@@ -34,7 +34,8 @@
     tests now cover critical sections, interlocked operations, TLS/last-error,
     time, event/wait, close-handle, heap/local/virtual allocation, raw
     file buffers/cursor/size/flush, HWND rectangles/points/text/window-long/
-    focus/messages, resources, and COM state.
+    focus/messages, unplugged waveOut adapter marshalling, resources, and COM
+    state.
   - Status: active ordinal-by-ordinal implementation work.
 
 - PE resources are not loaded into `ResourceSystem` yet.
@@ -48,5 +49,7 @@
 - Remote API has no Rust socket transport yet.
   - Symptom: remote touch/key/GPS/audio/status behavior exists as emulator API
     state, but there is no HTTP/WebSocket listener serving `/api/v1/...`.
-  - Evidence: `src/ce/remote.rs` implements state and control dispatch only.
+  - Evidence: `src/ce/remote.rs` implements state and control dispatch only;
+    websocket audio sink state already tracks per-client host-time cursors and
+    flush-marked chunks, but no socket writer consumes them yet.
   - Status: expected until host transport work lands.

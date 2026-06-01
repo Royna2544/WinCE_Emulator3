@@ -25,7 +25,8 @@
 
 - Add bounded run tooling and structured logs.
 - Add an HTTP/WebSocket transport over the Rust `CeRemote` API state when the
-  host runtime is ready for remote UI/audio streaming.
+  host runtime is ready for remote UI/audio streaming; audio transport should
+  honor the sink's per-client cursors and flush-marked chunks immediately.
 - Add ordinal/decorated-name evidence from the Windows CE 4.2 Mipsii SDK import
   libraries, alongside the source references already recorded.
 - Persist host-backed registry writes separately from the source dump.
@@ -36,7 +37,9 @@
 ## Later
 
 - Implement drawing surfaces and blit paths.
-- Implement audio playback backend after waveOut callback semantics are traced.
+- Keep host audio playback unplugged until guest callback/import trap semantics
+  are traced; current waveOut work is a virtual adapter only, with
+  `HostAudioSink` and `WebSocketAudioSink` boundaries ready for later binding.
 - Implement socket behavior for WINSOCK imports.
 
 ## Parked

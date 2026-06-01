@@ -26,6 +26,9 @@ shortcuts:
   exports, relocations, RVA mapping, and mapped image bytes
 - remote-control API state for touch/key input, GPS/NMEA serial injection, IMU
   state, pause/resume, status JSON, logs, and audio chunks
+- audio sink classes for an unplugged host adapter and websocket PCM streaming
+  with per-client host-time cursors, partial late-join chunks, and immediate
+  flush markers for short sounds
 - resource and COM subsystem state for HRSRC-like resource lookup and
   CoInitializeEx/class/object lifecycle modeling
 - host-backed file API with contained guest-path translation
@@ -33,7 +36,8 @@ shortcuts:
 - kernel object handles
 - GWE-style windows and message queues
 - timer bookkeeping
-- waveOut-style audio state and buffers
+- unplugged waveOut adapter state with CE `WAVEFORMATEX`, `WAVEHDR`, and
+  `MMTIME` raw ordinal marshalling
 - memory map validation and a Unicorn MIPS adapter boundary
 
 Behavior references are tracked in `SOURCE_REFERENCES.md`.

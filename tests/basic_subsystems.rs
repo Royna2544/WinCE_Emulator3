@@ -28,7 +28,12 @@ use wince_emulation_v3::{
             ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_TEXT_W, ORD_SHOW_WINDOW,
             ORD_SIZEOF_RESOURCE, ORD_SLEEP, ORD_SQRT, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
             ORD_TRY_ENTER_CRITICAL_SECTION, ORD_USER_CALL_WINDOW_PROC, ORD_VIRTUAL_ALLOC,
-            ORD_VIRTUAL_FREE, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE,
+            ORD_VIRTUAL_FREE, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WAVE_OUT_CLOSE,
+            ORD_WAVE_OUT_GET_NUM_DEVS, ORD_WAVE_OUT_GET_PLAYBACK_RATE, ORD_WAVE_OUT_GET_POSITION,
+            ORD_WAVE_OUT_GET_VOLUME, ORD_WAVE_OUT_OPEN, ORD_WAVE_OUT_PAUSE,
+            ORD_WAVE_OUT_PREPARE_HEADER, ORD_WAVE_OUT_RESTART, ORD_WAVE_OUT_SET_PLAYBACK_RATE,
+            ORD_WAVE_OUT_SET_VOLUME, ORD_WAVE_OUT_UNPREPARE_HEADER, ORD_WAVE_OUT_WRITE,
+            ORD_WRITE_FILE,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         gwe::{GWL_USERDATA, WM_CREATE, WM_QUIT, WM_TIMER, WM_USER},
@@ -78,6 +83,10 @@ impl TestGuestMemory {
         self.words.insert(addr, value);
     }
 
+    fn write_halfword(&mut self, addr: u32, value: u16) {
+        self.halfwords.insert(addr, value);
+    }
+
     fn write_bytes(&mut self, addr: u32, bytes: &[u8]) {
         for (index, byte) in bytes.iter().copied().enumerate() {
             self.bytes.insert(addr + index as u32, byte);
@@ -103,6 +112,17 @@ impl TestGuestMemory {
         for (index, unit) in text.encode_utf16().chain(std::iter::once(0)).enumerate() {
             self.halfwords.insert(addr + (index as u32) * 2, unit);
         }
+    }
+
+    fn write_wave_format_pcm(&mut self, addr: u32, channels: u16, samples_per_sec: u32) {
+        let block_align = channels * 2;
+        self.write_halfword(addr, 1);
+        self.write_halfword(addr + 2, channels);
+        self.write_word(addr + 4, samples_per_sec);
+        self.write_word(addr + 8, samples_per_sec * u32::from(block_align));
+        self.write_halfword(addr + 12, block_align);
+        self.write_halfword(addr + 14, 16);
+        self.write_halfword(addr + 16, 0);
     }
 
     fn read_wide_z(&self, addr: u32, max_chars: usize) -> String {
@@ -1135,6 +1155,211 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
 }
 
 #[test]
+fn coredll_raw_waveout_ordinals_use_unplugged_audio_adapter() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 12;
+    let handle_ptr = 0x1_5000;
+    let format_ptr = 0x1_5100;
+    let header_ptr = 0x1_5200;
+    let volume_ptr = 0x1_5300;
+    let time_ptr = 0x1_5400;
+
+    memory.map_words(handle_ptr, 1);
+    memory.write_wave_format_pcm(format_ptr, 2, 44_100);
+    memory.map_words(header_ptr, 8);
+    memory.write_word(header_ptr, 0x2_0000);
+    memory.write_word(header_ptr + 4, 2048);
+    memory.write_word(header_ptr + 16, 0);
+    memory.map_words(volume_ptr, 1);
+    memory.map_words(time_ptr, 2);
+    memory.write_word(time_ptr, 4);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAVE_OUT_GET_NUM_DEVS,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAVE_OUT_OPEN,
+            [handle_ptr, u32::MAX, format_ptr, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::MmResult(MMSYSERR_NOERROR),
+            ..
+        }
+    ));
+    let wave = memory.read_u32(handle_ptr)?;
+    assert!(wave != 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAVE_OUT_PREPARE_HEADER,
+            [wave, header_ptr, 32],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::MmResult(MMSYSERR_NOERROR),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(header_ptr + 16)? & 0x2, 0x2);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAVE_OUT_WRITE,
+            [wave, header_ptr, 32],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::MmResult(MMSYSERR_NOERROR),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(header_ptr + 16)? & 0x10, 0x10);
+    assert_eq!(kernel.audio.output(wave).unwrap().submitted_bytes, 2048);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAVE_OUT_SET_VOLUME,
+            [wave, 0x8000_8000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::MmResult(MMSYSERR_NOERROR),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAVE_OUT_GET_VOLUME,
+            [wave, volume_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::MmResult(MMSYSERR_NOERROR),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(volume_ptr)?, 0x8000_8000);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAVE_OUT_SET_PLAYBACK_RATE,
+            [wave, 0x0002_0000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::MmResult(MMSYSERR_NOERROR),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAVE_OUT_GET_PLAYBACK_RATE,
+            [wave, volume_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::MmResult(MMSYSERR_NOERROR),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(volume_ptr)?, 0x0002_0000);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAVE_OUT_GET_POSITION,
+            [wave, time_ptr, 8],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::MmResult(MMSYSERR_NOERROR),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(time_ptr + 4)?, 2048);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAVE_OUT_PAUSE,
+            [wave],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::MmResult(MMSYSERR_NOERROR),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAVE_OUT_RESTART,
+            [wave],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::MmResult(MMSYSERR_NOERROR),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAVE_OUT_UNPREPARE_HEADER,
+            [wave, header_ptr, 32],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::MmResult(MMSYSERR_NOERROR),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(header_ptr + 16)? & 0x2, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAVE_OUT_CLOSE,
+            [wave],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::MmResult(MMSYSERR_NOERROR),
+            ..
+        }
+    ));
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
@@ -1862,13 +2087,34 @@ fn remote_server_api_state_queues_input_serial_audio_and_status() -> Result<()> 
             .is_some_and(|target| !target.is_empty())
     );
 
-    kernel.remote.register_audio_client(1000);
+    let first_audio_client = kernel.remote.register_audio_client(1000);
     assert_eq!(kernel.remote.audio_client_count(), 1);
     assert_eq!(
         kernel.remote.publish_audio_chunk(vec![1, 2, 3, 4], 20),
         Some(1)
     );
-    assert_eq!(kernel.remote.take_audio_chunks(1)[0].pts_ms, 1000);
+    assert!(kernel.remote.audio_client_needs_flush(first_audio_client));
+    let first_chunks = kernel
+        .remote
+        .take_audio_chunks_for_client(first_audio_client, 1);
+    assert_eq!(first_chunks[0].pts_ms, 1000);
+    assert!(first_chunks[0].flush);
+
+    assert_eq!(
+        kernel
+            .remote
+            .publish_audio_chunk(vec![10, 11, 12, 13, 14, 15, 16, 17], 40),
+        Some(2)
+    );
+    let late_audio_client = kernel.remote.register_audio_client(1030);
+    let late_chunks = kernel
+        .remote
+        .take_audio_chunks_for_client(late_audio_client, 1);
+    assert_eq!(late_chunks[0].sequence, 2);
+    assert_eq!(late_chunks[0].pts_ms, 1030);
+    assert_eq!(late_chunks[0].duration_ms, 30);
+    assert_eq!(late_chunks[0].payload, vec![12, 13, 14, 15, 16, 17]);
+    assert!(late_chunks[0].flush);
 
     Ok(())
 }

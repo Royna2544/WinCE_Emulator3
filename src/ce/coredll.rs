@@ -2,7 +2,10 @@ use std::{collections::BTreeMap, fs, path::Path};
 
 use crate::{
     ce::{
-        audio::{MmResult, WaveBuffer, WaveFormat},
+        audio::{
+            MMSYSERR_BADDEVICEID, MMSYSERR_INVALHANDLE, MMSYSERR_NOERROR, MmResult,
+            WAVERR_BADFORMAT, WaveBuffer, WaveFormat,
+        },
         cemath::{CeMathCall, CeMathValue},
         coredll_ordinals::{self, *},
         devices::DeviceIoControlResult,
@@ -1480,6 +1483,98 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 2),
             raw_i32_arg(args, 3),
         ))),
+        ORD_WAVE_OUT_GET_NUM_DEVS => Some(CoredllValue::U32(kernel.audio.wave_out_get_num_devs())),
+        ORD_WAVE_OUT_OPEN => Some(CoredllValue::MmResult(wave_out_open_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_WAVE_OUT_PREPARE_HEADER => Some(CoredllValue::MmResult(wave_out_prepare_header_raw(
+            kernel,
+            memory,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_WAVE_OUT_UNPREPARE_HEADER => Some(CoredllValue::MmResult(
+            wave_out_unprepare_header_raw(kernel, memory, raw_arg(args, 0), raw_arg(args, 1)),
+        )),
+        ORD_WAVE_OUT_WRITE => Some(CoredllValue::MmResult(wave_out_write_raw(
+            kernel,
+            memory,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_WAVE_OUT_PAUSE => Some(CoredllValue::MmResult(kernel.audio.pause(raw_arg(args, 0)))),
+        ORD_WAVE_OUT_RESTART => Some(CoredllValue::MmResult(
+            kernel.audio.restart(raw_arg(args, 0)),
+        )),
+        ORD_WAVE_OUT_RESET => Some(CoredllValue::MmResult(
+            kernel.audio.wave_out_reset(raw_arg(args, 0)),
+        )),
+        ORD_WAVE_OUT_CLOSE => Some(CoredllValue::MmResult(
+            kernel.audio.wave_out_close(raw_arg(args, 0)),
+        )),
+        ORD_WAVE_OUT_GET_VOLUME => Some(CoredllValue::MmResult(wave_out_get_u32_raw(
+            kernel,
+            memory,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            WaveOutU32Kind::Volume,
+        ))),
+        ORD_WAVE_OUT_SET_VOLUME => Some(CoredllValue::MmResult(
+            kernel
+                .audio
+                .wave_out_set_volume(raw_arg(args, 0), raw_arg(args, 1)),
+        )),
+        ORD_WAVE_OUT_GET_POSITION => Some(CoredllValue::MmResult(wave_out_get_position_raw(
+            kernel,
+            memory,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_WAVE_OUT_GET_PITCH => Some(CoredllValue::MmResult(wave_out_get_u32_raw(
+            kernel,
+            memory,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            WaveOutU32Kind::Pitch,
+        ))),
+        ORD_WAVE_OUT_SET_PITCH => Some(CoredllValue::MmResult(
+            kernel.audio.set_pitch(raw_arg(args, 0), raw_arg(args, 1)),
+        )),
+        ORD_WAVE_OUT_GET_PLAYBACK_RATE => Some(CoredllValue::MmResult(wave_out_get_u32_raw(
+            kernel,
+            memory,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            WaveOutU32Kind::PlaybackRate,
+        ))),
+        ORD_WAVE_OUT_SET_PLAYBACK_RATE => Some(CoredllValue::MmResult(
+            kernel
+                .audio
+                .set_playback_rate(raw_arg(args, 0), raw_arg(args, 1)),
+        )),
+        ORD_WAVE_OUT_GET_ID => Some(CoredllValue::MmResult(wave_out_get_id_raw(
+            kernel,
+            memory,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_WAVE_OUT_BREAK_LOOP => Some(CoredllValue::MmResult(MMSYSERR_NOERROR)),
+        ORD_WAVE_OUT_MESSAGE => Some(CoredllValue::U32(0)),
+        ORD_WAVE_OUT_GET_DEV_CAPS => Some(CoredllValue::MmResult(wave_out_get_dev_caps_raw(
+            kernel,
+            memory,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ))),
+        ORD_WAVE_OUT_GET_ERROR_TEXT => Some(CoredllValue::MmResult(wave_out_get_error_text_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ))),
         _ => None,
     }
 }
@@ -1969,6 +2064,368 @@ fn write_wide_result<M: CoredllGuestMemory>(
     units.len() as u32
 }
 
+const WAVE_MAPPER: u32 = u32::MAX;
+const WAVE_FORMAT_QUERY: u32 = 0x0001;
+const WHDR_DONE: u32 = 0x0000_0001;
+const WHDR_PREPARED: u32 = 0x0000_0002;
+const WHDR_INQUEUE: u32 = 0x0000_0010;
+const TIME_MS: u32 = 0x0001;
+const TIME_SAMPLES: u32 = 0x0002;
+const TIME_BYTES: u32 = 0x0004;
+const WAVE_FORMAT_1M08: u32 = 0x0000_0001;
+const WAVE_FORMAT_1S08: u32 = 0x0000_0002;
+const WAVE_FORMAT_1M16: u32 = 0x0000_0004;
+const WAVE_FORMAT_1S16: u32 = 0x0000_0008;
+const WAVE_FORMAT_2M08: u32 = 0x0000_0010;
+const WAVE_FORMAT_2S08: u32 = 0x0000_0020;
+const WAVE_FORMAT_2M16: u32 = 0x0000_0040;
+const WAVE_FORMAT_2S16: u32 = 0x0000_0080;
+const WAVE_FORMAT_4M08: u32 = 0x0000_0100;
+const WAVE_FORMAT_4S08: u32 = 0x0000_0200;
+const WAVE_FORMAT_4M16: u32 = 0x0000_0400;
+const WAVE_FORMAT_4S16: u32 = 0x0000_0800;
+const WAVECAPS_VOLUME: u32 = 0x0004;
+const WAVECAPS_LRVOLUME: u32 = 0x0008;
+const WAVECAPS_SAMPLEACCURATE: u32 = 0x0020;
+
+fn wave_out_open_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> MmResult {
+    let handle_ptr = raw_arg(args, 0);
+    let device_id = raw_arg(args, 1);
+    let format_ptr = raw_arg(args, 2);
+    let open_flags = raw_arg(args, 5);
+    if device_id != 0 && device_id != WAVE_MAPPER {
+        return MMSYSERR_BADDEVICEID;
+    }
+    let Some(format) = read_wave_format(kernel, memory, thread_id, format_ptr) else {
+        return WAVERR_BADFORMAT;
+    };
+    if open_flags & WAVE_FORMAT_QUERY != 0 {
+        return if format.format_tag == 1 && format.block_align != 0 {
+            MMSYSERR_NOERROR
+        } else {
+            WAVERR_BADFORMAT
+        };
+    }
+    let handle = match kernel.wave_out_open(format) {
+        Ok(handle) => handle,
+        Err(status) => return status,
+    };
+    if !write_guest_u32(kernel, memory, thread_id, handle_ptr, handle) {
+        return MMSYSERR_INVALHANDLE;
+    }
+    MMSYSERR_NOERROR
+}
+
+fn wave_out_prepare_header_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    handle: u32,
+    header_ptr: u32,
+) -> MmResult {
+    if kernel.audio.output(handle).is_none() {
+        return MMSYSERR_INVALHANDLE;
+    }
+    let Some(flags) = read_guest_u32(kernel, memory, 0, header_ptr.wrapping_add(16)) else {
+        return MMSYSERR_INVALHANDLE;
+    };
+    if !write_guest_u32(
+        kernel,
+        memory,
+        0,
+        header_ptr.wrapping_add(16),
+        (flags | WHDR_PREPARED) & !WHDR_DONE,
+    ) {
+        return MMSYSERR_INVALHANDLE;
+    }
+    MMSYSERR_NOERROR
+}
+
+fn wave_out_unprepare_header_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    handle: u32,
+    header_ptr: u32,
+) -> MmResult {
+    if kernel.audio.output(handle).is_none() {
+        return MMSYSERR_INVALHANDLE;
+    }
+    let Some(flags) = read_guest_u32(kernel, memory, 0, header_ptr.wrapping_add(16)) else {
+        return MMSYSERR_INVALHANDLE;
+    };
+    if !write_guest_u32(
+        kernel,
+        memory,
+        0,
+        header_ptr.wrapping_add(16),
+        flags & !WHDR_PREPARED,
+    ) {
+        return MMSYSERR_INVALHANDLE;
+    }
+    MMSYSERR_NOERROR
+}
+
+fn wave_out_write_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    handle: u32,
+    header_ptr: u32,
+) -> MmResult {
+    let Some(data_ptr) = read_guest_u32(kernel, memory, 0, header_ptr) else {
+        return MMSYSERR_INVALHANDLE;
+    };
+    let Some(len) = read_guest_u32(kernel, memory, 0, header_ptr.wrapping_add(4)) else {
+        return MMSYSERR_INVALHANDLE;
+    };
+    let result = kernel.audio.wave_out_write(
+        handle,
+        WaveBuffer {
+            guest_ptr: data_ptr,
+            len,
+        },
+    );
+    if result != MMSYSERR_NOERROR {
+        return result;
+    }
+    if let Some(flags) = read_guest_u32(kernel, memory, 0, header_ptr.wrapping_add(16)) {
+        let _ = write_guest_u32(
+            kernel,
+            memory,
+            0,
+            header_ptr.wrapping_add(16),
+            (flags | WHDR_INQUEUE) & !WHDR_DONE,
+        );
+    }
+    MMSYSERR_NOERROR
+}
+
+#[derive(Debug, Clone, Copy)]
+enum WaveOutU32Kind {
+    Volume,
+    Pitch,
+    PlaybackRate,
+}
+
+fn wave_out_get_u32_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    handle: u32,
+    value_ptr: u32,
+    kind: WaveOutU32Kind,
+) -> MmResult {
+    let value = match kind {
+        WaveOutU32Kind::Volume => kernel.audio.get_volume(handle),
+        WaveOutU32Kind::Pitch => kernel.audio.get_pitch(handle),
+        WaveOutU32Kind::PlaybackRate => kernel.audio.get_playback_rate(handle),
+    };
+    let Ok(value) = value else {
+        return MMSYSERR_INVALHANDLE;
+    };
+    if write_guest_u32(kernel, memory, 0, value_ptr, value) {
+        MMSYSERR_NOERROR
+    } else {
+        MMSYSERR_INVALHANDLE
+    }
+}
+
+fn wave_out_get_position_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    handle: u32,
+    mmtime_ptr: u32,
+) -> MmResult {
+    let Ok(bytes) = kernel.audio.get_position_bytes(handle) else {
+        return MMSYSERR_INVALHANDLE;
+    };
+    let Some(time_type) = read_guest_u32(kernel, memory, 0, mmtime_ptr) else {
+        return MMSYSERR_INVALHANDLE;
+    };
+    let value = match time_type {
+        TIME_SAMPLES => {
+            let Some(output) = kernel.audio.output(handle) else {
+                return MMSYSERR_INVALHANDLE;
+            };
+            if output.format.block_align == 0 {
+                0
+            } else {
+                bytes / u32::from(output.format.block_align)
+            }
+        }
+        TIME_MS => {
+            let Some(output) = kernel.audio.output(handle) else {
+                return MMSYSERR_INVALHANDLE;
+            };
+            if output.format.avg_bytes_per_sec == 0 {
+                0
+            } else {
+                bytes.saturating_mul(1000) / output.format.avg_bytes_per_sec
+            }
+        }
+        _ => bytes,
+    };
+    if !write_guest_u32(kernel, memory, 0, mmtime_ptr, time_type.max(TIME_BYTES)) {
+        return MMSYSERR_INVALHANDLE;
+    }
+    if write_guest_u32(kernel, memory, 0, mmtime_ptr.wrapping_add(4), value) {
+        MMSYSERR_NOERROR
+    } else {
+        MMSYSERR_INVALHANDLE
+    }
+}
+
+fn wave_out_get_id_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    handle: u32,
+    id_ptr: u32,
+) -> MmResult {
+    if kernel.audio.output(handle).is_none() {
+        return MMSYSERR_INVALHANDLE;
+    }
+    if write_guest_u32(kernel, memory, 0, id_ptr, 0) {
+        MMSYSERR_NOERROR
+    } else {
+        MMSYSERR_INVALHANDLE
+    }
+}
+
+fn wave_out_get_dev_caps_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    device_id: u32,
+    caps_ptr: u32,
+    caps_size: u32,
+) -> MmResult {
+    if device_id != 0 && device_id != WAVE_MAPPER {
+        return MMSYSERR_BADDEVICEID;
+    }
+    let writes = [
+        (0, 1),
+        (2, 1),
+        (4, 0x0004_0000),
+        (72, wave_formats_mask()),
+        (76, 2),
+        (78, 0),
+        (
+            80,
+            WAVECAPS_VOLUME | WAVECAPS_LRVOLUME | WAVECAPS_SAMPLEACCURATE,
+        ),
+    ];
+    for (offset, value) in writes {
+        if offset >= caps_size {
+            continue;
+        }
+        let addr = caps_ptr.wrapping_add(offset);
+        let ok = if offset == 0 || offset == 2 || offset == 76 || offset == 78 {
+            write_guest_u16(kernel, memory, 0, addr, value as u16)
+        } else {
+            write_guest_u32(kernel, memory, 0, addr, value)
+        };
+        if !ok {
+            return MMSYSERR_INVALHANDLE;
+        }
+    }
+    write_guest_wide_fixed(
+        kernel,
+        memory,
+        0,
+        caps_ptr.wrapping_add(8),
+        "Virtual WaveOut",
+        32,
+    );
+    MMSYSERR_NOERROR
+}
+
+fn wave_out_get_error_text_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    error: u32,
+    buffer: u32,
+    capacity: u32,
+) -> MmResult {
+    let text = match error {
+        MMSYSERR_NOERROR => "No error",
+        MMSYSERR_BADDEVICEID => "Bad device id",
+        MMSYSERR_INVALHANDLE => "Invalid handle",
+        WAVERR_BADFORMAT => "Bad wave format",
+        _ => "Multimedia error",
+    };
+    if write_wide_result(kernel, memory, thread_id, buffer, capacity as usize, text) > 0 {
+        MMSYSERR_NOERROR
+    } else {
+        MMSYSERR_INVALHANDLE
+    }
+}
+
+fn read_wave_format<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    addr: u32,
+) -> Option<WaveFormat> {
+    Some(WaveFormat {
+        format_tag: read_guest_u16(kernel, memory, thread_id, addr)?,
+        channels: read_guest_u16(kernel, memory, thread_id, addr.wrapping_add(2))?,
+        samples_per_sec: read_guest_u32(kernel, memory, thread_id, addr.wrapping_add(4))?,
+        avg_bytes_per_sec: read_guest_u32(kernel, memory, thread_id, addr.wrapping_add(8))?,
+        block_align: read_guest_u16(kernel, memory, thread_id, addr.wrapping_add(12))?,
+        bits_per_sample: read_guest_u16(kernel, memory, thread_id, addr.wrapping_add(14))?,
+    })
+}
+
+fn wave_formats_mask() -> u32 {
+    WAVE_FORMAT_1M08
+        | WAVE_FORMAT_1S08
+        | WAVE_FORMAT_1M16
+        | WAVE_FORMAT_1S16
+        | WAVE_FORMAT_2M08
+        | WAVE_FORMAT_2S08
+        | WAVE_FORMAT_2M16
+        | WAVE_FORMAT_2S16
+        | WAVE_FORMAT_4M08
+        | WAVE_FORMAT_4S08
+        | WAVE_FORMAT_4M16
+        | WAVE_FORMAT_4S16
+}
+
+fn write_guest_wide_fixed<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    addr: u32,
+    text: &str,
+    capacity_chars: usize,
+) -> bool {
+    let mut units = text.encode_utf16().take(capacity_chars.saturating_sub(1));
+    for (index, unit) in units.by_ref().enumerate() {
+        if !write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            addr.wrapping_add((index as u32) * 2),
+            unit,
+        ) {
+            return false;
+        }
+    }
+    let len = text
+        .encode_utf16()
+        .take(capacity_chars.saturating_sub(1))
+        .count();
+    write_guest_u16(
+        kernel,
+        memory,
+        thread_id,
+        addr.wrapping_add((len as u32) * 2),
+        0,
+    )
+}
+
 fn find_resource(kernel: &mut CeKernel, thread_id: u32, module: u32, name: u32, kind: u32) -> u32 {
     let Some(handle) = kernel.resources.find_resource(
         module,
@@ -2442,6 +2899,23 @@ fn read_guest_u32<M: CoredllGuestMemory>(
     addr: u32,
 ) -> Option<u32> {
     match memory.read_u32(addr) {
+        Ok(value) => Some(value),
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            None
+        }
+    }
+}
+
+fn read_guest_u16<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    addr: u32,
+) -> Option<u16> {
+    match memory.read_u16(addr) {
         Ok(value) => Some(value),
         Err(_) => {
             kernel

@@ -6,6 +6,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::ce::audio::{AudioChunk, WebSocketAudioSink};
+
 pub const WM_KEYDOWN: u32 = 0x0100;
 pub const WM_KEYUP: u32 = 0x0101;
 pub const WM_MOUSEMOVE: u32 = 0x0200;
@@ -40,14 +42,6 @@ pub struct TouchEvent {
 pub struct KeyEvent {
     pub message: u32,
     pub vk: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AudioChunk {
-    pub payload: Vec<u8>,
-    pub sequence: u64,
-    pub pts_ms: u64,
-    pub duration_ms: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -107,10 +101,7 @@ pub struct CeRemote {
     touch_events: VecDeque<TouchEvent>,
     key_events: VecDeque<KeyEvent>,
     serial_bytes: VecDeque<u8>,
-    audio_chunks: VecDeque<AudioChunk>,
-    audio_client_count: usize,
-    audio_sequence: u64,
-    audio_next_pts_ms: u64,
+    audio_sink: WebSocketAudioSink,
     imu_state: Value,
     paused: bool,
     recent_logs: VecDeque<String>,
@@ -180,15 +171,13 @@ impl Default for CeRemote {
 
 impl CeRemote {
     pub fn new(config: RemoteConfig) -> Self {
+        let max_audio_chunks = config.max_audio_chunks;
         Self {
             config,
             touch_events: VecDeque::new(),
             key_events: VecDeque::new(),
             serial_bytes: VecDeque::new(),
-            audio_chunks: VecDeque::new(),
-            audio_client_count: 0,
-            audio_sequence: 0,
-            audio_next_pts_ms: 0,
+            audio_sink: WebSocketAudioSink::new(max_audio_chunks),
             imu_state: Value::Object(Default::default()),
             paused: false,
             recent_logs: VecDeque::new(),
@@ -310,61 +299,52 @@ impl CeRemote {
         &self.imu_state
     }
 
-    pub fn register_audio_client(&mut self, now_ms: u64) {
-        if self.audio_client_count == 0 {
-            self.audio_chunks.clear();
-            self.audio_next_pts_ms = now_ms;
-        }
-        self.audio_client_count += 1;
+    pub fn register_audio_client(&mut self, now_ms: u64) -> u64 {
+        self.audio_sink.register_client(now_ms)
     }
 
-    pub fn unregister_audio_client(&mut self) {
-        self.audio_client_count = self.audio_client_count.saturating_sub(1);
-        if self.audio_client_count == 0 {
-            self.audio_chunks.clear();
-            self.audio_next_pts_ms = 0;
-        }
+    pub fn unregister_audio_client(&mut self) -> bool {
+        self.audio_sink.unregister_latest_client()
+    }
+
+    pub fn unregister_audio_client_id(&mut self, client_id: u64) -> bool {
+        self.audio_sink.unregister_client(client_id)
     }
 
     pub fn audio_client_count(&self) -> usize {
-        self.audio_client_count
+        self.audio_sink.client_count()
     }
 
     pub fn publish_audio_chunk(&mut self, payload: Vec<u8>, duration_ms: u32) -> Option<u64> {
-        if payload.is_empty() || !self.config.audio_enabled || self.audio_client_count == 0 {
+        if !self.config.audio_enabled {
             return None;
         }
-        self.audio_sequence += 1;
-        let sequence = self.audio_sequence;
-        let duration_ms = duration_ms.max(1);
-        let chunk = AudioChunk {
-            payload,
-            sequence,
-            pts_ms: self.audio_next_pts_ms,
-            duration_ms,
-        };
-        self.audio_next_pts_ms = self
-            .audio_next_pts_ms
-            .saturating_add(u64::from(duration_ms));
-        self.audio_chunks.push_back(chunk);
-        while self.audio_chunks.len() > self.config.max_audio_chunks {
-            self.audio_chunks.pop_front();
-        }
-        Some(sequence)
+        self.audio_sink.publish_pcm(payload, duration_ms)
     }
 
     pub fn clear_audio_chunks(&mut self, now_ms: u64) {
-        self.audio_chunks.clear();
-        self.audio_next_pts_ms = now_ms;
+        self.audio_sink.clear(now_ms);
     }
 
     pub fn take_audio_chunks(&mut self, max_chunks: usize) -> Vec<AudioChunk> {
-        let count = max_chunks.min(self.audio_chunks.len());
-        self.audio_chunks.drain(..count).collect()
+        self.audio_sink.take_chunks(max_chunks)
+    }
+
+    pub fn take_audio_chunks_for_client(
+        &mut self,
+        client_id: u64,
+        max_chunks: usize,
+    ) -> Vec<AudioChunk> {
+        self.audio_sink
+            .take_chunks_for_client(client_id, max_chunks)
+    }
+
+    pub fn audio_client_needs_flush(&self, client_id: u64) -> bool {
+        self.audio_sink.needs_flush_for_client(client_id)
     }
 
     pub fn audio_chunk_count(&self) -> usize {
-        self.audio_chunks.len()
+        self.audio_sink.queued_chunk_count()
     }
 
     pub fn push_log_line(&mut self, line: impl Into<String>) {
@@ -402,8 +382,8 @@ impl CeRemote {
             queued_touch_events: self.touch_events.len(),
             queued_key_events: self.key_events.len(),
             queued_serial_bytes: self.serial_bytes.len(),
-            audio_clients: self.audio_client_count,
-            queued_audio_chunks: self.audio_chunks.len(),
+            audio_clients: self.audio_sink.client_count(),
+            queued_audio_chunks: self.audio_sink.queued_chunk_count(),
         }
     }
 

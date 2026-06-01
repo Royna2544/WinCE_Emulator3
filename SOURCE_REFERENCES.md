@@ -124,10 +124,16 @@ anchors, not app-specific shortcuts.
     initialize COM before COM maintenance work.
 
 - COREDLL multimedia ordinals:
-  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/core_common.def`
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/core_common.def`,
+  `/mnt/c/Program Files (x86)/Windows CE Tools/wce420/STANDARDSDK_420/Include/Mipsii/mmsystem.h`,
+  and
+  `/mnt/c/Program Files (x86)/Windows CE Tools/wce420/STANDARDSDK_420/Include/Mipsii/mmreg.h`
   - Lists waveOut exports including `waveOutSetVolume @382`,
     `waveOutClose @384`, `waveOutWrite @387`, `waveOutReset @390`, and
     `waveOutOpen @399`.
+  - SDK headers define `WAVEHDR`, `WAVEFORMATEX`, `WAVEOUTCAPS`, `MMTIME`,
+    `WHDR_*`, `TIME_*`, format masks, and capability flags used by the
+    unplugged virtual waveOut adapter.
   - Converted into checked-in Rust constants and a static ordinal `match` in
     `src/ce/coredll_ordinals.rs`; `src/ce/coredll.rs` keeps parser helpers only
     for validation/reference work.
@@ -162,3 +168,10 @@ anchors, not app-specific shortcuts.
     NMEA, IMU, pause, resume, status, logs, frame, MJPEG, and audio endpoints.
   - `CeRemote` stores queued touch/key events, serial bytes, audio chunks, IMU
     state, audio client counts, and paused state.
+  - `materializeRemoteAudioChunkLocked` and `CeAudio::liveSlice` tie remote
+    audio to the host playback cursor, so the Rust websocket sink models
+    host-time client cursors and partial-chunk late joins instead of a single
+    global audio drain.
+  - Rust now splits audio delivery into `HostAudioSink` and
+    `WebSocketAudioSink` adapter classes; only the websocket/remote queue is
+    connected, while host playback remains deliberately unplugged.

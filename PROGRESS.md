@@ -85,6 +85,15 @@
   - CE/MFC-style message-pump ordinals: raw `GetMessageW`, `PeekMessageW`,
     `PostMessageW`, `SendMessageW`, `DispatchMessageW`, `TranslateMessage`,
     and `DefWindowProcW` marshal `MSG` structs and queue state
+  - unplugged multimedia adapter ordinals: raw `waveOutGetNumDevs`,
+    `waveOutOpen`, `waveOutPrepareHeader`, `waveOutUnprepareHeader`,
+    `waveOutWrite`, `waveOutPause`, `waveOutRestart`, `waveOutReset`,
+    `waveOutClose`, `waveOutGetVolume`, `waveOutSetVolume`,
+    `waveOutGetPosition`, `waveOutGetPitch`, `waveOutSetPitch`,
+    `waveOutGetPlaybackRate`, `waveOutSetPlaybackRate`, `waveOutGetID`,
+    `waveOutGetDevCaps`, and `waveOutGetErrorText` marshal CE
+    `WAVEFORMATEX`, `WAVEHDR`, `MMTIME`, and output pointers without binding to
+    host playback
   - resource ordinals: `FindResourceW`/`FindResource`, `LoadResource`, and
     `SizeofResource`, plus `LoadStringW` buffer copying/null termination for
     registered virtual strings
@@ -111,6 +120,14 @@
   manages remote audio client/chunk state.
 - `CeKernel` owns `CeRemote` and can drain queued remote touch/key events into
   the GWE message queue.
+- Audio output has two sink classes:
+  - `HostAudioSink` is an explicit unplugged host adapter boundary for later
+    platform playback binding.
+  - `WebSocketAudioSink` owns per-client cursors, PCM chunk sequencing, PTS,
+    queue limits, and flush-marked chunks for the remote audio path;
+    middle-joined websocket devices attach at the host audio timeline and
+    receive a trimmed partial chunk when the host is already inside a retained
+    chunk.
 
 ## Current State
 
@@ -123,8 +140,9 @@
 - Many COREDLL ordinals are classified and dispatchable but still stubbed by
   subsystem. Kernel/thread/time/sync, memory/local/heap/virtual allocation,
   raw file buffer marshalling, first GWE HWND/RECT/text/window-long/focus/message
-  pump, and first resource raw ordinals have real CE-referenced semantics;
-  remaining ordinals still need to be burned down subsystem by subsystem.
+  pump, unplugged waveOut adapter ordinals, and first resource raw ordinals
+  have real CE-referenced semantics; remaining ordinals still need to be burned
+  down subsystem by subsystem.
 - Remote server socket/WebSocket binding is not implemented in Rust yet; the
   emulator-facing remote API state and dispatch behavior are present.
 
