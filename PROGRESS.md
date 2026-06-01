@@ -47,6 +47,11 @@
 - COREDLL dispatch table now augments `core_common.def` parsing with selected
   CRT/math ordinals from `crt_ordinals.h`; current table coverage is 1,752
   export entries.
+- COREDLL ordinal work is now split by subsystem in code. Every parsed export
+  can produce an ordinal plan entry with subsystem ownership and
+  implemented-vs-stubbed status; raw ordinal dispatch preserves raw arguments
+  and routes unresolved semantics through subsystem-owned stub policies instead
+  of a single generic unimplemented bucket.
 - PE parsing now validates DOS/NT signatures, reads COFF and PE32 optional
   headers, tracks all 16 standard data directories, maps RVAs through section
   headers, parses import descriptors/thunks by name or ordinal, parses export
@@ -69,6 +74,9 @@
 - The virtual Win32/CE framework and COREDLL dispatcher are ready for guest
   import traps to call into. PE import tables can now be parsed, but import trap
   patching and Unicorn memory mapping are not wired yet.
+- Many COREDLL ordinals are classified and dispatchable but still stubbed by
+  subsystem. Real ordinal-by-ordinal semantics need to be burned down inside
+  each subsystem.
 - Remote server socket/WebSocket binding is not implemented in Rust yet; the
   emulator-facing remote API state and dispatch behavior are present.
 

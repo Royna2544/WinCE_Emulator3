@@ -5,8 +5,9 @@ use wince_emulation_v3::{
         audio::{MMSYSERR_NOERROR, WaveBuffer, WaveFormat, WaveOutState},
         cemath::{CeMathBinaryF64, CeMathCall, CeMathUnaryF64, CeMathValue},
         coredll::{
-            CoredllCall, CoredllDispatch, CoredllExportTable, CoredllValue,
-            DEFAULT_CORE_COMMON_DEF, EventModifyAction,
+            CoredllCall, CoredllDispatch, CoredllExportTable, CoredllImplementationStatus,
+            CoredllStubPolicy, CoredllSubsystem, CoredllValue, DEFAULT_CORE_COMMON_DEF,
+            EventModifyAction,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::{GWL_USERDATA, WM_CREATE, WM_QUIT, WM_TIMER, WM_USER},
@@ -300,8 +301,78 @@ fn coredll_dispatcher_routes_ordinals_to_virtual_win32_framework() -> Result<()>
     let unimplemented = table.dispatch_untyped_ordinal(2);
     assert!(matches!(
         unimplemented,
-        CoredllDispatch::Unimplemented { export } if export.name == "InitializeCriticalSection"
+        CoredllDispatch::Stubbed { export, stub }
+            if export.name == "InitializeCriticalSection"
+                && stub.policy == CoredllStubPolicy::VoidNoOp
     ));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_dispatch_has_defined_path_for_every_parsed_ordinal() -> Result<()> {
+    let table = CoredllExportTable::from_core_common_def_path(DEFAULT_CORE_COMMON_DEF)?;
+    let plan = table.ordinal_plan();
+    assert_eq!(plan.len(), table.export_count());
+    assert!(plan.iter().any(|item| {
+        item.subsystem == CoredllSubsystem::Registry
+            && item.status == CoredllImplementationStatus::Implemented
+            && item.export.name == "RegOpenKeyExW"
+    }));
+    assert!(plan.iter().any(|item| {
+        item.subsystem == CoredllSubsystem::GweWindow
+            && item.status == CoredllImplementationStatus::Implemented
+            && item.export.name == "CreateWindowExW"
+    }));
+    assert!(plan.iter().any(|item| {
+        item.subsystem == CoredllSubsystem::Memory
+            && item.status == CoredllImplementationStatus::Stubbed
+            && item.export.name == "LocalAlloc"
+    }));
+
+    let mut covered = 0;
+    for ordinal in table.ordinals() {
+        match table.dispatch_raw_ordinal(ordinal, [0x1111_0000, 0x2222_0000]) {
+            CoredllDispatch::Stubbed { stub, .. } => {
+                assert_eq!(stub.args, vec![0x1111_0000, 0x2222_0000]);
+                assert!(matches!(
+                    stub.subsystem,
+                    CoredllSubsystem::KernelSync
+                        | CoredllSubsystem::ThreadProcess
+                        | CoredllSubsystem::Memory
+                        | CoredllSubsystem::FileSystem
+                        | CoredllSubsystem::DeviceIo
+                        | CoredllSubsystem::Registry
+                        | CoredllSubsystem::GweWindow
+                        | CoredllSubsystem::GweMessage
+                        | CoredllSubsystem::GdiGraphics
+                        | CoredllSubsystem::Multimedia
+                        | CoredllSubsystem::LocaleString
+                        | CoredllSubsystem::Time
+                        | CoredllSubsystem::Crypto
+                        | CoredllSubsystem::Comm
+                        | CoredllSubsystem::Storage
+                        | CoredllSubsystem::MsgQueue
+                        | CoredllSubsystem::Power
+                        | CoredllSubsystem::Services
+                        | CoredllSubsystem::Telephony
+                        | CoredllSubsystem::Security
+                        | CoredllSubsystem::Debug
+                        | CoredllSubsystem::InputIme
+                        | CoredllSubsystem::ShellUi
+                        | CoredllSubsystem::Bluetooth
+                        | CoredllSubsystem::EventLog
+                        | CoredllSubsystem::Credential
+                        | CoredllSubsystem::MathCrt
+                        | CoredllSubsystem::KernelPrivate
+                ));
+                covered += 1;
+            }
+            other => panic!("ordinal {ordinal} did not have raw dispatch coverage: {other:?}"),
+        }
+    }
+
+    assert!(covered >= 1_700);
 
     Ok(())
 }

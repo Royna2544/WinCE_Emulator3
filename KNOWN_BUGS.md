@@ -22,6 +22,14 @@
     MIPS import thunk/trap argument decoder exists yet.
   - Status: expected until PE mapping and import trap work lands.
 
+- Most COREDLL ordinals are still subsystem stubs.
+  - Symptom: every parsed ordinal has subsystem ownership and raw dispatch
+    metadata, but only the implemented virtual Win32/CE facade, waveOut, and
+    `cemath` paths have real semantics.
+  - Evidence: `src/ce/coredll.rs` reports implemented-vs-stubbed ordinal plan
+    entries and returns subsystem stub policies for remaining exports.
+  - Status: active ordinal-by-ordinal implementation work.
+
 - Remote API has no Rust socket transport yet.
   - Symptom: remote touch/key/GPS/audio/status behavior exists as emulator API
     state, but there is no HTTP/WebSocket listener serving `/api/v1/...`.

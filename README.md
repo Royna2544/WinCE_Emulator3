@@ -12,6 +12,8 @@ shortcuts:
   calls
 - COREDLL ordinal parser/dispatcher backed by the CE `core_common.def` export
   list
+- COREDLL ordinal plan entries split by subsystem with implemented-vs-stubbed
+  status for the full parsed table
 - simple CE CRT/math dispatch for common floating-point math and MIPS helper
   routines
 - PE32 parser for DOS/NT/COFF headers, optional headers, sections, imports,

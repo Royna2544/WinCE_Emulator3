@@ -27,6 +27,51 @@ pub struct CoredllExport {
     pub line: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CoredllSubsystem {
+    KernelSync,
+    ThreadProcess,
+    Memory,
+    FileSystem,
+    DeviceIo,
+    Registry,
+    GweWindow,
+    GweMessage,
+    GdiGraphics,
+    Multimedia,
+    LocaleString,
+    Time,
+    Crypto,
+    Comm,
+    Storage,
+    MsgQueue,
+    Power,
+    Services,
+    Telephony,
+    Security,
+    Debug,
+    InputIme,
+    ShellUi,
+    Bluetooth,
+    EventLog,
+    Credential,
+    MathCrt,
+    KernelPrivate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoredllImplementationStatus {
+    Implemented,
+    Stubbed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoredllOrdinalPlan {
+    pub export: CoredllExport,
+    pub subsystem: CoredllSubsystem,
+    pub status: CoredllImplementationStatus,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct CoredllExportTable {
     exports: Vec<CoredllExport>,
@@ -244,11 +289,33 @@ pub enum CoredllDispatch {
     Unimplemented {
         export: CoredllExport,
     },
+    Stubbed {
+        export: CoredllExport,
+        stub: CoredllStubResult,
+    },
     OrdinalMismatch {
         ordinal: u32,
         export: CoredllExport,
         call_name: &'static str,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CoredllStubResult {
+    pub subsystem: CoredllSubsystem,
+    pub policy: CoredllStubPolicy,
+    pub return_value: u32,
+    pub args: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoredllStubPolicy {
+    VoidNoOp,
+    BoolSuccess,
+    BoolFailure,
+    NullPointer,
+    InvalidHandle,
+    ZeroValue,
 }
 
 impl CoredllExportTable {
@@ -301,6 +368,30 @@ impl CoredllExportTable {
             .collect()
     }
 
+    pub fn ordinals(&self) -> impl Iterator<Item = u32> + '_ {
+        self.by_ordinal.keys().copied()
+    }
+
+    pub fn ordinal_plan(&self) -> Vec<CoredllOrdinalPlan> {
+        self.exports
+            .iter()
+            .cloned()
+            .map(|export| {
+                let subsystem = export.subsystem();
+                let status = if export.has_real_shim() {
+                    CoredllImplementationStatus::Implemented
+                } else {
+                    CoredllImplementationStatus::Stubbed
+                };
+                CoredllOrdinalPlan {
+                    export,
+                    subsystem,
+                    status,
+                }
+            })
+            .collect()
+    }
+
     pub fn dispatch_by_name(
         &self,
         kernel: &mut CeKernel,
@@ -333,8 +424,19 @@ impl CoredllExportTable {
     }
 
     pub fn dispatch_untyped_ordinal(&self, ordinal: u32) -> CoredllDispatch {
+        self.dispatch_raw_ordinal(ordinal, [])
+    }
+
+    pub fn dispatch_raw_ordinal<I>(&self, ordinal: u32, args: I) -> CoredllDispatch
+    where
+        I: IntoIterator<Item = u32>,
+    {
         match self.resolve_ordinal(ordinal).cloned() {
-            Some(export) => CoredllDispatch::Unimplemented { export },
+            Some(export) => {
+                let args = args.into_iter().collect();
+                let stub = CoredllStubResult::for_export(&export, args);
+                CoredllDispatch::Stubbed { export, stub }
+            }
             None => CoredllDispatch::UnresolvedOrdinal(ordinal),
         }
     }
@@ -366,6 +468,94 @@ impl CoredllExportTable {
     }
 }
 
+impl CoredllStubResult {
+    fn for_export(export: &CoredllExport, args: Vec<u32>) -> Self {
+        let subsystem = export.subsystem();
+        let policy = CoredllStubPolicy::for_export(export, subsystem);
+        Self {
+            subsystem,
+            policy,
+            return_value: policy.return_value(),
+            args,
+        }
+    }
+}
+
+impl CoredllStubPolicy {
+    fn for_export(export: &CoredllExport, subsystem: CoredllSubsystem) -> Self {
+        let name = normalize_name(&export.name);
+        if VOID_NOOP_STUBS
+            .iter()
+            .any(|stub_name| normalize_name(stub_name) == name)
+        {
+            return Self::VoidNoOp;
+        }
+        if BOOL_SUCCESS_STUBS
+            .iter()
+            .any(|stub_name| normalize_name(stub_name) == name)
+        {
+            return Self::BoolSuccess;
+        }
+        if INVALID_HANDLE_STUBS
+            .iter()
+            .any(|stub_name| normalize_name(stub_name) == name)
+        {
+            return Self::InvalidHandle;
+        }
+        if NULL_POINTER_STUB_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(&normalize_name(prefix)))
+        {
+            return Self::NullPointer;
+        }
+        if BOOL_FAILURE_STUB_PREFIXES
+            .iter()
+            .any(|prefix| name.starts_with(&normalize_name(prefix)))
+        {
+            return Self::BoolFailure;
+        }
+        match subsystem {
+            CoredllSubsystem::Memory => Self::NullPointer,
+            CoredllSubsystem::FileSystem
+            | CoredllSubsystem::DeviceIo
+            | CoredllSubsystem::Registry
+            | CoredllSubsystem::GweWindow
+            | CoredllSubsystem::GweMessage
+            | CoredllSubsystem::GdiGraphics
+            | CoredllSubsystem::Multimedia
+            | CoredllSubsystem::Comm
+            | CoredllSubsystem::Storage
+            | CoredllSubsystem::MsgQueue
+            | CoredllSubsystem::Power
+            | CoredllSubsystem::Services
+            | CoredllSubsystem::Telephony
+            | CoredllSubsystem::Security
+            | CoredllSubsystem::InputIme
+            | CoredllSubsystem::ShellUi
+            | CoredllSubsystem::Bluetooth
+            | CoredllSubsystem::EventLog
+            | CoredllSubsystem::Credential => Self::BoolFailure,
+            CoredllSubsystem::KernelSync
+            | CoredllSubsystem::ThreadProcess
+            | CoredllSubsystem::LocaleString
+            | CoredllSubsystem::Time
+            | CoredllSubsystem::Crypto
+            | CoredllSubsystem::Debug
+            | CoredllSubsystem::MathCrt
+            | CoredllSubsystem::KernelPrivate => Self::ZeroValue,
+        }
+    }
+
+    fn return_value(self) -> u32 {
+        match self {
+            Self::VoidNoOp | Self::ZeroValue => 0,
+            Self::BoolSuccess => 1,
+            Self::BoolFailure | Self::NullPointer => 0,
+            Self::InvalidHandle => u32::MAX,
+        }
+    }
+}
+
 impl CoredllExport {
     fn matches_name(&self, name: &str) -> bool {
         normalize_name(&self.name) == normalize_name(name)
@@ -373,6 +563,114 @@ impl CoredllExport {
                 .target
                 .as_deref()
                 .is_some_and(|target| normalize_name(target) == normalize_name(name))
+    }
+
+    pub fn subsystem(&self) -> CoredllSubsystem {
+        CoredllSubsystem::for_export(self)
+    }
+
+    pub fn has_real_shim(&self) -> bool {
+        IMPLEMENTED_EXPORTS
+            .iter()
+            .any(|name| self.matches_name(name))
+            || CEMATH_EXPORTS
+                .iter()
+                .any(|(name, _ordinal)| self.matches_name(name))
+    }
+}
+
+impl CoredllSubsystem {
+    fn for_export(export: &CoredllExport) -> Self {
+        let name = normalize_name(&export.name);
+        let target = export.target.as_deref().map(normalize_name);
+        if export.line == 0 || has_any_prefix(&name, MATH_PREFIXES) {
+            return Self::MathCrt;
+        }
+        if has_any_prefix(&name, REGISTRY_PREFIXES) {
+            return Self::Registry;
+        }
+        if has_any_prefix(&name, MEMORY_PREFIXES) {
+            return Self::Memory;
+        }
+        if has_any_prefix(&name, SYNC_PREFIXES) {
+            return Self::KernelSync;
+        }
+        if has_any_prefix(&name, THREAD_PROCESS_PREFIXES) {
+            return Self::ThreadProcess;
+        }
+        if has_any_prefix(&name, TIME_PREFIXES) {
+            return Self::Time;
+        }
+        if has_any_prefix(&name, LOCALE_STRING_PREFIXES) {
+            return Self::LocaleString;
+        }
+        if has_any_prefix(&name, CRYPTO_PREFIXES) {
+            return Self::Crypto;
+        }
+        if has_any_prefix(&name, COMM_PREFIXES) {
+            return Self::Comm;
+        }
+        if has_any_prefix(&name, DEVICE_IO_PREFIXES) {
+            return Self::DeviceIo;
+        }
+        if has_any_prefix(&name, STORAGE_PREFIXES) {
+            return Self::Storage;
+        }
+        if has_any_prefix(&name, MSG_QUEUE_PREFIXES) {
+            return Self::MsgQueue;
+        }
+        if has_any_prefix(&name, POWER_PREFIXES) {
+            return Self::Power;
+        }
+        if has_any_prefix(&name, SERVICE_PREFIXES) {
+            return Self::Services;
+        }
+        if has_any_prefix(&name, TELEPHONY_PREFIXES) {
+            return Self::Telephony;
+        }
+        if has_any_prefix(&name, SECURITY_PREFIXES) {
+            return Self::Security;
+        }
+        if has_any_prefix(&name, DEBUG_PREFIXES) {
+            return Self::Debug;
+        }
+        if has_any_prefix(&name, INPUT_IME_PREFIXES) {
+            return Self::InputIme;
+        }
+        if has_any_prefix(&name, SHELL_UI_PREFIXES) {
+            return Self::ShellUi;
+        }
+        if has_any_prefix(&name, BLUETOOTH_PREFIXES) {
+            return Self::Bluetooth;
+        }
+        if has_any_prefix(&name, EVENT_LOG_PREFIXES) {
+            return Self::EventLog;
+        }
+        if has_any_prefix(&name, CREDENTIAL_PREFIXES) {
+            return Self::Credential;
+        }
+        if has_any_prefix(&name, GWE_MESSAGE_PREFIXES) {
+            return Self::GweMessage;
+        }
+        if has_any_prefix(&name, GWE_WINDOW_PREFIXES) || (246..=293).contains(&export.ordinal) {
+            return Self::GweWindow;
+        }
+        if has_any_prefix(&name, GDI_PREFIXES) || (873..=987).contains(&export.ordinal) {
+            return Self::GdiGraphics;
+        }
+        if has_any_prefix(&name, MULTIMEDIA_PREFIXES) || (379..=454).contains(&export.ordinal) {
+            return Self::Multimedia;
+        }
+        if has_any_prefix(&name, FILESYSTEM_PREFIXES) {
+            return Self::FileSystem;
+        }
+        if target
+            .as_deref()
+            .is_some_and(|target| has_any_prefix(target, FILESYSTEM_PREFIXES))
+        {
+            return Self::FileSystem;
+        }
+        Self::KernelPrivate
     }
 }
 
@@ -716,6 +1014,552 @@ fn extract_export_target(before_ordinal: &str) -> Option<String> {
 fn normalize_name(name: &str) -> String {
     name.to_ascii_lowercase()
 }
+
+fn has_any_prefix(name: &str, prefixes: &[&str]) -> bool {
+    prefixes
+        .iter()
+        .any(|prefix| name.starts_with(&normalize_name(prefix)))
+}
+
+const IMPLEMENTED_EXPORTS: &[&str] = &[
+    "RegCloseKey",
+    "RegOpenKeyExW",
+    "RegQueryValueExW",
+    "RegSetValueExW",
+    "CreateFileW",
+    "ReadFile",
+    "WriteFile",
+    "DeviceIoControl",
+    "CloseHandle",
+    "CreateEventW",
+    "EventModify",
+    "WaitForSingleObject",
+    "CreateMutexW",
+    "ReleaseMutex",
+    "CreateWindowExW",
+    "DestroyWindow",
+    "SetWindowTextW",
+    "GetWindowTextW",
+    "GetWindowLongW",
+    "SetWindowLongW",
+    "GetMessageW",
+    "PeekMessageW",
+    "PostMessageW",
+    "SendMessageW",
+    "DispatchMessageW",
+    "TranslateMessage",
+    "DefWindowProcW",
+    "SetTimer",
+    "KillTimer",
+    "GetTickCount",
+    "Sleep",
+    "waveOutGetNumDevs",
+    "waveOutOpen",
+    "waveOutWrite",
+    "waveOutPause",
+    "waveOutRestart",
+    "waveOutReset",
+    "waveOutClose",
+    "waveOutGetVolume",
+    "waveOutSetVolume",
+];
+
+const REGISTRY_PREFIXES: &[&str] = &[
+    "RegClose",
+    "RegCreate",
+    "RegDelete",
+    "RegEnum",
+    "RegOpen",
+    "RegQuery",
+    "RegSet",
+    "RegFlush",
+    "RegCopy",
+    "RegRestore",
+    "RegSave",
+    "RegReplace",
+    "CeReg",
+    "Registry",
+];
+const FILESYSTEM_PREFIXES: &[&str] = &[
+    "CreateFile",
+    "ReadFile",
+    "WriteFile",
+    "CopyFile",
+    "DeleteFile",
+    "MoveFile",
+    "FindFirstFile",
+    "FindNextFile",
+    "FindClose",
+    "FindFirstChange",
+    "FindNextChange",
+    "GetFile",
+    "SetFile",
+    "FlushFile",
+    "LockFile",
+    "UnlockFile",
+    "CreateDirectory",
+    "RemoveDirectory",
+    "GetDisk",
+    "GetStore",
+    "CeFs",
+    "CeGetVolume",
+    "AFS_",
+    "LoadFSD",
+    "RegisterAFS",
+    "DeregisterAFS",
+];
+const DEVICE_IO_PREFIXES: &[&str] = &[
+    "DeviceIoControl",
+    "RegisterDevice",
+    "DeregisterDevice",
+    "ActivateDevice",
+    "DeactivateDevice",
+    "GetDevice",
+    "EnumDevice",
+    "OpenDevice",
+    "DDKReg",
+    "Resource",
+    "ClearComm",
+    "EscapeComm",
+    "GetComm",
+    "PurgeComm",
+    "SetComm",
+    "SetupComm",
+    "TransmitComm",
+    "WaitComm",
+];
+const GWE_MESSAGE_PREFIXES: &[&str] = &[
+    "DispatchMessage",
+    "GetMessage",
+    "PeekMessage",
+    "PostMessage",
+    "PostQuitMessage",
+    "PostThreadMessage",
+    "SendMessage",
+    "SendNotifyMessage",
+    "TranslateMessage",
+    "MsgWait",
+    "InSendMessage",
+    "GetQueue",
+];
+const GWE_WINDOW_PREFIXES: &[&str] = &[
+    "CreateWindow",
+    "DestroyWindow",
+    "DefWindow",
+    "SetWindow",
+    "GetWindow",
+    "IsWindow",
+    "MoveWindow",
+    "ShowWindow",
+    "UpdateWindow",
+    "Invalidate",
+    "Validate",
+    "BeginPaint",
+    "EndPaint",
+    "GetDC",
+    "ReleaseDC",
+    "SetParent",
+    "GetParent",
+    "FindWindow",
+    "EnableWindow",
+    "CallWindow",
+    "MapWindow",
+    "RegisterClass",
+    "UnregisterClass",
+    "GetClass",
+    "SetClass",
+    "SetTimer",
+    "KillTimer",
+    "CreateDialog",
+    "DialogBox",
+    "DefDlg",
+    "GetDlg",
+    "SetDlg",
+    "EndDialog",
+    "IsDialog",
+    "CheckRadio",
+];
+const GDI_PREFIXES: &[&str] = &[
+    "CreateDIB",
+    "CreateBitmap",
+    "CreateCompatible",
+    "CreateFont",
+    "CreatePen",
+    "CreateSolidBrush",
+    "CreatePatternBrush",
+    "CreatePalette",
+    "CreateRectRgn",
+    "BitBlt",
+    "Stretch",
+    "SetDIB",
+    "GetDIB",
+    "Draw",
+    "ExtText",
+    "GetText",
+    "SetText",
+    "DeleteObject",
+    "DeleteDC",
+    "GetObject",
+    "GetStock",
+    "SelectObject",
+    "Fill",
+    "PatBlt",
+    "Rectangle",
+    "RoundRect",
+    "Ellipse",
+    "Polygon",
+    "Polyline",
+    "LineTo",
+    "MoveTo",
+    "AlphaBlend",
+    "GradientFill",
+    "CombineRgn",
+    "IntersectClip",
+    "SelectClip",
+    "OffsetRgn",
+    "PtInRegion",
+    "RectInRegion",
+];
+const MULTIMEDIA_PREFIXES: &[&str] = &[
+    "wave", "mixer", "acm", "midi", "line", "phone", "Audio", "snd",
+];
+const MEMORY_PREFIXES: &[&str] = &[
+    "LocalAlloc",
+    "LocalReAlloc",
+    "LocalSize",
+    "LocalFree",
+    "RemoteLocal",
+    "RemoteHeap",
+    "Heap",
+    "Virtual",
+    "MapView",
+    "UnmapView",
+    "CreateFileMapping",
+    "CreateFileForMapping",
+    "CeVirtual",
+    "CeSafeCopyMemory",
+    "MapPtr",
+];
+const SYNC_PREFIXES: &[&str] = &[
+    "InitializeCriticalSection",
+    "DeleteCriticalSection",
+    "EnterCriticalSection",
+    "LeaveCriticalSection",
+    "TryEnterCriticalSection",
+    "Interlocked",
+    "CreateEvent",
+    "EventModify",
+    "WaitFor",
+    "CreateMutex",
+    "ReleaseMutex",
+    "SignalStarted",
+];
+const THREAD_PROCESS_PREFIXES: &[&str] = &[
+    "Thread",
+    "CreateThread",
+    "ExitThread",
+    "TerminateThread",
+    "SuspendThread",
+    "ResumeThread",
+    "GetThread",
+    "SetThread",
+    "CreateProcess",
+    "TerminateProcess",
+    "OpenProcess",
+    "OpenThread",
+    "GetProcess",
+    "SetProc",
+    "GetProc",
+    "IsProcess",
+    "Tls",
+    "ConvertThreadToFiber",
+    "CreateFiber",
+    "DeleteFiber",
+    "SwitchToFiber",
+    "GetCurrentFiber",
+    "GetFiberData",
+    "CloseHandle",
+];
+const TIME_PREFIXES: &[&str] = &[
+    "GetTick",
+    "Sleep",
+    "GetSystemTime",
+    "SetSystemTime",
+    "GetLocalTime",
+    "SetLocalTime",
+    "FileTime",
+    "CompareFileTime",
+    "GetTimeZone",
+    "SetTimeZone",
+    "CeGetRawTime",
+];
+const LOCALE_STRING_PREFIXES: &[&str] = &[
+    "String",
+    "lstr",
+    "wsprintf",
+    "wvsprintf",
+    "MultiByte",
+    "WideChar",
+    "CompareString",
+    "LCMap",
+    "GetLocale",
+    "SetLocale",
+    "GetACP",
+    "GetOEMCP",
+    "SetACP",
+    "SetOEMCP",
+    "GetCPInfo",
+    "IsDBCS",
+    "Char",
+    "FoldString",
+    "FormatMessage",
+    "GetDateFormat",
+    "GetTimeFormat",
+    "GetNumberFormat",
+    "GetCurrencyFormat",
+    "EnumCalendar",
+    "EnumTime",
+    "EnumDate",
+    "EnumSystem",
+    "GetStringType",
+    "GetSystemDefault",
+    "GetUserDefault",
+    "SetUserDefault",
+    "SetSystemDefault",
+    "ConvertDefaultLocale",
+    "IsValidLocale",
+    "IsValidCodePage",
+];
+const CRYPTO_PREFIXES: &[&str] = &["Crypt", "A_SHA", "MD5", "IsEncryption"];
+const COMM_PREFIXES: &[&str] = &[
+    "ClearComm",
+    "EscapeComm",
+    "GetComm",
+    "PurgeComm",
+    "SetComm",
+    "SetupComm",
+    "TransmitComm",
+    "WaitComm",
+];
+const STORAGE_PREFIXES: &[&str] = &[
+    "OpenStore",
+    "DismountStore",
+    "FormatStore",
+    "FindFirstStore",
+    "FindNextStore",
+    "FindCloseStore",
+    "CreatePartition",
+    "DeletePartition",
+    "OpenPartition",
+    "MountPartition",
+    "DismountPartition",
+    "RenamePartition",
+    "SetPartition",
+    "GetPartition",
+    "FormatPartition",
+    "FindFirstPartition",
+    "FindNextPartition",
+    "FindClosePartition",
+    "GetStoreInfo",
+];
+const MSG_QUEUE_PREFIXES: &[&str] = &[
+    "CreateMsgQueue",
+    "ReadMsgQueue",
+    "WriteMsgQueue",
+    "GetMsgQueue",
+    "CloseMsgQueue",
+    "OpenMsgQueue",
+];
+const POWER_PREFIXES: &[&str] = &[
+    "Power",
+    "Battery",
+    "SetSystemPower",
+    "GetSystemPower",
+    "SetDevicePower",
+    "GetDevicePower",
+    "RequestPower",
+    "StopPower",
+    "DevicePower",
+    "ReleasePower",
+];
+const SERVICE_PREFIXES: &[&str] = &[
+    "Service",
+    "ActivateService",
+    "RegisterService",
+    "DeregisterService",
+    "CloseAllService",
+];
+const TELEPHONY_PREFIXES: &[&str] = &["line", "phone"];
+const SECURITY_PREFIXES: &[&str] = &[
+    "CeAccess",
+    "CePrivilege",
+    "CeCreateToken",
+    "CeImpersonate",
+    "CeGetOwner",
+    "CeGetGroup",
+    "CeConvert",
+    "ADB",
+    "CheckPassword",
+    "SetPassword",
+    "GetPassword",
+    "VerifyUser",
+    "LASS",
+    "CePolicy",
+    "CeCert",
+];
+const DEBUG_PREFIXES: &[&str] = &[
+    "Debug",
+    "Attach",
+    "Connect",
+    "CaptureDump",
+    "ReportFault",
+    "CeLog",
+    "Profile",
+    "SetDbg",
+    "GetLastError",
+    "SetLastError",
+    "OutputDebug",
+    "NKDbg",
+    "Rtl",
+];
+const INPUT_IME_PREFIXES: &[&str] = &[
+    "Imm",
+    "Ime",
+    "DefaultIm",
+    "SendInput",
+    "mouse",
+    "keybd",
+    "Keybd",
+    "GetAsync",
+    "GetKey",
+    "MapVirtualKey",
+    "PostKeybd",
+    "EnableHardwareKeyboard",
+    "RegisterHotKey",
+    "UnregisterHotKey",
+    "SetWindowsHook",
+    "UnhookWindowsHook",
+    "CallNextHook",
+    "AllKeys",
+    "Touch",
+    "Gesture",
+    "Sip",
+];
+const SHELL_UI_PREFIXES: &[&str] = &[
+    "CreateCaret",
+    "DestroyCaret",
+    "HideCaret",
+    "ShowCaret",
+    "SetCaret",
+    "GetCaret",
+    "OpenClipboard",
+    "CloseClipboard",
+    "GetClipboard",
+    "SetClipboard",
+    "RegisterClipboard",
+    "CountClipboard",
+    "EnumClipboard",
+    "EmptyClipboard",
+    "IsClipboard",
+    "GetPriorityClipboard",
+    "InsertMenu",
+    "AppendMenu",
+    "RemoveMenu",
+    "DestroyMenu",
+    "TrackPopupMenu",
+    "LoadMenu",
+    "EnableMenu",
+    "CheckMenu",
+    "DeleteMenu",
+    "CreateMenu",
+    "CreatePopupMenu",
+    "SetMenu",
+    "GetMenu",
+    "DrawMenuBar",
+    "MessageBox",
+    "MessageBeep",
+    "Shell",
+    "NotifyWinUser",
+    "ExtractIcon",
+    "CreateIcon",
+    "DestroyIcon",
+    "DrawIcon",
+    "LoadIcon",
+    "GetIcon",
+    "DestroyCursor",
+    "CreateCursor",
+    "SetCursor",
+    "LoadCursor",
+    "ClipCursor",
+    "GetCursor",
+    "ShowCursor",
+    "LoadImage",
+    "ImageList",
+];
+const BLUETOOTH_PREFIXES: &[&str] = &["Bluetooth"];
+const EVENT_LOG_PREFIXES: &[&str] = &[
+    "ClearEventLog",
+    "ReportEvent",
+    "RegisterEventSource",
+    "DeregisterEventSource",
+    "OpenEventLog",
+    "CloseEventLog",
+    "BackupEventLog",
+    "LockEventLog",
+    "UnLockEventLog",
+    "ReadEventLog",
+];
+const CREDENTIAL_PREFIXES: &[&str] = &["Cred"];
+const MATH_PREFIXES: &[&str] = &[
+    "__", "abs", "acos", "asin", "atan", "ceil", "cos", "div", "exp", "fabs", "floor", "fmod",
+    "frexp", "labs", "ldexp", "ldiv", "log", "modf", "pow", "sin", "sqrt", "tan", "MulDiv",
+    "Random",
+];
+
+const VOID_NOOP_STUBS: &[&str] = &[
+    "InitializeCriticalSection",
+    "DeleteCriticalSection",
+    "EnterCriticalSection",
+    "LeaveCriticalSection",
+    "SetLastError",
+    "OutputDebugStringW",
+    "OutputDebugStringA",
+];
+
+const BOOL_SUCCESS_STUBS: &[&str] = &[
+    "TryEnterCriticalSection",
+    "IsValidLocale",
+    "IsValidCodePage",
+];
+
+const INVALID_HANDLE_STUBS: &[&str] = &[
+    "CreateFileForMappingW",
+    "CreateFileMappingW",
+    "CreateProcessW",
+    "CreateThread",
+    "LoadLibraryW",
+    "LoadLibraryExW",
+];
+
+const NULL_POINTER_STUB_PREFIXES: &[&str] = &[
+    "LocalAlloc",
+    "VirtualAlloc",
+    "MapViewOfFile",
+    "HeapAlloc",
+    "TlsGetValue",
+    "GetProcAddress",
+    "GetModuleHandle",
+];
+
+const BOOL_FAILURE_STUB_PREFIXES: &[&str] = &[
+    "LocalFree",
+    "VirtualFree",
+    "UnmapViewOfFile",
+    "HeapFree",
+    "TlsFree",
+    "TlsSetValue",
+    "FreeLibrary",
+];
 
 const CEMATH_EXPORTS: &[(&str, u32)] = &[
     ("abs", 988),
