@@ -8,19 +8,14 @@
   - Evidence: PE image mapping and import traps are not implemented yet.
   - Status: expected initial scaffold limitation.
 
-- Parsed PE images are not mapped into Unicorn yet.
-  - Symptom: `--image` parses PE32 headers, sections, imports, exports, and
-    relocations, but CPU execution still does not load the mapped image.
-  - Evidence: `src/pe/mod.rs` can produce mapped image bytes; no Unicorn loader
-    consumes them yet.
-  - Status: next implementation step.
-
-- COREDLL dispatcher is not connected to guest import traps yet.
-  - Symptom: subsystem APIs can be exercised from Rust tests, but guest PE calls
-    do not dispatch into them.
-  - Evidence: `src/ce/coredll.rs` resolves and dispatches typed calls, but no
-    MIPS import thunk/trap argument decoder exists yet.
-  - Status: expected until PE mapping and import trap work lands.
+- Main process launch has not been driven to a stable guest entry yet.
+  - Symptom: PE images and import traps can be prepared, but the target main
+    EXE has not yet produced a successful bounded Unicorn run.
+  - Evidence: `src/emulator/unicorn.rs` maps PE image bytes, installs import
+    hooks, and records PC/RA/SP/v0/v1/a0-a3/t9 debug snapshots; next run must
+    use the exact target path from `RULES.md` and inspect the first real
+    failure.
+  - Status: next bounded-run diagnostic.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch
@@ -37,6 +32,15 @@
     focus/messages, unplugged waveOut adapter marshalling, resources, and COM
     state.
   - Status: active ordinal-by-ordinal implementation work.
+
+- External DLL import traps are launch stubs, not final DLL implementations.
+  - Symptom: MFC400/mfcce400, commctrl, WINSOCK, and OLE imports can be patched
+    to trap addresses so execution can proceed, but most functions return only
+    conservative placeholder values.
+  - Evidence: `src/emulator/imports.rs` classifies these modules and logs
+    external import calls; real behavior still needs MFC/commctrl/WINSOCK/OLE
+    subsystem shims.
+  - Status: active launch-enabling diagnostic layer.
 
 - PE resources are not loaded into `ResourceSystem` yet.
   - Symptom: resource API behavior works for registered virtual resources and

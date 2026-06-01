@@ -24,6 +24,9 @@ shortcuts:
   routines
 - PE32 parser for DOS/NT/COFF headers, optional headers, sections, imports,
   exports, relocations, RVA mapping, and mapped image bytes
+- Unicorn launch prep for mapping PE image bytes, patching supported import
+  DLL slots to trap stubs, dispatching COREDLL traps through the raw ordinal
+  dispatcher, and reporting PC/RA/SP/v0/v1/a0-a3/t9 debug snapshots on failure
 - remote-control API state for touch/key input, GPS/NMEA serial injection, IMU
   state, pause/resume, status JSON, logs, and audio chunks
 - audio sink registry for host, websocket, and debug logging adapters; the host
@@ -55,9 +58,8 @@ Inspect a PE image without executing it:
 cargo run -- --image /mnt/d/INAVI_Emulator/INAVI/INavi/INavi.exe
 ```
 
-CPU execution is intentionally behind the `unicorn` feature until PE mapping and
-import traps are wired:
+CPU execution is behind the `unicorn` feature:
 
 ```bash
-cargo run --features unicorn -- --run-cpu
+cargo run --features unicorn -- --image /mnt/d/INAVI_Emulator/INAVI/INavi/INavi.exe --run-cpu
 ```

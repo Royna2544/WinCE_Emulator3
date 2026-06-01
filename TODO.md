@@ -2,10 +2,11 @@
 
 ## Immediate
 
-- Wire the Unicorn backend to map guest memory regions into the engine.
-- Map parsed MIPS PE32 images into Unicorn memory.
-- Build import thunk/trap handling that decodes guest MIPS arguments and calls
-  the COREDLL dispatcher.
+- Run a bounded Unicorn launch of
+  `/mnt/d/INAVI_Emulator/INAVI/INavi/INavi.exe` and capture the first concrete
+  PC/RA/SP/v0/v1/a0-a3/t9 failure snapshot.
+- Replace launch-stub behavior for MFC400/mfcce400, commctrl, WINSOCK, and OLE
+  imports with real subsystem-backed implementations as import traces demand.
 - Continue burning down COREDLL ordinals subsystem by subsystem, replacing
   stubbed ordinal plan entries with CE/MFC/SDK-referenced semantics. Next
   likely tranche: PE-backed resource string/icon/bitmap loading, COM/OLE API

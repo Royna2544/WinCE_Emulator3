@@ -130,17 +130,29 @@
     middle-joined websocket devices attach at the host audio timeline and
     receive a trimmed partial chunk when the host is already inside a retained
     chunk.
-  - Debug builds include `LoggingAudioSink`, which records/logs PCM submissions
-    and flush hints for short-audio debugging.
+- Debug builds include `LoggingAudioSink`, which records/logs PCM submissions
+  and flush hints for short-audio debugging.
+- Unicorn launch prep is wired:
+  - parsed PE images can be mapped into the Unicorn memory plan
+  - COREDLL, MFC400/mfcce400-style, commctrl, winsock, and OLE import slots are
+    patched to shim trap addresses
+  - COREDLL traps decode MIPS `a0`-`a3`, dispatch through the raw ordinal
+    dispatcher, write `v0`, and retain a debug snapshot with PC/RA/SP/v0/v1/
+    a0-a3/t9 on run failure
+  - non-COREDLL supported DLLs currently use module-owned launch stubs with
+    debug logs, not final API semantics
 
 ## Current State
 
-- CPU execution is not yet wired to mapped PE images or import traps.
+- CPU execution is wired far enough to load mapped PE images and dispatch import
+  traps, but the app has not yet been successfully launched through its main
+  procedure.
 - The default bootstrap uses `regs.json` as backing storage for the fake CE
   registry API and creates base GWE, timer, audio, and memory-map state.
-- The virtual Win32/CE framework and COREDLL dispatcher are ready for guest
-  import traps to call into. PE import tables can now be parsed, but import trap
-  patching and Unicorn memory mapping are not wired yet.
+- The virtual Win32/CE framework and COREDLL dispatcher are connected to Unicorn
+  import traps. External DLLs needed by the target are trap-patched, but MFC,
+  commctrl, WINSOCK, and OLE behavior still needs real subsystem-backed
+  implementation.
 - Many COREDLL ordinals are classified and dispatchable but still stubbed by
   subsystem. Kernel/thread/time/sync, memory/local/heap/virtual allocation,
   raw file buffer marshalling, first GWE HWND/RECT/text/window-long/focus/message
