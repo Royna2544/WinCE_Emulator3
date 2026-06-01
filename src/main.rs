@@ -87,8 +87,20 @@ fn main() -> Result<()> {
     if let Some(image_path) = args.image {
         let image = PeImage::inspect(image_path)?;
         println!(
-            "  PE image: {} ({} bytes, lfanew=0x{:08x})",
-            image.path, image.len, image.dos_lfanew
+            "  PE image: {} ({} bytes, lfanew=0x{:08x}, machine=0x{:04x})",
+            image.path, image.len, image.dos_lfanew, image.coff_header.machine
+        );
+        println!(
+            "  PE layout: image_base=0x{:08x} entry_va=0x{:08x} sections={} imports={} exports={} reloc_blocks={}",
+            image.image_base(),
+            image.entry_point_va(),
+            image.sections.len(),
+            image.imports.len(),
+            image
+                .exports
+                .as_ref()
+                .map_or(0, |exports| exports.functions.len()),
+            image.base_relocations.len()
         );
     }
 

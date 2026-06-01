@@ -14,6 +14,8 @@ shortcuts:
   list
 - simple CE CRT/math dispatch for common floating-point math and MIPS helper
   routines
+- PE32 parser for DOS/NT/COFF headers, optional headers, sections, imports,
+  exports, relocations, RVA mapping, and mapped image bytes
 - host-backed file API with contained guest-path translation
 - device namespace loading from `serial_devices.json`
 - kernel object handles
@@ -21,7 +23,6 @@ shortcuts:
 - timer bookkeeping
 - waveOut-style audio state and buffers
 - memory map validation and a Unicorn MIPS adapter boundary
-- minimal PE image inspection
 
 Behavior references are tracked in `SOURCE_REFERENCES.md`.
 

@@ -3,7 +3,7 @@
 ## Immediate
 
 - Wire the Unicorn backend to map guest memory regions into the engine.
-- Implement MIPS PE loading for the target executable.
+- Map parsed MIPS PE32 images into Unicorn memory.
 - Build import thunk/trap handling that decodes guest MIPS arguments and calls
   the COREDLL dispatcher.
 - Connect guest MFC, CRT-like exports, and WINSOCK imports.

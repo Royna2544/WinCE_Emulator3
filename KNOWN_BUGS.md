@@ -8,10 +8,11 @@
   - Evidence: PE image mapping and import traps are not implemented yet.
   - Status: expected initial scaffold limitation.
 
-- PE loading is inspection-only.
-  - Symptom: `--image` validates the MZ header and reports `e_lfanew`, but does
-    not map sections.
-  - Evidence: `src/pe/mod.rs` only performs minimal image inspection.
+- Parsed PE images are not mapped into Unicorn yet.
+  - Symptom: `--image` parses PE32 headers, sections, imports, exports, and
+    relocations, but CPU execution still does not load the mapped image.
+  - Evidence: `src/pe/mod.rs` can produce mapped image bytes; no Unicorn loader
+    consumes them yet.
   - Status: next implementation step.
 
 - COREDLL dispatcher is not connected to guest import traps yet.

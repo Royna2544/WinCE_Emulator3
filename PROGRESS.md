@@ -15,7 +15,8 @@
   - waveOut-style audio state
   - memory map validation
   - Unicorn MIPS adapter boundary
-  - minimal PE image inspection
+  - PE32 image parsing for headers, sections, imports, exports, relocations, and
+    mapped image bytes
 - Source references are recorded in `SOURCE_REFERENCES.md` for CE registry,
   GWE queue, waveOut exports, and MFC message pump behavior.
 - Rust smoke tests cover bootstrapping registry/device JSON backing plus basic
@@ -44,6 +45,13 @@
 - COREDLL dispatch table now augments `core_common.def` parsing with selected
   CRT/math ordinals from `crt_ordinals.h`; current table coverage is 1,752
   export entries.
+- PE parsing now validates DOS/NT signatures, reads COFF and PE32 optional
+  headers, tracks all 16 standard data directories, maps RVAs through section
+  headers, parses import descriptors/thunks by name or ordinal, parses export
+  functions, parses base relocation blocks, and can build a zero-filled mapped
+  image buffer.
+- PE parser smoke tests build a synthetic MIPS R4000 PE32 image with imports,
+  exports, relocations, and mapped section data.
 
 ## Current State
 
@@ -51,7 +59,8 @@
 - The default bootstrap uses `regs.json` as backing storage for the fake CE
   registry API and creates base GWE, timer, audio, and memory-map state.
 - The virtual Win32/CE framework and COREDLL dispatcher are ready for guest
-  import traps to call into, but PE import traps are not wired yet.
+  import traps to call into. PE import tables can now be parsed, but import trap
+  patching and Unicorn memory mapping are not wired yet.
 
 ## False Leads
 
