@@ -38,6 +38,7 @@ pub struct UnicornDebugSnapshot {
     pub trap_ordinal: Option<u32>,
     pub memory_fault: Option<UnicornMemoryFault>,
     pub function_pointer_probe: Option<UnicornFunctionPointerProbe>,
+    pub memory_write_probe: Option<UnicornMemoryWriteProbe>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +57,16 @@ pub struct UnicornFunctionPointerProbe {
     pub value: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornMemoryWriteProbe {
+    pub pc: u32,
+    pub ra: u32,
+    pub sp: u32,
+    pub address: u32,
+    pub size: usize,
+    pub value: i64,
+}
+
 const USER_KDATA_PAGE_BASE: u32 = 0x0000_5000;
 const USER_KDATA_PAGE_SIZE: u32 = 0x0000_1000;
 const USER_KDATA_BASE: u32 = 0x0000_5800;
@@ -68,6 +79,12 @@ const GUEST_HEAP_ARENA_SIZE: u32 = 0x0100_0000;
 const MAIN_DESTRUCTOR_BRANCH_PC: u32 = 0x0048_f9cc;
 #[cfg(feature = "unicorn")]
 const MAIN_DESTRUCTOR_JALR_PC: u32 = 0x0048_f9d4;
+#[cfg(feature = "unicorn")]
+const MAIN_DESTRUCTOR_BAD_SLOT: u32 = 0x3000_2390;
+#[cfg(feature = "unicorn")]
+const MAIN_DESTRUCTOR_TABLE_WATCH_BASE: u32 = 0x3000_2000;
+#[cfg(feature = "unicorn")]
+const MAIN_DESTRUCTOR_TABLE_WATCH_END: u32 = 0x3000_24ff;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -382,6 +399,34 @@ impl UnicornMips {
         )
         .map_err(|err| Error::Backend(format!("install function-pointer probe: {err:?}")))?;
 
+        let memory_write_probe = Rc::new(RefCell::new(None));
+        let memory_write_probe_hook = Rc::clone(&memory_write_probe);
+        uc.add_mem_hook(
+            HookType::MEM_WRITE,
+            u64::from(MAIN_DESTRUCTOR_TABLE_WATCH_BASE),
+            u64::from(MAIN_DESTRUCTOR_TABLE_WATCH_END),
+            move |uc, _access, address, size, value| {
+                let address = address as u32;
+                let end = address.saturating_add(size as u32);
+                let touches_bad_slot = address < MAIN_DESTRUCTOR_BAD_SLOT.saturating_add(4)
+                    && end > MAIN_DESTRUCTOR_BAD_SLOT;
+                let writes_low_pointer = size == 4 && value as u32 == 0x0001_0000;
+                if !touches_bad_slot && !writes_low_pointer {
+                    return true;
+                }
+                *memory_write_probe_hook.borrow_mut() = Some(UnicornMemoryWriteProbe {
+                    pc: read_mips_reg(uc, RegisterMIPS::PC),
+                    ra: read_mips_reg(uc, RegisterMIPS::RA),
+                    sp: read_mips_reg(uc, RegisterMIPS::SP),
+                    address,
+                    size,
+                    value,
+                });
+                true
+            },
+        )
+        .map_err(|err| Error::Backend(format!("install memory-write probe: {err:?}")))?;
+
         let memory_fault = Rc::new(RefCell::new(None));
         let memory_fault_hook = Rc::clone(&memory_fault);
         uc.add_mem_hook(
@@ -410,6 +455,7 @@ impl UnicornMips {
             &self.import_traps,
             memory_fault.borrow().clone(),
             function_pointer_probe.borrow().clone(),
+            memory_write_probe.borrow().clone(),
         ));
         result.map_err(|err| {
             let snapshot = self
@@ -568,6 +614,13 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 probe.pc, probe.slot, probe.value
             )?;
         }
+        if let Some(probe) = self.memory_write_probe.as_ref() {
+            write!(
+                f,
+                " write_pc=0x{:08x} write_ra=0x{:08x} write_sp=0x{:08x} write_addr=0x{:08x} write_size={} write_value=0x{:x}",
+                probe.pc, probe.ra, probe.sp, probe.address, probe.size, probe.value
+            )?;
+        }
         Ok(())
     }
 }
@@ -609,6 +662,7 @@ fn capture_debug_snapshot<D>(
     traps: &ImportTrapTable,
     memory_fault: Option<UnicornMemoryFault>,
     function_pointer_probe: Option<UnicornFunctionPointerProbe>,
+    memory_write_probe: Option<UnicornMemoryWriteProbe>,
 ) -> UnicornDebugSnapshot {
     use unicorn_engine::RegisterMIPS;
 
@@ -630,6 +684,7 @@ fn capture_debug_snapshot<D>(
         trap_ordinal: trap.and_then(|trap| trap.ordinal),
         memory_fault,
         function_pointer_probe,
+        memory_write_probe,
     }
 }
 

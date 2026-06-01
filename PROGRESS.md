@@ -162,6 +162,10 @@
   currently `jalr` from `0x0048f9d4` through slot `0x30002390` with value
   `0x00010000`, so the immediate launch failure is a low/invalid registered
   function pointer rather than a normal guest exit.
+- A follow-up write probe showed the exit table slot `0x30002390` was populated
+  by guest code at `0x0048f864` with callback `0x00019d7c`; that callback is
+  valid app code. The remaining `pc=0` symptom is therefore the direct Unicorn
+  entry lacking a CE loader/thread-exit return address after cleanup completes.
 
 ## Current State
 
