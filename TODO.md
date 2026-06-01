@@ -37,9 +37,10 @@
 ## Later
 
 - Implement drawing surfaces and blit paths.
-- Keep host audio playback unplugged until guest callback/import trap semantics
-  are traced; current waveOut work is a virtual adapter only, with
-  `HostAudioSink` and `WebSocketAudioSink` boundaries ready for later binding.
+- Keep actual host audio playback unplugged until guest callback/import trap
+  semantics are traced; current waveOut work is a virtual adapter only, with an
+  `AudioSinkRegistry`, a Windows `winmm` host-sink boundary, websocket sink, and
+  debug logging sink ready for later binding.
 - Implement socket behavior for WINSOCK imports.
 
 ## Parked

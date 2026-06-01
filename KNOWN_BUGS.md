@@ -51,5 +51,6 @@
     state, but there is no HTTP/WebSocket listener serving `/api/v1/...`.
   - Evidence: `src/ce/remote.rs` implements state and control dispatch only;
     websocket audio sink state already tracks per-client host-time cursors and
-    flush-marked chunks, but no socket writer consumes them yet.
+    flush-marked chunks, and `AudioSinkRegistry` can fan out to host/websocket/
+    debug sinks, but no socket writer consumes them yet.
   - Status: expected until host transport work lands.

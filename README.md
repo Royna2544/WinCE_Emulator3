@@ -26,9 +26,10 @@ shortcuts:
   exports, relocations, RVA mapping, and mapped image bytes
 - remote-control API state for touch/key input, GPS/NMEA serial injection, IMU
   state, pause/resume, status JSON, logs, and audio chunks
-- audio sink classes for an unplugged host adapter and websocket PCM streaming
-  with per-client host-time cursors, partial late-join chunks, and immediate
-  flush markers for short sounds
+- audio sink registry for host, websocket, and debug logging adapters; the host
+  boundary has a Windows `winmm` constructor through the `windows` crate, while
+  websocket PCM keeps per-client host-time cursors, partial late-join chunks,
+  and immediate flush markers for short sounds
 - resource and COM subsystem state for HRSRC-like resource lookup and
   CoInitializeEx/class/object lifecycle modeling
 - host-backed file API with contained guest-path translation

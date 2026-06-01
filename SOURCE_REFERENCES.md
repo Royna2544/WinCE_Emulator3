@@ -172,6 +172,8 @@ anchors, not app-specific shortcuts.
     audio to the host playback cursor, so the Rust websocket sink models
     host-time client cursors and partial-chunk late joins instead of a single
     global audio drain.
-  - Rust now splits audio delivery into `HostAudioSink` and
-    `WebSocketAudioSink` adapter classes; only the websocket/remote queue is
-    connected, while host playback remains deliberately unplugged.
+  - Rust now splits audio delivery into registered sink adapters:
+    `HostAudioSink`, `WebSocketAudioSink`, and debug-only `LoggingAudioSink`;
+    only the websocket/remote queue is connected, while host playback remains
+    deliberately unplugged even though the Windows host boundary is represented
+    with the `windows` crate.

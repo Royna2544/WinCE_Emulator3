@@ -34,15 +34,63 @@ pub struct AudioChunk {
     pub flush: bool,
 }
 
+impl AudioChunk {
+    fn new(payload: Vec<u8>, sequence: u64, pts_ms: u64, duration_ms: u32, flush: bool) -> Self {
+        Self {
+            payload,
+            sequence,
+            pts_ms,
+            duration_ms: duration_ms.max(1),
+            flush,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioSinkSubmit {
+    pub sink: String,
+    pub sequence: Option<u64>,
+    pub accepted: bool,
+}
+
+pub trait AudioSink {
+    fn name(&self) -> &str;
+    fn submit_pcm(
+        &mut self,
+        payload: &[u8],
+        pts_ms: u64,
+        duration_ms: u32,
+        flush: bool,
+    ) -> Option<u64>;
+    fn flush(&mut self);
+    fn queued_chunk_count(&self) -> usize;
+}
+
+pub struct AudioSinkRegistry {
+    sinks: BTreeMap<String, Box<dyn AudioSink>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostAudioSink {
+    name: String,
+    backend: HostAudioBackend,
     connected: bool,
     submitted: VecDeque<AudioChunk>,
     max_chunks: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HostAudioBackend {
+    Unplugged,
+    #[cfg(windows)]
+    Winmm {
+        device_count: u32,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebSocketAudioSink {
+    name: String,
     chunks: VecDeque<AudioChunk>,
     clients: BTreeMap<u64, WebSocketAudioCursor>,
     next_client_id: u64,
@@ -55,6 +103,25 @@ pub struct WebSocketAudioSink {
 struct WebSocketAudioCursor {
     next_sequence: u64,
     trim_before_ms: Option<u64>,
+}
+
+#[cfg(debug_assertions)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoggingAudioSink {
+    name: String,
+    events: VecDeque<LoggingAudioEvent>,
+    max_events: usize,
+    sequence: u64,
+}
+
+#[cfg(debug_assertions)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoggingAudioEvent {
+    pub sequence: u64,
+    pub bytes: usize,
+    pub pts_ms: u64,
+    pub duration_ms: u32,
+    pub flush: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -270,13 +337,121 @@ impl AudioSystem {
     }
 }
 
+impl Default for AudioSinkRegistry {
+    fn default() -> Self {
+        Self {
+            sinks: BTreeMap::new(),
+        }
+    }
+}
+
+impl std::fmt::Debug for AudioSinkRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AudioSinkRegistry")
+            .field("sinks", &self.sink_names())
+            .finish()
+    }
+}
+
+impl AudioSinkRegistry {
+    pub fn register<S>(&mut self, sink: S) -> bool
+    where
+        S: AudioSink + 'static,
+    {
+        let name = sink.name().to_owned();
+        if self.sinks.contains_key(&name) {
+            return false;
+        }
+        self.sinks.insert(name, Box::new(sink));
+        true
+    }
+
+    pub fn unregister(&mut self, name: &str) -> bool {
+        self.sinks.remove(name).is_some()
+    }
+
+    pub fn contains(&self, name: &str) -> bool {
+        self.sinks.contains_key(name)
+    }
+
+    pub fn len(&self) -> usize {
+        self.sinks.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.sinks.is_empty()
+    }
+
+    pub fn sink_names(&self) -> Vec<String> {
+        self.sinks.keys().cloned().collect()
+    }
+
+    pub fn submit_pcm(
+        &mut self,
+        payload: Vec<u8>,
+        pts_ms: u64,
+        duration_ms: u32,
+        flush: bool,
+    ) -> Vec<AudioSinkSubmit> {
+        self.sinks
+            .values_mut()
+            .map(|sink| {
+                let sequence = sink.submit_pcm(&payload, pts_ms, duration_ms, flush);
+                AudioSinkSubmit {
+                    sink: sink.name().to_owned(),
+                    accepted: sequence.is_some(),
+                    sequence,
+                }
+            })
+            .collect()
+    }
+
+    pub fn flush_all(&mut self) {
+        for sink in self.sinks.values_mut() {
+            sink.flush();
+        }
+    }
+
+    pub fn queued_chunk_count(&self, name: &str) -> Option<usize> {
+        self.sinks.get(name).map(|sink| sink.queued_chunk_count())
+    }
+}
+
 impl HostAudioSink {
     pub fn unplugged(max_chunks: usize) -> Self {
         Self {
+            name: "host".to_owned(),
+            backend: HostAudioBackend::Unplugged,
             connected: false,
             submitted: VecDeque::new(),
             max_chunks: max_chunks.max(1),
         }
+    }
+
+    pub fn named_unplugged(name: impl Into<String>, max_chunks: usize) -> Self {
+        Self {
+            name: name.into(),
+            backend: HostAudioBackend::Unplugged,
+            connected: false,
+            submitted: VecDeque::new(),
+            max_chunks: max_chunks.max(1),
+        }
+    }
+
+    #[cfg(windows)]
+    pub fn winmm(name: impl Into<String>, max_chunks: usize) -> Self {
+        let device_count = unsafe { windows::Win32::Media::Audio::waveOutGetNumDevs() };
+        Self {
+            name: name.into(),
+            backend: HostAudioBackend::Winmm { device_count },
+            connected: device_count > 0,
+            submitted: VecDeque::new(),
+            max_chunks: max_chunks.max(1),
+        }
+    }
+
+    pub fn backend(&self) -> &HostAudioBackend {
+        &self.backend
     }
 
     pub fn connect(&mut self) {
@@ -293,6 +468,16 @@ impl HostAudioSink {
     }
 
     pub fn submit_pcm(&mut self, payload: Vec<u8>, pts_ms: u64, duration_ms: u32) -> Option<u64> {
+        self.submit_pcm_with_flush(payload, pts_ms, duration_ms, true)
+    }
+
+    fn submit_pcm_with_flush(
+        &mut self,
+        payload: Vec<u8>,
+        pts_ms: u64,
+        duration_ms: u32,
+        flush: bool,
+    ) -> Option<u64> {
         if !self.connected || payload.is_empty() {
             return None;
         }
@@ -301,13 +486,13 @@ impl HostAudioSink {
             .back()
             .map(|chunk| chunk.sequence.saturating_add(1))
             .unwrap_or(1);
-        self.submitted.push_back(AudioChunk {
+        self.submitted.push_back(AudioChunk::new(
             payload,
             sequence,
             pts_ms,
-            duration_ms: duration_ms.max(1),
-            flush: true,
-        });
+            duration_ms,
+            flush,
+        ));
         while self.submitted.len() > self.max_chunks {
             self.submitted.pop_front();
         }
@@ -324,9 +509,47 @@ impl HostAudioSink {
     }
 }
 
+impl AudioSink for HostAudioSink {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn submit_pcm(
+        &mut self,
+        payload: &[u8],
+        pts_ms: u64,
+        duration_ms: u32,
+        flush: bool,
+    ) -> Option<u64> {
+        self.submit_pcm_with_flush(payload.to_vec(), pts_ms, duration_ms, flush)
+    }
+
+    fn flush(&mut self) {
+        if let Some(chunk) = self.submitted.back() {
+            tracing::debug!(
+                target: "ce.audio",
+                sink = self.name.as_str(),
+                backend = ?self.backend,
+                sequence = chunk.sequence,
+                bytes = chunk.payload.len(),
+                "host audio sink flush"
+            );
+        }
+    }
+
+    fn queued_chunk_count(&self) -> usize {
+        HostAudioSink::queued_chunk_count(self)
+    }
+}
+
 impl WebSocketAudioSink {
     pub fn new(max_chunks: usize) -> Self {
+        Self::named("websocket", max_chunks)
+    }
+
+    pub fn named(name: impl Into<String>, max_chunks: usize) -> Self {
         Self {
+            name: name.into(),
             chunks: VecDeque::new(),
             clients: BTreeMap::new(),
             next_client_id: 1,
@@ -367,20 +590,58 @@ impl WebSocketAudioSink {
     }
 
     pub fn publish_pcm(&mut self, payload: Vec<u8>, duration_ms: u32) -> Option<u64> {
+        self.publish_pcm_with_flush(payload, duration_ms, true)
+    }
+
+    pub fn publish_pcm_with_flush(
+        &mut self,
+        payload: Vec<u8>,
+        duration_ms: u32,
+        flush: bool,
+    ) -> Option<u64> {
         if payload.is_empty() {
             return None;
         }
         self.sequence += 1;
         let sequence = self.sequence;
         let duration_ms = duration_ms.max(1);
-        self.chunks.push_back(AudioChunk {
+        self.chunks.push_back(AudioChunk::new(
             payload,
             sequence,
-            pts_ms: self.next_pts_ms,
+            self.next_pts_ms,
             duration_ms,
-            flush: true,
-        });
+            flush,
+        ));
         self.next_pts_ms = self.next_pts_ms.saturating_add(u64::from(duration_ms));
+        while self.chunks.len() > self.max_chunks {
+            self.chunks.pop_front();
+        }
+        Some(sequence)
+    }
+
+    pub fn publish_pcm_at(
+        &mut self,
+        payload: Vec<u8>,
+        pts_ms: u64,
+        duration_ms: u32,
+        flush: bool,
+    ) -> Option<u64> {
+        if payload.is_empty() {
+            return None;
+        }
+        self.sequence += 1;
+        let sequence = self.sequence;
+        let duration_ms = duration_ms.max(1);
+        self.chunks.push_back(AudioChunk::new(
+            payload,
+            sequence,
+            pts_ms,
+            duration_ms,
+            flush,
+        ));
+        self.next_pts_ms = self
+            .next_pts_ms
+            .max(pts_ms.saturating_add(u64::from(duration_ms)));
         while self.chunks.len() > self.max_chunks {
             self.chunks.pop_front();
         }
@@ -462,6 +723,103 @@ impl WebSocketAudioSink {
             next_sequence: chunk.sequence,
             trim_before_ms: (now_ms > chunk.pts_ms).then_some(now_ms),
         }
+    }
+}
+
+impl AudioSink for WebSocketAudioSink {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn submit_pcm(
+        &mut self,
+        payload: &[u8],
+        pts_ms: u64,
+        duration_ms: u32,
+        flush: bool,
+    ) -> Option<u64> {
+        self.publish_pcm_at(payload.to_vec(), pts_ms, duration_ms, flush)
+    }
+
+    fn flush(&mut self) {}
+
+    fn queued_chunk_count(&self) -> usize {
+        WebSocketAudioSink::queued_chunk_count(self)
+    }
+}
+
+#[cfg(debug_assertions)]
+impl LoggingAudioSink {
+    pub fn new(name: impl Into<String>, max_events: usize) -> Self {
+        Self {
+            name: name.into(),
+            events: VecDeque::new(),
+            max_events: max_events.max(1),
+            sequence: 0,
+        }
+    }
+
+    pub fn events(&self) -> impl Iterator<Item = &LoggingAudioEvent> {
+        self.events.iter()
+    }
+
+    pub fn event_count(&self) -> usize {
+        self.events.len()
+    }
+}
+
+#[cfg(debug_assertions)]
+impl AudioSink for LoggingAudioSink {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn submit_pcm(
+        &mut self,
+        payload: &[u8],
+        pts_ms: u64,
+        duration_ms: u32,
+        flush: bool,
+    ) -> Option<u64> {
+        if payload.is_empty() {
+            return None;
+        }
+        self.sequence = self.sequence.saturating_add(1);
+        let event = LoggingAudioEvent {
+            sequence: self.sequence,
+            bytes: payload.len(),
+            pts_ms,
+            duration_ms: duration_ms.max(1),
+            flush,
+        };
+        tracing::debug!(
+            target: "ce.audio",
+            sink = self.name.as_str(),
+            sequence = event.sequence,
+            bytes = event.bytes,
+            pts_ms = event.pts_ms,
+            duration_ms = event.duration_ms,
+            flush = event.flush,
+            "audio sink submit"
+        );
+        self.events.push_back(event);
+        while self.events.len() > self.max_events {
+            self.events.pop_front();
+        }
+        Some(self.sequence)
+    }
+
+    fn flush(&mut self) {
+        tracing::debug!(
+            target: "ce.audio",
+            sink = self.name.as_str(),
+            events = self.events.len(),
+            "audio sink flush"
+        );
+    }
+
+    fn queued_chunk_count(&self) -> usize {
+        self.events.len()
     }
 }
 
@@ -565,6 +923,39 @@ mod tests {
         assert_eq!(chunks[0].duration_ms, 30);
         assert_eq!(chunks[0].payload, vec![2, 3, 4, 5, 6, 7]);
         assert!(chunks[0].flush);
+    }
+
+    #[test]
+    fn audio_sink_registry_fans_out_registered_sinks() {
+        let mut registry = AudioSinkRegistry::default();
+        let mut host = HostAudioSink::named_unplugged("host-debug", 2);
+        host.connect();
+
+        assert!(registry.register(host));
+        assert!(registry.register(WebSocketAudioSink::named("remote", 2)));
+        assert!(!registry.register(HostAudioSink::named_unplugged("remote", 2)));
+
+        let results = registry.submit_pcm(vec![1, 2, 3, 4], 100, 20, true);
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|result| result.accepted));
+        assert_eq!(registry.queued_chunk_count("host-debug"), Some(1));
+        assert_eq!(registry.queued_chunk_count("remote"), Some(1));
+        registry.flush_all();
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn logging_audio_sink_records_debug_events() {
+        let mut sink = LoggingAudioSink::new("log", 2);
+
+        assert_eq!(sink.submit_pcm(&[1, 2], 10, 0, true), Some(1));
+        assert_eq!(sink.submit_pcm(&[3, 4], 11, 1, false), Some(2));
+        assert_eq!(sink.submit_pcm(&[5, 6], 12, 1, true), Some(3));
+        let events = sink.events().cloned().collect::<Vec<_>>();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].sequence, 2);
+        assert!(!events[0].flush);
+        assert!(events[1].flush);
     }
 }
 

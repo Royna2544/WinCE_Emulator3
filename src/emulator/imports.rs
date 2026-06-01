@@ -16,10 +16,20 @@ pub const IMPORT_TRAP_PAGE_SIZE: u32 = 0x0001_0000;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportTrap {
     pub address: u32,
+    pub module_kind: ImportModuleKind,
     pub module_name: String,
     pub ordinal: Option<u32>,
     pub name: Option<String>,
     pub iat_va: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportModuleKind {
+    Coredll,
+    Mfc,
+    CommonControls,
+    Winsock,
+    Ole,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -61,11 +71,22 @@ impl ImportTrapTable {
         args: [u32; 4],
     ) -> Option<u32> {
         let trap = self.trap_at(address)?;
-        let ordinal = trap.ordinal?;
-        let table = CoredllExportTable::default();
-        Some(dispatch_return_to_u32(
-            table.dispatch_raw_ordinal_with_memory(kernel, memory, thread_id, ordinal, args),
-        ))
+        Some(match trap.module_kind {
+            ImportModuleKind::Coredll => {
+                let Some(ordinal) = trap.ordinal else {
+                    return Some(0);
+                };
+                let table = CoredllExportTable::default();
+                dispatch_return_to_u32(
+                    table
+                        .dispatch_raw_ordinal_with_memory(kernel, memory, thread_id, ordinal, args),
+                )
+            }
+            ImportModuleKind::Mfc
+            | ImportModuleKind::CommonControls
+            | ImportModuleKind::Winsock
+            | ImportModuleKind::Ole => dispatch_external_stub_to_u32(trap, args),
+        })
     }
 
     fn insert(&mut self, trap: ImportTrap) {
@@ -79,7 +100,7 @@ pub fn patch_pe_coredll_imports(
     exports: &CoredllExportTable,
     trap_base: u32,
 ) -> Result<ImportTrapTable> {
-    patch_coredll_imports(
+    patch_supported_imports(
         mapped,
         image.image_base(),
         &image.imports,
@@ -95,25 +116,38 @@ pub fn patch_coredll_imports(
     exports: &CoredllExportTable,
     trap_base: u32,
 ) -> Result<ImportTrapTable> {
+    patch_supported_imports(mapped, image_base, imports, exports, trap_base)
+}
+
+pub fn patch_supported_imports(
+    mapped: &mut [u8],
+    image_base: u32,
+    imports: &[ImportDescriptor],
+    exports: &CoredllExportTable,
+    trap_base: u32,
+) -> Result<ImportTrapTable> {
     let mut table = ImportTrapTable::new();
     let mut next_address = trap_base;
 
     for descriptor in imports {
-        if !is_coredll_module(&descriptor.module_name) {
+        let Some(module_kind) = classify_import_module(&descriptor.module_name) else {
             continue;
-        }
+        };
         for thunk in &descriptor.imports {
             let (ordinal, name) = match &thunk.import {
                 ImportBy::Ordinal(ordinal) => (Some(u32::from(*ordinal)), None),
-                ImportBy::Name { name, .. } => (
-                    exports.resolve_name(name).map(|export| export.ordinal),
-                    Some(name.clone()),
-                ),
+                ImportBy::Name { name, .. } => {
+                    let ordinal = (module_kind == ImportModuleKind::Coredll)
+                        .then(|| exports.resolve_name(name).map(|export| export.ordinal))
+                        .flatten();
+                    (ordinal, Some(name.clone()))
+                }
             };
             let iat_va = image_base.wrapping_add(thunk.iat_rva);
             write_mapped_u32(mapped, thunk.iat_rva, next_address)?;
             table.insert(ImportTrap {
                 address: next_address,
+                module_kind,
                 module_name: descriptor.module_name.clone(),
                 ordinal,
                 name,
@@ -124,13 +158,72 @@ pub fn patch_coredll_imports(
                 .ok_or_else(|| Error::InvalidArgument("import trap address overflow".to_owned()))?;
             if next_address >= trap_base.saturating_add(IMPORT_TRAP_PAGE_SIZE) {
                 return Err(Error::InvalidArgument(
-                    "COREDLL import trap page is full".to_owned(),
+                    "import trap page is full".to_owned(),
                 ));
             }
         }
     }
 
     Ok(table)
+}
+
+fn dispatch_external_stub_to_u32(trap: &ImportTrap, args: [u32; 4]) -> u32 {
+    let name = trap.name.as_deref().unwrap_or("");
+    tracing::debug!(
+        target: "ce.imports",
+        module = trap.module_name.as_str(),
+        kind = ?trap.module_kind,
+        name,
+        ordinal = trap.ordinal,
+        a0 = format_args!("0x{:08x}", args[0]),
+        a1 = format_args!("0x{:08x}", args[1]),
+        a2 = format_args!("0x{:08x}", args[2]),
+        a3 = format_args!("0x{:08x}", args[3]),
+        "external DLL import stub"
+    );
+    match trap.module_kind {
+        ImportModuleKind::Mfc => mfc_stub_return(name),
+        ImportModuleKind::CommonControls => common_controls_stub_return(name),
+        ImportModuleKind::Winsock => winsock_stub_return(name),
+        ImportModuleKind::Ole => ole_stub_return(name),
+        ImportModuleKind::Coredll => 0,
+    }
+}
+
+fn mfc_stub_return(name: &str) -> u32 {
+    let normalized = normalize_symbol(name);
+    if normalized.contains("afxwininit")
+        || normalized.contains("afxinit")
+        || normalized.contains("afxenable")
+    {
+        1
+    } else {
+        0
+    }
+}
+
+fn common_controls_stub_return(name: &str) -> u32 {
+    match normalize_symbol(name).as_str() {
+        "initcommoncontrols" => 0,
+        "initcommoncontrolsex" => 1,
+        _ => 0,
+    }
+}
+
+fn winsock_stub_return(name: &str) -> u32 {
+    match normalize_symbol(name).as_str() {
+        "wsastartup" | "wsacleanup" => 0,
+        "socket" | "accept" => u32::MAX,
+        _ => 0,
+    }
+}
+
+fn ole_stub_return(name: &str) -> u32 {
+    match normalize_symbol(name).as_str() {
+        "coinitialize" | "coinitializeex" | "couninitialize" | "oleinitialize" => 0,
+        "cocreateinstance" | "cogetclassobject" => 0x8000_4001,
+        _ => 0,
+    }
 }
 
 pub fn import_trap_code_page(table: &ImportTrapTable) -> Vec<u8> {
@@ -202,8 +295,38 @@ fn cemath_value_to_u32(value: crate::ce::cemath::CeMathValue) -> u32 {
     }
 }
 
-fn is_coredll_module(module_name: &str) -> bool {
-    module_name.eq_ignore_ascii_case("coredll.dll") || module_name.eq_ignore_ascii_case("coredll")
+fn classify_import_module(module_name: &str) -> Option<ImportModuleKind> {
+    let normalized = normalize_module(module_name);
+    if normalized == "coredll" {
+        Some(ImportModuleKind::Coredll)
+    } else if normalized.starts_with("mfc") {
+        Some(ImportModuleKind::Mfc)
+    } else if normalized == "commctrl" || normalized == "commctrlce" {
+        Some(ImportModuleKind::CommonControls)
+    } else if normalized == "winsock" || normalized == "ws2" || normalized == "ws2_32" {
+        Some(ImportModuleKind::Winsock)
+    } else if normalized == "ole32" || normalized == "oleaut32" || normalized == "olece" {
+        Some(ImportModuleKind::Ole)
+    } else {
+        None
+    }
+}
+
+fn normalize_module(module_name: &str) -> String {
+    module_name
+        .trim()
+        .trim_end_matches('\0')
+        .trim_end_matches(".dll")
+        .trim_end_matches(".DLL")
+        .to_ascii_lowercase()
+}
+
+fn normalize_symbol(name: &str) -> String {
+    name.trim_start_matches('_')
+        .split('@')
+        .next()
+        .unwrap_or(name)
+        .to_ascii_lowercase()
 }
 
 fn write_mapped_u32(mapped: &mut [u8], rva: u32, value: u32) -> Result<()> {
@@ -278,6 +401,7 @@ mod tests {
         let mut table = ImportTrapTable::new();
         table.insert(ImportTrap {
             address: IMPORT_TRAP_BASE,
+            module_kind: ImportModuleKind::Coredll,
             module_name: "COREDLL.dll".to_owned(),
             ordinal: Some(1),
             name: None,
@@ -290,5 +414,111 @@ mod tests {
             0x03e0_0008
         );
         assert_eq!(u32::from_le_bytes(page[4..8].try_into().unwrap()), 0);
+    }
+
+    #[test]
+    fn patches_mfc_commctrl_winsock_and_ole_imports_as_supported_traps() {
+        let imports = vec![
+            ImportDescriptor {
+                module_name: "MFC400.DLL".to_owned(),
+                original_first_thunk: 0x2000,
+                time_date_stamp: 0,
+                forwarder_chain: 0,
+                name_rva: 0x2040,
+                first_thunk: 0x3000,
+                imports: vec![ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "AfxWinInit".to_owned(),
+                    },
+                }],
+            },
+            ImportDescriptor {
+                module_name: "commctrl.dll".to_owned(),
+                original_first_thunk: 0x2010,
+                time_date_stamp: 0,
+                forwarder_chain: 0,
+                name_rva: 0x2050,
+                first_thunk: 0x3010,
+                imports: vec![ImportThunk {
+                    thunk_rva: 0x2010,
+                    iat_rva: 0x3010,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "InitCommonControlsEx".to_owned(),
+                    },
+                }],
+            },
+            ImportDescriptor {
+                module_name: "winsock.dll".to_owned(),
+                original_first_thunk: 0x2020,
+                time_date_stamp: 0,
+                forwarder_chain: 0,
+                name_rva: 0x2060,
+                first_thunk: 0x3020,
+                imports: vec![ImportThunk {
+                    thunk_rva: 0x2020,
+                    iat_rva: 0x3020,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "WSAStartup".to_owned(),
+                    },
+                }],
+            },
+            ImportDescriptor {
+                module_name: "ole32.dll".to_owned(),
+                original_first_thunk: 0x2030,
+                time_date_stamp: 0,
+                forwarder_chain: 0,
+                name_rva: 0x2070,
+                first_thunk: 0x3030,
+                imports: vec![ImportThunk {
+                    thunk_rva: 0x2030,
+                    iat_rva: 0x3030,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "CoInitializeEx".to_owned(),
+                    },
+                }],
+            },
+        ];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+
+        assert_eq!(table.len(), 4);
+        assert_eq!(
+            table.trap_at(IMPORT_TRAP_BASE).unwrap().module_kind,
+            ImportModuleKind::Mfc
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE)
+                .unwrap()
+                .module_kind,
+            ImportModuleKind::CommonControls
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2)
+                .unwrap()
+                .module_kind,
+            ImportModuleKind::Winsock
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 3)
+                .unwrap()
+                .module_kind,
+            ImportModuleKind::Ole
+        );
     }
 }

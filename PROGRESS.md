@@ -121,13 +121,17 @@
 - `CeKernel` owns `CeRemote` and can drain queued remote touch/key events into
   the GWE message queue.
 - Audio output has two sink classes:
-  - `HostAudioSink` is an explicit unplugged host adapter boundary for later
-    platform playback binding.
+  - `AudioSinkRegistry` lets host, websocket, and debug sinks register behind a
+    shared PCM submission/flush contract.
+  - `HostAudioSink` is an explicit host adapter boundary with an unplugged
+    default and a Windows `winmm` constructor gated through the `windows` crate.
   - `WebSocketAudioSink` owns per-client cursors, PCM chunk sequencing, PTS,
     queue limits, and flush-marked chunks for the remote audio path;
     middle-joined websocket devices attach at the host audio timeline and
     receive a trimmed partial chunk when the host is already inside a retained
     chunk.
+  - Debug builds include `LoggingAudioSink`, which records/logs PCM submissions
+    and flush hints for short-audio debugging.
 
 ## Current State
 
