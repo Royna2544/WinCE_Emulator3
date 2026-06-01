@@ -21,3 +21,9 @@
   - Evidence: `src/ce/coredll.rs` resolves and dispatches typed calls, but no
     MIPS import thunk/trap argument decoder exists yet.
   - Status: expected until PE mapping and import trap work lands.
+
+- Remote API has no Rust socket transport yet.
+  - Symptom: remote touch/key/GPS/audio/status behavior exists as emulator API
+    state, but there is no HTTP/WebSocket listener serving `/api/v1/...`.
+  - Evidence: `src/ce/remote.rs` implements state and control dispatch only.
+  - Status: expected until host transport work lands.

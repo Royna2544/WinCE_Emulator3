@@ -7,6 +7,7 @@ use crate::{
         gwe::{Gwe, Message},
         object::{FileObject, HandleTable, KernelObject, WaitResult},
         registry::Registry,
+        remote::{CeRemote, RemoteStatus, WM_LBUTTONDOWN, WM_MOUSEMOVE, make_lparam},
         timer::{TimerSystem, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
     config::RuntimeConfig,
@@ -30,6 +31,7 @@ pub struct CeKernel {
     pub audio: AudioSystem,
     pub math: CeMath,
     pub timers: TimerSystem,
+    pub remote: CeRemote,
 }
 
 impl CeKernel {
@@ -43,6 +45,7 @@ impl CeKernel {
             audio: AudioSystem::default(),
             math: CeMath,
             timers: TimerSystem::default(),
+            remote: CeRemote::default(),
         }
     }
 
@@ -244,6 +247,70 @@ impl CeKernel {
 
     pub fn kill_timer(&mut self, id: u32) -> bool {
         self.timers.kill_timer(id)
+    }
+
+    pub fn remote_gps_target(&self) -> String {
+        self.devices.remote_gps_target().unwrap_or_default()
+    }
+
+    pub fn remote_status(&self) -> RemoteStatus {
+        self.remote.status(self.remote_gps_target())
+    }
+
+    pub fn remote_status_json(&self) -> serde_json::Value {
+        self.remote.status_json(self.remote_gps_target())
+    }
+
+    pub fn dispatch_remote_control_message(
+        &mut self,
+        message: &serde_json::Value,
+    ) -> serde_json::Value {
+        let gps_target = self.remote_gps_target();
+        self.remote.dispatch_control_message(message, gps_target)
+    }
+
+    pub fn read_remote_serial_bytes(&mut self, max_bytes: usize) -> Vec<u8> {
+        self.remote.read_serial_bytes(max_bytes)
+    }
+
+    pub fn drain_remote_input_to_gwe(&mut self, thread_id: u32, hwnd: u32) -> usize {
+        if !self.gwe.is_window(hwnd) {
+            return 0;
+        }
+
+        let time_ms = self.timers.tick_count();
+        let touch_events = self.remote.drain_touch_events();
+        let key_events = self.remote.drain_key_events();
+        let mut posted = 0;
+
+        for event in touch_events {
+            let wparam = if event.message == WM_LBUTTONDOWN || event.message == WM_MOUSEMOVE {
+                1
+            } else {
+                0
+            };
+            self.gwe.post_message(
+                thread_id,
+                Message::new(
+                    hwnd,
+                    event.message,
+                    wparam,
+                    make_lparam(event.x, event.y),
+                    time_ms,
+                ),
+            );
+            posted += 1;
+        }
+
+        for event in key_events {
+            self.gwe.post_message(
+                thread_id,
+                Message::new(hwnd, event.message, event.vk, 1, time_ms),
+            );
+            posted += 1;
+        }
+
+        posted
     }
 
     pub fn wave_out_open(&mut self, format: WaveFormat) -> std::result::Result<u32, MmResult> {

@@ -67,3 +67,13 @@ anchors, not app-specific shortcuts.
   - `CWnd::WindowProc` calls message-map handling before `DefWindowProc`.
   - Window creation flows through `AfxCtxCreateWindowEx`, `PreCreateWindowEx`,
     and `PostCreateWindowEx`.
+
+## Prior Emulator Reference
+
+- Remote server API shape:
+  `../WinCE_Emulator_v2/src/remote_server.cpp` and
+  `../WinCE_Emulator_v2/src/ce_remote.h`
+  - Remote routes and WebSocket control messages accept touch, key, location,
+    NMEA, IMU, pause, resume, status, logs, frame, MJPEG, and audio endpoints.
+  - `CeRemote` stores queued touch/key events, serial bytes, audio chunks, IMU
+    state, audio client counts, and paused state.

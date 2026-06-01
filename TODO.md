@@ -13,6 +13,8 @@
 ## Next
 
 - Add bounded run tooling and structured logs.
+- Add an HTTP/WebSocket transport over the Rust `CeRemote` API state when the
+  host runtime is ready for remote UI/audio streaming.
 - Add ordinal/decorated-name evidence from the Windows CE 4.2 Mipsii SDK import
   libraries, alongside the source references already recorded.
 - Persist host-backed registry writes separately from the source dump.

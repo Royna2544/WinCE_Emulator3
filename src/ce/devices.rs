@@ -130,6 +130,23 @@ impl DeviceNamespace {
             .map(|device| device.guest.clone())
             .collect()
     }
+
+    pub fn remote_gps_target(&self) -> Option<String> {
+        let mut fallback = None;
+        for device in self.devices.values() {
+            if device.kind != DeviceKind::Serial {
+                continue;
+            }
+            if device.backend == DeviceBackend::Win32Com
+                && let Some(host) = &device.host
+                && !host.is_empty()
+            {
+                return Some(host.clone());
+            }
+            fallback.get_or_insert_with(|| device.guest.clone());
+        }
+        fallback
+    }
 }
 
 impl DeviceSession {

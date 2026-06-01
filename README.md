@@ -16,6 +16,8 @@ shortcuts:
   routines
 - PE32 parser for DOS/NT/COFF headers, optional headers, sections, imports,
   exports, relocations, RVA mapping, and mapped image bytes
+- remote-control API state for touch/key input, GPS/NMEA serial injection, IMU
+  state, pause/resume, status JSON, logs, and audio chunks
 - host-backed file API with contained guest-path translation
 - device namespace loading from `serial_devices.json`
 - kernel object handles

@@ -17,6 +17,8 @@
   - Unicorn MIPS adapter boundary
   - PE32 image parsing for headers, sections, imports, exports, relocations, and
     mapped image bytes
+  - remote-control API state for touch/key input, GPS/NMEA serial injection, IMU
+    state, pause/resume, status JSON, logs, and audio chunks
 - Source references are recorded in `SOURCE_REFERENCES.md` for CE registry,
   GWE queue, waveOut exports, and MFC message pump behavior.
 - Rust smoke tests cover bootstrapping registry/device JSON backing plus basic
@@ -52,6 +54,12 @@
   image buffer.
 - PE parser smoke tests build a synthetic MIPS R4000 PE32 image with imports,
   exports, relocations, and mapped section data.
+- Added a Rust `CeRemote` subsystem based on the prior remote server API shape:
+  it queues touch/key events, injects serial/NMEA/GPS data, stores IMU state,
+  tracks pause/resume, exposes remote status JSON, holds recent log lines, and
+  manages remote audio client/chunk state.
+- `CeKernel` owns `CeRemote` and can drain queued remote touch/key events into
+  the GWE message queue.
 
 ## Current State
 
@@ -61,6 +69,8 @@
 - The virtual Win32/CE framework and COREDLL dispatcher are ready for guest
   import traps to call into. PE import tables can now be parsed, but import trap
   patching and Unicorn memory mapping are not wired yet.
+- Remote server socket/WebSocket binding is not implemented in Rust yet; the
+  emulator-facing remote API state and dispatch behavior are present.
 
 ## False Leads
 

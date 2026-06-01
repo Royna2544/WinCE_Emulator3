@@ -13,6 +13,7 @@ use wince_emulation_v3::{
         kernel::{CeKernel, MessagePumpResult},
         object::{EventObject, KernelObject},
         registry::{ERROR_SUCCESS, HKEY_LOCAL_MACHINE, REG_SZ},
+        remote::{WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP},
         timer::{WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
     config::RuntimeConfig,
@@ -477,6 +478,83 @@ fn virtual_win32_api_smoke_covers_file_device_sync_gwe_and_audio() -> Result<()>
         WaveOutState::Paused
     );
     assert_eq!(kernel.audio.restart(wave), MMSYSERR_NOERROR);
+
+    Ok(())
+}
+
+#[test]
+fn remote_server_api_state_queues_input_serial_audio_and_status() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    kernel.remote.set_framebuffer_size(800, 480);
+
+    let hwnd = kernel.create_window_ex_w(99, "REMOTE", "remote", None, 1, 0, 0);
+    assert_eq!(
+        kernel.message_pump_step(99),
+        MessagePumpResult::Dispatched(0)
+    );
+
+    let touch = kernel.dispatch_remote_control_message(&serde_json::json!({
+        "type": "touch",
+        "phase": "tap",
+        "x": 12,
+        "y": 34
+    }));
+    assert_eq!(touch["ok"], true);
+
+    let key = kernel.dispatch_remote_control_message(&serde_json::json!({
+        "type": "key",
+        "phase": "down",
+        "vk": 0x26
+    }));
+    assert_eq!(key["ok"], true);
+
+    assert_eq!(kernel.drain_remote_input_to_gwe(99, hwnd), 3);
+    let down = kernel.gwe.get_message(99).unwrap();
+    assert_eq!(down.msg, WM_LBUTTONDOWN);
+    assert_eq!(down.lparam & 0xffff, 12);
+    assert_eq!((down.lparam >> 16) & 0xffff, 34);
+    assert_eq!(kernel.gwe.get_message(99).unwrap().msg, WM_LBUTTONUP);
+    let key_down = kernel.gwe.get_message(99).unwrap();
+    assert_eq!(key_down.msg, WM_KEYDOWN);
+    assert_eq!(key_down.wparam, 0x26);
+
+    let nmea = kernel.dispatch_remote_control_message(&serde_json::json!({
+        "type": "nmea",
+        "sentences": ["$GPRMC,remote*00"]
+    }));
+    assert_eq!(nmea["accepted"], 1);
+    assert_eq!(kernel.read_remote_serial_bytes(64), b"$GPRMC,remote*00\r\n");
+
+    let location = kernel.dispatch_remote_control_message(&serde_json::json!({
+        "type": "location",
+        "lat": 37.5,
+        "lon": 127.25,
+        "timestampMs": 0
+    }));
+    assert_eq!(location["sentencesGenerated"], 3);
+    assert!(kernel.remote.serial_byte_count() > 0);
+
+    assert_eq!(
+        kernel.dispatch_remote_control_message(&serde_json::json!({"type": "pause"}))["paused"],
+        true
+    );
+    let status = kernel.remote_status_json();
+    assert_eq!(status["paused"], true);
+    assert_eq!(status["guest_width"], 800);
+    assert!(
+        status["gps_target"]
+            .as_str()
+            .is_some_and(|target| !target.is_empty())
+    );
+
+    kernel.remote.register_audio_client(1000);
+    assert_eq!(kernel.remote.audio_client_count(), 1);
+    assert_eq!(
+        kernel.remote.publish_audio_chunk(vec![1, 2, 3, 4], 20),
+        Some(1)
+    );
+    assert_eq!(kernel.remote.take_audio_chunks(1)[0].pts_ms, 1000);
 
     Ok(())
 }
