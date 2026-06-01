@@ -152,6 +152,9 @@
 - SDK CE 4.2 Mipsii COREDLL ordinal evidence from `coredll.lib` is now captured
   for the launch-demanded CRT ordinals: `_wcsdup`, `wcsrchr`, `malloc`,
   `memcpy`, `memset`, operator `new`, `swprintf`, `printf`, and `free`.
+- Launch-demanded CE 4.2 CRT raw helper bodies now live in `src/ce/crt.rs`,
+  with COREDLL keeping ordinal dispatch ownership and delegating the actual
+  CRT memory/string routines to that module.
 - The bounded Unicorn launch with SDK `mfcce400.dll` now progresses past the
   previous unmapped-write failures and stops at a null function-pointer call from
   the main image destructor/function-pointer table around `0x0048f9d4`.
