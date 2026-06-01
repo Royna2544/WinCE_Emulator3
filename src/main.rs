@@ -33,18 +33,20 @@ fn main() -> Result<()> {
     let mut kernel = CeKernel::boot(config);
 
     let mut cpu = UnicornMips::new()?;
-    cpu.map_region(
-        0x0001_0000,
-        0x0010_0000,
-        MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC,
-        "guest-low",
-    )?;
-    cpu.map_region(
-        0x7fff_0000,
-        0x0001_0000,
-        MemoryPerms::READ | MemoryPerms::WRITE,
-        "ce-shim-trap-page",
-    )?;
+    if args.image.is_none() {
+        cpu.map_region(
+            0x0001_0000,
+            0x0010_0000,
+            MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC,
+            "guest-low",
+        )?;
+        cpu.map_region(
+            0x7fff_0000,
+            0x0001_0000,
+            MemoryPerms::READ | MemoryPerms::WRITE,
+            "ce-shim-trap-page",
+        )?;
+    }
 
     let hwnd = kernel.gwe.create_window(1, "FakeCEBaseWindow", "");
     let timer_id = kernel.timers.set_timer(Some(hwnd), None, 1000, WM_TIMER);
