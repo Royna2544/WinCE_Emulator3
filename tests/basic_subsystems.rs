@@ -11,22 +11,26 @@ use wince_emulation_v3::{
             EventModifyAction,
         },
         coredll_ordinals::{
+            CE42_MIPSII_SDK_ORDINALS, COREDLL_EXPORTS, ORD_CE42_MIPSII_FREE,
+            ORD_CE42_MIPSII_MALLOC, ORD_CE42_MIPSII_MEMCPY, ORD_CE42_MIPSII_MEMSET,
+            ORD_CE42_MIPSII_OPERATOR_NEW, ORD_CE42_MIPSII_WCSDUP, ORD_CE42_MIPSII_WCSRCHR,
             ORD_CLIENT_TO_SCREEN, ORD_CLOSE_HANDLE, ORD_CREATE_FILE_W, ORD_CREATE_WINDOW_EX_W,
             ORD_DESTROY_WINDOW, ORD_DISPATCH_MESSAGE_W, ORD_ENABLE_WINDOW, ORD_EVENT_MODIFY,
             ORD_FIND_RESOURCE_W, ORD_FLUSH_FILE_BUFFERS, ORD_GET_CLASS_NAME_W, ORD_GET_CLIENT_RECT,
             ORD_GET_FILE_SIZE, ORD_GET_FOCUS, ORD_GET_LAST_ERROR, ORD_GET_MESSAGE_W,
-            ORD_GET_PARENT, ORD_GET_PROCESS_HEAP, ORD_GET_TICK_COUNT, ORD_GET_WINDOW_LONG_W,
-            ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W,
-            ORD_HEAP_ALLOC, ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_SIZE,
-            ORD_INITIALIZE_CRITICAL_SECTION, ORD_INTERLOCKED_COMPARE_EXCHANGE,
-            ORD_INTERLOCKED_EXCHANGE_ADD, ORD_INTERLOCKED_INCREMENT, ORD_IS_WINDOW,
-            ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE, ORD_LEAVE_CRITICAL_SECTION, ORD_LL_DIV,
-            ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_LOCAL_ALLOC, ORD_LOCAL_FREE,
-            ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_MAP_WINDOW_POINTS, ORD_MOVE_WINDOW,
-            ORD_PEEK_MESSAGE_W, ORD_POST_MESSAGE_W, ORD_POW, ORD_READ_FILE, ORD_REG_OPEN_KEY_EX_W,
-            ORD_SCREEN_TO_CLIENT, ORD_SET_FILE_POINTER, ORD_SET_FOCUS, ORD_SET_LAST_ERROR,
-            ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_TEXT_W, ORD_SHOW_WINDOW,
-            ORD_SIZEOF_RESOURCE, ORD_SLEEP, ORD_SQRT, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
+            ORD_GET_MODULE_FILE_NAME_W, ORD_GET_PARENT, ORD_GET_PROCESS_HEAP, ORD_GET_TICK_COUNT,
+            ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_TEXT_LENGTH_W,
+            ORD_GET_WINDOW_TEXT_W, ORD_HEAP_ALLOC, ORD_HEAP_CREATE, ORD_HEAP_DESTROY,
+            ORD_HEAP_FREE, ORD_HEAP_SIZE, ORD_INITIALIZE_CRITICAL_SECTION,
+            ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
+            ORD_INTERLOCKED_INCREMENT, ORD_IS_WINDOW, ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE,
+            ORD_LEAVE_CRITICAL_SECTION, ORD_LL_DIV, ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W,
+            ORD_LOCAL_ALLOC, ORD_LOCAL_FREE, ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE,
+            ORD_MAP_WINDOW_POINTS, ORD_MOVE_WINDOW, ORD_PEEK_MESSAGE_W, ORD_POST_MESSAGE_W,
+            ORD_POW, ORD_READ_FILE, ORD_REG_OPEN_KEY_EX_W, ORD_SCREEN_TO_CLIENT,
+            ORD_SET_FILE_POINTER, ORD_SET_FOCUS, ORD_SET_LAST_ERROR, ORD_SET_WINDOW_LONG_W,
+            ORD_SET_WINDOW_POS, ORD_SET_WINDOW_TEXT_W, ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE,
+            ORD_SLEEP, ORD_SQRT, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
             ORD_TRY_ENTER_CRITICAL_SECTION, ORD_USER_CALL_WINDOW_PROC, ORD_VIRTUAL_ALLOC,
             ORD_VIRTUAL_FREE, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WAVE_OUT_CLOSE,
             ORD_WAVE_OUT_GET_NUM_DEVS, ORD_WAVE_OUT_GET_PLAYBACK_RATE, ORD_WAVE_OUT_GET_POSITION,
@@ -274,7 +278,10 @@ fn boots_and_smokes_basic_ce_subsystems() -> Result<()> {
 fn coredll_table_reads_full_static_rust_ordinals() -> Result<()> {
     let table = CoredllExportTable::default();
 
-    assert_eq!(table.export_count(), 1752);
+    assert_eq!(
+        table.export_count(),
+        COREDLL_EXPORTS.len() + CE42_MIPSII_SDK_ORDINALS.len()
+    );
     assert_eq!(
         table.resolve_name("CreateFileW").unwrap().ordinal,
         ORD_CREATE_FILE_W
@@ -956,6 +963,138 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         other => panic!("HeapAlloc did not return a pointer: {other:?}"),
     };
     assert_ne!(heap, process_heap);
+    let malloc_ptr = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CE42_MIPSII_MALLOC,
+        [16],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("SDK malloc ordinal did not return a pointer: {other:?}"),
+    };
+    let new_ptr = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CE42_MIPSII_OPERATOR_NEW,
+        [8],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("SDK operator new ordinal did not return a pointer: {other:?}"),
+    };
+    assert_eq!(
+        kernel.memory.heap_size(process_heap, 0, malloc_ptr),
+        Some(16)
+    );
+    assert_eq!(kernel.memory.heap_size(process_heap, 0, new_ptr), Some(8));
+
+    memory.map_bytes(0x6000, 8);
+    memory.map_bytes(0x6010, 8);
+    memory.write_bytes(0x6000, b"ABCDEFGH");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE42_MIPSII_MEMCPY,
+            [0x6010, 0x6000, 8],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0x6010),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_bytes(0x6010, 8), b"ABCDEFGH");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE42_MIPSII_MEMSET,
+            [0x6010, 0x2a, 4],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0x6010),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_bytes(0x6010, 8), b"****EFGH");
+
+    kernel.set_process_module_path("\\Program Files\\INavi\\INavi.exe");
+    memory.map_halfwords(0x6100, 260);
+    let copied = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_MODULE_FILE_NAME_W,
+        [0, 0x6100, 260],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(copied),
+            ..
+        } => copied,
+        other => panic!("GetModuleFileNameW did not copy module path: {other:?}"),
+    };
+    assert_eq!(
+        copied,
+        "\\Program Files\\INavi\\INavi.exe".encode_utf16().count() as u32
+    );
+    assert_eq!(
+        memory.read_wide_z(0x6100, 260),
+        "\\Program Files\\INavi\\INavi.exe"
+    );
+    let slash = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CE42_MIPSII_WCSRCHR,
+        [0x6100, '\\' as u32],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("SDK wcsrchr ordinal did not return a pointer: {other:?}"),
+    };
+    assert_eq!(memory.read_wide_z(slash + 2, 32), "INavi.exe");
+    memory.map_halfwords(0x3000_0000, 0x1000);
+    let dup = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CE42_MIPSII_WCSDUP,
+        [slash + 2],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("SDK _wcsdup ordinal did not return a pointer: {other:?}"),
+    };
+    assert_eq!(memory.read_wide_z(dup, 32), "INavi.exe");
+    assert!(kernel.memory.heap_size(process_heap, 0, dup).is_some());
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE42_MIPSII_FREE,
+            [dup],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(kernel.memory.heap_size(process_heap, 0, dup).is_none());
+
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

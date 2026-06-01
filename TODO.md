@@ -3,8 +3,11 @@
 ## Immediate
 
 - Run a bounded Unicorn launch of
-  `/mnt/d/INAVI_Emulator/INAVI/INavi/INavi.exe` and capture the first concrete
-  PC/RA/SP/v0/v1/a0-a3/t9 failure snapshot.
+  `/mnt/d/INAVI_Emulator/INAVI/INavi/INavi.exe` with the SDK MFC DLL search dir
+  and trace the null function-pointer call at `0x0048f9d4`/RA `0x0048f9dc`.
+- Add a targeted diagnostic around the main image destructor/function-pointer
+  table at `0x00835e88`/`0x00835e8c` to identify which registered pointer became
+  null or low-valued before `jalr`.
 - Replace launch-stub behavior for MFC400/mfcce400, commctrl, WINSOCK, and OLE
   imports with real subsystem-backed implementations as import traces demand.
 - Continue burning down COREDLL ordinals subsystem by subsystem, replacing
@@ -13,7 +16,8 @@
   dispatch when ole32 imports are connected, more GWE class/menu/dialog/control
   raw pointer marshalling, file attributes/find-directory APIs, and
   time/system-info structs.
-- Connect guest MFC, CRT-like exports, and WINSOCK imports.
+- Continue connecting SDK CE 4.2 Mipsii COREDLL CRT ordinals from `coredll.lib`
+  as the launch trace demands.
 - Extend `cemath` as real guest imports demand more CRT/floating-point helpers.
 - Extend subsystem smoke tests as each shim is connected to guest import traps.
 - Add import-trap argument/result marshalling tests that exercise the new raw

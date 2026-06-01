@@ -3,6 +3,7 @@ use std::{fs, path::Path};
 use crate::error::{Error, Result};
 
 pub const IMAGE_FILE_MACHINE_R4000: u16 = 0x0166;
+pub const IMAGE_FILE_RELOCS_STRIPPED: u16 = 0x0001;
 pub const IMAGE_NT_OPTIONAL_HDR32_MAGIC: u16 = 0x010b;
 pub const IMAGE_NT_OPTIONAL_HDR64_MAGIC: u16 = 0x020b;
 
@@ -22,6 +23,13 @@ pub const IMAGE_DIRECTORY_ENTRY_IAT: usize = 12;
 pub const IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT: usize = 13;
 pub const IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR: usize = 14;
 pub const IMAGE_NUMBEROF_DIRECTORY_ENTRIES: usize = 16;
+const IMAGE_REL_BASED_ABSOLUTE: u8 = 0;
+const IMAGE_REL_BASED_HIGH: u8 = 1;
+const IMAGE_REL_BASED_LOW: u8 = 2;
+const IMAGE_REL_BASED_HIGHLOW: u8 = 3;
+const IMAGE_REL_BASED_HIGHADJ: u8 = 4;
+const IMAGE_REL_BASED_MIPS_JMPADDR: u8 = 5;
+const IMAGE_REL_BASED_MIPS_JMPADDR16: u8 = 9;
 
 const IMAGE_DOS_SIGNATURE: u16 = 0x5a4d;
 const IMAGE_NT_SIGNATURE: u32 = 0x0000_4550;
@@ -161,6 +169,7 @@ pub struct BaseRelocationBlock {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BaseRelocationEntry {
+    pub raw: u16,
     pub relocation_type: u8,
     pub offset: u16,
 }
@@ -240,6 +249,10 @@ impl PeImage {
         self.optional_header.image_base
     }
 
+    pub fn relocations_stripped(&self) -> bool {
+        self.coff_header.characteristics & IMAGE_FILE_RELOCS_STRIPPED != 0
+    }
+
     pub fn data_directory(&self, index: usize) -> Option<DataDirectory> {
         self.optional_header.data_directories.get(index).copied()
     }
@@ -314,6 +327,88 @@ impl PeImage {
             }
             mapped[dst_start..dst_end]
                 .copy_from_slice(&self.bytes[src_start..src_start + copy_len]);
+        }
+
+        Ok(mapped)
+    }
+
+    pub fn mapped_image_at(&self, load_base: u32) -> Result<Vec<u8>> {
+        let mut mapped = self.mapped_image()?;
+        let delta = load_base.wrapping_sub(self.image_base());
+        if delta == 0 {
+            return Ok(mapped);
+        }
+        if self.relocations_stripped() {
+            return Err(pe_error(
+                &self.path,
+                format!("image has relocations stripped and cannot load at 0x{load_base:08x}"),
+            ));
+        }
+        if self.base_relocations.is_empty() {
+            return Err(pe_error(
+                &self.path,
+                format!("image has no base relocations for load base 0x{load_base:08x}"),
+            ));
+        }
+
+        for block in &self.base_relocations {
+            let mut index = 0;
+            while index < block.entries.len() {
+                let entry = block.entries[index];
+                let rva = rva_add(block.page_rva, u32::from(entry.offset), &self.path)?;
+                match entry.relocation_type {
+                    IMAGE_REL_BASED_ABSOLUTE => {}
+                    IMAGE_REL_BASED_HIGH => {
+                        let value = read_mapped_u16(&mapped, rva, &self.path)?;
+                        write_mapped_u16(
+                            &mut mapped,
+                            rva,
+                            value.wrapping_add((delta >> 16) as u16),
+                            &self.path,
+                        )?;
+                    }
+                    IMAGE_REL_BASED_LOW => {
+                        let value = read_mapped_u16(&mapped, rva, &self.path)?;
+                        write_mapped_u16(
+                            &mut mapped,
+                            rva,
+                            value.wrapping_add(delta as u16),
+                            &self.path,
+                        )?;
+                    }
+                    IMAGE_REL_BASED_HIGHLOW => {
+                        let value = read_mapped_u32(&mapped, rva, &self.path)?;
+                        write_mapped_u32(&mut mapped, rva, value.wrapping_add(delta), &self.path)?;
+                    }
+                    IMAGE_REL_BASED_HIGHADJ => {
+                        let Some(next) = block.entries.get(index + 1).copied() else {
+                            return Err(pe_error(&self.path, "HIGHADJ relocation missing pair"));
+                        };
+                        let high = read_mapped_u16(&mapped, rva, &self.path)? as i32;
+                        let low_adjust = next.raw as i16 as i32;
+                        let adjusted = ((high << 16) + low_adjust)
+                            .wrapping_add(delta as i32)
+                            .wrapping_add(0x8000);
+                        write_mapped_u16(&mut mapped, rva, (adjusted >> 16) as u16, &self.path)?;
+                        index += 1;
+                    }
+                    IMAGE_REL_BASED_MIPS_JMPADDR | IMAGE_REL_BASED_MIPS_JMPADDR16 => {
+                        let instruction = read_mapped_u32(&mapped, rva, &self.path)?;
+                        let target = (instruction & 0x03ff_ffff)
+                            .wrapping_shl(2)
+                            .wrapping_add(delta);
+                        let relocated = (instruction & 0xfc00_0000) | ((target >> 2) & 0x03ff_ffff);
+                        write_mapped_u32(&mut mapped, rva, relocated, &self.path)?;
+                    }
+                    other => {
+                        return Err(pe_error(
+                            &self.path,
+                            format!("unsupported base relocation type {other} at RVA 0x{rva:08x}"),
+                        ));
+                    }
+                }
+                index += 1;
+            }
         }
 
         Ok(mapped)
@@ -510,6 +605,7 @@ impl PeImage {
             for _ in 0..entry_count {
                 let raw = self.read_u16_rva(entry_rva)?;
                 entries.push(BaseRelocationEntry {
+                    raw,
                     relocation_type: (raw >> 12) as u8,
                     offset: raw & 0x0fff,
                 });
@@ -543,6 +639,40 @@ impl PeImage {
             .ok_or_else(|| pe_error(&self.path, format!("RVA 0x{rva:08x} has no file data")))?;
         PeReader::new(&self.path, &self.bytes).read_c_string(offset)
     }
+}
+
+fn read_mapped_u16(mapped: &[u8], rva: u32, path: &str) -> Result<u16> {
+    let offset = rva as usize;
+    let bytes = mapped
+        .get(offset..offset + 2)
+        .ok_or_else(|| pe_error(path, format!("relocation RVA 0x{rva:08x} is outside image")))?;
+    Ok(u16::from_le_bytes(bytes.try_into().unwrap()))
+}
+
+fn write_mapped_u16(mapped: &mut [u8], rva: u32, value: u16, path: &str) -> Result<()> {
+    let offset = rva as usize;
+    let bytes = mapped
+        .get_mut(offset..offset + 2)
+        .ok_or_else(|| pe_error(path, format!("relocation RVA 0x{rva:08x} is outside image")))?;
+    bytes.copy_from_slice(&value.to_le_bytes());
+    Ok(())
+}
+
+fn read_mapped_u32(mapped: &[u8], rva: u32, path: &str) -> Result<u32> {
+    let offset = rva as usize;
+    let bytes = mapped
+        .get(offset..offset + 4)
+        .ok_or_else(|| pe_error(path, format!("relocation RVA 0x{rva:08x} is outside image")))?;
+    Ok(u32::from_le_bytes(bytes.try_into().unwrap()))
+}
+
+fn write_mapped_u32(mapped: &mut [u8], rva: u32, value: u32, path: &str) -> Result<()> {
+    let offset = rva as usize;
+    let bytes = mapped
+        .get_mut(offset..offset + 4)
+        .ok_or_else(|| pe_error(path, format!("relocation RVA 0x{rva:08x} is outside image")))?;
+    bytes.copy_from_slice(&value.to_le_bytes());
+    Ok(())
 }
 
 impl DataDirectory {
@@ -817,10 +947,12 @@ mod tests {
             image.base_relocations[0].entries,
             vec![
                 BaseRelocationEntry {
+                    raw: 0x3010,
                     relocation_type: 3,
                     offset: 0x010,
                 },
                 BaseRelocationEntry {
+                    raw: 0,
                     relocation_type: 0,
                     offset: 0,
                 },
@@ -829,9 +961,26 @@ mod tests {
 
         let mapped = image.mapped_image()?;
         assert_eq!(&mapped[0x2040..0x204b], b"COREDLL.dll");
-        assert_eq!(mapped[0x1010], 0xcc);
+        assert_eq!(read_mapped_u32(&mapped, 0x1010, &image.path)?, 0x0040_1010);
+
+        let relocated = image.mapped_image_at(0x0050_0000)?;
+        assert_eq!(
+            read_mapped_u32(&relocated, 0x1010, &image.path)?,
+            0x0050_1010
+        );
 
         Ok(())
+    }
+
+    #[test]
+    fn rejects_relocating_stripped_images() {
+        let mut bytes = synthetic_pe32();
+        put_u16(&mut bytes, 0x84 + 18, 0x0103);
+        let image = PeImage::parse_bytes("stripped-mips.exe", &bytes).unwrap();
+
+        assert!(image.relocations_stripped());
+        let err = image.mapped_image_at(0x0050_0000).unwrap_err();
+        assert!(err.to_string().contains("relocations stripped"));
     }
 
     #[test]
@@ -932,7 +1081,7 @@ mod tests {
             0x4200_0040,
         );
 
-        bytes[0x210] = 0xcc;
+        put_u32(&mut bytes, 0x210, 0x0040_1010);
 
         put_u32(&mut bytes, 0x400, 0x2050);
         put_u32(&mut bytes, 0x40c, 0x2040);

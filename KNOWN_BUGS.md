@@ -9,13 +9,14 @@
   - Status: expected initial scaffold limitation.
 
 - Main process launch has not been driven to a stable guest entry yet.
-  - Symptom: PE images and import traps can be prepared, but the target main
-    EXE has not yet produced a successful bounded Unicorn run.
-  - Evidence: `src/emulator/unicorn.rs` maps PE image bytes, installs import
-    hooks, and records PC/RA/SP/v0/v1/a0-a3/t9 debug snapshots; next run must
-    use the exact target path from `RULES.md` and inspect the first real
-    failure.
-  - Status: next bounded-run diagnostic.
+  - Symptom: after loading SDK `mfcce400.dll` from the CE 4.2 Mipsii SDK and
+    dispatching the current SDK CRT ordinal tranche, execution stops at
+    `pc=0x00000000`.
+  - Evidence: bounded Unicorn run reaches `ra=0x0048f9dc`, where the main image
+    has just executed `jalr $2` at `0x0048f9d4` from a function-pointer table
+    bounded by globals near `0x00835e88`/`0x00835e8c`.
+  - Status: active; needs targeted table-pointer trace. Per `RULES.md`, this is
+    not treated as normal guest exit.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch
@@ -35,11 +36,11 @@
 
 - External DLL import traps are launch stubs, not final DLL implementations.
   - Symptom: MFC400/mfcce400, commctrl, WINSOCK, and OLE imports can be patched
-    to trap addresses so execution can proceed, but most functions return only
-    conservative placeholder values.
-  - Evidence: `src/emulator/imports.rs` classifies these modules and logs
-    external import calls; real behavior still needs MFC/commctrl/WINSOCK/OLE
-    subsystem shims.
+    to trap addresses so execution can proceed, but most non-SDK-DLL functions
+    return only conservative placeholder values.
+  - Evidence: `src/emulator/imports.rs` classifies these modules, resolves
+    loaded SDK DLL exports when available, and logs external import calls; real
+    behavior still needs MFC/commctrl/WINSOCK/OLE subsystem shims.
   - Status: active launch-enabling diagnostic layer.
 
 - PE resources are not loaded into `ResourceSystem` yet.

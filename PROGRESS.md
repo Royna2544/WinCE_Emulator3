@@ -111,7 +111,8 @@
   headers, tracks all 16 standard data directories, maps RVAs through section
   headers, parses import descriptors/thunks by name or ordinal, parses export
   functions, parses base relocation blocks, and can build a zero-filled mapped
-  image buffer.
+  image buffer. Relocation application now refuses to move relocation-stripped
+  images and applies supported CE/MIPS base relocations for SDK DLL images.
 - PE parser smoke tests build a synthetic MIPS R4000 PE32 image with imports,
   exports, relocations, and mapped section data.
 - Added a Rust `CeRemote` subsystem based on the prior remote server API shape:
@@ -134,25 +135,38 @@
   and flush hints for short-audio debugging.
 - Unicorn launch prep is wired:
   - parsed PE images can be mapped into the Unicorn memory plan
+  - `--dll-search-dir` can load SDK DLL images such as `mfcce400.dll`; the main
+    relocation-stripped EXE remains at its preferred base while relocatable DLLs
+    are moved when their preferred base overlaps
   - COREDLL, MFC400/mfcce400-style, commctrl, winsock, and OLE import slots are
     patched to shim trap addresses
+  - external imports can resolve to loaded DLL exports before falling back to
+    module-owned traps
   - COREDLL traps decode MIPS `a0`-`a3`, dispatch through the raw ordinal
     dispatcher, write `v0`, and retain a debug snapshot with PC/RA/SP/v0/v1/
-    a0-a3/t9 on run failure
+    a0-a3/t9 plus memory-fault details on run failure
+  - guest heap pages are mapped as a CE heap arena for APIs that allocate and
+    populate memory during the same import call
   - non-COREDLL supported DLLs currently use module-owned launch stubs with
     debug logs, not final API semantics
+- SDK CE 4.2 Mipsii COREDLL ordinal evidence from `coredll.lib` is now captured
+  for the launch-demanded CRT ordinals: `_wcsdup`, `wcsrchr`, `malloc`,
+  `memcpy`, `memset`, operator `new`, `swprintf`, `printf`, and `free`.
+- The bounded Unicorn launch with SDK `mfcce400.dll` now progresses past the
+  previous unmapped-write failures and stops at a null function-pointer call from
+  the main image destructor/function-pointer table around `0x0048f9d4`.
 
 ## Current State
 
 - CPU execution is wired far enough to load mapped PE images and dispatch import
-  traps, but the app has not yet been successfully launched through its main
-  procedure.
+  traps, but the app has not yet been successfully launched through a stable
+  main-procedure path.
 - The default bootstrap uses `regs.json` as backing storage for the fake CE
   registry API and creates base GWE, timer, audio, and memory-map state.
 - The virtual Win32/CE framework and COREDLL dispatcher are connected to Unicorn
-  import traps. External DLLs needed by the target are trap-patched, but MFC,
-  commctrl, WINSOCK, and OLE behavior still needs real subsystem-backed
-  implementation.
+  import traps. SDK `mfcce400.dll` can execute from a relocated image, but MFC,
+  commctrl, WINSOCK, OLE, and additional CE 4.2 ordinal behavior still need real
+  subsystem-backed implementation as traces demand.
 - Many COREDLL ordinals are classified and dispatchable but still stubbed by
   subsystem. Kernel/thread/time/sync, memory/local/heap/virtual allocation,
   raw file buffer marshalling, first GWE HWND/RECT/text/window-long/focus/message

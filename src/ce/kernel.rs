@@ -40,6 +40,7 @@ pub struct CeKernel {
     pub resources: ResourceSystem,
     pub com: ComSystem,
     pub memory: MemorySystem,
+    process_module_path: String,
 }
 
 impl CeKernel {
@@ -58,7 +59,16 @@ impl CeKernel {
             resources: ResourceSystem::default(),
             com: ComSystem::default(),
             memory: MemorySystem::default(),
+            process_module_path: "\\FakeCE\\process.exe".to_owned(),
         }
+    }
+
+    pub fn set_process_module_path(&mut self, path: impl Into<String>) {
+        self.process_module_path = path.into();
+    }
+
+    pub fn process_module_path(&self) -> &str {
+        &self.process_module_path
     }
 
     pub fn pump_timers_to_gwe(&mut self, thread_id: u32) {

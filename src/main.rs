@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+};
 
 use wince_emulation_v3::{
     Result,
@@ -18,6 +21,7 @@ struct Args {
     registry: PathBuf,
     devices: PathBuf,
     image: Option<PathBuf>,
+    dll_search_dirs: Vec<PathBuf>,
     run_cpu: bool,
 }
 
@@ -88,6 +92,7 @@ fn main() -> Result<()> {
 
     let pe_image = if let Some(image_path) = args.image {
         let image = PeImage::inspect(image_path)?;
+        kernel.set_process_module_path(ce_module_path(&image.path));
         println!(
             "  PE image: {} ({} bytes, lfanew=0x{:08x}, machine=0x{:04x})",
             image.path, image.len, image.dos_lfanew, image.coff_header.machine
@@ -110,11 +115,19 @@ fn main() -> Result<()> {
     };
 
     if let Some(image) = pe_image.as_ref() {
-        cpu.load_pe_image(image)?;
-        println!(
-            "  import traps: {} COREDLL slots patched",
-            cpu.import_traps().len()
-        );
+        let dll_images = load_import_dlls(image, &args.dll_search_dirs)?;
+        for dll in &dll_images {
+            println!(
+                "  DLL image: {} image_base=0x{:08x} size=0x{:08x} reloc_stripped={} reloc_blocks={}",
+                dll.path,
+                dll.image_base(),
+                dll.optional_header.size_of_image,
+                dll.relocations_stripped(),
+                dll.base_relocations.len()
+            );
+        }
+        cpu.load_pe_image_with_dlls(image, &dll_images)?;
+        println!("  import traps: {} slots patched", cpu.import_traps().len());
     }
 
     if args.run_cpu {
@@ -134,6 +147,7 @@ impl Args {
         let mut registry = PathBuf::from("regs.json");
         let mut devices = PathBuf::from("serial_devices.json");
         let mut image = None;
+        let mut dll_search_dirs = Vec::new();
         let mut run_cpu = false;
 
         let mut args = std::env::args().skip(1);
@@ -147,6 +161,9 @@ impl Args {
                 }
                 "--image" => {
                     image = Some(next_path(&mut args, "--image")?);
+                }
+                "--dll-search-dir" => {
+                    dll_search_dirs.push(next_path(&mut args, "--dll-search-dir")?);
                 }
                 "--run-cpu" => {
                     run_cpu = true;
@@ -167,6 +184,7 @@ impl Args {
             registry,
             devices,
             image,
+            dll_search_dirs,
             run_cpu,
         })
     }
@@ -180,6 +198,60 @@ fn next_path(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<Path
 
 fn print_help() {
     println!(
-        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--image INavi.exe] [--run-cpu]"
+        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--image INavi.exe] [--dll-search-dir DIR]... [--run-cpu]"
     );
+}
+
+fn load_import_dlls(image: &PeImage, search_dirs: &[PathBuf]) -> Result<Vec<PeImage>> {
+    let mut loaded = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for descriptor in &image.imports {
+        let normalized = normalize_module_name(&descriptor.module_name);
+        if normalized == "coredll" || !seen.insert(normalized) {
+            continue;
+        }
+        let Some(path) = resolve_dll_path(&descriptor.module_name, search_dirs) else {
+            continue;
+        };
+        loaded.push(PeImage::inspect(path)?);
+    }
+
+    Ok(loaded)
+}
+
+fn resolve_dll_path(module_name: &str, search_dirs: &[PathBuf]) -> Option<PathBuf> {
+    let candidates = [
+        module_name.to_owned(),
+        module_name.to_ascii_lowercase(),
+        module_name.to_ascii_uppercase(),
+    ];
+    for dir in search_dirs {
+        for candidate in &candidates {
+            let path = dir.join(candidate);
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+        if Path::new(module_name).extension().is_none() {
+            let path = dir.join(format!("{module_name}.dll"));
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+fn normalize_module_name(module_name: &str) -> String {
+    module_name
+        .trim()
+        .trim_end_matches('\0')
+        .trim_end_matches(".dll")
+        .trim_end_matches(".DLL")
+        .to_ascii_lowercase()
+}
+
+fn ce_module_path(path: &str) -> String {
+    path.replace('/', "\\")
 }

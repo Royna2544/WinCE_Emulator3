@@ -37,6 +37,19 @@ pub struct ImportTrapTable {
     traps: BTreeMap<u32, ImportTrap>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ExternalImportTable {
+    modules: BTreeMap<String, ExternalImportModule>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalImportModule {
+    pub module_name: String,
+    pub image_base: u32,
+    by_ordinal: BTreeMap<u32, u32>,
+    by_name: BTreeMap<String, u32>,
+}
+
 impl ImportTrapTable {
     pub fn new() -> Self {
         Self::default()
@@ -85,7 +98,7 @@ impl ImportTrapTable {
             ImportModuleKind::Mfc
             | ImportModuleKind::CommonControls
             | ImportModuleKind::Winsock
-            | ImportModuleKind::Ole => dispatch_external_stub_to_u32(trap, args),
+            | ImportModuleKind::Ole => dispatch_external_stub_to_u32(trap, memory, args),
         })
     }
 
@@ -100,12 +113,30 @@ pub fn patch_pe_coredll_imports(
     exports: &CoredllExportTable,
     trap_base: u32,
 ) -> Result<ImportTrapTable> {
-    patch_supported_imports(
+    patch_supported_imports_with_external(
         mapped,
         image.image_base(),
         &image.imports,
         exports,
         trap_base,
+        &ExternalImportTable::default(),
+    )
+}
+
+pub fn patch_pe_imports(
+    image: &PeImage,
+    mapped: &mut [u8],
+    exports: &CoredllExportTable,
+    trap_base: u32,
+    external: &ExternalImportTable,
+) -> Result<ImportTrapTable> {
+    patch_supported_imports_with_external(
+        mapped,
+        image.image_base(),
+        &image.imports,
+        exports,
+        trap_base,
+        external,
     )
 }
 
@@ -116,7 +147,14 @@ pub fn patch_coredll_imports(
     exports: &CoredllExportTable,
     trap_base: u32,
 ) -> Result<ImportTrapTable> {
-    patch_supported_imports(mapped, image_base, imports, exports, trap_base)
+    patch_supported_imports_with_external(
+        mapped,
+        image_base,
+        imports,
+        exports,
+        trap_base,
+        &ExternalImportTable::default(),
+    )
 }
 
 pub fn patch_supported_imports(
@@ -126,6 +164,24 @@ pub fn patch_supported_imports(
     exports: &CoredllExportTable,
     trap_base: u32,
 ) -> Result<ImportTrapTable> {
+    patch_supported_imports_with_external(
+        mapped,
+        image_base,
+        imports,
+        exports,
+        trap_base,
+        &ExternalImportTable::default(),
+    )
+}
+
+pub fn patch_supported_imports_with_external(
+    mapped: &mut [u8],
+    image_base: u32,
+    imports: &[ImportDescriptor],
+    exports: &CoredllExportTable,
+    trap_base: u32,
+    external: &ExternalImportTable,
+) -> Result<ImportTrapTable> {
     let mut table = ImportTrapTable::new();
     let mut next_address = trap_base;
 
@@ -134,6 +190,13 @@ pub fn patch_supported_imports(
             continue;
         };
         for thunk in &descriptor.imports {
+            if module_kind != ImportModuleKind::Coredll {
+                if let Some(address) = external.resolve(&descriptor.module_name, &thunk.import) {
+                    write_mapped_u32(mapped, thunk.iat_rva, address)?;
+                    continue;
+                }
+            }
+
             let (ordinal, name) = match &thunk.import {
                 ImportBy::Ordinal(ordinal) => (Some(u32::from(*ordinal)), None),
                 ImportBy::Name { name, .. } => {
@@ -167,7 +230,43 @@ pub fn patch_supported_imports(
     Ok(table)
 }
 
-fn dispatch_external_stub_to_u32(trap: &ImportTrap, args: [u32; 4]) -> u32 {
+impl ExternalImportTable {
+    pub fn add_pe_image(&mut self, module_name: &str, image: &PeImage, load_base: u32) {
+        let mut module = ExternalImportModule {
+            module_name: module_name.to_owned(),
+            image_base: load_base,
+            by_ordinal: BTreeMap::new(),
+            by_name: BTreeMap::new(),
+        };
+        if let Some(exports) = image.exports.as_ref() {
+            for export in &exports.functions {
+                if export.rva == 0 || export.forwarder.is_some() {
+                    continue;
+                }
+                let va = load_base.wrapping_add(export.rva);
+                module.by_ordinal.insert(export.ordinal, va);
+                if let Some(name) = export.name.as_deref() {
+                    module.by_name.insert(normalize_symbol(name), va);
+                }
+            }
+        }
+        self.modules.insert(normalize_module(module_name), module);
+    }
+
+    pub fn resolve(&self, module_name: &str, import: &ImportBy) -> Option<u32> {
+        let module = self.modules.get(&normalize_module(module_name))?;
+        match import {
+            ImportBy::Ordinal(ordinal) => module.by_ordinal.get(&u32::from(*ordinal)).copied(),
+            ImportBy::Name { name, .. } => module.by_name.get(&normalize_symbol(name)).copied(),
+        }
+    }
+}
+
+fn dispatch_external_stub_to_u32<M: CoredllGuestMemory>(
+    trap: &ImportTrap,
+    memory: &mut M,
+    args: [u32; 4],
+) -> u32 {
     let name = trap.name.as_deref().unwrap_or("");
     tracing::debug!(
         target: "ce.imports",
@@ -184,7 +283,7 @@ fn dispatch_external_stub_to_u32(trap: &ImportTrap, args: [u32; 4]) -> u32 {
     match trap.module_kind {
         ImportModuleKind::Mfc => mfc_stub_return(name),
         ImportModuleKind::CommonControls => common_controls_stub_return(name),
-        ImportModuleKind::Winsock => winsock_stub_return(name),
+        ImportModuleKind::Winsock => winsock_stub_return(trap, memory, args),
         ImportModuleKind::Ole => ole_stub_return(name),
         ImportModuleKind::Coredll => 0,
     }
@@ -210,12 +309,66 @@ fn common_controls_stub_return(name: &str) -> u32 {
     }
 }
 
-fn winsock_stub_return(name: &str) -> u32 {
-    match normalize_symbol(name).as_str() {
-        "wsastartup" | "wsacleanup" => 0,
-        "socket" | "accept" => u32::MAX,
+fn winsock_stub_return<M: CoredllGuestMemory>(
+    trap: &ImportTrap,
+    memory: &mut M,
+    args: [u32; 4],
+) -> u32 {
+    let name = trap.name.as_deref().unwrap_or("");
+    match (trap.ordinal, normalize_symbol(name).as_str()) {
+        (Some(3), _) | (_, "wsastartup") => wsa_startup(memory, args[0], args[1]),
+        (Some(1), _) | (_, "wsacleanup") => 0,
+        (_, "socket" | "accept") => u32::MAX,
         _ => 0,
     }
+}
+
+fn wsa_startup<M: CoredllGuestMemory>(memory: &mut M, requested: u32, data_ptr: u32) -> u32 {
+    const WSAVERNOTSUPPORTED: u32 = 10092;
+    const WSADESCRIPTION_LEN: usize = 256;
+    const WSASYS_STATUS_LEN: usize = 128;
+    if data_ptr == 0 {
+        return WSAVERNOTSUPPORTED;
+    }
+    let major = ((requested >> 8) & 0xff).clamp(1, 2) as u16;
+    let minor = (requested & 0xff).min(2) as u16;
+    let version = (major << 8) | minor;
+    if memory.write_u16(data_ptr, version).is_err()
+        || memory.write_u16(data_ptr + 2, 0x0202).is_err()
+        || write_guest_bytes(
+            memory,
+            data_ptr + 4,
+            b"FakeCE Winsock\0",
+            WSADESCRIPTION_LEN + 1,
+        )
+        .is_err()
+        || write_guest_bytes(
+            memory,
+            data_ptr + 4 + 257,
+            b"Running\0",
+            WSASYS_STATUS_LEN + 1,
+        )
+        .is_err()
+        || memory.write_u16(data_ptr + 4 + 257 + 129, 0).is_err()
+        || memory.write_u16(data_ptr + 4 + 257 + 129 + 2, 0).is_err()
+        || memory.write_u32(data_ptr + 4 + 257 + 129 + 4, 0).is_err()
+    {
+        return WSAVERNOTSUPPORTED;
+    }
+    0
+}
+
+fn write_guest_bytes<M: CoredllGuestMemory>(
+    memory: &mut M,
+    addr: u32,
+    bytes: &[u8],
+    capacity: usize,
+) -> Result<()> {
+    for index in 0..capacity {
+        let value = bytes.get(index).copied().unwrap_or(0);
+        memory.write_u8(addr + index as u32, value)?;
+    }
+    Ok(())
 }
 
 fn ole_stub_return(name: &str) -> u32 {

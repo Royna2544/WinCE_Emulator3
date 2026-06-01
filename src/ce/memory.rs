@@ -275,8 +275,16 @@ impl MemorySystem {
         self.allocations.get(&ptr)
     }
 
+    pub fn allocations(&self) -> impl Iterator<Item = &MemoryAllocation> {
+        self.allocations.values()
+    }
+
     pub fn virtual_allocation(&self, base: u32) -> Option<&VirtualAllocation> {
         self.virtual_allocations.get(&base)
+    }
+
+    pub fn virtual_allocations(&self) -> impl Iterator<Item = &VirtualAllocation> {
+        self.virtual_allocations.values()
     }
 
     fn is_live_heap(&self, heap: u32) -> bool {

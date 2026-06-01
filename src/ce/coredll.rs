@@ -353,6 +353,9 @@ impl CoredllExportTable {
         for ordinal in COREDLL_EXPORTS {
             table.insert(CoredllExport::from_static_ordinal(ordinal));
         }
+        for ordinal in CE42_MIPSII_SDK_ORDINALS {
+            table.insert(CoredllExport::from_static_ordinal(ordinal));
+        }
         table
     }
 
@@ -1153,6 +1156,55 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.close_handle(raw_arg(args, 0)).unwrap_or(false),
         )),
         ORD_GET_PROCESS_HEAP => Some(CoredllValue::Handle(kernel.memory.get_process_heap())),
+        ORD_GET_MODULE_FILE_NAME_W => Some(CoredllValue::U32(get_module_file_name_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ))),
+        ORD_CE42_MIPSII_WCSRCHR => Some(CoredllValue::Handle(wcsrchr_raw(
+            memory,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_CE42_MIPSII_WCSDUP => Some(CoredllValue::Handle(wcsdup_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_CE42_MIPSII_MALLOC | ORD_CE42_MIPSII_OPERATOR_NEW => {
+            Some(CoredllValue::Handle(heap_alloc_raw(
+                kernel,
+                thread_id,
+                kernel.memory.get_process_heap(),
+                0,
+                raw_arg(args, 0),
+            )))
+        }
+        ORD_CE42_MIPSII_MEMCPY => Some(CoredllValue::Handle(memcpy_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ))),
+        ORD_CE42_MIPSII_MEMSET => Some(CoredllValue::Handle(memset_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ))),
+        ORD_CE42_MIPSII_SWPRINTF | ORD_CE42_MIPSII_PRINTF => Some(CoredllValue::U32(0)),
+        ORD_CE42_MIPSII_FREE => {
+            free_raw(kernel, raw_arg(args, 0));
+            Some(CoredllValue::U32(0))
+        }
         ORD_LOCAL_ALLOC | ORD_LOCAL_ALLOC_TRACE => Some(CoredllValue::Handle(local_alloc_raw(
             kernel,
             thread_id,
@@ -1602,6 +1654,127 @@ fn create_file_w_raw<M: CoredllGuestMemory>(
     }
 }
 
+fn get_module_file_name_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    module: u32,
+    buffer: u32,
+    max_chars: u32,
+) -> u32 {
+    if module != 0 || buffer == 0 || max_chars == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let units = kernel
+        .process_module_path()
+        .encode_utf16()
+        .collect::<Vec<_>>();
+    let copied = units.len().min(max_chars.saturating_sub(1) as usize);
+    for (index, unit) in units.iter().copied().take(copied).enumerate() {
+        if !write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            buffer.wrapping_add(index as u32 * 2),
+            unit,
+        ) {
+            return 0;
+        }
+    }
+    if !write_guest_u16(
+        kernel,
+        memory,
+        thread_id,
+        buffer.wrapping_add(copied as u32 * 2),
+        0,
+    ) {
+        return 0;
+    }
+    copied as u32
+}
+
+fn wcsrchr_raw<M: CoredllGuestMemory>(memory: &M, string: u32, needle: u32) -> u32 {
+    if string == 0 {
+        return 0;
+    }
+    let needle = needle as u16;
+    let mut last_match = 0;
+    for index in 0..0x8000u32 {
+        let addr = string.wrapping_add(index * 2);
+        let Ok(unit) = memory.read_u16(addr) else {
+            return 0;
+        };
+        if unit == needle {
+            last_match = addr;
+        }
+        if unit == 0 {
+            break;
+        }
+    }
+    last_match
+}
+
+fn wcsdup_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    string: u32,
+) -> u32 {
+    if string == 0 {
+        return 0;
+    }
+    let mut units = Vec::new();
+    for index in 0..0x8000u32 {
+        let addr = string.wrapping_add(index * 2);
+        let Ok(unit) = memory.read_u16(addr) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        units.push(unit);
+        if unit == 0 {
+            break;
+        }
+    }
+    if !units.ends_with(&[0]) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let bytes = u32::try_from(units.len())
+        .ok()
+        .and_then(|chars| chars.checked_mul(2))
+        .unwrap_or(0);
+    let ptr = heap_alloc_raw(
+        kernel,
+        thread_id,
+        kernel.memory.get_process_heap(),
+        0,
+        bytes,
+    );
+    if ptr == 0 {
+        return 0;
+    }
+    for (index, unit) in units.iter().copied().enumerate() {
+        if !write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            ptr.wrapping_add(index as u32 * 2),
+            unit,
+        ) {
+            free_raw(kernel, ptr);
+            return 0;
+        }
+    }
+    ptr
+}
+
 fn read_file_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -1838,6 +2011,54 @@ fn heap_alloc_raw(kernel: &mut CeKernel, thread_id: u32, heap: u32, flags: u32, 
                 .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
             0
         }
+    }
+}
+
+fn free_raw(kernel: &mut CeKernel, ptr: u32) {
+    if ptr != 0 {
+        let _ = kernel
+            .memory
+            .heap_free(kernel.memory.get_process_heap(), 0, ptr);
+    }
+}
+
+fn memcpy_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest: u32,
+    src: u32,
+    len: u32,
+) -> u32 {
+    if len == 0 {
+        return dest;
+    }
+    let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, src, len) else {
+        return 0;
+    };
+    if write_guest_bytes(kernel, memory, thread_id, dest, &bytes) {
+        dest
+    } else {
+        0
+    }
+}
+
+fn memset_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest: u32,
+    value: u32,
+    len: u32,
+) -> u32 {
+    if len == 0 {
+        return dest;
+    }
+    let bytes = vec![value as u8; len as usize];
+    if write_guest_bytes(kernel, memory, thread_id, dest, &bytes) {
+        dest
+    } else {
+        0
     }
 }
 
@@ -3213,6 +3434,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "LocalFreeInProcess",
     "LocalSizeInProcess",
     "GetProcessHeap",
+    "GetModuleFileNameW",
     "HeapCreate",
     "HeapDestroy",
     "HeapAlloc",
@@ -3221,6 +3443,15 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "HeapSize",
     "HeapFree",
     "HeapValidate",
+    "malloc",
+    "wcsrchr",
+    "_wcsdup",
+    "memcpy",
+    "memset",
+    "??2@YAPAXI@Z",
+    "swprintf",
+    "printf",
+    "free",
     "RemoteHeapAlloc",
     "RemoteHeapReAlloc",
     "RemoteHeapSize",
