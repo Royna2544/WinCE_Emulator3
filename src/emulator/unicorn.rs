@@ -37,6 +37,7 @@ pub struct UnicornDebugSnapshot {
     pub trap_name: Option<String>,
     pub trap_ordinal: Option<u32>,
     pub memory_fault: Option<UnicornMemoryFault>,
+    pub function_pointer_probe: Option<UnicornFunctionPointerProbe>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +49,13 @@ pub struct UnicornMemoryFault {
     pub pc: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornFunctionPointerProbe {
+    pub pc: u32,
+    pub slot: u32,
+    pub value: u32,
+}
+
 const USER_KDATA_PAGE_BASE: u32 = 0x0000_5000;
 const USER_KDATA_PAGE_SIZE: u32 = 0x0000_1000;
 const USER_KDATA_BASE: u32 = 0x0000_5800;
@@ -56,6 +64,10 @@ const SYS_HANDLE_CURRENT_THREAD: usize = 1;
 const SYS_HANDLE_CURRENT_PROCESS: usize = 2;
 const GUEST_HEAP_ARENA_BASE: u32 = 0x3000_0000;
 const GUEST_HEAP_ARENA_SIZE: u32 = 0x0100_0000;
+#[cfg(feature = "unicorn")]
+const MAIN_DESTRUCTOR_BRANCH_PC: u32 = 0x0048_f9cc;
+#[cfg(feature = "unicorn")]
+const MAIN_DESTRUCTOR_JALR_PC: u32 = 0x0048_f9d4;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -351,6 +363,25 @@ impl UnicornMips {
         )
         .map_err(|err| Error::Backend(format!("install import hook: {err:?}")))?;
 
+        let function_pointer_probe = Rc::new(RefCell::new(None));
+        let function_pointer_probe_hook = Rc::clone(&function_pointer_probe);
+        uc.add_code_hook(
+            u64::from(MAIN_DESTRUCTOR_BRANCH_PC),
+            u64::from(MAIN_DESTRUCTOR_JALR_PC),
+            move |uc, address, _size| {
+                let pc = address as u32;
+                if pc != MAIN_DESTRUCTOR_BRANCH_PC && pc != MAIN_DESTRUCTOR_JALR_PC {
+                    return;
+                }
+                *function_pointer_probe_hook.borrow_mut() = Some(UnicornFunctionPointerProbe {
+                    pc,
+                    slot: read_mips_reg(uc, RegisterMIPS::FP),
+                    value: read_mips_reg(uc, RegisterMIPS::V0),
+                });
+            },
+        )
+        .map_err(|err| Error::Backend(format!("install function-pointer probe: {err:?}")))?;
+
         let memory_fault = Rc::new(RefCell::new(None));
         let memory_fault_hook = Rc::clone(&memory_fault);
         uc.add_mem_hook(
@@ -378,6 +409,7 @@ impl UnicornMips {
             &uc,
             &self.import_traps,
             memory_fault.borrow().clone(),
+            function_pointer_probe.borrow().clone(),
         ));
         result.map_err(|err| {
             let snapshot = self
@@ -529,6 +561,13 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 fault.access, fault.address, fault.size, fault.value, fault.pc
             )?;
         }
+        if let Some(probe) = self.function_pointer_probe.as_ref() {
+            write!(
+                f,
+                " funcptr_pc=0x{:08x} funcptr_slot=0x{:08x} funcptr_value=0x{:08x}",
+                probe.pc, probe.slot, probe.value
+            )?;
+        }
         Ok(())
     }
 }
@@ -569,6 +608,7 @@ fn capture_debug_snapshot<D>(
     uc: &unicorn_engine::Unicorn<'_, D>,
     traps: &ImportTrapTable,
     memory_fault: Option<UnicornMemoryFault>,
+    function_pointer_probe: Option<UnicornFunctionPointerProbe>,
 ) -> UnicornDebugSnapshot {
     use unicorn_engine::RegisterMIPS;
 
@@ -589,6 +629,7 @@ fn capture_debug_snapshot<D>(
         trap_name: trap.and_then(|trap| trap.name.clone()),
         trap_ordinal: trap.and_then(|trap| trap.ordinal),
         memory_fault,
+        function_pointer_probe,
     }
 }
 

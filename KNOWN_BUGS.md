@@ -14,9 +14,11 @@
     `pc=0x00000000`.
   - Evidence: bounded Unicorn run reaches `ra=0x0048f9dc`, where the main image
     has just executed `jalr $2` at `0x0048f9d4` from a function-pointer table
-    bounded by globals near `0x00835e88`/`0x00835e8c`.
-  - Status: active; needs targeted table-pointer trace. Per `RULES.md`, this is
-    not treated as normal guest exit.
+    bounded by globals near `0x00835e88`/`0x00835e8c`. The current targeted
+    probe reports `funcptr_slot=0x30002390` and
+    `funcptr_value=0x00010000`.
+  - Status: active; needs targeted write trace for the heap-backed slot. Per
+    `RULES.md`, this is not treated as normal guest exit.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch

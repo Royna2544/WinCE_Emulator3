@@ -5,9 +5,9 @@
 - Run a bounded Unicorn launch of
   `/mnt/d/INAVI_Emulator/INAVI/INavi/INavi.exe` with the SDK MFC DLL search dir
   and trace the null function-pointer call at `0x0048f9d4`/RA `0x0048f9dc`.
-- Add a targeted diagnostic around the main image destructor/function-pointer
-  table at `0x00835e88`/`0x00835e8c` to identify which registered pointer became
-  null or low-valued before `jalr`.
+- Add a targeted write diagnostic for the heap-backed destructor/function-pointer
+  table slot currently seen at `0x30002390` to identify which guest instruction
+  registered the low pointer value `0x00010000` before `jalr`.
 - Replace launch-stub behavior for MFC400/mfcce400, commctrl, WINSOCK, and OLE
   imports with real subsystem-backed implementations as import traces demand.
 - Continue burning down COREDLL ordinals subsystem by subsystem, replacing

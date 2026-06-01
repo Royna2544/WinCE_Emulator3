@@ -155,6 +155,10 @@
 - The bounded Unicorn launch with SDK `mfcce400.dll` now progresses past the
   previous unmapped-write failures and stops at a null function-pointer call from
   the main image destructor/function-pointer table around `0x0048f9d4`.
+- A targeted Unicorn probe shows the failing destructor/function-pointer call is
+  currently `jalr` from `0x0048f9d4` through slot `0x30002390` with value
+  `0x00010000`, so the immediate launch failure is a low/invalid registered
+  function pointer rather than a normal guest exit.
 
 ## Current State
 
