@@ -1,6 +1,8 @@
 pub mod audio;
 pub mod cemath;
+pub mod com;
 pub mod coredll;
+pub mod coredll_ordinals;
 pub mod devices;
 pub mod file;
 pub mod gwe;
@@ -8,4 +10,6 @@ pub mod kernel;
 pub mod object;
 pub mod registry;
 pub mod remote;
+pub mod resource;
+pub mod thread;
 pub mod timer;

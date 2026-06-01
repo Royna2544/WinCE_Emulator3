@@ -2,12 +2,15 @@ use crate::{
     ce::{
         audio::{AudioSystem, MmResult, WaveBuffer, WaveFormat},
         cemath::CeMath,
+        com::ComSystem,
         devices::{DeviceIoControlResult, DeviceNamespace},
         file::{FileIoResult, GENERIC_READ, GENERIC_WRITE, HostFileSystem, OPEN_EXISTING},
         gwe::{Gwe, Message},
         object::{FileObject, HandleTable, KernelObject, WaitResult},
         registry::Registry,
         remote::{CeRemote, RemoteStatus, WM_LBUTTONDOWN, WM_MOUSEMOVE, make_lparam},
+        resource::ResourceSystem,
+        thread::ThreadSystem,
         timer::{TimerSystem, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
     config::RuntimeConfig,
@@ -32,6 +35,9 @@ pub struct CeKernel {
     pub math: CeMath,
     pub timers: TimerSystem,
     pub remote: CeRemote,
+    pub threads: ThreadSystem,
+    pub resources: ResourceSystem,
+    pub com: ComSystem,
 }
 
 impl CeKernel {
@@ -46,6 +52,9 @@ impl CeKernel {
             math: CeMath,
             timers: TimerSystem::default(),
             remote: CeRemote::default(),
+            threads: ThreadSystem::default(),
+            resources: ResourceSystem::default(),
+            com: ComSystem::default(),
         }
     }
 

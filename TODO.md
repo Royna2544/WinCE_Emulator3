@@ -6,11 +6,19 @@
 - Map parsed MIPS PE32 images into Unicorn memory.
 - Build import thunk/trap handling that decodes guest MIPS arguments and calls
   the COREDLL dispatcher.
-- Burn down COREDLL ordinals subsystem by subsystem, replacing stubbed ordinal
-  plan entries with real CE-ish semantics.
+- Continue burning down COREDLL ordinals subsystem by subsystem, replacing
+  stubbed ordinal plan entries with CE/MFC/SDK-referenced semantics. Next
+  likely tranche: memory/heap/local allocation, file APIs with pointer writes,
+  PE-backed resource string/icon/bitmap loading, COM/OLE API dispatch when ole32
+  imports are connected, and more GWE message/window raw pointer marshalling.
 - Connect guest MFC, CRT-like exports, and WINSOCK imports.
 - Extend `cemath` as real guest imports demand more CRT/floating-point helpers.
 - Extend subsystem smoke tests as each shim is connected to guest import traps.
+- Add import-trap argument/result marshalling tests for raw ordinals that write
+  guest output pointers.
+- Parse PE resource directories into `ResourceSystem` so `FindResourceW` and
+  `LoadStringW` use the mapped guest image data rather than test-registered
+  virtual resources.
 
 ## Next
 

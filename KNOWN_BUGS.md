@@ -23,12 +23,24 @@
   - Status: expected until PE mapping and import trap work lands.
 
 - Most COREDLL ordinals are still subsystem stubs.
-  - Symptom: every parsed ordinal has subsystem ownership and raw dispatch
-    metadata, but only the implemented virtual Win32/CE facade, waveOut, and
-    `cemath` paths have real semantics.
+  - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch
+    metadata, but only the implemented virtual Win32/CE facade, waveOut,
+    `cemath`, the first kernel/thread/time/sync raw ordinal tranche, first
+    HWND/RECT GWE tranche, and first resource tranche have real semantics.
   - Evidence: `src/ce/coredll.rs` reports implemented-vs-stubbed ordinal plan
-    entries and returns subsystem stub policies for remaining exports.
+    entries and returns subsystem stub policies for remaining exports. Raw
+    tests now cover critical sections, interlocked operations, TLS/last-error,
+    time, event/wait, close-handle, HWND rectangles/points, resources, and COM
+    state.
   - Status: active ordinal-by-ordinal implementation work.
+
+- PE resources are not loaded into `ResourceSystem` yet.
+  - Symptom: resource API behavior works for registered virtual resources and
+    strings, but mapped PE resource directory data is not wired to
+    `FindResourceW`, `LoadResource`, `SizeofResource`, or `LoadStringW`.
+  - Evidence: `src/ce/resource.rs` has HRSRC/HGLOBAL-like state, but
+    `src/pe/mod.rs` does not populate it.
+  - Status: next PE/resource integration step.
 
 - Remote API has no Rust socket transport yet.
   - Symptom: remote touch/key/GPS/audio/status behavior exists as emulator API

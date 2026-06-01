@@ -29,6 +29,29 @@ anchors, not app-specific shortcuts.
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/KERNEL/schedule.c`
   - Event/mutex objects have handle-close hooks and are waited through
     `NKWaitForSingleObject`.
+  - `EVNTModify` calls `ForceEventModify`, accepts `EVENT_PULSE`,
+    `EVENT_RESET`, and `EVENT_SET`, and sets last error on invalid event
+    operations.
+
+- COREDLL critical sections:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/cscode.c`
+  and
+  `/mnt/c/Program Files (x86)/Windows CE Tools/wce420/STANDARDSDK_420/Include/Mipsii/winbase.h`
+  - The MIPS CE `CRITICAL_SECTION` layout is `LockCount`, `OwnerThread`,
+    `hCrit`, `needtrap`, and `dwContentions`.
+  - `InitializeCriticalSection`, `EnterCriticalSection`,
+    `TryEnterCriticalSection`, `LeaveCriticalSection`, and
+    `DeleteCriticalSection` update those fields before kernel trap handling.
+
+- COREDLL TLS and interlocked exports:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/apis.c`
+  and
+  `/mnt/c/Program Files (x86)/Windows CE Tools/wce420/STANDARDSDK_420/Include/Mipsii/winbase.h`
+  - `TlsGetValue` and `TlsSetValue` use `TLS_MINIMUM_AVAILABLE` and set
+    `ERROR_INVALID_PARAMETER` for invalid slots; `TlsGetValue` sets
+    `NO_ERROR` when a valid slot contains zero.
+  - MIPS CE headers define the exported interlocked signatures and
+    `InterlockedTestExchange`/`InterlockedCompareExchange` argument order.
 
 - GWE message queue surface:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h`
@@ -39,13 +62,40 @@ anchors, not app-specific shortcuts.
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp`
   - Declares `SetWindowTextW_I`, `GetWindowTextW_I`, `SetWindowLongW_I`,
     `GetWindowLongW_I`, `DefWindowProcW_I`, and `DestroyWindow_I`.
+  - `CWindow` stores `m_rc` for the whole window and `m_rcClient` for the
+    client area in screen coordinates; it declares `SetWindowPos_I`,
+    `MoveWindow_I`, `GetWindowRect_I`, `GetClientRect_I`,
+    `ClientToScreen_I`, and `ScreenToClient_I`.
+
+- MFC window layout behavior:
+  `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/wincore.cpp`
+  - Layout and child reposition paths use `GetWindowRect`,
+    `ScreenToClient`, `SetWindowPos`, and `GetClientRect`.
+
+- COREDLL resources:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/resource.cpp`
+  - `FindResourceW` searches MUI first and then base module resources.
+  - `LoadResource` returns the data pointer computed from module base plus
+    resource RVA.
+  - `SizeofResource` returns the resource data size from the resource data
+    entry.
+  - `LoadStringW` locates the string-table segment `(id >> 4) + 1`, advances
+    by counted UTF-16 strings, copies at most `nBufMax - 1` characters, and
+    appends a null terminator.
+
+- COM/OLE initialization reference:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/DEVICE/SERVICES/CORE/servcom.cpp`
+  - Services load `ole32.dll`, bind `CoInitializeEx` and `CoUninitialize`, and
+    initialize COM before COM maintenance work.
 
 - COREDLL multimedia ordinals:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/core_common.def`
   - Lists waveOut exports including `waveOutSetVolume @382`,
     `waveOutClose @384`, `waveOutWrite @387`, `waveOutReset @390`, and
     `waveOutOpen @399`.
-  - Parsed by `src/ce/coredll.rs` for name/ordinal dispatch coverage.
+  - Converted into checked-in Rust constants and a static ordinal `match` in
+    `src/ce/coredll_ordinals.rs`; `src/ce/coredll.rs` keeps parser helpers only
+    for validation/reference work.
 
 - COREDLL CRT/math exports:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/CRT/corelib1.def`

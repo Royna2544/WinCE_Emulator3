@@ -25,6 +25,13 @@ pub const GWL_STYLE: i32 = -16;
 pub const GWL_EXSTYLE: i32 = -20;
 pub const GWL_USERDATA: i32 = -21;
 
+pub const SWP_NOSIZE: u32 = 0x0001;
+pub const SWP_NOMOVE: u32 = 0x0002;
+pub const SWP_NOZORDER: u32 = 0x0004;
+pub const SWP_NOACTIVATE: u32 = 0x0010;
+pub const SWP_SHOWWINDOW: u32 = 0x0040;
+pub const SWP_HIDEWINDOW: u32 = 0x0080;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
     pub hwnd: u32,
@@ -32,6 +39,52 @@ pub struct Message {
     pub wparam: u32,
     pub lparam: u32,
     pub time_ms: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Rect {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+impl Rect {
+    pub fn from_origin_size(x: i32, y: i32, width: i32, height: i32) -> Self {
+        Self {
+            left: x,
+            top: y,
+            right: x.saturating_add(width),
+            bottom: y.saturating_add(height),
+        }
+    }
+
+    pub fn width(self) -> i32 {
+        self.right.saturating_sub(self.left)
+    }
+
+    pub fn height(self) -> i32 {
+        self.bottom.saturating_sub(self.top)
+    }
+
+    pub fn offset(self, dx: i32, dy: i32) -> Self {
+        Self {
+            left: self.left.saturating_add(dx),
+            top: self.top.saturating_add(dy),
+            right: self.right.saturating_add(dx),
+            bottom: self.bottom.saturating_add(dy),
+        }
+    }
+
+    pub fn zero_origin(self) -> Self {
+        Self::from_origin_size(0, 0, self.width(), self.height())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Point {
+    pub x: i32,
+    pub y: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +100,8 @@ pub struct Window {
     pub ex_style: u32,
     pub wndproc: u32,
     pub user_data: u32,
+    pub rect: Rect,
+    pub client_rect: Rect,
     pub destroyed: bool,
 }
 
@@ -82,6 +137,30 @@ impl Gwe {
         style: u32,
         ex_style: u32,
     ) -> u32 {
+        self.create_window_ex_with_rect(
+            thread_id,
+            class_name,
+            title,
+            parent,
+            id,
+            style,
+            ex_style,
+            Rect::default(),
+        )
+    }
+
+    pub fn create_window_ex_with_rect(
+        &mut self,
+        thread_id: u32,
+        class_name: &str,
+        title: &str,
+        parent: Option<u32>,
+        id: u32,
+        style: u32,
+        ex_style: u32,
+        rect: Rect,
+    ) -> u32 {
+        let rect = self.parent_to_screen_rect(parent, rect);
         let hwnd = self.next_hwnd;
         self.next_hwnd += 4;
         self.windows.insert(
@@ -98,6 +177,8 @@ impl Gwe {
                 ex_style,
                 wndproc: 0,
                 user_data: 0,
+                rect,
+                client_rect: rect,
                 destroyed: false,
             },
         );
@@ -123,6 +204,124 @@ impl Gwe {
             return false;
         };
         window.visible = visible;
+        true
+    }
+
+    pub fn set_window_pos(
+        &mut self,
+        hwnd: u32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        flags: u32,
+    ) -> bool {
+        let Some(window) = self.windows.get(&hwnd) else {
+            return false;
+        };
+        let old = window.rect;
+        let parent = window.parent;
+        let mut left = old.left;
+        let mut top = old.top;
+        let mut right = old.right;
+        let mut bottom = old.bottom;
+
+        if flags & SWP_NOMOVE == 0 {
+            let origin = self.parent_client_origin(parent);
+            left = origin.x.saturating_add(x);
+            top = origin.y.saturating_add(y);
+            if flags & SWP_NOSIZE != 0 {
+                right = left.saturating_add(old.width());
+                bottom = top.saturating_add(old.height());
+            }
+        }
+
+        if flags & SWP_NOSIZE == 0 {
+            right = left.saturating_add(width);
+            bottom = top.saturating_add(height);
+        }
+
+        let Some(window) = self.windows.get_mut(&hwnd) else {
+            return false;
+        };
+        window.rect = Rect {
+            left,
+            top,
+            right,
+            bottom,
+        };
+        window.client_rect = window.rect;
+        if flags & SWP_SHOWWINDOW != 0 {
+            window.visible = true;
+        }
+        if flags & SWP_HIDEWINDOW != 0 {
+            window.visible = false;
+        }
+        true
+    }
+
+    pub fn move_window(
+        &mut self,
+        hwnd: u32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        _repaint: bool,
+    ) -> bool {
+        self.set_window_pos(hwnd, x, y, width, height, 0)
+    }
+
+    pub fn get_window_rect(&self, hwnd: u32) -> Option<Rect> {
+        Some(self.windows.get(&hwnd)?.rect)
+    }
+
+    pub fn get_client_rect(&self, hwnd: u32) -> Option<Rect> {
+        Some(self.windows.get(&hwnd)?.client_rect.zero_origin())
+    }
+
+    pub fn client_to_screen(&self, hwnd: u32, point: Point) -> Option<Point> {
+        let origin = self.windows.get(&hwnd)?.client_rect;
+        Some(Point {
+            x: point.x.saturating_add(origin.left),
+            y: point.y.saturating_add(origin.top),
+        })
+    }
+
+    pub fn screen_to_client(&self, hwnd: u32, point: Point) -> Option<Point> {
+        let origin = self.windows.get(&hwnd)?.client_rect;
+        Some(Point {
+            x: point.x.saturating_sub(origin.left),
+            y: point.y.saturating_sub(origin.top),
+        })
+    }
+
+    pub fn map_window_points(
+        &self,
+        from: Option<u32>,
+        to: Option<u32>,
+        points: &mut [Point],
+    ) -> bool {
+        let from_origin = match from {
+            Some(hwnd) => match self.windows.get(&hwnd) {
+                Some(window) => window.client_rect,
+                None => return false,
+            },
+            None => Rect::default(),
+        };
+        let to_origin = match to {
+            Some(hwnd) => match self.windows.get(&hwnd) {
+                Some(window) => window.client_rect,
+                None => return false,
+            },
+            None => Rect::default(),
+        };
+        let dx = from_origin.left.saturating_sub(to_origin.left);
+        let dy = from_origin.top.saturating_sub(to_origin.top);
+        for point in points {
+            point.x = point.x.saturating_add(dx);
+            point.y = point.y.saturating_add(dy);
+        }
         true
     }
 
@@ -246,6 +445,21 @@ impl Gwe {
             .iter()
             .position(|message| message_matches(message, hwnd, min_msg, max_msg))?;
         queue.remove(index)
+    }
+
+    fn parent_to_screen_rect(&self, parent: Option<u32>, rect: Rect) -> Rect {
+        let origin = self.parent_client_origin(parent);
+        rect.offset(origin.x, origin.y)
+    }
+
+    fn parent_client_origin(&self, parent: Option<u32>) -> Point {
+        parent
+            .and_then(|hwnd| self.windows.get(&hwnd))
+            .map(|window| Point {
+                x: window.client_rect.left,
+                y: window.client_rect.top,
+            })
+            .unwrap_or_default()
     }
 }
 

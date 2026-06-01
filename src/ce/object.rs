@@ -13,6 +13,7 @@ pub enum KernelObject {
     Device(DeviceSession),
     Window(u32),
     WaveOut(u32),
+    CriticalSection(CriticalSectionObject),
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +33,11 @@ pub struct MutexObject {
 pub struct FileObject {
     pub guest_path: String,
     pub file_id: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct CriticalSectionObject {
+    pub guest_ptr: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -164,7 +170,8 @@ impl HandleTable {
             KernelObject::File(_)
             | KernelObject::Device(_)
             | KernelObject::Window(_)
-            | KernelObject::WaveOut(_) => WaitResult::Object0,
+            | KernelObject::WaveOut(_)
+            | KernelObject::CriticalSection(_) => WaitResult::Object0,
             _ if timeout_ms == 0 => WaitResult::Timeout,
             _ => WaitResult::Timeout,
         }

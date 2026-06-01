@@ -1,13 +1,27 @@
-use std::{fs, path::PathBuf};
+use std::{collections::BTreeMap, fs, path::PathBuf};
 use wince_emulation_v3::{
-    Result,
+    Error, Result,
     ce::{
         audio::{MMSYSERR_NOERROR, WaveBuffer, WaveFormat, WaveOutState},
         cemath::{CeMathBinaryF64, CeMathCall, CeMathUnaryF64, CeMathValue},
+        com::{REGDB_E_CLASSNOTREG, S_FALSE, S_OK},
         coredll::{
-            CoredllCall, CoredllDispatch, CoredllExportTable, CoredllImplementationStatus,
-            CoredllStubPolicy, CoredllSubsystem, CoredllValue, DEFAULT_CORE_COMMON_DEF,
+            CoredllCall, CoredllDispatch, CoredllExportTable, CoredllGuestMemory,
+            CoredllImplementationStatus, CoredllStubPolicy, CoredllSubsystem, CoredllValue,
             EventModifyAction,
+        },
+        coredll_ordinals::{
+            ORD_CLIENT_TO_SCREEN, ORD_CLOSE_HANDLE, ORD_CREATE_FILE_W, ORD_CREATE_WINDOW_EX_W,
+            ORD_DISPATCH_MESSAGE_W, ORD_EVENT_MODIFY, ORD_FIND_RESOURCE_W, ORD_GET_CLIENT_RECT,
+            ORD_GET_LAST_ERROR, ORD_GET_MESSAGE_W, ORD_GET_TICK_COUNT, ORD_GET_WINDOW_RECT,
+            ORD_INITIALIZE_CRITICAL_SECTION, ORD_INTERLOCKED_COMPARE_EXCHANGE,
+            ORD_INTERLOCKED_EXCHANGE_ADD, ORD_INTERLOCKED_INCREMENT, ORD_LEAVE_CRITICAL_SECTION,
+            ORD_LL_DIV, ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_MAP_WINDOW_POINTS,
+            ORD_MOVE_WINDOW, ORD_POST_MESSAGE_W, ORD_POW, ORD_REG_OPEN_KEY_EX_W,
+            ORD_SCREEN_TO_CLIENT, ORD_SET_LAST_ERROR, ORD_SET_WINDOW_POS, ORD_SIZEOF_RESOURCE,
+            ORD_SLEEP, ORD_SQRT, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
+            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_USER_CALL_WINDOW_PROC, ORD_WAIT_FOR_SINGLE_OBJECT,
+            ORD_WRITE_FILE,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::{GWL_USERDATA, WM_CREATE, WM_QUIT, WM_TIMER, WM_USER},
@@ -15,6 +29,8 @@ use wince_emulation_v3::{
         object::{EventObject, KernelObject},
         registry::{ERROR_SUCCESS, HKEY_LOCAL_MACHINE, REG_SZ},
         remote::{WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP},
+        resource::ResourceId,
+        thread::ERROR_INVALID_PARAMETER,
         timer::{WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
     config::RuntimeConfig,
@@ -23,6 +39,97 @@ use wince_emulation_v3::{
         unicorn::UnicornMips,
     },
 };
+
+#[derive(Debug, Default)]
+struct TestGuestMemory {
+    words: BTreeMap<u32, u32>,
+    halfwords: BTreeMap<u32, u16>,
+}
+
+impl TestGuestMemory {
+    fn map_words(&mut self, base: u32, words: u32) {
+        for index in 0..words {
+            self.write_word(base.wrapping_add(index * 4), 0);
+        }
+    }
+
+    fn map_halfwords(&mut self, base: u32, halfwords: u32) {
+        for index in 0..halfwords {
+            self.halfwords.insert(base.wrapping_add(index * 2), 0);
+        }
+    }
+
+    fn write_word(&mut self, addr: u32, value: u32) {
+        self.words.insert(addr, value);
+    }
+
+    fn read_i32(&self, addr: u32) -> Result<i32> {
+        Ok(self.read_u32(addr)? as i32)
+    }
+
+    fn write_point(&mut self, addr: u32, x: i32, y: i32) {
+        self.write_word(addr, x as u32);
+        self.write_word(addr + 4, y as u32);
+    }
+
+    fn write_wide_z(&mut self, addr: u32, text: &str) {
+        for (index, unit) in text.encode_utf16().chain(std::iter::once(0)).enumerate() {
+            self.halfwords.insert(addr + (index as u32) * 2, unit);
+        }
+    }
+
+    fn read_wide_z(&self, addr: u32, max_chars: usize) -> String {
+        let mut units = Vec::new();
+        for index in 0..max_chars {
+            let unit = self
+                .halfwords
+                .get(&(addr + (index as u32) * 2))
+                .copied()
+                .unwrap_or(0);
+            if unit == 0 {
+                break;
+            }
+            units.push(unit);
+        }
+        String::from_utf16_lossy(&units)
+    }
+}
+
+impl CoredllGuestMemory for TestGuestMemory {
+    fn read_u32(&self, addr: u32) -> Result<u32> {
+        self.words
+            .get(&addr)
+            .copied()
+            .ok_or_else(|| Error::Backend(format!("unmapped test word 0x{addr:08x}")))
+    }
+
+    fn write_u32(&mut self, addr: u32, value: u32) -> Result<()> {
+        if let Some(word) = self.words.get_mut(&addr) {
+            *word = value;
+            Ok(())
+        } else {
+            Err(Error::Backend(format!("unmapped test word 0x{addr:08x}")))
+        }
+    }
+
+    fn read_u16(&self, addr: u32) -> Result<u16> {
+        self.halfwords
+            .get(&addr)
+            .copied()
+            .ok_or_else(|| Error::Backend(format!("unmapped test halfword 0x{addr:08x}")))
+    }
+
+    fn write_u16(&mut self, addr: u32, value: u16) -> Result<()> {
+        if let Some(halfword) = self.halfwords.get_mut(&addr) {
+            *halfword = value;
+            Ok(())
+        } else {
+            Err(Error::Backend(format!(
+                "unmapped test halfword 0x{addr:08x}"
+            )))
+        }
+    }
+}
 
 #[test]
 fn boots_and_smokes_basic_ce_subsystems() -> Result<()> {
@@ -101,21 +208,40 @@ fn boots_and_smokes_basic_ce_subsystems() -> Result<()> {
 }
 
 #[test]
-fn coredll_table_reads_full_core_common_def_ordinals() -> Result<()> {
-    let table = CoredllExportTable::from_core_common_def_path(DEFAULT_CORE_COMMON_DEF)?;
+fn coredll_table_reads_full_static_rust_ordinals() -> Result<()> {
+    let table = CoredllExportTable::default();
 
     assert_eq!(table.export_count(), 1752);
-    assert_eq!(table.resolve_name("CreateFileW").unwrap().ordinal, 168);
-    assert_eq!(table.resolve_name("RegOpenKeyExW").unwrap().ordinal, 461);
-    assert_eq!(table.resolve_name("waveOutOpen").unwrap().ordinal, 399);
-    assert_eq!(table.resolve_name("GetMessageW").unwrap().ordinal, 861);
-    assert_eq!(table.resolve_name("DispatchMessageW").unwrap().ordinal, 859);
-    assert_eq!(table.resolve_name("sqrt").unwrap().ordinal, 1060);
-    assert_eq!(table.resolve_name("__ll_div").unwrap().ordinal, 2005);
-    assert_eq!(table.resolve_ordinal(168).unwrap().name, "CreateFileW");
-    assert_eq!(table.exports_by_ordinal(2867).len(), 1);
     assert_eq!(
-        table.resolve_ordinal(2867).unwrap().name,
+        table.resolve_name("CreateFileW").unwrap().ordinal,
+        ORD_CREATE_FILE_W
+    );
+    assert_eq!(
+        table.resolve_name("RegOpenKeyExW").unwrap().ordinal,
+        ORD_REG_OPEN_KEY_EX_W
+    );
+    assert_eq!(
+        table.resolve_name("GetMessageW").unwrap().ordinal,
+        ORD_GET_MESSAGE_W
+    );
+    assert_eq!(
+        table.resolve_name("DispatchMessageW").unwrap().ordinal,
+        ORD_DISPATCH_MESSAGE_W
+    );
+    assert_eq!(table.resolve_name("sqrt").unwrap().ordinal, ORD_SQRT);
+    assert_eq!(table.resolve_name("__ll_div").unwrap().ordinal, ORD_LL_DIV);
+    assert_eq!(
+        CoredllExportTable::resolve_static_ordinal(ORD_CREATE_FILE_W)
+            .unwrap()
+            .name,
+        "CreateFileW"
+    );
+    assert_eq!(table.exports_by_ordinal(ORD_USER_CALL_WINDOW_PROC).len(), 1);
+    assert_eq!(
+        table
+            .resolve_ordinal(ORD_USER_CALL_WINDOW_PROC)
+            .unwrap()
+            .name,
         "UserCallWindowProc"
     );
 
@@ -156,7 +282,7 @@ fn cemath_evaluates_crt_and_mips_helper_calls() -> Result<()> {
 
 #[test]
 fn coredll_dispatcher_routes_ordinals_to_virtual_win32_framework() -> Result<()> {
-    let table = CoredllExportTable::from_core_common_def_path(DEFAULT_CORE_COMMON_DEF)?;
+    let table = CoredllExportTable::default();
     let root = unique_test_root("coredll_dispatcher");
     fs::create_dir_all(&root).unwrap();
 
@@ -166,7 +292,7 @@ fn coredll_dispatcher_routes_ordinals_to_virtual_win32_framework() -> Result<()>
 
     let file = table.dispatch_by_ordinal(
         &mut kernel,
-        168,
+        ORD_CREATE_FILE_W,
         CoredllCall::CreateFileW {
             path: "\\ResidentFlash\\dispatch.bin".to_owned(),
             desired_access: GENERIC_READ | GENERIC_WRITE,
@@ -183,7 +309,7 @@ fn coredll_dispatcher_routes_ordinals_to_virtual_win32_framework() -> Result<()>
 
     let written = table.dispatch_by_ordinal(
         &mut kernel,
-        171,
+        ORD_WRITE_FILE,
         CoredllCall::WriteFile {
             handle: file,
             data: b"dispatch".to_vec(),
@@ -197,7 +323,11 @@ fn coredll_dispatcher_routes_ordinals_to_virtual_win32_framework() -> Result<()>
         }
     ));
     assert!(matches!(
-        table.dispatch_by_ordinal(&mut kernel, 553, CoredllCall::CloseHandle { handle: file }),
+        table.dispatch_by_ordinal(
+            &mut kernel,
+            ORD_CLOSE_HANDLE,
+            CoredllCall::CloseHandle { handle: file },
+        ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
             ..
@@ -227,7 +357,7 @@ fn coredll_dispatcher_routes_ordinals_to_virtual_win32_framework() -> Result<()>
     assert!(matches!(
         table.dispatch_by_ordinal(
             &mut kernel,
-            494,
+            ORD_EVENT_MODIFY,
             CoredllCall::EventModify {
                 handle: event,
                 action: EventModifyAction::Set,
@@ -241,7 +371,7 @@ fn coredll_dispatcher_routes_ordinals_to_virtual_win32_framework() -> Result<()>
     assert!(matches!(
         table.dispatch_by_ordinal(
             &mut kernel,
-            497,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
             CoredllCall::WaitForSingleObject {
                 handle: event,
                 timeout_ms: 0,
@@ -256,7 +386,7 @@ fn coredll_dispatcher_routes_ordinals_to_virtual_win32_framework() -> Result<()>
 
     let hwnd = table.dispatch_by_ordinal(
         &mut kernel,
-        246,
+        ORD_CREATE_WINDOW_EX_W,
         CoredllCall::CreateWindowExW {
             thread_id: 1,
             class_name: "STATIC".to_owned(),
@@ -277,7 +407,7 @@ fn coredll_dispatcher_routes_ordinals_to_virtual_win32_framework() -> Result<()>
     assert!(matches!(
         table.dispatch_by_ordinal(
             &mut kernel,
-            865,
+            ORD_POST_MESSAGE_W,
             CoredllCall::PostMessageW {
                 hwnd,
                 msg: WM_USER + 7,
@@ -291,14 +421,18 @@ fn coredll_dispatcher_routes_ordinals_to_virtual_win32_framework() -> Result<()>
         }
     ));
     assert!(matches!(
-        table.dispatch_by_ordinal(&mut kernel, 861, CoredllCall::GetMessageW { thread_id: 1 }),
+        table.dispatch_by_ordinal(
+            &mut kernel,
+            ORD_GET_MESSAGE_W,
+            CoredllCall::GetMessageW { thread_id: 1 },
+        ),
         CoredllDispatch::Returned {
             value: CoredllValue::OptionalMessage(Some(_)),
             ..
         }
     ));
 
-    let unimplemented = table.dispatch_untyped_ordinal(2);
+    let unimplemented = table.dispatch_untyped_ordinal(ORD_INITIALIZE_CRITICAL_SECTION);
     assert!(matches!(
         unimplemented,
         CoredllDispatch::Stubbed { export, stub }
@@ -311,7 +445,7 @@ fn coredll_dispatcher_routes_ordinals_to_virtual_win32_framework() -> Result<()>
 
 #[test]
 fn coredll_raw_dispatch_has_defined_path_for_every_parsed_ordinal() -> Result<()> {
-    let table = CoredllExportTable::from_core_common_def_path(DEFAULT_CORE_COMMON_DEF)?;
+    let table = CoredllExportTable::default();
     let plan = table.ordinal_plan();
     assert_eq!(plan.len(), table.export_count());
     assert!(plan.iter().any(|item| {
@@ -378,15 +512,524 @@ fn coredll_raw_dispatch_has_defined_path_for_every_parsed_ordinal() -> Result<()
 }
 
 #[test]
+fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let word = 0x1000;
+    let critical_section = 0x2000;
+    memory.write_word(word, 41);
+    memory.map_words(critical_section, 5);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_INITIALIZE_CRITICAL_SECTION,
+            [critical_section]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(critical_section)?, 0);
+    assert_eq!(memory.read_u32(critical_section + 4)?, 0);
+    assert!(memory.read_u32(critical_section + 8)? >= 0x100);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRY_ENTER_CRITICAL_SECTION,
+            [critical_section]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(critical_section)?, 1);
+    assert_eq!(memory.read_u32(critical_section + 4)?, thread_id);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LEAVE_CRITICAL_SECTION,
+            [critical_section]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(critical_section + 4)?, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_INTERLOCKED_INCREMENT,
+            [word],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(42),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(word)?, 42);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_INTERLOCKED_EXCHANGE_ADD,
+            [word, 8]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(42),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(word)?, 50);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_INTERLOCKED_COMPARE_EXCHANGE,
+            [word, 0xfeed, 50]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(50),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(word)?, 0xfeed);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TLS_SET_VALUE,
+            [5, 0xbeef]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TLS_GET_VALUE,
+            [5],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0xbeef),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_LAST_ERROR,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TLS_GET_VALUE,
+            [64],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_LAST_ERROR,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_INVALID_PARAMETER),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_LAST_ERROR,
+            [1234],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_LAST_ERROR,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1234),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_TICK_COUNT,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(_),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table
+            .dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id, ORD_SLEEP, [0],),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+
+    let event = kernel.create_event_w(Some("raw-event".to_owned()), false, false);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EVENT_MODIFY,
+            [event, 3]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [event, 0]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_OBJECT_0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [event, 0]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_TIMEOUT),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CLOSE_HANDLE,
+            [event],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+
+    let parent = kernel.create_window_ex_w(9, "PARENT", "parent", None, 1, 0, 0);
+    assert!(kernel.gwe.move_window(parent, 10, 20, 300, 200, true));
+    let class_ptr = 0x1_0000;
+    let title_ptr = 0x1_0040;
+    memory.write_wide_z(class_ptr, "CHILD");
+    memory.write_wide_z(title_ptr, "child");
+    let child = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_WINDOW_EX_W,
+        [0, class_ptr, title_ptr, 0, 5, 6, 70, 80, parent, 2, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } => hwnd,
+        other => panic!("CreateWindowExW did not create raw hwnd: {other:?}"),
+    };
+    assert_eq!(kernel.gwe.window(child).unwrap().class_name, "CHILD");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_WINDOW_POS,
+            [child, 0, 5, 6, 70, 80, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    let rect_ptr = 0x3000;
+    memory.map_words(rect_ptr, 4);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_WINDOW_RECT,
+            [child, rect_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_i32(rect_ptr)?, 15);
+    assert_eq!(memory.read_i32(rect_ptr + 4)?, 26);
+    assert_eq!(memory.read_i32(rect_ptr + 8)?, 85);
+    assert_eq!(memory.read_i32(rect_ptr + 12)?, 106);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CLIENT_RECT,
+            [child, rect_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_i32(rect_ptr)?, 0);
+    assert_eq!(memory.read_i32(rect_ptr + 4)?, 0);
+    assert_eq!(memory.read_i32(rect_ptr + 8)?, 70);
+    assert_eq!(memory.read_i32(rect_ptr + 12)?, 80);
+
+    let point_ptr = 0x3040;
+    memory.write_point(point_ptr, 7, 8);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CLIENT_TO_SCREEN,
+            [child, point_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_i32(point_ptr)?, 22);
+    assert_eq!(memory.read_i32(point_ptr + 4)?, 34);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SCREEN_TO_CLIENT,
+            [child, point_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_i32(point_ptr)?, 7);
+    assert_eq!(memory.read_i32(point_ptr + 4)?, 8);
+
+    memory.write_point(point_ptr, 0, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MAP_WINDOW_POINTS,
+            [child, parent, point_ptr, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_i32(point_ptr)?, 5);
+    assert_eq!(memory.read_i32(point_ptr + 4)?, 6);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MOVE_WINDOW,
+            [child, 20, 30, 90, 100, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    let resource = kernel.resources.register(
+        0x4000,
+        ResourceId::Integer(10),
+        ResourceId::Integer(6),
+        0x5000,
+        32,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_RESOURCE_W,
+            [0x4000, 10, 6],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(found),
+            ..
+        } if found == resource
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_RESOURCE,
+            [0x4000, resource],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0x5000),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SIZEOF_RESOURCE,
+            [0x4000, resource],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(32),
+            ..
+        }
+    ));
+    kernel
+        .resources
+        .register_string(0x4000, 42, "route ready", None);
+    let string_ptr = 0x3080;
+    memory.map_halfwords(string_ptr, 16);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_STRING_W,
+            [0x4000, 42, string_ptr, 16],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(11),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(string_ptr, 16), "route ready");
+
+    Ok(())
+}
+
+#[test]
+fn com_subsystem_tracks_apartments_and_registered_class_creation() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+
+    assert_eq!(kernel.com.co_initialize_ex(17, 0), S_OK);
+    assert_eq!(kernel.com.co_initialize_ex(17, 0), S_FALSE);
+    assert_eq!(
+        kernel.com.co_create_instance(0x7000, 0x7010),
+        Err(REGDB_E_CLASSNOTREG)
+    );
+    kernel.com.register_class(0x7000, 0x99);
+    let object = kernel.com.co_create_instance(0x7000, 0x7010).unwrap();
+    assert_eq!(kernel.com.object(object).unwrap().clsid_ptr, 0x7000);
+    kernel.com.co_uninitialize(17);
+    kernel.com.co_uninitialize(17);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_dispatcher_routes_cemath_ordinals() -> Result<()> {
-    let table = CoredllExportTable::from_core_common_def_path(DEFAULT_CORE_COMMON_DEF)?;
+    let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
     let mut kernel = CeKernel::boot(config);
 
     assert!(matches!(
         table.dispatch_by_ordinal(
             &mut kernel,
-            1060,
+            ORD_SQRT,
             CoredllCall::CeMath(CeMathCall::UnaryF64 {
                 op: CeMathUnaryF64::Sqrt,
                 value: 81.0,
@@ -401,7 +1044,7 @@ fn coredll_dispatcher_routes_cemath_ordinals() -> Result<()> {
     assert!(matches!(
         table.dispatch_by_ordinal(
             &mut kernel,
-            1051,
+            ORD_POW,
             CoredllCall::CeMath(CeMathCall::BinaryF64 {
                 op: CeMathBinaryF64::Pow,
                 lhs: 3.0,
@@ -417,7 +1060,7 @@ fn coredll_dispatcher_routes_cemath_ordinals() -> Result<()> {
     assert!(matches!(
         table.dispatch_by_ordinal(
             &mut kernel,
-            2005,
+            ORD_LL_DIV,
             CoredllCall::CeMath(CeMathCall::LlDiv { lhs: -21, rhs: 2 }),
         ),
         CoredllDispatch::Returned {

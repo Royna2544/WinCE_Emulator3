@@ -10,16 +10,19 @@ shortcuts:
 - CE-style registry API calls backed by `regs.json`
 - Win32/CE-shaped kernel facade for file, device, sync, GWE, timer, and waveOut
   calls
-- COREDLL ordinal parser/dispatcher backed by the CE `core_common.def` export
-  list
+- GWE HWND state with CE-style window/client rectangles and coordinate mapping
+- COREDLL ordinal dispatcher backed by checked-in Rust `ORD_*` constants, a
+  static export table, and an ordinal `match`
 - COREDLL ordinal plan entries split by subsystem with implemented-vs-stubbed
-  status for the full parsed table
+  status for the full static table
 - simple CE CRT/math dispatch for common floating-point math and MIPS helper
   routines
 - PE32 parser for DOS/NT/COFF headers, optional headers, sections, imports,
   exports, relocations, RVA mapping, and mapped image bytes
 - remote-control API state for touch/key input, GPS/NMEA serial injection, IMU
   state, pause/resume, status JSON, logs, and audio chunks
+- resource and COM subsystem state for HRSRC-like resource lookup and
+  CoInitializeEx/class/object lifecycle modeling
 - host-backed file API with contained guest-path translation
 - device namespace loading from `serial_devices.json`
 - kernel object handles
