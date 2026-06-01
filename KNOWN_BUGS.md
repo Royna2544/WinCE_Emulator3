@@ -33,8 +33,8 @@
     entries and returns subsystem stub policies for remaining exports. Raw
     tests now cover critical sections, interlocked operations, TLS/last-error,
     time, event/wait, close-handle, heap/local/virtual allocation, raw
-    file buffers, HWND rectangles/points/text/window-long/focus/messages,
-    resources, and COM state.
+    file buffers/cursor/size/flush, HWND rectangles/points/text/window-long/
+    focus/messages, resources, and COM state.
   - Status: active ordinal-by-ordinal implementation work.
 
 - PE resources are not loaded into `ResourceSystem` yet.

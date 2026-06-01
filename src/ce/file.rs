@@ -33,6 +33,12 @@ pub struct OpenFile {
     dirty: bool,
 }
 
+impl OpenFile {
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileIoResult {
     pub success: bool,
@@ -112,6 +118,9 @@ impl HostFileSystem {
     pub fn read_file(&mut self, id: u32, requested: u32) -> Result<Vec<u8>> {
         let file = self.open_file_mut(id)?;
         let requested = requested as usize;
+        if file.cursor >= file.data.len() {
+            return Ok(Vec::new());
+        }
         let end = file.cursor.saturating_add(requested).min(file.data.len());
         let bytes = file.data[file.cursor..end].to_vec();
         file.cursor = end;
@@ -142,8 +151,12 @@ impl HostFileSystem {
 
     pub fn set_file_pointer(&mut self, id: u32, position: usize) -> Result<usize> {
         let file = self.open_file_mut(id)?;
-        file.cursor = position.min(file.data.len());
+        file.cursor = position;
         Ok(file.cursor)
+    }
+
+    pub fn file_size(&self, id: u32) -> Result<usize> {
+        Ok(self.open_file(id)?.data.len())
     }
 
     pub fn flush(&mut self, id: u32) -> Result<()> {

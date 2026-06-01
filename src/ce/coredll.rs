@@ -1135,6 +1135,17 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_WRITE_FILE => Some(CoredllValue::Bool(write_file_raw(
             kernel, memory, thread_id, args,
         ))),
+        ORD_SET_FILE_POINTER => Some(CoredllValue::U32(set_file_pointer_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_GET_FILE_SIZE => Some(CoredllValue::U32(get_file_size_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_FLUSH_FILE_BUFFERS => Some(CoredllValue::Bool(flush_file_buffers_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_CLOSE_HANDLE => Some(CoredllValue::Bool(
             kernel.close_handle(raw_arg(args, 0)).unwrap_or(false),
         )),
@@ -1560,6 +1571,76 @@ fn write_file_raw<M: CoredllGuestMemory>(
         transferred_ptr,
         result.bytes_transferred,
     ) && result.success
+}
+
+fn set_file_pointer_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let handle = raw_arg(args, 0);
+    let low = raw_arg(args, 1);
+    let high_ptr = raw_arg(args, 2);
+    let method = raw_arg(args, 3);
+    let high = if high_ptr == 0 {
+        0
+    } else {
+        match read_guest_u32(kernel, memory, thread_id, high_ptr) {
+            Some(high) => high,
+            None => return u32::MAX,
+        }
+    };
+    let distance = (((high as u64) << 32) | low as u64) as i64;
+    let position = match kernel.set_file_pointer(handle, distance, method) {
+        Ok(position) => position as u64,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return u32::MAX;
+        }
+    };
+    if high_ptr != 0
+        && !write_guest_u32(kernel, memory, thread_id, high_ptr, (position >> 32) as u32)
+    {
+        return u32::MAX;
+    }
+    position as u32
+}
+
+fn get_file_size_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let size = match kernel.get_file_size(raw_arg(args, 0)) {
+        Ok(size) => size as u64,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return u32::MAX;
+        }
+    };
+    let high_ptr = raw_arg(args, 1);
+    if high_ptr != 0 && !write_guest_u32(kernel, memory, thread_id, high_ptr, (size >> 32) as u32) {
+        return u32::MAX;
+    }
+    size as u32
+}
+
+fn flush_file_buffers_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {
+    match kernel.flush_file_buffers(handle) {
+        Ok(ok) => ok,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            false
+        }
+    }
 }
 
 fn local_alloc_raw(kernel: &mut CeKernel, thread_id: u32, flags: u32, bytes: u32) -> u32 {
@@ -2679,6 +2760,9 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "CreateFileW",
     "ReadFile",
     "WriteFile",
+    "SetFilePointer",
+    "GetFileSize",
+    "FlushFileBuffers",
     "DeviceIoControl",
     "CloseHandle",
     "CreateEventW",

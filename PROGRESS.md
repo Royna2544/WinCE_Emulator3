@@ -71,7 +71,9 @@
     `VirtualAlloc`, and `VirtualFree`, plus the remote/in-process local and
     remote heap variants routed through the virtual heap model
   - raw file ordinals: `CreateFileW`, `ReadFile`, and `WriteFile` now marshal
-    UTF-16 paths, guest byte buffers, and transferred-byte output pointers
+    UTF-16 paths, guest byte buffers, and transferred-byte output pointers;
+    `SetFilePointer`, `GetFileSize`, and `FlushFileBuffers` track cursor,
+    size, high-word output, and flush behavior for host-backed files
   - CE/MFC-style HWND geometry/state ordinals: raw `CreateWindowExW`,
     `DestroyWindow`, `ShowWindow`, `UpdateWindow`, `EnableWindow`,
     `IsWindow`, `IsWindowEnabled`, `IsWindowVisible`, `GetParent`,

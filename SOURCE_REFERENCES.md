@@ -23,6 +23,15 @@ anchors, not app-specific shortcuts.
   - `DM_DevReadFile`, `DM_DevWriteFile`, and `DM_DevDeviceIoControl` show the
     device-file split beneath Win32 file handles.
 
+- COREDLL file cursor/size helpers:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/apis.c`
+  and
+  `/mnt/c/Program Files (x86)/Windows CE Tools/wce420/STANDARDSDK_420/Include/Mipsii/winbase.h`
+  - CE copy-file paths use `GetFileSize`, `SetFilePointer(FILE_BEGIN)`,
+    `ReadFile`, `WriteFile`, and `FlushFileBuffers`-style handle behavior.
+  - SDK signatures define the low/high file-pointer and high-size output
+    pointer shapes mirrored by the raw dispatcher.
+
 - Kernel sync/wait:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/KERNEL/syncobj.c`
   and

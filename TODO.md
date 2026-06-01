@@ -10,8 +10,8 @@
   stubbed ordinal plan entries with CE/MFC/SDK-referenced semantics. Next
   likely tranche: PE-backed resource string/icon/bitmap loading, COM/OLE API
   dispatch when ole32 imports are connected, more GWE class/menu/dialog/control
-  raw pointer marshalling, file seek/attributes/find APIs, and time/system-info
-  structs.
+  raw pointer marshalling, file attributes/find-directory APIs, and
+  time/system-info structs.
 - Connect guest MFC, CRT-like exports, and WINSOCK imports.
 - Extend `cemath` as real guest imports demand more CRT/floating-point helpers.
 - Extend subsystem smoke tests as each shim is connected to guest import traps.

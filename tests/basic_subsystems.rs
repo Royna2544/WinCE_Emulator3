@@ -13,21 +13,22 @@ use wince_emulation_v3::{
         coredll_ordinals::{
             ORD_CLIENT_TO_SCREEN, ORD_CLOSE_HANDLE, ORD_CREATE_FILE_W, ORD_CREATE_WINDOW_EX_W,
             ORD_DESTROY_WINDOW, ORD_DISPATCH_MESSAGE_W, ORD_ENABLE_WINDOW, ORD_EVENT_MODIFY,
-            ORD_FIND_RESOURCE_W, ORD_GET_CLASS_NAME_W, ORD_GET_CLIENT_RECT, ORD_GET_FOCUS,
-            ORD_GET_LAST_ERROR, ORD_GET_MESSAGE_W, ORD_GET_PARENT, ORD_GET_PROCESS_HEAP,
-            ORD_GET_TICK_COUNT, ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_RECT,
-            ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W, ORD_HEAP_ALLOC, ORD_HEAP_CREATE,
-            ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_SIZE, ORD_INITIALIZE_CRITICAL_SECTION,
-            ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
-            ORD_INTERLOCKED_INCREMENT, ORD_IS_WINDOW, ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE,
-            ORD_LEAVE_CRITICAL_SECTION, ORD_LL_DIV, ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W,
-            ORD_LOCAL_ALLOC, ORD_LOCAL_FREE, ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE,
-            ORD_MAP_WINDOW_POINTS, ORD_MOVE_WINDOW, ORD_PEEK_MESSAGE_W, ORD_POST_MESSAGE_W,
-            ORD_POW, ORD_READ_FILE, ORD_REG_OPEN_KEY_EX_W, ORD_SCREEN_TO_CLIENT, ORD_SET_FOCUS,
-            ORD_SET_LAST_ERROR, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_TEXT_W,
-            ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_SLEEP, ORD_SQRT, ORD_TLS_GET_VALUE,
-            ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION, ORD_USER_CALL_WINDOW_PROC,
-            ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE,
+            ORD_FIND_RESOURCE_W, ORD_FLUSH_FILE_BUFFERS, ORD_GET_CLASS_NAME_W, ORD_GET_CLIENT_RECT,
+            ORD_GET_FILE_SIZE, ORD_GET_FOCUS, ORD_GET_LAST_ERROR, ORD_GET_MESSAGE_W,
+            ORD_GET_PARENT, ORD_GET_PROCESS_HEAP, ORD_GET_TICK_COUNT, ORD_GET_WINDOW_LONG_W,
+            ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W,
+            ORD_HEAP_ALLOC, ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_SIZE,
+            ORD_INITIALIZE_CRITICAL_SECTION, ORD_INTERLOCKED_COMPARE_EXCHANGE,
+            ORD_INTERLOCKED_EXCHANGE_ADD, ORD_INTERLOCKED_INCREMENT, ORD_IS_WINDOW,
+            ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE, ORD_LEAVE_CRITICAL_SECTION, ORD_LL_DIV,
+            ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_LOCAL_ALLOC, ORD_LOCAL_FREE,
+            ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_MAP_WINDOW_POINTS, ORD_MOVE_WINDOW,
+            ORD_PEEK_MESSAGE_W, ORD_POST_MESSAGE_W, ORD_POW, ORD_READ_FILE, ORD_REG_OPEN_KEY_EX_W,
+            ORD_SCREEN_TO_CLIENT, ORD_SET_FILE_POINTER, ORD_SET_FOCUS, ORD_SET_LAST_ERROR,
+            ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_TEXT_W, ORD_SHOW_WINDOW,
+            ORD_SIZEOF_RESOURCE, ORD_SLEEP, ORD_SQRT, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
+            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_USER_CALL_WINDOW_PROC, ORD_VIRTUAL_ALLOC,
+            ORD_VIRTUAL_FREE, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         gwe::{GWL_USERDATA, WM_CREATE, WM_QUIT, WM_TIMER, WM_USER},
@@ -1047,6 +1048,46 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         }
     ));
     assert_eq!(memory.read_u32(count_ptr)?, 8);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_FILE_SIZE,
+            [file, count_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(8),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(count_ptr)?, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_FILE_POINTER,
+            [file, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FLUSH_FILE_BUFFERS,
+            [file],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

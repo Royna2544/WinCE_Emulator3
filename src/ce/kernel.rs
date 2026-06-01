@@ -129,6 +129,51 @@ impl CeKernel {
         }
     }
 
+    pub fn set_file_pointer(
+        &mut self,
+        handle: u32,
+        distance: i64,
+        move_method: u32,
+    ) -> Result<usize> {
+        let KernelObject::File(file) = self.handles.get(handle)? else {
+            return Err(crate::error::Error::InvalidHandle(handle));
+        };
+        let file_id = file.file_id;
+        let current = self.files.open_file(file_id)?.cursor() as i64;
+        let size = self.files.file_size(file_id)? as i64;
+        let position = match move_method {
+            0 => distance,
+            1 => current.saturating_add(distance),
+            2 => size.saturating_add(distance),
+            _ => {
+                return Err(crate::error::Error::InvalidArgument(
+                    "bad move method".to_owned(),
+                ));
+            }
+        };
+        if position < 0 {
+            return Err(crate::error::Error::InvalidArgument(
+                "negative file pointer".to_owned(),
+            ));
+        }
+        self.files.set_file_pointer(file_id, position as usize)
+    }
+
+    pub fn get_file_size(&self, handle: u32) -> Result<usize> {
+        let KernelObject::File(file) = self.handles.get(handle)? else {
+            return Err(crate::error::Error::InvalidHandle(handle));
+        };
+        self.files.file_size(file.file_id)
+    }
+
+    pub fn flush_file_buffers(&mut self, handle: u32) -> Result<bool> {
+        let KernelObject::File(file) = self.handles.get(handle)? else {
+            return Err(crate::error::Error::InvalidHandle(handle));
+        };
+        self.files.flush(file.file_id)?;
+        Ok(true)
+    }
+
     pub fn device_io_control(
         &mut self,
         handle: u32,

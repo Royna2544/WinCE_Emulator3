@@ -12,6 +12,7 @@ shortcuts:
   calls
 - virtual CE memory model for process/custom heaps, local allocation,
   `VirtualAlloc` ranges, and raw `ReadFile`/`WriteFile` guest buffers
+- host-backed file cursor, size, and flush behavior for raw file ordinals
 - GWE HWND state with CE-style window/client rectangles, title/class text,
   window-long slots, focus, visibility/enabled state, and coordinate mapping
 - raw CE/MFC-style `MSG` marshalling for the basic message pump
