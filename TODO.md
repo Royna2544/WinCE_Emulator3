@@ -9,7 +9,7 @@
 - Continue burning down COREDLL ordinals subsystem by subsystem, replacing
   stubbed ordinal plan entries with CE/MFC/SDK-referenced semantics. Next
   likely tranche: PE-backed resource string/icon/bitmap loading, COM/OLE API
-  dispatch when ole32 imports are connected, more GWE window text/class/menu
+  dispatch when ole32 imports are connected, more GWE class/menu/dialog/control
   raw pointer marshalling, file seek/attributes/find APIs, and time/system-info
   structs.
 - Connect guest MFC, CRT-like exports, and WINSOCK imports.

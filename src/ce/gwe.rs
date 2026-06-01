@@ -19,6 +19,8 @@ pub const WM_GETTEXTLENGTH: u32 = 0x000e;
 pub const WM_TIMER: u32 = 0x0113;
 pub const WM_USER: u32 = 0x0400;
 
+pub const DESKTOP_HWND: u32 = 0x0001_0000;
+
 pub const GWL_WNDPROC: i32 = -4;
 pub const GWL_ID: i32 = -12;
 pub const GWL_STYLE: i32 = -16;
@@ -94,6 +96,7 @@ pub struct Window {
     pub class_name: String,
     pub title: String,
     pub visible: bool,
+    pub enabled: bool,
     pub parent: Option<u32>,
     pub id: u32,
     pub style: u32,
@@ -110,14 +113,37 @@ pub struct Gwe {
     next_hwnd: u32,
     windows: BTreeMap<u32, Window>,
     queues: BTreeMap<u32, VecDeque<Message>>,
+    focus: Option<u32>,
 }
 
 impl Default for Gwe {
     fn default() -> Self {
+        let mut windows = BTreeMap::new();
+        windows.insert(
+            DESKTOP_HWND,
+            Window {
+                hwnd: DESKTOP_HWND,
+                thread_id: 0,
+                class_name: "Desktop".to_owned(),
+                title: String::new(),
+                visible: true,
+                enabled: true,
+                parent: None,
+                id: 0,
+                style: 0,
+                ex_style: 0,
+                wndproc: 0,
+                user_data: 0,
+                rect: Rect::from_origin_size(0, 0, 800, 480),
+                client_rect: Rect::from_origin_size(0, 0, 800, 480),
+                destroyed: false,
+            },
+        );
         Self {
             next_hwnd: 0x0002_0000,
-            windows: BTreeMap::new(),
+            windows,
             queues: BTreeMap::new(),
+            focus: None,
         }
     }
 }
@@ -171,6 +197,7 @@ impl Gwe {
                 class_name: class_name.to_owned(),
                 title: title.to_owned(),
                 visible: false,
+                enabled: true,
                 parent,
                 id,
                 style,
@@ -205,6 +232,51 @@ impl Gwe {
         };
         window.visible = visible;
         true
+    }
+
+    pub fn update_window(&self, hwnd: u32) -> bool {
+        self.is_window(hwnd)
+    }
+
+    pub fn enable_window(&mut self, hwnd: u32, enabled: bool) -> bool {
+        let Some(window) = self.windows.get_mut(&hwnd) else {
+            return false;
+        };
+        window.enabled = enabled;
+        true
+    }
+
+    pub fn is_window_enabled(&self, hwnd: u32) -> bool {
+        self.windows
+            .get(&hwnd)
+            .is_some_and(|window| !window.destroyed && window.enabled)
+    }
+
+    pub fn is_window_visible(&self, hwnd: u32) -> bool {
+        self.windows
+            .get(&hwnd)
+            .is_some_and(|window| !window.destroyed && window.visible)
+    }
+
+    pub fn get_parent(&self, hwnd: u32) -> Option<u32> {
+        self.windows.get(&hwnd).and_then(|window| window.parent)
+    }
+
+    pub fn get_desktop_window(&self) -> u32 {
+        DESKTOP_HWND
+    }
+
+    pub fn set_focus(&mut self, hwnd: Option<u32>) -> Option<u32> {
+        if hwnd.is_some_and(|hwnd| !self.is_window(hwnd)) {
+            return None;
+        }
+        let previous = self.focus;
+        self.focus = hwnd;
+        previous
+    }
+
+    pub fn get_focus(&self) -> Option<u32> {
+        self.focus
     }
 
     pub fn set_window_pos(
@@ -408,6 +480,16 @@ impl Gwe {
 
     pub fn get_window_text_length(&self, hwnd: u32) -> Option<usize> {
         Some(self.windows.get(&hwnd)?.title.encode_utf16().count())
+    }
+
+    pub fn get_class_name(&self, hwnd: u32, capacity_chars: usize) -> Option<String> {
+        let class_name = &self.windows.get(&hwnd)?.class_name;
+        Some(
+            class_name
+                .chars()
+                .take(capacity_chars.saturating_sub(1))
+                .collect(),
+        )
     }
 
     pub fn set_window_long(&mut self, hwnd: u32, index: i32, value: u32) -> Option<u32> {

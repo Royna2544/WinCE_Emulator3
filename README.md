@@ -12,7 +12,8 @@ shortcuts:
   calls
 - virtual CE memory model for process/custom heaps, local allocation,
   `VirtualAlloc` ranges, and raw `ReadFile`/`WriteFile` guest buffers
-- GWE HWND state with CE-style window/client rectangles and coordinate mapping
+- GWE HWND state with CE-style window/client rectangles, title/class text,
+  window-long slots, focus, visibility/enabled state, and coordinate mapping
 - raw CE/MFC-style `MSG` marshalling for the basic message pump
 - COREDLL ordinal dispatcher backed by checked-in Rust `ORD_*` constants, a
   static export table, and an ordinal `match`

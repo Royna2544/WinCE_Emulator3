@@ -1294,6 +1294,69 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_CREATE_WINDOW_EX_W => Some(CoredllValue::Handle(create_window_ex_w_raw(
             kernel, memory, thread_id, args,
         ))),
+        ORD_DESTROY_WINDOW => Some(CoredllValue::Bool(
+            kernel
+                .gwe
+                .destroy_window(raw_arg(args, 0), kernel.timers.tick_count()),
+        )),
+        ORD_SHOW_WINDOW => Some(CoredllValue::Bool(
+            kernel
+                .gwe
+                .show_window(raw_arg(args, 0), raw_arg(args, 1) != 0),
+        )),
+        ORD_UPDATE_WINDOW => Some(CoredllValue::Bool(
+            kernel.gwe.update_window(raw_arg(args, 0)),
+        )),
+        ORD_ENABLE_WINDOW => Some(CoredllValue::Bool(
+            kernel
+                .gwe
+                .enable_window(raw_arg(args, 0), raw_arg(args, 1) != 0),
+        )),
+        ORD_IS_WINDOW => Some(CoredllValue::Bool(kernel.gwe.is_window(raw_arg(args, 0)))),
+        ORD_IS_WINDOW_ENABLED => Some(CoredllValue::Bool(
+            kernel.gwe.is_window_enabled(raw_arg(args, 0)),
+        )),
+        ORD_IS_WINDOW_VISIBLE => Some(CoredllValue::Bool(
+            kernel.gwe.is_window_visible(raw_arg(args, 0)),
+        )),
+        ORD_GET_PARENT => Some(CoredllValue::Handle(
+            kernel.gwe.get_parent(raw_arg(args, 0)).unwrap_or(0),
+        )),
+        ORD_GET_DESKTOP_WINDOW => Some(CoredllValue::Handle(kernel.gwe.get_desktop_window())),
+        ORD_SET_FOCUS => Some(CoredllValue::Handle(
+            kernel
+                .gwe
+                .set_focus((raw_arg(args, 0) != 0).then_some(raw_arg(args, 0)))
+                .unwrap_or(0),
+        )),
+        ORD_GET_FOCUS => Some(CoredllValue::Handle(kernel.gwe.get_focus().unwrap_or(0))),
+        ORD_SET_WINDOW_TEXT_W => Some(CoredllValue::Bool(set_window_text_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_GET_WINDOW_TEXT_W | ORD_GET_WINDOW_TEXT_WDIRECT => Some(CoredllValue::U32(
+            get_window_text_w_raw(kernel, memory, thread_id, args),
+        )),
+        ORD_GET_WINDOW_TEXT_LENGTH_W => Some(CoredllValue::U32(
+            kernel
+                .gwe
+                .get_window_text_length(raw_arg(args, 0))
+                .unwrap_or(0) as u32,
+        )),
+        ORD_GET_CLASS_NAME_W => Some(CoredllValue::U32(get_class_name_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_SET_WINDOW_LONG_W => Some(CoredllValue::U32(
+            kernel
+                .gwe
+                .set_window_long(raw_arg(args, 0), raw_i32_arg(args, 1), raw_arg(args, 2))
+                .unwrap_or(0),
+        )),
+        ORD_GET_WINDOW_LONG_W => Some(CoredllValue::U32(
+            kernel
+                .gwe
+                .get_window_long(raw_arg(args, 0), raw_i32_arg(args, 1))
+                .unwrap_or(0),
+        )),
         ORD_SET_WINDOW_POS => Some(CoredllValue::Bool(kernel.gwe.set_window_pos(
             raw_arg(args, 0),
             raw_i32_arg(args, 2),
@@ -1724,6 +1787,105 @@ fn read_guest_wide_arg<M: CoredllGuestMemory>(memory: &M, ptr: u32) -> Option<St
         return Some(format!("#{ptr}"));
     }
     read_guest_wide_z(memory, ptr, 512).ok()
+}
+
+fn set_window_text_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let Some(title) = read_guest_wide_arg(memory, raw_arg(args, 1)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if kernel.gwe.set_window_text(raw_arg(args, 0), &title) {
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        false
+    }
+}
+
+fn get_window_text_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let hwnd = raw_arg(args, 0);
+    let buffer = raw_arg(args, 1);
+    let capacity = raw_arg(args, 2) as usize;
+    let Some(text) = kernel.gwe.get_window_text(hwnd, capacity) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    write_wide_result(kernel, memory, thread_id, buffer, capacity, &text)
+}
+
+fn get_class_name_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let hwnd = raw_arg(args, 0);
+    let buffer = raw_arg(args, 1);
+    let capacity = raw_arg(args, 2) as usize;
+    let Some(class_name) = kernel.gwe.get_class_name(hwnd, capacity) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    write_wide_result(kernel, memory, thread_id, buffer, capacity, &class_name)
+}
+
+fn write_wide_result<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    buffer: u32,
+    capacity_chars: usize,
+    text: &str,
+) -> u32 {
+    if buffer == 0 || capacity_chars == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let units: Vec<u16> = text
+        .encode_utf16()
+        .take(capacity_chars.saturating_sub(1))
+        .collect();
+    for (index, unit) in units.iter().copied().enumerate() {
+        if !write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            buffer.wrapping_add((index as u32) * 2),
+            unit,
+        ) {
+            return 0;
+        }
+    }
+    if !write_guest_u16(
+        kernel,
+        memory,
+        thread_id,
+        buffer.wrapping_add((units.len() as u32) * 2),
+        0,
+    ) {
+        return 0;
+    }
+    units.len() as u32
 }
 
 fn find_resource(kernel: &mut CeKernel, thread_id: u32, module: u32, name: u32, kind: u32) -> u32 {
@@ -2526,6 +2688,19 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "ReleaseMutex",
     "CreateWindowExW",
     "DestroyWindow",
+    "ShowWindow",
+    "UpdateWindow",
+    "GetParent",
+    "IsWindow",
+    "GetWindowTextLengthW",
+    "GetClassNameW",
+    "EnableWindow",
+    "IsWindowEnabled",
+    "GetDesktopWindow",
+    "GetWindowTextWDirect",
+    "SetFocus",
+    "GetFocus",
+    "IsWindowVisible",
     "SetWindowPos",
     "MoveWindow",
     "GetWindowRect",

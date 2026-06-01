@@ -85,11 +85,18 @@ anchors, not app-specific shortcuts.
     client area in screen coordinates; it declares `SetWindowPos_I`,
     `MoveWindow_I`, `GetWindowRect_I`, `GetClientRect_I`,
     `ClientToScreen_I`, and `ScreenToClient_I`.
+  - Also declares `ShowWindow_I`, `UpdateWindow_I`, `GetParent_I`,
+    `IsWindow_I`, `GetClassNameW_I`, and `EnableWindow_I`, which back the
+    virtual HWND state, class/title text copying, visibility/enabled checks,
+    parent lookup, and focus bookkeeping.
 
 - MFC window layout behavior:
   `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/wincore.cpp`
   - Layout and child reposition paths use `GetWindowRect`,
     `ScreenToClient`, `SetWindowPos`, and `GetClientRect`.
+  - Subclassing/debug/text paths call `GetWindowLong`, `SetWindowLong`,
+    `GetWindowTextLength`, `GetWindowText`, `GetClassName`, `DestroyWindow`,
+    `GetParent`, and `SetFocus`.
 
 - COREDLL resources:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/resource.cpp`
