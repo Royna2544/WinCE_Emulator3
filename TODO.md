@@ -4,10 +4,9 @@
 
 - Wire the Unicorn backend to map guest memory regions into the engine.
 - Implement MIPS PE loading for the target executable.
-- Build import thunk/trap handling for COREDLL, MFC, CRT-like exports, and WINSOCK.
-- Connect guest COREDLL registry imports to the existing CE-style registry API.
-- Connect guest COREDLL file, device, sync, GWE, timer, and waveOut imports to
-  the virtual Win32/CE framework on `CeKernel`.
+- Build import thunk/trap handling that decodes guest MIPS arguments and calls
+  the COREDLL dispatcher.
+- Connect guest MFC, CRT-like exports, and WINSOCK imports.
 - Extend subsystem smoke tests as each shim is connected to guest import traps.
 
 ## Next

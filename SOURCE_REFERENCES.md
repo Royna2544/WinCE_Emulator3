@@ -45,6 +45,7 @@ anchors, not app-specific shortcuts.
   - Lists waveOut exports including `waveOutSetVolume @382`,
     `waveOutClose @384`, `waveOutWrite @387`, `waveOutReset @390`, and
     `waveOutOpen @399`.
+  - Parsed by `src/ce/coredll.rs` for name/ordinal dispatch coverage.
 
 ## MFC CE Reference Source
 

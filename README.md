@@ -10,6 +10,8 @@ shortcuts:
 - CE-style registry API calls backed by `regs.json`
 - Win32/CE-shaped kernel facade for file, device, sync, GWE, timer, and waveOut
   calls
+- COREDLL ordinal parser/dispatcher backed by the CE `core_common.def` export
+  list
 - host-backed file API with contained guest-path translation
 - device namespace loading from `serial_devices.json`
 - kernel object handles

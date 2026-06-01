@@ -14,8 +14,9 @@
   - Evidence: `src/pe/mod.rs` only performs minimal image inspection.
   - Status: next implementation step.
 
-- Virtual Win32/CE APIs are not connected to guest imports yet.
+- COREDLL dispatcher is not connected to guest import traps yet.
   - Symptom: subsystem APIs can be exercised from Rust tests, but guest PE calls
     do not dispatch into them.
-  - Evidence: no import thunk/trap dispatcher exists yet.
+  - Evidence: `src/ce/coredll.rs` resolves and dispatches typed calls, but no
+    MIPS import thunk/trap argument decoder exists yet.
   - Status: expected until PE mapping and import trap work lands.

@@ -33,14 +33,19 @@
   - `waveOutOpen`/`waveOutWrite` plus pause/restart/reset/volume helpers
 - Host-backed file opens are contained under a configurable file root and reject
   parent-directory escapes.
+- Added a COREDLL export table parser for the CE `core_common.def` source. It
+  reads 1,698 ordinal-bearing entries in the current source tree and resolves by
+  name or ordinal.
+- Added a COREDLL dispatcher that routes implemented exports to the virtual
+  Win32/CE framework and reports unresolved or unimplemented ordinals explicitly.
 
 ## Current State
 
 - CPU execution is not yet wired to mapped PE images or import traps.
 - The default bootstrap uses `regs.json` as backing storage for the fake CE
   registry API and creates base GWE, timer, audio, and memory-map state.
-- The virtual Win32/CE framework is ready for guest import traps to call into,
-  but those traps are not wired yet.
+- The virtual Win32/CE framework and COREDLL dispatcher are ready for guest
+  import traps to call into, but PE import traps are not wired yet.
 
 ## False Leads
 

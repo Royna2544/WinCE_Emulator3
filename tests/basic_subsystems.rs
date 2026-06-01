@@ -3,6 +3,10 @@ use wince_emulation_v3::{
     Result,
     ce::{
         audio::{MMSYSERR_NOERROR, WaveBuffer, WaveFormat, WaveOutState},
+        coredll::{
+            CoredllCall, CoredllDispatch, CoredllExportTable, CoredllValue,
+            DEFAULT_CORE_COMMON_DEF, EventModifyAction,
+        },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::{GWL_USERDATA, WM_CREATE, WM_QUIT, WM_TIMER, WM_USER},
         kernel::{CeKernel, MessagePumpResult},
@@ -89,6 +93,179 @@ fn boots_and_smokes_basic_ce_subsystems() -> Result<()> {
         "smoke-ram",
     )?;
     assert_eq!(cpu.memory().regions().count(), 1);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_table_reads_full_core_common_def_ordinals() -> Result<()> {
+    let table = CoredllExportTable::from_core_common_def_path(DEFAULT_CORE_COMMON_DEF)?;
+
+    assert_eq!(table.export_count(), 1698);
+    assert_eq!(table.resolve_name("CreateFileW").unwrap().ordinal, 168);
+    assert_eq!(table.resolve_name("RegOpenKeyExW").unwrap().ordinal, 461);
+    assert_eq!(table.resolve_name("waveOutOpen").unwrap().ordinal, 399);
+    assert_eq!(table.resolve_name("GetMessageW").unwrap().ordinal, 861);
+    assert_eq!(table.resolve_name("DispatchMessageW").unwrap().ordinal, 859);
+    assert_eq!(table.resolve_ordinal(168).unwrap().name, "CreateFileW");
+    assert_eq!(table.exports_by_ordinal(2867).len(), 1);
+    assert_eq!(
+        table.resolve_ordinal(2867).unwrap().name,
+        "UserCallWindowProc"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_dispatcher_routes_ordinals_to_virtual_win32_framework() -> Result<()> {
+    let table = CoredllExportTable::from_core_common_def_path(DEFAULT_CORE_COMMON_DEF)?;
+    let root = unique_test_root("coredll_dispatcher");
+    fs::create_dir_all(&root).unwrap();
+
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    kernel.set_file_root(&root);
+
+    let file = table.dispatch_by_ordinal(
+        &mut kernel,
+        168,
+        CoredllCall::CreateFileW {
+            path: "\\ResidentFlash\\dispatch.bin".to_owned(),
+            desired_access: GENERIC_READ | GENERIC_WRITE,
+            creation_disposition: CREATE_ALWAYS,
+        },
+    );
+    let CoredllDispatch::Returned {
+        value: CoredllValue::Handle(file),
+        ..
+    } = file
+    else {
+        panic!("CreateFileW did not return a file handle");
+    };
+
+    let written = table.dispatch_by_ordinal(
+        &mut kernel,
+        171,
+        CoredllCall::WriteFile {
+            handle: file,
+            data: b"dispatch".to_vec(),
+        },
+    );
+    assert!(matches!(
+        written,
+        CoredllDispatch::Returned {
+            value: CoredllValue::FileIo(_),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_by_ordinal(&mut kernel, 553, CoredllCall::CloseHandle { handle: file }),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        fs::read(root.join("ResidentFlash/dispatch.bin")).unwrap(),
+        b"dispatch"
+    );
+
+    let event = table.dispatch_by_name(
+        &mut kernel,
+        "CreateEventW",
+        CoredllCall::CreateEventW {
+            name: Some("dispatch-event".to_owned()),
+            manual_reset: false,
+            initial_state: false,
+        },
+    );
+    let CoredllDispatch::Returned {
+        value: CoredllValue::Handle(event),
+        ..
+    } = event
+    else {
+        panic!("CreateEventW did not return an event handle");
+    };
+    assert!(matches!(
+        table.dispatch_by_ordinal(
+            &mut kernel,
+            494,
+            CoredllCall::EventModify {
+                handle: event,
+                action: EventModifyAction::Set,
+            },
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_by_ordinal(
+            &mut kernel,
+            497,
+            CoredllCall::WaitForSingleObject {
+                handle: event,
+                timeout_ms: 0,
+                thread_id: 1,
+            },
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_OBJECT_0),
+            ..
+        }
+    ));
+
+    let hwnd = table.dispatch_by_ordinal(
+        &mut kernel,
+        246,
+        CoredllCall::CreateWindowExW {
+            thread_id: 1,
+            class_name: "STATIC".to_owned(),
+            title: "dispatch-window".to_owned(),
+            parent: None,
+            id: 0,
+            style: 0,
+            ex_style: 0,
+        },
+    );
+    let CoredllDispatch::Returned {
+        value: CoredllValue::Handle(hwnd),
+        ..
+    } = hwnd
+    else {
+        panic!("CreateWindowExW did not return hwnd");
+    };
+    assert!(matches!(
+        table.dispatch_by_ordinal(
+            &mut kernel,
+            865,
+            CoredllCall::PostMessageW {
+                hwnd,
+                msg: WM_USER + 7,
+                wparam: 1,
+                lparam: 2,
+            },
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_by_ordinal(&mut kernel, 861, CoredllCall::GetMessageW { thread_id: 1 }),
+        CoredllDispatch::Returned {
+            value: CoredllValue::OptionalMessage(Some(_)),
+            ..
+        }
+    ));
+
+    let unimplemented = table.dispatch_untyped_ordinal(2);
+    assert!(matches!(
+        unimplemented,
+        CoredllDispatch::Unimplemented { export } if export.name == "InitializeCriticalSection"
+    ));
 
     Ok(())
 }
