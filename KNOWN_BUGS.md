@@ -8,20 +8,17 @@
   - Evidence: PE image mapping and import traps are not implemented yet.
   - Status: expected initial scaffold limitation.
 
-- Main process launch has not been driven to a stable guest entry yet.
-  - Symptom: after loading SDK `mfcce400.dll` from the CE 4.2 Mipsii SDK and
-    dispatching the current SDK CRT ordinal tranche, execution stops at
-    `pc=0x00000000`.
-  - Evidence: bounded Unicorn run reaches `ra=0x0048f9dc`, where the main image
-    has just executed `jalr $2` at `0x0048f9d4` from a function-pointer table
-    bounded by globals near `0x00835e88`/`0x00835e8c`. The current targeted
-    probe reports `funcptr_slot=0x30002390` and
-    `funcptr_value=0x00010000`; a write watch showed guest code at
-    `0x0048f864` stored valid callback `0x00019d7c` into slot `0x30002390`.
-    The remaining crash path follows a completed cleanup return with no
-    loader-supplied return address.
-  - Status: active; needs a generic CE loader/thread-exit return sentinel for
-    CPU startup. Per `RULES.md`, raw `pc=0` is not treated as normal guest exit.
+- Main process launch currently exits during startup/cleanup instead of reaching
+  a durable interactive message loop.
+  - Symptom: bounded launch now returns status 0 through decoded CE
+    `TerminateProcess`, but the emulator has not yet driven the app to a useful
+    GUI/message-loop state.
+  - Evidence: the previous exit-table corruption came from in-place heap
+    reallocation growth; moving reallocations fixed the invalid callback and the
+    same bounded launch now reaches the old MIPS encoded kernel exit
+    `target=0xfffff3fa` (`API set 2`, method `2`) with exit code 0.
+  - Status: active; next work is real subsystem behavior that keeps startup from
+    choosing the cleanup/terminate path.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch

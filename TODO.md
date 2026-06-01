@@ -2,12 +2,9 @@
 
 ## Immediate
 
-- Add a generic CE loader/thread-exit return sentinel for Unicorn CPU startup so
-  a guest entry returning after CRT/MFC cleanup stops at an emulator-owned exit
-  path instead of falling through to `pc=0`.
-- Re-run the bounded Unicorn launch of
-  `/mnt/d/INAVI_Emulator/INAVI/INavi/INavi.exe` with the SDK MFC DLL search dir
-  after the thread-exit sentinel is wired.
+- Continue the launch path past process startup/termination by driving real
+  window/message behavior instead of accepting startup-cleanup as the final
+  milestone.
 - Replace launch-stub behavior for MFC400/mfcce400, commctrl, WINSOCK, and OLE
   imports with real subsystem-backed implementations as import traces demand.
 - Continue burning down COREDLL ordinals subsystem by subsystem, replacing
@@ -18,6 +15,8 @@
   time/system-info structs.
 - Continue connecting SDK CE 4.2 Mipsii COREDLL CRT ordinals from `coredll.lib`
   as the launch trace demands.
+- Implement CRT `_msize`/`realloc`/operator delete ordinals from SDK evidence so
+  MFC/CRT heap paths do not rely only on Local/Heap reallocation aliases.
 - Extend `cemath` as real guest imports demand more CRT/floating-point helpers.
 - Extend subsystem smoke tests as each shim is connected to guest import traps.
 - Add import-trap argument/result marshalling tests that exercise the new raw

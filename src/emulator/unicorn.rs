@@ -39,6 +39,8 @@ pub struct UnicornDebugSnapshot {
     pub memory_fault: Option<UnicornMemoryFault>,
     pub function_pointer_probe: Option<UnicornFunctionPointerProbe>,
     pub memory_write_probe: Option<UnicornMemoryWriteProbe>,
+    pub thread_exit_reached: bool,
+    pub encoded_kernel_exit: Option<EncodedKernelExit>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +57,7 @@ pub struct UnicornFunctionPointerProbe {
     pub pc: u32,
     pub slot: u32,
     pub value: u32,
+    pub slot_value: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,6 +68,17 @@ pub struct UnicornMemoryWriteProbe {
     pub address: u32,
     pub size: usize,
     pub value: i64,
+    pub slot_value_after: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncodedKernelExit {
+    pub target: u32,
+    pub api_set: u32,
+    pub method: u32,
+    pub process: u32,
+    pub exit_code: u32,
+    pub caller: u32,
 }
 
 const USER_KDATA_PAGE_BASE: u32 = 0x0000_5000;
@@ -75,6 +89,9 @@ const SYS_HANDLE_CURRENT_THREAD: usize = 1;
 const SYS_HANDLE_CURRENT_PROCESS: usize = 2;
 const GUEST_HEAP_ARENA_BASE: u32 = 0x3000_0000;
 const GUEST_HEAP_ARENA_SIZE: u32 = 0x0100_0000;
+#[cfg(feature = "unicorn")]
+const THREAD_EXIT_STUB_ADDR: u32 =
+    IMPORT_TRAP_BASE + IMPORT_TRAP_PAGE_SIZE - crate::emulator::imports::IMPORT_TRAP_STRIDE;
 #[cfg(feature = "unicorn")]
 const MAIN_DESTRUCTOR_BRANCH_PC: u32 = 0x0048_f9cc;
 #[cfg(feature = "unicorn")]
@@ -314,7 +331,31 @@ impl UnicornMips {
             uc.reg_write(RegisterMIPS::SP, u64::from(stack_top))
                 .map_err(|err| Error::Backend(format!("set guest SP: {err:?}")))?;
         }
+        uc.reg_write(RegisterMIPS::RA, u64::from(THREAD_EXIT_STUB_ADDR))
+            .map_err(|err| Error::Backend(format!("set guest RA: {err:?}")))?;
 
+        let function_pointer_probe = Rc::new(RefCell::new(None));
+        let function_pointer_probe_hook = Rc::clone(&function_pointer_probe);
+        uc.add_code_hook(
+            u64::from(MAIN_DESTRUCTOR_BRANCH_PC),
+            u64::from(MAIN_DESTRUCTOR_JALR_PC),
+            move |uc, address, _size| {
+                let pc = address as u32;
+                if pc != MAIN_DESTRUCTOR_BRANCH_PC && pc != MAIN_DESTRUCTOR_JALR_PC {
+                    return;
+                }
+                let slot = read_mips_reg(uc, RegisterMIPS::FP);
+                *function_pointer_probe_hook.borrow_mut() = Some(UnicornFunctionPointerProbe {
+                    pc,
+                    slot,
+                    value: read_mips_reg(uc, RegisterMIPS::V0),
+                    slot_value: read_unicorn_u32(uc, slot),
+                });
+            },
+        )
+        .map_err(|err| Error::Backend(format!("install function-pointer probe: {err:?}")))?;
+
+        let memory_write_probe = Rc::new(RefCell::new(None));
         let traps = self.import_traps.clone();
         let kernel_ptr = kernel as *mut CeKernel;
         let mapped_kernel_memory = Rc::new(RefCell::new(vec![(
@@ -322,6 +363,7 @@ impl UnicornMips {
             GUEST_HEAP_ARENA_SIZE,
         )]));
         let mapped_kernel_memory_hook = Rc::clone(&mapped_kernel_memory);
+        let import_memory_write_probe = Rc::clone(&memory_write_probe);
         uc.add_code_hook(
             u64::from(IMPORT_TRAP_BASE),
             u64::from(IMPORT_TRAP_BASE + IMPORT_TRAP_PAGE_SIZE - 1),
@@ -352,7 +394,10 @@ impl UnicornMips {
                     read_mips_reg(uc, RegisterMIPS::A2),
                     read_mips_reg(uc, RegisterMIPS::A3),
                 ];
-                let mut memory = UnicornGuestMemory { uc };
+                let mut memory = UnicornGuestMemory {
+                    uc,
+                    memory_write_probe: Some(Rc::clone(&import_memory_write_probe)),
+                };
                 let Some(result) =
                     traps.dispatch_trap(unsafe { &mut *kernel_ptr }, &mut memory, 1, address, args)
                 else {
@@ -380,26 +425,18 @@ impl UnicornMips {
         )
         .map_err(|err| Error::Backend(format!("install import hook: {err:?}")))?;
 
-        let function_pointer_probe = Rc::new(RefCell::new(None));
-        let function_pointer_probe_hook = Rc::clone(&function_pointer_probe);
+        let thread_exit_reached = Rc::new(RefCell::new(false));
+        let thread_exit_reached_hook = Rc::clone(&thread_exit_reached);
         uc.add_code_hook(
-            u64::from(MAIN_DESTRUCTOR_BRANCH_PC),
-            u64::from(MAIN_DESTRUCTOR_JALR_PC),
-            move |uc, address, _size| {
-                let pc = address as u32;
-                if pc != MAIN_DESTRUCTOR_BRANCH_PC && pc != MAIN_DESTRUCTOR_JALR_PC {
-                    return;
-                }
-                *function_pointer_probe_hook.borrow_mut() = Some(UnicornFunctionPointerProbe {
-                    pc,
-                    slot: read_mips_reg(uc, RegisterMIPS::FP),
-                    value: read_mips_reg(uc, RegisterMIPS::V0),
-                });
+            u64::from(THREAD_EXIT_STUB_ADDR),
+            u64::from(THREAD_EXIT_STUB_ADDR),
+            move |uc, _address, _size| {
+                *thread_exit_reached_hook.borrow_mut() = true;
+                let _ = uc.emu_stop();
             },
         )
-        .map_err(|err| Error::Backend(format!("install function-pointer probe: {err:?}")))?;
+        .map_err(|err| Error::Backend(format!("install thread-exit hook: {err:?}")))?;
 
-        let memory_write_probe = Rc::new(RefCell::new(None));
         let memory_write_probe_hook = Rc::clone(&memory_write_probe);
         uc.add_mem_hook(
             HookType::MEM_WRITE,
@@ -421,6 +458,7 @@ impl UnicornMips {
                     address,
                     size,
                     value,
+                    slot_value_after: read_unicorn_u32(uc, MAIN_DESTRUCTOR_BAD_SLOT),
                 });
                 true
             },
@@ -456,15 +494,70 @@ impl UnicornMips {
             memory_fault.borrow().clone(),
             function_pointer_probe.borrow().clone(),
             memory_write_probe.borrow().clone(),
+            *thread_exit_reached.borrow(),
         ));
-        result.map_err(|err| {
+        if let Err(err) = result {
+            let decoded_exit = self
+                .last_debug
+                .as_ref()
+                .and_then(|snapshot| self.decode_encoded_kernel_exit(snapshot));
+            if let Some(exit) = decoded_exit {
+                if let Some(snapshot) = self.last_debug.as_mut() {
+                    snapshot.encoded_kernel_exit = Some(exit);
+                }
+                return Ok(());
+            }
             let snapshot = self
                 .last_debug
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_else(|| "register snapshot unavailable".to_owned());
-            Error::Backend(format!("Unicorn run failed: {err:?}; {snapshot}"))
+            return Err(Error::Backend(format!(
+                "Unicorn run failed: {err:?}; {snapshot}"
+            )));
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn decode_encoded_kernel_exit(
+        &self,
+        snapshot: &UnicornDebugSnapshot,
+    ) -> Option<EncodedKernelExit> {
+        if snapshot.pc != 0 || snapshot.ra < 12 {
+            return None;
+        }
+        let load_pc = snapshot.ra.wrapping_sub(12);
+        let call_pc = snapshot.ra.wrapping_sub(8);
+        let load = self.read_mapped_u32(load_pc)?;
+        let call = self.read_mapped_u32(call_pc)?;
+        let target_reg = decode_addiu_zero(load)?;
+        if decode_jalr_register(call)? != target_reg.0 {
+            return None;
+        }
+        let decoded = decode_old_mips_kernel_call(target_reg.1)?;
+        Some(EncodedKernelExit {
+            target: target_reg.1,
+            api_set: decoded.0,
+            method: decoded.1,
+            process: snapshot.a0,
+            exit_code: snapshot.a1,
+            caller: call_pc,
         })
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn read_mapped_u32(&self, address: u32) -> Option<u32> {
+        for blob in &self.mapped_blobs {
+            let Some(offset) = address.checked_sub(blob.base).map(|offset| offset as usize) else {
+                continue;
+            };
+            let end = offset.checked_add(4)?;
+            if end <= blob.bytes.len() {
+                return Some(u32::from_le_bytes(blob.bytes[offset..end].try_into().ok()?));
+            }
+        }
+        None
     }
 }
 
@@ -613,12 +706,28 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 " funcptr_pc=0x{:08x} funcptr_slot=0x{:08x} funcptr_value=0x{:08x}",
                 probe.pc, probe.slot, probe.value
             )?;
+            if let Some(slot_value) = probe.slot_value {
+                write!(f, " funcptr_slot_value=0x{slot_value:08x}")?;
+            }
         }
         if let Some(probe) = self.memory_write_probe.as_ref() {
             write!(
                 f,
                 " write_pc=0x{:08x} write_ra=0x{:08x} write_sp=0x{:08x} write_addr=0x{:08x} write_size={} write_value=0x{:x}",
                 probe.pc, probe.ra, probe.sp, probe.address, probe.size, probe.value
+            )?;
+            if let Some(slot_value_after) = probe.slot_value_after {
+                write!(f, " write_slot_after=0x{slot_value_after:08x}")?;
+            }
+        }
+        if self.thread_exit_reached {
+            write!(f, " thread_exit_reached=true")?;
+        }
+        if let Some(exit) = self.encoded_kernel_exit.as_ref() {
+            write!(
+                f,
+                " encoded_kernel_exit target=0x{:08x} api_set={} method={} process=0x{:08x} exit_code=0x{:08x} caller=0x{:08x}",
+                exit.target, exit.api_set, exit.method, exit.process, exit.exit_code, exit.caller
             )?;
         }
         Ok(())
@@ -657,12 +766,21 @@ fn read_mips_reg<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn read_unicorn_u32<D>(uc: &unicorn_engine::Unicorn<'_, D>, address: u32) -> Option<u32> {
+    let mut bytes = [0; 4];
+    uc.mem_read(u64::from(address), &mut bytes)
+        .ok()
+        .map(|()| u32::from_le_bytes(bytes))
+}
+
+#[cfg(feature = "unicorn")]
 fn capture_debug_snapshot<D>(
     uc: &unicorn_engine::Unicorn<'_, D>,
     traps: &ImportTrapTable,
     memory_fault: Option<UnicornMemoryFault>,
     function_pointer_probe: Option<UnicornFunctionPointerProbe>,
     memory_write_probe: Option<UnicornMemoryWriteProbe>,
+    thread_exit_reached: bool,
 ) -> UnicornDebugSnapshot {
     use unicorn_engine::RegisterMIPS;
 
@@ -685,12 +803,59 @@ fn capture_debug_snapshot<D>(
         memory_fault,
         function_pointer_probe,
         memory_write_probe,
+        thread_exit_reached,
+        encoded_kernel_exit: None,
     }
+}
+
+#[cfg(feature = "unicorn")]
+fn decode_addiu_zero(instruction: u32) -> Option<(u32, u32)> {
+    let opcode = instruction >> 26;
+    let rs = (instruction >> 21) & 0x1f;
+    if opcode != 0x09 || rs != 0 {
+        return None;
+    }
+    let rt = (instruction >> 16) & 0x1f;
+    let imm = instruction as u16 as i16 as i32 as u32;
+    Some((rt, imm))
+}
+
+#[cfg(feature = "unicorn")]
+fn decode_jalr_register(instruction: u32) -> Option<u32> {
+    let opcode = instruction >> 26;
+    let function = instruction & 0x3f;
+    if opcode != 0 || function != 0x09 {
+        return None;
+    }
+    Some((instruction >> 21) & 0x1f)
+}
+
+#[cfg(feature = "unicorn")]
+fn decode_old_mips_kernel_call(target: u32) -> Option<(u32, u32)> {
+    const OLD_FIRST_METHOD: u32 = 0xffff_fc02;
+    const API_CALL_SCALE: u32 = 4;
+    const API_SET_SHIFT: u32 = 8;
+    const CURRENT_PROCESS_API_SET: u32 = 2;
+    const PROC_TERMINATE_METHOD: u32 = 2;
+
+    if target > OLD_FIRST_METHOD {
+        return None;
+    }
+    let delta = OLD_FIRST_METHOD.wrapping_sub(target);
+    if delta % API_CALL_SCALE != 0 {
+        return None;
+    }
+    let encoded = delta / API_CALL_SCALE;
+    let api_set = encoded >> API_SET_SHIFT;
+    let method = encoded & ((1 << API_SET_SHIFT) - 1);
+    (api_set == CURRENT_PROCESS_API_SET && method == PROC_TERMINATE_METHOD)
+        .then_some((api_set, method))
 }
 
 #[cfg(feature = "unicorn")]
 struct UnicornGuestMemory<'a, 'uc, D> {
     uc: &'a mut unicorn_engine::Unicorn<'uc, D>,
+    memory_write_probe: Option<std::rc::Rc<std::cell::RefCell<Option<UnicornMemoryWriteProbe>>>>,
 }
 
 #[cfg(feature = "unicorn")]
@@ -706,7 +871,9 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
     fn write_u8(&mut self, addr: u32, value: u8) -> Result<()> {
         self.uc
             .mem_write(u64::from(addr), &[value])
-            .map_err(|err| Error::Backend(format!("write_u8 0x{addr:08x}: {err:?}")))
+            .map_err(|err| Error::Backend(format!("write_u8 0x{addr:08x}: {err:?}")))?;
+        self.record_write(addr, 1, i64::from(value));
+        Ok(())
     }
 
     fn read_u32(&self, addr: u32) -> Result<u32> {
@@ -720,7 +887,9 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
     fn write_u32(&mut self, addr: u32, value: u32) -> Result<()> {
         self.uc
             .mem_write(u64::from(addr), &value.to_le_bytes())
-            .map_err(|err| Error::Backend(format!("write_u32 0x{addr:08x}: {err:?}")))
+            .map_err(|err| Error::Backend(format!("write_u32 0x{addr:08x}: {err:?}")))?;
+        self.record_write(addr, 4, i64::from(value));
+        Ok(())
     }
 
     fn read_u16(&self, addr: u32) -> Result<u16> {
@@ -734,6 +903,33 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
     fn write_u16(&mut self, addr: u32, value: u16) -> Result<()> {
         self.uc
             .mem_write(u64::from(addr), &value.to_le_bytes())
-            .map_err(|err| Error::Backend(format!("write_u16 0x{addr:08x}: {err:?}")))
+            .map_err(|err| Error::Backend(format!("write_u16 0x{addr:08x}: {err:?}")))?;
+        self.record_write(addr, 2, i64::from(value));
+        Ok(())
+    }
+}
+
+#[cfg(feature = "unicorn")]
+impl<D> UnicornGuestMemory<'_, '_, D> {
+    fn record_write(&self, address: u32, size: usize, value: i64) {
+        let Some(probe) = self.memory_write_probe.as_ref() else {
+            return;
+        };
+        let end = address.saturating_add(size as u32);
+        let touches_bad_slot =
+            address < MAIN_DESTRUCTOR_BAD_SLOT.saturating_add(4) && end > MAIN_DESTRUCTOR_BAD_SLOT;
+        let writes_low_pointer = size == 4 && value as u32 == 0x0001_0000;
+        if !touches_bad_slot && !writes_low_pointer {
+            return;
+        }
+        *probe.borrow_mut() = Some(UnicornMemoryWriteProbe {
+            pc: read_mips_reg(self.uc, unicorn_engine::RegisterMIPS::PC),
+            ra: read_mips_reg(self.uc, unicorn_engine::RegisterMIPS::RA),
+            sp: read_mips_reg(self.uc, unicorn_engine::RegisterMIPS::SP),
+            address,
+            size,
+            value,
+            slot_value_after: read_unicorn_u32(self.uc, MAIN_DESTRUCTOR_BAD_SLOT),
+        });
     }
 }

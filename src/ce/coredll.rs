@@ -1210,6 +1210,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_LOCAL_RE_ALLOC => Some(CoredllValue::Handle(local_re_alloc_raw(
             kernel,
+            memory,
             thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
@@ -1239,6 +1240,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_REMOTE_LOCAL_RE_ALLOC => Some(CoredllValue::Handle(local_re_alloc_raw(
             kernel,
+            memory,
             thread_id,
             raw_arg(args, 1),
             raw_arg(args, 2),
@@ -1285,6 +1287,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_HEAP_RE_ALLOC => Some(CoredllValue::Handle(heap_re_alloc_raw(
             kernel,
+            memory,
             thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
@@ -1314,6 +1317,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_REMOTE_HEAP_RE_ALLOC => Some(CoredllValue::Handle(heap_re_alloc_raw(
             kernel,
+            memory,
             thread_id,
             raw_arg(args, 1),
             raw_arg(args, 2),
@@ -1841,15 +1845,16 @@ fn local_alloc_raw(kernel: &mut CeKernel, thread_id: u32, flags: u32, bytes: u32
     }
 }
 
-fn local_re_alloc_raw(
+fn local_re_alloc_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
+    memory: &mut M,
     thread_id: u32,
     ptr: u32,
     bytes: u32,
     flags: u32,
 ) -> u32 {
-    match kernel.memory.local_re_alloc(ptr, bytes, flags) {
-        Some(ptr) => ptr,
+    match kernel.memory.local_re_alloc_detail(ptr, bytes, flags) {
+        Some(result) => copy_reallocated_bytes(kernel, memory, thread_id, &result),
         None => {
             kernel
                 .threads
@@ -1932,8 +1937,9 @@ fn heap_alloc_raw(kernel: &mut CeKernel, thread_id: u32, heap: u32, flags: u32, 
     }
 }
 
-fn heap_re_alloc_raw(
+fn heap_re_alloc_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
+    memory: &mut M,
     thread_id: u32,
     heap: u32,
     flags: u32,
@@ -1946,8 +1952,8 @@ fn heap_re_alloc_raw(
             .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
         return 0;
     }
-    match kernel.memory.heap_re_alloc(heap, flags, ptr, bytes) {
-        Some(ptr) => ptr,
+    match kernel.memory.heap_re_alloc_detail(heap, flags, ptr, bytes) {
+        Some(result) => copy_reallocated_bytes(kernel, memory, thread_id, &result),
         None => {
             kernel
                 .threads
@@ -1955,6 +1961,27 @@ fn heap_re_alloc_raw(
             0
         }
     }
+}
+
+fn copy_reallocated_bytes<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    result: &crate::ce::memory::Reallocation,
+) -> u32 {
+    if !result.moved {
+        return result.ptr;
+    }
+    let copy_len = result.old_actual_size.min(result.new_actual_size);
+    if copy_len == 0 {
+        return result.ptr;
+    }
+    if let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, result.old_ptr, copy_len) {
+        if !write_guest_bytes(kernel, memory, thread_id, result.ptr, &bytes) {
+            return 0;
+        }
+    }
+    result.ptr
 }
 
 fn heap_size_raw(kernel: &mut CeKernel, thread_id: u32, heap: u32, flags: u32, ptr: u32) -> u32 {

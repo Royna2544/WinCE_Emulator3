@@ -54,6 +54,15 @@ pub struct MemoryAllocation {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reallocation {
+    pub ptr: u32,
+    pub old_ptr: u32,
+    pub old_actual_size: u32,
+    pub new_actual_size: u32,
+    pub moved: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VirtualAllocation {
     pub base: u32,
     pub size: u32,
@@ -104,6 +113,16 @@ impl MemorySystem {
     }
 
     pub fn local_re_alloc(&mut self, ptr: u32, bytes: u32, flags: u32) -> Option<u32> {
+        self.local_re_alloc_detail(ptr, bytes, flags)
+            .map(|result| result.ptr)
+    }
+
+    pub fn local_re_alloc_detail(
+        &mut self,
+        ptr: u32,
+        bytes: u32,
+        flags: u32,
+    ) -> Option<Reallocation> {
         if flags & !(LMEM_VALID_FLAGS | LMEM_MODIFY) != 0 {
             return None;
         }
@@ -112,7 +131,7 @@ impl MemorySystem {
         } else {
             0
         };
-        self.heap_re_alloc(self.process_heap, heap_flags, ptr, bytes)
+        self.heap_re_alloc_detail(self.process_heap, heap_flags, ptr, bytes)
     }
 
     pub fn local_size(&self, ptr: u32) -> Option<u32> {
@@ -183,6 +202,17 @@ impl MemorySystem {
     }
 
     pub fn heap_re_alloc(&mut self, heap: u32, flags: u32, ptr: u32, bytes: u32) -> Option<u32> {
+        self.heap_re_alloc_detail(heap, flags, ptr, bytes)
+            .map(|result| result.ptr)
+    }
+
+    pub fn heap_re_alloc_detail(
+        &mut self,
+        heap: u32,
+        flags: u32,
+        ptr: u32,
+        bytes: u32,
+    ) -> Option<Reallocation> {
         if flags
             & !(HEAP_GENERATE_EXCEPTIONS
                 | HEAP_NO_SERIALIZE
@@ -195,14 +225,46 @@ impl MemorySystem {
             return None;
         }
         let actual_size = sanitize_size(bytes)?;
-        let allocation = self.allocations.get_mut(&ptr)?;
+        let allocation = self.allocations.get(&ptr)?.clone();
         if allocation.heap != heap || ptr < POINTER_FLOOR {
             return None;
         }
-        allocation.requested_size = bytes;
-        allocation.actual_size = actual_size;
-        allocation.zeroed |= flags & HEAP_ZERO_MEMORY != 0;
-        Some(ptr)
+        let old_actual_size = allocation.actual_size;
+        if actual_size <= allocation.actual_size {
+            let allocation = self.allocations.get_mut(&ptr)?;
+            allocation.requested_size = bytes;
+            allocation.actual_size = actual_size;
+            allocation.zeroed |= flags & HEAP_ZERO_MEMORY != 0;
+            return Some(Reallocation {
+                ptr,
+                old_ptr: ptr,
+                old_actual_size,
+                new_actual_size: actual_size,
+                moved: false,
+            });
+        }
+        if flags & HEAP_REALLOC_IN_PLACE_ONLY != 0 {
+            return None;
+        }
+        let new_ptr = self.allocate_heap_ptr(actual_size)?;
+        self.allocations.remove(&ptr);
+        self.allocations.insert(
+            new_ptr,
+            MemoryAllocation {
+                ptr: new_ptr,
+                heap,
+                requested_size: bytes,
+                actual_size,
+                zeroed: allocation.zeroed || flags & HEAP_ZERO_MEMORY != 0,
+            },
+        );
+        Some(Reallocation {
+            ptr: new_ptr,
+            old_ptr: ptr,
+            old_actual_size,
+            new_actual_size: actual_size,
+            moved: true,
+        })
     }
 
     pub fn heap_free(&mut self, heap: u32, flags: u32, ptr: u32) -> bool {
@@ -353,5 +415,26 @@ mod tests {
         assert!(memory.heap_free(heap, 0, ptr));
         assert!(memory.heap_destroy(heap));
         assert!(memory.heap_alloc(heap, 0, 8).is_none());
+    }
+
+    #[test]
+    fn realloc_growth_moves_to_avoid_overlapping_later_allocations() {
+        let mut memory = MemorySystem::default();
+        let first = memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 16).unwrap();
+        let second = memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 16).unwrap();
+
+        let grown = memory
+            .heap_re_alloc_detail(PROCESS_HEAP_HANDLE, 0, first, 64)
+            .unwrap();
+
+        assert!(grown.moved);
+        assert_ne!(grown.ptr, first);
+        assert!(grown.ptr >= second + 16);
+        assert_eq!(
+            memory.heap_size(PROCESS_HEAP_HANDLE, 0, grown.ptr),
+            Some(64)
+        );
+        assert_eq!(memory.heap_size(PROCESS_HEAP_HANDLE, 0, first), None);
+        assert_eq!(memory.heap_size(PROCESS_HEAP_HANDLE, 0, second), Some(16));
     }
 }

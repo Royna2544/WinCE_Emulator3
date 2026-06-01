@@ -166,16 +166,26 @@
   by guest code at `0x0048f864` with callback `0x00019d7c`; that callback is
   valid app code. The remaining `pc=0` symptom is therefore the direct Unicorn
   entry lacking a CE loader/thread-exit return address after cleanup completes.
+- Heap and local reallocation growth now move allocations and the raw COREDLL
+  reallocation shims copy the old guest bytes to the new block. This fixed the
+  launch-path overlap where a later guest `memcpy` corrupted the CRT/MFC exit
+  callback table after `_onexit` table growth.
+- Unicorn now decodes the old MIPS CE directly encoded `TerminateProcess`
+  kernel thunk (`API set 2`, method `2`) from the caller instructions when the
+  guest exits through that path.
+- The bounded Unicorn launch of `INavi.exe` with SDK `mfcce400.dll` now reaches
+  the decoded CE `TerminateProcess` exit path and returns process status 0.
 
 ## Current State
 
-- CPU execution is wired far enough to load mapped PE images and dispatch import
-  traps, but the app has not yet been successfully launched through a stable
-  main-procedure path.
+- CPU execution is wired far enough to load mapped PE images, dispatch import
+  traps, run the target entry path, execute CRT/MFC cleanup, and recognize the
+  target's decoded CE `TerminateProcess` exit.
 - The default bootstrap uses `regs.json` as backing storage for the fake CE
   registry API and creates base GWE, timer, audio, and memory-map state.
 - The virtual Win32/CE framework and COREDLL dispatcher are connected to Unicorn
-  import traps. SDK `mfcce400.dll` can execute from a relocated image, but MFC,
+  import traps. SDK `mfcce400.dll` can execute from a relocated image through
+  the current target launch/cleanup path, but MFC,
   commctrl, WINSOCK, OLE, and additional CE 4.2 ordinal behavior still need real
   subsystem-backed implementation as traces demand.
 - Many COREDLL ordinals are classified and dispatchable but still stubbed by
