@@ -6,7 +6,8 @@
 - Implement MIPS PE loading for the target executable.
 - Build import thunk/trap handling for COREDLL, MFC, CRT-like exports, and WINSOCK.
 - Connect guest COREDLL registry imports to the existing CE-style registry API.
-- Add CE API shims for file, device, GWE, timer, and waveOut calls.
+- Connect guest COREDLL file, device, sync, GWE, timer, and waveOut imports to
+  the virtual Win32/CE framework on `CeKernel`.
 - Extend subsystem smoke tests as each shim is connected to guest import traps.
 
 ## Next
@@ -16,6 +17,8 @@
   libraries, alongside the source references already recorded.
 - Persist host-backed registry writes separately from the source dump.
 - Add real serial backend support for `win32_com` devices.
+- Bridge selected virtual Win32/CE APIs to host Win32 APIs where that preserves
+  real guest semantics.
 
 ## Later
 

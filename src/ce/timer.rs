@@ -10,6 +10,11 @@ pub struct TimerSystem {
     timers: BTreeMap<u32, KernelTimer>,
 }
 
+pub const INFINITE: u32 = 0xffff_ffff;
+pub const WAIT_OBJECT_0: u32 = 0;
+pub const WAIT_TIMEOUT: u32 = 258;
+pub const WAIT_FAILED: u32 = 0xffff_ffff;
+
 #[derive(Debug, Clone)]
 pub struct KernelTimer {
     pub id: u32,
@@ -66,6 +71,10 @@ impl TimerSystem {
 
     pub fn kill_timer(&mut self, id: u32) -> bool {
         self.timers.remove(&id).is_some()
+    }
+
+    pub fn timer_count(&self) -> usize {
+        self.timers.len()
     }
 
     pub fn due_timers(&mut self) -> Vec<KernelTimer> {

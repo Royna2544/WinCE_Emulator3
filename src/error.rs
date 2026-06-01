@@ -14,6 +14,12 @@ pub enum Error {
         #[source]
         source: serde_json::Error,
     },
+    #[error("I/O error for {path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
     #[error("CE object handle 0x{0:08x} is not valid")]

@@ -15,11 +15,30 @@ anchors, not app-specific shortcuts.
 - Kernel-mode import signatures:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/INC/kmodeentries.hpp`
   - Defines `NKRegOpenKeyExW_t` and `NKRegQueryValueExW_t` signatures.
+  - Defines `CreateFileW_t`, `ReadFile_t`, `DeviceIoControl_t`, and
+    `CloseHandle_t` signatures used by the virtual file/device facade.
+
+- Device manager file API:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/DEVICE/DEVCORE/devfile.c`
+  - `DM_DevReadFile`, `DM_DevWriteFile`, and `DM_DevDeviceIoControl` show the
+    device-file split beneath Win32 file handles.
+
+- Kernel sync/wait:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/KERNEL/syncobj.c`
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/KERNEL/schedule.c`
+  - Event/mutex objects have handle-close hooks and are waited through
+    `NKWaitForSingleObject`.
 
 - GWE message queue surface:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h`
   - Declares `GetMessageW_I`, `GetMessageWNoWait_I`, `PeekMessageW_I`,
     `PostMessageW_I`, and `SendMessageW_*` queue entry points.
+
+- GWE window surface:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp`
+  - Declares `SetWindowTextW_I`, `GetWindowTextW_I`, `SetWindowLongW_I`,
+    `GetWindowLongW_I`, `DefWindowProcW_I`, and `DestroyWindow_I`.
 
 - COREDLL multimedia ordinals:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/core_common.def`

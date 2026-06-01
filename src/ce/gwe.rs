@@ -11,8 +11,19 @@ bitflags::bitflags! {
 pub const WM_NULL: u32 = 0x0000;
 pub const WM_CREATE: u32 = 0x0001;
 pub const WM_DESTROY: u32 = 0x0002;
+pub const WM_CLOSE: u32 = 0x0010;
+pub const WM_QUIT: u32 = 0x0012;
+pub const WM_SETTEXT: u32 = 0x000c;
+pub const WM_GETTEXT: u32 = 0x000d;
+pub const WM_GETTEXTLENGTH: u32 = 0x000e;
 pub const WM_TIMER: u32 = 0x0113;
 pub const WM_USER: u32 = 0x0400;
+
+pub const GWL_WNDPROC: i32 = -4;
+pub const GWL_ID: i32 = -12;
+pub const GWL_STYLE: i32 = -16;
+pub const GWL_EXSTYLE: i32 = -20;
+pub const GWL_USERDATA: i32 = -21;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
@@ -30,6 +41,13 @@ pub struct Window {
     pub class_name: String,
     pub title: String,
     pub visible: bool,
+    pub parent: Option<u32>,
+    pub id: u32,
+    pub style: u32,
+    pub ex_style: u32,
+    pub wndproc: u32,
+    pub user_data: u32,
+    pub destroyed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -51,6 +69,19 @@ impl Default for Gwe {
 
 impl Gwe {
     pub fn create_window(&mut self, thread_id: u32, class_name: &str, title: &str) -> u32 {
+        self.create_window_ex(thread_id, class_name, title, None, 0, 0, 0)
+    }
+
+    pub fn create_window_ex(
+        &mut self,
+        thread_id: u32,
+        class_name: &str,
+        title: &str,
+        parent: Option<u32>,
+        id: u32,
+        style: u32,
+        ex_style: u32,
+    ) -> u32 {
         let hwnd = self.next_hwnd;
         self.next_hwnd += 4;
         self.windows.insert(
@@ -61,6 +92,13 @@ impl Gwe {
                 class_name: class_name.to_owned(),
                 title: title.to_owned(),
                 visible: false,
+                parent,
+                id,
+                style,
+                ex_style,
+                wndproc: 0,
+                user_data: 0,
+                destroyed: false,
             },
         );
         self.post_message(thread_id, Message::new(hwnd, WM_CREATE, 0, 0, 0));
@@ -68,13 +106,15 @@ impl Gwe {
     }
 
     pub fn destroy_window(&mut self, hwnd: u32, time_ms: u32) -> bool {
-        let Some(window) = self.windows.remove(&hwnd) else {
+        let Some(window) = self.windows.get_mut(&hwnd) else {
             return false;
         };
-        self.post_message(
-            window.thread_id,
-            Message::new(hwnd, WM_DESTROY, 0, 0, time_ms),
-        );
+        if window.destroyed {
+            return false;
+        }
+        window.destroyed = true;
+        let thread_id = window.thread_id;
+        self.post_message(thread_id, Message::new(hwnd, WM_DESTROY, 0, 0, time_ms));
         true
     }
 
@@ -99,28 +139,113 @@ impl Gwe {
     }
 
     pub fn send_message(&mut self, hwnd: u32, msg: u32, wparam: u32, lparam: u32) -> Option<u32> {
-        self.windows
-            .contains_key(&hwnd)
-            .then_some(default_send_message_result(msg, wparam, lparam))
+        if !self.windows.contains_key(&hwnd) {
+            return None;
+        }
+        if msg == WM_CLOSE {
+            self.destroy_window(hwnd, 0);
+        }
+        Some(default_send_message_result(msg, wparam, lparam))
     }
 
     pub fn get_message(&mut self, thread_id: u32) -> Option<Message> {
-        self.queues
-            .get_mut(&thread_id)
-            .and_then(VecDeque::pop_front)
+        self.get_message_filtered(thread_id, None, 0, 0)
     }
 
     pub fn peek_message(&mut self, thread_id: u32, flags: PeekFlags) -> Option<Message> {
+        self.peek_message_filtered(thread_id, None, 0, 0, flags)
+    }
+
+    pub fn post_quit_message(&mut self, thread_id: u32, exit_code: u32, time_ms: u32) {
+        self.post_message(thread_id, Message::new(0, WM_QUIT, exit_code, 0, time_ms));
+    }
+
+    pub fn get_message_filtered(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
+        self.take_matching_message(thread_id, hwnd, min_msg, max_msg)
+    }
+
+    pub fn peek_message_filtered(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+        flags: PeekFlags,
+    ) -> Option<Message> {
         let queue = self.queues.get_mut(&thread_id)?;
+        let index = queue
+            .iter()
+            .position(|message| message_matches(message, hwnd, min_msg, max_msg))?;
         if flags.contains(PeekFlags::REMOVE) {
-            queue.pop_front()
+            queue.remove(index)
         } else {
-            queue.front().cloned()
+            queue.get(index).cloned()
         }
+    }
+
+    pub fn set_window_text(&mut self, hwnd: u32, title: &str) -> bool {
+        let Some(window) = self.windows.get_mut(&hwnd) else {
+            return false;
+        };
+        window.title = title.to_owned();
+        true
+    }
+
+    pub fn get_window_text(&self, hwnd: u32, capacity_chars: usize) -> Option<String> {
+        let title = &self.windows.get(&hwnd)?.title;
+        Some(
+            title
+                .chars()
+                .take(capacity_chars.saturating_sub(1))
+                .collect(),
+        )
+    }
+
+    pub fn get_window_text_length(&self, hwnd: u32) -> Option<usize> {
+        Some(self.windows.get(&hwnd)?.title.encode_utf16().count())
+    }
+
+    pub fn set_window_long(&mut self, hwnd: u32, index: i32, value: u32) -> Option<u32> {
+        let window = self.windows.get_mut(&hwnd)?;
+        let slot = window_long_slot_mut(window, index)?;
+        let previous = *slot;
+        *slot = value;
+        Some(previous)
+    }
+
+    pub fn get_window_long(&self, hwnd: u32, index: i32) -> Option<u32> {
+        let window = self.windows.get(&hwnd)?;
+        window_long_slot(window, index).copied()
+    }
+
+    pub fn is_window(&self, hwnd: u32) -> bool {
+        self.windows
+            .get(&hwnd)
+            .is_some_and(|window| !window.destroyed)
     }
 
     pub fn window(&self, hwnd: u32) -> Option<&Window> {
         self.windows.get(&hwnd)
+    }
+
+    fn take_matching_message(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
+        let queue = self.queues.get_mut(&thread_id)?;
+        let index = queue
+            .iter()
+            .position(|message| message_matches(message, hwnd, min_msg, max_msg))?;
+        queue.remove(index)
     }
 }
 
@@ -139,7 +264,40 @@ impl Message {
 fn default_send_message_result(msg: u32, _wparam: u32, _lparam: u32) -> u32 {
     match msg {
         WM_NULL => 0,
+        WM_GETTEXTLENGTH => 0,
         _ => 0,
+    }
+}
+
+fn message_matches(message: &Message, hwnd: Option<u32>, min_msg: u32, max_msg: u32) -> bool {
+    if hwnd.is_some_and(|wanted| message.hwnd != wanted) {
+        return false;
+    }
+    if min_msg == 0 && max_msg == 0 {
+        return true;
+    }
+    (min_msg..=max_msg).contains(&message.msg)
+}
+
+fn window_long_slot(window: &Window, index: i32) -> Option<&u32> {
+    match index {
+        GWL_ID => Some(&window.id),
+        GWL_STYLE => Some(&window.style),
+        GWL_EXSTYLE => Some(&window.ex_style),
+        GWL_WNDPROC => Some(&window.wndproc),
+        GWL_USERDATA => Some(&window.user_data),
+        _ => None,
+    }
+}
+
+fn window_long_slot_mut(window: &mut Window, index: i32) -> Option<&mut u32> {
+    match index {
+        GWL_ID => Some(&mut window.id),
+        GWL_STYLE => Some(&mut window.style),
+        GWL_EXSTYLE => Some(&mut window.ex_style),
+        GWL_WNDPROC => Some(&mut window.wndproc),
+        GWL_USERDATA => Some(&mut window.user_data),
+        _ => None,
     }
 }
 

@@ -20,12 +20,27 @@
   GWE queue, waveOut exports, and MFC message pump behavior.
 - Rust smoke tests cover bootstrapping registry/device JSON backing plus basic
   registry, device, GWE/message, timer, audio, handle, and memory-map behavior.
+- Added a virtual Win32/CE API facade on `CeKernel` for:
+  - `CreateFileW`-style file/device opens
+  - `ReadFile`/`WriteFile`
+  - `DeviceIoControl`
+  - `CloseHandle`
+  - `CreateEventW`/`SetEvent`/`ResetEvent`/`WaitForSingleObject`
+  - `CreateMutexW`/`ReleaseMutex`
+  - `CreateWindowExW`, `PostMessageW`, `SendMessageW`, `GetMessageW`, and
+    single-step message pumping
+  - `SetTimer`/`KillTimer`
+  - `waveOutOpen`/`waveOutWrite` plus pause/restart/reset/volume helpers
+- Host-backed file opens are contained under a configurable file root and reject
+  parent-directory escapes.
 
 ## Current State
 
 - CPU execution is not yet wired to mapped PE images or import traps.
 - The default bootstrap uses `regs.json` as backing storage for the fake CE
   registry API and creates base GWE, timer, audio, and memory-map state.
+- The virtual Win32/CE framework is ready for guest import traps to call into,
+  but those traps are not wired yet.
 
 ## False Leads
 

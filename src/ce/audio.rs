@@ -1,5 +1,13 @@
 use std::collections::{BTreeMap, VecDeque};
 
+pub type MmResult = u32;
+
+pub const MMSYSERR_NOERROR: MmResult = 0;
+pub const MMSYSERR_ERROR: MmResult = 1;
+pub const MMSYSERR_BADDEVICEID: MmResult = 2;
+pub const MMSYSERR_INVALHANDLE: MmResult = 5;
+pub const WAVERR_BADFORMAT: MmResult = 32;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WaveFormat {
     pub format_tag: u16,
@@ -66,6 +74,25 @@ impl AudioSystem {
         id
     }
 
+    pub fn wave_out_get_num_devs(&self) -> u32 {
+        1
+    }
+
+    pub fn wave_out_open(&mut self, format: WaveFormat) -> Result<u32, MmResult> {
+        if !format.is_pcm() || format.block_align == 0 {
+            return Err(WAVERR_BADFORMAT);
+        }
+        Ok(self.open_wave_out(format))
+    }
+
+    pub fn wave_out_write(&mut self, id: u32, buffer: WaveBuffer) -> MmResult {
+        if self.write(id, buffer) {
+            MMSYSERR_NOERROR
+        } else {
+            MMSYSERR_INVALHANDLE
+        }
+    }
+
     pub fn write(&mut self, id: u32, buffer: WaveBuffer) -> bool {
         let Some(output) = self.outputs.get_mut(&id) else {
             return false;
@@ -93,12 +120,53 @@ impl AudioSystem {
         true
     }
 
+    pub fn pause(&mut self, id: u32) -> MmResult {
+        let Some(output) = self.outputs.get_mut(&id) else {
+            return MMSYSERR_INVALHANDLE;
+        };
+        output.state = WaveOutState::Paused;
+        MMSYSERR_NOERROR
+    }
+
+    pub fn restart(&mut self, id: u32) -> MmResult {
+        let Some(output) = self.outputs.get_mut(&id) else {
+            return MMSYSERR_INVALHANDLE;
+        };
+        if !output.pending.is_empty() {
+            output.state = WaveOutState::Playing;
+        }
+        MMSYSERR_NOERROR
+    }
+
+    pub fn wave_out_reset(&mut self, id: u32) -> MmResult {
+        if self.reset(id) {
+            MMSYSERR_NOERROR
+        } else {
+            MMSYSERR_INVALHANDLE
+        }
+    }
+
     pub fn set_volume(&mut self, id: u32, volume: u32) -> bool {
         let Some(output) = self.outputs.get_mut(&id) else {
             return false;
         };
         output.volume = volume;
         true
+    }
+
+    pub fn get_volume(&self, id: u32) -> Result<u32, MmResult> {
+        self.outputs
+            .get(&id)
+            .map(|output| output.volume)
+            .ok_or(MMSYSERR_INVALHANDLE)
+    }
+
+    pub fn wave_out_set_volume(&mut self, id: u32, volume: u32) -> MmResult {
+        if self.set_volume(id, volume) {
+            MMSYSERR_NOERROR
+        } else {
+            MMSYSERR_INVALHANDLE
+        }
     }
 
     pub fn close(&mut self, id: u32) -> bool {
@@ -108,6 +176,14 @@ impl AudioSystem {
         output.pending.clear();
         output.state = WaveOutState::Closed;
         true
+    }
+
+    pub fn wave_out_close(&mut self, id: u32) -> MmResult {
+        if self.close(id) {
+            MMSYSERR_NOERROR
+        } else {
+            MMSYSERR_INVALHANDLE
+        }
     }
 
     pub fn output(&self, id: u32) -> Option<&WaveOutDevice> {
@@ -147,5 +223,9 @@ impl WaveFormat {
             block_align,
             bits_per_sample: 16,
         }
+    }
+
+    fn is_pcm(&self) -> bool {
+        self.format_tag == 1
     }
 }

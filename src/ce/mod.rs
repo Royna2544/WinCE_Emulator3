@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod devices;
+pub mod file;
 pub mod gwe;
 pub mod kernel;
 pub mod object;

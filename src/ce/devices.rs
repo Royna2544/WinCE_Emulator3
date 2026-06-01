@@ -72,6 +72,16 @@ pub struct DeviceSession {
     pub guest_name: String,
     pub kind: DeviceKind,
     pub backend: DeviceBackend,
+    pub host: Option<String>,
+    rx: Vec<u8>,
+    tx: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceIoControlResult {
+    pub success: bool,
+    pub bytes_returned: u32,
+    pub output: Vec<u8>,
 }
 
 impl DeviceNamespace {
@@ -100,6 +110,9 @@ impl DeviceNamespace {
             guest_name: config.guest.clone(),
             kind: config.kind.clone(),
             backend: config.backend.clone(),
+            host: config.host.clone(),
+            rx: Vec::new(),
+            tx: Vec::new(),
         })
     }
 
@@ -116,6 +129,51 @@ impl DeviceNamespace {
             .values()
             .map(|device| device.guest.clone())
             .collect()
+    }
+}
+
+impl DeviceSession {
+    pub fn read_file(&mut self, requested: u32) -> Vec<u8> {
+        let count = (requested as usize).min(self.rx.len());
+        self.rx.drain(..count).collect()
+    }
+
+    pub fn write_file(&mut self, bytes: &[u8]) -> u32 {
+        self.tx.extend_from_slice(bytes);
+        bytes.len() as u32
+    }
+
+    pub fn device_io_control(
+        &mut self,
+        ioctl_code: u32,
+        _input: &[u8],
+        output_capacity: u32,
+    ) -> DeviceIoControlResult {
+        match self.backend {
+            DeviceBackend::Stub | DeviceBackend::Win32Com => DeviceIoControlResult {
+                success: false,
+                bytes_returned: 0,
+                output: Vec::new(),
+            },
+            DeviceBackend::NandUuidReturn => {
+                let mut output = ioctl_code.to_le_bytes().to_vec();
+                output.extend_from_slice(self.guest_name.as_bytes());
+                output.truncate(output_capacity as usize);
+                DeviceIoControlResult {
+                    success: true,
+                    bytes_returned: output.len() as u32,
+                    output,
+                }
+            }
+        }
+    }
+
+    pub fn enqueue_rx(&mut self, bytes: &[u8]) {
+        self.rx.extend_from_slice(bytes);
+    }
+
+    pub fn tx_bytes(&self) -> &[u8] {
+        &self.tx
     }
 }
 
