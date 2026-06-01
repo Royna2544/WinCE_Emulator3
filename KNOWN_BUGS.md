@@ -25,13 +25,15 @@
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch
     metadata, but only the implemented virtual Win32/CE facade, waveOut,
-    `cemath`, the first kernel/thread/time/sync raw ordinal tranche, first
-    HWND/RECT GWE tranche, and first resource tranche have real semantics.
+    `cemath`, the first kernel/thread/time/sync raw ordinal tranche,
+    local/heap/virtual memory tranche, raw file buffer marshalling, first
+    HWND/RECT/message GWE tranche, and first resource tranche have real
+    semantics.
   - Evidence: `src/ce/coredll.rs` reports implemented-vs-stubbed ordinal plan
     entries and returns subsystem stub policies for remaining exports. Raw
     tests now cover critical sections, interlocked operations, TLS/last-error,
-    time, event/wait, close-handle, HWND rectangles/points, resources, and COM
-    state.
+    time, event/wait, close-handle, heap/local/virtual allocation, raw
+    file buffers, HWND rectangles/points/messages, resources, and COM state.
   - Status: active ordinal-by-ordinal implementation work.
 
 - PE resources are not loaded into `ResourceSystem` yet.

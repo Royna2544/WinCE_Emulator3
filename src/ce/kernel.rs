@@ -6,6 +6,7 @@ use crate::{
         devices::{DeviceIoControlResult, DeviceNamespace},
         file::{FileIoResult, GENERIC_READ, GENERIC_WRITE, HostFileSystem, OPEN_EXISTING},
         gwe::{Gwe, Message},
+        memory::MemorySystem,
         object::{FileObject, HandleTable, KernelObject, WaitResult},
         registry::Registry,
         remote::{CeRemote, RemoteStatus, WM_LBUTTONDOWN, WM_MOUSEMOVE, make_lparam},
@@ -38,6 +39,7 @@ pub struct CeKernel {
     pub threads: ThreadSystem,
     pub resources: ResourceSystem,
     pub com: ComSystem,
+    pub memory: MemorySystem,
 }
 
 impl CeKernel {
@@ -55,6 +57,7 @@ impl CeKernel {
             threads: ThreadSystem::default(),
             resources: ResourceSystem::default(),
             com: ComSystem::default(),
+            memory: MemorySystem::default(),
         }
     }
 

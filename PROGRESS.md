@@ -65,14 +65,26 @@
     `SetLastError`
   - `Sleep`, `GetTickCount`, `EventModify`, `WaitForSingleObject`, and
     `CloseHandle`
+  - CE heap/local/virtual-memory ordinals: `GetProcessHeap`, `LocalAlloc`,
+    `LocalReAlloc`, `LocalSize`, `LocalFree`, `HeapCreate`, `HeapDestroy`,
+    `HeapAlloc`, `HeapReAlloc`, `HeapSize`, `HeapFree`, `HeapValidate`,
+    `VirtualAlloc`, and `VirtualFree`, plus the remote/in-process local and
+    remote heap variants routed through the virtual heap model
+  - raw file ordinals: `CreateFileW`, `ReadFile`, and `WriteFile` now marshal
+    UTF-16 paths, guest byte buffers, and transferred-byte output pointers
   - CE/MFC-style HWND geometry ordinals: raw `CreateWindowExW`,
     `SetWindowPos`, `MoveWindow`, `GetWindowRect`, `GetClientRect`,
     `ClientToScreen`, `ScreenToClient`, and `MapWindowPoints`
+  - CE/MFC-style message-pump ordinals: raw `GetMessageW`, `PeekMessageW`,
+    `PostMessageW`, `SendMessageW`, `DispatchMessageW`, `TranslateMessage`,
+    and `DefWindowProcW` marshal `MSG` structs and queue state
   - resource ordinals: `FindResourceW`/`FindResource`, `LoadResource`, and
     `SizeofResource`, plus `LoadStringW` buffer copying/null termination for
     registered virtual strings
 - GWE window state now tracks CE-style whole-window and client `RECT`s in screen
   coordinates and translates parent/client/screen points for MFC layout paths.
+- Added a virtual CE memory subsystem for process/custom heaps, local
+  allocations, allocation sizes, frees, and page-granular virtual allocations.
 - Added resource and COM subsystem state:
   - resources map `(module, name, type)` to an HRSRC-like handle, data pointer,
     byte size, and string resources keyed by module/id
@@ -101,9 +113,10 @@
   import traps to call into. PE import tables can now be parsed, but import trap
   patching and Unicorn memory mapping are not wired yet.
 - Many COREDLL ordinals are classified and dispatchable but still stubbed by
-  subsystem. Kernel/thread/time/sync, first GWE HWND/RECT, and first resource
-  raw ordinals have real CE-referenced semantics; remaining ordinals still need
-  to be burned down subsystem by subsystem.
+  subsystem. Kernel/thread/time/sync, memory/local/heap/virtual allocation,
+  raw file buffer marshalling, first GWE HWND/RECT/message pump, and first
+  resource raw ordinals have real CE-referenced semantics; remaining ordinals
+  still need to be burned down subsystem by subsystem.
 - Remote server socket/WebSocket binding is not implemented in Rust yet; the
   emulator-facing remote API state and dispatch behavior are present.
 

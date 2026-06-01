@@ -13,19 +13,22 @@ use wince_emulation_v3::{
         coredll_ordinals::{
             ORD_CLIENT_TO_SCREEN, ORD_CLOSE_HANDLE, ORD_CREATE_FILE_W, ORD_CREATE_WINDOW_EX_W,
             ORD_DISPATCH_MESSAGE_W, ORD_EVENT_MODIFY, ORD_FIND_RESOURCE_W, ORD_GET_CLIENT_RECT,
-            ORD_GET_LAST_ERROR, ORD_GET_MESSAGE_W, ORD_GET_TICK_COUNT, ORD_GET_WINDOW_RECT,
-            ORD_INITIALIZE_CRITICAL_SECTION, ORD_INTERLOCKED_COMPARE_EXCHANGE,
+            ORD_GET_LAST_ERROR, ORD_GET_MESSAGE_W, ORD_GET_PROCESS_HEAP, ORD_GET_TICK_COUNT,
+            ORD_GET_WINDOW_RECT, ORD_HEAP_ALLOC, ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE,
+            ORD_HEAP_SIZE, ORD_INITIALIZE_CRITICAL_SECTION, ORD_INTERLOCKED_COMPARE_EXCHANGE,
             ORD_INTERLOCKED_EXCHANGE_ADD, ORD_INTERLOCKED_INCREMENT, ORD_LEAVE_CRITICAL_SECTION,
-            ORD_LL_DIV, ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_MAP_WINDOW_POINTS,
-            ORD_MOVE_WINDOW, ORD_POST_MESSAGE_W, ORD_POW, ORD_REG_OPEN_KEY_EX_W,
+            ORD_LL_DIV, ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_LOCAL_ALLOC, ORD_LOCAL_FREE,
+            ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_MAP_WINDOW_POINTS, ORD_MOVE_WINDOW,
+            ORD_PEEK_MESSAGE_W, ORD_POST_MESSAGE_W, ORD_POW, ORD_READ_FILE, ORD_REG_OPEN_KEY_EX_W,
             ORD_SCREEN_TO_CLIENT, ORD_SET_LAST_ERROR, ORD_SET_WINDOW_POS, ORD_SIZEOF_RESOURCE,
             ORD_SLEEP, ORD_SQRT, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
-            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_USER_CALL_WINDOW_PROC, ORD_WAIT_FOR_SINGLE_OBJECT,
-            ORD_WRITE_FILE,
+            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_USER_CALL_WINDOW_PROC, ORD_VIRTUAL_ALLOC,
+            ORD_VIRTUAL_FREE, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE,
         },
-        file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
+        file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         gwe::{GWL_USERDATA, WM_CREATE, WM_QUIT, WM_TIMER, WM_USER},
         kernel::{CeKernel, MessagePumpResult},
+        memory::{HEAP_NO_SERIALIZE, HEAP_ZERO_MEMORY, LMEM_ZEROINIT, MEM_COMMIT, MEM_RELEASE},
         object::{EventObject, KernelObject},
         registry::{ERROR_SUCCESS, HKEY_LOCAL_MACHINE, REG_SZ},
         remote::{WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP},
@@ -42,11 +45,18 @@ use wince_emulation_v3::{
 
 #[derive(Debug, Default)]
 struct TestGuestMemory {
+    bytes: BTreeMap<u32, u8>,
     words: BTreeMap<u32, u32>,
     halfwords: BTreeMap<u32, u16>,
 }
 
 impl TestGuestMemory {
+    fn map_bytes(&mut self, base: u32, bytes: u32) {
+        for index in 0..bytes {
+            self.bytes.insert(base.wrapping_add(index), 0);
+        }
+    }
+
     fn map_words(&mut self, base: u32, words: u32) {
         for index in 0..words {
             self.write_word(base.wrapping_add(index * 4), 0);
@@ -61,6 +71,18 @@ impl TestGuestMemory {
 
     fn write_word(&mut self, addr: u32, value: u32) {
         self.words.insert(addr, value);
+    }
+
+    fn write_bytes(&mut self, addr: u32, bytes: &[u8]) {
+        for (index, byte) in bytes.iter().copied().enumerate() {
+            self.bytes.insert(addr + index as u32, byte);
+        }
+    }
+
+    fn read_bytes(&self, addr: u32, len: usize) -> Vec<u8> {
+        (0..len)
+            .map(|index| self.bytes.get(&(addr + index as u32)).copied().unwrap_or(0))
+            .collect()
     }
 
     fn read_i32(&self, addr: u32) -> Result<i32> {
@@ -96,6 +118,22 @@ impl TestGuestMemory {
 }
 
 impl CoredllGuestMemory for TestGuestMemory {
+    fn read_u8(&self, addr: u32) -> Result<u8> {
+        self.bytes
+            .get(&addr)
+            .copied()
+            .ok_or_else(|| Error::Backend(format!("unmapped test byte 0x{addr:08x}")))
+    }
+
+    fn write_u8(&mut self, addr: u32, value: u8) -> Result<()> {
+        if let Some(byte) = self.bytes.get_mut(&addr) {
+            *byte = value;
+            Ok(())
+        } else {
+            Err(Error::Backend(format!("unmapped test byte 0x{addr:08x}")))
+        }
+    }
+
     fn read_u32(&self, addr: u32) -> Result<u32> {
         self.words
             .get(&addr)
@@ -460,7 +498,7 @@ fn coredll_raw_dispatch_has_defined_path_for_every_parsed_ordinal() -> Result<()
     }));
     assert!(plan.iter().any(|item| {
         item.subsystem == CoredllSubsystem::Memory
-            && item.status == CoredllImplementationStatus::Stubbed
+            && item.status == CoredllImplementationStatus::Implemented
             && item.export.name == "LocalAlloc"
     }));
 
@@ -786,6 +824,272 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
 }
 
 #[test]
+fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("raw_memory_file");
+    fs::create_dir_all(&root).unwrap();
+    kernel.set_file_root(&root);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+
+    let process_heap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_PROCESS_HEAP,
+        [],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(heap),
+            ..
+        } => heap,
+        other => panic!("GetProcessHeap did not return a heap: {other:?}"),
+    };
+
+    let local = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOCAL_ALLOC,
+        [LMEM_ZEROINIT, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("LocalAlloc did not return a pointer: {other:?}"),
+    };
+    assert_eq!(kernel.memory.local_size(local), Some(1));
+    assert!(kernel.memory.allocation(local).unwrap().zeroed);
+
+    let local = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOCAL_RE_ALLOC,
+        [local, 24, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("LocalReAlloc did not resize pointer: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOCAL_SIZE,
+            [local],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(24),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOCAL_FREE,
+            [local],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+
+    let heap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_HEAP_CREATE,
+        [HEAP_NO_SERIALIZE, 0x1000, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(heap),
+            ..
+        } => heap,
+        other => panic!("HeapCreate did not return a heap: {other:?}"),
+    };
+    let heap_ptr = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_HEAP_ALLOC,
+        [heap, HEAP_ZERO_MEMORY, 32],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("HeapAlloc did not return a pointer: {other:?}"),
+    };
+    assert_ne!(heap, process_heap);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_HEAP_SIZE,
+            [heap, 0, heap_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(32),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_HEAP_FREE,
+            [heap, 0, heap_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_HEAP_DESTROY,
+            [heap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    let virtual_base = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_VIRTUAL_ALLOC,
+        [0, 0x1234, MEM_COMMIT, 4],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("VirtualAlloc did not return a base: {other:?}"),
+    };
+    assert!(kernel.memory.virtual_allocation(virtual_base).is_some());
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_VIRTUAL_FREE,
+            [virtual_base, 0, MEM_RELEASE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    let path_ptr = 0x1_1000;
+    let write_buffer = 0x1_2000;
+    let read_buffer = 0x1_3000;
+    let count_ptr = 0x1_4000;
+    memory.write_wide_z(path_ptr, "\\ResidentFlash\\raw-file.bin");
+    memory.write_bytes(write_buffer, b"raw-file");
+    memory.map_bytes(read_buffer, 16);
+    memory.map_words(count_ptr, 1);
+
+    let file = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_W,
+        [
+            path_ptr,
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            0,
+            CREATE_ALWAYS,
+            0,
+            0,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateFileW did not return a file handle: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WRITE_FILE,
+            [file, write_buffer, 8, count_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(count_ptr)?, 8);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CLOSE_HANDLE,
+            [file],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    let file = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_W,
+        [path_ptr, GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateFileW did not reopen file: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_READ_FILE,
+            [file, read_buffer, 8, count_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(count_ptr)?, 8);
+    assert_eq!(memory.read_bytes(read_buffer, 8), b"raw-file");
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
@@ -916,6 +1220,52 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
     ));
     assert_eq!(memory.read_i32(point_ptr)?, 5);
     assert_eq!(memory.read_i32(point_ptr + 4)?, 6);
+
+    let msg_ptr = 0x3080;
+    memory.map_words(msg_ptr, 7);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_POST_MESSAGE_W,
+            [child, WM_USER + 99, 0x11, 0x22],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PEEK_MESSAGE_W,
+            [msg_ptr, child, WM_USER + 99, WM_USER + 99, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(msg_ptr)?, child);
+    assert_eq!(memory.read_u32(msg_ptr + 4)?, WM_USER + 99);
+    assert_eq!(memory.read_u32(msg_ptr + 8)?, 0x11);
+    assert_eq!(memory.read_u32(msg_ptr + 12)?, 0x22);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_MESSAGE_W,
+            [msg_ptr, child, WM_USER + 99, WM_USER + 99],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

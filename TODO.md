@@ -8,14 +8,15 @@
   the COREDLL dispatcher.
 - Continue burning down COREDLL ordinals subsystem by subsystem, replacing
   stubbed ordinal plan entries with CE/MFC/SDK-referenced semantics. Next
-  likely tranche: memory/heap/local allocation, file APIs with pointer writes,
-  PE-backed resource string/icon/bitmap loading, COM/OLE API dispatch when ole32
-  imports are connected, and more GWE message/window raw pointer marshalling.
+  likely tranche: PE-backed resource string/icon/bitmap loading, COM/OLE API
+  dispatch when ole32 imports are connected, more GWE window text/class/menu
+  raw pointer marshalling, file seek/attributes/find APIs, and time/system-info
+  structs.
 - Connect guest MFC, CRT-like exports, and WINSOCK imports.
 - Extend `cemath` as real guest imports demand more CRT/floating-point helpers.
 - Extend subsystem smoke tests as each shim is connected to guest import traps.
-- Add import-trap argument/result marshalling tests for raw ordinals that write
-  guest output pointers.
+- Add import-trap argument/result marshalling tests that exercise the new raw
+  heap/file/message/resource ordinals through decoded guest MIPS registers.
 - Parse PE resource directories into `ResourceSystem` so `FindResourceW` and
   `LoadStringW` use the mapped guest image data rather than test-registered
   virtual resources.

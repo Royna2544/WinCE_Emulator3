@@ -53,10 +53,29 @@ anchors, not app-specific shortcuts.
   - MIPS CE headers define the exported interlocked signatures and
     `InterlockedTestExchange`/`InterlockedCompareExchange` argument order.
 
+- COREDLL heap/local/virtual memory:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/LMEM/heap.c`,
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/LMEM/heap.h`,
+  and
+  `/mnt/c/Program Files (x86)/Windows CE Tools/wce420/STANDARDSDK_420/Include/Mipsii/winbase.h`
+  - `SanitizeSize` maps zero-byte heap requests to one byte and rejects
+    requests above `HEAP_MAX_ALLOC`.
+  - `LocalAlloc` routes through the process heap and maps `LMEM_ZEROINIT` to
+    `HEAP_ZERO_MEMORY`; `LocalFree` returns `NULL` on success and the original
+    handle on failure.
+  - `HeapAlloc`, `HeapReAlloc`, `HeapFree`, `HeapSize`, `HeapValidate`, and
+    `GetProcessHeap` define the flag validation and return shapes mirrored by
+    the virtual heap model.
+  - `VirtualAlloc`/`VirtualFree` signatures and `MEM_*` flag shapes come from
+    the CE MIPS SDK headers; the Rust model keeps page-granular virtual ranges
+    until Unicorn mapping is connected.
+
 - GWE message queue surface:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h`
   - Declares `GetMessageW_I`, `GetMessageWNoWait_I`, `PeekMessageW_I`,
     `PostMessageW_I`, and `SendMessageW_*` queue entry points.
+  - Raw dispatcher support now writes and reads CE-style `MSG` memory records
+    for `GetMessageW`, `PeekMessageW`, and `DispatchMessageW`.
 
 - GWE window surface:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp`
