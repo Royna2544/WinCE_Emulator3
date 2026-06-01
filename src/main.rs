@@ -84,7 +84,7 @@ fn main() -> Result<()> {
     println!("  bootstrap waveOut: {wave_id}");
     println!("  memory regions: {}", cpu.memory().regions().count());
 
-    if let Some(image_path) = args.image {
+    let pe_image = if let Some(image_path) = args.image {
         let image = PeImage::inspect(image_path)?;
         println!(
             "  PE image: {} ({} bytes, lfanew=0x{:08x}, machine=0x{:04x})",
@@ -102,10 +102,26 @@ fn main() -> Result<()> {
                 .map_or(0, |exports| exports.functions.len()),
             image.base_relocations.len()
         );
+        Some(image)
+    } else {
+        None
+    };
+
+    if let Some(image) = pe_image.as_ref() {
+        cpu.load_pe_image(image)?;
+        println!(
+            "  import traps: {} COREDLL slots patched",
+            cpu.import_traps().len()
+        );
     }
 
     if args.run_cpu {
-        cpu.run_until_import_trap()?;
+        if let Err(err) = cpu.run_until_import_trap(&mut kernel) {
+            if let Some(snapshot) = cpu.last_debug_snapshot() {
+                eprintln!("  Unicorn debug: {snapshot}");
+            }
+            return Err(err);
+        }
     }
 
     Ok(())

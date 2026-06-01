@@ -61,4 +61,14 @@ impl MemoryMap {
     pub fn regions(&self) -> impl Iterator<Item = &MemoryRegion> {
         self.regions.values()
     }
+
+    pub fn contains_range(&self, base: u32, size: u32) -> bool {
+        let Some(end) = base.checked_add(size) else {
+            return false;
+        };
+        self.regions.values().any(|region| {
+            let region_end = region.base.saturating_add(region.size);
+            base >= region.base && end <= region_end
+        })
+    }
 }

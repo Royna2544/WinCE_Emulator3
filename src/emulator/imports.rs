@@ -1,0 +1,294 @@
+use std::collections::BTreeMap;
+
+use crate::{
+    ce::{
+        coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
+        kernel::CeKernel,
+    },
+    error::{Error, Result},
+    pe::{ImportBy, ImportDescriptor, PeImage},
+};
+
+pub const IMPORT_TRAP_BASE: u32 = 0x7fff_0000;
+pub const IMPORT_TRAP_STRIDE: u32 = 0x10;
+pub const IMPORT_TRAP_PAGE_SIZE: u32 = 0x0001_0000;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportTrap {
+    pub address: u32,
+    pub module_name: String,
+    pub ordinal: Option<u32>,
+    pub name: Option<String>,
+    pub iat_va: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ImportTrapTable {
+    traps: BTreeMap<u32, ImportTrap>,
+}
+
+impl ImportTrapTable {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn len(&self) -> usize {
+        self.traps.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.traps.is_empty()
+    }
+
+    pub fn traps(&self) -> impl Iterator<Item = &ImportTrap> {
+        self.traps.values()
+    }
+
+    pub fn trap_at(&self, address: u32) -> Option<&ImportTrap> {
+        self.traps.get(&address)
+    }
+
+    pub fn merge(&mut self, other: Self) {
+        self.traps.extend(other.traps);
+    }
+
+    pub fn dispatch_trap<M: CoredllGuestMemory>(
+        &self,
+        kernel: &mut CeKernel,
+        memory: &mut M,
+        thread_id: u32,
+        address: u32,
+        args: [u32; 4],
+    ) -> Option<u32> {
+        let trap = self.trap_at(address)?;
+        let ordinal = trap.ordinal?;
+        let table = CoredllExportTable::default();
+        Some(dispatch_return_to_u32(
+            table.dispatch_raw_ordinal_with_memory(kernel, memory, thread_id, ordinal, args),
+        ))
+    }
+
+    fn insert(&mut self, trap: ImportTrap) {
+        self.traps.insert(trap.address, trap);
+    }
+}
+
+pub fn patch_pe_coredll_imports(
+    image: &PeImage,
+    mapped: &mut [u8],
+    exports: &CoredllExportTable,
+    trap_base: u32,
+) -> Result<ImportTrapTable> {
+    patch_coredll_imports(
+        mapped,
+        image.image_base(),
+        &image.imports,
+        exports,
+        trap_base,
+    )
+}
+
+pub fn patch_coredll_imports(
+    mapped: &mut [u8],
+    image_base: u32,
+    imports: &[ImportDescriptor],
+    exports: &CoredllExportTable,
+    trap_base: u32,
+) -> Result<ImportTrapTable> {
+    let mut table = ImportTrapTable::new();
+    let mut next_address = trap_base;
+
+    for descriptor in imports {
+        if !is_coredll_module(&descriptor.module_name) {
+            continue;
+        }
+        for thunk in &descriptor.imports {
+            let (ordinal, name) = match &thunk.import {
+                ImportBy::Ordinal(ordinal) => (Some(u32::from(*ordinal)), None),
+                ImportBy::Name { name, .. } => (
+                    exports.resolve_name(name).map(|export| export.ordinal),
+                    Some(name.clone()),
+                ),
+            };
+            let iat_va = image_base.wrapping_add(thunk.iat_rva);
+            write_mapped_u32(mapped, thunk.iat_rva, next_address)?;
+            table.insert(ImportTrap {
+                address: next_address,
+                module_name: descriptor.module_name.clone(),
+                ordinal,
+                name,
+                iat_va,
+            });
+            next_address = next_address
+                .checked_add(IMPORT_TRAP_STRIDE)
+                .ok_or_else(|| Error::InvalidArgument("import trap address overflow".to_owned()))?;
+            if next_address >= trap_base.saturating_add(IMPORT_TRAP_PAGE_SIZE) {
+                return Err(Error::InvalidArgument(
+                    "COREDLL import trap page is full".to_owned(),
+                ));
+            }
+        }
+    }
+
+    Ok(table)
+}
+
+pub fn import_trap_code_page(table: &ImportTrapTable) -> Vec<u8> {
+    let mut page = vec![0; IMPORT_TRAP_PAGE_SIZE as usize];
+    for trap in table.traps() {
+        let Some(offset) = trap.address.checked_sub(IMPORT_TRAP_BASE) else {
+            continue;
+        };
+        let offset = offset as usize;
+        if offset + 8 > page.len() {
+            continue;
+        }
+        page[offset..offset + 4].copy_from_slice(&0x03e0_0008u32.to_le_bytes());
+        page[offset + 4..offset + 8].copy_from_slice(&0u32.to_le_bytes());
+    }
+    page
+}
+
+fn dispatch_return_to_u32(dispatch: CoredllDispatch) -> u32 {
+    match dispatch {
+        CoredllDispatch::Returned { value, .. } => coredll_value_to_u32(value),
+        CoredllDispatch::Stubbed { stub, .. } => stub.return_value,
+        CoredllDispatch::UnresolvedOrdinal(_)
+        | CoredllDispatch::UnresolvedName(_)
+        | CoredllDispatch::Unimplemented { .. }
+        | CoredllDispatch::OrdinalMismatch { .. } => 0,
+    }
+}
+
+fn coredll_value_to_u32(value: CoredllValue) -> u32 {
+    match value {
+        CoredllValue::Bool(value) => u32::from(value),
+        CoredllValue::U32(value) | CoredllValue::Handle(value) | CoredllValue::MmResult(value) => {
+            value
+        }
+        CoredllValue::MmOpen { status, handle } => {
+            if status == 0 {
+                handle.unwrap_or(0)
+            } else {
+                status
+            }
+        }
+        CoredllValue::FileIo(value) => u32::from(value.success),
+        CoredllValue::DeviceIoControl(value) => u32::from(value.success),
+        CoredllValue::RegOpen(value) => value.status,
+        CoredllValue::RegQuery(value) => value.status,
+        CoredllValue::CeMath(value) => cemath_value_to_u32(value),
+        CoredllValue::Bytes(_)
+        | CoredllValue::String(_)
+        | CoredllValue::OptionalMessage(_)
+        | CoredllValue::MessagePump(_) => 0,
+    }
+}
+
+fn cemath_value_to_u32(value: crate::ce::cemath::CeMathValue) -> u32 {
+    match value {
+        crate::ce::cemath::CeMathValue::I32(value) | crate::ce::cemath::CeMathValue::Cmp(value) => {
+            value as u32
+        }
+        crate::ce::cemath::CeMathValue::U32(value) => value,
+        crate::ce::cemath::CeMathValue::I64(value) => value as u32,
+        crate::ce::cemath::CeMathValue::U64(value) => value as u32,
+        crate::ce::cemath::CeMathValue::F32(value) => value.to_bits(),
+        crate::ce::cemath::CeMathValue::F64(value) => value.to_bits() as u32,
+        crate::ce::cemath::CeMathValue::Div { quot, .. } => quot as u32,
+        crate::ce::cemath::CeMathValue::Frexp { fraction, .. } => fraction.to_bits() as u32,
+        crate::ce::cemath::CeMathValue::Modf { fraction, .. } => fraction.to_bits() as u32,
+        crate::ce::cemath::CeMathValue::DivideByZero => 0,
+    }
+}
+
+fn is_coredll_module(module_name: &str) -> bool {
+    module_name.eq_ignore_ascii_case("coredll.dll") || module_name.eq_ignore_ascii_case("coredll")
+}
+
+fn write_mapped_u32(mapped: &mut [u8], rva: u32, value: u32) -> Result<()> {
+    let offset = rva as usize;
+    let end = offset
+        .checked_add(4)
+        .ok_or_else(|| Error::InvalidArgument("IAT write overflow".to_owned()))?;
+    let slot = mapped.get_mut(offset..end).ok_or_else(|| {
+        Error::InvalidArgument(format!("IAT RVA 0x{rva:08x} is outside mapped image"))
+    })?;
+    slot.copy_from_slice(&value.to_le_bytes());
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pe::ImportThunk;
+
+    #[test]
+    fn patches_coredll_iat_to_trap_addresses() {
+        let imports = vec![ImportDescriptor {
+            module_name: "COREDLL.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "GetTickCount".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Ordinal(461),
+                },
+            ],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_coredll_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+
+        assert_eq!(table.len(), 2);
+        assert_eq!(
+            u32::from_le_bytes(mapped[0x3000..0x3004].try_into().unwrap()),
+            IMPORT_TRAP_BASE
+        );
+        assert_eq!(
+            u32::from_le_bytes(mapped[0x3004..0x3008].try_into().unwrap()),
+            IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE
+        );
+        assert_eq!(
+            table.trap_at(IMPORT_TRAP_BASE).unwrap().ordinal,
+            Some(crate::ce::coredll_ordinals::ORD_GET_TICK_COUNT)
+        );
+    }
+
+    #[test]
+    fn trap_page_contains_mips_return_stubs() {
+        let mut table = ImportTrapTable::new();
+        table.insert(ImportTrap {
+            address: IMPORT_TRAP_BASE,
+            module_name: "COREDLL.dll".to_owned(),
+            ordinal: Some(1),
+            name: None,
+            iat_va: 0x4000,
+        });
+
+        let page = import_trap_code_page(&table);
+        assert_eq!(
+            u32::from_le_bytes(page[0..4].try_into().unwrap()),
+            0x03e0_0008
+        );
+        assert_eq!(u32::from_le_bytes(page[4..8].try_into().unwrap()), 0);
+    }
+}
