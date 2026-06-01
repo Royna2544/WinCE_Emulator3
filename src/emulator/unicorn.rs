@@ -15,6 +15,7 @@ use crate::{
 pub struct UnicornMips {
     memory: MemoryMap,
     entry: Option<u32>,
+    stack_top: Option<u32>,
     mapped_blobs: Vec<MappedBlob>,
     import_traps: ImportTrapTable,
     last_debug: Option<UnicornDebugSnapshot>,
@@ -49,6 +50,7 @@ impl UnicornMips {
         Ok(Self {
             memory: MemoryMap::default(),
             entry: None,
+            stack_top: None,
             mapped_blobs: Vec::new(),
             import_traps: ImportTrapTable::new(),
             last_debug: None,
@@ -106,6 +108,20 @@ impl UnicornMips {
                 "ce-import-traps",
             )?;
         }
+        let stack_size = align_up_4k(image.optional_header.size_of_stack_reserve.max(0x10000))?;
+        let stack_top = IMPORT_TRAP_BASE
+            .checked_sub(0x10000)
+            .ok_or_else(|| Error::InvalidArgument("guest stack top underflow".to_owned()))?;
+        let stack_base = stack_top
+            .checked_sub(stack_size)
+            .ok_or_else(|| Error::InvalidArgument("guest stack base underflow".to_owned()))?;
+        self.map_region(
+            stack_base,
+            stack_size,
+            MemoryPerms::READ | MemoryPerms::WRITE,
+            "guest-stack",
+        )?;
+        self.stack_top = Some(stack_top);
         self.entry = Some(image.entry_point_va());
         self.import_traps.merge(traps);
         self.mapped_blobs.push(MappedBlob {
@@ -165,6 +181,10 @@ impl UnicornMips {
         for blob in &self.mapped_blobs {
             uc.mem_write(u64::from(blob.base), &blob.bytes)
                 .map_err(|err| Error::Backend(format!("write 0x{:08x}: {err:?}", blob.base)))?;
+        }
+        if let Some(stack_top) = self.stack_top {
+            uc.reg_write(RegisterMIPS::SP, u64::from(stack_top))
+                .map_err(|err| Error::Backend(format!("set guest SP: {err:?}")))?;
         }
 
         let traps = self.import_traps.clone();
