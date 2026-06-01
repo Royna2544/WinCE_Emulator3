@@ -3,6 +3,7 @@ use std::{collections::BTreeMap, fs, path::Path};
 use crate::{
     ce::{
         audio::{MmResult, WaveBuffer, WaveFormat},
+        cemath::{CeMathCall, CeMathValue},
         devices::DeviceIoControlResult,
         file::FileIoResult,
         gwe::{Message, PeekFlags},
@@ -14,6 +15,8 @@ use crate::{
 
 pub const DEFAULT_CORE_COMMON_DEF: &str =
     "/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/core_common.def";
+pub const DEFAULT_CRT_ORDINALS_H: &str =
+    "/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/INC/crt_ordinals.h";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoredllExport {
@@ -38,7 +41,7 @@ pub enum EventModifyAction {
     Pulse,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CoredllCall {
     RegCloseKey {
         hkey: HKey,
@@ -206,6 +209,7 @@ pub enum CoredllCall {
         id: u32,
         volume: u32,
     },
+    CeMath(CeMathCall),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -226,6 +230,7 @@ pub enum CoredllValue {
         status: MmResult,
         handle: Option<u32>,
     },
+    CeMath(CeMathValue),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -253,7 +258,11 @@ impl CoredllExportTable {
             path: path.to_path_buf(),
             source,
         })?;
-        Ok(Self::from_core_common_def(&text))
+        let mut table = Self::from_core_common_def(&text);
+        if path.ends_with("core_common.def") {
+            table.insert_cemath_exports();
+        }
+        Ok(table)
     }
 
     pub fn from_core_common_def(text: &str) -> Self {
@@ -341,6 +350,20 @@ impl CoredllExportTable {
             .push(index);
         self.exports.push(export);
     }
+
+    fn insert_cemath_exports(&mut self) {
+        for (name, ordinal) in CEMATH_EXPORTS {
+            if self.resolve_name(name).is_none() {
+                self.insert(CoredllExport {
+                    name: (*name).to_owned(),
+                    target: None,
+                    ordinal: *ordinal,
+                    noname: false,
+                    line: 0,
+                });
+            }
+        }
+    }
 }
 
 impl CoredllExport {
@@ -396,6 +419,7 @@ impl CoredllCall {
             Self::WaveOutClose { .. } => "waveOutClose",
             Self::WaveOutGetVolume { .. } => "waveOutGetVolume",
             Self::WaveOutSetVolume { .. } => "waveOutSetVolume",
+            Self::CeMath(call) => call.export_name(),
         }
     }
 }
@@ -614,6 +638,7 @@ fn dispatch_resolved(
         CoredllCall::WaveOutSetVolume { id, volume } => {
             CoredllValue::MmResult(kernel.audio.wave_out_set_volume(id, volume))
         }
+        CoredllCall::CeMath(call) => CoredllValue::CeMath(kernel.math.eval(call)),
     };
 
     CoredllDispatch::Returned { export, value }
@@ -691,6 +716,63 @@ fn extract_export_target(before_ordinal: &str) -> Option<String> {
 fn normalize_name(name: &str) -> String {
     name.to_ascii_lowercase()
 }
+
+const CEMATH_EXPORTS: &[(&str, u32)] = &[
+    ("abs", 988),
+    ("acos", 989),
+    ("asin", 990),
+    ("atan", 991),
+    ("atan2", 992),
+    ("ceil", 999),
+    ("cos", 1004),
+    ("cosh", 1005),
+    ("div", 1007),
+    ("exp", 1009),
+    ("fabs", 1010),
+    ("floor", 1013),
+    ("fmod", 1014),
+    ("frexp", 1019),
+    ("labs", 1030),
+    ("ldexp", 1031),
+    ("ldiv", 1032),
+    ("log", 1033),
+    ("log10", 1034),
+    ("modf", 1048),
+    ("pow", 1051),
+    ("sin", 1058),
+    ("sinh", 1059),
+    ("sqrt", 1060),
+    ("tan", 1075),
+    ("tanh", 1076),
+    ("__ll_rshift", 2002),
+    ("__ll_lshift", 2003),
+    ("__ll_mul", 2004),
+    ("__ll_div", 2005),
+    ("__ll_rem", 2006),
+    ("__ull_rshift", 2011),
+    ("__ull_div", 2012),
+    ("__ull_rem", 2013),
+    ("__fpadd", 2022),
+    ("__dpadd", 2023),
+    ("__fpsub", 2024),
+    ("__dpsub", 2025),
+    ("__fpmul", 2026),
+    ("__dpmul", 2027),
+    ("__fpdiv", 2028),
+    ("__dpdiv", 2029),
+    ("__fptoli", 2030),
+    ("__fptoul", 2031),
+    ("__litofp", 2032),
+    ("__ultofp", 2033),
+    ("__dptoli", 2034),
+    ("__dptoul", 2035),
+    ("__litodp", 2036),
+    ("__ultodp", 2037),
+    ("__fptodp", 2038),
+    ("__dptofp", 2039),
+    ("__fpcmp", 2040),
+    ("__dpcmp", 2041),
+];
 
 #[cfg(test)]
 mod tests {

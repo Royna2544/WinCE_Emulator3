@@ -12,6 +12,8 @@ shortcuts:
   calls
 - COREDLL ordinal parser/dispatcher backed by the CE `core_common.def` export
   list
+- simple CE CRT/math dispatch for common floating-point math and MIPS helper
+  routines
 - host-backed file API with contained guest-path translation
 - device namespace loading from `serial_devices.json`
 - kernel object handles

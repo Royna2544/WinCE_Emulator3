@@ -3,6 +3,7 @@ use wince_emulation_v3::{
     Result,
     ce::{
         audio::{MMSYSERR_NOERROR, WaveBuffer, WaveFormat, WaveOutState},
+        cemath::{CeMathBinaryF64, CeMathCall, CeMathUnaryF64, CeMathValue},
         coredll::{
             CoredllCall, CoredllDispatch, CoredllExportTable, CoredllValue,
             DEFAULT_CORE_COMMON_DEF, EventModifyAction,
@@ -101,17 +102,51 @@ fn boots_and_smokes_basic_ce_subsystems() -> Result<()> {
 fn coredll_table_reads_full_core_common_def_ordinals() -> Result<()> {
     let table = CoredllExportTable::from_core_common_def_path(DEFAULT_CORE_COMMON_DEF)?;
 
-    assert_eq!(table.export_count(), 1698);
+    assert_eq!(table.export_count(), 1752);
     assert_eq!(table.resolve_name("CreateFileW").unwrap().ordinal, 168);
     assert_eq!(table.resolve_name("RegOpenKeyExW").unwrap().ordinal, 461);
     assert_eq!(table.resolve_name("waveOutOpen").unwrap().ordinal, 399);
     assert_eq!(table.resolve_name("GetMessageW").unwrap().ordinal, 861);
     assert_eq!(table.resolve_name("DispatchMessageW").unwrap().ordinal, 859);
+    assert_eq!(table.resolve_name("sqrt").unwrap().ordinal, 1060);
+    assert_eq!(table.resolve_name("__ll_div").unwrap().ordinal, 2005);
     assert_eq!(table.resolve_ordinal(168).unwrap().name, "CreateFileW");
     assert_eq!(table.exports_by_ordinal(2867).len(), 1);
     assert_eq!(
         table.resolve_ordinal(2867).unwrap().name,
         "UserCallWindowProc"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn cemath_evaluates_crt_and_mips_helper_calls() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let kernel = CeKernel::boot(config);
+
+    assert_eq!(
+        kernel.math.eval(CeMathCall::UnaryF64 {
+            op: CeMathUnaryF64::Sqrt,
+            value: 144.0,
+        }),
+        CeMathValue::F64(12.0)
+    );
+    assert_eq!(
+        kernel.math.eval(CeMathCall::BinaryF64 {
+            op: CeMathBinaryF64::Fmod,
+            lhs: 17.5,
+            rhs: 5.0,
+        }),
+        CeMathValue::F64(2.5)
+    );
+    assert_eq!(
+        kernel.math.eval(CeMathCall::LlDiv { lhs: -21, rhs: 2 }),
+        CeMathValue::I64(-10)
+    );
+    assert_eq!(
+        kernel.math.eval(CeMathCall::UllRem { lhs: 22, rhs: 5 }),
+        CeMathValue::U64(2)
     );
 
     Ok(())
@@ -265,6 +300,58 @@ fn coredll_dispatcher_routes_ordinals_to_virtual_win32_framework() -> Result<()>
     assert!(matches!(
         unimplemented,
         CoredllDispatch::Unimplemented { export } if export.name == "InitializeCriticalSection"
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_dispatcher_routes_cemath_ordinals() -> Result<()> {
+    let table = CoredllExportTable::from_core_common_def_path(DEFAULT_CORE_COMMON_DEF)?;
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+
+    assert!(matches!(
+        table.dispatch_by_ordinal(
+            &mut kernel,
+            1060,
+            CoredllCall::CeMath(CeMathCall::UnaryF64 {
+                op: CeMathUnaryF64::Sqrt,
+                value: 81.0,
+            }),
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::F64(9.0)),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_by_ordinal(
+            &mut kernel,
+            1051,
+            CoredllCall::CeMath(CeMathCall::BinaryF64 {
+                op: CeMathBinaryF64::Pow,
+                lhs: 3.0,
+                rhs: 4.0,
+            }),
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::F64(81.0)),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_by_ordinal(
+            &mut kernel,
+            2005,
+            CoredllCall::CeMath(CeMathCall::LlDiv { lhs: -21, rhs: 2 }),
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::I64(-10)),
+            ..
+        }
     ));
 
     Ok(())

@@ -47,6 +47,13 @@ anchors, not app-specific shortcuts.
     `waveOutOpen @399`.
   - Parsed by `src/ce/coredll.rs` for name/ordinal dispatch coverage.
 
+- COREDLL CRT/math exports:
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/CRT/corelib1.def`
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/INC/crt_ordinals.h`
+  - Define common CRT math exports such as `sqrt @1060`, `pow @1051`, and MIPS
+    helpers such as `__ll_div @2005`.
+
 ## MFC CE Reference Source
 
 - MFC thread pump:

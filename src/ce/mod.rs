@@ -1,4 +1,5 @@
 pub mod audio;
+pub mod cemath;
 pub mod coredll;
 pub mod devices;
 pub mod file;

@@ -38,6 +38,12 @@
   name or ordinal.
 - Added a COREDLL dispatcher that routes implemented exports to the virtual
   Win32/CE framework and reports unresolved or unimplemented ordinals explicitly.
+- Added a simple `cemath` subsystem for common CE CRT math exports and MIPS
+  helper routines, including `sqrt`, `pow`, `fmod`, `div`, `ldiv`, `__ll_div`,
+  `__ll_mul`, soft-float add/sub/mul/div, conversion, and compare helpers.
+- COREDLL dispatch table now augments `core_common.def` parsing with selected
+  CRT/math ordinals from `crt_ordinals.h`; current table coverage is 1,752
+  export entries.
 
 ## Current State
 

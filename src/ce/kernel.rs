@@ -1,6 +1,7 @@
 use crate::{
     ce::{
         audio::{AudioSystem, MmResult, WaveBuffer, WaveFormat},
+        cemath::CeMath,
         devices::{DeviceIoControlResult, DeviceNamespace},
         file::{FileIoResult, GENERIC_READ, GENERIC_WRITE, HostFileSystem, OPEN_EXISTING},
         gwe::{Gwe, Message},
@@ -27,6 +28,7 @@ pub struct CeKernel {
     pub handles: HandleTable,
     pub gwe: Gwe,
     pub audio: AudioSystem,
+    pub math: CeMath,
     pub timers: TimerSystem,
 }
 
@@ -39,6 +41,7 @@ impl CeKernel {
             handles: HandleTable::default(),
             gwe: Gwe::default(),
             audio: AudioSystem::default(),
+            math: CeMath,
             timers: TimerSystem::default(),
         }
     }
