@@ -368,10 +368,27 @@
   source tree under `target/wince-fixtures/mipsii/` when local SDK env vars are
   configured. The fixture sources were adjusted for this CE SDK by defining the
   standard `TLS_OUT_OF_INDEXES` sentinel when headers omit it and by using
-  explicit `CreateEventW` calls. `001_exit` and `002_gettickcount` pass through
-  the emulator; `003_tls` now compiles and reaches runtime. Raw
-  `CreateEventW @495` is wired to the existing kernel event objects, and the
-  current fixture frontier is raw `CreateThread @492`/guest worker execution.
+  explicit `CreateEventW` calls. The ignored eVC4 integration command now
+  builds and runs fixtures `001_exit` through `021_rect_math` through the
+  emulator successfully. Normal `cargo test --test fixture_exes` still leaves
+  the fixture test ignored and does not require eVC4.
+- The fixture source ladder now includes focused CE API fixtures for window
+  geometry, parent/child relationships, Z-order, message queue behavior,
+  synchronous `SendMessageW`, timers, focus/enable state, coordinate mapping,
+  RECT helpers, and a system/memory/heap/local/virtual allocation plus registry
+  smoke test. The existing `011_api_storm` fixture was made eVC4/MIPSII-valid
+  by using the wide version/type of `GetVersionEx`, adding the TLS sentinel
+  fallback, and avoiding the MIPS `small` identifier trap. A manual eVC4
+  compile/link pass succeeded for `011_api_storm` and the new `012` through
+  `021` focused fixtures.
+- Core support added for the expanded eVC4 fixtures includes cooperative guest
+  `CreateThread` execution/handle signaling in the Unicorn path, executable
+  `VirtualAlloc` permissions, PE-backed string resource registration,
+  `PostQuitMessage`, CE `GetVersionExW`, RECT helper ordinals, ASCII ACP
+  conversion/case APIs, raw registry create/set/query/enum/delete/close,
+  CE `WIN32_FIND_DATAW` layout, DC/device-caps/capture APIs, `SetParent`,
+  mutable z-order for `SetWindowPos`, raw `SetTimer`/`KillTimer`, correct
+  `EnableWindow` previous-state returns, and packed `MapWindowPoints` deltas.
 
 ## Current State
 
@@ -408,9 +425,10 @@
 - Many COREDLL ordinals are classified and dispatchable but still stubbed by
   subsystem. Kernel/thread/time/sync, performance counter/frequency,
   memory/local/heap/virtual allocation,
-  raw file buffer/find marshalling, first GWE class/HWND/RECT/text/window-long/
-  focus/message pump/paint-update behavior, unplugged waveOut adapter ordinals,
-  system-info/memory status, and first resource raw ordinals have real
+  raw file buffer/find marshalling, first registry create/query/enum/delete
+  behavior, first GWE class/HWND/RECT/text/window-long/focus/capture/z-order/
+  timer/message pump/paint-update behavior, unplugged waveOut adapter ordinals,
+  system-info/memory status, and first resource/string raw ordinals have real
   CE-referenced semantics; remaining ordinals still need to be burned down
   subsystem by subsystem.
 - Remote server socket/WebSocket binding is not implemented in Rust yet; the

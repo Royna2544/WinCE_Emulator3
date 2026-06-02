@@ -25,6 +25,7 @@ These are intentionally tiny. Each fixture should test one layer or invariant be
 | `008_file_io` | `CreateFileW`, `WriteFile`, `ReadFile`, `SetFilePointer`, `CloseHandle`. |
 | `009_gdi_paint` | Basic GWE/GDI paint path: window, invalidate, `BeginPaint`, `FillRect`, `Ellipse`. |
 | `010_resource_string` | PE resources: `LoadStringW`, `.rc` string table. |
+| `011_api_storm` | Broad API storm across time, memory, strings, file, registry, thread/TLS, GWE, GDI, and messages. |
 | `012_window_geometry` | Window lifetime, visibility, `GetWindowRect`, `GetClientRect`, `MoveWindow`, `SetWindowPos`. |
 | `013_parent_child` | Parent/child ownership, child IDs, `GetParent`, `SetParent`, `GetWindow(GW_CHILD)`. |
 | `014_z_order` | Top-level Z-order traversal and `SetWindowPos(HWND_TOP/HWND_BOTTOM)`. |

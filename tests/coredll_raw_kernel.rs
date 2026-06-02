@@ -3,8 +3,9 @@ use wince_emulation_v3::{
     ce::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
-            ORD_CLOSE_HANDLE, ORD_CREATE_EVENT_W, ORD_EVENT_MODIFY, ORD_GET_LAST_ERROR,
-            ORD_GET_TICK_COUNT, ORD_INITIALIZE_CRITICAL_SECTION, ORD_INTERLOCKED_COMPARE_EXCHANGE,
+            ORD_CLOSE_HANDLE, ORD_CREATE_EVENT_W, ORD_CREATE_THREAD, ORD_EVENT_MODIFY,
+            ORD_GET_LAST_ERROR, ORD_GET_TICK_COUNT, ORD_GET_VERSION_EX_W,
+            ORD_INITIALIZE_CRITICAL_SECTION, ORD_INTERLOCKED_COMPARE_EXCHANGE,
             ORD_INTERLOCKED_EXCHANGE_ADD, ORD_INTERLOCKED_INCREMENT, ORD_LEAVE_CRITICAL_SECTION,
             ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_SET_LAST_ERROR,
             ORD_SLEEP, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION,
@@ -281,6 +282,86 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
             .dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id, ORD_SLEEP, [0],),
         CoredllDispatch::Returned {
             value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+
+    let version_info = 0x6000;
+    memory.map_words(version_info, 69);
+    memory.map_halfwords(version_info + 20, 128);
+    memory.write_word(version_info, 276);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_VERSION_EX_W,
+            [version_info],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(version_info + 4)?, 4);
+    assert_eq!(memory.read_u32(version_info + 8)?, 20);
+    assert_eq!(memory.read_u32(version_info + 16)?, 3);
+    assert_eq!(memory.read_wide_z(version_info + 20, 128), "");
+
+    let thread_id_ptr = 0x5000;
+    memory.map_words(thread_id_ptr, 1);
+    let worker_thread = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_THREAD,
+        [0, 0, 0x1234_5678, 0xabcd_0000, 0, thread_id_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateThread did not return a raw thread handle: {other:?}"),
+    };
+    assert_ne!(worker_thread, 0);
+    assert_eq!(memory.read_u32(thread_id_ptr)?, 2);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [worker_thread, 0]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_TIMEOUT),
+            ..
+        }
+    ));
+    assert!(kernel.mark_guest_thread_exited(worker_thread, 0x55));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [worker_thread, 0]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_OBJECT_0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CLOSE_HANDLE,
+            [worker_thread],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
             ..
         }
     ));

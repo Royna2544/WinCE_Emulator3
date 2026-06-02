@@ -260,6 +260,23 @@ impl CeKernel {
         self.handles.create_event(name, manual_reset, initial_state)
     }
 
+    pub fn create_guest_thread(
+        &mut self,
+        start_address: u32,
+        parameter: u32,
+        suspended: bool,
+    ) -> (u32, u32) {
+        let thread_id = self.threads.allocate_guest_thread_id();
+        let handle = self
+            .handles
+            .create_thread(thread_id, start_address, parameter, suspended);
+        (handle, thread_id)
+    }
+
+    pub fn mark_guest_thread_exited(&mut self, handle: u32, exit_code: u32) -> bool {
+        self.handles.mark_thread_exited(handle, exit_code)
+    }
+
     pub fn set_event(&mut self, handle: u32) -> bool {
         self.handles.set_event(handle)
     }
@@ -354,6 +371,7 @@ impl CeKernel {
     pub fn set_window_pos(
         &mut self,
         hwnd: u32,
+        insert_after: Option<u32>,
         x: i32,
         y: i32,
         width: i32,
@@ -362,7 +380,9 @@ impl CeKernel {
     ) -> bool {
         let before = self.gwe.get_window_rect(hwnd);
         let was_visible = self.gwe.is_window_visible(hwnd);
-        let moved = self.gwe.set_window_pos(hwnd, x, y, width, height, flags);
+        let moved = self
+            .gwe
+            .set_window_pos(hwnd, insert_after, x, y, width, height, flags);
         if moved {
             let after = self.gwe.get_window_rect(hwnd);
             let is_visible = self.gwe.is_window_visible(hwnd);

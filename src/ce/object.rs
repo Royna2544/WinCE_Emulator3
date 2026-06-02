@@ -15,6 +15,7 @@ pub enum KernelObject {
     Window(u32),
     WaveOut(u32),
     CriticalSection(CriticalSectionObject),
+    Thread(ThreadObject),
 }
 
 #[derive(Debug, Clone)]
@@ -45,6 +46,16 @@ pub struct FindFileObject {
 #[derive(Debug, Clone)]
 pub struct CriticalSectionObject {
     pub guest_ptr: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ThreadObject {
+    pub thread_id: u32,
+    pub start_address: u32,
+    pub parameter: u32,
+    pub exit_code: u32,
+    pub signaled: bool,
+    pub suspended: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,6 +134,32 @@ impl HandleTable {
         }))
     }
 
+    pub fn create_thread(
+        &mut self,
+        thread_id: u32,
+        start_address: u32,
+        parameter: u32,
+        suspended: bool,
+    ) -> u32 {
+        self.insert(KernelObject::Thread(ThreadObject {
+            thread_id,
+            start_address,
+            parameter,
+            exit_code: 259,
+            signaled: false,
+            suspended,
+        }))
+    }
+
+    pub fn mark_thread_exited(&mut self, handle: u32, exit_code: u32) -> bool {
+        let Ok(KernelObject::Thread(thread)) = self.get_mut(handle) else {
+            return false;
+        };
+        thread.exit_code = exit_code;
+        thread.signaled = true;
+        true
+    }
+
     pub fn set_event(&mut self, handle: u32) -> bool {
         let Ok(KernelObject::Event(event)) = self.get_mut(handle) else {
             return false;
@@ -180,6 +217,7 @@ impl HandleTable {
             | KernelObject::Window(_)
             | KernelObject::WaveOut(_)
             | KernelObject::CriticalSection(_) => WaitResult::Object0,
+            KernelObject::Thread(thread) if thread.signaled => WaitResult::Object0,
             _ if timeout_ms == 0 => WaitResult::Timeout,
             _ => WaitResult::Timeout,
         }

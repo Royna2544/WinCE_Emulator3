@@ -11,6 +11,7 @@ pub const ERROR_FILE_NOT_FOUND: u32 = 2;
 pub const ERROR_INVALID_HANDLE: u32 = 6;
 pub const ERROR_INVALID_PARAMETER: u32 = 87;
 pub const ERROR_MORE_DATA: u32 = 234;
+pub const ERROR_NO_MORE_ITEMS: u32 = 259;
 
 pub const HKEY_CLASSES_ROOT: HKey = 0x8000_0000;
 pub const HKEY_CURRENT_USER: HKey = 0x8000_0001;
@@ -125,6 +126,28 @@ impl Registry {
         }
     }
 
+    pub fn reg_create_key_exw(&mut self, hkey: HKey, subkey: Option<&str>) -> RegCreateResult {
+        let Some(path) = self.resolve_subkey_path(hkey, subkey) else {
+            return RegCreateResult {
+                status: ERROR_INVALID_HANDLE,
+                hkey: None,
+                disposition: 0,
+            };
+        };
+        let existed = self.keys.contains_key(&path);
+        self.keys.entry(path.clone()).or_default();
+        let handle = self.alloc_key_handle(path);
+        RegCreateResult {
+            status: ERROR_SUCCESS,
+            hkey: Some(handle),
+            disposition: if existed {
+                REG_OPENED_EXISTING_KEY
+            } else {
+                REG_CREATED_NEW_KEY
+            },
+        }
+    }
+
     pub fn reg_query_value_exw(
         &self,
         hkey: HKey,
@@ -180,6 +203,70 @@ impl Registry {
 
         self.set_value(&path, value_name.unwrap_or_default(), value);
         ERROR_SUCCESS
+    }
+
+    pub fn reg_enum_value_w(
+        &self,
+        hkey: HKey,
+        index: u32,
+        name_capacity: Option<usize>,
+        data_capacity: Option<usize>,
+    ) -> RegEnumValueResult {
+        let Some(path) = self.resolve_handle_path(hkey) else {
+            return RegEnumValueResult::status(ERROR_INVALID_HANDLE);
+        };
+        let Some((name, value)) = self
+            .keys
+            .get(path)
+            .map(|key| key.values.iter().collect::<Vec<_>>())
+            .and_then(|values| values.get(index as usize).copied())
+        else {
+            return RegEnumValueResult::status(ERROR_NO_MORE_ITEMS);
+        };
+        let data = value.to_reg_bytes();
+        if name_capacity.is_some_and(|capacity| capacity <= name.encode_utf16().count()) {
+            return RegEnumValueResult {
+                status: ERROR_MORE_DATA,
+                name: None,
+                value_type: Some(value.ty.to_win32_type()),
+                required_name_chars: name.encode_utf16().count() as u32,
+                required_data_len: data.len() as u32,
+                data: None,
+            };
+        }
+        if data_capacity.is_some_and(|capacity| capacity < data.len()) {
+            return RegEnumValueResult {
+                status: ERROR_MORE_DATA,
+                name: Some(name.clone()),
+                value_type: Some(value.ty.to_win32_type()),
+                required_name_chars: name.encode_utf16().count() as u32,
+                required_data_len: data.len() as u32,
+                data: None,
+            };
+        }
+        RegEnumValueResult {
+            status: ERROR_SUCCESS,
+            name: Some(name.clone()),
+            value_type: Some(value.ty.to_win32_type()),
+            required_name_chars: name.encode_utf16().count() as u32,
+            required_data_len: data.len() as u32,
+            data: data_capacity.map(|_| data),
+        }
+    }
+
+    pub fn reg_delete_value_w(&mut self, hkey: HKey, value_name: Option<&str>) -> u32 {
+        let Some(path) = self.resolve_handle_path(hkey).map(str::to_owned) else {
+            return ERROR_INVALID_HANDLE;
+        };
+        let value_name = normalize_value_name(value_name.unwrap_or_default());
+        let Some(key) = self.keys.get_mut(&path) else {
+            return ERROR_INVALID_HANDLE;
+        };
+        if key.values.remove(&value_name).is_some() {
+            ERROR_SUCCESS
+        } else {
+            ERROR_FILE_NOT_FOUND
+        }
     }
 
     pub fn reg_close_key(&mut self, hkey: HKey) -> u32 {
@@ -289,6 +376,13 @@ pub struct RegOpenResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegCreateResult {
+    pub status: u32,
+    pub hkey: Option<HKey>,
+    pub disposition: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegQueryValueResult {
     pub status: u32,
     pub value_type: Option<u32>,
@@ -302,6 +396,29 @@ impl RegQueryValueResult {
             status,
             value_type: None,
             required_len: 0,
+            data: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegEnumValueResult {
+    pub status: u32,
+    pub name: Option<String>,
+    pub value_type: Option<u32>,
+    pub required_name_chars: u32,
+    pub required_data_len: u32,
+    pub data: Option<Vec<u8>>,
+}
+
+impl RegEnumValueResult {
+    fn status(status: u32) -> Self {
+        Self {
+            status,
+            name: None,
+            value_type: None,
+            required_name_chars: 0,
+            required_data_len: 0,
             data: None,
         }
     }
@@ -403,6 +520,9 @@ fn normalize_path(path: &str) -> String {
 fn normalize_value_name(name: &str) -> String {
     name.to_ascii_lowercase()
 }
+
+const REG_CREATED_NEW_KEY: u32 = 1;
+const REG_OPENED_EXISTING_KEY: u32 = 2;
 
 fn predefined_root_path(hkey: HKey) -> Option<&'static str> {
     match hkey {

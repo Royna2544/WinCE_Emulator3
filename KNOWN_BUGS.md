@@ -69,31 +69,20 @@
     `QueryPerformanceCounter`, `QueryPerformanceFrequency`, and raw
     `CreateEventW`,
     local/heap/virtual memory tranche, raw file buffer/find marshalling, first
-    class/HWND/RECT/message GWE tranche, system-info/memory-status helpers,
-    first resource tranche, and the Unicorn-only SDK MFC `_setjmp`/`longjmp`
-    import control-flow path have real semantics.
+    registry create/query/enum/delete tranche, first class/HWND/RECT/message/
+    focus/capture/z-order/timer GWE tranche, system-info/memory-status helpers,
+    first resource/string tranche, and the Unicorn-only SDK MFC
+    `_setjmp`/`longjmp` import control-flow path have real semantics.
   - Evidence: `src/ce/coredll.rs` reports implemented-vs-stubbed ordinal plan
     entries and returns subsystem stub policies for remaining exports. Raw
     tests now cover critical sections, interlocked operations, TLS/last-error,
     time, raw event creation/event modify/wait, close-handle,
     heap/local/virtual allocation, raw
-    file buffers/cursor/size/flush/finds, class registration/window lookup,
-    HWND rectangles/points/text/window-long/focus/messages/paint updates,
-    unplugged waveOut adapter marshalling, resources, and COM state.
+    file buffers/cursor/size/flush/finds, registry create/query/enumeration,
+    class registration/window lookup, HWND rectangles/points/text/window-long/
+    focus/capture/z-order/timers/messages/paint updates, unplugged waveOut
+    adapter marshalling, resources, and COM state.
   - Status: active ordinal-by-ordinal implementation work.
-
-- Ignored eVC4 fixtures now reach the first guest-thread runtime gap.
-  - Symptom: `cargo test --features "unicorn evc4-fixtures" --test fixture_exes
-    -- --ignored --nocapture` builds and runs `001_exit` and
-    `002_gettickcount`, then `003_tls` exits with `0x00001005` after waiting
-    for a worker-thread event.
-  - Evidence: the fixture source now compiles as CE MIPSII source under eVC4
-    after adding a `TLS_OUT_OF_INDEXES` fallback and explicit `CreateEventW`.
-    The latest fixture trace shows raw `CreateEventW @495` returning a real
-    handle, then raw `CreateThread @492` returning `0xffffffff`; the worker
-    does not execute, so `WaitForSingleObject @497` returns `WAIT_TIMEOUT`.
-  - Status: active; next runtime work is real raw `CreateThread`/thread handle
-    behavior, not more fixture source portability.
 
 - External DLL import traps are launch stubs, not final DLL implementations.
   - Symptom: commctrl, WINSOCK, and OLE imports can be patched to trap
@@ -105,13 +94,15 @@
     emulator `Afx*` return shim.
   - Status: active launch-enabling diagnostic layer for non-MFC external DLLs.
 
-- PE resources are not loaded into `ResourceSystem` yet.
+- PE resources are only partially loaded into `ResourceSystem`.
   - Symptom: resource API behavior works for registered virtual resources and
-    strings, but mapped PE resource directory data is not wired to
-    `FindResourceW`, `LoadResource`, `SizeofResource`, or `LoadStringW`.
-  - Evidence: `src/ce/resource.rs` has HRSRC/HGLOBAL-like state, but
-    `src/pe/mod.rs` does not populate it.
-  - Status: next PE/resource integration step.
+    PE-backed string tables, but icon/bitmap/dialog/menu resource directory
+    data is not yet wired to `FindResourceW`, `LoadResource`, or
+    `SizeofResource`.
+  - Evidence: `src/ce/resource.rs` has HRSRC/HGLOBAL-like state and
+    `src/pe/mod.rs` now parses string-table resources for `LoadStringW`, but
+    the rest of the PE resource tree is not populated into the resource system.
+  - Status: next PE/resource integration step beyond strings.
 
 - Remote API has no Rust socket transport yet.
   - Symptom: remote touch/key/GPS/audio/status behavior exists as emulator API

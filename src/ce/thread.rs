@@ -21,9 +21,19 @@ pub struct ThreadSystem {
     last_error_by_thread: BTreeMap<u32, u32>,
     tls_by_thread: BTreeMap<u32, BTreeMap<u32, u32>>,
     allocated_tls_slots: BTreeSet<u32>,
+    next_guest_thread_id: u32,
 }
 
 impl ThreadSystem {
+    pub fn allocate_guest_thread_id(&mut self) -> u32 {
+        if self.next_guest_thread_id < 2 {
+            self.next_guest_thread_id = 2;
+        }
+        let thread_id = self.next_guest_thread_id;
+        self.next_guest_thread_id = self.next_guest_thread_id.saturating_add(1);
+        thread_id
+    }
+
     pub fn get_last_error(&self, thread_id: u32) -> u32 {
         self.last_error_by_thread
             .get(&thread_id)

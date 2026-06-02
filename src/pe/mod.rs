@@ -174,6 +174,13 @@ pub struct BaseRelocationEntry {
     pub offset: u16,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeResourceString {
+    pub id: u32,
+    pub data_rva: u32,
+    pub text: String,
+}
+
 impl PeImage {
     pub fn inspect(path: impl AsRef<Path>) -> Result<Self> {
         let path_ref = path.as_ref();
@@ -255,6 +262,52 @@ impl PeImage {
 
     pub fn data_directory(&self, index: usize) -> Option<DataDirectory> {
         self.optional_header.data_directories.get(index).copied()
+    }
+
+    pub fn resource_strings(&self) -> Result<Vec<PeResourceString>> {
+        const RT_STRING: u32 = 6;
+
+        let Some(directory) = self.data_directory(IMAGE_DIRECTORY_ENTRY_RESOURCE) else {
+            return Ok(Vec::new());
+        };
+        if directory.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for type_entry in self.resource_directory_entries(directory.virtual_address)? {
+            if type_entry.id != Some(RT_STRING) || !type_entry.is_directory {
+                continue;
+            }
+            let name_dir_rva = directory
+                .virtual_address
+                .checked_add(type_entry.offset)
+                .ok_or_else(|| pe_error(&self.path, "resource type offset overflow"))?;
+            for name_entry in self.resource_directory_entries(name_dir_rva)? {
+                let Some(block_id) = name_entry.id else {
+                    continue;
+                };
+                if !name_entry.is_directory {
+                    continue;
+                }
+                let lang_dir_rva = directory
+                    .virtual_address
+                    .checked_add(name_entry.offset)
+                    .ok_or_else(|| pe_error(&self.path, "resource name offset overflow"))?;
+                for lang_entry in self.resource_directory_entries(lang_dir_rva)? {
+                    if lang_entry.is_directory {
+                        continue;
+                    }
+                    let entry_rva = directory
+                        .virtual_address
+                        .checked_add(lang_entry.offset)
+                        .ok_or_else(|| pe_error(&self.path, "resource data offset overflow"))?;
+                    let data_rva = self.read_u32_rva(entry_rva)?;
+                    let size = self.read_u32_rva(rva_add(entry_rva, 4, &self.path)?)?;
+                    self.parse_string_table_block(block_id, data_rva, size, &mut out)?;
+                }
+            }
+        }
+        Ok(out)
     }
 
     pub fn section_for_rva(&self, rva: u32) -> Option<&SectionHeader> {
@@ -639,6 +692,71 @@ impl PeImage {
             .ok_or_else(|| pe_error(&self.path, format!("RVA 0x{rva:08x} has no file data")))?;
         PeReader::new(&self.path, &self.bytes).read_c_string(offset)
     }
+
+    fn resource_directory_entries(
+        &self,
+        directory_rva: u32,
+    ) -> Result<Vec<ResourceDirectoryEntry>> {
+        let named = self.read_u16_rva(rva_add(directory_rva, 12, &self.path)?)? as u32;
+        let ids = self.read_u16_rva(rva_add(directory_rva, 14, &self.path)?)? as u32;
+        let count = named.saturating_add(ids);
+        let mut entries = Vec::new();
+        let mut entry_rva = rva_add(directory_rva, 16, &self.path)?;
+        for _ in 0..count {
+            let name_or_id = self.read_u32_rva(entry_rva)?;
+            let offset_to_data = self.read_u32_rva(rva_add(entry_rva, 4, &self.path)?)?;
+            entries.push(ResourceDirectoryEntry {
+                id: (name_or_id & 0x8000_0000 == 0).then_some(name_or_id & 0xffff),
+                is_directory: offset_to_data & 0x8000_0000 != 0,
+                offset: offset_to_data & 0x7fff_ffff,
+            });
+            entry_rva = rva_add(entry_rva, 8, &self.path)?;
+        }
+        Ok(entries)
+    }
+
+    fn parse_string_table_block(
+        &self,
+        block_id: u32,
+        data_rva: u32,
+        size: u32,
+        out: &mut Vec<PeResourceString>,
+    ) -> Result<()> {
+        let mut cursor = data_rva;
+        let end = data_rva
+            .checked_add(size)
+            .ok_or_else(|| pe_error(&self.path, "resource string block overflow"))?;
+        for index in 0..16 {
+            if cursor >= end {
+                break;
+            }
+            let len = self.read_u16_rva(cursor)? as u32;
+            cursor = rva_add(cursor, 2, &self.path)?;
+            let mut units = Vec::new();
+            for _ in 0..len {
+                if cursor >= end {
+                    return Err(pe_error(&self.path, "truncated resource string"));
+                }
+                units.push(self.read_u16_rva(cursor)?);
+                cursor = rva_add(cursor, 2, &self.path)?;
+            }
+            if len != 0 {
+                out.push(PeResourceString {
+                    id: block_id.saturating_sub(1).saturating_mul(16) + index,
+                    data_rva,
+                    text: String::from_utf16_lossy(&units),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResourceDirectoryEntry {
+    id: Option<u32>,
+    is_directory: bool,
+    offset: u32,
 }
 
 fn read_mapped_u16(mapped: &[u8], rva: u32, path: &str) -> Result<u16> {

@@ -12,10 +12,10 @@
 - Continue burning down COREDLL ordinals subsystem by subsystem, replacing
   stubbed ordinal plan entries with CE/MFC/SDK-referenced semantics. Next
   likely tranche: GDI/DC/surface drawing into the virtual framebuffer,
-  PE-backed resource string/icon/bitmap loading, COM/OLE API dispatch when
-  ole32 imports are connected, more GWE menu/dialog/control raw pointer
-  marshalling, file attributes/directory metadata beyond the first
-  `FindFirstFileW` tranche, and timer/system-time structs.
+  PE-backed resource icon/bitmap loading beyond the string-resource path,
+  COM/OLE API dispatch when ole32 imports are connected, more GWE menu/dialog/
+  control raw pointer marshalling, broader file attributes/directory metadata,
+  and timer/system-time structs.
 - Continue tracing after CE `CreateWindowExW` now delivers the source-backed
   create-time `WM_CREATE` callout and CE `CallWindowProcW` enters guest
   window-procedure targets. The latest bounded snapshot still reaches SDK MFC
@@ -40,11 +40,6 @@
   adding more lifecycle messages.
 - Continue connecting SDK CE 4.2 Mipsii COREDLL CRT ordinals from `coredll.lib`
   as the launch trace demands.
-- Add CE-referenced raw `CreateThread`/thread-handle execution semantics for
-  the fixture and launch paths. The ignored eVC4 fixture ladder now compiles
-  `003_tls` and passes raw `CreateEventW`; it fails at runtime because
-  `CreateThread @492` does not run the worker thread, so the event wait times
-  out.
 - Add focused import-trap tests for Unicorn `_setjmp`/`longjmp` register/PC
   restoration once the fixture harness is wired to the existing
   `tests/test_progs/006_setjmp_longjmp` program.
@@ -55,9 +50,10 @@
 - Add import-trap argument/result marshalling tests that exercise the new raw
   heap/file/find/message/resource ordinals through decoded guest MIPS
   registers.
-- Parse PE resource directories into `ResourceSystem` so `FindResourceW` and
-  `LoadStringW` use the mapped guest image data rather than test-registered
-  virtual resources.
+- Continue PE resource directory integration beyond string tables so
+  `FindResourceW`, `LoadResource`, and `SizeofResource` can consume mapped
+  icon/bitmap/dialog/menu data rather than only test-registered virtual
+  resources and PE-backed strings.
 - When GWE/DC behavior is ready, adapt window state to the generic `Desktop`
   trait boundary without replacing CE/MFC message, class, or window semantics
   with host-window shortcuts.

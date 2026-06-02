@@ -23,6 +23,7 @@ pub struct UnicornMips {
     stack_top: Option<u32>,
     mapped_blobs: Vec<MappedBlob>,
     import_traps: ImportTrapTable,
+    resource_strings: Vec<MappedResourceString>,
     #[cfg(feature = "unicorn")]
     trampoline_ranges: Vec<(u32, u32)>,
     #[cfg(feature = "unicorn")]
@@ -220,11 +221,14 @@ const THREAD_EXIT_STUB_ADDR: u32 =
     IMPORT_TRAP_BASE + IMPORT_TRAP_PAGE_SIZE - crate::emulator::imports::IMPORT_TRAP_STRIDE;
 #[cfg(feature = "unicorn")]
 const CREATE_WINDOW_RETURN_STUB_ADDR: u32 =
+    GUEST_THREAD_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
+#[cfg(feature = "unicorn")]
+const GUEST_THREAD_RETURN_STUB_ADDR: u32 =
     THREAD_EXIT_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
 #[cfg(feature = "unicorn")]
 const WNDPROC_RETURN_STUB_ADDR: u32 =
     CREATE_WINDOW_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
-const RESERVED_IMPORT_TRAP_STUB_BYTES: u32 = crate::emulator::imports::IMPORT_TRAP_STRIDE * 3;
+const RESERVED_IMPORT_TRAP_STUB_BYTES: u32 = crate::emulator::imports::IMPORT_TRAP_STRIDE * 4;
 #[cfg(feature = "unicorn")]
 const CREATESTRUCTW_SIZE: u32 = 48;
 #[cfg(feature = "unicorn")]
@@ -265,6 +269,24 @@ struct PendingWndProcReturn {
     class_name: Option<String>,
 }
 
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingGuestThreadReturn {
+    creator_thread_id: u32,
+    worker_thread_id: u32,
+    thread_handle: u32,
+    return_pc: u32,
+    creator_regs: [u32; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MappedResourceString {
+    module: u32,
+    id: u32,
+    text: String,
+    data_ptr: Option<u32>,
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 struct MappedBlob {
@@ -281,6 +303,7 @@ impl UnicornMips {
             stack_top: None,
             mapped_blobs: Vec::new(),
             import_traps: ImportTrapTable::new(),
+            resource_strings: Vec::new(),
             #[cfg(feature = "unicorn")]
             trampoline_ranges: Vec::new(),
             #[cfg(feature = "unicorn")]
@@ -447,12 +470,16 @@ impl UnicornMips {
         self.stack_top = Some(stack_top);
         self.entry = Some(image.entry_point_va());
         self.entry_image_base = Some(image.image_base());
+        self.register_image_resource_strings(image, image.image_base())?;
         self.import_traps.merge(traps);
         self.mapped_blobs.push(MappedBlob {
             base: image.image_base(),
             bytes: mapped,
         });
-        for (_path, load_base, mapped) in loaded_dlls {
+        for (path, load_base, mapped) in loaded_dlls {
+            if let Some(dll) = dlls.iter().find(|dll| dll.path == path) {
+                self.register_image_resource_strings(dll, load_base)?;
+            }
             self.mapped_blobs.push(MappedBlob {
                 base: load_base,
                 bytes: mapped,
@@ -467,6 +494,18 @@ impl UnicornMips {
             base: IMPORT_TRAP_BASE,
             bytes: trap_page,
         });
+        Ok(())
+    }
+
+    fn register_image_resource_strings(&mut self, image: &PeImage, load_base: u32) -> Result<()> {
+        for string in image.resource_strings()? {
+            self.resource_strings.push(MappedResourceString {
+                module: load_base,
+                id: string.id,
+                text: string.text,
+                data_ptr: Some(load_base.wrapping_add(string.data_rva)),
+            });
+        }
         Ok(())
     }
 
@@ -503,6 +542,14 @@ impl UnicornMips {
     ) -> Result<()> {
         let info = framebuffer.info();
         kernel.remote.set_framebuffer_size(info.width, info.height);
+        for string in &self.resource_strings {
+            kernel.resources.register_string(
+                string.module,
+                string.id,
+                string.text.clone(),
+                string.data_ptr,
+            );
+        }
         #[cfg(not(feature = "unicorn"))]
         let _ = instruction_limit;
         #[cfg(feature = "unicorn")]
@@ -747,8 +794,14 @@ impl UnicornMips {
         let pending_wndproc_returns_hook = Rc::clone(&pending_wndproc_returns);
         let create_window_returns = Rc::new(RefCell::new(Vec::<CreateWindowReturn>::new()));
         let create_window_returns_hook = Rc::clone(&create_window_returns);
+        let current_thread_id = Rc::new(RefCell::new(1u32));
+        let current_thread_id_hook = Rc::clone(&current_thread_id);
+        let pending_guest_thread_returns =
+            Rc::new(RefCell::new(Vec::<PendingGuestThreadReturn>::new()));
+        let pending_guest_thread_returns_hook = Rc::clone(&pending_guest_thread_returns);
         let traps = self.import_traps.clone();
         let kernel_ptr = kernel as *mut CeKernel;
+        let stack_top = self.stack_top.unwrap_or(0);
         let mapped_kernel_memory = Rc::new(RefCell::new(vec![(
             GUEST_HEAP_ARENA_BASE,
             GUEST_HEAP_ARENA_SIZE,
@@ -818,6 +871,34 @@ impl UnicornMips {
                     }
                     return;
                 }
+                if address == GUEST_THREAD_RETURN_STUB_ADDR {
+                    let Some(callout) = pending_guest_thread_returns_hook.borrow_mut().pop() else {
+                        let _ = uc.emu_stop();
+                        return;
+                    };
+                    let exit_code = read_mips_reg(uc, RegisterMIPS::V0);
+                    unsafe { &mut *kernel_ptr }
+                        .mark_guest_thread_exited(callout.thread_handle, exit_code);
+                    *current_thread_id_hook.borrow_mut() = callout.creator_thread_id;
+                    restore_mips_gprs(uc, &callout.creator_regs);
+                    let writes = [
+                        uc.reg_write(RegisterMIPS::V0, u64::from(callout.thread_handle)),
+                        uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc)),
+                        uc.reg_write(RegisterMIPS::RA, u64::from(callout.return_pc)),
+                    ];
+                    tracing::debug!(
+                        target: "ce.imports",
+                        thread_id = callout.worker_thread_id,
+                        handle = format_args!("0x{:08x}", callout.thread_handle),
+                        exit_code = format_args!("0x{exit_code:08x}"),
+                        return_pc = format_args!("0x{:08x}", callout.return_pc),
+                        "guest thread returned"
+                    );
+                    if writes.into_iter().any(|write| write.is_err()) {
+                        let _ = uc.emu_stop();
+                    }
+                    return;
+                }
                 if traps.trap_at(address).is_none() {
                     return;
                 }
@@ -863,6 +944,7 @@ impl UnicornMips {
                     );
                 }
                 let args = read_mips_import_args(uc);
+                let active_thread_id = *current_thread_id_hook.borrow();
                 if trap.as_ref().is_some_and(|trap| {
                     try_block_empty_get_message(
                         unsafe { &mut *kernel_ptr },
@@ -870,6 +952,7 @@ impl UnicornMips {
                         trap.module_kind,
                         trap.ordinal,
                         &args,
+                        active_thread_id,
                         &blocked_get_message_hook,
                         &last_messages_hook,
                     )
@@ -952,10 +1035,25 @@ impl UnicornMips {
                 }) {
                     return;
                 }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_enter_create_thread_callout(
+                        unsafe { &mut *kernel_ptr },
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        active_thread_id,
+                        stack_top,
+                        &current_thread_id_hook,
+                        &pending_guest_thread_returns_hook,
+                    )
+                }) {
+                    return;
+                }
                 let Some(result) = traps.dispatch_trap(
                     unsafe { &mut *kernel_ptr },
                     &mut memory,
-                    1,
+                    active_thread_id,
                     address,
                     args.clone(),
                 ) else {
@@ -1697,6 +1795,7 @@ fn map_kernel_memory_allocations<D>(
             mapped,
             allocation.ptr,
             allocation.actual_size,
+            MemoryPerms::READ | MemoryPerms::WRITE,
             "heap allocation",
         )?;
     }
@@ -1706,6 +1805,7 @@ fn map_kernel_memory_allocations<D>(
             mapped,
             allocation.base,
             allocation.size,
+            virtual_allocation_perms(allocation.protect),
             "virtual allocation",
         )?;
     }
@@ -1718,6 +1818,7 @@ fn map_guest_range<D>(
     mapped: &mut Vec<(u32, u32)>,
     base: u32,
     size: u32,
+    perms: MemoryPerms,
     label: &str,
 ) -> Result<()> {
     let first_page = base & !0xfff;
@@ -1736,18 +1837,38 @@ fn map_guest_range<D>(
                 .ok_or_else(|| Error::InvalidArgument(format!("{label} page overflow")))?;
             continue;
         }
-        uc.mem_map(
-            u64::from(page_base),
-            0x1000,
-            unicorn_perms(MemoryPerms::READ | MemoryPerms::WRITE),
-        )
-        .map_err(|err| Error::Backend(format!("map {label} page 0x{page_base:08x}: {err:?}")))?;
+        uc.mem_map(u64::from(page_base), 0x1000, unicorn_perms(perms))
+            .map_err(|err| {
+                Error::Backend(format!("map {label} page 0x{page_base:08x}: {err:?}"))
+            })?;
         mapped.push((page_base, 0x1000));
         page_base = page_base
             .checked_add(0x1000)
             .ok_or_else(|| Error::InvalidArgument(format!("{label} page overflow")))?;
     }
     Ok(())
+}
+
+#[cfg(feature = "unicorn")]
+fn virtual_allocation_perms(protect: u32) -> MemoryPerms {
+    const PAGE_READONLY: u32 = 0x02;
+    const PAGE_READWRITE: u32 = 0x04;
+    const PAGE_WRITECOPY: u32 = 0x08;
+    const PAGE_EXECUTE: u32 = 0x10;
+    const PAGE_EXECUTE_READ: u32 = 0x20;
+    const PAGE_EXECUTE_READWRITE: u32 = 0x40;
+    const PAGE_EXECUTE_WRITECOPY: u32 = 0x80;
+
+    match protect & 0xff {
+        PAGE_READONLY => MemoryPerms::READ,
+        PAGE_READWRITE | PAGE_WRITECOPY => MemoryPerms::READ | MemoryPerms::WRITE,
+        PAGE_EXECUTE => MemoryPerms::EXEC,
+        PAGE_EXECUTE_READ => MemoryPerms::READ | MemoryPerms::EXEC,
+        PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY => {
+            MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC
+        }
+        _ => MemoryPerms::READ | MemoryPerms::WRITE,
+    }
 }
 
 impl std::fmt::Display for UnicornDebugSnapshot {
@@ -2251,6 +2372,7 @@ fn try_block_empty_get_message<D>(
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
+    thread_id: u32,
     blocked: &std::rc::Rc<std::cell::RefCell<Option<UnicornBlockedGetMessage>>>,
     last_messages: &std::rc::Rc<std::cell::RefCell<Vec<UnicornLastMessage>>>,
 ) -> bool {
@@ -2263,7 +2385,6 @@ fn try_block_empty_get_message<D>(
     let hwnd = args.get(1).copied().filter(|hwnd| *hwnd != 0);
     let min_msg = args.get(2).copied().unwrap_or(0);
     let max_msg = args.get(3).copied().unwrap_or(0);
-    let thread_id = 1;
     kernel.pump_timers_to_gwe(thread_id);
     if kernel
         .gwe
@@ -2287,6 +2408,116 @@ fn try_block_empty_get_message<D>(
     });
     record_message_import(uc, module_kind, ordinal, args, None, last_messages);
     true
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_create_thread_callout<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    creator_thread_id: u32,
+    process_stack_top: u32,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_CREATE_THREAD)
+    {
+        return false;
+    }
+
+    let start_address = args.get(2).copied().unwrap_or(0);
+    if start_address == 0 || process_stack_top == 0 {
+        kernel.threads.set_last_error(
+            creator_thread_id,
+            crate::ce::thread::ERROR_INVALID_PARAMETER,
+        );
+        let _ = uc.reg_write(RegisterMIPS::V0, 0);
+        return true;
+    }
+    let parameter = args.get(3).copied().unwrap_or(0);
+    let suspended = args.get(4).copied().unwrap_or(0) & 0x0000_0004 != 0;
+    let thread_id_ptr = args.get(5).copied().unwrap_or(0);
+    let (thread_handle, worker_thread_id) =
+        kernel.create_guest_thread(start_address, parameter, suspended);
+    if thread_id_ptr != 0
+        && uc
+            .mem_write(u64::from(thread_id_ptr), &worker_thread_id.to_le_bytes())
+            .is_err()
+    {
+        let _ = kernel.close_handle(thread_handle);
+        kernel.threads.set_last_error(
+            creator_thread_id,
+            crate::ce::thread::ERROR_INVALID_PARAMETER,
+        );
+        let _ = uc.reg_write(RegisterMIPS::V0, 0);
+        return true;
+    }
+    kernel.threads.set_last_error(creator_thread_id, 0);
+    if suspended {
+        let _ = uc.reg_write(RegisterMIPS::V0, u64::from(thread_handle));
+        return true;
+    }
+
+    let creator_regs = capture_mips_gprs(uc);
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+    pending_returns.borrow_mut().push(PendingGuestThreadReturn {
+        creator_thread_id,
+        worker_thread_id,
+        thread_handle,
+        return_pc,
+        creator_regs,
+    });
+    *current_thread_id.borrow_mut() = worker_thread_id;
+    let worker_stack = guest_thread_stack_top(process_stack_top, worker_thread_id);
+    let writes = [
+        uc.reg_write(RegisterMIPS::PC, u64::from(start_address)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(GUEST_THREAD_RETURN_STUB_ADDR)),
+        uc.reg_write(RegisterMIPS::A0, u64::from(parameter)),
+        uc.reg_write(RegisterMIPS::SP, u64::from(worker_stack)),
+        uc.reg_write(RegisterMIPS::T9, u64::from(start_address)),
+    ];
+    tracing::debug!(
+        target: "ce.imports",
+        creator_thread_id,
+        worker_thread_id,
+        handle = format_args!("0x{thread_handle:08x}"),
+        start = format_args!("0x{start_address:08x}"),
+        parameter = format_args!("0x{parameter:08x}"),
+        stack = format_args!("0x{worker_stack:08x}"),
+        return_pc = format_args!("0x{return_pc:08x}"),
+        "enter guest thread"
+    );
+    if writes.into_iter().any(|write| write.is_err()) {
+        let _ = uc.emu_stop();
+    }
+    true
+}
+
+#[cfg(feature = "unicorn")]
+fn guest_thread_stack_top(process_stack_top: u32, thread_id: u32) -> u32 {
+    let offset = 0x0002_0000u32.saturating_mul(thread_id.max(1));
+    process_stack_top.wrapping_sub(offset) & !0x7
+}
+
+#[cfg(feature = "unicorn")]
+fn capture_mips_gprs<D>(uc: &unicorn_engine::Unicorn<'_, D>) -> [u32; 32] {
+    let mut regs = [0; 32];
+    for register in 1..32 {
+        regs[register as usize] = read_mips_gpr(uc, register).unwrap_or(0);
+    }
+    regs
+}
+
+#[cfg(feature = "unicorn")]
+fn restore_mips_gprs<D>(uc: &mut unicorn_engine::Unicorn<'_, D>, regs: &[u32; 32]) {
+    for register in 1..32 {
+        let _ = write_mips_gpr(uc, register, regs[register as usize]);
+    }
 }
 
 #[cfg(feature = "unicorn")]

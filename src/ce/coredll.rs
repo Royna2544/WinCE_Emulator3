@@ -1130,6 +1130,15 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.timers.sleep_ms(raw_arg(args, 0));
             Some(CoredllValue::U32(0))
         }
+        ORD_SET_TIMER => Some(CoredllValue::U32(kernel.set_timer(
+            (raw_arg(args, 0) != 0).then_some(raw_arg(args, 0)),
+            (raw_arg(args, 1) != 0).then_some(raw_arg(args, 1)),
+            raw_arg(args, 2),
+        ))),
+        ORD_KILL_TIMER => Some(CoredllValue::Bool(kernel.kill_timer(raw_arg(args, 1)))),
+        ORD_CREATE_THREAD => Some(CoredllValue::Handle(create_thread_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_GLOBAL_MEMORY_STATUS => {
             write_global_memory_status(kernel, memory, thread_id, raw_arg(args, 0));
             Some(CoredllValue::U32(0))
@@ -1138,9 +1147,93 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             write_system_info(kernel, memory, thread_id, raw_arg(args, 0));
             Some(CoredllValue::U32(0))
         }
+        ORD_GET_VERSION_EX | ORD_GET_VERSION_EX_W => Some(CoredllValue::Bool(
+            write_os_version_info_w(kernel, memory, thread_id, raw_arg(args, 0)),
+        )),
         ORD_GET_SYSTEM_METRICS => Some(CoredllValue::U32(
             kernel.gwe.system_metric(raw_arg(args, 0)) as u32,
         )),
+        ORD_COPY_RECT => Some(CoredllValue::Bool(copy_rect_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_EQUAL_RECT => Some(CoredllValue::Bool(equal_rect_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_INFLATE_RECT => Some(CoredllValue::Bool(inflate_rect_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1) as i32,
+            raw_arg(args, 2) as i32,
+        ))),
+        ORD_INTERSECT_RECT => Some(CoredllValue::Bool(intersect_rect_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ))),
+        ORD_IS_RECT_EMPTY => Some(CoredllValue::Bool(is_rect_empty_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_OFFSET_RECT => Some(CoredllValue::Bool(offset_rect_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1) as i32,
+            raw_arg(args, 2) as i32,
+        ))),
+        ORD_PT_IN_RECT => Some(CoredllValue::Bool(pt_in_rect_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            Point {
+                x: raw_arg(args, 1) as i32,
+                y: raw_arg(args, 2) as i32,
+            },
+        ))),
+        ORD_SET_RECT => Some(CoredllValue::Bool(set_rect_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            Rect {
+                left: raw_arg(args, 1) as i32,
+                top: raw_arg(args, 2) as i32,
+                right: raw_arg(args, 3) as i32,
+                bottom: raw_arg(args, 4) as i32,
+            },
+        ))),
+        ORD_SET_RECT_EMPTY => Some(CoredllValue::Bool(set_rect_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            Rect::default(),
+        ))),
+        ORD_UNION_RECT => Some(CoredllValue::Bool(union_rect_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ))),
         ORD_EVENT_MODIFY => {
             let ok = match raw_arg(args, 1) {
                 EVENT_PULSE => {
@@ -1210,6 +1303,27 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
+        ORD_REG_CLOSE_KEY => Some(CoredllValue::U32(
+            kernel.registry.reg_close_key(raw_arg(args, 0)),
+        )),
+        ORD_REG_CREATE_KEY_EX_W => Some(CoredllValue::U32(reg_create_key_ex_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_REG_DELETE_VALUE_W => Some(CoredllValue::U32(reg_delete_value_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_REG_ENUM_VALUE_W => Some(CoredllValue::U32(reg_enum_value_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_REG_OPEN_KEY_EX_W => Some(CoredllValue::U32(reg_open_key_ex_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_REG_QUERY_VALUE_EX_W => Some(CoredllValue::U32(reg_query_value_ex_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_REG_SET_VALUE_EX_W => Some(CoredllValue::U32(reg_set_value_ex_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_CLOSE_HANDLE => Some(CoredllValue::Bool(
             kernel.close_handle(raw_arg(args, 0)).unwrap_or(false),
         )),
@@ -1239,6 +1353,42 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 2),
         ) as u32)),
+        ORD_MULTI_BYTE_TO_WIDE_CHAR => Some(CoredllValue::U32(multi_byte_to_wide_char_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_WIDE_CHAR_TO_MULTI_BYTE => Some(CoredllValue::U32(wide_char_to_multi_byte_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_CHAR_UPPER_W => Some(CoredllValue::Handle(char_case_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            WideCaseMode::Upper,
+        ))),
+        ORD_CHAR_LOWER_W => Some(CoredllValue::Handle(char_case_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            WideCaseMode::Lower,
+        ))),
+        ORD_CHAR_UPPER_BUFF_W => Some(CoredllValue::U32(char_case_buff_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            WideCaseMode::Upper,
+        ))),
+        ORD_CHAR_LOWER_BUFF_W => Some(CoredllValue::U32(char_case_buff_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            WideCaseMode::Lower,
+        ))),
         ORD_MALLOC | ORD_OPERATOR_NEW => Some(CoredllValue::Handle(crt::malloc_raw(
             kernel,
             thread_id,
@@ -1484,6 +1634,17 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
+        ORD_GET_DC => Some(CoredllValue::Handle(get_dc_raw(kernel, raw_arg(args, 0)))),
+        ORD_RELEASE_DC => Some(CoredllValue::U32(release_dc_raw(
+            kernel,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_GET_DEVICE_CAPS => Some(CoredllValue::U32(get_device_caps_raw(
+            kernel,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
         ORD_ENABLE_WINDOW => Some(CoredllValue::Bool(
             kernel
                 .gwe
@@ -1498,6 +1659,16 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         )),
         ORD_GET_PARENT => Some(CoredllValue::Handle(
             kernel.gwe.get_parent(raw_arg(args, 0)).unwrap_or(0),
+        )),
+        ORD_SET_PARENT => Some(CoredllValue::Handle(
+            kernel
+                .gwe
+                .set_parent(
+                    raw_arg(args, 0),
+                    (raw_arg(args, 1) != 0).then_some(raw_arg(args, 1)),
+                )
+                .flatten()
+                .unwrap_or(0),
         )),
         ORD_GET_WINDOW => Some(CoredllValue::Handle(get_window_raw(
             kernel,
@@ -1526,6 +1697,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .unwrap_or(0),
         )),
         ORD_GET_FOCUS => Some(CoredllValue::Handle(kernel.gwe.get_focus().unwrap_or(0))),
+        ORD_SET_CAPTURE => Some(CoredllValue::Handle(
+            kernel.gwe.set_capture(raw_arg(args, 0)).unwrap_or(0),
+        )),
+        ORD_GET_CAPTURE => Some(CoredllValue::Handle(kernel.gwe.get_capture().unwrap_or(0))),
+        ORD_RELEASE_CAPTURE => Some(CoredllValue::Bool(kernel.gwe.release_capture())),
         ORD_SET_WINDOW_TEXT_W => Some(CoredllValue::Bool(set_window_text_w_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -1545,6 +1721,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_WINDOW_LONG_W => Some(CoredllValue::U32(get_window_long_w_raw(kernel, args))),
         ORD_SET_WINDOW_POS => Some(CoredllValue::Bool(kernel.set_window_pos(
             raw_arg(args, 0),
+            Some(raw_arg(args, 1)),
             raw_i32_arg(args, 2),
             raw_i32_arg(args, 3),
             raw_i32_arg(args, 4),
@@ -1613,6 +1790,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 2),
             raw_arg(args, 3),
         ))),
+        ORD_POST_QUIT_MESSAGE => {
+            kernel
+                .gwe
+                .post_quit_message(thread_id, raw_arg(args, 0), kernel.timers.tick_count());
+            Some(CoredllValue::U32(0))
+        }
         ORD_SEND_MESSAGE_W | ORD_DEF_WINDOW_PROC_W => Some(CoredllValue::U32(
             kernel
                 .send_message_w(
@@ -1840,6 +2023,493 @@ fn write_system_info<M: CoredllGuestMemory>(
     true
 }
 
+fn write_os_version_info_w<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    info_ptr: u32,
+) -> bool {
+    if info_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(size) = read_guest_u32(kernel, memory, thread_id, info_ptr) else {
+        return false;
+    };
+    if size < 20 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let dword_writes = [(4, 4), (8, 20), (12, 0), (16, VER_PLATFORM_WIN32_CE)];
+    for (offset, value) in dword_writes {
+        if !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            info_ptr.wrapping_add(offset),
+            value,
+        ) {
+            return false;
+        }
+    }
+    let csd_units = size.saturating_sub(20).min(OSVERSIONINFO_CSD_WCHARS * 2) / 2;
+    for index in 0..csd_units {
+        if !write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            info_ptr.wrapping_add(20 + index * 2),
+            0,
+        ) {
+            return false;
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn multi_byte_to_wide_char_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let input_ptr = raw_arg(args, 2);
+    let input_len = raw_arg(args, 3) as i32;
+    let output_ptr = raw_arg(args, 4);
+    let output_capacity = raw_arg(args, 5);
+    let Some(bytes) = read_conversion_bytes(kernel, memory, thread_id, input_ptr, input_len) else {
+        return 0;
+    };
+    let units: Vec<u16> = bytes.into_iter().map(u16::from).collect();
+    write_conversion_wide_result(
+        kernel,
+        memory,
+        thread_id,
+        output_ptr,
+        output_capacity,
+        &units,
+    )
+}
+
+fn wide_char_to_multi_byte_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let input_ptr = raw_arg(args, 2);
+    let input_len = raw_arg(args, 3) as i32;
+    let output_ptr = raw_arg(args, 4);
+    let output_capacity = raw_arg(args, 5);
+    let Some(units) = read_conversion_wide(kernel, memory, thread_id, input_ptr, input_len) else {
+        return 0;
+    };
+    let bytes: Vec<u8> = units
+        .into_iter()
+        .map(|unit| if unit <= 0x7f { unit as u8 } else { b'?' })
+        .collect();
+    write_conversion_byte_result(
+        kernel,
+        memory,
+        thread_id,
+        output_ptr,
+        output_capacity,
+        &bytes,
+    )
+}
+
+fn read_conversion_bytes<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    ptr: u32,
+    len: i32,
+) -> Option<Vec<u8>> {
+    if ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
+    if len < 0 {
+        let mut bytes = Vec::new();
+        for offset in 0..MAX_CONVERSION_CHARS {
+            let byte = match memory.read_u8(ptr.wrapping_add(offset)) {
+                Ok(byte) => byte,
+                Err(_) => {
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                    return None;
+                }
+            };
+            bytes.push(byte);
+            if byte == 0 {
+                return Some(bytes);
+            }
+        }
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        None
+    } else {
+        read_guest_bytes(kernel, memory, thread_id, ptr, len as u32)
+    }
+}
+
+fn read_conversion_wide<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    ptr: u32,
+    len: i32,
+) -> Option<Vec<u16>> {
+    if ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
+    let max_units = if len < 0 {
+        MAX_CONVERSION_CHARS
+    } else {
+        len as u32
+    };
+    let mut units = Vec::new();
+    for index in 0..max_units {
+        let unit = read_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            ptr.wrapping_add(index.wrapping_mul(2)),
+        )?;
+        units.push(unit);
+        if len < 0 && unit == 0 {
+            return Some(units);
+        }
+    }
+    if len < 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        None
+    } else {
+        Some(units)
+    }
+}
+
+fn write_conversion_wide_result<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    output_ptr: u32,
+    output_capacity: u32,
+    units: &[u16],
+) -> u32 {
+    if output_ptr == 0 || output_capacity == 0 {
+        return units.len() as u32;
+    }
+    if output_capacity < units.len() as u32 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INSUFFICIENT_BUFFER);
+        return 0;
+    }
+    for (index, unit) in units.iter().copied().enumerate() {
+        if !write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            output_ptr.wrapping_add((index as u32) * 2),
+            unit,
+        ) {
+            return 0;
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    units.len() as u32
+}
+
+fn write_conversion_byte_result<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    output_ptr: u32,
+    output_capacity: u32,
+    bytes: &[u8],
+) -> u32 {
+    if output_ptr == 0 || output_capacity == 0 {
+        return bytes.len() as u32;
+    }
+    if output_capacity < bytes.len() as u32 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INSUFFICIENT_BUFFER);
+        return 0;
+    }
+    if !write_guest_bytes(kernel, memory, thread_id, output_ptr, bytes) {
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    bytes.len() as u32
+}
+
+#[derive(Debug, Clone, Copy)]
+enum WideCaseMode {
+    Lower,
+    Upper,
+}
+
+fn char_case_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    ptr_or_char: u32,
+    mode: WideCaseMode,
+) -> u32 {
+    if ptr_or_char <= 0xffff {
+        return u32::from(convert_ascii_wide_case(ptr_or_char as u16, mode));
+    }
+    for index in 0..MAX_CONVERSION_CHARS {
+        let addr = ptr_or_char.wrapping_add(index.wrapping_mul(2));
+        let Some(unit) = read_guest_u16(kernel, memory, thread_id, addr) else {
+            return 0;
+        };
+        if unit == 0 {
+            kernel.threads.set_last_error(thread_id, 0);
+            return ptr_or_char;
+        }
+        if !write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            addr,
+            convert_ascii_wide_case(unit, mode),
+        ) {
+            return 0;
+        }
+    }
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+    0
+}
+
+fn char_case_buff_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    ptr: u32,
+    len: u32,
+    mode: WideCaseMode,
+) -> u32 {
+    if ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    for index in 0..len {
+        let addr = ptr.wrapping_add(index.wrapping_mul(2));
+        let Some(unit) = read_guest_u16(kernel, memory, thread_id, addr) else {
+            return 0;
+        };
+        if !write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            addr,
+            convert_ascii_wide_case(unit, mode),
+        ) {
+            return 0;
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    len
+}
+
+fn convert_ascii_wide_case(unit: u16, mode: WideCaseMode) -> u16 {
+    match mode {
+        WideCaseMode::Lower if (b'A' as u16..=b'Z' as u16).contains(&unit) => unit + 0x20,
+        WideCaseMode::Upper if (b'a' as u16..=b'z' as u16).contains(&unit) => unit - 0x20,
+        _ => unit,
+    }
+}
+
+fn copy_rect_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest_ptr: u32,
+    src_ptr: u32,
+) -> bool {
+    let Some(rect) = read_guest_rect(kernel, memory, thread_id, src_ptr) else {
+        return false;
+    };
+    set_rect_raw(kernel, memory, thread_id, dest_ptr, rect)
+}
+
+fn equal_rect_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    left_ptr: u32,
+    right_ptr: u32,
+) -> bool {
+    let Some(left) = read_guest_rect(kernel, memory, thread_id, left_ptr) else {
+        return false;
+    };
+    let Some(right) = read_guest_rect(kernel, memory, thread_id, right_ptr) else {
+        return false;
+    };
+    left == right
+}
+
+fn inflate_rect_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    rect_ptr: u32,
+    dx: i32,
+    dy: i32,
+) -> bool {
+    let Some(rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
+        return false;
+    };
+    set_rect_raw(
+        kernel,
+        memory,
+        thread_id,
+        rect_ptr,
+        Rect {
+            left: rect.left.saturating_sub(dx),
+            top: rect.top.saturating_sub(dy),
+            right: rect.right.saturating_add(dx),
+            bottom: rect.bottom.saturating_add(dy),
+        },
+    )
+}
+
+fn intersect_rect_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest_ptr: u32,
+    left_ptr: u32,
+    right_ptr: u32,
+) -> bool {
+    let Some(left) = read_guest_rect(kernel, memory, thread_id, left_ptr) else {
+        return false;
+    };
+    let Some(right) = read_guest_rect(kernel, memory, thread_id, right_ptr) else {
+        return false;
+    };
+    let intersection = Rect {
+        left: left.left.max(right.left),
+        top: left.top.max(right.top),
+        right: left.right.min(right.right),
+        bottom: left.bottom.min(right.bottom),
+    };
+    let intersects = !is_rect_empty_value(intersection);
+    let rect_to_write = if intersects {
+        intersection
+    } else {
+        Rect::default()
+    };
+    set_rect_raw(kernel, memory, thread_id, dest_ptr, rect_to_write) && intersects
+}
+
+fn is_rect_empty_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    rect_ptr: u32,
+) -> bool {
+    read_guest_rect(kernel, memory, thread_id, rect_ptr)
+        .map(is_rect_empty_value)
+        .unwrap_or(false)
+}
+
+fn offset_rect_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    rect_ptr: u32,
+    dx: i32,
+    dy: i32,
+) -> bool {
+    let Some(rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
+        return false;
+    };
+    set_rect_raw(kernel, memory, thread_id, rect_ptr, rect.offset(dx, dy))
+}
+
+fn pt_in_rect_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    rect_ptr: u32,
+    point: Point,
+) -> bool {
+    let Some(rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
+        return false;
+    };
+    point.x >= rect.left && point.x < rect.right && point.y >= rect.top && point.y < rect.bottom
+}
+
+fn set_rect_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    rect_ptr: u32,
+    rect: Rect,
+) -> bool {
+    let ok = write_guest_rect(kernel, memory, thread_id, rect_ptr, rect);
+    if ok {
+        kernel.threads.set_last_error(thread_id, 0);
+    }
+    ok
+}
+
+fn union_rect_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest_ptr: u32,
+    left_ptr: u32,
+    right_ptr: u32,
+) -> bool {
+    let Some(left) = read_guest_rect(kernel, memory, thread_id, left_ptr) else {
+        return false;
+    };
+    let Some(right) = read_guest_rect(kernel, memory, thread_id, right_ptr) else {
+        return false;
+    };
+    let left_empty = is_rect_empty_value(left);
+    let right_empty = is_rect_empty_value(right);
+    let union = match (left_empty, right_empty) {
+        (true, true) => Rect::default(),
+        (true, false) => right,
+        (false, true) => left,
+        (false, false) => Rect {
+            left: left.left.min(right.left),
+            top: left.top.min(right.top),
+            right: left.right.max(right.right),
+            bottom: left.bottom.max(right.bottom),
+        },
+    };
+    set_rect_raw(kernel, memory, thread_id, dest_ptr, union) && !is_rect_empty_value(union)
+}
+
+fn is_rect_empty_value(rect: Rect) -> bool {
+    rect.right <= rect.left || rect.bottom <= rect.top
+}
+
 fn write_performance_counter_value<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -1932,6 +2602,235 @@ fn find_close_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {
     }
 }
 
+fn reg_create_key_ex_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let Some(subkey) = read_optional_guest_wide_arg(memory, raw_arg(args, 1)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    };
+    let result = kernel
+        .registry
+        .reg_create_key_exw(raw_arg(args, 0), subkey.as_deref());
+    if result.status == crate::ce::registry::ERROR_SUCCESS {
+        if let Some(hkey) = result.hkey {
+            if !write_optional_u32(kernel, memory, thread_id, raw_arg(args, 7), hkey) {
+                return crate::ce::registry::ERROR_INVALID_PARAMETER;
+            }
+        }
+        if !write_optional_u32(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 8),
+            result.disposition,
+        ) {
+            return crate::ce::registry::ERROR_INVALID_PARAMETER;
+        }
+    }
+    result.status
+}
+
+fn reg_open_key_ex_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let Some(subkey) = read_optional_guest_wide_arg(memory, raw_arg(args, 1)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    };
+    let result = kernel.registry.reg_open_key_exw(
+        raw_arg(args, 0),
+        subkey.as_deref(),
+        raw_arg(args, 2),
+        raw_arg(args, 3),
+    );
+    if result.status == crate::ce::registry::ERROR_SUCCESS {
+        if let Some(hkey) = result.hkey {
+            if !write_optional_u32(kernel, memory, thread_id, raw_arg(args, 4), hkey) {
+                return crate::ce::registry::ERROR_INVALID_PARAMETER;
+            }
+        }
+    }
+    result.status
+}
+
+fn reg_set_value_ex_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let Some(value_name) = read_optional_guest_wide_arg(memory, raw_arg(args, 1)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    };
+    let Some(data) = read_guest_bytes(
+        kernel,
+        memory,
+        thread_id,
+        raw_arg(args, 4),
+        raw_arg(args, 5),
+    ) else {
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    };
+    kernel.registry.reg_set_value_exw(
+        raw_arg(args, 0),
+        value_name.as_deref(),
+        raw_arg(args, 3),
+        &data,
+    )
+}
+
+fn reg_query_value_ex_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let Some(value_name) = read_optional_guest_wide_arg(memory, raw_arg(args, 1)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    };
+    let data_len_ptr = raw_arg(args, 5);
+    let data_capacity = if data_len_ptr == 0 {
+        None
+    } else {
+        let Some(capacity) = read_guest_u32(kernel, memory, thread_id, data_len_ptr) else {
+            return crate::ce::registry::ERROR_INVALID_PARAMETER;
+        };
+        Some(capacity as usize)
+    };
+    let result =
+        kernel
+            .registry
+            .reg_query_value_exw(raw_arg(args, 0), value_name.as_deref(), data_capacity);
+    if let Some(value_type) = result.value_type {
+        if !write_optional_u32(kernel, memory, thread_id, raw_arg(args, 3), value_type) {
+            return crate::ce::registry::ERROR_INVALID_PARAMETER;
+        }
+    }
+    if !write_optional_u32(kernel, memory, thread_id, data_len_ptr, result.required_len) {
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    }
+    if result.status == crate::ce::registry::ERROR_SUCCESS {
+        if let Some(data) = result.data {
+            if raw_arg(args, 4) != 0
+                && !write_guest_bytes(kernel, memory, thread_id, raw_arg(args, 4), &data)
+            {
+                return crate::ce::registry::ERROR_INVALID_PARAMETER;
+            }
+        }
+    }
+    result.status
+}
+
+fn reg_enum_value_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let name_len_ptr = raw_arg(args, 3);
+    let name_capacity = if name_len_ptr == 0 {
+        None
+    } else {
+        let Some(capacity) = read_guest_u32(kernel, memory, thread_id, name_len_ptr) else {
+            return crate::ce::registry::ERROR_INVALID_PARAMETER;
+        };
+        Some(capacity as usize)
+    };
+    let data_len_ptr = raw_arg(args, 7);
+    let data_capacity = if data_len_ptr == 0 {
+        None
+    } else {
+        let Some(capacity) = read_guest_u32(kernel, memory, thread_id, data_len_ptr) else {
+            return crate::ce::registry::ERROR_INVALID_PARAMETER;
+        };
+        Some(capacity as usize)
+    };
+    let result = kernel.registry.reg_enum_value_w(
+        raw_arg(args, 0),
+        raw_arg(args, 1),
+        name_capacity,
+        data_capacity,
+    );
+    if let Some(value_type) = result.value_type {
+        if !write_optional_u32(kernel, memory, thread_id, raw_arg(args, 5), value_type) {
+            return crate::ce::registry::ERROR_INVALID_PARAMETER;
+        }
+    }
+    if !write_optional_u32(
+        kernel,
+        memory,
+        thread_id,
+        name_len_ptr,
+        result.required_name_chars,
+    ) || !write_optional_u32(
+        kernel,
+        memory,
+        thread_id,
+        data_len_ptr,
+        result.required_data_len,
+    ) {
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    }
+    if result.status == crate::ce::registry::ERROR_SUCCESS {
+        if let Some(name) = result.name {
+            if raw_arg(args, 2) != 0
+                && write_wide_result(
+                    kernel,
+                    memory,
+                    thread_id,
+                    raw_arg(args, 2),
+                    name_capacity.unwrap_or(0),
+                    &name,
+                ) == 0
+            {
+                return crate::ce::registry::ERROR_INVALID_PARAMETER;
+            }
+        }
+        if let Some(data) = result.data {
+            if raw_arg(args, 6) != 0
+                && !write_guest_bytes(kernel, memory, thread_id, raw_arg(args, 6), &data)
+            {
+                return crate::ce::registry::ERROR_INVALID_PARAMETER;
+            }
+        }
+    }
+    result.status
+}
+
+fn reg_delete_value_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let Some(value_name) = read_optional_guest_wide_arg(memory, raw_arg(args, 1)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    };
+    kernel
+        .registry
+        .reg_delete_value_w(raw_arg(args, 0), value_name.as_deref())
+}
+
 fn write_win32_find_data_w<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -1952,7 +2851,6 @@ fn write_win32_find_data_w<M: CoredllGuestMemory>(
         (28, file_size_high),
         (32, file_size_low),
         (36, 0),
-        (40, 0),
     ];
     for (offset, value) in dwords {
         if !write_guest_u32(kernel, memory, thread_id, addr.wrapping_add(offset), value) {
@@ -2407,6 +3305,32 @@ fn create_event_w_raw<M: CoredllGuestMemory>(
     handle
 }
 
+fn create_thread_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let start_address = raw_arg(args, 2);
+    if start_address == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let parameter = raw_arg(args, 3);
+    let suspended = raw_arg(args, 4) & 0x0000_0004 != 0;
+    let thread_id_ptr = raw_arg(args, 5);
+    let (handle, created_thread_id) =
+        kernel.create_guest_thread(start_address, parameter, suspended);
+    if !write_optional_count(kernel, memory, thread_id, thread_id_ptr, created_thread_id) {
+        let _ = kernel.close_handle(handle);
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    handle
+}
+
 fn release_mutex_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {
     if kernel.release_mutex(handle, thread_id) {
         kernel.threads.set_last_error(thread_id, 0);
@@ -2586,6 +3510,17 @@ fn read_guest_wide_arg<M: CoredllGuestMemory>(memory: &M, ptr: u32) -> Option<St
         return Some(format!("#{ptr}"));
     }
     read_guest_wide_z(memory, ptr, 512).ok()
+}
+
+fn read_optional_guest_wide_arg<M: CoredllGuestMemory>(
+    memory: &M,
+    ptr: u32,
+) -> Option<Option<String>> {
+    if ptr == 0 {
+        Some(None)
+    } else {
+        read_guest_wide_arg(memory, ptr).map(Some)
+    }
 }
 
 fn set_window_text_w_raw<M: CoredllGuestMemory>(
@@ -3276,6 +4211,7 @@ fn map_window_points<M: CoredllGuestMemory>(
         };
         points.push(point);
     }
+    let first_before = points.first().copied();
     let from = (hwnd_from != 0).then_some(hwnd_from);
     let to = (hwnd_to != 0).then_some(hwnd_to);
     if !kernel.gwe.map_window_points(from, to, &mut points) {
@@ -3284,13 +4220,21 @@ fn map_window_points<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     }
+    let packed_delta = first_before
+        .zip(points.first().copied())
+        .map(|(before, after)| {
+            let dx = after.x.saturating_sub(before.x) as i16 as u16;
+            let dy = after.y.saturating_sub(before.y) as i16 as u16;
+            u32::from(dx) | (u32::from(dy) << 16)
+        })
+        .unwrap_or(0);
     for (index, point) in points.into_iter().enumerate() {
         let point_ptr = points_ptr.wrapping_add((index as u32).wrapping_mul(8));
         if !write_guest_point(kernel, memory, thread_id, point_ptr, point) {
             return 0;
         }
     }
-    1
+    packed_delta
 }
 
 fn invalidate_rect_raw<M: CoredllGuestMemory>(
@@ -3385,6 +4329,44 @@ fn end_paint_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> bool {
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn get_dc_raw(kernel: &CeKernel, hwnd: u32) -> u32 {
+    let target = if hwnd == 0 {
+        kernel.gwe.get_desktop_window()
+    } else {
+        hwnd
+    };
+    if kernel.gwe.is_window(target) {
+        paint_hdc_for_hwnd(target)
+    } else {
+        0
+    }
+}
+
+fn release_dc_raw(kernel: &CeKernel, hwnd: u32, hdc: u32) -> u32 {
+    if hdc == 0 {
+        return 0;
+    }
+    if hwnd == 0 || kernel.gwe.is_window(hwnd) {
+        1
+    } else {
+        0
+    }
+}
+
+fn get_device_caps_raw(kernel: &CeKernel, hdc: u32, index: u32) -> u32 {
+    if hdc == 0 {
+        return 0;
+    }
+    match index {
+        HORZRES => kernel.gwe.system_metric(crate::ce::gwe::SM_CXSCREEN) as u32,
+        VERTRES => kernel.gwe.system_metric(crate::ce::gwe::SM_CYSCREEN) as u32,
+        BITSPIXEL => 16,
+        PLANES => 1,
+        LOGPIXELSX | LOGPIXELSY => 96,
+        _ => 0,
+    }
 }
 
 fn paint_hdc_for_hwnd(hwnd: u32) -> u32 {
@@ -3723,6 +4705,16 @@ fn write_optional_count<M: CoredllGuestMemory>(
     addr == 0 || write_guest_u32(kernel, memory, thread_id, addr, value)
 }
 
+fn write_optional_u32<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    addr: u32,
+    value: u32,
+) -> bool {
+    write_optional_count(kernel, memory, thread_id, addr, value)
+}
+
 fn read_guest_u32<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
@@ -4041,7 +5033,17 @@ fn has_any_prefix(name: &str, prefixes: &[&str]) -> bool {
 const EVENT_PULSE: u32 = 1;
 const EVENT_RESET: u32 = 2;
 const EVENT_SET: u32 = 3;
-const WIN32_FIND_DATAW_FILE_NAME: u32 = 44;
+const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+const HORZRES: u32 = 8;
+const VERTRES: u32 = 10;
+const BITSPIXEL: u32 = 12;
+const PLANES: u32 = 14;
+const LOGPIXELSX: u32 = 88;
+const LOGPIXELSY: u32 = 90;
+const MAX_CONVERSION_CHARS: u32 = 0x1_0000;
+const OSVERSIONINFO_CSD_WCHARS: u32 = 128;
+const VER_PLATFORM_WIN32_CE: u32 = 3;
+const WIN32_FIND_DATAW_FILE_NAME: u32 = 40;
 const WIN32_FIND_DATAW_FILE_NAME_CHARS: usize = 260;
 
 const IMPLEMENTED_EXPORTS: &[&str] = &[
@@ -4079,7 +5081,19 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "LocalSizeInProcess",
     "GetProcessHeap",
     "GetModuleFileNameW",
+    "GetVersionEx",
+    "GetVersionExW",
     "GetSystemMetrics",
+    "CopyRect",
+    "EqualRect",
+    "InflateRect",
+    "IntersectRect",
+    "IsRectEmpty",
+    "OffsetRect",
+    "PtInRect",
+    "SetRect",
+    "SetRectEmpty",
+    "UnionRect",
     "HeapCreate",
     "HeapDestroy",
     "HeapAlloc",
@@ -4091,6 +5105,12 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "malloc",
     "wcsrchr",
     "_wcsdup",
+    "MultiByteToWideChar",
+    "WideCharToMultiByte",
+    "CharLowerW",
+    "CharLowerBuffW",
+    "CharUpperBuffW",
+    "CharUpperW",
     "memcpy",
     "memset",
     "??2@YAPAXI@Z",
@@ -4104,6 +5124,9 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "VirtualAlloc",
     "VirtualFree",
     "RegCloseKey",
+    "RegCreateKeyExW",
+    "RegDeleteValueW",
+    "RegEnumValueW",
     "RegOpenKeyExW",
     "RegQueryValueExW",
     "RegSetValueExW",
@@ -4120,6 +5143,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "CreateEventW",
     "EventModify",
     "WaitForSingleObject",
+    "CreateThread",
     "CreateMutexW",
     "ReleaseMutex",
     "CreateWindowExW",
@@ -4127,6 +5151,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "ShowWindow",
     "UpdateWindow",
     "GetParent",
+    "SetParent",
     "IsWindow",
     "GetWindowTextLengthW",
     "GetClassNameW",
@@ -4136,6 +5161,9 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "GetWindowTextWDirect",
     "SetFocus",
     "GetFocus",
+    "SetCapture",
+    "GetCapture",
+    "ReleaseCapture",
     "IsWindowVisible",
     "SetWindowPos",
     "MoveWindow",
@@ -4148,9 +5176,13 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "GetWindowTextW",
     "GetWindowLongW",
     "SetWindowLongW",
+    "GetDC",
+    "ReleaseDC",
+    "GetDeviceCaps",
     "GetMessageW",
     "PeekMessageW",
     "PostMessageW",
+    "PostQuitMessage",
     "SendMessageW",
     "DispatchMessageW",
     "TranslateMessage",

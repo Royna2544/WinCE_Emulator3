@@ -50,6 +50,10 @@ pub const SWP_NOZORDER: u32 = 0x0004;
 pub const SWP_NOACTIVATE: u32 = 0x0010;
 pub const SWP_SHOWWINDOW: u32 = 0x0040;
 pub const SWP_HIDEWINDOW: u32 = 0x0080;
+pub const HWND_TOP: u32 = 0;
+pub const HWND_BOTTOM: u32 = 1;
+pub const HWND_TOPMOST: u32 = u32::MAX;
+pub const HWND_NOTOPMOST: u32 = u32::MAX - 1;
 pub const WS_CHILD: u32 = 0x4000_0000;
 pub const WS_VISIBLE: u32 = 0x1000_0000;
 
@@ -185,8 +189,10 @@ pub struct Gwe {
     classes_by_name: BTreeMap<String, WindowClass>,
     class_names_by_atom: BTreeMap<u16, String>,
     windows: BTreeMap<u32, Window>,
+    z_order: Vec<u32>,
     queues: BTreeMap<u32, VecDeque<Message>>,
     focus: Option<u32>,
+    capture: Option<u32>,
     cursor_pos: Point,
 }
 
@@ -222,8 +228,10 @@ impl Default for Gwe {
             classes_by_name: BTreeMap::new(),
             class_names_by_atom: BTreeMap::new(),
             windows,
+            z_order: vec![DESKTOP_HWND],
             queues: BTreeMap::new(),
             focus: None,
+            capture: None,
             cursor_pos: Point::default(),
         }
     }
@@ -307,6 +315,7 @@ impl Gwe {
                 destroyed: false,
             },
         );
+        self.z_order.push(hwnd);
         hwnd
     }
 
@@ -370,6 +379,13 @@ impl Gwe {
         }
         window.destroyed = true;
         let thread_id = window.thread_id;
+        if self.capture == Some(hwnd) {
+            self.capture = None;
+        }
+        if self.focus == Some(hwnd) {
+            self.focus = None;
+        }
+        self.z_order.retain(|candidate| *candidate != hwnd);
         self.post_message(thread_id, Message::new(hwnd, WM_DESTROY, 0, 0, time_ms));
         true
     }
@@ -447,8 +463,9 @@ impl Gwe {
         let Some(window) = self.windows.get_mut(&hwnd) else {
             return false;
         };
+        let previous = window.enabled;
         window.enabled = enabled;
-        true
+        previous
     }
 
     pub fn is_window_enabled(&self, hwnd: u32) -> bool {
@@ -465,6 +482,19 @@ impl Gwe {
 
     pub fn get_parent(&self, hwnd: u32) -> Option<u32> {
         self.windows.get(&hwnd).and_then(|window| window.parent)
+    }
+
+    pub fn set_parent(&mut self, hwnd: u32, parent: Option<u32>) -> Option<Option<u32>> {
+        if parent.is_some_and(|parent| !self.is_window(parent) || parent == hwnd) {
+            return None;
+        }
+        let window = self.windows.get_mut(&hwnd)?;
+        if window.destroyed {
+            return None;
+        }
+        let previous = window.parent;
+        window.parent = parent;
+        Some(previous)
     }
 
     pub fn get_window(&self, hwnd: u32, cmd: u32) -> Option<u32> {
@@ -509,6 +539,24 @@ impl Gwe {
 
     pub fn get_focus(&self) -> Option<u32> {
         self.focus
+    }
+
+    pub fn set_capture(&mut self, hwnd: u32) -> Option<u32> {
+        if !self.is_window(hwnd) {
+            return None;
+        }
+        let previous = self.capture;
+        self.capture = Some(hwnd);
+        previous
+    }
+
+    pub fn get_capture(&self) -> Option<u32> {
+        self.capture.filter(|hwnd| self.is_window(*hwnd))
+    }
+
+    pub fn release_capture(&mut self) -> bool {
+        self.capture = None;
+        true
     }
 
     pub fn get_active_window(&self) -> Option<u32> {
@@ -558,6 +606,7 @@ impl Gwe {
     pub fn set_window_pos(
         &mut self,
         hwnd: u32,
+        insert_after: Option<u32>,
         x: i32,
         y: i32,
         width: i32,
@@ -608,6 +657,9 @@ impl Gwe {
         if flags & SWP_HIDEWINDOW != 0 {
             window.visible = false;
         }
+        if flags & SWP_NOZORDER == 0 {
+            self.apply_z_order(hwnd, parent, insert_after.unwrap_or(HWND_TOP));
+        }
         true
     }
 
@@ -620,7 +672,7 @@ impl Gwe {
         height: i32,
         _repaint: bool,
     ) -> bool {
-        let moved = self.set_window_pos(hwnd, x, y, width, height, 0);
+        let moved = self.set_window_pos(hwnd, None, x, y, width, height, 0);
         if moved && _repaint {
             self.invalidate_window(hwnd, None, true);
         }
@@ -938,8 +990,9 @@ impl Gwe {
     }
 
     fn sibling_windows(&self, parent: Option<u32>) -> Vec<u32> {
-        self.windows
-            .values()
+        self.z_order
+            .iter()
+            .filter_map(|hwnd| self.windows.get(hwnd))
             .filter(|window| {
                 !window.destroyed
                     && window.parent == parent
@@ -947,6 +1000,38 @@ impl Gwe {
             })
             .map(|window| window.hwnd)
             .collect()
+    }
+
+    fn apply_z_order(&mut self, hwnd: u32, parent: Option<u32>, insert_after: u32) {
+        self.z_order.retain(|candidate| *candidate != hwnd);
+        let siblings = self.sibling_windows(parent);
+        let index = match insert_after {
+            HWND_TOP | HWND_TOPMOST | HWND_NOTOPMOST => siblings
+                .first()
+                .and_then(|sibling| {
+                    self.z_order
+                        .iter()
+                        .position(|candidate| candidate == sibling)
+                })
+                .unwrap_or(self.z_order.len()),
+            HWND_BOTTOM => siblings
+                .last()
+                .and_then(|sibling| {
+                    self.z_order
+                        .iter()
+                        .position(|candidate| candidate == sibling)
+                })
+                .map(|index| index + 1)
+                .unwrap_or(self.z_order.len()),
+            sibling if siblings.contains(&sibling) => self
+                .z_order
+                .iter()
+                .position(|candidate| *candidate == sibling)
+                .map(|index| index + 1)
+                .unwrap_or(self.z_order.len()),
+            _ => self.z_order.len(),
+        };
+        self.z_order.insert(index.min(self.z_order.len()), hwnd);
     }
 }
 
