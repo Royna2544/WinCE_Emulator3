@@ -4,18 +4,20 @@ use wince_emulation_v3::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
             ORD_CLOSE_HANDLE, ORD_CREATE_EVENT_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD,
-            ORD_EVENT_MODIFY, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD,
-            ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_PROCESS_ID, ORD_GET_PROCESS_VERSION,
-            ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_TIME, ORD_GET_SYSTEM_TIME_AS_FILE_TIME,
-            ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY, ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT,
-            ORD_GET_TIME_ZONE_INFORMATION, ORD_GET_VERSION_EX_W, ORD_INITIALIZE_CRITICAL_SECTION,
-            ORD_INPUT_DEBUG_CHAR_W, ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
-            ORD_INTERLOCKED_INCREMENT, ORD_LEAVE_CRITICAL_SECTION,
+            ORD_EVENT_MODIFY, ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_GET_EXIT_CODE_PROCESS,
+            ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_PROCESS_ID,
+            ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_TIME,
+            ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY,
+            ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT, ORD_GET_TIME_ZONE_INFORMATION,
+            ORD_GET_VERSION_EX_W, ORD_INITIALIZE_CRITICAL_SECTION, ORD_INPUT_DEBUG_CHAR_W,
+            ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
+            ORD_INTERLOCKED_INCREMENT, ORD_KERNEL_IO_CONTROL, ORD_LEAVE_CRITICAL_SECTION,
             ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR,
             ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_RELEASE_SEMAPHORE,
             ORD_RESUME_THREAD, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY, ORD_SLEEP,
-            ORD_SUSPEND_THREAD, ORD_TERMINATE_PROCESS, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
-            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_FOR_SINGLE_OBJECT,
+            ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS,
+            ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
         },
         gwe::Message,
         kernel::CeKernel,
@@ -973,6 +975,125 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
             ..
         }
     ));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_file_time_to_system_time_round_trips_guest_fields() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 17;
+    let source_system_time = 0x1000;
+    let file_time = 0x1100;
+    let dest_system_time = 0x1200;
+    memory.map_halfwords(source_system_time, 8);
+    memory.map_words(file_time, 2);
+    memory.map_halfwords(dest_system_time, 8);
+    memory.write_halfword(source_system_time, 2024);
+    memory.write_halfword(source_system_time + 2, 2);
+    memory.write_halfword(source_system_time + 4, 4);
+    memory.write_halfword(source_system_time + 6, 29);
+    memory.write_halfword(source_system_time + 8, 12);
+    memory.write_halfword(source_system_time + 10, 34);
+    memory.write_halfword(source_system_time + 12, 56);
+    memory.write_halfword(source_system_time + 14, 789);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SYSTEM_TIME_TO_FILE_TIME,
+            [source_system_time, file_time],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(memory.read_u32(file_time + 4)? != 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FILE_TIME_TO_SYSTEM_TIME,
+            [file_time, dest_system_time],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u16(dest_system_time)?, 2024);
+    assert_eq!(memory.read_u16(dest_system_time + 2)?, 2);
+    assert_eq!(memory.read_u16(dest_system_time + 4)?, 4);
+    assert_eq!(memory.read_u16(dest_system_time + 6)?, 29);
+    assert_eq!(memory.read_u16(dest_system_time + 8)?, 12);
+    assert_eq!(memory.read_u16(dest_system_time + 10)?, 34);
+    assert_eq!(memory.read_u16(dest_system_time + 12)?, 56);
+    assert_eq!(memory.read_u16(dest_system_time + 14)?, 789);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_kernel_io_control_returns_device_id() -> Result<()> {
+    const IOCTL_HAL_GET_DEVICEID: u32 = 0x0101_207c;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 18;
+    let out = 0x1400;
+    let returned = 0x1500;
+    memory.map_words(out, 5);
+    memory.map_bytes(out + 20, 64);
+    memory.map_words(returned, 1);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KERNEL_IO_CONTROL,
+            [IOCTL_HAL_GET_DEVICEID, 0, 0, out, 4, returned],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(memory.read_u32(out)? > 20);
+
+    let required_size = memory.read_u32(out)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KERNEL_IO_CONTROL,
+            [IOCTL_HAL_GET_DEVICEID, 0, 0, out, required_size, returned],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(out)?, required_size);
+    assert_eq!(memory.read_u32(out + 4)?, 20);
+    assert_eq!(memory.read_u32(out + 8)?, 10);
+    assert_eq!(memory.read_u32(out + 12)?, 30);
+    assert_eq!(memory.read_u32(out + 16)?, 11);
+    assert_eq!(memory.read_bytes(out + 20, 10), b"WINCE_EMU\0");
+    assert_eq!(memory.read_bytes(out + 30, 11), b"INAVI_HOST\0");
+    assert_eq!(memory.read_u32(returned)?, required_size);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
     Ok(())
 }

@@ -44,6 +44,10 @@ const CTYPE_CONTROL: u32 = 0x0020;
 const CTYPE_BLANK: u32 = 0x0040;
 const CTYPE_HEX: u32 = 0x0080;
 const CTYPE_ALPHA: u32 = 0x0100;
+const SPI_GETWORKAREA: u32 = 0x0030;
+const SPI_GETPLATFORMTYPE: u32 = 0x0101;
+const SPI_GETOEMINFO: u32 = 0x0102;
+const IOCTL_HAL_GET_DEVICEID: u32 = 0x0101_207c;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CoredllSubsystem {
@@ -1188,6 +1192,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             write_global_memory_status(kernel, memory, thread_id, raw_arg(args, 0));
             Some(CoredllValue::U32(0))
         }
+        ORD_SYSTEM_PARAMETERS_INFO_W => Some(CoredllValue::Bool(system_parameters_info_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_GET_STORE_INFORMATION => Some(CoredllValue::Bool(write_store_information(
             kernel,
             memory,
@@ -1490,6 +1497,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_DEVICE_IO_CONTROL => Some(CoredllValue::Bool(device_io_control_raw(
             kernel, memory, thread_id, args,
         ))),
+        ORD_KERNEL_IO_CONTROL => Some(CoredllValue::Bool(kernel_io_control_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_SET_FILE_POINTER => Some(CoredllValue::U32(set_file_pointer_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -1502,6 +1512,13 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
         ))),
         ORD_SYSTEM_TIME_TO_FILE_TIME => Some(CoredllValue::Bool(system_time_to_file_time_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_FILE_TIME_TO_SYSTEM_TIME => Some(CoredllValue::Bool(file_time_to_system_time_raw(
             kernel,
             memory,
             thread_id,
@@ -3332,6 +3349,74 @@ fn convert_ascii_wide_case(unit: u16, mode: WideCaseMode) -> u16 {
     }
 }
 
+fn system_parameters_info_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let action = raw_arg(args, 0);
+    let ui_param = raw_arg(args, 1);
+    let pv_param = raw_arg(args, 2);
+    let ok = match action {
+        SPI_GETWORKAREA => {
+            if pv_param == 0 {
+                false
+            } else {
+                let rect = Rect {
+                    left: 0,
+                    top: 0,
+                    right: kernel.gwe.system_metric(crate::ce::gwe::SM_CXSCREEN),
+                    bottom: kernel.gwe.system_metric(crate::ce::gwe::SM_CYSCREEN),
+                };
+                write_guest_rect(kernel, memory, thread_id, pv_param, rect)
+            }
+        }
+        SPI_GETPLATFORMTYPE => write_system_parameter_info_string(
+            kernel,
+            memory,
+            thread_id,
+            pv_param,
+            ui_param,
+            "Windows CE",
+        ),
+        SPI_GETOEMINFO => write_system_parameter_info_string(
+            kernel,
+            memory,
+            thread_id,
+            pv_param,
+            ui_param,
+            "WinCE Emulator",
+        ),
+        _ => true,
+    };
+    kernel
+        .threads
+        .set_last_error(thread_id, if ok { 0 } else { ERROR_INVALID_PARAMETER });
+    ok
+}
+
+fn write_system_parameter_info_string<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest: u32,
+    capacity_chars: u32,
+    text: &str,
+) -> bool {
+    if dest == 0 || capacity_chars == 0 {
+        return false;
+    }
+    write_guest_wide_fixed(
+        kernel,
+        memory,
+        thread_id,
+        dest,
+        text,
+        capacity_chars as usize,
+    )
+}
+
 fn adjust_window_rect_ex_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -4306,14 +4391,20 @@ fn system_time_to_file_time_raw<M: CoredllGuestMemory>(
     else {
         return false;
     };
+    let Some(milliseconds) =
+        read_guest_u16(kernel, memory, thread_id, system_time_ptr.wrapping_add(14))
+    else {
+        return false;
+    };
     if year < 1601
         || month == 0
         || month > 12
         || day == 0
-        || day > 31
+        || day > days_in_month(year as i32, month as i32) as u16
         || hour > 23
         || minute > 59
         || second > 59
+        || milliseconds > 999
     {
         kernel
             .threads
@@ -4325,7 +4416,9 @@ fn system_time_to_file_time_raw<M: CoredllGuestMemory>(
         + i64::from(day - 1);
     let seconds =
         days * 86_400 + i64::from(hour) * 3_600 + i64::from(minute) * 60 + i64::from(second);
-    let ticks = (seconds as u64).saturating_mul(10_000_000);
+    let ticks = (seconds as u64)
+        .saturating_mul(FILETIME_TICKS_PER_SECOND)
+        .saturating_add(u64::from(milliseconds).saturating_mul(FILETIME_TICKS_PER_MILLISECOND));
     if !write_guest_u32(kernel, memory, thread_id, file_time_ptr, ticks as u32)
         || !write_guest_u32(
             kernel,
@@ -4339,6 +4432,83 @@ fn system_time_to_file_time_raw<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn file_time_to_system_time_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    file_time_ptr: u32,
+    system_time_ptr: u32,
+) -> bool {
+    if file_time_ptr == 0 || system_time_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(low) = read_guest_u32(kernel, memory, thread_id, file_time_ptr) else {
+        return false;
+    };
+    let Some(high) = read_guest_u32(kernel, memory, thread_id, file_time_ptr.wrapping_add(4))
+    else {
+        return false;
+    };
+    let fields = system_time_fields_from_ticks((u64::from(high) << 32) | u64::from(low));
+    let ok = write_guest_u16(kernel, memory, thread_id, system_time_ptr, fields.year)
+        && write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            system_time_ptr.wrapping_add(2),
+            fields.month,
+        )
+        && write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            system_time_ptr.wrapping_add(4),
+            fields.day_of_week,
+        )
+        && write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            system_time_ptr.wrapping_add(6),
+            fields.day,
+        )
+        && write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            system_time_ptr.wrapping_add(8),
+            fields.hour,
+        )
+        && write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            system_time_ptr.wrapping_add(10),
+            fields.minute,
+        )
+        && write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            system_time_ptr.wrapping_add(12),
+            fields.second,
+        )
+        && write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            system_time_ptr.wrapping_add(14),
+            fields.milliseconds,
+        );
+    if ok {
+        kernel.threads.set_last_error(thread_id, 0);
+    }
+    ok
 }
 
 fn days_before_year(year: i32) -> i64 {
@@ -5055,6 +5225,101 @@ fn device_io_control_raw<M: CoredllGuestMemory>(
         },
     );
     result.success
+}
+
+fn kernel_io_control_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    match raw_arg(args, 0) {
+        IOCTL_HAL_GET_DEVICEID => write_hal_device_id(kernel, memory, thread_id, args),
+        _ => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+            write_optional_count(kernel, memory, thread_id, raw_arg(args, 5), 0);
+            false
+        }
+    }
+}
+
+fn write_hal_device_id<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    const DEVICE_ID_HEADER_SIZE: u32 = 20;
+    const PRESET_ID: &[u8] = b"WINCE_EMU\0";
+    const PLATFORM_ID: &[u8] = b"INAVI_HOST\0";
+
+    let out_ptr = raw_arg(args, 3);
+    let out_size = raw_arg(args, 4);
+    let returned_ptr = raw_arg(args, 5);
+    let preset_offset = DEVICE_ID_HEADER_SIZE;
+    let platform_offset = preset_offset + PRESET_ID.len() as u32;
+    let required_size = platform_offset + PLATFORM_ID.len() as u32;
+
+    if out_ptr == 0 || out_size < required_size {
+        if out_ptr != 0 && out_size >= 4 {
+            let _ = write_guest_u32(kernel, memory, thread_id, out_ptr, required_size);
+        }
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INSUFFICIENT_BUFFER);
+        return false;
+    }
+
+    let ok = write_guest_u32(kernel, memory, thread_id, out_ptr, required_size)
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            out_ptr.wrapping_add(4),
+            preset_offset,
+        )
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            out_ptr.wrapping_add(8),
+            PRESET_ID.len() as u32,
+        )
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            out_ptr.wrapping_add(12),
+            platform_offset,
+        )
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            out_ptr.wrapping_add(16),
+            PLATFORM_ID.len() as u32,
+        )
+        && write_guest_bytes(
+            kernel,
+            memory,
+            thread_id,
+            out_ptr.wrapping_add(preset_offset),
+            PRESET_ID,
+        )
+        && write_guest_bytes(
+            kernel,
+            memory,
+            thread_id,
+            out_ptr.wrapping_add(platform_offset),
+            PLATFORM_ID,
+        )
+        && write_optional_count(kernel, memory, thread_id, returned_ptr, required_size);
+    if ok {
+        kernel.threads.set_last_error(thread_id, 0);
+    }
+    ok
 }
 
 fn set_file_pointer_raw<M: CoredllGuestMemory>(
@@ -10191,6 +10456,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "GetVersionEx",
     "GetVersionExW",
     "GetSystemMetrics",
+    "SystemParametersInfoW",
     "CopyRect",
     "EqualRect",
     "InflateRect",
@@ -10256,6 +10522,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "FlushFileBuffers",
     "GetStoreInformation",
     "DeviceIoControl",
+    "KernelIoControl",
     "ClearCommBreak",
     "ClearCommError",
     "EscapeCommFunction",
@@ -10354,6 +10621,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "GetSystemTime",
     "GetLocalTime",
     "GetSystemTimeAsFileTime",
+    "FileTimeToSystemTime",
     "GetTickCount",
     "QueryPerformanceCounter",
     "QueryPerformanceFrequency",

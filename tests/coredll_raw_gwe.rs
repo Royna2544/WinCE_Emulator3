@@ -26,8 +26,8 @@ use wince_emulation_v3::{
             ORD_SET_BK_COLOR, ORD_SET_CAPTURE, ORD_SET_FOCUS, ORD_SET_FOREGROUND_WINDOW,
             ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_RECT, ORD_SET_RECT_EMPTY,
             ORD_SET_TIMER, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_TEXT_W,
-            ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_SLEEP, ORD_UNION_RECT, ORD_UPDATE_WINDOW,
-            ORD_VALIDATE_RECT,
+            ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_SLEEP, ORD_SYSTEM_PARAMETERS_INFO_W,
+            ORD_UNION_RECT, ORD_UPDATE_WINDOW, ORD_VALIDATE_RECT,
         },
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat, VirtualFramebuffer},
         gwe::{
@@ -347,6 +347,58 @@ fn coredll_raw_gwe_rect_helpers_match_win32_semantics() -> Result<()> {
             ..
         }
     ));
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_system_parameters_info_returns_ce_strings_and_work_area() -> Result<()> {
+    const SPI_GETWORKAREA: u32 = 0x0030;
+    const SPI_GETOEMINFO: u32 = 0x0102;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 5;
+    let text = 0x1000;
+    let rect = 0x1200;
+    memory.map_halfwords(text, 256);
+    memory.map_words(rect, 4);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SYSTEM_PARAMETERS_INFO_W,
+            [SPI_GETOEMINFO, 256, text, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(text, 256), "WinCE Emulator");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SYSTEM_PARAMETERS_INFO_W,
+            [SPI_GETWORKAREA, 0, rect, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(rect)?, 0);
+    assert_eq!(memory.read_u32(rect + 4)?, 0);
+    assert_eq!(memory.read_u32(rect + 8)?, 800);
+    assert_eq!(memory.read_u32(rect + 12)?, 480);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
     Ok(())
 }
 
