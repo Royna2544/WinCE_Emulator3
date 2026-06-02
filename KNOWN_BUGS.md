@@ -92,8 +92,12 @@
     no-debug-input (`OEM_DEBUG_READ_NODATA`/`0xffffffff`), advancing the run
     into a guest CPU exception (`interrupt_no=12`, `pc=0x00000000`,
     `ra=0x00035cf4`) after app jump-table code reaches
-    `interrupt_last_pc=0x000ef80a`/`interrupt_last_insn=0x007b375a`; the
-    framebuffer is still all zero.
+    `interrupt_last_pc=0x000ef80a`/`interrupt_last_insn=0x007b375a`; that was
+    traced to the trampoline scanner rewriting branch-shaped halfword
+    jump-table data. The scanner now preserves those table bytes, and the
+    latest mounted release run reaches the next clean stop at COREDLL ordinal
+    `1943` (`pc=0x7fff0900`, `ra=0x600110e4`); the framebuffer is still all
+    zero.
   - Status: active; `TlsCall` now returns real CE-style slots,
     `CallWindowProcW` now enters guest window-procedure targets, and
     `CreateWindowExW` now delivers the first create-time message. Raw
@@ -113,11 +117,11 @@
     generic debug input helper into a MIPS CPU exception after the newly
     connected soft-float helpers, MIPS 64-bit helper returns,
     `GetTimeZoneInformation @27`, foreground-window activation, and
-    `InputDebugCharW @595`. Next work is to disassemble and fix the
-    MIPS/trampoline/control-flow frontier now identified as the halfword-aligned
-    jump-table target `0x000ef80a`, then continue with CE-referenced raw
-    behavior that advances the guest path toward the newly connected framebuffer
-    drawing and the remaining GDI/DC/surface drawing and blit imports.
+    `InputDebugCharW @595`, and the halfword jump-table corruption at
+    `0x000ebbf0`. Next work is to classify COREDLL ordinal `1943` from the SDK
+    MFC callsite, then continue with CE-referenced raw behavior that advances
+    the guest path toward the newly connected framebuffer drawing and the
+    remaining GDI/DC/surface drawing and blit imports.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch

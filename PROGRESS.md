@@ -527,6 +527,14 @@
   (`interrupt_last_insn=0x007b375a`). This is a halfword-aligned
   MIPS/control-flow frontier, not another unresolved COREDLL import; the
   framebuffer dump remains blank.
+- The Unicorn trampoline scanner now detects MIPS halfword jump-table data that
+  immediately follows the `lui/addiu/sll/addu/lh/addu/jr` dispatch pattern and
+  skips branch/JAL rewrites that overlap those table bytes. This preserves the
+  iNavi selector-3 table entry `0x16b0` at `0x000ebbf6`, avoiding the previous
+  corrupted jump to `0x000ef80a`. The latest mounted release run now gets past
+  that CPU exception and stops cleanly at a COREDLL import trap for ordinal
+  `1943` (`pc=0x7fff0900`, `ra=0x600110e4`); the framebuffer dump is still all
+  zero.
 
 ## Current State
 
@@ -547,10 +555,10 @@
   previous `GetSystemTime @25` trap, the previous soft-float `__nes @2047`/
   `__litofp @2032` traps, the MIPS `__ll_div @2005` helper frontier,
   `GetTimeZoneInformation @27`, `SetForegroundWindow @702`, and
-  `InputDebugCharW @595`. The current concrete stop is a guest CPU exception
-  (`interrupt_no=12`, `pc=0x00000000`, `ra=0x00035cf4`) after the app jump
-  table target at `interrupt_last_pc=0x000ef80a`
-  (`interrupt_last_insn=0x007b375a`); the framebuffer remains blank. A
+  `InputDebugCharW @595`, and the trampoline scanner's halfword jump-table
+  corruption bug. The current concrete stop is a COREDLL import trap for
+  ordinal `1943` (`pc=0x7fff0900`, `ra=0x600110e4`) reached from SDK MFC code;
+  the framebuffer remains blank. A
   generic virtual framebuffer is now
   attached to the emulator boundary, generic virtual presenter/desktop
   interfaces exist for host

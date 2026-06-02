@@ -1735,8 +1735,16 @@ fn patch_mips_unicorn_trampolines(
                 image.path, section.name
             )));
         };
+        let halfword_jump_table_ranges =
+            mips_halfword_jump_table_ranges(mapped, load_base, start, end, &image.path)?;
         let mut rva = start;
         while rva.checked_add(8).is_some_and(|next| next <= end) {
+            if mips_patch_rva_overlaps_data_ranges(rva, &halfword_jump_table_ranges) {
+                rva = rva
+                    .checked_add(4)
+                    .ok_or_else(|| Error::InvalidArgument("section scan overflow".to_owned()))?;
+                continue;
+            }
             let instruction = read_mapped_word(mapped, rva, &image.path)?;
             let delay_slot = read_mapped_word(mapped, rva + 4, &image.path)?;
             if let Some(branch) = decode_mips_branch_likely(instruction) {
@@ -2014,6 +2022,181 @@ fn target_in_ranges(target: u32, ranges: &[(u32, u32)]) -> bool {
         let end = base.saturating_add(*size);
         target >= *base && target < end
     })
+}
+
+#[cfg(feature = "unicorn")]
+fn mips_halfword_jump_table_ranges(
+    mapped: &[u8],
+    load_base: u32,
+    start: u32,
+    end: u32,
+    path: &str,
+) -> Result<Vec<(u32, u32)>> {
+    let mut ranges = Vec::new();
+    let mut rva = start;
+    while rva.checked_add(32).is_some_and(|next| next <= end) {
+        let Some(range) =
+            decode_mips_halfword_jump_table_range(mapped, load_base, start, end, rva, path)?
+        else {
+            rva = rva
+                .checked_add(4)
+                .ok_or_else(|| Error::InvalidArgument("section scan overflow".to_owned()))?;
+            continue;
+        };
+        ranges.push(range);
+        rva = rva
+            .checked_add(4)
+            .ok_or_else(|| Error::InvalidArgument("section scan overflow".to_owned()))?;
+    }
+    Ok(ranges)
+}
+
+#[cfg(feature = "unicorn")]
+fn decode_mips_halfword_jump_table_range(
+    mapped: &[u8],
+    load_base: u32,
+    section_start: u32,
+    section_end: u32,
+    rva: u32,
+    path: &str,
+) -> Result<Option<(u32, u32)>> {
+    let lui = read_mapped_word(mapped, rva, path)?;
+    let addiu = read_mapped_word(mapped, rva + 4, path)?;
+    let sll = read_mapped_word(mapped, rva + 8, path)?;
+    let addu_index = read_mapped_word(mapped, rva + 12, path)?;
+    let lh = read_mapped_word(mapped, rva + 16, path)?;
+    let addu_target = read_mapped_word(mapped, rva + 20, path)?;
+    let jr = read_mapped_word(mapped, rva + 24, path)?;
+    let delay_slot = read_mapped_word(mapped, rva + 28, path)?;
+
+    let Some(base_register) = decode_mips_lui_rt(lui) else {
+        return Ok(None);
+    };
+    if !is_mips_addiu_same_register(addiu, base_register) {
+        return Ok(None);
+    }
+    let Some((index_register, selector_register)) = decode_mips_sll_by_one(sll) else {
+        return Ok(None);
+    };
+    if !is_mips_addu(addu_index, index_register, index_register, base_register) {
+        return Ok(None);
+    }
+    if !is_mips_lh_same_register(lh, index_register) {
+        return Ok(None);
+    }
+    if !is_mips_addu(addu_target, base_register, base_register, index_register) {
+        return Ok(None);
+    }
+    if !is_mips_jr(jr, base_register) || delay_slot != MIPS_NOP {
+        return Ok(None);
+    }
+
+    let table_pc = ((lui & 0xffff) << 16).wrapping_add(addiu as u16 as i16 as i32 as u32);
+    let Some(table_rva) = table_pc.checked_sub(load_base) else {
+        return Ok(None);
+    };
+    if table_rva != rva + 32 || table_rva >= section_end {
+        return Ok(None);
+    }
+    let Some(entry_count) = find_mips_halfword_jump_table_entry_count(
+        mapped,
+        section_start,
+        rva,
+        selector_register,
+        path,
+    )?
+    else {
+        return Ok(None);
+    };
+    let byte_len = entry_count.saturating_mul(2);
+    if byte_len == 0 {
+        return Ok(None);
+    }
+    let Some(table_end) = table_rva.checked_add(byte_len) else {
+        return Ok(None);
+    };
+    if table_end > section_end {
+        return Ok(None);
+    }
+    Ok(Some((table_rva, byte_len)))
+}
+
+#[cfg(feature = "unicorn")]
+fn find_mips_halfword_jump_table_entry_count(
+    mapped: &[u8],
+    section_start: u32,
+    setup_rva: u32,
+    selector_register: u32,
+    path: &str,
+) -> Result<Option<u32>> {
+    let search_start = setup_rva.saturating_sub(64).max(section_start);
+    let mut cursor = setup_rva;
+    while cursor >= search_start + 4 {
+        cursor -= 4;
+        let instruction = read_mapped_word(mapped, cursor, path)?;
+        if instruction >> 26 == 0x0b
+            && ((instruction >> 21) & 0x1f) == selector_register
+            && (instruction & 0xffff) != 0
+        {
+            return Ok(Some(instruction & 0xffff));
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(feature = "unicorn")]
+fn mips_patch_rva_overlaps_data_ranges(rva: u32, ranges: &[(u32, u32)]) -> bool {
+    ranges.iter().any(|(start, len)| {
+        let end = start.saturating_add(*len);
+        rva < end && rva.saturating_add(8) > *start
+    })
+}
+
+#[cfg(feature = "unicorn")]
+fn decode_mips_lui_rt(instruction: u32) -> Option<u32> {
+    (instruction >> 26 == 0x0f).then_some((instruction >> 16) & 0x1f)
+}
+
+#[cfg(feature = "unicorn")]
+fn is_mips_addiu_same_register(instruction: u32, register: u32) -> bool {
+    instruction >> 26 == 0x09
+        && ((instruction >> 21) & 0x1f) == register
+        && ((instruction >> 16) & 0x1f) == register
+}
+
+#[cfg(feature = "unicorn")]
+fn decode_mips_sll_by_one(instruction: u32) -> Option<(u32, u32)> {
+    let opcode = instruction >> 26;
+    let rs = (instruction >> 21) & 0x1f;
+    let rt = (instruction >> 16) & 0x1f;
+    let rd = (instruction >> 11) & 0x1f;
+    let shamt = (instruction >> 6) & 0x1f;
+    let funct = instruction & 0x3f;
+    (opcode == 0 && rs == 0 && shamt == 1 && funct == 0).then_some((rd, rt))
+}
+
+#[cfg(feature = "unicorn")]
+fn is_mips_addu(instruction: u32, rd: u32, rs: u32, rt: u32) -> bool {
+    instruction >> 26 == 0
+        && ((instruction >> 21) & 0x1f) == rs
+        && ((instruction >> 16) & 0x1f) == rt
+        && ((instruction >> 11) & 0x1f) == rd
+        && (instruction & 0x3f) == 0x21
+}
+
+#[cfg(feature = "unicorn")]
+fn is_mips_lh_same_register(instruction: u32, register: u32) -> bool {
+    instruction >> 26 == 0x21
+        && ((instruction >> 21) & 0x1f) == register
+        && ((instruction >> 16) & 0x1f) == register
+        && (instruction & 0xffff) == 0
+}
+
+#[cfg(feature = "unicorn")]
+fn is_mips_jr(instruction: u32, register: u32) -> bool {
+    instruction >> 26 == 0
+        && ((instruction >> 21) & 0x1f) == register
+        && (instruction & 0x001f_ffff) == 0x08
 }
 
 #[cfg(feature = "unicorn")]
@@ -5280,8 +5463,42 @@ mod unicorn_tests {
         assert_eq!(uc.reg_read(RegisterMIPS::A0).unwrap(), 0x6004_ed38);
     }
 
+    #[test]
+    fn trampoline_scan_skips_halfword_jump_table_data() {
+        let mut mapped = vec![0; 0x80];
+        write_vec_u32(&mut mapped, 0x10, 0x2c43_0005);
+        write_vec_u32(&mut mapped, 0x20, 0x3c07_0000);
+        write_vec_u32(&mut mapped, 0x24, 0x24e7_0040);
+        write_vec_u32(&mut mapped, 0x28, 0x0002_3040);
+        write_vec_u32(&mut mapped, 0x2c, 0x00c7_3021);
+        write_vec_u32(&mut mapped, 0x30, 0x84c6_0000);
+        write_vec_u32(&mut mapped, 0x34, 0x00e6_3821);
+        write_vec_u32(&mut mapped, 0x38, 0x00e0_0008);
+        write_vec_u32(&mut mapped, 0x3c, 0x0000_0000);
+        let table_entries = [0x000c_u16, 0x29b8, 0x243c, 0x16b0, 0x2154];
+        for (index, entry) in table_entries.into_iter().enumerate() {
+            let offset = 0x40 + index * 2;
+            mapped[offset..offset + 2].copy_from_slice(&entry.to_le_bytes());
+        }
+
+        let ranges =
+            super::mips_halfword_jump_table_ranges(&mapped, 0, 0, mapped.len() as u32, "test")
+                .unwrap();
+
+        assert_eq!(ranges, vec![(0x40, 10)]);
+        assert!(!super::mips_patch_rva_overlaps_data_ranges(0x38, &ranges));
+        assert!(super::mips_patch_rva_overlaps_data_ranges(0x3c, &ranges));
+        assert!(super::mips_patch_rva_overlaps_data_ranges(0x44, &ranges));
+        assert!(super::mips_patch_rva_overlaps_data_ranges(0x48, &ranges));
+        assert!(!super::mips_patch_rva_overlaps_data_ranges(0x4c, &ranges));
+    }
+
     fn write_u32(uc: &mut Unicorn<'_, ()>, address: u64, value: u32) {
         uc.mem_write(address, &value.to_le_bytes()).unwrap();
+    }
+
+    fn write_vec_u32(mapped: &mut [u8], offset: usize, value: u32) {
+        mapped[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
 
     fn write_words(uc: &mut Unicorn<'_, ()>, address: u32, words: &[u32]) {

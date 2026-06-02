@@ -22,16 +22,15 @@
   `MultiByteToWideChar @196`; the framebuffer dump is still all zero. Use
   release/longer bounded slices and implement the next real GWE/GDI/resource
   behavior the trace demands before expecting guest drawing.
-- Continue from the new post-debug-input CPU exception frontier. The latest
-  release mounted run gets past `__nes @2047`, `__litofp @2032`,
-  `__ll_div @2005`, `GetTimeZoneInformation @27`, `SetForegroundWindow @702`,
-  and `InputDebugCharW @595`; it now stops on a guest CPU exception
-  (`interrupt_no=12`, `pc=0x00000000`, `ra=0x00035cf4`) after a trace through
-  the app jump table at `0x000ebb84`, with the last code hook at
-  `interrupt_last_pc=0x000ef80a`/`interrupt_last_insn=0x007b375a`. The
-  framebuffer dump `target\inavi-release-debugchar.ppm` is still all zero.
-  Disassemble and fix the next MIPS/trampoline/control-flow issue before
-  expecting guest drawing.
+- Continue from the new post-jump-table import frontier. The latest release
+  mounted run gets past `__nes @2047`, `__litofp @2032`, `__ll_div @2005`,
+  `GetTimeZoneInformation @27`, `SetForegroundWindow @702`,
+  `InputDebugCharW @595`, and the previous trampoline corruption of the iNavi
+  halfword jump table at `0x000ebbf0`; it now stops cleanly at a COREDLL import
+  trap for ordinal `1943` (`pc=0x7fff0900`, `ra=0x600110e4`). The framebuffer
+  dump `target\inavi-release-jumptable.ppm` is still all zero. Inspect the SDK
+  MFC callsite and implement the next real CE-referenced ordinal behavior
+  before expecting guest drawing.
 - Replace launch-stub behavior for commctrl, WINSOCK, and OLE imports with
   real subsystem-backed implementations as import traces demand. Keep MFC on
   the loaded SDK DLL path only; do not add emulator MFC stubs.
