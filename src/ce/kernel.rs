@@ -429,6 +429,20 @@ impl CeKernel {
         self.handles.create_mutex(name, initial_owner_thread)
     }
 
+    pub fn create_semaphore_w(
+        &mut self,
+        name: Option<String>,
+        initial_count: i32,
+        maximum_count: i32,
+    ) -> Option<u32> {
+        self.handles
+            .create_semaphore(name, initial_count, maximum_count)
+    }
+
+    pub fn release_semaphore(&mut self, handle: u32, release_count: i32) -> Option<i32> {
+        self.handles.release_semaphore(handle, release_count)
+    }
+
     pub fn release_mutex(&mut self, handle: u32, thread_id: u32) -> bool {
         self.handles.release_mutex(handle, thread_id)
     }
@@ -598,6 +612,23 @@ impl CeKernel {
                 .gwe
                 .post_message_for_window(hwnd, Message::new(hwnd, msg, wparam, lparam, time_ms)),
         }
+    }
+
+    pub fn post_thread_message_w(
+        &mut self,
+        target_thread_id: u32,
+        msg: u32,
+        wparam: u32,
+        lparam: u32,
+    ) -> bool {
+        self.gwe.post_thread_message(
+            target_thread_id,
+            msg,
+            wparam,
+            lparam,
+            self.timers.tick_count(),
+        );
+        true
     }
 
     pub fn send_message_w(&mut self, hwnd: u32, msg: u32, wparam: u32, lparam: u32) -> Option<u32> {

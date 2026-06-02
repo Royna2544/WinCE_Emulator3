@@ -30,6 +30,13 @@ pub const WM_USER: u32 = 0x0400;
 pub const MSGSRC_UNKNOWN: u32 = 0;
 pub const MSGSRC_SOFTWARE_POST: u32 = 1;
 pub const MSGSRC_HARDWARE_KEYBOARD: u32 = 2;
+pub const QS_KEY: u32 = 0x0001;
+pub const QS_MOUSEMOVE: u32 = 0x0002;
+pub const QS_MOUSEBUTTON: u32 = 0x0004;
+pub const QS_POSTMESSAGE: u32 = 0x0008;
+pub const QS_TIMER: u32 = 0x0010;
+pub const QS_PAINT: u32 = 0x0020;
+pub const QS_SENDMESSAGE: u32 = 0x0040;
 
 pub const HWND_BROADCAST: u32 = 0x0000_ffff;
 pub const DESKTOP_HWND: u32 = 0x0001_0000;
@@ -989,6 +996,15 @@ impl Gwe {
             .unwrap_or(MSGSRC_UNKNOWN)
     }
 
+    pub fn get_queue_status(&self, thread_id: u32, flags: u32) -> u32 {
+        let current = self.queue_status_bits(thread_id) & flags;
+        (current << 16) | current
+    }
+
+    pub fn has_queue_input(&self, thread_id: u32, flags: u32) -> bool {
+        self.queue_status_bits(thread_id) & flags != 0
+    }
+
     pub fn get_message(&mut self, thread_id: u32) -> Option<Message> {
         self.get_message_filtered(thread_id, None, 0, 0)
     }
@@ -1144,6 +1160,34 @@ impl Gwe {
                     && hwnd.is_none_or(|wanted| window.hwnd == wanted)
             })
             .map(|window| Message::new(window.hwnd, WM_PAINT, 0, 0, 0))
+    }
+
+    fn queue_status_bits(&self, thread_id: u32) -> u32 {
+        let mut status = 0;
+        if self.in_send_message(thread_id) {
+            status |= QS_SENDMESSAGE;
+        }
+        if let Some(queue) = self.queues.get(&thread_id) {
+            for message in queue {
+                status |= match message.msg {
+                    WM_TIMER => QS_TIMER,
+                    WM_PAINT => QS_PAINT,
+                    WM_KEYDOWN | WM_CHAR => QS_KEY,
+                    0x0201 | 0x0202 => QS_MOUSEBUTTON,
+                    0x0200 => QS_MOUSEMOVE,
+                    _ => QS_POSTMESSAGE,
+                };
+            }
+        }
+        if self.windows.values().any(|window| {
+            !window.destroyed
+                && window.thread_id == thread_id
+                && window.visible
+                && window.update_pending
+        }) {
+            status |= QS_PAINT;
+        }
+        status
     }
 
     fn parent_to_screen_rect(&self, parent: Option<u32>, rect: Rect) -> Rect {

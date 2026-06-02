@@ -1287,6 +1287,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
+        ORD_CREATE_SEMAPHORE_W => Some(CoredllValue::Handle(create_semaphore_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_RELEASE_SEMAPHORE => Some(CoredllValue::Bool(release_semaphore_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_WAIT_FOR_SINGLE_OBJECT => Some(CoredllValue::U32(kernel.wait_for_single_object(
             raw_arg(args, 0),
             raw_arg(args, 1),
@@ -2277,6 +2283,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 2),
             raw_arg(args, 3),
         ))),
+        ORD_POST_THREAD_MESSAGE_W => Some(CoredllValue::Bool(kernel.post_thread_message_w(
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+            raw_arg(args, 3),
+        ))),
         ORD_POST_QUIT_MESSAGE => {
             kernel
                 .gwe
@@ -2310,6 +2322,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_IN_SEND_MESSAGE => Some(CoredllValue::Bool(kernel.gwe.in_send_message(thread_id))),
         ORD_GET_MESSAGE_SOURCE => Some(CoredllValue::U32(kernel.gwe.get_message_source(thread_id))),
+        ORD_GET_QUEUE_STATUS => Some(CoredllValue::U32(
+            kernel.gwe.get_queue_status(thread_id, raw_arg(args, 0)),
+        )),
         ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP => {
             Some(CoredllValue::U32(kernel.timers.tick_count()))
         }
@@ -4430,7 +4445,7 @@ fn msg_wait_for_multiple_objects_ex_raw<M: CoredllGuestMemory>(
     let count = raw_arg(args, 0);
     let handles_ptr = raw_arg(args, 1);
     let timeout_ms = raw_arg(args, 2);
-    let _wake_mask = raw_arg(args, 3);
+    let wake_mask = raw_arg(args, 3);
     let flags = raw_arg(args, 4);
     const MWMO_WAITALL: u32 = 0x0001;
     const MAXIMUM_WAIT_OBJECTS: u32 = 64;
@@ -4470,11 +4485,8 @@ fn msg_wait_for_multiple_objects_ex_raw<M: CoredllGuestMemory>(
         }
     }
 
-    if kernel
-        .gwe
-        .peek_message_filtered(thread_id, None, 0, 0, PeekFlags::NO_REMOVE)
-        .is_some()
-    {
+    kernel.pump_timers_to_gwe(thread_id);
+    if kernel.gwe.has_queue_input(thread_id, wake_mask) {
         kernel.threads.set_last_error(thread_id, 0);
         return crate::ce::timer::WAIT_OBJECT_0 + count;
     }
@@ -4997,6 +5009,36 @@ fn create_event_w_raw<M: CoredllGuestMemory>(
     handle
 }
 
+fn create_semaphore_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let initial_count = raw_i32_arg(args, 1);
+    let maximum_count = raw_i32_arg(args, 2);
+    let name_ptr = raw_arg(args, 3);
+    let name = if name_ptr == 0 {
+        None
+    } else {
+        let Some(name) = read_guest_wide_arg(memory, name_ptr) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        Some(name)
+    };
+    let Some(handle) = kernel.create_semaphore_w(name, initial_count, maximum_count) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    handle
+}
+
 fn create_thread_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -5097,6 +5139,28 @@ fn release_mutex_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         false
     }
+}
+
+fn release_semaphore_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let handle = raw_arg(args, 0);
+    let release_count = raw_i32_arg(args, 1);
+    let previous_ptr = raw_arg(args, 2);
+    let Some(previous) = kernel.release_semaphore(handle, release_count) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if !write_optional_count(kernel, memory, thread_id, previous_ptr, previous as u32) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn register_class_w_raw<M: CoredllGuestMemory>(

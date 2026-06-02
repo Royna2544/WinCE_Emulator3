@@ -9,26 +9,27 @@ use wince_emulation_v3::{
             ORD_GET_ACTIVE_WINDOW, ORD_GET_CAPTURE, ORD_GET_CLASS_INFO_W, ORD_GET_CLASS_NAME_W,
             ORD_GET_CLIENT_RECT, ORD_GET_CURSOR_POS, ORD_GET_DC, ORD_GET_DEVICE_CAPS,
             ORD_GET_FOCUS, ORD_GET_MESSAGE_SOURCE, ORD_GET_MESSAGE_W, ORD_GET_PARENT,
-            ORD_GET_STOCK_OBJECT, ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH, ORD_GET_SYSTEM_INFO,
-            ORD_GET_SYSTEM_METRICS, ORD_GET_UPDATE_RECT, ORD_GET_WINDOW, ORD_GET_WINDOW_LONG_W,
-            ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W,
-            ORD_GLOBAL_MEMORY_STATUS, ORD_IN_SEND_MESSAGE, ORD_INFLATE_RECT, ORD_INTERSECT_RECT,
-            ORD_INVALIDATE_RECT, ORD_IS_RECT_EMPTY, ORD_IS_WINDOW, ORD_IS_WINDOW_ENABLED,
-            ORD_IS_WINDOW_VISIBLE, ORD_KILL_TIMER, ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W,
-            ORD_MAP_WINDOW_POINTS, ORD_MESSAGE_BOX_W, ORD_MOVE_WINDOW, ORD_OFFSET_RECT,
-            ORD_PEEK_MESSAGE_W, ORD_POLYGON, ORD_POST_MESSAGE_W, ORD_POST_QUIT_MESSAGE,
-            ORD_PT_IN_RECT, ORD_REGISTER_CLASS_W, ORD_RELEASE_CAPTURE, ORD_RELEASE_DC,
-            ORD_RELEASE_MUTEX, ORD_ROUND_RECT, ORD_SCREEN_TO_CLIENT, ORD_SELECT_OBJECT,
-            ORD_SEND_MESSAGE_TIMEOUT, ORD_SET_BK_COLOR, ORD_SET_CAPTURE, ORD_SET_FOCUS,
-            ORD_SET_PARENT, ORD_SET_RECT, ORD_SET_RECT_EMPTY, ORD_SET_TIMER, ORD_SET_WINDOW_LONG_W,
-            ORD_SET_WINDOW_POS, ORD_SET_WINDOW_TEXT_W, ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE,
-            ORD_SLEEP, ORD_UNION_RECT, ORD_UPDATE_WINDOW, ORD_VALIDATE_RECT,
+            ORD_GET_QUEUE_STATUS, ORD_GET_STOCK_OBJECT, ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH,
+            ORD_GET_SYSTEM_INFO, ORD_GET_SYSTEM_METRICS, ORD_GET_UPDATE_RECT, ORD_GET_WINDOW,
+            ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_TEXT_LENGTH_W,
+            ORD_GET_WINDOW_TEXT_W, ORD_GLOBAL_MEMORY_STATUS, ORD_IN_SEND_MESSAGE, ORD_INFLATE_RECT,
+            ORD_INTERSECT_RECT, ORD_INVALIDATE_RECT, ORD_IS_RECT_EMPTY, ORD_IS_WINDOW,
+            ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE, ORD_KILL_TIMER, ORD_LOAD_RESOURCE,
+            ORD_LOAD_STRING_W, ORD_MAP_WINDOW_POINTS, ORD_MESSAGE_BOX_W, ORD_MOVE_WINDOW,
+            ORD_OFFSET_RECT, ORD_PEEK_MESSAGE_W, ORD_POLYGON, ORD_POST_MESSAGE_W,
+            ORD_POST_QUIT_MESSAGE, ORD_POST_THREAD_MESSAGE_W, ORD_PT_IN_RECT, ORD_REGISTER_CLASS_W,
+            ORD_RELEASE_CAPTURE, ORD_RELEASE_DC, ORD_RELEASE_MUTEX, ORD_ROUND_RECT,
+            ORD_SCREEN_TO_CLIENT, ORD_SELECT_OBJECT, ORD_SEND_MESSAGE_TIMEOUT, ORD_SET_BK_COLOR,
+            ORD_SET_CAPTURE, ORD_SET_FOCUS, ORD_SET_PARENT, ORD_SET_RECT, ORD_SET_RECT_EMPTY,
+            ORD_SET_TIMER, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_TEXT_W,
+            ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_SLEEP, ORD_UNION_RECT, ORD_UPDATE_WINDOW,
+            ORD_VALIDATE_RECT,
         },
         gwe::{
             GW_CHILD, GW_HWNDFIRST, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER, GWL_USERDATA,
-            HWND_BROADCAST, MSGSRC_SOFTWARE_POST, Point, SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN,
-            WM_MOVE, WM_PAINT, WM_QUIT, WM_SHOWWINDOW, WM_SIZE, WM_TIMER, WM_USER,
-            WM_WINDOWPOSCHANGED, WS_VISIBLE,
+            HWND_BROADCAST, MSGSRC_SOFTWARE_POST, Point, QS_PAINT, QS_POSTMESSAGE, SM_CXBORDER,
+            SM_CXSCREEN, SM_CYSCREEN, WM_MOVE, WM_PAINT, WM_QUIT, WM_SHOWWINDOW, WM_SIZE, WM_TIMER,
+            WM_USER, WM_WINDOWPOSCHANGED, WS_VISIBLE,
         },
         kernel::CeKernel,
         resource::ResourceId,
@@ -1908,6 +1909,109 @@ fn coredll_raw_message_ipc_state_tracks_source_send_and_timeout() -> Result<()> 
     ));
     assert_eq!(memory.read_u32(result_ptr)?, 0);
     assert!(!kernel.gwe.in_send_message(thread_id));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_queue_status_tracks_thread_posts_and_paint() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 6;
+    let msg_ptr = 0x9800;
+    memory.map_words(msg_ptr, 7);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_QUEUE_STATUS,
+            [QS_POSTMESSAGE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_POST_THREAD_MESSAGE_W,
+            [thread_id, WM_USER + 61, 0x61, 0x62],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_QUEUE_STATUS,
+            [QS_POSTMESSAGE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(v),
+            ..
+        } if v == ((QS_POSTMESSAGE << 16) | QS_POSTMESSAGE)
+    ));
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        0,
+        WM_USER + 61,
+        0x61,
+        0x62,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_QUEUE_STATUS,
+            [QS_POSTMESSAGE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+
+    let hwnd = kernel.create_window_ex_w(thread_id, "PAINTSTATUS", "", None, 0, WS_VISIBLE, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_QUEUE_STATUS,
+            [QS_PAINT],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(v),
+            ..
+        } if v == ((QS_PAINT << 16) | QS_PAINT)
+    ));
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        hwnd,
+        WM_PAINT,
+        0,
+        0,
+    );
 
     Ok(())
 }

@@ -9,6 +9,7 @@ use crate::{
 pub enum KernelObject {
     Event(EventObject),
     Mutex(MutexObject),
+    Semaphore(SemaphoreObject),
     File(FileObject),
     FindFile(FindFileObject),
     Device(DeviceSession),
@@ -31,6 +32,13 @@ pub struct EventObject {
 pub struct MutexObject {
     pub name: Option<String>,
     pub owner_thread: Option<u32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SemaphoreObject {
+    pub name: Option<String>,
+    pub count: i32,
+    pub maximum: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -161,6 +169,48 @@ impl HandleTable {
             name,
             owner_thread: initial_owner,
         }))
+    }
+
+    pub fn create_semaphore(
+        &mut self,
+        name: Option<String>,
+        initial_count: i32,
+        maximum_count: i32,
+    ) -> Option<u32> {
+        if maximum_count <= 0 || initial_count < 0 || initial_count > maximum_count {
+            return None;
+        }
+        if let Some(name) = name.as_deref() {
+            if let Some((handle, _)) = self.objects.iter().find(|(_, object)| {
+                matches!(
+                    object,
+                    KernelObject::Semaphore(semaphore)
+                        if semaphore.name.as_deref() == Some(name)
+                )
+            }) {
+                return Some(*handle);
+            }
+        }
+        Some(self.insert(KernelObject::Semaphore(SemaphoreObject {
+            name,
+            count: initial_count,
+            maximum: maximum_count,
+        })))
+    }
+
+    pub fn release_semaphore(&mut self, handle: u32, release_count: i32) -> Option<i32> {
+        if release_count <= 0 {
+            return None;
+        }
+        let Ok(KernelObject::Semaphore(semaphore)) = self.get_mut(handle) else {
+            return None;
+        };
+        let previous = semaphore.count;
+        if semaphore.count.saturating_add(release_count) > semaphore.maximum {
+            return None;
+        }
+        semaphore.count += release_count;
+        Some(previous)
     }
 
     pub fn create_thread(
@@ -392,6 +442,10 @@ impl HandleTable {
                 mutex.owner_thread = Some(thread_id);
                 WaitResult::Object0
             }
+            KernelObject::Semaphore(semaphore) if semaphore.count > 0 => {
+                semaphore.count -= 1;
+                WaitResult::Object0
+            }
             KernelObject::File(_)
             | KernelObject::FindFile(_)
             | KernelObject::Device(_)
@@ -413,6 +467,7 @@ impl HandleTable {
             KernelObject::Mutex(mutex) => {
                 mutex.owner_thread.is_none() || mutex.owner_thread == Some(thread_id)
             }
+            KernelObject::Semaphore(semaphore) => semaphore.count > 0,
             KernelObject::Thread(thread) => thread.signaled,
             KernelObject::Process(process) => process.signaled,
             KernelObject::File(_)
