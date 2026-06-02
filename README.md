@@ -13,6 +13,8 @@ shortcuts:
 - virtual CE memory model for process/custom heaps, local allocation,
   `VirtualAlloc` ranges, and raw `ReadFile`/`WriteFile` guest buffers
 - host-backed file cursor, size, and flush behavior for raw file ordinals
+- static CE mount-point enumeration for `\SDMMC Disk` plus host binding with
+  `--sdmmc-root`
 - GWE HWND state with CE-style window/client rectangles, title/class text,
   window-long slots, focus, visibility/enabled state, and coordinate mapping
 - raw CE/MFC-style `MSG` marshalling for the basic message pump
@@ -27,6 +29,7 @@ shortcuts:
 - Unicorn launch prep for mapping PE image bytes, patching supported import
   DLL slots to trap stubs, dispatching COREDLL traps through the raw ordinal
   dispatcher, and reporting PC/RA/SP/v0/v1/a0-a3/t9 debug snapshots on failure
+  or bounded self-stop states such as an empty-queue `GetMessageW` block
 - remote-control API state for touch/key input, GPS/NMEA serial injection, IMU
   state, pause/resume, status JSON, logs, and audio chunks
 - audio sink registry for host, websocket, and debug logging adapters; the host
@@ -61,5 +64,9 @@ cargo run -- --image /mnt/d/INAVI_Emulator/INAVI/INavi/INavi.exe
 CPU execution is behind the `unicorn` feature:
 
 ```bash
-cargo run --features unicorn -- --image /mnt/d/INAVI_Emulator/INAVI/INavi/INavi.exe --run-cpu
+cargo run --features unicorn -- --image D:\INAVI_Emulator\INAVI\INavi\INavi.exe --dll-search-dir "C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii" --sdmmc-root D:\INAVI_Emulator\INAVI --run-cpu
 ```
+
+The current bounded target run stops at a CE/MFC-style empty `GetMessageW`
+wait with a `blocked_get_message` snapshot. That is a useful frontier, not a
+completed GUI launch.

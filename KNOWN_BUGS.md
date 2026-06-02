@@ -2,38 +2,35 @@
 
 ## Open
 
-- CPU execution is not available in the default build.
-  - Symptom: `--run-cpu` reports that the binary was built without the `unicorn`
-    feature.
-  - Evidence: PE image mapping and import traps are not implemented yet.
-  - Status: expected initial scaffold limitation.
-
-- Main process launch currently exits during startup/cleanup instead of reaching
-  a durable interactive message loop.
-  - Symptom: bounded launch now returns status 0 through decoded CE
-    `TerminateProcess`, but the emulator has not yet driven the app to a useful
-    GUI/message-loop state.
-  - Evidence: the previous exit-table corruption came from in-place heap
-    reallocation growth; moving reallocations fixed the invalid callback and the
-    same bounded launch now reaches the old MIPS encoded kernel exit
-    `target=0xfffff3fa` (`API set 2`, method `2`) with exit code 0.
-  - Status: active; next work is real subsystem behavior that keeps startup from
-    choosing the cleanup/terminate path.
+- Main process launch parks in an empty `GetMessageW` wait before useful GUI
+  output.
+  - Symptom: bounded launch exits the emulator process with status 0 only
+    because the Unicorn runner stops itself at a CE/MFC-correct empty-queue
+    `GetMessageW` block; this is not GUI success.
+  - Evidence: latest bounded run with `--features unicorn`,
+    `--dll-search-dir C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii`,
+    and `--sdmmc-root D:\INAVI_Emulator\INAVI` stops at trap
+    `0x7fff0b60` / COREDLL ordinal 861 with
+    `blocked_get_message thread_id=1 hwnd=<any> min_msg=0 max_msg=0`.
+    The previous `pc=0`/reserved-instruction and decoded
+    `TerminateProcess` startup-cleanup states are no longer the current stop.
+  - Status: active; next work is real CE/MFC message, timer, paint,
+    invalidation, and input behavior that wakes the pump through the guest path.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch
     metadata, but only the implemented virtual Win32/CE facade, waveOut,
     `cemath`, the first kernel/thread/time/sync raw ordinal tranche,
-    local/heap/virtual memory tranche, raw file buffer marshalling, first
-    HWND/RECT/message GWE tranche, and first resource tranche have real
-    semantics.
+    local/heap/virtual memory tranche, raw file buffer/find marshalling, first
+    class/HWND/RECT/message GWE tranche, system-info/memory-status helpers, and
+    first resource tranche have real semantics.
   - Evidence: `src/ce/coredll.rs` reports implemented-vs-stubbed ordinal plan
     entries and returns subsystem stub policies for remaining exports. Raw
     tests now cover critical sections, interlocked operations, TLS/last-error,
     time, event/wait, close-handle, heap/local/virtual allocation, raw
-    file buffers/cursor/size/flush, HWND rectangles/points/text/window-long/
-    focus/messages, unplugged waveOut adapter marshalling, resources, and COM
-    state.
+    file buffers/cursor/size/flush/finds, class registration/window lookup,
+    HWND rectangles/points/text/window-long/focus/messages, unplugged waveOut
+    adapter marshalling, resources, and COM state.
   - Status: active ordinal-by-ordinal implementation work.
 
 - External DLL import traps are launch stubs, not final DLL implementations.

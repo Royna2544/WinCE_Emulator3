@@ -99,6 +99,17 @@ anchors, not app-specific shortcuts.
     virtual HWND state, class/title text copying, visibility/enabled checks,
     parent lookup, and focus bookkeeping.
 
+- GWE class/message surface:
+  `/mnt/c/Program Files (x86)/Windows CE Tools/wce420/STANDARDSDK_420/Include/Mipsii/winuser.h`
+  and
+  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h`
+  - CE SDK headers define the `WNDCLASSW` memory shape, `HWND_BROADCAST`, and
+    `WS_VISIBLE` values used by raw `RegisterClassW`, `GetClassInfoW`,
+    `FindWindowW`, `PostMessageW`, and `ShowWindow` marshalling.
+  - GWE queue declarations keep `GetMessageW` as the blocking message API;
+    an empty queue is not modeled as a `FALSE` return because MFC treats that
+    as `WM_QUIT`/thread exit.
+
 - MFC window layout behavior:
   `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/wincore.cpp`
   - Layout and child reposition paths use `GetWindowRect`,
@@ -151,7 +162,9 @@ anchors, not app-specific shortcuts.
   `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/thrdcore.cpp`
   - `AfxInternalPumpMessage` calls `GetMessage`.
   - `CWinThread::Run` uses `PeekMessage(..., PM_NOREMOVE)` for idle detection
-    and loops through `PumpMessage`.
+    and loops through `PumpMessage`; a `FALSE` `GetMessage` return unwinds the
+    pump as a quit condition, so an empty queue must block instead of returning
+    false.
 
 - MFC window dispatch:
   `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/wincore.cpp`
@@ -177,3 +190,13 @@ anchors, not app-specific shortcuts.
     only the websocket/remote queue is connected, while host playback remains
     deliberately unplugged even though the Windows host boundary is represented
     with the `windows` crate.
+
+- CE file namespace / SDMMC mount precedent:
+  `../WinCE_Emulator_v2/README.md`,
+  `../WinCE_Emulator_v2/src/synthetic_dll.cpp`, and
+  `../WinCE_Emulator_v2/src/coredll_fs.cpp`
+  - v2 exposed `SDMMC Disk` as a CE virtual root and mapped the main module
+    under `\SDMMC Disk\...` when the host image lived beneath that root.
+  - Root-relative probes under the SDMMC backing were supported, but `\`
+    itself represented the CE namespace and should enumerate mount-point
+    prefixes such as `SDMMC Disk` rather than the host filesystem root.

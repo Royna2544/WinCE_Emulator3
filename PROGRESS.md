@@ -36,6 +36,10 @@
   - `waveOutOpen`/`waveOutWrite` plus pause/restart/reset/volume helpers
 - Host-backed file opens are contained under a configurable file root and reject
   parent-directory escapes.
+- The host-backed file namespace now has a static CE mount table containing
+  `SDMMC Disk`. `FindFirstFileW("\\")` enumerates that mount prefix, exact
+  `\SDMMC Disk` returns directory metadata, and `--sdmmc-root DIR` binds the
+  mount contents to host storage for file opens/finds beneath the mount.
 - Added checked-in Rust COREDLL ordinal definitions in
   `src/ce/coredll_ordinals.rs`. Runtime dispatch now uses Rust `ORD_*`
   constants, a static export table, and an ordinal `match`, with 1,752 export
@@ -73,7 +77,9 @@
   - raw file ordinals: `CreateFileW`, `ReadFile`, and `WriteFile` now marshal
     UTF-16 paths, guest byte buffers, and transferred-byte output pointers;
     `SetFilePointer`, `GetFileSize`, and `FlushFileBuffers` track cursor,
-    size, high-word output, and flush behavior for host-backed files
+    size, high-word output, and flush behavior for host-backed files;
+    `FindFirstFileW`/`FindClose` marshal `WIN32_FIND_DATAW` and enumerate the
+    static CE mount table at `\`
   - CE/MFC-style HWND geometry/state ordinals: raw `CreateWindowExW`,
     `DestroyWindow`, `ShowWindow`, `UpdateWindow`, `EnableWindow`,
     `IsWindow`, `IsWindowEnabled`, `IsWindowVisible`, `GetParent`,
@@ -81,7 +87,8 @@
     `GetWindowTextW`, `GetWindowTextLengthW`, `GetClassNameW`,
     `SetWindowLongW`, `GetWindowLongW`, `SetWindowPos`, `MoveWindow`,
     `GetWindowRect`, `GetClientRect`, `ClientToScreen`, `ScreenToClient`,
-    and `MapWindowPoints`
+    `MapWindowPoints`, `RegisterClassW`, `GetClassInfoW`, `FindWindowW`,
+    `GetCursorPos`, `GetActiveWindow`, and `MessageBoxW`
   - CE/MFC-style message-pump ordinals: raw `GetMessageW`, `PeekMessageW`,
     `PostMessageW`, `SendMessageW`, `DispatchMessageW`, `TranslateMessage`,
     and `DefWindowProcW` marshal `MSG` structs and queue state
@@ -173,27 +180,42 @@
 - Unicorn now decodes the old MIPS CE directly encoded `TerminateProcess`
   kernel thunk (`API set 2`, method `2`) from the caller instructions when the
   guest exits through that path.
-- The bounded Unicorn launch of `INavi.exe` with SDK `mfcce400.dll` now reaches
-  the decoded CE `TerminateProcess` exit path and returns process status 0.
+- The Unicorn MIPS backend now rewrites direct `jal`, ordinary conditional
+  branch, and branch-likely sites in executable PE sections into same-image
+  trampolines. This works around the observed Unicorn control-flow fault where
+  returning into MFC branch/call sites could fall into `pc=0`/reserved
+  instruction state. Branch-likely delay-slot annulment, normal branch delay
+  slots, and `jal` link/delay-slot behavior are covered by feature-gated tests.
+- Raw `GetMessageW` now models CE/MFC blocking semantics for an empty queue in
+  the Unicorn import path. It stops the bounded run with a
+  `blocked_get_message` debug snapshot instead of returning `FALSE` to MFC and
+  causing normal thread/application cleanup.
+- The bounded Unicorn launch of `INavi.exe` with SDK `mfcce400.dll`,
+  `--sdmmc-root D:\INAVI_Emulator\INAVI`, and the current debug binary now
+  stops at raw `GetMessageW` ordinal 861 with
+  `blocked_get_message thread_id=1 hwnd=<any> min_msg=0 max_msg=0`. This is not
+  GUI success, but it is past the previous `pc=0` and decoded
+  `TerminateProcess` startup-cleanup states.
 
 ## Current State
 
 - CPU execution is wired far enough to load mapped PE images, dispatch import
-  traps, run the target entry path, execute CRT/MFC cleanup, and recognize the
-  target's decoded CE `TerminateProcess` exit.
+  traps, run the target entry path, execute SDK MFC code through the current
+  MIPS trampoline workaround, and stop at an empty-queue `GetMessageW` wait
+  instead of accepting startup cleanup as the final milestone.
 - The default bootstrap uses `regs.json` as backing storage for the fake CE
   registry API and creates base GWE, timer, audio, and memory-map state.
 - The virtual Win32/CE framework and COREDLL dispatcher are connected to Unicorn
   import traps. SDK `mfcce400.dll` can execute from a relocated image through
-  the current target launch/cleanup path, but MFC,
-  commctrl, WINSOCK, OLE, and additional CE 4.2 ordinal behavior still need real
+  the current target startup and message-pump entry path, but MFC, commctrl,
+  WINSOCK, OLE, and additional CE 4.2 ordinal behavior still need real
   subsystem-backed implementation as traces demand.
 - Many COREDLL ordinals are classified and dispatchable but still stubbed by
   subsystem. Kernel/thread/time/sync, memory/local/heap/virtual allocation,
-  raw file buffer marshalling, first GWE HWND/RECT/text/window-long/focus/message
-  pump, unplugged waveOut adapter ordinals, and first resource raw ordinals
-  have real CE-referenced semantics; remaining ordinals still need to be burned
-  down subsystem by subsystem.
+  raw file buffer/find marshalling, first GWE class/HWND/RECT/text/window-long/
+  focus/message pump, unplugged waveOut adapter ordinals, system-info/memory
+  status, and first resource raw ordinals have real CE-referenced semantics;
+  remaining ordinals still need to be burned down subsystem by subsystem.
 - Remote server socket/WebSocket binding is not implemented in Rust yet; the
   emulator-facing remote API state and dispatch behavior are present.
 

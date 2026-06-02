@@ -2,17 +2,18 @@
 
 ## Immediate
 
-- Continue the launch path past process startup/termination by driving real
-  window/message behavior instead of accepting startup-cleanup as the final
-  milestone.
+- Continue the launch path from the current empty-queue `GetMessageW` block by
+  driving real CE/MFC window, timer, paint, input, and invalidation behavior.
+  Do not treat the blocked pump as GUI success.
 - Replace launch-stub behavior for MFC400/mfcce400, commctrl, WINSOCK, and OLE
   imports with real subsystem-backed implementations as import traces demand.
 - Continue burning down COREDLL ordinals subsystem by subsystem, replacing
   stubbed ordinal plan entries with CE/MFC/SDK-referenced semantics. Next
-  likely tranche: PE-backed resource string/icon/bitmap loading, COM/OLE API
-  dispatch when ole32 imports are connected, more GWE class/menu/dialog/control
-  raw pointer marshalling, file attributes/find-directory APIs, and
-  time/system-info structs.
+  likely tranche: real message wakeups after `GetMessageW`, PE-backed resource
+  string/icon/bitmap loading, COM/OLE API dispatch when ole32 imports are
+  connected, more GWE menu/dialog/control raw pointer marshalling, file
+  attributes/directory metadata beyond the first `FindFirstFileW` tranche, and
+  timer/system-time structs.
 - Continue connecting SDK CE 4.2 Mipsii COREDLL CRT ordinals from `coredll.lib`
   as the launch trace demands.
 - Implement CRT `_msize`/`realloc`/operator delete ordinals from SDK evidence so
@@ -20,7 +21,8 @@
 - Extend `cemath` as real guest imports demand more CRT/floating-point helpers.
 - Extend subsystem smoke tests as each shim is connected to guest import traps.
 - Add import-trap argument/result marshalling tests that exercise the new raw
-  heap/file/message/resource ordinals through decoded guest MIPS registers.
+  heap/file/find/message/resource ordinals through decoded guest MIPS
+  registers.
 - Parse PE resource directories into `ResourceSystem` so `FindResourceW` and
   `LoadStringW` use the mapped guest image data rather than test-registered
   virtual resources.
