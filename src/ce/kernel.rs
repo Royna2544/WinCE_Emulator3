@@ -448,41 +448,25 @@ impl CeKernel {
         &mut self,
         handles: &[u32],
         wait_all: bool,
-        timeout_ms: u32,
+        _timeout_ms: u32,
         thread_id: u32,
     ) -> u32 {
-        if handles.is_empty() {
+        if handles.is_empty() || wait_all {
             return WAIT_FAILED;
         }
-        if wait_all {
-            if handles
-                .iter()
-                .all(|handle| self.handles.is_wait_ready(*handle, thread_id) == Some(true))
-            {
-                for handle in handles {
-                    let _ = self.handles.wait_for_single_object(*handle, 0, thread_id);
-                }
-                WAIT_OBJECT_0
-            } else if timeout_ms == 0 {
-                WAIT_TIMEOUT
-            } else {
-                WAIT_TIMEOUT
+        for (index, handle) in handles.iter().enumerate() {
+            if self.handles.is_wait_ready(*handle, thread_id) == Some(true) {
+                let _ = self.handles.wait_for_single_object(*handle, 0, thread_id);
+                return WAIT_OBJECT_0 + index as u32;
             }
+        }
+        if handles
+            .iter()
+            .any(|handle| self.handles.is_wait_ready(*handle, thread_id).is_none())
+        {
+            WAIT_FAILED
         } else {
-            for (index, handle) in handles.iter().enumerate() {
-                if self.handles.is_wait_ready(*handle, thread_id) == Some(true) {
-                    let _ = self.handles.wait_for_single_object(*handle, 0, thread_id);
-                    return WAIT_OBJECT_0 + index as u32;
-                }
-            }
-            if handles
-                .iter()
-                .any(|handle| self.handles.is_wait_ready(*handle, thread_id).is_none())
-            {
-                WAIT_FAILED
-            } else {
-                WAIT_TIMEOUT
-            }
+            WAIT_TIMEOUT
         }
     }
 

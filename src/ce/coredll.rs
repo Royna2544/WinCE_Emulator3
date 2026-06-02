@@ -4370,6 +4370,12 @@ fn wait_for_multiple_objects_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return crate::ce::timer::WAIT_FAILED;
     }
+    if wait_all {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return crate::ce::timer::WAIT_FAILED;
+    }
 
     let mut handles = Vec::with_capacity(count as usize);
     for index in 0..count {

@@ -14,8 +14,12 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     if (r != WAIT_OBJECT_0 + 1) return FixtureFail(4302);
 
     SetEvent(e1);
+    // CE6 NKWaitForMultipleObjects rejects fWaitAll == TRUE with
+    // WAIT_FAILED/ERROR_INVALID_PARAMETER instead of waiting for all handles.
+    SetLastError(0);
     r = WaitForMultipleObjects(2, handles, TRUE, 1000);
-    if (r != WAIT_OBJECT_0) return FixtureFail(4303);
+    if (r != WAIT_FAILED) return FixtureFail(4303);
+    if (GetLastError() != ERROR_INVALID_PARAMETER) return FixtureFail(4306);
 
     HANDLE mutex = CreateMutexW(0, TRUE, L"Fixture043MutexW");
     if (!mutex) return FixtureFail(4304);

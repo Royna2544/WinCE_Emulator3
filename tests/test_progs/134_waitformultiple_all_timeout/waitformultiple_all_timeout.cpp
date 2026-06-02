@@ -27,6 +27,16 @@ int WINAPI WinMain(HINSTANCE h, HINSTANCE, LPWSTR, int) {
     ZeroMemory(&s, sizeof(s));
     s.eventHandle = CreateEventW(0, TRUE, FALSE, 0);
     if (!s.eventHandle) return FixtureFail(13401);
+    HANDLE neverReady = CreateEventW(0, TRUE, FALSE, 0);
+    if (!neverReady) return FixtureFail(13409);
+
+    HANDLE waitAllHandles[2] = { s.eventHandle, neverReady };
+    // CE6 NKWaitForMultipleObjects rejects fWaitAll == TRUE with
+    // WAIT_FAILED/ERROR_INVALID_PARAMETER instead of timing out.
+    SetLastError(0);
+    DWORD allWait = WaitForMultipleObjects(2, waitAllHandles, TRUE, 1);
+    if (allWait != WAIT_FAILED) return FixtureFail(13410);
+    if (GetLastError() != ERROR_INVALID_PARAMETER) return FixtureFail(13411);
 
     WNDCLASSW wc;
     ZeroMemory(&wc, sizeof(wc));
@@ -69,6 +79,7 @@ int WINAPI WinMain(HINSTANCE h, HINSTANCE, LPWSTR, int) {
 
     WaitForSingleObject(thread, 5000);
     CloseHandle(thread);
+    CloseHandle(neverReady);
     CloseHandle(s.eventHandle);
     DestroyWindow(s.hwnd);
     return FIXTURE_OK;
