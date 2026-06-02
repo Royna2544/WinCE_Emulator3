@@ -30,12 +30,12 @@ int WINAPI WinMain(HINSTANCE h, HINSTANCE, LPWSTR, int) {
     HWND hwnd = CreateWindowExW(0, wc.lpszClassName, L"invalidate", WS_VISIBLE, 0, 0, 80, 40, 0, 0, h, 0);
     if (!hwnd) return FixtureFail(3302);
 
-    RECT small;
-    SetRect(&small, 5, 5, 20, 20);
+    RECT smallRect;
+    SetRect(&smallRect, 5, 5, 20, 20);
 
-    InvalidateRect(hwnd, &small, FALSE);
+    InvalidateRect(hwnd, &smallRect, FALSE);
     UpdateWindow(hwnd);
-    ValidateRect(hwnd, &small);
+    ValidateRect(hwnd, &smallRect);
 
     InvalidateRect(hwnd, 0, TRUE);
     UpdateWindow(hwnd);

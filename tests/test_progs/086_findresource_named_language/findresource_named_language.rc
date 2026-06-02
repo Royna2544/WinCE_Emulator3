@@ -1,0 +1,9 @@
+#include "resource.h"
+CUSTOM_DATA RCDATA
+BEGIN
+    0x4e, 0x41, 0x4d, 0x45, 0x44
+END
+STRINGTABLE
+BEGIN
+    IDS_NAMED_RESOURCE "named-resource-ok"
+END

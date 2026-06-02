@@ -1,0 +1,3 @@
+#pragma once
+#define IDD_NESTED_COMMAND 7901
+#define IDC_NESTED_BUTTON 7902

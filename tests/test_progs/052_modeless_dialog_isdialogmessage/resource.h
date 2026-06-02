@@ -1,0 +1,4 @@
+#pragma once
+#define IDD_MODELESS_DIALOG 5201
+#define IDC_MODELESS_EDIT 5202
+#define IDC_MODELESS_BUTTON 5203

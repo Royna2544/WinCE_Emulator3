@@ -1,0 +1,10 @@
+#include "resource.h"
+IDM_RADIO_MENU MENU
+BEGIN
+    POPUP "Radio"
+    BEGIN
+        MENUITEM "A", IDM_RADIO_A
+        MENUITEM "B", IDM_RADIO_B
+        MENUITEM "C", IDM_RADIO_C
+    END
+END
