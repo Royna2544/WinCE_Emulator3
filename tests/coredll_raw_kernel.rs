@@ -12,10 +12,10 @@ use wince_emulation_v3::{
             ORD_GET_VERSION_EX_W, ORD_INITIALIZE_CRITICAL_SECTION, ORD_INPUT_DEBUG_CHAR_W,
             ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_LEAVE_CRITICAL_SECTION,
-            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_QUERY_PERFORMANCE_COUNTER,
-            ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD,
-            ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY, ORD_SLEEP, ORD_SUSPEND_THREAD,
-            ORD_TERMINATE_PROCESS, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
+            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR,
+            ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_RELEASE_SEMAPHORE,
+            ORD_RESUME_THREAD, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY, ORD_SLEEP,
+            ORD_SUSPEND_THREAD, ORD_TERMINATE_PROCESS, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
             ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_FOR_SINGLE_OBJECT,
         },
         gwe::Message,
@@ -974,6 +974,71 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
             ..
         }
     ));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_multibyte_to_wide_char_uses_korean_acp() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let input = 0x1000;
+    let output = 0x2000;
+    memory.write_bytes(input, &[0xb0, 0xa1, 0]);
+    memory.map_halfwords(output, 4);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MULTI_BYTE_TO_WIDE_CHAR,
+            [0, 0, input, u32::MAX, output, 4],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(2),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(output, 4), "가");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_input_debug_char_w_formats_when_called_like_wsprintf() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let dest = 0x1000;
+    let format = 0x2000;
+    let source = 0x3000;
+    memory.map_halfwords(dest, 32);
+    memory.write_wide_z(format, "%s");
+    memory.write_wide_z(source, "\\SDMMC Disk\\INavi\\iNavi.exe");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_INPUT_DEBUG_CHAR_W,
+            [dest, format, source],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(27),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_wide_z(dest, 32),
+        "\\SDMMC Disk\\INavi\\iNavi.exe"
+    );
 
     Ok(())
 }

@@ -65,6 +65,7 @@ pub struct UnicornDebugSnapshot {
     pub last_imports: Vec<UnicornLastImport>,
     pub last_messages: Vec<UnicornLastMessage>,
     pub last_wndproc_returns: Vec<UnicornWndProcReturn>,
+    pub last_wndproc_call_traces: Vec<UnicornWndProcCallTrace>,
     pub last_code: Vec<UnicornLastCode>,
     pub last_blocks: Vec<UnicornLastBlock>,
     pub import_counts: Vec<UnicornImportCount>,
@@ -125,6 +126,10 @@ pub struct UnicornLastCall {
     pub pc: u32,
     pub target: u32,
     pub kind: &'static str,
+    pub target_module_kind: Option<crate::emulator::imports::ImportModuleKind>,
+    pub target_module_name: Option<String>,
+    pub target_name: Option<String>,
+    pub target_ordinal: Option<u32>,
     pub ra: u32,
     pub sp: u32,
     pub a0: u32,
@@ -146,6 +151,7 @@ pub struct UnicornLastImport {
     pub a3: u32,
     pub sp: u32,
     pub result: Option<u32>,
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -199,10 +205,29 @@ pub struct UnicornWndProcReturn {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornWndProcCallTrace {
+    pub source: &'static str,
+    pub hwnd: u32,
+    pub msg: u32,
+    pub wparam: u32,
+    pub lparam: u32,
+    pub wndproc: u32,
+    pub return_pc: u32,
+    pub return_pc_trampoline_origin: Option<u32>,
+    pub result: u32,
+    pub class_name: Option<String>,
+    pub calls: Vec<UnicornLastCall>,
+    pub imports: Vec<UnicornLastImport>,
+    pub code: Vec<UnicornLastCode>,
+    pub readiness_code: Vec<UnicornLastCode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnicornLastCode {
     pub pc: u32,
     pub ra: u32,
     pub sp: u32,
+    pub v0: u32,
     pub sp_return_slot: Option<u32>,
     pub instruction: Option<u32>,
     pub next_instruction: Option<u32>,
@@ -228,6 +253,30 @@ pub struct UnicornBlockedGetMessage {
     pub hwnd: Option<u32>,
     pub min_msg: u32,
     pub max_msg: u32,
+    pub queue_status: u32,
+    pub z_order: Vec<u32>,
+    pub windows: Vec<UnicornWindowSnapshot>,
+    pub queues: Vec<UnicornQueueSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornWindowSnapshot {
+    pub hwnd: u32,
+    pub thread_id: u32,
+    pub class_name: String,
+    pub title: String,
+    pub visible: bool,
+    pub destroyed: bool,
+    pub update_pending: bool,
+    pub erase_pending: bool,
+    pub rect: crate::ce::gwe::Rect,
+    pub wndproc: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornQueueSnapshot {
+    pub thread_id: u32,
+    pub messages: Vec<UnicornMessageRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -251,6 +300,16 @@ const GUEST_HEAP_ARENA_BASE: u32 = 0x3000_0000;
 const GUEST_HEAP_ARENA_SIZE: u32 = 0x0100_0000;
 #[cfg(feature = "unicorn")]
 const UNICORN_TRACE_LIMIT: usize = 256;
+#[cfg(feature = "unicorn")]
+const UNICORN_WNDPROC_TRACE_LIMIT: usize = 32;
+#[cfg(feature = "unicorn")]
+const UNICORN_WNDPROC_TRACE_CALL_LIMIT: usize = 96;
+#[cfg(feature = "unicorn")]
+const UNICORN_WNDPROC_TRACE_IMPORT_LIMIT: usize = 64;
+#[cfg(feature = "unicorn")]
+const UNICORN_WNDPROC_TRACE_CODE_LIMIT: usize = 256;
+#[cfg(feature = "unicorn")]
+const UNICORN_WNDPROC_READINESS_TRACE_LIMIT: usize = 64;
 #[cfg(feature = "unicorn")]
 const UNICORN_CODE_TRACE_SAMPLE_INTERVAL: u32 = 64;
 #[cfg(feature = "unicorn")]
@@ -785,6 +844,8 @@ impl UnicornMips {
         let indirect_call_probe_hook = Rc::clone(&indirect_call_probe);
         let last_code = Rc::new(RefCell::new(Vec::<UnicornLastCode>::new()));
         let last_code_hook = Rc::clone(&last_code);
+        let last_readiness_code = Rc::new(RefCell::new(Vec::<UnicornLastCode>::new()));
+        let last_readiness_code_hook = Rc::clone(&last_readiness_code);
         let last_code_probe = Rc::new(RefCell::new(None));
         let last_code_probe_hook = Rc::clone(&last_code_probe);
         let code_trace_counter = Rc::new(Cell::new(0u32));
@@ -875,32 +936,42 @@ impl UnicornMips {
                     .filter(|end| pc >= trampoline.stub && pc < *end)
                     .map(|_| trampoline.origin)
             });
+            let code_record = || UnicornLastCode {
+                pc,
+                ra: read_mips_reg(uc, RegisterMIPS::RA),
+                sp: read_mips_reg(uc, RegisterMIPS::SP),
+                v0: read_mips_reg(uc, RegisterMIPS::V0),
+                sp_return_slot: read_mips_reg(uc, RegisterMIPS::SP)
+                    .checked_add(0x10)
+                    .and_then(|addr| read_unicorn_u32(uc, addr)),
+                instruction,
+                next_instruction,
+                direct_jump_target,
+                direct_jump_target_instruction,
+                direct_jump_target_in_trampoline,
+                direct_jump_trampoline_origin,
+                current_trampoline_origin,
+            };
+            if is_inavi_readiness_probe_pc(pc)
+                || current_trampoline_origin.is_some_and(is_inavi_readiness_probe_pc)
+            {
+                let mut readiness = last_readiness_code_hook.borrow_mut();
+                if readiness.len() == UNICORN_WNDPROC_READINESS_TRACE_LIMIT {
+                    readiness.remove(0);
+                }
+                readiness.push(code_record());
+            }
             let should_trace_code = code_trace_index % UNICORN_CODE_TRACE_SAMPLE_INTERVAL == 0
                 || direct_jump_target_in_trampoline
                 || direct_jump_trampoline_origin.is_some()
-                || current_trampoline_origin.is_some();
+                || current_trampoline_origin.is_some()
+                || is_inavi_readiness_probe_pc(pc);
             if should_trace_code {
-                let ra = read_mips_reg(uc, RegisterMIPS::RA);
-                let sp = read_mips_reg(uc, RegisterMIPS::SP);
                 let mut last_code = last_code_hook.borrow_mut();
                 if last_code.len() == UNICORN_TRACE_LIMIT {
                     last_code.remove(0);
                 }
-                last_code.push(UnicornLastCode {
-                    pc,
-                    ra,
-                    sp,
-                    sp_return_slot: sp
-                        .checked_add(0x10)
-                        .and_then(|addr| read_unicorn_u32(uc, addr)),
-                    instruction,
-                    next_instruction,
-                    direct_jump_target,
-                    direct_jump_target_instruction,
-                    direct_jump_target_in_trampoline,
-                    direct_jump_trampoline_origin,
-                    current_trampoline_origin,
-                });
+                last_code.push(code_record());
             }
             if let (Some(instruction), Some(next_instruction), Some(target)) =
                 (instruction, next_instruction, direct_jump_target)
@@ -967,6 +1038,12 @@ impl UnicornMips {
         let last_messages_hook = Rc::clone(&last_messages);
         let last_wndproc_returns = Rc::new(RefCell::new(Vec::<UnicornWndProcReturn>::new()));
         let last_wndproc_returns_hook = Rc::clone(&last_wndproc_returns);
+        let last_wndproc_call_traces = Rc::new(RefCell::new(Vec::<UnicornWndProcCallTrace>::new()));
+        let last_wndproc_call_traces_hook = Rc::clone(&last_wndproc_call_traces);
+        let last_calls_for_wndproc_hook = Rc::clone(&last_calls);
+        let last_imports_for_wndproc_hook = Rc::clone(&last_imports);
+        let last_code_for_wndproc_hook = Rc::clone(&last_code);
+        let last_readiness_code_for_wndproc_hook = Rc::clone(&last_readiness_code);
         let pending_wndproc_returns = Rc::new(RefCell::new(Vec::<PendingWndProcReturn>::new()));
         let pending_wndproc_returns_hook = Rc::clone(&pending_wndproc_returns);
         let create_window_returns = Rc::new(RefCell::new(Vec::<CreateWindowReturn>::new()));
@@ -1046,6 +1123,39 @@ impl UnicornMips {
                         unsafe { &mut *kernel_ptr }
                             .gwe
                             .validate_window(callout.hwnd);
+                    }
+                    if should_trace_wndproc_message(callout.msg) {
+                        record_wndproc_call_trace(
+                            &last_wndproc_call_traces_hook,
+                            UnicornWndProcCallTrace {
+                                source: callout.source,
+                                hwnd: callout.hwnd,
+                                msg: callout.msg,
+                                wparam: callout.wparam,
+                                lparam: callout.lparam,
+                                wndproc: callout.wndproc,
+                                return_pc: callout.return_pc,
+                                return_pc_trampoline_origin: None,
+                                result,
+                                class_name: callout.class_name.clone(),
+                                calls: snapshot_recent_unicorn_calls(
+                                    &last_calls_for_wndproc_hook,
+                                    UNICORN_WNDPROC_TRACE_CALL_LIMIT,
+                                ),
+                                imports: snapshot_recent_unicorn_imports(
+                                    &last_imports_for_wndproc_hook,
+                                    UNICORN_WNDPROC_TRACE_IMPORT_LIMIT,
+                                ),
+                                code: snapshot_recent_unicorn_code(
+                                    &last_code_for_wndproc_hook,
+                                    UNICORN_WNDPROC_TRACE_CODE_LIMIT,
+                                ),
+                                readiness_code: snapshot_recent_unicorn_code(
+                                    &last_readiness_code_for_wndproc_hook,
+                                    UNICORN_WNDPROC_READINESS_TRACE_LIMIT,
+                                ),
+                            },
+                        );
                     }
                     if callout.finalize_destroy {
                         let time_ms = unsafe { &*kernel_ptr }.timers.tick_count();
@@ -1180,6 +1290,7 @@ impl UnicornMips {
                             a3,
                             sp,
                             result: None,
+                            detail: None,
                         });
                     }
                     tracing::debug!(
@@ -1438,6 +1549,13 @@ impl UnicornMips {
                         .find(|import| import.pc == address && import.result.is_none())
                     {
                         import.result = Some(result);
+                        import.detail = import_detail_after_return(
+                            memory.uc,
+                            trap.module_kind,
+                            trap.ordinal,
+                            &args,
+                            result,
+                        );
                     }
                     tracing::debug!(
                         target: "ce.imports",
@@ -1612,6 +1730,7 @@ impl UnicornMips {
             last_imports.borrow().clone(),
             last_messages.borrow().clone(),
             last_wndproc_returns.borrow().clone(),
+            last_wndproc_call_traces.borrow().clone(),
             last_code.borrow().clone(),
             last_blocks.borrow().clone(),
             import_count_snapshot(&import_counts.borrow()),
@@ -2789,6 +2908,9 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 } else {
                     write!(f, "/ret=<pending>")?;
                 }
+                if let Some(detail) = import.detail.as_deref() {
+                    write!(f, "/detail={}", format_trace_string(detail))?;
+                }
             }
             write!(f, "]")?;
         }
@@ -2800,16 +2922,14 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 }
                 write!(
                     f,
-                    "0x{:08x}->0x{:08x}/{}/ra=0x{:08x}/sp=0x{:08x}/a0=0x{:08x}/a1=0x{:08x}/a2=0x{:08x}/a3=0x{:08x}",
-                    call.pc,
-                    call.target,
-                    call.kind,
-                    call.ra,
-                    call.sp,
-                    call.a0,
-                    call.a1,
-                    call.a2,
-                    call.a3
+                    "0x{:08x}->0x{:08x}/{}/ra=0x{:08x}/sp=0x{:08x}",
+                    call.pc, call.target, call.kind, call.ra, call.sp
+                )?;
+                write_call_target_import(f, call)?;
+                write!(
+                    f,
+                    "/a0=0x{:08x}/a1=0x{:08x}/a2=0x{:08x}/a3=0x{:08x}",
+                    call.a0, call.a1, call.a2, call.a3
                 )?;
             }
             write!(f, "]")?;
@@ -2881,6 +3001,123 @@ impl std::fmt::Display for UnicornDebugSnapshot {
             }
             write!(f, "]")?;
         }
+        if !self.last_wndproc_call_traces.is_empty() {
+            write!(f, " last_wndproc_call_traces=[")?;
+            for (index, trace) in self.last_wndproc_call_traces.iter().enumerate() {
+                if index != 0 {
+                    write!(f, ",")?;
+                }
+                write!(
+                    f,
+                    "{}/hwnd=0x{:08x}/msg=0x{:08x}/w=0x{:08x}/l=0x{:08x}/wndproc=0x{:08x}/return_pc=0x{:08x}",
+                    trace.source,
+                    trace.hwnd,
+                    trace.msg,
+                    trace.wparam,
+                    trace.lparam,
+                    trace.wndproc,
+                    trace.return_pc
+                )?;
+                if let Some(origin) = trace.return_pc_trampoline_origin {
+                    write!(f, "/return_tramp_origin=0x{origin:08x}")?;
+                }
+                write!(f, "/ret=0x{:08x}", trace.result)?;
+                if let Some(class_name) = trace.class_name.as_deref() {
+                    write!(f, "/class={class_name}")?;
+                }
+                write!(f, "/calls=[")?;
+                for (call_index, call) in trace.calls.iter().enumerate() {
+                    if call_index != 0 {
+                        write!(f, ";")?;
+                    }
+                    write!(
+                        f,
+                        "0x{:08x}->0x{:08x}/{}/ra=0x{:08x}/sp=0x{:08x}",
+                        call.pc, call.target, call.kind, call.ra, call.sp
+                    )?;
+                    write_call_target_import(f, call)?;
+                    write!(
+                        f,
+                        "/a0=0x{:08x}/a1=0x{:08x}/a2=0x{:08x}/a3=0x{:08x}",
+                        call.a0, call.a1, call.a2, call.a3
+                    )?;
+                }
+                write!(f, "]")?;
+                write!(f, "/imports=[")?;
+                for (import_index, import) in trace.imports.iter().enumerate() {
+                    if import_index != 0 {
+                        write!(f, ";")?;
+                    }
+                    write!(f, "0x{:08x}/{:?}/{}", import.pc, import.kind, import.module)?;
+                    if let Some(ordinal) = import.ordinal {
+                        write!(f, "/ord={ordinal}")?;
+                    }
+                    if let Some(name) = import.name.as_deref() {
+                        write!(f, "/name={name}")?;
+                    }
+                    write!(
+                        f,
+                        "/a0=0x{:08x}/a1=0x{:08x}/a2=0x{:08x}/a3=0x{:08x}/sp=0x{:08x}",
+                        import.a0, import.a1, import.a2, import.a3, import.sp
+                    )?;
+                    if let Some(result) = import.result {
+                        write!(f, "/ret=0x{result:08x}")?;
+                    } else {
+                        write!(f, "/ret=<pending>")?;
+                    }
+                    if let Some(detail) = import.detail.as_deref() {
+                        write!(f, "/detail={}", format_trace_string(detail))?;
+                    }
+                }
+                write!(f, "]")?;
+                write!(f, "/code=[")?;
+                for (code_index, code) in trace.code.iter().enumerate() {
+                    if code_index != 0 {
+                        write!(f, ";")?;
+                    }
+                    write!(
+                        f,
+                        "0x{:08x}/ra=0x{:08x}/sp=0x{:08x}/v0=0x{:08x}",
+                        code.pc, code.ra, code.sp, code.v0
+                    )?;
+                    if let Some(instruction) = code.instruction {
+                        write!(f, "/insn=0x{instruction:08x}")?;
+                    }
+                    if let Some(next_instruction) = code.next_instruction {
+                        write!(f, "/next=0x{next_instruction:08x}")?;
+                    }
+                    if let Some(origin) = code.current_trampoline_origin {
+                        write!(f, "/tramp_origin=0x{origin:08x}")?;
+                    }
+                    if let Some(target) = code.direct_jump_target {
+                        write!(f, "/jt=0x{target:08x}")?;
+                    }
+                }
+                write!(f, "]")?;
+                write!(f, "/probes=[")?;
+                for (code_index, code) in trace.readiness_code.iter().enumerate() {
+                    if code_index != 0 {
+                        write!(f, ";")?;
+                    }
+                    write!(
+                        f,
+                        "0x{:08x}/ra=0x{:08x}/sp=0x{:08x}/v0=0x{:08x}",
+                        code.pc, code.ra, code.sp, code.v0
+                    )?;
+                    if let Some(origin) = code.current_trampoline_origin {
+                        write!(f, "/tramp_origin=0x{origin:08x}")?;
+                    }
+                    if let Some(instruction) = code.instruction {
+                        write!(f, "/insn=0x{instruction:08x}")?;
+                    }
+                    if let Some(next_instruction) = code.next_instruction {
+                        write!(f, "/next=0x{next_instruction:08x}")?;
+                    }
+                }
+                write!(f, "]")?;
+            }
+            write!(f, "]")?;
+        }
         if !self.last_code.is_empty() {
             write!(f, " last_code=[")?;
             for (index, code) in self.last_code.iter().enumerate() {
@@ -2889,8 +3126,8 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 }
                 write!(
                     f,
-                    "0x{:08x}/ra=0x{:08x}/sp=0x{:08x}",
-                    code.pc, code.ra, code.sp
+                    "0x{:08x}/ra=0x{:08x}/sp=0x{:08x}/v0=0x{:08x}",
+                    code.pc, code.ra, code.sp, code.v0
                 )?;
                 if let Some(sp_return_slot) = code.sp_return_slot {
                     write!(f, "/sp10=0x{sp_return_slot:08x}")?;
@@ -2950,6 +3187,67 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 blocked.min_msg,
                 blocked.max_msg
             )?;
+            write!(f, " queue_status=0x{:08x}", blocked.queue_status)?;
+            if !blocked.z_order.is_empty() {
+                write!(f, " z_order=[")?;
+                for (index, hwnd) in blocked.z_order.iter().enumerate() {
+                    if index != 0 {
+                        write!(f, ",")?;
+                    }
+                    write!(f, "0x{hwnd:08x}")?;
+                }
+                write!(f, "]")?;
+            }
+            if !blocked.windows.is_empty() {
+                write!(f, " windows=[")?;
+                for (index, window) in blocked.windows.iter().enumerate() {
+                    if index != 0 {
+                        write!(f, ";")?;
+                    }
+                    write!(
+                        f,
+                        "0x{:08x}/tid={}/class={}/title={}/vis={}/dead={}/upd={}/erase={}/rect={},{}-{},{}",
+                        window.hwnd,
+                        window.thread_id,
+                        format_trace_string(&window.class_name),
+                        format_trace_string(&window.title),
+                        window.visible,
+                        window.destroyed,
+                        window.update_pending,
+                        window.erase_pending,
+                        window.rect.left,
+                        window.rect.top,
+                        window.rect.right,
+                        window.rect.bottom,
+                    )?;
+                    if window.wndproc != 0 {
+                        write!(f, "/wndproc=0x{:08x}", window.wndproc)?;
+                    }
+                }
+                write!(f, "]")?;
+            }
+            if !blocked.queues.is_empty() {
+                write!(f, " queues=[")?;
+                for (queue_index, queue) in blocked.queues.iter().enumerate() {
+                    if queue_index != 0 {
+                        write!(f, ";")?;
+                    }
+                    write!(f, "tid={}/msgs=", queue.thread_id)?;
+                    write!(f, "[")?;
+                    for (message_index, message) in queue.messages.iter().enumerate() {
+                        if message_index != 0 {
+                            write!(f, ",")?;
+                        }
+                        write!(
+                            f,
+                            "0x{:08x}:0x{:08x}/w=0x{:08x}/l=0x{:08x}",
+                            message.hwnd, message.msg, message.wparam, message.lparam
+                        )?;
+                    }
+                    write!(f, "]")?;
+                }
+                write!(f, "]")?;
+            }
         }
         if self.thread_exit_reached {
             write!(f, " thread_exit_reached=true")?;
@@ -2963,6 +3261,25 @@ impl std::fmt::Display for UnicornDebugSnapshot {
         }
         Ok(())
     }
+}
+
+fn write_call_target_import(
+    f: &mut std::fmt::Formatter<'_>,
+    call: &UnicornLastCall,
+) -> std::fmt::Result {
+    if let Some(module_kind) = call.target_module_kind {
+        write!(f, "/target_module={module_kind:?}")?;
+    }
+    if let Some(module_name) = call.target_module_name.as_deref() {
+        write!(f, "/target_dll={module_name}")?;
+    }
+    if let Some(ordinal) = call.target_ordinal {
+        write!(f, "/target_ord={ordinal}")?;
+    }
+    if let Some(name) = call.target_name.as_deref() {
+        write!(f, "/target_name={name}")?;
+    }
+    Ok(())
 }
 
 fn align_up_4k(size: u32) -> Result<u32> {
@@ -3240,6 +3557,7 @@ fn try_block_empty_get_message<D>(
     let min_msg = args.get(2).copied().unwrap_or(0);
     let max_msg = args.get(3).copied().unwrap_or(0);
     kernel.pump_timers_to_gwe(thread_id);
+    kernel.drain_remote_input_to_thread_window(thread_id, hwnd);
     if kernel
         .gwe
         .peek_message_filtered(
@@ -3259,6 +3577,43 @@ fn try_block_empty_get_message<D>(
         hwnd,
         min_msg,
         max_msg,
+        queue_status: kernel.gwe.get_queue_status(thread_id, u32::MAX),
+        z_order: kernel.gwe.z_order_snapshot(),
+        windows: kernel
+            .gwe
+            .windows_snapshot()
+            .into_iter()
+            .map(|window| UnicornWindowSnapshot {
+                hwnd: window.hwnd,
+                thread_id: window.thread_id,
+                class_name: window.class_name,
+                title: window.title,
+                visible: window.visible,
+                destroyed: window.destroyed,
+                update_pending: window.update_pending,
+                erase_pending: window.erase_pending,
+                rect: window.rect,
+                wndproc: window.wndproc,
+            })
+            .collect(),
+        queues: kernel
+            .gwe
+            .queue_snapshot()
+            .into_iter()
+            .map(|(thread_id, messages)| UnicornQueueSnapshot {
+                thread_id,
+                messages: messages
+                    .into_iter()
+                    .map(|message| UnicornMessageRecord {
+                        hwnd: message.hwnd,
+                        msg: message.msg,
+                        wparam: message.wparam,
+                        lparam: message.lparam,
+                        time_ms: message.time_ms,
+                    })
+                    .collect(),
+            })
+            .collect(),
     });
     record_message_import(uc, module_kind, ordinal, args, None, last_messages);
 
@@ -3856,6 +4211,23 @@ fn record_wndproc_return(
         returns.remove(0);
     }
     returns.push(record);
+}
+
+#[cfg(feature = "unicorn")]
+fn record_wndproc_call_trace(
+    last_wndproc_call_traces: &std::rc::Rc<std::cell::RefCell<Vec<UnicornWndProcCallTrace>>>,
+    trace: UnicornWndProcCallTrace,
+) {
+    let mut traces = last_wndproc_call_traces.borrow_mut();
+    if traces.len() == UNICORN_WNDPROC_TRACE_LIMIT {
+        traces.remove(0);
+    }
+    traces.push(trace);
+}
+
+#[cfg(feature = "unicorn")]
+fn should_trace_wndproc_message(msg: u32) -> bool {
+    msg >= crate::ce::gwe::WM_USER
 }
 
 #[cfg(feature = "unicorn")]
@@ -4699,6 +5071,10 @@ fn push_unicorn_last_call<D>(
         pc,
         target,
         kind,
+        target_module_kind: None,
+        target_module_name: None,
+        target_name: None,
+        target_ordinal: None,
         ra: read_mips_reg(uc, RegisterMIPS::RA),
         sp: read_mips_reg(uc, RegisterMIPS::SP),
         a0: read_mips_reg(uc, RegisterMIPS::A0),
@@ -4718,10 +5094,11 @@ fn capture_debug_snapshot<D>(
     host_wall_clock_stop: Option<UnicornHostWallClockStop>,
     interrupt_probe: Option<UnicornInterruptProbe>,
     invalid_instruction_probe: Option<UnicornInvalidInstructionProbe>,
-    last_calls: Vec<UnicornLastCall>,
+    mut last_calls: Vec<UnicornLastCall>,
     last_imports: Vec<UnicornLastImport>,
     last_messages: Vec<UnicornLastMessage>,
     mut last_wndproc_returns: Vec<UnicornWndProcReturn>,
+    mut last_wndproc_call_traces: Vec<UnicornWndProcCallTrace>,
     last_code: Vec<UnicornLastCode>,
     last_blocks: Vec<UnicornLastBlock>,
     import_counts: Vec<UnicornImportCount>,
@@ -4732,7 +5109,12 @@ fn capture_debug_snapshot<D>(
 
     let pc = read_mips_reg(uc, RegisterMIPS::PC);
     let trap = traps.trap_at(pc);
+    annotate_call_import_targets(&mut last_calls, traps);
+    for trace in &mut last_wndproc_call_traces {
+        annotate_call_import_targets(&mut trace.calls, traps);
+    }
     annotate_wndproc_return_trampolines(&mut last_wndproc_returns, trampoline_jumps);
+    annotate_wndproc_call_trace_trampolines(&mut last_wndproc_call_traces, trampoline_jumps);
     UnicornDebugSnapshot {
         pc,
         ra: read_mips_reg(uc, RegisterMIPS::RA),
@@ -4758,6 +5140,7 @@ fn capture_debug_snapshot<D>(
         last_imports,
         last_messages,
         last_wndproc_returns,
+        last_wndproc_call_traces,
         last_code,
         last_blocks,
         import_counts,
@@ -4775,6 +5158,124 @@ fn annotate_wndproc_return_trampolines(
     for record in returns {
         record.return_pc_trampoline_origin =
             mips_trampoline_origin_for_pc(record.return_pc, trampoline_jumps);
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn annotate_wndproc_call_trace_trampolines(
+    traces: &mut [UnicornWndProcCallTrace],
+    trampoline_jumps: &[MipsTrampolineJump],
+) {
+    for trace in traces {
+        trace.return_pc_trampoline_origin =
+            mips_trampoline_origin_for_pc(trace.return_pc, trampoline_jumps);
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn snapshot_recent_unicorn_calls(
+    last_calls: &std::rc::Rc<std::cell::RefCell<Vec<UnicornLastCall>>>,
+    limit: usize,
+) -> Vec<UnicornLastCall> {
+    let calls = last_calls.borrow();
+    let start = calls.len().saturating_sub(limit);
+    calls[start..].to_vec()
+}
+
+#[cfg(feature = "unicorn")]
+fn snapshot_recent_unicorn_imports(
+    last_imports: &std::rc::Rc<std::cell::RefCell<Vec<UnicornLastImport>>>,
+    limit: usize,
+) -> Vec<UnicornLastImport> {
+    let imports = last_imports.borrow();
+    let start = imports.len().saturating_sub(limit);
+    imports[start..].to_vec()
+}
+
+#[cfg(feature = "unicorn")]
+fn snapshot_recent_unicorn_code(
+    last_code: &std::rc::Rc<std::cell::RefCell<Vec<UnicornLastCode>>>,
+    limit: usize,
+) -> Vec<UnicornLastCode> {
+    let code = last_code.borrow();
+    let start = code.len().saturating_sub(limit);
+    code[start..].to_vec()
+}
+
+#[cfg(feature = "unicorn")]
+fn import_detail_after_return<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    result: u32,
+) -> Option<String> {
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_GET_MODULE_FILE_NAME_W)
+        || result == 0
+    {
+        return None;
+    }
+    let buffer = args.get(1).copied().unwrap_or(0);
+    let max_chars = args.get(2).copied().unwrap_or(0).min(260);
+    read_unicorn_wide_z(uc, buffer, max_chars as usize).map(|path| format!("path={path}"))
+}
+
+#[cfg(feature = "unicorn")]
+fn read_unicorn_wide_z<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    ptr: u32,
+    max_units: usize,
+) -> Option<String> {
+    if ptr == 0 {
+        return None;
+    }
+    let mut units = Vec::new();
+    for index in 0..max_units {
+        let addr = ptr.wrapping_add((index as u32).wrapping_mul(2));
+        let mut bytes = [0u8; 2];
+        uc.mem_read(u64::from(addr), &mut bytes).ok()?;
+        let unit = u16::from_le_bytes(bytes);
+        if unit == 0 {
+            break;
+        }
+        units.push(unit);
+    }
+    String::from_utf16(&units).ok()
+}
+
+fn format_trace_string(value: &str) -> String {
+    format!("{value:?}")
+}
+
+#[cfg(feature = "unicorn")]
+fn is_inavi_readiness_probe_pc(pc: u32) -> bool {
+    matches!(
+        pc,
+        0x0005_87ec
+            | 0x0005_8834
+            | 0x0005_88a0
+            | 0x0005_88ec
+            | 0x0005_8904
+            | 0x0005_891c
+            | 0x0005_89fc
+            | 0x0005_8a34
+            | 0x0005_8a7c
+            | 0x0005_8ab4
+            | 0x0005_8ad8
+    )
+}
+
+#[cfg(feature = "unicorn")]
+fn annotate_call_import_targets(calls: &mut [UnicornLastCall], traps: &ImportTrapTable) {
+    for call in calls {
+        let Some(trap) = traps.trap_at(call.target) else {
+            continue;
+        };
+        call.target_module_kind = Some(trap.module_kind);
+        call.target_module_name = Some(trap.module_name.clone());
+        call.target_name = trap.name.clone();
+        call.target_ordinal = trap.ordinal;
     }
 }
 

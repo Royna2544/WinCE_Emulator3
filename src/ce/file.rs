@@ -729,9 +729,13 @@ fn mount_remainder<'a>(normalized: &'a str, mount_root: &str) -> Option<&'a str>
     if normalized.len() <= mount_root.len() {
         return None;
     }
-    let (prefix, rest) = normalized.split_at(mount_root.len());
+    let Some(prefix) = normalized.get(..mount_root.len()) else {
+        return None;
+    };
     if prefix.eq_ignore_ascii_case(mount_root) {
-        rest.strip_prefix('/')
+        normalized
+            .get(mount_root.len()..)
+            .and_then(|rest| rest.strip_prefix('/'))
     } else {
         None
     }
@@ -879,6 +883,11 @@ mod tests {
             fs.create_file_w("\\Windows\\x.txt", GENERIC_WRITE, CREATE_ALWAYS)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn mount_matching_tolerates_non_ascii_nonmatching_paths() {
+        assert_eq!(mount_remainder("翽䨼y젌〆\u{17}", "Windows"), None);
     }
 
     #[test]

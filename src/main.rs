@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeSet,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use wince_emulation_v3::{
@@ -32,6 +33,7 @@ struct Args {
     desktop: DesktopMode,
     cpu_instruction_limit: usize,
     cpu_wall_clock_limit_ms: u64,
+    startup_taps: Vec<(i32, i32)>,
     run_cpu: bool,
 }
 
@@ -189,28 +191,49 @@ fn main() -> Result<()> {
     }
 
     if args.run_cpu {
-        enqueue_desktop_input(&mut desktop, &mut kernel)?;
-        if let Err(err) = cpu.run_until_import_trap_with_framebuffer_limits(
-            &mut kernel,
-            desktop.framebuffer_mut(),
-            UnicornRunLimits {
-                instruction_limit: args.cpu_instruction_limit,
-                wall_clock_limit_ms: args.cpu_wall_clock_limit_ms,
-            },
-        ) {
+        enqueue_startup_taps(&mut kernel, &args.startup_taps)?;
+        let mut reported_blocked_message_wait = false;
+        loop {
+            if enqueue_desktop_input(&mut desktop, &mut kernel)? != 0 {
+                reported_blocked_message_wait = false;
+            }
+            if let Err(err) = cpu.run_until_import_trap_with_framebuffer_limits(
+                &mut kernel,
+                desktop.framebuffer_mut(),
+                UnicornRunLimits {
+                    instruction_limit: args.cpu_instruction_limit,
+                    wall_clock_limit_ms: args.cpu_wall_clock_limit_ms,
+                },
+            ) {
+                if let Some(snapshot) = cpu.last_debug_snapshot() {
+                    eprintln!("  Unicorn debug: {snapshot}");
+                }
+                if let Some(path) = args.framebuffer_dump.as_ref() {
+                    desktop.framebuffer().write_ppm(path)?;
+                    eprintln!("  framebuffer dump: {}", path.display());
+                }
+                return Err(err);
+            }
+            if enqueue_desktop_input(&mut desktop, &mut kernel)? != 0 {
+                reported_blocked_message_wait = false;
+            }
+            desktop.present()?;
             if let Some(snapshot) = cpu.last_debug_snapshot() {
-                eprintln!("  Unicorn debug: {snapshot}");
+                if args.desktop == DesktopMode::Host && snapshot.blocked_get_message.is_some() {
+                    if !reported_blocked_message_wait {
+                        println!("  Unicorn stopped: {snapshot}");
+                        if let Some(path) = args.framebuffer_dump.as_ref() {
+                            desktop.framebuffer().write_ppm(path)?;
+                            println!("  framebuffer dump: {}", path.display());
+                        }
+                        reported_blocked_message_wait = true;
+                    }
+                    std::thread::sleep(Duration::from_millis(16));
+                    continue;
+                }
+                println!("  Unicorn stopped: {snapshot}");
             }
-            if let Some(path) = args.framebuffer_dump.as_ref() {
-                desktop.framebuffer().write_ppm(path)?;
-                eprintln!("  framebuffer dump: {}", path.display());
-            }
-            return Err(err);
-        }
-        enqueue_desktop_input(&mut desktop, &mut kernel)?;
-        desktop.present()?;
-        if let Some(snapshot) = cpu.last_debug_snapshot() {
-            println!("  Unicorn stopped: {snapshot}");
+            break;
         }
     }
     if let Some(path) = args.framebuffer_dump.as_ref() {
@@ -297,7 +320,8 @@ fn create_host_desktop() -> Result<DesktopRuntime> {
     ))
 }
 
-fn enqueue_desktop_input(desktop: &mut DesktopRuntime, kernel: &mut CeKernel) -> Result<()> {
+fn enqueue_desktop_input(desktop: &mut DesktopRuntime, kernel: &mut CeKernel) -> Result<usize> {
+    let mut queued = 0;
     for event in desktop.poll_input()? {
         match event {
             VirtualInputEvent::Key {
@@ -311,23 +335,37 @@ fn enqueue_desktop_input(desktop: &mut DesktopRuntime, kernel: &mut CeKernel) ->
                     .map_err(|err| {
                         wince_emulation_v3::Error::Backend(format!("host key input: {err}"))
                     })?;
+                queued += 1;
             }
             VirtualInputEvent::TouchDown { x, y } => {
                 kernel.remote.enqueue_touch("down", x, y).map_err(|err| {
                     wince_emulation_v3::Error::Backend(format!("host touch down: {err}"))
                 })?;
+                queued += 1;
             }
             VirtualInputEvent::TouchMove { x, y } => {
                 kernel.remote.enqueue_touch("move", x, y).map_err(|err| {
                     wince_emulation_v3::Error::Backend(format!("host touch move: {err}"))
                 })?;
+                queued += 1;
             }
             VirtualInputEvent::TouchUp { x, y } => {
                 kernel.remote.enqueue_touch("up", x, y).map_err(|err| {
                     wince_emulation_v3::Error::Backend(format!("host touch up: {err}"))
                 })?;
+                queued += 1;
             }
         }
+    }
+    Ok(queued)
+}
+
+fn enqueue_startup_taps(kernel: &mut CeKernel, taps: &[(i32, i32)]) -> Result<()> {
+    for &(x, y) in taps {
+        kernel
+            .remote
+            .enqueue_touch("tap", x, y)
+            .map_err(|err| wince_emulation_v3::Error::Backend(format!("startup tap: {err}")))?;
     }
     Ok(())
 }
@@ -374,6 +412,7 @@ impl Args {
         let mut desktop = DesktopMode::Virtual;
         let mut cpu_instruction_limit = 0;
         let mut cpu_wall_clock_limit_ms = 0;
+        let mut startup_taps = Vec::new();
         let mut run_cpu = false;
 
         let mut args = std::env::args().skip(1);
@@ -406,6 +445,9 @@ impl Args {
                 "--cpu-wall-clock-limit-ms" => {
                     cpu_wall_clock_limit_ms = next_u64(&mut args, "--cpu-wall-clock-limit-ms")?;
                 }
+                "--tap" => {
+                    startup_taps.push(next_tap(&mut args, "--tap")?);
+                }
                 "--run-cpu" => {
                     run_cpu = true;
                 }
@@ -431,6 +473,7 @@ impl Args {
             desktop,
             cpu_instruction_limit,
             cpu_wall_clock_limit_ms,
+            startup_taps,
             run_cpu,
         })
     }
@@ -473,9 +516,27 @@ fn next_desktop_mode(args: &mut impl Iterator<Item = String>, flag: &str) -> Res
     }
 }
 
+fn next_tap(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<(i32, i32)> {
+    let value = args.next().ok_or_else(|| {
+        wince_emulation_v3::Error::InvalidArgument(format!("{flag} needs X,Y coordinates"))
+    })?;
+    let Some((x, y)) = value.split_once(',') else {
+        return Err(wince_emulation_v3::Error::InvalidArgument(format!(
+            "{flag}: expected X,Y, got {value}"
+        )));
+    };
+    let x = x
+        .parse()
+        .map_err(|err| wince_emulation_v3::Error::InvalidArgument(format!("{flag} x: {err}")))?;
+    let y = y
+        .parse()
+        .map_err(|err| wince_emulation_v3::Error::InvalidArgument(format!("{flag} y: {err}")))?;
+    Ok((x, y))
+}
+
 fn print_help() {
     println!(
-        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--mount-config mounts.toml] [--image INavi.exe] [--dll-search-dir DIR]... [--desktop virtual|host] [--framebuffer-dump OUT.ppm] [--cpu-instruction-limit N] [--cpu-wall-clock-limit-ms N] [--run-cpu]"
+        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--mount-config mounts.toml] [--image INavi.exe] [--dll-search-dir DIR]... [--desktop virtual|host] [--framebuffer-dump OUT.ppm] [--cpu-instruction-limit N] [--cpu-wall-clock-limit-ms N] [--tap X,Y]... [--run-cpu]"
     );
 }
 

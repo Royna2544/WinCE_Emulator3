@@ -333,3 +333,26 @@ fn remote_server_api_state_queues_input_serial_audio_and_status() -> Result<()> 
 
     Ok(())
 }
+
+#[test]
+fn get_message_drains_remote_touch_to_active_window() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    kernel.remote.set_framebuffer_size(800, 480);
+
+    let hwnd = kernel.create_window_ex_w(42, "REMOTE", "remote", None, 1, 0, 0);
+    kernel.gwe.set_focus(Some(hwnd));
+    kernel.remote.enqueue_touch("tap", 21, 43).unwrap();
+
+    let down = kernel.get_message_w(42).unwrap();
+    assert_eq!(down.hwnd, hwnd);
+    assert_eq!(down.msg, WM_LBUTTONDOWN);
+    assert_eq!(down.lparam & 0xffff, 21);
+    assert_eq!((down.lparam >> 16) & 0xffff, 43);
+
+    let up = kernel.get_message_w(42).unwrap();
+    assert_eq!(up.hwnd, hwnd);
+    assert_eq!(up.msg, WM_LBUTTONUP);
+
+    Ok(())
+}

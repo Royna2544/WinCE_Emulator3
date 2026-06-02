@@ -37,6 +37,8 @@ pub struct CoredllExport {
     pub line: usize,
 }
 
+const CE_ACP_CODE_PAGE: u32 = 949;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CoredllSubsystem {
     KernelSync,
@@ -980,11 +982,15 @@ fn dispatch_resolved(
             min_msg,
             max_msg,
             flags,
-        } => CoredllValue::OptionalMessage(
-            kernel
-                .gwe
-                .peek_message_filtered(thread_id, hwnd, min_msg, max_msg, flags),
-        ),
+        } => {
+            kernel.pump_timers_to_gwe(thread_id);
+            kernel.drain_remote_input_to_thread_window(thread_id, hwnd);
+            CoredllValue::OptionalMessage(
+                kernel
+                    .gwe
+                    .peek_message_filtered(thread_id, hwnd, min_msg, max_msg, flags),
+            )
+        }
         CoredllCall::PostMessageW {
             hwnd,
             msg,
@@ -1174,7 +1180,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
             Some(CoredllValue::Bool(false))
         }
-        ORD_INPUT_DEBUG_CHAR_W => Some(CoredllValue::U32(OEM_DEBUG_READ_NODATA)),
+        ORD_INPUT_DEBUG_CHAR_W => Some(CoredllValue::U32(input_debug_char_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_QUERY_PERFORMANCE_FREQUENCY => {
             Some(CoredllValue::Bool(write_performance_counter_value(
                 kernel,
@@ -3033,6 +3041,8 @@ fn multi_byte_to_wide_char_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
+    let code_page = active_conversion_code_page(raw_arg(args, 0));
+    let flags = raw_arg(args, 1);
     let input_ptr = raw_arg(args, 2);
     let input_len = raw_arg(args, 3) as i32;
     let output_ptr = raw_arg(args, 4);
@@ -3040,7 +3050,12 @@ fn multi_byte_to_wide_char_raw<M: CoredllGuestMemory>(
     let Some(bytes) = read_conversion_bytes(kernel, memory, thread_id, input_ptr, input_len) else {
         return 0;
     };
-    let units: Vec<u16> = bytes.into_iter().map(u16::from).collect();
+    let Some(units) = decode_multibyte_to_wide(code_page, flags, &bytes) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
     write_conversion_wide_result(
         kernel,
         memory,
@@ -3049,6 +3064,37 @@ fn multi_byte_to_wide_char_raw<M: CoredllGuestMemory>(
         output_capacity,
         &units,
     )
+}
+
+fn active_conversion_code_page(code_page: u32) -> u32 {
+    if code_page == 0 {
+        CE_ACP_CODE_PAGE
+    } else {
+        code_page
+    }
+}
+
+#[cfg(windows)]
+fn decode_multibyte_to_wide(code_page: u32, flags: u32, bytes: &[u8]) -> Option<Vec<u16>> {
+    use windows::Win32::Globalization::{MULTI_BYTE_TO_WIDE_CHAR_FLAGS, MultiByteToWideChar};
+
+    let flags = MULTI_BYTE_TO_WIDE_CHAR_FLAGS(flags);
+    let needed = unsafe { MultiByteToWideChar(code_page, flags, bytes, None) };
+    if needed <= 0 {
+        return None;
+    }
+    let mut units = vec![0; needed as usize];
+    let written = unsafe { MultiByteToWideChar(code_page, flags, bytes, Some(&mut units)) };
+    if written <= 0 {
+        return None;
+    }
+    units.truncate(written as usize);
+    Some(units)
+}
+
+#[cfg(not(windows))]
+fn decode_multibyte_to_wide(_code_page: u32, _flags: u32, bytes: &[u8]) -> Option<Vec<u16>> {
+    Some(bytes.iter().copied().map(u16::from).collect())
 }
 
 fn wide_char_to_multi_byte_raw<M: CoredllGuestMemory>(
@@ -3884,6 +3930,31 @@ const TIME_ZONE_INFORMATION_SIZE: usize = 172;
 const TIME_ZONE_ID_UNKNOWN: u32 = 0;
 const TIME_ZONE_ID_INVALID: u32 = u32::MAX;
 const OEM_DEBUG_READ_NODATA: u32 = u32::MAX;
+
+fn input_debug_char_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let dest = raw_arg(args, 0);
+    let format = raw_arg(args, 1);
+    if args.len() >= 2
+        && dest != 0
+        && format != 0
+        && read_guest_wide_z(memory, format, 256).is_ok_and(|format| format.contains('%'))
+    {
+        return crt::wsprintf_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            dest,
+            format,
+            if args.len() > 2 { &args[2..] } else { &[] },
+        );
+    }
+    OEM_DEBUG_READ_NODATA
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SystemTimeFields {
@@ -9245,6 +9316,7 @@ fn get_message_w_raw<M: CoredllGuestMemory>(
     let min_msg = raw_arg(args, 2);
     let max_msg = raw_arg(args, 3);
     kernel.pump_timers_to_gwe(thread_id);
+    kernel.drain_remote_input_to_thread_window(thread_id, hwnd);
     let Some(message) = kernel
         .gwe
         .get_message_filtered(thread_id, hwnd, min_msg, max_msg)
@@ -9269,6 +9341,7 @@ fn peek_message_w_raw<M: CoredllGuestMemory>(
     let max_msg = raw_arg(args, 3);
     let flags = PeekFlags::from_bits_truncate(raw_arg(args, 4));
     kernel.pump_timers_to_gwe(thread_id);
+    kernel.drain_remote_input_to_thread_window(thread_id, hwnd);
     let Some(message) = kernel
         .gwe
         .peek_message_filtered(thread_id, hwnd, min_msg, max_msg, flags)

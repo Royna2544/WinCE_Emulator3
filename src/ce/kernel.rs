@@ -618,6 +618,7 @@ impl CeKernel {
 
     pub fn get_message_w(&mut self, thread_id: u32) -> Option<Message> {
         self.pump_timers_to_gwe(thread_id);
+        self.drain_remote_input_to_thread_window(thread_id, None);
         self.gwe.get_message(thread_id)
     }
 
@@ -769,6 +770,18 @@ impl CeKernel {
         }
 
         posted
+    }
+
+    pub fn drain_remote_input_to_thread_window(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+    ) -> usize {
+        let hwnd = hwnd
+            .filter(|hwnd| self.gwe.is_window(*hwnd))
+            .or_else(|| self.gwe.get_capture())
+            .or_else(|| self.gwe.get_active_window());
+        hwnd.map_or(0, |hwnd| self.drain_remote_input_to_gwe(thread_id, hwnd))
     }
 
     pub fn wave_out_open(&mut self, format: WaveFormat) -> std::result::Result<u32, MmResult> {

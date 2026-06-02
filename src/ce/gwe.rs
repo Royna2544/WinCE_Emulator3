@@ -1040,6 +1040,21 @@ impl Gwe {
         (current << 16) | current
     }
 
+    pub fn windows_snapshot(&self) -> Vec<Window> {
+        self.windows.values().cloned().collect()
+    }
+
+    pub fn queue_snapshot(&self) -> Vec<(u32, Vec<Message>)> {
+        self.queues
+            .iter()
+            .map(|(thread_id, queue)| (*thread_id, queue.iter().cloned().collect()))
+            .collect()
+    }
+
+    pub fn z_order_snapshot(&self) -> Vec<u32> {
+        self.z_order.clone()
+    }
+
     pub fn has_queue_input(&self, thread_id: u32, flags: u32) -> bool {
         self.queue_status_bits(thread_id) & flags != 0
     }
