@@ -623,6 +623,15 @@
   all zero, so the current target frontier is no longer startup input delivery;
   it is the missing app paint/GDI/surface path after the visible window and real
   tap are present.
+- Unicorn WNDPROC return handling no longer validates every `WM_PAINT`
+  unconditionally. Plain guest WNDPROC returns leave the update region pending;
+  `DefWindowProcW` and `CallWindowProcW(DEFAULT)` consume paint through the
+  default-proc helper instead. A focused Unicorn-feature regression covers this
+  distinction. A real mounted `--tap 400,240` rerun still writes an all-zero
+  framebuffer, but the trace now clearly shows the top-level `WM_PAINT` entering
+  app WNDPROC `0x000135cc`, then falling through `DefWindowProcW @264` without
+  `BeginPaint` or GDI/DC imports. The next display frontier is the app
+  WNDPROC/message-map branch that decides not to paint.
 - The default bootstrap uses `regs.json` as backing storage for the fake CE
   registry API and creates base GWE, timer, audio, and memory-map state.
 - The virtual Win32/CE framework and COREDLL dispatcher are connected to Unicorn

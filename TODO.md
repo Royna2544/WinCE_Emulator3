@@ -70,10 +70,12 @@
   dispatch through `AfxWndProcBase` (`0x6004eba8`), and `Solution_iNavi`
   registered with target WNDPROC `0x000135cc`. A `--tap 400,240` idle-frontier
   run now confirms queued `WM_LBUTTONDOWN`/`WM_LBUTTONUP` delivery and drain
-  through the active HWND, but still produces an all-zero framebuffer. Continue
-  with a targeted probe of `SetWindowLongW`/superclass state, first-message
-  creation ordering, and the missing app paint/GDI path before adding more
-  lifecycle messages.
+  through the active HWND, but still produces an all-zero framebuffer. After
+  correcting Unicorn paint validation semantics, the app WNDPROC still routes
+  top-level `WM_PAINT` to `DefWindowProcW` without `BeginPaint` or drawing
+  imports. Continue with a targeted probe of the `0x000135cc` app
+  WNDPROC/message-map branch, `SetWindowLongW`/superclass state, and
+  first-message creation ordering before adding more lifecycle messages.
 - Continue connecting SDK CE 4.2 Mipsii COREDLL CRT ordinals from `coredll.lib`
   as the launch trace demands.
 - Add focused import-trap tests for Unicorn `_setjmp`/`longjmp` register/PC

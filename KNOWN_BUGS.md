@@ -85,7 +85,13 @@
     `--tap 400,240` run confirms `WM_LBUTTONDOWN`/`WM_LBUTTONUP` delivery and
     drains back to the same idle snapshot. Both dumps are still all zero, so
     the current failure is missing paint/GDI/surface output after startup and
-    input delivery, not inability to reach the message pump. The compact import
+    input delivery, not inability to reach the message pump. After correcting
+    Unicorn WNDPROC return semantics so only `DefWindowProcW`/default-WNDPROC
+    paths validate `WM_PAINT`, a 45,000 ms `--tap 400,240` rerun still drains
+    back to idle with an all-zero dump. The trace shows top-level `WM_PAINT`
+    entering app WNDPROC `0x000135cc` via `CallWindowProcW @285`, then falling
+    through `DefWindowProcW @264` without `BeginPaint`, `GetDC`, or drawing
+    imports. The compact import
     summary now includes
     `operator new @1095`, `SetRect @103`, `MultiByteToWideChar @196`, and more
     `GetClassInfoW @878`/class-registration traffic, so this is a deeper

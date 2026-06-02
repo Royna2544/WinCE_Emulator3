@@ -1141,11 +1141,6 @@ impl UnicornMips {
                     if let Some(result_ptr) = callout.send_timeout_result_ptr {
                         let _ = uc.mem_write(u64::from(result_ptr), &result.to_le_bytes());
                     }
-                    if callout.msg == crate::ce::gwe::WM_PAINT {
-                        unsafe { &mut *kernel_ptr }
-                            .gwe
-                            .validate_window(callout.hwnd);
-                    }
                     if should_trace_wndproc_message(callout.msg) {
                         record_wndproc_call_trace(
                             &last_wndproc_call_traces_hook,
@@ -4498,9 +4493,23 @@ fn try_enter_def_window_proc_callout<D>(
         );
     }
 
-    let result = crate::ce::gwe::default_send_message_result(msg, wparam, lparam);
+    let result = default_window_proc_result(&mut kernel.gwe, hwnd, msg, wparam, lparam);
     let _ = uc.reg_write(RegisterMIPS::V0, u64::from(result));
     true
+}
+
+#[cfg(feature = "unicorn")]
+fn default_window_proc_result(
+    gwe: &mut crate::ce::gwe::Gwe,
+    hwnd: u32,
+    msg: u32,
+    wparam: u32,
+    lparam: u32,
+) -> u32 {
+    if msg == crate::ce::gwe::WM_PAINT {
+        let _ = gwe.validate_window(hwnd);
+    }
+    crate::ce::gwe::default_send_message_result(msg, wparam, lparam)
 }
 
 #[cfg(feature = "unicorn")]
@@ -5056,7 +5065,7 @@ fn try_enter_call_window_proc_callout<D>(
                 pending_returns,
             );
         }
-        let result = crate::ce::gwe::default_send_message_result(msg, wparam, lparam);
+        let result = default_window_proc_result(&mut kernel.gwe, hwnd, msg, wparam, lparam);
         let _ = uc.reg_write(RegisterMIPS::V0, u64::from(result));
         return true;
     }
@@ -6120,6 +6129,26 @@ mod unicorn_tests {
 
         assert_eq!(returns[0].return_pc_trampoline_origin, Some(0x0004_3e38));
         assert_eq!(returns[1].return_pc_trampoline_origin, None);
+    }
+
+    #[test]
+    fn default_window_proc_consumes_paint_but_plain_wndproc_return_does_not() {
+        let mut gwe = crate::ce::gwe::Gwe::default();
+        let hwnd =
+            gwe.create_window_ex(1, "STATIC", "paint", None, 0, crate::ce::gwe::WS_VISIBLE, 0);
+
+        assert!(gwe.update_rect(hwnd).is_some());
+        assert_eq!(
+            crate::ce::gwe::default_send_message_result(crate::ce::gwe::WM_PAINT, 0, 0),
+            0
+        );
+        assert!(gwe.update_rect(hwnd).is_some());
+
+        assert_eq!(
+            super::default_window_proc_result(&mut gwe, hwnd, crate::ce::gwe::WM_PAINT, 0, 0),
+            0
+        );
+        assert!(gwe.update_rect(hwnd).is_none());
     }
 
     #[test]
