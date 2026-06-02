@@ -85,6 +85,18 @@ impl TimerSystem {
         self.timers.len()
     }
 
+    pub fn pending_timers(&self) -> Vec<KernelTimer> {
+        self.timers.values().cloned().collect()
+    }
+
+    pub fn next_due_delay_ms(&self) -> Option<u32> {
+        let now = self.tick_count();
+        self.timers
+            .values()
+            .map(|timer| timer.due_ms.saturating_sub(now))
+            .min()
+    }
+
     pub fn due_timers(&mut self) -> Vec<KernelTimer> {
         let now = self.tick_count();
         let due_ids: Vec<u32> = self

@@ -355,9 +355,20 @@ pub struct UnicornBlockedGetMessage {
     pub min_msg: u32,
     pub max_msg: u32,
     pub queue_status: u32,
+    pub next_timer_due_ms: Option<u32>,
+    pub timers: Vec<UnicornTimerSnapshot>,
     pub z_order: Vec<u32>,
     pub windows: Vec<UnicornWindowSnapshot>,
     pub queues: Vec<UnicornQueueSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornTimerSnapshot {
+    pub id: u32,
+    pub hwnd: Option<u32>,
+    pub message: u32,
+    pub due_ms: u32,
+    pub period_ms: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3567,6 +3578,26 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 blocked.max_msg
             )?;
             write!(f, " queue_status=0x{:08x}", blocked.queue_status)?;
+            if let Some(delay_ms) = blocked.next_timer_due_ms {
+                write!(f, " next_timer_due_ms={delay_ms}")?;
+            }
+            if !blocked.timers.is_empty() {
+                write!(f, " timers=[")?;
+                for (index, timer) in blocked.timers.iter().enumerate() {
+                    if index != 0 {
+                        write!(f, ",")?;
+                    }
+                    write!(f, "id=0x{:08x}", timer.id)?;
+                    if let Some(hwnd) = timer.hwnd {
+                        write!(f, "/hwnd=0x{hwnd:08x}")?;
+                    }
+                    write!(f, "/msg=0x{:08x}/due={}", timer.message, timer.due_ms)?;
+                    if let Some(period_ms) = timer.period_ms {
+                        write!(f, "/period={period_ms}")?;
+                    }
+                }
+                write!(f, "]")?;
+            }
             if !blocked.z_order.is_empty() {
                 write!(f, " z_order=[")?;
                 for (index, hwnd) in blocked.z_order.iter().enumerate() {
@@ -3989,12 +4020,48 @@ fn try_block_empty_get_message<D>(
         return false;
     }
 
+    const MAX_GET_MESSAGE_TIMER_WAIT_MS: u32 = 5_000;
+    if let Some(delay_ms) = kernel.timers.next_due_delay_ms() {
+        if delay_ms <= MAX_GET_MESSAGE_TIMER_WAIT_MS {
+            if delay_ms != 0 {
+                kernel.timers.sleep_ms(delay_ms);
+            }
+            kernel.pump_timers_to_gwe(thread_id);
+            if kernel
+                .gwe
+                .peek_message_filtered(
+                    thread_id,
+                    hwnd,
+                    min_msg,
+                    max_msg,
+                    crate::ce::gwe::PeekFlags::empty(),
+                )
+                .is_some()
+            {
+                return false;
+            }
+        }
+    }
+
     *blocked.borrow_mut() = Some(UnicornBlockedGetMessage {
         thread_id,
         hwnd,
         min_msg,
         max_msg,
         queue_status: kernel.gwe.get_queue_status(thread_id, u32::MAX),
+        next_timer_due_ms: kernel.timers.next_due_delay_ms(),
+        timers: kernel
+            .timers
+            .pending_timers()
+            .into_iter()
+            .map(|timer| UnicornTimerSnapshot {
+                id: timer.id,
+                hwnd: timer.hwnd,
+                message: timer.message,
+                due_ms: timer.due_ms,
+                period_ms: timer.period_ms,
+            })
+            .collect(),
         z_order: kernel.gwe.z_order_snapshot(),
         windows: kernel
             .gwe
