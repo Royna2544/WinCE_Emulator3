@@ -16,8 +16,10 @@ shortcuts:
 - static CE mount-point enumeration for `\SDMMC Disk` plus host binding with
   `--sdmmc-root`
 - GWE HWND state with CE-style window/client rectangles, title/class text,
-  window-long slots, focus, visibility/enabled state, and coordinate mapping
-- raw CE/MFC-style `MSG` marshalling for the basic message pump
+  window-long slots, focus, visibility/enabled state, coordinate mapping, and
+  pending paint/update state
+- raw CE/MFC-style `MSG`, `RECT`, and `PAINTSTRUCT` marshalling for the basic
+  message pump and first paint-update path
 - COREDLL ordinal dispatcher backed by checked-in Rust `ORD_*` constants, a
   static export table, and an ordinal `match`
 - COREDLL ordinal plan entries split by subsystem with implemented-vs-stubbed
@@ -29,7 +31,7 @@ shortcuts:
 - Unicorn launch prep for mapping PE image bytes, patching supported import
   DLL slots to trap stubs, dispatching COREDLL traps through the raw ordinal
   dispatcher, and reporting PC/RA/SP/v0/v1/a0-a3/t9 debug snapshots on failure
-  or bounded self-stop states such as an empty-queue `GetMessageW` block
+  or bounded self-stop states
 - remote-control API state for touch/key input, GPS/NMEA serial injection, IMU
   state, pause/resume, status JSON, logs, and audio chunks
 - audio sink registry for host, websocket, and debug logging adapters; the host
@@ -67,6 +69,7 @@ CPU execution is behind the `unicorn` feature:
 cargo run --features unicorn -- --image D:\INAVI_Emulator\INAVI\INavi\INavi.exe --dll-search-dir "C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii" --sdmmc-root D:\INAVI_Emulator\INAVI --run-cpu
 ```
 
-The current bounded target run creates and shows the main HWND, then stops at a
-CE/MFC-style empty `GetMessageW` wait with a `blocked_get_message` snapshot.
-That is a useful frontier, not a completed GUI launch.
+The current bounded target run creates and shows the main HWND, synthesizes and
+dispatches the first `WM_PAINT` through the SDK MFC window procedure, and then
+continues until the timeout kills it. There is still no host-visible GUI or
+framebuffer output, so this is a useful frontier, not a completed GUI launch.

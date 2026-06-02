@@ -1424,6 +1424,33 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_UPDATE_WINDOW => Some(CoredllValue::Bool(
             kernel.gwe.update_window(raw_arg(args, 0)),
         )),
+        ORD_INVALIDATE_RECT => Some(CoredllValue::Bool(invalidate_rect_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_VALIDATE_RECT => Some(CoredllValue::Bool(validate_rect_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_GET_UPDATE_RECT => Some(CoredllValue::Bool(get_update_rect_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_BEGIN_PAINT => Some(CoredllValue::Handle(begin_paint_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_END_PAINT => Some(CoredllValue::Bool(end_paint_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_ENABLE_WINDOW => Some(CoredllValue::Bool(
             kernel
                 .gwe
@@ -3072,6 +3099,128 @@ fn map_window_points<M: CoredllGuestMemory>(
     1
 }
 
+fn invalidate_rect_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let hwnd = raw_arg(args, 0);
+    let rect_ptr = raw_arg(args, 1);
+    let erase = raw_arg(args, 2) != 0;
+    let rect = if rect_ptr == 0 {
+        None
+    } else {
+        match read_guest_rect(kernel, memory, thread_id, rect_ptr) {
+            Some(rect) => Some(rect),
+            None => return false,
+        }
+    };
+    if !kernel.gwe.invalidate_window(hwnd, rect, erase) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn validate_rect_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> bool {
+    if !kernel.gwe.validate_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn get_update_rect_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    hwnd: u32,
+    rect_ptr: u32,
+) -> bool {
+    if !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    }
+    let Some(update) = kernel.gwe.update_rect(hwnd) else {
+        kernel.threads.set_last_error(thread_id, 0);
+        return false;
+    };
+    if rect_ptr != 0 && !write_guest_rect(kernel, memory, thread_id, rect_ptr, update.rect) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn begin_paint_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    hwnd: u32,
+    paint_ptr: u32,
+) -> u32 {
+    let Some(update) = kernel.gwe.begin_paint(hwnd) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    };
+    let hdc = paint_hdc_for_hwnd(hwnd);
+    if paint_ptr != 0 && !write_paint_struct(kernel, memory, thread_id, paint_ptr, hdc, update) {
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    hdc
+}
+
+fn end_paint_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> bool {
+    if !kernel.gwe.validate_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn paint_hdc_for_hwnd(hwnd: u32) -> u32 {
+    0x0200_0000 | (hwnd & 0x00ff_ffff)
+}
+
+fn write_paint_struct<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    addr: u32,
+    hdc: u32,
+    update: crate::ce::gwe::PaintUpdate,
+) -> bool {
+    write_guest_u32(kernel, memory, thread_id, addr, hdc)
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            addr.wrapping_add(4),
+            u32::from(update.erase),
+        )
+        && write_guest_rect(kernel, memory, thread_id, addr.wrapping_add(8), update.rect)
+        && write_guest_u32(kernel, memory, thread_id, addr.wrapping_add(24), 0)
+        && write_guest_u32(kernel, memory, thread_id, addr.wrapping_add(28), 0)
+        && (0..32).all(|offset| {
+            write_guest_u8(kernel, memory, thread_id, addr.wrapping_add(32 + offset), 0)
+        })
+}
+
 fn get_message_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -3432,6 +3581,24 @@ fn write_guest_u32<M: CoredllGuestMemory>(
     }
 }
 
+fn write_guest_u8<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    addr: u32,
+    value: u8,
+) -> bool {
+    match memory.write_u8(addr, value) {
+        Ok(()) => true,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            false
+        }
+    }
+}
+
 pub(crate) fn write_guest_u16<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -3506,6 +3673,20 @@ fn write_guest_point<M: CoredllGuestMemory>(
 ) -> bool {
     write_guest_i32(kernel, memory, thread_id, addr, point.x)
         && write_guest_i32(kernel, memory, thread_id, addr.wrapping_add(4), point.y)
+}
+
+fn read_guest_rect<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    addr: u32,
+) -> Option<Rect> {
+    Some(Rect {
+        left: read_guest_i32(kernel, memory, thread_id, addr)?,
+        top: read_guest_i32(kernel, memory, thread_id, addr.wrapping_add(4))?,
+        right: read_guest_i32(kernel, memory, thread_id, addr.wrapping_add(8))?,
+        bottom: read_guest_i32(kernel, memory, thread_id, addr.wrapping_add(12))?,
+    })
 }
 
 fn write_guest_rect<M: CoredllGuestMemory>(

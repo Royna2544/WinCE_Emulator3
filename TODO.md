@@ -2,16 +2,16 @@
 
 ## Immediate
 
-- Continue the launch path from the current empty-queue `GetMessageW` block by
-  driving real CE/MFC window, timer, paint, input, and invalidation behavior
-  now that the main HWND is shown. Do not treat the blocked pump as GUI
+- Continue the launch path after the first synthetic `WM_PAINT` dispatch by
+  adding CE-referenced virtual framebuffer/surface plumbing and then real
+  drawing/blit behavior. Do not treat the timeout-running paint loop as GUI
   success.
 - Replace launch-stub behavior for commctrl, WINSOCK, and OLE imports with
   real subsystem-backed implementations as import traces demand. Keep MFC on
   the loaded SDK DLL path only; do not add emulator MFC stubs.
 - Continue burning down COREDLL ordinals subsystem by subsystem, replacing
   stubbed ordinal plan entries with CE/MFC/SDK-referenced semantics. Next
-  likely tranche: real message wakeups after `GetMessageW`, PE-backed resource
+  likely tranche: virtual framebuffer/GDI surfaces, PE-backed resource
   string/icon/bitmap loading, COM/OLE API dispatch when ole32 imports are
   connected, more GWE menu/dialog/control raw pointer marshalling, file
   attributes/directory metadata beyond the first `FindFirstFileW` tranche, and
@@ -44,7 +44,7 @@
 
 ## Later
 
-- Implement drawing surfaces and blit paths.
+- Extend the virtual framebuffer into drawing surfaces and blit paths.
 - Keep actual host audio playback unplugged until guest callback/import trap
   semantics are traced; current waveOut work is a virtual adapter only, with an
   `AudioSinkRegistry`, a Windows `winmm` host-sink boundary, websocket sink, and

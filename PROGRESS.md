@@ -92,6 +92,10 @@
   - CE/MFC-style message-pump ordinals: raw `GetMessageW`, `PeekMessageW`,
     `PostMessageW`, `SendMessageW`, `DispatchMessageW`, `TranslateMessage`,
     and `DefWindowProcW` marshal `MSG` structs and queue state
+  - CE/MFC-style paint/update ordinals: `InvalidateRect`, `ValidateRect`,
+    `GetUpdateRect`, `BeginPaint`, and `EndPaint` track pending window update
+    state, marshal CE `RECT`/`PAINTSTRUCT` data, and synthesize `WM_PAINT`
+    through the message pump for visible invalidated windows
   - unplugged multimedia adapter ordinals: raw `waveOutGetNumDevs`,
     `waveOutOpen`, `waveOutPrepareHeader`, `waveOutUnprepareHeader`,
     `waveOutWrite`, `waveOutPause`, `waveOutRestart`, `waveOutReset`,
@@ -192,6 +196,11 @@
   the Unicorn import path. It stops the bounded run with a
   `blocked_get_message` debug snapshot instead of returning `FALSE` to MFC and
   causing normal thread/application cleanup.
+- GWE now tracks pending update regions for visible windows. `ShowWindow`,
+  `SetWindowPos`, `MoveWindow`, and `InvalidateRect` can mark a window dirty,
+  `PeekMessageW`/`GetMessageW` can synthesize `WM_PAINT`, and `BeginPaint` or
+  `ValidateRect` clears the pending update state using the CE SDK
+  `PAINTSTRUCT` layout.
 - Unicorn now initializes the main PE entry context with CE/MFC-style WinMain
   arguments: `A0=hInstance`, `A1=0`, `A2` pointing at a real empty UTF-16
   command-line string, and `A3=1` (`SW_SHOWNORMAL`). The kernel also tracks the
@@ -199,20 +208,21 @@
   configured CE module path instead of failing for nonzero `hModule`.
 - The bounded Unicorn launch of `INavi.exe` with SDK `mfcce400.dll`,
   `--sdmmc-root D:\INAVI_Emulator\INAVI`, and the current debug binary now
-  stops at raw `GetMessageW` ordinal 861 with
-  `blocked_get_message thread_id=1 hwnd=<any> min_msg=0 max_msg=0`. The latest
-  trace shows `GetModuleFileNameW(0x00010000)` returning 27 chars,
-  `ShowWindow(hwnd, 1)`, and `IsWindowVisible(hwnd) -> 1` before that stop.
-  This is not GUI success, but it is past the previous hidden-window,
-  `pc=0`, and decoded `TerminateProcess` startup-cleanup states.
+  progresses past the previous empty-queue `GetMessageW` frontier. The latest
+  debug trace shows `PeekMessageW` and `GetMessageW` returning a synthetic
+  `WM_PAINT`, followed by `DispatchMessageW` entering the SDK MFC window
+  procedure for class `solution_inavi` at `0x6004eba8`. A 30-second bounded
+  run still had to be killed by the timeout and produced no host-visible GUI;
+  this is not launch success.
 
 ## Current State
 
 - CPU execution is wired far enough to load mapped PE images, dispatch import
   traps, run the target entry path, execute SDK MFC code through the current
-  MIPS trampoline workaround, create/show the main HWND, and stop at an
-  empty-queue `GetMessageW` wait instead of accepting startup cleanup as the
-  final milestone.
+  MIPS trampoline workaround, create/show the main HWND, synthesize and dispatch
+  the first `WM_PAINT`, and keep running until the bounded launcher kills the
+  process. There is still no host window/framebuffer output and this must not
+  be treated as GUI success.
 - The default bootstrap uses `regs.json` as backing storage for the fake CE
   registry API and creates base GWE, timer, audio, and memory-map state.
 - The virtual Win32/CE framework and COREDLL dispatcher are connected to Unicorn
@@ -223,9 +233,10 @@
 - Many COREDLL ordinals are classified and dispatchable but still stubbed by
   subsystem. Kernel/thread/time/sync, memory/local/heap/virtual allocation,
   raw file buffer/find marshalling, first GWE class/HWND/RECT/text/window-long/
-  focus/message pump, unplugged waveOut adapter ordinals, system-info/memory
-  status, and first resource raw ordinals have real CE-referenced semantics;
-  remaining ordinals still need to be burned down subsystem by subsystem.
+  focus/message pump/paint-update behavior, unplugged waveOut adapter ordinals,
+  system-info/memory status, and first resource raw ordinals have real
+  CE-referenced semantics; remaining ordinals still need to be burned down
+  subsystem by subsystem.
 - Remote server socket/WebSocket binding is not implemented in Rust yet; the
   emulator-facing remote API state and dispatch behavior are present.
 

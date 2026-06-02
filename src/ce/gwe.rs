@@ -11,8 +11,10 @@ bitflags::bitflags! {
 pub const WM_NULL: u32 = 0x0000;
 pub const WM_CREATE: u32 = 0x0001;
 pub const WM_DESTROY: u32 = 0x0002;
+pub const WM_PAINT: u32 = 0x000f;
 pub const WM_CLOSE: u32 = 0x0010;
 pub const WM_QUIT: u32 = 0x0012;
+pub const WM_ERASEBKGND: u32 = 0x0014;
 pub const WM_SETTEXT: u32 = 0x000c;
 pub const WM_GETTEXT: u32 = 0x000d;
 pub const WM_GETTEXTLENGTH: u32 = 0x000e;
@@ -108,6 +110,9 @@ pub struct Window {
     pub user_data: u32,
     pub rect: Rect,
     pub client_rect: Rect,
+    pub update_pending: bool,
+    pub erase_pending: bool,
+    pub update_rect: Rect,
     pub destroyed: bool,
 }
 
@@ -116,6 +121,12 @@ pub struct WindowClass {
     pub atom: u16,
     pub name: String,
     pub bytes: [u8; WNDCLASSW_SIZE],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PaintUpdate {
+    pub rect: Rect,
+    pub erase: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -150,6 +161,9 @@ impl Default for Gwe {
                 user_data: 0,
                 rect: Rect::from_origin_size(0, 0, 800, 480),
                 client_rect: Rect::from_origin_size(0, 0, 800, 480),
+                update_pending: false,
+                erase_pending: false,
+                update_rect: Rect::default(),
                 destroyed: false,
             },
         );
@@ -219,6 +233,8 @@ impl Gwe {
             .unwrap_or(0);
         let hwnd = self.next_hwnd;
         self.next_hwnd += 4;
+        let visible = style & WS_VISIBLE != 0;
+        let update_rect = rect.zero_origin();
         self.windows.insert(
             hwnd,
             Window {
@@ -226,7 +242,7 @@ impl Gwe {
                 thread_id,
                 class_name,
                 title: title.to_owned(),
-                visible: style & WS_VISIBLE != 0,
+                visible,
                 enabled: true,
                 parent,
                 id,
@@ -236,6 +252,9 @@ impl Gwe {
                 user_data: 0,
                 rect,
                 client_rect: rect,
+                update_pending: visible,
+                erase_pending: visible,
+                update_rect,
                 destroyed: false,
             },
         );
@@ -312,11 +331,67 @@ impl Gwe {
         };
         let previous = window.visible;
         window.visible = visible;
+        if visible && !previous {
+            window.update_pending = true;
+            window.erase_pending = true;
+            window.update_rect = window.client_rect.zero_origin();
+        }
         previous
     }
 
     pub fn update_window(&self, hwnd: u32) -> bool {
         self.is_window(hwnd)
+    }
+
+    pub fn invalidate_window(&mut self, hwnd: u32, rect: Option<Rect>, erase: bool) -> bool {
+        let Some(window) = self.windows.get_mut(&hwnd) else {
+            return false;
+        };
+        if window.destroyed {
+            return false;
+        }
+        window.update_pending = true;
+        window.erase_pending |= erase;
+        window.update_rect = rect.unwrap_or_else(|| window.client_rect.zero_origin());
+        true
+    }
+
+    pub fn validate_window(&mut self, hwnd: u32) -> bool {
+        let Some(window) = self.windows.get_mut(&hwnd) else {
+            return false;
+        };
+        if window.destroyed {
+            return false;
+        }
+        window.update_pending = false;
+        window.erase_pending = false;
+        window.update_rect = Rect::default();
+        true
+    }
+
+    pub fn update_rect(&self, hwnd: u32) -> Option<PaintUpdate> {
+        let window = self.windows.get(&hwnd)?;
+        (!window.destroyed && window.update_pending).then_some(PaintUpdate {
+            rect: window.update_rect,
+            erase: window.erase_pending,
+        })
+    }
+
+    pub fn begin_paint(&mut self, hwnd: u32) -> Option<PaintUpdate> {
+        let window = self.windows.get(&hwnd)?;
+        if window.destroyed {
+            return None;
+        }
+        let update = PaintUpdate {
+            rect: if window.update_pending {
+                window.update_rect
+            } else {
+                window.client_rect.zero_origin()
+            },
+            erase: window.erase_pending,
+        };
+        self.validate_window(hwnd);
+        Some(update)
     }
 
     pub fn enable_window(&mut self, hwnd: u32, enabled: bool) -> bool {
@@ -426,6 +501,9 @@ impl Gwe {
         window.client_rect = window.rect;
         if flags & SWP_SHOWWINDOW != 0 {
             window.visible = true;
+            window.update_pending = true;
+            window.erase_pending = true;
+            window.update_rect = window.client_rect.zero_origin();
         }
         if flags & SWP_HIDEWINDOW != 0 {
             window.visible = false;
@@ -442,7 +520,11 @@ impl Gwe {
         height: i32,
         _repaint: bool,
     ) -> bool {
-        self.set_window_pos(hwnd, x, y, width, height, 0)
+        let moved = self.set_window_pos(hwnd, x, y, width, height, 0);
+        if moved && _repaint {
+            self.invalidate_window(hwnd, None, true);
+        }
+        moved
     }
 
     pub fn get_window_rect(&self, hwnd: u32) -> Option<Rect> {
@@ -550,8 +632,14 @@ impl Gwe {
         if !self.windows.contains_key(&hwnd) {
             return None;
         }
-        if msg == WM_CLOSE {
-            self.destroy_window(hwnd, 0);
+        match msg {
+            WM_CLOSE => {
+                self.destroy_window(hwnd, 0);
+            }
+            WM_PAINT => {
+                self.validate_window(hwnd);
+            }
+            _ => {}
         }
         Some(default_send_message_result(msg, wparam, lparam))
     }
@@ -576,6 +664,7 @@ impl Gwe {
         max_msg: u32,
     ) -> Option<Message> {
         self.take_matching_message(thread_id, hwnd, min_msg, max_msg)
+            .or_else(|| self.synthetic_paint_message(thread_id, hwnd, min_msg, max_msg))
     }
 
     pub fn peek_message_filtered(
@@ -586,15 +675,19 @@ impl Gwe {
         max_msg: u32,
         flags: PeekFlags,
     ) -> Option<Message> {
-        let queue = self.queues.get_mut(&thread_id)?;
-        let index = queue
-            .iter()
-            .position(|message| message_matches(message, hwnd, min_msg, max_msg))?;
-        if flags.contains(PeekFlags::REMOVE) {
-            queue.remove(index)
-        } else {
-            queue.get(index).cloned()
+        if let Some(queue) = self.queues.get_mut(&thread_id) {
+            if let Some(index) = queue
+                .iter()
+                .position(|message| message_matches(message, hwnd, min_msg, max_msg))
+            {
+                return if flags.contains(PeekFlags::REMOVE) {
+                    queue.remove(index)
+                } else {
+                    queue.get(index).cloned()
+                };
+            }
         }
+        self.synthetic_paint_message(thread_id, hwnd, min_msg, max_msg)
     }
 
     pub fn set_window_text(&mut self, hwnd: u32, title: &str) -> bool {
@@ -666,6 +759,28 @@ impl Gwe {
         queue.remove(index)
     }
 
+    fn synthetic_paint_message(
+        &self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
+        if !message_id_matches(WM_PAINT, min_msg, max_msg) {
+            return None;
+        }
+        self.windows
+            .values()
+            .find(|window| {
+                !window.destroyed
+                    && window.thread_id == thread_id
+                    && window.visible
+                    && window.update_pending
+                    && hwnd.is_none_or(|wanted| window.hwnd == wanted)
+            })
+            .map(|window| Message::new(window.hwnd, WM_PAINT, 0, 0, 0))
+    }
+
     fn parent_to_screen_rect(&self, parent: Option<u32>, rect: Rect) -> Rect {
         let origin = self.parent_client_origin(parent);
         rect.offset(origin.x, origin.y)
@@ -714,6 +829,7 @@ fn default_send_message_result(msg: u32, _wparam: u32, _lparam: u32) -> u32 {
     match msg {
         WM_NULL => 0,
         WM_GETTEXTLENGTH => 0,
+        WM_ERASEBKGND => 1,
         _ => 0,
     }
 }
@@ -725,7 +841,14 @@ fn message_matches(message: &Message, hwnd: Option<u32>, min_msg: u32, max_msg: 
     if min_msg == 0 && max_msg == 0 {
         return true;
     }
-    (min_msg..=max_msg).contains(&message.msg)
+    message_id_matches(message.msg, min_msg, max_msg)
+}
+
+fn message_id_matches(msg: u32, min_msg: u32, max_msg: u32) -> bool {
+    if min_msg == 0 && max_msg == 0 {
+        return true;
+    }
+    (min_msg..=max_msg).contains(&msg)
 }
 
 fn window_long_slot(window: &Window, index: i32) -> Option<&u32> {

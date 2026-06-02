@@ -102,13 +102,26 @@ anchors, not app-specific shortcuts.
 - GWE class/message surface:
   `/mnt/c/Program Files (x86)/Windows CE Tools/wce420/STANDARDSDK_420/Include/Mipsii/winuser.h`
   and
-  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/cmsgque.h`
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`
   - CE SDK headers define the `WNDCLASSW` memory shape, `HWND_BROADCAST`, and
     `WS_VISIBLE` values used by raw `RegisterClassW`, `GetClassInfoW`,
     `FindWindowW`, `PostMessageW`, and `ShowWindow` marshalling.
   - GWE queue declarations keep `GetMessageW` as the blocking message API;
     an empty queue is not modeled as a `FALSE` return because MFC treats that
     as `WM_QUIT`/thread exit.
+
+- GWE paint/update surface:
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\gweapiset1.hpp`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\ARMV4I\RETAIL\coredll.def`, and
+  `/mnt/c/Program Files (x86)/Windows CE Tools/wce420/STANDARDSDK_420/Include/Mipsii/winuser.h`
+  - CE exposes `InvalidateRect`, `BeginPaint`, `EndPaint`, `UpdateWindow`,
+    `GetUpdateRect`, and `ValidateRect` through the GWE API set and coredll
+    ordinals `250`, `260`, `261`, `267`, `274`, and `278`.
+  - The SDK `PAINTSTRUCT` layout is `hdc`, `fErase`, `rcPaint`, `fRestore`,
+    `fIncUpdate`, and 32 reserved bytes; raw `BeginPaint` writes that shape.
+  - `WM_PAINT` is `0x000F`; the virtual GWE subsystem generates it from a
+    pending update region and clears the region through `BeginPaint` or
+    `ValidateRect`.
 
 - MFC window layout behavior:
   `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/wincore.cpp`
@@ -175,6 +188,14 @@ anchors, not app-specific shortcuts.
     and loops through `PumpMessage`; a `FALSE` `GetMessage` return unwinds the
     pump as a quit condition, so an empty queue must block instead of returning
     false.
+  - Its exception path calls `ValidateRect` for `WM_PAINT`, and idle detection
+    excludes `WM_PAINT`, so paint messages must be tied to real update-region
+    validation.
+
+- MFC paint DC:
+  `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/wingdi.cpp`
+  - `CPaintDC` attaches the HDC returned by `BeginPaint` and calls `EndPaint`
+    in its destructor.
 
 - MFC window dispatch:
   `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/wincore.cpp`
