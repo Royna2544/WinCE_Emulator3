@@ -193,6 +193,7 @@ pub struct UnicornWndProcReturn {
     pub lparam: u32,
     pub wndproc: u32,
     pub return_pc: u32,
+    pub return_pc_trampoline_origin: Option<u32>,
     pub result: u32,
     pub class_name: Option<String>,
 }
@@ -1014,6 +1015,7 @@ impl UnicornMips {
                             lparam: callout.lparam,
                             wndproc: callout.wndproc,
                             return_pc: callout.return_pc,
+                            return_pc_trampoline_origin: None,
                             result: read_mips_reg(uc, RegisterMIPS::V0),
                             class_name: callout.class_name,
                         },
@@ -1061,6 +1063,7 @@ impl UnicornMips {
                             lparam: callout.lparam,
                             wndproc: callout.wndproc,
                             return_pc: callout.return_pc,
+                            return_pc_trampoline_origin: None,
                             result,
                             class_name: callout.class_name,
                         },
@@ -1599,6 +1602,7 @@ impl UnicornMips {
         self.last_debug = Some(capture_debug_snapshot(
             &uc,
             &self.import_traps,
+            &self.trampoline_jumps,
             memory_fault.borrow().clone(),
             indirect_call_probe.borrow().clone(),
             host_wall_clock_stop.borrow().clone(),
@@ -2858,16 +2862,19 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 }
                 write!(
                     f,
-                    "{}/hwnd=0x{:08x}/msg=0x{:08x}/w=0x{:08x}/l=0x{:08x}/wndproc=0x{:08x}/return_pc=0x{:08x}/ret=0x{:08x}",
+                    "{}/hwnd=0x{:08x}/msg=0x{:08x}/w=0x{:08x}/l=0x{:08x}/wndproc=0x{:08x}/return_pc=0x{:08x}",
                     record.source,
                     record.hwnd,
                     record.msg,
                     record.wparam,
                     record.lparam,
                     record.wndproc,
-                    record.return_pc,
-                    record.result
+                    record.return_pc
                 )?;
+                if let Some(origin) = record.return_pc_trampoline_origin {
+                    write!(f, "/return_tramp_origin=0x{origin:08x}")?;
+                }
+                write!(f, "/ret=0x{:08x}", record.result)?;
                 if let Some(class_name) = record.class_name.as_deref() {
                     write!(f, "/class={class_name}")?;
                 }
@@ -4705,6 +4712,7 @@ fn push_unicorn_last_call<D>(
 fn capture_debug_snapshot<D>(
     uc: &unicorn_engine::Unicorn<'_, D>,
     traps: &ImportTrapTable,
+    trampoline_jumps: &[MipsTrampolineJump],
     memory_fault: Option<UnicornMemoryFault>,
     indirect_call_probe: Option<UnicornIndirectCallProbe>,
     host_wall_clock_stop: Option<UnicornHostWallClockStop>,
@@ -4713,7 +4721,7 @@ fn capture_debug_snapshot<D>(
     last_calls: Vec<UnicornLastCall>,
     last_imports: Vec<UnicornLastImport>,
     last_messages: Vec<UnicornLastMessage>,
-    last_wndproc_returns: Vec<UnicornWndProcReturn>,
+    mut last_wndproc_returns: Vec<UnicornWndProcReturn>,
     last_code: Vec<UnicornLastCode>,
     last_blocks: Vec<UnicornLastBlock>,
     import_counts: Vec<UnicornImportCount>,
@@ -4724,6 +4732,7 @@ fn capture_debug_snapshot<D>(
 
     let pc = read_mips_reg(uc, RegisterMIPS::PC);
     let trap = traps.trap_at(pc);
+    annotate_wndproc_return_trampolines(&mut last_wndproc_returns, trampoline_jumps);
     UnicornDebugSnapshot {
         pc,
         ra: read_mips_reg(uc, RegisterMIPS::RA),
@@ -4756,6 +4765,25 @@ fn capture_debug_snapshot<D>(
         thread_exit_reached,
         encoded_kernel_exit: None,
     }
+}
+
+#[cfg(feature = "unicorn")]
+fn annotate_wndproc_return_trampolines(
+    returns: &mut [UnicornWndProcReturn],
+    trampoline_jumps: &[MipsTrampolineJump],
+) {
+    for record in returns {
+        record.return_pc_trampoline_origin =
+            mips_trampoline_origin_for_pc(record.return_pc, trampoline_jumps);
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn mips_trampoline_origin_for_pc(pc: u32, trampoline_jumps: &[MipsTrampolineJump]) -> Option<u32> {
+    trampoline_jumps.iter().find_map(|trampoline| {
+        let end = trampoline.stub.checked_add(trampoline.byte_len)?;
+        (pc >= trampoline.stub && pc < end).then_some(trampoline.origin)
+    })
 }
 
 fn import_count_snapshot(
@@ -5471,6 +5499,46 @@ mod unicorn_tests {
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap(), u64::from(target));
         assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap(), u64::from(pc + 8));
         assert_eq!(uc.reg_read(RegisterMIPS::A0).unwrap(), 0x6004_ed38);
+    }
+
+    #[test]
+    fn wndproc_trace_marks_return_pc_trampoline_origin() {
+        let mut returns = vec![
+            super::UnicornWndProcReturn {
+                source: "SendMessageW",
+                hwnd: 0x20000,
+                msg: 0x5236,
+                wparam: 0,
+                lparam: 0,
+                wndproc: 0x6004_eba8,
+                return_pc: 0x008b_7b70,
+                return_pc_trampoline_origin: None,
+                result: 0,
+                class_name: None,
+            },
+            super::UnicornWndProcReturn {
+                source: "SendMessageW",
+                hwnd: 0x20004,
+                msg: 0x56d0,
+                wparam: 0,
+                lparam: 0,
+                wndproc: 0x6004_eba8,
+                return_pc: 0x0002_bcf4,
+                return_pc_trampoline_origin: None,
+                result: 0,
+                class_name: None,
+            },
+        ];
+        let jumps = [super::MipsTrampolineJump {
+            origin: 0x0004_3e38,
+            stub: 0x008b_7b6c,
+            byte_len: 0x14,
+        }];
+
+        super::annotate_wndproc_return_trampolines(&mut returns, &jumps);
+
+        assert_eq!(returns[0].return_pc_trampoline_origin, Some(0x0004_3e38));
+        assert_eq!(returns[1].return_pc_trampoline_origin, None);
     }
 
     #[test]

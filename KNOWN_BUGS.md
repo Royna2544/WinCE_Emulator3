@@ -121,11 +121,13 @@
     `GetTimeZoneInformation @27`, foreground-window activation, and
     `InputDebugCharW @595`, the halfword jump-table corruption at
     `0x000ebbf0`, and the `ADBSetAccountProperties @1943` import stop. Next
-    work is to disassemble the encoded `TerminateProcess` caller at
-    `0x0048fa90` and identify which earlier CE/MFC result is driving shutdown,
-    then continue with CE-referenced raw behavior that advances the guest path
-    toward the newly connected framebuffer drawing and the remaining
-    GDI/DC/surface drawing and blit imports.
+    work is to follow the decoded shutdown branch through guest function
+    `0x0004390c`: it sends `0x5236` at `0x00043e30`/`0x00043e38`, and the main
+    WNDPROC converts that custom message to `WM_CLOSE`. Identify which earlier
+    CE/MFC result feeds that branch, then continue with CE-referenced raw
+    behavior that advances the guest path toward the newly connected
+    framebuffer drawing and the remaining GDI/DC/surface drawing and blit
+    imports.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch

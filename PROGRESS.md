@@ -544,6 +544,14 @@
   observed ordinal-1943 calls and now exits through the guest encoded
   `TerminateProcess` path (`caller=0x0048fa90`, process `0x42`,
   `exit_code=0`); `target\inavi-release-adb1943.ppm` is still all zero.
+- Unicorn WNDPROC return traces now annotate return PCs that land inside
+  generated branch/JAL trampolines with their original guest instruction. The
+  latest mounted release run keeps the same encoded `TerminateProcess` exit and
+  blank framebuffer, but the shutdown path is now decoded: the app handles
+  `0x56d0`, enters the guest function at `0x0004390c`, reaches the shutdown
+  epilogue at `0x00043e30`, and sends `0x5236` from trampoline return
+  `0x008b7b70` back to origin `0x00043e38`; the `wce_solution_inavi` WNDPROC
+  maps `0x5236` to `WM_CLOSE`.
 
 ## Current State
 
@@ -568,7 +576,10 @@
   corruption bug, and the launch-demanded `ADBSetAccountProperties @1943`
   import. The current concrete stop is an encoded guest `TerminateProcess`
   path (`caller=0x0048fa90`, process `0x42`, `exit_code=0`); the framebuffer
-  remains blank. A
+  remains blank. The current decoded shutdown chain is app message `0x56d0`
+  into guest function `0x0004390c`, then a `0x5236` send at `0x00043e30`/
+  `0x00043e38` that the main `wce_solution_inavi` WNDPROC converts to
+  `WM_CLOSE`. A
   generic virtual framebuffer is now
   attached to the emulator boundary, generic virtual presenter/desktop
   interfaces exist for host

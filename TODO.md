@@ -30,9 +30,12 @@
   frontier now returns `FALSE`/`ERROR_NOT_SUPPORTED` and the app proceeds to an
   encoded `TerminateProcess` exit (`caller=0x0048fa90`, process `0x42`,
   `exit_code=0`). The framebuffer dump `target\inavi-release-adb1943.ppm` is
-  still all zero. Disassemble the caller-side exit decision and determine which
-  preceding CE/MFC resource, window, or service result is causing the app to
-  shut down before useful drawing.
+  still all zero. WNDPROC return trampoline-origin tracing now decodes the
+  shutdown path as `0x56d0` entering `0x0004390c`, then an app-side `0x5236`
+  send at `0x00043e30`/`0x00043e38`; the main `wce_solution_inavi` WNDPROC maps
+  that to `WM_CLOSE`. Disassemble the branch path through `0x0004390c` and
+  determine which preceding CE/MFC resource, window, or service result is
+  causing the app to shut down before useful drawing.
 - Replace launch-stub behavior for commctrl, WINSOCK, and OLE imports with
   real subsystem-backed implementations as import traces demand. Keep MFC on
   the loaded SDK DLL path only; do not add emulator MFC stubs.
