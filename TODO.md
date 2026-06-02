@@ -5,8 +5,9 @@
 - Continue the launch path from the current empty-queue `GetMessageW` block by
   driving real CE/MFC window, timer, paint, input, and invalidation behavior.
   Do not treat the blocked pump as GUI success.
-- Replace launch-stub behavior for MFC400/mfcce400, commctrl, WINSOCK, and OLE
-  imports with real subsystem-backed implementations as import traces demand.
+- Replace launch-stub behavior for commctrl, WINSOCK, and OLE imports with
+  real subsystem-backed implementations as import traces demand. Keep MFC on
+  the loaded SDK DLL path only; do not add emulator MFC stubs.
 - Continue burning down COREDLL ordinals subsystem by subsystem, replacing
   stubbed ordinal plan entries with CE/MFC/SDK-referenced semantics. Next
   likely tranche: real message wakeups after `GetMessageW`, PE-backed resource

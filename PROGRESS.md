@@ -145,8 +145,10 @@
   - `--dll-search-dir` can load SDK DLL images such as `mfcce400.dll`; the main
     relocation-stripped EXE remains at its preferred base while relocatable DLLs
     are moved when their preferred base overlaps
-  - COREDLL, MFC400/mfcce400-style, commctrl, winsock, and OLE import slots are
-    patched to shim trap addresses
+  - COREDLL, commctrl, winsock, and OLE import slots are patched to shim trap
+    addresses when no loaded DLL export resolves them
+  - MFC imports are not emulated by external stubs; they must resolve to loaded
+    SDK DLL exports such as `mfcce400.dll`
   - external imports can resolve to loaded DLL exports before falling back to
     module-owned traps
   - COREDLL traps decode MIPS `a0`-`a3`, dispatch through the raw ordinal
@@ -154,8 +156,8 @@
     a0-a3/t9 plus memory-fault details on run failure
   - guest heap pages are mapped as a CE heap arena for APIs that allocate and
     populate memory during the same import call
-  - non-COREDLL supported DLLs currently use module-owned launch stubs with
-    debug logs, not final API semantics
+  - non-COREDLL supported DLLs other than MFC currently use module-owned launch
+    stubs with debug logs, not final API semantics
 - SDK CE 4.2 Mipsii COREDLL ordinal evidence from `coredll.lib` is now captured
   for the launch-demanded CRT ordinals: `_wcsdup`, `wcsrchr`, `malloc`,
   `memcpy`, `memset`, operator `new`, `swprintf`, `printf`, and `free`.
@@ -207,9 +209,9 @@
   registry API and creates base GWE, timer, audio, and memory-map state.
 - The virtual Win32/CE framework and COREDLL dispatcher are connected to Unicorn
   import traps. SDK `mfcce400.dll` can execute from a relocated image through
-  the current target startup and message-pump entry path, but MFC, commctrl,
-  WINSOCK, OLE, and additional CE 4.2 ordinal behavior still need real
-  subsystem-backed implementation as traces demand.
+  the current target startup and message-pump entry path. MFC imports are now
+  SDK-DLL-only; commctrl, WINSOCK, OLE, and additional CE 4.2 ordinal behavior
+  still need real subsystem-backed implementation as traces demand.
 - Many COREDLL ordinals are classified and dispatchable but still stubbed by
   subsystem. Kernel/thread/time/sync, memory/local/heap/virtual allocation,
   raw file buffer/find marshalling, first GWE class/HWND/RECT/text/window-long/

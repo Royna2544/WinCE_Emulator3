@@ -95,10 +95,10 @@ impl ImportTrapTable {
                         .dispatch_raw_ordinal_with_memory(kernel, memory, thread_id, ordinal, args),
                 )
             }
-            ImportModuleKind::Mfc
-            | ImportModuleKind::CommonControls
+            ImportModuleKind::CommonControls
             | ImportModuleKind::Winsock
             | ImportModuleKind::Ole => dispatch_external_stub_to_u32(trap, memory, &args),
+            ImportModuleKind::Mfc => return None,
         })
     }
 
@@ -195,6 +195,9 @@ pub fn patch_supported_imports_with_external(
                     write_mapped_u32(mapped, thunk.iat_rva, address)?;
                     continue;
                 }
+                if module_kind == ImportModuleKind::Mfc {
+                    continue;
+                }
             }
 
             let (ordinal, name) = match &thunk.import {
@@ -281,28 +284,18 @@ fn dispatch_external_stub_to_u32<M: CoredllGuestMemory>(
         "external DLL import stub"
     );
     match trap.module_kind {
-        ImportModuleKind::Mfc => mfc_stub_return(name),
         ImportModuleKind::CommonControls => common_controls_stub_return(name),
         ImportModuleKind::Winsock => winsock_stub_return(trap, memory, args),
         ImportModuleKind::Ole => ole_stub_return(name),
         ImportModuleKind::Coredll => 0,
+        ImportModuleKind::Mfc => {
+            unreachable!("MFC imports must resolve to SDK DLL exports, not emulator stubs")
+        }
     }
 }
 
 fn raw_import_arg(args: &[u32], index: usize) -> u32 {
     args.get(index).copied().unwrap_or(0)
-}
-
-fn mfc_stub_return(name: &str) -> u32 {
-    let normalized = normalize_symbol(name);
-    if normalized.contains("afxwininit")
-        || normalized.contains("afxinit")
-        || normalized.contains("afxenable")
-    {
-        1
-    } else {
-        0
-    }
 }
 
 fn common_controls_stub_return(name: &str) -> u32 {
@@ -576,7 +569,7 @@ mod tests {
     }
 
     #[test]
-    fn patches_mfc_commctrl_winsock_and_ole_imports_as_supported_traps() {
+    fn patches_commctrl_winsock_and_ole_imports_as_supported_traps_without_mfc_stub() {
         let imports = vec![
             ImportDescriptor {
                 module_name: "MFC400.DLL".to_owned(),
@@ -644,6 +637,7 @@ mod tests {
             },
         ];
         let mut mapped = vec![0; 0x4000];
+        mapped[0x3000..0x3004].copy_from_slice(&0xfeed_faceu32.to_le_bytes());
         let table = patch_supported_imports(
             &mut mapped,
             0x0040_0000,
@@ -653,28 +647,25 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(table.len(), 4);
+        assert_eq!(table.len(), 3);
+        assert_eq!(
+            u32::from_le_bytes(mapped[0x3000..0x3004].try_into().unwrap()),
+            0xfeed_face
+        );
         assert_eq!(
             table.trap_at(IMPORT_TRAP_BASE).unwrap().module_kind,
-            ImportModuleKind::Mfc
+            ImportModuleKind::CommonControls
         );
         assert_eq!(
             table
                 .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE)
                 .unwrap()
                 .module_kind,
-            ImportModuleKind::CommonControls
-        );
-        assert_eq!(
-            table
-                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2)
-                .unwrap()
-                .module_kind,
             ImportModuleKind::Winsock
         );
         assert_eq!(
             table
-                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 3)
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2)
                 .unwrap()
                 .module_kind,
             ImportModuleKind::Ole

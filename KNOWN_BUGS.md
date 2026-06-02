@@ -34,13 +34,14 @@
   - Status: active ordinal-by-ordinal implementation work.
 
 - External DLL import traps are launch stubs, not final DLL implementations.
-  - Symptom: MFC400/mfcce400, commctrl, WINSOCK, and OLE imports can be patched
-    to trap addresses so execution can proceed, but most non-SDK-DLL functions
-    return only conservative placeholder values.
-  - Evidence: `src/emulator/imports.rs` classifies these modules, resolves
-    loaded SDK DLL exports when available, and logs external import calls; real
-    behavior still needs MFC/commctrl/WINSOCK/OLE subsystem shims.
-  - Status: active launch-enabling diagnostic layer.
+  - Symptom: commctrl, WINSOCK, and OLE imports can be patched to trap
+    addresses so execution can proceed, but most non-SDK-DLL functions return
+    only conservative placeholder values.
+  - Evidence: `src/emulator/imports.rs` resolves loaded SDK DLL exports when
+    available. MFC imports are deliberately not stubbed anymore; unresolved MFC
+    slots are left for the loaded SDK DLL path instead of being patched to an
+    emulator `Afx*` return shim.
+  - Status: active launch-enabling diagnostic layer for non-MFC external DLLs.
 
 - PE resources are not loaded into `ResourceSystem` yet.
   - Symptom: resource API behavior works for registered virtual resources and
