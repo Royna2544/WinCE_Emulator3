@@ -992,9 +992,12 @@ impl UnicornMips {
         let last_inavi_controller =
             Rc::new(RefCell::new(Vec::<UnicornInaviControllerTrace>::new()));
         let last_inavi_controller_hook = Rc::clone(&last_inavi_controller);
+        let late_inavi_init_dialog_posted = Rc::new(Cell::new(false));
+        let late_inavi_init_dialog_posted_hook = Rc::clone(&late_inavi_init_dialog_posted);
         let mapped_blobs = self.mapped_blobs.clone();
         let trampoline_ranges = self.trampoline_ranges.clone();
         let trampoline_jumps = self.trampoline_jumps.clone();
+        let kernel_ptr = kernel as *mut CeKernel;
         uc.add_code_hook(1, 0, move |uc, address, _size| {
             let pc = address as u32;
             let code_trace_index = code_trace_counter_hook.get().wrapping_add(1);
@@ -1079,6 +1082,12 @@ impl UnicornMips {
             .flatten();
             record_mfc_dispatch_trace(&last_mfc_dispatch_hook, uc, pc);
             record_inavi_display_trace(&last_inavi_display_hook, uc, pc);
+            maybe_post_late_inavi_init_dialog(
+                unsafe { &mut *kernel_ptr },
+                uc,
+                pc,
+                &late_inavi_init_dialog_posted_hook,
+            );
             repair_inavi_aux_touch_alias(uc, pc);
             record_inavi_controller_trace(&last_inavi_controller_hook, uc, pc);
             let code_record = || UnicornLastCode {
@@ -1221,7 +1230,6 @@ impl UnicornMips {
         let guest_thread_stack_slots = Rc::new(RefCell::new(std::collections::BTreeMap::new()));
         let guest_thread_stack_slots_hook = Rc::clone(&guest_thread_stack_slots);
         let traps = self.import_traps.clone();
-        let kernel_ptr = kernel as *mut CeKernel;
         let framebuffer_ptr = framebuffer as *mut dyn Framebuffer;
         let stack_top = self.stack_top.unwrap_or(0);
         let mapped_kernel_memory = Rc::new(RefCell::new(vec![(
@@ -4954,6 +4962,33 @@ fn repair_inavi_aux_touch_alias<D>(uc: &mut unicorn_engine::Unicorn<'_, D>, pc: 
 }
 
 #[cfg(feature = "unicorn")]
+fn maybe_post_late_inavi_init_dialog<D>(
+    kernel: &mut CeKernel,
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    pc: u32,
+    posted: &std::cell::Cell<bool>,
+) {
+    use unicorn_engine::RegisterMIPS;
+
+    if posted.get() || pc != 0x0001_29b8 {
+        return;
+    }
+    let this_ptr = read_mips_reg(uc, RegisterMIPS::FP);
+    let Some(hwnd) = this_ptr
+        .checked_add(0x20)
+        .and_then(|addr| read_unicorn_u32(uc, addr))
+        .filter(|hwnd| *hwnd != 0)
+    else {
+        return;
+    };
+    let time_ms = kernel.timers.tick_count();
+    let message = crate::ce::gwe::Message::new(hwnd, WM_INITDIALOG, 0, 0, time_ms);
+    if kernel.gwe.post_message_for_window(hwnd, message) {
+        posted.set(true);
+    }
+}
+
+#[cfg(feature = "unicorn")]
 fn record_inavi_controller_trace<D>(
     traces: &std::rc::Rc<std::cell::RefCell<Vec<UnicornInaviControllerTrace>>>,
     uc: &unicorn_engine::Unicorn<'_, D>,
@@ -4998,6 +5033,10 @@ fn record_inavi_controller_trace<D>(
     };
     let paint_this = match label {
         "paint_entry" => Some(a0),
+        "render_lifecycle_entry" => Some(a0),
+        "render_lifecycle_after_base"
+        | "render_lifecycle_before_full_resize"
+        | "render_lifecycle_full_resize_call" => Some(fp),
         "paint_after_begin"
         | "paint_gate_check"
         | "paint_render_obj_check"
@@ -5235,9 +5274,19 @@ fn inavi_controller_probe_label(pc: u32) -> Option<&'static str> {
         0x0002_c734 => Some("paint_render_vtable"),
         0x0002_c73c => Some("paint_render_call"),
         0x0002_c748 => Some("paint_end"),
+        0x0002_bac8 => Some("init_dialog_surface_call"),
+        0x0002_bc34 => Some("init_dialog_surface_entry"),
+        0x0002_bcd8 => Some("init_dialog_resource_check"),
+        0x0002_bcfc => Some("init_dialog_after_resource"),
+        0x0002_bda0 => Some("render_lifecycle_precall"),
+        0x0002_bddc => Some("render_lifecycle_full_call"),
+        0x0002_bde4 => Some("render_lifecycle_full_return"),
         0x0002_d158 => Some("wm_size_entry"),
         0x0002_d198 => Some("wm_size_render_vtable"),
         0x0002_d1a0 => Some("wm_size_render_call"),
+        0x0003_0e1c => Some("render_lifecycle_entry"),
+        0x0003_0fa0 => Some("render_lifecycle_after_base"),
+        0x0003_1140 => Some("render_lifecycle_before_full_resize"),
         0x0003_1188 => Some("render_full_resize_load_obj"),
         0x0003_118c => Some("render_full_resize_obj"),
         0x0003_1194 => Some("render_full_resize_call"),
@@ -6295,15 +6344,59 @@ fn import_detail_after_return<D>(
     args: &[u32],
     result: u32,
 ) -> Option<String> {
-    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
-        || ordinal != Some(crate::ce::coredll_ordinals::ORD_GET_MODULE_FILE_NAME_W)
-        || result == 0
-    {
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll {
         return None;
     }
-    let buffer = args.get(1).copied().unwrap_or(0);
-    let max_chars = args.get(2).copied().unwrap_or(0).min(260);
-    read_unicorn_wide_z(uc, buffer, max_chars as usize).map(|path| format!("path={path}"))
+    match ordinal {
+        Some(crate::ce::coredll_ordinals::ORD_GET_MODULE_FILE_NAME_W) if result != 0 => {
+            let buffer = args.get(1).copied().unwrap_or(0);
+            let max_chars = args.get(2).copied().unwrap_or(0).min(260);
+            read_unicorn_wide_z(uc, buffer, max_chars as usize).map(|path| format!("path={path}"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_WCSNCPY) => {
+            let dest = args.first().copied().unwrap_or(0);
+            let src = args.get(1).copied().unwrap_or(0);
+            let count = args.get(2).copied().unwrap_or(0);
+            let mut parts = vec![format!("count={count}")];
+            if let Some(dest_preview) = read_unicorn_wide_z(uc, dest, 32) {
+                parts.push(format!("dest={dest_preview:?}"));
+            }
+            if let Some(src_preview) = read_unicorn_wide_z(uc, src, 32) {
+                parts.push(format!("src={src_preview:?}"));
+            }
+            if let Some(pointer) = read_unicorn_u32(uc, src) {
+                parts.push(format!("src_word=0x{pointer:08x}"));
+                if let Some(deref_preview) = read_unicorn_wide_z(uc, pointer, 32) {
+                    parts.push(format!("src_deref={deref_preview:?}"));
+                }
+            }
+            Some(parts.join("/"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_MEMMOVE) => {
+            let dest = args.first().copied().unwrap_or(0);
+            let src = args.get(1).copied().unwrap_or(0);
+            let count = args.get(2).copied().unwrap_or(0);
+            let mut parts = vec![format!("count={count}")];
+            if let Some(dest_preview) = read_unicorn_wide_z(uc, dest, 32) {
+                parts.push(format!("dest_wide={dest_preview:?}"));
+            }
+            if let Some(src_preview) = read_unicorn_wide_z(uc, src, 32) {
+                parts.push(format!("src_wide={src_preview:?}"));
+            }
+            Some(parts.join("/"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_WCSRCHR) => {
+            let string = args.first().copied().unwrap_or(0);
+            let needle = args.get(1).copied().unwrap_or(0);
+            let preview = read_unicorn_wide_z(uc, string, 32).unwrap_or_default();
+            Some(format!("needle=0x{needle:04x}/string={preview:?}"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_INPUT_DEBUG_CHAR_W) => {
+            let string = args.first().copied().unwrap_or(0);
+            read_unicorn_wide_z(uc, string, 32).map(|preview| format!("string={preview:?}"))
+        }
+        _ => None,
+    }
 }
 
 #[cfg(feature = "unicorn")]
