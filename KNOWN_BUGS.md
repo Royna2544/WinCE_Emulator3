@@ -63,9 +63,12 @@
     ordinals before export-index fallback, returning heap-backed
     `RegisterGesture @2724` state, and writing basic system time structs, the
     latest mounted run now gets past the prior 1576, 2724, and 25 traps after
-    creating the main and MFC child windows. The current post-time path did not
-    return a bounded snapshot before the shell timeout and produced no
-    framebuffer dump.
+    creating the main and MFC child windows. `--cpu-wall-clock-limit-ms 15000`
+    now stops this post-time path without external killing and writes
+    `target\inavi-wall-clock-stop.ppm`; that dump body is still all zero. The
+    captured snapshot stops at `pc=0x0001354c` with repeated SDK CRT
+    `memset @1047`/`swprintf @1097` import activity, so the current failure is
+    still "no useful GUI pixels," not a missing `GetSystemTime` import.
   - Status: active; `TlsCall` now returns real CE-style slots,
     `CallWindowProcW` now enters guest window-procedure targets, and
     `CreateWindowExW` now delivers the first create-time message. Raw

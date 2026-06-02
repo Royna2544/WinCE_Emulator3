@@ -80,8 +80,9 @@ CPU execution is behind the `unicorn` feature:
 cargo run --features unicorn -- --mount-config mounts.toml --image D:\INAVI_Emulator\INAVI\INavi\iNavi.exe --dll-search-dir "C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii" --framebuffer-dump target\last-framebuffer.ppm --run-cpu
 ```
 
-Use `--cpu-instruction-limit N` with `--run-cpu` to make Unicorn return a
-bounded diagnostic snapshot instead of relying on an external timeout.
+Use `--cpu-instruction-limit N` or `--cpu-wall-clock-limit-ms N` with
+`--run-cpu` to make Unicorn return a bounded diagnostic snapshot instead of
+relying on an external timeout.
 
 The current bounded target run creates and shows the main HWND, delivers the
 create-time `WM_CREATE` callout, dispatches the initial visible-window
@@ -90,6 +91,7 @@ dispatches the first `WM_PAINT` through the SDK MFC window procedure, and then
 returns through the emulator's empty-queue `GetMessageW @861` diagnostic after
 MFC idle UI update handling. There are now virtual framebuffer, presenter, and
 desktop boundaries, and the first solid `FillRect` path can draw into the
-attached framebuffer. The target still has not reached useful drawing/blit
-imports in the current launch trace, so this remains a useful frontier, not a
-completed GUI launch.
+attached framebuffer. The mounted run now gets past the earlier
+`GetSystemTime @25` trap and can stop through the wall-clock limiter, but the
+current snapshot is still in startup CRT/import activity and the framebuffer
+dump remains blank. This remains a useful frontier, not a completed GUI launch.

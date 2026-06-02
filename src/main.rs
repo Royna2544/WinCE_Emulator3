@@ -14,7 +14,10 @@ use wince_emulation_v3::{
         registry::{ERROR_SUCCESS, HKEY_LOCAL_MACHINE},
     },
     config::RuntimeConfig,
-    emulator::{memory::MemoryPerms, unicorn::UnicornMips},
+    emulator::{
+        memory::MemoryPerms,
+        unicorn::{UnicornMips, UnicornRunLimits},
+    },
     pe::PeImage,
 };
 
@@ -28,6 +31,7 @@ struct Args {
     framebuffer_dump: Option<PathBuf>,
     desktop: DesktopMode,
     cpu_instruction_limit: usize,
+    cpu_wall_clock_limit_ms: u64,
     run_cpu: bool,
 }
 
@@ -186,10 +190,13 @@ fn main() -> Result<()> {
 
     if args.run_cpu {
         enqueue_desktop_input(&mut desktop, &mut kernel)?;
-        if let Err(err) = cpu.run_until_import_trap_with_framebuffer_limit(
+        if let Err(err) = cpu.run_until_import_trap_with_framebuffer_limits(
             &mut kernel,
             desktop.framebuffer_mut(),
-            args.cpu_instruction_limit,
+            UnicornRunLimits {
+                instruction_limit: args.cpu_instruction_limit,
+                wall_clock_limit_ms: args.cpu_wall_clock_limit_ms,
+            },
         ) {
             if let Some(snapshot) = cpu.last_debug_snapshot() {
                 eprintln!("  Unicorn debug: {snapshot}");
@@ -366,6 +373,7 @@ impl Args {
         let mut framebuffer_dump = None;
         let mut desktop = DesktopMode::Virtual;
         let mut cpu_instruction_limit = 0;
+        let mut cpu_wall_clock_limit_ms = 0;
         let mut run_cpu = false;
 
         let mut args = std::env::args().skip(1);
@@ -395,6 +403,9 @@ impl Args {
                 "--cpu-instruction-limit" => {
                     cpu_instruction_limit = next_usize(&mut args, "--cpu-instruction-limit")?;
                 }
+                "--cpu-wall-clock-limit-ms" => {
+                    cpu_wall_clock_limit_ms = next_u64(&mut args, "--cpu-wall-clock-limit-ms")?;
+                }
                 "--run-cpu" => {
                     run_cpu = true;
                 }
@@ -419,6 +430,7 @@ impl Args {
             framebuffer_dump,
             desktop,
             cpu_instruction_limit,
+            cpu_wall_clock_limit_ms,
             run_cpu,
         })
     }
@@ -431,6 +443,15 @@ fn next_path(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<Path
 }
 
 fn next_usize(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<usize> {
+    let value = args.next().ok_or_else(|| {
+        wince_emulation_v3::Error::InvalidArgument(format!("{flag} needs a value"))
+    })?;
+    value
+        .parse()
+        .map_err(|err| wince_emulation_v3::Error::InvalidArgument(format!("{flag}: {err}")))
+}
+
+fn next_u64(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<u64> {
     let value = args.next().ok_or_else(|| {
         wince_emulation_v3::Error::InvalidArgument(format!("{flag} needs a value"))
     })?;
@@ -454,7 +475,7 @@ fn next_desktop_mode(args: &mut impl Iterator<Item = String>, flag: &str) -> Res
 
 fn print_help() {
     println!(
-        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--mount-config mounts.toml] [--image INavi.exe] [--dll-search-dir DIR]... [--desktop virtual|host] [--framebuffer-dump OUT.ppm] [--cpu-instruction-limit N] [--run-cpu]"
+        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--mount-config mounts.toml] [--image INavi.exe] [--dll-search-dir DIR]... [--desktop virtual|host] [--framebuffer-dump OUT.ppm] [--cpu-instruction-limit N] [--cpu-wall-clock-limit-ms N] [--run-cpu]"
     );
 }
 

@@ -454,6 +454,14 @@
   dump. The next task is to instrument or bound the post-time path so the
   emulator can report whether it is spinning in guest code, spending excessive
   time in translated blocks, or waiting in a message/timer path.
+- `--cpu-wall-clock-limit-ms N` now lets Unicorn stop from inside the generic
+  code hook after real CPU execution exceeds a host wall-clock budget, captures
+  the same register/import/block rings, and still writes `--framebuffer-dump`.
+  A 15,000 ms mounted iNavi run now returns without external killing and writes
+  `target\inavi-wall-clock-stop.ppm`, but the dump body is still all zero. The
+  snapshot stops at `pc=0x0001354c` with repeated SDK CRT `memset @1047`/
+  `swprintf @1097` activity in the import ring, so the current frontier is
+  startup initialization past system time, not an unimplemented raw import.
 
 ## Current State
 
@@ -468,9 +476,11 @@
   `_setjmp`/`longjmp` exception path, pass iNavi's `iNaviData` SD-card
   directory validation, implement first palette/DC state behavior, preserve SDK
   CRT import ordinals ahead of export-index aliases, return heap-backed
-  `RegisterGesture @2724` state, and write basic system/local time structs.
-  The current mounted run progresses past the previous `GetSystemTime @25`
-  trap but does not yet produce a bounded post-time diagnostic snapshot. A
+  `RegisterGesture @2724` state, write basic system/local time structs, and
+  stop long post-time runs through `--cpu-wall-clock-limit-ms` with a diagnostic
+  snapshot plus framebuffer dump. The current mounted run progresses past the
+  previous `GetSystemTime @25` trap, but the wall-clock-bounded snapshot is
+  still in startup CRT/import activity and the framebuffer remains blank. A
   generic virtual framebuffer is now
   attached to the emulator boundary, generic virtual presenter/desktop
   interfaces exist for host

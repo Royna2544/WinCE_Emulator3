@@ -7,13 +7,16 @@
   first solid `FillRect` framebuffer path, then verify those pixels through the
   generic presenter boundary. Do not treat the timeout-running paint loop as
   GUI success.
-- Instrument the post-time iNavi path. The latest mounted run now gets past the
+- Continue the post-time iNavi path from the new wall-clock diagnostic frontier.
+  The latest mounted run now gets past the
   earlier export-index `GetPaletteEntries` trap via real palette/DC state,
   preserves SDK CRT ordinals such as `memset @1047` and `swprintf @1097` before
   export-index fallback, returns heap-backed `RegisterGesture @2724` state, and
-  writes `GetSystemTime @25`, but a reduced-log 9,050,000-instruction run did
-  not return a bounded snapshot before the shell timeout and produced no
-  framebuffer dump.
+  writes `GetSystemTime @25`. With `--cpu-wall-clock-limit-ms 15000`, the run
+  now returns a bounded snapshot and framebuffer dump without external killing;
+  the dump is still all zero, and the snapshot stops around `pc=0x0001354c`
+  with repeated SDK CRT `memset @1047`/`swprintf @1097` activity. Burn down the
+  next real startup bottleneck before expecting guest drawing.
 - Replace launch-stub behavior for commctrl, WINSOCK, and OLE imports with
   real subsystem-backed implementations as import traces demand. Keep MFC on
   the loaded SDK DLL path only; do not add emulator MFC stubs.
@@ -39,8 +42,9 @@
   MFC child window. The latest rerun gets past the previous
   `GetPaletteEntries` trap, SDK CRT ordinal normalization bug, and
   `RegisterGesture @2724` pointer-return path, and `GetSystemTime @25`; the
-  current post-time run needs a better bounded diagnostic before the next raw
-  import or guest loop can be named. Continue replacing raw COREDLL/GDI/DC
+  current wall-clock-bounded post-time run names the next frontier as repeated
+  startup CRT/import activity before visible drawing. Continue replacing raw
+  COREDLL/GDI/DC
   behavior with CE-referenced semantics that advance the path toward target
   framebuffer drawing.
 - Use the new guest-WNDPROC return ring to compare creation-time sequencing

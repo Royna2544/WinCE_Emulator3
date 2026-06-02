@@ -33,6 +33,12 @@ pub struct UnicornMips {
     last_debug: Option<UnicornDebugSnapshot>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UnicornRunLimits {
+    pub instruction_limit: usize,
+    pub wall_clock_limit_ms: u64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UnicornDebugSnapshot {
     pub pc: u32,
@@ -50,6 +56,7 @@ pub struct UnicornDebugSnapshot {
     pub trap_ordinal: Option<u32>,
     pub memory_fault: Option<UnicornMemoryFault>,
     pub indirect_call_probe: Option<UnicornIndirectCallProbe>,
+    pub host_wall_clock_stop: Option<UnicornHostWallClockStop>,
     pub interrupt_probe: Option<UnicornInterruptProbe>,
     pub invalid_instruction_probe: Option<UnicornInvalidInstructionProbe>,
     pub last_calls: Vec<UnicornLastCall>,
@@ -81,6 +88,15 @@ pub struct UnicornIndirectCallProbe {
     pub register: u32,
     pub register_name: &'static str,
     pub target: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornHostWallClockStop {
+    pub pc: u32,
+    pub ra: u32,
+    pub sp: u32,
+    pub instruction: Option<u32>,
+    pub elapsed_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -592,6 +608,22 @@ impl UnicornMips {
         framebuffer: &mut dyn Framebuffer,
         instruction_limit: usize,
     ) -> Result<()> {
+        self.run_until_import_trap_with_framebuffer_limits(
+            kernel,
+            framebuffer,
+            UnicornRunLimits {
+                instruction_limit,
+                wall_clock_limit_ms: 0,
+            },
+        )
+    }
+
+    pub fn run_until_import_trap_with_framebuffer_limits(
+        &mut self,
+        kernel: &mut CeKernel,
+        framebuffer: &mut dyn Framebuffer,
+        limits: UnicornRunLimits,
+    ) -> Result<()> {
         let info = framebuffer.info();
         kernel.remote.set_framebuffer_size(info.width, info.height);
         for string in &self.resource_strings {
@@ -618,10 +650,10 @@ impl UnicornMips {
             );
         }
         #[cfg(not(feature = "unicorn"))]
-        let _ = instruction_limit;
+        let _ = limits;
         #[cfg(feature = "unicorn")]
         {
-            return self.run_with_unicorn(kernel, framebuffer, instruction_limit);
+            return self.run_with_unicorn(kernel, framebuffer, limits);
         }
 
         #[cfg(not(feature = "unicorn"))]
@@ -680,9 +712,13 @@ impl UnicornMips {
         &mut self,
         kernel: &mut CeKernel,
         framebuffer: &mut dyn Framebuffer,
-        instruction_limit: usize,
+        limits: UnicornRunLimits,
     ) -> Result<()> {
-        use std::{cell::RefCell, rc::Rc};
+        use std::{
+            cell::RefCell,
+            rc::Rc,
+            time::{Duration, Instant},
+        };
         use unicorn_engine::{
             RegisterMIPS, Unicorn,
             unicorn_const::{Arch, HookType, Mode},
@@ -725,6 +761,13 @@ impl UnicornMips {
         let indirect_call_probe_hook = Rc::clone(&indirect_call_probe);
         let last_code = Rc::new(RefCell::new(Vec::<UnicornLastCode>::new()));
         let last_code_hook = Rc::clone(&last_code);
+        let host_wall_clock_stop = Rc::new(RefCell::new(None));
+        let host_wall_clock_stop_hook = Rc::clone(&host_wall_clock_stop);
+        let host_wall_clock_limit = (limits.wall_clock_limit_ms != 0)
+            .then(|| Duration::from_millis(limits.wall_clock_limit_ms));
+        let host_wall_clock_started = Instant::now();
+        let host_wall_clock_counter = Rc::new(RefCell::new(0u32));
+        let host_wall_clock_counter_hook = Rc::clone(&host_wall_clock_counter);
         let last_calls = Rc::new(RefCell::new(Vec::<UnicornLastCall>::new()));
         let last_calls_hook = Rc::clone(&last_calls);
         let trampoline_ranges = self.trampoline_ranges.clone();
@@ -733,6 +776,21 @@ impl UnicornMips {
             let pc = address as u32;
             let instruction = read_unicorn_u32(uc, pc);
             let next_instruction = read_unicorn_u32(uc, pc.wrapping_add(4));
+            if let Some(limit) = host_wall_clock_limit {
+                let mut counter = host_wall_clock_counter_hook.borrow_mut();
+                *counter = counter.wrapping_add(1);
+                if *counter & 0x0fff == 0 && host_wall_clock_started.elapsed() >= limit {
+                    *host_wall_clock_stop_hook.borrow_mut() = Some(UnicornHostWallClockStop {
+                        pc,
+                        ra: read_mips_reg(uc, RegisterMIPS::RA),
+                        sp: read_mips_reg(uc, RegisterMIPS::SP),
+                        instruction,
+                        elapsed_ms: host_wall_clock_started.elapsed().as_millis() as u64,
+                    });
+                    let _ = uc.emu_stop();
+                    return;
+                }
+            }
             let direct_jump_target =
                 instruction.and_then(|instruction| decode_direct_jump_target(pc, instruction));
             let direct_jump_target_instruction =
@@ -1318,7 +1376,7 @@ impl UnicornMips {
                     let _ = run_pending_process_launches(
                         memory.uc,
                         unsafe { &mut *kernel_ptr },
-                        instruction_limit,
+                        limits.instruction_limit,
                     );
                     let _ = sync_file_mapping_views_to_unicorn(memory.uc, unsafe { &*kernel_ptr });
                 }
@@ -1483,12 +1541,13 @@ impl UnicornMips {
         let entry = self
             .entry
             .ok_or_else(|| Error::Backend("no PE entry point has been loaded".to_owned()))?;
-        let result = uc.emu_start(u64::from(entry), 0, 0, instruction_limit);
+        let result = uc.emu_start(u64::from(entry), 0, 0, limits.instruction_limit);
         self.last_debug = Some(capture_debug_snapshot(
             &uc,
             &self.import_traps,
             memory_fault.borrow().clone(),
             indirect_call_probe.borrow().clone(),
+            host_wall_clock_stop.borrow().clone(),
             interrupt_probe.borrow().clone(),
             invalid_instruction_probe.borrow().clone(),
             last_calls.borrow().clone(),
@@ -2409,6 +2468,16 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 probe.register_name,
                 probe.target
             )?;
+        }
+        if let Some(stop) = self.host_wall_clock_stop.as_ref() {
+            write!(
+                f,
+                " host_wall_clock_stop_ms={} host_stop_pc=0x{:08x} host_stop_ra=0x{:08x} host_stop_sp=0x{:08x}",
+                stop.elapsed_ms, stop.pc, stop.ra, stop.sp
+            )?;
+            if let Some(instruction) = stop.instruction {
+                write!(f, " host_stop_insn=0x{instruction:08x}")?;
+            }
         }
         if let Some(probe) = self.interrupt_probe.as_ref() {
             write!(
@@ -4372,6 +4441,7 @@ fn capture_debug_snapshot<D>(
     traps: &ImportTrapTable,
     memory_fault: Option<UnicornMemoryFault>,
     indirect_call_probe: Option<UnicornIndirectCallProbe>,
+    host_wall_clock_stop: Option<UnicornHostWallClockStop>,
     interrupt_probe: Option<UnicornInterruptProbe>,
     invalid_instruction_probe: Option<UnicornInvalidInstructionProbe>,
     last_calls: Vec<UnicornLastCall>,
@@ -4403,6 +4473,7 @@ fn capture_debug_snapshot<D>(
         trap_ordinal: trap.and_then(|trap| trap.ordinal),
         memory_fault,
         indirect_call_probe,
+        host_wall_clock_stop,
         interrupt_probe,
         invalid_instruction_probe,
         last_calls,
