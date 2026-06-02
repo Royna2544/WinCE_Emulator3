@@ -276,6 +276,7 @@ pub struct UnicornInaviDisplayTrace {
 pub struct UnicornInaviControllerTrace {
     pub pc: u32,
     pub label: &'static str,
+    pub instruction: Option<u32>,
     pub ra: u32,
     pub sp: u32,
     pub v0: u32,
@@ -315,8 +316,11 @@ pub struct UnicornInaviControllerTrace {
     pub render_dim_w: Option<u32>,
     pub render_dim_h: Option<u32>,
     pub aux_base: Option<u32>,
+    pub aux_slot_10ec_value: Option<u32>,
     pub aux_slot_10f0: Option<u32>,
     pub aux_slot_10f0_vtable: Option<u32>,
+    pub aux_inline_10f8: Option<u32>,
+    pub aux_inline_10f8_vtable: Option<u32>,
     pub aux_link_ee4: Option<u32>,
     pub aux_init_flag_edc: Option<u32>,
     pub aux_vtable_source: Option<u32>,
@@ -1075,6 +1079,7 @@ impl UnicornMips {
             .flatten();
             record_mfc_dispatch_trace(&last_mfc_dispatch_hook, uc, pc);
             record_inavi_display_trace(&last_inavi_display_hook, uc, pc);
+            repair_inavi_aux_touch_alias(uc, pc);
             record_inavi_controller_trace(&last_inavi_controller_hook, uc, pc);
             let code_record = || UnicornLastCode {
                 pc,
@@ -3411,6 +3416,9 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                     trace.s7,
                     trace.fp
                 )?;
+                if let Some(instruction) = trace.instruction {
+                    write!(f, "/insn=0x{instruction:08x}")?;
+                }
                 if let Some(sp10) = trace.sp10 {
                     write!(f, "/sp10=0x{sp10:08x}")?;
                 }
@@ -3489,11 +3497,20 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 if let Some(aux_base) = trace.aux_base {
                     write!(f, "/aux_base=0x{aux_base:08x}")?;
                 }
+                if let Some(aux_slot_10ec_value) = trace.aux_slot_10ec_value {
+                    write!(f, "/aux10ec_value=0x{aux_slot_10ec_value:08x}")?;
+                }
                 if let Some(aux_slot_10f0) = trace.aux_slot_10f0 {
                     write!(f, "/aux10f0=0x{aux_slot_10f0:08x}")?;
                 }
                 if let Some(aux_slot_10f0_vtable) = trace.aux_slot_10f0_vtable {
                     write!(f, "/aux10f0_vt=0x{aux_slot_10f0_vtable:08x}")?;
+                }
+                if let Some(aux_inline_10f8) = trace.aux_inline_10f8 {
+                    write!(f, "/aux10f8=0x{aux_inline_10f8:08x}")?;
+                }
+                if let Some(aux_inline_10f8_vtable) = trace.aux_inline_10f8_vtable {
+                    write!(f, "/aux10f8_vt=0x{aux_inline_10f8_vtable:08x}")?;
                 }
                 if let Some(aux_link_ee4) = trace.aux_link_ee4 {
                     write!(f, "/aux_ee4=0x{aux_link_ee4:08x}")?;
@@ -4914,6 +4931,29 @@ fn inavi_display_probe_label(pc: u32) -> Option<&'static str> {
 }
 
 #[cfg(feature = "unicorn")]
+fn repair_inavi_aux_touch_alias<D>(uc: &mut unicorn_engine::Unicorn<'_, D>, pc: u32) {
+    use unicorn_engine::RegisterMIPS;
+
+    if pc != 0x0006_39ec {
+        return;
+    }
+    let aux_base = read_mips_reg(uc, RegisterMIPS::A2);
+    let Some(alias_addr) = aux_base.checked_add(0x10f0) else {
+        return;
+    };
+    if read_unicorn_u32(uc, alias_addr).unwrap_or(0) != 0 {
+        return;
+    }
+    let Some(inline_addr) = aux_base.checked_add(0x10f8) else {
+        return;
+    };
+    if read_unicorn_u32(uc, inline_addr).unwrap_or(0) == 0 {
+        return;
+    }
+    let _ = uc.mem_write(u64::from(alias_addr), &inline_addr.to_le_bytes());
+}
+
+#[cfg(feature = "unicorn")]
 fn record_inavi_controller_trace<D>(
     traces: &std::rc::Rc<std::cell::RefCell<Vec<UnicornInaviControllerTrace>>>,
     uc: &unicorn_engine::Unicorn<'_, D>,
@@ -5056,7 +5096,12 @@ fn record_inavi_controller_trace<D>(
         _ => None,
     };
     let aux_slot_10f0 = aux_base.and_then(|base| base.checked_add(0x10f0));
+    let aux_slot_10ec_value = aux_base
+        .and_then(|base| base.checked_add(0x10ec))
+        .and_then(|addr| read_unicorn_u32(uc, addr));
     let aux_slot_10f0_vtable = aux_slot_10f0.and_then(|addr| read_unicorn_u32(uc, addr));
+    let aux_inline_10f8 = aux_base.and_then(|base| base.checked_add(0x10f8));
+    let aux_inline_10f8_vtable = aux_inline_10f8.and_then(|addr| read_unicorn_u32(uc, addr));
     let aux_link_ee4 = aux_base
         .and_then(|base| base.checked_add(0xee4))
         .and_then(|addr| read_unicorn_u32(uc, addr));
@@ -5082,6 +5127,7 @@ fn record_inavi_controller_trace<D>(
     let trace = UnicornInaviControllerTrace {
         pc,
         label,
+        instruction: read_unicorn_u32(uc, pc),
         ra: read_mips_reg(uc, RegisterMIPS::RA),
         sp,
         v0: read_mips_reg(uc, RegisterMIPS::V0),
@@ -5140,8 +5186,11 @@ fn record_inavi_controller_trace<D>(
         render_dim_w,
         render_dim_h,
         aux_base,
+        aux_slot_10ec_value,
         aux_slot_10f0,
         aux_slot_10f0_vtable,
+        aux_inline_10f8,
+        aux_inline_10f8_vtable,
         aux_link_ee4,
         aux_init_flag_edc,
         aux_vtable_source,
