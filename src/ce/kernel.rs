@@ -8,7 +8,7 @@ use crate::{
             FileIoResult, FindData, GENERIC_READ, GENERIC_WRITE, HostFileSystem, OPEN_EXISTING,
         },
         gwe::{
-            Gwe, HWND_BROADCAST, Message, Rect, WM_MOVE, WM_SHOWWINDOW, WM_SIZE,
+            Gwe, HWND_BROADCAST, Message, Point, Rect, WM_MOVE, WM_SHOWWINDOW, WM_SIZE,
             WM_WINDOWPOSCHANGED,
         },
         memory::MemorySystem,
@@ -560,6 +560,7 @@ impl CeKernel {
             thread_id, class_name, title, parent, id, style, ex_style, rect,
         );
         self.handles.insert(KernelObject::Window(hwnd));
+        self.post_window_rect_messages(hwnd, Some(Rect::default()), self.gwe.get_window_rect(hwnd));
         hwnd
     }
 
@@ -735,13 +736,37 @@ impl CeKernel {
         if !self.gwe.is_window(hwnd) {
             return 0;
         }
+        self.drain_remote_input_to_target(thread_id, Some(hwnd), false)
+    }
 
+    fn drain_remote_input_to_target(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        hit_test_touches: bool,
+    ) -> usize {
         let time_ms = self.timers.tick_count();
         let touch_events = self.remote.drain_touch_events();
         let key_events = self.remote.drain_key_events();
         let mut posted = 0;
 
         for event in touch_events {
+            let point = Point {
+                x: event.x,
+                y: event.y,
+            };
+            let target = if hit_test_touches {
+                self.gwe
+                    .get_capture()
+                    .or_else(|| self.gwe.window_from_point_for_thread(thread_id, point))
+                    .or(hwnd)
+            } else {
+                hwnd
+            };
+            let Some(target) = target.filter(|hwnd| self.gwe.is_window(*hwnd)) else {
+                continue;
+            };
+            let client = self.gwe.screen_to_client(target, point).unwrap_or(point);
             let wparam = if event.message == WM_LBUTTONDOWN || event.message == WM_MOUSEMOVE {
                 1
             } else {
@@ -750,20 +775,26 @@ impl CeKernel {
             self.gwe.post_message(
                 thread_id,
                 Message::new(
-                    hwnd,
+                    target,
                     event.message,
                     wparam,
-                    make_lparam(event.x, event.y),
+                    make_lparam(client.x, client.y),
                     time_ms,
                 ),
             );
             posted += 1;
         }
 
+        let key_target = hwnd
+            .or_else(|| self.gwe.get_capture())
+            .or_else(|| self.gwe.get_active_window());
         for event in key_events {
+            let Some(key_target) = key_target.filter(|hwnd| self.gwe.is_window(*hwnd)) else {
+                continue;
+            };
             self.gwe.post_message(
                 thread_id,
-                Message::new(hwnd, event.message, event.vk, 1, time_ms)
+                Message::new(key_target, event.message, event.vk, 1, time_ms)
                     .with_source(crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD),
             );
             posted += 1;
@@ -781,7 +812,7 @@ impl CeKernel {
             .filter(|hwnd| self.gwe.is_window(*hwnd))
             .or_else(|| self.gwe.get_capture())
             .or_else(|| self.gwe.get_active_window());
-        hwnd.map_or(0, |hwnd| self.drain_remote_input_to_gwe(thread_id, hwnd))
+        self.drain_remote_input_to_target(thread_id, hwnd, true)
     }
 
     pub fn wave_out_open(&mut self, format: WaveFormat) -> std::result::Result<u32, MmResult> {

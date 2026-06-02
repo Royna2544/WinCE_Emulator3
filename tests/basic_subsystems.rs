@@ -5,7 +5,7 @@ use wince_emulation_v3::{
         audio::{MMSYSERR_NOERROR, WaveBuffer, WaveFormat, WaveOutState},
         com::{REGDB_E_CLASSNOTREG, S_FALSE, S_OK},
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
-        gwe::{GWL_USERDATA, WM_QUIT, WM_TIMER, WM_USER},
+        gwe::{GWL_USERDATA, Rect, WM_QUIT, WM_TIMER, WM_USER, WS_CHILD, WS_VISIBLE},
         kernel::{CeKernel, MessagePumpResult},
         object::{EventObject, KernelObject},
         registry::{ERROR_SUCCESS, HKEY_LOCAL_MACHINE, REG_SZ},
@@ -352,6 +352,48 @@ fn get_message_drains_remote_touch_to_active_window() -> Result<()> {
 
     let up = kernel.get_message_w(42).unwrap();
     assert_eq!(up.hwnd, hwnd);
+    assert_eq!(up.msg, WM_LBUTTONUP);
+
+    Ok(())
+}
+
+#[test]
+fn get_message_hit_tests_remote_touch_to_visible_child() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    kernel.remote.set_framebuffer_size(800, 480);
+
+    let parent = kernel.gwe.create_window_ex_with_rect(
+        42,
+        "PARENT",
+        "parent",
+        None,
+        1,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(0, 0, 800, 480),
+    );
+    let child = kernel.gwe.create_window_ex_with_rect(
+        42,
+        "CHILD",
+        "child",
+        Some(parent),
+        2,
+        WS_VISIBLE | WS_CHILD,
+        0,
+        Rect::from_origin_size(0, 0, 800, 480),
+    );
+    kernel.gwe.set_focus(Some(parent));
+    kernel.remote.enqueue_touch("tap", 400, 240).unwrap();
+
+    let down = kernel.get_message_w(42).unwrap();
+    assert_eq!(down.hwnd, child);
+    assert_eq!(down.msg, WM_LBUTTONDOWN);
+    assert_eq!(down.lparam & 0xffff, 400);
+    assert_eq!((down.lparam >> 16) & 0xffff, 240);
+
+    let up = kernel.get_message_w(42).unwrap();
+    assert_eq!(up.hwnd, child);
     assert_eq!(up.msg, WM_LBUTTONUP);
 
     Ok(())

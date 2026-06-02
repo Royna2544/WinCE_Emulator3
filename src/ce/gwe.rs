@@ -157,6 +157,10 @@ impl Rect {
     pub fn zero_origin(self) -> Self {
         Self::from_origin_size(0, 0, self.width(), self.height())
     }
+
+    pub fn contains_point(self, point: Point) -> bool {
+        point.x >= self.left && point.x < self.right && point.y >= self.top && point.y < self.bottom
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1055,6 +1059,10 @@ impl Gwe {
         self.z_order.clone()
     }
 
+    pub fn window_from_point_for_thread(&self, thread_id: u32, point: Point) -> Option<u32> {
+        self.window_from_point_in_parent(thread_id, None, point)
+    }
+
     pub fn has_queue_input(&self, thread_id: u32, flags: u32) -> bool {
         self.queue_status_bits(thread_id) & flags != 0
     }
@@ -1325,6 +1333,29 @@ impl Gwe {
             .collect()
     }
 
+    fn window_from_point_in_parent(
+        &self,
+        thread_id: u32,
+        parent: Option<u32>,
+        point: Point,
+    ) -> Option<u32> {
+        for hwnd in self.sibling_windows(parent) {
+            let Some(window) = self.windows.get(&hwnd) else {
+                continue;
+            };
+            if !window.visible || !window.enabled || !window.client_rect.contains_point(point) {
+                continue;
+            }
+            if let Some(child) = self.window_from_point_in_parent(thread_id, Some(hwnd), point) {
+                return Some(child);
+            }
+            if window.thread_id == thread_id {
+                return Some(hwnd);
+            }
+        }
+        None
+    }
+
     fn apply_z_order(&mut self, hwnd: u32, parent: Option<u32>, insert_after: u32) {
         self.z_order.retain(|candidate| *candidate != hwnd);
         let siblings = self.sibling_windows(parent);
@@ -1537,6 +1568,40 @@ mod tests {
         assert_eq!(
             gwe.get_window_rect(child).unwrap(),
             Rect::from_origin_size(10, 20, 300, 200)
+        );
+    }
+
+    #[test]
+    fn window_from_point_prefers_visible_child_over_parent() {
+        let mut gwe = Gwe::default();
+        let parent = gwe.create_window_ex_with_rect(
+            1,
+            "PARENT",
+            "parent",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 800, 480),
+        );
+        let child = gwe.create_window_ex_with_rect(
+            1,
+            "CHILD",
+            "child",
+            Some(parent),
+            0,
+            WS_VISIBLE | WS_CHILD,
+            0,
+            Rect::from_origin_size(0, 0, 800, 480),
+        );
+
+        assert_eq!(
+            gwe.window_from_point_for_thread(1, Point { x: 400, y: 240 }),
+            Some(child)
+        );
+        assert_eq!(
+            gwe.window_from_point_for_thread(2, Point { x: 400, y: 240 }),
+            None
         );
     }
 

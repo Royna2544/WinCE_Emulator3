@@ -3,17 +3,17 @@ use wince_emulation_v3::{
     ce::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
-            ORD_BEGIN_PAINT, ORD_CHECK_MENU_RADIO_ITEM, ORD_CLIENT_TO_SCREEN, ORD_COPY_RECT,
-            ORD_CREATE_MUTEX_W, ORD_CREATE_PALETTE, ORD_CREATE_SOLID_BRUSH, ORD_CREATE_WINDOW_EX_W,
-            ORD_DESTROY_WINDOW, ORD_ENABLE_WINDOW, ORD_END_PAINT, ORD_EQUAL_RECT, ORD_FILL_RECT,
-            ORD_FIND_RESOURCE_W, ORD_FIND_WINDOW_W, ORD_GET_ACTIVE_WINDOW, ORD_GET_CAPTURE,
-            ORD_GET_CLASS_INFO_W, ORD_GET_CLASS_NAME_W, ORD_GET_CLIENT_RECT, ORD_GET_CURSOR_POS,
-            ORD_GET_DC, ORD_GET_DEVICE_CAPS, ORD_GET_FOCUS, ORD_GET_FOREGROUND_WINDOW,
-            ORD_GET_MESSAGE_SOURCE, ORD_GET_MESSAGE_W, ORD_GET_NEAREST_PALETTE_INDEX,
-            ORD_GET_PALETTE_ENTRIES, ORD_GET_PARENT, ORD_GET_QUEUE_STATUS, ORD_GET_STOCK_OBJECT,
-            ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH, ORD_GET_SYSTEM_INFO,
-            ORD_GET_SYSTEM_METRICS, ORD_GET_SYSTEM_PALETTE_ENTRIES, ORD_GET_UPDATE_RECT,
-            ORD_GET_WINDOW, ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_RECT,
+            ORD_ADJUST_WINDOW_RECT_EX, ORD_BEGIN_PAINT, ORD_CHECK_MENU_RADIO_ITEM,
+            ORD_CLIENT_TO_SCREEN, ORD_COPY_RECT, ORD_CREATE_MUTEX_W, ORD_CREATE_PALETTE,
+            ORD_CREATE_SOLID_BRUSH, ORD_CREATE_WINDOW_EX_W, ORD_DESTROY_WINDOW, ORD_ENABLE_WINDOW,
+            ORD_END_PAINT, ORD_EQUAL_RECT, ORD_FILL_RECT, ORD_FIND_RESOURCE_W, ORD_FIND_WINDOW_W,
+            ORD_GET_ACTIVE_WINDOW, ORD_GET_CAPTURE, ORD_GET_CLASS_INFO_W, ORD_GET_CLASS_NAME_W,
+            ORD_GET_CLIENT_RECT, ORD_GET_CURSOR_POS, ORD_GET_DC, ORD_GET_DEVICE_CAPS,
+            ORD_GET_FOCUS, ORD_GET_FOREGROUND_WINDOW, ORD_GET_MESSAGE_SOURCE, ORD_GET_MESSAGE_W,
+            ORD_GET_NEAREST_PALETTE_INDEX, ORD_GET_PALETTE_ENTRIES, ORD_GET_PARENT,
+            ORD_GET_QUEUE_STATUS, ORD_GET_STOCK_OBJECT, ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH,
+            ORD_GET_SYSTEM_INFO, ORD_GET_SYSTEM_METRICS, ORD_GET_SYSTEM_PALETTE_ENTRIES,
+            ORD_GET_UPDATE_RECT, ORD_GET_WINDOW, ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_RECT,
             ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W, ORD_GLOBAL_MEMORY_STATUS,
             ORD_IN_SEND_MESSAGE, ORD_INFLATE_RECT, ORD_INTERSECT_RECT, ORD_INVALIDATE_RECT,
             ORD_IS_RECT_EMPTY, ORD_IS_WINDOW, ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE,
@@ -73,6 +73,23 @@ fn coredll_raw_gwe_rect_helpers_match_win32_semantics() -> Result<()> {
             ..
         }
     ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ADJUST_WINDOW_RECT_EX,
+            [a, 0x5200_0000, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_i32(a)?, 10);
+    assert_eq!(memory.read_i32(a + 4)?, 20);
+    assert_eq!(memory.read_i32(a + 8)?, 70);
+    assert_eq!(memory.read_i32(a + 12)?, 90);
     let menu = kernel
         .resources
         .create_menu(0, ResourceId::Integer(8501), None);
@@ -2149,6 +2166,28 @@ fn coredll_raw_visible_create_uses_default_rect_and_exposes_paint() -> Result<()
         wince_emulation_v3::ce::gwe::Rect::from_origin_size(0, 0, 800, 480)
     );
 
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        hwnd,
+        WM_WINDOWPOSCHANGED,
+        0,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        hwnd,
+        WM_SIZE,
+        0,
+        0x01e0_0320,
+    );
     assert_next_message(
         &table,
         &mut kernel,

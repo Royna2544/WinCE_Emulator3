@@ -1243,6 +1243,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::Handle(get_sys_color_brush(raw_arg(args, 0))))
         }
         ORD_SET_SYS_COLORS => Some(CoredllValue::Bool(true)),
+        ORD_ADJUST_WINDOW_RECT_EX => Some(CoredllValue::Bool(adjust_window_rect_ex_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_COPY_RECT => Some(CoredllValue::Bool(copy_rect_raw(
             kernel,
             memory,
@@ -3340,6 +3346,18 @@ fn convert_ascii_wide_case(unit: u16, mode: WideCaseMode) -> u16 {
         WideCaseMode::Upper if (b'a' as u16..=b'z' as u16).contains(&unit) => unit - 0x20,
         _ => unit,
     }
+}
+
+fn adjust_window_rect_ex_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    rect_ptr: u32,
+) -> bool {
+    let Some(rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
+        return false;
+    };
+    set_rect_raw(kernel, memory, thread_id, rect_ptr, rect)
 }
 
 fn copy_rect_raw<M: CoredllGuestMemory>(
