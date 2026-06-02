@@ -56,10 +56,12 @@
     run fixes the earlier `GetModuleFileNameW` host-path leak and CE
     `wcsncpy` byte-count mismatch: `FindFirstFileW("\SDMMC Disk\iNaviData")`
     now maps to `D:\INAVI_Emulator\INAVI\iNaviData` and succeeds instead of
-    showing the Korean SD-card-lock `MessageBoxW`. That same run creates
-    `WCE_Solution_iNavi` plus an `Afx:10000:b:0:40000006:0` child window, then
-    stops on unimplemented COREDLL ordinal 1576 (`GetPaletteEntries`). The
-    dump `target\inavi-wcsncpy-path.ppm` has `nonzero=0`.
+    showing the Korean SD-card-lock `MessageBoxW`. That run creates
+    `WCE_Solution_iNavi` plus an `Afx:10000:b:0:40000006:0` child window. After
+    adding real first palette/DC state and normalizing the observed COREDLL
+    export-index ordinal for `GetPaletteEntries`, the latest mounted run now
+    gets past the prior 1576 trap and stops at unimplemented COREDLL ordinal
+    558 (`AddEventAccess`) after `LocalAlloc`.
   - Status: active; `TlsCall` now returns real CE-style slots,
     `CallWindowProcW` now enters guest window-procedure targets, and
     `CreateWindowExW` now delivers the first create-time message. Raw
@@ -72,9 +74,9 @@
     process module, but the latest shorter iNavi run still shows an EXE-module
     `FindResourceW(..., name=0x0e01, type=RT_STRING)` miss; LLVM resource
     dumping confirms the EXE has no RT_STRING table. The latest bounded launch
-    confirms the current frontier is `GetPaletteEntries @1576`; next work is
-    to implement CE-referenced palette/DC/GDI behavior that should advance the
-    guest path toward the newly connected framebuffer drawing and the remaining
+    confirms the current frontier is `AddEventAccess @558`; next work is to
+    implement CE-referenced raw COREDLL behavior that should advance the guest
+    path toward the newly connected framebuffer drawing and the remaining
     GDI/DC/surface drawing and blit imports.
 
 - Most COREDLL ordinals are still subsystem stubs.

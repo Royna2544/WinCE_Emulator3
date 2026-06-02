@@ -1977,6 +1977,56 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_i32_arg(args, 1),
             raw_arg(args, 2),
         ))),
+        ORD_CREATE_PALETTE => Some(CoredllValue::Handle(create_palette_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_GET_NEAREST_PALETTE_INDEX => Some(CoredllValue::U32(get_nearest_palette_index_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_GET_PALETTE_ENTRIES => Some(CoredllValue::U32(get_palette_entries_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+            raw_arg(args, 3),
+        ))),
+        ORD_GET_SYSTEM_PALETTE_ENTRIES => Some(CoredllValue::U32(get_system_palette_entries_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+            raw_arg(args, 3),
+        ))),
+        ORD_SET_PALETTE_ENTRIES => Some(CoredllValue::U32(set_palette_entries_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+            raw_arg(args, 3),
+        ))),
+        ORD_REALIZE_PALETTE => Some(CoredllValue::U32(realize_palette_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_SELECT_PALETTE => Some(CoredllValue::Handle(select_palette_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
         ORD_GET_STOCK_OBJECT => Some(CoredllValue::Handle(get_stock_object_raw(raw_arg(args, 0)))),
         ORD_SELECT_OBJECT => Some(CoredllValue::Handle(select_object_raw(
             kernel,
@@ -7652,6 +7702,249 @@ fn create_pen_raw(kernel: &mut CeKernel, style: u32, width: i32, color: u32) -> 
     kernel.resources.create_pen(style, width, color)
 }
 
+fn create_palette_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    log_palette_ptr: u32,
+) -> u32 {
+    if log_palette_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(header) = read_guest_bytes(kernel, memory, thread_id, log_palette_ptr, 4) else {
+        return 0;
+    };
+    let Some(entry_count) = read_le_u16(&header, 2).map(u32::from) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if entry_count > MAX_LOG_PALETTE_ENTRIES {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(byte_count) = entry_count.checked_mul(PALETTE_ENTRY_SIZE_U32) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let Some(bytes) = read_guest_bytes(
+        kernel,
+        memory,
+        thread_id,
+        log_palette_ptr.wrapping_add(4),
+        byte_count,
+    ) else {
+        return 0;
+    };
+    let entries = bytes
+        .chunks_exact(PALETTE_ENTRY_SIZE)
+        .map(|entry| [entry[0], entry[1], entry[2], entry[3]])
+        .collect();
+    kernel.threads.set_last_error(thread_id, 0);
+    kernel.resources.create_palette(entries)
+}
+
+fn get_palette_entries_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    palette: u32,
+    start: u32,
+    count: u32,
+    entries_ptr: u32,
+) -> u32 {
+    let Some(entries) = kernel
+        .resources
+        .palette(palette)
+        .map(|palette| &palette.entries)
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    let Some(bytes) = palette_entry_bytes(entries, start, count) else {
+        kernel.threads.set_last_error(thread_id, 0);
+        return 0;
+    };
+    if entries_ptr == 0 || bytes.is_empty() {
+        kernel.threads.set_last_error(thread_id, 0);
+        return (bytes.len() / PALETTE_ENTRY_SIZE) as u32;
+    }
+    if !write_guest_bytes(kernel, memory, thread_id, entries_ptr, &bytes) {
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    (bytes.len() / PALETTE_ENTRY_SIZE) as u32
+}
+
+fn set_palette_entries_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    palette: u32,
+    start: u32,
+    count: u32,
+    entries_ptr: u32,
+) -> u32 {
+    let Some(entries_len) = kernel
+        .resources
+        .palette(palette)
+        .map(|palette| palette.entries.len())
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    let Ok(start_index) = usize::try_from(start) else {
+        kernel.threads.set_last_error(thread_id, 0);
+        return 0;
+    };
+    if start_index >= entries_len || count == 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return 0;
+    }
+    if entries_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let copy_count = usize::try_from(count)
+        .ok()
+        .unwrap_or(usize::MAX)
+        .min(entries_len - start_index);
+    let Some(byte_count) = (copy_count as u32).checked_mul(PALETTE_ENTRY_SIZE_U32) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, entries_ptr, byte_count) else {
+        return 0;
+    };
+    if let Some(palette) = kernel.resources.palette_mut(palette) {
+        for (index, entry) in bytes.chunks_exact(PALETTE_ENTRY_SIZE).enumerate() {
+            palette.entries[start_index + index] = [entry[0], entry[1], entry[2], entry[3]];
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    copy_count as u32
+}
+
+fn get_system_palette_entries_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    hdc: u32,
+    start: u32,
+    count: u32,
+    entries_ptr: u32,
+) -> u32 {
+    if hdc == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
+    let entries = system_palette_entries();
+    let Some(bytes) = palette_entry_bytes(&entries, start, count) else {
+        kernel.threads.set_last_error(thread_id, 0);
+        return 0;
+    };
+    if entries_ptr == 0 || bytes.is_empty() {
+        kernel.threads.set_last_error(thread_id, 0);
+        return (bytes.len() / PALETTE_ENTRY_SIZE) as u32;
+    }
+    if !write_guest_bytes(kernel, memory, thread_id, entries_ptr, &bytes) {
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    (bytes.len() / PALETTE_ENTRY_SIZE) as u32
+}
+
+fn get_nearest_palette_index_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    palette: u32,
+    colorref: u32,
+) -> u32 {
+    let Some(entries) = kernel
+        .resources
+        .palette(palette)
+        .map(|palette| &palette.entries)
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return u32::MAX;
+    };
+    let red = (colorref & 0xff) as i32;
+    let green = ((colorref >> 8) & 0xff) as i32;
+    let blue = ((colorref >> 16) & 0xff) as i32;
+    let Some((index, _distance)) = entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let dr = i32::from(entry[0]) - red;
+            let dg = i32::from(entry[1]) - green;
+            let db = i32::from(entry[2]) - blue;
+            (index, dr * dr + dg * dg + db * db)
+        })
+        .min_by_key(|(_, distance)| *distance)
+    else {
+        kernel.threads.set_last_error(thread_id, 0);
+        return u32::MAX;
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    index as u32
+}
+
+fn select_palette_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, palette: u32) -> u32 {
+    let Some(previous) = kernel.resources.select_palette(hdc, palette) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    previous
+}
+
+fn realize_palette_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32) -> u32 {
+    let Some(mapped) = kernel.resources.realize_palette(hdc) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    mapped
+}
+
+fn palette_entry_bytes(entries: &[[u8; 4]], start: u32, count: u32) -> Option<Vec<u8>> {
+    let start = usize::try_from(start).ok()?;
+    if start >= entries.len() || count == 0 {
+        return Some(Vec::new());
+    }
+    let count = usize::try_from(count).ok().unwrap_or(usize::MAX);
+    let end = start.saturating_add(count).min(entries.len());
+    Some(entries[start..end].iter().flatten().copied().collect())
+}
+
+fn system_palette_entries() -> Vec<[u8; 4]> {
+    (0..=255).map(|value| [value, value, value, 0]).collect()
+}
+
 fn get_stock_object_raw(index: u32) -> u32 {
     stock_object_handle(index).unwrap_or(0)
 }
@@ -9193,6 +9486,9 @@ const IMAGE_CURSOR: u32 = 2;
 const BI_RGB: u32 = 0;
 const CLR_INVALID: u32 = 0xffff_ffff;
 const DIB_RGB_COLORS: u32 = 0;
+const PALETTE_ENTRY_SIZE: usize = 4;
+const PALETTE_ENTRY_SIZE_U32: u32 = 4;
+const MAX_LOG_PALETTE_ENTRIES: u32 = 4096;
 const DS_SETFONT: u32 = 0x0000_0040;
 const LR_LOADFROMFILE: u32 = 0x0000_0010;
 const MF_CHECKED: u32 = 0x0000_0008;
@@ -9445,6 +9741,13 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "CreateSolidBrush",
     "CreatePatternBrush",
     "CreatePen",
+    "CreatePalette",
+    "GetNearestPaletteIndex",
+    "GetPaletteEntries",
+    "GetSystemPaletteEntries",
+    "SetPaletteEntries",
+    "RealizePalette",
+    "SelectPalette",
     "SelectObject",
     "SetBkMode",
     "SetTextColor",

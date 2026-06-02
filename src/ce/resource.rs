@@ -131,10 +131,17 @@ pub struct PenObject {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaletteObject {
+    pub handle: u32,
+    pub entries: Vec<[u8; 4]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DcState {
     pub selected_object: u32,
     pub selected_font: u32,
     pub selected_brush: u32,
+    pub selected_palette: u32,
     pub bk_color: u32,
     pub bk_mode: i32,
     pub text_color: u32,
@@ -147,6 +154,7 @@ impl Default for DcState {
             selected_object: 0,
             selected_font: 0,
             selected_brush: 0,
+            selected_palette: 0,
             bk_color: 0x00ff_ffff,
             bk_mode: 2,
             text_color: 0,
@@ -169,6 +177,7 @@ pub struct ResourceSystem {
     fonts: BTreeMap<u32, FontObject>,
     brushes: BTreeMap<u32, BrushObject>,
     pens: BTreeMap<u32, PenObject>,
+    palettes: BTreeMap<u32, PaletteObject>,
     memory_dcs: BTreeSet<u32>,
     dc_states: BTreeMap<u32, DcState>,
     dc_clips: BTreeMap<u32, u32>,
@@ -189,6 +198,7 @@ impl Default for ResourceSystem {
             fonts: BTreeMap::new(),
             brushes: BTreeMap::new(),
             pens: BTreeMap::new(),
+            palettes: BTreeMap::new(),
             memory_dcs: BTreeSet::new(),
             dc_states: BTreeMap::new(),
             dc_clips: BTreeMap::new(),
@@ -488,6 +498,22 @@ impl ResourceSystem {
         handle
     }
 
+    pub fn create_palette(&mut self, entries: Vec<[u8; 4]>) -> u32 {
+        let handle = self.next_gdi_handle;
+        self.next_gdi_handle += 4;
+        self.palettes
+            .insert(handle, PaletteObject { handle, entries });
+        handle
+    }
+
+    pub fn palette(&self, handle: u32) -> Option<&PaletteObject> {
+        self.palettes.get(&handle)
+    }
+
+    pub fn palette_mut(&mut self, handle: u32) -> Option<&mut PaletteObject> {
+        self.palettes.get_mut(&handle)
+    }
+
     pub fn create_compatible_dc(&mut self) -> u32 {
         let handle = self.next_gdi_handle;
         self.next_gdi_handle += 4;
@@ -525,6 +551,24 @@ impl ResourceSystem {
         } else {
             Some(state.selected_object)
         }
+    }
+
+    pub fn select_palette(&mut self, hdc: u32, palette: u32) -> Option<u32> {
+        if hdc == 0 || !self.palettes.contains_key(&palette) {
+            return None;
+        }
+        let state = self.dc_states.entry(hdc).or_default();
+        let previous = state.selected_palette;
+        state.selected_palette = palette;
+        Some(previous)
+    }
+
+    pub fn realize_palette(&mut self, hdc: u32) -> Option<u32> {
+        if hdc == 0 {
+            return None;
+        }
+        self.dc_states.entry(hdc).or_default();
+        Some(0)
     }
 
     pub fn set_dc_bk_mode(&mut self, hdc: u32, mode: i32) -> Option<i32> {
@@ -573,6 +617,7 @@ impl ResourceSystem {
         removed |= self.pens.remove(&handle).is_some();
         removed |= self.bitmaps.remove(&handle).is_some();
         removed |= self.delete_region(handle);
+        removed |= self.palettes.remove(&handle).is_some();
         for state in self.dc_states.values_mut() {
             if state.selected_object == handle {
                 state.selected_object = 0;
@@ -582,6 +627,9 @@ impl ResourceSystem {
             }
             if state.selected_brush == handle {
                 state.selected_brush = 0;
+            }
+            if state.selected_palette == handle {
+                state.selected_palette = 0;
             }
         }
         removed

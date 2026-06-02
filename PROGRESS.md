@@ -420,12 +420,21 @@
   `FindFirstFileW("\SDMMC Disk\iNaviData")` maps to
   `D:\INAVI_Emulator\INAVI\iNaviData` and succeeds instead of showing the
   Korean SD-card-lock message.
+- GDI palette handles and entry APIs now have first real raw semantics:
+  `CreatePalette`, `GetPaletteEntries`, `SetPaletteEntries`,
+  `GetNearestPaletteIndex`, `GetSystemPaletteEntries`, `SelectPalette`, and
+  `RealizePalette` are backed by the generic resource/DC state instead of
+  launch stubs. COREDLL import-by-ordinal patching also now normalizes the
+  observed SDK export-table index form when it does not collide with a real
+  static ordinal; the iNavi import previously trapped at export index 1576,
+  which maps to real `GetPaletteEntries`.
 - The latest 4,000,000-instruction bounded launch with SDK `mfcce400.dll` and
-  `--mount-config mounts.toml` reaches main and child window creation
-  (`WCE_Solution_iNavi` and an `Afx:10000:b:0:40000006:0` child), then stops at
-  unimplemented COREDLL ordinal 1576 (`GetPaletteEntries`). The framebuffer
-  dump `target\inavi-wcsncpy-path.ppm` is still all black, so this is progress
-  past SD-card validation and into GDI/palette work, not GUI success.
+  `--mount-config mounts.toml` gets past the previous `GetPaletteEntries`
+  frontier and now stops earlier in SDK/MFC startup at unimplemented COREDLL
+  ordinal 558 (`AddEventAccess`) after `LocalAlloc`. The framebuffer dump
+  `target\inavi-palette-alias.ppm` is still diagnostic rather than visible app
+  output, so this is progress into the next raw COREDLL tranche, not GUI
+  success.
 
 ## Current State
 
@@ -438,8 +447,9 @@
   `CallWindowProcW` targets, enter registered guest WNDPROCs for raw
   `SendMessageW` when that import path is used, emulate the SDK MFC
   `_setjmp`/`longjmp` exception path, pass iNavi's `iNaviData` SD-card
-  directory validation, and then reach unimplemented `GetPaletteEntries @1576`
-  after main/child window creation. A generic virtual framebuffer is now
+  directory validation, implement first palette/DC state behavior, and then
+  reach unimplemented `AddEventAccess @558` in the current SDK/MFC startup
+  path. A generic virtual framebuffer is now
   attached to the emulator boundary, generic virtual presenter/desktop
   interfaces exist for host
   presentation/window management, and solid `FillRect` on a window/screen HDC

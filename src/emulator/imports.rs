@@ -249,7 +249,10 @@ pub fn patch_supported_imports_with_external(
             }
 
             let (ordinal, name) = match &thunk.import {
-                ImportBy::Ordinal(ordinal) => (Some(u32::from(*ordinal)), None),
+                ImportBy::Ordinal(ordinal) => (
+                    Some(normalize_coredll_import_ordinal(u32::from(*ordinal))),
+                    None,
+                ),
                 ImportBy::Name { name, .. } => {
                     let ordinal = (module_kind == ImportModuleKind::Coredll)
                         .then(|| exports.resolve_name(name).map(|export| export.ordinal))
@@ -279,6 +282,16 @@ pub fn patch_supported_imports_with_external(
     }
 
     Ok(table)
+}
+
+fn normalize_coredll_import_ordinal(ordinal: u32) -> u32 {
+    if CoredllExportTable::resolve_static_ordinal(ordinal).is_some() {
+        return ordinal;
+    }
+    crate::ce::coredll_ordinals::COREDLL_EXPORTS
+        .get(ordinal as usize)
+        .map(|export| export.ordinal)
+        .unwrap_or(ordinal)
 }
 
 impl ExternalImportTable {
@@ -633,6 +646,39 @@ mod tests {
             table.trap_at(IMPORT_TRAP_BASE).unwrap().ordinal,
             Some(crate::ce::coredll_ordinals::ORD_GET_TICK_COUNT)
         );
+    }
+
+    #[test]
+    fn normalizes_coredll_export_index_ordinals_when_no_real_ordinal_collides() {
+        let imports = vec![ImportDescriptor {
+            module_name: "COREDLL.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![ImportThunk {
+                thunk_rva: 0x2000,
+                iat_rva: 0x3000,
+                import: ImportBy::Ordinal(1576),
+            }],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_coredll_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+
+        let trap = table.trap_at(IMPORT_TRAP_BASE).unwrap();
+        assert_eq!(
+            trap.ordinal,
+            Some(crate::ce::coredll_ordinals::ORD_GET_PALETTE_ENTRIES)
+        );
+        assert_eq!(trap.name, None);
     }
 
     #[test]
