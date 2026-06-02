@@ -153,6 +153,7 @@ fn main() -> Result<()> {
         let image = PeImage::inspect(image_path)?;
         kernel.set_process_module_base(image.image_base());
         kernel.set_process_module_path(ce_module_path_for_image(&kernel, &image.path));
+        kernel.set_process_module_host_path(PathBuf::from(&image.path));
         println!(
             "  PE image: {} ({} bytes, lfanew=0x{:08x}, machine=0x{:04x})",
             image.path, image.len, image.dos_lfanew, image.coff_header.machine
