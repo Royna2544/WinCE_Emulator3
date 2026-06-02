@@ -8,6 +8,10 @@
 #define INVALID_SET_FILE_POINTER ((DWORD)-1)
 #endif
 
+#ifndef TLS_OUT_OF_INDEXES
+#define TLS_OUT_OF_INDEXES ((DWORD)0xFFFFFFFF)
+#endif
+
 #define FIXTURE_OK 0
 #define FIXTURE_FAIL_BASE 0x1000
 
@@ -41,10 +45,10 @@ static DWORD PhaseSystemAndTime() {
     GlobalMemoryStatus(&ms);
     if (ms.dwLength != sizeof(ms)) return Fail(102);
 
-    OSVERSIONINFO ov;
+    OSVERSIONINFOW ov;
     ZeroMemory(&ov, sizeof(ov));
     ov.dwOSVersionInfoSize = sizeof(ov);
-    if (!GetVersionEx(&ov)) return Fail(103);
+    if (!GetVersionExW(&ov)) return Fail(103);
 
     LARGE_INTEGER freq, c0, c1;
     if (!QueryPerformanceFrequency(&freq)) return Fail(104);
@@ -460,11 +464,11 @@ static LRESULT CALLBACK StormWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
             HDC memdc = CreateCompatibleDC(dc);
             HBITMAP bitmap = CreateCompatibleBitmap(dc, 16, 16);
             if (memdc && bitmap) {
+                RECT smallRect;
                 HBITMAP oldBitmap = (HBITMAP)SelectObject(memdc, bitmap);
-                RECT small;
-                SetRect(&small, 0, 0, 16, 16);
                 HBRUSH smallBrush = CreateSolidBrush(RGB(0, 200, 0));
-                FillRect(memdc, &small, smallBrush);
+                SetRect(&smallRect, 0, 0, 16, 16);
+                FillRect(memdc, &smallRect, smallBrush);
                 DeleteObject(smallBrush);
                 BitBlt(dc, 2, 2, 16, 16, memdc, 0, 0, SRCCOPY);
                 SelectObject(memdc, oldBitmap);
