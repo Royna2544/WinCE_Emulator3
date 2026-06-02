@@ -600,6 +600,20 @@
   thread-local state and message pre-translation (`CThreadLocalObject::GetData`
   and later `CWnd::WalkPreTranslateTree`) rather than reaching guest drawing
   imports yet.
+- Remote touch/key input is now connected to guest message retrieval instead of
+  only being stored in `CeRemote`: `GetMessageW`/`PeekMessageW` and the Unicorn
+  empty-queue block check drain queued remote input into the active, captured,
+  or explicitly filtered HWND before checking GWE queues. The runner also has
+  repeatable `--tap X,Y` startup injection, and host desktop mode keeps pumping
+  while blocked in `GetMessageW` and refreshes `--framebuffer-dump` at each new
+  blocked wait. A focused test verifies a queued tap becomes
+  `WM_LBUTTONDOWN`/`WM_LBUTTONUP` through `CeKernel::get_message_w`.
+- A real mounted iNavi run with `--tap 400,240` and a 60,000 ms wall-clock
+  limit still writes an all-zero framebuffer dump
+  (`target\inavi-tap-center-60s.ppm`) and stops in SDK MFC startup before the
+  final snapshot records `GetMessageW` or mouse messages. The touch path is now
+  available for real input experiments, but the current target frontier remains
+  earlier startup/MFC progress plus missing drawing behavior.
 - The default bootstrap uses `regs.json` as backing storage for the fake CE
   registry API and creates base GWE, timer, audio, and memory-map state.
 - The virtual Win32/CE framework and COREDLL dispatcher are connected to Unicorn

@@ -102,6 +102,13 @@
 
 - Extend bounded run tooling beyond the current snapshot import ring if more
   structured trace context is needed.
+- Use the new `--tap X,Y` runner input once the mounted iNavi path reliably
+  reaches the idle `GetMessageW` frontier again; confirm queued
+  `WM_LBUTTONDOWN`/`WM_LBUTTONUP` messages in `last_messages` and then trace
+  whether the tap triggers new WNDPROC/custom-message or drawing imports.
+- Continue reducing the current long MFC startup/wall-clock frontier observed
+  by `target\inavi-tap-center-60s.log`; the queued tap cannot be consumed until
+  the app returns to message retrieval.
 - Add an HTTP/WebSocket transport over the Rust `CeRemote` API state when the
   host runtime is ready for remote UI/audio streaming; audio transport should
   honor the sink's per-client cursors and flush-marked chunks immediately.

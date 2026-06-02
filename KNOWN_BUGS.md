@@ -181,3 +181,14 @@
     flush-marked chunks, and `AudioSinkRegistry` can fan out to host/websocket/
     debug sinks, but no socket writer consumes them yet.
   - Status: expected until host transport work lands.
+
+- Host desktop windows may be inaccessible from the current automation session.
+  - Symptom: `--desktop host` initializes the Win32 presenter and reports
+    `desktop: win32 host presenter`, but an automated user32 `FindWindow`
+    script could not discover the visible `WinCE virtual desktop` HWND in this
+    session before the scripted timeout.
+  - Evidence: `target\inavi-host-touch.out.log` reaches host presenter setup and
+    PE import patching; no framebuffer dump was produced because the script
+    stopped before it could inject a click or reach a blocked wait.
+  - Status: use deterministic `--tap X,Y` runner injection for repeatable touch
+    experiments until host-window discovery is reliable in the active session.
