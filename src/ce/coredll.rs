@@ -2400,7 +2400,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
-        ORD_MESSAGE_BOX_W => Some(CoredllValue::U32(1)),
+        ORD_MESSAGE_BOX_W => Some(CoredllValue::U32(message_box_w_raw(memory, args))),
         ORD_FIND_RESOURCE | ORD_FIND_RESOURCE_W => Some(CoredllValue::Handle(find_resource(
             kernel,
             memory,
@@ -3387,9 +3387,30 @@ fn find_first_file_w_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return u32::MAX;
     };
+    tracing::debug!(
+        target: "ce.file",
+        pattern = %pattern,
+        find_data_ptr = format_args!("0x{find_data_ptr:08x}"),
+        "FindFirstFileW"
+    );
     let (handle, find_data) = match kernel.find_first_file_w(&pattern) {
-        Ok(result) => result,
+        Ok(result) => {
+            tracing::debug!(
+                target: "ce.file",
+                pattern = %pattern,
+                handle = format_args!("0x{:08x}", result.0),
+                file_name = %result.1.file_name,
+                attributes = format_args!("0x{:08x}", result.1.attributes),
+                "FindFirstFileW matched"
+            );
+            result
+        }
         Err(_) => {
+            tracing::debug!(
+                target: "ce.file",
+                pattern = %pattern,
+                "FindFirstFileW failed"
+            );
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
@@ -3407,6 +3428,20 @@ fn find_first_file_w_raw<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     handle
+}
+
+fn message_box_w_raw<M: CoredllGuestMemory>(memory: &M, args: &[u32]) -> u32 {
+    let text = read_guest_wide_arg(memory, raw_arg(args, 1)).unwrap_or_default();
+    let caption = read_guest_wide_arg(memory, raw_arg(args, 2)).unwrap_or_default();
+    tracing::debug!(
+        target: "ce.gwe",
+        hwnd = format_args!("0x{:08x}", raw_arg(args, 0)),
+        text = %text,
+        caption = %caption,
+        style = format_args!("0x{:08x}", raw_arg(args, 3)),
+        "MessageBoxW"
+    );
+    1
 }
 
 fn find_close_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {
