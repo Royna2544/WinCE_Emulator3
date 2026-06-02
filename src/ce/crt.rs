@@ -77,6 +77,53 @@ pub(crate) fn wcsdup_raw<M: CoredllGuestMemory>(
     ptr
 }
 
+pub(crate) fn wcsnicmp_raw<M: CoredllGuestMemory>(
+    memory: &M,
+    left: u32,
+    right: u32,
+    count: u32,
+) -> i32 {
+    if count == 0 {
+        return 0;
+    }
+    if left == 0 || right == 0 {
+        return if left == right {
+            0
+        } else if left == 0 {
+            -1
+        } else {
+            1
+        };
+    }
+    for index in 0..count.min(0x8000) {
+        let left_addr = left.wrapping_add(index * 2);
+        let right_addr = right.wrapping_add(index * 2);
+        let Ok(left_unit) = memory.read_u16(left_addr) else {
+            return -1;
+        };
+        let Ok(right_unit) = memory.read_u16(right_addr) else {
+            return 1;
+        };
+        let left_folded = fold_ascii_wide(left_unit);
+        let right_folded = fold_ascii_wide(right_unit);
+        if left_folded != right_folded {
+            return i32::from(left_folded).saturating_sub(i32::from(right_folded));
+        }
+        if left_unit == 0 {
+            return 0;
+        }
+    }
+    0
+}
+
+fn fold_ascii_wide(unit: u16) -> u16 {
+    if (b'A' as u16..=b'Z' as u16).contains(&unit) {
+        unit + 0x20
+    } else {
+        unit
+    }
+}
+
 pub(crate) fn malloc_raw(kernel: &mut CeKernel, thread_id: u32, bytes: u32) -> u32 {
     match kernel
         .memory

@@ -18,3 +18,4 @@ windows = { version = "0.58", features = ["Win32_Media_Audio"] }
 [features]
 default = []
 unicorn = ["dep:unicorn-engine"]
+evc4-fixtures = []

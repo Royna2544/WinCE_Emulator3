@@ -179,8 +179,9 @@
   - non-COREDLL supported DLLs other than MFC currently use module-owned launch
     stubs with debug logs, not final API semantics
 - SDK CE 4.2 Mipsii COREDLL ordinal evidence from `coredll.lib` is now captured
-  for the launch-demanded CRT ordinals: `_wcsdup`, `wcsrchr`, `malloc`,
-  `memcpy`, `memset`, operator `new`, `swprintf`, `printf`, and `free`.
+  for the launch-demanded CRT ordinals: `_wcsdup`, `wcsrchr`, `_wcsnicmp`,
+  `malloc`, `memcpy`, `memset`, operator `new`, `swprintf`, `printf`, `free`,
+  `longjmp`, and `_setjmp`.
 - Launch-demanded CE 4.2 CRT raw helper bodies now live in `src/ce/crt.rs`,
   with COREDLL keeping ordinal dispatch ownership and delegating the actual
   CRT memory/string routines to that module.
@@ -334,6 +335,43 @@
   this path but did not show `SendMessageW` as the current main-pump frontier;
   the run still stops at empty `GetMessageW @861` after the show/size/paint and
   MFC idle-update sequence.
+- Unicorn debug snapshots now include a compact recent guest-WNDPROC return
+  ring for `CreateWindowExW` create-time callouts, `DispatchMessageW`,
+  `SendMessageW`, and `CallWindowProcW`. The 3,000,000-instruction iNavi launch
+  shows `WM_CREATE`, `WM_SHOWWINDOW`, `WM_WINDOWPOSCHANGED`,
+  `WM_SIZE(800,480)`, `WM_PAINT`, and MFC `WM_IDLEUPDATECMDUI` all returning
+  `0` through the guest path. `WM_PAINT` still falls through the MFC superclass
+  path without reaching `BeginPaint`, `GetDC`, or GDI imports.
+- SDK MFC export evidence labels the dispatch WNDPROC at `0x6004eba8` as
+  `AfxWndProcBase` and the registered `AfxFrameOrView42u` first window proc at
+  `0x60005488` as `wce_FirstDefWindowProc`. The target also registers its own
+  `Solution_iNavi` class with WNDPROC `0x000135cc`; the create-time `WM_CREATE`
+  diagnostic currently enters that target proc and returns `0`.
+- SDK `coredll.lib` evidence identifies COREDLL ordinal 1036 as `longjmp` and
+  ordinal 2000 as `_setjmp`; `_purecall` is ordinal 1092, so the earlier MFC
+  `pc=0` suspicion was not a purecall. The Unicorn import hook now saves and
+  restores a CE MIPS `jmp_buf` for `_setjmp`/`longjmp`, including return PC,
+  SP/FP/RA/GP, and callee-saved `s0..s7`. The bounded iNavi launch now logs
+  `restored MIPS longjmp buffer` and continues through SDK MFC instead of
+  returning from `longjmp` into the stale `jalr $v0` site at `0x6001f7f8`.
+- Raw CE/GWE class registration now rejects empty class names at the API
+  boundary, which removes the bogus `WCE_` recursive class path observed after
+  `_wcsnicmp` first enabled the MFC CE superclass flow.
+- The latest 500,000-instruction Unicorn launch reaches the real
+  `WCE_Solution_iNavi` class, enters create-time `wce_FirstDefWindowProc`,
+  restores through `longjmp`, switches the window proc to `AfxWndProcBase`,
+  dispatches `WM_SHOWWINDOW`, `WM_WINDOWPOSCHANGED`, `WM_SIZE`, `WM_PAINT`,
+  `WM_IDLEUPDATECMDUI`, and then stops at the intentional empty
+  `GetMessageW @861` `blocked_get_message` snapshot. This is the current
+  frontier; the previous ordinal-1036 `pc=0` crash is retired.
+- The ignored eVC4 fixture harness now rebuilds the committed MIPSII fixture
+  source tree under `target/wince-fixtures/mipsii/` when local SDK env vars are
+  configured. The fixture sources were adjusted for this CE SDK by defining the
+  standard `TLS_OUT_OF_INDEXES` sentinel when headers omit it and by using
+  explicit `CreateEventW` calls. `001_exit` and `002_gettickcount` pass through
+  the emulator; `003_tls` now compiles and reaches runtime. Raw
+  `CreateEventW @495` is wired to the existing kernel event objects, and the
+  current fixture frontier is raw `CreateThread @492`/guest worker execution.
 
 ## Current State
 
@@ -344,12 +382,18 @@
   `WM_CREATE` callout, queue and dispatch visible-create show/size lifecycle
   messages, synthesize and dispatch the first `WM_PAINT`, enter guest
   `CallWindowProcW` targets, enter registered guest WNDPROCs for raw
-  `SendMessageW` when that import path is used, and then reach an empty-queue
-  `GetMessageW` diagnostic snapshot. A generic virtual framebuffer is now
-  attached to the emulator boundary, and generic virtual presenter/desktop
-  interfaces exist for later host presentation/window management, but guest
-  drawing/blit behavior is not connected yet and this must not be treated as
-  GUI success.
+  `SendMessageW` when that import path is used, emulate the SDK MFC
+  `_setjmp`/`longjmp` exception path, and then reach an empty-queue
+  `GetMessageW` diagnostic snapshot after several dispatched main-window
+  messages. A generic virtual framebuffer is now attached to the emulator
+  boundary, and generic virtual presenter/desktop interfaces exist for later
+  host presentation/window management, but guest drawing/blit behavior is not
+  connected yet and this must not be treated as GUI success.
+- The latest launch diagnostics show the main window's delivered create/show/
+  size/paint/idle messages all return through guest code, but no handler creates
+  child HWNDs or enters GDI/DC drawing. The next launch-path question is whether
+  the create-time sequencing and superclass WNDPROC chain are still incomplete,
+  or whether a later CE resource/menu/file/device/event path must seed the UI.
 - Instruction-limited snapshots show the post-`WM_PAINT` path entering SDK MFC
   thread-local state and message pre-translation (`CThreadLocalObject::GetData`
   and later `CWnd::WalkPreTranslateTree`) rather than reaching guest drawing
@@ -362,7 +406,8 @@
   SDK-DLL-only; commctrl, WINSOCK, OLE, and additional CE 4.2 ordinal behavior
   still need real subsystem-backed implementation as traces demand.
 - Many COREDLL ordinals are classified and dispatchable but still stubbed by
-  subsystem. Kernel/thread/time/sync, memory/local/heap/virtual allocation,
+  subsystem. Kernel/thread/time/sync, performance counter/frequency,
+  memory/local/heap/virtual allocation,
   raw file buffer/find marshalling, first GWE class/HWND/RECT/text/window-long/
   focus/message pump/paint-update behavior, unplugged waveOut adapter ordinals,
   system-info/memory status, and first resource raw ordinals have real

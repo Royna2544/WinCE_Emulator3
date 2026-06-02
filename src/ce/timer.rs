@@ -35,6 +35,14 @@ impl Default for TimerSystem {
 }
 
 impl TimerSystem {
+    pub fn performance_frequency(&self) -> u64 {
+        1_000
+    }
+
+    pub fn performance_counter(&self) -> u64 {
+        self.boot.elapsed().as_millis() as u64
+    }
+
     pub fn tick_count(&self) -> u32 {
         self.boot.elapsed().as_millis() as u32
     }

@@ -41,15 +41,22 @@
     3,000,000-instruction bounded run confirms those messages dispatch through
     SDK MFC, then reaches MFC `WM_IDLEUPDATECMDUI` (`0x0363`) handling and an
     empty `GetMessageW @861` queue without child HWND creation or GDI/DC import
-    activity. The earlier
-    `pc=0`/reserved-instruction and decoded `TerminateProcess` startup-cleanup
-    states are no longer the current stop.
+    activity. SDK `coredll.lib` evidence later identified ordinal 1036 as
+    `longjmp` and ordinal 2000 as `_setjmp`; the Unicorn import hook now
+    restores the saved MIPS `jmp_buf`, so the prior `pc=0` failure after a
+    stubbed `longjmp` return at MFC `0x6001f7f8` is no longer the current stop.
+    The latest 500,000-instruction launch reaches `WCE_Solution_iNavi`,
+    dispatches several main-window messages through `AfxWndProcBase`, restores
+    through `longjmp`, and stops at the intentional empty `GetMessageW @861`
+    `blocked_get_message` diagnostic.
   - Status: active; `TlsCall` now returns real CE-style slots,
     `CallWindowProcW` now enters guest window-procedure targets, and
     `CreateWindowExW` now delivers the first create-time message. Raw
     `GetWindow` ordinal 251 now handles CE SDK child/sibling/owner traversal,
     virtual HWND lifecycle queueing is connected for show/move/size changes,
-    and visible top-level create now queues the initial show/size sequence. The
+    visible top-level create now queues the initial show/size sequence, empty
+    class registration is rejected at the raw CE API boundary, and SDK MFC
+    `_setjmp`/`longjmp` control flow is emulated in the Unicorn import hook. The
     latest bounded launch confirms the current `GW_CHILD` query returns no
     child HWNDs; next work is to identify which remaining CE/MFC-sourced queue,
     timer, paint, posted-message, window-child creation, or GDI behavior should
@@ -58,18 +65,35 @@
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch
     metadata, but only the implemented virtual Win32/CE facade, waveOut,
-    `cemath`, the first kernel/thread/time/sync raw ordinal tranche,
+    `cemath`, the first kernel/thread/time/sync raw ordinal tranche including
+    `QueryPerformanceCounter`, `QueryPerformanceFrequency`, and raw
+    `CreateEventW`,
     local/heap/virtual memory tranche, raw file buffer/find marshalling, first
-    class/HWND/RECT/message GWE tranche, system-info/memory-status helpers, and
-    first resource tranche have real semantics.
+    class/HWND/RECT/message GWE tranche, system-info/memory-status helpers,
+    first resource tranche, and the Unicorn-only SDK MFC `_setjmp`/`longjmp`
+    import control-flow path have real semantics.
   - Evidence: `src/ce/coredll.rs` reports implemented-vs-stubbed ordinal plan
     entries and returns subsystem stub policies for remaining exports. Raw
     tests now cover critical sections, interlocked operations, TLS/last-error,
-    time, event/wait, close-handle, heap/local/virtual allocation, raw
+    time, raw event creation/event modify/wait, close-handle,
+    heap/local/virtual allocation, raw
     file buffers/cursor/size/flush/finds, class registration/window lookup,
     HWND rectangles/points/text/window-long/focus/messages/paint updates,
     unplugged waveOut adapter marshalling, resources, and COM state.
   - Status: active ordinal-by-ordinal implementation work.
+
+- Ignored eVC4 fixtures now reach the first guest-thread runtime gap.
+  - Symptom: `cargo test --features "unicorn evc4-fixtures" --test fixture_exes
+    -- --ignored --nocapture` builds and runs `001_exit` and
+    `002_gettickcount`, then `003_tls` exits with `0x00001005` after waiting
+    for a worker-thread event.
+  - Evidence: the fixture source now compiles as CE MIPSII source under eVC4
+    after adding a `TLS_OUT_OF_INDEXES` fallback and explicit `CreateEventW`.
+    The latest fixture trace shows raw `CreateEventW @495` returning a real
+    handle, then raw `CreateThread @492` returning `0xffffffff`; the worker
+    does not execute, so `WaitForSingleObject @497` returns `WAIT_TIMEOUT`.
+  - Status: active; next runtime work is real raw `CreateThread`/thread handle
+    behavior, not more fixture source portability.
 
 - External DLL import traps are launch stubs, not final DLL implementations.
   - Symptom: commctrl, WINSOCK, and OLE imports can be patched to trap

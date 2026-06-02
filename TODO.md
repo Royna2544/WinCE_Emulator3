@@ -19,18 +19,35 @@
 - Continue tracing after CE `CreateWindowExW` now delivers the source-backed
   create-time `WM_CREATE` callout and CE `CallWindowProcW` enters guest
   window-procedure targets. The latest bounded snapshot still reaches SDK MFC
-  default/idle handling and then an empty-queue `GetMessageW` diagnostic.
+  default/idle handling and then an empty-queue `GetMessageW` diagnostic; the
+  former ordinal-1036 `longjmp`/`pc=0` crash is no longer the current stop.
   Raw `GetWindow` sibling/child traversal is now connected for the observed
   MFC `GetWindow @251` calls. Virtual show/move/size lifecycle messages are
   queued for raw `ShowWindow`, `SetWindowPos`, `MoveWindow`, and visible
   top-level `CreateWindowExW`; the latest bounded rerun shows
   `WM_SHOWWINDOW`, `WM_WINDOWPOSCHANGED`, `WM_SIZE(800,480)`, `WM_PAINT`, and
-  MFC `WM_IDLEUPDATECMDUI` (`0x0363`) handling before the queue empties. Next
-  work is to identify the next CE/MFC-sourced queue, timer, paint,
-  posted-message, window-child creation, or GDI behavior that should advance
-  the path toward real framebuffer drawing.
+  MFC `WM_IDLEUPDATECMDUI` (`0x0363`) handling before the queue empties. The
+  latest trace also confirms `WCE_Solution_iNavi`, `wce_FirstDefWindowProc`,
+  and `AfxWndProcBase` sequencing. Next work is to identify the next
+  CE/MFC-sourced queue, timer, paint, posted-message, window-child creation, or
+  GDI behavior that should advance the path toward real framebuffer drawing.
+- Use the new guest-WNDPROC return ring to compare creation-time sequencing
+  against CE/MFC expectations. The latest diagnostic shows create/show/size/
+  paint/idle messages returning `0`, `WM_PAINT` not reaching `BeginPaint`, MFC
+  dispatch through `AfxWndProcBase` (`0x6004eba8`), and `Solution_iNavi`
+  registered with target WNDPROC `0x000135cc`. Continue with a targeted probe of
+  `SetWindowLongW`/superclass state and first-message creation ordering before
+  adding more lifecycle messages.
 - Continue connecting SDK CE 4.2 Mipsii COREDLL CRT ordinals from `coredll.lib`
   as the launch trace demands.
+- Add CE-referenced raw `CreateThread`/thread-handle execution semantics for
+  the fixture and launch paths. The ignored eVC4 fixture ladder now compiles
+  `003_tls` and passes raw `CreateEventW`; it fails at runtime because
+  `CreateThread @492` does not run the worker thread, so the event wait times
+  out.
+- Add focused import-trap tests for Unicorn `_setjmp`/`longjmp` register/PC
+  restoration once the fixture harness is wired to the existing
+  `tests/test_progs/006_setjmp_longjmp` program.
 - Implement CRT `_msize`/`realloc`/operator delete ordinals from SDK evidence so
   MFC/CRT heap paths do not rely only on Local/Heap reallocation aliases.
 - Extend `cemath` as real guest imports demand more CRT/floating-point helpers.

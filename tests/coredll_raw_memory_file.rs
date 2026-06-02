@@ -4,14 +4,13 @@ use wince_emulation_v3::{
     ce::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
-            ORD_CE42_MIPSII_FREE, ORD_CE42_MIPSII_MALLOC, ORD_CE42_MIPSII_MEMCPY,
-            ORD_CE42_MIPSII_MEMSET, ORD_CE42_MIPSII_OPERATOR_NEW, ORD_CE42_MIPSII_WCSDUP,
-            ORD_CE42_MIPSII_WCSRCHR, ORD_CLOSE_HANDLE, ORD_CREATE_FILE_W, ORD_FIND_CLOSE,
-            ORD_FIND_FIRST_FILE_W, ORD_FLUSH_FILE_BUFFERS, ORD_GET_FILE_SIZE,
-            ORD_GET_MODULE_FILE_NAME_W, ORD_GET_PROCESS_HEAP, ORD_HEAP_ALLOC, ORD_HEAP_CREATE,
-            ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_SIZE, ORD_LOCAL_ALLOC, ORD_LOCAL_FREE,
-            ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_READ_FILE, ORD_SET_FILE_POINTER,
-            ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_WRITE_FILE,
+            ORD_CLOSE_HANDLE, ORD_CREATE_FILE_W, ORD_FIND_CLOSE, ORD_FIND_FIRST_FILE_W,
+            ORD_FLUSH_FILE_BUFFERS, ORD_FREE, ORD_GET_FILE_SIZE, ORD_GET_MODULE_FILE_NAME_W,
+            ORD_GET_PROCESS_HEAP, ORD_HEAP_ALLOC, ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE,
+            ORD_HEAP_SIZE, ORD_LOCAL_ALLOC, ORD_LOCAL_FREE, ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE,
+            ORD_MALLOC, ORD_MEMCPY, ORD_MEMSET, ORD_OPERATOR_NEW, ORD_READ_FILE,
+            ORD_SET_FILE_POINTER, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_WCSDUP, ORD_WCSNICMP,
+            ORD_WCSRCHR, ORD_WRITE_FILE,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         kernel::CeKernel,
@@ -139,7 +138,7 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         &mut kernel,
         &mut memory,
         thread_id,
-        ORD_CE42_MIPSII_MALLOC,
+        ORD_MALLOC,
         [16],
     ) {
         CoredllDispatch::Returned {
@@ -152,7 +151,7 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         &mut kernel,
         &mut memory,
         thread_id,
-        ORD_CE42_MIPSII_OPERATOR_NEW,
+        ORD_OPERATOR_NEW,
         [8],
     ) {
         CoredllDispatch::Returned {
@@ -175,7 +174,7 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
             &mut kernel,
             &mut memory,
             thread_id,
-            ORD_CE42_MIPSII_MEMCPY,
+            ORD_MEMCPY,
             [0x6010, 0x6000, 8],
         ),
         CoredllDispatch::Returned {
@@ -189,7 +188,7 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
             &mut kernel,
             &mut memory,
             thread_id,
-            ORD_CE42_MIPSII_MEMSET,
+            ORD_MEMSET,
             [0x6010, 0x2a, 4],
         ),
         CoredllDispatch::Returned {
@@ -246,7 +245,7 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         &mut kernel,
         &mut memory,
         thread_id,
-        ORD_CE42_MIPSII_WCSRCHR,
+        ORD_WCSRCHR,
         [0x6100, '\\' as u32],
     ) {
         CoredllDispatch::Returned {
@@ -261,7 +260,7 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         &mut kernel,
         &mut memory,
         thread_id,
-        ORD_CE42_MIPSII_WCSDUP,
+        ORD_WCSDUP,
         [slash + 2],
     ) {
         CoredllDispatch::Returned {
@@ -272,12 +271,59 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
     };
     assert_eq!(memory.read_wide_z(dup, 32), "INavi.exe");
     assert!(kernel.memory.heap_size(process_heap, 0, dup).is_some());
+    let afx = 0x6800;
+    let afx_lower = 0x6840;
+    let solution = 0x6880;
+    let wce = 0x68c0;
+    memory.write_wide_z(afx, "Afx");
+    memory.write_wide_z(afx_lower, "afxWindow");
+    memory.write_wide_z(solution, "Solution_iNavi");
+    memory.write_wide_z(wce, "WCE_Solution_iNavi");
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
             &mut memory,
             thread_id,
-            ORD_CE42_MIPSII_FREE,
+            ORD_WCSNICMP,
+            [afx_lower, afx, 3],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WCSNICMP,
+            [solution, afx, 3],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(value),
+            ..
+        } if value != 0
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WCSNICMP,
+            [wce, wce + 0x08, 4],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(value),
+            ..
+        } if value != 0
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FREE,
             [dup],
         ),
         CoredllDispatch::Returned {

@@ -1,0 +1,7 @@
+#include "resource.h"
+
+STRINGTABLE
+BEGIN
+    IDS_FIXTURE_HELLO "fixture-resource-ok"
+    IDS_FIXTURE_KOREAN "korean-resource-placeholder"
+END

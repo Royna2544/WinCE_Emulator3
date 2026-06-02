@@ -356,7 +356,7 @@ impl CoredllExportTable {
         for ordinal in COREDLL_EXPORTS {
             table.insert(CoredllExport::from_static_ordinal(ordinal));
         }
-        for ordinal in CE42_MIPSII_SDK_ORDINALS {
+        for ordinal in SDK_ORDINALS {
             table.insert(CoredllExport::from_static_ordinal(ordinal));
         }
         table
@@ -1110,6 +1110,22 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::U32(0))
         }
         ORD_GET_TICK_COUNT => Some(CoredllValue::U32(kernel.timers.tick_count())),
+        ORD_QUERY_PERFORMANCE_FREQUENCY => {
+            Some(CoredllValue::Bool(write_performance_counter_value(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                kernel.timers.performance_frequency(),
+            )))
+        }
+        ORD_QUERY_PERFORMANCE_COUNTER => Some(CoredllValue::Bool(write_performance_counter_value(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            kernel.timers.performance_counter(),
+        ))),
         ORD_SLEEP => {
             kernel.timers.sleep_ms(raw_arg(args, 0));
             Some(CoredllValue::U32(0))
@@ -1146,6 +1162,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             }
             Some(CoredllValue::Bool(ok))
         }
+        ORD_CREATE_EVENT_W => Some(CoredllValue::Handle(create_event_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_CREATE_MUTEX_W => Some(CoredllValue::Handle(create_mutex_w_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -1203,21 +1222,29 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 2),
         ))),
-        ORD_CE42_MIPSII_WCSRCHR => Some(CoredllValue::Handle(crt::wcsrchr_raw(
+        ORD_WCSRCHR => Some(CoredllValue::Handle(crt::wcsrchr_raw(
             memory,
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
-        ORD_CE42_MIPSII_WCSDUP => Some(CoredllValue::Handle(crt::wcsdup_raw(
+        ORD_WCSDUP => Some(CoredllValue::Handle(crt::wcsdup_raw(
             kernel,
             memory,
             thread_id,
             raw_arg(args, 0),
         ))),
-        ORD_CE42_MIPSII_MALLOC | ORD_CE42_MIPSII_OPERATOR_NEW => Some(CoredllValue::Handle(
-            crt::malloc_raw(kernel, thread_id, raw_arg(args, 0)),
-        )),
-        ORD_CE42_MIPSII_MEMCPY => Some(CoredllValue::Handle(crt::memcpy_raw(
+        ORD_WCSNICMP => Some(CoredllValue::U32(crt::wcsnicmp_raw(
+            memory,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ) as u32)),
+        ORD_MALLOC | ORD_OPERATOR_NEW => Some(CoredllValue::Handle(crt::malloc_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_MEMCPY => Some(CoredllValue::Handle(crt::memcpy_raw(
             kernel,
             memory,
             thread_id,
@@ -1225,7 +1252,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 2),
         ))),
-        ORD_CE42_MIPSII_MEMSET => Some(CoredllValue::Handle(crt::memset_raw(
+        ORD_MEMSET => Some(CoredllValue::Handle(crt::memset_raw(
             kernel,
             memory,
             thread_id,
@@ -1233,10 +1260,10 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 2),
         ))),
-        ORD_CE42_MIPSII_SWPRINTF | ORD_CE42_MIPSII_PRINTF => {
+        ORD_SWPRINTF | ORD_PRINTF => {
             Some(CoredllValue::U32(crt::printf_family_raw(kernel, thread_id)))
         }
-        ORD_CE42_MIPSII_FREE => {
+        ORD_FREE => {
             crt::free_raw(kernel, raw_arg(args, 0));
             Some(CoredllValue::U32(0))
         }
@@ -1514,18 +1541,8 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_CLASS_NAME_W => Some(CoredllValue::U32(get_class_name_w_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_SET_WINDOW_LONG_W => Some(CoredllValue::U32(
-            kernel
-                .gwe
-                .set_window_long(raw_arg(args, 0), raw_i32_arg(args, 1), raw_arg(args, 2))
-                .unwrap_or(0),
-        )),
-        ORD_GET_WINDOW_LONG_W => Some(CoredllValue::U32(
-            kernel
-                .gwe
-                .get_window_long(raw_arg(args, 0), raw_i32_arg(args, 1))
-                .unwrap_or(0),
-        )),
+        ORD_SET_WINDOW_LONG_W => Some(CoredllValue::U32(set_window_long_w_raw(kernel, args))),
+        ORD_GET_WINDOW_LONG_W => Some(CoredllValue::U32(get_window_long_w_raw(kernel, args))),
         ORD_SET_WINDOW_POS => Some(CoredllValue::Bool(kernel.set_window_pos(
             raw_arg(args, 0),
             raw_i32_arg(args, 2),
@@ -1821,6 +1838,25 @@ fn write_system_info<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn write_performance_counter_value<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    addr: u32,
+    value: u64,
+) -> bool {
+    if addr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let low = value as u32;
+    let high = (value >> 32) as u32;
+    write_guest_u32(kernel, memory, thread_id, addr, low)
+        && write_guest_u32(kernel, memory, thread_id, addr.wrapping_add(4), high)
 }
 
 fn create_file_w_raw<M: CoredllGuestMemory>(
@@ -2348,6 +2384,29 @@ fn create_mutex_w_raw<M: CoredllGuestMemory>(
     handle
 }
 
+fn create_event_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let name_ptr = raw_arg(args, 3);
+    let name = if name_ptr == 0 {
+        None
+    } else {
+        let Some(name) = read_guest_wide_arg(memory, name_ptr) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        Some(name)
+    };
+    let handle = kernel.create_event_w(name, raw_arg(args, 1) != 0, raw_arg(args, 2) != 0);
+    kernel.threads.set_last_error(thread_id, 0);
+    handle
+}
+
 fn release_mutex_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {
     if kernel.release_mutex(handle, thread_id) {
         kernel.threads.set_last_error(thread_id, 0);
@@ -2381,6 +2440,12 @@ fn register_class_w_raw<M: CoredllGuestMemory>(
     let class_name_ptr =
         u32::from_le_bytes([wndclass[36], wndclass[37], wndclass[38], wndclass[39]]);
     let class_name = read_guest_wide_arg(memory, class_name_ptr).unwrap_or_default();
+    if class_name.is_empty() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
     let wndproc = u32::from_le_bytes([wndclass[4], wndclass[5], wndclass[6], wndclass[7]]);
     tracing::debug!(
         target: "ce.gwe",
@@ -2407,6 +2472,12 @@ fn get_class_info_w_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_CLASS_DOES_NOT_EXIST);
         return false;
     };
+    if class_name.is_empty() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_CLASS_DOES_NOT_EXIST);
+        return false;
+    }
     tracing::debug!(
         target: "ce.gwe",
         class_name = class_name.as_str(),
@@ -2459,7 +2530,18 @@ fn create_window_ex_w_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
-    let class_name = read_guest_wide_arg(memory, raw_arg(args, 1)).unwrap_or_default();
+    let Some(class_name) = read_guest_wide_arg(memory, raw_arg(args, 1)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if class_name.is_empty() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_CLASS_DOES_NOT_EXIST);
+        return 0;
+    }
     let title = read_guest_wide_arg(memory, raw_arg(args, 2)).unwrap_or_default();
     let rect = Rect::from_origin_size(
         raw_i32_arg(args, 4),
@@ -2562,6 +2644,59 @@ fn get_class_name_w_raw<M: CoredllGuestMemory>(
         return 0;
     };
     write_wide_result(kernel, memory, thread_id, buffer, capacity, &class_name)
+}
+
+fn set_window_long_w_raw(kernel: &mut CeKernel, args: &[u32]) -> u32 {
+    let hwnd = raw_arg(args, 0);
+    let index = raw_i32_arg(args, 1);
+    let value = raw_arg(args, 2);
+    let class_name = kernel
+        .gwe
+        .window(hwnd)
+        .map(|window| window.class_name.clone());
+    let previous = kernel.gwe.set_window_long(hwnd, index, value).unwrap_or(0);
+    tracing::debug!(
+        target: "ce.gwe",
+        hwnd = format_args!("0x{hwnd:08x}"),
+        index,
+        index_name = window_long_index_name(index),
+        value = format_args!("0x{value:08x}"),
+        previous = format_args!("0x{previous:08x}"),
+        class = class_name.as_deref().unwrap_or("<invalid>"),
+        "SetWindowLongW"
+    );
+    previous
+}
+
+fn get_window_long_w_raw(kernel: &mut CeKernel, args: &[u32]) -> u32 {
+    let hwnd = raw_arg(args, 0);
+    let index = raw_i32_arg(args, 1);
+    let class_name = kernel
+        .gwe
+        .window(hwnd)
+        .map(|window| window.class_name.clone());
+    let value = kernel.gwe.get_window_long(hwnd, index).unwrap_or(0);
+    tracing::debug!(
+        target: "ce.gwe",
+        hwnd = format_args!("0x{hwnd:08x}"),
+        index,
+        index_name = window_long_index_name(index),
+        value = format_args!("0x{value:08x}"),
+        class = class_name.as_deref().unwrap_or("<invalid>"),
+        "GetWindowLongW"
+    );
+    value
+}
+
+fn window_long_index_name(index: i32) -> &'static str {
+    match index {
+        crate::ce::gwe::GWL_WNDPROC => "GWL_WNDPROC",
+        crate::ce::gwe::GWL_ID => "GWL_ID",
+        crate::ce::gwe::GWL_STYLE => "GWL_STYLE",
+        crate::ce::gwe::GWL_EXSTYLE => "GWL_EXSTYLE",
+        crate::ce::gwe::GWL_USERDATA => "GWL_USERDATA",
+        _ => "<unknown>",
+    }
 }
 
 fn write_wide_result<M: CoredllGuestMemory>(
@@ -4023,6 +4158,8 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "SetTimer",
     "KillTimer",
     "GetTickCount",
+    "QueryPerformanceCounter",
+    "QueryPerformanceFrequency",
     "Sleep",
     "waveOutGetNumDevs",
     "waveOutOpen",

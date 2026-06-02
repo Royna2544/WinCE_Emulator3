@@ -32,6 +32,68 @@ mod support;
 use support::TestGuestMemory;
 
 #[test]
+fn coredll_raw_gwe_rejects_empty_class_names() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+
+    let empty_class_ptr = 0x1_0000;
+    let wndclass_ptr = 0x1_0040;
+    let wndclass_out_ptr = 0x1_0080;
+    memory.write_wide_z(empty_class_ptr, "");
+    memory.map_bytes(wndclass_ptr, 40);
+    memory.map_bytes(wndclass_out_ptr, 40);
+    let mut wndclass = [0; 40];
+    wndclass[4..8].copy_from_slice(&0x0040_1234u32.to_le_bytes());
+    wndclass[36..40].copy_from_slice(&empty_class_ptr.to_le_bytes());
+    memory.write_bytes(wndclass_ptr, &wndclass);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REGISTER_CLASS_W,
+            [wndclass_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CLASS_INFO_W,
+            [0, empty_class_ptr, wndclass_out_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_WINDOW_EX_W,
+            [0, empty_class_ptr, 0, WS_VISIBLE, 0, 0, 0, 0, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert!(kernel.gwe.class_info("").is_none());
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;

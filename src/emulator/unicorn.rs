@@ -53,6 +53,7 @@ pub struct UnicornDebugSnapshot {
     pub invalid_instruction_probe: Option<UnicornInvalidInstructionProbe>,
     pub last_imports: Vec<UnicornLastImport>,
     pub last_messages: Vec<UnicornLastMessage>,
+    pub last_wndproc_returns: Vec<UnicornWndProcReturn>,
     pub last_code: Vec<UnicornLastCode>,
     pub last_blocks: Vec<UnicornLastBlock>,
     pub blocked_get_message: Option<UnicornBlockedGetMessage>,
@@ -152,6 +153,19 @@ pub struct UnicornMessageRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornWndProcReturn {
+    pub source: &'static str,
+    pub hwnd: u32,
+    pub msg: u32,
+    pub wparam: u32,
+    pub lparam: u32,
+    pub wndproc: u32,
+    pub return_pc: u32,
+    pub result: u32,
+    pub class_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnicornLastCode {
     pub pc: u32,
     pub ra: u32,
@@ -196,6 +210,7 @@ const USER_KDATA_BASE: u32 = 0x0000_5800;
 const USER_KDATA_SYSHANDLE_OFFSET: u32 = 0x0000_0004;
 const SYS_HANDLE_CURRENT_THREAD: usize = 1;
 const SYS_HANDLE_CURRENT_PROCESS: usize = 2;
+const GUEST_STACK_MIN_RESERVE: u32 = 0x0010_0000;
 const GUEST_HEAP_ARENA_BASE: u32 = 0x3000_0000;
 const GUEST_HEAP_ARENA_SIZE: u32 = 0x0100_0000;
 #[cfg(feature = "unicorn")]
@@ -206,7 +221,10 @@ const THREAD_EXIT_STUB_ADDR: u32 =
 #[cfg(feature = "unicorn")]
 const CREATE_WINDOW_RETURN_STUB_ADDR: u32 =
     THREAD_EXIT_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
-const RESERVED_IMPORT_TRAP_STUB_BYTES: u32 = crate::emulator::imports::IMPORT_TRAP_STRIDE * 2;
+#[cfg(feature = "unicorn")]
+const WNDPROC_RETURN_STUB_ADDR: u32 =
+    CREATE_WINDOW_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
+const RESERVED_IMPORT_TRAP_STUB_BYTES: u32 = crate::emulator::imports::IMPORT_TRAP_STRIDE * 3;
 #[cfg(feature = "unicorn")]
 const CREATESTRUCTW_SIZE: u32 = 48;
 #[cfg(feature = "unicorn")]
@@ -225,10 +243,26 @@ const IMAGE_SCN_MEM_EXECUTE: u32 = 0x2000_0000;
 const MIPS_NOP: u32 = 0x0000_0000;
 
 #[cfg(feature = "unicorn")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct CreateWindowReturn {
     return_pc: u32,
     hwnd: u32,
+    wndproc: u32,
+    lparam: u32,
+    class_name: Option<String>,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingWndProcReturn {
+    source: &'static str,
+    hwnd: u32,
+    msg: u32,
+    wparam: u32,
+    lparam: u32,
+    wndproc: u32,
+    return_pc: u32,
+    class_name: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -392,7 +426,12 @@ impl UnicornMips {
                 "ce-heap-arena",
             )?;
         }
-        let stack_size = align_up_4k(image.optional_header.size_of_stack_reserve.max(0x10000))?;
+        let stack_size = align_up_4k(
+            image
+                .optional_header
+                .size_of_stack_reserve
+                .max(GUEST_STACK_MIN_RESERVE),
+        )?;
         let stack_top = IMPORT_TRAP_BASE
             .checked_sub(0x10000)
             .ok_or_else(|| Error::InvalidArgument("guest stack top underflow".to_owned()))?;
@@ -702,6 +741,10 @@ impl UnicornMips {
         let last_imports_hook = Rc::clone(&last_imports);
         let last_messages = Rc::new(RefCell::new(Vec::<UnicornLastMessage>::new()));
         let last_messages_hook = Rc::clone(&last_messages);
+        let last_wndproc_returns = Rc::new(RefCell::new(Vec::<UnicornWndProcReturn>::new()));
+        let last_wndproc_returns_hook = Rc::clone(&last_wndproc_returns);
+        let pending_wndproc_returns = Rc::new(RefCell::new(Vec::<PendingWndProcReturn>::new()));
+        let pending_wndproc_returns_hook = Rc::clone(&pending_wndproc_returns);
         let create_window_returns = Rc::new(RefCell::new(Vec::<CreateWindowReturn>::new()));
         let create_window_returns_hook = Rc::clone(&create_window_returns);
         let traps = self.import_traps.clone();
@@ -722,9 +765,53 @@ impl UnicornMips {
                         let _ = uc.emu_stop();
                         return;
                     };
+                    record_wndproc_return(
+                        &last_wndproc_returns_hook,
+                        UnicornWndProcReturn {
+                            source: "CreateWindowExW/WM_CREATE",
+                            hwnd: callout.hwnd,
+                            msg: crate::ce::gwe::WM_CREATE,
+                            wparam: 0,
+                            lparam: callout.lparam,
+                            wndproc: callout.wndproc,
+                            return_pc: callout.return_pc,
+                            result: read_mips_reg(uc, RegisterMIPS::V0),
+                            class_name: callout.class_name,
+                        },
+                    );
                     let writes = [
                         uc.reg_write(RegisterMIPS::V0, u64::from(callout.hwnd)),
                         uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc)),
+                        uc.reg_write(RegisterMIPS::RA, u64::from(callout.return_pc)),
+                    ];
+                    if writes.into_iter().any(|write| write.is_err()) {
+                        let _ = uc.emu_stop();
+                    }
+                    return;
+                }
+                if address == WNDPROC_RETURN_STUB_ADDR {
+                    let Some(callout) = pending_wndproc_returns_hook.borrow_mut().pop() else {
+                        let _ = uc.emu_stop();
+                        return;
+                    };
+                    let result = read_mips_reg(uc, RegisterMIPS::V0);
+                    record_wndproc_return(
+                        &last_wndproc_returns_hook,
+                        UnicornWndProcReturn {
+                            source: callout.source,
+                            hwnd: callout.hwnd,
+                            msg: callout.msg,
+                            wparam: callout.wparam,
+                            lparam: callout.lparam,
+                            wndproc: callout.wndproc,
+                            return_pc: callout.return_pc,
+                            result,
+                            class_name: callout.class_name,
+                        },
+                    );
+                    let writes = [
+                        uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc)),
+                        uc.reg_write(RegisterMIPS::RA, u64::from(callout.return_pc)),
                     ];
                     if writes.into_iter().any(|write| write.is_err()) {
                         let _ = uc.emu_stop();
@@ -794,6 +881,42 @@ impl UnicornMips {
                     uc,
                     memory_write_probe: Some(Rc::clone(&import_memory_write_probe)),
                 };
+                if let Some(setjmp_result) = trap.as_ref().and_then(|trap| {
+                    try_handle_setjmp_longjmp(
+                        &mut memory,
+                        trap.module_kind,
+                        trap.ordinal,
+                        trap.name.as_deref(),
+                        &args,
+                    )
+                }) {
+                    if let Some(trap) = trap.as_ref() {
+                        if let Some(import) = last_imports_hook
+                            .borrow_mut()
+                            .iter_mut()
+                            .rev()
+                            .find(|import| import.pc == address && import.result.is_none())
+                        {
+                            import.result = Some(setjmp_result.result);
+                        }
+                        tracing::debug!(
+                            target: "ce.imports",
+                            pc = format_args!("0x{address:08x}"),
+                            module = trap.module_name.as_str(),
+                            kind = ?trap.module_kind,
+                            ordinal = trap.ordinal,
+                            name = trap.name.as_deref().unwrap_or("<ordinal>"),
+                            result = format_args!("0x{:08x}", setjmp_result.result),
+                            "import trap return"
+                        );
+                    }
+                    if !setjmp_result.jumped {
+                        let _ = memory
+                            .uc
+                            .reg_write(RegisterMIPS::V0, u64::from(setjmp_result.result));
+                    }
+                    return;
+                }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_dispatch_message_callout(
                         unsafe { &*kernel_ptr },
@@ -801,6 +924,7 @@ impl UnicornMips {
                         trap.module_kind,
                         trap.ordinal,
                         &args,
+                        &pending_wndproc_returns_hook,
                     )
                 }) {
                     return;
@@ -812,6 +936,7 @@ impl UnicornMips {
                         trap.module_kind,
                         trap.ordinal,
                         &args,
+                        &pending_wndproc_returns_hook,
                     )
                 }) {
                     return;
@@ -822,6 +947,7 @@ impl UnicornMips {
                         trap.module_kind,
                         trap.ordinal,
                         &args,
+                        &pending_wndproc_returns_hook,
                     )
                 }) {
                     return;
@@ -988,6 +1114,7 @@ impl UnicornMips {
             invalid_instruction_probe.borrow().clone(),
             last_imports.borrow().clone(),
             last_messages.borrow().clone(),
+            last_wndproc_returns.borrow().clone(),
             last_code.borrow().clone(),
             last_blocks.borrow().clone(),
             blocked_get_message.borrow().clone(),
@@ -1771,6 +1898,30 @@ impl std::fmt::Display for UnicornDebugSnapshot {
             }
             write!(f, "]")?;
         }
+        if !self.last_wndproc_returns.is_empty() {
+            write!(f, " last_wndproc_returns=[")?;
+            for (index, record) in self.last_wndproc_returns.iter().enumerate() {
+                if index != 0 {
+                    write!(f, ",")?;
+                }
+                write!(
+                    f,
+                    "{}/hwnd=0x{:08x}/msg=0x{:08x}/w=0x{:08x}/l=0x{:08x}/wndproc=0x{:08x}/return_pc=0x{:08x}/ret=0x{:08x}",
+                    record.source,
+                    record.hwnd,
+                    record.msg,
+                    record.wparam,
+                    record.lparam,
+                    record.wndproc,
+                    record.return_pc,
+                    record.result
+                )?;
+                if let Some(class_name) = record.class_name.as_deref() {
+                    write!(f, "/class={class_name}")?;
+                }
+            }
+            write!(f, "]")?;
+        }
         if !self.last_code.is_empty() {
             write!(f, " last_code=[")?;
             for (index, code) in self.last_code.iter().enumerate() {
@@ -1908,6 +2059,192 @@ fn read_mips_import_args<D>(uc: &unicorn_engine::Unicorn<'_, D>) -> Vec<u32> {
 }
 
 #[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SetjmpLongjmpTrapResult {
+    result: u32,
+    jumped: bool,
+}
+
+#[cfg(feature = "unicorn")]
+const MIPS_JMPBUF_RETURN_PC_SLOT: u32 = 0;
+#[cfg(feature = "unicorn")]
+const MIPS_JMPBUF_SP_SLOT: u32 = 1;
+#[cfg(feature = "unicorn")]
+const MIPS_JMPBUF_FP_SLOT: u32 = 2;
+#[cfg(feature = "unicorn")]
+const MIPS_JMPBUF_RA_SLOT: u32 = 3;
+#[cfg(feature = "unicorn")]
+const MIPS_JMPBUF_GP_SLOT: u32 = 4;
+#[cfg(feature = "unicorn")]
+const MIPS_JMPBUF_S0_SLOT: u32 = 5;
+
+#[cfg(feature = "unicorn")]
+fn try_handle_setjmp_longjmp<D>(
+    memory: &mut UnicornGuestMemory<'_, '_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    name: Option<&str>,
+    args: &[u32],
+) -> Option<SetjmpLongjmpTrapResult> {
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll {
+        return None;
+    }
+
+    let is_setjmp = ordinal == Some(crate::ce::coredll_ordinals::ORD_SETJMP)
+        || name.is_some_and(|name| name.eq_ignore_ascii_case("_setjmp"));
+    if is_setjmp {
+        let env = args.first().copied().unwrap_or(0);
+        if save_mips_jmp_buf(memory, env).is_err() {
+            let _ = memory.uc.emu_stop();
+        }
+        return Some(SetjmpLongjmpTrapResult {
+            result: 0,
+            jumped: false,
+        });
+    }
+
+    let is_longjmp = ordinal == Some(crate::ce::coredll_ordinals::ORD_LONGJMP)
+        || name.is_some_and(|name| name.eq_ignore_ascii_case("longjmp"));
+    if !is_longjmp {
+        return None;
+    }
+
+    let env = args.first().copied().unwrap_or(0);
+    let value = match args.get(1).copied().unwrap_or(1) {
+        0 => 1,
+        value => value,
+    };
+    if restore_mips_jmp_buf(memory, env, value).is_err() {
+        let _ = memory.uc.emu_stop();
+    }
+    Some(SetjmpLongjmpTrapResult {
+        result: value,
+        jumped: true,
+    })
+}
+
+#[cfg(feature = "unicorn")]
+fn save_mips_jmp_buf<D>(memory: &mut UnicornGuestMemory<'_, '_, D>, env: u32) -> Result<()> {
+    use unicorn_engine::RegisterMIPS;
+
+    write_mips_jmp_buf_slot(
+        memory,
+        env,
+        MIPS_JMPBUF_RETURN_PC_SLOT,
+        read_mips_reg(memory.uc, RegisterMIPS::RA),
+    )?;
+    write_mips_jmp_buf_slot(
+        memory,
+        env,
+        MIPS_JMPBUF_SP_SLOT,
+        read_mips_reg(memory.uc, RegisterMIPS::SP),
+    )?;
+    write_mips_jmp_buf_slot(
+        memory,
+        env,
+        MIPS_JMPBUF_FP_SLOT,
+        read_mips_reg(memory.uc, RegisterMIPS::FP),
+    )?;
+    write_mips_jmp_buf_slot(
+        memory,
+        env,
+        MIPS_JMPBUF_RA_SLOT,
+        read_mips_reg(memory.uc, RegisterMIPS::RA),
+    )?;
+    write_mips_jmp_buf_slot(
+        memory,
+        env,
+        MIPS_JMPBUF_GP_SLOT,
+        read_mips_reg(memory.uc, RegisterMIPS::GP),
+    )?;
+    for register in 16..=23 {
+        let value = read_mips_gpr(memory.uc, register).unwrap_or(0);
+        write_mips_jmp_buf_slot(memory, env, MIPS_JMPBUF_S0_SLOT + (register - 16), value)?;
+    }
+    tracing::debug!(
+        target: "ce.crt",
+        env = format_args!("0x{env:08x}"),
+        return_pc = format_args!("0x{:08x}", read_mips_reg(memory.uc, RegisterMIPS::RA)),
+        "saved MIPS _setjmp buffer"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "unicorn")]
+fn restore_mips_jmp_buf<D>(
+    memory: &mut UnicornGuestMemory<'_, '_, D>,
+    env: u32,
+    value: u32,
+) -> Result<()> {
+    use unicorn_engine::RegisterMIPS;
+
+    let return_pc = read_mips_jmp_buf_slot(memory, env, MIPS_JMPBUF_RETURN_PC_SLOT)?;
+    let sp = read_mips_jmp_buf_slot(memory, env, MIPS_JMPBUF_SP_SLOT)?;
+    let fp = read_mips_jmp_buf_slot(memory, env, MIPS_JMPBUF_FP_SLOT)?;
+    let ra = read_mips_jmp_buf_slot(memory, env, MIPS_JMPBUF_RA_SLOT)?;
+    let gp = read_mips_jmp_buf_slot(memory, env, MIPS_JMPBUF_GP_SLOT)?;
+    for register in 16..=23 {
+        let slot = MIPS_JMPBUF_S0_SLOT + (register - 16);
+        let saved = read_mips_jmp_buf_slot(memory, env, slot)?;
+        write_mips_gpr(memory.uc, register, saved)
+            .ok_or_else(|| Error::Backend(format!("restore MIPS register ${register}")))?;
+    }
+    memory
+        .uc
+        .reg_write(RegisterMIPS::SP, u64::from(sp))
+        .map_err(|err| Error::Backend(format!("restore MIPS SP: {err:?}")))?;
+    memory
+        .uc
+        .reg_write(RegisterMIPS::FP, u64::from(fp))
+        .map_err(|err| Error::Backend(format!("restore MIPS FP: {err:?}")))?;
+    memory
+        .uc
+        .reg_write(RegisterMIPS::RA, u64::from(ra))
+        .map_err(|err| Error::Backend(format!("restore MIPS RA: {err:?}")))?;
+    memory
+        .uc
+        .reg_write(RegisterMIPS::GP, u64::from(gp))
+        .map_err(|err| Error::Backend(format!("restore MIPS GP: {err:?}")))?;
+    memory
+        .uc
+        .reg_write(RegisterMIPS::V0, u64::from(value))
+        .map_err(|err| Error::Backend(format!("restore MIPS V0: {err:?}")))?;
+    memory
+        .uc
+        .reg_write(RegisterMIPS::PC, u64::from(return_pc))
+        .map_err(|err| Error::Backend(format!("restore MIPS PC: {err:?}")))?;
+    tracing::debug!(
+        target: "ce.crt",
+        env = format_args!("0x{env:08x}"),
+        return_pc = format_args!("0x{return_pc:08x}"),
+        value = format_args!("0x{value:08x}"),
+        "restored MIPS longjmp buffer"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "unicorn")]
+fn read_mips_jmp_buf_slot<M: CoredllGuestMemory>(memory: &M, env: u32, slot: u32) -> Result<u32> {
+    memory.read_u32(jmp_buf_slot_addr(env, slot)?)
+}
+
+#[cfg(feature = "unicorn")]
+fn write_mips_jmp_buf_slot<M: CoredllGuestMemory>(
+    memory: &mut M,
+    env: u32,
+    slot: u32,
+    value: u32,
+) -> Result<()> {
+    memory.write_u32(jmp_buf_slot_addr(env, slot)?, value)
+}
+
+#[cfg(feature = "unicorn")]
+fn jmp_buf_slot_addr(env: u32, slot: u32) -> Result<u32> {
+    env.checked_add(slot.checked_mul(4).unwrap_or(u32::MAX))
+        .ok_or_else(|| Error::InvalidArgument("MIPS jmp_buf slot overflow".to_owned()))
+}
+
+#[cfg(feature = "unicorn")]
 fn try_block_empty_get_message<D>(
     kernel: &mut CeKernel,
     uc: &unicorn_engine::Unicorn<'_, D>,
@@ -2009,12 +2346,38 @@ fn read_unicorn_message<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn record_wndproc_return(
+    last_wndproc_returns: &std::rc::Rc<std::cell::RefCell<Vec<UnicornWndProcReturn>>>,
+    record: UnicornWndProcReturn,
+) {
+    tracing::debug!(
+        target: "ce.gwe",
+        source = record.source,
+        hwnd = format_args!("0x{:08x}", record.hwnd),
+        msg = format_args!("0x{:08x}", record.msg),
+        wparam = format_args!("0x{:08x}", record.wparam),
+        lparam = format_args!("0x{:08x}", record.lparam),
+        wndproc = format_args!("0x{:08x}", record.wndproc),
+        return_pc = format_args!("0x{:08x}", record.return_pc),
+        result = format_args!("0x{:08x}", record.result),
+        class = record.class_name.as_deref().unwrap_or("<unknown>"),
+        "guest wndproc return"
+    );
+    let mut returns = last_wndproc_returns.borrow_mut();
+    if returns.len() == 32 {
+        returns.remove(0);
+    }
+    returns.push(record);
+}
+
+#[cfg(feature = "unicorn")]
 fn try_enter_dispatch_message_callout<D>(
     kernel: &CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
@@ -2047,6 +2410,7 @@ fn try_enter_dispatch_message_callout<D>(
     if wndproc == 0 {
         return false;
     }
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
 
     tracing::debug!(
         target: "ce.gwe",
@@ -2057,19 +2421,35 @@ fn try_enter_dispatch_message_callout<D>(
         lparam = format_args!("0x{lparam:08x}"),
         class = window.class_name.as_str(),
         wndproc = format_args!("0x{wndproc:08x}"),
-        ra = format_args!("0x{:08x}", read_mips_reg(uc, RegisterMIPS::RA)),
+        ra = format_args!("0x{return_pc:08x}"),
         "DispatchMessageW guest wndproc callout"
     );
 
+    pending_returns.borrow_mut().push(PendingWndProcReturn {
+        source: "DispatchMessageW",
+        hwnd,
+        msg,
+        wparam,
+        lparam,
+        wndproc,
+        return_pc,
+        class_name: Some(window.class_name.clone()),
+    });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
         uc.reg_write(RegisterMIPS::A1, u64::from(msg)),
         uc.reg_write(RegisterMIPS::A2, u64::from(wparam)),
         uc.reg_write(RegisterMIPS::A3, u64::from(lparam)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(WNDPROC_RETURN_STUB_ADDR)),
         uc.reg_write(RegisterMIPS::T9, u64::from(wndproc)),
         uc.reg_write(RegisterMIPS::PC, u64::from(wndproc)),
     ];
-    writes.into_iter().all(|write| write.is_ok())
+    if writes.into_iter().all(|write| write.is_ok()) {
+        true
+    } else {
+        let _ = pending_returns.borrow_mut().pop();
+        false
+    }
 }
 
 #[cfg(feature = "unicorn")]
@@ -2079,6 +2459,7 @@ fn try_enter_send_message_callout<D>(
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
@@ -2099,6 +2480,7 @@ fn try_enter_send_message_callout<D>(
     let msg = args.get(1).copied().unwrap_or(0);
     let wparam = args.get(2).copied().unwrap_or(0);
     let lparam = args.get(3).copied().unwrap_or(0);
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
 
     tracing::debug!(
         target: "ce.gwe",
@@ -2108,19 +2490,35 @@ fn try_enter_send_message_callout<D>(
         lparam = format_args!("0x{lparam:08x}"),
         class = window.class_name.as_str(),
         wndproc = format_args!("0x{wndproc:08x}"),
-        ra = format_args!("0x{:08x}", read_mips_reg(uc, RegisterMIPS::RA)),
+        ra = format_args!("0x{return_pc:08x}"),
         "SendMessageW guest wndproc callout"
     );
 
+    pending_returns.borrow_mut().push(PendingWndProcReturn {
+        source: "SendMessageW",
+        hwnd,
+        msg,
+        wparam,
+        lparam,
+        wndproc,
+        return_pc,
+        class_name: Some(window.class_name.clone()),
+    });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
         uc.reg_write(RegisterMIPS::A1, u64::from(msg)),
         uc.reg_write(RegisterMIPS::A2, u64::from(wparam)),
         uc.reg_write(RegisterMIPS::A3, u64::from(lparam)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(WNDPROC_RETURN_STUB_ADDR)),
         uc.reg_write(RegisterMIPS::T9, u64::from(wndproc)),
         uc.reg_write(RegisterMIPS::PC, u64::from(wndproc)),
     ];
-    writes.into_iter().all(|write| write.is_ok())
+    if writes.into_iter().all(|write| write.is_ok()) {
+        true
+    } else {
+        let _ = pending_returns.borrow_mut().pop();
+        false
+    }
 }
 
 #[cfg(feature = "unicorn")]
@@ -2178,9 +2576,13 @@ fn try_enter_create_window_create_callout<D>(
         "CreateWindowExW guest WM_CREATE callout"
     );
 
-    pending_returns
-        .borrow_mut()
-        .push(CreateWindowReturn { return_pc, hwnd });
+    pending_returns.borrow_mut().push(CreateWindowReturn {
+        return_pc,
+        hwnd,
+        wndproc,
+        lparam: create_struct,
+        class_name: Some(class_name),
+    });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
         uc.reg_write(RegisterMIPS::A1, u64::from(crate::ce::gwe::WM_CREATE)),
@@ -2227,6 +2629,7 @@ fn try_enter_call_window_proc_callout<D>(
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
@@ -2244,6 +2647,7 @@ fn try_enter_call_window_proc_callout<D>(
     let msg = args.get(2).copied().unwrap_or(0);
     let wparam = args.get(3).copied().unwrap_or(0);
     let lparam = args.get(4).copied().unwrap_or(0);
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
 
     tracing::debug!(
         target: "ce.gwe",
@@ -2252,19 +2656,35 @@ fn try_enter_call_window_proc_callout<D>(
         wparam = format_args!("0x{wparam:08x}"),
         lparam = format_args!("0x{lparam:08x}"),
         wndproc = format_args!("0x{wndproc:08x}"),
-        ra = format_args!("0x{:08x}", read_mips_reg(uc, RegisterMIPS::RA)),
+        ra = format_args!("0x{return_pc:08x}"),
         "CallWindowProcW guest wndproc callout"
     );
 
+    pending_returns.borrow_mut().push(PendingWndProcReturn {
+        source: "CallWindowProcW",
+        hwnd,
+        msg,
+        wparam,
+        lparam,
+        wndproc,
+        return_pc,
+        class_name: None,
+    });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
         uc.reg_write(RegisterMIPS::A1, u64::from(msg)),
         uc.reg_write(RegisterMIPS::A2, u64::from(wparam)),
         uc.reg_write(RegisterMIPS::A3, u64::from(lparam)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(WNDPROC_RETURN_STUB_ADDR)),
         uc.reg_write(RegisterMIPS::T9, u64::from(wndproc)),
         uc.reg_write(RegisterMIPS::PC, u64::from(wndproc)),
     ];
-    writes.into_iter().all(|write| write.is_ok())
+    if writes.into_iter().all(|write| write.is_ok()) {
+        true
+    } else {
+        let _ = pending_returns.borrow_mut().pop();
+        false
+    }
 }
 
 #[cfg(feature = "unicorn")]
@@ -2279,6 +2699,7 @@ fn capture_debug_snapshot<D>(
     invalid_instruction_probe: Option<UnicornInvalidInstructionProbe>,
     last_imports: Vec<UnicornLastImport>,
     last_messages: Vec<UnicornLastMessage>,
+    last_wndproc_returns: Vec<UnicornWndProcReturn>,
     last_code: Vec<UnicornLastCode>,
     last_blocks: Vec<UnicornLastBlock>,
     blocked_get_message: Option<UnicornBlockedGetMessage>,
@@ -2310,6 +2731,7 @@ fn capture_debug_snapshot<D>(
         invalid_instruction_probe,
         last_imports,
         last_messages,
+        last_wndproc_returns,
         last_code,
         last_blocks,
         blocked_get_message,

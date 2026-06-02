@@ -8,11 +8,11 @@ use wince_emulation_v3::{
             CoredllStubPolicy, CoredllSubsystem, CoredllValue, EventModifyAction,
         },
         coredll_ordinals::{
-            CE42_MIPSII_SDK_ORDINALS, COREDLL_EXPORTS, ORD_CLOSE_HANDLE, ORD_CREATE_FILE_W,
-            ORD_CREATE_WINDOW_EX_W, ORD_DISPATCH_MESSAGE_W, ORD_EVENT_MODIFY, ORD_GET_MESSAGE_W,
-            ORD_INITIALIZE_CRITICAL_SECTION, ORD_LL_DIV, ORD_POST_MESSAGE_W, ORD_POW,
-            ORD_REG_OPEN_KEY_EX_W, ORD_SQRT, ORD_USER_CALL_WINDOW_PROC, ORD_WAIT_FOR_SINGLE_OBJECT,
-            ORD_WRITE_FILE,
+            COREDLL_EXPORTS, ORD_CLOSE_HANDLE, ORD_CREATE_FILE_W, ORD_CREATE_WINDOW_EX_W,
+            ORD_DISPATCH_MESSAGE_W, ORD_EVENT_MODIFY, ORD_GET_MESSAGE_W,
+            ORD_INITIALIZE_CRITICAL_SECTION, ORD_LL_DIV, ORD_LONGJMP, ORD_POST_MESSAGE_W, ORD_POW,
+            ORD_REG_OPEN_KEY_EX_W, ORD_SETJMP, ORD_SQRT, ORD_USER_CALL_WINDOW_PROC,
+            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE, SDK_ORDINALS,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::WM_USER,
@@ -31,7 +31,7 @@ fn coredll_table_reads_full_static_rust_ordinals() -> Result<()> {
 
     assert_eq!(
         table.export_count(),
-        COREDLL_EXPORTS.len() + CE42_MIPSII_SDK_ORDINALS.len()
+        COREDLL_EXPORTS.len() + SDK_ORDINALS.len()
     );
     assert_eq!(
         table.resolve_name("CreateFileW").unwrap().ordinal,
@@ -51,6 +51,8 @@ fn coredll_table_reads_full_static_rust_ordinals() -> Result<()> {
     );
     assert_eq!(table.resolve_name("sqrt").unwrap().ordinal, ORD_SQRT);
     assert_eq!(table.resolve_name("__ll_div").unwrap().ordinal, ORD_LL_DIV);
+    assert_eq!(table.resolve_name("longjmp").unwrap().ordinal, ORD_LONGJMP);
+    assert_eq!(table.resolve_name("_setjmp").unwrap().ordinal, ORD_SETJMP);
     assert_eq!(
         CoredllExportTable::resolve_static_ordinal(ORD_CREATE_FILE_W)
             .unwrap()

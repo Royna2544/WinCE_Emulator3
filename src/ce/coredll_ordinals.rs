@@ -11,15 +11,18 @@ pub struct CoredllOrdinalDef {
 }
 
 pub const ORD_SYSTEM_MEMORY_LOW: u32 = 720;
-pub const ORD_CE42_MIPSII_WCSDUP: u32 = 74;
-pub const ORD_CE42_MIPSII_WCSRCHR: u32 = 69;
-pub const ORD_CE42_MIPSII_MALLOC: u32 = 1041;
-pub const ORD_CE42_MIPSII_MEMCPY: u32 = 1044;
-pub const ORD_CE42_MIPSII_MEMSET: u32 = 1047;
-pub const ORD_CE42_MIPSII_OPERATOR_NEW: u32 = 1095;
-pub const ORD_CE42_MIPSII_SWPRINTF: u32 = 1097;
-pub const ORD_CE42_MIPSII_PRINTF: u32 = 1102;
-pub const ORD_CE42_MIPSII_FREE: u32 = 1018;
+pub const ORD_WCSDUP: u32 = 74;
+pub const ORD_WCSRCHR: u32 = 69;
+pub const ORD_WCSNICMP: u32 = 229;
+pub const ORD_MALLOC: u32 = 1041;
+pub const ORD_MEMCPY: u32 = 1044;
+pub const ORD_MEMSET: u32 = 1047;
+pub const ORD_OPERATOR_NEW: u32 = 1095;
+pub const ORD_SWPRINTF: u32 = 1097;
+pub const ORD_PRINTF: u32 = 1102;
+pub const ORD_FREE: u32 = 1018;
+pub const ORD_LONGJMP: u32 = 1036;
+pub const ORD_SETJMP: u32 = 2000;
 pub const ORD_INITIALIZE_CRITICAL_SECTION: u32 = 2;
 pub const ORD_DELETE_CRITICAL_SECTION: u32 = 3;
 pub const ORD_ENTER_CRITICAL_SECTION: u32 = 4;
@@ -1759,67 +1762,88 @@ pub const ORD_DPTOFP: u32 = 2039;
 pub const ORD_FPCMP: u32 = 2040;
 pub const ORD_DPCMP: u32 = 2041;
 
-pub const CE42_MIPSII_SDK_ORDINALS: &[CoredllOrdinalDef] = &[
+pub const SDK_ORDINALS: &[CoredllOrdinalDef] = &[
     CoredllOrdinalDef {
         name: "wcsrchr",
         target: Some("SDK_Mipsii_coredll.lib"),
-        ordinal: ORD_CE42_MIPSII_WCSRCHR,
+        ordinal: ORD_WCSRCHR,
         noname: false,
         line: 0,
     },
     CoredllOrdinalDef {
         name: "_wcsdup",
         target: Some("SDK_Mipsii_coredll.lib"),
-        ordinal: ORD_CE42_MIPSII_WCSDUP,
+        ordinal: ORD_WCSDUP,
+        noname: false,
+        line: 0,
+    },
+    CoredllOrdinalDef {
+        name: "_wcsnicmp",
+        target: Some("SDK_Mipsii_coredll.lib"),
+        ordinal: ORD_WCSNICMP,
         noname: false,
         line: 0,
     },
     CoredllOrdinalDef {
         name: "malloc",
         target: Some("SDK_Mipsii_coredll.lib"),
-        ordinal: ORD_CE42_MIPSII_MALLOC,
+        ordinal: ORD_MALLOC,
         noname: false,
         line: 0,
     },
     CoredllOrdinalDef {
         name: "memcpy",
         target: Some("SDK_Mipsii_coredll.lib"),
-        ordinal: ORD_CE42_MIPSII_MEMCPY,
+        ordinal: ORD_MEMCPY,
         noname: false,
         line: 0,
     },
     CoredllOrdinalDef {
         name: "memset",
         target: Some("SDK_Mipsii_coredll.lib"),
-        ordinal: ORD_CE42_MIPSII_MEMSET,
+        ordinal: ORD_MEMSET,
         noname: false,
         line: 0,
     },
     CoredllOrdinalDef {
         name: "??2@YAPAXI@Z",
         target: Some("SDK_Mipsii_coredll.lib"),
-        ordinal: ORD_CE42_MIPSII_OPERATOR_NEW,
+        ordinal: ORD_OPERATOR_NEW,
         noname: false,
         line: 0,
     },
     CoredllOrdinalDef {
         name: "swprintf",
         target: Some("SDK_Mipsii_coredll.lib"),
-        ordinal: ORD_CE42_MIPSII_SWPRINTF,
+        ordinal: ORD_SWPRINTF,
         noname: false,
         line: 0,
     },
     CoredllOrdinalDef {
         name: "printf",
         target: Some("SDK_Mipsii_coredll.lib"),
-        ordinal: ORD_CE42_MIPSII_PRINTF,
+        ordinal: ORD_PRINTF,
         noname: false,
         line: 0,
     },
     CoredllOrdinalDef {
         name: "free",
         target: Some("SDK_Mipsii_coredll.lib"),
-        ordinal: ORD_CE42_MIPSII_FREE,
+        ordinal: ORD_FREE,
+        noname: false,
+        line: 0,
+    },
+    CoredllOrdinalDef {
+        name: "longjmp",
+        target: Some("SDK_Mipsii_coredll.lib"),
+        ordinal: ORD_LONGJMP,
+        noname: false,
+        line: 0,
+    },
+    CoredllOrdinalDef {
+        name: "_setjmp",
+        target: Some("SDK_Mipsii_coredll.lib"),
+        ordinal: ORD_SETJMP,
         noname: false,
         line: 0,
     },
