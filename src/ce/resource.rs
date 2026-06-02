@@ -233,7 +233,19 @@ impl ResourceSystem {
     }
 
     pub fn find_resource(&self, module: u32, name: ResourceId, kind: ResourceId) -> Option<u32> {
-        self.by_key.get(&(module, name, kind)).copied()
+        self.by_key
+            .get(&(module, name.clone(), kind.clone()))
+            .copied()
+            .or_else(|| {
+                let (ResourceId::Integer(6), ResourceId::Integer(id)) = (&kind, &name) else {
+                    return None;
+                };
+                let block_id = (u32::from(*id) >> 4) + 1;
+                let block_id = u16::try_from(block_id).ok()?;
+                self.by_key
+                    .get(&(module, ResourceId::Integer(block_id), kind))
+                    .copied()
+            })
     }
 
     pub fn load_resource(&self, handle: u32) -> Option<u32> {
@@ -643,5 +655,31 @@ impl ResourceId {
         } else {
             Self::NamePtr(value)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ResourceId, ResourceSystem};
+
+    #[test]
+    fn rt_string_resource_lookup_falls_back_to_string_block() {
+        let mut resources = ResourceSystem::default();
+        let handle = resources.register(
+            0x0001_0000,
+            ResourceId::Integer(242),
+            ResourceId::Integer(6),
+            0x0040_0000,
+            12,
+        );
+
+        assert_eq!(
+            resources.find_resource(
+                0x0001_0000,
+                ResourceId::Integer(3867),
+                ResourceId::Integer(6),
+            ),
+            Some(handle)
+        );
     }
 }
