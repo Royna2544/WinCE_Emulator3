@@ -297,6 +297,36 @@ pub(crate) fn wsprintf_w_raw<M: CoredllGuestMemory>(
     text.encode_utf16().count() as u32
 }
 
+pub(crate) fn vswprintf_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest: u32,
+    format: u32,
+    va_list: u32,
+) -> u32 {
+    if va_list == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let args = read_va_list_words(memory, va_list, 64);
+    wsprintf_w_raw(kernel, memory, thread_id, dest, format, &args)
+}
+
+fn read_va_list_words<M: CoredllGuestMemory>(memory: &M, va_list: u32, max_words: u32) -> Vec<u32> {
+    let mut args = Vec::new();
+    for index in 0..max_words {
+        let addr = va_list.wrapping_add(index * 4);
+        let Ok(value) = memory.read_u32(addr) else {
+            break;
+        };
+        args.push(value);
+    }
+    args
+}
+
 fn read_wide_z<M: CoredllGuestMemory>(memory: &M, ptr: u32, max_chars: usize) -> Option<String> {
     let mut units = Vec::new();
     for index in 0..max_chars {

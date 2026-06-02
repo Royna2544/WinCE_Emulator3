@@ -35,6 +35,15 @@ pub struct CoredllExport {
 }
 
 const CE_ACP_CODE_PAGE: u32 = 949;
+const CTYPE_UPPER: u32 = 0x0001;
+const CTYPE_LOWER: u32 = 0x0002;
+const CTYPE_DIGIT: u32 = 0x0004;
+const CTYPE_SPACE: u32 = 0x0008;
+const CTYPE_PUNCT: u32 = 0x0010;
+const CTYPE_CONTROL: u32 = 0x0020;
+const CTYPE_BLANK: u32 = 0x0040;
+const CTYPE_HEX: u32 = 0x0080;
+const CTYPE_ALPHA: u32 = 0x0100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CoredllSubsystem {
@@ -1574,6 +1583,10 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
+        ORD_ISWCTYPE => Some(CoredllValue::U32(iswctype_raw(
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
         ORD_WCSDUP => Some(CoredllValue::Handle(crt::wcsdup_raw(
             kernel,
             memory,
@@ -1661,6 +1674,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
             if args.len() > 2 { &args[2..] } else { &[] },
+        ))),
+        ORD_WVSPRINTF_W | ORD_VSWPRINTF => Some(CoredllValue::U32(crt::vswprintf_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
         ))),
         ORD_PRINTF => Some(CoredllValue::U32(crt::printf_family_raw(kernel, thread_id))),
         ORD_FREE
@@ -3553,6 +3574,39 @@ fn wtol_raw<M: CoredllGuestMemory>(memory: &M, text_ptr: u32) -> i32 {
         return 0;
     };
     parse_decimal_prefix(text.trim_start())
+}
+
+fn iswctype_raw(wch: u32, ctype: u32) -> u32 {
+    let ch = char::from_u32(wch & 0xffff).unwrap_or('\0');
+    let mut mask = 0_u32;
+    if ch.is_uppercase() {
+        mask |= CTYPE_UPPER;
+    }
+    if ch.is_lowercase() {
+        mask |= CTYPE_LOWER;
+    }
+    if ch.is_ascii_digit() {
+        mask |= CTYPE_DIGIT;
+    }
+    if ch.is_whitespace() {
+        mask |= CTYPE_SPACE;
+    }
+    if ch.is_ascii_punctuation() {
+        mask |= CTYPE_PUNCT;
+    }
+    if ch.is_control() {
+        mask |= CTYPE_CONTROL;
+    }
+    if matches!(ch, ' ' | '\t') {
+        mask |= CTYPE_BLANK;
+    }
+    if ch.is_ascii_hexdigit() {
+        mask |= CTYPE_HEX;
+    }
+    if ch.is_alphabetic() {
+        mask |= CTYPE_ALPHA;
+    }
+    mask & ctype
 }
 
 fn parse_decimal_prefix(text: &str) -> i32 {
@@ -10160,6 +10214,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "malloc",
     "wcsrchr",
     "_wcsdup",
+    "iswctype",
     "MultiByteToWideChar",
     "WideCharToMultiByte",
     "CharLowerW",
@@ -10169,7 +10224,10 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "memcpy",
     "memset",
     "??2@YAPAXI@Z",
+    "wsprintfW",
+    "wvsprintfW",
     "swprintf",
+    "vswprintf",
     "printf",
     "free",
     "RemoteHeapAlloc",

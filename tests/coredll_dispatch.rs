@@ -10,9 +10,9 @@ use wince_emulation_v3::{
         coredll_ordinals::{
             ORD_CLOSE_HANDLE, ORD_CREATE_APISET, ORD_CREATE_FILE_W, ORD_CREATE_WINDOW_EX_W,
             ORD_DISPATCH_MESSAGE_W, ORD_EVENT_MODIFY, ORD_GET_MESSAGE_W,
-            ORD_INITIALIZE_CRITICAL_SECTION, ORD_LITOFP, ORD_LL_DIV, ORD_LONGJMP, ORD_LTD, ORD_NES,
-            ORD_POST_MESSAGE_W, ORD_POW, ORD_REG_OPEN_KEY_EX_W, ORD_SETJMP, ORD_SQRT,
-            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE, current_static_export_count,
+            ORD_INITIALIZE_CRITICAL_SECTION, ORD_ISWCTYPE, ORD_LITOFP, ORD_LL_DIV, ORD_LONGJMP,
+            ORD_LTD, ORD_NES, ORD_POST_MESSAGE_W, ORD_POW, ORD_REG_OPEN_KEY_EX_W, ORD_SETJMP,
+            ORD_SQRT, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE, current_static_export_count,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::WM_USER,
@@ -189,6 +189,75 @@ fn coredll_raw_dispatch_routes_mips_soft_float_compare_helpers() -> Result<()> {
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::CeMath(CeMathValue::I64(16)),
+            ..
+        }
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_dispatch_handles_iswctype_masks() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 1;
+
+    assert_eq!(
+        table.resolve_name("iswctype").unwrap().ordinal,
+        ORD_ISWCTYPE
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ISWCTYPE,
+            ['A' as u32, 0x0101],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0x0101),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ISWCTYPE,
+            ['9' as u32, 0x0084],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0x0084),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ISWCTYPE,
+            ['한' as u32, 0x0100],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0x0100),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ISWCTYPE,
+            ['/' as u32, 0x0100],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
             ..
         }
     ));
