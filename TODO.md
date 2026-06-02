@@ -27,9 +27,11 @@
   `__ll_div @2005`, `GetTimeZoneInformation @27`, `SetForegroundWindow @702`,
   and `InputDebugCharW @595`; it now stops on a guest CPU exception
   (`interrupt_no=12`, `pc=0x00000000`, `ra=0x00035cf4`) after a trace through
-  app code near `0x000ef80a`. The framebuffer dump
-  `target\inavi-release-debugchar.ppm` is still all zero. Disassemble and fix
-  the next MIPS/trampoline/control-flow issue before expecting guest drawing.
+  the app jump table at `0x000ebb84`, with the last code hook at
+  `interrupt_last_pc=0x000ef80a`/`interrupt_last_insn=0x007b375a`. The
+  framebuffer dump `target\inavi-release-debugchar.ppm` is still all zero.
+  Disassemble and fix the next MIPS/trampoline/control-flow issue before
+  expecting guest drawing.
 - Replace launch-stub behavior for commctrl, WINSOCK, and OLE imports with
   real subsystem-backed implementations as import traces demand. Keep MFC on
   the loaded SDK DLL path only; do not add emulator MFC stubs.

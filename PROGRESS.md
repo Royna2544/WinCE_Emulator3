@@ -519,6 +519,14 @@
   exception (`interrupt_no=12`, `pc=0x00000000`, `ra=0x00035cf4`) after app
   code near `0x000ef80a`; `target\inavi-release-debugchar.ppm` remains all
   zero.
+- Unicorn interrupt snapshots now retain the last code-hook PC and instruction
+  seen before the interrupt. The post-debug-input release run confirms the CPU
+  exception follows the app jump table at `0x000ebb84`: for selector
+  `a1=0x5835`, the table base `0x000ebbf0` plus halfword offset `0x3c1a`
+  lands at `interrupt_last_pc=0x000ef80a`
+  (`interrupt_last_insn=0x007b375a`). This is a halfword-aligned
+  MIPS/control-flow frontier, not another unresolved COREDLL import; the
+  framebuffer dump remains blank.
 
 ## Current State
 
@@ -540,8 +548,9 @@
   `__litofp @2032` traps, the MIPS `__ll_div @2005` helper frontier,
   `GetTimeZoneInformation @27`, `SetForegroundWindow @702`, and
   `InputDebugCharW @595`. The current concrete stop is a guest CPU exception
-  (`interrupt_no=12`, `pc=0x00000000`, `ra=0x00035cf4`) after app code near
-  `0x000ef80a`; the framebuffer remains blank. A
+  (`interrupt_no=12`, `pc=0x00000000`, `ra=0x00035cf4`) after the app jump
+  table target at `interrupt_last_pc=0x000ef80a`
+  (`interrupt_last_insn=0x007b375a`); the framebuffer remains blank. A
   generic virtual framebuffer is now
   attached to the emulator boundary, generic virtual presenter/desktop
   interfaces exist for host

@@ -106,6 +106,8 @@ pub struct UnicornInterruptProbe {
     pub ra: u32,
     pub sp: u32,
     pub intno: u32,
+    pub last_code_pc: Option<u32>,
+    pub last_code_instruction: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -780,6 +782,8 @@ impl UnicornMips {
         let indirect_call_probe_hook = Rc::clone(&indirect_call_probe);
         let last_code = Rc::new(RefCell::new(Vec::<UnicornLastCode>::new()));
         let last_code_hook = Rc::clone(&last_code);
+        let last_code_probe = Rc::new(RefCell::new(None));
+        let last_code_probe_hook = Rc::clone(&last_code_probe);
         let code_trace_counter = Rc::new(Cell::new(0u32));
         let code_trace_counter_hook = Rc::clone(&code_trace_counter);
         let host_wall_clock_stop = Rc::new(RefCell::new(None));
@@ -798,6 +802,7 @@ impl UnicornMips {
             let code_trace_index = code_trace_counter_hook.get().wrapping_add(1);
             code_trace_counter_hook.set(code_trace_index);
             let instruction = read_unicorn_u32(uc, pc);
+            *last_code_probe_hook.borrow_mut() = Some((pc, instruction));
             let next_instruction = read_unicorn_u32(uc, pc.wrapping_add(4));
             if let Some(limit) = host_wall_clock_limit {
                 let mut counter = host_wall_clock_counter_hook.borrow_mut();
@@ -1556,12 +1561,16 @@ impl UnicornMips {
 
         let interrupt_probe = Rc::new(RefCell::new(None));
         let interrupt_probe_hook = Rc::clone(&interrupt_probe);
+        let interrupt_last_code_probe = Rc::clone(&last_code_probe);
         uc.add_intr_hook(move |uc, intno| {
+            let last_code = *interrupt_last_code_probe.borrow();
             *interrupt_probe_hook.borrow_mut() = Some(UnicornInterruptProbe {
                 pc: read_mips_reg(uc, RegisterMIPS::PC),
                 ra: read_mips_reg(uc, RegisterMIPS::RA),
                 sp: read_mips_reg(uc, RegisterMIPS::SP),
                 intno: intno as u32,
+                last_code_pc: last_code.map(|(pc, _)| pc),
+                last_code_instruction: last_code.and_then(|(_, instruction)| instruction),
             });
             let _ = uc.emu_stop();
         })
@@ -2545,6 +2554,12 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 " interrupt_pc=0x{:08x} interrupt_ra=0x{:08x} interrupt_sp=0x{:08x} interrupt_no={}",
                 probe.pc, probe.ra, probe.sp, probe.intno
             )?;
+            if let Some(last_pc) = probe.last_code_pc {
+                write!(f, " interrupt_last_pc=0x{last_pc:08x}")?;
+            }
+            if let Some(instruction) = probe.last_code_instruction {
+                write!(f, " interrupt_last_insn=0x{instruction:08x}")?;
+            }
         }
         if let Some(probe) = self.invalid_instruction_probe.as_ref() {
             write!(
