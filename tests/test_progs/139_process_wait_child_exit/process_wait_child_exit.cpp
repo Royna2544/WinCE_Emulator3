@@ -71,6 +71,11 @@ int WINAPI WinMain(HINSTANCE h, HINSTANCE, LPWSTR, int) {
     WaitForSingleObject(thread, 5000);
     if (!GetExitCodeThread(thread, &exitCode)) return FixtureFail(13912);
     if (exitCode != 0) return FixtureFail(13913);
+    FILETIME createTime;
+    FILETIME exitTime;
+    FILETIME kernelTime;
+    FILETIME userTime;
+    if (!GetThreadTimes(thread, &createTime, &exitTime, &kernelTime, &userTime)) return FixtureFail(13914);
     CloseHandle(thread);
     CloseHandle(s.eventHandle);
     DestroyWindow(s.hwnd);

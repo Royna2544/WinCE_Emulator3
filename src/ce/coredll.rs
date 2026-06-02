@@ -1290,6 +1290,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_EXIT_CODE_PROCESS => Some(CoredllValue::Bool(get_process_exit_code_raw(
             kernel, memory, thread_id, args,
         ))),
+        ORD_GET_PROCESS_VERSION => Some(CoredllValue::U32(get_process_version_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_GET_THREAD_TIMES => Some(CoredllValue::Bool(get_thread_times_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_TERMINATE_PROCESS => Some(CoredllValue::Bool(terminate_process_raw(
             kernel,
             thread_id,
@@ -5176,6 +5184,47 @@ fn get_process_exit_code_raw<M: CoredllGuestMemory>(
     };
     if !write_guest_u32(kernel, memory, thread_id, exit_code_ptr, exit_code) {
         return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn get_process_version_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    _process_id_or_module: u32,
+) -> u32 {
+    kernel.threads.set_last_error(thread_id, 0);
+    0x0004_0014
+}
+
+fn get_thread_times_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let handle = raw_arg(args, 0);
+    if kernel.guest_thread_id(handle).is_none() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+
+    for filetime_ptr in [
+        raw_arg(args, 1),
+        raw_arg(args, 2),
+        raw_arg(args, 3),
+        raw_arg(args, 4),
+    ] {
+        if filetime_ptr != 0 {
+            if !write_guest_u32(kernel, memory, thread_id, filetime_ptr, 0)
+                || !write_guest_u32(kernel, memory, thread_id, filetime_ptr + 4, 0)
+            {
+                return false;
+            }
+        }
     }
     kernel.threads.set_last_error(thread_id, 0);
     true

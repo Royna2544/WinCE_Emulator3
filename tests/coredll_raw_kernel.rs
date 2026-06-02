@@ -5,7 +5,8 @@ use wince_emulation_v3::{
         coredll_ordinals::{
             ORD_CLOSE_HANDLE, ORD_CREATE_EVENT_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD,
             ORD_EVENT_MODIFY, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD,
-            ORD_GET_LAST_ERROR, ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY, ORD_GET_TICK_COUNT,
+            ORD_GET_LAST_ERROR, ORD_GET_PROCESS_VERSION, ORD_GET_THREAD_ID,
+            ORD_GET_THREAD_PRIORITY, ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT,
             ORD_GET_VERSION_EX_W, ORD_INITIALIZE_CRITICAL_SECTION,
             ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_LEAVE_CRITICAL_SECTION,
@@ -140,6 +141,19 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_PROCESS_VERSION,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0x0004_0014),
             ..
         }
     ));
@@ -376,6 +390,32 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
         kernel.threads.get_last_error(thread_id),
         ERROR_INVALID_PARAMETER
     );
+    let thread_times_ptr = 0x50c0;
+    memory.map_words(thread_times_ptr, 8);
+    memory.write_word(thread_times_ptr, 0xdead_beef);
+    memory.write_word(thread_times_ptr + 4, 0xfeed_face);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_THREAD_TIMES,
+            [
+                worker_thread,
+                thread_times_ptr,
+                thread_times_ptr + 8,
+                thread_times_ptr + 16,
+                thread_times_ptr + 24,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    for offset in (0..32).step_by(4) {
+        assert_eq!(memory.read_u32(thread_times_ptr + offset)?, 0);
+    }
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

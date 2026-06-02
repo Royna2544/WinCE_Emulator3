@@ -28,6 +28,8 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
 
     BOOL ok = CreateProcessW(CHILD_REL, CMD_LINE, 0, 0, FALSE, 0, 0, 0, &si, &pi);
     if (!ok) return FixtureFail(4004);
+    DWORD processVersion = GetProcessVersion(pi.dwProcessId);
+    if (processVersion != 0x00040014) return FixtureFail(4009);
 
     if (WaitForSingleObject(eventHandle, 5000) != WAIT_OBJECT_0) return FixtureFail(4005);
 
