@@ -4,6 +4,7 @@ pub mod com;
 pub mod coredll;
 pub mod coredll_ordinals;
 pub mod crt;
+pub mod desktop;
 pub mod devices;
 pub mod file;
 pub mod framebuffer;
