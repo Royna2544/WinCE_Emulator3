@@ -6558,6 +6558,7 @@ fn find_resource<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_RESOURCE_NAME_NOT_FOUND);
         return 0;
     };
+    let module = normalized_module(kernel, module);
     let Some(handle) = kernel.resources.find_resource(module, name, kind) else {
         kernel
             .threads
@@ -6610,6 +6611,7 @@ fn load_string_w<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
+    let module = normalized_module(kernel, module);
     let Some(resource) = kernel.resources.load_string(module, id) else {
         kernel
             .threads

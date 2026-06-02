@@ -1646,6 +1646,7 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
         0x5000,
         32,
     );
+    kernel.set_process_module_base(0x4000);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -1653,6 +1654,19 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
             thread_id,
             ORD_FIND_RESOURCE_W,
             [0x4000, 10, 6],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(found),
+            ..
+        } if found == resource
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_RESOURCE_W,
+            [0, 10, 6],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Handle(found),
@@ -1697,6 +1711,21 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
             thread_id,
             ORD_LOAD_STRING_W,
             [0x4000, 42, string_ptr, 16],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(11),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(string_ptr, 16), "route ready");
+    memory.write_wide_z(string_ptr, "");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_STRING_W,
+            [0, 42, string_ptr, 16],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::U32(11),

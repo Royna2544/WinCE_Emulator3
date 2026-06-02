@@ -57,6 +57,11 @@
   `FindResourceW`, `LoadResource`, and `SizeofResource` can consume mapped
   icon/bitmap/dialog/menu data rather than only test-registered virtual
   resources and PE-backed strings.
+- Investigate the iNavi startup `FindResourceW(hModule=0x00010000,
+  name=0x0e01, type=RT_STRING)` miss as a real MFC/resource-loading path. LLVM
+  resource dumping confirms the main EXE has no RT_STRING table, so next
+  candidates are language/resource DLL loading, MFC fallback behavior after
+  missing `AFX_IDS_APP_TITLE`, or earlier app resource initialization state.
 - When GWE/DC behavior is ready, adapt window state to the generic `Desktop`
   trait boundary without replacing CE/MFC message, class, or window semantics
   with host-window shortcuts.

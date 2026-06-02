@@ -400,6 +400,14 @@
   ordinal dispatch, while memory-only tests keep the existing dispatch path.
   Focused coverage:
   `cargo test --test coredll_raw_gwe coredll_raw_fill_rect_paints_attached_framebuffer`.
+- Raw `FindResourceW` and `LoadStringW` now normalize a null `hModule` to the
+  current process module, matching the module fallback already used by raw
+  menu/bitmap/icon resource helpers. Focused coverage:
+  `cargo test --test coredll_raw_gwe coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources`.
+- The latest iNavi resource probe shows the main EXE resource tree has CEUX,
+  icon, menu, dialog, group-icon, and version resources but no RT_STRING table;
+  the observed `FindResourceW(hModule=0x00010000, name=0x0e01, type=6)` miss is
+  therefore not a parser miss for a present main-image string resource.
 
 ## Current State
 
@@ -424,6 +432,10 @@
   child HWNDs or enters GDI/DC drawing. The next launch-path question is whether
   the create-time sequencing and superclass WNDPROC chain are still incomplete,
   or whether a later CE resource/menu/file/device/event path must seed the UI.
+  A later shorter run exited through the guest's encoded `TerminateProcess`
+  path after an MFC RT_STRING lookup miss for `0x0e01`; the EXE has no such
+  string table, so companion resource-module loading or MFC fallback behavior
+  remains under investigation.
 - Instruction-limited snapshots show the post-`WM_PAINT` path entering SDK MFC
   thread-local state and message pre-translation (`CThreadLocalObject::GetData`
   and later `CWnd::WalkPreTranslateTree`) rather than reaching guest drawing

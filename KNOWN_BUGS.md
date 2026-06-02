@@ -60,12 +60,17 @@
     virtual HWND lifecycle queueing is connected for show/move/size changes,
     visible top-level create now queues the initial show/size sequence, empty
     class registration is rejected at the raw CE API boundary, and SDK MFC
-    `_setjmp`/`longjmp` control flow is emulated in the Unicorn import hook. The
-    latest bounded launch confirms the current `GW_CHILD` query returns no
-    child HWNDs; next work is to identify which remaining CE/MFC-sourced queue,
-    timer, paint, posted-message, window-child creation, or GDI behavior should
-    advance the guest path toward the newly connected framebuffer drawing and
-    the remaining GDI/DC/surface drawing and blit imports.
+    `_setjmp`/`longjmp` control flow is emulated in the Unicorn import hook. Raw
+    `FindResourceW`/`LoadStringW` now normalize `hModule == 0` to the current
+    process module, but the latest shorter iNavi run still shows an EXE-module
+    `FindResourceW(..., name=0x0e01, type=RT_STRING)` miss; LLVM resource
+    dumping confirms the EXE has no RT_STRING table. The latest bounded launch
+    confirms the current `GW_CHILD` query returns no child HWNDs; next work is
+    to identify which remaining CE/MFC-sourced queue, timer, paint,
+    posted-message, window-child creation, resource-module loading, or GDI
+    behavior should advance the guest path toward the newly connected
+    framebuffer drawing and the remaining GDI/DC/surface drawing and blit
+    imports.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch
@@ -101,12 +106,14 @@
 
 - PE resources are only partially loaded into `ResourceSystem`.
   - Symptom: resource API behavior works for registered virtual resources and
-    PE-backed string tables, but icon/bitmap/dialog/menu resource directory
-    data is not yet wired to `FindResourceW`, `LoadResource`, or
-    `SizeofResource`.
+    PE-backed string tables. Raw PE resource data entries are collected for
+    registration, but broader icon/bitmap/dialog/menu parsing/consumption and
+    runtime resource-module loading are still incomplete.
   - Evidence: `src/ce/resource.rs` has HRSRC/HGLOBAL-like state and
-    `src/pe/mod.rs` now parses string-table resources for `LoadStringW`, but
-    the rest of the PE resource tree is not populated into the resource system.
+    `src/pe/mod.rs` parses string-table resources for `LoadStringW` and raw
+    resource data entries for registration. The iNavi EXE resource dump has no
+    RT_STRING resources, while the latest startup trace still probes
+    `FindResourceW(hModule=0x00010000, name=0x0e01, type=6)` and receives 0.
   - Status: next PE/resource integration step beyond strings.
 
 - Remote API has no Rust socket transport yet.
