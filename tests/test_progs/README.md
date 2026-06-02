@@ -25,7 +25,6 @@ These are intentionally tiny. Each fixture should test one layer or invariant be
 | `008_file_io` | `CreateFileW`, `WriteFile`, `ReadFile`, `SetFilePointer`, `CloseHandle`. |
 | `009_gdi_paint` | Basic GWE/GDI paint path: window, invalidate, `BeginPaint`, `FillRect`, `Ellipse`. |
 | `010_resource_string` | PE resources: `LoadStringW`, `.rc` string table. |
-| `011_rect_math` | RECT helpers: `SetRect`, `CopyRect`, `EqualRect`, `OffsetRect`, `IntersectRect`, empty rects. |
 | `012_window_geometry` | Window lifetime, visibility, `GetWindowRect`, `GetClientRect`, `MoveWindow`, `SetWindowPos`. |
 | `013_parent_child` | Parent/child ownership, child IDs, `GetParent`, `SetParent`, `GetWindow(GW_CHILD)`. |
 | `014_z_order` | Top-level Z-order traversal and `SetWindowPos(HWND_TOP/HWND_BOTTOM)`. |
@@ -35,6 +34,7 @@ These are intentionally tiny. Each fixture should test one layer or invariant be
 | `018_focus_enable` | `EnableWindow`, `IsWindowEnabled`, `SetFocus`, and `GetFocus`. |
 | `019_coordinate_map` | `ClientToScreen`, `ScreenToClient`, and `MapWindowPoints` across parent/child HWNDs. |
 | `020_subsystem_smoke` | System/memory/heap/local/virtual allocation plus registry open/query/close. |
+| `021_rect_math` | RECT helpers: `SetRect`, `CopyRect`, `EqualRect`, `OffsetRect`, `IntersectRect`, empty rects. |
 | `asm/` | Optional assembly/reference snippets for executable-section branch/delay tests. |
 | `tools/make_raw_mips_blobs.py` | Generates raw MIPS little-endian blobs for CPU-only unit tests. |
 
