@@ -9,8 +9,7 @@ Target app:
 - MIPS R4000 PE
 - Uses COREDLL.dll, mfcce400.dll, CRT-like exports, WINSOCK.dll
 
-Use the installed Windows CE 4.2 Standard SDK import libraries for ordinal and
-decorated-name evidence:
+Use the installed Windows CE 4.2 Standard SDK import libraries:
 
 - `C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Lib`
 - `C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib`
@@ -23,9 +22,13 @@ Windows CE Core-OS source is at: `C:\WINCE600`
 
 MFC reference source is at: `C:\Program Files (x86)\Microsoft Visual Studio 8\VC\ce\atlmfc\src\mfc`
 
-Device sd-card firmware: `D:\INAVI_Emulator\INAVI`
+Device sd-card firmware (see mounts.toml): `D:\INAVI_Emulator\INAVI`
 
 Main target right now: `D:\INAVI_Emulator\INAVI\INavi\iNavi.exe`
+
+LLVM Tools for target=MIPS: `D:\GitHub\llvm-proj\build-mips-objdump\bin`
+
+eVC4 toolchain for testsuite: `C:\Program Files (x86)\Microsoft eMbedded C++ 4.0\EVC\wce420\bin`
 
 ---
 
@@ -46,6 +49,7 @@ Allowed:
 - Known-address diagnostics
 - Temporary breakpoints/watchpoints
 - Host-backed shims for real API semantics
+- Referencing sources for diagnostics are very welcome.
 
 Dangerous unless explicitly justified:
 
