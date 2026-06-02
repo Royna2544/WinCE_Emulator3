@@ -11,11 +11,12 @@ use wince_emulation_v3::{
             ORD_HEAP_SIZE, ORD_IS_BAD_READ_PTR, ORD_IS_BAD_WRITE_PTR, ORD_LOCAL_ALLOC,
             ORD_LOCAL_FREE, ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_MALLOC, ORD_MEMCPY,
             ORD_MEMMOVE, ORD_MEMSET, ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_OPERATOR_DELETE,
-            ORD_OPERATOR_NEW, ORD_READ_FILE, ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W,
-            ORD_REG_DELETE_VALUE_W, ORD_REG_ENUM_VALUE_W, ORD_REG_QUERY_VALUE_EX_W,
-            ORD_REG_SET_VALUE_EX_W, ORD_SET_FILE_POINTER, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE,
-            ORD_WCSDUP, ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSRCHR, ORD_WIDE_CHAR_TO_MULTI_BYTE,
-            ORD_WRITE_FILE, ORD_WSPRINTF_W,
+            ORD_OPERATOR_DELETE_ARRAY, ORD_OPERATOR_NEW, ORD_OPERATOR_NEW_ARRAY, ORD_READ_FILE,
+            ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_VALUE_W,
+            ORD_REG_ENUM_VALUE_W, ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W,
+            ORD_SET_FILE_POINTER, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_WCSDUP, ORD_WCSNCPY,
+            ORD_WCSNICMP, ORD_WCSRCHR, ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W,
+            ORD_WTOL,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         kernel::CeKernel,
@@ -604,6 +605,43 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         Some(16)
     );
     assert_eq!(kernel.memory.heap_size(process_heap, 0, new_ptr), Some(8));
+    let new_array_ptr = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_OPERATOR_NEW_ARRAY,
+        [24],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("SDK operator new[] ordinal did not return a pointer: {other:?}"),
+    };
+    assert_ne!(new_array_ptr, 0);
+    assert_eq!(
+        kernel.memory.heap_size(process_heap, 0, new_array_ptr),
+        Some(24)
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_OPERATOR_DELETE_ARRAY,
+            [new_array_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(
+        kernel
+            .memory
+            .heap_size(process_heap, 0, new_array_ptr)
+            .is_none()
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -618,6 +656,22 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         }
     ));
     assert!(kernel.memory.heap_size(process_heap, 0, new_ptr).is_none());
+
+    memory.map_bytes(0x5f00, 32);
+    memory.write_wide_z(0x5f00, " -123abc");
+    assert_eq!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WTOL,
+            [0x5f00],
+        ),
+        CoredllDispatch::Returned {
+            export: table.resolve_ordinal(ORD_WTOL).unwrap().clone(),
+            value: CoredllValue::U32((-123_i32) as u32),
+        }
+    );
 
     memory.map_bytes(0x6000, 8);
     memory.map_bytes(0x6010, 8);

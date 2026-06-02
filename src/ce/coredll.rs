@@ -1629,6 +1629,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
+        ORD_WTOL => Some(CoredllValue::U32(wtol_raw(memory, raw_arg(args, 0)) as u32)),
         ORD_WCSNICMP => Some(CoredllValue::U32(crt::wcsnicmp_raw(
             memory,
             raw_arg(args, 0),
@@ -1679,11 +1680,13 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             WideCaseMode::Lower,
         ))),
-        ORD_MALLOC | ORD_OPERATOR_NEW => Some(CoredllValue::Handle(crt::malloc_raw(
-            kernel,
-            thread_id,
-            raw_arg(args, 0),
-        ))),
+        ORD_MALLOC | ORD_OPERATOR_NEW | ORD_OPERATOR_NEW_ARRAY | ORD_OPERATOR_NEW_ARRAY_NOTHROW => {
+            Some(CoredllValue::Handle(crt::malloc_raw(
+                kernel,
+                thread_id,
+                raw_arg(args, 0),
+            )))
+        }
         ORD_MEMCPY | ORD_MEMMOVE => Some(CoredllValue::Handle(crt::memcpy_raw(
             kernel,
             memory,
@@ -1709,7 +1712,10 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             if args.len() > 2 { &args[2..] } else { &[] },
         ))),
         ORD_PRINTF => Some(CoredllValue::U32(crt::printf_family_raw(kernel, thread_id))),
-        ORD_FREE | ORD_OPERATOR_DELETE => {
+        ORD_FREE
+        | ORD_OPERATOR_DELETE
+        | ORD_OPERATOR_DELETE_ARRAY
+        | ORD_OPERATOR_DELETE_ARRAY_NOTHROW => {
             crt::free_raw(kernel, raw_arg(args, 0));
             Some(CoredllValue::U32(0))
         }
@@ -3589,6 +3595,43 @@ fn create_file_w_raw<M: CoredllGuestMemory>(
             u32::MAX
         }
     }
+}
+
+fn wtol_raw<M: CoredllGuestMemory>(memory: &M, text_ptr: u32) -> i32 {
+    let Ok(text) = read_guest_wide_z(memory, text_ptr, 128) else {
+        return 0;
+    };
+    parse_decimal_prefix(text.trim_start())
+}
+
+fn parse_decimal_prefix(text: &str) -> i32 {
+    let mut chars = text.chars();
+    let mut sign = 1_i64;
+    let mut value = 0_i64;
+    match chars.clone().next() {
+        Some('-') => {
+            sign = -1;
+            chars.next();
+        }
+        Some('+') => {
+            chars.next();
+        }
+        _ => {}
+    }
+    let mut saw_digit = false;
+    for ch in chars {
+        let Some(digit) = ch.to_digit(10) else {
+            break;
+        };
+        saw_digit = true;
+        value = value.saturating_mul(10).saturating_add(i64::from(digit));
+    }
+    if !saw_digit {
+        return 0;
+    }
+    value
+        .saturating_mul(sign)
+        .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
 fn create_file_w_arg_preview<M: CoredllGuestMemory>(memory: &M, path_ptr: u32) -> Option<String> {

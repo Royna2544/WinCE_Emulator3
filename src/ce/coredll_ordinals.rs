@@ -18,11 +18,7 @@ static CURRENT_COREDLL_MAP_EXPORTS: OnceLock<Vec<(String, u32)>> = OnceLock::new
 fn current_coredll_map_exports() -> &'static [(String, u32)] {
     CURRENT_COREDLL_MAP_EXPORTS
         .get_or_init(|| {
-            let words: Vec<u16> = CURRENT_COREDLL_MAP
-                .chunks_exact(2)
-                .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-                .collect();
-            let text = String::from_utf16_lossy(&words);
+            let text = decode_current_coredll_map();
             text.trim_start_matches('\u{feff}')
                 .lines()
                 .filter_map(|line| {
@@ -34,6 +30,20 @@ fn current_coredll_map_exports() -> &'static [(String, u32)] {
                 .collect()
         })
         .as_slice()
+}
+
+fn decode_current_coredll_map() -> String {
+    if CURRENT_COREDLL_MAP.starts_with(&[0xff, 0xfe])
+        || CURRENT_COREDLL_MAP.iter().take(64).any(|byte| *byte == 0)
+    {
+        let words: Vec<u16> = CURRENT_COREDLL_MAP
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect();
+        String::from_utf16_lossy(&words)
+    } else {
+        String::from_utf8_lossy(CURRENT_COREDLL_MAP).into_owned()
+    }
 }
 
 pub fn is_current_map_export(export: &CoredllOrdinalDef) -> bool {
@@ -52,6 +62,7 @@ pub fn current_static_export_count() -> usize {
 
 pub const ORD_SYSTEM_MEMORY_LOW: u32 = 720;
 pub const ORD_WCSDUP: u32 = 74;
+pub const ORD_WTOL: u32 = 78;
 pub const ORD_WCSRCHR: u32 = 69;
 pub const ORD_WCSNICMP: u32 = 229;
 pub const ORD_WCSNCPY: u32 = 66;
@@ -61,6 +72,10 @@ pub const ORD_MEMMOVE: u32 = 1046;
 pub const ORD_MEMSET: u32 = 1047;
 pub const ORD_OPERATOR_DELETE: u32 = 1094;
 pub const ORD_OPERATOR_NEW: u32 = 1095;
+pub const ORD_OPERATOR_NEW_ARRAY: u32 = 1456;
+pub const ORD_OPERATOR_DELETE_ARRAY: u32 = 1457;
+pub const ORD_OPERATOR_NEW_ARRAY_NOTHROW: u32 = 1661;
+pub const ORD_OPERATOR_DELETE_ARRAY_NOTHROW: u32 = 1663;
 pub const ORD_SWPRINTF: u32 = 1097;
 pub const ORD_PRINTF: u32 = 1102;
 pub const ORD_FREE: u32 = 1018;
@@ -1682,7 +1697,6 @@ pub const ORD_SET_SCROLL_INFO: u32 = 279;
 pub const ORD_SET_SCROLL_POS: u32 = 280;
 pub const ORD_SET_SCROLL_RANGE: u32 = 281;
 pub const ORD_GET_SCROLL_INFO: u32 = 282;
-pub const ORD_CE_SAFE_COPY_MEMORY: u32 = 2508;
 pub const ORD_STRING_CCH_COPY_A: u32 = 1705;
 pub const ORD_STRING_CB_COPY_A: u32 = 1706;
 pub const ORD_STRING_CCH_COPY_EX_A: u32 = 1707;
@@ -1707,15 +1721,6 @@ pub const ORD_STRING_CCH_VPRINTF_EX_A: u32 = 1719;
 pub const ORD_STRING_CB_VPRINTF_EX_A: u32 = 1720;
 pub const ORD_STRING_CCH_LENGTH_A: u32 = 1756;
 pub const ORD_STRING_CB_LENGTH_A: u32 = 1757;
-pub const ORD_SIP_STATUS: u32 = 1169;
-pub const ORD_SIP_REGISTER_NOTIFICATION: u32 = 1170;
-pub const ORD_SIP_SHOW_IM: u32 = 1171;
-pub const ORD_SIP_GET_INFO: u32 = 1172;
-pub const ORD_SIP_SET_INFO: u32 = 1173;
-pub const ORD_SIP_ENUM_IM: u32 = 1174;
-pub const ORD_SIP_GET_CURRENT_IM: u32 = 1175;
-pub const ORD_SIP_SET_CURRENT_IM: u32 = 1176;
-pub const ORD_SIP_SET_DEFAULT_RECT: u32 = 1214;
 pub const ORD_GET_OVERLAPPED_RESULT: u32 = 1188;
 pub const ORD_MONITOR_FROM_POINT: u32 = 1522;
 pub const ORD_MONITOR_FROM_RECT: u32 = 1523;
@@ -1728,13 +1733,6 @@ pub const ORD_A_SHAFINAL: u32 = 1791;
 pub const ORD_MD5_INIT: u32 = 1792;
 pub const ORD_MD5_UPDATE: u32 = 1793;
 pub const ORD_MD5_FINAL: u32 = 1794;
-pub const ORD_MUL_DIV: u32 = 1877;
-pub const ORD_CRED_WRITE: u32 = 1878;
-pub const ORD_CRED_READ: u32 = 1879;
-pub const ORD_CRED_UPDATE: u32 = 1880;
-pub const ORD_CRED_DELETE: u32 = 1881;
-pub const ORD_CRED_FREE: u32 = 1882;
-pub const ORD_SECURE_WIPE_ALL_VOLUMES: u32 = 2519;
 pub const ORD_GET_STDIO_PATH_W: u32 = 1149;
 pub const ORD_SET_STDIO_PATH_W: u32 = 1150;
 pub const ORD_REGISTRY_GET_DWORD: u32 = 2615;
@@ -1833,6 +1831,13 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef] = &[
         line: 0,
     },
     CoredllOrdinalDef {
+        name: "_wtol",
+        target: Some("SDK_Mipsii_coredll.lib"),
+        ordinal: ORD_WTOL,
+        noname: false,
+        line: 0,
+    },
+    CoredllOrdinalDef {
         name: "_wcsnicmp",
         target: Some("SDK_Mipsii_coredll.lib"),
         ordinal: ORD_WCSNICMP,
@@ -1885,6 +1890,34 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef] = &[
         name: "??2@YAPAXI@Z",
         target: Some("SDK_Mipsii_coredll.lib"),
         ordinal: ORD_OPERATOR_NEW,
+        noname: false,
+        line: 0,
+    },
+    CoredllOrdinalDef {
+        name: "??_U@YAPAXI@Z",
+        target: Some("SDK_Mipsii_coredll.lib"),
+        ordinal: ORD_OPERATOR_NEW_ARRAY,
+        noname: false,
+        line: 0,
+    },
+    CoredllOrdinalDef {
+        name: "??_V@YAXPAX@Z",
+        target: Some("SDK_Mipsii_coredll.lib"),
+        ordinal: ORD_OPERATOR_DELETE_ARRAY,
+        noname: false,
+        line: 0,
+    },
+    CoredllOrdinalDef {
+        name: "??_U@YAPAXIABUnothrow_t@std@@@Z",
+        target: Some("SDK_Mipsii_coredll.lib"),
+        ordinal: ORD_OPERATOR_NEW_ARRAY_NOTHROW,
+        noname: false,
+        line: 0,
+    },
+    CoredllOrdinalDef {
+        name: "??_V@YAXPAXABUnothrow_t@std@@@Z",
+        target: Some("SDK_Mipsii_coredll.lib"),
+        ordinal: ORD_OPERATOR_DELETE_ARRAY_NOTHROW,
         noname: false,
         line: 0,
     },
@@ -15248,14 +15281,6 @@ pub fn lookup(ordinal: u32) -> Option<&'static CoredllOrdinalDef> {
         ORD_TRANSLATE_CHARSET_INFO => Some(&COREDLL_EXPORTS[1598]),
         ORD_CREATE_FILE_FOR_MAPPING_W => Some(&COREDLL_EXPORTS[1012]),
         ORD_LINE_SET_CURRENT_LOCATION => Some(&COREDLL_EXPORTS[647]),
-        ORD_SIP_STATUS => Some(&COREDLL_EXPORTS[1655]),
-        ORD_SIP_REGISTER_NOTIFICATION => Some(&COREDLL_EXPORTS[1656]),
-        ORD_SIP_SHOW_IM => Some(&COREDLL_EXPORTS[1657]),
-        ORD_SIP_GET_INFO => Some(&COREDLL_EXPORTS[1658]),
-        ORD_SIP_SET_INFO => Some(&COREDLL_EXPORTS[1659]),
-        ORD_SIP_ENUM_IM => Some(&COREDLL_EXPORTS[1660]),
-        ORD_SIP_GET_CURRENT_IM => Some(&COREDLL_EXPORTS[1661]),
-        ORD_SIP_SET_CURRENT_IM => Some(&COREDLL_EXPORTS[1662]),
         ORD_GET_MODULE_HANDLE_W => Some(&COREDLL_EXPORTS[988]),
         ORD_ACTIVATE_DEVICE => Some(&COREDLL_EXPORTS[389]),
         ORD_DEACTIVATE_DEVICE => Some(&COREDLL_EXPORTS[391]),
@@ -15736,12 +15761,6 @@ pub fn lookup(ordinal: u32) -> Option<&'static CoredllOrdinalDef> {
         ORD_FIND_FIRST_DEVICE => Some(&COREDLL_EXPORTS[397]),
         ORD_FIND_NEXT_DEVICE => Some(&COREDLL_EXPORTS[398]),
         ORD_ENUM_DEVICE_INTERFACES => Some(&COREDLL_EXPORTS[399]),
-        ORD_MUL_DIV => Some(&COREDLL_EXPORTS[1676]),
-        ORD_CRED_WRITE => Some(&COREDLL_EXPORTS[1677]),
-        ORD_CRED_READ => Some(&COREDLL_EXPORTS[1678]),
-        ORD_CRED_UPDATE => Some(&COREDLL_EXPORTS[1679]),
-        ORD_CRED_DELETE => Some(&COREDLL_EXPORTS[1680]),
-        ORD_CRED_FREE => Some(&COREDLL_EXPORTS[1681]),
         ORD_ALPHA_BLEND => Some(&COREDLL_EXPORTS[1583]),
         ORD_HEAP_COMPACT => Some(&COREDLL_EXPORTS[112]),
         ORD_ENUM_FONT_FAMILIES_EX_W => Some(&COREDLL_EXPORTS[1594]),
@@ -15893,7 +15912,6 @@ pub fn lookup(ordinal: u32) -> Option<&'static CoredllOrdinalDef> {
         ORD_CE_REG_GET_INFO => Some(&COREDLL_EXPORTS[826]),
         ORD_CE_REG_GET_NOTIFICATION_INFO => Some(&COREDLL_EXPORTS[827]),
         ORD_CHECK_REMOTE_DEBUGGER_PRESENT => Some(&COREDLL_EXPORTS[937]),
-        ORD_CE_SAFE_COPY_MEMORY => Some(&COREDLL_EXPORTS[1630]),
         ORD_CE_CERT_VERIFY => Some(&COREDLL_EXPORTS[285]),
         ORD_CE_GET_PROCESS_TRUST => Some(&COREDLL_EXPORTS[1117]),
         ORD_CE_OPEN_FILE_HANDLE => Some(&COREDLL_EXPORTS[938]),
@@ -15903,7 +15921,6 @@ pub fn lookup(ordinal: u32) -> Option<&'static CoredllOrdinalDef> {
         ORD_VERIFY_USER_ASYNC => Some(&COREDLL_EXPORTS[1192]),
         ORD_LASSGET_RESULT => Some(&COREDLL_EXPORTS[1193]),
         ORD_LASSCLOSE => Some(&COREDLL_EXPORTS[1194]),
-        ORD_SECURE_WIPE_ALL_VOLUMES => Some(&COREDLL_EXPORTS[1682]),
         ORD_GET_USER_KDATA => Some(&COREDLL_EXPORTS[56]),
         ORD_CE_GET_RAW_TIME_OFFSET => Some(&COREDLL_EXPORTS[57]),
         ORD_CREATE_WATCH_DOG_TIMER => Some(&COREDLL_EXPORTS[1042]),
