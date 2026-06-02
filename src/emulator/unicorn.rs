@@ -52,6 +52,7 @@ pub struct UnicornDebugSnapshot {
     pub interrupt_probe: Option<UnicornInterruptProbe>,
     pub invalid_instruction_probe: Option<UnicornInvalidInstructionProbe>,
     pub last_imports: Vec<UnicornLastImport>,
+    pub last_messages: Vec<UnicornLastMessage>,
     pub last_code: Vec<UnicornLastCode>,
     pub last_blocks: Vec<UnicornLastBlock>,
     pub blocked_get_message: Option<UnicornBlockedGetMessage>,
@@ -127,6 +128,27 @@ pub struct UnicornLastImport {
     pub a3: u32,
     pub sp: u32,
     pub result: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornLastMessage {
+    pub ordinal: u32,
+    pub msg_ptr: u32,
+    pub filter_hwnd: Option<u32>,
+    pub min_msg: u32,
+    pub max_msg: u32,
+    pub flags: Option<u32>,
+    pub result: Option<u32>,
+    pub message: Option<UnicornMessageRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornMessageRecord {
+    pub hwnd: u32,
+    pub msg: u32,
+    pub wparam: u32,
+    pub lparam: u32,
+    pub time_ms: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -678,6 +700,8 @@ impl UnicornMips {
         let blocked_get_message_hook = Rc::clone(&blocked_get_message);
         let last_imports = Rc::new(RefCell::new(Vec::<UnicornLastImport>::new()));
         let last_imports_hook = Rc::clone(&last_imports);
+        let last_messages = Rc::new(RefCell::new(Vec::<UnicornLastMessage>::new()));
+        let last_messages_hook = Rc::clone(&last_messages);
         let create_window_returns = Rc::new(RefCell::new(Vec::<CreateWindowReturn>::new()));
         let create_window_returns_hook = Rc::clone(&create_window_returns);
         let traps = self.import_traps.clone();
@@ -755,10 +779,12 @@ impl UnicornMips {
                 if trap.as_ref().is_some_and(|trap| {
                     try_block_empty_get_message(
                         unsafe { &mut *kernel_ptr },
+                        uc,
                         trap.module_kind,
                         trap.ordinal,
                         &args,
                         &blocked_get_message_hook,
+                        &last_messages_hook,
                     )
                 }) {
                     let _ = uc.emu_stop();
@@ -821,6 +847,14 @@ impl UnicornMips {
                         name = trap.name.as_deref().unwrap_or("<ordinal>"),
                         result = format_args!("0x{result:08x}"),
                         "import trap return"
+                    );
+                    record_message_import(
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        Some(result),
+                        &last_messages_hook,
                     );
                 }
                 if trap.as_ref().is_some_and(|trap| {
@@ -942,6 +976,7 @@ impl UnicornMips {
             interrupt_probe.borrow().clone(),
             invalid_instruction_probe.borrow().clone(),
             last_imports.borrow().clone(),
+            last_messages.borrow().clone(),
             last_code.borrow().clone(),
             last_blocks.borrow().clone(),
             blocked_get_message.borrow().clone(),
@@ -1685,6 +1720,46 @@ impl std::fmt::Display for UnicornDebugSnapshot {
             }
             write!(f, "]")?;
         }
+        if !self.last_messages.is_empty() {
+            write!(f, " last_messages=[")?;
+            for (index, message) in self.last_messages.iter().enumerate() {
+                if index != 0 {
+                    write!(f, ",")?;
+                }
+                let name = if message.ordinal == crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W {
+                    "GetMessageW"
+                } else {
+                    "PeekMessageW"
+                };
+                write!(
+                    f,
+                    "{name}/msg_ptr=0x{:08x}/filter={}/range=0x{:08x}..0x{:08x}",
+                    message.msg_ptr,
+                    message
+                        .filter_hwnd
+                        .map(|hwnd| format!("0x{hwnd:08x}"))
+                        .unwrap_or_else(|| "<any>".to_owned()),
+                    message.min_msg,
+                    message.max_msg
+                )?;
+                if let Some(flags) = message.flags {
+                    write!(f, "/flags=0x{flags:08x}")?;
+                }
+                if let Some(result) = message.result {
+                    write!(f, "/ret=0x{result:08x}")?;
+                } else {
+                    write!(f, "/ret=<blocked>")?;
+                }
+                if let Some(record) = message.message.as_ref() {
+                    write!(
+                        f,
+                        "/msg_hwnd=0x{:08x}/msg=0x{:08x}/w=0x{:08x}/l=0x{:08x}/time={}",
+                        record.hwnd, record.msg, record.wparam, record.lparam, record.time_ms
+                    )?;
+                }
+            }
+            write!(f, "]")?;
+        }
         if !self.last_code.is_empty() {
             write!(f, " last_code=[")?;
             for (index, code) in self.last_code.iter().enumerate() {
@@ -1822,12 +1897,14 @@ fn read_mips_import_args<D>(uc: &unicorn_engine::Unicorn<'_, D>) -> Vec<u32> {
 }
 
 #[cfg(feature = "unicorn")]
-fn try_block_empty_get_message(
+fn try_block_empty_get_message<D>(
     kernel: &mut CeKernel,
+    uc: &unicorn_engine::Unicorn<'_, D>,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
     blocked: &std::rc::Rc<std::cell::RefCell<Option<UnicornBlockedGetMessage>>>,
+    last_messages: &std::rc::Rc<std::cell::RefCell<Vec<UnicornLastMessage>>>,
 ) -> bool {
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
         || ordinal != Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W)
@@ -1860,7 +1937,64 @@ fn try_block_empty_get_message(
         min_msg,
         max_msg,
     });
+    record_message_import(uc, module_kind, ordinal, args, None, last_messages);
     true
+}
+
+#[cfg(feature = "unicorn")]
+fn record_message_import<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    result: Option<u32>,
+    last_messages: &std::rc::Rc<std::cell::RefCell<Vec<UnicornLastMessage>>>,
+) {
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll {
+        return;
+    }
+    let Some(ordinal) = ordinal else {
+        return;
+    };
+    if ordinal != crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W
+        && ordinal != crate::ce::coredll_ordinals::ORD_PEEK_MESSAGE_W
+    {
+        return;
+    }
+
+    let msg_ptr = args.first().copied().unwrap_or(0);
+    let message = result
+        .filter(|result| *result != 0)
+        .and_then(|_| read_unicorn_message(uc, msg_ptr));
+    let mut messages = last_messages.borrow_mut();
+    if messages.len() == 64 {
+        messages.remove(0);
+    }
+    messages.push(UnicornLastMessage {
+        ordinal,
+        msg_ptr,
+        filter_hwnd: args.get(1).copied().filter(|hwnd| *hwnd != 0),
+        min_msg: args.get(2).copied().unwrap_or(0),
+        max_msg: args.get(3).copied().unwrap_or(0),
+        flags: (ordinal == crate::ce::coredll_ordinals::ORD_PEEK_MESSAGE_W)
+            .then(|| args.get(4).copied().unwrap_or(0)),
+        result,
+        message,
+    });
+}
+
+#[cfg(feature = "unicorn")]
+fn read_unicorn_message<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    msg_ptr: u32,
+) -> Option<UnicornMessageRecord> {
+    Some(UnicornMessageRecord {
+        hwnd: read_unicorn_u32(uc, msg_ptr)?,
+        msg: read_unicorn_u32(uc, msg_ptr.wrapping_add(4))?,
+        wparam: read_unicorn_u32(uc, msg_ptr.wrapping_add(8))?,
+        lparam: read_unicorn_u32(uc, msg_ptr.wrapping_add(12))?,
+        time_ms: read_unicorn_u32(uc, msg_ptr.wrapping_add(16))?,
+    })
 }
 
 #[cfg(feature = "unicorn")]
@@ -2082,6 +2216,7 @@ fn capture_debug_snapshot<D>(
     interrupt_probe: Option<UnicornInterruptProbe>,
     invalid_instruction_probe: Option<UnicornInvalidInstructionProbe>,
     last_imports: Vec<UnicornLastImport>,
+    last_messages: Vec<UnicornLastMessage>,
     last_code: Vec<UnicornLastCode>,
     last_blocks: Vec<UnicornLastBlock>,
     blocked_get_message: Option<UnicornBlockedGetMessage>,
@@ -2112,6 +2247,7 @@ fn capture_debug_snapshot<D>(
         interrupt_probe,
         invalid_instruction_probe,
         last_imports,
+        last_messages,
         last_code,
         last_blocks,
         blocked_get_message,
