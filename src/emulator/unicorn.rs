@@ -66,6 +66,9 @@ pub struct UnicornDebugSnapshot {
     pub last_messages: Vec<UnicornLastMessage>,
     pub last_wndproc_returns: Vec<UnicornWndProcReturn>,
     pub last_wndproc_call_traces: Vec<UnicornWndProcCallTrace>,
+    pub last_mfc_dispatch: Vec<UnicornMfcDispatchTrace>,
+    pub last_inavi_display: Vec<UnicornInaviDisplayTrace>,
+    pub last_inavi_controller: Vec<UnicornInaviControllerTrace>,
     pub last_code: Vec<UnicornLastCode>,
     pub last_blocks: Vec<UnicornLastBlock>,
     pub import_counts: Vec<UnicornImportCount>,
@@ -223,6 +226,81 @@ pub struct UnicornWndProcCallTrace {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornMfcDispatchTrace {
+    pub pc: u32,
+    pub label: &'static str,
+    pub ra: u32,
+    pub sp: u32,
+    pub v0: u32,
+    pub a0: u32,
+    pub a1: u32,
+    pub a2: u32,
+    pub a3: u32,
+    pub s5: u32,
+    pub s6: u32,
+    pub s7: u32,
+    pub fp: u32,
+    pub sp10: Option<u32>,
+    pub this_ptr: Option<u32>,
+    pub hwnd: Option<u32>,
+    pub msg: Option<u32>,
+    pub wparam: Option<u32>,
+    pub lparam: Option<u32>,
+    pub vtable_slot_98: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornInaviDisplayTrace {
+    pub pc: u32,
+    pub label: &'static str,
+    pub ra: u32,
+    pub sp: u32,
+    pub v0: u32,
+    pub a0: u32,
+    pub a1: u32,
+    pub a2: u32,
+    pub a3: u32,
+    pub this_ptr: Option<u32>,
+    pub hwnd: Option<u32>,
+    pub msg: Option<u32>,
+    pub wparam: Option<u32>,
+    pub lparam: Option<u32>,
+    pub field_20: Option<u32>,
+    pub field_44: Option<u32>,
+    pub field_e8: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornInaviControllerTrace {
+    pub pc: u32,
+    pub label: &'static str,
+    pub ra: u32,
+    pub sp: u32,
+    pub v0: u32,
+    pub a0: u32,
+    pub a1: u32,
+    pub a2: u32,
+    pub a3: u32,
+    pub s2: u32,
+    pub s3: u32,
+    pub s4: u32,
+    pub s6: u32,
+    pub s7: u32,
+    pub fp: u32,
+    pub sp10: Option<u32>,
+    pub sp48: Option<u32>,
+    pub controller: Option<u32>,
+    pub hwnd: Option<u32>,
+    pub msg: Option<u32>,
+    pub wparam: Option<u32>,
+    pub lparam: Option<u32>,
+    pub classifier: Option<u32>,
+    pub selected_obj: Option<u32>,
+    pub selected_vtable: Option<u32>,
+    pub selected_target: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnicornLastCode {
     pub pc: u32,
     pub ra: u32,
@@ -310,6 +388,12 @@ const UNICORN_WNDPROC_TRACE_IMPORT_LIMIT: usize = 64;
 const UNICORN_WNDPROC_TRACE_CODE_LIMIT: usize = 256;
 #[cfg(feature = "unicorn")]
 const UNICORN_WNDPROC_READINESS_TRACE_LIMIT: usize = 64;
+#[cfg(feature = "unicorn")]
+const UNICORN_MFC_DISPATCH_TRACE_LIMIT: usize = 64;
+#[cfg(feature = "unicorn")]
+const UNICORN_INAVI_DISPLAY_TRACE_LIMIT: usize = 96;
+#[cfg(feature = "unicorn")]
+const UNICORN_INAVI_CONTROLLER_TRACE_LIMIT: usize = 128;
 #[cfg(feature = "unicorn")]
 const UNICORN_CODE_TRACE_SAMPLE_INTERVAL: u32 = 64;
 #[cfg(feature = "unicorn")]
@@ -861,6 +945,13 @@ impl UnicornMips {
         let host_wall_clock_counter_hook = Rc::clone(&host_wall_clock_counter);
         let last_calls = Rc::new(RefCell::new(Vec::<UnicornLastCall>::new()));
         let last_calls_hook = Rc::clone(&last_calls);
+        let last_mfc_dispatch = Rc::new(RefCell::new(Vec::<UnicornMfcDispatchTrace>::new()));
+        let last_mfc_dispatch_hook = Rc::clone(&last_mfc_dispatch);
+        let last_inavi_display = Rc::new(RefCell::new(Vec::<UnicornInaviDisplayTrace>::new()));
+        let last_inavi_display_hook = Rc::clone(&last_inavi_display);
+        let last_inavi_controller =
+            Rc::new(RefCell::new(Vec::<UnicornInaviControllerTrace>::new()));
+        let last_inavi_controller_hook = Rc::clone(&last_inavi_controller);
         let mapped_blobs = self.mapped_blobs.clone();
         let trampoline_ranges = self.trampoline_ranges.clone();
         let trampoline_jumps = self.trampoline_jumps.clone();
@@ -946,6 +1037,9 @@ impl UnicornMips {
                 })
             })
             .flatten();
+            record_mfc_dispatch_trace(&last_mfc_dispatch_hook, uc, pc);
+            record_inavi_display_trace(&last_inavi_display_hook, uc, pc);
+            record_inavi_controller_trace(&last_inavi_controller_hook, uc, pc);
             let code_record = || UnicornLastCode {
                 pc,
                 ra: read_mips_reg(uc, RegisterMIPS::RA),
@@ -1748,6 +1842,9 @@ impl UnicornMips {
             last_messages.borrow().clone(),
             last_wndproc_returns.borrow().clone(),
             last_wndproc_call_traces.borrow().clone(),
+            last_mfc_dispatch.borrow().clone(),
+            last_inavi_display.borrow().clone(),
+            last_inavi_controller.borrow().clone(),
             last_code.borrow().clone(),
             last_blocks.borrow().clone(),
             import_count_snapshot(&import_counts.borrow()),
@@ -3135,6 +3232,160 @@ impl std::fmt::Display for UnicornDebugSnapshot {
             }
             write!(f, "]")?;
         }
+        if !self.last_mfc_dispatch.is_empty() {
+            write!(f, " last_mfc_dispatch=[")?;
+            for (index, trace) in self.last_mfc_dispatch.iter().enumerate() {
+                if index != 0 {
+                    write!(f, ",")?;
+                }
+                write!(
+                    f,
+                    "{}@0x{:08x}/ra=0x{:08x}/sp=0x{:08x}/v0=0x{:08x}/a0=0x{:08x}/a1=0x{:08x}/a2=0x{:08x}/a3=0x{:08x}/s5=0x{:08x}/s6=0x{:08x}/s7=0x{:08x}/fp=0x{:08x}",
+                    trace.label,
+                    trace.pc,
+                    trace.ra,
+                    trace.sp,
+                    trace.v0,
+                    trace.a0,
+                    trace.a1,
+                    trace.a2,
+                    trace.a3,
+                    trace.s5,
+                    trace.s6,
+                    trace.s7,
+                    trace.fp
+                )?;
+                if let Some(sp10) = trace.sp10 {
+                    write!(f, "/sp10=0x{sp10:08x}")?;
+                }
+                if let Some(this_ptr) = trace.this_ptr {
+                    write!(f, "/this=0x{this_ptr:08x}")?;
+                }
+                if let Some(hwnd) = trace.hwnd {
+                    write!(f, "/hwnd=0x{hwnd:08x}")?;
+                }
+                if let Some(msg) = trace.msg {
+                    write!(f, "/msg=0x{msg:08x}")?;
+                }
+                if let Some(wparam) = trace.wparam {
+                    write!(f, "/w=0x{wparam:08x}")?;
+                }
+                if let Some(lparam) = trace.lparam {
+                    write!(f, "/l=0x{lparam:08x}")?;
+                }
+                if let Some(slot) = trace.vtable_slot_98 {
+                    write!(f, "/vtable98=0x{slot:08x}")?;
+                }
+            }
+            write!(f, "]")?;
+        }
+        if !self.last_inavi_display.is_empty() {
+            write!(f, " last_inavi_display=[")?;
+            for (index, trace) in self.last_inavi_display.iter().enumerate() {
+                if index != 0 {
+                    write!(f, ",")?;
+                }
+                write!(
+                    f,
+                    "{}@0x{:08x}/ra=0x{:08x}/sp=0x{:08x}/v0=0x{:08x}/a0=0x{:08x}/a1=0x{:08x}/a2=0x{:08x}/a3=0x{:08x}",
+                    trace.label,
+                    trace.pc,
+                    trace.ra,
+                    trace.sp,
+                    trace.v0,
+                    trace.a0,
+                    trace.a1,
+                    trace.a2,
+                    trace.a3
+                )?;
+                if let Some(this_ptr) = trace.this_ptr {
+                    write!(f, "/this=0x{this_ptr:08x}")?;
+                }
+                if let Some(hwnd) = trace.hwnd {
+                    write!(f, "/hwnd=0x{hwnd:08x}")?;
+                }
+                if let Some(msg) = trace.msg {
+                    write!(f, "/msg=0x{msg:08x}")?;
+                }
+                if let Some(wparam) = trace.wparam {
+                    write!(f, "/w=0x{wparam:08x}")?;
+                }
+                if let Some(lparam) = trace.lparam {
+                    write!(f, "/l=0x{lparam:08x}")?;
+                }
+                if let Some(field_20) = trace.field_20 {
+                    write!(f, "/field20=0x{field_20:08x}")?;
+                }
+                if let Some(field_44) = trace.field_44 {
+                    write!(f, "/field44=0x{field_44:08x}")?;
+                }
+                if let Some(field_e8) = trace.field_e8 {
+                    write!(f, "/fielde8=0x{field_e8:08x}")?;
+                }
+            }
+            write!(f, "]")?;
+        }
+        if !self.last_inavi_controller.is_empty() {
+            write!(f, " last_inavi_controller=[")?;
+            for (index, trace) in self.last_inavi_controller.iter().enumerate() {
+                if index != 0 {
+                    write!(f, ",")?;
+                }
+                write!(
+                    f,
+                    "{}@0x{:08x}/ra=0x{:08x}/sp=0x{:08x}/v0=0x{:08x}/a0=0x{:08x}/a1=0x{:08x}/a2=0x{:08x}/a3=0x{:08x}/s2=0x{:08x}/s3=0x{:08x}/s4=0x{:08x}/s6=0x{:08x}/s7=0x{:08x}/fp=0x{:08x}",
+                    trace.label,
+                    trace.pc,
+                    trace.ra,
+                    trace.sp,
+                    trace.v0,
+                    trace.a0,
+                    trace.a1,
+                    trace.a2,
+                    trace.a3,
+                    trace.s2,
+                    trace.s3,
+                    trace.s4,
+                    trace.s6,
+                    trace.s7,
+                    trace.fp
+                )?;
+                if let Some(sp10) = trace.sp10 {
+                    write!(f, "/sp10=0x{sp10:08x}")?;
+                }
+                if let Some(sp48) = trace.sp48 {
+                    write!(f, "/sp48=0x{sp48:08x}")?;
+                }
+                if let Some(controller) = trace.controller {
+                    write!(f, "/controller=0x{controller:08x}")?;
+                }
+                if let Some(hwnd) = trace.hwnd {
+                    write!(f, "/hwnd=0x{hwnd:08x}")?;
+                }
+                if let Some(msg) = trace.msg {
+                    write!(f, "/msg=0x{msg:08x}")?;
+                }
+                if let Some(wparam) = trace.wparam {
+                    write!(f, "/w=0x{wparam:08x}")?;
+                }
+                if let Some(lparam) = trace.lparam {
+                    write!(f, "/l=0x{lparam:08x}")?;
+                }
+                if let Some(classifier) = trace.classifier {
+                    write!(f, "/class=0x{classifier:08x}")?;
+                }
+                if let Some(selected_obj) = trace.selected_obj {
+                    write!(f, "/obj=0x{selected_obj:08x}")?;
+                }
+                if let Some(selected_vtable) = trace.selected_vtable {
+                    write!(f, "/vt=0x{selected_vtable:08x}")?;
+                }
+                if let Some(selected_target) = trace.selected_target {
+                    write!(f, "/target=0x{selected_target:08x}")?;
+                }
+            }
+            write!(f, "]")?;
+        }
         if !self.last_code.is_empty() {
             write!(f, " last_code=[")?;
             for (index, code) in self.last_code.iter().enumerate() {
@@ -4273,6 +4524,322 @@ fn record_wndproc_call_trace(
 }
 
 #[cfg(feature = "unicorn")]
+fn record_mfc_dispatch_trace<D>(
+    traces: &std::rc::Rc<std::cell::RefCell<Vec<UnicornMfcDispatchTrace>>>,
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    pc: u32,
+) {
+    use unicorn_engine::RegisterMIPS;
+
+    let Some(label) = mfc_dispatch_probe_label(pc) else {
+        return;
+    };
+    let sp = read_mips_reg(uc, RegisterMIPS::SP);
+    let s6 = read_mips_reg(uc, RegisterMIPS::S6);
+    let s7 = read_mips_reg(uc, RegisterMIPS::S7);
+    let fp = read_mips_reg(uc, RegisterMIPS::FP);
+    let sp10 = sp
+        .checked_add(0x10)
+        .and_then(|addr| read_unicorn_u32(uc, addr));
+    let this_ptr = match label {
+        "route_entry" => Some(read_mips_reg(uc, RegisterMIPS::A0)),
+        "vtable_call" => Some(s7),
+        "message_map_result" => Some(s7),
+        _ => None,
+    };
+    let vtable_slot_98 = this_ptr
+        .and_then(|ptr| read_unicorn_u32(uc, ptr))
+        .and_then(|vtable| read_unicorn_u32(uc, vtable.wrapping_add(0x98)));
+    let trace = UnicornMfcDispatchTrace {
+        pc,
+        label,
+        ra: read_mips_reg(uc, RegisterMIPS::RA),
+        sp,
+        v0: read_mips_reg(uc, RegisterMIPS::V0),
+        a0: read_mips_reg(uc, RegisterMIPS::A0),
+        a1: read_mips_reg(uc, RegisterMIPS::A1),
+        a2: read_mips_reg(uc, RegisterMIPS::A2),
+        a3: read_mips_reg(uc, RegisterMIPS::A3),
+        s5: read_mips_reg(uc, RegisterMIPS::S5),
+        s6,
+        s7,
+        fp,
+        sp10,
+        this_ptr,
+        hwnd: match label {
+            "afx_wndproc" | "dispatch_entry" | "lookup_entry" => {
+                Some(read_mips_reg(uc, RegisterMIPS::A0))
+            }
+            "lookup_return" => Some(read_mips_reg(uc, RegisterMIPS::A1)),
+            "route_entry" | "message_map_result" | "vtable_call" => {
+                Some(read_mips_reg(uc, RegisterMIPS::A1))
+            }
+            _ => None,
+        },
+        msg: match label {
+            "afx_wndproc" | "dispatch_entry" => Some(read_mips_reg(uc, RegisterMIPS::A1)),
+            "route_entry" | "message_map_result" | "vtable_call" => {
+                Some(read_mips_reg(uc, RegisterMIPS::A2))
+            }
+            _ => None,
+        },
+        wparam: match label {
+            "afx_wndproc" => Some(read_mips_reg(uc, RegisterMIPS::A2)),
+            "dispatch_entry" | "route_entry" | "message_map_result" | "vtable_call" => {
+                Some(read_mips_reg(uc, RegisterMIPS::A3))
+            }
+            _ => None,
+        },
+        lparam: match label {
+            "afx_wndproc" => Some(read_mips_reg(uc, RegisterMIPS::A3)),
+            "route_entry" => sp10,
+            "message_map_result" | "vtable_call" => sp10,
+            _ => None,
+        },
+        vtable_slot_98,
+    };
+    let mut traces = traces.borrow_mut();
+    if traces.len() == UNICORN_MFC_DISPATCH_TRACE_LIMIT {
+        traces.remove(0);
+    }
+    traces.push(trace);
+}
+
+#[cfg(feature = "unicorn")]
+fn mfc_dispatch_probe_label(pc: u32) -> Option<&'static str> {
+    match pc {
+        0x6004_eba8 => Some("afx_wndproc"),
+        0x6002_5204 => Some("dispatch_entry"),
+        0x6002_50e8 => Some("lookup_entry"),
+        0x6002_5114 => Some("lookup_return"),
+        0x6002_4d94 => Some("route_entry"),
+        0x6002_4e3c => Some("message_map_result"),
+        0x6002_4ea0 => Some("vtable_call"),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn record_inavi_display_trace<D>(
+    traces: &std::rc::Rc<std::cell::RefCell<Vec<UnicornInaviDisplayTrace>>>,
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    pc: u32,
+) {
+    use unicorn_engine::RegisterMIPS;
+
+    let Some(label) = inavi_display_probe_label(pc) else {
+        return;
+    };
+    let sp = read_mips_reg(uc, RegisterMIPS::SP);
+    let a0 = read_mips_reg(uc, RegisterMIPS::A0);
+    let s7 = read_mips_reg(uc, RegisterMIPS::S7);
+    let fp = read_mips_reg(uc, RegisterMIPS::FP);
+    let this_ptr = match label {
+        "child_wndproc_entry" | "renderer_init_entry" | "renderer_destroy_entry" => Some(a0),
+        "child_forward_controller" | "child_default_no_controller" => Some(s7),
+        "renderer_init_after_base"
+        | "renderer_init_store"
+        | "renderer_init_success"
+        | "renderer_clear" => Some(fp),
+        _ => None,
+    };
+    let sp10 = sp
+        .checked_add(0x10)
+        .and_then(|addr| read_unicorn_u32(uc, addr));
+    let trace = UnicornInaviDisplayTrace {
+        pc,
+        label,
+        ra: read_mips_reg(uc, RegisterMIPS::RA),
+        sp,
+        v0: read_mips_reg(uc, RegisterMIPS::V0),
+        a0,
+        a1: read_mips_reg(uc, RegisterMIPS::A1),
+        a2: read_mips_reg(uc, RegisterMIPS::A2),
+        a3: read_mips_reg(uc, RegisterMIPS::A3),
+        this_ptr,
+        hwnd: this_ptr
+            .and_then(|ptr| ptr.checked_add(0x20))
+            .and_then(|addr| read_unicorn_u32(uc, addr)),
+        msg: match label {
+            "child_wndproc_entry" | "renderer_init_entry" | "renderer_destroy_entry" => {
+                Some(read_mips_reg(uc, RegisterMIPS::A1))
+            }
+            "child_forward_controller" | "child_default_no_controller" => Some(fp),
+            _ => None,
+        },
+        wparam: match label {
+            "child_wndproc_entry" | "renderer_init_entry" | "renderer_destroy_entry" => {
+                Some(read_mips_reg(uc, RegisterMIPS::A2))
+            }
+            "child_forward_controller" | "child_default_no_controller" => {
+                Some(read_mips_reg(uc, RegisterMIPS::S5))
+            }
+            _ => None,
+        },
+        lparam: match label {
+            "child_wndproc_entry" | "renderer_init_entry" | "renderer_destroy_entry" => {
+                Some(read_mips_reg(uc, RegisterMIPS::A3))
+            }
+            "child_forward_controller" | "child_default_no_controller" => {
+                Some(read_mips_reg(uc, RegisterMIPS::S6))
+            }
+            "renderer_init_store" => sp10,
+            _ => None,
+        },
+        field_20: this_ptr
+            .and_then(|ptr| ptr.checked_add(0x20))
+            .and_then(|addr| read_unicorn_u32(uc, addr)),
+        field_44: this_ptr
+            .and_then(|ptr| ptr.checked_add(0x44))
+            .and_then(|addr| read_unicorn_u32(uc, addr)),
+        field_e8: this_ptr
+            .and_then(|ptr| ptr.checked_add(0xe8))
+            .and_then(|addr| read_unicorn_u32(uc, addr)),
+    };
+    let mut traces = traces.borrow_mut();
+    if traces.len() == UNICORN_INAVI_DISPLAY_TRACE_LIMIT {
+        traces.remove(0);
+    }
+    traces.push(trace);
+}
+
+#[cfg(feature = "unicorn")]
+fn inavi_display_probe_label(pc: u32) -> Option<&'static str> {
+    match pc {
+        0x0001_2860 => Some("child_wndproc_entry"),
+        0x0001_2890 => Some("child_forward_controller"),
+        0x0001_28f4 => Some("child_default_no_controller"),
+        0x0001_2924 => Some("renderer_init_entry"),
+        0x0001_2940 => Some("renderer_init_after_base"),
+        0x0001_2998 => Some("renderer_init_store"),
+        0x0001_29b8 => Some("renderer_init_success"),
+        0x0001_2a04 => Some("renderer_destroy_entry"),
+        0x0001_2a38 => Some("renderer_clear"),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn record_inavi_controller_trace<D>(
+    traces: &std::rc::Rc<std::cell::RefCell<Vec<UnicornInaviControllerTrace>>>,
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    pc: u32,
+) {
+    use unicorn_engine::RegisterMIPS;
+
+    let Some(label) = inavi_controller_probe_label(pc) else {
+        return;
+    };
+    let sp = read_mips_reg(uc, RegisterMIPS::SP);
+    let a0 = read_mips_reg(uc, RegisterMIPS::A0);
+    let s2 = read_mips_reg(uc, RegisterMIPS::S2);
+    let s3 = read_mips_reg(uc, RegisterMIPS::S3);
+    let s4 = read_mips_reg(uc, RegisterMIPS::S4);
+    let s6 = read_mips_reg(uc, RegisterMIPS::S6);
+    let s7 = read_mips_reg(uc, RegisterMIPS::S7);
+    let fp = read_mips_reg(uc, RegisterMIPS::FP);
+    let t4 = read_mips_reg(uc, RegisterMIPS::T4);
+    let t6 = read_mips_reg(uc, RegisterMIPS::T6);
+    let sp10 = sp
+        .checked_add(0x10)
+        .and_then(|addr| read_unicorn_u32(uc, addr));
+    let sp48 = sp
+        .checked_add(0x48)
+        .and_then(|addr| read_unicorn_u32(uc, addr));
+    let controller = match label {
+        "router_entry" | "classifier_call" => Some(a0),
+        _ => Some(s6),
+    };
+    let selected_obj = match label {
+        "selected_object" | "vtable_load" | "vtable_call" | "vtable_return" => Some(a0),
+        _ => None,
+    };
+    let selected_vtable = match label {
+        "vtable_call" => Some(t6),
+        _ => selected_obj.and_then(|obj| read_unicorn_u32(uc, obj)),
+    };
+    let selected_target = match label {
+        "vtable_call" => Some(t4),
+        _ => selected_vtable.and_then(|vtable| read_unicorn_u32(uc, vtable)),
+    };
+    let trace = UnicornInaviControllerTrace {
+        pc,
+        label,
+        ra: read_mips_reg(uc, RegisterMIPS::RA),
+        sp,
+        v0: read_mips_reg(uc, RegisterMIPS::V0),
+        a0,
+        a1: read_mips_reg(uc, RegisterMIPS::A1),
+        a2: read_mips_reg(uc, RegisterMIPS::A2),
+        a3: read_mips_reg(uc, RegisterMIPS::A3),
+        s2,
+        s3,
+        s4,
+        s6,
+        s7,
+        fp,
+        sp10,
+        sp48,
+        controller,
+        hwnd: match label {
+            "router_entry" => Some(read_mips_reg(uc, RegisterMIPS::A1)),
+            _ => Some(s2),
+        },
+        msg: match label {
+            "router_entry" => Some(read_mips_reg(uc, RegisterMIPS::A2)),
+            "classifier_entry" => Some(read_mips_reg(uc, RegisterMIPS::A1)),
+            _ => Some(fp),
+        },
+        wparam: match label {
+            "router_entry" => Some(read_mips_reg(uc, RegisterMIPS::A3)),
+            "classifier_entry" => Some(read_mips_reg(uc, RegisterMIPS::A2)),
+            _ => Some(s4),
+        },
+        lparam: match label {
+            "router_entry" => sp10,
+            _ => sp48,
+        },
+        classifier: match label {
+            "router_entry" | "classifier_call" => None,
+            "classifier_entry" => None,
+            "classifier_return" => Some(read_mips_reg(uc, RegisterMIPS::V0)),
+            _ => Some(s7),
+        },
+        selected_obj,
+        selected_vtable,
+        selected_target,
+    };
+    let mut traces = traces.borrow_mut();
+    if traces.len() == UNICORN_INAVI_CONTROLLER_TRACE_LIMIT {
+        traces.remove(0);
+    }
+    traces.push(trace);
+}
+
+#[cfg(feature = "unicorn")]
+fn inavi_controller_probe_label(pc: u32) -> Option<&'static str> {
+    match pc {
+        0x0001_a448 => Some("classifier_entry"),
+        0x0001_a558 => Some("router_entry"),
+        0x0001_a598 => Some("classifier_call"),
+        0x0001_a5a0 => Some("classifier_return"),
+        0x0001_a6f0 => Some("jump_table"),
+        0x0001_a714 => Some("select_bucket0"),
+        0x0001_a728 => Some("select_bucket1"),
+        0x0001_a73c => Some("select_bucket2"),
+        0x0001_a750 => Some("select_bucket3"),
+        0x0001_a764 => Some("select_bucket4"),
+        0x0001_a778 => Some("select_bucket5"),
+        0x0001_a788 => Some("selected_object"),
+        0x0001_a790 => Some("vtable_load"),
+        0x0001_a7a8 => Some("vtable_call"),
+        0x0001_a7b0 => Some("vtable_return"),
+        0x0001_a7b8 => Some("router_return"),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "unicorn")]
 fn should_trace_wndproc_message(msg: u32) -> bool {
     msg >= crate::ce::gwe::WM_USER
 }
@@ -5160,6 +5727,9 @@ fn capture_debug_snapshot<D>(
     last_messages: Vec<UnicornLastMessage>,
     mut last_wndproc_returns: Vec<UnicornWndProcReturn>,
     mut last_wndproc_call_traces: Vec<UnicornWndProcCallTrace>,
+    last_mfc_dispatch: Vec<UnicornMfcDispatchTrace>,
+    last_inavi_display: Vec<UnicornInaviDisplayTrace>,
+    last_inavi_controller: Vec<UnicornInaviControllerTrace>,
     last_code: Vec<UnicornLastCode>,
     last_blocks: Vec<UnicornLastBlock>,
     import_counts: Vec<UnicornImportCount>,
@@ -5202,6 +5772,9 @@ fn capture_debug_snapshot<D>(
         last_messages,
         last_wndproc_returns,
         last_wndproc_call_traces,
+        last_mfc_dispatch,
+        last_inavi_display,
+        last_inavi_controller,
         last_code,
         last_blocks,
         import_counts,
