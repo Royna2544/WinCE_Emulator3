@@ -52,6 +52,8 @@ pub struct UnicornDebugSnapshot {
     pub a3: u32,
     pub t9: u32,
     pub trap_address: Option<u32>,
+    pub trap_module_kind: Option<crate::emulator::imports::ImportModuleKind>,
+    pub trap_module_name: Option<String>,
     pub trap_name: Option<String>,
     pub trap_ordinal: Option<u32>,
     pub memory_fault: Option<UnicornMemoryFault>,
@@ -2678,6 +2680,12 @@ impl std::fmt::Display for UnicornDebugSnapshot {
         )?;
         if let Some(trap_address) = self.trap_address {
             write!(f, " trap=0x{trap_address:08x}")?;
+            if let Some(kind) = self.trap_module_kind {
+                write!(f, " trap_kind={kind:?}")?;
+            }
+            if let Some(module) = self.trap_module_name.as_deref() {
+                write!(f, " trap_module={module}")?;
+            }
             if let Some(ordinal) = self.trap_ordinal {
                 write!(f, " ordinal={ordinal}")?;
             }
@@ -4728,6 +4736,8 @@ fn capture_debug_snapshot<D>(
         a3: read_mips_reg(uc, RegisterMIPS::A3),
         t9: read_mips_reg(uc, RegisterMIPS::T9),
         trap_address: trap.map(|trap| trap.address),
+        trap_module_kind: trap.map(|trap| trap.module_kind),
+        trap_module_name: trap.map(|trap| trap.module_name.clone()),
         trap_name: trap.and_then(|trap| trap.name.clone()),
         trap_ordinal: trap.and_then(|trap| trap.ordinal),
         memory_fault,

@@ -22,15 +22,17 @@
   `MultiByteToWideChar @196`; the framebuffer dump is still all zero. Use
   release/longer bounded slices and implement the next real GWE/GDI/resource
   behavior the trace demands before expecting guest drawing.
-- Continue from the new post-jump-table import frontier. The latest release
+- Continue from the new post-jump-table exit frontier. The latest release
   mounted run gets past `__nes @2047`, `__litofp @2032`, `__ll_div @2005`,
   `GetTimeZoneInformation @27`, `SetForegroundWindow @702`,
   `InputDebugCharW @595`, and the previous trampoline corruption of the iNavi
-  halfword jump table at `0x000ebbf0`; it now stops cleanly at a COREDLL import
-  trap for ordinal `1943` (`pc=0x7fff0900`, `ra=0x600110e4`). The framebuffer
-  dump `target\inavi-release-jumptable.ppm` is still all zero. Inspect the SDK
-  MFC callsite and implement the next real CE-referenced ordinal behavior
-  before expecting guest drawing.
+  halfword jump table at `0x000ebbf0`. The `ADBSetAccountProperties @1943`
+  frontier now returns `FALSE`/`ERROR_NOT_SUPPORTED` and the app proceeds to an
+  encoded `TerminateProcess` exit (`caller=0x0048fa90`, process `0x42`,
+  `exit_code=0`). The framebuffer dump `target\inavi-release-adb1943.ppm` is
+  still all zero. Disassemble the caller-side exit decision and determine which
+  preceding CE/MFC resource, window, or service result is causing the app to
+  shut down before useful drawing.
 - Replace launch-stub behavior for commctrl, WINSOCK, and OLE imports with
   real subsystem-backed implementations as import traces demand. Keep MFC on
   the loaded SDK DLL path only; do not add emulator MFC stubs.

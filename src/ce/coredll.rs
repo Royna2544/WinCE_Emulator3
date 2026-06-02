@@ -1168,6 +1168,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
+        ORD_ADBSET_ACCOUNT_PROPERTIES => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+            Some(CoredllValue::Bool(false))
+        }
         ORD_INPUT_DEBUG_CHAR_W => Some(CoredllValue::U32(OEM_DEBUG_READ_NODATA)),
         ORD_QUERY_PERFORMANCE_FREQUENCY => {
             Some(CoredllValue::Bool(write_performance_counter_value(
@@ -10197,6 +10203,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "SetTimer",
     "KillTimer",
     "RegisterGesture",
+    "ADBSetAccountProperties",
     "GetSystemTime",
     "GetLocalTime",
     "GetSystemTimeAsFileTime",

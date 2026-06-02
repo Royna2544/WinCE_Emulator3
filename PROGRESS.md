@@ -535,6 +535,15 @@
   that CPU exception and stops cleanly at a COREDLL import trap for ordinal
   `1943` (`pc=0x7fff0900`, `ra=0x600110e4`); the framebuffer dump is still all
   zero.
+- Unicorn stop snapshots now print the current trap module kind and module name
+  in addition to the trap address/ordinal, confirming the `0x7fff0900` stop as
+  `COREDLL.dll` ordinal `1943`. That launch-demanded
+  `ADBSetAccountProperties` path now returns `FALSE` with
+  `ERROR_NOT_SUPPORTED`, modeling an absent CE account database rather than
+  reporting an emulator import stop. The mounted release run gets past both
+  observed ordinal-1943 calls and now exits through the guest encoded
+  `TerminateProcess` path (`caller=0x0048fa90`, process `0x42`,
+  `exit_code=0`); `target\inavi-release-adb1943.ppm` is still all zero.
 
 ## Current State
 
@@ -555,10 +564,11 @@
   previous `GetSystemTime @25` trap, the previous soft-float `__nes @2047`/
   `__litofp @2032` traps, the MIPS `__ll_div @2005` helper frontier,
   `GetTimeZoneInformation @27`, `SetForegroundWindow @702`, and
-  `InputDebugCharW @595`, and the trampoline scanner's halfword jump-table
-  corruption bug. The current concrete stop is a COREDLL import trap for
-  ordinal `1943` (`pc=0x7fff0900`, `ra=0x600110e4`) reached from SDK MFC code;
-  the framebuffer remains blank. A
+  `InputDebugCharW @595`, the trampoline scanner's halfword jump-table
+  corruption bug, and the launch-demanded `ADBSetAccountProperties @1943`
+  import. The current concrete stop is an encoded guest `TerminateProcess`
+  path (`caller=0x0048fa90`, process `0x42`, `exit_code=0`); the framebuffer
+  remains blank. A
   generic virtual framebuffer is now
   attached to the emulator boundary, generic virtual presenter/desktop
   interfaces exist for host
