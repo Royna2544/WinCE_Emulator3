@@ -1856,6 +1856,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_WAVE_OUT_WRITE => Some(CoredllValue::MmResult(wave_out_write_raw(
             kernel,
             memory,
+            thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
@@ -3783,6 +3784,7 @@ fn wave_out_unprepare_header_raw<M: CoredllGuestMemory>(
 fn wave_out_write_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
+    thread_id: u32,
     handle: u32,
     header_ptr: u32,
 ) -> MmResult {
@@ -3792,13 +3794,26 @@ fn wave_out_write_raw<M: CoredllGuestMemory>(
     let Some(len) = read_guest_u32(kernel, memory, 0, header_ptr.wrapping_add(4)) else {
         return MMSYSERR_INVALHANDLE;
     };
-    let result = kernel.audio.wave_out_write(
-        handle,
-        WaveBuffer {
-            guest_ptr: data_ptr,
-            len,
-        },
-    );
+    if kernel.audio.output(handle).is_none() {
+        return MMSYSERR_INVALHANDLE;
+    }
+    let buffer = WaveBuffer {
+        guest_ptr: data_ptr,
+        len,
+    };
+    let payload = if kernel.audio.has_sinks() && len > 0 {
+        let Some(payload) = read_guest_bytes(kernel, memory, thread_id, data_ptr, len) else {
+            return MMSYSERR_INVALHANDLE;
+        };
+        Some(payload)
+    } else {
+        None
+    };
+    let result = if let Some(payload) = payload.as_deref() {
+        kernel.audio.wave_out_write_pcm(handle, buffer, payload)
+    } else {
+        kernel.audio.wave_out_write(handle, buffer)
+    };
     if result != MMSYSERR_NOERROR {
         return result;
     }

@@ -40,10 +40,10 @@ shortcuts:
   or bounded self-stop states
 - remote-control API state for touch/key input, GPS/NMEA serial injection, IMU
   state, pause/resume, status JSON, logs, and audio chunks
-- audio sink registry for host, websocket, and debug logging adapters; the host
-  boundary has a Windows `winmm` constructor through the `windows` crate, while
-  websocket PCM keeps per-client host-time cursors, partial late-join chunks,
-  and immediate flush markers for short sounds
+- audio sink registry for host, websocket, and debug logging adapters; `main`
+  registers the Windows `winmm` host-sink boundary when running on a Windows
+  host, while websocket PCM keeps per-client host-time cursors, partial
+  late-join chunks, and immediate flush markers for short sounds
 - resource and COM subsystem state for HRSRC-like resource lookup and
   CoInitializeEx/class/object lifecycle modeling
 - host-backed file API with contained guest-path translation
@@ -51,8 +51,8 @@ shortcuts:
 - kernel object handles
 - GWE-style windows and message queues
 - timer bookkeeping
-- unplugged waveOut adapter state with CE `WAVEFORMATEX`, `WAVEHDR`, and
-  `MMTIME` raw ordinal marshalling
+- waveOut adapter state with CE `WAVEFORMATEX`, `WAVEHDR`, `MMTIME`, and raw
+  ordinal PCM marshalling into registered audio sinks
 - memory map validation and a Unicorn MIPS adapter boundary
 
 Behavior references are tracked in `SOURCE_REFERENCES.md`.

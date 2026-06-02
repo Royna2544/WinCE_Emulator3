@@ -6,7 +6,7 @@ use std::{
 use wince_emulation_v3::{
     Result,
     ce::{
-        audio::WaveFormat,
+        audio::{HostAudioSink, WaveFormat},
         framebuffer::{Framebuffer, VirtualFramebuffer},
         gwe::WM_TIMER,
         kernel::CeKernel,
@@ -39,6 +39,7 @@ fn main() -> Result<()> {
     let args = Args::parse()?;
     let config = RuntimeConfig::load(&args.registry, &args.devices)?;
     let mut kernel = CeKernel::boot(config);
+    let host_audio_status = attach_host_audio(&mut kernel);
     if let Some(sdmmc_root) = args.sdmmc_root.as_ref() {
         kernel.mount_guest_root("\\SDMMC Disk", sdmmc_root);
     }
@@ -101,6 +102,7 @@ fn main() -> Result<()> {
         kernel.devices.default_baud(),
         kernel.devices.default_mode()
     );
+    println!("  host audio: {host_audio_status}");
     if let Some((hwnd, timer_id, wave_id)) = bootstrap_handles {
         println!("  bootstrap hwnd: 0x{hwnd:08x}");
         println!("  bootstrap timer: {timer_id}");
@@ -187,6 +189,36 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn attach_host_audio(kernel: &mut CeKernel) -> String {
+    #[cfg(windows)]
+    {
+        let sink = HostAudioSink::winmm("host", 32);
+        let status = match sink.backend() {
+            wince_emulation_v3::ce::audio::HostAudioBackend::Unplugged => {
+                "host sink is unplugged".to_owned()
+            }
+            wince_emulation_v3::ce::audio::HostAudioBackend::Winmm { device_count } => {
+                if sink.is_connected() {
+                    format!("winmm host sink registered ({device_count} output device(s))")
+                } else {
+                    "winmm host sink registered, but no output devices were reported".to_owned()
+                }
+            }
+        };
+        let registered = kernel.audio.register_sink(sink);
+        if registered {
+            status
+        } else {
+            "winmm host sink already registered".to_owned()
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = kernel;
+        "not registered on non-Windows host".to_owned()
+    }
 }
 
 impl Args {

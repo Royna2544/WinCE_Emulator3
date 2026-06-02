@@ -1,7 +1,7 @@
 use wince_emulation_v3::{
     Result,
     ce::{
-        audio::MMSYSERR_NOERROR,
+        audio::{HostAudioSink, MMSYSERR_NOERROR},
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
             ORD_WAVE_OUT_CLOSE, ORD_WAVE_OUT_GET_NUM_DEVS, ORD_WAVE_OUT_GET_PLAYBACK_RATE,
@@ -23,6 +23,9 @@ fn coredll_raw_waveout_ordinals_use_unplugged_audio_adapter() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
     let mut kernel = CeKernel::boot(config);
+    let mut host_sink = HostAudioSink::named_unplugged("host-test", 4);
+    host_sink.connect();
+    assert!(kernel.audio.register_sink(host_sink));
     let mut memory = TestGuestMemory::default();
     let thread_id = 12;
     let handle_ptr = 0x1_5000;
@@ -34,6 +37,7 @@ fn coredll_raw_waveout_ordinals_use_unplugged_audio_adapter() -> Result<()> {
     memory.map_words(handle_ptr, 1);
     memory.write_wave_format_pcm(format_ptr, 2, 44_100);
     memory.map_words(header_ptr, 8);
+    memory.write_bytes(0x2_0000, &[0x10; 2048]);
     memory.write_word(header_ptr, 0x2_0000);
     memory.write_word(header_ptr + 4, 2048);
     memory.write_word(header_ptr + 16, 0);
@@ -98,6 +102,7 @@ fn coredll_raw_waveout_ordinals_use_unplugged_audio_adapter() -> Result<()> {
     ));
     assert_eq!(memory.read_u32(header_ptr + 16)? & 0x10, 0x10);
     assert_eq!(kernel.audio.output(wave).unwrap().submitted_bytes, 2048);
+    assert_eq!(kernel.audio.queued_sink_chunk_count("host-test"), Some(1));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

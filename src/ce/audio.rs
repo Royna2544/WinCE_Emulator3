@@ -145,10 +145,12 @@ pub enum WaveOutState {
     Closed,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct AudioSystem {
     next_id: u32,
     outputs: BTreeMap<u32, WaveOutDevice>,
+    sinks: AudioSinkRegistry,
+    next_sink_pts_ms: u64,
 }
 
 impl Default for AudioSystem {
@@ -156,6 +158,19 @@ impl Default for AudioSystem {
         Self {
             next_id: 1,
             outputs: BTreeMap::new(),
+            sinks: AudioSinkRegistry::default(),
+            next_sink_pts_ms: 0,
+        }
+    }
+}
+
+impl Clone for AudioSystem {
+    fn clone(&self) -> Self {
+        Self {
+            next_id: self.next_id,
+            outputs: self.outputs.clone(),
+            sinks: AudioSinkRegistry::default(),
+            next_sink_pts_ms: self.next_sink_pts_ms,
         }
     }
 }
@@ -197,6 +212,17 @@ impl AudioSystem {
         } else {
             MMSYSERR_INVALHANDLE
         }
+    }
+
+    pub fn wave_out_write_pcm(&mut self, id: u32, buffer: WaveBuffer, payload: &[u8]) -> MmResult {
+        let Some(format) = self.outputs.get(&id).map(|output| output.format.clone()) else {
+            return MMSYSERR_INVALHANDLE;
+        };
+        if !self.write(id, buffer) {
+            return MMSYSERR_INVALHANDLE;
+        }
+        self.submit_pcm_to_sinks(payload, &format, true);
+        MMSYSERR_NOERROR
     }
 
     pub fn write(&mut self, id: u32, buffer: WaveBuffer) -> bool {
@@ -334,6 +360,49 @@ impl AudioSystem {
 
     pub fn output(&self, id: u32) -> Option<&WaveOutDevice> {
         self.outputs.get(&id)
+    }
+
+    pub fn register_sink<S>(&mut self, sink: S) -> bool
+    where
+        S: AudioSink + 'static,
+    {
+        self.sinks.register(sink)
+    }
+
+    pub fn unregister_sink(&mut self, name: &str) -> bool {
+        self.sinks.unregister(name)
+    }
+
+    pub fn has_sinks(&self) -> bool {
+        !self.sinks.is_empty()
+    }
+
+    pub fn sink_names(&self) -> Vec<String> {
+        self.sinks.sink_names()
+    }
+
+    pub fn queued_sink_chunk_count(&self, name: &str) -> Option<usize> {
+        self.sinks.queued_chunk_count(name)
+    }
+
+    pub fn flush_sinks(&mut self) {
+        self.sinks.flush_all();
+    }
+
+    fn submit_pcm_to_sinks(
+        &mut self,
+        payload: &[u8],
+        format: &WaveFormat,
+        flush: bool,
+    ) -> Vec<AudioSinkSubmit> {
+        if payload.is_empty() || self.sinks.is_empty() {
+            return Vec::new();
+        }
+        let duration_ms = format.duration_ms_for_bytes(payload.len());
+        let pts_ms = self.next_sink_pts_ms;
+        self.next_sink_pts_ms = self.next_sink_pts_ms.saturating_add(u64::from(duration_ms));
+        self.sinks
+            .submit_pcm(payload.to_vec(), pts_ms, duration_ms, flush)
     }
 }
 
@@ -943,6 +1012,30 @@ mod tests {
         registry.flush_all();
     }
 
+    #[test]
+    fn wave_write_pcm_fans_out_to_registered_host_sink() {
+        let mut audio = AudioSystem::default();
+        let mut host = HostAudioSink::named_unplugged("host-test", 2);
+        host.connect();
+        assert!(audio.register_sink(host));
+
+        let id = audio.open_wave_out(WaveFormat::pcm_16bit(2, 44_100));
+        assert_eq!(
+            audio.wave_out_write_pcm(
+                id,
+                WaveBuffer {
+                    guest_ptr: 0x4000,
+                    len: 8
+                },
+                &[0, 1, 2, 3, 4, 5, 6, 7]
+            ),
+            MMSYSERR_NOERROR
+        );
+
+        assert_eq!(audio.output(id).unwrap().submitted_bytes, 8);
+        assert_eq!(audio.queued_sink_chunk_count("host-test"), Some(1));
+    }
+
     #[cfg(debug_assertions)]
     #[test]
     fn logging_audio_sink_records_debug_events() {
@@ -974,5 +1067,14 @@ impl WaveFormat {
 
     fn is_pcm(&self) -> bool {
         self.format_tag == 1
+    }
+
+    fn duration_ms_for_bytes(&self, bytes: usize) -> u32 {
+        if bytes == 0 || self.avg_bytes_per_sec == 0 {
+            return 1;
+        }
+        let duration = ((bytes as u128 * 1000) + u128::from(self.avg_bytes_per_sec) - 1)
+            / u128::from(self.avg_bytes_per_sec);
+        duration.clamp(1, u128::from(u32::MAX)) as u32
     }
 }

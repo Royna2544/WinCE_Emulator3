@@ -138,6 +138,9 @@
     shared PCM submission/flush contract.
   - `HostAudioSink` is an explicit host adapter boundary with an unplugged
     default and a Windows `winmm` constructor gated through the `windows` crate.
+  - `AudioSystem` owns the sink registry; raw `waveOutWrite` now copies guest
+    `WAVEHDR` PCM into registered sinks, and `main` registers the Windows host
+    sink on Windows hosts.
   - `WebSocketAudioSink` owns per-client cursors, PCM chunk sequencing, PTS,
     queue limits, and flush-marked chunks for the remote audio path;
     middle-joined websocket devices attach at the host audio timeline and

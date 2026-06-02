@@ -76,10 +76,10 @@
 
 - Add host presentation/streaming of framebuffer snapshots through `Presenter`
   implementations after guest drawing writes meaningful pixels.
-- Keep actual host audio playback unplugged until guest callback/import trap
-  semantics are traced; current waveOut work is a virtual adapter only, with an
-  `AudioSinkRegistry`, a Windows `winmm` host-sink boundary, websocket sink, and
-  debug logging sink ready for later binding.
+- Add real low-latency host playback draining behind `HostAudioSink`; current
+  waveOut work copies guest PCM into registered sinks and `main` registers the
+  Windows `winmm` host-sink boundary, but the host backend still retains chunks
+  instead of owning a full playback queue.
 - Implement socket behavior for WINSOCK imports.
 
 ## Parked
