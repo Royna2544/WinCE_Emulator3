@@ -199,7 +199,8 @@ fn attach_host_audio(kernel: &mut CeKernel) -> String {
             wince_emulation_v3::ce::audio::HostAudioBackend::Unplugged => {
                 "host sink is unplugged".to_owned()
             }
-            wince_emulation_v3::ce::audio::HostAudioBackend::Winmm { device_count } => {
+            wince_emulation_v3::ce::audio::HostAudioBackend::Winmm(backend) => {
+                let device_count = backend.device_count();
                 if sink.is_connected() {
                     format!("winmm host sink registered ({device_count} output device(s))")
                 } else {

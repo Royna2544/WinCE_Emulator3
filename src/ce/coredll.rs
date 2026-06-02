@@ -4,7 +4,7 @@ use crate::{
     ce::{
         audio::{
             MMSYSERR_BADDEVICEID, MMSYSERR_INVALHANDLE, MMSYSERR_NOERROR, MmResult,
-            WAVERR_BADFORMAT, WaveBuffer, WaveFormat,
+            WAVERR_BADFORMAT, WaveBuffer, WaveFormat, WaveOutCallback,
         },
         cemath::{CeMathCall, CeMathValue},
         coredll_ordinals::{self, *},
@@ -3681,6 +3681,7 @@ const WAVE_FORMAT_QUERY: u32 = 0x0001;
 const WHDR_DONE: u32 = 0x0000_0001;
 const WHDR_PREPARED: u32 = 0x0000_0002;
 const WHDR_INQUEUE: u32 = 0x0000_0010;
+const CALLBACK_EVENT: u32 = 0x0005_0000;
 const TIME_MS: u32 = 0x0001;
 const TIME_SAMPLES: u32 = 0x0002;
 const TIME_BYTES: u32 = 0x0004;
@@ -3709,6 +3710,7 @@ fn wave_out_open_raw<M: CoredllGuestMemory>(
     let handle_ptr = raw_arg(args, 0);
     let device_id = raw_arg(args, 1);
     let format_ptr = raw_arg(args, 2);
+    let callback = raw_arg(args, 3);
     let open_flags = raw_arg(args, 5);
     if device_id != 0 && device_id != WAVE_MAPPER {
         return MMSYSERR_BADDEVICEID;
@@ -3727,6 +3729,11 @@ fn wave_out_open_raw<M: CoredllGuestMemory>(
         Ok(handle) => handle,
         Err(status) => return status,
     };
+    if open_flags & CALLBACK_EVENT != 0 {
+        kernel
+            .audio
+            .set_wave_out_callback(handle, Some(WaveOutCallback::Event(callback)));
+    }
     if !write_guest_u32(kernel, memory, thread_id, handle_ptr, handle) {
         return MMSYSERR_INVALHANDLE;
     }
@@ -3823,8 +3830,15 @@ fn wave_out_write_raw<M: CoredllGuestMemory>(
             memory,
             0,
             header_ptr.wrapping_add(16),
-            (flags | WHDR_INQUEUE) & !WHDR_DONE,
+            flags | WHDR_INQUEUE | WHDR_DONE,
         );
+    }
+    if let Some(WaveOutCallback::Event(event_handle)) = kernel
+        .audio
+        .output(handle)
+        .and_then(|output| output.callback)
+    {
+        let _ = kernel.set_event(event_handle);
     }
     MMSYSERR_NOERROR
 }

@@ -1,4 +1,6 @@
 use std::collections::{BTreeMap, VecDeque};
+#[cfg(windows)]
+use std::mem::size_of;
 
 pub type MmResult = u32;
 
@@ -22,6 +24,11 @@ pub struct WaveFormat {
 pub struct WaveBuffer {
     pub guest_ptr: u32,
     pub len: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaveOutCallback {
+    Event(u32),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +65,7 @@ pub trait AudioSink {
     fn submit_pcm(
         &mut self,
         payload: &[u8],
+        format: &WaveFormat,
         pts_ms: u64,
         duration_ms: u32,
         flush: bool,
@@ -70,7 +78,7 @@ pub struct AudioSinkRegistry {
     sinks: BTreeMap<String, Box<dyn AudioSink>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct HostAudioSink {
     name: String,
     backend: HostAudioBackend,
@@ -79,13 +87,30 @@ pub struct HostAudioSink {
     max_chunks: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum HostAudioBackend {
     Unplugged,
     #[cfg(windows)]
-    Winmm {
-        device_count: u32,
-    },
+    Winmm(WinmmAudioBackend),
+}
+
+#[cfg(windows)]
+pub struct WinmmAudioBackend {
+    device_count: u32,
+    output: Option<WinmmWaveOut>,
+}
+
+#[cfg(windows)]
+struct WinmmWaveOut {
+    handle: windows::Win32::Media::Audio::HWAVEOUT,
+    format: WaveFormat,
+    queued: VecDeque<WinmmQueuedBuffer>,
+}
+
+#[cfg(windows)]
+struct WinmmQueuedBuffer {
+    header: Box<windows::Win32::Media::Audio::WAVEHDR>,
+    _payload: Box<[u8]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,6 +153,7 @@ pub struct LoggingAudioEvent {
 pub struct WaveOutDevice {
     pub id: u32,
     pub format: WaveFormat,
+    pub callback: Option<WaveOutCallback>,
     pub volume: u32,
     pub pitch: u32,
     pub playback_rate: u32,
@@ -184,6 +210,7 @@ impl AudioSystem {
             WaveOutDevice {
                 id,
                 format,
+                callback: None,
                 volume: 0xffff_ffff,
                 pitch: 0x0001_0000,
                 playback_rate: 0x0001_0000,
@@ -362,6 +389,14 @@ impl AudioSystem {
         self.outputs.get(&id)
     }
 
+    pub fn set_wave_out_callback(&mut self, id: u32, callback: Option<WaveOutCallback>) -> bool {
+        let Some(output) = self.outputs.get_mut(&id) else {
+            return false;
+        };
+        output.callback = callback;
+        true
+    }
+
     pub fn register_sink<S>(&mut self, sink: S) -> bool
     where
         S: AudioSink + 'static,
@@ -402,7 +437,7 @@ impl AudioSystem {
         let pts_ms = self.next_sink_pts_ms;
         self.next_sink_pts_ms = self.next_sink_pts_ms.saturating_add(u64::from(duration_ms));
         self.sinks
-            .submit_pcm(payload.to_vec(), pts_ms, duration_ms, flush)
+            .submit_pcm(payload.to_vec(), format, pts_ms, duration_ms, flush)
     }
 }
 
@@ -458,6 +493,7 @@ impl AudioSinkRegistry {
     pub fn submit_pcm(
         &mut self,
         payload: Vec<u8>,
+        format: &WaveFormat,
         pts_ms: u64,
         duration_ms: u32,
         flush: bool,
@@ -465,7 +501,7 @@ impl AudioSinkRegistry {
         self.sinks
             .values_mut()
             .map(|sink| {
-                let sequence = sink.submit_pcm(&payload, pts_ms, duration_ms, flush);
+                let sequence = sink.submit_pcm(&payload, format, pts_ms, duration_ms, flush);
                 AudioSinkSubmit {
                     sink: sink.name().to_owned(),
                     accepted: sequence.is_some(),
@@ -512,7 +548,7 @@ impl HostAudioSink {
         let device_count = unsafe { windows::Win32::Media::Audio::waveOutGetNumDevs() };
         Self {
             name: name.into(),
-            backend: HostAudioBackend::Winmm { device_count },
+            backend: HostAudioBackend::Winmm(WinmmAudioBackend::new(device_count)),
             connected: device_count > 0,
             submitted: VecDeque::new(),
             max_chunks: max_chunks.max(1),
@@ -529,6 +565,7 @@ impl HostAudioSink {
 
     pub fn unplug(&mut self) {
         self.connected = false;
+        self.backend.unplug();
         self.submitted.clear();
     }
 
@@ -537,17 +574,36 @@ impl HostAudioSink {
     }
 
     pub fn submit_pcm(&mut self, payload: Vec<u8>, pts_ms: u64, duration_ms: u32) -> Option<u64> {
-        self.submit_pcm_with_flush(payload, pts_ms, duration_ms, true)
+        self.submit_pcm_with_format(
+            payload,
+            &WaveFormat::pcm_16bit(2, 44_100),
+            pts_ms,
+            duration_ms,
+        )
+    }
+
+    pub fn submit_pcm_with_format(
+        &mut self,
+        payload: Vec<u8>,
+        format: &WaveFormat,
+        pts_ms: u64,
+        duration_ms: u32,
+    ) -> Option<u64> {
+        self.submit_pcm_with_flush(payload, format, pts_ms, duration_ms, true)
     }
 
     fn submit_pcm_with_flush(
         &mut self,
         payload: Vec<u8>,
+        format: &WaveFormat,
         pts_ms: u64,
         duration_ms: u32,
         flush: bool,
     ) -> Option<u64> {
         if !self.connected || payload.is_empty() {
+            return None;
+        }
+        if !self.backend.submit_pcm(&payload, format) {
             return None;
         }
         let sequence = self
@@ -578,6 +634,263 @@ impl HostAudioSink {
     }
 }
 
+impl HostAudioBackend {
+    #[cfg(windows)]
+    pub fn device_count(&self) -> Option<u32> {
+        match self {
+            HostAudioBackend::Unplugged => None,
+            HostAudioBackend::Winmm(backend) => Some(backend.device_count()),
+        }
+    }
+
+    fn submit_pcm(&mut self, payload: &[u8], format: &WaveFormat) -> bool {
+        match self {
+            HostAudioBackend::Unplugged => true,
+            #[cfg(windows)]
+            HostAudioBackend::Winmm(backend) => backend.submit_pcm(payload, format),
+        }
+    }
+
+    fn unplug(&mut self) {
+        match self {
+            HostAudioBackend::Unplugged => {}
+            #[cfg(windows)]
+            HostAudioBackend::Winmm(backend) => backend.close(),
+        }
+    }
+
+    fn flush(&mut self) {
+        match self {
+            HostAudioBackend::Unplugged => {}
+            #[cfg(windows)]
+            HostAudioBackend::Winmm(backend) => backend.reclaim_done(),
+        }
+    }
+}
+
+#[cfg(windows)]
+impl std::fmt::Debug for WinmmAudioBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WinmmAudioBackend")
+            .field("device_count", &self.device_count)
+            .field("open", &self.output.is_some())
+            .field(
+                "queued",
+                &self
+                    .output
+                    .as_ref()
+                    .map(|output| output.queued.len())
+                    .unwrap_or(0),
+            )
+            .finish()
+    }
+}
+
+#[cfg(windows)]
+impl WinmmAudioBackend {
+    fn new(device_count: u32) -> Self {
+        Self {
+            device_count,
+            output: None,
+        }
+    }
+
+    pub fn device_count(&self) -> u32 {
+        self.device_count
+    }
+
+    fn submit_pcm(&mut self, payload: &[u8], format: &WaveFormat) -> bool {
+        if self.device_count == 0 || payload.is_empty() {
+            return false;
+        }
+        let format = format.clone();
+        if self
+            .output
+            .as_ref()
+            .is_none_or(|output| output.format != format)
+        {
+            self.close();
+            let Some(output) = WinmmWaveOut::open(format) else {
+                return false;
+            };
+            self.output = Some(output);
+        }
+        let Some(output) = self.output.as_mut() else {
+            return false;
+        };
+        output.submit_pcm(payload)
+    }
+
+    fn reclaim_done(&mut self) {
+        if let Some(output) = self.output.as_mut() {
+            output.reclaim_done();
+        }
+    }
+
+    fn close(&mut self) {
+        self.output.take();
+    }
+}
+
+#[cfg(windows)]
+impl std::fmt::Debug for WinmmWaveOut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WinmmWaveOut")
+            .field("format", &self.format)
+            .field("queued", &self.queued.len())
+            .finish()
+    }
+}
+
+#[cfg(windows)]
+impl WinmmWaveOut {
+    fn open(format: WaveFormat) -> Option<Self> {
+        use windows::Win32::Media::Audio::{CALLBACK_NULL, HWAVEOUT, WAVE_MAPPER, WAVEFORMATEX};
+
+        let native_format = WAVEFORMATEX {
+            wFormatTag: format.format_tag,
+            nChannels: format.channels,
+            nSamplesPerSec: format.samples_per_sec,
+            nAvgBytesPerSec: format.avg_bytes_per_sec,
+            nBlockAlign: format.block_align,
+            wBitsPerSample: format.bits_per_sample,
+            cbSize: 0,
+        };
+        let mut handle = HWAVEOUT::default();
+        let result = unsafe {
+            windows::Win32::Media::Audio::waveOutOpen(
+                Some(&mut handle),
+                WAVE_MAPPER,
+                &native_format,
+                0,
+                0,
+                CALLBACK_NULL,
+            )
+        };
+        if result != MMSYSERR_NOERROR || handle.is_invalid() {
+            tracing::warn!(
+                target: "ce.audio",
+                result,
+                "failed to open host winmm waveOut"
+            );
+            return None;
+        }
+        Some(Self {
+            handle,
+            format,
+            queued: VecDeque::new(),
+        })
+    }
+
+    fn submit_pcm(&mut self, payload: &[u8]) -> bool {
+        use windows::{
+            Win32::Media::Audio::{WAVEHDR, waveOutPrepareHeader, waveOutWrite},
+            core::PSTR,
+        };
+
+        self.reclaim_done();
+
+        let mut payload = payload.to_vec().into_boxed_slice();
+        let mut queued = WinmmQueuedBuffer {
+            header: Box::new(WAVEHDR {
+                lpData: PSTR(payload.as_mut_ptr()),
+                dwBufferLength: payload.len().min(u32::MAX as usize) as u32,
+                dwBytesRecorded: 0,
+                dwUser: 0,
+                dwFlags: 0,
+                dwLoops: 0,
+                lpNext: std::ptr::null_mut(),
+                reserved: 0,
+            }),
+            _payload: payload,
+        };
+        let header = queued.header.as_mut() as *mut WAVEHDR;
+        let header_size = size_of::<WAVEHDR>() as u32;
+        let prepare = unsafe { waveOutPrepareHeader(self.handle, header, header_size) };
+        if prepare != MMSYSERR_NOERROR {
+            tracing::warn!(
+                target: "ce.audio",
+                result = prepare,
+                "failed to prepare host winmm waveOut buffer"
+            );
+            return false;
+        }
+        let write = unsafe { waveOutWrite(self.handle, header, header_size) };
+        if write != MMSYSERR_NOERROR {
+            unsafe {
+                let _ = windows::Win32::Media::Audio::waveOutUnprepareHeader(
+                    self.handle,
+                    header,
+                    header_size,
+                );
+            }
+            tracing::warn!(
+                target: "ce.audio",
+                result = write,
+                "failed to write host winmm waveOut buffer"
+            );
+            return false;
+        }
+        self.queued.push_back(queued);
+        self.trim_backlog();
+        true
+    }
+
+    fn reclaim_done(&mut self) {
+        while self.queued.front().is_some_and(WinmmQueuedBuffer::is_done) {
+            if let Some(mut done) = self.queued.pop_front() {
+                done.unprepare(self.handle);
+            }
+        }
+    }
+
+    fn trim_backlog(&mut self) {
+        const MAX_WINMM_BUFFERS: usize = 16;
+        if self.queued.len() <= MAX_WINMM_BUFFERS {
+            return;
+        }
+        unsafe {
+            let _ = windows::Win32::Media::Audio::waveOutReset(self.handle);
+        }
+        while let Some(mut queued) = self.queued.pop_front() {
+            queued.unprepare(self.handle);
+        }
+    }
+}
+
+#[cfg(windows)]
+impl Drop for WinmmWaveOut {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = windows::Win32::Media::Audio::waveOutReset(self.handle);
+        }
+        while let Some(mut queued) = self.queued.pop_front() {
+            queued.unprepare(self.handle);
+        }
+        unsafe {
+            let _ = windows::Win32::Media::Audio::waveOutClose(self.handle);
+        }
+    }
+}
+
+#[cfg(windows)]
+impl WinmmQueuedBuffer {
+    fn is_done(&self) -> bool {
+        let flags = unsafe { std::ptr::addr_of!((*self.header).dwFlags).read_unaligned() };
+        flags & windows::Win32::Media::Audio::WHDR_DONE != 0
+    }
+
+    fn unprepare(&mut self, handle: windows::Win32::Media::Audio::HWAVEOUT) {
+        unsafe {
+            let _ = windows::Win32::Media::Audio::waveOutUnprepareHeader(
+                handle,
+                self.header.as_mut() as *mut windows::Win32::Media::Audio::WAVEHDR,
+                size_of::<windows::Win32::Media::Audio::WAVEHDR>() as u32,
+            );
+        }
+    }
+}
+
 impl AudioSink for HostAudioSink {
     fn name(&self) -> &str {
         &self.name
@@ -586,14 +899,16 @@ impl AudioSink for HostAudioSink {
     fn submit_pcm(
         &mut self,
         payload: &[u8],
+        format: &WaveFormat,
         pts_ms: u64,
         duration_ms: u32,
         flush: bool,
     ) -> Option<u64> {
-        self.submit_pcm_with_flush(payload.to_vec(), pts_ms, duration_ms, flush)
+        self.submit_pcm_with_flush(payload.to_vec(), format, pts_ms, duration_ms, flush)
     }
 
     fn flush(&mut self) {
+        self.backend.flush();
         if let Some(chunk) = self.submitted.back() {
             tracing::debug!(
                 target: "ce.audio",
@@ -803,6 +1118,7 @@ impl AudioSink for WebSocketAudioSink {
     fn submit_pcm(
         &mut self,
         payload: &[u8],
+        _format: &WaveFormat,
         pts_ms: u64,
         duration_ms: u32,
         flush: bool,
@@ -846,6 +1162,7 @@ impl AudioSink for LoggingAudioSink {
     fn submit_pcm(
         &mut self,
         payload: &[u8],
+        _format: &WaveFormat,
         pts_ms: u64,
         duration_ms: u32,
         flush: bool,
@@ -1004,7 +1321,8 @@ mod tests {
         assert!(registry.register(WebSocketAudioSink::named("remote", 2)));
         assert!(!registry.register(HostAudioSink::named_unplugged("remote", 2)));
 
-        let results = registry.submit_pcm(vec![1, 2, 3, 4], 100, 20, true);
+        let format = WaveFormat::pcm_16bit(2, 44_100);
+        let results = registry.submit_pcm(vec![1, 2, 3, 4], &format, 100, 20, true);
         assert_eq!(results.len(), 2);
         assert!(results.iter().all(|result| result.accepted));
         assert_eq!(registry.queued_chunk_count("host-debug"), Some(1));
@@ -1041,9 +1359,10 @@ mod tests {
     fn logging_audio_sink_records_debug_events() {
         let mut sink = LoggingAudioSink::new("log", 2);
 
-        assert_eq!(sink.submit_pcm(&[1, 2], 10, 0, true), Some(1));
-        assert_eq!(sink.submit_pcm(&[3, 4], 11, 1, false), Some(2));
-        assert_eq!(sink.submit_pcm(&[5, 6], 12, 1, true), Some(3));
+        let format = WaveFormat::pcm_16bit(2, 44_100);
+        assert_eq!(sink.submit_pcm(&[1, 2], &format, 10, 0, true), Some(1));
+        assert_eq!(sink.submit_pcm(&[3, 4], &format, 11, 1, false), Some(2));
+        assert_eq!(sink.submit_pcm(&[5, 6], &format, 12, 1, true), Some(3));
         let events = sink.events().cloned().collect::<Vec<_>>();
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].sequence, 2);
