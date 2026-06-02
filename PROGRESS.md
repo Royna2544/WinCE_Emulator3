@@ -153,6 +153,13 @@
     800x480 RGB565 primary surface, and can write a temporary PPM dump
   - `main` owns the virtual framebuffer, updates the remote/input framebuffer
     size from it, and passes it into the Unicorn execution boundary
+- Added generic virtual presentation and desktop boundaries:
+  - `Presenter` describes how to present any `Framebuffer` trait object, and
+    `VirtualPresenter` snapshots framebuffer pixels plus dirty rectangles
+  - `Desktop` describes create/move/remove/window-enumeration operations, and
+    `VirtualDesktop` provides an in-memory virtual implementation
+  - These interfaces are host-side architecture boundaries only; they are not
+    CE/MFC behavior and do not create a host window yet
 - Unicorn launch prep is wired:
   - parsed PE images can be mapped into the Unicorn memory plan
   - `--dll-search-dir` can load SDK DLL images such as `mfcce400.dll`; the main
@@ -270,6 +277,17 @@
   `GetMessageW @861` `blocked_get_message` diagnostic. The trace still does not
   reach `BeginPaint`, `GetDC`, `GetWindowDC`, `SetTimer`, or `KillTimer`, so
   this is not GUI success.
+- Re-running the 1,000,000-instruction bounded launch after the virtual
+  presenter/desktop boundary addition still returns at the same SDK MFC
+  message-pump frontier: `CallWindowProcW @285`, `DefWindowProcW @264`,
+  `GetWindow @251`, `PeekMessageW @864`, and final `GetMessageW @861`
+  `blocked_get_message`. This interface work did not change launch behavior or
+  produce a visible GUI.
+- The large `tests/basic_subsystems.rs` integration suite is now split into
+  subsystem-focused files for broad smoke coverage, COREDLL dispatch, raw
+  kernel/thread/sync, raw memory/file/find, raw GWE/resource/window behavior,
+  and raw waveOut marshalling. Shared guest-memory helpers live under
+  `tests/support/`.
 
 ## Current State
 
@@ -279,8 +297,10 @@
   create-time `WM_CREATE` callout, synthesize and dispatch the first `WM_PAINT`,
   enter guest `CallWindowProcW` targets, and then reach an empty-queue
   `GetMessageW` diagnostic snapshot. A generic virtual framebuffer is now
-  attached to the emulator boundary, but guest drawing/blit behavior is not
-  connected yet and this must not be treated as GUI success.
+  attached to the emulator boundary, and generic virtual presenter/desktop
+  interfaces exist for later host presentation/window management, but guest
+  drawing/blit behavior is not connected yet and this must not be treated as
+  GUI success.
 - Instruction-limited snapshots show the post-`WM_PAINT` path entering SDK MFC
   thread-local state and message pre-translation (`CThreadLocalObject::GetData`
   and later `CWnd::WalkPreTranslateTree`) rather than reaching guest drawing

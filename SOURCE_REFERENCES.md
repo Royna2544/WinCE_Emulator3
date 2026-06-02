@@ -142,6 +142,9 @@ anchors, not app-specific shortcuts.
   - `GXDeviceInfo` exposes a framebuffer pointer, stride, width, height, and
     bits-per-pixel. The Rust `Framebuffer` trait keeps only that generic
     byte-surface boundary; HWND/HDC/GDI behavior remains outside the trait.
+  - The Rust `Presenter` and `Desktop` traits are host architecture boundaries
+    layered around that generic byte-surface model. They deliberately do not
+    define CE/MFC message, class, HWND, HDC, or GDI semantics.
 
 - MFC window layout behavior:
   `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/wincore.cpp`

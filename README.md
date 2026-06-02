@@ -23,6 +23,9 @@ shortcuts:
 - generic virtual framebuffer trait with an in-memory 800x480 RGB565
   implementation, dirty-rectangle tracking, optional PPM dumps, and no
   dependency on HWND/HDC/GDI concepts
+- generic presenter and desktop traits with virtual implementations, kept as
+  host-side boundaries for presenting framebuffers and managing virtual windows
+  without creating a host window yet
 - COREDLL ordinal dispatcher backed by checked-in Rust `ORD_*` constants, a
   static export table, and an ordinal `match`
 - COREDLL ordinal plan entries split by subsystem with implemented-vs-stubbed
@@ -53,6 +56,9 @@ shortcuts:
 - memory map validation and a Unicorn MIPS adapter boundary
 
 Behavior references are tracked in `SOURCE_REFERENCES.md`.
+Integration tests are split by subsystem under `tests/` so raw COREDLL
+dispatcher, kernel/thread, memory/file, GWE, waveOut, and broad smoke coverage
+can grow independently.
 
 Run the base bootstrap:
 
@@ -78,6 +84,7 @@ bounded diagnostic snapshot instead of relying on an external timeout.
 The current bounded target run creates and shows the main HWND, delivers the
 create-time `WM_CREATE` callout, synthesizes and dispatches the first
 `WM_PAINT` through the SDK MFC window procedure, and then returns through the
-emulator's empty-queue `GetMessageW` diagnostic. There is now a virtual
-framebuffer boundary, but guest drawing is not connected to it yet, so this is
-a useful frontier, not a completed GUI launch.
+emulator's empty-queue `GetMessageW @861` diagnostic. There are now virtual
+framebuffer, presenter, and desktop boundaries, but guest drawing is not
+connected to them yet, so this is a useful frontier, not a completed GUI
+launch.

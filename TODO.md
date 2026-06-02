@@ -4,8 +4,8 @@
 
 - Continue the launch path after the first synthetic `WM_PAINT` dispatch by
   connecting CE-referenced GDI/surface drawing and blit behavior to the generic
-  virtual framebuffer. Do not treat the timeout-running paint loop as GUI
-  success.
+  virtual framebuffer and then to the generic presenter boundary. Do not treat
+  the timeout-running paint loop as GUI success.
 - Replace launch-stub behavior for commctrl, WINSOCK, and OLE imports with
   real subsystem-backed implementations as import traces demand. Keep MFC on
   the loaded SDK DLL path only; do not add emulator MFC stubs.
@@ -36,6 +36,9 @@
 - Parse PE resource directories into `ResourceSystem` so `FindResourceW` and
   `LoadStringW` use the mapped guest image data rather than test-registered
   virtual resources.
+- When GWE/DC behavior is ready, adapt window state to the generic `Desktop`
+  trait boundary without replacing CE/MFC message, class, or window semantics
+  with host-window shortcuts.
 
 ## Next
 
@@ -53,8 +56,8 @@
 
 ## Later
 
-- Add host presentation/streaming of framebuffer snapshots after guest drawing
-  writes meaningful pixels.
+- Add host presentation/streaming of framebuffer snapshots through `Presenter`
+  implementations after guest drawing writes meaningful pixels.
 - Keep actual host audio playback unplugged until guest callback/import trap
   semantics are traced; current waveOut work is a virtual adapter only, with an
   `AudioSinkRegistry`, a Windows `winmm` host-sink boundary, websocket sink, and

@@ -20,11 +20,14 @@
     `WM_CREATE` callout with a CE SDK `CREATESTRUCTW` lParam for
     `hwnd=0x00020000`, but still reaches the same empty-queue
     `GetMessageW @861` diagnostic without hitting `BeginPaint`, `GetDC`,
-    `GetWindowDC`, `SetTimer`, or `KillTimer`. The framebuffer-plumbed run
-    prints an attached 800x480 RGB565 virtual framebuffer before CPU execution,
-    but no guest drawing/blit imports have produced visible output. The earlier
-    `pc=0`/reserved-instruction and decoded `TerminateProcess` startup-cleanup
-    states are no longer the current stop.
+    `GetWindowDC`, `SetTimer`, or `KillTimer`. A later 1,000,000-instruction
+    bounded run after adding the generic presenter/desktop boundary still
+    returned at the same `GetMessageW @861` `blocked_get_message` frontier. The
+    framebuffer-plumbed run prints an attached 800x480 RGB565 virtual
+    framebuffer before CPU execution, but no guest drawing/blit imports have
+    produced visible output. The earlier `pc=0`/reserved-instruction and
+    decoded `TerminateProcess` startup-cleanup states are no longer the current
+    stop.
   - Status: active; `TlsCall` now returns real CE-style slots,
     `CallWindowProcW` now enters guest window-procedure targets, and
     `CreateWindowExW` now delivers the first create-time message, but the
