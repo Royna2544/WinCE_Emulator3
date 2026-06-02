@@ -231,10 +231,12 @@ pub(crate) fn memset_raw<M: CoredllGuestMemory>(
     if len == 0 {
         return dest;
     }
-    let bytes = vec![value as u8; len as usize];
-    if write_guest_bytes(kernel, memory, thread_id, dest, &bytes) {
+    if memory.fill_bytes(dest, value as u8, len).is_ok() {
         dest
     } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         0
     }
 }

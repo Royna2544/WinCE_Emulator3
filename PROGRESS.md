@@ -462,6 +462,13 @@
   snapshot stops at `pc=0x0001354c` with repeated SDK CRT `memset @1047`/
   `swprintf @1097` activity in the import ring, so the current frontier is
   startup initialization past system time, not an unimplemented raw import.
+- Guest-memory byte helpers now have bulk read/write/fill methods, and the
+  Unicorn-backed implementation maps them to `mem_read`/`mem_write` so raw CRT
+  `memcpy`/`memset` no longer have to cross the memory trait one byte at a
+  time. The focused memory/file/CRT test still passes. A follow-up 15,000 ms
+  mounted iNavi wall-clock run stopped at the same `pc=0x0001354c`/blank
+  framebuffer frontier, so this is a generic startup-cost cleanup, not the
+  visible-GUI breakthrough.
 
 ## Current State
 

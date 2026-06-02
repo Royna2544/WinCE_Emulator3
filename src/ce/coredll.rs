@@ -301,6 +301,27 @@ pub trait CoredllGuestMemory {
     fn write_u32(&mut self, addr: u32, value: u32) -> Result<()>;
     fn read_u16(&self, addr: u32) -> Result<u16>;
     fn write_u16(&mut self, addr: u32, value: u16) -> Result<()>;
+
+    fn read_bytes(&self, addr: u32, out: &mut [u8]) -> Result<()> {
+        for (offset, byte) in out.iter_mut().enumerate() {
+            *byte = self.read_u8(addr.wrapping_add(offset as u32))?;
+        }
+        Ok(())
+    }
+
+    fn write_bytes(&mut self, addr: u32, bytes: &[u8]) -> Result<()> {
+        for (offset, byte) in bytes.iter().copied().enumerate() {
+            self.write_u8(addr.wrapping_add(offset as u32), byte)?;
+        }
+        Ok(())
+    }
+
+    fn fill_bytes(&mut self, addr: u32, value: u8, len: u32) -> Result<()> {
+        for offset in 0..len {
+            self.write_u8(addr.wrapping_add(offset), value)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -9283,17 +9304,12 @@ pub(crate) fn read_guest_bytes<M: CoredllGuestMemory>(
     addr: u32,
     len: u32,
 ) -> Option<Vec<u8>> {
-    let mut bytes = Vec::with_capacity(len as usize);
-    for offset in 0..len {
-        match memory.read_u8(addr.wrapping_add(offset)) {
-            Ok(byte) => bytes.push(byte),
-            Err(_) => {
-                kernel
-                    .threads
-                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-                return None;
-            }
-        }
+    let mut bytes = vec![0; len as usize];
+    if memory.read_bytes(addr, &mut bytes).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
     }
     Some(bytes)
 }
@@ -9305,16 +9321,11 @@ pub(crate) fn write_guest_bytes<M: CoredllGuestMemory>(
     addr: u32,
     bytes: &[u8],
 ) -> bool {
-    for (offset, byte) in bytes.iter().copied().enumerate() {
-        if memory
-            .write_u8(addr.wrapping_add(offset as u32), byte)
-            .is_err()
-        {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-            return false;
-        }
+    if memory.write_bytes(addr, bytes).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
     }
     true
 }

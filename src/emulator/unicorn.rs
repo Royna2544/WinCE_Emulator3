@@ -4735,6 +4735,37 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
             .map_err(|err| Error::Backend(format!("write_u16 0x{addr:08x}: {err:?}")))?;
         Ok(())
     }
+
+    fn read_bytes(&self, addr: u32, out: &mut [u8]) -> Result<()> {
+        self.uc
+            .mem_read(u64::from(addr), out)
+            .map_err(|err| Error::Backend(format!("read_bytes 0x{addr:08x}: {err:?}")))?;
+        Ok(())
+    }
+
+    fn write_bytes(&mut self, addr: u32, bytes: &[u8]) -> Result<()> {
+        self.uc
+            .mem_write(u64::from(addr), bytes)
+            .map_err(|err| Error::Backend(format!("write_bytes 0x{addr:08x}: {err:?}")))?;
+        Ok(())
+    }
+
+    fn fill_bytes(&mut self, addr: u32, value: u8, len: u32) -> Result<()> {
+        const FILL_CHUNK: usize = 4096;
+
+        let chunk = [value; FILL_CHUNK];
+        let mut remaining = len as usize;
+        let mut cursor = addr;
+        while remaining != 0 {
+            let count = remaining.min(FILL_CHUNK);
+            self.uc
+                .mem_write(u64::from(cursor), &chunk[..count])
+                .map_err(|err| Error::Backend(format!("fill_bytes 0x{cursor:08x}: {err:?}")))?;
+            cursor = cursor.wrapping_add(count as u32);
+            remaining -= count;
+        }
+        Ok(())
+    }
 }
 
 #[cfg(all(test, feature = "unicorn"))]
