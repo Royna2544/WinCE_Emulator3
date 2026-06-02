@@ -1295,6 +1295,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
+        ORD_GET_PROCESS_ID => Some(CoredllValue::U32(get_process_id_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_GET_THREAD_TIMES => Some(CoredllValue::Bool(get_thread_times_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -5196,6 +5201,21 @@ fn get_process_version_raw(
 ) -> u32 {
     kernel.threads.set_last_error(thread_id, 0);
     0x0004_0014
+}
+
+fn get_process_id_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {
+    match kernel.process_id(handle) {
+        Some(process_id) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            process_id
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            0
+        }
+    }
 }
 
 fn get_thread_times_raw<M: CoredllGuestMemory>(

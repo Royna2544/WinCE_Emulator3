@@ -412,6 +412,13 @@ impl HandleTable {
         Some(process.exit_code)
     }
 
+    pub fn process_id(&self, handle: u32) -> Option<u32> {
+        let Ok(KernelObject::Process(process)) = self.get(handle) else {
+            return None;
+        };
+        Some(process.process_id)
+    }
+
     pub fn set_event(&mut self, handle: u32) -> bool {
         let Ok(KernelObject::Event(event)) = self.get_mut(handle) else {
             return false;

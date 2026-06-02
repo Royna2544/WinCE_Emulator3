@@ -401,6 +401,10 @@ impl CeKernel {
         self.handles.process_exit_code(handle)
     }
 
+    pub fn process_id(&self, handle: u32) -> Option<u32> {
+        self.handles.process_id(handle)
+    }
+
     pub fn terminate_process(&mut self, handle: u32, exit_code: u32) -> bool {
         self.handles.mark_process_exited(handle, exit_code)
     }
