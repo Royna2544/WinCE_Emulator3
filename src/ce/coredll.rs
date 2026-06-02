@@ -375,14 +375,7 @@ impl CoredllExportTable {
     pub fn from_static_ordinals() -> Self {
         let mut table = Self::empty();
         for ordinal in COREDLL_EXPORTS {
-            if coredll_ordinals::is_current_map_export(ordinal) {
-                table.insert(CoredllExport::from_static_ordinal(ordinal));
-            }
-        }
-        for ordinal in SDK_ORDINALS {
-            if coredll_ordinals::is_current_map_export(ordinal) {
-                table.insert(CoredllExport::from_static_ordinal(ordinal));
-            }
+            table.insert(CoredllExport::from_static_ordinal(ordinal));
         }
         table
     }

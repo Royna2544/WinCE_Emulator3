@@ -349,10 +349,7 @@ fn normalize_coredll_import_ordinal(ordinal: u32) -> u32 {
     if CoredllExportTable::resolve_static_ordinal(ordinal).is_some() {
         return ordinal;
     }
-    if let Some(export) = crate::ce::coredll_ordinals::COREDLL_EXPORTS
-        .get(ordinal as usize)
-        .filter(|export| crate::ce::coredll_ordinals::is_current_map_export(export))
-    {
+    if let Some(export) = crate::ce::coredll_ordinals::lookup_export_index(ordinal) {
         return export.ordinal;
     }
     ordinal
