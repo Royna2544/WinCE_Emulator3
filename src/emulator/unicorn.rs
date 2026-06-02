@@ -402,11 +402,22 @@ impl UnicornMips {
         kernel: &mut CeKernel,
         framebuffer: &mut dyn Framebuffer,
     ) -> Result<()> {
+        self.run_until_import_trap_with_framebuffer_limit(kernel, framebuffer, 0)
+    }
+
+    pub fn run_until_import_trap_with_framebuffer_limit(
+        &mut self,
+        kernel: &mut CeKernel,
+        framebuffer: &mut dyn Framebuffer,
+        instruction_limit: usize,
+    ) -> Result<()> {
         let info = framebuffer.info();
         kernel.remote.set_framebuffer_size(info.width, info.height);
+        #[cfg(not(feature = "unicorn"))]
+        let _ = instruction_limit;
         #[cfg(feature = "unicorn")]
         {
-            return self.run_with_unicorn(kernel, framebuffer);
+            return self.run_with_unicorn(kernel, framebuffer, instruction_limit);
         }
 
         #[cfg(not(feature = "unicorn"))]
@@ -461,6 +472,7 @@ impl UnicornMips {
         &mut self,
         kernel: &mut CeKernel,
         framebuffer: &mut dyn Framebuffer,
+        instruction_limit: usize,
     ) -> Result<()> {
         use std::{cell::RefCell, rc::Rc};
         use unicorn_engine::{
@@ -812,7 +824,7 @@ impl UnicornMips {
         let entry = self
             .entry
             .ok_or_else(|| Error::Backend("no PE entry point has been loaded".to_owned()))?;
-        let result = uc.emu_start(u64::from(entry), 0, 0, 0);
+        let result = uc.emu_start(u64::from(entry), 0, 0, instruction_limit);
         self.last_debug = Some(capture_debug_snapshot(
             &uc,
             &self.import_traps,

@@ -25,6 +25,7 @@ struct Args {
     dll_search_dirs: Vec<PathBuf>,
     sdmmc_root: Option<PathBuf>,
     framebuffer_dump: Option<PathBuf>,
+    cpu_instruction_limit: usize,
     run_cpu: bool,
 }
 
@@ -162,8 +163,11 @@ fn main() -> Result<()> {
     }
 
     if args.run_cpu {
-        if let Err(err) = cpu.run_until_import_trap_with_framebuffer(&mut kernel, &mut framebuffer)
-        {
+        if let Err(err) = cpu.run_until_import_trap_with_framebuffer_limit(
+            &mut kernel,
+            &mut framebuffer,
+            args.cpu_instruction_limit,
+        ) {
             if let Some(snapshot) = cpu.last_debug_snapshot() {
                 eprintln!("  Unicorn debug: {snapshot}");
             }
@@ -193,6 +197,7 @@ impl Args {
         let mut dll_search_dirs = Vec::new();
         let mut sdmmc_root = None;
         let mut framebuffer_dump = None;
+        let mut cpu_instruction_limit = 0;
         let mut run_cpu = false;
 
         let mut args = std::env::args().skip(1);
@@ -216,6 +221,9 @@ impl Args {
                 "--framebuffer-dump" => {
                     framebuffer_dump = Some(next_path(&mut args, "--framebuffer-dump")?);
                 }
+                "--cpu-instruction-limit" => {
+                    cpu_instruction_limit = next_usize(&mut args, "--cpu-instruction-limit")?;
+                }
                 "--run-cpu" => {
                     run_cpu = true;
                 }
@@ -238,6 +246,7 @@ impl Args {
             dll_search_dirs,
             sdmmc_root,
             framebuffer_dump,
+            cpu_instruction_limit,
             run_cpu,
         })
     }
@@ -249,9 +258,18 @@ fn next_path(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<Path
         .ok_or_else(|| wince_emulation_v3::Error::InvalidArgument(format!("{flag} needs a path")))
 }
 
+fn next_usize(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<usize> {
+    let value = args.next().ok_or_else(|| {
+        wince_emulation_v3::Error::InvalidArgument(format!("{flag} needs a value"))
+    })?;
+    value
+        .parse()
+        .map_err(|err| wince_emulation_v3::Error::InvalidArgument(format!("{flag}: {err}")))
+}
+
 fn print_help() {
     println!(
-        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--image INavi.exe] [--dll-search-dir DIR]... [--sdmmc-root DIR] [--framebuffer-dump OUT.ppm] [--run-cpu]"
+        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--image INavi.exe] [--dll-search-dir DIR]... [--sdmmc-root DIR] [--framebuffer-dump OUT.ppm] [--cpu-instruction-limit N] [--run-cpu]"
     );
 }
 

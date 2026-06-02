@@ -22,8 +22,9 @@
   - Status: active; `TlsCall` now returns real CE-style slots, but a short debug
     trace still does not reach later drawing imports, and a 30-second non-debug
     run still times out after the startup/framebuffer/PE mapping output. Next
-    work is to identify the post-TLS stall and continue toward CE-referenced
-    GDI/DC/surface drawing and blit behavior through the guest path.
+    work is to use bounded instruction snapshots to identify the post-TLS SDK
+    MFC path and continue toward CE-referenced GDI/DC/surface drawing and blit
+    behavior through the guest path.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch

@@ -72,6 +72,9 @@ CPU execution is behind the `unicorn` feature:
 cargo run --features unicorn -- --image D:\INAVI_Emulator\INAVI\INavi\INavi.exe --dll-search-dir "C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii" --sdmmc-root D:\INAVI_Emulator\INAVI --framebuffer-dump target\last-framebuffer.ppm --run-cpu
 ```
 
+Use `--cpu-instruction-limit N` with `--run-cpu` to make Unicorn return a
+bounded diagnostic snapshot instead of relying on an external timeout.
+
 The current bounded target run creates and shows the main HWND, synthesizes and
 dispatches the first `WM_PAINT` through the SDK MFC window procedure, and then
 continues until the timeout kills it. There is now a virtual framebuffer

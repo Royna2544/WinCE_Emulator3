@@ -34,7 +34,9 @@
 
 ## Next
 
-- Add bounded run tooling and structured logs.
+- Extend bounded run tooling with structured trace summaries now that
+  `--cpu-instruction-limit N` can return snapshots without external process
+  kills.
 - Add an HTTP/WebSocket transport over the Rust `CeRemote` API state when the
   host runtime is ready for remote UI/audio streaming; audio transport should
   honor the sink's per-client cursors and flush-marked chunks immediately.

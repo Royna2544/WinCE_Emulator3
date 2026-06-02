@@ -235,6 +235,12 @@
   imports, and a 30-second non-debug run still times out after the normal
   startup/framebuffer/PE mapping output. This is progress in startup TLS setup
   rather than GUI success.
+- Added bounded Unicorn instruction-count tooling via
+  `--cpu-instruction-limit N`. A 10,000-instruction run now returns an emulator
+  snapshot instead of needing an external kill, and a 100,000-instruction run
+  reaches SDK MFC code around `0x6004f6a0..0x6004f8dc` with PC near
+  `0x600dd98c`. This is diagnostic tooling only; default `0` keeps the previous
+  unbounded CPU behavior.
 
 ## Current State
 
