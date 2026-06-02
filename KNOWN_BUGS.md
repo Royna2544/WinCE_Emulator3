@@ -84,9 +84,12 @@
     identified raw soft-float compare helpers `__lts` through `__ned` at
     ordinals 2042 through 2053; implementing those plus `__litofp @2032` and
     `__ultofp @2033` advances the release mounted run past the previous
-    `__nes @2047` and `__litofp @2032` traps. The current concrete stop is
-    now `__ll_div @2005` from SDK MFC (`pc=0x7fff06b0`, `ra=0x6000cd80`) with
-    64-bit arguments in `a0:a1` and `a2:a3`; the framebuffer is still all zero.
+    `__nes @2047` and `__litofp @2032` traps. Raw MIPS 64-bit helper dispatch
+    and `$v1` import returns then advance the run past `__ll_div @2005`, and
+    `GetTimeZoneInformation @27` support advances it past the time-zone query.
+    The current concrete stop is now `SetForegroundWindow @702`
+    (`pc=0x7fff1410`, `ra=0x0089ecec`, `a0=0x00020000`); the framebuffer is
+    still all zero.
   - Status: active; `TlsCall` now returns real CE-style slots,
     `CallWindowProcW` now enters guest window-procedure targets, and
     `CreateWindowExW` now delivers the first create-time message. Raw
@@ -102,12 +105,13 @@
     confirms the current frontier is a post-time long-running startup path with
     import-count evidence rather than an unimplemented import trap; sampled
     trace runs now push that frontier into app-side date/geometry work while the
-    framebuffer stays blank. The latest launch-demanded stop is the MIPS
-    `__ll_div @2005` helper after the newly connected soft-float helpers. Next
-    work is to confirm the 64-bit helper return ABI, implement the demanded
-    integer helpers, then continue with CE-referenced raw behavior that
-    advances the guest path toward the newly connected framebuffer drawing and
-    the remaining GDI/DC/surface drawing and blit imports.
+    framebuffer stays blank. The latest launch-demanded stop is
+    `SetForegroundWindow @702` after the newly connected soft-float helpers,
+    MIPS 64-bit helper returns, and `GetTimeZoneInformation @27`. Next work is
+    to route foreground activation through the GWE focus/active-window model,
+    then continue with CE-referenced raw behavior that advances the guest path
+    toward the newly connected framebuffer drawing and the remaining
+    GDI/DC/surface drawing and blit imports.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch

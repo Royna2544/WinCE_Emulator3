@@ -22,12 +22,13 @@
   `MultiByteToWideChar @196`; the framebuffer dump is still all zero. Use
   release/longer bounded slices and implement the next real GWE/GDI/resource
   behavior the trace demands before expecting guest drawing.
-- Implement the next launch-demanded MIPS helper ABI boundary. The latest
-  release mounted run gets past `__nes @2047` and `__litofp @2032` and now
-  traps at `__ll_div @2005` inside SDK MFC with 64-bit operands in
-  `a0:a1`/`a2:a3`. Inspect the caller around `ra=0x6000cd80`, confirm 64-bit
-  return register ordering, then route raw integer helpers through real
-  `cemath` semantics and write both result registers as needed.
+- Implement the next launch-demanded foreground/window activation boundary.
+  The latest release mounted run gets past `__nes @2047`, `__litofp @2032`,
+  `__ll_div @2005`, and `GetTimeZoneInformation @27`; it now traps at
+  `SetForegroundWindow @702` with `a0=0x00020000` on the MFC/app message path.
+  Route this through the existing GWE focus/active-window model instead of an
+  app-specific shortcut, then rerun the mounted slice and inspect the next
+  real frontier.
 - Replace launch-stub behavior for commctrl, WINSOCK, and OLE imports with
   real subsystem-backed implementations as import traces demand. Keep MFC on
   the loaded SDK DLL path only; do not add emulator MFC stubs.

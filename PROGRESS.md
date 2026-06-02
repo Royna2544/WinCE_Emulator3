@@ -496,6 +496,16 @@
   (`pc=0x7fff06b0`, `ra=0x6000cd80`, `a0:a1=0x00000000_09896800`,
   `a2:a3=0x00000000_00989680`). The framebuffer dump remains blank, so this
   is an ABI/helper frontier, not GUI success.
+- Raw MIPS 64-bit helper dispatch now routes signed/unsigned div/rem/mul and
+  shift helpers through `cemath`, and the Unicorn import trap writes high-word
+  `CeMathValue::I64`/`U64`/`F64` returns to `$v1` while preserving the existing
+  `$v0` path. A release mounted run gets past the previous `__ll_div @2005`
+  trap. `GetTimeZoneInformation @27` now writes a CE
+  `TIME_ZONE_INFORMATION`-layout UTC/no-DST struct and returns
+  `TIME_ZONE_ID_UNKNOWN`; the next release mounted run gets past ordinal 27 and
+  now stops at `SetForegroundWindow @702` (`pc=0x7fff1410`,
+  `ra=0x0089ecec`, `a0=0x00020000`). The framebuffer dump
+  `target\inavi-release-timezone.ppm` is still all zero.
 
 ## Current State
 
@@ -514,8 +524,9 @@
   stop long post-time runs through `--cpu-wall-clock-limit-ms` with a diagnostic
   snapshot plus framebuffer dump. The current mounted run progresses past the
   previous `GetSystemTime @25` trap, the previous soft-float `__nes @2047`/
-  `__litofp @2032` traps, and now stops at the next raw MIPS helper frontier,
-  `__ll_div @2005`, from loaded SDK MFC code. The framebuffer remains blank. A
+  `__litofp @2032` traps, the MIPS `__ll_div @2005` helper frontier, and
+  `GetTimeZoneInformation @27`. The current concrete stop is
+  `SetForegroundWindow @702`; the framebuffer remains blank. A
   generic virtual framebuffer is now
   attached to the emulator boundary, generic virtual presenter/desktop
   interfaces exist for host

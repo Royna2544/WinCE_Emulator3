@@ -8,7 +8,7 @@ use wince_emulation_v3::{
             ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_PROCESS_ID, ORD_GET_PROCESS_VERSION,
             ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_TIME, ORD_GET_SYSTEM_TIME_AS_FILE_TIME,
             ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY, ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT,
-            ORD_GET_VERSION_EX_W, ORD_INITIALIZE_CRITICAL_SECTION,
+            ORD_GET_TIME_ZONE_INFORMATION, ORD_GET_VERSION_EX_W, ORD_INITIALIZE_CRITICAL_SECTION,
             ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_LEAVE_CRITICAL_SECTION,
             ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_QUERY_PERFORMANCE_COUNTER,
@@ -310,6 +310,33 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     ));
     assert_ne!(memory.read_u32(file_time + 4)?, 0);
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    let time_zone = 0x2f60;
+    memory.map_bytes(time_zone, 172);
+    memory.map_halfwords(time_zone, 86);
+    memory.map_words(time_zone, 43);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_TIME_ZONE_INFORMATION,
+            [time_zone],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(time_zone)?, 0);
+    assert_eq!(memory.read_u16(time_zone + 4)?, b'U' as u16);
+    assert_eq!(memory.read_u16(time_zone + 6)?, b'T' as u16);
+    assert_eq!(memory.read_u16(time_zone + 8)?, b'C' as u16);
+    assert_eq!(memory.read_u16(time_zone + 10)?, 0);
+    assert_eq!(memory.read_u32(time_zone + 84)?, 0);
+    assert_eq!(memory.read_u32(time_zone + 168)?, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

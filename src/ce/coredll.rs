@@ -1162,6 +1162,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             write_current_file_time(kernel, memory, thread_id, raw_arg(args, 0));
             Some(CoredllValue::U32(0))
         }
+        ORD_GET_TIME_ZONE_INFORMATION => Some(CoredllValue::U32(write_time_zone_information(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_QUERY_PERFORMANCE_FREQUENCY => {
             Some(CoredllValue::Bool(write_performance_counter_value(
                 kernel,
@@ -3854,6 +3860,9 @@ const FILETIME_TICKS_PER_MILLISECOND: u64 = 10_000;
 const SYSTEM_TIME_BASE_YEAR: i32 = 2024;
 const SYSTEM_TIME_BASE_MONTH: i32 = 1;
 const SYSTEM_TIME_BASE_DAY: i32 = 1;
+const TIME_ZONE_INFORMATION_SIZE: usize = 172;
+const TIME_ZONE_ID_UNKNOWN: u32 = 0;
+const TIME_ZONE_ID_INVALID: u32 = u32::MAX;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SystemTimeFields {
@@ -3959,6 +3968,53 @@ fn write_current_file_time<M: CoredllGuestMemory>(
     {
         kernel.threads.set_last_error(thread_id, 0);
     }
+}
+
+fn write_time_zone_information<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    time_zone_information_ptr: u32,
+) -> u32 {
+    if time_zone_information_ptr == 0
+        || !write_guest_bytes(
+            kernel,
+            memory,
+            thread_id,
+            time_zone_information_ptr,
+            &[0; TIME_ZONE_INFORMATION_SIZE],
+        )
+        || !write_guest_i32(kernel, memory, thread_id, time_zone_information_ptr, 0)
+        || !write_guest_wide_fixed(
+            kernel,
+            memory,
+            thread_id,
+            time_zone_information_ptr.wrapping_add(4),
+            "UTC",
+            32,
+        )
+        || !write_guest_i32(
+            kernel,
+            memory,
+            thread_id,
+            time_zone_information_ptr.wrapping_add(84),
+            0,
+        )
+        || !write_guest_i32(
+            kernel,
+            memory,
+            thread_id,
+            time_zone_information_ptr.wrapping_add(168),
+            0,
+        )
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return TIME_ZONE_ID_INVALID;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    TIME_ZONE_ID_UNKNOWN
 }
 
 fn current_filetime_ticks(kernel: &CeKernel) -> u64 {
