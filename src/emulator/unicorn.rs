@@ -1717,6 +1717,7 @@ impl UnicornMips {
                         );
                         import.result = Some(result);
                         import.detail = import_detail_after_return(
+                            unsafe { &*kernel_ptr },
                             memory.uc,
                             trap.module_kind,
                             trap.ordinal,
@@ -6338,6 +6339,7 @@ fn snapshot_recent_unicorn_code(
 
 #[cfg(feature = "unicorn")]
 fn import_detail_after_return<D>(
+    kernel: &CeKernel,
     uc: &unicorn_engine::Unicorn<'_, D>,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
@@ -6352,6 +6354,64 @@ fn import_detail_after_return<D>(
             let buffer = args.get(1).copied().unwrap_or(0);
             let max_chars = args.get(2).copied().unwrap_or(0).min(260);
             read_unicorn_wide_z(uc, buffer, max_chars as usize).map(|path| format!("path={path}"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_CREATE_FILE_W) => {
+            let path_ptr = args.first().copied().unwrap_or(0);
+            let path = if result != u32::MAX {
+                kernel.path_for_handle(result)
+            } else {
+                read_unicorn_wide_z(uc, path_ptr, 260)
+            };
+            let access = args.get(1).copied().unwrap_or(0);
+            let disposition = args.get(4).copied().unwrap_or(0);
+            let mut parts = vec![
+                format!("access=0x{access:08x}"),
+                format!("disposition={disposition}"),
+            ];
+            if let Some(path) = path {
+                parts.push(format!("path={path:?}"));
+            }
+            Some(parts.join("/"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_READ_FILE) => {
+            let handle = args.first().copied().unwrap_or(0);
+            let requested = args.get(2).copied().unwrap_or(0);
+            let transferred = args
+                .get(3)
+                .copied()
+                .filter(|ptr| *ptr != 0)
+                .and_then(|ptr| read_unicorn_u32(uc, ptr));
+            let mut parts = vec![
+                format!("handle=0x{handle:08x}"),
+                format!("requested={requested}"),
+            ];
+            if let Some(transferred) = transferred {
+                parts.push(format!("transferred={transferred}"));
+            }
+            if let Some(path) = kernel.path_for_handle(handle) {
+                parts.push(format!("path={path:?}"));
+            }
+            Some(parts.join("/"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_SET_FILE_POINTER) => {
+            let handle = args.first().copied().unwrap_or(0);
+            let method = args.get(3).copied().unwrap_or(0);
+            let high = args
+                .get(2)
+                .copied()
+                .filter(|ptr| *ptr != 0)
+                .and_then(|ptr| read_unicorn_u32(uc, ptr))
+                .unwrap_or(0);
+            let position = ((high as u64) << 32) | result as u64;
+            let mut parts = vec![
+                format!("handle=0x{handle:08x}"),
+                format!("method={method}"),
+                format!("position=0x{position:08x}"),
+            ];
+            if let Some(path) = kernel.path_for_handle(handle) {
+                parts.push(format!("path={path:?}"));
+            }
+            Some(parts.join("/"))
         }
         Some(crate::ce::coredll_ordinals::ORD_WCSNCPY) => {
             let dest = args.first().copied().unwrap_or(0);

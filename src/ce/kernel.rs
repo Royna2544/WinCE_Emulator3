@@ -229,7 +229,7 @@ impl CeKernel {
         self.recent_file_ops.push(record);
     }
 
-    fn path_for_handle(&self, handle: u32) -> Option<String> {
+    pub fn path_for_handle(&self, handle: u32) -> Option<String> {
         match self.handles.get(handle).ok()? {
             KernelObject::File(file) => Some(file.guest_path.clone()),
             KernelObject::Device(device) => Some(device.guest_name.clone()),
