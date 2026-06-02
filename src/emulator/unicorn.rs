@@ -329,6 +329,8 @@ pub struct UnicornInaviControllerTrace {
     pub aux_vtable_source_value: Option<u32>,
     pub aux_store_addr: Option<u32>,
     pub aux_store_value: Option<u32>,
+    pub query_thunk_slot: Option<u32>,
+    pub query_thunk_target: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3141,6 +3143,12 @@ fn write_inavi_controller_traces(
         if let Some(aux_store_value) = trace.aux_store_value {
             write!(f, "/aux_store_value=0x{aux_store_value:08x}")?;
         }
+        if let Some(query_thunk_slot) = trace.query_thunk_slot {
+            write!(f, "/query_slot=0x{query_thunk_slot:08x}")?;
+        }
+        if let Some(query_thunk_target) = trace.query_thunk_target {
+            write!(f, "/query_target=0x{query_thunk_target:08x}")?;
+        }
     }
     Ok(())
 }
@@ -5039,6 +5047,7 @@ fn record_inavi_controller_trace<D>(
     let s6 = read_mips_reg(uc, RegisterMIPS::S6);
     let s7 = read_mips_reg(uc, RegisterMIPS::S7);
     let fp = read_mips_reg(uc, RegisterMIPS::FP);
+    let t0 = read_mips_reg(uc, RegisterMIPS::T0);
     let t4 = read_mips_reg(uc, RegisterMIPS::T4);
     let t6 = read_mips_reg(uc, RegisterMIPS::T6);
     let sp10 = sp
@@ -5199,6 +5208,15 @@ fn record_inavi_controller_trace<D>(
         "aux_ctor_store_vtable" => Some(read_mips_reg(uc, RegisterMIPS::T7)),
         _ => None,
     };
+    let query_thunk_slot = match label {
+        "app_query_thunk_entry" | "app_query_thunk_target" => read_unicorn_u32(uc, 0x0052_5068),
+        _ => None,
+    };
+    let query_thunk_target = match label {
+        "app_query_thunk_entry" => query_thunk_slot,
+        "app_query_thunk_target" => Some(t0),
+        _ => None,
+    };
     let trace = UnicornInaviControllerTrace {
         pc,
         label,
@@ -5272,6 +5290,8 @@ fn record_inavi_controller_trace<D>(
         aux_vtable_source_value,
         aux_store_addr,
         aux_store_value,
+        query_thunk_slot,
+        query_thunk_target,
     };
     if is_inavi_render_milestone_label(label) {
         let mut milestones = milestones.borrow_mut();
@@ -5289,7 +5309,10 @@ fn record_inavi_controller_trace<D>(
 
 #[cfg(feature = "unicorn")]
 fn is_inavi_render_milestone_label(label: &str) -> bool {
-    label.starts_with("render_") || label.starts_with("paint_") || label.starts_with("init_dialog_")
+    label.starts_with("render_")
+        || label.starts_with("paint_")
+        || label.starts_with("init_dialog_")
+        || label.starts_with("app_query_")
 }
 
 #[cfg(feature = "unicorn")]
@@ -5320,11 +5343,15 @@ fn inavi_controller_probe_label(pc: u32) -> Option<&'static str> {
         0x0002_c748 => Some("paint_end"),
         0x0002_bac8 => Some("init_dialog_surface_call"),
         0x0002_bc34 => Some("init_dialog_surface_entry"),
+        0x0002_bcd0 => Some("init_dialog_query_5237_call"),
         0x0002_bcd8 => Some("init_dialog_resource_check"),
+        0x0002_bcec => Some("init_dialog_query_56d0_call"),
         0x0002_bcfc => Some("init_dialog_after_resource"),
         0x0002_bda0 => Some("render_lifecycle_precall"),
         0x0002_bddc => Some("render_lifecycle_full_call"),
         0x0002_bde4 => Some("render_lifecycle_full_return"),
+        0x0001_360c => Some("app_query_thunk_entry"),
+        0x0001_3614 => Some("app_query_thunk_target"),
         0x0002_d158 => Some("wm_size_entry"),
         0x0002_d198 => Some("wm_size_render_vtable"),
         0x0002_d1a0 => Some("wm_size_render_call"),
