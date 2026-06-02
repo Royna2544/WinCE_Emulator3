@@ -7,13 +7,13 @@
   first solid `FillRect` framebuffer path, then verify those pixels through the
   generic presenter boundary. Do not treat the timeout-running paint loop as
   GUI success.
-- Implement the next observed raw COREDLL frontier: ordinal 25
-  (`GetSystemTime`). The latest mounted iNavi run now gets past the earlier
-  export-index `GetPaletteEntries` trap via real palette/DC state, preserves
-  SDK CRT ordinals such as `memset @1047` and `swprintf @1097` before
-  export-index fallback, and returns heap-backed `RegisterGesture @2724` state,
-  then stops at `GetSystemTime` with the framebuffer dump still diagnostic
-  rather than visible app output.
+- Instrument the post-time iNavi path. The latest mounted run now gets past the
+  earlier export-index `GetPaletteEntries` trap via real palette/DC state,
+  preserves SDK CRT ordinals such as `memset @1047` and `swprintf @1097` before
+  export-index fallback, returns heap-backed `RegisterGesture @2724` state, and
+  writes `GetSystemTime @25`, but a reduced-log 9,050,000-instruction run did
+  not return a bounded snapshot before the shell timeout and produced no
+  framebuffer dump.
 - Replace launch-stub behavior for commctrl, WINSOCK, and OLE imports with
   real subsystem-backed implementations as import traces demand. Keep MFC on
   the loaded SDK DLL path only; do not add emulator MFC stubs.
@@ -38,10 +38,11 @@
   `\SDMMC Disk\iNaviData` succeeds and creates `WCE_Solution_iNavi` plus an
   MFC child window. The latest rerun gets past the previous
   `GetPaletteEntries` trap, SDK CRT ordinal normalization bug, and
-  `RegisterGesture @2724` pointer-return path, and now stops on unimplemented
-  `GetSystemTime @25`; continue replacing raw COREDLL/GDI/DC behavior with
-  CE-referenced semantics that advance the path toward target framebuffer
-  drawing.
+  `RegisterGesture @2724` pointer-return path, and `GetSystemTime @25`; the
+  current post-time run needs a better bounded diagnostic before the next raw
+  import or guest loop can be named. Continue replacing raw COREDLL/GDI/DC
+  behavior with CE-referenced semantics that advance the path toward target
+  framebuffer drawing.
 - Use the new guest-WNDPROC return ring to compare creation-time sequencing
   against CE/MFC expectations. The latest diagnostic shows create/show/size/
   paint/idle messages returning `0`, `WM_PAINT` not reaching `BeginPaint`, MFC

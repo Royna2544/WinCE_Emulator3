@@ -1133,6 +1133,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::U32(0))
         }
         ORD_GET_TICK_COUNT => Some(CoredllValue::U32(kernel.timers.tick_count())),
+        ORD_GET_SYSTEM_TIME | ORD_GET_LOCAL_TIME => {
+            write_current_system_time(kernel, memory, thread_id, raw_arg(args, 0));
+            Some(CoredllValue::U32(0))
+        }
+        ORD_GET_SYSTEM_TIME_AS_FILE_TIME => {
+            write_current_file_time(kernel, memory, thread_id, raw_arg(args, 0));
+            Some(CoredllValue::U32(0))
+        }
         ORD_QUERY_PERFORMANCE_FREQUENCY => {
             Some(CoredllValue::Bool(write_performance_counter_value(
                 kernel,
@@ -3669,6 +3677,170 @@ fn file_handle_bool_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> b
     }
 }
 
+const FILETIME_TICKS_PER_SECOND: u64 = 10_000_000;
+const FILETIME_TICKS_PER_MILLISECOND: u64 = 10_000;
+const SYSTEM_TIME_BASE_YEAR: i32 = 2024;
+const SYSTEM_TIME_BASE_MONTH: i32 = 1;
+const SYSTEM_TIME_BASE_DAY: i32 = 1;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SystemTimeFields {
+    year: u16,
+    month: u16,
+    day_of_week: u16,
+    day: u16,
+    hour: u16,
+    minute: u16,
+    second: u16,
+    milliseconds: u16,
+}
+
+fn write_current_system_time<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    system_time_ptr: u32,
+) {
+    if system_time_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return;
+    }
+    let fields = system_time_fields_from_ticks(current_filetime_ticks(kernel));
+    let ok = write_guest_u16(kernel, memory, thread_id, system_time_ptr, fields.year)
+        && write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            system_time_ptr.wrapping_add(2),
+            fields.month,
+        )
+        && write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            system_time_ptr.wrapping_add(4),
+            fields.day_of_week,
+        )
+        && write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            system_time_ptr.wrapping_add(6),
+            fields.day,
+        )
+        && write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            system_time_ptr.wrapping_add(8),
+            fields.hour,
+        )
+        && write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            system_time_ptr.wrapping_add(10),
+            fields.minute,
+        )
+        && write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            system_time_ptr.wrapping_add(12),
+            fields.second,
+        )
+        && write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            system_time_ptr.wrapping_add(14),
+            fields.milliseconds,
+        );
+    if ok {
+        kernel.threads.set_last_error(thread_id, 0);
+    }
+}
+
+fn write_current_file_time<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    file_time_ptr: u32,
+) {
+    if file_time_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return;
+    }
+    let ticks = current_filetime_ticks(kernel);
+    if write_guest_u32(kernel, memory, thread_id, file_time_ptr, ticks as u32)
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            file_time_ptr.wrapping_add(4),
+            (ticks >> 32) as u32,
+        )
+    {
+        kernel.threads.set_last_error(thread_id, 0);
+    }
+}
+
+fn current_filetime_ticks(kernel: &CeKernel) -> u64 {
+    let base_days = days_before_year(SYSTEM_TIME_BASE_YEAR)
+        + days_before_month(SYSTEM_TIME_BASE_YEAR, SYSTEM_TIME_BASE_MONTH)
+        + i64::from(SYSTEM_TIME_BASE_DAY - 1);
+    (base_days as u64)
+        .saturating_mul(86_400)
+        .saturating_mul(FILETIME_TICKS_PER_SECOND)
+        .saturating_add(
+            u64::from(kernel.timers.tick_count()).saturating_mul(FILETIME_TICKS_PER_MILLISECOND),
+        )
+}
+
+fn system_time_fields_from_ticks(ticks: u64) -> SystemTimeFields {
+    let total_ms = ticks / FILETIME_TICKS_PER_MILLISECOND;
+    let total_seconds = total_ms / 1_000;
+    let mut days = (total_seconds / 86_400) as i64;
+    let seconds_of_day = total_seconds % 86_400;
+    let milliseconds = (total_ms % 1_000) as u16;
+
+    let mut year = 1601;
+    loop {
+        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
+        if days < days_in_year {
+            break;
+        }
+        days -= days_in_year;
+        year += 1;
+    }
+
+    let mut month = 1;
+    loop {
+        let days_in_month = days_in_month(year, month);
+        if days < i64::from(days_in_month) {
+            break;
+        }
+        days -= i64::from(days_in_month);
+        month += 1;
+    }
+
+    let days_since_epoch = total_seconds / 86_400;
+    SystemTimeFields {
+        year: year as u16,
+        month: month as u16,
+        day_of_week: ((days_since_epoch + 1) % 7) as u16,
+        day: (days + 1) as u16,
+        hour: (seconds_of_day / 3_600) as u16,
+        minute: ((seconds_of_day % 3_600) / 60) as u16,
+        second: (seconds_of_day % 60) as u16,
+        milliseconds,
+    }
+}
+
 fn system_time_to_file_time_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -3756,6 +3928,15 @@ fn days_before_month(year: i32, month: i32) -> i64 {
         }
     }
     i64::from(days)
+}
+
+fn days_in_month(year: i32, month: i32) -> i32 {
+    const MONTH_DAYS: [i32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let mut days = MONTH_DAYS[(month - 1) as usize];
+    if month == 2 && is_leap_year(year) {
+        days += 1;
+    }
+    days
 }
 
 fn is_leap_year(year: i32) -> bool {
@@ -9750,6 +9931,9 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "SetTimer",
     "KillTimer",
     "RegisterGesture",
+    "GetSystemTime",
+    "GetLocalTime",
+    "GetSystemTimeAsFileTime",
     "GetTickCount",
     "QueryPerformanceCounter",
     "QueryPerformanceFrequency",

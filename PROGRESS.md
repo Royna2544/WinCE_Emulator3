@@ -445,6 +445,15 @@
   `target\inavi-register-gesture-handle.ppm` is still diagnostic rather than
   visible app output, so this is progress into the next raw COREDLL tranche,
   not GUI success.
+- `GetSystemTime @25`, `GetLocalTime @23`, and
+  `GetSystemTimeAsFileTime @2536` now write guest `SYSTEMTIME`/`FILETIME`
+  values from a fixed emulator epoch plus the timer tick counter. A reduced-log
+  9,050,000-instruction mounted run no longer reaches the previous
+  `GetSystemTime` trap, but it did not return a bounded snapshot before the
+  shell timeout and had to be stopped manually; it produced no framebuffer
+  dump. The next task is to instrument or bound the post-time path so the
+  emulator can report whether it is spinning in guest code, spending excessive
+  time in translated blocks, or waiting in a message/timer path.
 
 ## Current State
 
@@ -459,9 +468,10 @@
   `_setjmp`/`longjmp` exception path, pass iNavi's `iNaviData` SD-card
   directory validation, implement first palette/DC state behavior, preserve SDK
   CRT import ordinals ahead of export-index aliases, return heap-backed
-  `RegisterGesture @2724` state, and then reach unimplemented
-  `GetSystemTime @25` in the current SDK/MFC startup path. A generic virtual
-  framebuffer is now
+  `RegisterGesture @2724` state, and write basic system/local time structs.
+  The current mounted run progresses past the previous `GetSystemTime @25`
+  trap but does not yet produce a bounded post-time diagnostic snapshot. A
+  generic virtual framebuffer is now
   attached to the emulator boundary, generic virtual presenter/desktop
   interfaces exist for host
   presentation/window management, and solid `FillRect` on a window/screen HDC

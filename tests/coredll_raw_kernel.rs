@@ -5,11 +5,12 @@ use wince_emulation_v3::{
         coredll_ordinals::{
             ORD_CLOSE_HANDLE, ORD_CREATE_EVENT_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD,
             ORD_EVENT_MODIFY, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD,
-            ORD_GET_LAST_ERROR, ORD_GET_PROCESS_ID, ORD_GET_PROCESS_VERSION,
-            ORD_GET_STORE_INFORMATION, ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY,
-            ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT, ORD_GET_VERSION_EX_W,
-            ORD_INITIALIZE_CRITICAL_SECTION, ORD_INTERLOCKED_COMPARE_EXCHANGE,
-            ORD_INTERLOCKED_EXCHANGE_ADD, ORD_INTERLOCKED_INCREMENT, ORD_LEAVE_CRITICAL_SECTION,
+            ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_PROCESS_ID, ORD_GET_PROCESS_VERSION,
+            ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_TIME, ORD_GET_SYSTEM_TIME_AS_FILE_TIME,
+            ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY, ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT,
+            ORD_GET_VERSION_EX_W, ORD_INITIALIZE_CRITICAL_SECTION,
+            ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
+            ORD_INTERLOCKED_INCREMENT, ORD_LEAVE_CRITICAL_SECTION,
             ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_QUERY_PERFORMANCE_COUNTER,
             ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD,
             ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY, ORD_SLEEP, ORD_SUSPEND_THREAD,
@@ -249,6 +250,83 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
             ..
         }
     ));
+    let system_time = 0x2f00;
+    memory.map_halfwords(system_time, 8);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_SYSTEM_TIME,
+            [system_time],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u16(system_time)?, 2024);
+    assert_eq!(memory.read_u16(system_time + 2)?, 1);
+    assert_eq!(memory.read_u16(system_time + 4)?, 1);
+    assert_eq!(memory.read_u16(system_time + 6)?, 1);
+    assert!(memory.read_u16(system_time + 8)? <= 23);
+    assert!(memory.read_u16(system_time + 10)? <= 59);
+    assert!(memory.read_u16(system_time + 12)? <= 59);
+    assert!(memory.read_u16(system_time + 14)? <= 999);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    let local_time = 0x2f20;
+    memory.map_halfwords(local_time, 8);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_LOCAL_TIME,
+            [local_time],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u16(local_time)?, 2024);
+    assert_eq!(memory.read_u16(local_time + 2)?, 1);
+
+    let file_time = 0x2f40;
+    memory.map_words(file_time, 2);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_SYSTEM_TIME_AS_FILE_TIME,
+            [file_time],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_ne!(memory.read_u32(file_time + 4)?, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_SYSTEM_TIME,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
     memory.map_words(0x3000, 4);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
