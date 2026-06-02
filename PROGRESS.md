@@ -38,8 +38,9 @@
   parent-directory escapes.
 - The host-backed file namespace now has a static CE mount table containing
   `SDMMC Disk`. `FindFirstFileW("\\")` enumerates that mount prefix, exact
-  `\SDMMC Disk` returns directory metadata, and `--sdmmc-root DIR` binds the
-  mount contents to host storage for file opens/finds beneath the mount.
+  `\SDMMC Disk` returns directory metadata, and `--mount-config mounts.toml`
+  binds mount contents such as `D:\INAVI_Emulator\INAVI` to host storage for
+  file opens/finds beneath the mount.
 - Added checked-in Rust COREDLL ordinal definitions in
   `src/ce/coredll_ordinals.rs`. Runtime dispatch now uses Rust `ORD_*`
   constants, a static export table, and an ordinal `match`, with 1,752 export
@@ -227,7 +228,7 @@
   main process module base so `GetModuleFileNameW(hInstance, ...)` returns the
   configured CE module path instead of failing for nonzero `hModule`.
 - The bounded Unicorn launch of `INavi.exe` with SDK `mfcce400.dll`,
-  `--sdmmc-root D:\INAVI_Emulator\INAVI`, and the current debug binary now
+  `--mount-config mounts.toml`, and the current debug binary now
   progresses past the previous empty-queue `GetMessageW` frontier. The latest
   debug trace shows `PeekMessageW` and `GetMessageW` returning a synthetic
   `WM_PAINT`, followed by `DispatchMessageW` entering the SDK MFC window
@@ -273,7 +274,7 @@
   than adding any emulator-side MFC stub. A feature-gated test covers the
   `CREATESTRUCTW` field offsets.
 - The latest 1,000,000-instruction bounded launch with SDK `mfcce400.dll` and
-  `--sdmmc-root D:\INAVI_Emulator\INAVI` logs
+  `--mount-config mounts.toml` logs
   `CreateWindowExW guest WM_CREATE callout` for `hwnd=0x00020000`,
   `class="solution_inavi"`, `wndproc=0x000135cc`, and lParam pointing at the
   marshalled `CREATESTRUCTW`. It still reaches the first synthetic `WM_PAINT`,
@@ -310,7 +311,7 @@
   execution and subsystem tests see the same queue behavior.
 - A corrected 1,000,000-instruction bounded launch using
   `D:\INAVI_Emulator\INAVI\INavi\iNavi.exe`, SDK `mfcce400.dll`, and
-  `--sdmmc-root D:\INAVI_Emulator\INAVI` still reaches the same
+  `--mount-config mounts.toml` still reaches the same
   `GetMessageW @861` `blocked_get_message` frontier after SDK MFC dispatch.
   The run writes `target\framebuffer-launch.ppm`, but this remains diagnostic
   output only because no guest drawing/blit imports have produced GUI pixels.
@@ -408,6 +409,23 @@
   icon, menu, dialog, group-icon, and version resources but no RT_STRING table;
   the observed `FindResourceW(hModule=0x00010000, name=0x0e01, type=6)` miss is
   therefore not a parser miss for a present main-image string resource.
+- Host image paths now map through configured storage mounts even when earlier
+  virtual mounts have no host root or do not match the path. With
+  `mounts.toml`, `GetModuleFileNameW` for
+  `D:\INAVI_Emulator\INAVI\INavi\iNavi.exe` now returns
+  `\SDMMC Disk\INavi\iNavi.exe` instead of leaking the host path.
+- Raw CE `wcsncpy` now follows the aligned byte-count behavior observed from
+  the CE 4.2 Mipsii target path. This lets the app derive
+  `\SDMMC Disk\iNaviData` from its module path; the latest bounded run confirms
+  `FindFirstFileW("\SDMMC Disk\iNaviData")` maps to
+  `D:\INAVI_Emulator\INAVI\iNaviData` and succeeds instead of showing the
+  Korean SD-card-lock message.
+- The latest 4,000,000-instruction bounded launch with SDK `mfcce400.dll` and
+  `--mount-config mounts.toml` reaches main and child window creation
+  (`WCE_Solution_iNavi` and an `Afx:10000:b:0:40000006:0` child), then stops at
+  unimplemented COREDLL ordinal 1576 (`GetPaletteEntries`). The framebuffer
+  dump `target\inavi-wcsncpy-path.ppm` is still all black, so this is progress
+  past SD-card validation and into GDI/palette work, not GUI success.
 
 ## Current State
 
@@ -419,10 +437,11 @@
   messages, synthesize and dispatch the first `WM_PAINT`, enter guest
   `CallWindowProcW` targets, enter registered guest WNDPROCs for raw
   `SendMessageW` when that import path is used, emulate the SDK MFC
-  `_setjmp`/`longjmp` exception path, and then reach an empty-queue
-  `GetMessageW` diagnostic snapshot after several dispatched main-window
-  messages. A generic virtual framebuffer is now attached to the emulator
-  boundary, generic virtual presenter/desktop interfaces exist for host
+  `_setjmp`/`longjmp` exception path, pass iNavi's `iNaviData` SD-card
+  directory validation, and then reach unimplemented `GetPaletteEntries @1576`
+  after main/child window creation. A generic virtual framebuffer is now
+  attached to the emulator boundary, generic virtual presenter/desktop
+  interfaces exist for host
   presentation/window management, and solid `FillRect` on a window/screen HDC
   can write pixels into that framebuffer. Broader guest drawing/blit behavior
   and the target app's own useful drawing path are still incomplete, so this

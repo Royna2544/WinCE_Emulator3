@@ -134,8 +134,9 @@ pub(crate) fn wcsncpy_raw<M: CoredllGuestMemory>(
         return 0;
     }
 
+    let units = ce_wcsncpy_units(count);
     let mut padding = false;
-    for index in 0..count {
+    for index in 0..units {
         let unit = if padding {
             0
         } else {
@@ -161,6 +162,10 @@ pub(crate) fn wcsncpy_raw<M: CoredllGuestMemory>(
         }
     }
     dest
+}
+
+fn ce_wcsncpy_units(count: u32) -> u32 {
+    if count % 2 == 0 { count / 2 } else { count }
 }
 
 fn fold_ascii_wide(unit: u16) -> u16 {

@@ -561,6 +561,25 @@ mod tests {
     }
 
     #[test]
+    fn maps_image_under_loaded_mount_config_to_ce_mount_path() {
+        let config = RuntimeConfig::load_with_mounts(
+            "regs.json",
+            "serial_devices.json",
+            Some("mounts.toml"),
+        )
+        .unwrap();
+        assert_eq!(config.storage.mounts.len(), 3);
+        assert_eq!(
+            config.storage.mounts[0].host_root.as_deref(),
+            Some(Path::new(r"D:\INAVI_Emulator\INAVI"))
+        );
+        let kernel = CeKernel::boot(config);
+        let path = ce_module_path_for_image(&kernel, r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe");
+
+        assert_eq!(path, r"\SDMMC Disk\INavi\iNavi.exe");
+    }
+
+    #[test]
     fn leaves_unmounted_image_path_as_ce_style_host_path() {
         let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
         let kernel = CeKernel::boot(config);

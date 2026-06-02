@@ -14,7 +14,7 @@ shortcuts:
   `VirtualAlloc` ranges, and raw `ReadFile`/`WriteFile` guest buffers
 - host-backed file cursor, size, and flush behavior for raw file ordinals
 - static CE mount-point enumeration for `\SDMMC Disk` plus host binding with
-  `--sdmmc-root`
+  `--mount-config mounts.toml`
 - GWE HWND state with CE-style window/client rectangles, title/class text,
   window-long slots, focus, visibility/enabled state, coordinate mapping, and
   pending paint/update state
@@ -77,7 +77,7 @@ cargo run -- --image /mnt/d/INAVI_Emulator/INAVI/INavi/iNavi.exe
 CPU execution is behind the `unicorn` feature:
 
 ```bash
-cargo run --features unicorn -- --image D:\INAVI_Emulator\INAVI\INavi\iNavi.exe --dll-search-dir "C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii" --sdmmc-root D:\INAVI_Emulator\INAVI --framebuffer-dump target\last-framebuffer.ppm --run-cpu
+cargo run --features unicorn -- --mount-config mounts.toml --image D:\INAVI_Emulator\INAVI\INavi\iNavi.exe --dll-search-dir "C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii" --framebuffer-dump target\last-framebuffer.ppm --run-cpu
 ```
 
 Use `--cpu-instruction-limit N` with `--run-cpu` to make Unicorn return a

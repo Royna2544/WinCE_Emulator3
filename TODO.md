@@ -7,6 +7,10 @@
   first solid `FillRect` framebuffer path, then verify those pixels through the
   generic presenter boundary. Do not treat the timeout-running paint loop as
   GUI success.
+- Implement the next observed GDI palette frontier: COREDLL ordinal 1576
+  (`GetPaletteEntries`). The latest mounted iNavi run has already passed
+  `\SDMMC Disk\iNaviData` validation, created main/child HWNDs, and stopped on
+  this unimplemented import with an all-black framebuffer dump.
 - Replace launch-stub behavior for commctrl, WINSOCK, and OLE imports with
   real subsystem-backed implementations as import traces demand. Keep MFC on
   the loaded SDK DLL path only; do not add emulator MFC stubs.
@@ -27,13 +31,11 @@
   Raw `GetWindow` sibling/child traversal is now connected for the observed
   MFC `GetWindow @251` calls. Virtual show/move/size lifecycle messages are
   queued for raw `ShowWindow`, `SetWindowPos`, `MoveWindow`, and visible
-  top-level `CreateWindowExW`; the latest bounded rerun shows
-  `WM_SHOWWINDOW`, `WM_WINDOWPOSCHANGED`, `WM_SIZE(800,480)`, `WM_PAINT`, and
-  MFC `WM_IDLEUPDATECMDUI` (`0x0363`) handling before the queue empties. The
-  latest trace also confirms `WCE_Solution_iNavi`, `wce_FirstDefWindowProc`,
-  and `AfxWndProcBase` sequencing. Next work is to identify the next
-  CE/MFC-sourced queue, timer, paint, posted-message, window-child creation, or
-  GDI behavior that should advance the path toward target framebuffer drawing.
+  top-level `CreateWindowExW`; the latest mounted bounded rerun confirms
+  `\SDMMC Disk\iNaviData` succeeds, creates `WCE_Solution_iNavi` and an MFC
+  child window, then stops on unimplemented `GetPaletteEntries @1576`. Next
+  work is palette/DC/GDI behavior that should advance the path toward target
+  framebuffer drawing.
 - Use the new guest-WNDPROC return ring to compare creation-time sequencing
   against CE/MFC expectations. The latest diagnostic shows create/show/size/
   paint/idle messages returning `0`, `WM_PAINT` not reaching `BeginPaint`, MFC

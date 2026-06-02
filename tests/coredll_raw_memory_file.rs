@@ -157,7 +157,7 @@ fn coredll_raw_wcsncpy_copies_and_pads_wide_strings() -> Result<()> {
             &mut memory,
             thread_id,
             ORD_WCSNCPY,
-            [dest, src, 6],
+            [dest, src, 12],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Handle(ptr),
@@ -168,6 +168,43 @@ fn coredll_raw_wcsncpy_copies_and_pads_wide_strings() -> Result<()> {
     assert_eq!(memory.read_u16(dest + 6)?, 0);
     assert_eq!(memory.read_u16(dest + 8)?, 0);
     assert_eq!(memory.read_u16(dest + 10)?, 0);
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_wcsncpy_uses_ce_byte_counts_for_path_prefixes() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let dest = 0x1_0000;
+    let src = 0x1_0100;
+    memory.map_halfwords(dest, 64);
+    memory.map_halfwords(src, 64);
+    for index in 0..64 {
+        memory.write_halfword(dest + index * 2, b'X' as u16);
+    }
+    memory.write_halfword(dest + 34, 0);
+    memory.write_wide_z(src, r"\SDMMC Disk\INavi\iNavi.exe");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WCSNCPY,
+            [dest, src, 34],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } if ptr == dest
+    ));
+    assert_eq!(memory.read_wide_z(dest, 64), r"\SDMMC Disk\INavi");
+    assert_eq!(memory.read_u16(dest + 32)?, b'i' as u16);
+    assert_eq!(memory.read_u16(dest + 34)?, 0);
+    assert_eq!(memory.read_u16(dest + 36)?, b'X' as u16);
     Ok(())
 }
 

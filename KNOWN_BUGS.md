@@ -4,15 +4,15 @@
 
 - Main process launch reaches the paint loop without useful GUI output.
   - Symptom: a bounded debug launch gets past the earlier empty-queue
-    `GetMessageW` self-stop and dispatches a synthetic `WM_PAINT`, but still
-    produces no drawn framebuffer/window output and must be killed by the
-    timeout. A generic virtual framebuffer is attached, and raw solid-brush
-    `FillRect` can now draw into it when guest code reaches a window/screen
-    HDC, but the target launch has not yet reached useful drawing/blit imports.
-    This is not GUI success.
+    `GetMessageW` self-stop and the later SD-card validation dialog, creates
+    main/child HWNDs, but still produces no drawn framebuffer/window output.
+    A generic virtual framebuffer is attached, and raw solid-brush `FillRect`
+    can now draw into it when guest code reaches a window/screen HDC, but the
+    target launch currently stops before useful drawing/blit output. This is
+    not GUI success.
   - Evidence: latest bounded run with `--features unicorn`,
     `--dll-search-dir C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii`,
-    and `--sdmmc-root D:\INAVI_Emulator\INAVI` previously timed out after 30
+    and `--mount-config mounts.toml` previously timed out after 30
     seconds. A later 1,000,000-instruction bounded run returned through the
     emulator diagnostic path: `CallWindowProcW @285` now enters the guest SDK
     MFC WNDPROC thunk at `0x6000e530`, then the import ring shows
@@ -52,7 +52,14 @@
     The latest 500,000-instruction launch reaches `WCE_Solution_iNavi`,
     dispatches several main-window messages through `AfxWndProcBase`, restores
     through `longjmp`, and stops at the intentional empty `GetMessageW @861`
-    `blocked_get_message` diagnostic.
+    `blocked_get_message` diagnostic. The latest 4,000,000-instruction mounted
+    run fixes the earlier `GetModuleFileNameW` host-path leak and CE
+    `wcsncpy` byte-count mismatch: `FindFirstFileW("\SDMMC Disk\iNaviData")`
+    now maps to `D:\INAVI_Emulator\INAVI\iNaviData` and succeeds instead of
+    showing the Korean SD-card-lock `MessageBoxW`. That same run creates
+    `WCE_Solution_iNavi` plus an `Afx:10000:b:0:40000006:0` child window, then
+    stops on unimplemented COREDLL ordinal 1576 (`GetPaletteEntries`). The
+    dump `target\inavi-wcsncpy-path.ppm` has `nonzero=0`.
   - Status: active; `TlsCall` now returns real CE-style slots,
     `CallWindowProcW` now enters guest window-procedure targets, and
     `CreateWindowExW` now delivers the first create-time message. Raw
@@ -65,12 +72,10 @@
     process module, but the latest shorter iNavi run still shows an EXE-module
     `FindResourceW(..., name=0x0e01, type=RT_STRING)` miss; LLVM resource
     dumping confirms the EXE has no RT_STRING table. The latest bounded launch
-    confirms the current `GW_CHILD` query returns no child HWNDs; next work is
-    to identify which remaining CE/MFC-sourced queue, timer, paint,
-    posted-message, window-child creation, resource-module loading, or GDI
-    behavior should advance the guest path toward the newly connected
-    framebuffer drawing and the remaining GDI/DC/surface drawing and blit
-    imports.
+    confirms the current frontier is `GetPaletteEntries @1576`; next work is
+    to implement CE-referenced palette/DC/GDI behavior that should advance the
+    guest path toward the newly connected framebuffer drawing and the remaining
+    GDI/DC/surface drawing and blit imports.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch

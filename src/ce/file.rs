@@ -161,8 +161,12 @@ impl HostFileSystem {
 
     pub fn host_path_to_guest_mount(&self, host_path: &Path) -> Option<String> {
         for mount in self.mounts.values() {
-            let host_root = mount.host_root.as_ref()?;
-            let relative = host_path.strip_prefix(host_root).ok()?;
+            let Some(host_root) = mount.host_root.as_ref() else {
+                continue;
+            };
+            let Some(relative) = strip_host_prefix(host_path, host_root) else {
+                continue;
+            };
             let mut guest_path = format!("\\{}", mount.guest_root.replace('/', "\\"));
             for component in relative.components() {
                 let Component::Normal(part) = component else {
@@ -685,6 +689,19 @@ impl HostFileSystem {
                     .to_owned(),
             })
     }
+}
+
+fn strip_host_prefix(host_path: &Path, host_root: &Path) -> Option<PathBuf> {
+    if let Ok(relative) = host_path.strip_prefix(host_root) {
+        return Some(relative.to_path_buf());
+    }
+
+    let canonical_path = fs::canonicalize(host_path).ok()?;
+    let canonical_root = fs::canonicalize(host_root).ok()?;
+    canonical_path
+        .strip_prefix(canonical_root)
+        .ok()
+        .map(Path::to_path_buf)
 }
 
 fn normalize_guest_path(guest_path: &str) -> String {
