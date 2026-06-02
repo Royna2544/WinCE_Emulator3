@@ -269,6 +269,56 @@ impl Registry {
         }
     }
 
+    pub fn reg_delete_key_w(&mut self, hkey: HKey, subkey: Option<&str>) -> u32 {
+        let Some(path) = self.resolve_subkey_path(hkey, subkey) else {
+            return ERROR_INVALID_HANDLE;
+        };
+        if !self.keys.contains_key(&path) {
+            return ERROR_FILE_NOT_FOUND;
+        }
+        let prefix = format!("{path}\\");
+        self.keys
+            .retain(|candidate, _| candidate != &path && !candidate.starts_with(&prefix));
+        self.open_handles
+            .retain(|_, candidate| candidate != &path && !candidate.starts_with(&prefix));
+        ERROR_SUCCESS
+    }
+
+    pub fn reg_query_info_key_w(&self, hkey: HKey) -> RegQueryInfoResult {
+        let Some(path) = self.resolve_handle_path(hkey) else {
+            return RegQueryInfoResult::status(ERROR_INVALID_HANDLE);
+        };
+        let Some(key) = self.keys.get(path) else {
+            return RegQueryInfoResult::status(ERROR_INVALID_HANDLE);
+        };
+        let subkeys = self.enum_subkeys(path);
+        let max_subkey_chars = subkeys
+            .iter()
+            .map(|name| name.encode_utf16().count())
+            .max()
+            .unwrap_or(0) as u32;
+        let max_value_name_chars = key
+            .values
+            .keys()
+            .map(|name| name.encode_utf16().count())
+            .max()
+            .unwrap_or(0) as u32;
+        let max_value_data_len = key
+            .values
+            .values()
+            .map(|value| value.to_reg_bytes().len())
+            .max()
+            .unwrap_or(0) as u32;
+        RegQueryInfoResult {
+            status: ERROR_SUCCESS,
+            subkeys: subkeys.len() as u32,
+            values: key.values.len() as u32,
+            max_subkey_chars,
+            max_value_name_chars,
+            max_value_data_len,
+        }
+    }
+
     pub fn reg_close_key(&mut self, hkey: HKey) -> u32 {
         if predefined_root_path(hkey).is_some() {
             return ERROR_SUCCESS;
@@ -380,6 +430,29 @@ pub struct RegCreateResult {
     pub status: u32,
     pub hkey: Option<HKey>,
     pub disposition: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegQueryInfoResult {
+    pub status: u32,
+    pub subkeys: u32,
+    pub values: u32,
+    pub max_subkey_chars: u32,
+    pub max_value_name_chars: u32,
+    pub max_value_data_len: u32,
+}
+
+impl RegQueryInfoResult {
+    fn status(status: u32) -> Self {
+        Self {
+            status,
+            subkeys: 0,
+            values: 0,
+            max_subkey_chars: 0,
+            max_value_name_chars: 0,
+            max_value_data_len: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

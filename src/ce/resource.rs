@@ -1,4 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::ce::gwe::Rect;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ResourceId {
@@ -23,21 +25,130 @@ pub struct ResourceString {
     pub data_ptr: Option<u32>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BitmapObject {
+    pub handle: u32,
+    pub width: i32,
+    pub height: i32,
+    pub width_bytes: i32,
+    pub planes: u16,
+    pub bits_pixel: u16,
+    pub bits_ptr: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegionObject {
+    pub handle: u32,
+    pub rect: Rect,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MenuObject {
+    pub handle: u32,
+    pub module: u32,
+    pub name: ResourceId,
+    pub resource_handle: Option<u32>,
+    pub checked_items: BTreeMap<u32, bool>,
+    pub removed_items: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcceleratorEntry {
+    pub flags: u8,
+    pub key: u16,
+    pub command: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AcceleratorObject {
+    pub handle: u32,
+    pub module: u32,
+    pub name: ResourceId,
+    pub resource_handle: Option<u32>,
+    pub entries: Vec<AcceleratorEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FontObject {
+    pub handle: u32,
+    pub logfont_ptr: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BrushObject {
+    pub handle: u32,
+    pub color: u32,
+    pub pattern_bitmap: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PenObject {
+    pub handle: u32,
+    pub style: u32,
+    pub width: i32,
+    pub color: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DcState {
+    pub selected_object: u32,
+    pub selected_font: u32,
+    pub selected_brush: u32,
+    pub bk_mode: i32,
+    pub text_color: u32,
+    pub text_align: u32,
+}
+
+impl Default for DcState {
+    fn default() -> Self {
+        Self {
+            selected_object: 0,
+            selected_font: 0,
+            selected_brush: 0,
+            bk_mode: 2,
+            text_color: 0,
+            text_align: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ResourceSystem {
     next_handle: u32,
+    next_gdi_handle: u32,
     by_key: BTreeMap<(u32, ResourceId, ResourceId), u32>,
     entries: BTreeMap<u32, ResourceEntry>,
     strings: BTreeMap<(u32, u32), ResourceString>,
+    bitmaps: BTreeMap<u32, BitmapObject>,
+    regions: BTreeMap<u32, RegionObject>,
+    menus: BTreeMap<u32, MenuObject>,
+    accelerators: BTreeMap<u32, AcceleratorObject>,
+    fonts: BTreeMap<u32, FontObject>,
+    brushes: BTreeMap<u32, BrushObject>,
+    pens: BTreeMap<u32, PenObject>,
+    memory_dcs: BTreeSet<u32>,
+    dc_states: BTreeMap<u32, DcState>,
+    dc_clips: BTreeMap<u32, u32>,
 }
 
 impl Default for ResourceSystem {
     fn default() -> Self {
         Self {
             next_handle: 0x0009_0000,
+            next_gdi_handle: 0x000a_0000,
             by_key: BTreeMap::new(),
             entries: BTreeMap::new(),
             strings: BTreeMap::new(),
+            bitmaps: BTreeMap::new(),
+            regions: BTreeMap::new(),
+            menus: BTreeMap::new(),
+            accelerators: BTreeMap::new(),
+            fonts: BTreeMap::new(),
+            brushes: BTreeMap::new(),
+            pens: BTreeMap::new(),
+            memory_dcs: BTreeSet::new(),
+            dc_states: BTreeMap::new(),
+            dc_clips: BTreeMap::new(),
         }
     }
 }
@@ -103,6 +214,299 @@ impl ResourceSystem {
 
     pub fn load_string(&self, module: u32, id: u32) -> Option<&ResourceString> {
         self.strings.get(&(module, id))
+    }
+
+    pub fn create_bitmap(
+        &mut self,
+        width: i32,
+        height: i32,
+        planes: u16,
+        bits_pixel: u16,
+        bits_ptr: u32,
+    ) -> u32 {
+        let handle = self.next_gdi_handle;
+        self.next_gdi_handle += 4;
+        let bits_per_row = (width.unsigned_abs() as u64) * (bits_pixel as u64);
+        let width_bytes = (((bits_per_row + 31) / 32) * 4).min(i32::MAX as u64) as i32;
+        self.bitmaps.insert(
+            handle,
+            BitmapObject {
+                handle,
+                width,
+                height: height.abs(),
+                width_bytes,
+                planes,
+                bits_pixel,
+                bits_ptr,
+            },
+        );
+        handle
+    }
+
+    pub fn bitmap(&self, handle: u32) -> Option<&BitmapObject> {
+        self.bitmaps.get(&handle)
+    }
+
+    pub fn delete_bitmap(&mut self, handle: u32) -> bool {
+        self.bitmaps.remove(&handle).is_some()
+    }
+
+    pub fn create_region(&mut self, rect: Rect) -> u32 {
+        let handle = self.next_gdi_handle;
+        self.next_gdi_handle += 4;
+        self.regions.insert(handle, RegionObject { handle, rect });
+        handle
+    }
+
+    pub fn region(&self, handle: u32) -> Option<&RegionObject> {
+        self.regions.get(&handle)
+    }
+
+    pub fn set_region(&mut self, handle: u32, rect: Rect) -> bool {
+        let Some(region) = self.regions.get_mut(&handle) else {
+            return false;
+        };
+        region.rect = rect;
+        true
+    }
+
+    pub fn delete_region(&mut self, handle: u32) -> bool {
+        self.dc_clips.retain(|_, region| *region != handle);
+        self.regions.remove(&handle).is_some()
+    }
+
+    pub fn select_clip_region(&mut self, hdc: u32, region: Option<u32>) {
+        if let Some(region) = region {
+            self.dc_clips.insert(hdc, region);
+        } else {
+            self.dc_clips.remove(&hdc);
+        }
+    }
+
+    pub fn clip_region(&self, hdc: u32) -> Option<u32> {
+        self.dc_clips.get(&hdc).copied()
+    }
+
+    pub fn create_menu(
+        &mut self,
+        module: u32,
+        name: ResourceId,
+        resource_handle: Option<u32>,
+    ) -> u32 {
+        let handle = self.next_gdi_handle;
+        self.next_gdi_handle += 4;
+        self.menus.insert(
+            handle,
+            MenuObject {
+                handle,
+                module,
+                name,
+                resource_handle,
+                checked_items: BTreeMap::new(),
+                removed_items: Vec::new(),
+            },
+        );
+        handle
+    }
+
+    pub fn menu(&self, handle: u32) -> Option<&MenuObject> {
+        self.menus.get(&handle)
+    }
+
+    pub fn check_menu_item(&mut self, handle: u32, item: u32, checked: bool) -> Option<u32> {
+        let menu = self.menus.get_mut(&handle)?;
+        let previous = menu.checked_items.insert(item, checked).unwrap_or(false);
+        Some(u32::from(previous) * 0x0000_0008)
+    }
+
+    pub fn remove_menu_item(&mut self, handle: u32, item: u32) -> bool {
+        let Some(menu) = self.menus.get_mut(&handle) else {
+            return false;
+        };
+        menu.removed_items.push(item);
+        menu.checked_items.remove(&item);
+        true
+    }
+
+    pub fn delete_menu(&mut self, handle: u32) -> bool {
+        self.menus.remove(&handle).is_some()
+    }
+
+    pub fn create_accelerator(
+        &mut self,
+        module: u32,
+        name: ResourceId,
+        resource_handle: Option<u32>,
+        entries: Vec<AcceleratorEntry>,
+    ) -> u32 {
+        let handle = self.next_gdi_handle;
+        self.next_gdi_handle += 4;
+        self.accelerators.insert(
+            handle,
+            AcceleratorObject {
+                handle,
+                module,
+                name,
+                resource_handle,
+                entries,
+            },
+        );
+        handle
+    }
+
+    pub fn accelerator(&self, handle: u32) -> Option<&AcceleratorObject> {
+        self.accelerators.get(&handle)
+    }
+
+    pub fn delete_accelerator(&mut self, handle: u32) -> bool {
+        self.accelerators.remove(&handle).is_some()
+    }
+
+    pub fn create_font(&mut self, logfont_ptr: u32) -> u32 {
+        let handle = self.next_gdi_handle;
+        self.next_gdi_handle += 4;
+        self.fonts.insert(
+            handle,
+            FontObject {
+                handle,
+                logfont_ptr,
+            },
+        );
+        handle
+    }
+
+    pub fn create_brush(&mut self, color: u32) -> u32 {
+        let handle = self.next_gdi_handle;
+        self.next_gdi_handle += 4;
+        self.brushes.insert(
+            handle,
+            BrushObject {
+                handle,
+                color,
+                pattern_bitmap: None,
+            },
+        );
+        handle
+    }
+
+    pub fn create_pattern_brush(&mut self, bitmap: u32) -> Option<u32> {
+        if !self.bitmaps.contains_key(&bitmap) {
+            return None;
+        }
+        let handle = self.next_gdi_handle;
+        self.next_gdi_handle += 4;
+        self.brushes.insert(
+            handle,
+            BrushObject {
+                handle,
+                color: 0,
+                pattern_bitmap: Some(bitmap),
+            },
+        );
+        Some(handle)
+    }
+
+    pub fn create_pen(&mut self, style: u32, width: i32, color: u32) -> u32 {
+        let handle = self.next_gdi_handle;
+        self.next_gdi_handle += 4;
+        self.pens.insert(
+            handle,
+            PenObject {
+                handle,
+                style,
+                width,
+                color,
+            },
+        );
+        handle
+    }
+
+    pub fn create_compatible_dc(&mut self) -> u32 {
+        let handle = self.next_gdi_handle;
+        self.next_gdi_handle += 4;
+        self.memory_dcs.insert(handle);
+        self.dc_states.entry(handle).or_default();
+        handle
+    }
+
+    pub fn delete_dc(&mut self, handle: u32) -> bool {
+        self.dc_clips.remove(&handle);
+        self.dc_states.remove(&handle);
+        self.memory_dcs.remove(&handle)
+    }
+
+    pub fn select_object(&mut self, hdc: u32, object: u32) -> Option<u32> {
+        if hdc == 0 || object == 0 {
+            return Some(0);
+        }
+        let is_font = self.fonts.contains_key(&object);
+        let is_drawable = self.brushes.contains_key(&object)
+            || self.bitmaps.contains_key(&object)
+            || self.pens.contains_key(&object);
+        let state = self.dc_states.entry(hdc).or_default();
+        if is_font {
+            let previous = state.selected_font;
+            state.selected_font = object;
+            state.selected_object = object;
+            Some(previous)
+        } else if is_drawable {
+            let previous = state.selected_brush;
+            state.selected_brush = object;
+            state.selected_object = object;
+            Some(previous)
+        } else {
+            Some(state.selected_object)
+        }
+    }
+
+    pub fn set_dc_bk_mode(&mut self, hdc: u32, mode: i32) -> Option<i32> {
+        if hdc == 0 {
+            return None;
+        }
+        let state = self.dc_states.entry(hdc).or_default();
+        let previous = state.bk_mode;
+        state.bk_mode = mode;
+        Some(previous)
+    }
+
+    pub fn set_dc_text_color(&mut self, hdc: u32, color: u32) -> Option<u32> {
+        if hdc == 0 {
+            return None;
+        }
+        let state = self.dc_states.entry(hdc).or_default();
+        let previous = state.text_color;
+        state.text_color = color;
+        Some(previous)
+    }
+
+    pub fn set_dc_text_align(&mut self, hdc: u32, align: u32) -> Option<u32> {
+        if hdc == 0 {
+            return None;
+        }
+        let state = self.dc_states.entry(hdc).or_default();
+        let previous = state.text_align;
+        state.text_align = align;
+        Some(previous)
+    }
+
+    pub fn delete_gdi_object(&mut self, handle: u32) -> bool {
+        let mut removed = self.fonts.remove(&handle).is_some();
+        removed |= self.brushes.remove(&handle).is_some();
+        removed |= self.pens.remove(&handle).is_some();
+        removed |= self.bitmaps.remove(&handle).is_some();
+        removed |= self.delete_region(handle);
+        for state in self.dc_states.values_mut() {
+            if state.selected_object == handle {
+                state.selected_object = 0;
+            }
+            if state.selected_font == handle {
+                state.selected_font = 0;
+            }
+            if state.selected_brush == handle {
+                state.selected_brush = 0;
+            }
+        }
+        removed
     }
 }
 

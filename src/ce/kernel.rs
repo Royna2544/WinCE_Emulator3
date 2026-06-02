@@ -23,6 +23,8 @@ use crate::{
     error::Result,
 };
 
+use std::path::PathBuf;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessagePumpResult {
     Dispatched(u32),
@@ -47,6 +49,20 @@ pub struct CeKernel {
     pub memory: MemorySystem,
     process_module_base: u32,
     process_module_path: String,
+    process_module_host_path: Option<PathBuf>,
+    process_command_line: String,
+    pending_process_launches: Vec<PendingProcessLaunch>,
+    next_process_id: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingProcessLaunch {
+    pub application: Option<String>,
+    pub command_line: Option<String>,
+    pub process_handle: u32,
+    pub thread_handle: u32,
+    pub process_id: u32,
+    pub thread_id: u32,
 }
 
 impl CeKernel {
@@ -67,6 +83,10 @@ impl CeKernel {
             memory: MemorySystem::default(),
             process_module_base: 0,
             process_module_path: "\\FakeCE\\process.exe".to_owned(),
+            process_module_host_path: None,
+            process_command_line: String::new(),
+            pending_process_launches: Vec::new(),
+            next_process_id: 0x42,
         }
     }
 
@@ -84,6 +104,55 @@ impl CeKernel {
 
     pub fn process_module_path(&self) -> &str {
         &self.process_module_path
+    }
+
+    pub fn set_process_module_host_path(&mut self, path: impl Into<PathBuf>) {
+        self.process_module_host_path = Some(path.into());
+    }
+
+    pub fn process_module_host_path(&self) -> Option<&PathBuf> {
+        self.process_module_host_path.as_ref()
+    }
+
+    pub fn set_process_command_line(&mut self, command_line: impl Into<String>) {
+        self.process_command_line = command_line.into();
+    }
+
+    pub fn process_command_line(&self) -> &str {
+        &self.process_command_line
+    }
+
+    pub fn queue_process_launch(
+        &mut self,
+        application: Option<String>,
+        command_line: Option<String>,
+    ) -> PendingProcessLaunch {
+        let process_id = self.next_process_id;
+        self.next_process_id = self.next_process_id.saturating_add(1);
+        let thread_id = self.threads.allocate_guest_thread_id();
+        let process_handle = self.handles.create_process(process_id);
+        let thread_handle = self.handles.create_thread(thread_id, 0, 0, false);
+        let launch = PendingProcessLaunch {
+            application,
+            command_line,
+            process_handle,
+            thread_handle,
+            process_id,
+            thread_id,
+        };
+        self.pending_process_launches.push(launch.clone());
+        launch
+    }
+
+    pub fn take_pending_process_launches(&mut self) -> Vec<PendingProcessLaunch> {
+        std::mem::take(&mut self.pending_process_launches)
+    }
+
+    pub fn mark_process_launch_exited(&mut self, launch: &PendingProcessLaunch, exit_code: u32) {
+        self.handles
+            .mark_process_exited(launch.process_handle, exit_code);
+        self.handles
+            .mark_thread_exited(launch.thread_handle, exit_code);
     }
 
     pub fn pump_timers_to_gwe(&mut self, thread_id: u32) {
@@ -144,6 +213,38 @@ impl CeKernel {
         }
     }
 
+    pub fn read_file_at(&self, file_id: u32, offset: usize, requested: usize) -> Result<Vec<u8>> {
+        self.files.read_at(file_id, offset, requested)
+    }
+
+    pub fn read_guest_file(&self, path: &str) -> Result<Vec<u8>> {
+        self.files.read_guest_file(path)
+    }
+
+    pub fn file_attributes_w(&self, path: &str) -> Result<FindData> {
+        self.files.file_attributes_w(path)
+    }
+
+    pub fn create_directory_w(&self, path: &str) -> Result<()> {
+        self.files.create_directory_w(path)
+    }
+
+    pub fn remove_directory_w(&self, path: &str) -> Result<()> {
+        self.files.remove_directory_w(path)
+    }
+
+    pub fn delete_file_w(&self, path: &str) -> Result<()> {
+        self.files.delete_file_w(path)
+    }
+
+    pub fn move_file_w(&self, existing_path: &str, new_path: &str) -> Result<()> {
+        self.files.move_file_w(existing_path, new_path)
+    }
+
+    pub fn set_file_attributes_w(&self, path: &str, attributes: u32) -> Result<()> {
+        self.files.set_file_attributes_w(path, attributes)
+    }
+
     pub fn write_file(&mut self, handle: u32, bytes: &[u8]) -> Result<FileIoResult> {
         match self.handles.get_mut(handle)? {
             KernelObject::File(file) => self.files.write_file(file.file_id, bytes),
@@ -156,6 +257,15 @@ impl CeKernel {
                 bytes_transferred: 0,
             }),
         }
+    }
+
+    pub fn write_file_at(
+        &mut self,
+        file_id: u32,
+        offset: usize,
+        bytes: &[u8],
+    ) -> Result<FileIoResult> {
+        self.files.write_at(file_id, offset, bytes)
     }
 
     pub fn set_file_pointer(
@@ -245,6 +355,8 @@ impl CeKernel {
         match object {
             KernelObject::File(file) => self.files.close(file.file_id)?,
             KernelObject::FindFile(find) => self.files.find_close(find.find_id)?,
+            KernelObject::Event(event) if event.name.is_some() => return Ok(true),
+            KernelObject::FileMapping(mapping) if mapping.name.is_some() => return Ok(true),
             _ => {}
         }
         self.handles.close(handle)?;
@@ -277,6 +389,14 @@ impl CeKernel {
         self.handles.mark_thread_exited(handle, exit_code)
     }
 
+    pub fn resume_thread(&mut self, handle: u32) -> Option<u32> {
+        self.handles.resume_thread(handle)
+    }
+
+    pub fn guest_thread_start(&self, handle: u32) -> Option<(u32, u32, u32)> {
+        self.handles.thread_start(handle)
+    }
+
     pub fn set_event(&mut self, handle: u32) -> bool {
         self.handles.set_event(handle)
     }
@@ -305,6 +425,52 @@ impl CeKernel {
             WaitResult::Object0 => WAIT_OBJECT_0,
             WaitResult::Timeout => WAIT_TIMEOUT,
             WaitResult::Failed => WAIT_FAILED,
+        }
+    }
+
+    pub fn is_wait_ready(&self, handle: u32, thread_id: u32) -> Option<bool> {
+        self.handles.is_wait_ready(handle, thread_id)
+    }
+
+    pub fn wait_for_multiple_objects(
+        &mut self,
+        handles: &[u32],
+        wait_all: bool,
+        timeout_ms: u32,
+        thread_id: u32,
+    ) -> u32 {
+        if handles.is_empty() {
+            return WAIT_FAILED;
+        }
+        if wait_all {
+            if handles
+                .iter()
+                .all(|handle| self.handles.is_wait_ready(*handle, thread_id) == Some(true))
+            {
+                for handle in handles {
+                    let _ = self.handles.wait_for_single_object(*handle, 0, thread_id);
+                }
+                WAIT_OBJECT_0
+            } else if timeout_ms == 0 {
+                WAIT_TIMEOUT
+            } else {
+                WAIT_TIMEOUT
+            }
+        } else {
+            for (index, handle) in handles.iter().enumerate() {
+                if self.handles.is_wait_ready(*handle, thread_id) == Some(true) {
+                    let _ = self.handles.wait_for_single_object(*handle, 0, thread_id);
+                    return WAIT_OBJECT_0 + index as u32;
+                }
+            }
+            if handles
+                .iter()
+                .any(|handle| self.handles.is_wait_ready(*handle, thread_id).is_none())
+            {
+                WAIT_FAILED
+            } else {
+                WAIT_TIMEOUT
+            }
         }
     }
 
@@ -345,14 +511,6 @@ impl CeKernel {
             thread_id, class_name, title, parent, id, style, ex_style, rect,
         );
         self.handles.insert(KernelObject::Window(hwnd));
-        if self.gwe.is_window_visible(hwnd) {
-            self.post_window_message(hwnd, WM_SHOWWINDOW, 1, 0);
-            self.post_window_rect_messages(
-                hwnd,
-                Some(Rect::default()),
-                self.gwe.get_window_rect(hwnd),
-            );
-        }
         hwnd
     }
 

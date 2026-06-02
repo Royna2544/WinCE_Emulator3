@@ -68,6 +68,7 @@ pub struct VirtualAllocation {
     pub size: u32,
     pub allocation_type: u32,
     pub protect: u32,
+    pub initial_bytes: Vec<u8>,
 }
 
 impl Default for MemorySystem {
@@ -317,9 +318,18 @@ impl MemorySystem {
                 size,
                 allocation_type,
                 protect,
+                initial_bytes: Vec::new(),
             },
         );
         Some(base)
+    }
+
+    pub fn set_virtual_initial_bytes(&mut self, base: u32, bytes: Vec<u8>) -> bool {
+        let Some(allocation) = self.virtual_allocations.get_mut(&base) else {
+            return false;
+        };
+        allocation.initial_bytes = bytes;
+        true
     }
 
     pub fn virtual_free(&mut self, address: u32, size: u32, free_type: u32) -> bool {

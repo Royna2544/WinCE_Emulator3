@@ -159,6 +159,91 @@ impl HostFileSystem {
         Ok(bytes)
     }
 
+    pub fn read_at(&self, id: u32, offset: usize, requested: usize) -> Result<Vec<u8>> {
+        let file = self.open_file(id)?;
+        if offset >= file.data.len() {
+            return Ok(Vec::new());
+        }
+        let end = offset.saturating_add(requested).min(file.data.len());
+        Ok(file.data[offset..end].to_vec())
+    }
+
+    pub fn read_guest_file(&self, guest_path: &str) -> Result<Vec<u8>> {
+        let host_path = self.translate_guest_path(guest_path)?;
+        fs::read(&host_path).map_err(|source| Error::Io {
+            path: host_path,
+            source,
+        })
+    }
+
+    pub fn file_attributes_w(&self, guest_path: &str) -> Result<FindData> {
+        let normalized = normalize_guest_path(guest_path);
+        if let Some(entry) = root_mount_entry(guest_path, &normalized) {
+            return Ok(entry);
+        }
+
+        let host_path = self.translate_guest_path(guest_path)?;
+        let file_name = host_path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        find_data_from_path(&host_path, file_name)
+    }
+
+    pub fn create_directory_w(&self, guest_path: &str) -> Result<()> {
+        let host_path = self.translate_guest_path(guest_path)?;
+        fs::create_dir_all(&host_path).map_err(|source| Error::Io {
+            path: host_path,
+            source,
+        })
+    }
+
+    pub fn remove_directory_w(&self, guest_path: &str) -> Result<()> {
+        let host_path = self.translate_guest_path(guest_path)?;
+        fs::remove_dir(&host_path).map_err(|source| Error::Io {
+            path: host_path,
+            source,
+        })
+    }
+
+    pub fn delete_file_w(&self, guest_path: &str) -> Result<()> {
+        let host_path = self.translate_guest_path(guest_path)?;
+        fs::remove_file(&host_path).map_err(|source| Error::Io {
+            path: host_path,
+            source,
+        })
+    }
+
+    pub fn move_file_w(&self, existing_path: &str, new_path: &str) -> Result<()> {
+        let existing = self.translate_guest_path(existing_path)?;
+        let new = self.translate_guest_path(new_path)?;
+        if let Some(parent) = new.parent() {
+            fs::create_dir_all(parent).map_err(|source| Error::Io {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        fs::rename(&existing, &new).map_err(|source| Error::Io {
+            path: existing,
+            source,
+        })
+    }
+
+    pub fn set_file_attributes_w(&self, guest_path: &str, attributes: u32) -> Result<()> {
+        let host_path = self.translate_guest_path(guest_path)?;
+        let mut permissions = fs::metadata(&host_path)
+            .map_err(|source| Error::Io {
+                path: host_path.clone(),
+                source,
+            })?
+            .permissions();
+        permissions.set_readonly(attributes & FILE_ATTRIBUTE_READONLY != 0);
+        fs::set_permissions(&host_path, permissions).map_err(|source| Error::Io {
+            path: host_path,
+            source,
+        })
+    }
+
     pub fn write_file(&mut self, id: u32, bytes: &[u8]) -> Result<FileIoResult> {
         let file = self.open_file_mut(id)?;
         if !file.writable {
@@ -174,6 +259,27 @@ impl HostFileSystem {
         }
         file.data[file.cursor..end].copy_from_slice(bytes);
         file.cursor = end;
+        file.dirty = true;
+        Ok(FileIoResult {
+            success: true,
+            bytes_transferred: bytes.len() as u32,
+        })
+    }
+
+    pub fn write_at(&mut self, id: u32, offset: usize, bytes: &[u8]) -> Result<FileIoResult> {
+        let file = self.open_file_mut(id)?;
+        if !file.writable {
+            return Ok(FileIoResult {
+                success: false,
+                bytes_transferred: 0,
+            });
+        }
+
+        let end = offset.saturating_add(bytes.len());
+        if end > file.data.len() {
+            file.data.resize(end, 0);
+        }
+        file.data[offset..end].copy_from_slice(bytes);
         file.dirty = true;
         Ok(FileIoResult {
             success: true,

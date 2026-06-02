@@ -6,6 +6,13 @@
   },
   "devices": [
     {
+      "guest": "COM1:",
+      "type": "serial",
+      "backend": "stub",
+      "enabled": true,
+      "note": "Fixture/default CE serial port stub"
+    },
+    {
       "guest": "COM7:",
       "type": "serial",
       "backend": "win32_com",

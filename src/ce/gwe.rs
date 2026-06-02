@@ -22,18 +22,25 @@ pub const WM_WINDOWPOSCHANGED: u32 = 0x0047;
 pub const WM_SETTEXT: u32 = 0x000c;
 pub const WM_GETTEXT: u32 = 0x000d;
 pub const WM_GETTEXTLENGTH: u32 = 0x000e;
+pub const WM_KEYDOWN: u32 = 0x0100;
+pub const WM_CHAR: u32 = 0x0102;
+pub const WM_COMMAND: u32 = 0x0111;
 pub const WM_TIMER: u32 = 0x0113;
 pub const WM_USER: u32 = 0x0400;
 
 pub const HWND_BROADCAST: u32 = 0x0000_ffff;
 pub const DESKTOP_HWND: u32 = 0x0001_0000;
 pub const WNDCLASSW_SIZE: usize = 40;
+pub const DEFAULT_WNDPROC: u32 = 0xffff_fffc;
 
 pub const GWL_WNDPROC: i32 = -4;
 pub const GWL_ID: i32 = -12;
 pub const GWL_STYLE: i32 = -16;
 pub const GWL_EXSTYLE: i32 = -20;
 pub const GWL_USERDATA: i32 = -21;
+pub const DWL_MSGRESULT: i32 = 0;
+pub const DWL_DLGPROC: i32 = 4;
+pub const DWL_USER: i32 = 8;
 
 pub const GW_HWNDFIRST: u32 = 0;
 pub const GW_HWNDLAST: u32 = 1;
@@ -161,6 +168,7 @@ pub struct Window {
     pub ex_style: u32,
     pub wndproc: u32,
     pub user_data: u32,
+    pub extra_longs: Vec<u32>,
     pub rect: Rect,
     pub client_rect: Rect,
     pub update_pending: bool,
@@ -194,6 +202,11 @@ pub struct Gwe {
     focus: Option<u32>,
     capture: Option<u32>,
     cursor_pos: Point,
+    next_registered_message: u32,
+    registered_messages: BTreeMap<String, u32>,
+    dialog_results: BTreeMap<u32, u32>,
+    dialog_checks: BTreeMap<(u32, u32), u32>,
+    window_regions: BTreeMap<u32, Rect>,
 }
 
 impl Default for Gwe {
@@ -214,6 +227,7 @@ impl Default for Gwe {
                 ex_style: 0,
                 wndproc: 0,
                 user_data: 0,
+                extra_longs: Vec::new(),
                 rect: Rect::from_origin_size(0, 0, 800, 480),
                 client_rect: Rect::from_origin_size(0, 0, 800, 480),
                 update_pending: false,
@@ -233,6 +247,11 @@ impl Default for Gwe {
             focus: None,
             capture: None,
             cursor_pos: Point::default(),
+            next_registered_message: 0xc000,
+            registered_messages: BTreeMap::new(),
+            dialog_results: BTreeMap::new(),
+            dialog_checks: BTreeMap::new(),
+            window_regions: BTreeMap::new(),
         }
     }
 }
@@ -287,7 +306,14 @@ impl Gwe {
                     window_class.bytes[7],
                 ])
             })
-            .unwrap_or(0);
+            .filter(|wndproc| *wndproc != 0)
+            .unwrap_or(DEFAULT_WNDPROC);
+        let is_dialog = class_name.eq_ignore_ascii_case("dialog");
+        let extra_longs = self
+            .class_info(&class_name)
+            .map(window_extra_long_count)
+            .unwrap_or(0)
+            .max(if is_dialog { 3 } else { 0 });
         let hwnd = self.next_hwnd;
         self.next_hwnd += 4;
         let visible = style & WS_VISIBLE != 0;
@@ -307,6 +333,7 @@ impl Gwe {
                 ex_style,
                 wndproc,
                 user_data: 0,
+                extra_longs: vec![0; extra_longs],
                 rect,
                 client_rect: rect,
                 update_pending: visible,
@@ -340,6 +367,23 @@ impl Gwe {
         atom
     }
 
+    pub fn register_window_message(&mut self, name: &str) -> Option<u32> {
+        let name = normalize_class_name(name);
+        if name.is_empty() {
+            return None;
+        }
+        if let Some(message) = self.registered_messages.get(&name) {
+            return Some(*message);
+        }
+        let message = self.next_registered_message;
+        if message > 0xffff {
+            return None;
+        }
+        self.next_registered_message = self.next_registered_message.saturating_add(1);
+        self.registered_messages.insert(name, message);
+        Some(message)
+    }
+
     pub fn class_info(&self, name_or_atom: &str) -> Option<&WindowClass> {
         let name = if let Some(atom) = parse_atom_class_name(name_or_atom) {
             self.class_names_by_atom.get(&atom)?.clone()
@@ -370,7 +414,7 @@ impl Gwe {
             .map(|(hwnd, _)| *hwnd)
     }
 
-    pub fn destroy_window(&mut self, hwnd: u32, time_ms: u32) -> bool {
+    pub fn destroy_window(&mut self, hwnd: u32, _time_ms: u32) -> bool {
         let Some(window) = self.windows.get_mut(&hwnd) else {
             return false;
         };
@@ -378,7 +422,6 @@ impl Gwe {
             return false;
         }
         window.destroyed = true;
-        let thread_id = window.thread_id;
         if self.capture == Some(hwnd) {
             self.capture = None;
         }
@@ -386,7 +429,7 @@ impl Gwe {
             self.focus = None;
         }
         self.z_order.retain(|candidate| *candidate != hwnd);
-        self.post_message(thread_id, Message::new(hwnd, WM_DESTROY, 0, 0, time_ms));
+        self.window_regions.remove(&hwnd);
         true
     }
 
@@ -482,6 +525,72 @@ impl Gwe {
 
     pub fn get_parent(&self, hwnd: u32) -> Option<u32> {
         self.windows.get(&hwnd).and_then(|window| window.parent)
+    }
+
+    pub fn get_dlg_item(&self, parent: u32, id: u32) -> Option<u32> {
+        self.windows
+            .values()
+            .find(|window| !window.destroyed && window.parent == Some(parent) && window.id == id)
+            .map(|window| window.hwnd)
+    }
+
+    pub fn get_dlg_ctrl_id(&self, hwnd: u32) -> Option<u32> {
+        let window = self.windows.get(&hwnd)?;
+        (!window.destroyed).then_some(window.id)
+    }
+
+    pub fn end_dialog(&mut self, hwnd: u32, result: u32) -> bool {
+        if !self.is_window(hwnd) {
+            return false;
+        }
+        self.dialog_results.insert(hwnd, result);
+        true
+    }
+
+    pub fn dialog_result(&self, hwnd: u32) -> Option<u32> {
+        self.dialog_results.get(&hwnd).copied()
+    }
+
+    pub fn check_dlg_button(&mut self, hwnd: u32, id: u32, check: u32) -> bool {
+        if !self.is_window(hwnd) {
+            return false;
+        }
+        self.dialog_checks.insert((hwnd, id), check);
+        true
+    }
+
+    pub fn check_radio_button(&mut self, hwnd: u32, first: u32, last: u32, check: u32) -> bool {
+        if !self.is_window(hwnd) || first > last || check < first || check > last {
+            return false;
+        }
+        for id in first..=last {
+            self.dialog_checks
+                .insert((hwnd, id), u32::from(id == check));
+        }
+        true
+    }
+
+    pub fn is_dlg_button_checked(&self, hwnd: u32, id: u32) -> Option<u32> {
+        self.is_window(hwnd)
+            .then(|| self.dialog_checks.get(&(hwnd, id)).copied().unwrap_or(0))
+    }
+
+    pub fn set_window_region(&mut self, hwnd: u32, rect: Option<Rect>) -> bool {
+        if !self.is_window(hwnd) {
+            return false;
+        }
+        if let Some(rect) = rect {
+            self.window_regions.insert(hwnd, rect);
+        } else {
+            self.window_regions.remove(&hwnd);
+        }
+        true
+    }
+
+    pub fn window_region(&self, hwnd: u32) -> Option<Rect> {
+        self.is_window(hwnd)
+            .then(|| self.window_regions.get(&hwnd).copied())
+            .flatten()
     }
 
     pub fn set_parent(&mut self, hwnd: u32, parent: Option<u32>) -> Option<Option<u32>> {
@@ -781,7 +890,7 @@ impl Gwe {
     }
 
     pub fn send_message(&mut self, hwnd: u32, msg: u32, wparam: u32, lparam: u32) -> Option<u32> {
-        if !self.windows.contains_key(&hwnd) {
+        if !self.is_window(hwnd) {
             return None;
         }
         match msg {
@@ -846,12 +955,19 @@ impl Gwe {
         let Some(window) = self.windows.get_mut(&hwnd) else {
             return false;
         };
+        if window.destroyed {
+            return false;
+        }
         window.title = title.to_owned();
         true
     }
 
     pub fn get_window_text(&self, hwnd: u32, capacity_chars: usize) -> Option<String> {
-        let title = &self.windows.get(&hwnd)?.title;
+        let window = self.windows.get(&hwnd)?;
+        if window.destroyed {
+            return None;
+        }
+        let title = &window.title;
         Some(
             title
                 .chars()
@@ -1063,7 +1179,7 @@ impl Message {
     }
 }
 
-fn default_send_message_result(msg: u32, _wparam: u32, _lparam: u32) -> u32 {
+pub fn default_send_message_result(msg: u32, _wparam: u32, _lparam: u32) -> u32 {
     match msg {
         WM_NULL => 0,
         WM_GETTEXTLENGTH => 0,
@@ -1096,6 +1212,7 @@ fn window_long_slot(window: &Window, index: i32) -> Option<&u32> {
         GWL_EXSTYLE => Some(&window.ex_style),
         GWL_WNDPROC => Some(&window.wndproc),
         GWL_USERDATA => Some(&window.user_data),
+        _ if index >= 0 && index % 4 == 0 => window.extra_longs.get((index / 4) as usize),
         _ => None,
     }
 }
@@ -1107,7 +1224,22 @@ fn window_long_slot_mut(window: &mut Window, index: i32) -> Option<&mut u32> {
         GWL_EXSTYLE => Some(&mut window.ex_style),
         GWL_WNDPROC => Some(&mut window.wndproc),
         GWL_USERDATA => Some(&mut window.user_data),
+        _ if index >= 0 && index % 4 == 0 => window.extra_longs.get_mut((index / 4) as usize),
         _ => None,
+    }
+}
+
+fn window_extra_long_count(class: &WindowClass) -> usize {
+    let bytes = i32::from_le_bytes([
+        class.bytes[12],
+        class.bytes[13],
+        class.bytes[14],
+        class.bytes[15],
+    ]);
+    if bytes <= 0 {
+        0
+    } else {
+        ((bytes as usize) + 3) / 4
     }
 }
 

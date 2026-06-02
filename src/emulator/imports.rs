@@ -12,6 +12,7 @@ use crate::{
 pub const IMPORT_TRAP_BASE: u32 = 0x7fff_0000;
 pub const IMPORT_TRAP_STRIDE: u32 = 0x10;
 pub const IMPORT_TRAP_PAGE_SIZE: u32 = 0x0001_0000;
+pub const DYNAMIC_COREDLL_PROC_TRAP_BASE: u32 = IMPORT_TRAP_BASE + 0x5000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportTrap {
@@ -83,7 +84,10 @@ impl ImportTrapTable {
         address: u32,
         args: Vec<u32>,
     ) -> Option<u32> {
-        let trap = self.trap_at(address)?;
+        let trap = self
+            .trap_at(address)
+            .cloned()
+            .or_else(|| dynamic_coredll_proc_trap(address))?;
         Some(match trap.module_kind {
             ImportModuleKind::Coredll => {
                 let Some(ordinal) = trap.ordinal else {
@@ -97,7 +101,7 @@ impl ImportTrapTable {
             }
             ImportModuleKind::CommonControls
             | ImportModuleKind::Winsock
-            | ImportModuleKind::Ole => dispatch_external_stub_to_u32(trap, memory, &args),
+            | ImportModuleKind::Ole => dispatch_external_stub_to_u32(&trap, memory, &args),
             ImportModuleKind::Mfc => return None,
         })
     }
@@ -105,6 +109,34 @@ impl ImportTrapTable {
     fn insert(&mut self, trap: ImportTrap) {
         self.traps.insert(trap.address, trap);
     }
+}
+
+pub fn dynamic_coredll_proc_address(ordinal: u32) -> Option<u32> {
+    let address =
+        DYNAMIC_COREDLL_PROC_TRAP_BASE.checked_add(ordinal.checked_mul(IMPORT_TRAP_STRIDE)?)?;
+    (address < IMPORT_TRAP_BASE.saturating_add(IMPORT_TRAP_PAGE_SIZE)).then_some(address)
+}
+
+pub fn dynamic_coredll_proc_trap(address: u32) -> Option<ImportTrap> {
+    if address < DYNAMIC_COREDLL_PROC_TRAP_BASE
+        || address >= IMPORT_TRAP_BASE.saturating_add(IMPORT_TRAP_PAGE_SIZE)
+    {
+        return None;
+    }
+    let offset = address - DYNAMIC_COREDLL_PROC_TRAP_BASE;
+    if offset % IMPORT_TRAP_STRIDE != 0 {
+        return None;
+    }
+    let ordinal = offset / IMPORT_TRAP_STRIDE;
+    let export = crate::ce::coredll::CoredllExportTable::resolve_static_ordinal(ordinal)?;
+    Some(ImportTrap {
+        address,
+        module_kind: ImportModuleKind::Coredll,
+        module_name: "COREDLL.dll".to_owned(),
+        ordinal: Some(ordinal),
+        name: Some(export.name),
+        iat_va: 0,
+    })
 }
 
 pub fn patch_pe_coredll_imports(
@@ -388,6 +420,12 @@ pub fn import_trap_code_page(table: &ImportTrapTable) -> Vec<u8> {
         if offset + 8 > page.len() {
             continue;
         }
+        page[offset..offset + 4].copy_from_slice(&0x03e0_0008u32.to_le_bytes());
+        page[offset + 4..offset + 8].copy_from_slice(&0u32.to_le_bytes());
+    }
+    let dynamic_start = (DYNAMIC_COREDLL_PROC_TRAP_BASE - IMPORT_TRAP_BASE) as usize;
+    for offset in (dynamic_start..page.len().saturating_sub(8)).step_by(IMPORT_TRAP_STRIDE as usize)
+    {
         page[offset..offset + 4].copy_from_slice(&0x03e0_0008u32.to_le_bytes());
         page[offset + 4..offset + 8].copy_from_slice(&0u32.to_le_bytes());
     }

@@ -181,6 +181,14 @@ pub struct PeResourceString {
     pub text: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeResourceData {
+    pub kind: u32,
+    pub name: u32,
+    pub data_rva: u32,
+    pub size: u32,
+}
+
 impl PeImage {
     pub fn inspect(path: impl AsRef<Path>) -> Result<Self> {
         let path_ref = path.as_ref();
@@ -304,6 +312,56 @@ impl PeImage {
                     let data_rva = self.read_u32_rva(entry_rva)?;
                     let size = self.read_u32_rva(rva_add(entry_rva, 4, &self.path)?)?;
                     self.parse_string_table_block(block_id, data_rva, size, &mut out)?;
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn resource_data_entries(&self) -> Result<Vec<PeResourceData>> {
+        let Some(directory) = self.data_directory(IMAGE_DIRECTORY_ENTRY_RESOURCE) else {
+            return Ok(Vec::new());
+        };
+        if directory.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for type_entry in self.resource_directory_entries(directory.virtual_address)? {
+            let Some(kind) = type_entry.id else {
+                continue;
+            };
+            if !type_entry.is_directory {
+                continue;
+            }
+            let name_dir_rva = directory
+                .virtual_address
+                .checked_add(type_entry.offset)
+                .ok_or_else(|| pe_error(&self.path, "resource type offset overflow"))?;
+            for name_entry in self.resource_directory_entries(name_dir_rva)? {
+                let Some(name) = name_entry.id else {
+                    continue;
+                };
+                if !name_entry.is_directory {
+                    continue;
+                }
+                let lang_dir_rva = directory
+                    .virtual_address
+                    .checked_add(name_entry.offset)
+                    .ok_or_else(|| pe_error(&self.path, "resource name offset overflow"))?;
+                for lang_entry in self.resource_directory_entries(lang_dir_rva)? {
+                    if lang_entry.is_directory {
+                        continue;
+                    }
+                    let entry_rva = directory
+                        .virtual_address
+                        .checked_add(lang_entry.offset)
+                        .ok_or_else(|| pe_error(&self.path, "resource data offset overflow"))?;
+                    out.push(PeResourceData {
+                        kind,
+                        name,
+                        data_rva: self.read_u32_rva(entry_rva)?,
+                        size: self.read_u32_rva(rva_add(entry_rva, 4, &self.path)?)?,
+                    });
                 }
             }
         }

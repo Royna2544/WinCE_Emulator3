@@ -6,7 +6,8 @@ use crate::{
     },
     emulator::{
         imports::{
-            ExternalImportTable, IMPORT_TRAP_BASE, IMPORT_TRAP_PAGE_SIZE, ImportTrapTable,
+            DYNAMIC_COREDLL_PROC_TRAP_BASE, ExternalImportTable, IMPORT_TRAP_BASE,
+            IMPORT_TRAP_PAGE_SIZE, ImportTrapTable, dynamic_coredll_proc_trap,
             import_trap_code_page, patch_pe_coredll_imports, patch_pe_imports,
         },
         memory::{MemoryMap, MemoryPerms},
@@ -24,6 +25,7 @@ pub struct UnicornMips {
     mapped_blobs: Vec<MappedBlob>,
     import_traps: ImportTrapTable,
     resource_strings: Vec<MappedResourceString>,
+    resources: Vec<MappedResource>,
     #[cfg(feature = "unicorn")]
     trampoline_ranges: Vec<(u32, u32)>,
     #[cfg(feature = "unicorn")]
@@ -171,6 +173,7 @@ pub struct UnicornLastCode {
     pub pc: u32,
     pub ra: u32,
     pub sp: u32,
+    pub sp_return_slot: Option<u32>,
     pub instruction: Option<u32>,
     pub next_instruction: Option<u32>,
     pub direct_jump_target: Option<u32>,
@@ -232,6 +235,8 @@ const RESERVED_IMPORT_TRAP_STUB_BYTES: u32 = crate::emulator::imports::IMPORT_TR
 #[cfg(feature = "unicorn")]
 const CREATESTRUCTW_SIZE: u32 = 48;
 #[cfg(feature = "unicorn")]
+const WM_INITDIALOG: u32 = 0x0110;
+#[cfg(feature = "unicorn")]
 const MAIN_DESTRUCTOR_BRANCH_PC: u32 = 0x0048_f9cc;
 #[cfg(feature = "unicorn")]
 const MAIN_DESTRUCTOR_JALR_PC: u32 = 0x0048_f9d4;
@@ -267,6 +272,8 @@ struct PendingWndProcReturn {
     wndproc: u32,
     return_pc: u32,
     class_name: Option<String>,
+    api_result: Option<u32>,
+    dialog_result_hwnd: Option<u32>,
 }
 
 #[cfg(feature = "unicorn")]
@@ -279,12 +286,52 @@ struct PendingGuestThreadReturn {
     creator_regs: [u32; 32],
 }
 
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SuspendedGuestThread {
+    thread_id: u32,
+    regs: [u32; 32],
+    pc: u32,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BlockedGuestThread {
+    thread_id: u32,
+    thread_handle: u32,
+    regs: [u32; 32],
+    return_pc: u32,
+    msg_ptr: u32,
+    hwnd: Option<u32>,
+    min_msg: u32,
+    max_msg: u32,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BlockedWaitThread {
+    thread_id: u32,
+    thread_handle: u32,
+    wait_handle: u32,
+    regs: [u32; 32],
+    return_pc: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MappedResourceString {
     module: u32,
     id: u32,
     text: String,
     data_ptr: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MappedResource {
+    module: u32,
+    name: u32,
+    kind: u32,
+    data_ptr: u32,
+    size: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -304,6 +351,7 @@ impl UnicornMips {
             mapped_blobs: Vec::new(),
             import_traps: ImportTrapTable::new(),
             resource_strings: Vec::new(),
+            resources: Vec::new(),
             #[cfg(feature = "unicorn")]
             trampoline_ranges: Vec::new(),
             #[cfg(feature = "unicorn")]
@@ -506,6 +554,15 @@ impl UnicornMips {
                 data_ptr: Some(load_base.wrapping_add(string.data_rva)),
             });
         }
+        for resource in image.resource_data_entries()? {
+            self.resources.push(MappedResource {
+                module: load_base,
+                name: resource.name,
+                kind: resource.kind,
+                data_ptr: load_base.wrapping_add(resource.data_rva),
+                size: resource.size,
+            });
+        }
         Ok(())
     }
 
@@ -550,6 +607,15 @@ impl UnicornMips {
                 string.data_ptr,
             );
         }
+        for resource in &self.resources {
+            kernel.resources.register(
+                resource.module,
+                crate::ce::resource::ResourceId::Integer(resource.name as u16),
+                crate::ce::resource::ResourceId::Integer(resource.kind as u16),
+                resource.data_ptr,
+                resource.size,
+            );
+        }
         #[cfg(not(feature = "unicorn"))]
         let _ = instruction_limit;
         #[cfg(feature = "unicorn")]
@@ -567,6 +633,7 @@ impl UnicornMips {
     #[cfg(feature = "unicorn")]
     fn write_process_entry_context<D>(
         &self,
+        kernel: &CeKernel,
         uc: &mut unicorn_engine::Unicorn<'_, D>,
     ) -> Result<()> {
         use unicorn_engine::RegisterMIPS;
@@ -586,10 +653,13 @@ impl UnicornMips {
             .checked_sub(STACK_COMMAND_LINE_OFFSET)
             .ok_or_else(|| Error::Backend("guest command-line pointer underflow".to_owned()))?;
 
-        // CE/MFC WinMain receives the application command line in A2. There is
-        // no CLI command-line argument plumbed yet, so expose a real empty
-        // UTF-16 string instead of a null pointer.
-        uc.mem_write(u64::from(command_line), &[0, 0])
+        // CE/MFC WinMain receives the application command line in A2.
+        let mut command_line_bytes = Vec::new();
+        for unit in kernel.process_command_line().encode_utf16() {
+            command_line_bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        command_line_bytes.extend_from_slice(&0u16.to_le_bytes());
+        uc.mem_write(u64::from(command_line), &command_line_bytes)
             .map_err(|err| Error::Backend(format!("write guest command line: {err:?}")))?;
         for (register, value, name) in [
             (RegisterMIPS::A0, hinstance, "A0/hInstance"),
@@ -648,7 +718,7 @@ impl UnicornMips {
         }
         uc.reg_write(RegisterMIPS::RA, u64::from(THREAD_EXIT_STUB_ADDR))
             .map_err(|err| Error::Backend(format!("set guest RA: {err:?}")))?;
-        self.write_process_entry_context(&mut uc)?;
+        self.write_process_entry_context(kernel, &mut uc)?;
 
         let function_pointer_probe = Rc::new(RefCell::new(None));
         let function_pointer_probe_hook = Rc::clone(&function_pointer_probe);
@@ -719,6 +789,9 @@ impl UnicornMips {
                     pc,
                     ra: read_mips_reg(uc, RegisterMIPS::RA),
                     sp: read_mips_reg(uc, RegisterMIPS::SP),
+                    sp_return_slot: read_mips_reg(uc, RegisterMIPS::SP)
+                        .checked_add(0x10)
+                        .and_then(|addr| read_unicorn_u32(uc, addr)),
                     instruction,
                     next_instruction,
                     direct_jump_target,
@@ -799,6 +872,14 @@ impl UnicornMips {
         let pending_guest_thread_returns =
             Rc::new(RefCell::new(Vec::<PendingGuestThreadReturn>::new()));
         let pending_guest_thread_returns_hook = Rc::clone(&pending_guest_thread_returns);
+        let blocked_guest_thread = Rc::new(RefCell::new(None::<BlockedGuestThread>));
+        let blocked_guest_thread_hook = Rc::clone(&blocked_guest_thread);
+        let blocked_wait_threads = Rc::new(RefCell::new(Vec::<BlockedWaitThread>::new()));
+        let blocked_wait_threads_hook = Rc::clone(&blocked_wait_threads);
+        let suspended_guest_thread = Rc::new(RefCell::new(None::<SuspendedGuestThread>));
+        let suspended_guest_thread_hook = Rc::clone(&suspended_guest_thread);
+        let running_guest_thread = Rc::new(RefCell::new(None::<(u32, u32)>));
+        let running_guest_thread_hook = Rc::clone(&running_guest_thread);
         let traps = self.import_traps.clone();
         let kernel_ptr = kernel as *mut CeKernel;
         let stack_top = self.stack_top.unwrap_or(0);
@@ -848,6 +929,11 @@ impl UnicornMips {
                         return;
                     };
                     let result = read_mips_reg(uc, RegisterMIPS::V0);
+                    if callout.msg == crate::ce::gwe::WM_PAINT {
+                        unsafe { &mut *kernel_ptr }
+                            .gwe
+                            .validate_window(callout.hwnd);
+                    }
                     record_wndproc_return(
                         &last_wndproc_returns_hook,
                         UnicornWndProcReturn {
@@ -862,6 +948,14 @@ impl UnicornMips {
                             class_name: callout.class_name,
                         },
                     );
+                    let api_result = callout.api_result.or_else(|| {
+                        callout
+                            .dialog_result_hwnd
+                            .and_then(|hwnd| unsafe { &*kernel_ptr }.gwe.dialog_result(hwnd))
+                    });
+                    if let Some(api_result) = api_result {
+                        let _ = uc.reg_write(RegisterMIPS::V0, u64::from(api_result));
+                    }
                     let writes = [
                         uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc)),
                         uc.reg_write(RegisterMIPS::RA, u64::from(callout.return_pc)),
@@ -872,37 +966,61 @@ impl UnicornMips {
                     return;
                 }
                 if address == GUEST_THREAD_RETURN_STUB_ADDR {
-                    let Some(callout) = pending_guest_thread_returns_hook.borrow_mut().pop() else {
+                    let exit_code = read_mips_reg(uc, RegisterMIPS::V0);
+                    if let Some(callout) = pending_guest_thread_returns_hook.borrow_mut().pop() {
+                        unsafe { &mut *kernel_ptr }
+                            .mark_guest_thread_exited(callout.thread_handle, exit_code);
+                        *current_thread_id_hook.borrow_mut() = callout.creator_thread_id;
+                        *running_guest_thread_hook.borrow_mut() = None;
+                        restore_mips_gprs(uc, &callout.creator_regs);
+                        let writes = [
+                            uc.reg_write(RegisterMIPS::V0, u64::from(callout.thread_handle)),
+                            uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc)),
+                            uc.reg_write(RegisterMIPS::RA, u64::from(callout.return_pc)),
+                        ];
+                        tracing::debug!(
+                            target: "ce.imports",
+                            thread_id = callout.worker_thread_id,
+                            handle = format_args!("0x{:08x}", callout.thread_handle),
+                            exit_code = format_args!("0x{exit_code:08x}"),
+                            return_pc = format_args!("0x{:08x}", callout.return_pc),
+                            "guest thread returned"
+                        );
+                        if writes.into_iter().any(|write| write.is_err()) {
+                            let _ = uc.emu_stop();
+                        }
+                        return;
+                    }
+                    let Some((worker_thread_id, thread_handle)) =
+                        running_guest_thread_hook.borrow_mut().take()
+                    else {
                         let _ = uc.emu_stop();
                         return;
                     };
-                    let exit_code = read_mips_reg(uc, RegisterMIPS::V0);
-                    unsafe { &mut *kernel_ptr }
-                        .mark_guest_thread_exited(callout.thread_handle, exit_code);
-                    *current_thread_id_hook.borrow_mut() = callout.creator_thread_id;
-                    restore_mips_gprs(uc, &callout.creator_regs);
-                    let writes = [
-                        uc.reg_write(RegisterMIPS::V0, u64::from(callout.thread_handle)),
-                        uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc)),
-                        uc.reg_write(RegisterMIPS::RA, u64::from(callout.return_pc)),
-                    ];
+                    unsafe { &mut *kernel_ptr }.mark_guest_thread_exited(thread_handle, exit_code);
+                    let Some(suspended) = suspended_guest_thread_hook.borrow_mut().take() else {
+                        let _ = uc.emu_stop();
+                        return;
+                    };
+                    *current_thread_id_hook.borrow_mut() = suspended.thread_id;
+                    restore_suspended_thread(uc, &suspended);
                     tracing::debug!(
                         target: "ce.imports",
-                        thread_id = callout.worker_thread_id,
-                        handle = format_args!("0x{:08x}", callout.thread_handle),
+                        thread_id = worker_thread_id,
+                        handle = format_args!("0x{thread_handle:08x}"),
                         exit_code = format_args!("0x{exit_code:08x}"),
-                        return_pc = format_args!("0x{:08x}", callout.return_pc),
-                        "guest thread returned"
+                        resume_thread_id = suspended.thread_id,
+                        "resumed creator after guest thread returned"
                     );
-                    if writes.into_iter().any(|write| write.is_err()) {
-                        let _ = uc.emu_stop();
-                    }
                     return;
                 }
-                if traps.trap_at(address).is_none() {
+                let trap = traps
+                    .trap_at(address)
+                    .cloned()
+                    .or_else(|| dynamic_coredll_proc_trap(address));
+                if trap.is_none() {
                     return;
                 }
-                let trap = traps.trap_at(address).cloned();
                 if let Some(trap) = trap.as_ref() {
                     let a0 = read_mips_reg(uc, RegisterMIPS::A0);
                     let a1 = read_mips_reg(uc, RegisterMIPS::A1);
@@ -954,10 +1072,31 @@ impl UnicornMips {
                         &args,
                         active_thread_id,
                         &blocked_get_message_hook,
+                        &blocked_guest_thread_hook,
+                        &pending_guest_thread_returns_hook,
+                        &current_thread_id_hook,
+                        &suspended_guest_thread_hook,
+                        &running_guest_thread_hook,
                         &last_messages_hook,
                     )
                 }) {
-                    let _ = uc.emu_stop();
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_block_wait_for_single_object(
+                        unsafe { &mut *kernel_ptr },
+                        uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        active_thread_id,
+                        &blocked_wait_threads_hook,
+                        &pending_guest_thread_returns_hook,
+                        &current_thread_id_hook,
+                        &suspended_guest_thread_hook,
+                        &running_guest_thread_hook,
+                    )
+                }) {
                     return;
                 }
                 let mut memory = UnicornGuestMemory {
@@ -1025,6 +1164,54 @@ impl UnicornMips {
                     return;
                 }
                 if trap.as_ref().is_some_and(|trap| {
+                    try_enter_def_dlg_proc_callout(
+                        unsafe { &*kernel_ptr },
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        &pending_wndproc_returns_hook,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_enter_destroy_window_callout(
+                        unsafe { &mut *kernel_ptr },
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        &pending_wndproc_returns_hook,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_enter_update_window_callout(
+                        unsafe { &*kernel_ptr },
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        &pending_wndproc_returns_hook,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_enter_is_dialog_message_callout(
+                        unsafe { &*kernel_ptr },
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        &pending_wndproc_returns_hook,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
                     try_enter_call_window_proc_callout(
                         memory.uc,
                         trap.module_kind,
@@ -1045,6 +1232,7 @@ impl UnicornMips {
                         active_thread_id,
                         stack_top,
                         &current_thread_id_hook,
+                        &running_guest_thread_hook,
                         &pending_guest_thread_returns_hook,
                     )
                 }) {
@@ -1064,6 +1252,18 @@ impl UnicornMips {
                     unsafe { &*kernel_ptr },
                     &mut mapped_kernel_memory_hook.borrow_mut(),
                 );
+                if trap.as_ref().is_some_and(|trap| {
+                    trap.module_kind == crate::emulator::imports::ImportModuleKind::Coredll
+                        && trap.ordinal == Some(crate::ce::coredll_ordinals::ORD_CREATE_PROCESS_W)
+                        && result != 0
+                }) {
+                    let _ = run_pending_process_launches(
+                        memory.uc,
+                        unsafe { &mut *kernel_ptr },
+                        instruction_limit,
+                    );
+                    let _ = sync_file_mapping_views_to_unicorn(memory.uc, unsafe { &*kernel_ptr });
+                }
                 if let Some(trap) = trap.as_ref() {
                     if let Some(import) = last_imports_hook
                         .borrow_mut()
@@ -1106,7 +1306,59 @@ impl UnicornMips {
                 }) {
                     return;
                 }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_enter_dialog_init_callout(
+                        unsafe { &*kernel_ptr },
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        result,
+                        &pending_wndproc_returns_hook,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_enter_resumed_thread_callout(
+                        unsafe { &*kernel_ptr },
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        result,
+                        active_thread_id,
+                        stack_top,
+                        &current_thread_id_hook,
+                        &suspended_guest_thread_hook,
+                        &running_guest_thread_hook,
+                    )
+                }) {
+                    return;
+                }
                 let _ = memory.uc.reg_write(RegisterMIPS::V0, u64::from(result));
+                if try_resume_blocked_wait(
+                    unsafe { &mut *kernel_ptr },
+                    memory.uc,
+                    active_thread_id,
+                    &current_thread_id_hook,
+                    &blocked_wait_threads_hook,
+                    &suspended_guest_thread_hook,
+                    &running_guest_thread_hook,
+                ) {
+                    return;
+                }
+                if try_resume_blocked_get_message(
+                    unsafe { &mut *kernel_ptr },
+                    memory.uc,
+                    active_thread_id,
+                    &current_thread_id_hook,
+                    &blocked_guest_thread_hook,
+                    &suspended_guest_thread_hook,
+                    &running_guest_thread_hook,
+                ) {
+                    return;
+                }
             },
         )
         .map_err(|err| Error::Backend(format!("install import hook: {err:?}")))?;
@@ -1227,6 +1479,7 @@ impl UnicornMips {
                 if let Some(snapshot) = self.last_debug.as_mut() {
                     snapshot.encoded_kernel_exit = Some(exit);
                 }
+                let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
                 return Ok(());
             }
             let snapshot = self
@@ -1252,6 +1505,7 @@ impl UnicornMips {
                 "Unicorn run stopped on guest CPU exception; {snapshot}"
             )));
         }
+        let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
         Ok(())
     }
 
@@ -1352,11 +1606,15 @@ fn patch_mips_unicorn_trampolines(
                 });
             } else if let Some(branch) = decode_mips_normal_branch(instruction) {
                 let pc = load_base.wrapping_add(rva);
-                patches.push(MipsUnicornPatch {
-                    rva,
-                    pc,
-                    kind: MipsUnicornPatchKind::Branch { branch, delay_slot },
-                });
+                if delay_slot == MIPS_NOP && pc.wrapping_add(branch.target) == pc.wrapping_add(8) {
+                    write_mapped_word(mapped, rva, MIPS_NOP, &image.path)?;
+                } else if delay_slot != MIPS_NOP || is_unconditional_taken_branch(branch) {
+                    patches.push(MipsUnicornPatch {
+                        rva,
+                        pc,
+                        kind: MipsUnicornPatchKind::Branch { branch, delay_slot },
+                    });
+                }
             } else if let Some(target) =
                 decode_mips_jal_target(load_base.wrapping_add(rva), instruction)
             {
@@ -1553,6 +1811,11 @@ fn decode_mips_normal_branch(instruction: u32) -> Option<MipsBranchLikely> {
         inverse_branch,
         link: false,
     })
+}
+
+#[cfg(feature = "unicorn")]
+fn is_unconditional_taken_branch(branch: MipsBranchLikely) -> bool {
+    branch.rs == 0 && branch.rt == 0 && branch.inverse_branch == MipsBranch::Bne
 }
 
 #[cfg(feature = "unicorn")]
@@ -1772,10 +2035,7 @@ fn advance_trap_base(current: u32, trap_count: usize) -> Result<u32> {
     let next = current
         .checked_add(bytes)
         .ok_or_else(|| Error::InvalidArgument("import trap base overflow".to_owned()))?;
-    let trap_end = IMPORT_TRAP_BASE
-        .checked_add(IMPORT_TRAP_PAGE_SIZE)
-        .ok_or_else(|| Error::InvalidArgument("import trap page overflow".to_owned()))?;
-    if next >= trap_end.saturating_sub(RESERVED_IMPORT_TRAP_STUB_BYTES) {
+    if next >= DYNAMIC_COREDLL_PROC_TRAP_BASE.saturating_sub(RESERVED_IMPORT_TRAP_STUB_BYTES) {
         return Err(Error::InvalidArgument(
             "import trap page is full".to_owned(),
         ));
@@ -1800,7 +2060,7 @@ fn map_kernel_memory_allocations<D>(
         )?;
     }
     for allocation in kernel.memory.virtual_allocations() {
-        map_guest_range(
+        let newly_mapped = map_guest_range(
             uc,
             mapped,
             allocation.base,
@@ -1808,8 +2068,201 @@ fn map_kernel_memory_allocations<D>(
             virtual_allocation_perms(allocation.protect),
             "virtual allocation",
         )?;
+        if newly_mapped && !allocation.initial_bytes.is_empty() {
+            uc.mem_write(u64::from(allocation.base), &allocation.initial_bytes)
+                .map_err(|err| {
+                    Error::Backend(format!(
+                        "seed virtual allocation 0x{:08x}: {err:?}",
+                        allocation.base
+                    ))
+                })?;
+        }
     }
     Ok(())
+}
+
+#[cfg(feature = "unicorn")]
+fn sync_file_mapping_views_from_unicorn<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    kernel: &mut CeKernel,
+) -> Result<()> {
+    let mut updates = Vec::new();
+    for mapping in kernel.handles.file_mappings() {
+        let Some(base) = mapping.view_base else {
+            continue;
+        };
+        let size = mapping.view_size.min(mapping.size) as usize;
+        let mut bytes = vec![0; size];
+        uc.mem_read(u64::from(base), &mut bytes).map_err(|err| {
+            Error::Backend(format!(
+                "read mapped view 0x{base:08x} before process launch: {err:?}"
+            ))
+        })?;
+        updates.push((base, mapping.view_offset as usize, bytes));
+    }
+    for (base, offset, bytes) in updates {
+        if let Some(mapping) = kernel.handles.file_mapping_by_view_mut(base) {
+            let end = offset.saturating_add(bytes.len());
+            if end > mapping.data.len() {
+                mapping.data.resize(end, 0);
+            }
+            mapping.data[offset..end].copy_from_slice(&bytes);
+        }
+        kernel.memory.set_virtual_initial_bytes(base, bytes);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "unicorn")]
+fn sync_file_mapping_views_to_unicorn<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    kernel: &CeKernel,
+) -> Result<()> {
+    for mapping in kernel.handles.file_mappings() {
+        let Some(base) = mapping.view_base else {
+            continue;
+        };
+        let start = mapping.view_offset as usize;
+        let end = start
+            .saturating_add(mapping.view_size as usize)
+            .min(mapping.data.len());
+        if start >= end {
+            continue;
+        }
+        uc.mem_write(u64::from(base), &mapping.data[start..end])
+            .map_err(|err| Error::Backend(format!("write mapped view 0x{base:08x}: {err:?}")))?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "unicorn")]
+fn run_pending_process_launches<D>(
+    parent_uc: &mut unicorn_engine::Unicorn<'_, D>,
+    kernel: &mut CeKernel,
+    instruction_limit: usize,
+) -> Result<()> {
+    let launches = kernel.take_pending_process_launches();
+    if launches.is_empty() {
+        return Ok(());
+    }
+    sync_file_mapping_views_from_unicorn(parent_uc, kernel)?;
+    for launch in launches {
+        let Some(path) = resolve_process_launch_path(kernel, &launch)? else {
+            kernel.mark_process_launch_exited(&launch, u32::MAX);
+            continue;
+        };
+        let image = PeImage::inspect(&path)?;
+        let saved_base = kernel.process_module_base();
+        let saved_path = kernel.process_module_path().to_owned();
+        let saved_host_path = kernel.process_module_host_path().cloned();
+        let saved_command_line = kernel.process_command_line().to_owned();
+
+        kernel.set_process_module_base(image.image_base());
+        kernel.set_process_module_path(format!(
+            "\\SDMMC Disk\\{}",
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("child.exe")
+        ));
+        kernel.set_process_module_host_path(path.clone());
+        kernel.set_process_command_line(launch.command_line.clone().unwrap_or_default());
+
+        let mut child = UnicornMips::new()?;
+        child.load_pe_image(&image)?;
+        let mut child_framebuffer = VirtualFramebuffer::default_primary()?;
+        child.run_until_import_trap_with_framebuffer_limit(
+            kernel,
+            &mut child_framebuffer,
+            instruction_limit,
+        )?;
+        let exit_code = child
+            .last_debug_snapshot()
+            .and_then(|snapshot| {
+                snapshot
+                    .encoded_kernel_exit
+                    .as_ref()
+                    .map(|exit| exit.exit_code)
+            })
+            .unwrap_or(0);
+        kernel.mark_process_launch_exited(&launch, exit_code);
+
+        kernel.set_process_module_base(saved_base);
+        kernel.set_process_module_path(saved_path);
+        if let Some(saved_host_path) = saved_host_path {
+            kernel.set_process_module_host_path(saved_host_path);
+        }
+        kernel.set_process_command_line(saved_command_line);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "unicorn")]
+fn resolve_process_launch_path(
+    kernel: &CeKernel,
+    launch: &crate::ce::kernel::PendingProcessLaunch,
+) -> Result<Option<std::path::PathBuf>> {
+    let raw_path = if let Some(application) = launch
+        .application
+        .as_deref()
+        .filter(|path| !path.is_empty())
+    {
+        application.to_owned()
+    } else if let Some(token) = first_command_line_token(launch.command_line.as_deref()) {
+        token
+    } else {
+        return Ok(None);
+    };
+    let separator = std::path::MAIN_SEPARATOR.to_string();
+    let relative = raw_path.replace('\\', &separator);
+    let relative_path = std::path::Path::new(&relative);
+    let Some(parent_exe) = kernel.process_module_host_path() else {
+        return Ok(None);
+    };
+    let Some(parent_dir) = parent_exe.parent() else {
+        return Ok(None);
+    };
+    let direct = parent_dir.join(relative_path);
+    if direct.exists() {
+        return Ok(Some(direct));
+    }
+    let Some(file_name) = relative_path.file_name() else {
+        return Ok(None);
+    };
+    let Some(search_root) = parent_dir.parent() else {
+        return Ok(None);
+    };
+    for entry in std::fs::read_dir(search_root).map_err(|source| Error::Io {
+        path: search_root.to_path_buf(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| Error::Io {
+            path: search_root.to_path_buf(),
+            source,
+        })?;
+        if !entry.file_type().map(|ty| ty.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let candidate = entry.path().join(file_name);
+        if candidate.exists() {
+            return Ok(Some(candidate));
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(feature = "unicorn")]
+fn first_command_line_token(command_line: Option<&str>) -> Option<String> {
+    let command_line = command_line?.trim();
+    if command_line.is_empty() {
+        return None;
+    }
+    if let Some(rest) = command_line.strip_prefix('"') {
+        return rest.find('"').map(|end| rest[..end].to_owned());
+    }
+    command_line
+        .split_whitespace()
+        .next()
+        .map(|token| token.to_owned())
 }
 
 #[cfg(feature = "unicorn")]
@@ -1820,7 +2273,7 @@ fn map_guest_range<D>(
     size: u32,
     perms: MemoryPerms,
     label: &str,
-) -> Result<()> {
+) -> Result<bool> {
     let first_page = base & !0xfff;
     let page_end = base
         .checked_add(size.max(1))
@@ -1828,6 +2281,7 @@ fn map_guest_range<D>(
         .map(|end| end & !0xfff)
         .ok_or_else(|| Error::InvalidArgument(format!("{label} range overflow")))?;
     let mut page_base = first_page;
+    let mut mapped_any = false;
     while page_base < page_end {
         if mapped.iter().any(|(mapped_base, mapped_size)| {
             page_base >= *mapped_base && page_base < mapped_base.saturating_add(*mapped_size)
@@ -1842,11 +2296,12 @@ fn map_guest_range<D>(
                 Error::Backend(format!("map {label} page 0x{page_base:08x}: {err:?}"))
             })?;
         mapped.push((page_base, 0x1000));
+        mapped_any = true;
         page_base = page_base
             .checked_add(0x1000)
             .ok_or_else(|| Error::InvalidArgument(format!("{label} page overflow")))?;
     }
-    Ok(())
+    Ok(mapped_any)
 }
 
 #[cfg(feature = "unicorn")]
@@ -2054,6 +2509,9 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                     "0x{:08x}/ra=0x{:08x}/sp=0x{:08x}",
                     code.pc, code.ra, code.sp
                 )?;
+                if let Some(sp_return_slot) = code.sp_return_slot {
+                    write!(f, "/sp10=0x{sp_return_slot:08x}")?;
+                }
                 if let Some(instruction) = code.instruction {
                     write!(f, "/insn=0x{instruction:08x}")?;
                 }
@@ -2368,14 +2826,21 @@ fn jmp_buf_slot_addr(env: u32, slot: u32) -> Result<u32> {
 #[cfg(feature = "unicorn")]
 fn try_block_empty_get_message<D>(
     kernel: &mut CeKernel,
-    uc: &unicorn_engine::Unicorn<'_, D>,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
     thread_id: u32,
     blocked: &std::rc::Rc<std::cell::RefCell<Option<UnicornBlockedGetMessage>>>,
+    blocked_thread: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     last_messages: &std::rc::Rc<std::cell::RefCell<Vec<UnicornLastMessage>>>,
 ) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
         || ordinal != Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W)
     {
@@ -2407,6 +2872,176 @@ fn try_block_empty_get_message<D>(
         max_msg,
     });
     record_message_import(uc, module_kind, ordinal, args, None, last_messages);
+
+    let mut pending_returns = pending_returns.borrow_mut();
+    if let Some(callout) = pending_returns.pop() {
+        *blocked_thread.borrow_mut() = Some(BlockedGuestThread {
+            thread_id,
+            thread_handle: callout.thread_handle,
+            regs: capture_mips_gprs(uc),
+            return_pc: read_mips_reg(uc, RegisterMIPS::RA),
+            msg_ptr: args.first().copied().unwrap_or(0),
+            hwnd,
+            min_msg,
+            max_msg,
+        });
+        *running_thread.borrow_mut() = None;
+        *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        restore_mips_gprs(uc, &callout.creator_regs);
+        let writes = [
+            uc.reg_write(RegisterMIPS::V0, u64::from(callout.thread_handle)),
+            uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc)),
+            uc.reg_write(RegisterMIPS::RA, u64::from(callout.return_pc)),
+        ];
+        if writes.into_iter().any(|write| write.is_err()) {
+            let _ = uc.emu_stop();
+        }
+        return true;
+    }
+
+    let running = *running_thread.borrow();
+    if let Some((_, thread_handle)) = running {
+        *blocked_thread.borrow_mut() = Some(BlockedGuestThread {
+            thread_id,
+            thread_handle,
+            regs: capture_mips_gprs(uc),
+            return_pc: read_mips_reg(uc, RegisterMIPS::RA),
+            msg_ptr: args.first().copied().unwrap_or(0),
+            hwnd,
+            min_msg,
+            max_msg,
+        });
+        *running_thread.borrow_mut() = None;
+        if let Some(suspended) = suspended_thread.borrow_mut().take() {
+            *current_thread_id.borrow_mut() = suspended.thread_id;
+            restore_suspended_thread(uc, &suspended);
+            return true;
+        }
+    }
+    let _ = uc.emu_stop();
+    true
+}
+
+#[cfg(feature = "unicorn")]
+fn try_block_wait_for_single_object<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    thread_id: u32,
+    blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_SINGLE_OBJECT)
+    {
+        return false;
+    }
+
+    let wait_handle = args.first().copied().unwrap_or(0);
+    let timeout = args.get(1).copied().unwrap_or(0);
+    if timeout == 0 || kernel.is_wait_ready(wait_handle, thread_id) != Some(false) {
+        return false;
+    }
+
+    let regs = capture_mips_gprs(uc);
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+    if let Some(callout) = pending_returns.borrow_mut().pop() {
+        blocked_waits.borrow_mut().push(BlockedWaitThread {
+            thread_id,
+            thread_handle: callout.thread_handle,
+            wait_handle,
+            regs,
+            return_pc,
+        });
+        *running_thread.borrow_mut() = None;
+        *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        restore_mips_gprs(uc, &callout.creator_regs);
+        let writes = [
+            uc.reg_write(RegisterMIPS::V0, u64::from(callout.thread_handle)),
+            uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc)),
+            uc.reg_write(RegisterMIPS::RA, u64::from(callout.return_pc)),
+        ];
+        if writes.into_iter().any(|write| write.is_err()) {
+            let _ = uc.emu_stop();
+        }
+        return true;
+    }
+
+    if let Some((_, thread_handle)) = *running_thread.borrow() {
+        blocked_waits.borrow_mut().push(BlockedWaitThread {
+            thread_id,
+            thread_handle,
+            wait_handle,
+            regs,
+            return_pc,
+        });
+        *running_thread.borrow_mut() = None;
+        if let Some(suspended) = suspended_thread.borrow_mut().take() {
+            *current_thread_id.borrow_mut() = suspended.thread_id;
+            restore_suspended_thread(uc, &suspended);
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(feature = "unicorn")]
+fn try_resume_blocked_wait<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    active_thread_id: u32,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
+    suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if running_thread.borrow().is_some() {
+        return false;
+    }
+
+    let ready_index = {
+        let blocked_waits = blocked_waits.borrow();
+        blocked_waits.iter().position(|blocked| {
+            blocked.thread_id != active_thread_id
+                && kernel.is_wait_ready(blocked.wait_handle, blocked.thread_id) == Some(true)
+        })
+    };
+    let Some(index) = ready_index else {
+        return false;
+    };
+    let blocked = blocked_waits.borrow_mut().remove(index);
+    let wait_result = kernel.wait_for_single_object(blocked.wait_handle, 0, blocked.thread_id);
+
+    let mut current = SuspendedGuestThread {
+        thread_id: active_thread_id,
+        regs: capture_mips_gprs(uc),
+        pc: read_mips_reg(uc, RegisterMIPS::RA),
+    };
+    current.regs[2] = read_mips_reg(uc, RegisterMIPS::V0);
+    *suspended_thread.borrow_mut() = Some(current);
+
+    let mut regs = blocked.regs;
+    regs[2] = wait_result;
+    restore_mips_gprs(uc, &regs);
+    let writes = [
+        uc.reg_write(RegisterMIPS::PC, u64::from(blocked.return_pc)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(blocked.return_pc)),
+    ];
+    if writes.into_iter().any(|write| write.is_err()) {
+        let _ = uc.emu_stop();
+        return true;
+    }
+    *current_thread_id.borrow_mut() = blocked.thread_id;
+    *running_thread.borrow_mut() = Some((blocked.thread_id, blocked.thread_handle));
     true
 }
 
@@ -2420,6 +3055,7 @@ fn try_enter_create_thread_callout<D>(
     creator_thread_id: u32,
     process_stack_top: u32,
     current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
@@ -2473,6 +3109,7 @@ fn try_enter_create_thread_callout<D>(
         creator_regs,
     });
     *current_thread_id.borrow_mut() = worker_thread_id;
+    *running_thread.borrow_mut() = Some((worker_thread_id, thread_handle));
     let worker_stack = guest_thread_stack_top(process_stack_top, worker_thread_id);
     let writes = [
         uc.reg_write(RegisterMIPS::PC, u64::from(start_address)),
@@ -2496,6 +3133,145 @@ fn try_enter_create_thread_callout<D>(
         let _ = uc.emu_stop();
     }
     true
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_resumed_thread_callout<D>(
+    kernel: &CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    result: u32,
+    creator_thread_id: u32,
+    process_stack_top: u32,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_RESUME_THREAD)
+        || result == u32::MAX
+        || process_stack_top == 0
+        || running_thread.borrow().is_some()
+    {
+        return false;
+    }
+    let thread_handle = args.first().copied().unwrap_or(0);
+    let Some((worker_thread_id, start_address, parameter)) =
+        kernel.guest_thread_start(thread_handle)
+    else {
+        return false;
+    };
+
+    let mut creator = SuspendedGuestThread {
+        thread_id: creator_thread_id,
+        regs: capture_mips_gprs(uc),
+        pc: read_mips_reg(uc, RegisterMIPS::RA),
+    };
+    creator.regs[2] = result;
+    *suspended_thread.borrow_mut() = Some(creator);
+    *current_thread_id.borrow_mut() = worker_thread_id;
+    *running_thread.borrow_mut() = Some((worker_thread_id, thread_handle));
+
+    let worker_stack = guest_thread_stack_top(process_stack_top, worker_thread_id);
+    let writes = [
+        uc.reg_write(RegisterMIPS::PC, u64::from(start_address)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(GUEST_THREAD_RETURN_STUB_ADDR)),
+        uc.reg_write(RegisterMIPS::A0, u64::from(parameter)),
+        uc.reg_write(RegisterMIPS::SP, u64::from(worker_stack)),
+        uc.reg_write(RegisterMIPS::T9, u64::from(start_address)),
+    ];
+    if writes.into_iter().any(|write| write.is_err()) {
+        let _ = uc.emu_stop();
+    }
+    true
+}
+
+#[cfg(feature = "unicorn")]
+fn try_resume_blocked_get_message<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    active_thread_id: u32,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    blocked_thread: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
+    suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    let Some(blocked) = blocked_thread.borrow().as_ref().cloned() else {
+        return false;
+    };
+    if active_thread_id == blocked.thread_id {
+        return false;
+    }
+    kernel.pump_timers_to_gwe(blocked.thread_id);
+    let Some(message) = kernel.gwe.get_message_filtered(
+        blocked.thread_id,
+        blocked.hwnd,
+        blocked.min_msg,
+        blocked.max_msg,
+    ) else {
+        return false;
+    };
+    if write_unicorn_message(uc, blocked.msg_ptr, &message).is_err() {
+        let _ = uc.emu_stop();
+        return true;
+    }
+
+    let mut current = SuspendedGuestThread {
+        thread_id: active_thread_id,
+        regs: capture_mips_gprs(uc),
+        pc: read_mips_reg(uc, RegisterMIPS::RA),
+    };
+    current.regs[2] = read_mips_reg(uc, RegisterMIPS::V0);
+    *suspended_thread.borrow_mut() = Some(current);
+
+    let mut regs = blocked.regs;
+    regs[2] = u32::from(message.msg != crate::ce::gwe::WM_QUIT);
+    restore_mips_gprs(uc, &regs);
+    let writes = [
+        uc.reg_write(RegisterMIPS::PC, u64::from(blocked.return_pc)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(blocked.return_pc)),
+    ];
+    if writes.into_iter().any(|write| write.is_err()) {
+        let _ = uc.emu_stop();
+        return true;
+    }
+    *current_thread_id.borrow_mut() = blocked.thread_id;
+    *running_thread.borrow_mut() = Some((blocked.thread_id, blocked.thread_handle));
+    *blocked_thread.borrow_mut() = None;
+    true
+}
+
+#[cfg(feature = "unicorn")]
+fn restore_suspended_thread<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    suspended: &SuspendedGuestThread,
+) {
+    use unicorn_engine::RegisterMIPS;
+
+    restore_mips_gprs(uc, &suspended.regs);
+    let _ = uc.reg_write(RegisterMIPS::PC, u64::from(suspended.pc));
+}
+
+#[cfg(feature = "unicorn")]
+fn write_unicorn_message<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    addr: u32,
+    message: &crate::ce::gwe::Message,
+) -> Result<()> {
+    let mut bytes = [0u8; 28];
+    bytes[0..4].copy_from_slice(&message.hwnd.to_le_bytes());
+    bytes[4..8].copy_from_slice(&message.msg.to_le_bytes());
+    bytes[8..12].copy_from_slice(&message.wparam.to_le_bytes());
+    bytes[12..16].copy_from_slice(&message.lparam.to_le_bytes());
+    bytes[16..20].copy_from_slice(&message.time_ms.to_le_bytes());
+    uc.mem_write(u64::from(addr), &bytes)
+        .map_err(|err| Error::Backend(format!("write resumed MSG 0x{addr:08x}: {err:?}")))
 }
 
 #[cfg(feature = "unicorn")]
@@ -2602,6 +3378,11 @@ fn record_wndproc_return(
 }
 
 #[cfg(feature = "unicorn")]
+fn is_guest_wndproc(wndproc: u32) -> bool {
+    wndproc != 0 && wndproc != crate::ce::gwe::DEFAULT_WNDPROC
+}
+
+#[cfg(feature = "unicorn")]
 fn try_enter_dispatch_message_callout<D>(
     kernel: &CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
@@ -2638,7 +3419,7 @@ fn try_enter_dispatch_message_callout<D>(
         return false;
     };
     let wndproc = window.wndproc;
-    if wndproc == 0 {
+    if !is_guest_wndproc(wndproc) {
         return false;
     }
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
@@ -2665,6 +3446,8 @@ fn try_enter_dispatch_message_callout<D>(
         wndproc,
         return_pc,
         class_name: Some(window.class_name.clone()),
+        api_result: None,
+        dialog_result_hwnd: None,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
@@ -2701,11 +3484,14 @@ fn try_enter_send_message_callout<D>(
     }
 
     let hwnd = args.first().copied().unwrap_or(0);
+    if !kernel.gwe.is_window(hwnd) {
+        return false;
+    }
     let Some(window) = kernel.gwe.window(hwnd) else {
         return false;
     };
     let wndproc = window.wndproc;
-    if wndproc == 0 {
+    if !is_guest_wndproc(wndproc) {
         return false;
     }
     let msg = args.get(1).copied().unwrap_or(0);
@@ -2734,12 +3520,390 @@ fn try_enter_send_message_callout<D>(
         wndproc,
         return_pc,
         class_name: Some(window.class_name.clone()),
+        api_result: None,
+        dialog_result_hwnd: None,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
         uc.reg_write(RegisterMIPS::A1, u64::from(msg)),
         uc.reg_write(RegisterMIPS::A2, u64::from(wparam)),
         uc.reg_write(RegisterMIPS::A3, u64::from(lparam)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(WNDPROC_RETURN_STUB_ADDR)),
+        uc.reg_write(RegisterMIPS::T9, u64::from(wndproc)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(wndproc)),
+    ];
+    if writes.into_iter().all(|write| write.is_ok()) {
+        true
+    } else {
+        let _ = pending_returns.borrow_mut().pop();
+        false
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_def_dlg_proc_callout<D>(
+    kernel: &CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_DEF_DLG_PROC_W)
+    {
+        return false;
+    }
+
+    let hwnd = args.first().copied().unwrap_or(0);
+    let dlgproc = kernel
+        .gwe
+        .get_window_long(hwnd, crate::ce::gwe::DWL_DLGPROC)
+        .unwrap_or(0);
+    if !is_guest_wndproc(dlgproc) {
+        return false;
+    }
+    let msg = args.get(1).copied().unwrap_or(0);
+    let wparam = args.get(2).copied().unwrap_or(0);
+    let lparam = args.get(3).copied().unwrap_or(0);
+    let class_name = kernel
+        .gwe
+        .window(hwnd)
+        .map(|window| window.class_name.clone());
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+
+    tracing::debug!(
+        target: "ce.gwe",
+        hwnd = format_args!("0x{hwnd:08x}"),
+        msg = format_args!("0x{msg:08x}"),
+        wparam = format_args!("0x{wparam:08x}"),
+        lparam = format_args!("0x{lparam:08x}"),
+        dlgproc = format_args!("0x{dlgproc:08x}"),
+        ra = format_args!("0x{return_pc:08x}"),
+        "DefDlgProcW guest dlgproc callout"
+    );
+
+    pending_returns.borrow_mut().push(PendingWndProcReturn {
+        source: "DefDlgProcW",
+        hwnd,
+        msg,
+        wparam,
+        lparam,
+        wndproc: dlgproc,
+        return_pc,
+        class_name,
+        api_result: None,
+        dialog_result_hwnd: None,
+    });
+    let writes = [
+        uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(msg)),
+        uc.reg_write(RegisterMIPS::A2, u64::from(wparam)),
+        uc.reg_write(RegisterMIPS::A3, u64::from(lparam)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(WNDPROC_RETURN_STUB_ADDR)),
+        uc.reg_write(RegisterMIPS::T9, u64::from(dlgproc)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(dlgproc)),
+    ];
+    if writes.into_iter().all(|write| write.is_ok()) {
+        true
+    } else {
+        let _ = pending_returns.borrow_mut().pop();
+        false
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_destroy_window_callout<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_DESTROY_WINDOW)
+    {
+        return false;
+    }
+
+    let hwnd = args.first().copied().unwrap_or(0);
+    let Some(window) = kernel.gwe.window(hwnd) else {
+        return false;
+    };
+    let wndproc = window.wndproc;
+    let class_name = window.class_name.clone();
+    let api_result = u32::from(kernel.gwe.destroy_window(hwnd, kernel.timers.tick_count()));
+    if api_result == 0 || !is_guest_wndproc(wndproc) {
+        let _ = uc.reg_write(RegisterMIPS::V0, u64::from(api_result));
+        return true;
+    }
+
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+    tracing::debug!(
+        target: "ce.gwe",
+        hwnd = format_args!("0x{hwnd:08x}"),
+        wndproc = format_args!("0x{wndproc:08x}"),
+        ra = format_args!("0x{return_pc:08x}"),
+        "DestroyWindow guest WM_DESTROY callout"
+    );
+
+    pending_returns.borrow_mut().push(PendingWndProcReturn {
+        source: "DestroyWindow/WM_DESTROY",
+        hwnd,
+        msg: crate::ce::gwe::WM_DESTROY,
+        wparam: 0,
+        lparam: 0,
+        wndproc,
+        return_pc,
+        class_name: Some(class_name),
+        api_result: Some(api_result),
+        dialog_result_hwnd: None,
+    });
+    let writes = [
+        uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(crate::ce::gwe::WM_DESTROY)),
+        uc.reg_write(RegisterMIPS::A2, 0),
+        uc.reg_write(RegisterMIPS::A3, 0),
+        uc.reg_write(RegisterMIPS::RA, u64::from(WNDPROC_RETURN_STUB_ADDR)),
+        uc.reg_write(RegisterMIPS::T9, u64::from(wndproc)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(wndproc)),
+    ];
+    if writes.into_iter().all(|write| write.is_ok()) {
+        true
+    } else {
+        let _ = pending_returns.borrow_mut().pop();
+        false
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_is_dialog_message_callout<D>(
+    kernel: &CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_IS_DIALOG_MESSAGE_W)
+    {
+        return false;
+    }
+
+    let hwnd = args.first().copied().unwrap_or(0);
+    let msg_ptr = args.get(1).copied().unwrap_or(0);
+    let Some(msg_hwnd) = read_unicorn_u32(uc, msg_ptr) else {
+        return false;
+    };
+    let Some(msg) = read_unicorn_u32(uc, msg_ptr.wrapping_add(4)) else {
+        return false;
+    };
+    if msg != crate::ce::gwe::WM_COMMAND {
+        return false;
+    }
+    let Some(wparam) = read_unicorn_u32(uc, msg_ptr.wrapping_add(8)) else {
+        return false;
+    };
+    let Some(lparam) = read_unicorn_u32(uc, msg_ptr.wrapping_add(12)) else {
+        return false;
+    };
+    let target = if msg_hwnd != 0 { msg_hwnd } else { hwnd };
+    let Some(window) = kernel.gwe.window(target) else {
+        return false;
+    };
+    let wndproc = window.wndproc;
+    if !is_guest_wndproc(wndproc) {
+        return false;
+    }
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+
+    tracing::debug!(
+        target: "ce.gwe",
+        hwnd = format_args!("0x{target:08x}"),
+        msg = format_args!("0x{msg:08x}"),
+        wparam = format_args!("0x{wparam:08x}"),
+        lparam = format_args!("0x{lparam:08x}"),
+        class = window.class_name.as_str(),
+        wndproc = format_args!("0x{wndproc:08x}"),
+        ra = format_args!("0x{return_pc:08x}"),
+        "IsDialogMessageW guest dialog proc callout"
+    );
+
+    pending_returns.borrow_mut().push(PendingWndProcReturn {
+        source: "IsDialogMessageW",
+        hwnd: target,
+        msg,
+        wparam,
+        lparam,
+        wndproc,
+        return_pc,
+        class_name: Some(window.class_name.clone()),
+        api_result: Some(1),
+        dialog_result_hwnd: None,
+    });
+    let writes = [
+        uc.reg_write(RegisterMIPS::A0, u64::from(target)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(msg)),
+        uc.reg_write(RegisterMIPS::A2, u64::from(wparam)),
+        uc.reg_write(RegisterMIPS::A3, u64::from(lparam)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(WNDPROC_RETURN_STUB_ADDR)),
+        uc.reg_write(RegisterMIPS::T9, u64::from(wndproc)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(wndproc)),
+    ];
+    if writes.into_iter().all(|write| write.is_ok()) {
+        true
+    } else {
+        let _ = pending_returns.borrow_mut().pop();
+        false
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_update_window_callout<D>(
+    kernel: &CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_UPDATE_WINDOW)
+    {
+        return false;
+    }
+
+    let hwnd = args.first().copied().unwrap_or(0);
+    if kernel.gwe.update_rect(hwnd).is_none() {
+        return false;
+    }
+    let Some(window) = kernel.gwe.window(hwnd) else {
+        return false;
+    };
+    let wndproc = window.wndproc;
+    if !is_guest_wndproc(wndproc) {
+        return false;
+    }
+    let msg = crate::ce::gwe::WM_PAINT;
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+
+    tracing::debug!(
+        target: "ce.gwe",
+        hwnd = format_args!("0x{hwnd:08x}"),
+        msg = format_args!("0x{msg:08x}"),
+        class = window.class_name.as_str(),
+        wndproc = format_args!("0x{wndproc:08x}"),
+        ra = format_args!("0x{return_pc:08x}"),
+        "UpdateWindow guest WM_PAINT callout"
+    );
+
+    pending_returns.borrow_mut().push(PendingWndProcReturn {
+        source: "UpdateWindow/WM_PAINT",
+        hwnd,
+        msg,
+        wparam: 0,
+        lparam: 0,
+        wndproc,
+        return_pc,
+        class_name: Some(window.class_name.clone()),
+        api_result: Some(1),
+        dialog_result_hwnd: None,
+    });
+    let writes = [
+        uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(msg)),
+        uc.reg_write(RegisterMIPS::A2, 0),
+        uc.reg_write(RegisterMIPS::A3, 0),
+        uc.reg_write(RegisterMIPS::RA, u64::from(WNDPROC_RETURN_STUB_ADDR)),
+        uc.reg_write(RegisterMIPS::T9, u64::from(wndproc)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(wndproc)),
+    ];
+    if writes.into_iter().all(|write| write.is_ok()) {
+        true
+    } else {
+        let _ = pending_returns.borrow_mut().pop();
+        false
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_dialog_init_callout<D>(
+    kernel: &CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    hwnd: u32,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll {
+        return false;
+    }
+    let is_create =
+        ordinal == Some(crate::ce::coredll_ordinals::ORD_CREATE_DIALOG_INDIRECT_PARAM_W);
+    let is_modal = ordinal == Some(crate::ce::coredll_ordinals::ORD_DIALOG_BOX_INDIRECT_PARAM_W);
+    if !is_create && !is_modal {
+        return false;
+    }
+    if hwnd == 0 {
+        return false;
+    }
+    let Some(window) = kernel.gwe.window(hwnd) else {
+        return false;
+    };
+    let wndproc = window.wndproc;
+    if !is_guest_wndproc(wndproc) {
+        return false;
+    }
+    let init_param = args.get(4).copied().unwrap_or(0);
+    let msg = WM_INITDIALOG;
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+    let source = if is_modal {
+        "DialogBoxIndirectParamW/WM_INITDIALOG"
+    } else {
+        "CreateDialogIndirectParamW/WM_INITDIALOG"
+    };
+
+    tracing::debug!(
+        target: "ce.gwe",
+        hwnd = format_args!("0x{hwnd:08x}"),
+        msg = format_args!("0x{msg:08x}"),
+        lparam = format_args!("0x{init_param:08x}"),
+        class = window.class_name.as_str(),
+        wndproc = format_args!("0x{wndproc:08x}"),
+        ra = format_args!("0x{return_pc:08x}"),
+        "dialog init guest proc callout"
+    );
+
+    pending_returns.borrow_mut().push(PendingWndProcReturn {
+        source,
+        hwnd,
+        msg,
+        wparam: 0,
+        lparam: init_param,
+        wndproc,
+        return_pc,
+        class_name: Some(window.class_name.clone()),
+        api_result: is_create.then_some(hwnd),
+        dialog_result_hwnd: is_modal.then_some(hwnd),
+    });
+    let writes = [
+        uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(msg)),
+        uc.reg_write(RegisterMIPS::A2, 0),
+        uc.reg_write(RegisterMIPS::A3, u64::from(init_param)),
         uc.reg_write(RegisterMIPS::RA, u64::from(WNDPROC_RETURN_STUB_ADDR)),
         uc.reg_write(RegisterMIPS::T9, u64::from(wndproc)),
         uc.reg_write(RegisterMIPS::PC, u64::from(wndproc)),
@@ -2776,7 +3940,7 @@ fn try_enter_create_window_create_callout<D>(
         return false;
     };
     let wndproc = window.wndproc;
-    if wndproc == 0 {
+    if !is_guest_wndproc(wndproc) {
         return false;
     }
     let class_name = window.class_name.clone();
@@ -2878,6 +4042,11 @@ fn try_enter_call_window_proc_callout<D>(
     let msg = args.get(2).copied().unwrap_or(0);
     let wparam = args.get(3).copied().unwrap_or(0);
     let lparam = args.get(4).copied().unwrap_or(0);
+    if wndproc == crate::ce::gwe::DEFAULT_WNDPROC {
+        let result = crate::ce::gwe::default_send_message_result(msg, wparam, lparam);
+        let _ = uc.reg_write(RegisterMIPS::V0, u64::from(result));
+        return true;
+    }
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
 
     tracing::debug!(
@@ -2900,6 +4069,8 @@ fn try_enter_call_window_proc_callout<D>(
         wndproc,
         return_pc,
         class_name: None,
+        api_result: None,
+        dialog_result_hwnd: None,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),

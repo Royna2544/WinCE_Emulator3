@@ -14,8 +14,10 @@ pub enum KernelObject {
     Device(DeviceSession),
     Window(u32),
     WaveOut(u32),
+    FileMapping(FileMappingObject),
     CriticalSection(CriticalSectionObject),
     Thread(ThreadObject),
+    Process(ProcessObject),
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +46,18 @@ pub struct FindFileObject {
 }
 
 #[derive(Debug, Clone)]
+pub struct FileMappingObject {
+    pub name: Option<String>,
+    pub size: u32,
+    pub protect: u32,
+    pub file_id: Option<u32>,
+    pub data: Vec<u8>,
+    pub view_base: Option<u32>,
+    pub view_size: u32,
+    pub view_offset: u32,
+}
+
+#[derive(Debug, Clone)]
 pub struct CriticalSectionObject {
     pub guest_ptr: u32,
 }
@@ -56,6 +70,13 @@ pub struct ThreadObject {
     pub exit_code: u32,
     pub signaled: bool,
     pub suspended: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProcessObject {
+    pub process_id: u32,
+    pub exit_code: u32,
+    pub signaled: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,6 +141,13 @@ impl HandleTable {
         manual_reset: bool,
         initial_state: bool,
     ) -> u32 {
+        if let Some(name) = name.as_deref() {
+            if let Some((handle, _)) = self.objects.iter().find(|(_, object)| {
+                matches!(object, KernelObject::Event(event) if event.name.as_deref() == Some(name))
+            }) {
+                return *handle;
+            }
+        }
         self.insert(KernelObject::Event(EventObject {
             name,
             manual_reset,
@@ -151,12 +179,128 @@ impl HandleTable {
         }))
     }
 
+    pub fn create_file_mapping(
+        &mut self,
+        name: Option<String>,
+        size: u32,
+        protect: u32,
+        file_id: Option<u32>,
+    ) -> u32 {
+        if let Some(name) = name.as_deref() {
+            if let Some((handle, _)) = self.objects.iter().find(|(_, object)| {
+                matches!(
+                    object,
+                    KernelObject::FileMapping(mapping) if mapping.name.as_deref() == Some(name)
+                )
+            }) {
+                return *handle;
+            }
+        }
+        self.insert(KernelObject::FileMapping(FileMappingObject {
+            name,
+            size,
+            protect,
+            file_id,
+            data: vec![0; size as usize],
+            view_base: None,
+            view_size: 0,
+            view_offset: 0,
+        }))
+    }
+
+    pub fn create_process(&mut self, process_id: u32) -> u32 {
+        self.insert(KernelObject::Process(ProcessObject {
+            process_id,
+            exit_code: 259,
+            signaled: false,
+        }))
+    }
+
+    pub fn file_mapping(&self, handle: u32) -> Result<&FileMappingObject> {
+        match self.get(handle)? {
+            KernelObject::FileMapping(mapping) => Ok(mapping),
+            _ => Err(Error::InvalidHandle(handle)),
+        }
+    }
+
+    pub fn file_mapping_mut(&mut self, handle: u32) -> Result<&mut FileMappingObject> {
+        match self.get_mut(handle)? {
+            KernelObject::FileMapping(mapping) => Ok(mapping),
+            _ => Err(Error::InvalidHandle(handle)),
+        }
+    }
+
+    pub fn has_file_mapping_view(&self, base: u32) -> bool {
+        self.objects.values().any(|object| {
+            matches!(
+                object,
+                KernelObject::FileMapping(FileMappingObject {
+                    view_base: Some(view_base),
+                    ..
+                }) if *view_base == base
+            )
+        })
+    }
+
+    pub fn file_mapping_by_view(&self, base: u32) -> Option<&FileMappingObject> {
+        self.objects.values().find_map(|object| match object {
+            KernelObject::FileMapping(mapping) if mapping.view_base == Some(base) => Some(mapping),
+            _ => None,
+        })
+    }
+
+    pub fn file_mapping_by_view_mut(&mut self, base: u32) -> Option<&mut FileMappingObject> {
+        self.objects.values_mut().find_map(|object| match object {
+            KernelObject::FileMapping(mapping) if mapping.view_base == Some(base) => Some(mapping),
+            _ => None,
+        })
+    }
+
+    pub fn file_mappings_mut(&mut self) -> impl Iterator<Item = &mut FileMappingObject> {
+        self.objects.values_mut().filter_map(|object| match object {
+            KernelObject::FileMapping(mapping) => Some(mapping),
+            _ => None,
+        })
+    }
+
+    pub fn file_mappings(&self) -> impl Iterator<Item = &FileMappingObject> {
+        self.objects.values().filter_map(|object| match object {
+            KernelObject::FileMapping(mapping) => Some(mapping),
+            _ => None,
+        })
+    }
+
     pub fn mark_thread_exited(&mut self, handle: u32, exit_code: u32) -> bool {
         let Ok(KernelObject::Thread(thread)) = self.get_mut(handle) else {
             return false;
         };
         thread.exit_code = exit_code;
         thread.signaled = true;
+        true
+    }
+
+    pub fn resume_thread(&mut self, handle: u32) -> Option<u32> {
+        let Ok(KernelObject::Thread(thread)) = self.get_mut(handle) else {
+            return None;
+        };
+        let previous = u32::from(thread.suspended);
+        thread.suspended = false;
+        Some(previous)
+    }
+
+    pub fn thread_start(&self, handle: u32) -> Option<(u32, u32, u32)> {
+        let Ok(KernelObject::Thread(thread)) = self.get(handle) else {
+            return None;
+        };
+        (!thread.signaled).then_some((thread.thread_id, thread.start_address, thread.parameter))
+    }
+
+    pub fn mark_process_exited(&mut self, handle: u32, exit_code: u32) -> bool {
+        let Ok(KernelObject::Process(process)) = self.get_mut(handle) else {
+            return false;
+        };
+        process.exit_code = exit_code;
+        process.signaled = true;
         true
     }
 
@@ -216,10 +360,31 @@ impl HandleTable {
             | KernelObject::Device(_)
             | KernelObject::Window(_)
             | KernelObject::WaveOut(_)
+            | KernelObject::FileMapping(_)
             | KernelObject::CriticalSection(_) => WaitResult::Object0,
             KernelObject::Thread(thread) if thread.signaled => WaitResult::Object0,
+            KernelObject::Process(process) if process.signaled => WaitResult::Object0,
             _ if timeout_ms == 0 => WaitResult::Timeout,
             _ => WaitResult::Timeout,
         }
+    }
+
+    pub fn is_wait_ready(&self, handle: u32, thread_id: u32) -> Option<bool> {
+        let object = self.get(handle).ok()?;
+        Some(match object {
+            KernelObject::Event(event) => event.signaled,
+            KernelObject::Mutex(mutex) => {
+                mutex.owner_thread.is_none() || mutex.owner_thread == Some(thread_id)
+            }
+            KernelObject::Thread(thread) => thread.signaled,
+            KernelObject::Process(process) => process.signaled,
+            KernelObject::File(_)
+            | KernelObject::FindFile(_)
+            | KernelObject::Device(_)
+            | KernelObject::Window(_)
+            | KernelObject::WaveOut(_)
+            | KernelObject::FileMapping(_)
+            | KernelObject::CriticalSection(_) => true,
+        })
     }
 }

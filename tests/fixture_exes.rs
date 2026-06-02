@@ -71,7 +71,7 @@ mod fixtures {
             return Ok(());
         };
 
-        let fixtures = discover_fixtures(&manifest_dir)?;
+        let fixtures = filter_fixtures(discover_fixtures(&manifest_dir)?)?;
         if fixtures.is_empty() {
             return Err(Error::Backend(format!(
                 "no fixture source directories found under {}",
@@ -208,6 +208,27 @@ mod fixtures {
 
         fixtures.sort_by(|lhs, rhs| lhs.name.cmp(&rhs.name));
         Ok(fixtures)
+    }
+
+    fn filter_fixtures(fixtures: Vec<Fixture>) -> Result<Vec<Fixture>> {
+        let Some(filter) = env::var("WINCE_FIXTURE_FILTER")
+            .ok()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty())
+        else {
+            return Ok(fixtures);
+        };
+        let filtered: Vec<_> = fixtures
+            .into_iter()
+            .filter(|fixture| fixture.name.contains(&filter))
+            .collect();
+        if filtered.is_empty() {
+            return Err(Error::Backend(format!(
+                "WINCE_FIXTURE_FILTER={filter:?} matched no fixtures"
+            )));
+        }
+        eprintln!("fixture filter {filter:?}: {} match(es)", filtered.len());
+        Ok(filtered)
     }
 
     fn sorted_files_with_extension(dir: &Path, extension: &str) -> Result<Vec<PathBuf>> {
