@@ -72,6 +72,7 @@ pub struct UnicornDebugSnapshot {
     pub last_mfc_dispatch: Vec<UnicornMfcDispatchTrace>,
     pub last_inavi_display: Vec<UnicornInaviDisplayTrace>,
     pub last_inavi_controller: Vec<UnicornInaviControllerTrace>,
+    pub inavi_render_milestones: Vec<UnicornInaviControllerTrace>,
     pub last_code: Vec<UnicornLastCode>,
     pub last_blocks: Vec<UnicornLastBlock>,
     pub import_counts: Vec<UnicornImportCount>,
@@ -437,6 +438,8 @@ const UNICORN_MFC_DISPATCH_TRACE_LIMIT: usize = 64;
 const UNICORN_INAVI_DISPLAY_TRACE_LIMIT: usize = 96;
 #[cfg(feature = "unicorn")]
 const UNICORN_INAVI_CONTROLLER_TRACE_LIMIT: usize = 128;
+#[cfg(feature = "unicorn")]
+const UNICORN_INAVI_RENDER_MILESTONE_LIMIT: usize = 256;
 #[cfg(feature = "unicorn")]
 const UNICORN_CODE_TRACE_SAMPLE_INTERVAL: u32 = 64;
 #[cfg(feature = "unicorn")]
@@ -995,6 +998,9 @@ impl UnicornMips {
         let last_inavi_controller =
             Rc::new(RefCell::new(Vec::<UnicornInaviControllerTrace>::new()));
         let last_inavi_controller_hook = Rc::clone(&last_inavi_controller);
+        let inavi_render_milestones =
+            Rc::new(RefCell::new(Vec::<UnicornInaviControllerTrace>::new()));
+        let inavi_render_milestones_hook = Rc::clone(&inavi_render_milestones);
         let late_inavi_init_dialog_posted = Rc::new(Cell::new(false));
         let late_inavi_init_dialog_posted_hook = Rc::clone(&late_inavi_init_dialog_posted);
         let mapped_blobs = self.mapped_blobs.clone();
@@ -1092,7 +1098,12 @@ impl UnicornMips {
                 &late_inavi_init_dialog_posted_hook,
             );
             repair_inavi_aux_touch_alias(uc, pc);
-            record_inavi_controller_trace(&last_inavi_controller_hook, uc, pc);
+            record_inavi_controller_trace(
+                &last_inavi_controller_hook,
+                &inavi_render_milestones_hook,
+                uc,
+                pc,
+            );
             let code_record = || UnicornLastCode {
                 pc,
                 ra: read_mips_reg(uc, RegisterMIPS::RA),
@@ -1934,6 +1945,7 @@ impl UnicornMips {
             last_mfc_dispatch.borrow().clone(),
             last_inavi_display.borrow().clone(),
             last_inavi_controller.borrow().clone(),
+            inavi_render_milestones.borrow().clone(),
             last_code.borrow().clone(),
             last_blocks.borrow().clone(),
             import_count_snapshot(&import_counts.borrow()),
@@ -2988,6 +3000,151 @@ fn virtual_allocation_perms(protect: u32) -> MemoryPerms {
     }
 }
 
+fn write_inavi_controller_traces(
+    f: &mut std::fmt::Formatter<'_>,
+    traces: &[UnicornInaviControllerTrace],
+) -> std::fmt::Result {
+    for (index, trace) in traces.iter().enumerate() {
+        if index != 0 {
+            write!(f, ",")?;
+        }
+        write!(
+            f,
+            "{}@0x{:08x}/ra=0x{:08x}/sp=0x{:08x}/v0=0x{:08x}/a0=0x{:08x}/a1=0x{:08x}/a2=0x{:08x}/a3=0x{:08x}/s2=0x{:08x}/s3=0x{:08x}/s4=0x{:08x}/s6=0x{:08x}/s7=0x{:08x}/fp=0x{:08x}",
+            trace.label,
+            trace.pc,
+            trace.ra,
+            trace.sp,
+            trace.v0,
+            trace.a0,
+            trace.a1,
+            trace.a2,
+            trace.a3,
+            trace.s2,
+            trace.s3,
+            trace.s4,
+            trace.s6,
+            trace.s7,
+            trace.fp
+        )?;
+        if let Some(instruction) = trace.instruction {
+            write!(f, "/insn=0x{instruction:08x}")?;
+        }
+        if let Some(sp10) = trace.sp10 {
+            write!(f, "/sp10=0x{sp10:08x}")?;
+        }
+        if let Some(sp48) = trace.sp48 {
+            write!(f, "/sp48=0x{sp48:08x}")?;
+        }
+        if let Some(controller) = trace.controller {
+            write!(f, "/controller=0x{controller:08x}")?;
+        }
+        if let Some(hwnd) = trace.hwnd {
+            write!(f, "/hwnd=0x{hwnd:08x}")?;
+        }
+        if let Some(msg) = trace.msg {
+            write!(f, "/msg=0x{msg:08x}")?;
+        }
+        if let Some(wparam) = trace.wparam {
+            write!(f, "/w=0x{wparam:08x}")?;
+        }
+        if let Some(lparam) = trace.lparam {
+            write!(f, "/l=0x{lparam:08x}")?;
+        }
+        if let Some(classifier) = trace.classifier {
+            write!(f, "/class=0x{classifier:08x}")?;
+        }
+        if let Some(selected_obj) = trace.selected_obj {
+            write!(f, "/obj=0x{selected_obj:08x}")?;
+        }
+        if let Some(selected_vtable) = trace.selected_vtable {
+            write!(f, "/vt=0x{selected_vtable:08x}")?;
+        }
+        if let Some(selected_target) = trace.selected_target {
+            write!(f, "/target=0x{selected_target:08x}")?;
+        }
+        if let Some(paint_base) = trace.paint_base {
+            write!(f, "/paint_base=0x{paint_base:08x}")?;
+        }
+        if let Some(paint_gate) = trace.paint_gate {
+            write!(f, "/paint_gate=0x{paint_gate:08x}")?;
+        }
+        if let Some(paint_render_obj) = trace.paint_render_obj {
+            write!(f, "/paint_obj=0x{paint_render_obj:08x}")?;
+        }
+        if let Some(paint_render_target) = trace.paint_render_target {
+            write!(f, "/paint_target=0x{paint_render_target:08x}")?;
+        }
+        if let Some(render_surface) = trace.render_surface {
+            write!(f, "/render_surface=0x{render_surface:08x}")?;
+        }
+        if let Some(render_enabled) = trace.render_enabled {
+            write!(f, "/render_enabled=0x{render_enabled:08x}")?;
+        }
+        if let Some(render_size_target) = trace.render_size_target {
+            write!(f, "/render_size_target=0x{render_size_target:08x}")?;
+        }
+        if let Some(render_resize_target) = trace.render_resize_target {
+            write!(f, "/render_resize_target=0x{render_resize_target:08x}")?;
+        }
+        if let Some(render_flush_obj) = trace.render_flush_obj {
+            write!(f, "/render_flush_obj=0x{render_flush_obj:08x}")?;
+        }
+        if let Some(render_flush_target) = trace.render_flush_target {
+            write!(f, "/render_flush_target=0x{render_flush_target:08x}")?;
+        }
+        if let Some(render_poll_result) = trace.render_poll_result {
+            write!(f, "/render_poll=0x{render_poll_result:08x}")?;
+        }
+        if let Some(render_dim_ptr) = trace.render_dim_ptr {
+            write!(f, "/dim_ptr=0x{render_dim_ptr:08x}")?;
+        }
+        if let Some(render_dim_w) = trace.render_dim_w {
+            write!(f, "/dim_w=0x{render_dim_w:08x}")?;
+        }
+        if let Some(render_dim_h) = trace.render_dim_h {
+            write!(f, "/dim_h=0x{render_dim_h:08x}")?;
+        }
+        if let Some(aux_base) = trace.aux_base {
+            write!(f, "/aux_base=0x{aux_base:08x}")?;
+        }
+        if let Some(aux_slot_10ec_value) = trace.aux_slot_10ec_value {
+            write!(f, "/aux10ec_value=0x{aux_slot_10ec_value:08x}")?;
+        }
+        if let Some(aux_slot_10f0) = trace.aux_slot_10f0 {
+            write!(f, "/aux10f0=0x{aux_slot_10f0:08x}")?;
+        }
+        if let Some(aux_slot_10f0_vtable) = trace.aux_slot_10f0_vtable {
+            write!(f, "/aux10f0_vt=0x{aux_slot_10f0_vtable:08x}")?;
+        }
+        if let Some(aux_inline_10f8) = trace.aux_inline_10f8 {
+            write!(f, "/aux10f8=0x{aux_inline_10f8:08x}")?;
+        }
+        if let Some(aux_inline_10f8_vtable) = trace.aux_inline_10f8_vtable {
+            write!(f, "/aux10f8_vt=0x{aux_inline_10f8_vtable:08x}")?;
+        }
+        if let Some(aux_link_ee4) = trace.aux_link_ee4 {
+            write!(f, "/aux_ee4=0x{aux_link_ee4:08x}")?;
+        }
+        if let Some(aux_init_flag_edc) = trace.aux_init_flag_edc {
+            write!(f, "/aux_edc=0x{aux_init_flag_edc:08x}")?;
+        }
+        if let Some(aux_vtable_source) = trace.aux_vtable_source {
+            write!(f, "/aux_vt_src=0x{aux_vtable_source:08x}")?;
+        }
+        if let Some(aux_vtable_source_value) = trace.aux_vtable_source_value {
+            write!(f, "/aux_vt_src_value=0x{aux_vtable_source_value:08x}")?;
+        }
+        if let Some(aux_store_addr) = trace.aux_store_addr {
+            write!(f, "/aux_store_addr=0x{aux_store_addr:08x}")?;
+        }
+        if let Some(aux_store_value) = trace.aux_store_value {
+            write!(f, "/aux_store_value=0x{aux_store_value:08x}")?;
+        }
+    }
+    Ok(())
+}
+
 impl std::fmt::Display for UnicornDebugSnapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -3405,146 +3562,14 @@ impl std::fmt::Display for UnicornDebugSnapshot {
             }
             write!(f, "]")?;
         }
+        if !self.inavi_render_milestones.is_empty() {
+            write!(f, " inavi_render_milestones=[")?;
+            write_inavi_controller_traces(f, &self.inavi_render_milestones)?;
+            write!(f, "]")?;
+        }
         if !self.last_inavi_controller.is_empty() {
             write!(f, " last_inavi_controller=[")?;
-            for (index, trace) in self.last_inavi_controller.iter().enumerate() {
-                if index != 0 {
-                    write!(f, ",")?;
-                }
-                write!(
-                    f,
-                    "{}@0x{:08x}/ra=0x{:08x}/sp=0x{:08x}/v0=0x{:08x}/a0=0x{:08x}/a1=0x{:08x}/a2=0x{:08x}/a3=0x{:08x}/s2=0x{:08x}/s3=0x{:08x}/s4=0x{:08x}/s6=0x{:08x}/s7=0x{:08x}/fp=0x{:08x}",
-                    trace.label,
-                    trace.pc,
-                    trace.ra,
-                    trace.sp,
-                    trace.v0,
-                    trace.a0,
-                    trace.a1,
-                    trace.a2,
-                    trace.a3,
-                    trace.s2,
-                    trace.s3,
-                    trace.s4,
-                    trace.s6,
-                    trace.s7,
-                    trace.fp
-                )?;
-                if let Some(instruction) = trace.instruction {
-                    write!(f, "/insn=0x{instruction:08x}")?;
-                }
-                if let Some(sp10) = trace.sp10 {
-                    write!(f, "/sp10=0x{sp10:08x}")?;
-                }
-                if let Some(sp48) = trace.sp48 {
-                    write!(f, "/sp48=0x{sp48:08x}")?;
-                }
-                if let Some(controller) = trace.controller {
-                    write!(f, "/controller=0x{controller:08x}")?;
-                }
-                if let Some(hwnd) = trace.hwnd {
-                    write!(f, "/hwnd=0x{hwnd:08x}")?;
-                }
-                if let Some(msg) = trace.msg {
-                    write!(f, "/msg=0x{msg:08x}")?;
-                }
-                if let Some(wparam) = trace.wparam {
-                    write!(f, "/w=0x{wparam:08x}")?;
-                }
-                if let Some(lparam) = trace.lparam {
-                    write!(f, "/l=0x{lparam:08x}")?;
-                }
-                if let Some(classifier) = trace.classifier {
-                    write!(f, "/class=0x{classifier:08x}")?;
-                }
-                if let Some(selected_obj) = trace.selected_obj {
-                    write!(f, "/obj=0x{selected_obj:08x}")?;
-                }
-                if let Some(selected_vtable) = trace.selected_vtable {
-                    write!(f, "/vt=0x{selected_vtable:08x}")?;
-                }
-                if let Some(selected_target) = trace.selected_target {
-                    write!(f, "/target=0x{selected_target:08x}")?;
-                }
-                if let Some(paint_base) = trace.paint_base {
-                    write!(f, "/paint_base=0x{paint_base:08x}")?;
-                }
-                if let Some(paint_gate) = trace.paint_gate {
-                    write!(f, "/paint_gate=0x{paint_gate:08x}")?;
-                }
-                if let Some(paint_render_obj) = trace.paint_render_obj {
-                    write!(f, "/paint_obj=0x{paint_render_obj:08x}")?;
-                }
-                if let Some(paint_render_target) = trace.paint_render_target {
-                    write!(f, "/paint_target=0x{paint_render_target:08x}")?;
-                }
-                if let Some(render_surface) = trace.render_surface {
-                    write!(f, "/render_surface=0x{render_surface:08x}")?;
-                }
-                if let Some(render_enabled) = trace.render_enabled {
-                    write!(f, "/render_enabled=0x{render_enabled:08x}")?;
-                }
-                if let Some(render_size_target) = trace.render_size_target {
-                    write!(f, "/render_size_target=0x{render_size_target:08x}")?;
-                }
-                if let Some(render_resize_target) = trace.render_resize_target {
-                    write!(f, "/render_resize_target=0x{render_resize_target:08x}")?;
-                }
-                if let Some(render_flush_obj) = trace.render_flush_obj {
-                    write!(f, "/render_flush_obj=0x{render_flush_obj:08x}")?;
-                }
-                if let Some(render_flush_target) = trace.render_flush_target {
-                    write!(f, "/render_flush_target=0x{render_flush_target:08x}")?;
-                }
-                if let Some(render_poll_result) = trace.render_poll_result {
-                    write!(f, "/render_poll=0x{render_poll_result:08x}")?;
-                }
-                if let Some(render_dim_ptr) = trace.render_dim_ptr {
-                    write!(f, "/dim_ptr=0x{render_dim_ptr:08x}")?;
-                }
-                if let Some(render_dim_w) = trace.render_dim_w {
-                    write!(f, "/dim_w=0x{render_dim_w:08x}")?;
-                }
-                if let Some(render_dim_h) = trace.render_dim_h {
-                    write!(f, "/dim_h=0x{render_dim_h:08x}")?;
-                }
-                if let Some(aux_base) = trace.aux_base {
-                    write!(f, "/aux_base=0x{aux_base:08x}")?;
-                }
-                if let Some(aux_slot_10ec_value) = trace.aux_slot_10ec_value {
-                    write!(f, "/aux10ec_value=0x{aux_slot_10ec_value:08x}")?;
-                }
-                if let Some(aux_slot_10f0) = trace.aux_slot_10f0 {
-                    write!(f, "/aux10f0=0x{aux_slot_10f0:08x}")?;
-                }
-                if let Some(aux_slot_10f0_vtable) = trace.aux_slot_10f0_vtable {
-                    write!(f, "/aux10f0_vt=0x{aux_slot_10f0_vtable:08x}")?;
-                }
-                if let Some(aux_inline_10f8) = trace.aux_inline_10f8 {
-                    write!(f, "/aux10f8=0x{aux_inline_10f8:08x}")?;
-                }
-                if let Some(aux_inline_10f8_vtable) = trace.aux_inline_10f8_vtable {
-                    write!(f, "/aux10f8_vt=0x{aux_inline_10f8_vtable:08x}")?;
-                }
-                if let Some(aux_link_ee4) = trace.aux_link_ee4 {
-                    write!(f, "/aux_ee4=0x{aux_link_ee4:08x}")?;
-                }
-                if let Some(aux_init_flag_edc) = trace.aux_init_flag_edc {
-                    write!(f, "/aux_edc=0x{aux_init_flag_edc:08x}")?;
-                }
-                if let Some(aux_vtable_source) = trace.aux_vtable_source {
-                    write!(f, "/aux_vt_src=0x{aux_vtable_source:08x}")?;
-                }
-                if let Some(aux_vtable_source_value) = trace.aux_vtable_source_value {
-                    write!(f, "/aux_vt_src_value=0x{aux_vtable_source_value:08x}")?;
-                }
-                if let Some(aux_store_addr) = trace.aux_store_addr {
-                    write!(f, "/aux_store_addr=0x{aux_store_addr:08x}")?;
-                }
-                if let Some(aux_store_value) = trace.aux_store_value {
-                    write!(f, "/aux_store_value=0x{aux_store_value:08x}")?;
-                }
-            }
+            write_inavi_controller_traces(f, &self.last_inavi_controller)?;
             write!(f, "]")?;
         }
         if !self.last_code.is_empty() {
@@ -4997,6 +5022,7 @@ fn maybe_post_late_inavi_init_dialog<D>(
 #[cfg(feature = "unicorn")]
 fn record_inavi_controller_trace<D>(
     traces: &std::rc::Rc<std::cell::RefCell<Vec<UnicornInaviControllerTrace>>>,
+    milestones: &std::rc::Rc<std::cell::RefCell<Vec<UnicornInaviControllerTrace>>>,
     uc: &unicorn_engine::Unicorn<'_, D>,
     pc: u32,
 ) {
@@ -5247,11 +5273,23 @@ fn record_inavi_controller_trace<D>(
         aux_store_addr,
         aux_store_value,
     };
+    if is_inavi_render_milestone_label(label) {
+        let mut milestones = milestones.borrow_mut();
+        if milestones.len() == UNICORN_INAVI_RENDER_MILESTONE_LIMIT {
+            milestones.remove(0);
+        }
+        milestones.push(trace.clone());
+    }
     let mut traces = traces.borrow_mut();
     if traces.len() == UNICORN_INAVI_CONTROLLER_TRACE_LIMIT {
         traces.remove(0);
     }
     traces.push(trace);
+}
+
+#[cfg(feature = "unicorn")]
+fn is_inavi_render_milestone_label(label: &str) -> bool {
+    label.starts_with("render_") || label.starts_with("paint_") || label.starts_with("init_dialog_")
 }
 
 #[cfg(feature = "unicorn")]
@@ -6235,6 +6273,7 @@ fn capture_debug_snapshot<D>(
     last_mfc_dispatch: Vec<UnicornMfcDispatchTrace>,
     last_inavi_display: Vec<UnicornInaviDisplayTrace>,
     last_inavi_controller: Vec<UnicornInaviControllerTrace>,
+    inavi_render_milestones: Vec<UnicornInaviControllerTrace>,
     last_code: Vec<UnicornLastCode>,
     last_blocks: Vec<UnicornLastBlock>,
     import_counts: Vec<UnicornImportCount>,
@@ -6283,6 +6322,7 @@ fn capture_debug_snapshot<D>(
         last_mfc_dispatch,
         last_inavi_display,
         last_inavi_controller,
+        inavi_render_milestones,
         last_code,
         last_blocks,
         import_counts,
