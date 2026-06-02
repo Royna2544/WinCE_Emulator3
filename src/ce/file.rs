@@ -4,7 +4,10 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use crate::error::{Error, Result};
+use crate::{
+    config::{MountConfig, StorageConfig},
+    error::{Error, Result},
+};
 
 pub const GENERIC_READ: u32 = 0x8000_0000;
 pub const GENERIC_WRITE: u32 = 0x4000_0000;
@@ -19,15 +22,31 @@ pub const FILE_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
 pub const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
 pub const FILE_ATTRIBUTE_ARCHIVE: u32 = 0x0000_0020;
 
-pub const CE_MOUNT_POINTS: &[&str] = &["SDMMC Disk"];
-
 #[derive(Debug, Clone)]
 pub struct HostFileSystem {
     root: PathBuf,
-    mount_roots: BTreeMap<String, PathBuf>,
+    mounts: BTreeMap<String, FileMount>,
+    object_store: ObjectStore,
+    root_relative_mount: Option<String>,
     next_id: u32,
     open_files: BTreeMap<u32, OpenFile>,
     open_finds: BTreeMap<u32, OpenFind>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FileMount {
+    pub name: Option<String>,
+    pub guest_root: String,
+    pub host_root: Option<PathBuf>,
+    pub total_bytes: u64,
+    pub free_bytes: u64,
+    pub writable: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ObjectStore {
+    pub total_bytes: u64,
+    pub free_bytes: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -72,18 +91,89 @@ impl HostFileSystem {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             root: root.into(),
-            mount_roots: BTreeMap::new(),
+            mounts: BTreeMap::new(),
+            object_store: ObjectStore {
+                total_bytes: 256 * 1024 * 1024,
+                free_bytes: 128 * 1024 * 1024,
+            },
+            root_relative_mount: None,
             next_id: 1,
             open_files: BTreeMap::new(),
             open_finds: BTreeMap::new(),
         }
     }
 
-    pub fn mount_guest_root(&mut self, guest_root: &str, host_root: impl Into<PathBuf>) {
-        let guest_root = normalize_guest_path(guest_root);
-        if !guest_root.is_empty() {
-            self.mount_roots.insert(guest_root, host_root.into());
+    pub fn from_storage(root: impl Into<PathBuf>, storage: StorageConfig) -> Self {
+        let mut fs = Self::new(root);
+        fs.object_store = ObjectStore {
+            total_bytes: storage.object_store.total_bytes(),
+            free_bytes: storage.object_store.free_bytes(),
+        };
+        for mount in storage.mounts {
+            fs.mount(mount);
         }
+        fs
+    }
+
+    pub fn mount_guest_root(&mut self, guest_root: &str, host_root: impl Into<PathBuf>) {
+        self.mount(MountConfig {
+            name: None,
+            guest_root: guest_root.to_owned(),
+            host_root: Some(host_root.into()),
+            total_mbytes: 8192,
+            free_mbytes: 4096,
+            writable: true,
+        });
+    }
+
+    pub fn mount(&mut self, mount: MountConfig) {
+        let guest_root = normalize_guest_path(&mount.guest_root);
+        if guest_root.is_empty() {
+            return;
+        }
+        let total_bytes = mount.total_bytes();
+        let free_bytes = mount.free_bytes();
+        let host_root = mount.host_root;
+        let writable = mount.writable && host_root.is_some();
+        self.mounts.insert(
+            guest_root.clone(),
+            FileMount {
+                name: mount.name,
+                guest_root,
+                host_root,
+                total_bytes,
+                free_bytes,
+                writable,
+            },
+        );
+    }
+
+    pub fn object_store(&self) -> ObjectStore {
+        self.object_store
+    }
+
+    pub fn set_root_relative_guest_path(&mut self, guest_path: &str) {
+        let normalized = normalize_guest_path(guest_path);
+        self.root_relative_mount = self
+            .mount_for_normalized_path(&normalized)
+            .map(|mount| mount.guest_root.clone());
+    }
+
+    pub fn host_path_to_guest_mount(&self, host_path: &Path) -> Option<String> {
+        for mount in self.mounts.values() {
+            let host_root = mount.host_root.as_ref()?;
+            let relative = host_path.strip_prefix(host_root).ok()?;
+            let mut guest_path = format!("\\{}", mount.guest_root.replace('/', "\\"));
+            for component in relative.components() {
+                let Component::Normal(part) = component else {
+                    continue;
+                };
+                guest_path.push('\\');
+                guest_path.push_str(&part.to_string_lossy());
+            }
+            return Some(guest_path);
+        }
+        None
     }
 
     pub fn create_file_w(
@@ -92,6 +182,12 @@ impl HostFileSystem {
         desired_access: u32,
         creation_disposition: u32,
     ) -> Result<u32> {
+        let mount = self.mount_for_guest_path(guest_path);
+        if desired_access & GENERIC_WRITE != 0 && mount.is_some_and(|mount| !mount.writable) {
+            return Err(Error::InvalidArgument(format!(
+                "guest mount is read-only: {guest_path}"
+            )));
+        }
         let host_path = self.translate_guest_path(guest_path)?;
         let exists = host_path.exists();
         let writable = desired_access & GENERIC_WRITE != 0;
@@ -178,7 +274,7 @@ impl HostFileSystem {
 
     pub fn file_attributes_w(&self, guest_path: &str) -> Result<FindData> {
         let normalized = normalize_guest_path(guest_path);
-        if let Some(entry) = root_mount_entry(guest_path, &normalized) {
+        if let Some(entry) = self.root_mount_entry(guest_path, &normalized) {
             return Ok(entry);
         }
 
@@ -191,6 +287,14 @@ impl HostFileSystem {
     }
 
     pub fn create_directory_w(&self, guest_path: &str) -> Result<()> {
+        if self
+            .mount_for_guest_path(guest_path)
+            .is_some_and(|mount| !mount.writable)
+        {
+            return Err(Error::InvalidArgument(format!(
+                "guest mount is read-only: {guest_path}"
+            )));
+        }
         let host_path = self.translate_guest_path(guest_path)?;
         fs::create_dir_all(&host_path).map_err(|source| Error::Io {
             path: host_path,
@@ -199,6 +303,14 @@ impl HostFileSystem {
     }
 
     pub fn remove_directory_w(&self, guest_path: &str) -> Result<()> {
+        if self
+            .mount_for_guest_path(guest_path)
+            .is_some_and(|mount| !mount.writable)
+        {
+            return Err(Error::InvalidArgument(format!(
+                "guest mount is read-only: {guest_path}"
+            )));
+        }
         let host_path = self.translate_guest_path(guest_path)?;
         fs::remove_dir(&host_path).map_err(|source| Error::Io {
             path: host_path,
@@ -207,6 +319,14 @@ impl HostFileSystem {
     }
 
     pub fn delete_file_w(&self, guest_path: &str) -> Result<()> {
+        if self
+            .mount_for_guest_path(guest_path)
+            .is_some_and(|mount| !mount.writable)
+        {
+            return Err(Error::InvalidArgument(format!(
+                "guest mount is read-only: {guest_path}"
+            )));
+        }
         let host_path = self.translate_guest_path(guest_path)?;
         fs::remove_file(&host_path).map_err(|source| Error::Io {
             path: host_path,
@@ -215,6 +335,17 @@ impl HostFileSystem {
     }
 
     pub fn move_file_w(&self, existing_path: &str, new_path: &str) -> Result<()> {
+        if self
+            .mount_for_guest_path(existing_path)
+            .is_some_and(|mount| !mount.writable)
+            || self
+                .mount_for_guest_path(new_path)
+                .is_some_and(|mount| !mount.writable)
+        {
+            return Err(Error::InvalidArgument(format!(
+                "guest mount is read-only: {existing_path} -> {new_path}"
+            )));
+        }
         let existing = self.translate_guest_path(existing_path)?;
         let new = self.translate_guest_path(new_path)?;
         if let Some(parent) = new.parent() {
@@ -230,6 +361,14 @@ impl HostFileSystem {
     }
 
     pub fn set_file_attributes_w(&self, guest_path: &str, attributes: u32) -> Result<()> {
+        if self
+            .mount_for_guest_path(guest_path)
+            .is_some_and(|mount| !mount.writable)
+        {
+            return Err(Error::InvalidArgument(format!(
+                "guest mount is read-only: {guest_path}"
+            )));
+        }
         let host_path = self.translate_guest_path(guest_path)?;
         let mut permissions = fs::metadata(&host_path)
             .map_err(|source| Error::Io {
@@ -371,31 +510,20 @@ impl HostFileSystem {
             return Err(Error::InvalidArgument("empty guest path".to_owned()));
         }
 
-        for (guest_root, host_root) in self.mount_roots.iter().rev() {
-            let remainder = if normalized == *guest_root {
-                Some("")
-            } else {
-                normalized
-                    .strip_prefix(guest_root)
-                    .and_then(|rest| rest.strip_prefix('/'))
-            };
+        for mount in self.mounts.values().rev() {
+            let remainder = mount_remainder(&normalized, &mount.guest_root);
             if let Some(remainder) = remainder {
+                let Some(host_root) = mount.host_root.as_ref() else {
+                    return Err(Error::InvalidArgument(format!(
+                        "virtual guest mount has no host files: {guest_path}"
+                    )));
+                };
                 return join_normalized_host_path(host_root, remainder, guest_path);
             }
         }
 
-        if CE_MOUNT_POINTS
-            .iter()
-            .map(|mount| normalize_guest_path(mount))
-            .any(|mount| normalized == mount || normalized.starts_with(&format!("{mount}/")))
-        {
-            return Err(Error::InvalidArgument(format!(
-                "unbound guest mount point: {guest_path}"
-            )));
-        }
-
         if is_root_relative_path(guest_path) {
-            if let Some(host_root) = self.bound_mount_root("SDMMC Disk") {
+            if let Some(host_root) = self.root_relative_host_root() {
                 return join_normalized_host_path(host_root, &normalized, guest_path);
             }
         }
@@ -405,11 +533,17 @@ impl HostFileSystem {
 
     fn find_matches(&self, guest_pattern: &str) -> Result<Vec<FindData>> {
         let normalized = normalize_guest_path(guest_pattern);
-        if is_root_namespace_pattern(guest_pattern, &normalized) {
+        if self.is_root_namespace_pattern(guest_pattern, &normalized) {
             return Ok(self.root_namespace_entries(&normalized));
         }
-        if let Some(entry) = root_mount_entry(guest_pattern, &normalized) {
+        if let Some(entry) = self.root_mount_entry(guest_pattern, &normalized) {
             return Ok(vec![entry]);
+        }
+        if self
+            .mount_for_normalized_path(&normalized)
+            .is_some_and(|mount| mount.host_root.is_none())
+        {
+            return Ok(Vec::new());
         }
 
         let host_pattern = self.translate_guest_path(guest_pattern)?;
@@ -477,14 +611,19 @@ impl HostFileSystem {
 
     fn root_namespace_entries(&self, pattern: &str) -> Vec<FindData> {
         let mut entries = Vec::new();
-        for mount in CE_MOUNT_POINTS {
-            if !pattern.is_empty() && !wildcard_match(pattern, mount) {
+        for mount in self.mounts.values() {
+            let file_name = mount
+                .guest_root
+                .rsplit('/')
+                .next()
+                .unwrap_or(&mount.guest_root);
+            if !pattern.is_empty() && !wildcard_match(pattern, file_name) {
                 continue;
             }
             entries.push(FindData {
                 attributes: FILE_ATTRIBUTE_DIRECTORY,
                 file_size: 0,
-                file_name: (*mount).to_owned(),
+                file_name: file_name.to_owned(),
             });
         }
         entries.sort_by(|lhs, rhs| lhs.file_name.cmp(&rhs.file_name));
@@ -497,39 +636,55 @@ impl HostFileSystem {
         entries
     }
 
-    fn bound_mount_root(&self, guest_root: &str) -> Option<&Path> {
-        let guest_root = normalize_guest_path(guest_root);
-        self.mount_roots
-            .iter()
-            .find(|(mount, _)| mount.eq_ignore_ascii_case(&guest_root))
-            .map(|(_, root)| root.as_path())
-    }
-}
-
-fn is_root_namespace_pattern(guest_pattern: &str, normalized: &str) -> bool {
-    (normalized.is_empty()
-        || is_root_relative_path(guest_pattern)
-            && !normalized.contains('/')
-            && has_wildcards(normalized))
-        && !root_mount_entry(guest_pattern, normalized).is_some()
-}
-
-fn root_mount_entry(guest_pattern: &str, normalized: &str) -> Option<FindData> {
-    if !is_root_relative_path(guest_pattern)
-        || normalized.contains('/')
-        || has_wildcards(normalized)
-    {
-        return None;
+    fn root_relative_host_root(&self) -> Option<&Path> {
+        let guest_root = self.root_relative_mount.as_ref()?;
+        self.mounts
+            .values()
+            .find(|mount| mount.guest_root.eq_ignore_ascii_case(&guest_root))
+            .and_then(|mount| mount.host_root.as_deref())
     }
 
-    CE_MOUNT_POINTS
-        .iter()
-        .find(|mount| mount.eq_ignore_ascii_case(normalized))
-        .map(|mount| FindData {
-            attributes: FILE_ATTRIBUTE_DIRECTORY,
-            file_size: 0,
-            file_name: (*mount).to_owned(),
-        })
+    fn mount_for_guest_path(&self, guest_path: &str) -> Option<&FileMount> {
+        let normalized = normalize_guest_path(guest_path);
+        self.mount_for_normalized_path(&normalized)
+    }
+
+    fn mount_for_normalized_path(&self, normalized: &str) -> Option<&FileMount> {
+        self.mounts
+            .values()
+            .find(|mount| mount_remainder(normalized, &mount.guest_root).is_some())
+    }
+
+    fn is_root_namespace_pattern(&self, guest_pattern: &str, normalized: &str) -> bool {
+        normalized.is_empty()
+            || is_root_relative_path(guest_pattern)
+                && !normalized.contains('/')
+                && has_wildcards(normalized)
+                && self.root_mount_entry(guest_pattern, normalized).is_none()
+    }
+
+    fn root_mount_entry(&self, guest_pattern: &str, normalized: &str) -> Option<FindData> {
+        if !is_root_relative_path(guest_pattern)
+            || normalized.contains('/')
+            || has_wildcards(normalized)
+        {
+            return None;
+        }
+
+        self.mounts
+            .values()
+            .find(|mount| mount.guest_root.eq_ignore_ascii_case(normalized))
+            .map(|mount| FindData {
+                attributes: FILE_ATTRIBUTE_DIRECTORY,
+                file_size: 0,
+                file_name: mount
+                    .guest_root
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(&mount.guest_root)
+                    .to_owned(),
+            })
+    }
 }
 
 fn normalize_guest_path(guest_path: &str) -> String {
@@ -548,6 +703,21 @@ fn is_root_relative_path(guest_path: &str) -> bool {
         .chars()
         .next()
         .is_some_and(|ch| ch == '\\' || ch == '/')
+}
+
+fn mount_remainder<'a>(normalized: &'a str, mount_root: &str) -> Option<&'a str> {
+    if normalized.eq_ignore_ascii_case(mount_root) {
+        return Some("");
+    }
+    if normalized.len() <= mount_root.len() {
+        return None;
+    }
+    let (prefix, rest) = normalized.split_at(mount_root.len());
+    if prefix.eq_ignore_ascii_case(mount_root) {
+        rest.strip_prefix('/')
+    } else {
+        None
+    }
 }
 
 fn join_normalized_host_path(root: &Path, normalized: &str, guest_path: &str) -> Result<PathBuf> {
@@ -647,8 +817,22 @@ mod tests {
     }
 
     #[test]
-    fn root_find_lists_static_ce_mount_points() {
+    fn root_find_is_empty_without_configured_mounts() {
         let mut fs = HostFileSystem::new(".");
+        assert!(fs.find_first_file_w("\\").is_err());
+    }
+
+    #[test]
+    fn root_find_lists_configured_ce_mount_points() {
+        let mut fs = HostFileSystem::new(".");
+        fs.mount(MountConfig {
+            name: Some("sdmmc".to_owned()),
+            guest_root: "\\SDMMC Disk".to_owned(),
+            host_root: None,
+            total_mbytes: 8192,
+            free_mbytes: 4096,
+            writable: false,
+        });
         let (_id, data) = fs.find_first_file_w("\\").unwrap();
         assert_eq!(data.attributes, FILE_ATTRIBUTE_DIRECTORY);
         assert_eq!(data.file_name, "SDMMC Disk");
@@ -660,13 +844,36 @@ mod tests {
     }
 
     #[test]
-    fn root_relative_paths_probe_bound_sdmmc_backing() {
+    fn hostless_mount_is_empty_and_read_only() {
+        let mut fs = HostFileSystem::new(".");
+        fs.mount(MountConfig {
+            name: Some("windows".to_owned()),
+            guest_root: "\\Windows".to_owned(),
+            host_root: None,
+            total_mbytes: 2048,
+            free_mbytes: 1024,
+            writable: true,
+        });
+
+        let (_id, data) = fs.find_first_file_w("\\Windows").unwrap();
+        assert_eq!(data.file_name, "Windows");
+        assert!(fs.find_first_file_w("\\Windows\\*").is_err());
+        assert!(
+            fs.create_file_w("\\Windows\\x.txt", GENERIC_WRITE, CREATE_ALWAYS)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn root_relative_paths_probe_process_mount_backing() {
         let root = std::env::temp_dir().join(format!("wince_file_mount_{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("iNaviData")).unwrap();
 
         let mut fs = HostFileSystem::new(".");
-        fs.mount_guest_root("\\SDMMC Disk", &root);
+        fs.mount_guest_root("\\ResidentFlash", &root);
+        assert!(fs.find_first_file_w("\\iNaviData").is_err());
+        fs.set_root_relative_guest_path("\\ResidentFlash\\INavi\\INavi.exe");
         let (_id, data) = fs.find_first_file_w("\\iNaviData").unwrap();
         assert_eq!(data.attributes, FILE_ATTRIBUTE_DIRECTORY);
         assert_eq!(data.file_name, "iNaviData");

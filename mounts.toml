@@ -1,0 +1,25 @@
+[object_store]
+total_mbytes = 256
+free_mbytes = 128
+
+[[mounts]]
+name = "sdmmc"
+guest_root = "\\SDMMC Disk"
+host_root = "D:\\INAVI_Emulator\\INAVI"
+total_mbytes = 8192
+free_mbytes = 4096
+writable = true
+
+[[mounts]]
+name = "resident_flash"
+guest_root = "\\ResidentFlash"
+total_mbytes = 2048
+free_mbytes = 1024
+writable = false
+
+[[mounts]]
+name = "windows"
+guest_root = "\\Windows"
+total_mbytes = 2048
+free_mbytes = 1024
+writable = false

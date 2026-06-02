@@ -70,7 +70,7 @@ impl CeKernel {
         Self {
             registry: Registry::from_dump(config.registry),
             devices: DeviceNamespace::from_config(config.devices),
-            files: HostFileSystem::new("."),
+            files: HostFileSystem::from_storage(".", config.storage),
             handles: HandleTable::default(),
             gwe: Gwe::default(),
             audio: AudioSystem::default(),
@@ -99,7 +99,9 @@ impl CeKernel {
     }
 
     pub fn set_process_module_path(&mut self, path: impl Into<String>) {
-        self.process_module_path = path.into();
+        let path = path.into();
+        self.files.set_root_relative_guest_path(&path);
+        self.process_module_path = path;
     }
 
     pub fn process_module_path(&self) -> &str {
@@ -176,6 +178,10 @@ impl CeKernel {
 
     pub fn mount_guest_root(&mut self, guest_root: &str, host_root: impl Into<std::path::PathBuf>) {
         self.files.mount_guest_root(guest_root, host_root);
+    }
+
+    pub fn host_path_to_guest_mount(&self, host_path: &std::path::Path) -> Option<String> {
+        self.files.host_path_to_guest_mount(host_path)
     }
 
     pub fn create_file_w(

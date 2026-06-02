@@ -2197,12 +2197,10 @@ fn run_pending_process_launches<D>(
         let saved_command_line = kernel.process_command_line().to_owned();
 
         kernel.set_process_module_base(image.image_base());
-        kernel.set_process_module_path(format!(
-            "\\SDMMC Disk\\{}",
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("child.exe")
-        ));
+        let child_module_path = kernel
+            .host_path_to_guest_mount(&path)
+            .unwrap_or_else(|| path.to_string_lossy().replace('/', "\\"));
+        kernel.set_process_module_path(child_module_path);
         kernel.set_process_module_host_path(path.clone());
         kernel.set_process_command_line(launch.command_line.clone().unwrap_or_default());
 

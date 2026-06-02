@@ -14,6 +14,12 @@ pub enum Error {
         #[source]
         source: serde_json::Error,
     },
+    #[error("failed to parse TOML from {path}: {source}")]
+    Toml {
+        path: PathBuf,
+        #[source]
+        source: toml::de::Error,
+    },
     #[error("I/O error for {path}: {source}")]
     Io {
         path: PathBuf,

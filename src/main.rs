@@ -24,7 +24,7 @@ struct Args {
     devices: PathBuf,
     image: Option<PathBuf>,
     dll_search_dirs: Vec<PathBuf>,
-    sdmmc_root: Option<PathBuf>,
+    mount_config: Option<PathBuf>,
     framebuffer_dump: Option<PathBuf>,
     desktop: DesktopMode,
     cpu_instruction_limit: usize,
@@ -56,12 +56,13 @@ fn main() -> Result<()> {
         .init();
 
     let args = Args::parse()?;
-    let config = RuntimeConfig::load(&args.registry, &args.devices)?;
+    let config = RuntimeConfig::load_with_mounts(
+        &args.registry,
+        &args.devices,
+        args.mount_config.as_deref(),
+    )?;
     let mut kernel = CeKernel::boot(config);
     let host_audio_status = attach_host_audio(&mut kernel);
-    if let Some(sdmmc_root) = args.sdmmc_root.as_ref() {
-        kernel.mount_guest_root("\\SDMMC Disk", sdmmc_root);
-    }
     let mut desktop = create_desktop(args.desktop)?;
     kernel.remote.set_framebuffer_size(
         desktop.framebuffer().width(),
@@ -145,10 +146,7 @@ fn main() -> Result<()> {
     let pe_image = if let Some(image_path) = args.image.as_ref() {
         let image = PeImage::inspect(image_path)?;
         kernel.set_process_module_base(image.image_base());
-        kernel.set_process_module_path(ce_module_path_for_image(
-            &image.path,
-            args.sdmmc_root.as_deref(),
-        ));
+        kernel.set_process_module_path(ce_module_path_for_image(&kernel, &image.path));
         println!(
             "  PE image: {} ({} bytes, lfanew=0x{:08x}, machine=0x{:04x})",
             image.path, image.len, image.dos_lfanew, image.coff_header.machine
@@ -364,7 +362,7 @@ impl Args {
         let mut devices = PathBuf::from("serial_devices.json");
         let mut image = None;
         let mut dll_search_dirs = Vec::new();
-        let mut sdmmc_root = None;
+        let mut mount_config = None;
         let mut framebuffer_dump = None;
         let mut desktop = DesktopMode::Virtual;
         let mut cpu_instruction_limit = 0;
@@ -385,8 +383,8 @@ impl Args {
                 "--dll-search-dir" => {
                     dll_search_dirs.push(next_path(&mut args, "--dll-search-dir")?);
                 }
-                "--sdmmc-root" => {
-                    sdmmc_root = Some(next_path(&mut args, "--sdmmc-root")?);
+                "--mount-config" => {
+                    mount_config = Some(next_path(&mut args, "--mount-config")?);
                 }
                 "--framebuffer-dump" => {
                     framebuffer_dump = Some(next_path(&mut args, "--framebuffer-dump")?);
@@ -417,7 +415,7 @@ impl Args {
             devices,
             image,
             dll_search_dirs,
-            sdmmc_root,
+            mount_config,
             framebuffer_dump,
             desktop,
             cpu_instruction_limit,
@@ -456,7 +454,7 @@ fn next_desktop_mode(args: &mut impl Iterator<Item = String>, flag: &str) -> Res
 
 fn print_help() {
     println!(
-        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--image INavi.exe] [--dll-search-dir DIR]... [--sdmmc-root DIR] [--desktop virtual|host] [--framebuffer-dump OUT.ppm] [--cpu-instruction-limit N] [--run-cpu]"
+        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--mount-config mounts.toml] [--image INavi.exe] [--dll-search-dir DIR]... [--desktop virtual|host] [--framebuffer-dump OUT.ppm] [--cpu-instruction-limit N] [--run-cpu]"
     );
 }
 
@@ -527,30 +525,11 @@ fn normalize_module_name(module_name: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn ce_module_path_for_image(path: &str, sdmmc_root: Option<&Path>) -> String {
-    if let Some(sdmmc_root) = sdmmc_root {
-        if let Some(path) = host_path_to_guest_mount("\\SDMMC Disk", sdmmc_root, Path::new(path)) {
-            return path;
-        }
+fn ce_module_path_for_image(kernel: &CeKernel, path: &str) -> String {
+    if let Some(path) = kernel.host_path_to_guest_mount(Path::new(path)) {
+        return path;
     }
     ce_module_path(path)
-}
-
-fn host_path_to_guest_mount(
-    guest_root: &str,
-    host_root: &Path,
-    host_path: &Path,
-) -> Option<String> {
-    let relative = host_path.strip_prefix(host_root).ok()?;
-    let mut guest_path = guest_root.trim_end_matches('\\').to_owned();
-    for component in relative.components() {
-        let std::path::Component::Normal(part) = component else {
-            continue;
-        };
-        guest_path.push('\\');
-        guest_path.push_str(&part.to_string_lossy());
-    }
-    Some(guest_path)
 }
 
 fn ce_module_path(path: &str) -> String {
@@ -562,21 +541,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn maps_image_under_sdmmc_root_to_ce_mount_path() {
-        let path = ce_module_path_for_image(
-            r"D:\INAVI_Emulator\INAVI\INavi\INavi.exe",
-            Some(Path::new(r"D:\INAVI_Emulator\INAVI")),
-        );
+    fn maps_image_under_configured_mount_to_ce_mount_path() {
+        let mut config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        config
+            .storage
+            .mounts
+            .push(wince_emulation_v3::config::MountConfig {
+                name: Some("sdmmc".to_owned()),
+                guest_root: "\\SDMMC Disk".to_owned(),
+                host_root: Some(PathBuf::from(r"D:\INAVI_Emulator\INAVI")),
+                total_mbytes: 8192,
+                free_mbytes: 4096,
+                writable: true,
+            });
+        let kernel = CeKernel::boot(config);
+        let path = ce_module_path_for_image(&kernel, r"D:\INAVI_Emulator\INAVI\INavi\INavi.exe");
 
         assert_eq!(path, r"\SDMMC Disk\INavi\INavi.exe");
     }
 
     #[test]
     fn leaves_unmounted_image_path_as_ce_style_host_path() {
-        let path = ce_module_path_for_image(
-            r"D:\Other\INavi.exe",
-            Some(Path::new(r"D:\INAVI_Emulator\INAVI")),
-        );
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let kernel = CeKernel::boot(config);
+        let path = ce_module_path_for_image(&kernel, r"D:\Other\INavi.exe");
 
         assert_eq!(path, r"D:\Other\INavi.exe");
     }

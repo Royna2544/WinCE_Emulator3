@@ -2626,8 +2626,12 @@ fn write_store_information<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    let store_size = 64 * 1024 * 1024;
-    let free_size = 48 * 1024 * 1024;
+    let object_store = kernel.files.object_store();
+    let store_size = object_store.total_bytes.min(u32::MAX as u64) as u32;
+    let free_size = object_store
+        .free_bytes
+        .min(object_store.total_bytes)
+        .min(u32::MAX as u64) as u32;
     if !write_guest_u32(kernel, memory, thread_id, info_ptr, store_size)
         || !write_guest_u32(
             kernel,
