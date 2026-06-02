@@ -196,6 +196,15 @@ pub struct WindowClass {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GestureRegistration {
+    pub id: u32,
+    pub handle: u32,
+    pub arg1: u32,
+    pub arg2: u32,
+    pub arg3: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PaintUpdate {
     pub rect: Rect,
     pub erase: bool,
@@ -216,6 +225,7 @@ pub struct Gwe {
     cursor_pos: Point,
     next_registered_message: u32,
     registered_messages: BTreeMap<String, u32>,
+    gesture_registrations: BTreeMap<u32, GestureRegistration>,
     dialog_results: BTreeMap<u32, u32>,
     dialog_checks: BTreeMap<(u32, u32), u32>,
     window_regions: BTreeMap<u32, Rect>,
@@ -265,6 +275,7 @@ impl Default for Gwe {
             cursor_pos: Point::default(),
             next_registered_message: 0xc000,
             registered_messages: BTreeMap::new(),
+            gesture_registrations: BTreeMap::new(),
             dialog_results: BTreeMap::new(),
             dialog_checks: BTreeMap::new(),
             window_regions: BTreeMap::new(),
@@ -401,6 +412,34 @@ impl Gwe {
         self.next_registered_message = self.next_registered_message.saturating_add(1);
         self.registered_messages.insert(name, message);
         Some(message)
+    }
+
+    pub fn register_gesture(
+        &mut self,
+        id: u32,
+        handle: u32,
+        arg1: u32,
+        arg2: u32,
+        arg3: u32,
+    ) -> bool {
+        if id == 0 || handle == 0 {
+            return false;
+        }
+        self.gesture_registrations.insert(
+            id,
+            GestureRegistration {
+                id,
+                handle,
+                arg1,
+                arg2,
+                arg3,
+            },
+        );
+        true
+    }
+
+    pub fn gesture_registration(&self, id: u32) -> Option<GestureRegistration> {
+        self.gesture_registrations.get(&id).copied()
     }
 
     pub fn class_info(&self, name_or_atom: &str) -> Option<&WindowClass> {

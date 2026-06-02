@@ -433,14 +433,18 @@
   ordinals 1047 and 1097 are SDK CRT `memset` and `swprintf`, not export-index
   aliases for `AddEventAccess` or `BinaryDecompress`; preserving those ordinals
   lets MFC startup continue through the real CRT helpers.
-- The latest 6,000,000-instruction bounded launch with SDK `mfcce400.dll` and
-  `--mount-config mounts.toml` gets past the previous `GetPaletteEntries`
-  frontier, creates `WCE_Solution_iNavi` plus the MFC child HWND
+- `RegisterGesture @2724` now records the guest registration arguments and
+  returns a zeroed process-heap registration block, matching the observed guest
+  behavior where the return value is treated as writable state rather than a
+  BOOL. The latest 9,000,000-instruction bounded launch with SDK
+  `mfcce400.dll` and `--mount-config mounts.toml` gets past the previous
+  `GetPaletteEntries`, SDK CRT ordinal, and `RegisterGesture` frontiers,
+  creates `WCE_Solution_iNavi` plus the MFC child HWND
   `Afx:10000:b:0:40000006:0`, and now stops at unimplemented COREDLL ordinal
-  2724 (`RegisterGesture`). The framebuffer dump
-  `target\inavi-sdk-crt-ordinals.ppm` is still diagnostic rather than visible
-  app output, so this is progress into the next raw COREDLL tranche, not GUI
-  success.
+  25 (`GetSystemTime`). The framebuffer dump
+  `target\inavi-register-gesture-handle.ppm` is still diagnostic rather than
+  visible app output, so this is progress into the next raw COREDLL tranche,
+  not GUI success.
 
 ## Current State
 
@@ -454,9 +458,10 @@
   `SendMessageW` when that import path is used, emulate the SDK MFC
   `_setjmp`/`longjmp` exception path, pass iNavi's `iNaviData` SD-card
   directory validation, implement first palette/DC state behavior, preserve SDK
-  CRT import ordinals ahead of export-index aliases, and then reach
-  unimplemented `RegisterGesture @2724` in the current SDK/MFC startup path. A
-  generic virtual framebuffer is now
+  CRT import ordinals ahead of export-index aliases, return heap-backed
+  `RegisterGesture @2724` state, and then reach unimplemented
+  `GetSystemTime @25` in the current SDK/MFC startup path. A generic virtual
+  framebuffer is now
   attached to the emulator boundary, generic virtual presenter/desktop
   interfaces exist for host
   presentation/window management, and solid `FillRect` on a window/screen HDC

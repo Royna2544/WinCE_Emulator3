@@ -20,13 +20,13 @@ use wince_emulation_v3::{
             ORD_LOAD_STRING_W, ORD_MAP_WINDOW_POINTS, ORD_MESSAGE_BOX_W, ORD_MOVE_WINDOW,
             ORD_OFFSET_RECT, ORD_PEEK_MESSAGE_W, ORD_POLYGON, ORD_POST_MESSAGE_W,
             ORD_POST_QUIT_MESSAGE, ORD_POST_THREAD_MESSAGE_W, ORD_PT_IN_RECT, ORD_REALIZE_PALETTE,
-            ORD_REGISTER_CLASS_W, ORD_RELEASE_CAPTURE, ORD_RELEASE_DC, ORD_RELEASE_MUTEX,
-            ORD_ROUND_RECT, ORD_SCREEN_TO_CLIENT, ORD_SELECT_OBJECT, ORD_SELECT_PALETTE,
-            ORD_SEND_MESSAGE_TIMEOUT, ORD_SET_BK_COLOR, ORD_SET_CAPTURE, ORD_SET_FOCUS,
-            ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_RECT, ORD_SET_RECT_EMPTY,
-            ORD_SET_TIMER, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_TEXT_W,
-            ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_SLEEP, ORD_UNION_RECT, ORD_UPDATE_WINDOW,
-            ORD_VALIDATE_RECT,
+            ORD_REGISTER_CLASS_W, ORD_REGISTER_GESTURE, ORD_RELEASE_CAPTURE, ORD_RELEASE_DC,
+            ORD_RELEASE_MUTEX, ORD_ROUND_RECT, ORD_SCREEN_TO_CLIENT, ORD_SELECT_OBJECT,
+            ORD_SELECT_PALETTE, ORD_SEND_MESSAGE_TIMEOUT, ORD_SET_BK_COLOR, ORD_SET_CAPTURE,
+            ORD_SET_FOCUS, ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_RECT,
+            ORD_SET_RECT_EMPTY, ORD_SET_TIMER, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS,
+            ORD_SET_WINDOW_TEXT_W, ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_SLEEP, ORD_UNION_RECT,
+            ORD_UPDATE_WINDOW, ORD_VALIDATE_RECT,
         },
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat, VirtualFramebuffer},
         gwe::{
@@ -37,7 +37,7 @@ use wince_emulation_v3::{
         },
         kernel::CeKernel,
         resource::ResourceId,
-        thread::ERROR_ALREADY_EXISTS,
+        thread::{ERROR_ALREADY_EXISTS, ERROR_INVALID_PARAMETER},
     },
     config::RuntimeConfig,
 };
@@ -622,6 +622,59 @@ fn coredll_raw_gwe_rejects_empty_class_names() -> Result<()> {
         }
     ));
     assert!(kernel.gwe.class_info("").is_none());
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_register_gesture_records_guest_registration() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+
+    let handle = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_REGISTER_GESTURE,
+        [0x390, 0x9210, 0x3001_496c, 0xa0bc],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("RegisterGesture did not return a handle: {other:?}"),
+    };
+    assert_ne!(handle, 0);
+    let registration = kernel.gwe.gesture_registration(0x390).unwrap();
+    assert_eq!(registration.id, 0x390);
+    assert_eq!(registration.handle, handle);
+    assert_eq!(registration.arg1, 0x9210);
+    assert_eq!(registration.arg2, 0x3001_496c);
+    assert_eq!(registration.arg3, 0xa0bc);
+    let allocation = kernel.memory.allocation(handle).unwrap();
+    assert!(allocation.actual_size >= 0x400);
+    assert!(allocation.zeroed);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REGISTER_GESTURE,
+            [0, 0x9210, 0x3001_496c, 0xa0bc],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
     Ok(())
 }
 

@@ -1869,6 +1869,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
+        ORD_REGISTER_GESTURE => Some(CoredllValue::Handle(register_gesture_raw(
+            kernel, thread_id, args,
+        ))),
         ORD_FIND_WINDOW_W => Some(CoredllValue::Handle(find_window_w_raw(
             kernel,
             memory,
@@ -5587,6 +5590,47 @@ fn register_window_message_w_raw<M: CoredllGuestMemory>(
     };
     kernel.threads.set_last_error(thread_id, 0);
     message
+}
+
+const REGISTER_GESTURE_BYTES: u32 = 0x400;
+
+fn register_gesture_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
+    let id = raw_arg(args, 0);
+    let arg1 = raw_arg(args, 1);
+    let arg2 = raw_arg(args, 2);
+    let arg3 = raw_arg(args, 3);
+    tracing::debug!(
+        target: "ce.gwe",
+        id = format_args!("0x{id:08x}"),
+        arg1 = format_args!("0x{arg1:08x}"),
+        arg2 = format_args!("0x{arg2:08x}"),
+        arg3 = format_args!("0x{arg3:08x}"),
+        "RegisterGesture"
+    );
+    if id == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(handle) = kernel.memory.heap_alloc(
+        PROCESS_HEAP_HANDLE,
+        HEAP_ZERO_MEMORY,
+        REGISTER_GESTURE_BYTES,
+    ) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+        return 0;
+    };
+    if !kernel.gwe.register_gesture(id, handle, arg1, arg2, arg3) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    handle
 }
 
 fn find_window_w_raw<M: CoredllGuestMemory>(
@@ -9705,6 +9749,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "DefWindowProcW",
     "SetTimer",
     "KillTimer",
+    "RegisterGesture",
     "GetTickCount",
     "QueryPerformanceCounter",
     "QueryPerformanceFrequency",
