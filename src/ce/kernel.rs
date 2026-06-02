@@ -42,6 +42,7 @@ pub struct CeKernel {
     pub resources: ResourceSystem,
     pub com: ComSystem,
     pub memory: MemorySystem,
+    process_module_base: u32,
     process_module_path: String,
 }
 
@@ -61,8 +62,17 @@ impl CeKernel {
             resources: ResourceSystem::default(),
             com: ComSystem::default(),
             memory: MemorySystem::default(),
+            process_module_base: 0,
             process_module_path: "\\FakeCE\\process.exe".to_owned(),
         }
+    }
+
+    pub fn set_process_module_base(&mut self, base: u32) {
+        self.process_module_base = base;
+    }
+
+    pub fn process_module_base(&self) -> u32 {
+        self.process_module_base
     }
 
     pub fn set_process_module_path(&mut self, path: impl Into<String>) {

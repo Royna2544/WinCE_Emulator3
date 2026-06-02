@@ -12,8 +12,10 @@
     and `--sdmmc-root D:\INAVI_Emulator\INAVI` stops at trap
     `0x7fff0b60` / COREDLL ordinal 861 with
     `blocked_get_message thread_id=1 hwnd=<any> min_msg=0 max_msg=0`.
-    The previous `pc=0`/reserved-instruction and decoded
-    `TerminateProcess` startup-cleanup states are no longer the current stop.
+    The same trace shows `ShowWindow(hwnd, 1)` and
+    `IsWindowVisible(hwnd) -> 1` before the wait. The previous hidden-window,
+    `pc=0`/reserved-instruction, and decoded `TerminateProcess`
+    startup-cleanup states are no longer the current stop.
   - Status: active; next work is real CE/MFC message, timer, paint,
     invalidation, and input behavior that wakes the pump through the guest path.
 

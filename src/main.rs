@@ -105,6 +105,7 @@ fn main() -> Result<()> {
 
     let pe_image = if let Some(image_path) = args.image.as_ref() {
         let image = PeImage::inspect(image_path)?;
+        kernel.set_process_module_base(image.image_base());
         kernel.set_process_module_path(ce_module_path_for_image(
             &image.path,
             args.sdmmc_root.as_deref(),

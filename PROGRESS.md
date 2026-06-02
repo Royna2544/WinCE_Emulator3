@@ -192,19 +192,27 @@
   the Unicorn import path. It stops the bounded run with a
   `blocked_get_message` debug snapshot instead of returning `FALSE` to MFC and
   causing normal thread/application cleanup.
+- Unicorn now initializes the main PE entry context with CE/MFC-style WinMain
+  arguments: `A0=hInstance`, `A1=0`, `A2` pointing at a real empty UTF-16
+  command-line string, and `A3=1` (`SW_SHOWNORMAL`). The kernel also tracks the
+  main process module base so `GetModuleFileNameW(hInstance, ...)` returns the
+  configured CE module path instead of failing for nonzero `hModule`.
 - The bounded Unicorn launch of `INavi.exe` with SDK `mfcce400.dll`,
   `--sdmmc-root D:\INAVI_Emulator\INAVI`, and the current debug binary now
   stops at raw `GetMessageW` ordinal 861 with
-  `blocked_get_message thread_id=1 hwnd=<any> min_msg=0 max_msg=0`. This is not
-  GUI success, but it is past the previous `pc=0` and decoded
-  `TerminateProcess` startup-cleanup states.
+  `blocked_get_message thread_id=1 hwnd=<any> min_msg=0 max_msg=0`. The latest
+  trace shows `GetModuleFileNameW(0x00010000)` returning 27 chars,
+  `ShowWindow(hwnd, 1)`, and `IsWindowVisible(hwnd) -> 1` before that stop.
+  This is not GUI success, but it is past the previous hidden-window,
+  `pc=0`, and decoded `TerminateProcess` startup-cleanup states.
 
 ## Current State
 
 - CPU execution is wired far enough to load mapped PE images, dispatch import
   traps, run the target entry path, execute SDK MFC code through the current
-  MIPS trampoline workaround, and stop at an empty-queue `GetMessageW` wait
-  instead of accepting startup cleanup as the final milestone.
+  MIPS trampoline workaround, create/show the main HWND, and stop at an
+  empty-queue `GetMessageW` wait instead of accepting startup cleanup as the
+  final milestone.
 - The default bootstrap uses `regs.json` as backing storage for the fake CE
   registry API and creates base GWE, timer, audio, and memory-map state.
 - The virtual Win32/CE framework and COREDLL dispatcher are connected to Unicorn

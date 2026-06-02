@@ -1902,7 +1902,7 @@ fn get_module_file_name_w_raw<M: CoredllGuestMemory>(
     buffer: u32,
     max_chars: u32,
 ) -> u32 {
-    if module != 0 || buffer == 0 || max_chars == 0 {
+    if buffer == 0 || max_chars == 0 || (module != 0 && module != kernel.process_module_base()) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);

@@ -1033,6 +1033,7 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
     ));
     assert_eq!(memory.read_bytes(0x6010, 8), b"****EFGH");
 
+    kernel.set_process_module_base(0x0001_0000);
     kernel.set_process_module_path("\\Program Files\\INavi\\INavi.exe");
     memory.map_halfwords(0x6100, 260);
     let copied = match table.dispatch_raw_ordinal_with_memory(
@@ -1054,6 +1055,25 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
     );
     assert_eq!(
         memory.read_wide_z(0x6100, 260),
+        "\\Program Files\\INavi\\INavi.exe"
+    );
+    memory.map_halfwords(0x6400, 260);
+    let copied_from_hinstance = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_MODULE_FILE_NAME_W,
+        [0x0001_0000, 0x6400, 260],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(copied),
+            ..
+        } => copied,
+        other => panic!("GetModuleFileNameW(hInstance) did not copy module path: {other:?}"),
+    };
+    assert_eq!(copied_from_hinstance, copied);
+    assert_eq!(
+        memory.read_wide_z(0x6400, 260),
         "\\Program Files\\INavi\\INavi.exe"
     );
     let slash = match table.dispatch_raw_ordinal_with_memory(

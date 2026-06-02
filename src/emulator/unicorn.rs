@@ -15,6 +15,7 @@ use crate::{
 pub struct UnicornMips {
     memory: MemoryMap,
     entry: Option<u32>,
+    entry_image_base: Option<u32>,
     stack_top: Option<u32>,
     mapped_blobs: Vec<MappedBlob>,
     import_traps: ImportTrapTable,
@@ -187,6 +188,7 @@ impl UnicornMips {
         Ok(Self {
             memory: MemoryMap::default(),
             entry: None,
+            entry_image_base: None,
             stack_top: None,
             mapped_blobs: Vec::new(),
             import_traps: ImportTrapTable::new(),
@@ -350,6 +352,7 @@ impl UnicornMips {
         )?;
         self.stack_top = Some(stack_top);
         self.entry = Some(image.entry_point_va());
+        self.entry_image_base = Some(image.image_base());
         self.import_traps.merge(traps);
         self.mapped_blobs.push(MappedBlob {
             base: image.image_base(),
@@ -399,6 +402,46 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
+    fn write_process_entry_context<D>(
+        &self,
+        uc: &mut unicorn_engine::Unicorn<'_, D>,
+    ) -> Result<()> {
+        use unicorn_engine::RegisterMIPS;
+
+        const STACK_COMMAND_LINE_OFFSET: u32 = 0x800;
+        const SW_SHOWNORMAL: u32 = 1;
+
+        let Some(hinstance) = self.entry_image_base else {
+            return Ok(());
+        };
+        let Some(stack_top) = self.stack_top else {
+            return Err(Error::Backend(
+                "PE entry context needs a mapped guest stack".to_owned(),
+            ));
+        };
+        let command_line = stack_top
+            .checked_sub(STACK_COMMAND_LINE_OFFSET)
+            .ok_or_else(|| Error::Backend("guest command-line pointer underflow".to_owned()))?;
+
+        // CE/MFC WinMain receives the application command line in A2. There is
+        // no CLI command-line argument plumbed yet, so expose a real empty
+        // UTF-16 string instead of a null pointer.
+        uc.mem_write(u64::from(command_line), &[0, 0])
+            .map_err(|err| Error::Backend(format!("write guest command line: {err:?}")))?;
+        for (register, value, name) in [
+            (RegisterMIPS::A0, hinstance, "A0/hInstance"),
+            (RegisterMIPS::A1, 0, "A1/hPrevInstance"),
+            (RegisterMIPS::A2, command_line, "A2/lpCmdLine"),
+            (RegisterMIPS::A3, SW_SHOWNORMAL, "A3/nCmdShow"),
+        ] {
+            uc.reg_write(register, u64::from(value))
+                .map_err(|err| Error::Backend(format!("set guest {name}: {err:?}")))?;
+        }
+
+        Ok(())
+    }
+
+    #[cfg(feature = "unicorn")]
     fn run_with_unicorn(&mut self, kernel: &mut CeKernel) -> Result<()> {
         use std::{cell::RefCell, rc::Rc};
         use unicorn_engine::{
@@ -426,6 +469,7 @@ impl UnicornMips {
         }
         uc.reg_write(RegisterMIPS::RA, u64::from(THREAD_EXIT_STUB_ADDR))
             .map_err(|err| Error::Backend(format!("set guest RA: {err:?}")))?;
+        self.write_process_entry_context(&mut uc)?;
 
         let function_pointer_probe = Rc::new(RefCell::new(None));
         let function_pointer_probe_hook = Rc::clone(&function_pointer_probe);

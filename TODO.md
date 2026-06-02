@@ -3,8 +3,9 @@
 ## Immediate
 
 - Continue the launch path from the current empty-queue `GetMessageW` block by
-  driving real CE/MFC window, timer, paint, input, and invalidation behavior.
-  Do not treat the blocked pump as GUI success.
+  driving real CE/MFC window, timer, paint, input, and invalidation behavior
+  now that the main HWND is shown. Do not treat the blocked pump as GUI
+  success.
 - Replace launch-stub behavior for commctrl, WINSOCK, and OLE imports with
   real subsystem-backed implementations as import traces demand. Keep MFC on
   the loaded SDK DLL path only; do not add emulator MFC stubs.

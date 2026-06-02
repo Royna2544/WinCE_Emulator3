@@ -158,6 +158,16 @@ anchors, not app-specific shortcuts.
 
 ## MFC CE Reference Source
 
+- MFC process startup / show state:
+  `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/appinit.cpp`,
+  `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/docmgr.cpp`,
+  and
+  `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/winfrm.cpp`
+  - `AfxWinInit` copies `hInstance`, `lpCmdLine`, and `nCmdShow` into the
+    `CWinApp` state.
+  - Later document/frame startup consumes `m_nCmdShow` when calling
+    `ShowWindow`, so a zeroed entry `A3` incorrectly hides the main window.
+
 - MFC thread pump:
   `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/thrdcore.cpp`
   - `AfxInternalPumpMessage` calls `GetMessage`.
@@ -200,3 +210,11 @@ anchors, not app-specific shortcuts.
   - Root-relative probes under the SDMMC backing were supported, but `\`
     itself represented the CE namespace and should enumerate mount-point
     prefixes such as `SDMMC Disk` rather than the host filesystem root.
+
+- CE process entry / module-name precedent:
+  `../WinCE_Emulator_v2/src/main.cpp` and
+  `../WinCE_Emulator_v2/src/coredll_named_dispatch.cpp`
+  - v2 entered the main image with `A0=hInstance`, `A1=0`,
+    `A2=guestCommandLine`, and `A3=1`.
+  - v2 `GetModuleFileNameW` resolves the main module path when the requested
+    module handle is the process module base.

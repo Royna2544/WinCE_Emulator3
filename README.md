@@ -67,6 +67,6 @@ CPU execution is behind the `unicorn` feature:
 cargo run --features unicorn -- --image D:\INAVI_Emulator\INAVI\INavi\INavi.exe --dll-search-dir "C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii" --sdmmc-root D:\INAVI_Emulator\INAVI --run-cpu
 ```
 
-The current bounded target run stops at a CE/MFC-style empty `GetMessageW`
-wait with a `blocked_get_message` snapshot. That is a useful frontier, not a
-completed GUI launch.
+The current bounded target run creates and shows the main HWND, then stops at a
+CE/MFC-style empty `GetMessageW` wait with a `blocked_get_message` snapshot.
+That is a useful frontier, not a completed GUI launch.
