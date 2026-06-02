@@ -27,6 +27,9 @@ pub const WM_CHAR: u32 = 0x0102;
 pub const WM_COMMAND: u32 = 0x0111;
 pub const WM_TIMER: u32 = 0x0113;
 pub const WM_USER: u32 = 0x0400;
+pub const MSGSRC_UNKNOWN: u32 = 0;
+pub const MSGSRC_SOFTWARE_POST: u32 = 1;
+pub const MSGSRC_HARDWARE_KEYBOARD: u32 = 2;
 
 pub const HWND_BROADCAST: u32 = 0x0000_ffff;
 pub const DESKTOP_HWND: u32 = 0x0001_0000;
@@ -106,6 +109,7 @@ pub struct Message {
     pub wparam: u32,
     pub lparam: u32,
     pub time_ms: u32,
+    pub source: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -208,6 +212,9 @@ pub struct Gwe {
     dialog_results: BTreeMap<u32, u32>,
     dialog_checks: BTreeMap<(u32, u32), u32>,
     window_regions: BTreeMap<u32, Rect>,
+    send_depth_by_thread: BTreeMap<u32, u32>,
+    last_message_source_by_thread: BTreeMap<u32, u32>,
+    replied_send_depth_by_thread: BTreeMap<u32, u32>,
 }
 
 impl Default for Gwe {
@@ -254,6 +261,9 @@ impl Default for Gwe {
             dialog_results: BTreeMap::new(),
             dialog_checks: BTreeMap::new(),
             window_regions: BTreeMap::new(),
+            send_depth_by_thread: BTreeMap::new(),
+            last_message_source_by_thread: BTreeMap::new(),
+            replied_send_depth_by_thread: BTreeMap::new(),
         }
     }
 }
@@ -417,21 +427,37 @@ impl Gwe {
     }
 
     pub fn destroy_window(&mut self, hwnd: u32, _time_ms: u32) -> bool {
-        let Some(window) = self.windows.get_mut(&hwnd) else {
-            return false;
-        };
-        if window.destroyed {
+        if !self.is_window(hwnd) {
             return false;
         }
-        window.destroyed = true;
-        if self.capture == Some(hwnd) {
+        let mut targets = vec![hwnd];
+        let mut index = 0;
+        while let Some(parent) = targets.get(index).copied() {
+            index += 1;
+            let children: Vec<u32> = self
+                .windows
+                .values()
+                .filter(|window| !window.destroyed && window.parent == Some(parent))
+                .map(|window| window.hwnd)
+                .collect();
+            targets.extend(children);
+        }
+        for target in targets.iter().rev().copied() {
+            if let Some(window) = self.windows.get_mut(&target) {
+                window.destroyed = true;
+            }
+            self.window_regions.remove(&target);
+            self.z_order.retain(|candidate| *candidate != target);
+        }
+        if targets.contains(&self.capture.unwrap_or(0)) {
             self.capture = None;
         }
-        if self.focus == Some(hwnd) {
+        if targets.contains(&self.focus.unwrap_or(0)) {
             self.focus = None;
         }
-        self.z_order.retain(|candidate| *candidate != hwnd);
-        self.window_regions.remove(&hwnd);
+        for queue in self.queues.values_mut() {
+            queue.retain(|message| message.hwnd == 0 || !targets.contains(&message.hwnd));
+        }
         true
     }
 
@@ -853,7 +879,10 @@ impl Gwe {
         true
     }
 
-    pub fn post_message(&mut self, thread_id: u32, message: Message) {
+    pub fn post_message(&mut self, thread_id: u32, mut message: Message) {
+        if message.source == MSGSRC_UNKNOWN {
+            message.source = MSGSRC_SOFTWARE_POST;
+        }
         self.queues.entry(thread_id).or_default().push_back(message);
     }
 
@@ -917,6 +946,49 @@ impl Gwe {
         Some(default_send_message_result(msg, wparam, lparam))
     }
 
+    pub fn begin_send_message(&mut self, thread_id: u32) {
+        *self.send_depth_by_thread.entry(thread_id).or_default() += 1;
+    }
+
+    pub fn end_send_message(&mut self, thread_id: u32) {
+        let Some(depth) = self.send_depth_by_thread.get_mut(&thread_id) else {
+            return;
+        };
+        *depth = depth.saturating_sub(1);
+        if *depth == 0 {
+            self.send_depth_by_thread.remove(&thread_id);
+            self.replied_send_depth_by_thread.remove(&thread_id);
+        }
+    }
+
+    pub fn in_send_message(&self, thread_id: u32) -> bool {
+        self.send_depth_by_thread
+            .get(&thread_id)
+            .copied()
+            .unwrap_or(0)
+            > 0
+    }
+
+    pub fn reply_message(&mut self, thread_id: u32, _result: u32) -> bool {
+        let depth = self
+            .send_depth_by_thread
+            .get(&thread_id)
+            .copied()
+            .unwrap_or(0);
+        if depth == 0 {
+            return false;
+        }
+        self.replied_send_depth_by_thread.insert(thread_id, depth);
+        true
+    }
+
+    pub fn get_message_source(&self, thread_id: u32) -> u32 {
+        self.last_message_source_by_thread
+            .get(&thread_id)
+            .copied()
+            .unwrap_or(MSGSRC_UNKNOWN)
+    }
+
     pub fn get_message(&mut self, thread_id: u32) -> Option<Message> {
         self.get_message_filtered(thread_id, None, 0, 0)
     }
@@ -936,8 +1008,13 @@ impl Gwe {
         min_msg: u32,
         max_msg: u32,
     ) -> Option<Message> {
-        self.take_matching_message(thread_id, hwnd, min_msg, max_msg)
-            .or_else(|| self.synthetic_paint_message(thread_id, hwnd, min_msg, max_msg))
+        if let Some(message) = self.take_matching_message(thread_id, hwnd, min_msg, max_msg) {
+            return Some(message);
+        }
+        let message = self.synthetic_paint_message(thread_id, hwnd, min_msg, max_msg)?;
+        self.last_message_source_by_thread
+            .insert(thread_id, message.source);
+        Some(message)
     }
 
     pub fn peek_message_filtered(
@@ -954,7 +1031,12 @@ impl Gwe {
                 .position(|message| message_matches(message, hwnd, min_msg, max_msg))
             {
                 return if flags.contains(PeekFlags::REMOVE) {
-                    queue.remove(index)
+                    let message = queue.remove(index);
+                    if let Some(message) = message.as_ref() {
+                        self.last_message_source_by_thread
+                            .insert(thread_id, message.source);
+                    }
+                    message
                 } else {
                     queue.get(index).cloned()
                 };
@@ -1036,7 +1118,10 @@ impl Gwe {
         let index = queue
             .iter()
             .position(|message| message_matches(message, hwnd, min_msg, max_msg))?;
-        queue.remove(index)
+        let message = queue.remove(index)?;
+        self.last_message_source_by_thread
+            .insert(thread_id, message.source);
+        Some(message)
     }
 
     fn synthetic_paint_message(
@@ -1187,7 +1272,13 @@ impl Message {
             wparam,
             lparam,
             time_ms,
+            source: MSGSRC_UNKNOWN,
         }
+    }
+
+    pub fn with_source(mut self, source: u32) -> Self {
+        self.source = source;
+        self
     }
 }
 

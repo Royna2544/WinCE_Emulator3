@@ -306,6 +306,13 @@ impl HandleTable {
         Some(thread.priority)
     }
 
+    pub fn thread_priority_by_id(&self, thread_id: u32) -> Option<i32> {
+        self.objects.values().find_map(|object| match object {
+            KernelObject::Thread(thread) if thread.thread_id == thread_id => Some(thread.priority),
+            _ => None,
+        })
+    }
+
     pub fn set_thread_priority(&mut self, handle: u32, priority: i32) -> bool {
         let Ok(KernelObject::Thread(thread)) = self.get_mut(handle) else {
             return false;

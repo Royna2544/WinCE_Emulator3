@@ -262,6 +262,8 @@ struct PendingWndProcReturn {
     api_result: Option<u32>,
     dialog_result_hwnd: Option<u32>,
     finalize_destroy: bool,
+    send_thread_id: Option<u32>,
+    send_timeout_result_ptr: Option<u32>,
 }
 
 #[cfg(feature = "unicorn")]
@@ -935,6 +937,12 @@ impl UnicornMips {
                         return;
                     };
                     let result = read_mips_reg(uc, RegisterMIPS::V0);
+                    if let Some(thread_id) = callout.send_thread_id {
+                        unsafe { &mut *kernel_ptr }.gwe.end_send_message(thread_id);
+                    }
+                    if let Some(result_ptr) = callout.send_timeout_result_ptr {
+                        let _ = uc.mem_write(u64::from(result_ptr), &result.to_le_bytes());
+                    }
                     if callout.msg == crate::ce::gwe::WM_PAINT {
                         unsafe { &mut *kernel_ptr }
                             .gwe
@@ -1186,7 +1194,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_send_message_callout(
-                        unsafe { &*kernel_ptr },
+                        unsafe { &mut *kernel_ptr },
                         memory.uc,
                         trap.module_kind,
                         trap.ordinal,
@@ -3050,10 +3058,20 @@ fn try_resume_blocked_wait<D>(
 
     let ready_index = {
         let blocked_waits = blocked_waits.borrow();
-        blocked_waits.iter().position(|blocked| {
-            blocked.thread_id != active_thread_id
-                && kernel.is_wait_ready(blocked.wait_handle, blocked.thread_id) == Some(true)
-        })
+        blocked_waits
+            .iter()
+            .enumerate()
+            .filter(|(_, blocked)| {
+                blocked.thread_id != active_thread_id
+                    && kernel.is_wait_ready(blocked.wait_handle, blocked.thread_id) == Some(true)
+            })
+            .max_by_key(|(index, blocked)| {
+                (
+                    kernel.thread_priority_by_id(blocked.thread_id),
+                    std::cmp::Reverse(*index),
+                )
+            })
+            .map(|(index, _)| index)
     };
     let Some(index) = ready_index else {
         return false;
@@ -3570,6 +3588,8 @@ fn try_enter_dispatch_message_callout<D>(
         api_result: None,
         dialog_result_hwnd: None,
         finalize_destroy: false,
+        send_thread_id: None,
+        send_timeout_result_ptr: None,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
@@ -3590,7 +3610,7 @@ fn try_enter_dispatch_message_callout<D>(
 
 #[cfg(feature = "unicorn")]
 fn try_enter_send_message_callout<D>(
-    kernel: &CeKernel,
+    kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
@@ -3599,8 +3619,11 @@ fn try_enter_send_message_callout<D>(
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
+    let is_send_message = ordinal == Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_W);
+    let is_send_message_timeout =
+        ordinal == Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT);
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
-        || ordinal != Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_W)
+        || (!is_send_message && !is_send_message_timeout)
     {
         return false;
     }
@@ -3613,38 +3636,51 @@ fn try_enter_send_message_callout<D>(
         return false;
     };
     let wndproc = window.wndproc;
+    let target_thread_id = window.thread_id;
+    let class_name = window.class_name.clone();
     if !is_guest_wndproc(wndproc) {
         return false;
     }
     let msg = args.get(1).copied().unwrap_or(0);
     let wparam = args.get(2).copied().unwrap_or(0);
     let lparam = args.get(3).copied().unwrap_or(0);
+    let result_ptr = is_send_message_timeout
+        .then(|| args.get(6).copied().unwrap_or(0))
+        .filter(|ptr| *ptr != 0);
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
 
     tracing::debug!(
         target: "ce.gwe",
+        source = if is_send_message_timeout { "SendMessageTimeout" } else { "SendMessageW" },
         hwnd = format_args!("0x{hwnd:08x}"),
         msg = format_args!("0x{msg:08x}"),
         wparam = format_args!("0x{wparam:08x}"),
         lparam = format_args!("0x{lparam:08x}"),
-        class = window.class_name.as_str(),
+        class = class_name.as_str(),
         wndproc = format_args!("0x{wndproc:08x}"),
         ra = format_args!("0x{return_pc:08x}"),
-        "SendMessageW guest wndproc callout"
+        "SendMessage guest wndproc callout"
     );
 
+    kernel.gwe.begin_send_message(target_thread_id);
     pending_returns.borrow_mut().push(PendingWndProcReturn {
-        source: "SendMessageW",
+        source: if is_send_message_timeout {
+            "SendMessageTimeout"
+        } else {
+            "SendMessageW"
+        },
         hwnd,
         msg,
         wparam,
         lparam,
         wndproc,
         return_pc,
-        class_name: Some(window.class_name.clone()),
+        class_name: Some(class_name),
         api_result: None,
         dialog_result_hwnd: None,
         finalize_destroy: false,
+        send_thread_id: Some(target_thread_id),
+        send_timeout_result_ptr: result_ptr,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
@@ -3659,6 +3695,7 @@ fn try_enter_send_message_callout<D>(
         true
     } else {
         let _ = pending_returns.borrow_mut().pop();
+        kernel.gwe.end_send_message(target_thread_id);
         false
     }
 }
@@ -3757,6 +3794,8 @@ fn try_enter_def_dlg_proc_callout<D>(
         api_result: None,
         dialog_result_hwnd: None,
         finalize_destroy: false,
+        send_thread_id: None,
+        send_timeout_result_ptr: None,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
@@ -3849,6 +3888,8 @@ fn enter_destroy_window_wm_destroy_callout<D>(
         api_result: Some(api_result),
         dialog_result_hwnd: None,
         finalize_destroy: true,
+        send_thread_id: None,
+        send_timeout_result_ptr: None,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
@@ -3935,6 +3976,8 @@ fn try_enter_is_dialog_message_callout<D>(
         api_result: Some(1),
         dialog_result_hwnd: None,
         finalize_destroy: false,
+        send_thread_id: None,
+        send_timeout_result_ptr: None,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(target)),
@@ -4006,6 +4049,8 @@ fn try_enter_update_window_callout<D>(
         api_result: Some(1),
         dialog_result_hwnd: None,
         finalize_destroy: false,
+        send_thread_id: None,
+        send_timeout_result_ptr: None,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
@@ -4087,6 +4132,8 @@ fn try_enter_dialog_init_callout<D>(
         api_result: is_create.then_some(hwnd),
         dialog_result_hwnd: is_modal.then_some(hwnd),
         finalize_destroy: false,
+        send_thread_id: None,
+        send_timeout_result_ptr: None,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
@@ -4272,6 +4319,8 @@ fn try_enter_call_window_proc_callout<D>(
         api_result: None,
         dialog_result_hwnd: None,
         finalize_destroy: false,
+        send_thread_id: None,
+        send_timeout_result_ptr: None,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),

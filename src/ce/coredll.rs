@@ -2293,6 +2293,26 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 )
                 .unwrap_or(0),
         )),
+        ORD_SEND_NOTIFY_MESSAGE_W => {
+            let ok = kernel.gwe.is_window(raw_arg(args, 0))
+                && kernel
+                    .send_message_w(
+                        raw_arg(args, 0),
+                        raw_arg(args, 1),
+                        raw_arg(args, 2),
+                        raw_arg(args, 3),
+                    )
+                    .is_some();
+            Some(CoredllValue::Bool(ok))
+        }
+        ORD_SEND_MESSAGE_TIMEOUT => Some(CoredllValue::U32(send_message_timeout_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_IN_SEND_MESSAGE => Some(CoredllValue::Bool(kernel.gwe.in_send_message(thread_id))),
+        ORD_GET_MESSAGE_SOURCE => Some(CoredllValue::U32(kernel.gwe.get_message_source(thread_id))),
+        ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP => {
+            Some(CoredllValue::U32(kernel.timers.tick_count()))
+        }
         ORD_DISPATCH_MESSAGE_W => Some(CoredllValue::U32(dispatch_message_w_raw(
             kernel,
             memory,
@@ -8047,6 +8067,30 @@ fn dispatch_message_w_raw<M: CoredllGuestMemory>(
     kernel.dispatch_message_w(message)
 }
 
+fn send_message_timeout_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let hwnd = raw_arg(args, 0);
+    let msg = raw_arg(args, 1);
+    let wparam = raw_arg(args, 2);
+    let lparam = raw_arg(args, 3);
+    let result_ptr = raw_arg(args, 6);
+    let Some(result) = kernel.send_message_w(hwnd, msg, wparam, lparam) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    };
+    if result_ptr != 0 && !write_guest_u32(kernel, memory, thread_id, result_ptr, result) {
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    result
+}
+
 fn translate_message_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
@@ -8529,6 +8573,7 @@ fn read_guest_message<M: CoredllGuestMemory>(
         wparam: read_guest_u32(kernel, memory, thread_id, addr.wrapping_add(8))?,
         lparam: read_guest_u32(kernel, memory, thread_id, addr.wrapping_add(12))?,
         time_ms: read_guest_u32(kernel, memory, thread_id, addr.wrapping_add(16))?,
+        source: crate::ce::gwe::MSGSRC_UNKNOWN,
     })
 }
 

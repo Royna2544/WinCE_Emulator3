@@ -401,6 +401,10 @@ impl CeKernel {
         self.handles.thread_priority(handle)
     }
 
+    pub fn thread_priority_by_id(&self, thread_id: u32) -> i32 {
+        self.handles.thread_priority_by_id(thread_id).unwrap_or(0)
+    }
+
     pub fn set_thread_priority(&mut self, handle: u32, priority: i32) -> bool {
         self.handles.set_thread_priority(handle, priority)
     }
@@ -597,7 +601,11 @@ impl CeKernel {
     }
 
     pub fn send_message_w(&mut self, hwnd: u32, msg: u32, wparam: u32, lparam: u32) -> Option<u32> {
-        self.gwe.send_message(hwnd, msg, wparam, lparam)
+        let target_thread = self.gwe.window(hwnd).map(|window| window.thread_id)?;
+        self.gwe.begin_send_message(target_thread);
+        let result = self.gwe.send_message(hwnd, msg, wparam, lparam);
+        self.gwe.end_send_message(target_thread);
+        result
     }
 
     pub fn dispatch_message_w(&mut self, message: Message) -> u32 {
@@ -688,7 +696,8 @@ impl CeKernel {
         for event in key_events {
             self.gwe.post_message(
                 thread_id,
-                Message::new(hwnd, event.message, event.vk, 1, time_ms),
+                Message::new(hwnd, event.message, event.vk, 1, time_ms)
+                    .with_source(crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD),
             );
             posted += 1;
         }
