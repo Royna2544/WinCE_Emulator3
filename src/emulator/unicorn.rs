@@ -63,6 +63,7 @@ pub struct UnicornDebugSnapshot {
     pub invalid_instruction_probe: Option<UnicornInvalidInstructionProbe>,
     pub last_calls: Vec<UnicornLastCall>,
     pub last_imports: Vec<UnicornLastImport>,
+    pub import_milestones: Vec<UnicornLastImport>,
     pub recent_file_open_ops: Vec<crate::ce::kernel::FileTraceRecord>,
     pub recent_file_ops: Vec<crate::ce::kernel::FileTraceRecord>,
     pub last_messages: Vec<UnicornLastMessage>,
@@ -418,6 +419,8 @@ const GUEST_HEAP_ARENA_BASE: u32 = 0x3000_0000;
 const GUEST_HEAP_ARENA_SIZE: u32 = 0x0100_0000;
 #[cfg(feature = "unicorn")]
 const UNICORN_TRACE_LIMIT: usize = 256;
+#[cfg(feature = "unicorn")]
+const UNICORN_IMPORT_MILESTONE_LIMIT: usize = 128;
 #[cfg(feature = "unicorn")]
 const UNICORN_WNDPROC_TRACE_LIMIT: usize = 32;
 #[cfg(feature = "unicorn")]
@@ -1198,6 +1201,8 @@ impl UnicornMips {
         let blocked_get_message_hook = Rc::clone(&blocked_get_message);
         let last_imports = Rc::new(RefCell::new(Vec::<UnicornLastImport>::new()));
         let last_imports_hook = Rc::clone(&last_imports);
+        let import_milestones = Rc::new(RefCell::new(Vec::<UnicornLastImport>::new()));
+        let import_milestones_hook = Rc::clone(&import_milestones);
         let import_counts = Rc::new(RefCell::new(BTreeMap::<UnicornImportCountKey, u64>::new()));
         let import_counts_hook = Rc::clone(&import_counts);
         let last_messages = Rc::new(RefCell::new(Vec::<UnicornLastMessage>::new()));
@@ -1440,7 +1445,7 @@ impl UnicornMips {
                         if imports.len() == UNICORN_TRACE_LIMIT {
                             imports.remove(0);
                         }
-                        imports.push(UnicornLastImport {
+                        let import = UnicornLastImport {
                             pc: address,
                             module: trap.module_name.clone(),
                             kind: trap.module_kind,
@@ -1453,7 +1458,15 @@ impl UnicornMips {
                             sp,
                             result: None,
                             detail: None,
-                        });
+                        };
+                        imports.push(import.clone());
+                        if is_import_milestone(trap.module_kind, trap.ordinal) {
+                            let mut milestones = import_milestones_hook.borrow_mut();
+                            if milestones.len() == UNICORN_IMPORT_MILESTONE_LIMIT {
+                                milestones.remove(0);
+                            }
+                            milestones.push(import);
+                        }
                     }
                     tracing::debug!(
                         target: "ce.imports",
@@ -1704,26 +1717,36 @@ impl UnicornMips {
                     let _ = sync_file_mapping_views_to_unicorn(memory.uc, unsafe { &*kernel_ptr });
                 }
                 if let Some(trap) = trap.as_ref() {
+                    let name =
+                        trace_import_name(trap.module_kind, trap.ordinal, trap.name.as_deref());
+                    let detail = import_detail_after_return(
+                        unsafe { &*kernel_ptr },
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        result,
+                    );
                     if let Some(import) = last_imports_hook
                         .borrow_mut()
                         .iter_mut()
                         .rev()
                         .find(|import| import.pc == address && import.result.is_none())
                     {
-                        import.name = trace_import_name(
-                            trap.module_kind,
-                            trap.ordinal,
-                            import.name.as_deref(),
-                        );
+                        import.name = name.clone();
                         import.result = Some(result);
-                        import.detail = import_detail_after_return(
-                            unsafe { &*kernel_ptr },
-                            memory.uc,
-                            trap.module_kind,
-                            trap.ordinal,
-                            &args,
-                            result,
-                        );
+                        import.detail = detail.clone();
+                    }
+                    if is_import_milestone(trap.module_kind, trap.ordinal)
+                        && let Some(import) = import_milestones_hook
+                            .borrow_mut()
+                            .iter_mut()
+                            .rev()
+                            .find(|import| import.pc == address && import.result.is_none())
+                    {
+                        import.name = name.clone();
+                        import.result = Some(result);
+                        import.detail = detail.clone();
                     }
                     tracing::debug!(
                         target: "ce.imports",
@@ -1902,6 +1925,7 @@ impl UnicornMips {
             invalid_instruction_probe.borrow().clone(),
             last_calls.borrow().clone(),
             last_imports.borrow().clone(),
+            import_milestones.borrow().clone(),
             kernel.recent_file_open_ops().to_vec(),
             kernel.recent_file_ops().to_vec(),
             last_messages.borrow().clone(),
@@ -3066,31 +3090,12 @@ impl std::fmt::Display for UnicornDebugSnapshot {
         }
         if !self.last_imports.is_empty() {
             write!(f, " last_imports=[")?;
-            for (index, import) in self.last_imports.iter().enumerate() {
-                if index != 0 {
-                    write!(f, ",")?;
-                }
-                write!(f, "0x{:08x}/{:?}/{}", import.pc, import.kind, import.module)?;
-                if let Some(ordinal) = import.ordinal {
-                    write!(f, "/ord={ordinal}")?;
-                }
-                if let Some(name) = import.name.as_deref() {
-                    write!(f, "/name={name}")?;
-                }
-                write!(
-                    f,
-                    "/a0=0x{:08x}/a1=0x{:08x}/a2=0x{:08x}/a3=0x{:08x}/sp=0x{:08x}",
-                    import.a0, import.a1, import.a2, import.a3, import.sp
-                )?;
-                if let Some(result) = import.result {
-                    write!(f, "/ret=0x{result:08x}")?;
-                } else {
-                    write!(f, "/ret=<pending>")?;
-                }
-                if let Some(detail) = import.detail.as_deref() {
-                    write!(f, "/detail={}", format_trace_string(detail))?;
-                }
-            }
+            write_unicorn_import_records(f, &self.last_imports)?;
+            write!(f, "]")?;
+        }
+        if !self.import_milestones.is_empty() {
+            write!(f, " import_milestones=[")?;
+            write_unicorn_import_records(f, &self.import_milestones)?;
             write!(f, "]")?;
         }
         if !self.recent_file_ops.is_empty() {
@@ -6221,6 +6226,7 @@ fn capture_debug_snapshot<D>(
     invalid_instruction_probe: Option<UnicornInvalidInstructionProbe>,
     mut last_calls: Vec<UnicornLastCall>,
     last_imports: Vec<UnicornLastImport>,
+    import_milestones: Vec<UnicornLastImport>,
     recent_file_open_ops: Vec<crate::ce::kernel::FileTraceRecord>,
     recent_file_ops: Vec<crate::ce::kernel::FileTraceRecord>,
     last_messages: Vec<UnicornLastMessage>,
@@ -6268,6 +6274,7 @@ fn capture_debug_snapshot<D>(
         invalid_instruction_probe,
         last_calls,
         last_imports,
+        import_milestones,
         recent_file_open_ops,
         recent_file_ops,
         last_messages,
@@ -6350,10 +6357,101 @@ fn import_detail_after_return<D>(
         return None;
     }
     match ordinal {
-        Some(crate::ce::coredll_ordinals::ORD_GET_MODULE_FILE_NAME_W) if result != 0 => {
+        Some(crate::ce::coredll_ordinals::ORD_GET_MODULE_FILE_NAME_W) => {
+            let module = args.first().copied().unwrap_or(0);
             let buffer = args.get(1).copied().unwrap_or(0);
             let max_chars = args.get(2).copied().unwrap_or(0).min(260);
-            read_unicorn_wide_z(uc, buffer, max_chars as usize).map(|path| format!("path={path}"))
+            let mut parts = vec![
+                format!("module=0x{module:08x}"),
+                format!("buffer=0x{buffer:08x}"),
+                format!("max={max_chars}"),
+            ];
+            if let Some(path) = read_unicorn_wide_z(uc, buffer, max_chars as usize) {
+                parts.push(format!("path={path:?}"));
+            }
+            Some(parts.join("/"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_FIND_RESOURCE)
+        | Some(crate::ce::coredll_ordinals::ORD_FIND_RESOURCE_W) => {
+            let module = args.first().copied().unwrap_or(0);
+            let name = args.get(1).copied().unwrap_or(0);
+            let kind = args.get(2).copied().unwrap_or(0);
+            Some(format!(
+                "module=0x{module:08x}/name={}/type={}",
+                import_resource_arg_detail(uc, name),
+                import_resource_arg_detail(uc, kind)
+            ))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_LOAD_RESOURCE)
+        | Some(crate::ce::coredll_ordinals::ORD_SIZEOF_RESOURCE) => {
+            let module = args.first().copied().unwrap_or(0);
+            let resource = args.get(1).copied().unwrap_or(0);
+            Some(format!("module=0x{module:08x}/resource=0x{resource:08x}"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_LOAD_STRING_W) => {
+            let module = args.first().copied().unwrap_or(0);
+            let id = args.get(1).copied().unwrap_or(0);
+            let buffer = args.get(2).copied().unwrap_or(0);
+            let max_chars = args.get(3).copied().unwrap_or(0).min(260);
+            let mut parts = vec![
+                format!("module=0x{module:08x}"),
+                format!("id=0x{id:08x}"),
+                format!("buffer=0x{buffer:08x}"),
+                format!("max={max_chars}"),
+            ];
+            if let Some(text) = read_unicorn_wide_z(uc, buffer, max_chars as usize) {
+                parts.push(format!("text={text:?}"));
+            }
+            Some(parts.join("/"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_LOAD_MENU_W) => {
+            let module = args.first().copied().unwrap_or(0);
+            let name = args.get(1).copied().unwrap_or(0);
+            Some(format!(
+                "module=0x{module:08x}/name={}",
+                import_resource_arg_detail(uc, name)
+            ))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_REGISTER_CLASS_W) => {
+            let class_ptr = args.first().copied().unwrap_or(0);
+            let wndproc = read_unicorn_u32(uc, class_ptr.wrapping_add(4)).unwrap_or(0);
+            let class_name_ptr = read_unicorn_u32(uc, class_ptr.wrapping_add(36)).unwrap_or(0);
+            let mut parts = vec![
+                format!("class_ptr=0x{class_ptr:08x}"),
+                format!("wndproc=0x{wndproc:08x}"),
+                format!("class_name_ptr=0x{class_name_ptr:08x}"),
+            ];
+            if let Some(class_name) = read_unicorn_wide_z(uc, class_name_ptr, 128) {
+                parts.push(format!("class={class_name:?}"));
+            }
+            Some(parts.join("/"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_CREATE_WINDOW_EX_W) => {
+            let class_ptr = args.get(1).copied().unwrap_or(0);
+            let title_ptr = args.get(2).copied().unwrap_or(0);
+            let style = args.get(3).copied().unwrap_or(0);
+            let x = args.get(4).copied().unwrap_or(0) as i32;
+            let y = args.get(5).copied().unwrap_or(0) as i32;
+            let width = args.get(6).copied().unwrap_or(0) as i32;
+            let height = args.get(7).copied().unwrap_or(0) as i32;
+            let parent = args.get(8).copied().unwrap_or(0);
+            let id = args.get(9).copied().unwrap_or(0);
+            let mut parts = vec![
+                format!("ex_style=0x{:08x}", args.first().copied().unwrap_or(0)),
+                format!("class_ptr=0x{class_ptr:08x}"),
+                format!("title_ptr=0x{title_ptr:08x}"),
+                format!("style=0x{style:08x}"),
+                format!("rect={x},{y},{width},{height}"),
+                format!("parent=0x{parent:08x}"),
+                format!("id=0x{id:08x}"),
+            ];
+            if let Some(class_name) = import_pointer_or_wide_arg(uc, class_ptr) {
+                parts.push(format!("class={class_name:?}"));
+            }
+            if let Some(title) = import_pointer_or_wide_arg(uc, title_ptr) {
+                parts.push(format!("title={title:?}"));
+            }
+            Some(parts.join("/"))
         }
         Some(crate::ce::coredll_ordinals::ORD_CREATE_FILE_W) => {
             let path_ptr = args.first().copied().unwrap_or(0);
@@ -6460,6 +6558,46 @@ fn import_detail_after_return<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn is_import_milestone(
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+) -> bool {
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll {
+        return false;
+    }
+    matches!(
+        ordinal,
+        Some(crate::ce::coredll_ordinals::ORD_GET_MODULE_FILE_NAME_W)
+            | Some(crate::ce::coredll_ordinals::ORD_FIND_RESOURCE)
+            | Some(crate::ce::coredll_ordinals::ORD_FIND_RESOURCE_W)
+            | Some(crate::ce::coredll_ordinals::ORD_LOAD_RESOURCE)
+            | Some(crate::ce::coredll_ordinals::ORD_SIZEOF_RESOURCE)
+            | Some(crate::ce::coredll_ordinals::ORD_LOAD_STRING_W)
+            | Some(crate::ce::coredll_ordinals::ORD_LOAD_MENU_W)
+            | Some(crate::ce::coredll_ordinals::ORD_REGISTER_CLASS_W)
+            | Some(crate::ce::coredll_ordinals::ORD_CREATE_WINDOW_EX_W)
+    )
+}
+
+#[cfg(feature = "unicorn")]
+fn import_resource_arg_detail<D>(uc: &unicorn_engine::Unicorn<'_, D>, ptr: u32) -> String {
+    import_pointer_or_wide_arg(uc, ptr)
+        .map(|value| format!("{value:?}"))
+        .unwrap_or_else(|| format!("0x{ptr:08x}"))
+}
+
+#[cfg(feature = "unicorn")]
+fn import_pointer_or_wide_arg<D>(uc: &unicorn_engine::Unicorn<'_, D>, ptr: u32) -> Option<String> {
+    if ptr == 0 {
+        return None;
+    }
+    if ptr <= 0xffff {
+        return Some(format!("#{ptr}"));
+    }
+    read_unicorn_wide_z(uc, ptr, 128)
+}
+
+#[cfg(feature = "unicorn")]
 fn read_unicorn_wide_z<D>(
     uc: &unicorn_engine::Unicorn<'_, D>,
     ptr: u32,
@@ -6484,6 +6622,38 @@ fn read_unicorn_wide_z<D>(
 
 fn format_trace_string(value: &str) -> String {
     format!("{value:?}")
+}
+
+fn write_unicorn_import_records(
+    f: &mut std::fmt::Formatter<'_>,
+    imports: &[UnicornLastImport],
+) -> std::fmt::Result {
+    for (index, import) in imports.iter().enumerate() {
+        if index != 0 {
+            write!(f, ",")?;
+        }
+        write!(f, "0x{:08x}/{:?}/{}", import.pc, import.kind, import.module)?;
+        if let Some(ordinal) = import.ordinal {
+            write!(f, "/ord={ordinal}")?;
+        }
+        if let Some(name) = import.name.as_deref() {
+            write!(f, "/name={name}")?;
+        }
+        write!(
+            f,
+            "/a0=0x{:08x}/a1=0x{:08x}/a2=0x{:08x}/a3=0x{:08x}/sp=0x{:08x}",
+            import.a0, import.a1, import.a2, import.a3, import.sp
+        )?;
+        if let Some(result) = import.result {
+            write!(f, "/ret=0x{result:08x}")?;
+        } else {
+            write!(f, "/ret=<pending>")?;
+        }
+        if let Some(detail) = import.detail.as_deref() {
+            write!(f, "/detail={}", format_trace_string(detail))?;
+        }
+    }
+    Ok(())
 }
 
 fn write_file_trace_records(
