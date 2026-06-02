@@ -65,6 +65,7 @@ pub struct UnicornDebugSnapshot {
     pub last_wndproc_returns: Vec<UnicornWndProcReturn>,
     pub last_code: Vec<UnicornLastCode>,
     pub last_blocks: Vec<UnicornLastBlock>,
+    pub import_counts: Vec<UnicornImportCount>,
     pub blocked_get_message: Option<UnicornBlockedGetMessage>,
     pub thread_exit_reached: bool,
     pub encoded_kernel_exit: Option<EncodedKernelExit>,
@@ -141,6 +142,21 @@ pub struct UnicornLastImport {
     pub a3: u32,
     pub sp: u32,
     pub result: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornImportCount {
+    pub module: String,
+    pub ordinal: Option<u32>,
+    pub name: Option<String>,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct UnicornImportCountKey {
+    module: String,
+    ordinal: Option<u32>,
+    name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -716,6 +732,7 @@ impl UnicornMips {
     ) -> Result<()> {
         use std::{
             cell::RefCell,
+            collections::BTreeMap,
             rc::Rc,
             time::{Duration, Instant},
         };
@@ -924,6 +941,8 @@ impl UnicornMips {
         let blocked_get_message_hook = Rc::clone(&blocked_get_message);
         let last_imports = Rc::new(RefCell::new(Vec::<UnicornLastImport>::new()));
         let last_imports_hook = Rc::clone(&last_imports);
+        let import_counts = Rc::new(RefCell::new(BTreeMap::<UnicornImportCountKey, u64>::new()));
+        let import_counts_hook = Rc::clone(&import_counts);
         let last_messages = Rc::new(RefCell::new(Vec::<UnicornLastMessage>::new()));
         let last_messages_hook = Rc::clone(&last_messages);
         let last_wndproc_returns = Rc::new(RefCell::new(Vec::<UnicornWndProcReturn>::new()));
@@ -1114,6 +1133,14 @@ impl UnicornMips {
                     let a2 = read_mips_reg(uc, RegisterMIPS::A2);
                     let a3 = read_mips_reg(uc, RegisterMIPS::A3);
                     let sp = read_mips_reg(uc, RegisterMIPS::SP);
+                    *import_counts_hook
+                        .borrow_mut()
+                        .entry(UnicornImportCountKey {
+                            module: trap.module_name.clone(),
+                            ordinal: trap.ordinal,
+                            name: trap.name.clone(),
+                        })
+                        .or_insert(0) += 1;
                     {
                         let mut imports = last_imports_hook.borrow_mut();
                         if imports.len() == UNICORN_TRACE_LIMIT {
@@ -1556,6 +1583,7 @@ impl UnicornMips {
             last_wndproc_returns.borrow().clone(),
             last_code.borrow().clone(),
             last_blocks.borrow().clone(),
+            import_count_snapshot(&import_counts.borrow()),
             blocked_get_message.borrow().clone(),
             *thread_exit_reached.borrow(),
         ));
@@ -2478,6 +2506,22 @@ impl std::fmt::Display for UnicornDebugSnapshot {
             if let Some(instruction) = stop.instruction {
                 write!(f, " host_stop_insn=0x{instruction:08x}")?;
             }
+        }
+        if !self.import_counts.is_empty() {
+            write!(f, " import_counts=[")?;
+            for (index, count) in self.import_counts.iter().enumerate() {
+                if index != 0 {
+                    write!(f, ",")?;
+                }
+                write!(f, "{}/count={}", count.module, count.count)?;
+                if let Some(ordinal) = count.ordinal {
+                    write!(f, "/ord={ordinal}")?;
+                }
+                if let Some(name) = count.name.as_deref() {
+                    write!(f, "/name={name}")?;
+                }
+            }
+            write!(f, "]")?;
         }
         if let Some(probe) = self.interrupt_probe.as_ref() {
             write!(
@@ -4450,6 +4494,7 @@ fn capture_debug_snapshot<D>(
     last_wndproc_returns: Vec<UnicornWndProcReturn>,
     last_code: Vec<UnicornLastCode>,
     last_blocks: Vec<UnicornLastBlock>,
+    import_counts: Vec<UnicornImportCount>,
     blocked_get_message: Option<UnicornBlockedGetMessage>,
     thread_exit_reached: bool,
 ) -> UnicornDebugSnapshot {
@@ -4482,10 +4527,36 @@ fn capture_debug_snapshot<D>(
         last_wndproc_returns,
         last_code,
         last_blocks,
+        import_counts,
         blocked_get_message,
         thread_exit_reached,
         encoded_kernel_exit: None,
     }
+}
+
+fn import_count_snapshot(
+    counts: &std::collections::BTreeMap<UnicornImportCountKey, u64>,
+) -> Vec<UnicornImportCount> {
+    const IMPORT_COUNT_SNAPSHOT_LIMIT: usize = 16;
+
+    let mut counts = counts
+        .iter()
+        .map(|(key, count)| UnicornImportCount {
+            module: key.module.clone(),
+            ordinal: key.ordinal,
+            name: key.name.clone(),
+            count: *count,
+        })
+        .collect::<Vec<_>>();
+    counts.sort_by(|lhs, rhs| {
+        rhs.count
+            .cmp(&lhs.count)
+            .then_with(|| lhs.module.cmp(&rhs.module))
+            .then_with(|| lhs.ordinal.cmp(&rhs.ordinal))
+            .then_with(|| lhs.name.cmp(&rhs.name))
+    });
+    counts.truncate(IMPORT_COUNT_SNAPSHOT_LIMIT);
+    counts
 }
 
 #[cfg(feature = "unicorn")]

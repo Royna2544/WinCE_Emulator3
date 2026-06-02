@@ -469,6 +469,14 @@
   mounted iNavi wall-clock run stopped at the same `pc=0x0001354c`/blank
   framebuffer frontier, so this is a generic startup-cost cleanup, not the
   visible-GUI breakthrough.
+- Unicorn debug snapshots now include a compact top-import count summary in
+  addition to the recent import ring. An 8,000 ms mounted iNavi wall-clock run
+  writes `target\inavi-import-counts.ppm`, whose 800x480 RGB bytes are still
+  all zero, and reports the hottest imports as `memset @1047` 259 times,
+  `LocalAlloc @33`/TLS-ish `TlsGetValue @15` 7 times each, and
+  `WINSOCK.dll!WSAStartup` once. This confirms the current post-time frontier
+  is still legitimate startup/import churn before visible drawing, not a new
+  unimplemented import trap.
 
 ## Current State
 
@@ -487,8 +495,9 @@
   stop long post-time runs through `--cpu-wall-clock-limit-ms` with a diagnostic
   snapshot plus framebuffer dump. The current mounted run progresses past the
   previous `GetSystemTime @25` trap, but the wall-clock-bounded snapshot is
-  still in startup CRT/import activity and the framebuffer remains blank. A
-  generic virtual framebuffer is now
+  still in startup CRT/import activity, with compact import counts showing
+  `memset @1047` dominating and `WSAStartup` already reached, and the
+  framebuffer remains blank. A generic virtual framebuffer is now
   attached to the emulator boundary, generic virtual presenter/desktop
   interfaces exist for host
   presentation/window management, and solid `FillRect` on a window/screen HDC

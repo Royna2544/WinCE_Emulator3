@@ -68,7 +68,12 @@
     `target\inavi-wall-clock-stop.ppm`; that dump body is still all zero. The
     captured snapshot stops at `pc=0x0001354c` with repeated SDK CRT
     `memset @1047`/`swprintf @1097` import activity, so the current failure is
-    still "no useful GUI pixels," not a missing `GetSystemTime` import.
+    still "no useful GUI pixels," not a missing `GetSystemTime` import. A
+    follow-up 8,000 ms run with compact import counting writes
+    `target\inavi-import-counts.ppm`; its RGB body is still all zero, and the
+    summary shows `memset @1047` 259 times plus
+    `WINSOCK.dll!WSAStartup` once before the wall-clock stop. The app is still
+    in post-time startup/import churn before useful drawing.
   - Status: active; `TlsCall` now returns real CE-style slots,
     `CallWindowProcW` now enters guest window-procedure targets, and
     `CreateWindowExW` now delivers the first create-time message. Raw
@@ -81,10 +86,10 @@
     process module, but the latest shorter iNavi run still shows an EXE-module
     `FindResourceW(..., name=0x0e01, type=RT_STRING)` miss; LLVM resource
     dumping confirms the EXE has no RT_STRING table. The latest bounded launch
-    confirms the current frontier is a post-time long-running path rather than
-    an unimplemented import trap; next work is to capture a bounded diagnostic
-    snapshot and then implement the next CE-referenced raw COREDLL behavior that
-    should advance the guest path toward the newly connected framebuffer
+    confirms the current frontier is a post-time long-running startup path with
+    import-count evidence rather than an unimplemented import trap; next work is
+    to run longer bounded slices and implement the next CE-referenced raw
+    behavior that advances the guest path toward the newly connected framebuffer
     drawing and the remaining GDI/DC/surface drawing and blit imports.
 
 - Most COREDLL ordinals are still subsystem stubs.

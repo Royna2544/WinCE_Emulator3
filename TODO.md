@@ -12,11 +12,12 @@
   earlier export-index `GetPaletteEntries` trap via real palette/DC state,
   preserves SDK CRT ordinals such as `memset @1047` and `swprintf @1097` before
   export-index fallback, returns heap-backed `RegisterGesture @2724` state, and
-  writes `GetSystemTime @25`. With `--cpu-wall-clock-limit-ms 15000`, the run
-  now returns a bounded snapshot and framebuffer dump without external killing;
-  the dump is still all zero, and the snapshot stops around `pc=0x0001354c`
-  with repeated SDK CRT `memset @1047`/`swprintf @1097` activity. Burn down the
-  next real startup bottleneck before expecting guest drawing.
+  writes `GetSystemTime @25`. With wall-clock-bounded runs, the emulator now
+  returns snapshots and framebuffer dumps without external killing; the latest
+  8,000 ms diagnostic dump is still all zero, and compact import counts show
+  `memset @1047` dominating startup with `WINSOCK.dll!WSAStartup` already
+  reached once. Run longer bounded slices to find the next real startup
+  boundary before expecting guest drawing.
 - Replace launch-stub behavior for commctrl, WINSOCK, and OLE imports with
   real subsystem-backed implementations as import traces demand. Keep MFC on
   the loaded SDK DLL path only; do not add emulator MFC stubs.
