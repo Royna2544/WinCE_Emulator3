@@ -5,18 +5,22 @@
 - Main process launch reaches the paint loop without useful GUI output.
   - Symptom: a bounded debug launch gets past the earlier empty-queue
     `GetMessageW` self-stop and dispatches a synthetic `WM_PAINT`, but still
-    produces no host-visible framebuffer/window output and must be killed by the
-    timeout. This is not GUI success.
+    produces no drawn framebuffer/window output and must be killed by the
+    timeout. A generic virtual framebuffer is attached, but guest GDI/surface
+    drawing is not connected to it yet. This is not GUI success.
   - Evidence: latest bounded run with `--features unicorn`,
     `--dll-search-dir C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii`,
     and `--sdmmc-root D:\INAVI_Emulator\INAVI` timed out after 30 seconds. The
     debug trace shows `PeekMessageW`/`GetMessageW` returning a synthetic
     `WM_PAINT` and `DispatchMessageW` entering the SDK MFC window procedure for
-    class `solution_inavi` at `0x6004eba8`. The previous hidden-window,
-    empty-queue `GetMessageW`, `pc=0`/reserved-instruction, and decoded
-    `TerminateProcess` startup-cleanup states are no longer the current stop.
-  - Status: active; next work is a CE-referenced virtual framebuffer/surface
-    boundary and then real drawing/blit behavior through the guest path.
+    class `solution_inavi` at `0x6004eba8`. The framebuffer-plumbed run prints
+    an attached 800x480 RGB565 virtual framebuffer before CPU execution, but
+    the timeout-killed target run does not return far enough to write the
+    optional PPM dump. The previous hidden-window, empty-queue `GetMessageW`,
+    `pc=0`/reserved-instruction, and decoded `TerminateProcess`
+    startup-cleanup states are no longer the current stop.
+  - Status: active; next work is CE-referenced GDI/DC/surface drawing and blit
+    behavior through the guest path.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch

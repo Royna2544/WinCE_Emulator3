@@ -144,6 +144,14 @@
     chunk.
 - Debug builds include `LoggingAudioSink`, which records/logs PCM submissions
   and flush hints for short-audio debugging.
+- Added a generic virtual framebuffer boundary:
+  - `Framebuffer` describes a byte-addressable surface with dimensions, stride,
+    pixel format, dirty rectangles, and mutable pixel storage without depending
+    on Windows names or handles
+  - `VirtualFramebuffer` provides an in-memory implementation, defaults to an
+    800x480 RGB565 primary surface, and can write a temporary PPM dump
+  - `main` owns the virtual framebuffer, updates the remote/input framebuffer
+    size from it, and passes it into the Unicorn execution boundary
 - Unicorn launch prep is wired:
   - parsed PE images can be mapped into the Unicorn memory plan
   - `--dll-search-dir` can load SDK DLL images such as `mfcce400.dll`; the main
@@ -214,6 +222,12 @@
   procedure for class `solution_inavi` at `0x6004eba8`. A 30-second bounded
   run still had to be killed by the timeout and produced no host-visible GUI;
   this is not launch success.
+- The framebuffer-plumbed bounded launch prints an attached 800x480 RGB565
+  virtual framebuffer (`stride=1600`, `bytes=768000`) before entering CPU
+  execution. The same 30-second target run still times out and has to be
+  killed, so the optional framebuffer dump is only produced for runs that
+  return normally or error through the emulator path. A non-CPU smoke run wrote
+  `target\framebuffer-smoke.ppm` from the virtual framebuffer.
 
 ## Current State
 
@@ -221,8 +235,9 @@
   traps, run the target entry path, execute SDK MFC code through the current
   MIPS trampoline workaround, create/show the main HWND, synthesize and dispatch
   the first `WM_PAINT`, and keep running until the bounded launcher kills the
-  process. There is still no host window/framebuffer output and this must not
-  be treated as GUI success.
+  process. A generic virtual framebuffer is now attached to the emulator
+  boundary, but guest drawing/blit behavior is not connected yet and this must
+  not be treated as GUI success.
 - The default bootstrap uses `regs.json` as backing storage for the fake CE
   registry API and creates base GWE, timer, audio, and memory-map state.
 - The virtual Win32/CE framework and COREDLL dispatcher are connected to Unicorn

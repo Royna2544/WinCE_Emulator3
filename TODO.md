@@ -3,19 +3,19 @@
 ## Immediate
 
 - Continue the launch path after the first synthetic `WM_PAINT` dispatch by
-  adding CE-referenced virtual framebuffer/surface plumbing and then real
-  drawing/blit behavior. Do not treat the timeout-running paint loop as GUI
+  connecting CE-referenced GDI/surface drawing and blit behavior to the generic
+  virtual framebuffer. Do not treat the timeout-running paint loop as GUI
   success.
 - Replace launch-stub behavior for commctrl, WINSOCK, and OLE imports with
   real subsystem-backed implementations as import traces demand. Keep MFC on
   the loaded SDK DLL path only; do not add emulator MFC stubs.
 - Continue burning down COREDLL ordinals subsystem by subsystem, replacing
   stubbed ordinal plan entries with CE/MFC/SDK-referenced semantics. Next
-  likely tranche: virtual framebuffer/GDI surfaces, PE-backed resource
-  string/icon/bitmap loading, COM/OLE API dispatch when ole32 imports are
-  connected, more GWE menu/dialog/control raw pointer marshalling, file
-  attributes/directory metadata beyond the first `FindFirstFileW` tranche, and
-  timer/system-time structs.
+  likely tranche: GDI/DC/surface drawing into the virtual framebuffer,
+  PE-backed resource string/icon/bitmap loading, COM/OLE API dispatch when
+  ole32 imports are connected, more GWE menu/dialog/control raw pointer
+  marshalling, file attributes/directory metadata beyond the first
+  `FindFirstFileW` tranche, and timer/system-time structs.
 - Continue connecting SDK CE 4.2 Mipsii COREDLL CRT ordinals from `coredll.lib`
   as the launch trace demands.
 - Implement CRT `_msize`/`realloc`/operator delete ordinals from SDK evidence so
@@ -44,7 +44,8 @@
 
 ## Later
 
-- Extend the virtual framebuffer into drawing surfaces and blit paths.
+- Add host presentation/streaming of framebuffer snapshots after guest drawing
+  writes meaningful pixels.
 - Keep actual host audio playback unplugged until guest callback/import trap
   semantics are traced; current waveOut work is a virtual adapter only, with an
   `AudioSinkRegistry`, a Windows `winmm` host-sink boundary, websocket sink, and

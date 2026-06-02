@@ -6,6 +6,7 @@ pub mod coredll_ordinals;
 pub mod crt;
 pub mod devices;
 pub mod file;
+pub mod framebuffer;
 pub mod gwe;
 pub mod kernel;
 pub mod memory;

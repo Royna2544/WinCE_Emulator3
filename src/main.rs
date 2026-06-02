@@ -7,6 +7,7 @@ use wince_emulation_v3::{
     Result,
     ce::{
         audio::WaveFormat,
+        framebuffer::{Framebuffer, VirtualFramebuffer},
         gwe::WM_TIMER,
         kernel::CeKernel,
         registry::{ERROR_SUCCESS, HKEY_LOCAL_MACHINE},
@@ -23,6 +24,7 @@ struct Args {
     image: Option<PathBuf>,
     dll_search_dirs: Vec<PathBuf>,
     sdmmc_root: Option<PathBuf>,
+    framebuffer_dump: Option<PathBuf>,
     run_cpu: bool,
 }
 
@@ -39,6 +41,10 @@ fn main() -> Result<()> {
     if let Some(sdmmc_root) = args.sdmmc_root.as_ref() {
         kernel.mount_guest_root("\\SDMMC Disk", sdmmc_root);
     }
+    let mut framebuffer = VirtualFramebuffer::default_primary()?;
+    kernel
+        .remote
+        .set_framebuffer_size(framebuffer.width(), framebuffer.height());
 
     let mut cpu = UnicornMips::new()?;
     if args.image.is_none() {
@@ -102,6 +108,14 @@ fn main() -> Result<()> {
         println!("  bootstrap demo state: skipped for PE image");
     }
     println!("  memory regions: {}", cpu.memory().regions().count());
+    println!(
+        "  framebuffer: {}x{} {:?} stride={} bytes={}",
+        framebuffer.width(),
+        framebuffer.height(),
+        framebuffer.pixel_format(),
+        framebuffer.stride(),
+        framebuffer.pixels().len()
+    );
 
     let pe_image = if let Some(image_path) = args.image.as_ref() {
         let image = PeImage::inspect(image_path)?;
@@ -148,15 +162,24 @@ fn main() -> Result<()> {
     }
 
     if args.run_cpu {
-        if let Err(err) = cpu.run_until_import_trap(&mut kernel) {
+        if let Err(err) = cpu.run_until_import_trap_with_framebuffer(&mut kernel, &mut framebuffer)
+        {
             if let Some(snapshot) = cpu.last_debug_snapshot() {
                 eprintln!("  Unicorn debug: {snapshot}");
+            }
+            if let Some(path) = args.framebuffer_dump.as_ref() {
+                framebuffer.write_ppm(path)?;
+                eprintln!("  framebuffer dump: {}", path.display());
             }
             return Err(err);
         }
         if let Some(snapshot) = cpu.last_debug_snapshot() {
             println!("  Unicorn stopped: {snapshot}");
         }
+    }
+    if let Some(path) = args.framebuffer_dump.as_ref() {
+        framebuffer.write_ppm(path)?;
+        println!("  framebuffer dump: {}", path.display());
     }
 
     Ok(())
@@ -169,6 +192,7 @@ impl Args {
         let mut image = None;
         let mut dll_search_dirs = Vec::new();
         let mut sdmmc_root = None;
+        let mut framebuffer_dump = None;
         let mut run_cpu = false;
 
         let mut args = std::env::args().skip(1);
@@ -188,6 +212,9 @@ impl Args {
                 }
                 "--sdmmc-root" => {
                     sdmmc_root = Some(next_path(&mut args, "--sdmmc-root")?);
+                }
+                "--framebuffer-dump" => {
+                    framebuffer_dump = Some(next_path(&mut args, "--framebuffer-dump")?);
                 }
                 "--run-cpu" => {
                     run_cpu = true;
@@ -210,6 +237,7 @@ impl Args {
             image,
             dll_search_dirs,
             sdmmc_root,
+            framebuffer_dump,
             run_cpu,
         })
     }
@@ -223,7 +251,7 @@ fn next_path(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<Path
 
 fn print_help() {
     println!(
-        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--image INavi.exe] [--dll-search-dir DIR]... [--sdmmc-root DIR] [--run-cpu]"
+        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--image INavi.exe] [--dll-search-dir DIR]... [--sdmmc-root DIR] [--framebuffer-dump OUT.ppm] [--run-cpu]"
     );
 }
 

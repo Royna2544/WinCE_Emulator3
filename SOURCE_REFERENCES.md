@@ -123,6 +123,15 @@ anchors, not app-specific shortcuts.
     pending update region and clears the region through `BeginPaint` or
     `ValidateRect`.
 
+- Display surface boundary:
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\gpe.h` and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\gxinfo.h`
+  - CE display drivers expose a `GPE` device with a primary `GPESurf`, screen
+    width/height, stride, pixel format, and video-memory surface hooks.
+  - `GXDeviceInfo` exposes a framebuffer pointer, stride, width, height, and
+    bits-per-pixel. The Rust `Framebuffer` trait keeps only that generic
+    byte-surface boundary; HWND/HDC/GDI behavior remains outside the trait.
+
 - MFC window layout behavior:
   `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/wincore.cpp`
   - Layout and child reposition paths use `GetWindowRect`,

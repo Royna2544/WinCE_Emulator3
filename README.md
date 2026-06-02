@@ -20,6 +20,9 @@ shortcuts:
   pending paint/update state
 - raw CE/MFC-style `MSG`, `RECT`, and `PAINTSTRUCT` marshalling for the basic
   message pump and first paint-update path
+- generic virtual framebuffer trait with an in-memory 800x480 RGB565
+  implementation, dirty-rectangle tracking, optional PPM dumps, and no
+  dependency on HWND/HDC/GDI concepts
 - COREDLL ordinal dispatcher backed by checked-in Rust `ORD_*` constants, a
   static export table, and an ordinal `match`
 - COREDLL ordinal plan entries split by subsystem with implemented-vs-stubbed
@@ -66,10 +69,11 @@ cargo run -- --image /mnt/d/INAVI_Emulator/INAVI/INavi/INavi.exe
 CPU execution is behind the `unicorn` feature:
 
 ```bash
-cargo run --features unicorn -- --image D:\INAVI_Emulator\INAVI\INavi\INavi.exe --dll-search-dir "C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii" --sdmmc-root D:\INAVI_Emulator\INAVI --run-cpu
+cargo run --features unicorn -- --image D:\INAVI_Emulator\INAVI\INavi\INavi.exe --dll-search-dir "C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii" --sdmmc-root D:\INAVI_Emulator\INAVI --framebuffer-dump target\last-framebuffer.ppm --run-cpu
 ```
 
 The current bounded target run creates and shows the main HWND, synthesizes and
 dispatches the first `WM_PAINT` through the SDK MFC window procedure, and then
-continues until the timeout kills it. There is still no host-visible GUI or
-framebuffer output, so this is a useful frontier, not a completed GUI launch.
+continues until the timeout kills it. There is now a virtual framebuffer
+boundary, but guest drawing is not connected to it yet, so this is a useful
+frontier, not a completed GUI launch.

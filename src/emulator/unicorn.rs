@@ -1,5 +1,9 @@
 use crate::{
-    ce::{coredll::CoredllGuestMemory, kernel::CeKernel},
+    ce::{
+        coredll::CoredllGuestMemory,
+        framebuffer::{Framebuffer, VirtualFramebuffer},
+        kernel::CeKernel,
+    },
     emulator::{
         imports::{
             ExternalImportTable, IMPORT_TRAP_BASE, IMPORT_TRAP_PAGE_SIZE, ImportTrapTable,
@@ -388,10 +392,21 @@ impl UnicornMips {
             .dispatch_trap(kernel, memory, thread_id, address, args.to_vec())
     }
 
-    pub fn run_until_import_trap(&mut self, _kernel: &mut CeKernel) -> Result<()> {
+    pub fn run_until_import_trap(&mut self, kernel: &mut CeKernel) -> Result<()> {
+        let mut framebuffer = VirtualFramebuffer::default_primary()?;
+        self.run_until_import_trap_with_framebuffer(kernel, &mut framebuffer)
+    }
+
+    pub fn run_until_import_trap_with_framebuffer(
+        &mut self,
+        kernel: &mut CeKernel,
+        framebuffer: &mut dyn Framebuffer,
+    ) -> Result<()> {
+        let info = framebuffer.info();
+        kernel.remote.set_framebuffer_size(info.width, info.height);
         #[cfg(feature = "unicorn")]
         {
-            return self.run_with_unicorn(_kernel);
+            return self.run_with_unicorn(kernel, framebuffer);
         }
 
         #[cfg(not(feature = "unicorn"))]
@@ -442,12 +457,27 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
-    fn run_with_unicorn(&mut self, kernel: &mut CeKernel) -> Result<()> {
+    fn run_with_unicorn(
+        &mut self,
+        kernel: &mut CeKernel,
+        framebuffer: &mut dyn Framebuffer,
+    ) -> Result<()> {
         use std::{cell::RefCell, rc::Rc};
         use unicorn_engine::{
             RegisterMIPS, Unicorn,
             unicorn_const::{Arch, HookType, Mode},
         };
+
+        let framebuffer_info = framebuffer.info();
+        tracing::debug!(
+            target: "ce.framebuffer",
+            width = framebuffer_info.width,
+            height = framebuffer_info.height,
+            stride = framebuffer_info.stride,
+            format = ?framebuffer_info.format,
+            dirty_rects = framebuffer.dirty_rects().len(),
+            "virtual framebuffer attached"
+        );
 
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
             .map_err(|err| Error::Backend(format!("{err:?}")))?;
