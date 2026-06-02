@@ -18,6 +18,10 @@ pub struct UnicornMips {
     stack_top: Option<u32>,
     mapped_blobs: Vec<MappedBlob>,
     import_traps: ImportTrapTable,
+    #[cfg(feature = "unicorn")]
+    trampoline_ranges: Vec<(u32, u32)>,
+    #[cfg(feature = "unicorn")]
+    trampoline_jumps: Vec<(u32, u32)>,
     last_debug: Option<UnicornDebugSnapshot>,
 }
 
@@ -38,7 +42,13 @@ pub struct UnicornDebugSnapshot {
     pub trap_ordinal: Option<u32>,
     pub memory_fault: Option<UnicornMemoryFault>,
     pub function_pointer_probe: Option<UnicornFunctionPointerProbe>,
+    pub indirect_call_probe: Option<UnicornIndirectCallProbe>,
     pub memory_write_probe: Option<UnicornMemoryWriteProbe>,
+    pub interrupt_probe: Option<UnicornInterruptProbe>,
+    pub invalid_instruction_probe: Option<UnicornInvalidInstructionProbe>,
+    pub last_code: Vec<UnicornLastCode>,
+    pub last_blocks: Vec<UnicornLastBlock>,
+    pub blocked_get_message: Option<UnicornBlockedGetMessage>,
     pub thread_exit_reached: bool,
     pub encoded_kernel_exit: Option<EncodedKernelExit>,
 }
@@ -61,6 +71,17 @@ pub struct UnicornFunctionPointerProbe {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornIndirectCallProbe {
+    pub pc: u32,
+    pub ra: u32,
+    pub sp: u32,
+    pub instruction: u32,
+    pub register: u32,
+    pub register_name: &'static str,
+    pub target: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnicornMemoryWriteProbe {
     pub pc: u32,
     pub ra: u32,
@@ -69,6 +90,51 @@ pub struct UnicornMemoryWriteProbe {
     pub size: usize,
     pub value: i64,
     pub slot_value_after: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornInterruptProbe {
+    pub pc: u32,
+    pub ra: u32,
+    pub sp: u32,
+    pub intno: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornInvalidInstructionProbe {
+    pub pc: u32,
+    pub ra: u32,
+    pub sp: u32,
+    pub instruction: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornLastCode {
+    pub pc: u32,
+    pub ra: u32,
+    pub sp: u32,
+    pub instruction: Option<u32>,
+    pub next_instruction: Option<u32>,
+    pub direct_jump_target: Option<u32>,
+    pub direct_jump_target_instruction: Option<u32>,
+    pub direct_jump_target_in_trampoline: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornLastBlock {
+    pub pc: u32,
+    pub size: u32,
+    pub ra: u32,
+    pub sp: u32,
+    pub instruction: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornBlockedGetMessage {
+    pub thread_id: u32,
+    pub hwnd: Option<u32>,
+    pub min_msg: u32,
+    pub max_msg: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +156,8 @@ const SYS_HANDLE_CURRENT_PROCESS: usize = 2;
 const GUEST_HEAP_ARENA_BASE: u32 = 0x3000_0000;
 const GUEST_HEAP_ARENA_SIZE: u32 = 0x0100_0000;
 #[cfg(feature = "unicorn")]
+const IMPORT_TRAP_ARG_COUNT: usize = 12;
+#[cfg(feature = "unicorn")]
 const THREAD_EXIT_STUB_ADDR: u32 =
     IMPORT_TRAP_BASE + IMPORT_TRAP_PAGE_SIZE - crate::emulator::imports::IMPORT_TRAP_STRIDE;
 #[cfg(feature = "unicorn")]
@@ -102,6 +170,10 @@ const MAIN_DESTRUCTOR_BAD_SLOT: u32 = 0x3000_2390;
 const MAIN_DESTRUCTOR_TABLE_WATCH_BASE: u32 = 0x3000_2000;
 #[cfg(feature = "unicorn")]
 const MAIN_DESTRUCTOR_TABLE_WATCH_END: u32 = 0x3000_24ff;
+#[cfg(feature = "unicorn")]
+const IMAGE_SCN_MEM_EXECUTE: u32 = 0x2000_0000;
+#[cfg(feature = "unicorn")]
+const MIPS_NOP: u32 = 0x0000_0000;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -118,6 +190,10 @@ impl UnicornMips {
             stack_top: None,
             mapped_blobs: Vec::new(),
             import_traps: ImportTrapTable::new(),
+            #[cfg(feature = "unicorn")]
+            trampoline_ranges: Vec::new(),
+            #[cfg(feature = "unicorn")]
+            trampoline_jumps: Vec::new(),
             last_debug: None,
         })
     }
@@ -184,6 +260,14 @@ impl UnicornMips {
             next_trap_base = advance_trap_base(next_trap_base, traps.len())?;
             self.import_traps.merge(traps);
             external.add_pe_image(module_file_name(&dll.path), dll, load_base);
+            #[cfg(feature = "unicorn")]
+            {
+                let trampoline_patch = patch_mips_unicorn_trampolines(dll, load_base, &mut mapped)?;
+                if let Some(range) = trampoline_patch.range {
+                    self.trampoline_ranges.push(range);
+                }
+                self.trampoline_jumps.extend(trampoline_patch.jumps);
+            }
             loaded_dlls.push((dll.path.clone(), load_base, mapped));
         }
 
@@ -195,6 +279,15 @@ impl UnicornMips {
             next_trap_base,
             &external,
         )?;
+        #[cfg(feature = "unicorn")]
+        {
+            let trampoline_patch =
+                patch_mips_unicorn_trampolines(image, image.image_base(), &mut mapped)?;
+            if let Some(range) = trampoline_patch.range {
+                self.trampoline_ranges.push(range);
+            }
+            self.trampoline_jumps.extend(trampoline_patch.jumps);
+        }
         self.map_region(
             image.image_base(),
             align_up_4k(mapped.len() as u32)?,
@@ -289,7 +382,7 @@ impl UnicornMips {
         args: [u32; 4],
     ) -> Option<u32> {
         self.import_traps
-            .dispatch_trap(kernel, memory, thread_id, address, args)
+            .dispatch_trap(kernel, memory, thread_id, address, args.to_vec())
     }
 
     pub fn run_until_import_trap(&mut self, _kernel: &mut CeKernel) -> Result<()> {
@@ -355,7 +448,119 @@ impl UnicornMips {
         )
         .map_err(|err| Error::Backend(format!("install function-pointer probe: {err:?}")))?;
 
+        let indirect_call_probe = Rc::new(RefCell::new(None));
+        let indirect_call_probe_hook = Rc::clone(&indirect_call_probe);
+        let last_code = Rc::new(RefCell::new(Vec::<UnicornLastCode>::new()));
+        let last_code_hook = Rc::clone(&last_code);
+        let trampoline_ranges = self.trampoline_ranges.clone();
+        let trampoline_jumps = self.trampoline_jumps.clone();
+        uc.add_code_hook(1, 0, move |uc, address, _size| {
+            let pc = address as u32;
+            let instruction = read_unicorn_u32(uc, pc);
+            let next_instruction = read_unicorn_u32(uc, pc.wrapping_add(4));
+            let direct_jump_target =
+                instruction.and_then(|instruction| decode_direct_jump_target(pc, instruction));
+            let direct_jump_target_instruction =
+                direct_jump_target.and_then(|target| read_unicorn_u32(uc, target));
+            let sentinel_target =
+                instruction
+                    .zip(next_instruction)
+                    .and_then(|(instruction, next_instruction)| {
+                        decode_trampoline_sentinel_target(instruction, next_instruction)
+                    });
+            if let Some((register, target)) = instruction
+                .and_then(decode_jr_register)
+                .and_then(|register| read_mips_gpr(uc, register).map(|target| (register, target)))
+            {
+                if let Some((_, trampoline_target)) = trampoline_jumps
+                    .iter()
+                    .find(|(origin, _)| *origin == target)
+                {
+                    let _ = write_mips_gpr(uc, register, *trampoline_target);
+                }
+            }
+            if let Some(target) = sentinel_target {
+                if target_in_ranges(target, &trampoline_ranges) {
+                    let _ = uc.reg_write(RegisterMIPS::PC, u64::from(target));
+                    return;
+                }
+            }
+            let direct_jump_target_in_trampoline = direct_jump_target
+                .is_some_and(|target| target_in_ranges(target, &trampoline_ranges));
+            {
+                let mut last_code = last_code_hook.borrow_mut();
+                if last_code.len() == 12 {
+                    last_code.remove(0);
+                }
+                last_code.push(UnicornLastCode {
+                    pc,
+                    ra: read_mips_reg(uc, RegisterMIPS::RA),
+                    sp: read_mips_reg(uc, RegisterMIPS::SP),
+                    instruction,
+                    next_instruction,
+                    direct_jump_target,
+                    direct_jump_target_instruction,
+                    direct_jump_target_in_trampoline,
+                });
+            }
+            if let (Some(instruction), Some(next_instruction), Some(target)) =
+                (instruction, next_instruction, direct_jump_target)
+            {
+                if is_patched_trampoline_jump(
+                    instruction,
+                    next_instruction,
+                    target,
+                    &trampoline_ranges,
+                ) {
+                    let _ = uc.reg_write(RegisterMIPS::PC, u64::from(target));
+                    return;
+                }
+            }
+            let Some(instruction) = instruction else {
+                return;
+            };
+            let Some(register) = decode_indirect_call_register(instruction) else {
+                return;
+            };
+            let Some(target) = read_mips_gpr(uc, register) else {
+                return;
+            };
+            if target != 0 && target >= 0x0001_0000 {
+                return;
+            }
+            *indirect_call_probe_hook.borrow_mut() = Some(UnicornIndirectCallProbe {
+                pc,
+                ra: read_mips_reg(uc, RegisterMIPS::RA),
+                sp: read_mips_reg(uc, RegisterMIPS::SP),
+                instruction,
+                register,
+                register_name: mips_gpr_name(register),
+                target,
+            });
+        })
+        .map_err(|err| Error::Backend(format!("install indirect-call probe: {err:?}")))?;
+
+        let last_blocks = Rc::new(RefCell::new(Vec::<UnicornLastBlock>::new()));
+        let last_blocks_hook = Rc::clone(&last_blocks);
+        uc.add_block_hook(1, 0, move |uc, address, size| {
+            let mut last_blocks = last_blocks_hook.borrow_mut();
+            if last_blocks.len() == 16 {
+                last_blocks.remove(0);
+            }
+            let pc = address as u32;
+            last_blocks.push(UnicornLastBlock {
+                pc,
+                size: size as u32,
+                ra: read_mips_reg(uc, RegisterMIPS::RA),
+                sp: read_mips_reg(uc, RegisterMIPS::SP),
+                instruction: read_unicorn_u32(uc, pc),
+            });
+        })
+        .map_err(|err| Error::Backend(format!("install block trace hook: {err:?}")))?;
+
         let memory_write_probe = Rc::new(RefCell::new(None));
+        let blocked_get_message = Rc::new(RefCell::new(None));
+        let blocked_get_message_hook = Rc::clone(&blocked_get_message);
         let traps = self.import_traps.clone();
         let kernel_ptr = kernel as *mut CeKernel;
         let mapped_kernel_memory = Rc::new(RefCell::new(vec![(
@@ -385,19 +590,38 @@ impl UnicornMips {
                         a1 = format_args!("0x{:08x}", read_mips_reg(uc, RegisterMIPS::A1)),
                         a2 = format_args!("0x{:08x}", read_mips_reg(uc, RegisterMIPS::A2)),
                         a3 = format_args!("0x{:08x}", read_mips_reg(uc, RegisterMIPS::A3)),
+                        sp = format_args!("0x{:08x}", read_mips_reg(uc, RegisterMIPS::SP)),
                         "import trap"
                     );
                 }
-                let args = [
-                    read_mips_reg(uc, RegisterMIPS::A0),
-                    read_mips_reg(uc, RegisterMIPS::A1),
-                    read_mips_reg(uc, RegisterMIPS::A2),
-                    read_mips_reg(uc, RegisterMIPS::A3),
-                ];
+                let args = read_mips_import_args(uc);
+                if trap.as_ref().is_some_and(|trap| {
+                    try_block_empty_get_message(
+                        unsafe { &mut *kernel_ptr },
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        &blocked_get_message_hook,
+                    )
+                }) {
+                    let _ = uc.emu_stop();
+                    return;
+                }
                 let mut memory = UnicornGuestMemory {
                     uc,
                     memory_write_probe: Some(Rc::clone(&import_memory_write_probe)),
                 };
+                if trap.as_ref().is_some_and(|trap| {
+                    try_enter_dispatch_message_callout(
+                        unsafe { &*kernel_ptr },
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                    )
+                }) {
+                    return;
+                }
                 let Some(result) =
                     traps.dispatch_trap(unsafe { &mut *kernel_ptr }, &mut memory, 1, address, args)
                 else {
@@ -484,6 +708,33 @@ impl UnicornMips {
         )
         .map_err(|err| Error::Backend(format!("install memory fault hook: {err:?}")))?;
 
+        let interrupt_probe = Rc::new(RefCell::new(None));
+        let interrupt_probe_hook = Rc::clone(&interrupt_probe);
+        uc.add_intr_hook(move |uc, intno| {
+            *interrupt_probe_hook.borrow_mut() = Some(UnicornInterruptProbe {
+                pc: read_mips_reg(uc, RegisterMIPS::PC),
+                ra: read_mips_reg(uc, RegisterMIPS::RA),
+                sp: read_mips_reg(uc, RegisterMIPS::SP),
+                intno: intno as u32,
+            });
+            let _ = uc.emu_stop();
+        })
+        .map_err(|err| Error::Backend(format!("install interrupt probe: {err:?}")))?;
+
+        let invalid_instruction_probe = Rc::new(RefCell::new(None));
+        let invalid_instruction_probe_hook = Rc::clone(&invalid_instruction_probe);
+        uc.add_insn_invalid_hook(move |uc| {
+            let pc = read_mips_reg(uc, RegisterMIPS::PC);
+            *invalid_instruction_probe_hook.borrow_mut() = Some(UnicornInvalidInstructionProbe {
+                pc,
+                ra: read_mips_reg(uc, RegisterMIPS::RA),
+                sp: read_mips_reg(uc, RegisterMIPS::SP),
+                instruction: read_unicorn_u32(uc, pc),
+            });
+            false
+        })
+        .map_err(|err| Error::Backend(format!("install invalid-instruction probe: {err:?}")))?;
+
         let entry = self
             .entry
             .ok_or_else(|| Error::Backend("no PE entry point has been loaded".to_owned()))?;
@@ -493,7 +744,13 @@ impl UnicornMips {
             &self.import_traps,
             memory_fault.borrow().clone(),
             function_pointer_probe.borrow().clone(),
+            indirect_call_probe.borrow().clone(),
             memory_write_probe.borrow().clone(),
+            interrupt_probe.borrow().clone(),
+            invalid_instruction_probe.borrow().clone(),
+            last_code.borrow().clone(),
+            last_blocks.borrow().clone(),
+            blocked_get_message.borrow().clone(),
             *thread_exit_reached.borrow(),
         ));
         if let Err(err) = result {
@@ -514,6 +771,20 @@ impl UnicornMips {
                 .unwrap_or_else(|| "register snapshot unavailable".to_owned());
             return Err(Error::Backend(format!(
                 "Unicorn run failed: {err:?}; {snapshot}"
+            )));
+        }
+        if self
+            .last_debug
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.interrupt_probe.is_some())
+        {
+            let snapshot = self
+                .last_debug
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "register snapshot unavailable".to_owned());
+            return Err(Error::Backend(format!(
+                "Unicorn run stopped on guest CPU exception; {snapshot}"
             )));
         }
         Ok(())
@@ -582,6 +853,450 @@ fn write_user_kdata_handle(page: &mut [u8], index: usize, value: u32) {
     let offset =
         (USER_KDATA_BASE - USER_KDATA_PAGE_BASE + USER_KDATA_SYSHANDLE_OFFSET) as usize + index * 4;
     page[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+#[cfg(feature = "unicorn")]
+fn patch_mips_unicorn_trampolines(
+    image: &PeImage,
+    load_base: u32,
+    mapped: &mut Vec<u8>,
+) -> Result<MipsTrampolinePatchResult> {
+    let mut patches = Vec::new();
+    for section in &image.sections {
+        if section.characteristics & IMAGE_SCN_MEM_EXECUTE == 0 {
+            continue;
+        }
+        let section_size = section.virtual_size.max(section.size_of_raw_data);
+        let start = section.virtual_address;
+        let Some(end) = start.checked_add(section_size) else {
+            return Err(Error::InvalidArgument(format!(
+                "{} section {} overflows",
+                image.path, section.name
+            )));
+        };
+        let mut rva = start;
+        while rva.checked_add(8).is_some_and(|next| next <= end) {
+            let instruction = read_mapped_word(mapped, rva, &image.path)?;
+            let delay_slot = read_mapped_word(mapped, rva + 4, &image.path)?;
+            if let Some(branch) = decode_mips_branch_likely(instruction) {
+                let pc = load_base.wrapping_add(rva);
+                patches.push(MipsUnicornPatch {
+                    rva,
+                    pc,
+                    kind: MipsUnicornPatchKind::BranchLikely { branch, delay_slot },
+                });
+            } else if let Some(branch) = decode_mips_normal_branch(instruction) {
+                let pc = load_base.wrapping_add(rva);
+                patches.push(MipsUnicornPatch {
+                    rva,
+                    pc,
+                    kind: MipsUnicornPatchKind::Branch { branch, delay_slot },
+                });
+            } else if let Some(target) =
+                decode_mips_jal_target(load_base.wrapping_add(rva), instruction)
+            {
+                let pc = load_base.wrapping_add(rva);
+                patches.push(MipsUnicornPatch {
+                    rva,
+                    pc,
+                    kind: MipsUnicornPatchKind::Jal { target, delay_slot },
+                });
+            }
+            rva = rva
+                .checked_add(4)
+                .ok_or_else(|| Error::InvalidArgument("section scan overflow".to_owned()))?;
+        }
+    }
+
+    if patches.is_empty() {
+        return Ok(MipsTrampolinePatchResult::default());
+    }
+
+    let aligned_len = align_up_4k(mapped.len() as u32)? as usize;
+    if mapped.len() < aligned_len {
+        mapped.resize(aligned_len, 0);
+    }
+    let mut stub_rva = aligned_len as u32;
+    let mut trampoline_jumps = Vec::with_capacity(patches.len());
+    for patch in patches {
+        let stub_pc = load_base.wrapping_add(stub_rva);
+        let stub_words = match patch.kind {
+            MipsUnicornPatchKind::BranchLikely { branch, delay_slot } => {
+                branch_likely_stub_words(patch.pc, branch, delay_slot, stub_pc)?
+            }
+            MipsUnicornPatchKind::Branch { branch, delay_slot } => {
+                normal_branch_stub_words(patch.pc, branch, delay_slot, stub_pc)?
+            }
+            MipsUnicornPatchKind::Jal { target, delay_slot } => {
+                jal_stub_words(patch.pc, target, delay_slot, stub_pc)?
+            }
+        };
+        write_mapped_word(
+            mapped,
+            patch.rva,
+            encode_mips_lui(26, stub_pc >> 16),
+            &image.path,
+        )?;
+        write_mapped_word(
+            mapped,
+            patch.rva + 4,
+            encode_mips_ori(26, 26, stub_pc & 0xffff),
+            &image.path,
+        )?;
+        trampoline_jumps.push((patch.pc, stub_pc));
+
+        let stub_offset = stub_rva as usize;
+        let stub_end = stub_offset
+            .checked_add(stub_words.len() * 4)
+            .ok_or_else(|| Error::InvalidArgument("branch-likely stub overflow".to_owned()))?;
+        if mapped.len() < stub_end {
+            mapped.resize(stub_end, 0);
+        }
+        for (index, word) in stub_words.into_iter().enumerate() {
+            let offset = stub_offset + index * 4;
+            mapped[offset..offset + 4].copy_from_slice(&word.to_le_bytes());
+        }
+        stub_rva = stub_rva
+            .checked_add((stub_end - stub_offset) as u32)
+            .ok_or_else(|| Error::InvalidArgument("branch-likely stub RVA overflow".to_owned()))?;
+    }
+    let final_len = align_up_4k(stub_rva)? as usize;
+    if mapped.len() < final_len {
+        mapped.resize(final_len, 0);
+    }
+    let range_base = load_base.wrapping_add(aligned_len as u32);
+    let range_size = final_len
+        .checked_sub(aligned_len)
+        .and_then(|size| u32::try_from(size).ok())
+        .ok_or_else(|| Error::InvalidArgument("branch trampoline range overflow".to_owned()))?;
+    Ok(MipsTrampolinePatchResult {
+        range: Some((range_base, range_size)),
+        jumps: trampoline_jumps,
+    })
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct MipsTrampolinePatchResult {
+    range: Option<(u32, u32)>,
+    jumps: Vec<(u32, u32)>,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MipsUnicornPatch {
+    rva: u32,
+    pc: u32,
+    kind: MipsUnicornPatchKind,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MipsUnicornPatchKind {
+    BranchLikely {
+        branch: MipsBranchLikely,
+        delay_slot: u32,
+    },
+    Branch {
+        branch: MipsBranchLikely,
+        delay_slot: u32,
+    },
+    Jal {
+        target: u32,
+        delay_slot: u32,
+    },
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MipsBranchLikely {
+    rs: u32,
+    rt: u32,
+    target: u32,
+    inverse_branch: MipsBranch,
+    link: bool,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MipsBranch {
+    Beq,
+    Bne,
+    Blez,
+    Bgtz,
+    Bltz,
+    Bgez,
+}
+
+#[cfg(feature = "unicorn")]
+fn decode_mips_branch_likely(instruction: u32) -> Option<MipsBranchLikely> {
+    let opcode = instruction >> 26;
+    let rs = (instruction >> 21) & 0x1f;
+    let rt = (instruction >> 16) & 0x1f;
+    let imm = instruction as u16 as i16 as i32;
+    let target = (4i32.wrapping_add(imm.wrapping_shl(2))) as u32;
+    let relative_target = |pc: u32| pc.wrapping_add(target);
+
+    let inverse_branch = match opcode {
+        0x14 => MipsBranch::Bne,
+        0x15 => MipsBranch::Beq,
+        0x16 => MipsBranch::Bgtz,
+        0x17 => MipsBranch::Blez,
+        0x01 => match rt {
+            0x02 => MipsBranch::Bgez,
+            0x03 => MipsBranch::Bltz,
+            0x12 => MipsBranch::Bgez,
+            0x13 => MipsBranch::Bltz,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    let link = opcode == 0x01 && matches!(rt, 0x12 | 0x13);
+    Some(MipsBranchLikely {
+        rs,
+        rt,
+        target: relative_target(0),
+        inverse_branch,
+        link,
+    })
+}
+
+#[cfg(feature = "unicorn")]
+fn decode_mips_normal_branch(instruction: u32) -> Option<MipsBranchLikely> {
+    let opcode = instruction >> 26;
+    let rs = (instruction >> 21) & 0x1f;
+    let rt = (instruction >> 16) & 0x1f;
+    let imm = instruction as u16 as i16 as i32;
+    let target = (4i32.wrapping_add(imm.wrapping_shl(2))) as u32;
+
+    let inverse_branch = match opcode {
+        0x04 => MipsBranch::Bne,
+        0x05 => MipsBranch::Beq,
+        0x06 => MipsBranch::Bgtz,
+        0x07 => MipsBranch::Blez,
+        0x01 => match rt {
+            0x00 => MipsBranch::Bgez,
+            0x01 => MipsBranch::Bltz,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    Some(MipsBranchLikely {
+        rs,
+        rt,
+        target,
+        inverse_branch,
+        link: false,
+    })
+}
+
+#[cfg(feature = "unicorn")]
+fn decode_mips_jal_target(pc: u32, instruction: u32) -> Option<u32> {
+    let opcode = instruction >> 26;
+    if opcode != 0x03 {
+        return None;
+    }
+    let index = instruction & 0x03ff_ffff;
+    Some((pc.wrapping_add(4) & 0xf000_0000) | (index << 2))
+}
+
+#[cfg(feature = "unicorn")]
+fn decode_trampoline_sentinel_target(instruction: u32, next_instruction: u32) -> Option<u32> {
+    let opcode = instruction >> 26;
+    let rt = (instruction >> 16) & 0x1f;
+    if opcode != 0x0f || rt != 26 {
+        return None;
+    }
+    let next_opcode = next_instruction >> 26;
+    let next_rs = (next_instruction >> 21) & 0x1f;
+    let next_rt = (next_instruction >> 16) & 0x1f;
+    if next_opcode != 0x0d || next_rs != 26 || next_rt != 26 {
+        return None;
+    }
+    Some(((instruction & 0xffff) << 16) | (next_instruction & 0xffff))
+}
+
+#[cfg(feature = "unicorn")]
+fn is_patched_trampoline_jump(
+    instruction: u32,
+    next_instruction: u32,
+    target: u32,
+    trampoline_ranges: &[(u32, u32)],
+) -> bool {
+    let opcode = instruction >> 26;
+    opcode == 0x02 && next_instruction == MIPS_NOP && target_in_ranges(target, trampoline_ranges)
+}
+
+#[cfg(feature = "unicorn")]
+fn target_in_ranges(target: u32, ranges: &[(u32, u32)]) -> bool {
+    ranges.iter().any(|(base, size)| {
+        let end = base.saturating_add(*size);
+        target >= *base && target < end
+    })
+}
+
+#[cfg(feature = "unicorn")]
+fn jal_stub_words(pc: u32, target: u32, delay_slot: u32, stub_pc: u32) -> Result<Vec<u32>> {
+    let link_address = pc.wrapping_add(8);
+    Ok(vec![
+        encode_mips_lui(31, link_address >> 16),
+        encode_mips_ori(31, 31, link_address & 0xffff),
+        delay_slot,
+        encode_mips_jump(stub_pc.wrapping_add(12), target)?,
+        MIPS_NOP,
+    ])
+}
+
+#[cfg(feature = "unicorn")]
+fn branch_likely_stub_words(
+    pc: u32,
+    mut branch: MipsBranchLikely,
+    delay_slot: u32,
+    stub_pc: u32,
+) -> Result<Vec<u32>> {
+    branch.target = pc.wrapping_add(branch.target);
+    let fallthrough = pc.wrapping_add(8);
+    let false_path_index = if branch.link { 7 } else { 5 };
+    let false_path_pc = stub_pc.wrapping_add(false_path_index * 4);
+
+    let mut words = vec![
+        encode_mips_cond_branch(
+            branch.inverse_branch,
+            branch.rs,
+            branch.rt,
+            stub_pc,
+            false_path_pc,
+        )?,
+        MIPS_NOP,
+    ];
+    if branch.link {
+        let link_address = pc.wrapping_add(8);
+        words.push(encode_mips_lui(31, link_address >> 16));
+        words.push(encode_mips_ori(31, 31, link_address & 0xffff));
+    }
+    let true_jump_pc = stub_pc.wrapping_add((words.len() as u32 + 1) * 4);
+    words.extend([
+        delay_slot,
+        encode_mips_jump(true_jump_pc, branch.target)?,
+        MIPS_NOP,
+        encode_mips_jump(false_path_pc, fallthrough)?,
+        MIPS_NOP,
+    ]);
+    Ok(words)
+}
+
+#[cfg(feature = "unicorn")]
+fn normal_branch_stub_words(
+    pc: u32,
+    mut branch: MipsBranchLikely,
+    delay_slot: u32,
+    stub_pc: u32,
+) -> Result<Vec<u32>> {
+    branch.target = pc.wrapping_add(branch.target);
+    let fallthrough = pc.wrapping_add(8);
+    let false_path_pc = stub_pc.wrapping_add(20);
+
+    Ok(vec![
+        encode_mips_cond_branch(
+            branch.inverse_branch,
+            branch.rs,
+            branch.rt,
+            stub_pc,
+            false_path_pc,
+        )?,
+        MIPS_NOP,
+        delay_slot,
+        encode_mips_jump(stub_pc.wrapping_add(12), branch.target)?,
+        MIPS_NOP,
+        delay_slot,
+        encode_mips_jump(false_path_pc.wrapping_add(4), fallthrough)?,
+        MIPS_NOP,
+    ])
+}
+
+#[cfg(feature = "unicorn")]
+fn encode_mips_cond_branch(
+    branch: MipsBranch,
+    rs: u32,
+    rt: u32,
+    pc: u32,
+    target: u32,
+) -> Result<u32> {
+    let offset = branch_offset(pc, target)?;
+    let instruction = match branch {
+        MipsBranch::Beq => (0x04 << 26) | (rs << 21) | (rt << 16),
+        MipsBranch::Bne => (0x05 << 26) | (rs << 21) | (rt << 16),
+        MipsBranch::Blez => (0x06 << 26) | (rs << 21),
+        MipsBranch::Bgtz => (0x07 << 26) | (rs << 21),
+        MipsBranch::Bltz => (0x01 << 26) | (rs << 21),
+        MipsBranch::Bgez => (0x01 << 26) | (rs << 21) | (0x01 << 16),
+    };
+    Ok(instruction | u32::from(offset as u16))
+}
+
+#[cfg(feature = "unicorn")]
+fn branch_offset(pc: u32, target: u32) -> Result<i16> {
+    let delta = target as i64 - pc.wrapping_add(4) as i64;
+    if delta % 4 != 0 {
+        return Err(Error::InvalidArgument(format!(
+            "unaligned MIPS branch target 0x{target:08x}"
+        )));
+    }
+    let offset = delta / 4;
+    i16::try_from(offset).map_err(|_| {
+        Error::InvalidArgument(format!(
+            "MIPS branch target 0x{target:08x} is out of trampoline range from 0x{pc:08x}"
+        ))
+    })
+}
+
+#[cfg(feature = "unicorn")]
+fn encode_mips_jump(pc: u32, target: u32) -> Result<u32> {
+    if pc.wrapping_add(4) & 0xf000_0000 != target & 0xf000_0000 {
+        return Err(Error::InvalidArgument(format!(
+            "MIPS jump target 0x{target:08x} is outside direct jump region from 0x{pc:08x}"
+        )));
+    }
+    Ok((0x02 << 26) | ((target >> 2) & 0x03ff_ffff))
+}
+
+#[cfg(feature = "unicorn")]
+fn encode_mips_lui(rt: u32, imm: u32) -> u32 {
+    (0x0f << 26) | (rt << 16) | (imm & 0xffff)
+}
+
+#[cfg(feature = "unicorn")]
+fn encode_mips_ori(rt: u32, rs: u32, imm: u32) -> u32 {
+    (0x0d << 26) | (rs << 21) | (rt << 16) | (imm & 0xffff)
+}
+
+#[cfg(feature = "unicorn")]
+fn read_mapped_word(mapped: &[u8], rva: u32, path: &str) -> Result<u32> {
+    let offset = rva as usize;
+    let end = offset
+        .checked_add(4)
+        .ok_or_else(|| Error::InvalidArgument(format!("{path} mapped read overflows")))?;
+    let bytes = mapped.get(offset..end).ok_or_else(|| {
+        Error::InvalidArgument(format!(
+            "{path} mapped read RVA 0x{rva:08x} is outside image"
+        ))
+    })?;
+    Ok(u32::from_le_bytes(bytes.try_into().unwrap()))
+}
+
+#[cfg(feature = "unicorn")]
+fn write_mapped_word(mapped: &mut [u8], rva: u32, value: u32, path: &str) -> Result<()> {
+    let offset = rva as usize;
+    let end = offset
+        .checked_add(4)
+        .ok_or_else(|| Error::InvalidArgument(format!("{path} mapped write overflows")))?;
+    let bytes = mapped.get_mut(offset..end).ok_or_else(|| {
+        Error::InvalidArgument(format!(
+            "{path} mapped write RVA 0x{rva:08x} is outside image"
+        ))
+    })?;
+    bytes.copy_from_slice(&value.to_le_bytes());
+    Ok(())
 }
 
 fn advance_trap_base(current: u32, trap_count: usize) -> Result<u32> {
@@ -710,6 +1425,19 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 write!(f, " funcptr_slot_value=0x{slot_value:08x}")?;
             }
         }
+        if let Some(probe) = self.indirect_call_probe.as_ref() {
+            write!(
+                f,
+                " indirect_pc=0x{:08x} indirect_ra=0x{:08x} indirect_sp=0x{:08x} indirect_insn=0x{:08x} indirect_reg=${}({}) indirect_target=0x{:08x}",
+                probe.pc,
+                probe.ra,
+                probe.sp,
+                probe.instruction,
+                probe.register,
+                probe.register_name,
+                probe.target
+            )?;
+        }
         if let Some(probe) = self.memory_write_probe.as_ref() {
             write!(
                 f,
@@ -719,6 +1447,84 @@ impl std::fmt::Display for UnicornDebugSnapshot {
             if let Some(slot_value_after) = probe.slot_value_after {
                 write!(f, " write_slot_after=0x{slot_value_after:08x}")?;
             }
+        }
+        if let Some(probe) = self.interrupt_probe.as_ref() {
+            write!(
+                f,
+                " interrupt_pc=0x{:08x} interrupt_ra=0x{:08x} interrupt_sp=0x{:08x} interrupt_no={}",
+                probe.pc, probe.ra, probe.sp, probe.intno
+            )?;
+        }
+        if let Some(probe) = self.invalid_instruction_probe.as_ref() {
+            write!(
+                f,
+                " invalid_pc=0x{:08x} invalid_ra=0x{:08x} invalid_sp=0x{:08x}",
+                probe.pc, probe.ra, probe.sp
+            )?;
+            if let Some(instruction) = probe.instruction {
+                write!(f, " invalid_insn=0x{instruction:08x}")?;
+            }
+        }
+        if !self.last_code.is_empty() {
+            write!(f, " last_code=[")?;
+            for (index, code) in self.last_code.iter().enumerate() {
+                if index != 0 {
+                    write!(f, ",")?;
+                }
+                write!(
+                    f,
+                    "0x{:08x}/ra=0x{:08x}/sp=0x{:08x}",
+                    code.pc, code.ra, code.sp
+                )?;
+                if let Some(instruction) = code.instruction {
+                    write!(f, "/insn=0x{instruction:08x}")?;
+                }
+                if let Some(next_instruction) = code.next_instruction {
+                    write!(f, "/next=0x{next_instruction:08x}")?;
+                }
+                if let Some(target) = code.direct_jump_target {
+                    write!(f, "/jt=0x{target:08x}")?;
+                    if code.direct_jump_target_in_trampoline {
+                        write!(f, "/jt_trampoline=true")?;
+                    }
+                    if let Some(target_instruction) = code.direct_jump_target_instruction {
+                        write!(f, "/jt_insn=0x{target_instruction:08x}")?;
+                    } else {
+                        write!(f, "/jt_insn=<unreadable>")?;
+                    }
+                }
+            }
+            write!(f, "]")?;
+        }
+        if !self.last_blocks.is_empty() {
+            write!(f, " last_blocks=[")?;
+            for (index, block) in self.last_blocks.iter().enumerate() {
+                if index != 0 {
+                    write!(f, ",")?;
+                }
+                write!(
+                    f,
+                    "0x{:08x}/size={}/ra=0x{:08x}/sp=0x{:08x}",
+                    block.pc, block.size, block.ra, block.sp
+                )?;
+                if let Some(instruction) = block.instruction {
+                    write!(f, "/insn=0x{instruction:08x}")?;
+                }
+            }
+            write!(f, "]")?;
+        }
+        if let Some(blocked) = self.blocked_get_message.as_ref() {
+            write!(
+                f,
+                " blocked_get_message thread_id={} hwnd={} min_msg=0x{:08x} max_msg=0x{:08x}",
+                blocked.thread_id,
+                blocked
+                    .hwnd
+                    .map(|hwnd| format!("0x{hwnd:08x}"))
+                    .unwrap_or_else(|| "<any>".to_owned()),
+                blocked.min_msg,
+                blocked.max_msg
+            )?;
         }
         if self.thread_exit_reached {
             write!(f, " thread_exit_reached=true")?;
@@ -774,12 +1580,146 @@ fn read_unicorn_u32<D>(uc: &unicorn_engine::Unicorn<'_, D>, address: u32) -> Opt
 }
 
 #[cfg(feature = "unicorn")]
+fn read_mips_import_args<D>(uc: &unicorn_engine::Unicorn<'_, D>) -> Vec<u32> {
+    let mut args = Vec::with_capacity(IMPORT_TRAP_ARG_COUNT);
+    args.extend([
+        read_mips_reg(uc, unicorn_engine::RegisterMIPS::A0),
+        read_mips_reg(uc, unicorn_engine::RegisterMIPS::A1),
+        read_mips_reg(uc, unicorn_engine::RegisterMIPS::A2),
+        read_mips_reg(uc, unicorn_engine::RegisterMIPS::A3),
+    ]);
+
+    let sp = read_mips_reg(uc, unicorn_engine::RegisterMIPS::SP);
+    for stack_index in 0..IMPORT_TRAP_ARG_COUNT.saturating_sub(4) {
+        let offset = 16 + (stack_index as u32 * 4);
+        let value = sp
+            .checked_add(offset)
+            .and_then(|addr| read_unicorn_u32(uc, addr))
+            .unwrap_or(0);
+        args.push(value);
+    }
+    args
+}
+
+#[cfg(feature = "unicorn")]
+fn try_block_empty_get_message(
+    kernel: &mut CeKernel,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    blocked: &std::rc::Rc<std::cell::RefCell<Option<UnicornBlockedGetMessage>>>,
+) -> bool {
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W)
+    {
+        return false;
+    }
+
+    let hwnd = args.get(1).copied().filter(|hwnd| *hwnd != 0);
+    let min_msg = args.get(2).copied().unwrap_or(0);
+    let max_msg = args.get(3).copied().unwrap_or(0);
+    let thread_id = 1;
+    kernel.pump_timers_to_gwe(thread_id);
+    if kernel
+        .gwe
+        .peek_message_filtered(
+            thread_id,
+            hwnd,
+            min_msg,
+            max_msg,
+            crate::ce::gwe::PeekFlags::empty(),
+        )
+        .is_some()
+    {
+        return false;
+    }
+
+    *blocked.borrow_mut() = Some(UnicornBlockedGetMessage {
+        thread_id,
+        hwnd,
+        min_msg,
+        max_msg,
+    });
+    true
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_dispatch_message_callout<D>(
+    kernel: &CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_DISPATCH_MESSAGE_W)
+    {
+        return false;
+    }
+
+    let msg_ptr = args.first().copied().unwrap_or(0);
+    let Some(hwnd) = read_unicorn_u32(uc, msg_ptr) else {
+        return false;
+    };
+    let Some(msg) = read_unicorn_u32(uc, msg_ptr.wrapping_add(4)) else {
+        return false;
+    };
+    if msg == crate::ce::gwe::WM_QUIT {
+        return false;
+    }
+    let Some(wparam) = read_unicorn_u32(uc, msg_ptr.wrapping_add(8)) else {
+        return false;
+    };
+    let Some(lparam) = read_unicorn_u32(uc, msg_ptr.wrapping_add(12)) else {
+        return false;
+    };
+    let Some(window) = kernel.gwe.window(hwnd) else {
+        return false;
+    };
+    let wndproc = window.wndproc;
+    if wndproc == 0 {
+        return false;
+    }
+
+    tracing::debug!(
+        target: "ce.gwe",
+        msg_ptr = format_args!("0x{msg_ptr:08x}"),
+        hwnd = format_args!("0x{hwnd:08x}"),
+        msg = format_args!("0x{msg:08x}"),
+        wparam = format_args!("0x{wparam:08x}"),
+        lparam = format_args!("0x{lparam:08x}"),
+        class = window.class_name.as_str(),
+        wndproc = format_args!("0x{wndproc:08x}"),
+        ra = format_args!("0x{:08x}", read_mips_reg(uc, RegisterMIPS::RA)),
+        "DispatchMessageW guest wndproc callout"
+    );
+
+    let writes = [
+        uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(msg)),
+        uc.reg_write(RegisterMIPS::A2, u64::from(wparam)),
+        uc.reg_write(RegisterMIPS::A3, u64::from(lparam)),
+        uc.reg_write(RegisterMIPS::T9, u64::from(wndproc)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(wndproc)),
+    ];
+    writes.into_iter().all(|write| write.is_ok())
+}
+
+#[cfg(feature = "unicorn")]
 fn capture_debug_snapshot<D>(
     uc: &unicorn_engine::Unicorn<'_, D>,
     traps: &ImportTrapTable,
     memory_fault: Option<UnicornMemoryFault>,
     function_pointer_probe: Option<UnicornFunctionPointerProbe>,
+    indirect_call_probe: Option<UnicornIndirectCallProbe>,
     memory_write_probe: Option<UnicornMemoryWriteProbe>,
+    interrupt_probe: Option<UnicornInterruptProbe>,
+    invalid_instruction_probe: Option<UnicornInvalidInstructionProbe>,
+    last_code: Vec<UnicornLastCode>,
+    last_blocks: Vec<UnicornLastBlock>,
+    blocked_get_message: Option<UnicornBlockedGetMessage>,
     thread_exit_reached: bool,
 ) -> UnicornDebugSnapshot {
     use unicorn_engine::RegisterMIPS;
@@ -802,7 +1742,13 @@ fn capture_debug_snapshot<D>(
         trap_ordinal: trap.and_then(|trap| trap.ordinal),
         memory_fault,
         function_pointer_probe,
+        indirect_call_probe,
         memory_write_probe,
+        interrupt_probe,
+        invalid_instruction_probe,
+        last_code,
+        last_blocks,
+        blocked_get_message,
         thread_exit_reached,
         encoded_kernel_exit: None,
     }
@@ -828,6 +1774,158 @@ fn decode_jalr_register(instruction: u32) -> Option<u32> {
         return None;
     }
     Some((instruction >> 21) & 0x1f)
+}
+
+#[cfg(feature = "unicorn")]
+fn decode_indirect_call_register(instruction: u32) -> Option<u32> {
+    let opcode = instruction >> 26;
+    let function = instruction & 0x3f;
+    if opcode != 0 || (function != 0x08 && function != 0x09) {
+        return None;
+    }
+    Some((instruction >> 21) & 0x1f)
+}
+
+#[cfg(feature = "unicorn")]
+fn decode_jr_register(instruction: u32) -> Option<u32> {
+    let opcode = instruction >> 26;
+    let function = instruction & 0x3f;
+    if opcode != 0 || function != 0x08 {
+        return None;
+    }
+    Some((instruction >> 21) & 0x1f)
+}
+
+#[cfg(feature = "unicorn")]
+fn decode_direct_jump_target(pc: u32, instruction: u32) -> Option<u32> {
+    let opcode = instruction >> 26;
+    if opcode != 0x02 && opcode != 0x03 {
+        return None;
+    }
+    let index = instruction & 0x03ff_ffff;
+    Some((pc.wrapping_add(4) & 0xf000_0000) | (index << 2))
+}
+
+#[cfg(feature = "unicorn")]
+fn read_mips_gpr<D>(uc: &unicorn_engine::Unicorn<'_, D>, register: u32) -> Option<u32> {
+    use unicorn_engine::RegisterMIPS;
+
+    match register {
+        0 => Some(0),
+        1 => Some(read_mips_reg(uc, RegisterMIPS::AT)),
+        2 => Some(read_mips_reg(uc, RegisterMIPS::V0)),
+        3 => Some(read_mips_reg(uc, RegisterMIPS::V1)),
+        4 => Some(read_mips_reg(uc, RegisterMIPS::A0)),
+        5 => Some(read_mips_reg(uc, RegisterMIPS::A1)),
+        6 => Some(read_mips_reg(uc, RegisterMIPS::A2)),
+        7 => Some(read_mips_reg(uc, RegisterMIPS::A3)),
+        8 => Some(read_mips_reg(uc, RegisterMIPS::T0)),
+        9 => Some(read_mips_reg(uc, RegisterMIPS::T1)),
+        10 => Some(read_mips_reg(uc, RegisterMIPS::T2)),
+        11 => Some(read_mips_reg(uc, RegisterMIPS::T3)),
+        12 => Some(read_mips_reg(uc, RegisterMIPS::T4)),
+        13 => Some(read_mips_reg(uc, RegisterMIPS::T5)),
+        14 => Some(read_mips_reg(uc, RegisterMIPS::T6)),
+        15 => Some(read_mips_reg(uc, RegisterMIPS::T7)),
+        16 => Some(read_mips_reg(uc, RegisterMIPS::S0)),
+        17 => Some(read_mips_reg(uc, RegisterMIPS::S1)),
+        18 => Some(read_mips_reg(uc, RegisterMIPS::S2)),
+        19 => Some(read_mips_reg(uc, RegisterMIPS::S3)),
+        20 => Some(read_mips_reg(uc, RegisterMIPS::S4)),
+        21 => Some(read_mips_reg(uc, RegisterMIPS::S5)),
+        22 => Some(read_mips_reg(uc, RegisterMIPS::S6)),
+        23 => Some(read_mips_reg(uc, RegisterMIPS::S7)),
+        24 => Some(read_mips_reg(uc, RegisterMIPS::T8)),
+        25 => Some(read_mips_reg(uc, RegisterMIPS::T9)),
+        28 => Some(read_mips_reg(uc, RegisterMIPS::GP)),
+        29 => Some(read_mips_reg(uc, RegisterMIPS::SP)),
+        30 => Some(read_mips_reg(uc, RegisterMIPS::FP)),
+        31 => Some(read_mips_reg(uc, RegisterMIPS::RA)),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn write_mips_gpr<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    register: u32,
+    value: u32,
+) -> Option<()> {
+    use unicorn_engine::RegisterMIPS;
+
+    let register = match register {
+        0 => return Some(()),
+        1 => RegisterMIPS::AT,
+        2 => RegisterMIPS::V0,
+        3 => RegisterMIPS::V1,
+        4 => RegisterMIPS::A0,
+        5 => RegisterMIPS::A1,
+        6 => RegisterMIPS::A2,
+        7 => RegisterMIPS::A3,
+        8 => RegisterMIPS::T0,
+        9 => RegisterMIPS::T1,
+        10 => RegisterMIPS::T2,
+        11 => RegisterMIPS::T3,
+        12 => RegisterMIPS::T4,
+        13 => RegisterMIPS::T5,
+        14 => RegisterMIPS::T6,
+        15 => RegisterMIPS::T7,
+        16 => RegisterMIPS::S0,
+        17 => RegisterMIPS::S1,
+        18 => RegisterMIPS::S2,
+        19 => RegisterMIPS::S3,
+        20 => RegisterMIPS::S4,
+        21 => RegisterMIPS::S5,
+        22 => RegisterMIPS::S6,
+        23 => RegisterMIPS::S7,
+        24 => RegisterMIPS::T8,
+        25 => RegisterMIPS::T9,
+        28 => RegisterMIPS::GP,
+        29 => RegisterMIPS::SP,
+        30 => RegisterMIPS::FP,
+        31 => RegisterMIPS::RA,
+        _ => return None,
+    };
+    uc.reg_write(register, u64::from(value)).ok()
+}
+
+#[cfg(feature = "unicorn")]
+fn mips_gpr_name(register: u32) -> &'static str {
+    match register {
+        0 => "zero",
+        1 => "at",
+        2 => "v0",
+        3 => "v1",
+        4 => "a0",
+        5 => "a1",
+        6 => "a2",
+        7 => "a3",
+        8 => "t0",
+        9 => "t1",
+        10 => "t2",
+        11 => "t3",
+        12 => "t4",
+        13 => "t5",
+        14 => "t6",
+        15 => "t7",
+        16 => "s0",
+        17 => "s1",
+        18 => "s2",
+        19 => "s3",
+        20 => "s4",
+        21 => "s5",
+        22 => "s6",
+        23 => "s7",
+        24 => "t8",
+        25 => "t9",
+        26 => "k0",
+        27 => "k1",
+        28 => "gp",
+        29 => "sp",
+        30 => "fp",
+        31 => "ra",
+        _ => "?",
+    }
 }
 
 #[cfg(feature = "unicorn")]
@@ -906,6 +2004,387 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
             .map_err(|err| Error::Backend(format!("write_u16 0x{addr:08x}: {err:?}")))?;
         self.record_write(addr, 2, i64::from(value));
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "unicorn"))]
+mod unicorn_tests {
+    use unicorn_engine::{
+        RegisterMIPS, Unicorn,
+        unicorn_const::{Arch, Mode, Prot},
+    };
+
+    #[test]
+    fn unicorn_executes_relocated_high_address_jal_with_delay_slot() {
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x6002_4000, 0x0000_7000, Prot::ALL).unwrap();
+        write_u32(&mut uc, 0x6002_4218, 0x0c00_a6cc);
+        write_u32(&mut uc, 0x6002_421c, 0x02c0_2025);
+        write_u32(&mut uc, 0x6002_9b30, 0x27bd_ffe0);
+        write_u32(&mut uc, 0x6002_9b34, 0x03e0_0008);
+        write_u32(&mut uc, 0x6002_9b38, 0x0000_0000);
+        uc.reg_write(RegisterMIPS::SP, 0x7ffd_fee8).unwrap();
+        uc.reg_write(RegisterMIPS::S6, 0x6004_ed38).unwrap();
+
+        uc.emu_start(0x6002_4218, 0, 0, 3).unwrap();
+
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap(), 0x6002_9b34);
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap(), 0x6002_4220);
+        assert_eq!(uc.reg_read(RegisterMIPS::A0).unwrap(), 0x6004_ed38);
+        assert_eq!(uc.reg_read(RegisterMIPS::SP).unwrap(), 0x7ffd_fec8);
+    }
+
+    #[test]
+    fn unicorn_executes_relocated_high_address_jal_with_trace_hook() {
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x6002_4000, 0x0000_7000, Prot::ALL).unwrap();
+        write_u32(&mut uc, 0x6002_4218, 0x0c00_a6cc);
+        write_u32(&mut uc, 0x6002_421c, 0x02c0_2025);
+        write_u32(&mut uc, 0x6002_9b30, 0x27bd_ffe0);
+        write_u32(&mut uc, 0x6002_9b34, 0x03e0_0008);
+        write_u32(&mut uc, 0x6002_9b38, 0x0000_0000);
+        uc.reg_write(RegisterMIPS::SP, 0x7ffd_fee8).unwrap();
+        uc.reg_write(RegisterMIPS::S6, 0x6004_ed38).unwrap();
+
+        uc.add_code_hook(1, 0, |uc, address, _size| {
+            let pc = address as u32;
+            let instruction = super::read_unicorn_u32(uc, pc);
+            let _next_instruction = super::read_unicorn_u32(uc, pc.wrapping_add(4));
+            let direct_jump_target = instruction
+                .and_then(|instruction| super::decode_direct_jump_target(pc, instruction));
+            let _direct_jump_target_instruction =
+                direct_jump_target.and_then(|target| super::read_unicorn_u32(uc, target));
+            let _ra = super::read_mips_reg(uc, RegisterMIPS::RA);
+            let _sp = super::read_mips_reg(uc, RegisterMIPS::SP);
+        })
+        .unwrap();
+
+        uc.emu_start(0x6002_4218, 0, 0, 3).unwrap();
+
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap(), 0x6002_9b34);
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap(), 0x6002_4220);
+        assert_eq!(uc.reg_read(RegisterMIPS::A0).unwrap(), 0x6004_ed38);
+        assert_eq!(uc.reg_read(RegisterMIPS::SP).unwrap(), 0x7ffd_fec8);
+    }
+
+    #[test]
+    fn unicorn_executes_jal_immediately_after_jr_return_target() {
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x6002_4000, 0x0000_7000, Prot::ALL).unwrap();
+        write_u32(&mut uc, 0x6002_9b28, 0x03e0_0008);
+        write_u32(&mut uc, 0x6002_9b2c, 0xac43_0010);
+        write_u32(&mut uc, 0x6002_4218, 0x0c00_a6cc);
+        write_u32(&mut uc, 0x6002_421c, 0x02c0_2025);
+        write_u32(&mut uc, 0x6002_9b30, 0x27bd_ffe0);
+        write_u32(&mut uc, 0x6002_9b34, 0x03e0_0008);
+        write_u32(&mut uc, 0x6002_9b38, 0x0000_0000);
+        uc.reg_write(RegisterMIPS::RA, 0x6002_4218).unwrap();
+        uc.reg_write(RegisterMIPS::SP, 0x7ffd_fee8).unwrap();
+        uc.reg_write(RegisterMIPS::S6, 0x6004_ed38).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 0x3000_22f0).unwrap();
+        uc.reg_write(RegisterMIPS::V1, 1).unwrap();
+        uc.mem_map(0x3000_2000, 0x1000, Prot::ALL).unwrap();
+
+        uc.emu_start(0x6002_9b28, 0, 0, 5).unwrap();
+
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap(), 0x6002_9b34);
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap(), 0x6002_4220);
+        assert_eq!(uc.reg_read(RegisterMIPS::A0).unwrap(), 0x6004_ed38);
+        assert_eq!(uc.reg_read(RegisterMIPS::SP).unwrap(), 0x7ffd_fec8);
+        let mut slot = [0; 4];
+        uc.mem_read(0x3000_2300, &mut slot).unwrap();
+        assert_eq!(u32::from_le_bytes(slot), 1);
+    }
+
+    #[test]
+    fn unicorn_executes_jal_after_jr_return_target_with_trace_hook() {
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x6002_4000, 0x0000_7000, Prot::ALL).unwrap();
+        uc.mem_map(0x3000_2000, 0x1000, Prot::ALL).unwrap();
+        uc.mem_map(0x7ffd_f000, 0x1000, Prot::ALL).unwrap();
+        write_u32(&mut uc, 0x6002_9b18, 0x8c43_0010);
+        write_u32(&mut uc, 0x6002_9b1c, 0x8fbf_0010);
+        write_u32(&mut uc, 0x6002_9b20, 0x2463_0001);
+        write_u32(&mut uc, 0x6002_9b24, 0x27bd_0018);
+        write_u32(&mut uc, 0x6002_9b28, 0x03e0_0008);
+        write_u32(&mut uc, 0x6002_9b2c, 0xac43_0010);
+        write_u32(&mut uc, 0x6002_4218, 0x0c00_a6cc);
+        write_u32(&mut uc, 0x6002_421c, 0x02c0_2025);
+        write_u32(&mut uc, 0x6002_9b30, 0x27bd_ffe0);
+        write_u32(&mut uc, 0x6002_9b34, 0x03e0_0008);
+        write_u32(&mut uc, 0x6002_9b38, 0x0000_0000);
+        uc.reg_write(RegisterMIPS::SP, 0x7ffd_fed0).unwrap();
+        uc.reg_write(RegisterMIPS::S6, 0x6004_ed38).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 0x3000_22f0).unwrap();
+        write_u32(&mut uc, 0x3000_2300, 0);
+        write_u32(&mut uc, 0x7ffd_fee0, 0x6002_4218);
+
+        uc.add_code_hook(1, 0, |uc, address, _size| {
+            let pc = address as u32;
+            let instruction = super::read_unicorn_u32(uc, pc);
+            let _next_instruction = super::read_unicorn_u32(uc, pc.wrapping_add(4));
+            let direct_jump_target = instruction
+                .and_then(|instruction| super::decode_direct_jump_target(pc, instruction));
+            let _direct_jump_target_instruction =
+                direct_jump_target.and_then(|target| super::read_unicorn_u32(uc, target));
+            let _ra = super::read_mips_reg(uc, RegisterMIPS::RA);
+            let _sp = super::read_mips_reg(uc, RegisterMIPS::SP);
+        })
+        .unwrap();
+
+        uc.emu_start(0x6002_9b18, 0, 0, 9).unwrap();
+
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap(), 0x6002_9b34);
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap(), 0x6002_4220);
+        assert_eq!(uc.reg_read(RegisterMIPS::A0).unwrap(), 0x6004_ed38);
+        assert_eq!(uc.reg_read(RegisterMIPS::SP).unwrap(), 0x7ffd_fec8);
+        let mut slot = [0; 4];
+        uc.mem_read(0x3000_2300, &mut slot).unwrap();
+        assert_eq!(u32::from_le_bytes(slot), 1);
+    }
+
+    #[test]
+    fn unicorn_executes_mfc_return_site_and_nested_target_prologue() {
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x6002_4000, 0x0003_0000, Prot::ALL).unwrap();
+        uc.mem_map(0x3000_2000, 0x1000, Prot::ALL).unwrap();
+        uc.mem_map(0x7ffd_f000, 0x1000, Prot::ALL).unwrap();
+        write_u32(&mut uc, 0x6002_9b18, 0x8c43_0010);
+        write_u32(&mut uc, 0x6002_9b1c, 0x8fbf_0010);
+        write_u32(&mut uc, 0x6002_9b20, 0x2463_0001);
+        write_u32(&mut uc, 0x6002_9b24, 0x27bd_0018);
+        write_u32(&mut uc, 0x6002_9b28, 0x03e0_0008);
+        write_u32(&mut uc, 0x6002_9b2c, 0xac43_0010);
+        write_u32(&mut uc, 0x6002_4218, 0x0c00_a6cc);
+        write_u32(&mut uc, 0x6002_421c, 0x02c0_2025);
+        write_u32(&mut uc, 0x6002_4220, 0x0802_5400);
+        write_u32(&mut uc, 0x6002_4224, 0x0000_0000);
+        write_u32(&mut uc, 0x6002_9b30, 0x27bd_ffe0);
+        write_u32(&mut uc, 0x6002_9b34, 0xafbf_0018);
+        write_u32(&mut uc, 0x6002_9b38, 0xafbe_0010);
+        write_u32(&mut uc, 0x6002_9b3c, 0xafb7_0014);
+        write_u32(&mut uc, 0x6002_9b40, 0x0c01_3b27);
+        write_u32(&mut uc, 0x6002_9b44, 0x0080_b825);
+        write_u32(&mut uc, 0x6004_ec9c, 0x03e0_0008);
+        write_u32(&mut uc, 0x6004_eca0, 0x0000_0000);
+        uc.reg_write(RegisterMIPS::SP, 0x7ffd_fed0).unwrap();
+        uc.reg_write(RegisterMIPS::S6, 0x6004_ed38).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 0x3000_22f0).unwrap();
+        write_u32(&mut uc, 0x3000_2300, 0);
+        write_u32(&mut uc, 0x7ffd_fee0, 0x6002_4218);
+
+        uc.emu_start(0x6002_9b18, 0, 0, 15).unwrap();
+
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap(), 0x6002_9b48);
+        assert_eq!(uc.reg_read(RegisterMIPS::S7).unwrap(), 0x6004_ed38);
+    }
+
+    #[test]
+    fn unicorn_executes_mfc_return_site_with_run_diagnostics() {
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x6002_4000, 0x0003_0000, Prot::ALL).unwrap();
+        uc.mem_map(0x3000_2000, 0x1000, Prot::ALL).unwrap();
+        uc.mem_map(0x7ffd_f000, 0x1000, Prot::ALL).unwrap();
+        write_u32(&mut uc, 0x6002_9b18, 0x8c43_0010);
+        write_u32(&mut uc, 0x6002_9b1c, 0x8fbf_0010);
+        write_u32(&mut uc, 0x6002_9b20, 0x2463_0001);
+        write_u32(&mut uc, 0x6002_9b24, 0x27bd_0018);
+        write_u32(&mut uc, 0x6002_9b28, 0x03e0_0008);
+        write_u32(&mut uc, 0x6002_9b2c, 0xac43_0010);
+        write_u32(&mut uc, 0x6002_4218, 0x0c00_a6cc);
+        write_u32(&mut uc, 0x6002_421c, 0x02c0_2025);
+        write_u32(&mut uc, 0x6002_4220, 0x0802_5400);
+        write_u32(&mut uc, 0x6002_4224, 0x0000_0000);
+        write_u32(&mut uc, 0x6002_9b30, 0x27bd_ffe0);
+        write_u32(&mut uc, 0x6002_9b34, 0xafbf_0018);
+        write_u32(&mut uc, 0x6002_9b38, 0xafbe_0010);
+        write_u32(&mut uc, 0x6002_9b3c, 0xafb7_0014);
+        write_u32(&mut uc, 0x6002_9b40, 0x0c01_3b27);
+        write_u32(&mut uc, 0x6002_9b44, 0x0080_b825);
+        write_u32(&mut uc, 0x6004_ec9c, 0x03e0_0008);
+        write_u32(&mut uc, 0x6004_eca0, 0x0000_0000);
+        uc.reg_write(RegisterMIPS::SP, 0x7ffd_fed0).unwrap();
+        uc.reg_write(RegisterMIPS::S6, 0x6004_ed38).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 0x3000_22f0).unwrap();
+        write_u32(&mut uc, 0x3000_2300, 0);
+        write_u32(&mut uc, 0x7ffd_fee0, 0x6002_4218);
+
+        uc.add_code_hook(1, 0, |uc, address, _size| {
+            let pc = address as u32;
+            let instruction = super::read_unicorn_u32(uc, pc);
+            let _next_instruction = super::read_unicorn_u32(uc, pc.wrapping_add(4));
+            let direct_jump_target = instruction
+                .and_then(|instruction| super::decode_direct_jump_target(pc, instruction));
+            let _direct_jump_target_instruction =
+                direct_jump_target.and_then(|target| super::read_unicorn_u32(uc, target));
+            let _ra = super::read_mips_reg(uc, RegisterMIPS::RA);
+            let _sp = super::read_mips_reg(uc, RegisterMIPS::SP);
+        })
+        .unwrap();
+        uc.add_block_hook(1, 0, |uc, address, _size| {
+            let _pc = address as u32;
+            let _ra = super::read_mips_reg(uc, RegisterMIPS::RA);
+            let _sp = super::read_mips_reg(uc, RegisterMIPS::SP);
+        })
+        .unwrap();
+        uc.add_mem_hook(
+            unicorn_engine::unicorn_const::HookType::MEM_UNMAPPED
+                | unicorn_engine::unicorn_const::HookType::MEM_PROT,
+            1,
+            0,
+            |_uc, _access, _address, _size, _value| false,
+        )
+        .unwrap();
+        uc.add_intr_hook(|uc, _intno| {
+            let _ = uc.emu_stop();
+        })
+        .unwrap();
+        uc.add_insn_invalid_hook(|_uc| false).unwrap();
+
+        uc.emu_start(0x6002_9b18, 0, 0, 15).unwrap();
+
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap(), 0x6002_9b48);
+        assert_eq!(uc.reg_read(RegisterMIPS::S7).unwrap(), 0x6004_ed38);
+    }
+
+    #[test]
+    fn unicorn_executes_direct_jump_immediately_after_jr_return_target() {
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x6002_4000, 0x0009_0000, Prot::ALL).unwrap();
+        uc.mem_map(0x3000_2000, 0x1000, Prot::ALL).unwrap();
+        write_u32(&mut uc, 0x6002_9b28, 0x03e0_0008);
+        write_u32(&mut uc, 0x6002_9b2c, 0xac43_0010);
+        write_u32(&mut uc, 0x6002_4218, 0x0802_6c1b);
+        write_u32(&mut uc, 0x6002_421c, 0x0000_0000);
+        write_u32(&mut uc, 0x6009_b06c, 0x3c1f_6002);
+        write_u32(&mut uc, 0x6009_b070, 0x37ff_4220);
+        write_u32(&mut uc, 0x6009_b074, 0x02c0_2025);
+        write_u32(&mut uc, 0x6009_b078, 0x0800_a6cc);
+        write_u32(&mut uc, 0x6009_b07c, 0x0000_0000);
+        uc.reg_write(RegisterMIPS::RA, 0x6002_4218).unwrap();
+        uc.reg_write(RegisterMIPS::SP, 0x7ffd_fee8).unwrap();
+        uc.reg_write(RegisterMIPS::S6, 0x6004_ed38).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 0x3000_22f0).unwrap();
+        uc.reg_write(RegisterMIPS::V1, 1).unwrap();
+
+        uc.emu_start(0x6002_9b28, 0, 0, 7).unwrap();
+
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap(), 0x6002_4220);
+        assert_eq!(uc.reg_read(RegisterMIPS::A0).unwrap(), 0x6004_ed38);
+        let mut slot = [0; 4];
+        uc.mem_read(0x3000_2300, &mut slot).unwrap();
+        assert_eq!(u32::from_le_bytes(slot), 1);
+    }
+
+    #[test]
+    fn unicorn_honors_pc_redirect_from_code_hook() {
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x6002_4000, 0x0009_0000, Prot::ALL).unwrap();
+        write_u32(&mut uc, 0x6002_4218, 0x0802_6c1b);
+        write_u32(&mut uc, 0x6002_421c, 0x0000_0000);
+        write_u32(&mut uc, 0x6009_b06c, 0x3c1f_6002);
+        write_u32(&mut uc, 0x6009_b070, 0x37ff_4220);
+
+        uc.add_code_hook(0x6002_4218, 0x6002_4218, |uc, _address, _size| {
+            uc.reg_write(RegisterMIPS::PC, 0x6009_b06c).unwrap();
+        })
+        .unwrap();
+        uc.emu_start(0x6002_4218, 0, 0, 3).unwrap();
+
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap(), 0x6002_4220);
+    }
+
+    #[test]
+    fn branch_likely_trampoline_annuls_delay_slot_when_condition_is_false() {
+        let pc = 0x6002_4220;
+        let stub_pc = 0x6002_a000;
+        let branch = super::decode_mips_branch_likely(0x0683_0003).unwrap();
+        let words = super::branch_likely_stub_words(pc, branch, 0x2442_0001, stub_pc).unwrap();
+
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x6002_4000, 0x0000_7000, Prot::ALL).unwrap();
+        write_words(&mut uc, stub_pc, &words);
+        uc.reg_write(RegisterMIPS::S4, u64::MAX).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 41).unwrap();
+
+        uc.emu_start(u64::from(stub_pc), 0, 0, 4).unwrap();
+
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap(), u64::from(pc + 8));
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap(), 41);
+    }
+
+    #[test]
+    fn branch_likely_trampoline_runs_delay_slot_when_condition_is_true() {
+        let pc = 0x6002_4220;
+        let stub_pc = 0x6002_a000;
+        let branch = super::decode_mips_branch_likely(0x0683_0003).unwrap();
+        let words = super::branch_likely_stub_words(pc, branch, 0x2442_0001, stub_pc).unwrap();
+
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x6002_4000, 0x0000_7000, Prot::ALL).unwrap();
+        write_words(&mut uc, stub_pc, &words);
+        uc.reg_write(RegisterMIPS::S4, 0).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 41).unwrap();
+
+        uc.emu_start(u64::from(stub_pc), 0, 0, 5).unwrap();
+
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap(), u64::from(pc + 16));
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap(), 42);
+    }
+
+    #[test]
+    fn normal_branch_trampoline_runs_delay_slot_on_both_paths() {
+        let pc = 0x6002_9b64;
+        let stub_pc = 0x6002_a000;
+        let branch = super::decode_mips_normal_branch(0x12e0_0018).unwrap();
+        let words = super::normal_branch_stub_words(pc, branch, 0x2442_0001, stub_pc).unwrap();
+
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x6002_4000, 0x0000_7000, Prot::ALL).unwrap();
+        write_words(&mut uc, stub_pc, &words);
+        uc.reg_write(RegisterMIPS::S7, 0).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 41).unwrap();
+        uc.emu_start(u64::from(stub_pc), 0, 0, 5).unwrap();
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap(), 0x6002_9bc8);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap(), 42);
+
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x6002_4000, 0x0000_7000, Prot::ALL).unwrap();
+        write_words(&mut uc, stub_pc, &words);
+        uc.reg_write(RegisterMIPS::S7, 1).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 41).unwrap();
+        uc.emu_start(u64::from(stub_pc), 0, 0, 5).unwrap();
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap(), u64::from(pc + 8));
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap(), 42);
+    }
+
+    #[test]
+    fn jal_trampoline_sets_link_and_runs_delay_slot() {
+        let pc = 0x6002_4218;
+        let stub_pc = 0x6002_a000;
+        let target = 0x6002_9b30;
+        let words = super::jal_stub_words(pc, target, 0x02c0_2025, stub_pc).unwrap();
+
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x6002_4000, 0x0000_7000, Prot::ALL).unwrap();
+        write_words(&mut uc, stub_pc, &words);
+        uc.reg_write(RegisterMIPS::S6, 0x6004_ed38).unwrap();
+
+        uc.emu_start(u64::from(stub_pc), 0, 0, 5).unwrap();
+
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap(), u64::from(target));
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap(), u64::from(pc + 8));
+        assert_eq!(uc.reg_read(RegisterMIPS::A0).unwrap(), 0x6004_ed38);
+    }
+
+    fn write_u32(uc: &mut Unicorn<'_, ()>, address: u64, value: u32) {
+        uc.mem_write(address, &value.to_le_bytes()).unwrap();
+    }
+
+    fn write_words(uc: &mut Unicorn<'_, ()>, address: u32, words: &[u32]) {
+        for (index, word) in words.iter().enumerate() {
+            write_u32(uc, u64::from(address) + index as u64 * 4, *word);
+        }
     }
 }
 

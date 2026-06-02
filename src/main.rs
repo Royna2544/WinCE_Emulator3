@@ -22,6 +22,7 @@ struct Args {
     devices: PathBuf,
     image: Option<PathBuf>,
     dll_search_dirs: Vec<PathBuf>,
+    sdmmc_root: Option<PathBuf>,
     run_cpu: bool,
 }
 
@@ -35,6 +36,9 @@ fn main() -> Result<()> {
     let args = Args::parse()?;
     let config = RuntimeConfig::load(&args.registry, &args.devices)?;
     let mut kernel = CeKernel::boot(config);
+    if let Some(sdmmc_root) = args.sdmmc_root.as_ref() {
+        kernel.mount_guest_root("\\SDMMC Disk", sdmmc_root);
+    }
 
     let mut cpu = UnicornMips::new()?;
     if args.image.is_none() {
@@ -52,9 +56,14 @@ fn main() -> Result<()> {
         )?;
     }
 
-    let hwnd = kernel.gwe.create_window(1, "FakeCEBaseWindow", "");
-    let timer_id = kernel.timers.set_timer(Some(hwnd), None, 1000, WM_TIMER);
-    let wave_id = kernel.audio.open_wave_out(WaveFormat::pcm_16bit(2, 44_100));
+    let bootstrap_handles = if args.image.is_none() {
+        let hwnd = kernel.gwe.create_window(1, "FakeCEBaseWindow", "");
+        let timer_id = kernel.timers.set_timer(Some(hwnd), None, 1000, WM_TIMER);
+        let wave_id = kernel.audio.open_wave_out(WaveFormat::pcm_16bit(2, 44_100));
+        Some((hwnd, timer_id, wave_id))
+    } else {
+        None
+    };
     let ident_key = kernel
         .registry
         .reg_open_key_exw(HKEY_LOCAL_MACHINE, Some("Ident"), 0, 0);
@@ -85,14 +94,21 @@ fn main() -> Result<()> {
         kernel.devices.default_baud(),
         kernel.devices.default_mode()
     );
-    println!("  bootstrap hwnd: 0x{hwnd:08x}");
-    println!("  bootstrap timer: {timer_id}");
-    println!("  bootstrap waveOut: {wave_id}");
+    if let Some((hwnd, timer_id, wave_id)) = bootstrap_handles {
+        println!("  bootstrap hwnd: 0x{hwnd:08x}");
+        println!("  bootstrap timer: {timer_id}");
+        println!("  bootstrap waveOut: {wave_id}");
+    } else {
+        println!("  bootstrap demo state: skipped for PE image");
+    }
     println!("  memory regions: {}", cpu.memory().regions().count());
 
-    let pe_image = if let Some(image_path) = args.image {
+    let pe_image = if let Some(image_path) = args.image.as_ref() {
         let image = PeImage::inspect(image_path)?;
-        kernel.set_process_module_path(ce_module_path(&image.path));
+        kernel.set_process_module_path(ce_module_path_for_image(
+            &image.path,
+            args.sdmmc_root.as_deref(),
+        ));
         println!(
             "  PE image: {} ({} bytes, lfanew=0x{:08x}, machine=0x{:04x})",
             image.path, image.len, image.dos_lfanew, image.coff_header.machine
@@ -137,6 +153,9 @@ fn main() -> Result<()> {
             }
             return Err(err);
         }
+        if let Some(snapshot) = cpu.last_debug_snapshot() {
+            println!("  Unicorn stopped: {snapshot}");
+        }
     }
 
     Ok(())
@@ -148,6 +167,7 @@ impl Args {
         let mut devices = PathBuf::from("serial_devices.json");
         let mut image = None;
         let mut dll_search_dirs = Vec::new();
+        let mut sdmmc_root = None;
         let mut run_cpu = false;
 
         let mut args = std::env::args().skip(1);
@@ -164,6 +184,9 @@ impl Args {
                 }
                 "--dll-search-dir" => {
                     dll_search_dirs.push(next_path(&mut args, "--dll-search-dir")?);
+                }
+                "--sdmmc-root" => {
+                    sdmmc_root = Some(next_path(&mut args, "--sdmmc-root")?);
                 }
                 "--run-cpu" => {
                     run_cpu = true;
@@ -185,6 +208,7 @@ impl Args {
             devices,
             image,
             dll_search_dirs,
+            sdmmc_root,
             run_cpu,
         })
     }
@@ -198,7 +222,7 @@ fn next_path(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<Path
 
 fn print_help() {
     println!(
-        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--image INavi.exe] [--dll-search-dir DIR]... [--run-cpu]"
+        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--image INavi.exe] [--dll-search-dir DIR]... [--sdmmc-root DIR] [--run-cpu]"
     );
 }
 
@@ -252,6 +276,57 @@ fn normalize_module_name(module_name: &str) -> String {
         .to_ascii_lowercase()
 }
 
+fn ce_module_path_for_image(path: &str, sdmmc_root: Option<&Path>) -> String {
+    if let Some(sdmmc_root) = sdmmc_root {
+        if let Some(path) = host_path_to_guest_mount("\\SDMMC Disk", sdmmc_root, Path::new(path)) {
+            return path;
+        }
+    }
+    ce_module_path(path)
+}
+
+fn host_path_to_guest_mount(
+    guest_root: &str,
+    host_root: &Path,
+    host_path: &Path,
+) -> Option<String> {
+    let relative = host_path.strip_prefix(host_root).ok()?;
+    let mut guest_path = guest_root.trim_end_matches('\\').to_owned();
+    for component in relative.components() {
+        let std::path::Component::Normal(part) = component else {
+            continue;
+        };
+        guest_path.push('\\');
+        guest_path.push_str(&part.to_string_lossy());
+    }
+    Some(guest_path)
+}
+
 fn ce_module_path(path: &str) -> String {
     path.replace('/', "\\")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_image_under_sdmmc_root_to_ce_mount_path() {
+        let path = ce_module_path_for_image(
+            r"D:\INAVI_Emulator\INAVI\INavi\INavi.exe",
+            Some(Path::new(r"D:\INAVI_Emulator\INAVI")),
+        );
+
+        assert_eq!(path, r"\SDMMC Disk\INavi\INavi.exe");
+    }
+
+    #[test]
+    fn leaves_unmounted_image_path_as_ce_style_host_path() {
+        let path = ce_module_path_for_image(
+            r"D:\Other\INavi.exe",
+            Some(Path::new(r"D:\INAVI_Emulator\INAVI")),
+        );
+
+        assert_eq!(path, r"D:\Other\INavi.exe");
+    }
 }

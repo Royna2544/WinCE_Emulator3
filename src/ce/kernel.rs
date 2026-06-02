@@ -4,10 +4,12 @@ use crate::{
         cemath::CeMath,
         com::ComSystem,
         devices::{DeviceIoControlResult, DeviceNamespace},
-        file::{FileIoResult, GENERIC_READ, GENERIC_WRITE, HostFileSystem, OPEN_EXISTING},
-        gwe::{Gwe, Message},
+        file::{
+            FileIoResult, FindData, GENERIC_READ, GENERIC_WRITE, HostFileSystem, OPEN_EXISTING,
+        },
+        gwe::{Gwe, HWND_BROADCAST, Message},
         memory::MemorySystem,
-        object::{FileObject, HandleTable, KernelObject, WaitResult},
+        object::{FileObject, FindFileObject, HandleTable, KernelObject, WaitResult},
         registry::Registry,
         remote::{CeRemote, RemoteStatus, WM_LBUTTONDOWN, WM_MOUSEMOVE, make_lparam},
         resource::ResourceSystem,
@@ -88,6 +90,10 @@ impl CeKernel {
 
     pub fn set_file_root(&mut self, root: impl Into<std::path::PathBuf>) {
         self.files = HostFileSystem::new(root);
+    }
+
+    pub fn mount_guest_root(&mut self, guest_root: &str, host_root: impl Into<std::path::PathBuf>) {
+        self.files.mount_guest_root(guest_root, host_root);
     }
 
     pub fn create_file_w(
@@ -184,6 +190,24 @@ impl CeKernel {
         Ok(true)
     }
 
+    pub fn find_first_file_w(&mut self, pattern: &str) -> Result<(u32, FindData)> {
+        let (find_id, data) = self.files.find_first_file_w(pattern)?;
+        let handle = self.handles.insert(KernelObject::FindFile(FindFileObject {
+            guest_pattern: pattern.to_owned(),
+            find_id,
+        }));
+        Ok((handle, data))
+    }
+
+    pub fn find_close(&mut self, handle: u32) -> Result<bool> {
+        let KernelObject::FindFile(find) = self.handles.get(handle)?.clone() else {
+            return Err(crate::error::Error::InvalidHandle(handle));
+        };
+        self.files.find_close(find.find_id)?;
+        self.handles.close(handle)?;
+        Ok(true)
+    }
+
     pub fn device_io_control(
         &mut self,
         handle: u32,
@@ -205,8 +229,10 @@ impl CeKernel {
 
     pub fn close_handle(&mut self, handle: u32) -> Result<bool> {
         let object = self.handles.get(handle)?.clone();
-        if let KernelObject::File(file) = object {
-            self.files.close(file.file_id)?;
+        match object {
+            KernelObject::File(file) => self.files.close(file.file_id)?,
+            KernelObject::FindFile(find) => self.files.find_close(find.find_id)?,
+            _ => {}
         }
         self.handles.close(handle)?;
         Ok(true)
@@ -275,9 +301,31 @@ impl CeKernel {
     }
 
     pub fn post_message_w(&mut self, hwnd: u32, msg: u32, wparam: u32, lparam: u32) -> bool {
+        self.post_message_w_for_thread(0, hwnd, msg, wparam, lparam)
+    }
+
+    pub fn post_message_w_for_thread(
+        &mut self,
+        thread_id: u32,
+        hwnd: u32,
+        msg: u32,
+        wparam: u32,
+        lparam: u32,
+    ) -> bool {
         let time_ms = self.timers.tick_count();
-        self.gwe
-            .post_message_for_window(hwnd, Message::new(hwnd, msg, wparam, lparam, time_ms))
+        match hwnd {
+            HWND_BROADCAST => self
+                .gwe
+                .post_broadcast_message(msg, wparam, lparam, time_ms),
+            0 => {
+                self.gwe
+                    .post_thread_message(thread_id, msg, wparam, lparam, time_ms);
+                true
+            }
+            hwnd => self
+                .gwe
+                .post_message_for_window(hwnd, Message::new(hwnd, msg, wparam, lparam, time_ms)),
+        }
     }
 
     pub fn send_message_w(&mut self, hwnd: u32, msg: u32, wparam: u32, lparam: u32) -> Option<u32> {

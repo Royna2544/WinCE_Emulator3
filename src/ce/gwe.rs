@@ -19,7 +19,9 @@ pub const WM_GETTEXTLENGTH: u32 = 0x000e;
 pub const WM_TIMER: u32 = 0x0113;
 pub const WM_USER: u32 = 0x0400;
 
+pub const HWND_BROADCAST: u32 = 0x0000_ffff;
 pub const DESKTOP_HWND: u32 = 0x0001_0000;
+pub const WNDCLASSW_SIZE: usize = 40;
 
 pub const GWL_WNDPROC: i32 = -4;
 pub const GWL_ID: i32 = -12;
@@ -33,6 +35,7 @@ pub const SWP_NOZORDER: u32 = 0x0004;
 pub const SWP_NOACTIVATE: u32 = 0x0010;
 pub const SWP_SHOWWINDOW: u32 = 0x0040;
 pub const SWP_HIDEWINDOW: u32 = 0x0080;
+pub const WS_VISIBLE: u32 = 0x1000_0000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
@@ -108,12 +111,23 @@ pub struct Window {
     pub destroyed: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowClass {
+    pub atom: u16,
+    pub name: String,
+    pub bytes: [u8; WNDCLASSW_SIZE],
+}
+
 #[derive(Debug, Clone)]
 pub struct Gwe {
     next_hwnd: u32,
+    next_class_atom: u16,
+    classes_by_name: BTreeMap<String, WindowClass>,
+    class_names_by_atom: BTreeMap<u16, String>,
     windows: BTreeMap<u32, Window>,
     queues: BTreeMap<u32, VecDeque<Message>>,
     focus: Option<u32>,
+    cursor_pos: Point,
 }
 
 impl Default for Gwe {
@@ -141,9 +155,13 @@ impl Default for Gwe {
         );
         Self {
             next_hwnd: 0x0002_0000,
+            next_class_atom: 0xc000,
+            classes_by_name: BTreeMap::new(),
+            class_names_by_atom: BTreeMap::new(),
             windows,
             queues: BTreeMap::new(),
             focus: None,
+            cursor_pos: Point::default(),
         }
     }
 }
@@ -187,6 +205,18 @@ impl Gwe {
         rect: Rect,
     ) -> u32 {
         let rect = self.parent_to_screen_rect(parent, rect);
+        let class_name = self.resolve_class_name(class_name);
+        let wndproc = self
+            .class_info(&class_name)
+            .map(|window_class| {
+                u32::from_le_bytes([
+                    window_class.bytes[4],
+                    window_class.bytes[5],
+                    window_class.bytes[6],
+                    window_class.bytes[7],
+                ])
+            })
+            .unwrap_or(0);
         let hwnd = self.next_hwnd;
         self.next_hwnd += 4;
         self.windows.insert(
@@ -194,23 +224,73 @@ impl Gwe {
             Window {
                 hwnd,
                 thread_id,
-                class_name: class_name.to_owned(),
+                class_name,
                 title: title.to_owned(),
-                visible: false,
+                visible: style & WS_VISIBLE != 0,
                 enabled: true,
                 parent,
                 id,
                 style,
                 ex_style,
-                wndproc: 0,
+                wndproc,
                 user_data: 0,
                 rect,
                 client_rect: rect,
                 destroyed: false,
             },
         );
-        self.post_message(thread_id, Message::new(hwnd, WM_CREATE, 0, 0, 0));
         hwnd
+    }
+
+    pub fn register_class(&mut self, name_or_atom: &str, bytes: [u8; WNDCLASSW_SIZE]) -> u16 {
+        let name = normalize_class_name(name_or_atom);
+        if let Some(window_class) = self.classes_by_name.get_mut(&name) {
+            window_class.bytes = bytes;
+            return window_class.atom;
+        }
+
+        let atom = self.next_class_atom;
+        self.next_class_atom = self.next_class_atom.wrapping_add(1).max(0xc000);
+        self.classes_by_name.insert(
+            name.clone(),
+            WindowClass {
+                atom,
+                name: name.clone(),
+                bytes,
+            },
+        );
+        self.class_names_by_atom.insert(atom, name);
+        atom
+    }
+
+    pub fn class_info(&self, name_or_atom: &str) -> Option<&WindowClass> {
+        let name = if let Some(atom) = parse_atom_class_name(name_or_atom) {
+            self.class_names_by_atom.get(&atom)?.clone()
+        } else {
+            normalize_class_name(name_or_atom)
+        };
+        self.classes_by_name.get(&name)
+    }
+
+    pub fn resolve_class_name(&self, name_or_atom: &str) -> String {
+        if let Some(window_class) = self.class_info(name_or_atom) {
+            return window_class.name.clone();
+        }
+        normalize_class_name(name_or_atom)
+    }
+
+    pub fn find_window(&self, class_name: Option<&str>, title: Option<&str>) -> Option<u32> {
+        let class_name = class_name.map(|class_name| self.resolve_class_name(class_name));
+        self.windows
+            .iter()
+            .find(|(_, window)| {
+                !window.destroyed
+                    && class_name
+                        .as_ref()
+                        .is_none_or(|class_name| &window.class_name == class_name)
+                    && title.is_none_or(|title| window.title == title)
+            })
+            .map(|(hwnd, _)| *hwnd)
     }
 
     pub fn destroy_window(&mut self, hwnd: u32, time_ms: u32) -> bool {
@@ -230,8 +310,9 @@ impl Gwe {
         let Some(window) = self.windows.get_mut(&hwnd) else {
             return false;
         };
+        let previous = window.visible;
         window.visible = visible;
-        true
+        previous
     }
 
     pub fn update_window(&self, hwnd: u32) -> bool {
@@ -277,6 +358,26 @@ impl Gwe {
 
     pub fn get_focus(&self) -> Option<u32> {
         self.focus
+    }
+
+    pub fn get_active_window(&self) -> Option<u32> {
+        if let Some(hwnd) = self.focus.filter(|hwnd| self.is_window(*hwnd)) {
+            return Some(hwnd);
+        }
+        self.windows
+            .values()
+            .find(|window| {
+                !window.destroyed && window.parent.is_none() && window.hwnd != DESKTOP_HWND
+            })
+            .map(|window| window.hwnd)
+    }
+
+    pub fn set_cursor_pos(&mut self, point: Point) {
+        self.cursor_pos = point;
+    }
+
+    pub fn get_cursor_pos(&self) -> Point {
+        self.cursor_pos
     }
 
     pub fn set_window_pos(
@@ -405,8 +506,44 @@ impl Gwe {
         let Some(window) = self.windows.get(&hwnd) else {
             return false;
         };
+        if window.destroyed {
+            return false;
+        }
         self.post_message(window.thread_id, message);
         true
+    }
+
+    pub fn post_broadcast_message(
+        &mut self,
+        msg: u32,
+        wparam: u32,
+        lparam: u32,
+        time_ms: u32,
+    ) -> bool {
+        let targets: Vec<(u32, u32)> = self
+            .windows
+            .values()
+            .filter(|window| !window.destroyed && window.parent.is_none())
+            .map(|window| (window.hwnd, window.thread_id))
+            .collect();
+        for (hwnd, thread_id) in &targets {
+            self.post_message(
+                *thread_id,
+                Message::new(*hwnd, msg, wparam, lparam, time_ms),
+            );
+        }
+        !targets.is_empty()
+    }
+
+    pub fn post_thread_message(
+        &mut self,
+        thread_id: u32,
+        msg: u32,
+        wparam: u32,
+        lparam: u32,
+        time_ms: u32,
+    ) {
+        self.post_message(thread_id, Message::new(0, msg, wparam, lparam, time_ms));
     }
 
     pub fn send_message(&mut self, hwnd: u32, msg: u32, wparam: u32, lparam: u32) -> Option<u32> {
@@ -545,6 +682,22 @@ impl Gwe {
     }
 }
 
+fn normalize_class_name(name_or_atom: &str) -> String {
+    if name_or_atom.is_empty() {
+        return "#anonymous".to_owned();
+    }
+    if parse_atom_class_name(name_or_atom).is_some() {
+        return name_or_atom.to_owned();
+    }
+    name_or_atom.to_ascii_lowercase()
+}
+
+fn parse_atom_class_name(name_or_atom: &str) -> Option<u16> {
+    name_or_atom
+        .strip_prefix('#')
+        .and_then(|atom| atom.parse::<u16>().ok())
+}
+
 impl Message {
     pub fn new(hwnd: u32, msg: u32, wparam: u32, lparam: u32, time_ms: u32) -> Self {
         Self {
@@ -602,12 +755,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn create_window_posts_create_message() {
+    fn create_window_records_window_state() {
         let mut gwe = Gwe::default();
         let hwnd = gwe.create_window(1, "STATIC", "ready");
-        let message = gwe.get_message(1).unwrap();
+        let window = gwe.window(hwnd).unwrap();
 
-        assert_eq!(message.hwnd, hwnd);
-        assert_eq!(message.msg, WM_CREATE);
+        assert_eq!(window.hwnd, hwnd);
+        assert_eq!(window.thread_id, 1);
+        assert_eq!(window.class_name, "static");
+        assert_eq!(window.title, "ready");
+        assert!(gwe.get_message(1).is_none());
+    }
+
+    #[test]
+    fn create_and_show_window_track_visibility() {
+        let mut gwe = Gwe::default();
+        let hwnd = gwe.create_window_ex(1, "STATIC", "ready", None, 0, WS_VISIBLE, 0);
+
+        assert!(gwe.is_window_visible(hwnd));
+        assert!(gwe.show_window(hwnd, false));
+        assert!(!gwe.is_window_visible(hwnd));
+        assert!(!gwe.show_window(hwnd, true));
+        assert!(gwe.is_window_visible(hwnd));
     }
 }

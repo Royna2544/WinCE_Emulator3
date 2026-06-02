@@ -11,14 +11,16 @@ use crate::{
         crt,
         devices::DeviceIoControlResult,
         file::FileIoResult,
-        gwe::{Message, PeekFlags, Point, Rect},
+        file::FindData,
+        gwe::{Message, PeekFlags, Point, Rect, WNDCLASSW_SIZE},
         kernel::{CeKernel, MessagePumpResult},
         memory::HEAP_GENERATE_EXCEPTIONS,
         object::{CriticalSectionObject, KernelObject},
         registry::{HKey, RegOpenResult, RegQueryValueResult},
         resource::ResourceId,
         thread::{
-            ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOT_ENOUGH_MEMORY,
+            ERROR_CLASS_DOES_NOT_EXIST, ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE,
+            ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_ENOUGH_MEMORY,
             ERROR_NOT_SUPPORTED, ERROR_RESOURCE_NAME_NOT_FOUND,
         },
     },
@@ -1107,6 +1109,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.timers.sleep_ms(raw_arg(args, 0));
             Some(CoredllValue::U32(0))
         }
+        ORD_GLOBAL_MEMORY_STATUS => {
+            write_global_memory_status(kernel, memory, thread_id, raw_arg(args, 0));
+            Some(CoredllValue::U32(0))
+        }
+        ORD_GET_SYSTEM_INFO => {
+            write_system_info(kernel, memory, thread_id, raw_arg(args, 0));
+            Some(CoredllValue::U32(0))
+        }
         ORD_EVENT_MODIFY => {
             let ok = match raw_arg(args, 1) {
                 EVENT_PULSE => {
@@ -1128,6 +1138,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             }
             Some(CoredllValue::Bool(ok))
         }
+        ORD_CREATE_MUTEX_W => Some(CoredllValue::Handle(create_mutex_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_RELEASE_MUTEX => Some(CoredllValue::Bool(release_mutex_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_WAIT_FOR_SINGLE_OBJECT => Some(CoredllValue::U32(kernel.wait_for_single_object(
             raw_arg(args, 0),
             raw_arg(args, 1),
@@ -1135,6 +1153,18 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_CREATE_FILE_W => Some(CoredllValue::Handle(create_file_w_raw(
             kernel, memory, thread_id, args,
+        ))),
+        ORD_FIND_FIRST_FILE_W => Some(CoredllValue::Handle(find_first_file_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_FIND_CLOSE => Some(CoredllValue::Bool(find_close_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
         ))),
         ORD_READ_FILE => Some(CoredllValue::Bool(read_file_raw(
             kernel, memory, thread_id, args,
@@ -1358,6 +1388,26 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 2),
         ))),
+        ORD_REGISTER_CLASS_W => Some(CoredllValue::U32(register_class_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_GET_CLASS_INFO_W => Some(CoredllValue::Bool(get_class_info_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ))),
+        ORD_FIND_WINDOW_W => Some(CoredllValue::Handle(find_window_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
         ORD_CREATE_WINDOW_EX_W => Some(CoredllValue::Handle(create_window_ex_w_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -1390,6 +1440,19 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.gwe.get_parent(raw_arg(args, 0)).unwrap_or(0),
         )),
         ORD_GET_DESKTOP_WINDOW => Some(CoredllValue::Handle(kernel.gwe.get_desktop_window())),
+        ORD_GET_ACTIVE_WINDOW => Some(CoredllValue::Handle(
+            kernel.gwe.get_active_window().unwrap_or(0),
+        )),
+        ORD_GET_CURSOR_POS => {
+            let cursor_pos = kernel.gwe.get_cursor_pos();
+            Some(CoredllValue::Bool(write_guest_point(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                cursor_pos,
+            )))
+        }
         ORD_SET_FOCUS => Some(CoredllValue::Handle(
             kernel
                 .gwe
@@ -1487,7 +1550,8 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_PEEK_MESSAGE_W => Some(CoredllValue::Bool(peek_message_w_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_POST_MESSAGE_W => Some(CoredllValue::Bool(kernel.post_message_w(
+        ORD_POST_MESSAGE_W => Some(CoredllValue::Bool(kernel.post_message_w_for_thread(
+            thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
             raw_arg(args, 2),
@@ -1510,6 +1574,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
         ))),
         ORD_TRANSLATE_MESSAGE => Some(CoredllValue::Bool(raw_arg(args, 0) != 0)),
+        ORD_MESSAGE_BOX_W => Some(CoredllValue::U32(1)),
         ORD_FIND_RESOURCE | ORD_FIND_RESOURCE_W => Some(CoredllValue::Handle(find_resource(
             kernel,
             thread_id,
@@ -1632,6 +1697,93 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
     }
 }
 
+fn write_global_memory_status<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    status_ptr: u32,
+) -> bool {
+    if status_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let total = 64 * 1024 * 1024;
+    let available = 48 * 1024 * 1024;
+    let writes = [
+        (0, 32),
+        (4, 25),
+        (8, total),
+        (12, available),
+        (16, total),
+        (20, available),
+        (24, 0x7fff_0000),
+        (28, 0x4000_0000),
+    ];
+    for (offset, value) in writes {
+        if !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            status_ptr.wrapping_add(offset),
+            value,
+        ) {
+            return false;
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn write_system_info<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    info_ptr: u32,
+) -> bool {
+    if info_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let word_writes = [(0, 0x0004), (2, 0), (32, 4), (34, 0)];
+    for (offset, value) in word_writes {
+        if !write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            info_ptr.wrapping_add(offset),
+            value,
+        ) {
+            return false;
+        }
+    }
+    let dword_writes = [
+        (4, 4096),
+        (8, 0x0001_0000),
+        (12, 0x7ffe_ffff),
+        (16, 1),
+        (20, 1),
+        (24, 4000),
+        (28, 64 * 1024),
+    ];
+    for (offset, value) in dword_writes {
+        if !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            info_ptr.wrapping_add(offset),
+            value,
+        ) {
+            return false;
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
 fn create_file_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
@@ -1653,6 +1805,93 @@ fn create_file_w_raw<M: CoredllGuestMemory>(
             u32::MAX
         }
     }
+}
+
+fn find_first_file_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    pattern_ptr: u32,
+    find_data_ptr: u32,
+) -> u32 {
+    let Some(pattern) = read_guest_wide_arg(memory, pattern_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return u32::MAX;
+    };
+    let (handle, find_data) = match kernel.find_first_file_w(&pattern) {
+        Ok(result) => result,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+            return u32::MAX;
+        }
+    };
+    if find_data_ptr == 0
+        || !write_win32_find_data_w(kernel, memory, thread_id, find_data_ptr, &find_data)
+    {
+        let _ = kernel.find_close(handle);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return u32::MAX;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    handle
+}
+
+fn find_close_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {
+    match kernel.find_close(handle) {
+        Ok(ok) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            ok
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            false
+        }
+    }
+}
+
+fn write_win32_find_data_w<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    addr: u32,
+    find_data: &FindData,
+) -> bool {
+    let file_size_high = (find_data.file_size >> 32) as u32;
+    let file_size_low = find_data.file_size as u32;
+    let dwords = [
+        (0, find_data.attributes),
+        (4, 0),
+        (8, 0),
+        (12, 0),
+        (16, 0),
+        (20, 0),
+        (24, 0),
+        (28, file_size_high),
+        (32, file_size_low),
+        (36, 0),
+        (40, 0),
+    ];
+    for (offset, value) in dwords {
+        if !write_guest_u32(kernel, memory, thread_id, addr.wrapping_add(offset), value) {
+            return false;
+        }
+    }
+    write_guest_wide_fixed(
+        kernel,
+        memory,
+        thread_id,
+        addr.wrapping_add(WIN32_FIND_DATAW_FILE_NAME),
+        &find_data.file_name,
+        WIN32_FIND_DATAW_FILE_NAME_CHARS,
+    )
 }
 
 fn get_module_file_name_w_raw<M: CoredllGuestMemory>(
@@ -2044,6 +2283,120 @@ fn virtual_free_raw(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         false
     }
+}
+
+fn create_mutex_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let name_ptr = raw_arg(args, 2);
+    let name = if name_ptr == 0 {
+        None
+    } else {
+        let Some(name) = read_guest_wide_arg(memory, name_ptr) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        Some(name)
+    };
+    let owner = (raw_arg(args, 1) != 0).then_some(thread_id);
+    let handle = kernel.create_mutex_w(name, owner);
+    kernel.threads.set_last_error(thread_id, 0);
+    handle
+}
+
+fn release_mutex_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {
+    if kernel.release_mutex(handle, thread_id) {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        false
+    }
+}
+
+fn register_class_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    class_ptr: u32,
+) -> u32 {
+    if class_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, class_ptr, WNDCLASSW_SIZE as u32)
+    else {
+        return 0;
+    };
+    let mut wndclass = [0; WNDCLASSW_SIZE];
+    wndclass.copy_from_slice(&bytes);
+    let class_name_ptr =
+        u32::from_le_bytes([wndclass[36], wndclass[37], wndclass[38], wndclass[39]]);
+    let class_name = read_guest_wide_arg(memory, class_name_ptr).unwrap_or_default();
+    let atom = kernel.gwe.register_class(&class_name, wndclass);
+    kernel.threads.set_last_error(thread_id, 0);
+    u32::from(atom)
+}
+
+fn get_class_info_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    class_name_ptr: u32,
+    out_ptr: u32,
+) -> bool {
+    let Some(class_name) = read_guest_wide_arg(memory, class_name_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_CLASS_DOES_NOT_EXIST);
+        return false;
+    };
+    let Some(bytes) = kernel.gwe.class_info(&class_name).map(|class| class.bytes) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_CLASS_DOES_NOT_EXIST);
+        return false;
+    };
+    if out_ptr == 0 || !write_guest_bytes(kernel, memory, thread_id, out_ptr, &bytes) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_CLASS_DOES_NOT_EXIST);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn find_window_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    class_name_ptr: u32,
+    title_ptr: u32,
+) -> u32 {
+    let class_name = read_guest_wide_arg(memory, class_name_ptr);
+    let title = read_guest_wide_arg(memory, title_ptr);
+    let hwnd = kernel
+        .gwe
+        .find_window(class_name.as_deref(), title.as_deref())
+        .unwrap_or(0);
+    if hwnd == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+    } else {
+        kernel.threads.set_last_error(thread_id, 0);
+    }
+    hwnd
 }
 
 fn create_window_ex_w_raw<M: CoredllGuestMemory>(
@@ -2772,6 +3125,23 @@ fn dispatch_message_w_raw<M: CoredllGuestMemory>(
     let Some(message) = read_guest_message(kernel, memory, thread_id, msg_ptr) else {
         return 0;
     };
+    let (class_name, wndproc) = kernel
+        .gwe
+        .window(message.hwnd)
+        .map(|window| (window.class_name.clone(), window.wndproc))
+        .unwrap_or_default();
+    tracing::debug!(
+        target: "ce.gwe",
+        thread_id,
+        msg_ptr = format_args!("0x{msg_ptr:08x}"),
+        hwnd = format_args!("0x{:08x}", message.hwnd),
+        msg = format_args!("0x{:08x}", message.msg),
+        wparam = format_args!("0x{:08x}", message.wparam),
+        lparam = format_args!("0x{:08x}", message.lparam),
+        class = class_name.as_str(),
+        wndproc = format_args!("0x{wndproc:08x}"),
+        "DispatchMessageW"
+    );
     kernel.dispatch_message_w(message)
 }
 
@@ -3296,6 +3666,8 @@ fn has_any_prefix(name: &str, prefixes: &[&str]) -> bool {
 const EVENT_PULSE: u32 = 1;
 const EVENT_RESET: u32 = 2;
 const EVENT_SET: u32 = 3;
+const WIN32_FIND_DATAW_FILE_NAME: u32 = 44;
+const WIN32_FIND_DATAW_FILE_NAME_CHARS: usize = 260;
 
 const IMPLEMENTED_EXPORTS: &[&str] = &[
     "InitializeCriticalSection",
@@ -3360,6 +3732,8 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "RegQueryValueExW",
     "RegSetValueExW",
     "CreateFileW",
+    "FindFirstFileW",
+    "FindClose",
     "ReadFile",
     "WriteFile",
     "SetFilePointer",

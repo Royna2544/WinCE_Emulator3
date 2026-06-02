@@ -81,7 +81,7 @@ impl ImportTrapTable {
         memory: &mut M,
         thread_id: u32,
         address: u32,
-        args: [u32; 4],
+        args: Vec<u32>,
     ) -> Option<u32> {
         let trap = self.trap_at(address)?;
         Some(match trap.module_kind {
@@ -98,7 +98,7 @@ impl ImportTrapTable {
             ImportModuleKind::Mfc
             | ImportModuleKind::CommonControls
             | ImportModuleKind::Winsock
-            | ImportModuleKind::Ole => dispatch_external_stub_to_u32(trap, memory, args),
+            | ImportModuleKind::Ole => dispatch_external_stub_to_u32(trap, memory, &args),
         })
     }
 
@@ -265,7 +265,7 @@ impl ExternalImportTable {
 fn dispatch_external_stub_to_u32<M: CoredllGuestMemory>(
     trap: &ImportTrap,
     memory: &mut M,
-    args: [u32; 4],
+    args: &[u32],
 ) -> u32 {
     let name = trap.name.as_deref().unwrap_or("");
     tracing::debug!(
@@ -274,10 +274,10 @@ fn dispatch_external_stub_to_u32<M: CoredllGuestMemory>(
         kind = ?trap.module_kind,
         name,
         ordinal = trap.ordinal,
-        a0 = format_args!("0x{:08x}", args[0]),
-        a1 = format_args!("0x{:08x}", args[1]),
-        a2 = format_args!("0x{:08x}", args[2]),
-        a3 = format_args!("0x{:08x}", args[3]),
+        a0 = format_args!("0x{:08x}", raw_import_arg(args, 0)),
+        a1 = format_args!("0x{:08x}", raw_import_arg(args, 1)),
+        a2 = format_args!("0x{:08x}", raw_import_arg(args, 2)),
+        a3 = format_args!("0x{:08x}", raw_import_arg(args, 3)),
         "external DLL import stub"
     );
     match trap.module_kind {
@@ -287,6 +287,10 @@ fn dispatch_external_stub_to_u32<M: CoredllGuestMemory>(
         ImportModuleKind::Ole => ole_stub_return(name),
         ImportModuleKind::Coredll => 0,
     }
+}
+
+fn raw_import_arg(args: &[u32], index: usize) -> u32 {
+    args.get(index).copied().unwrap_or(0)
 }
 
 fn mfc_stub_return(name: &str) -> u32 {
@@ -312,11 +316,13 @@ fn common_controls_stub_return(name: &str) -> u32 {
 fn winsock_stub_return<M: CoredllGuestMemory>(
     trap: &ImportTrap,
     memory: &mut M,
-    args: [u32; 4],
+    args: &[u32],
 ) -> u32 {
     let name = trap.name.as_deref().unwrap_or("");
     match (trap.ordinal, normalize_symbol(name).as_str()) {
-        (Some(3), _) | (_, "wsastartup") => wsa_startup(memory, args[0], args[1]),
+        (Some(3), _) | (_, "wsastartup") => {
+            wsa_startup(memory, raw_import_arg(args, 0), raw_import_arg(args, 1))
+        }
         (Some(1), _) | (_, "wsacleanup") => 0,
         (_, "socket" | "accept") => u32::MAX,
         _ => 0,

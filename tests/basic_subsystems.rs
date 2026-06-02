@@ -14,33 +14,35 @@ use wince_emulation_v3::{
             CE42_MIPSII_SDK_ORDINALS, COREDLL_EXPORTS, ORD_CE42_MIPSII_FREE,
             ORD_CE42_MIPSII_MALLOC, ORD_CE42_MIPSII_MEMCPY, ORD_CE42_MIPSII_MEMSET,
             ORD_CE42_MIPSII_OPERATOR_NEW, ORD_CE42_MIPSII_WCSDUP, ORD_CE42_MIPSII_WCSRCHR,
-            ORD_CLIENT_TO_SCREEN, ORD_CLOSE_HANDLE, ORD_CREATE_FILE_W, ORD_CREATE_WINDOW_EX_W,
-            ORD_DESTROY_WINDOW, ORD_DISPATCH_MESSAGE_W, ORD_ENABLE_WINDOW, ORD_EVENT_MODIFY,
-            ORD_FIND_RESOURCE_W, ORD_FLUSH_FILE_BUFFERS, ORD_GET_CLASS_NAME_W, ORD_GET_CLIENT_RECT,
-            ORD_GET_FILE_SIZE, ORD_GET_FOCUS, ORD_GET_LAST_ERROR, ORD_GET_MESSAGE_W,
-            ORD_GET_MODULE_FILE_NAME_W, ORD_GET_PARENT, ORD_GET_PROCESS_HEAP, ORD_GET_TICK_COUNT,
+            ORD_CLIENT_TO_SCREEN, ORD_CLOSE_HANDLE, ORD_CREATE_FILE_W, ORD_CREATE_MUTEX_W,
+            ORD_CREATE_WINDOW_EX_W, ORD_DESTROY_WINDOW, ORD_DISPATCH_MESSAGE_W, ORD_ENABLE_WINDOW,
+            ORD_EVENT_MODIFY, ORD_FIND_CLOSE, ORD_FIND_FIRST_FILE_W, ORD_FIND_RESOURCE_W,
+            ORD_FIND_WINDOW_W, ORD_FLUSH_FILE_BUFFERS, ORD_GET_ACTIVE_WINDOW, ORD_GET_CLASS_INFO_W,
+            ORD_GET_CLASS_NAME_W, ORD_GET_CLIENT_RECT, ORD_GET_CURSOR_POS, ORD_GET_FILE_SIZE,
+            ORD_GET_FOCUS, ORD_GET_LAST_ERROR, ORD_GET_MESSAGE_W, ORD_GET_MODULE_FILE_NAME_W,
+            ORD_GET_PARENT, ORD_GET_PROCESS_HEAP, ORD_GET_SYSTEM_INFO, ORD_GET_TICK_COUNT,
             ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_TEXT_LENGTH_W,
-            ORD_GET_WINDOW_TEXT_W, ORD_HEAP_ALLOC, ORD_HEAP_CREATE, ORD_HEAP_DESTROY,
-            ORD_HEAP_FREE, ORD_HEAP_SIZE, ORD_INITIALIZE_CRITICAL_SECTION,
+            ORD_GET_WINDOW_TEXT_W, ORD_GLOBAL_MEMORY_STATUS, ORD_HEAP_ALLOC, ORD_HEAP_CREATE,
+            ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_SIZE, ORD_INITIALIZE_CRITICAL_SECTION,
             ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_IS_WINDOW, ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE,
             ORD_LEAVE_CRITICAL_SECTION, ORD_LL_DIV, ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W,
             ORD_LOCAL_ALLOC, ORD_LOCAL_FREE, ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE,
-            ORD_MAP_WINDOW_POINTS, ORD_MOVE_WINDOW, ORD_PEEK_MESSAGE_W, ORD_POST_MESSAGE_W,
-            ORD_POW, ORD_READ_FILE, ORD_REG_OPEN_KEY_EX_W, ORD_SCREEN_TO_CLIENT,
-            ORD_SET_FILE_POINTER, ORD_SET_FOCUS, ORD_SET_LAST_ERROR, ORD_SET_WINDOW_LONG_W,
-            ORD_SET_WINDOW_POS, ORD_SET_WINDOW_TEXT_W, ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE,
-            ORD_SLEEP, ORD_SQRT, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
-            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_USER_CALL_WINDOW_PROC, ORD_VIRTUAL_ALLOC,
-            ORD_VIRTUAL_FREE, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WAVE_OUT_CLOSE,
-            ORD_WAVE_OUT_GET_NUM_DEVS, ORD_WAVE_OUT_GET_PLAYBACK_RATE, ORD_WAVE_OUT_GET_POSITION,
-            ORD_WAVE_OUT_GET_VOLUME, ORD_WAVE_OUT_OPEN, ORD_WAVE_OUT_PAUSE,
-            ORD_WAVE_OUT_PREPARE_HEADER, ORD_WAVE_OUT_RESTART, ORD_WAVE_OUT_SET_PLAYBACK_RATE,
-            ORD_WAVE_OUT_SET_VOLUME, ORD_WAVE_OUT_UNPREPARE_HEADER, ORD_WAVE_OUT_WRITE,
-            ORD_WRITE_FILE,
+            ORD_MAP_WINDOW_POINTS, ORD_MESSAGE_BOX_W, ORD_MOVE_WINDOW, ORD_PEEK_MESSAGE_W,
+            ORD_POST_MESSAGE_W, ORD_POW, ORD_READ_FILE, ORD_REG_OPEN_KEY_EX_W,
+            ORD_REGISTER_CLASS_W, ORD_RELEASE_MUTEX, ORD_SCREEN_TO_CLIENT, ORD_SET_FILE_POINTER,
+            ORD_SET_FOCUS, ORD_SET_LAST_ERROR, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS,
+            ORD_SET_WINDOW_TEXT_W, ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_SLEEP, ORD_SQRT,
+            ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION,
+            ORD_USER_CALL_WINDOW_PROC, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE,
+            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WAVE_OUT_CLOSE, ORD_WAVE_OUT_GET_NUM_DEVS,
+            ORD_WAVE_OUT_GET_PLAYBACK_RATE, ORD_WAVE_OUT_GET_POSITION, ORD_WAVE_OUT_GET_VOLUME,
+            ORD_WAVE_OUT_OPEN, ORD_WAVE_OUT_PAUSE, ORD_WAVE_OUT_PREPARE_HEADER,
+            ORD_WAVE_OUT_RESTART, ORD_WAVE_OUT_SET_PLAYBACK_RATE, ORD_WAVE_OUT_SET_VOLUME,
+            ORD_WAVE_OUT_UNPREPARE_HEADER, ORD_WAVE_OUT_WRITE, ORD_WRITE_FILE,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
-        gwe::{GWL_USERDATA, WM_CREATE, WM_QUIT, WM_TIMER, WM_USER},
+        gwe::{GWL_USERDATA, HWND_BROADCAST, Point, WM_QUIT, WM_TIMER, WM_USER},
         kernel::{CeKernel, MessagePumpResult},
         memory::{HEAP_NO_SERIALIZE, HEAP_ZERO_MEMORY, LMEM_ZEROINIT, MEM_COMMIT, MEM_RELEASE},
         object::{EventObject, KernelObject},
@@ -221,7 +223,7 @@ fn boots_and_smokes_basic_ce_subsystems() -> Result<()> {
     assert_eq!(serial.guest_name, "COM7:");
 
     let hwnd = kernel.gwe.create_window(42, "SmokeWindow", "smoke");
-    assert_eq!(kernel.gwe.get_message(42).unwrap().msg, WM_CREATE);
+    assert!(kernel.gwe.get_message(42).is_none());
     let timer_id = kernel.timers.set_timer(Some(hwnd), Some(77), 0, WM_TIMER);
     assert_eq!(timer_id, 77);
     kernel.pump_timers_to_gwe(42);
@@ -862,7 +864,11 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
     let mut kernel = CeKernel::boot(config);
     let root = unique_test_root("raw_memory_file");
     fs::create_dir_all(&root).unwrap();
+    let sdmmc_root = root.join("sdmmc");
+    fs::create_dir_all(&sdmmc_root).unwrap();
+    fs::write(sdmmc_root.join("mapinfo.bin"), b"mounted").unwrap();
     kernel.set_file_root(&root);
+    kernel.mount_guest_root("\\SDMMC Disk", &sdmmc_root);
     let mut memory = TestGuestMemory::default();
     let thread_id = 11;
 
@@ -1290,6 +1296,74 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
     assert_eq!(memory.read_u32(count_ptr)?, 8);
     assert_eq!(memory.read_bytes(read_buffer, 8), b"raw-file");
 
+    let find_pattern_ptr = 0x1_5000;
+    let find_data_ptr = 0x1_6000;
+    memory.map_words(find_data_ptr, 11);
+    memory.map_halfwords(find_data_ptr + 44, 260);
+
+    memory.write_wide_z(find_pattern_ptr, "\\");
+    let root_find = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_FIND_FIRST_FILE_W,
+        [find_pattern_ptr, find_data_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("FindFirstFileW did not return a root find handle: {other:?}"),
+    };
+    assert_ne!(root_find, u32::MAX);
+    assert_eq!(memory.read_u32(find_data_ptr)?, 0x10);
+    assert_eq!(memory.read_wide_z(find_data_ptr + 44, 260), "SDMMC Disk");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_CLOSE,
+            [root_find],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    memory.write_wide_z(find_pattern_ptr, "\\SDMMC Disk\\*.bin");
+    let find = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_FIND_FIRST_FILE_W,
+        [find_pattern_ptr, find_data_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("FindFirstFileW did not return a find handle: {other:?}"),
+    };
+    assert_ne!(find, u32::MAX);
+    assert_eq!(memory.read_u32(find_data_ptr)?, 0x20);
+    assert_eq!(memory.read_u32(find_data_ptr + 32)?, 7);
+    assert_eq!(memory.read_wide_z(find_data_ptr + 44, 260), "mapinfo.bin");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_CLOSE,
+            [find],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
     Ok(())
 }
 
@@ -1510,8 +1584,73 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
     assert!(kernel.gwe.move_window(parent, 10, 20, 300, 200, true));
     let class_ptr = 0x1_0000;
     let title_ptr = 0x1_0040;
+    let wndclass_ptr = 0x1_0080;
+    let wndclass_out_ptr = 0x1_00c0;
+    let mutex_name_ptr = 0x1_0100;
     memory.write_wide_z(class_ptr, "CHILD");
     memory.write_wide_z(title_ptr, "child");
+    memory.write_wide_z(mutex_name_ptr, "gwe-smoke-mutex");
+    memory.map_bytes(wndclass_ptr, 40);
+    memory.map_bytes(wndclass_out_ptr, 40);
+    let mut wndclass = [0; 40];
+    wndclass[4..8].copy_from_slice(&0x0040_1234u32.to_le_bytes());
+    wndclass[36..40].copy_from_slice(&class_ptr.to_le_bytes());
+    memory.write_bytes(wndclass_ptr, &wndclass);
+    let class_atom = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_REGISTER_CLASS_W,
+        [wndclass_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(atom),
+            ..
+        } => atom,
+        other => panic!("RegisterClassW did not register raw class: {other:?}"),
+    };
+    assert!(class_atom >= 0xc000);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CLASS_INFO_W,
+            [0, class_atom, wndclass_out_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_bytes(wndclass_out_ptr, 40), wndclass);
+    let mutex = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_MUTEX_W,
+        [0, 1, mutex_name_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateMutexW did not create raw mutex: {other:?}"),
+    };
+    assert_ne!(mutex, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_RELEASE_MUTEX,
+            [mutex],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
     let child = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
@@ -1525,7 +1664,22 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
         } => hwnd,
         other => panic!("CreateWindowExW did not create raw hwnd: {other:?}"),
     };
-    assert_eq!(kernel.gwe.window(child).unwrap().class_name, "CHILD");
+    let child_window = kernel.gwe.window(child).unwrap();
+    assert_eq!(child_window.class_name, "child");
+    assert_eq!(child_window.wndproc, 0x0040_1234);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_WINDOW_W,
+            [class_atom, title_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } if hwnd == child
+    ));
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -1613,6 +1767,23 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
     assert_eq!(memory.read_i32(point_ptr)?, 7);
     assert_eq!(memory.read_i32(point_ptr + 4)?, 8);
 
+    kernel.gwe.set_cursor_pos(Point { x: 123, y: 456 });
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CURSOR_POS,
+            [point_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_i32(point_ptr)?, 123);
+    assert_eq!(memory.read_i32(point_ptr + 4)?, 456);
+
     memory.write_point(point_ptr, 0, 0);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -1632,6 +1803,62 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
 
     let msg_ptr = 0x3080;
     memory.map_words(msg_ptr, 7);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_POST_MESSAGE_W,
+            [HWND_BROADCAST, WM_USER + 77, 0xaa, 0xbb],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PEEK_MESSAGE_W,
+            [msg_ptr, parent, WM_USER + 77, WM_USER + 77, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(msg_ptr)?, parent);
+    assert_eq!(memory.read_u32(msg_ptr + 4)?, WM_USER + 77);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_POST_MESSAGE_W,
+            [0, WM_USER + 88, 0xcc, 0xdd],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PEEK_MESSAGE_W,
+            [msg_ptr, 0, WM_USER + 88, WM_USER + 88, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(msg_ptr)?, 0);
+    assert_eq!(memory.read_u32(msg_ptr + 4)?, WM_USER + 88);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -1749,7 +1976,7 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
             ..
         }
     ));
-    assert_eq!(memory.read_wide_z(class_buffer, 32), "CHILD");
+    assert_eq!(memory.read_wide_z(class_buffer, 32), "child");
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -1814,6 +2041,74 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
             value: CoredllValue::Handle(hwnd),
             ..
         } if hwnd == child
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_ACTIVE_WINDOW,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } if hwnd == child
+    ));
+    let memory_status_ptr = 0x3280;
+    let system_info_ptr = 0x32c0;
+    memory.map_words(memory_status_ptr, 8);
+    memory.map_words(system_info_ptr, 9);
+    memory.map_halfwords(system_info_ptr, 18);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GLOBAL_MEMORY_STATUS,
+            [memory_status_ptr],
+        ),
+        CoredllDispatch::Returned { .. }
+    ));
+    assert_eq!(memory.read_u32(memory_status_ptr)?, 32);
+    assert!(memory.read_u32(memory_status_ptr + 8)? > 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_SYSTEM_INFO,
+            [system_info_ptr],
+        ),
+        CoredllDispatch::Returned { .. }
+    ));
+    assert_eq!(memory.read_u32(system_info_ptr + 4)?, 4096);
+    assert_eq!(memory.read_u32(system_info_ptr + 24)?, 4000);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MESSAGE_BOX_W,
+            [0, title_ptr, title_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHOW_WINDOW,
+            [child, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
     ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -2103,10 +2398,7 @@ fn virtual_win32_api_smoke_covers_file_device_sync_gwe_and_audio() -> Result<()>
     assert!(kernel.release_mutex(mutex, 7));
 
     let hwnd = kernel.create_window_ex_w(7, "STATIC", "old", None, 100, 0x4000_0000, 0);
-    assert_eq!(
-        kernel.message_pump_step(7),
-        MessagePumpResult::Dispatched(0)
-    );
+    assert_eq!(kernel.message_pump_step(7), MessagePumpResult::Idle);
     assert!(kernel.gwe.set_window_text(hwnd, "new title"));
     assert_eq!(
         kernel.gwe.get_window_text(hwnd, 32).as_deref(),
@@ -2167,10 +2459,7 @@ fn remote_server_api_state_queues_input_serial_audio_and_status() -> Result<()> 
     kernel.remote.set_framebuffer_size(800, 480);
 
     let hwnd = kernel.create_window_ex_w(99, "REMOTE", "remote", None, 1, 0, 0);
-    assert_eq!(
-        kernel.message_pump_step(99),
-        MessagePumpResult::Dispatched(0)
-    );
+    assert_eq!(kernel.message_pump_step(99), MessagePumpResult::Idle);
 
     let touch = kernel.dispatch_remote_control_message(&serde_json::json!({
         "type": "touch",

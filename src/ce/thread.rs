@@ -1,10 +1,13 @@
 use std::collections::BTreeMap;
 
 pub const ERROR_SUCCESS: u32 = 0;
+pub const ERROR_FILE_NOT_FOUND: u32 = 2;
 pub const ERROR_INVALID_HANDLE: u32 = 6;
 pub const ERROR_NOT_ENOUGH_MEMORY: u32 = 8;
 pub const ERROR_NOT_SUPPORTED: u32 = 50;
 pub const ERROR_INVALID_PARAMETER: u32 = 87;
+pub const ERROR_INVALID_WINDOW_HANDLE: u32 = 1400;
+pub const ERROR_CLASS_DOES_NOT_EXIST: u32 = 1411;
 pub const ERROR_RESOURCE_NAME_NOT_FOUND: u32 = 1814;
 pub const TLS_MINIMUM_AVAILABLE: u32 = 64;
 

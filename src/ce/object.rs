@@ -10,6 +10,7 @@ pub enum KernelObject {
     Event(EventObject),
     Mutex(MutexObject),
     File(FileObject),
+    FindFile(FindFileObject),
     Device(DeviceSession),
     Window(u32),
     WaveOut(u32),
@@ -33,6 +34,12 @@ pub struct MutexObject {
 pub struct FileObject {
     pub guest_path: String,
     pub file_id: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct FindFileObject {
+    pub guest_pattern: String,
+    pub find_id: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -168,6 +175,7 @@ impl HandleTable {
                 WaitResult::Object0
             }
             KernelObject::File(_)
+            | KernelObject::FindFile(_)
             | KernelObject::Device(_)
             | KernelObject::Window(_)
             | KernelObject::WaveOut(_)
