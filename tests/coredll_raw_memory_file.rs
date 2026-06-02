@@ -242,6 +242,34 @@ fn coredll_raw_wcsncpy_accepts_pointer_backed_wide_source() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_wcsrchr_keeps_match_before_unmapped_tail() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let string = 0x1_0000;
+    memory.map_halfwords(string, 1);
+    memory.write_halfword(string, b'\\' as u16);
+
+    let slash = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_WCSRCHR,
+        [string, '\\' as u32],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("wcsrchr did not return a pointer: {other:?}"),
+    };
+    assert_eq!(slash, string);
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_registry_ordinals_create_query_enum_and_delete_values() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;

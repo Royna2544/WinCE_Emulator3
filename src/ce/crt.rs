@@ -13,7 +13,7 @@ pub(crate) fn wcsrchr_raw<M: CoredllGuestMemory>(memory: &M, string: u32, needle
     for index in 0..0x8000u32 {
         let addr = string.wrapping_add(index * 2);
         let Ok(unit) = memory.read_u16(addr) else {
-            return 0;
+            return last_match;
         };
         if unit == needle {
             last_match = addr;
