@@ -56,7 +56,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPWSTR cmd, int show) {
     wnd.SetTimer(1, 1, NULL);
     MSG msg;
     DWORD spins = 0;
-    while ((wnd.seen & 4) == 0 && spins++ < 100) {
+    while (wnd.m_hWnd && spins++ < 100) {
         while (PeekMessageW(&msg, 0, 0, 0, PM_REMOVE)) {
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
@@ -64,7 +64,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPWSTR cmd, int show) {
         Sleep(1);
     }
     if ((wnd.seen & 4) == 0) return FixtureFail(10207);
+    if (wnd.m_hWnd) return FixtureFail(10208);
 
-    if (wnd.m_hWnd) wnd.DestroyWindow();
     return FIXTURE_OK;
 }
