@@ -30,6 +30,8 @@ pub enum Error {
     MissingRegistryValue { key: String, value: String },
     #[error("CE device not found: {0}")]
     MissingDevice(String),
+    #[error("import DLL {dll} was not found; add a --dll-search-dir containing it")]
+    MissingImportDll { dll: String },
     #[error("emulator backend error: {0}")]
     Backend(String),
 }

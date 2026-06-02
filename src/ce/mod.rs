@@ -17,3 +17,5 @@ pub mod remote;
 pub mod resource;
 pub mod thread;
 pub mod timer;
+#[cfg(all(windows, feature = "win32-desktop"))]
+pub mod win32_desktop;

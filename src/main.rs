@@ -7,6 +7,7 @@ use wince_emulation_v3::{
     Result,
     ce::{
         audio::{HostAudioSink, WaveFormat},
+        desktop::{VirtualDesktop, VirtualInputEvent},
         framebuffer::{Framebuffer, VirtualFramebuffer},
         gwe::WM_TIMER,
         kernel::CeKernel,
@@ -25,8 +26,26 @@ struct Args {
     dll_search_dirs: Vec<PathBuf>,
     sdmmc_root: Option<PathBuf>,
     framebuffer_dump: Option<PathBuf>,
+    desktop: DesktopMode,
     cpu_instruction_limit: usize,
     run_cpu: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DesktopMode {
+    Virtual,
+    Host,
+}
+
+enum DesktopRuntime {
+    Virtual(VirtualDesktop),
+    #[cfg(all(windows, feature = "win32-desktop"))]
+    Host(
+        VirtualDesktop<
+            wince_emulation_v3::ce::win32_desktop::Win32Input,
+            wince_emulation_v3::ce::win32_desktop::Win32Presenter,
+        >,
+    ),
 }
 
 fn main() -> Result<()> {
@@ -43,10 +62,11 @@ fn main() -> Result<()> {
     if let Some(sdmmc_root) = args.sdmmc_root.as_ref() {
         kernel.mount_guest_root("\\SDMMC Disk", sdmmc_root);
     }
-    let mut framebuffer = VirtualFramebuffer::default_primary()?;
-    kernel
-        .remote
-        .set_framebuffer_size(framebuffer.width(), framebuffer.height());
+    let mut desktop = create_desktop(args.desktop)?;
+    kernel.remote.set_framebuffer_size(
+        desktop.framebuffer().width(),
+        desktop.framebuffer().height(),
+    );
 
     let mut cpu = UnicornMips::new()?;
     if args.image.is_none() {
@@ -113,12 +133,14 @@ fn main() -> Result<()> {
     println!("  memory regions: {}", cpu.memory().regions().count());
     println!(
         "  framebuffer: {}x{} {:?} stride={} bytes={}",
-        framebuffer.width(),
-        framebuffer.height(),
-        framebuffer.pixel_format(),
-        framebuffer.stride(),
-        framebuffer.pixels().len()
+        desktop.framebuffer().width(),
+        desktop.framebuffer().height(),
+        desktop.framebuffer().pixel_format(),
+        desktop.framebuffer().stride(),
+        desktop.framebuffer().pixels().len()
     );
+    println!("  desktop: {}", desktop.describe());
+    desktop.present()?;
 
     let pe_image = if let Some(image_path) = args.image.as_ref() {
         let image = PeImage::inspect(image_path)?;
@@ -165,29 +187,143 @@ fn main() -> Result<()> {
     }
 
     if args.run_cpu {
+        enqueue_desktop_input(&mut desktop, &mut kernel)?;
         if let Err(err) = cpu.run_until_import_trap_with_framebuffer_limit(
             &mut kernel,
-            &mut framebuffer,
+            desktop.framebuffer_mut(),
             args.cpu_instruction_limit,
         ) {
             if let Some(snapshot) = cpu.last_debug_snapshot() {
                 eprintln!("  Unicorn debug: {snapshot}");
             }
             if let Some(path) = args.framebuffer_dump.as_ref() {
-                framebuffer.write_ppm(path)?;
+                desktop.framebuffer().write_ppm(path)?;
                 eprintln!("  framebuffer dump: {}", path.display());
             }
             return Err(err);
         }
+        enqueue_desktop_input(&mut desktop, &mut kernel)?;
+        desktop.present()?;
         if let Some(snapshot) = cpu.last_debug_snapshot() {
             println!("  Unicorn stopped: {snapshot}");
         }
     }
     if let Some(path) = args.framebuffer_dump.as_ref() {
-        framebuffer.write_ppm(path)?;
+        desktop.framebuffer().write_ppm(path)?;
         println!("  framebuffer dump: {}", path.display());
     }
 
+    Ok(())
+}
+
+impl DesktopRuntime {
+    fn framebuffer(&self) -> &VirtualFramebuffer {
+        match self {
+            Self::Virtual(desktop) => desktop.framebuffer(),
+            #[cfg(all(windows, feature = "win32-desktop"))]
+            Self::Host(desktop) => desktop.framebuffer(),
+        }
+    }
+
+    fn framebuffer_mut(&mut self) -> &mut VirtualFramebuffer {
+        match self {
+            Self::Virtual(desktop) => desktop.framebuffer_mut(),
+            #[cfg(all(windows, feature = "win32-desktop"))]
+            Self::Host(desktop) => desktop.framebuffer_mut(),
+        }
+    }
+
+    fn present(&mut self) -> Result<()> {
+        match self {
+            Self::Virtual(desktop) => {
+                let _ = desktop.present()?;
+            }
+            #[cfg(all(windows, feature = "win32-desktop"))]
+            Self::Host(desktop) => {
+                let _ = desktop.present()?;
+            }
+        }
+        Ok(())
+    }
+
+    fn poll_input(&mut self) -> Result<Vec<VirtualInputEvent>> {
+        match self {
+            Self::Virtual(desktop) => desktop.poll_input(),
+            #[cfg(all(windows, feature = "win32-desktop"))]
+            Self::Host(desktop) => desktop.poll_input(),
+        }
+    }
+
+    fn describe(&self) -> &'static str {
+        match self {
+            Self::Virtual(_) => "virtual/null presenter",
+            #[cfg(all(windows, feature = "win32-desktop"))]
+            Self::Host(_) => "win32 host presenter",
+        }
+    }
+}
+
+fn create_desktop(mode: DesktopMode) -> Result<DesktopRuntime> {
+    match mode {
+        DesktopMode::Virtual => Ok(DesktopRuntime::Virtual(VirtualDesktop::default_primary()?)),
+        DesktopMode::Host => create_host_desktop(),
+    }
+}
+
+#[cfg(all(windows, feature = "win32-desktop"))]
+fn create_host_desktop() -> Result<DesktopRuntime> {
+    let framebuffer = VirtualFramebuffer::default_primary()?;
+    let presenter = wince_emulation_v3::ce::win32_desktop::Win32Presenter::new(
+        framebuffer.width(),
+        framebuffer.height(),
+        "WinCE virtual desktop",
+    )?;
+    Ok(DesktopRuntime::Host(VirtualDesktop::with_parts(
+        framebuffer,
+        wince_emulation_v3::ce::win32_desktop::Win32Input::new(),
+        presenter,
+    )))
+}
+
+#[cfg(not(all(windows, feature = "win32-desktop")))]
+fn create_host_desktop() -> Result<DesktopRuntime> {
+    Err(wince_emulation_v3::Error::InvalidArgument(
+        "--desktop host requires Windows and the `win32-desktop` feature".to_owned(),
+    ))
+}
+
+fn enqueue_desktop_input(desktop: &mut DesktopRuntime, kernel: &mut CeKernel) -> Result<()> {
+    for event in desktop.poll_input()? {
+        match event {
+            VirtualInputEvent::Key {
+                virtual_key,
+                pressed,
+            } => {
+                let phase = if pressed { "down" } else { "up" };
+                kernel
+                    .remote
+                    .enqueue_key(phase, virtual_key)
+                    .map_err(|err| {
+                        wince_emulation_v3::Error::Backend(format!("host key input: {err}"))
+                    })?;
+            }
+            VirtualInputEvent::TouchDown { x, y } => {
+                kernel.remote.enqueue_touch("down", x, y).map_err(|err| {
+                    wince_emulation_v3::Error::Backend(format!("host touch down: {err}"))
+                })?;
+            }
+            VirtualInputEvent::TouchMove { x, y } => {
+                kernel.remote.enqueue_touch("move", x, y).map_err(|err| {
+                    wince_emulation_v3::Error::Backend(format!("host touch move: {err}"))
+                })?;
+            }
+            VirtualInputEvent::TouchUp { x, y } => {
+                kernel.remote.enqueue_touch("up", x, y).map_err(|err| {
+                    wince_emulation_v3::Error::Backend(format!("host touch up: {err}"))
+                })?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -230,6 +366,7 @@ impl Args {
         let mut dll_search_dirs = Vec::new();
         let mut sdmmc_root = None;
         let mut framebuffer_dump = None;
+        let mut desktop = DesktopMode::Virtual;
         let mut cpu_instruction_limit = 0;
         let mut run_cpu = false;
 
@@ -253,6 +390,9 @@ impl Args {
                 }
                 "--framebuffer-dump" => {
                     framebuffer_dump = Some(next_path(&mut args, "--framebuffer-dump")?);
+                }
+                "--desktop" => {
+                    desktop = next_desktop_mode(&mut args, "--desktop")?;
                 }
                 "--cpu-instruction-limit" => {
                     cpu_instruction_limit = next_usize(&mut args, "--cpu-instruction-limit")?;
@@ -279,6 +419,7 @@ impl Args {
             dll_search_dirs,
             sdmmc_root,
             framebuffer_dump,
+            desktop,
             cpu_instruction_limit,
             run_cpu,
         })
@@ -300,9 +441,22 @@ fn next_usize(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<usi
         .map_err(|err| wince_emulation_v3::Error::InvalidArgument(format!("{flag}: {err}")))
 }
 
+fn next_desktop_mode(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<DesktopMode> {
+    let value = args.next().ok_or_else(|| {
+        wince_emulation_v3::Error::InvalidArgument(format!("{flag} needs a value"))
+    })?;
+    match value.as_str() {
+        "virtual" | "null" | "headless" => Ok(DesktopMode::Virtual),
+        "host" | "win32" => Ok(DesktopMode::Host),
+        other => Err(wince_emulation_v3::Error::InvalidArgument(format!(
+            "{flag}: expected virtual or host, got {other}"
+        ))),
+    }
+}
+
 fn print_help() {
     println!(
-        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--image INavi.exe] [--dll-search-dir DIR]... [--sdmmc-root DIR] [--framebuffer-dump OUT.ppm] [--cpu-instruction-limit N] [--run-cpu]"
+        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--image INavi.exe] [--dll-search-dir DIR]... [--sdmmc-root DIR] [--desktop virtual|host] [--framebuffer-dump OUT.ppm] [--cpu-instruction-limit N] [--run-cpu]"
     );
 }
 
@@ -312,16 +466,33 @@ fn load_import_dlls(image: &PeImage, search_dirs: &[PathBuf]) -> Result<Vec<PeIm
 
     for descriptor in &image.imports {
         let normalized = normalize_module_name(&descriptor.module_name);
-        if normalized == "coredll" || !seen.insert(normalized) {
+        if emulator_provided_import_module(&normalized) || !seen.insert(normalized) {
             continue;
         }
-        let Some(path) = resolve_dll_path(&descriptor.module_name, search_dirs) else {
-            continue;
-        };
+        let path = resolve_dll_path(&descriptor.module_name, search_dirs).ok_or_else(|| {
+            wince_emulation_v3::Error::MissingImportDll {
+                dll: descriptor.module_name.clone(),
+            }
+        })?;
         loaded.push(PeImage::inspect(path)?);
     }
 
     Ok(loaded)
+}
+
+fn emulator_provided_import_module(normalized_module_name: &str) -> bool {
+    matches!(
+        normalized_module_name,
+        "coredll"
+            | "winsock"
+            | "ws2"
+            | "ws2_32"
+            | "commctrl"
+            | "commctrlce"
+            | "ole32"
+            | "oleaut32"
+            | "olece"
+    )
 }
 
 fn resolve_dll_path(module_name: &str, search_dirs: &[PathBuf]) -> Option<PathBuf> {
@@ -408,5 +579,32 @@ mod tests {
         );
 
         assert_eq!(path, r"D:\Other\INavi.exe");
+    }
+
+    #[test]
+    fn resolves_dll_path_with_case_variants_and_optional_extension() {
+        let root = std::env::temp_dir().join(format!("wince-dll-resolve-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let dll = root.join("mfcce400.dll");
+        std::fs::write(&dll, []).unwrap();
+
+        let mixed_case = resolve_dll_path("MFCcE400.DLL", std::slice::from_ref(&root)).unwrap();
+        assert!(mixed_case.is_file());
+        assert_eq!(
+            mixed_case
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_ascii_lowercase(),
+            "mfcce400.dll"
+        );
+        assert_eq!(
+            resolve_dll_path("mfcce400", std::slice::from_ref(&root)).unwrap(),
+            dll
+        );
+        assert!(resolve_dll_path("missing.dll", &[root.clone()]).is_none());
+
+        let _ = std::fs::remove_file(dll);
+        let _ = std::fs::remove_dir(root);
     }
 }

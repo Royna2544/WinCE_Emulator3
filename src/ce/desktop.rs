@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 use crate::{
     Error, Result,
-    ce::framebuffer::{Framebuffer, FramebufferInfo, FramebufferRect, FramebufferSnapshot},
+    ce::framebuffer::{
+        Framebuffer, FramebufferInfo, FramebufferRect, FramebufferSnapshot, VirtualFramebuffer,
+    },
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,6 +15,47 @@ pub struct Presentation {
 
 pub trait Presenter {
     fn present(&mut self, framebuffer: &dyn Framebuffer) -> Result<Presentation>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VirtualInputEvent {
+    Key { virtual_key: u32, pressed: bool },
+    TouchDown { x: i32, y: i32 },
+    TouchMove { x: i32, y: i32 },
+    TouchUp { x: i32, y: i32 },
+}
+
+pub trait Input {
+    fn poll_events(&mut self) -> Result<Vec<VirtualInputEvent>>;
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VirtualInput {
+    events: Vec<VirtualInputEvent>,
+}
+
+impl VirtualInput {
+    pub fn push_event(&mut self, event: VirtualInputEvent) {
+        self.events.push(event);
+    }
+
+    pub fn push_touch_down(&mut self, x: i32, y: i32) {
+        self.push_event(VirtualInputEvent::TouchDown { x, y });
+    }
+
+    pub fn push_touch_move(&mut self, x: i32, y: i32) {
+        self.push_event(VirtualInputEvent::TouchMove { x, y });
+    }
+
+    pub fn push_touch_up(&mut self, x: i32, y: i32) {
+        self.push_event(VirtualInputEvent::TouchUp { x, y });
+    }
+}
+
+impl Input for VirtualInput {
+    fn poll_events(&mut self) -> Result<Vec<VirtualInputEvent>> {
+        Ok(std::mem::take(&mut self.events))
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -115,25 +158,90 @@ pub trait Desktop {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VirtualDesktop {
-    surface_info: FramebufferInfo,
+pub struct VirtualDesktop<I = VirtualInput, P = VirtualPresenter> {
+    framebuffer: VirtualFramebuffer,
+    input: I,
+    presenter: P,
     next_id: u32,
     windows: BTreeMap<DesktopWindowId, DesktopWindow>,
 }
 
 impl VirtualDesktop {
     pub fn new(surface_info: FramebufferInfo) -> Self {
+        let framebuffer = VirtualFramebuffer::with_stride(
+            surface_info.width,
+            surface_info.height,
+            surface_info.stride,
+            surface_info.format,
+        )
+        .expect("desktop surface info must describe a valid framebuffer");
+        Self::with_parts(
+            framebuffer,
+            VirtualInput::default(),
+            VirtualPresenter::default(),
+        )
+    }
+
+    pub fn default_primary() -> Result<Self> {
+        Ok(Self::with_parts(
+            VirtualFramebuffer::default_primary()?,
+            VirtualInput::default(),
+            VirtualPresenter::default(),
+        ))
+    }
+}
+
+impl<I, P> VirtualDesktop<I, P> {
+    pub fn with_parts(framebuffer: VirtualFramebuffer, input: I, presenter: P) -> Self {
         Self {
-            surface_info,
+            framebuffer,
+            input,
+            presenter,
             next_id: 1,
             windows: BTreeMap::new(),
         }
     }
+
+    pub fn framebuffer(&self) -> &VirtualFramebuffer {
+        &self.framebuffer
+    }
+
+    pub fn framebuffer_mut(&mut self) -> &mut VirtualFramebuffer {
+        &mut self.framebuffer
+    }
+
+    pub fn input(&self) -> &I {
+        &self.input
+    }
+
+    pub fn input_mut(&mut self) -> &mut I {
+        &mut self.input
+    }
+
+    pub fn presenter(&self) -> &P {
+        &self.presenter
+    }
+
+    pub fn presenter_mut(&mut self) -> &mut P {
+        &mut self.presenter
+    }
 }
 
-impl Desktop for VirtualDesktop {
+impl<I: Input, P> VirtualDesktop<I, P> {
+    pub fn poll_input(&mut self) -> Result<Vec<VirtualInputEvent>> {
+        self.input.poll_events()
+    }
+}
+
+impl<I, P: Presenter> VirtualDesktop<I, P> {
+    pub fn present(&mut self) -> Result<Presentation> {
+        self.presenter.present(&self.framebuffer)
+    }
+}
+
+impl<I, P> Desktop for VirtualDesktop<I, P> {
     fn surface_info(&self) -> FramebufferInfo {
-        self.surface_info
+        self.framebuffer.info()
     }
 
     fn create_window(&mut self, spec: DesktopWindowSpec) -> Result<DesktopWindowId> {
