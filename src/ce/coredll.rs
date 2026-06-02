@@ -1422,9 +1422,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .destroy_window(raw_arg(args, 0), kernel.timers.tick_count()),
         )),
         ORD_SHOW_WINDOW => Some(CoredllValue::Bool(
-            kernel
-                .gwe
-                .show_window(raw_arg(args, 0), raw_arg(args, 1) != 0),
+            kernel.show_window(raw_arg(args, 0), raw_arg(args, 1) != 0),
         )),
         ORD_UPDATE_WINDOW => Some(CoredllValue::Bool(
             kernel.gwe.update_window(raw_arg(args, 0)),
@@ -1525,7 +1523,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .get_window_long(raw_arg(args, 0), raw_i32_arg(args, 1))
                 .unwrap_or(0),
         )),
-        ORD_SET_WINDOW_POS => Some(CoredllValue::Bool(kernel.gwe.set_window_pos(
+        ORD_SET_WINDOW_POS => Some(CoredllValue::Bool(kernel.set_window_pos(
             raw_arg(args, 0),
             raw_i32_arg(args, 2),
             raw_i32_arg(args, 3),
@@ -1533,7 +1531,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_i32_arg(args, 5),
             raw_arg(args, 6),
         ))),
-        ORD_MOVE_WINDOW => Some(CoredllValue::Bool(kernel.gwe.move_window(
+        ORD_MOVE_WINDOW => Some(CoredllValue::Bool(kernel.move_window(
             raw_arg(args, 0),
             raw_i32_arg(args, 1),
             raw_i32_arg(args, 2),

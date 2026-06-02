@@ -7,7 +7,10 @@ use crate::{
         file::{
             FileIoResult, FindData, GENERIC_READ, GENERIC_WRITE, HostFileSystem, OPEN_EXISTING,
         },
-        gwe::{Gwe, HWND_BROADCAST, Message},
+        gwe::{
+            Gwe, HWND_BROADCAST, Message, Rect, WM_MOVE, WM_SHOWWINDOW, WM_SIZE,
+            WM_WINDOWPOSCHANGED,
+        },
         memory::MemorySystem,
         object::{FileObject, FindFileObject, HandleTable, KernelObject, WaitResult},
         registry::Registry,
@@ -305,6 +308,56 @@ impl CeKernel {
         hwnd
     }
 
+    pub fn show_window(&mut self, hwnd: u32, visible: bool) -> bool {
+        if !self.gwe.is_window(hwnd) {
+            return false;
+        }
+        let was_visible = self.gwe.is_window_visible(hwnd);
+        let previous = self.gwe.show_window(hwnd, visible);
+        if was_visible != visible {
+            self.post_window_message(hwnd, WM_SHOWWINDOW, u32::from(visible), 0);
+        }
+        previous
+    }
+
+    pub fn set_window_pos(
+        &mut self,
+        hwnd: u32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        flags: u32,
+    ) -> bool {
+        let before = self.gwe.get_window_rect(hwnd);
+        let was_visible = self.gwe.is_window_visible(hwnd);
+        let moved = self.gwe.set_window_pos(hwnd, x, y, width, height, flags);
+        if moved {
+            let after = self.gwe.get_window_rect(hwnd);
+            let is_visible = self.gwe.is_window_visible(hwnd);
+            self.post_window_visibility_message(hwnd, was_visible, is_visible);
+            self.post_window_rect_messages(hwnd, before, after);
+        }
+        moved
+    }
+
+    pub fn move_window(
+        &mut self,
+        hwnd: u32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        repaint: bool,
+    ) -> bool {
+        let before = self.gwe.get_window_rect(hwnd);
+        let moved = self.gwe.move_window(hwnd, x, y, width, height, repaint);
+        if moved {
+            self.post_window_rect_messages(hwnd, before, self.gwe.get_window_rect(hwnd));
+        }
+        moved
+    }
+
     pub fn get_message_w(&mut self, thread_id: u32) -> Option<Message> {
         self.pump_timers_to_gwe(thread_id);
         self.gwe.get_message(thread_id)
@@ -445,4 +498,43 @@ impl CeKernel {
     pub fn wave_out_write(&mut self, id: u32, buffer: WaveBuffer) -> MmResult {
         self.audio.wave_out_write(id, buffer)
     }
+
+    fn post_window_visibility_message(&mut self, hwnd: u32, before: bool, after: bool) {
+        if before != after {
+            self.post_window_message(hwnd, WM_SHOWWINDOW, u32::from(after), 0);
+        }
+    }
+
+    fn post_window_rect_messages(&mut self, hwnd: u32, before: Option<Rect>, after: Option<Rect>) {
+        let (Some(before), Some(after)) = (before, after) else {
+            return;
+        };
+        if before == after {
+            return;
+        }
+        self.post_window_message(hwnd, WM_WINDOWPOSCHANGED, 0, 0);
+        if before.left != after.left || before.top != after.top {
+            self.post_window_message(hwnd, WM_MOVE, 0, make_lparam_i16(after.left, after.top));
+        }
+        if before.width() != after.width() || before.height() != after.height() {
+            self.post_window_message(
+                hwnd,
+                WM_SIZE,
+                0,
+                make_lparam_i16(after.width(), after.height()),
+            );
+        }
+    }
+
+    fn post_window_message(&mut self, hwnd: u32, msg: u32, wparam: u32, lparam: u32) {
+        let Some(window) = self.gwe.window(hwnd) else {
+            return;
+        };
+        let message = Message::new(hwnd, msg, wparam, lparam, self.timers.tick_count());
+        self.gwe.post_message(window.thread_id, message);
+    }
+}
+
+fn make_lparam_i16(low: i32, high: i32) -> u32 {
+    ((high as u32) & 0xffff) << 16 | ((low as u32) & 0xffff)
 }

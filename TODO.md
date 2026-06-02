@@ -21,11 +21,12 @@
   window-procedure targets. The latest bounded snapshot still reaches SDK MFC
   default/idle handling and then an empty-queue `GetMessageW` diagnostic.
   Raw `GetWindow` sibling/child traversal is now connected for the observed
-  MFC `GetWindow @251` calls, and a bounded rerun shows the main window's
-  `GW_CHILD` query legitimately returning `0`; next work is to identify the
-  next CE/MFC-sourced queue, timer, paint, posted-message, window-child
-  creation, or GDI behavior that should advance the path toward real
-  framebuffer drawing.
+  MFC `GetWindow @251` calls, virtual show/move/size lifecycle messages are
+  queued for raw `ShowWindow`, `SetWindowPos`, and `MoveWindow`, and a bounded
+  rerun shows the main window's `GW_CHILD` query legitimately returning `0`;
+  next work is to identify the next CE/MFC-sourced queue, timer, paint,
+  posted-message, window-child creation, or GDI behavior that should advance
+  the path toward real framebuffer drawing.
 - Continue connecting SDK CE 4.2 Mipsii COREDLL CRT ordinals from `coredll.lib`
   as the launch trace demands.
 - Implement CRT `_msize`/`realloc`/operator delete ordinals from SDK evidence so

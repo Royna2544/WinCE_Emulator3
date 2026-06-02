@@ -127,6 +127,11 @@ anchors, not app-specific shortcuts.
     `style`, `lpszName`, `lpszClass`, and `dwExStyle`, and define
     `WM_CREATE` as `0x0001`. Unicorn raw `CreateWindowExW` uses that layout
     when delivering the create-time guest WNDPROC callout.
+  - The CE SDK `winuser.h` message constants define `WM_MOVE`, `WM_SIZE`,
+    `WM_SHOWWINDOW`, and `WM_WINDOWPOSCHANGED`. The virtual GWE kernel boundary
+    now queues those lifecycle messages from raw show/move/resize calls so MFC
+    frame/layout code can observe the same window-state transitions as the
+    launch path advances.
 
 - GWE paint/update surface:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\gweapiset1.hpp`,

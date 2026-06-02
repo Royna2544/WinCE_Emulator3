@@ -29,16 +29,22 @@
     added, a 1,000,000-instruction bounded launch still stopped at the same
     empty `GetMessageW @861` diagnostic; the recent import ring shows
     `GetWindow(hwnd=0x00020000, relation=GW_CHILD)` returning `0`, so the
-    observed MFC child traversal is no longer just a stubbed ordinal. The
-    earlier `pc=0`/reserved-instruction and decoded `TerminateProcess`
-    startup-cleanup states are no longer the current stop.
+    observed MFC child traversal is no longer just a stubbed ordinal. Raw
+    `ShowWindow`, `SetWindowPos`, and `MoveWindow` now queue CE-style
+    `WM_SHOWWINDOW`, `WM_WINDOWPOSCHANGED`, `WM_MOVE`, and `WM_SIZE` messages,
+    but a corrected bounded run from
+    `D:\INAVI_Emulator\INAVI\INavi\iNavi.exe` still reaches the same
+    `GetMessageW @861` `blocked_get_message` frontier. The earlier
+    `pc=0`/reserved-instruction and decoded `TerminateProcess` startup-cleanup
+    states are no longer the current stop.
   - Status: active; `TlsCall` now returns real CE-style slots,
     `CallWindowProcW` now enters guest window-procedure targets, and
     `CreateWindowExW` now delivers the first create-time message. Raw
-    `GetWindow` ordinal 251 now handles CE SDK child/sibling/owner traversal.
+    `GetWindow` ordinal 251 now handles CE SDK child/sibling/owner traversal,
+    and virtual HWND lifecycle queueing is connected for show/move/size changes.
     The latest bounded launch confirms the current `GW_CHILD` query returns no
-    child HWNDs; next work is to identify which CE/MFC-sourced queue, timer,
-    paint, posted-message, window-child creation, or GDI behavior should
+    child HWNDs; next work is to identify which remaining CE/MFC-sourced queue,
+    timer, paint, posted-message, window-child creation, or GDI behavior should
     advance the guest path toward real GDI/DC/surface drawing and blit imports.
 
 - Most COREDLL ordinals are still subsystem stubs.
