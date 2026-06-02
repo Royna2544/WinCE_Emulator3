@@ -306,6 +306,8 @@ pub struct UnicornInaviControllerTrace {
     pub paint_render_target: Option<u32>,
     pub render_surface: Option<u32>,
     pub render_enabled: Option<u32>,
+    pub render_size_target: Option<u32>,
+    pub render_resize_target: Option<u32>,
     pub render_flush_obj: Option<u32>,
     pub render_flush_target: Option<u32>,
     pub render_poll_result: Option<u32>,
@@ -3460,6 +3462,12 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 if let Some(render_enabled) = trace.render_enabled {
                     write!(f, "/render_enabled=0x{render_enabled:08x}")?;
                 }
+                if let Some(render_size_target) = trace.render_size_target {
+                    write!(f, "/render_size_target=0x{render_size_target:08x}")?;
+                }
+                if let Some(render_resize_target) = trace.render_resize_target {
+                    write!(f, "/render_resize_target=0x{render_resize_target:08x}")?;
+                }
                 if let Some(render_flush_obj) = trace.render_flush_obj {
                     write!(f, "/render_flush_obj=0x{render_flush_obj:08x}")?;
                 }
@@ -4995,6 +5003,11 @@ fn record_inavi_controller_trace<D>(
         .and_then(|this_ptr| this_ptr.checked_add(0x8d68))
         .and_then(|addr| read_unicorn_u8(uc, addr))
         .map(u32::from);
+    let render_vtable = render_this.and_then(|this_ptr| read_unicorn_u32(uc, this_ptr));
+    let render_size_target =
+        render_vtable.and_then(|vtable| read_unicorn_u32(uc, vtable.wrapping_add(0xf0)));
+    let render_resize_target =
+        render_vtable.and_then(|vtable| read_unicorn_u32(uc, vtable.wrapping_add(0xf4)));
     let render_flush_obj = render_this
         .and_then(|this_ptr| this_ptr.checked_add(0x91a8))
         .and_then(|addr| read_unicorn_u32(uc, addr));
@@ -5003,15 +5016,22 @@ fn record_inavi_controller_trace<D>(
         .and_then(|vtable| read_unicorn_u32(uc, vtable.wrapping_add(0x1c)));
     let render_poll_result =
         (label == "render_after_loop").then_some(read_mips_reg(uc, RegisterMIPS::V0));
-    let render_dim_ptr = matches!(label, "render_dim_width_check" | "render_dim_height_check")
-        .then_some(read_mips_reg(uc, RegisterMIPS::V0));
+    let render_dim_ptr = match label {
+        "render_dim_width_check" | "render_dim_height_check" => {
+            Some(read_mips_reg(uc, RegisterMIPS::V0))
+        }
+        "render_size_return" => Some(read_mips_reg(uc, RegisterMIPS::A0)),
+        _ => None,
+    };
+    let render_dim_offset = if label == "render_size_return" { 8 } else { 0 };
     let render_dim_w = render_dim_ptr
-        .and_then(|ptr| read_unicorn_u32(uc, ptr))
+        .and_then(|ptr| ptr.checked_add(render_dim_offset))
+        .and_then(|addr| read_unicorn_u32(uc, addr))
         .or_else(|| {
             (label == "render_dim_width_check").then_some(read_mips_reg(uc, RegisterMIPS::T7))
         });
     let render_dim_h = render_dim_ptr
-        .and_then(|ptr| ptr.checked_add(4))
+        .and_then(|ptr| ptr.checked_add(render_dim_offset.wrapping_add(4)))
         .and_then(|addr| read_unicorn_u32(uc, addr))
         .or_else(|| {
             (label == "render_dim_height_check").then_some(read_mips_reg(uc, RegisterMIPS::T6))
@@ -5111,6 +5131,8 @@ fn record_inavi_controller_trace<D>(
         paint_render_target,
         render_surface,
         render_enabled,
+        render_size_target,
+        render_resize_target,
         render_flush_obj,
         render_flush_target,
         render_poll_result,
