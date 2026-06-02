@@ -5,11 +5,11 @@ use wince_emulation_v3::{
         coredll_ordinals::{
             ORD_CLOSE_HANDLE, ORD_CREATE_EVENT_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD,
             ORD_EVENT_MODIFY, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD,
-            ORD_GET_LAST_ERROR, ORD_GET_PROCESS_ID, ORD_GET_PROCESS_VERSION, ORD_GET_THREAD_ID,
-            ORD_GET_THREAD_PRIORITY, ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT,
-            ORD_GET_VERSION_EX_W, ORD_INITIALIZE_CRITICAL_SECTION,
-            ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
-            ORD_INTERLOCKED_INCREMENT, ORD_LEAVE_CRITICAL_SECTION,
+            ORD_GET_LAST_ERROR, ORD_GET_PROCESS_ID, ORD_GET_PROCESS_VERSION,
+            ORD_GET_STORE_INFORMATION, ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY,
+            ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT, ORD_GET_VERSION_EX_W,
+            ORD_INITIALIZE_CRITICAL_SECTION, ORD_INTERLOCKED_COMPARE_EXCHANGE,
+            ORD_INTERLOCKED_EXCHANGE_ADD, ORD_INTERLOCKED_INCREMENT, ORD_LEAVE_CRITICAL_SECTION,
             ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_QUERY_PERFORMANCE_COUNTER,
             ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD,
             ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY, ORD_SLEEP, ORD_SUSPEND_THREAD,
@@ -326,6 +326,43 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     assert_eq!(memory.read_u32(version_info + 8)?, 20);
     assert_eq!(memory.read_u32(version_info + 16)?, 3);
     assert_eq!(memory.read_wide_z(version_info + 20, 128), "");
+
+    let store_info = 0x5100;
+    memory.map_words(store_info, 2);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_STORE_INFORMATION,
+            [store_info],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let store_size = memory.read_u32(store_info)?;
+    let free_size = memory.read_u32(store_info + 4)?;
+    assert!(store_size > 0);
+    assert!(free_size <= store_size);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_STORE_INFORMATION,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
 
     let thread_id_ptr = 0x5000;
     memory.map_words(thread_id_ptr, 1);

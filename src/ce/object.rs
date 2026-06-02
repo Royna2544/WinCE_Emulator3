@@ -165,10 +165,26 @@ impl HandleTable {
     }
 
     pub fn create_mutex(&mut self, name: Option<String>, initial_owner: Option<u32>) -> u32 {
-        self.insert(KernelObject::Mutex(MutexObject {
+        self.create_mutex_with_status(name, initial_owner).0
+    }
+
+    pub fn create_mutex_with_status(
+        &mut self,
+        name: Option<String>,
+        initial_owner: Option<u32>,
+    ) -> (u32, bool) {
+        if let Some(name) = name.as_deref() {
+            if let Some((handle, _)) = self.objects.iter().find(|(_, object)| {
+                matches!(object, KernelObject::Mutex(mutex) if mutex.name.as_deref() == Some(name))
+            }) {
+                return (*handle, true);
+            }
+        }
+        let handle = self.insert(KernelObject::Mutex(MutexObject {
             name,
             owner_thread: initial_owner,
-        }))
+        }));
+        (handle, false)
     }
 
     pub fn create_semaphore(

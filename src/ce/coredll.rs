@@ -19,9 +19,9 @@ use crate::{
         registry::{HKey, RegOpenResult, RegQueryValueResult},
         resource::{AcceleratorEntry, ResourceId, stock_object_handle},
         thread::{
-            ERROR_CLASS_DOES_NOT_EXIST, ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE,
-            ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_ENOUGH_MEMORY,
-            ERROR_NOT_SUPPORTED, ERROR_RESOURCE_NAME_NOT_FOUND,
+            ERROR_ALREADY_EXISTS, ERROR_CLASS_DOES_NOT_EXIST, ERROR_FILE_NOT_FOUND,
+            ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE,
+            ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_SUPPORTED, ERROR_RESOURCE_NAME_NOT_FOUND,
         },
     },
     error::{Error, Result},
@@ -1149,6 +1149,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             write_global_memory_status(kernel, memory, thread_id, raw_arg(args, 0));
             Some(CoredllValue::U32(0))
         }
+        ORD_GET_STORE_INFORMATION => Some(CoredllValue::Bool(write_store_information(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_GET_SYSTEM_INFO => {
             write_system_info(kernel, memory, thread_id, raw_arg(args, 0));
             Some(CoredllValue::U32(0))
@@ -2603,6 +2609,35 @@ fn write_global_memory_status<M: CoredllGuestMemory>(
         ) {
             return false;
         }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn write_store_information<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    info_ptr: u32,
+) -> bool {
+    if info_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let store_size = 64 * 1024 * 1024;
+    let free_size = 48 * 1024 * 1024;
+    if !write_guest_u32(kernel, memory, thread_id, info_ptr, store_size)
+        || !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            info_ptr.wrapping_add(4),
+            free_size,
+        )
+    {
+        return false;
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
@@ -5011,8 +5046,10 @@ fn create_mutex_w_raw<M: CoredllGuestMemory>(
         Some(name)
     };
     let owner = (raw_arg(args, 1) != 0).then_some(thread_id);
-    let handle = kernel.create_mutex_w(name, owner);
-    kernel.threads.set_last_error(thread_id, 0);
+    let (handle, existed) = kernel.create_mutex_w_with_status(name, owner);
+    kernel
+        .threads
+        .set_last_error(thread_id, if existed { ERROR_ALREADY_EXISTS } else { 0 });
     handle
 }
 
@@ -9101,6 +9138,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "SetFilePointer",
     "GetFileSize",
     "FlushFileBuffers",
+    "GetStoreInformation",
     "DeviceIoControl",
     "ClearCommBreak",
     "ClearCommError",

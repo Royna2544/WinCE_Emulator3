@@ -33,6 +33,7 @@ use wince_emulation_v3::{
         },
         kernel::CeKernel,
         resource::ResourceId,
+        thread::ERROR_ALREADY_EXISTS,
     },
     config::RuntimeConfig,
 };
@@ -494,6 +495,25 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
         other => panic!("CreateMutexW did not create raw mutex: {other:?}"),
     };
     assert_ne!(mutex, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    let existing_mutex = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_MUTEX_W,
+        [0, 0, mutex_name_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateMutexW did not reopen raw mutex: {other:?}"),
+    };
+    assert_eq!(existing_mutex, mutex);
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_ALREADY_EXISTS
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

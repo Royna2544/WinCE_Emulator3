@@ -449,6 +449,15 @@ impl CeKernel {
         self.handles.create_mutex(name, initial_owner_thread)
     }
 
+    pub fn create_mutex_w_with_status(
+        &mut self,
+        name: Option<String>,
+        initial_owner_thread: Option<u32>,
+    ) -> (u32, bool) {
+        self.handles
+            .create_mutex_with_status(name, initial_owner_thread)
+    }
+
     pub fn create_semaphore_w(
         &mut self,
         name: Option<String>,
