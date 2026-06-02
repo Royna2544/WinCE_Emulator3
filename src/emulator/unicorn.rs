@@ -5019,7 +5019,11 @@ fn record_inavi_controller_trace<D>(
         .and_then(|obj| read_unicorn_u32(uc, obj))
         .and_then(|vtable| read_unicorn_u32(uc, vtable.wrapping_add(0x150)));
     let render_this = match label {
-        "render_entry" | "render_resize_entry" | "render_size_entry" => Some(a0),
+        "render_entry"
+        | "render_resize_entry"
+        | "render_size_entry"
+        | "render_full_resize_obj"
+        | "render_full_resize_call" => Some(a0),
         "render_surface_gate"
         | "render_enabled_gate"
         | "render_loop_call"
@@ -5234,8 +5238,13 @@ fn inavi_controller_probe_label(pc: u32) -> Option<&'static str> {
         0x0002_d158 => Some("wm_size_entry"),
         0x0002_d198 => Some("wm_size_render_vtable"),
         0x0002_d1a0 => Some("wm_size_render_call"),
+        0x0003_1188 => Some("render_full_resize_load_obj"),
+        0x0003_118c => Some("render_full_resize_obj"),
+        0x0003_1194 => Some("render_full_resize_call"),
         0x0006_3708 => Some("aux_mouse_slot_load"),
         0x0006_370c => Some("aux_mouse_slot_deref"),
+        0x0006_4b58 => Some("aux_full_resize_slot_load"),
+        0x0006_4b64 => Some("aux_full_resize_slot_call"),
         0x0006_39ec => Some("aux_mouse_slot_load"),
         0x0006_39f0 => Some("aux_mouse_slot_deref"),
         0x004b_1c8c => Some("aux_update_before_call"),
