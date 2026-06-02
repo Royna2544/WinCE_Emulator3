@@ -1,0 +1,14 @@
+#include "resource.h"
+
+IDM_TEST_MENU MENU
+BEGIN
+    POPUP "Fixture"
+    BEGIN
+        MENUITEM "Test Item", IDM_TEST_ITEM
+    END
+END
+
+IDA_TEST_ACCEL ACCELERATORS
+BEGIN
+    "T", IDM_TEST_ITEM, VIRTKEY, CONTROL
+END

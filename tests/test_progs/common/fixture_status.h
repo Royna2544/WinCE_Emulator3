@@ -18,3 +18,22 @@ static void FixtureTouch(volatile DWORD* sink, DWORD value) {
         *sink = value;
     }
 }
+
+static int WideEqAscii(const wchar_t* wide, const char* ascii) {
+    if (!wide || !ascii) return 0;
+    while (*wide && *ascii) {
+        if ((char)*wide != *ascii) return 0;
+        ++wide;
+        ++ascii;
+    }
+    return *wide == 0 && *ascii == 0;
+}
+
+static int BytesEq(const BYTE* left, const BYTE* right, DWORD count) {
+    DWORD i;
+    if (!left || !right) return 0;
+    for (i = 0; i < count; ++i) {
+        if (left[i] != right[i]) return 0;
+    }
+    return 1;
+}

@@ -1,0 +1,13 @@
+#include "resource.h"
+
+IDB_TEST_4X4 BITMAP "..\\res\\test_4x4.bmp"
+
+IDR_TEST_DATA RCDATA
+BEGIN
+    0x46, 0x49, 0x58, 0x52, 0x45, 0x53
+END
+
+STRINGTABLE
+BEGIN
+    IDS_RESOURCE_BITMAP_OK "resource-bitmap-ok"
+END

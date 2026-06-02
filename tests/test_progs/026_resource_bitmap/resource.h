@@ -1,0 +1,4 @@
+#pragma once
+#define IDS_RESOURCE_BITMAP_OK 2601
+#define IDB_TEST_4X4 2602
+#define IDR_TEST_DATA 2603
