@@ -285,6 +285,12 @@ pub fn patch_supported_imports_with_external(
 }
 
 fn normalize_coredll_import_ordinal(ordinal: u32) -> u32 {
+    if crate::ce::coredll_ordinals::SDK_ORDINALS
+        .iter()
+        .any(|export| export.ordinal == ordinal && export.line == 0)
+    {
+        return ordinal;
+    }
     if CoredllExportTable::resolve_static_ordinal(ordinal).is_some() {
         return ordinal;
     }
@@ -679,6 +685,51 @@ mod tests {
             Some(crate::ce::coredll_ordinals::ORD_GET_PALETTE_ENTRIES)
         );
         assert_eq!(trap.name, None);
+    }
+
+    #[test]
+    fn keeps_checked_coredll_crt_ordinals_before_export_index_fallback() {
+        let imports = vec![ImportDescriptor {
+            module_name: "COREDLL.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Ordinal(crate::ce::coredll_ordinals::ORD_MEMSET as u16),
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Ordinal(crate::ce::coredll_ordinals::ORD_SWPRINTF as u16),
+                },
+            ],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_coredll_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+
+        assert_eq!(
+            table.trap_at(IMPORT_TRAP_BASE).unwrap().ordinal,
+            Some(crate::ce::coredll_ordinals::ORD_MEMSET)
+        );
+        assert_eq!(
+            table
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE)
+                .unwrap()
+                .ordinal,
+            Some(crate::ce::coredll_ordinals::ORD_SWPRINTF)
+        );
     }
 
     #[test]

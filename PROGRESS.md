@@ -428,12 +428,18 @@
   observed SDK export-table index form when it does not collide with a real
   static ordinal; the iNavi import previously trapped at export index 1576,
   which maps to real `GetPaletteEntries`.
-- The latest 4,000,000-instruction bounded launch with SDK `mfcce400.dll` and
+- COREDLL import ordinal normalization now preserves checked SDK CRT ordinals
+  before attempting export-table-index fallback. The iNavi import slots for raw
+  ordinals 1047 and 1097 are SDK CRT `memset` and `swprintf`, not export-index
+  aliases for `AddEventAccess` or `BinaryDecompress`; preserving those ordinals
+  lets MFC startup continue through the real CRT helpers.
+- The latest 6,000,000-instruction bounded launch with SDK `mfcce400.dll` and
   `--mount-config mounts.toml` gets past the previous `GetPaletteEntries`
-  frontier and now stops earlier in SDK/MFC startup at unimplemented COREDLL
-  ordinal 558 (`AddEventAccess`) after `LocalAlloc`. The framebuffer dump
-  `target\inavi-palette-alias.ppm` is still diagnostic rather than visible app
-  output, so this is progress into the next raw COREDLL tranche, not GUI
+  frontier, creates `WCE_Solution_iNavi` plus the MFC child HWND
+  `Afx:10000:b:0:40000006:0`, and now stops at unimplemented COREDLL ordinal
+  2724 (`RegisterGesture`). The framebuffer dump
+  `target\inavi-sdk-crt-ordinals.ppm` is still diagnostic rather than visible
+  app output, so this is progress into the next raw COREDLL tranche, not GUI
   success.
 
 ## Current State
@@ -447,9 +453,10 @@
   `CallWindowProcW` targets, enter registered guest WNDPROCs for raw
   `SendMessageW` when that import path is used, emulate the SDK MFC
   `_setjmp`/`longjmp` exception path, pass iNavi's `iNaviData` SD-card
-  directory validation, implement first palette/DC state behavior, and then
-  reach unimplemented `AddEventAccess @558` in the current SDK/MFC startup
-  path. A generic virtual framebuffer is now
+  directory validation, implement first palette/DC state behavior, preserve SDK
+  CRT import ordinals ahead of export-index aliases, and then reach
+  unimplemented `RegisterGesture @2724` in the current SDK/MFC startup path. A
+  generic virtual framebuffer is now
   attached to the emulator boundary, generic virtual presenter/desktop
   interfaces exist for host
   presentation/window management, and solid `FillRect` on a window/screen HDC

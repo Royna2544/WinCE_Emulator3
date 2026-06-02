@@ -7,11 +7,13 @@
   first solid `FillRect` framebuffer path, then verify those pixels through the
   generic presenter boundary. Do not treat the timeout-running paint loop as
   GUI success.
-- Implement the next observed raw COREDLL frontier: ordinal 558
-  (`AddEventAccess`). The latest mounted iNavi run now gets past the earlier
-  export-index `GetPaletteEntries` trap via real palette/DC state and import
-  ordinal normalization, then stops at `AddEventAccess` after `LocalAlloc` with
-  the framebuffer dump still diagnostic rather than visible app output.
+- Implement the next observed raw COREDLL frontier: ordinal 2724
+  (`RegisterGesture`). The latest mounted iNavi run now gets past the earlier
+  export-index `GetPaletteEntries` trap via real palette/DC state and preserves
+  SDK CRT ordinals such as `memset @1047` and `swprintf @1097` before
+  export-index fallback, then stops at `RegisterGesture` after creating the
+  main and child windows with the framebuffer dump still diagnostic rather than
+  visible app output.
 - Replace launch-stub behavior for commctrl, WINSOCK, and OLE imports with
   real subsystem-backed implementations as import traces demand. Keep MFC on
   the loaded SDK DLL path only; do not add emulator MFC stubs.
@@ -35,9 +37,10 @@
   top-level `CreateWindowExW`; the mounted bounded rerun confirmed
   `\SDMMC Disk\iNaviData` succeeds and creates `WCE_Solution_iNavi` plus an
   MFC child window. The latest rerun gets past the previous
-  `GetPaletteEntries` trap and now stops on unimplemented `AddEventAccess
-  @558`; continue replacing raw COREDLL/GDI/DC behavior with CE-referenced
-  semantics that advance the path toward target framebuffer drawing.
+  `GetPaletteEntries` trap and SDK CRT ordinal normalization bug and now stops
+  on unimplemented `RegisterGesture @2724`; continue replacing raw
+  COREDLL/GDI/DC behavior with CE-referenced semantics that advance the path
+  toward target framebuffer drawing.
 - Use the new guest-WNDPROC return ring to compare creation-time sequencing
   against CE/MFC expectations. The latest diagnostic shows create/show/size/
   paint/idle messages returning `0`, `WM_PAINT` not reaching `BeginPaint`, MFC
