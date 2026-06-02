@@ -53,6 +53,8 @@ pub struct CeKernel {
     process_command_line: String,
     pending_process_launches: Vec<PendingProcessLaunch>,
     next_process_id: u32,
+    recent_file_ops: Vec<FileTraceRecord>,
+    recent_file_open_ops: Vec<FileTraceRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +66,22 @@ pub struct PendingProcessLaunch {
     pub process_id: u32,
     pub thread_id: u32,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileTraceRecord {
+    pub op: &'static str,
+    pub handle: Option<u32>,
+    pub path: Option<String>,
+    pub preview: Option<String>,
+    pub requested: Option<u32>,
+    pub transferred: Option<u32>,
+    pub position: Option<u64>,
+    pub result: Option<u32>,
+    pub error: Option<String>,
+}
+
+const FILE_TRACE_LIMIT: usize = 512;
+const FILE_TRACE_PREVIEW_LIMIT: usize = 64;
 
 impl CeKernel {
     pub fn boot(config: RuntimeConfig) -> Self {
@@ -87,6 +105,8 @@ impl CeKernel {
             process_command_line: String::new(),
             pending_process_launches: Vec::new(),
             next_process_id: 0x42,
+            recent_file_ops: Vec::new(),
+            recent_file_open_ops: Vec::new(),
         }
     }
 
@@ -184,6 +204,39 @@ impl CeKernel {
         self.files.host_path_to_guest_mount(host_path)
     }
 
+    pub fn recent_file_ops(&self) -> &[FileTraceRecord] {
+        &self.recent_file_ops
+    }
+
+    pub fn recent_file_open_ops(&self) -> &[FileTraceRecord] {
+        &self.recent_file_open_ops
+    }
+
+    pub fn record_file_trace(&mut self, record: FileTraceRecord) {
+        self.push_file_trace(record);
+    }
+
+    fn push_file_trace(&mut self, record: FileTraceRecord) {
+        if is_file_open_trace(record.op) {
+            if self.recent_file_open_ops.len() == FILE_TRACE_LIMIT {
+                self.recent_file_open_ops.remove(0);
+            }
+            self.recent_file_open_ops.push(record.clone());
+        }
+        if self.recent_file_ops.len() == FILE_TRACE_LIMIT {
+            self.recent_file_ops.remove(0);
+        }
+        self.recent_file_ops.push(record);
+    }
+
+    fn path_for_handle(&self, handle: u32) -> Option<String> {
+        match self.handles.get(handle).ok()? {
+            KernelObject::File(file) => Some(file.guest_path.clone()),
+            KernelObject::Device(device) => Some(device.guest_name.clone()),
+            _ => None,
+        }
+    }
+
     pub fn create_file_w(
         &mut self,
         path: &str,
@@ -191,16 +244,57 @@ impl CeKernel {
         creation_disposition: u32,
     ) -> Result<u32> {
         if let Ok(session) = self.devices.open(path) {
-            return Ok(self.handles.insert(KernelObject::Device(session)));
+            let handle = self.handles.insert(KernelObject::Device(session));
+            self.push_file_trace(FileTraceRecord {
+                op: "CreateFileW",
+                handle: Some(handle),
+                path: Some(path.to_owned()),
+                preview: None,
+                requested: Some(desired_access),
+                transferred: None,
+                position: Some(u64::from(creation_disposition)),
+                result: Some(handle),
+                error: None,
+            });
+            return Ok(handle);
         }
 
-        let file_id = self
+        let file_id = match self
             .files
-            .create_file_w(path, desired_access, creation_disposition)?;
-        Ok(self.handles.insert(KernelObject::File(FileObject {
+            .create_file_w(path, desired_access, creation_disposition)
+        {
+            Ok(file_id) => file_id,
+            Err(err) => {
+                self.push_file_trace(FileTraceRecord {
+                    op: "CreateFileW",
+                    handle: None,
+                    path: Some(path.to_owned()),
+                    preview: None,
+                    requested: Some(desired_access),
+                    transferred: None,
+                    position: Some(u64::from(creation_disposition)),
+                    result: Some(u32::MAX),
+                    error: Some(err.to_string()),
+                });
+                return Err(err);
+            }
+        };
+        let handle = self.handles.insert(KernelObject::File(FileObject {
             guest_path: path.to_owned(),
             file_id,
-        })))
+        }));
+        self.push_file_trace(FileTraceRecord {
+            op: "CreateFileW",
+            handle: Some(handle),
+            path: Some(path.to_owned()),
+            preview: None,
+            requested: Some(desired_access),
+            transferred: None,
+            position: Some(u64::from(creation_disposition)),
+            result: Some(handle),
+            error: None,
+        });
+        Ok(handle)
     }
 
     pub fn open_existing_readonly(&mut self, path: &str) -> Result<u32> {
@@ -212,11 +306,27 @@ impl CeKernel {
     }
 
     pub fn read_file(&mut self, handle: u32, requested: u32) -> Result<Vec<u8>> {
-        match self.handles.get_mut(handle)? {
-            KernelObject::File(file) => self.files.read_file(file.file_id, requested),
-            KernelObject::Device(device) => Ok(device.read_file(requested)),
-            _ => Ok(Vec::new()),
-        }
+        let path = self.path_for_handle(handle);
+        let result = match self.handles.get_mut(handle) {
+            Ok(object) => match object {
+                KernelObject::File(file) => self.files.read_file(file.file_id, requested),
+                KernelObject::Device(device) => Ok(device.read_file(requested)),
+                _ => Ok(Vec::new()),
+            },
+            Err(err) => Err(err),
+        };
+        self.push_file_trace(FileTraceRecord {
+            op: "ReadFile",
+            handle: Some(handle),
+            path,
+            preview: None,
+            requested: Some(requested),
+            transferred: result.as_ref().ok().map(|bytes| bytes.len() as u32),
+            position: None,
+            result: result.as_ref().ok().map(|_| 1),
+            error: result.as_ref().err().map(ToString::to_string),
+        });
+        result
     }
 
     pub fn read_file_at(&self, file_id: u32, offset: usize, requested: usize) -> Result<Vec<u8>> {
@@ -252,17 +362,33 @@ impl CeKernel {
     }
 
     pub fn write_file(&mut self, handle: u32, bytes: &[u8]) -> Result<FileIoResult> {
-        match self.handles.get_mut(handle)? {
-            KernelObject::File(file) => self.files.write_file(file.file_id, bytes),
-            KernelObject::Device(device) => Ok(FileIoResult {
-                success: true,
-                bytes_transferred: device.write_file(bytes),
-            }),
-            _ => Ok(FileIoResult {
-                success: false,
-                bytes_transferred: 0,
-            }),
-        }
+        let path = self.path_for_handle(handle);
+        let result = match self.handles.get_mut(handle) {
+            Ok(object) => match object {
+                KernelObject::File(file) => self.files.write_file(file.file_id, bytes),
+                KernelObject::Device(device) => Ok(FileIoResult {
+                    success: true,
+                    bytes_transferred: device.write_file(bytes),
+                }),
+                _ => Ok(FileIoResult {
+                    success: false,
+                    bytes_transferred: 0,
+                }),
+            },
+            Err(err) => Err(err),
+        };
+        self.push_file_trace(FileTraceRecord {
+            op: "WriteFile",
+            handle: Some(handle),
+            path,
+            preview: file_trace_preview(bytes),
+            requested: Some(bytes.len() as u32),
+            transferred: result.as_ref().ok().map(|io| io.bytes_transferred),
+            position: None,
+            result: result.as_ref().ok().map(|io| u32::from(io.success)),
+            error: result.as_ref().err().map(ToString::to_string),
+        });
+        result
     }
 
     pub fn write_file_at(
@@ -280,7 +406,19 @@ impl CeKernel {
         distance: i64,
         move_method: u32,
     ) -> Result<usize> {
+        let path = self.path_for_handle(handle);
         let KernelObject::File(file) = self.handles.get(handle)? else {
+            self.push_file_trace(FileTraceRecord {
+                op: "SetFilePointer",
+                handle: Some(handle),
+                path,
+                preview: None,
+                requested: Some(move_method),
+                transferred: None,
+                position: None,
+                result: Some(u32::MAX),
+                error: Some("invalid handle".to_owned()),
+            });
             return Err(crate::error::Error::InvalidHandle(handle));
         };
         let file_id = file.file_id;
@@ -297,11 +435,34 @@ impl CeKernel {
             }
         };
         if position < 0 {
+            self.push_file_trace(FileTraceRecord {
+                op: "SetFilePointer",
+                handle: Some(handle),
+                path,
+                preview: None,
+                requested: Some(move_method),
+                transferred: None,
+                position: None,
+                result: Some(u32::MAX),
+                error: Some("negative file pointer".to_owned()),
+            });
             return Err(crate::error::Error::InvalidArgument(
                 "negative file pointer".to_owned(),
             ));
         }
-        self.files.set_file_pointer(file_id, position as usize)
+        let result = self.files.set_file_pointer(file_id, position as usize);
+        self.push_file_trace(FileTraceRecord {
+            op: "SetFilePointer",
+            handle: Some(handle),
+            path,
+            preview: None,
+            requested: Some(move_method),
+            transferred: None,
+            position: result.as_ref().ok().map(|position| *position as u64),
+            result: result.as_ref().ok().map(|position| *position as u32),
+            error: result.as_ref().err().map(ToString::to_string),
+        });
+        result
     }
 
     pub fn get_file_size(&self, handle: u32) -> Result<usize> {
@@ -320,11 +481,38 @@ impl CeKernel {
     }
 
     pub fn find_first_file_w(&mut self, pattern: &str) -> Result<(u32, FindData)> {
-        let (find_id, data) = self.files.find_first_file_w(pattern)?;
+        let (find_id, data) = match self.files.find_first_file_w(pattern) {
+            Ok(result) => result,
+            Err(err) => {
+                self.push_file_trace(FileTraceRecord {
+                    op: "FindFirstFileW",
+                    handle: None,
+                    path: Some(pattern.to_owned()),
+                    preview: None,
+                    requested: None,
+                    transferred: None,
+                    position: None,
+                    result: Some(u32::MAX),
+                    error: Some(err.to_string()),
+                });
+                return Err(err);
+            }
+        };
         let handle = self.handles.insert(KernelObject::FindFile(FindFileObject {
             guest_pattern: pattern.to_owned(),
             find_id,
         }));
+        self.push_file_trace(FileTraceRecord {
+            op: "FindFirstFileW",
+            handle: Some(handle),
+            path: Some(pattern.to_owned()),
+            preview: None,
+            requested: None,
+            transferred: Some(data.file_size as u32),
+            position: None,
+            result: Some(handle),
+            error: None,
+        });
         Ok((handle, data))
     }
 
@@ -857,6 +1045,30 @@ impl CeKernel {
         let message = Message::new(hwnd, msg, wparam, lparam, self.timers.tick_count());
         self.gwe.post_message(window.thread_id, message);
     }
+}
+
+fn file_trace_preview(bytes: &[u8]) -> Option<String> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let mut preview = String::new();
+    for &byte in bytes.iter().take(FILE_TRACE_PREVIEW_LIMIT) {
+        match byte {
+            b'\r' => preview.push_str("\\r"),
+            b'\n' => preview.push_str("\\n"),
+            b'\t' => preview.push_str("\\t"),
+            0x20..=0x7e => preview.push(byte as char),
+            _ => preview.push_str(&format!("\\x{byte:02x}")),
+        }
+    }
+    if bytes.len() > FILE_TRACE_PREVIEW_LIMIT {
+        preview.push_str("...");
+    }
+    Some(preview)
+}
+
+fn is_file_open_trace(op: &str) -> bool {
+    matches!(op, "CreateFileW" | "CreateFileWArg" | "FindFirstFileW")
 }
 
 fn make_lparam_i16(low: i32, high: i32) -> u32 {

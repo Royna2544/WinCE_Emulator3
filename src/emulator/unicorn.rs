@@ -63,6 +63,8 @@ pub struct UnicornDebugSnapshot {
     pub invalid_instruction_probe: Option<UnicornInvalidInstructionProbe>,
     pub last_calls: Vec<UnicornLastCall>,
     pub last_imports: Vec<UnicornLastImport>,
+    pub recent_file_open_ops: Vec<crate::ce::kernel::FileTraceRecord>,
+    pub recent_file_ops: Vec<crate::ce::kernel::FileTraceRecord>,
     pub last_messages: Vec<UnicornLastMessage>,
     pub last_wndproc_returns: Vec<UnicornWndProcReturn>,
     pub last_wndproc_call_traces: Vec<UnicornWndProcCallTrace>,
@@ -1873,6 +1875,8 @@ impl UnicornMips {
             invalid_instruction_probe.borrow().clone(),
             last_calls.borrow().clone(),
             last_imports.borrow().clone(),
+            kernel.recent_file_open_ops().to_vec(),
+            kernel.recent_file_ops().to_vec(),
             last_messages.borrow().clone(),
             last_wndproc_returns.borrow().clone(),
             last_wndproc_call_traces.borrow().clone(),
@@ -3060,6 +3064,16 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                     write!(f, "/detail={}", format_trace_string(detail))?;
                 }
             }
+            write!(f, "]")?;
+        }
+        if !self.recent_file_ops.is_empty() {
+            write!(f, " recent_file_ops=[")?;
+            write_file_trace_records(f, &self.recent_file_ops)?;
+            write!(f, "]")?;
+        }
+        if !self.recent_file_open_ops.is_empty() {
+            write!(f, " recent_file_open_ops=[")?;
+            write_file_trace_records(f, &self.recent_file_open_ops)?;
             write!(f, "]")?;
         }
         if !self.last_calls.is_empty() {
@@ -6010,6 +6024,8 @@ fn capture_debug_snapshot<D>(
     invalid_instruction_probe: Option<UnicornInvalidInstructionProbe>,
     mut last_calls: Vec<UnicornLastCall>,
     last_imports: Vec<UnicornLastImport>,
+    recent_file_open_ops: Vec<crate::ce::kernel::FileTraceRecord>,
+    recent_file_ops: Vec<crate::ce::kernel::FileTraceRecord>,
     last_messages: Vec<UnicornLastMessage>,
     mut last_wndproc_returns: Vec<UnicornWndProcReturn>,
     mut last_wndproc_call_traces: Vec<UnicornWndProcCallTrace>,
@@ -6055,6 +6071,8 @@ fn capture_debug_snapshot<D>(
         invalid_instruction_probe,
         last_calls,
         last_imports,
+        recent_file_open_ops,
+        recent_file_ops,
         last_messages,
         last_wndproc_returns,
         last_wndproc_call_traces,
@@ -6166,6 +6184,43 @@ fn read_unicorn_wide_z<D>(
 
 fn format_trace_string(value: &str) -> String {
     format!("{value:?}")
+}
+
+fn write_file_trace_records(
+    f: &mut std::fmt::Formatter<'_>,
+    records: &[crate::ce::kernel::FileTraceRecord],
+) -> std::fmt::Result {
+    for (index, op) in records.iter().enumerate() {
+        if index != 0 {
+            write!(f, ",")?;
+        }
+        write!(f, "{}", op.op)?;
+        if let Some(handle) = op.handle {
+            write!(f, "/h=0x{handle:08x}")?;
+        }
+        if let Some(path) = op.path.as_deref() {
+            write!(f, "/path={}", format_trace_string(path))?;
+        }
+        if let Some(preview) = op.preview.as_deref() {
+            write!(f, "/preview={}", format_trace_string(preview))?;
+        }
+        if let Some(requested) = op.requested {
+            write!(f, "/req=0x{requested:08x}")?;
+        }
+        if let Some(transferred) = op.transferred {
+            write!(f, "/xfer=0x{transferred:08x}")?;
+        }
+        if let Some(position) = op.position {
+            write!(f, "/pos=0x{position:08x}")?;
+        }
+        if let Some(result) = op.result {
+            write!(f, "/ret=0x{result:08x}")?;
+        }
+        if let Some(error) = op.error.as_deref() {
+            write!(f, "/err={}", format_trace_string(error))?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "unicorn")]

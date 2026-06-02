@@ -3554,7 +3554,21 @@ fn create_file_w_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
-    let Some(path) = read_guest_wide_arg(memory, raw_arg(args, 0)) else {
+    let path_ptr = raw_arg(args, 0);
+    let path = read_guest_wide_arg(memory, path_ptr);
+    kernel.record_file_trace(crate::ce::kernel::FileTraceRecord {
+        op: "CreateFileWArg",
+        handle: None,
+        path: path.clone(),
+        preview: read_guest_narrow_preview(memory, path_ptr, 96)
+            .map(|preview| format!("ptr=0x{path_ptr:08x}/ansi={preview}")),
+        requested: Some(raw_arg(args, 1)),
+        transferred: None,
+        position: Some(u64::from(raw_arg(args, 4))),
+        result: None,
+        error: path.is_none().then(|| "invalid wide path".to_owned()),
+    });
+    let Some(path) = path else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -9656,6 +9670,31 @@ pub(crate) fn read_guest_bytes<M: CoredllGuestMemory>(
         return None;
     }
     Some(bytes)
+}
+
+fn read_guest_narrow_preview<M: CoredllGuestMemory>(
+    memory: &M,
+    ptr: u32,
+    max_len: usize,
+) -> Option<String> {
+    if ptr == 0 {
+        return None;
+    }
+    let mut preview = String::new();
+    for offset in 0..max_len {
+        let byte = memory.read_u8(ptr.wrapping_add(offset as u32)).ok()?;
+        if byte == 0 {
+            break;
+        }
+        match byte {
+            b'\r' => preview.push_str("\\r"),
+            b'\n' => preview.push_str("\\n"),
+            b'\t' => preview.push_str("\\t"),
+            0x20..=0x7e => preview.push(byte as char),
+            _ => preview.push_str(&format!("\\x{byte:02x}")),
+        }
+    }
+    Some(preview)
 }
 
 pub(crate) fn write_guest_bytes<M: CoredllGuestMemory>(
