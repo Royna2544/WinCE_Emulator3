@@ -1122,6 +1122,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             write_system_info(kernel, memory, thread_id, raw_arg(args, 0));
             Some(CoredllValue::U32(0))
         }
+        ORD_GET_SYSTEM_METRICS => Some(CoredllValue::U32(
+            kernel.gwe.system_metric(raw_arg(args, 0)) as u32,
+        )),
         ORD_EVENT_MODIFY => {
             let ok = match raw_arg(args, 1) {
                 EVENT_PULSE => {
@@ -2472,10 +2475,16 @@ fn create_window_ex_w_raw<M: CoredllGuestMemory>(
         title = title.as_str(),
         style = format_args!("0x{:08x}", raw_arg(args, 3)),
         ex_style = format_args!("0x{:08x}", raw_arg(args, 0)),
+        x = raw_i32_arg(args, 4),
+        y = raw_i32_arg(args, 5),
+        width = raw_i32_arg(args, 6),
+        height = raw_i32_arg(args, 7),
         parent = format_args!("0x{:08x}", raw_arg(args, 8)),
+        id = format_args!("0x{:08x}", raw_arg(args, 9)),
+        create_params = format_args!("0x{:08x}", raw_arg(args, 11)),
         "CreateWindowExW"
     );
-    kernel.gwe.create_window_ex_with_rect(
+    kernel.create_window_ex_w_with_rect(
         thread_id,
         &class_name,
         &title,
@@ -3935,6 +3944,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "LocalSizeInProcess",
     "GetProcessHeap",
     "GetModuleFileNameW",
+    "GetSystemMetrics",
     "HeapCreate",
     "HeapDestroy",
     "HeapAlloc",

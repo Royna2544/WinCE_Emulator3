@@ -69,22 +69,23 @@ cargo run
 Inspect a PE image without executing it:
 
 ```bash
-cargo run -- --image /mnt/d/INAVI_Emulator/INAVI/INavi/INavi.exe
+cargo run -- --image /mnt/d/INAVI_Emulator/INAVI/INavi/iNavi.exe
 ```
 
 CPU execution is behind the `unicorn` feature:
 
 ```bash
-cargo run --features unicorn -- --image D:\INAVI_Emulator\INAVI\INavi\INavi.exe --dll-search-dir "C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii" --sdmmc-root D:\INAVI_Emulator\INAVI --framebuffer-dump target\last-framebuffer.ppm --run-cpu
+cargo run --features unicorn -- --image D:\INAVI_Emulator\INAVI\INavi\iNavi.exe --dll-search-dir "C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii" --sdmmc-root D:\INAVI_Emulator\INAVI --framebuffer-dump target\last-framebuffer.ppm --run-cpu
 ```
 
 Use `--cpu-instruction-limit N` with `--run-cpu` to make Unicorn return a
 bounded diagnostic snapshot instead of relying on an external timeout.
 
 The current bounded target run creates and shows the main HWND, delivers the
-create-time `WM_CREATE` callout, synthesizes and dispatches the first
-`WM_PAINT` through the SDK MFC window procedure, and then returns through the
-emulator's empty-queue `GetMessageW @861` diagnostic. There are now virtual
-framebuffer, presenter, and desktop boundaries, but guest drawing is not
-connected to them yet, so this is a useful frontier, not a completed GUI
-launch.
+create-time `WM_CREATE` callout, dispatches the initial visible-window
+`WM_SHOWWINDOW`/`WM_WINDOWPOSCHANGED`/`WM_SIZE` sequence, synthesizes and
+dispatches the first `WM_PAINT` through the SDK MFC window procedure, and then
+returns through the emulator's empty-queue `GetMessageW @861` diagnostic after
+MFC idle UI update handling. There are now virtual framebuffer, presenter, and
+desktop boundaries, but guest drawing is not connected to them yet, so this is
+a useful frontier, not a completed GUI launch.

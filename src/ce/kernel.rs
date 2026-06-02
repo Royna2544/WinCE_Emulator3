@@ -301,10 +301,41 @@ impl CeKernel {
         style: u32,
         ex_style: u32,
     ) -> u32 {
-        let hwnd = self
-            .gwe
-            .create_window_ex(thread_id, class_name, title, parent, id, style, ex_style);
+        self.create_window_ex_w_with_rect(
+            thread_id,
+            class_name,
+            title,
+            parent,
+            id,
+            style,
+            ex_style,
+            Rect::default(),
+        )
+    }
+
+    pub fn create_window_ex_w_with_rect(
+        &mut self,
+        thread_id: u32,
+        class_name: &str,
+        title: &str,
+        parent: Option<u32>,
+        id: u32,
+        style: u32,
+        ex_style: u32,
+        rect: Rect,
+    ) -> u32 {
+        let hwnd = self.gwe.create_window_ex_with_rect(
+            thread_id, class_name, title, parent, id, style, ex_style, rect,
+        );
         self.handles.insert(KernelObject::Window(hwnd));
+        if self.gwe.is_window_visible(hwnd) {
+            self.post_window_message(hwnd, WM_SHOWWINDOW, 1, 0);
+            self.post_window_rect_messages(
+                hwnd,
+                Some(Rect::default()),
+                self.gwe.get_window_rect(hwnd),
+            );
+        }
         hwnd
     }
 

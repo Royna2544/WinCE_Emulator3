@@ -34,15 +34,23 @@
     `WM_SHOWWINDOW`, `WM_WINDOWPOSCHANGED`, `WM_MOVE`, and `WM_SIZE` messages,
     but a corrected bounded run from
     `D:\INAVI_Emulator\INAVI\INavi\iNavi.exe` still reaches the same
-    `GetMessageW @861` `blocked_get_message` frontier. The earlier
+    `GetMessageW @861` `blocked_get_message` frontier. Visible top-level
+    `CreateWindowExW` now also normalizes a zero/default rect to the 800x480
+    desktop and queues `WM_SHOWWINDOW`, `WM_WINDOWPOSCHANGED`, and
+    `WM_SIZE(800,480)` before the first synthetic `WM_PAINT`; the latest
+    3,000,000-instruction bounded run confirms those messages dispatch through
+    SDK MFC, then reaches MFC `WM_IDLEUPDATECMDUI` (`0x0363`) handling and an
+    empty `GetMessageW @861` queue without child HWND creation or GDI/DC import
+    activity. The earlier
     `pc=0`/reserved-instruction and decoded `TerminateProcess` startup-cleanup
     states are no longer the current stop.
   - Status: active; `TlsCall` now returns real CE-style slots,
     `CallWindowProcW` now enters guest window-procedure targets, and
     `CreateWindowExW` now delivers the first create-time message. Raw
     `GetWindow` ordinal 251 now handles CE SDK child/sibling/owner traversal,
-    and virtual HWND lifecycle queueing is connected for show/move/size changes.
-    The latest bounded launch confirms the current `GW_CHILD` query returns no
+    virtual HWND lifecycle queueing is connected for show/move/size changes,
+    and visible top-level create now queues the initial show/size sequence. The
+    latest bounded launch confirms the current `GW_CHILD` query returns no
     child HWNDs; next work is to identify which remaining CE/MFC-sourced queue,
     timer, paint, posted-message, window-child creation, or GDI behavior should
     advance the guest path toward real GDI/DC/surface drawing and blit imports.

@@ -7,19 +7,20 @@ use wince_emulation_v3::{
             ORD_DESTROY_WINDOW, ORD_ENABLE_WINDOW, ORD_END_PAINT, ORD_FIND_RESOURCE_W,
             ORD_FIND_WINDOW_W, ORD_GET_ACTIVE_WINDOW, ORD_GET_CLASS_INFO_W, ORD_GET_CLASS_NAME_W,
             ORD_GET_CLIENT_RECT, ORD_GET_CURSOR_POS, ORD_GET_FOCUS, ORD_GET_MESSAGE_W,
-            ORD_GET_PARENT, ORD_GET_SYSTEM_INFO, ORD_GET_UPDATE_RECT, ORD_GET_WINDOW,
-            ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_TEXT_LENGTH_W,
-            ORD_GET_WINDOW_TEXT_W, ORD_GLOBAL_MEMORY_STATUS, ORD_INVALIDATE_RECT, ORD_IS_WINDOW,
-            ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE, ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W,
-            ORD_MAP_WINDOW_POINTS, ORD_MESSAGE_BOX_W, ORD_MOVE_WINDOW, ORD_PEEK_MESSAGE_W,
-            ORD_POST_MESSAGE_W, ORD_REGISTER_CLASS_W, ORD_RELEASE_MUTEX, ORD_SCREEN_TO_CLIENT,
-            ORD_SET_FOCUS, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_TEXT_W,
-            ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_UPDATE_WINDOW, ORD_VALIDATE_RECT,
+            ORD_GET_PARENT, ORD_GET_SYSTEM_INFO, ORD_GET_SYSTEM_METRICS, ORD_GET_UPDATE_RECT,
+            ORD_GET_WINDOW, ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_RECT,
+            ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W, ORD_GLOBAL_MEMORY_STATUS,
+            ORD_INVALIDATE_RECT, ORD_IS_WINDOW, ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE,
+            ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_MAP_WINDOW_POINTS, ORD_MESSAGE_BOX_W,
+            ORD_MOVE_WINDOW, ORD_PEEK_MESSAGE_W, ORD_POST_MESSAGE_W, ORD_REGISTER_CLASS_W,
+            ORD_RELEASE_MUTEX, ORD_SCREEN_TO_CLIENT, ORD_SET_FOCUS, ORD_SET_WINDOW_LONG_W,
+            ORD_SET_WINDOW_POS, ORD_SET_WINDOW_TEXT_W, ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE,
+            ORD_UPDATE_WINDOW, ORD_VALIDATE_RECT,
         },
         gwe::{
             GW_CHILD, GW_HWNDFIRST, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER, GWL_USERDATA,
-            HWND_BROADCAST, Point, WM_MOVE, WM_PAINT, WM_SHOWWINDOW, WM_SIZE, WM_USER,
-            WM_WINDOWPOSCHANGED,
+            HWND_BROADCAST, Point, SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN, WM_MOVE, WM_PAINT,
+            WM_SHOWWINDOW, WM_SIZE, WM_USER, WM_WINDOWPOSCHANGED, WS_VISIBLE,
         },
         kernel::CeKernel,
         resource::ResourceId,
@@ -68,6 +69,45 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
         other => panic!("RegisterClassW did not register raw class: {other:?}"),
     };
     assert!(class_atom >= 0xc000);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_SYSTEM_METRICS,
+            [SM_CXSCREEN],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(800),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_SYSTEM_METRICS,
+            [SM_CYSCREEN],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(480),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_SYSTEM_METRICS,
+            [SM_CXBORDER],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -1059,6 +1099,75 @@ fn coredll_raw_window_state_changes_queue_lifecycle_messages() -> Result<()> {
         WM_SIZE,
         0,
         0x0050_0064,
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_visible_create_queues_show_and_size_messages() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 4;
+    let class_ptr = 0x8000;
+    let title_ptr = 0x8040;
+    let msg_ptr = 0x8080;
+    memory.write_wide_z(class_ptr, "FRAME");
+    memory.write_wide_z(title_ptr, "");
+    memory.map_words(msg_ptr, 7);
+
+    let hwnd = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_WINDOW_EX_W,
+        [0, class_ptr, title_ptr, WS_VISIBLE, 0, 0, 0, 0, 0, 0, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } => hwnd,
+        other => panic!("CreateWindowExW did not create visible raw hwnd: {other:?}"),
+    };
+    assert_eq!(
+        kernel.gwe.get_window_rect(hwnd).unwrap(),
+        wince_emulation_v3::ce::gwe::Rect::from_origin_size(0, 0, 800, 480)
+    );
+
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        hwnd,
+        WM_SHOWWINDOW,
+        1,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        hwnd,
+        WM_WINDOWPOSCHANGED,
+        0,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        hwnd,
+        WM_SIZE,
+        0,
+        0x01e0_0320,
     );
 
     Ok(())

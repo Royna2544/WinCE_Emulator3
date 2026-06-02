@@ -310,14 +310,33 @@
   `GetMessageW @861` `blocked_get_message` frontier after SDK MFC dispatch.
   The run writes `target\framebuffer-launch.ppm`, but this remains diagnostic
   output only because no guest drawing/blit imports have produced GUI pixels.
+- Unicorn debug snapshots now include a compact recent-message ring for
+  `PeekMessageW`/`GetMessageW` results. The diagnostic confirmed that before
+  create-time visible-window lifecycle queueing, the target pump only observed
+  synthetic `WM_PAINT` and then an empty queue.
+- GWE now normalizes visible top-level `CreateWindowExW` windows with
+  default/zero dimensions to the virtual desktop client size and exposes first
+  CE SDK `GetSystemMetrics` values from the same desktop model. Raw
+  `CreateWindowExW` goes through the kernel boundary so visible creates queue
+  `WM_SHOWWINDOW`, `WM_WINDOWPOSCHANGED`, and `WM_SIZE`; tests cover the raw
+  visible zero-rect create case as `WM_SIZE(800,480)`.
+- A 3,000,000-instruction bounded launch after visible-create lifecycle
+  queueing now dispatches `WM_SHOWWINDOW`, `WM_WINDOWPOSCHANGED`,
+  `WM_SIZE(lParam=0x01e00320)`, and then synthetic `WM_PAINT` for
+  `hwnd=0x00020000`. It still reaches the intentional empty-queue
+  `GetMessageW @861` `blocked_get_message` diagnostic after MFC
+  `WM_IDLEUPDATECMDUI` (`0x0363`) handling, without reaching child HWND
+  creation or GDI/DC drawing imports. This is progress in CE/GWE message
+  semantics, not GUI success.
 
 ## Current State
 
 - CPU execution is wired far enough to load mapped PE images, dispatch import
   traps, run the target entry path, execute SDK MFC code through the current
-  MIPS trampoline workaround, create/show the main HWND, deliver the
-  create-time `WM_CREATE` callout, queue show/move/size lifecycle messages,
-  synthesize and dispatch the first `WM_PAINT`, enter guest
+  MIPS trampoline workaround, create/show the main HWND, normalize visible
+  top-level default sizing to the virtual desktop, deliver the create-time
+  `WM_CREATE` callout, queue and dispatch visible-create show/size lifecycle
+  messages, synthesize and dispatch the first `WM_PAINT`, enter guest
   `CallWindowProcW` targets, and then reach an empty-queue `GetMessageW`
   diagnostic snapshot. A generic virtual framebuffer is now attached to the
   emulator boundary, and generic virtual presenter/desktop interfaces exist for

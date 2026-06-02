@@ -42,13 +42,51 @@ pub const GW_HWNDPREV: u32 = 3;
 pub const GW_OWNER: u32 = 4;
 pub const GW_CHILD: u32 = 5;
 
+pub const CW_USEDEFAULT: i32 = i32::MIN;
+
 pub const SWP_NOSIZE: u32 = 0x0001;
 pub const SWP_NOMOVE: u32 = 0x0002;
 pub const SWP_NOZORDER: u32 = 0x0004;
 pub const SWP_NOACTIVATE: u32 = 0x0010;
 pub const SWP_SHOWWINDOW: u32 = 0x0040;
 pub const SWP_HIDEWINDOW: u32 = 0x0080;
+pub const WS_CHILD: u32 = 0x4000_0000;
 pub const WS_VISIBLE: u32 = 0x1000_0000;
+
+pub const SM_CXSCREEN: u32 = 0;
+pub const SM_CYSCREEN: u32 = 1;
+pub const SM_CXVSCROLL: u32 = 2;
+pub const SM_CYHSCROLL: u32 = 3;
+pub const SM_CYCAPTION: u32 = 4;
+pub const SM_CXBORDER: u32 = 5;
+pub const SM_CYBORDER: u32 = 6;
+pub const SM_CXDLGFRAME: u32 = 7;
+pub const SM_CYDLGFRAME: u32 = 8;
+pub const SM_CXICON: u32 = 11;
+pub const SM_CYICON: u32 = 12;
+pub const SM_CXCURSOR: u32 = 13;
+pub const SM_CYCURSOR: u32 = 14;
+pub const SM_CYMENU: u32 = 15;
+pub const SM_CXFULLSCREEN: u32 = 16;
+pub const SM_CYFULLSCREEN: u32 = 17;
+pub const SM_MOUSEPRESENT: u32 = 19;
+pub const SM_CYVSCROLL: u32 = 20;
+pub const SM_CXHSCROLL: u32 = 21;
+pub const SM_DEBUG: u32 = 22;
+pub const SM_CXDOUBLECLK: u32 = 36;
+pub const SM_CYDOUBLECLK: u32 = 37;
+pub const SM_CXICONSPACING: u32 = 38;
+pub const SM_CYICONSPACING: u32 = 39;
+pub const SM_CXEDGE: u32 = 45;
+pub const SM_CYEDGE: u32 = 46;
+pub const SM_CXSMICON: u32 = 49;
+pub const SM_CYSMICON: u32 = 50;
+pub const SM_XVIRTUALSCREEN: u32 = 76;
+pub const SM_YVIRTUALSCREEN: u32 = 77;
+pub const SM_CXVIRTUALSCREEN: u32 = 78;
+pub const SM_CYVIRTUALSCREEN: u32 = 79;
+pub const SM_CMONITORS: u32 = 80;
+pub const SM_SAMEDISPLAYFORMAT: u32 = 81;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
@@ -229,7 +267,7 @@ impl Gwe {
         ex_style: u32,
         rect: Rect,
     ) -> u32 {
-        let rect = self.parent_to_screen_rect(parent, rect);
+        let rect = self.normalize_create_rect(parent, style, rect);
         let class_name = self.resolve_class_name(class_name);
         let wndproc = self
             .class_info(&class_name)
@@ -491,6 +529,30 @@ impl Gwe {
 
     pub fn get_cursor_pos(&self) -> Point {
         self.cursor_pos
+    }
+
+    pub fn system_metric(&self, index: u32) -> i32 {
+        let desktop = self.desktop_rect();
+        match index {
+            SM_CXSCREEN | SM_CXFULLSCREEN | SM_CXVIRTUALSCREEN => desktop.width(),
+            SM_CYSCREEN | SM_CYFULLSCREEN | SM_CYVIRTUALSCREEN => desktop.height(),
+            SM_XVIRTUALSCREEN => desktop.left,
+            SM_YVIRTUALSCREEN => desktop.top,
+            SM_CXVSCROLL | SM_CXHSCROLL => 13,
+            SM_CYVSCROLL | SM_CYHSCROLL => 13,
+            SM_CYCAPTION | SM_CYMENU => 24,
+            SM_CXBORDER | SM_CYBORDER => 1,
+            SM_CXDLGFRAME | SM_CYDLGFRAME => 3,
+            SM_CXICON | SM_CYICON | SM_CXCURSOR | SM_CYCURSOR => 32,
+            SM_CXSMICON | SM_CYSMICON => 16,
+            SM_CXDOUBLECLK | SM_CYDOUBLECLK => 4,
+            SM_CXICONSPACING | SM_CYICONSPACING => 75,
+            SM_CXEDGE | SM_CYEDGE => 2,
+            SM_MOUSEPRESENT => 1,
+            SM_CMONITORS | SM_SAMEDISPLAYFORMAT => 1,
+            SM_DEBUG => 0,
+            _ => 0,
+        }
     }
 
     pub fn set_window_pos(
@@ -834,6 +896,38 @@ impl Gwe {
             .unwrap_or_default()
     }
 
+    fn desktop_rect(&self) -> Rect {
+        self.windows
+            .get(&DESKTOP_HWND)
+            .map(|window| window.client_rect)
+            .unwrap_or_else(|| Rect::from_origin_size(0, 0, 800, 480))
+    }
+
+    fn normalize_create_rect(&self, parent: Option<u32>, style: u32, rect: Rect) -> Rect {
+        let mut rect = self.parent_to_screen_rect(parent, rect);
+        let visible_top_level = parent.is_none() && style & (WS_VISIBLE | WS_CHILD) == WS_VISIBLE;
+        if !visible_top_level {
+            return rect;
+        }
+
+        let desktop = self.desktop_rect();
+        if rect.left == CW_USEDEFAULT || rect.top == CW_USEDEFAULT {
+            let width = rect.width();
+            let height = rect.height();
+            rect.left = desktop.left;
+            rect.top = desktop.top;
+            rect.right = rect.left.saturating_add(width);
+            rect.bottom = rect.top.saturating_add(height);
+        }
+        if rect.width() <= 0 || rect.right == CW_USEDEFAULT {
+            rect.right = rect.left.saturating_add(desktop.width());
+        }
+        if rect.height() <= 0 || rect.bottom == CW_USEDEFAULT {
+            rect.bottom = rect.top.saturating_add(desktop.height());
+        }
+        rect
+    }
+
     fn first_child(&self, hwnd: u32) -> Option<u32> {
         let parent = if hwnd == DESKTOP_HWND {
             None
@@ -947,6 +1041,73 @@ mod tests {
         assert_eq!(window.class_name, "static");
         assert_eq!(window.title, "ready");
         assert!(gwe.get_message(1).is_none());
+    }
+
+    #[test]
+    fn visible_top_level_default_size_uses_desktop_rect() {
+        let mut gwe = Gwe::default();
+        let zero = gwe.create_window_ex_with_rect(
+            1,
+            "STATIC",
+            "zero",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::default(),
+        );
+        assert_eq!(
+            gwe.get_window_rect(zero).unwrap(),
+            Rect::from_origin_size(0, 0, 800, 480)
+        );
+
+        let default = gwe.create_window_ex_with_rect(
+            1,
+            "STATIC",
+            "default",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, CW_USEDEFAULT, CW_USEDEFAULT),
+        );
+        assert_eq!(
+            gwe.get_window_rect(default).unwrap(),
+            Rect::from_origin_size(0, 0, 800, 480)
+        );
+    }
+
+    #[test]
+    fn hidden_and_child_zero_size_windows_keep_requested_rect() {
+        let mut gwe = Gwe::default();
+        let hidden =
+            gwe.create_window_ex_with_rect(1, "STATIC", "hidden", None, 0, 0, 0, Rect::default());
+        assert_eq!(gwe.get_window_rect(hidden).unwrap(), Rect::default());
+
+        let parent = gwe.create_window_ex_with_rect(
+            1,
+            "PARENT",
+            "parent",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(10, 20, 300, 200),
+        );
+        let child = gwe.create_window_ex_with_rect(
+            1,
+            "CHILD",
+            "child",
+            Some(parent),
+            0,
+            WS_VISIBLE | WS_CHILD,
+            0,
+            Rect::default(),
+        );
+        assert_eq!(
+            gwe.get_window_rect(child).unwrap(),
+            Rect::from_origin_size(10, 20, 0, 0)
+        );
     }
 
     #[test]
