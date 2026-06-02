@@ -1397,12 +1397,14 @@ impl UnicornMips {
                     let a2 = read_mips_reg(uc, RegisterMIPS::A2);
                     let a3 = read_mips_reg(uc, RegisterMIPS::A3);
                     let sp = read_mips_reg(uc, RegisterMIPS::SP);
+                    let trace_name =
+                        trace_import_name(trap.module_kind, trap.ordinal, trap.name.as_deref());
                     *import_counts_hook
                         .borrow_mut()
                         .entry(UnicornImportCountKey {
                             module: trap.module_name.clone(),
                             ordinal: trap.ordinal,
-                            name: trap.name.clone(),
+                            name: trace_name.clone(),
                         })
                         .or_insert(0) += 1;
                     {
@@ -1415,7 +1417,7 @@ impl UnicornMips {
                             module: trap.module_name.clone(),
                             kind: trap.module_kind,
                             ordinal: trap.ordinal,
-                            name: trap.name.clone(),
+                            name: trace_name.clone(),
                             a0,
                             a1,
                             a2,
@@ -1431,7 +1433,7 @@ impl UnicornMips {
                         module = trap.module_name.as_str(),
                         kind = ?trap.module_kind,
                         ordinal = trap.ordinal,
-                        name = trap.name.as_deref().unwrap_or("<ordinal>"),
+                        name = trace_name.as_deref().unwrap_or("<ordinal>"),
                         a0 = format_args!("0x{a0:08x}"),
                         a1 = format_args!("0x{a1:08x}"),
                         a2 = format_args!("0x{a2:08x}"),
@@ -1680,6 +1682,11 @@ impl UnicornMips {
                         .rev()
                         .find(|import| import.pc == address && import.result.is_none())
                     {
+                        import.name = trace_import_name(
+                            trap.module_kind,
+                            trap.ordinal,
+                            import.name.as_deref(),
+                        );
                         import.result = Some(result);
                         import.detail = import_detail_after_return(
                             memory.uc,
@@ -1695,7 +1702,13 @@ impl UnicornMips {
                         module = trap.module_name.as_str(),
                         kind = ?trap.module_kind,
                         ordinal = trap.ordinal,
-                        name = trap.name.as_deref().unwrap_or("<ordinal>"),
+                        name = trace_import_name(
+                            trap.module_kind,
+                            trap.ordinal,
+                            trap.name.as_deref(),
+                        )
+                        .as_deref()
+                        .unwrap_or("<ordinal>"),
                         result = format_args!("0x{result:08x}"),
                         "import trap return"
                     );
@@ -6153,6 +6166,23 @@ fn read_unicorn_wide_z<D>(
 
 fn format_trace_string(value: &str) -> String {
     format!("{value:?}")
+}
+
+#[cfg(feature = "unicorn")]
+fn trace_import_name(
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    name: Option<&str>,
+) -> Option<String> {
+    if let Some(name) = name {
+        return Some(name.to_owned());
+    }
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll {
+        return None;
+    }
+    crate::ce::coredll::CoredllExportTable::default()
+        .resolve_ordinal(ordinal?)
+        .map(|export| export.name.clone())
 }
 
 #[cfg(feature = "unicorn")]
