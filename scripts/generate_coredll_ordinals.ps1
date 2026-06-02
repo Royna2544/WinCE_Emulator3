@@ -194,5 +194,16 @@ $newText = @(
     ""
 ) -join "`n"
 
-[System.IO.File]::WriteAllText((Resolve-Path $OutputPath), $newText, [System.Text.UTF8Encoding]::new($false))
+$resolvedOutput = Resolve-Path $OutputPath
+[System.IO.File]::WriteAllText($resolvedOutput.Path, $newText, [System.Text.UTF8Encoding]::new($false))
+
+$rustfmt = Get-Command rustfmt -ErrorAction SilentlyContinue
+if ($null -ne $rustfmt) {
+    & $rustfmt.Source --edition 2021 $resolvedOutput.Path
+    if ($LASTEXITCODE -ne 0) {
+        throw "rustfmt failed for $OutputPath"
+    }
+} else {
+    Write-Warning "rustfmt was not found; run cargo fmt before committing $OutputPath"
+}
 Write-Output "generated $OutputPath from ${MapPath}: exports=$($mapExports.Count), export_index_slots=$($exportIndex.Count)"
