@@ -310,6 +310,15 @@ pub struct UnicornInaviControllerTrace {
     pub render_dim_ptr: Option<u32>,
     pub render_dim_w: Option<u32>,
     pub render_dim_h: Option<u32>,
+    pub aux_base: Option<u32>,
+    pub aux_slot_10f0: Option<u32>,
+    pub aux_slot_10f0_vtable: Option<u32>,
+    pub aux_link_ee4: Option<u32>,
+    pub aux_init_flag_edc: Option<u32>,
+    pub aux_vtable_source: Option<u32>,
+    pub aux_vtable_source_value: Option<u32>,
+    pub aux_store_addr: Option<u32>,
+    pub aux_store_value: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3431,6 +3440,33 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 if let Some(render_dim_h) = trace.render_dim_h {
                     write!(f, "/dim_h=0x{render_dim_h:08x}")?;
                 }
+                if let Some(aux_base) = trace.aux_base {
+                    write!(f, "/aux_base=0x{aux_base:08x}")?;
+                }
+                if let Some(aux_slot_10f0) = trace.aux_slot_10f0 {
+                    write!(f, "/aux10f0=0x{aux_slot_10f0:08x}")?;
+                }
+                if let Some(aux_slot_10f0_vtable) = trace.aux_slot_10f0_vtable {
+                    write!(f, "/aux10f0_vt=0x{aux_slot_10f0_vtable:08x}")?;
+                }
+                if let Some(aux_link_ee4) = trace.aux_link_ee4 {
+                    write!(f, "/aux_ee4=0x{aux_link_ee4:08x}")?;
+                }
+                if let Some(aux_init_flag_edc) = trace.aux_init_flag_edc {
+                    write!(f, "/aux_edc=0x{aux_init_flag_edc:08x}")?;
+                }
+                if let Some(aux_vtable_source) = trace.aux_vtable_source {
+                    write!(f, "/aux_vt_src=0x{aux_vtable_source:08x}")?;
+                }
+                if let Some(aux_vtable_source_value) = trace.aux_vtable_source_value {
+                    write!(f, "/aux_vt_src_value=0x{aux_vtable_source_value:08x}")?;
+                }
+                if let Some(aux_store_addr) = trace.aux_store_addr {
+                    write!(f, "/aux_store_addr=0x{aux_store_addr:08x}")?;
+                }
+                if let Some(aux_store_value) = trace.aux_store_value {
+                    write!(f, "/aux_store_value=0x{aux_store_value:08x}")?;
+                }
             }
             write!(f, "]")?;
         }
@@ -4886,6 +4922,49 @@ fn record_inavi_controller_trace<D>(
         .or_else(|| {
             (label == "render_dim_height_check").then_some(read_mips_reg(uc, RegisterMIPS::T6))
         });
+    let aux_base = match label {
+        "aux_update_loaded_base"
+        | "aux_update_state_gate"
+        | "aux_update_compare0"
+        | "aux_update_compare1"
+        | "aux_update_after_ctor"
+        | "aux_update_skip_ctor" => {
+            Some(read_mips_reg(uc, RegisterMIPS::S7)).filter(|value| *value != 0)
+        }
+        "aux_ctor_dispatch" | "aux_ctor_entry" | "aux_lazy_init_entry" => Some(a0),
+        "aux_ctor_setup"
+        | "aux_ctor_store_ptr"
+        | "aux_ctor_store_vtable"
+        | "aux_lazy_init_done" => Some(fp),
+        "aux_mouse_slot_load" | "aux_mouse_slot_deref" => {
+            Some(read_mips_reg(uc, RegisterMIPS::A2)).filter(|value| *value != 0)
+        }
+        _ => None,
+    };
+    let aux_slot_10f0 = aux_base.and_then(|base| base.checked_add(0x10f0));
+    let aux_slot_10f0_vtable = aux_slot_10f0.and_then(|addr| read_unicorn_u32(uc, addr));
+    let aux_link_ee4 = aux_base
+        .and_then(|base| base.checked_add(0xee4))
+        .and_then(|addr| read_unicorn_u32(uc, addr));
+    let aux_init_flag_edc = aux_base
+        .and_then(|base| base.checked_add(0xedc))
+        .and_then(|addr| read_unicorn_u32(uc, addr));
+    let aux_vtable_source = aux_base
+        .and_then(|base| base.checked_add(0x194))
+        .and_then(|addr| read_unicorn_u32(uc, addr));
+    let aux_vtable_source_value = aux_vtable_source
+        .and_then(|source| source.checked_add(4))
+        .and_then(|addr| read_unicorn_u32(uc, addr));
+    let aux_store_addr = match label {
+        "aux_ctor_store_ptr" => Some(read_mips_reg(uc, RegisterMIPS::V0)),
+        "aux_ctor_store_vtable" => Some(read_mips_reg(uc, RegisterMIPS::T6).wrapping_add(8)),
+        _ => None,
+    };
+    let aux_store_value = match label {
+        "aux_ctor_store_ptr" => Some(read_mips_reg(uc, RegisterMIPS::T6)),
+        "aux_ctor_store_vtable" => Some(read_mips_reg(uc, RegisterMIPS::T7)),
+        _ => None,
+    };
     let trace = UnicornInaviControllerTrace {
         pc,
         label,
@@ -4944,6 +5023,15 @@ fn record_inavi_controller_trace<D>(
         render_dim_ptr,
         render_dim_w,
         render_dim_h,
+        aux_base,
+        aux_slot_10f0,
+        aux_slot_10f0_vtable,
+        aux_link_ee4,
+        aux_init_flag_edc,
+        aux_vtable_source,
+        aux_vtable_source_value,
+        aux_store_addr,
+        aux_store_value,
     };
     let mut traces = traces.borrow_mut();
     if traces.len() == UNICORN_INAVI_CONTROLLER_TRACE_LIMIT {
@@ -4981,6 +5069,18 @@ fn inavi_controller_probe_label(pc: u32) -> Option<&'static str> {
         0x0002_d158 => Some("wm_size_entry"),
         0x0002_d198 => Some("wm_size_render_vtable"),
         0x0002_d1a0 => Some("wm_size_render_call"),
+        0x0006_3708 => Some("aux_mouse_slot_load"),
+        0x0006_370c => Some("aux_mouse_slot_deref"),
+        0x0006_39ec => Some("aux_mouse_slot_load"),
+        0x0006_39f0 => Some("aux_mouse_slot_deref"),
+        0x004b_1c8c => Some("aux_update_before_call"),
+        0x004b_2104 => Some("aux_update_entry"),
+        0x004b_2144 => Some("aux_update_loaded_base"),
+        0x004b_21dc => Some("aux_update_state_gate"),
+        0x004b_21e4 => Some("aux_update_compare0"),
+        0x004b_21f4 => Some("aux_update_compare1"),
+        0x004b_2214 => Some("aux_update_after_ctor"),
+        0x004b_23a8 => Some("aux_update_skip_ctor"),
         0x0010_23e0 => Some("render_ctor_surface_zero"),
         0x0010_28a8 => Some("render_ctor_enabled_zero"),
         0x0010_33e4 => Some("render_resize_entry"),
@@ -5001,6 +5101,13 @@ fn inavi_controller_probe_label(pc: u32) -> Option<&'static str> {
         0x0011_ce7c => Some("render_size_return"),
         0x0014_b30c => Some("render_poll_call"),
         0x0014_b314 => Some("render_poll_return"),
+        0x004b_2204 => Some("aux_ctor_dispatch"),
+        0x004b_23e4 => Some("aux_ctor_entry"),
+        0x004b_2410 => Some("aux_ctor_setup"),
+        0x004b_24f0 => Some("aux_ctor_store_ptr"),
+        0x004b_2648 => Some("aux_ctor_store_vtable"),
+        0x004b_264c => Some("aux_lazy_init_entry"),
+        0x004b_2724 => Some("aux_lazy_init_done"),
         _ => None,
     }
 }
