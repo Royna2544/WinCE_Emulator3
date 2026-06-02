@@ -608,12 +608,21 @@
   while blocked in `GetMessageW` and refreshes `--framebuffer-dump` at each new
   blocked wait. A focused test verifies a queued tap becomes
   `WM_LBUTTONDOWN`/`WM_LBUTTONUP` through `CeKernel::get_message_w`.
-- A real mounted iNavi run with `--tap 400,240` and a 60,000 ms wall-clock
-  limit still writes an all-zero framebuffer dump
-  (`target\inavi-tap-center-60s.ppm`) and stops in SDK MFC startup before the
-  final snapshot records `GetMessageW` or mouse messages. The touch path is now
-  available for real input experiments, but the current target frontier remains
-  earlier startup/MFC progress plus missing drawing behavior.
+- Unicorn code tracing now reads static instructions from mapped PE/DLL bytes
+  before falling back to emulator memory and samples block traces. With that
+  overhead removed, a real mounted iNavi no-tap run with a 90,000 ms wall-clock
+  limit returns in roughly 27 s at the idle `GetMessageW @861`
+  `blocked_get_message` frontier instead of timing out in app-side
+  date/geometry code. The snapshot has a visible `800x480`
+  `wce_solution_inavi` top-level HWND plus an MFC child HWND, but the
+  framebuffer dump remains all zero.
+- A real mounted iNavi run with `--tap 400,240` and the same 90,000 ms
+  wall-clock limit now confirms startup-injected input is actually consumed:
+  the import/message trace reaches the `WM_LBUTTONDOWN`/`WM_LBUTTONUP` path and
+  drains back to the idle `GetMessageW @861` snapshot. The framebuffer is still
+  all zero, so the current target frontier is no longer startup input delivery;
+  it is the missing app paint/GDI/surface path after the visible window and real
+  tap are present.
 - The default bootstrap uses `regs.json` as backing storage for the fake CE
   registry API and creates base GWE, timer, audio, and memory-map state.
 - The virtual Win32/CE framework and COREDLL dispatcher are connected to Unicorn

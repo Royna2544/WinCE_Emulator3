@@ -77,7 +77,16 @@
     Unicorn code tracing, a later 180,000 ms mounted run writes
     `target\inavi-sampled-180s.ppm`; its RGB body is also still all zero, but
     the run gets farther into app code before stopping in a date/geometry loop
-    around `0x0024f80c`/`0x0024fa30`. The compact import summary now includes
+    around `0x0024f80c`/`0x0024fa30`. After switching code diagnostics to read
+    mapped PE/DLL bytes before Unicorn memory and sampling block traces, a
+    90,000 ms no-tap mounted run returns in roughly 27 s at the idle
+    `GetMessageW @861` `blocked_get_message` frontier with a visible `800x480`
+    `wce_solution_inavi` top-level HWND and an MFC child HWND. A matching
+    `--tap 400,240` run confirms `WM_LBUTTONDOWN`/`WM_LBUTTONUP` delivery and
+    drains back to the same idle snapshot. Both dumps are still all zero, so
+    the current failure is missing paint/GDI/surface output after startup and
+    input delivery, not inability to reach the message pump. The compact import
+    summary now includes
     `operator new @1095`, `SetRect @103`, `MultiByteToWideChar @196`, and more
     `GetClassInfoW @878`/class-registration traffic, so this is a deeper
     frontier and still not GUI success. SDK `coredll.lib` evidence then

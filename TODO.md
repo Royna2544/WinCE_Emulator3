@@ -8,20 +8,18 @@
   generic presenter boundary. Do not treat the timeout-running paint loop as
   GUI success.
 - Continue the post-time iNavi path from the new wall-clock diagnostic frontier.
-  The latest mounted run now gets past the
-  earlier export-index `GetPaletteEntries` trap via real palette/DC state,
-  preserves SDK CRT ordinals such as `memset @1047` and `swprintf @1097` before
-  export-index fallback, returns heap-backed `RegisterGesture @2724` state, and
-  writes `GetSystemTime @25`. With wall-clock-bounded runs, the emulator now
-  returns snapshots and framebuffer dumps without external killing; the latest
-  8,000 ms diagnostic dump is still all zero, and compact import counts show
-  `memset @1047` dominating startup with `WINSOCK.dll!WSAStartup` already
-  reached once. With sampled Unicorn code tracing, a 180,000 ms mounted run now
-  reaches app-side date/geometry logic around `0x0024f80c`/`0x0024fa30`, with
-  hot imports including `operator new @1095`, `SetRect @103`, and
-  `MultiByteToWideChar @196`; the framebuffer dump is still all zero. Use
-  release/longer bounded slices and implement the next real GWE/GDI/resource
-  behavior the trace demands before expecting guest drawing.
+  The latest mounted run now gets past the earlier export-index
+  `GetPaletteEntries` trap via real palette/DC state, preserves SDK CRT
+  ordinals such as `memset @1047` and `swprintf @1097` before export-index
+  fallback, returns heap-backed `RegisterGesture @2724` state, and writes
+  `GetSystemTime @25`. With sampled Unicorn code tracing and mapped-code
+  instruction reads, a 90,000 ms mounted no-tap run now returns in roughly 27 s
+  at an idle `GetMessageW @861` `blocked_get_message` snapshot instead of
+  timing out in app-side date/geometry logic. The visible top-level
+  `wce_solution_inavi` HWND is `800x480`, and the `Afx:10000:b:0:40000006:0`
+  child HWND exists, but the framebuffer dump is still all zero. Use the idle
+  frontier to keep probing WNDPROC/paint/GDI behavior before expecting guest
+  drawing.
 - Continue from the new post-jump-table exit frontier. The latest release
   mounted run gets past `__nes @2047`, `__litofp @2032`, `__ll_div @2005`,
   `GetTimeZoneInformation @27`, `SetForegroundWindow @702`,
@@ -70,9 +68,12 @@
   against CE/MFC expectations. The latest diagnostic shows create/show/size/
   paint/idle messages returning `0`, `WM_PAINT` not reaching `BeginPaint`, MFC
   dispatch through `AfxWndProcBase` (`0x6004eba8`), and `Solution_iNavi`
-  registered with target WNDPROC `0x000135cc`. Continue with a targeted probe of
-  `SetWindowLongW`/superclass state and first-message creation ordering before
-  adding more lifecycle messages.
+  registered with target WNDPROC `0x000135cc`. A `--tap 400,240` idle-frontier
+  run now confirms queued `WM_LBUTTONDOWN`/`WM_LBUTTONUP` delivery and drain
+  through the active HWND, but still produces an all-zero framebuffer. Continue
+  with a targeted probe of `SetWindowLongW`/superclass state, first-message
+  creation ordering, and the missing app paint/GDI path before adding more
+  lifecycle messages.
 - Continue connecting SDK CE 4.2 Mipsii COREDLL CRT ordinals from `coredll.lib`
   as the launch trace demands.
 - Add focused import-trap tests for Unicorn `_setjmp`/`longjmp` register/PC
@@ -102,13 +103,10 @@
 
 - Extend bounded run tooling beyond the current snapshot import ring if more
   structured trace context is needed.
-- Use the new `--tap X,Y` runner input once the mounted iNavi path reliably
-  reaches the idle `GetMessageW` frontier again; confirm queued
-  `WM_LBUTTONDOWN`/`WM_LBUTTONUP` messages in `last_messages` and then trace
-  whether the tap triggers new WNDPROC/custom-message or drawing imports.
-- Continue reducing the current long MFC startup/wall-clock frontier observed
-  by `target\inavi-tap-center-60s.log`; the queued tap cannot be consumed until
-  the app returns to message retrieval.
+- Trace why the now-consumed `--tap 400,240` messages do not trigger useful
+  paint, child-window, or custom-message drawing behavior. The next useful
+  evidence is the exact WNDPROC/superclass path and any GDI/DC/resource imports
+  following the delivered mouse down/up.
 - Add an HTTP/WebSocket transport over the Rust `CeRemote` API state when the
   host runtime is ready for remote UI/audio streaming; audio transport should
   honor the sink's per-client cursors and flush-marked chunks immediately.

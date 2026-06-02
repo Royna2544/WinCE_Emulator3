@@ -313,6 +313,8 @@ const UNICORN_WNDPROC_READINESS_TRACE_LIMIT: usize = 64;
 #[cfg(feature = "unicorn")]
 const UNICORN_CODE_TRACE_SAMPLE_INTERVAL: u32 = 64;
 #[cfg(feature = "unicorn")]
+const UNICORN_BLOCK_TRACE_SAMPLE_INTERVAL: u32 = 16;
+#[cfg(feature = "unicorn")]
 const IMPORT_TRAP_ARG_COUNT: usize = 12;
 #[cfg(feature = "unicorn")]
 const THREAD_EXIT_STUB_ADDR: u32 =
@@ -859,15 +861,16 @@ impl UnicornMips {
         let host_wall_clock_counter_hook = Rc::clone(&host_wall_clock_counter);
         let last_calls = Rc::new(RefCell::new(Vec::<UnicornLastCall>::new()));
         let last_calls_hook = Rc::clone(&last_calls);
+        let mapped_blobs = self.mapped_blobs.clone();
         let trampoline_ranges = self.trampoline_ranges.clone();
         let trampoline_jumps = self.trampoline_jumps.clone();
         uc.add_code_hook(1, 0, move |uc, address, _size| {
             let pc = address as u32;
             let code_trace_index = code_trace_counter_hook.get().wrapping_add(1);
             code_trace_counter_hook.set(code_trace_index);
-            let instruction = read_unicorn_u32(uc, pc);
+            let sampled_code_trace = code_trace_index % UNICORN_CODE_TRACE_SAMPLE_INTERVAL == 0;
+            let instruction = read_unicorn_code_u32(uc, &mapped_blobs, pc);
             *last_code_probe_hook.borrow_mut() = Some((pc, instruction));
-            let next_instruction = read_unicorn_u32(uc, pc.wrapping_add(4));
             if let Some(limit) = host_wall_clock_limit {
                 let mut counter = host_wall_clock_counter_hook.borrow_mut();
                 *counter = counter.wrapping_add(1);
@@ -885,8 +888,8 @@ impl UnicornMips {
             }
             let direct_jump_target =
                 instruction.and_then(|instruction| decode_direct_jump_target(pc, instruction));
-            let direct_jump_target_instruction =
-                direct_jump_target.and_then(|target| read_unicorn_u32(uc, target));
+            let direct_jump_target_in_trampoline = direct_jump_target
+                .is_some_and(|target| target_in_ranges(target, &trampoline_ranges));
             if let (Some(instruction), Some(target)) = (instruction, direct_jump_target) {
                 if instruction >> 26 == 0x03 {
                     push_unicorn_last_call(&last_calls_hook, uc, pc, target, "jal");
@@ -899,12 +902,14 @@ impl UnicornMips {
                 let kind = mips_gpr_name(register);
                 push_unicorn_last_call(&last_calls_hook, uc, pc, target, kind);
             }
-            let sentinel_target =
-                instruction
-                    .zip(next_instruction)
-                    .and_then(|(instruction, next_instruction)| {
-                        decode_trampoline_sentinel_target(instruction, next_instruction)
-                    });
+            let sentinel_target = instruction.and_then(|instruction| {
+                if !is_trampoline_sentinel_first_word(instruction) {
+                    return None;
+                }
+                let next_instruction =
+                    read_unicorn_code_u32(uc, &mapped_blobs, pc.wrapping_add(4))?;
+                decode_trampoline_sentinel_target(instruction, next_instruction)
+            });
             if let Some((register, target)) = instruction
                 .and_then(decode_jr_register)
                 .and_then(|register| read_mips_gpr(uc, register).map(|target| (register, target)))
@@ -922,20 +927,25 @@ impl UnicornMips {
                     return;
                 }
             }
-            let direct_jump_target_in_trampoline = direct_jump_target
-                .is_some_and(|target| target_in_ranges(target, &trampoline_ranges));
-            let direct_jump_trampoline_origin = direct_jump_target.and_then(|target| {
-                trampoline_jumps
-                    .iter()
-                    .find_map(|trampoline| (trampoline.stub == target).then_some(trampoline.origin))
-            });
-            let current_trampoline_origin = trampoline_jumps.iter().find_map(|trampoline| {
-                trampoline
-                    .stub
-                    .checked_add(trampoline.byte_len)
-                    .filter(|end| pc >= trampoline.stub && pc < *end)
-                    .map(|_| trampoline.origin)
-            });
+            let direct_jump_trampoline_origin = direct_jump_target
+                .filter(|_| direct_jump_target_in_trampoline)
+                .and_then(|target| {
+                    trampoline_jumps.iter().find_map(|trampoline| {
+                        (trampoline.stub == target).then_some(trampoline.origin)
+                    })
+                });
+            let current_trampoline_origin = (sampled_code_trace
+                && target_in_ranges(pc, &trampoline_ranges))
+            .then(|| {
+                trampoline_jumps.iter().find_map(|trampoline| {
+                    trampoline
+                        .stub
+                        .checked_add(trampoline.byte_len)
+                        .filter(|end| pc >= trampoline.stub && pc < *end)
+                        .map(|_| trampoline.origin)
+                })
+            })
+            .flatten();
             let code_record = || UnicornLastCode {
                 pc,
                 ra: read_mips_reg(uc, RegisterMIPS::RA),
@@ -945,9 +955,11 @@ impl UnicornMips {
                     .checked_add(0x10)
                     .and_then(|addr| read_unicorn_u32(uc, addr)),
                 instruction,
-                next_instruction,
+                next_instruction: read_unicorn_code_u32(uc, &mapped_blobs, pc.wrapping_add(4)),
                 direct_jump_target,
-                direct_jump_target_instruction,
+                direct_jump_target_instruction: direct_jump_target
+                    .filter(|_| direct_jump_target_in_trampoline)
+                    .and_then(|target| read_unicorn_code_u32(uc, &mapped_blobs, target)),
                 direct_jump_target_in_trampoline,
                 direct_jump_trampoline_origin,
                 current_trampoline_origin,
@@ -961,10 +973,9 @@ impl UnicornMips {
                 }
                 readiness.push(code_record());
             }
-            let should_trace_code = code_trace_index % UNICORN_CODE_TRACE_SAMPLE_INTERVAL == 0
+            let should_trace_code = sampled_code_trace
                 || direct_jump_target_in_trampoline
                 || direct_jump_trampoline_origin.is_some()
-                || current_trampoline_origin.is_some()
                 || is_inavi_readiness_probe_pc(pc);
             if should_trace_code {
                 let mut last_code = last_code_hook.borrow_mut();
@@ -973,9 +984,13 @@ impl UnicornMips {
                 }
                 last_code.push(code_record());
             }
-            if let (Some(instruction), Some(next_instruction), Some(target)) =
-                (instruction, next_instruction, direct_jump_target)
-            {
+            if let (Some(instruction), Some(next_instruction), Some(target)) = (
+                instruction,
+                direct_jump_target
+                    .filter(|_| direct_jump_target_in_trampoline)
+                    .and_then(|_| read_unicorn_code_u32(uc, &mapped_blobs, pc.wrapping_add(4))),
+                direct_jump_target,
+            ) {
                 if is_patched_trampoline_jump(
                     instruction,
                     next_instruction,
@@ -1012,7 +1027,14 @@ impl UnicornMips {
 
         let last_blocks = Rc::new(RefCell::new(Vec::<UnicornLastBlock>::new()));
         let last_blocks_hook = Rc::clone(&last_blocks);
+        let block_trace_counter = Rc::new(Cell::new(0u32));
+        let block_trace_counter_hook = Rc::clone(&block_trace_counter);
         uc.add_block_hook(1, 0, move |uc, address, size| {
+            let counter = block_trace_counter_hook.get().wrapping_add(1);
+            block_trace_counter_hook.set(counter);
+            if counter % UNICORN_BLOCK_TRACE_SAMPLE_INTERVAL != 0 {
+                return;
+            }
             let mut last_blocks = last_blocks_hook.borrow_mut();
             if last_blocks.len() == UNICORN_TRACE_LIMIT {
                 last_blocks.remove(0);
@@ -3319,6 +3341,36 @@ fn read_unicorn_u32<D>(uc: &unicorn_engine::Unicorn<'_, D>, address: u32) -> Opt
     uc.mem_read(u64::from(address), &mut bytes)
         .ok()
         .map(|()| u32::from_le_bytes(bytes))
+}
+
+#[cfg(feature = "unicorn")]
+fn read_mapped_blobs_u32(mapped_blobs: &[MappedBlob], address: u32) -> Option<u32> {
+    for blob in mapped_blobs {
+        let Some(offset) = address.checked_sub(blob.base).map(|offset| offset as usize) else {
+            continue;
+        };
+        let end = offset.checked_add(4)?;
+        if end <= blob.bytes.len() {
+            return Some(u32::from_le_bytes(blob.bytes[offset..end].try_into().ok()?));
+        }
+    }
+    None
+}
+
+#[cfg(feature = "unicorn")]
+fn read_unicorn_code_u32<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    mapped_blobs: &[MappedBlob],
+    address: u32,
+) -> Option<u32> {
+    read_mapped_blobs_u32(mapped_blobs, address).or_else(|| read_unicorn_u32(uc, address))
+}
+
+#[cfg(feature = "unicorn")]
+fn is_trampoline_sentinel_first_word(instruction: u32) -> bool {
+    let opcode = instruction >> 26;
+    let rt = (instruction >> 16) & 0x1f;
+    opcode == 0x0f && rt == 26
 }
 
 #[cfg(feature = "unicorn")]
@@ -5954,6 +6006,34 @@ mod unicorn_tests {
         uc.emu_start(u64::from(stub_pc), 0, 0, 5).unwrap();
 
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap(), u64::from(pc + 16));
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap(), 42);
+    }
+
+    #[test]
+    fn beqzl_trampoline_matches_inavi_layout_loop() {
+        let pc = 0x0024_fa48;
+        let stub_pc = 0x00a8_9000;
+        let branch = super::decode_mips_branch_likely(0x5060_fff7).unwrap();
+        let words = super::branch_likely_stub_words(pc, branch, 0x2442_0001, stub_pc).unwrap();
+
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x0024_f000, 0x0000_2000, Prot::ALL).unwrap();
+        uc.mem_map(0x00a8_9000, 0x0000_1000, Prot::ALL).unwrap();
+        write_words(&mut uc, stub_pc, &words);
+        uc.reg_write(RegisterMIPS::V1, 1).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 41).unwrap();
+        uc.emu_start(u64::from(stub_pc), 0, 0, 4).unwrap();
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap(), u64::from(pc + 8));
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap(), 41);
+
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x0024_f000, 0x0000_2000, Prot::ALL).unwrap();
+        uc.mem_map(0x00a8_9000, 0x0000_1000, Prot::ALL).unwrap();
+        write_words(&mut uc, stub_pc, &words);
+        uc.reg_write(RegisterMIPS::V1, 0).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 41).unwrap();
+        uc.emu_start(u64::from(stub_pc), 0, 0, 5).unwrap();
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap(), u64::from(pc - 0x20));
         assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap(), 42);
     }
 
