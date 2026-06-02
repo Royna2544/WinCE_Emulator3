@@ -54,11 +54,17 @@ anchors, not app-specific shortcuts.
 
 - COREDLL TLS and interlocked exports:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/apis.c`
-  and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kmisc.c`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\kfuncs.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pkfuncs.h`, and
   `/mnt/c/Program Files (x86)/Windows CE Tools/wce420/STANDARDSDK_420/Include/Mipsii/winbase.h`
   - `TlsGetValue` and `TlsSetValue` use `TLS_MINIMUM_AVAILABLE` and set
     `ERROR_INVALID_PARAMETER` for invalid slots; `TlsGetValue` sets
     `NO_ERROR` when a valid slot contains zero.
+  - `TlsCall(type, slot)` routes `TLS_FUNCALLOC` and `TLS_FUNCFREE` through the
+    kernel TLS allocator/free path. CE reserves slots `0..3`, allocates slots
+    `4..63`, returns `TLS_OUT_OF_INDEXES` when exhausted, and clears freed TLS
+    slots across process threads.
   - MIPS CE headers define the exported interlocked signatures and
     `InterlockedTestExchange`/`InterlockedCompareExchange` argument order.
 

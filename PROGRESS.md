@@ -66,7 +66,8 @@
     `InterlockedDecrement`, `InterlockedExchange`,
     `InterlockedExchangeAdd`, and `InterlockedCompareExchange`
   - per-thread `TlsGetValue`, `TlsSetValue`, `GetLastError`, and
-    `SetLastError`
+    `SetLastError`, plus process-style `TlsCall` allocation/free for CE TLS
+    slots `4..63`
   - `Sleep`, `GetTickCount`, `EventModify`, `WaitForSingleObject`, and
     `CloseHandle`
   - CE heap/local/virtual-memory ordinals: `GetProcessHeap`, `LocalAlloc`,
@@ -228,6 +229,12 @@
   killed, so the optional framebuffer dump is only produced for runs that
   return normally or error through the emulator path. A non-CPU smoke run wrote
   `target\framebuffer-smoke.ppm` from the virtual framebuffer.
+- `TlsCall` ordinal 520 now returns a real CE-style TLS allocation result. The
+  short debug trace changed the first `TlsCall(TLS_FUNCALLOC, 0)` result from
+  `0` to slot `4`; a 10-second debug run still does not reach later GDI/DC
+  imports, and a 30-second non-debug run still times out after the normal
+  startup/framebuffer/PE mapping output. This is progress in startup TLS setup
+  rather than GUI success.
 
 ## Current State
 

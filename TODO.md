@@ -16,6 +16,9 @@
   ole32 imports are connected, more GWE menu/dialog/control raw pointer
   marshalling, file attributes/directory metadata beyond the first
   `FindFirstFileW` tranche, and timer/system-time structs.
+- Continue tracing after CE `TlsCall` now returns real slots; identify whether
+  the next demand is guest-side TLS/user-kdata setup, more loader/thread
+  behavior, or eventually GDI/DC drawing into the virtual framebuffer.
 - Continue connecting SDK CE 4.2 Mipsii COREDLL CRT ordinals from `coredll.lib`
   as the launch trace demands.
 - Implement CRT `_msize`/`realloc`/operator delete ordinals from SDK evidence so

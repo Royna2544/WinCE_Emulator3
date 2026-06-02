@@ -1099,6 +1099,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
+        ORD_TLS_CALL => Some(CoredllValue::U32(kernel.threads.tls_call(
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
         ORD_GET_LAST_ERROR => Some(CoredllValue::U32(kernel.threads.get_last_error(thread_id))),
         ORD_SET_LAST_ERROR => {
             kernel.threads.set_last_error(thread_id, raw_arg(args, 0));
