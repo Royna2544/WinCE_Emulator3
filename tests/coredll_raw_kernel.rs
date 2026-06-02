@@ -9,7 +9,7 @@ use wince_emulation_v3::{
             ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_TIME, ORD_GET_SYSTEM_TIME_AS_FILE_TIME,
             ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY, ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT,
             ORD_GET_TIME_ZONE_INFORMATION, ORD_GET_VERSION_EX_W, ORD_INITIALIZE_CRITICAL_SECTION,
-            ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
+            ORD_INPUT_DEBUG_CHAR_W, ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_LEAVE_CRITICAL_SECTION,
             ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_QUERY_PERFORMANCE_COUNTER,
             ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD,
@@ -336,6 +336,20 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     assert_eq!(memory.read_u32(time_zone + 84)?, 0);
     assert_eq!(memory.read_u32(time_zone + 168)?, 0);
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_INPUT_DEBUG_CHAR_W,
+            []
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(u32::MAX),
+            ..
+        }
+    ));
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

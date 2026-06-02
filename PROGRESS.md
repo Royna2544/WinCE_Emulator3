@@ -511,6 +511,14 @@
   The mounted release run gets past the previous `SetForegroundWindow @702`
   trap and now stops at `InputDebugCharW @595` (`pc=0x7fff0a90`,
   `ra=0x600119c4`). `target\inavi-release-foreground.ppm` remains all zero.
+- Raw `InputDebugCharW @595` now follows the CE debug-port no-data path and
+  returns `OEM_DEBUG_READ_NODATA` (`0xffffffff`) when no host debug character is
+  available. The focused raw kernel/time/sync dispatch test passes and
+  `cargo check --features unicorn` is clean. The mounted release run gets past
+  the previous `InputDebugCharW @595` trap and now stops on a guest CPU
+  exception (`interrupt_no=12`, `pc=0x00000000`, `ra=0x00035cf4`) after app
+  code near `0x000ef80a`; `target\inavi-release-debugchar.ppm` remains all
+  zero.
 
 ## Current State
 
@@ -530,8 +538,10 @@
   snapshot plus framebuffer dump. The current mounted run progresses past the
   previous `GetSystemTime @25` trap, the previous soft-float `__nes @2047`/
   `__litofp @2032` traps, the MIPS `__ll_div @2005` helper frontier,
-  `GetTimeZoneInformation @27`, and `SetForegroundWindow @702`. The current
-  concrete stop is `InputDebugCharW @595`; the framebuffer remains blank. A
+  `GetTimeZoneInformation @27`, `SetForegroundWindow @702`, and
+  `InputDebugCharW @595`. The current concrete stop is a guest CPU exception
+  (`interrupt_no=12`, `pc=0x00000000`, `ra=0x00035cf4`) after app code near
+  `0x000ef80a`; the framebuffer remains blank. A
   generic virtual framebuffer is now
   attached to the emulator boundary, generic virtual presenter/desktop
   interfaces exist for host

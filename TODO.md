@@ -22,13 +22,14 @@
   `MultiByteToWideChar @196`; the framebuffer dump is still all zero. Use
   release/longer bounded slices and implement the next real GWE/GDI/resource
   behavior the trace demands before expecting guest drawing.
-- Implement the next launch-demanded debug/input helper boundary. The latest
+- Continue from the new post-debug-input CPU exception frontier. The latest
   release mounted run gets past `__nes @2047`, `__litofp @2032`,
-  `__ll_div @2005`, `GetTimeZoneInformation @27`, and
-  `SetForegroundWindow @702`; it now traps at `InputDebugCharW @595` from the
-  SDK MFC path. Confirm the CE return semantics and route it through a generic
-  debug/input shim rather than an app-specific shortcut, then rerun the mounted
-  slice and inspect the next real frontier.
+  `__ll_div @2005`, `GetTimeZoneInformation @27`, `SetForegroundWindow @702`,
+  and `InputDebugCharW @595`; it now stops on a guest CPU exception
+  (`interrupt_no=12`, `pc=0x00000000`, `ra=0x00035cf4`) after a trace through
+  app code near `0x000ef80a`. The framebuffer dump
+  `target\inavi-release-debugchar.ppm` is still all zero. Disassemble and fix
+  the next MIPS/trampoline/control-flow issue before expecting guest drawing.
 - Replace launch-stub behavior for commctrl, WINSOCK, and OLE imports with
   real subsystem-backed implementations as import traces demand. Keep MFC on
   the loaded SDK DLL path only; do not add emulator MFC stubs.

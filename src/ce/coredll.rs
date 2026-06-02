@@ -1168,6 +1168,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
+        ORD_INPUT_DEBUG_CHAR_W => Some(CoredllValue::U32(OEM_DEBUG_READ_NODATA)),
         ORD_QUERY_PERFORMANCE_FREQUENCY => {
             Some(CoredllValue::Bool(write_performance_counter_value(
                 kernel,
@@ -3876,6 +3877,7 @@ const SYSTEM_TIME_BASE_DAY: i32 = 1;
 const TIME_ZONE_INFORMATION_SIZE: usize = 172;
 const TIME_ZONE_ID_UNKNOWN: u32 = 0;
 const TIME_ZONE_ID_INVALID: u32 = u32::MAX;
+const OEM_DEBUG_READ_NODATA: u32 = u32::MAX;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SystemTimeFields {

@@ -88,9 +88,11 @@
     and `$v1` import returns then advance the run past `__ll_div @2005`, and
     `GetTimeZoneInformation @27` support advances it past the time-zone query,
     and foreground-window activation support advances it past
-    `SetForegroundWindow @702`. The current concrete stop is now
-    `InputDebugCharW @595` (`pc=0x7fff0a90`, `ra=0x600119c4`); the framebuffer
-    is still all zero.
+    `SetForegroundWindow @702`. `InputDebugCharW @595` now returns CE-style
+    no-debug-input (`OEM_DEBUG_READ_NODATA`/`0xffffffff`), advancing the run
+    into a guest CPU exception (`interrupt_no=12`, `pc=0x00000000`,
+    `ra=0x00035cf4`) after app code near `0x000ef80a`; the framebuffer is still
+    all zero.
   - Status: active; `TlsCall` now returns real CE-style slots,
     `CallWindowProcW` now enters guest window-procedure targets, and
     `CreateWindowExW` now delivers the first create-time message. Raw
@@ -106,13 +108,14 @@
     confirms the current frontier is a post-time long-running startup path with
     import-count evidence rather than an unimplemented import trap; sampled
     trace runs now push that frontier into app-side date/geometry work while the
-    framebuffer stays blank. The latest launch-demanded stop is
-    `InputDebugCharW @595` after the newly connected soft-float helpers, MIPS
-    64-bit helper returns, `GetTimeZoneInformation @27`, and foreground-window
-    activation. Next work is to implement the generic debug/input helper, then
-    continue with CE-referenced raw behavior that advances the guest path toward
-    the newly connected framebuffer drawing and the remaining GDI/DC/surface
-    drawing and blit imports.
+    framebuffer stays blank. The latest launch-demanded stop has moved past the
+    generic debug input helper into a MIPS CPU exception after the newly
+    connected soft-float helpers, MIPS 64-bit helper returns,
+    `GetTimeZoneInformation @27`, foreground-window activation, and
+    `InputDebugCharW @595`. Next work is to disassemble and fix the
+    MIPS/trampoline/control-flow frontier, then continue with CE-referenced raw
+    behavior that advances the guest path toward the newly connected framebuffer
+    drawing and the remaining GDI/DC/surface drawing and blit imports.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch
