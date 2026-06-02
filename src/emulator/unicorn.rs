@@ -806,6 +806,17 @@ impl UnicornMips {
                     return;
                 }
                 if trap.as_ref().is_some_and(|trap| {
+                    try_enter_send_message_callout(
+                        unsafe { &*kernel_ptr },
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
                     try_enter_call_window_proc_callout(
                         memory.uc,
                         trap.module_kind,
@@ -2048,6 +2059,57 @@ fn try_enter_dispatch_message_callout<D>(
         wndproc = format_args!("0x{wndproc:08x}"),
         ra = format_args!("0x{:08x}", read_mips_reg(uc, RegisterMIPS::RA)),
         "DispatchMessageW guest wndproc callout"
+    );
+
+    let writes = [
+        uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(msg)),
+        uc.reg_write(RegisterMIPS::A2, u64::from(wparam)),
+        uc.reg_write(RegisterMIPS::A3, u64::from(lparam)),
+        uc.reg_write(RegisterMIPS::T9, u64::from(wndproc)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(wndproc)),
+    ];
+    writes.into_iter().all(|write| write.is_ok())
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_send_message_callout<D>(
+    kernel: &CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_W)
+    {
+        return false;
+    }
+
+    let hwnd = args.first().copied().unwrap_or(0);
+    let Some(window) = kernel.gwe.window(hwnd) else {
+        return false;
+    };
+    let wndproc = window.wndproc;
+    if wndproc == 0 {
+        return false;
+    }
+    let msg = args.get(1).copied().unwrap_or(0);
+    let wparam = args.get(2).copied().unwrap_or(0);
+    let lparam = args.get(3).copied().unwrap_or(0);
+
+    tracing::debug!(
+        target: "ce.gwe",
+        hwnd = format_args!("0x{hwnd:08x}"),
+        msg = format_args!("0x{msg:08x}"),
+        wparam = format_args!("0x{wparam:08x}"),
+        lparam = format_args!("0x{lparam:08x}"),
+        class = window.class_name.as_str(),
+        wndproc = format_args!("0x{wndproc:08x}"),
+        ra = format_args!("0x{:08x}", read_mips_reg(uc, RegisterMIPS::RA)),
+        "SendMessageW guest wndproc callout"
     );
 
     let writes = [

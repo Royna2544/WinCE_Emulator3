@@ -328,6 +328,12 @@
   `WM_IDLEUPDATECMDUI` (`0x0363`) handling, without reaching child HWND
   creation or GDI/DC drawing imports. This is progress in CE/GWE message
   semantics, not GUI success.
+- The Unicorn import hook can now enter a registered guest WNDPROC for raw
+  `SendMessageW` using the same guest-callout pattern as `DispatchMessageW` and
+  `CallWindowProcW`. A follow-up 3,000,000-instruction bounded launch compiled
+  this path but did not show `SendMessageW` as the current main-pump frontier;
+  the run still stops at empty `GetMessageW @861` after the show/size/paint and
+  MFC idle-update sequence.
 
 ## Current State
 
@@ -337,11 +343,13 @@
   top-level default sizing to the virtual desktop, deliver the create-time
   `WM_CREATE` callout, queue and dispatch visible-create show/size lifecycle
   messages, synthesize and dispatch the first `WM_PAINT`, enter guest
-  `CallWindowProcW` targets, and then reach an empty-queue `GetMessageW`
-  diagnostic snapshot. A generic virtual framebuffer is now attached to the
-  emulator boundary, and generic virtual presenter/desktop interfaces exist for
-  later host presentation/window management, but guest drawing/blit behavior is
-  not connected yet and this must not be treated as GUI success.
+  `CallWindowProcW` targets, enter registered guest WNDPROCs for raw
+  `SendMessageW` when that import path is used, and then reach an empty-queue
+  `GetMessageW` diagnostic snapshot. A generic virtual framebuffer is now
+  attached to the emulator boundary, and generic virtual presenter/desktop
+  interfaces exist for later host presentation/window management, but guest
+  drawing/blit behavior is not connected yet and this must not be treated as
+  GUI success.
 - Instruction-limited snapshots show the post-`WM_PAINT` path entering SDK MFC
   thread-local state and message pre-translation (`CThreadLocalObject::GetData`
   and later `CWnd::WalkPreTranslateTree`) rather than reaching guest drawing
