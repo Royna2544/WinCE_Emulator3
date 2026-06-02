@@ -44,6 +44,7 @@ int WINAPI WinMain(HINSTANCE h, HINSTANCE, LPWSTR, int) {
     DWORD tid = 0;
     HANDLE thread = CreateThread(0, 0, WorkerProc, &s, 0, &tid);
     if (!thread) return FixtureFail(13903);
+    DWORD exitCode = 0;
 
     DWORD wait = WaitForSingleObject(s.eventHandle, 5000);
     if (wait != WAIT_OBJECT_0) return FixtureFail(13904);
@@ -68,6 +69,8 @@ int WINAPI WinMain(HINSTANCE h, HINSTANCE, LPWSTR, int) {
     if (!seen) return FixtureFail(13908);
 
     WaitForSingleObject(thread, 5000);
+    if (!GetExitCodeThread(thread, &exitCode)) return FixtureFail(13912);
+    if (exitCode != 0) return FixtureFail(13913);
     CloseHandle(thread);
     CloseHandle(s.eventHandle);
     DestroyWindow(s.hwnd);

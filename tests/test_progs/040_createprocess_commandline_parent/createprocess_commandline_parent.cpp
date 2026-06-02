@@ -34,6 +34,9 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     if (view[0] != 'O' || view[1] != 'K') return FixtureFail(4006);
 
     WaitForSingleObject(pi.hProcess, 5000);
+    DWORD exitCode = 0xffffffff;
+    if (!GetExitCodeProcess(pi.hProcess, &exitCode)) return FixtureFail(4007);
+    if (exitCode != 0) return FixtureFail(4008);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
     CloseHandle(eventHandle);

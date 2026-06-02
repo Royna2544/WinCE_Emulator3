@@ -1279,6 +1279,23 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
+        ORD_GET_THREAD_ID => Some(CoredllValue::U32(get_thread_id_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_GET_EXIT_CODE_THREAD => Some(CoredllValue::Bool(get_thread_exit_code_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_GET_EXIT_CODE_PROCESS => Some(CoredllValue::Bool(get_process_exit_code_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_TERMINATE_PROCESS => Some(CoredllValue::Bool(terminate_process_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
         ORD_CREATE_MUTEX_W => Some(CoredllValue::Handle(create_mutex_w_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -5092,6 +5109,92 @@ fn resume_thread_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 
                 .set_last_error(thread_id, ERROR_INVALID_HANDLE);
             u32::MAX
         }
+    }
+}
+
+fn get_thread_id_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {
+    match kernel.guest_thread_id(handle) {
+        Some(target_thread_id) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            target_thread_id
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            0
+        }
+    }
+}
+
+fn get_thread_exit_code_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let handle = raw_arg(args, 0);
+    let exit_code_ptr = raw_arg(args, 1);
+    if exit_code_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(exit_code) = kernel.guest_thread_exit_code(handle) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    if !write_guest_u32(kernel, memory, thread_id, exit_code_ptr, exit_code) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn get_process_exit_code_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let handle = raw_arg(args, 0);
+    let exit_code_ptr = raw_arg(args, 1);
+    if exit_code_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(exit_code) = kernel.process_exit_code(handle) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    if !write_guest_u32(kernel, memory, thread_id, exit_code_ptr, exit_code) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn terminate_process_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    handle: u32,
+    exit_code: u32,
+) -> bool {
+    if kernel.terminate_process(handle, exit_code) {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        false
     }
 }
 

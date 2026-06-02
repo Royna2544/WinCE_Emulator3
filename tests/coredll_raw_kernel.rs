@@ -4,20 +4,21 @@ use wince_emulation_v3::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
             ORD_CLOSE_HANDLE, ORD_CREATE_EVENT_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD,
-            ORD_EVENT_MODIFY, ORD_GET_LAST_ERROR, ORD_GET_THREAD_PRIORITY, ORD_GET_TICK_COUNT,
+            ORD_EVENT_MODIFY, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD,
+            ORD_GET_LAST_ERROR, ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY, ORD_GET_TICK_COUNT,
             ORD_GET_VERSION_EX_W, ORD_INITIALIZE_CRITICAL_SECTION,
             ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_LEAVE_CRITICAL_SECTION,
             ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_QUERY_PERFORMANCE_COUNTER,
             ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD,
             ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY, ORD_SLEEP, ORD_SUSPEND_THREAD,
-            ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION,
-            ORD_WAIT_FOR_SINGLE_OBJECT,
+            ORD_TERMINATE_PROCESS, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
+            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_FOR_SINGLE_OBJECT,
         },
         gwe::Message,
         kernel::CeKernel,
         registry::ERROR_SUCCESS,
-        thread::ERROR_INVALID_PARAMETER,
+        thread::{ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER},
         timer::{WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
     config::RuntimeConfig,
@@ -329,6 +330,52 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     };
     assert_ne!(worker_thread, 0);
     assert_eq!(memory.read_u32(thread_id_ptr)?, 2);
+    let exit_code_ptr = 0x5040;
+    memory.map_words(exit_code_ptr, 1);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_THREAD_ID,
+            [worker_thread],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(2),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_EXIT_CODE_THREAD,
+            [worker_thread, exit_code_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(exit_code_ptr)?, 259);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_EXIT_CODE_THREAD,
+            [worker_thread, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -415,6 +462,20 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
             &mut kernel,
             &mut memory,
             thread_id,
+            ORD_GET_EXIT_CODE_THREAD,
+            [worker_thread, exit_code_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(exit_code_ptr)?, 0x55);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_WAIT_FOR_SINGLE_OBJECT,
             [worker_thread, 0]
         ),
@@ -436,6 +497,68 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
             ..
         }
     ));
+
+    let launch = kernel.queue_process_launch(Some("raw-child.exe".to_owned()), None);
+    let process_exit_ptr = 0x5080;
+    memory.map_words(process_exit_ptr, 1);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_EXIT_CODE_PROCESS,
+            [launch.process_handle, process_exit_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(process_exit_ptr)?, 259);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TERMINATE_PROCESS,
+            [launch.process_handle, 0x66],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_EXIT_CODE_PROCESS,
+            [launch.process_handle, process_exit_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(process_exit_ptr)?, 0x66);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_EXIT_CODE_PROCESS,
+            [worker_thread, process_exit_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
 
     let event_name_ptr = 0x4000;
     memory.write_wide_z(event_name_ptr, "raw-event");

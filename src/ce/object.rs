@@ -331,6 +331,20 @@ impl HandleTable {
         true
     }
 
+    pub fn thread_id(&self, handle: u32) -> Option<u32> {
+        let Ok(KernelObject::Thread(thread)) = self.get(handle) else {
+            return None;
+        };
+        Some(thread.thread_id)
+    }
+
+    pub fn thread_exit_code(&self, handle: u32) -> Option<u32> {
+        let Ok(KernelObject::Thread(thread)) = self.get(handle) else {
+            return None;
+        };
+        Some(thread.exit_code)
+    }
+
     pub fn suspend_thread(&mut self, handle: u32) -> Option<u32> {
         let Ok(KernelObject::Thread(thread)) = self.get_mut(handle) else {
             return None;
@@ -389,6 +403,13 @@ impl HandleTable {
         process.exit_code = exit_code;
         process.signaled = true;
         true
+    }
+
+    pub fn process_exit_code(&self, handle: u32) -> Option<u32> {
+        let Ok(KernelObject::Process(process)) = self.get(handle) else {
+            return None;
+        };
+        Some(process.exit_code)
     }
 
     pub fn set_event(&mut self, handle: u32) -> bool {

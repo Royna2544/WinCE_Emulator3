@@ -389,6 +389,22 @@ impl CeKernel {
         self.handles.mark_thread_exited(handle, exit_code)
     }
 
+    pub fn guest_thread_id(&self, handle: u32) -> Option<u32> {
+        self.handles.thread_id(handle)
+    }
+
+    pub fn guest_thread_exit_code(&self, handle: u32) -> Option<u32> {
+        self.handles.thread_exit_code(handle)
+    }
+
+    pub fn process_exit_code(&self, handle: u32) -> Option<u32> {
+        self.handles.process_exit_code(handle)
+    }
+
+    pub fn terminate_process(&mut self, handle: u32, exit_code: u32) -> bool {
+        self.handles.mark_process_exited(handle, exit_code)
+    }
+
     pub fn suspend_thread(&mut self, handle: u32) -> Option<u32> {
         self.handles.suspend_thread(handle)
     }
