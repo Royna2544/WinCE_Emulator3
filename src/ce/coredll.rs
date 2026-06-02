@@ -2374,6 +2374,14 @@ fn register_class_w_raw<M: CoredllGuestMemory>(
     let class_name_ptr =
         u32::from_le_bytes([wndclass[36], wndclass[37], wndclass[38], wndclass[39]]);
     let class_name = read_guest_wide_arg(memory, class_name_ptr).unwrap_or_default();
+    let wndproc = u32::from_le_bytes([wndclass[4], wndclass[5], wndclass[6], wndclass[7]]);
+    tracing::debug!(
+        target: "ce.gwe",
+        class_name = class_name.as_str(),
+        class_name_ptr = format_args!("0x{class_name_ptr:08x}"),
+        wndproc = format_args!("0x{wndproc:08x}"),
+        "RegisterClassW"
+    );
     let atom = kernel.gwe.register_class(&class_name, wndclass);
     kernel.threads.set_last_error(thread_id, 0);
     u32::from(atom)
@@ -2392,6 +2400,13 @@ fn get_class_info_w_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_CLASS_DOES_NOT_EXIST);
         return false;
     };
+    tracing::debug!(
+        target: "ce.gwe",
+        class_name = class_name.as_str(),
+        class_name_ptr = format_args!("0x{class_name_ptr:08x}"),
+        out_ptr = format_args!("0x{out_ptr:08x}"),
+        "GetClassInfoW"
+    );
     let Some(bytes) = kernel.gwe.class_info(&class_name).map(|class| class.bytes) else {
         kernel
             .threads
@@ -2446,6 +2461,16 @@ fn create_window_ex_w_raw<M: CoredllGuestMemory>(
         raw_i32_arg(args, 7),
     );
     let parent = (raw_arg(args, 8) != 0).then_some(raw_arg(args, 8));
+    tracing::debug!(
+        target: "ce.gwe",
+        class_name = class_name.as_str(),
+        class_ptr = format_args!("0x{:08x}", raw_arg(args, 1)),
+        title = title.as_str(),
+        style = format_args!("0x{:08x}", raw_arg(args, 3)),
+        ex_style = format_args!("0x{:08x}", raw_arg(args, 0)),
+        parent = format_args!("0x{:08x}", raw_arg(args, 8)),
+        "CreateWindowExW"
+    );
     kernel.gwe.create_window_ex_with_rect(
         thread_id,
         &class_name,
