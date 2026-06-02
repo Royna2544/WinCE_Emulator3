@@ -342,7 +342,7 @@ pub fn patch_supported_imports_with_external(
 fn normalize_coredll_import_ordinal(ordinal: u32) -> u32 {
     if crate::ce::coredll_ordinals::SDK_ORDINALS
         .iter()
-        .any(|export| export.ordinal == ordinal && export.line == 0)
+        .any(|export| export.ordinal == ordinal)
     {
         return ordinal;
     }

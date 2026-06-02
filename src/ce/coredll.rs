@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fs, path::Path};
+use std::collections::BTreeMap;
 
 use crate::{
     ce::{
@@ -25,16 +25,13 @@ use crate::{
             ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_SUPPORTED, ERROR_RESOURCE_NAME_NOT_FOUND,
         },
     },
-    error::{Error, Result},
+    error::Result,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoredllExport {
     pub name: String,
-    pub target: Option<String>,
     pub ordinal: u32,
-    pub noname: bool,
-    pub line: usize,
 }
 
 const CE_ACP_CODE_PAGE: u32 = 949;
@@ -396,25 +393,6 @@ impl CoredllExportTable {
             .map(CoredllExport::from_static_ordinal)
     }
 
-    pub fn from_core_common_def_path(path: impl AsRef<Path>) -> Result<Self> {
-        let path = path.as_ref();
-        let text = fs::read_to_string(path).map_err(|source| Error::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
-        Ok(Self::from_core_common_def(&text))
-    }
-
-    pub fn from_core_common_def(text: &str) -> Self {
-        let mut table = Self::empty();
-        for (line_index, line) in text.lines().enumerate() {
-            if let Some(export) = parse_export_line(line, line_index + 1) {
-                table.insert(export);
-            }
-        }
-        table
-    }
-
     pub fn export_count(&self) -> usize {
         self.exports.len()
     }
@@ -668,19 +646,12 @@ impl CoredllExport {
     fn from_static_ordinal(ordinal: &CoredllOrdinalDef) -> Self {
         Self {
             name: ordinal.name.to_owned(),
-            target: ordinal.target.map(str::to_owned),
             ordinal: ordinal.ordinal,
-            noname: ordinal.noname,
-            line: ordinal.line,
         }
     }
 
     fn matches_name(&self, name: &str) -> bool {
         normalize_name(&self.name) == normalize_name(name)
-            || self
-                .target
-                .as_deref()
-                .is_some_and(|target| normalize_name(target) == normalize_name(name))
     }
 
     pub fn subsystem(&self) -> CoredllSubsystem {
@@ -700,8 +671,7 @@ impl CoredllExport {
 impl CoredllSubsystem {
     fn for_export(export: &CoredllExport) -> Self {
         let name = normalize_name(&export.name);
-        let target = export.target.as_deref().map(normalize_name);
-        if export.line == 0 || has_any_prefix(&name, MATH_PREFIXES) {
+        if is_sdk_crt_export(export) || has_any_prefix(&name, MATH_PREFIXES) {
             return Self::MathCrt;
         }
         if has_any_prefix(&name, REGISTRY_PREFIXES) {
@@ -780,12 +750,6 @@ impl CoredllSubsystem {
             return Self::Multimedia;
         }
         if has_any_prefix(&name, FILESYSTEM_PREFIXES) {
-            return Self::FileSystem;
-        }
-        if target
-            .as_deref()
-            .is_some_and(|target| has_any_prefix(target, FILESYSTEM_PREFIXES))
-        {
             return Self::FileSystem;
         }
         Self::KernelPrivate
@@ -1180,12 +1144,6 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
-        ORD_ADBSET_ACCOUNT_PROPERTIES => {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Bool(false))
-        }
         ORD_INPUT_DEBUG_CHAR_W => Some(CoredllValue::U32(input_debug_char_w_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -10090,75 +10048,6 @@ fn raw_i64_pair(args: &[u32], low_index: usize, high_index: usize) -> i64 {
     raw_u64_pair(args, low_index, high_index) as i64
 }
 
-fn parse_export_line(line: &str, line_number: usize) -> Option<CoredllExport> {
-    let trimmed = line.trim();
-    if trimmed.is_empty()
-        || trimmed.starts_with(';')
-        || trimmed.starts_with("//")
-        || trimmed.starts_with('#')
-    {
-        return None;
-    }
-
-    let at = trimmed.rfind('@')?;
-    let ordinal = parse_ordinal(&trimmed[at + 1..])?;
-    let before = trimmed[..at].trim();
-    let name = extract_export_name(before)?;
-    let target = extract_export_target(before);
-    let noname = trimmed[at + 1..]
-        .split_ascii_whitespace()
-        .any(|part| part.eq_ignore_ascii_case("NONAME"));
-
-    Some(CoredllExport {
-        name,
-        target,
-        ordinal,
-        noname,
-        line: line_number,
-    })
-}
-
-fn parse_ordinal(text: &str) -> Option<u32> {
-    let digits: String = text
-        .trim_start()
-        .chars()
-        .take_while(char::is_ascii_digit)
-        .collect();
-    (!digits.is_empty()).then(|| digits.parse().ok()).flatten()
-}
-
-fn extract_export_name(before_ordinal: &str) -> Option<String> {
-    let mut text = before_ordinal.trim().trim_end_matches(')').trim();
-    if let Some(eq) = text.find('=') {
-        text = text[..eq].trim();
-    }
-    if let Some(paren) = text.rfind('(') {
-        text = text[paren + 1..].trim();
-    }
-    if let Some(comma) = text.find(',') {
-        text = text[..comma].trim();
-    }
-    if let Some(space) = text.find(char::is_whitespace) {
-        text = text[..space].trim();
-    }
-    (!text.is_empty()).then(|| text.to_owned())
-}
-
-fn extract_export_target(before_ordinal: &str) -> Option<String> {
-    let eq = before_ordinal.find('=')?;
-    let mut text = before_ordinal[eq + 1..].trim().trim_end_matches(')').trim();
-    if let Some(paren) = text.rfind('(') {
-        text = text[paren + 1..].trim();
-    }
-    if let Some(comma) = text.find(',') {
-        text = text[..comma].trim();
-    }
-    if let Some(space) = text.find(char::is_whitespace) {
-        text = text[..space].trim();
-    }
-    (!text.is_empty()).then(|| text.to_owned())
-}
-
 fn normalize_name(name: &str) -> String {
     name.to_ascii_lowercase()
 }
@@ -10167,6 +10056,12 @@ fn has_any_prefix(name: &str, prefixes: &[&str]) -> bool {
     prefixes
         .iter()
         .any(|prefix| name.starts_with(&normalize_name(prefix)))
+}
+
+fn is_sdk_crt_export(export: &CoredllExport) -> bool {
+    SDK_ORDINALS
+        .iter()
+        .any(|sdk| sdk.name == export.name && sdk.ordinal == export.ordinal)
 }
 
 const EVENT_PULSE: u32 = 1;
@@ -10405,7 +10300,6 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "SetTimer",
     "KillTimer",
     "RegisterGesture",
-    "ADBSetAccountProperties",
     "GetSystemTime",
     "GetLocalTime",
     "GetSystemTimeAsFileTime",
@@ -10816,7 +10710,6 @@ const SECURITY_PREFIXES: &[&str] = &[
     "CeGetOwner",
     "CeGetGroup",
     "CeConvert",
-    "ADB",
     "CheckPassword",
     "SetPassword",
     "GetPassword",
@@ -11047,32 +10940,3 @@ const CEMATH_EXPORTS: &[(&str, u32)] = &[
     ("__gtd", 2052),
     ("__ned", 2053),
 ];
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_common_def_line_forms() {
-        let text = "\
-   STDAPI(InitializeCriticalSection,4) @2
-   IsProcessDying @ 1213
-   RegOpenKeyExW=xxx_RegOpenKeyExW @461
-   DPA_CreateEx @1838 NONAME
-   KCOREDLL_ONLY(DirectHandleCall @2552)
-";
-        let table = CoredllExportTable::from_core_common_def(text);
-
-        assert_eq!(table.export_count(), 5);
-        assert_eq!(
-            table.resolve_ordinal(2).unwrap().name,
-            "InitializeCriticalSection"
-        );
-        assert_eq!(table.resolve_name("RegOpenKeyExW").unwrap().ordinal, 461);
-        assert!(table.resolve_name("DPA_CreateEx").unwrap().noname);
-        assert_eq!(
-            table.resolve_ordinal(2552).unwrap().name,
-            "DirectHandleCall"
-        );
-    }
-}
