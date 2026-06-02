@@ -19,7 +19,6 @@ pub struct RuntimeConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct StorageConfig {
-    #[serde(default = "default_object_store")]
     pub object_store: ObjectStoreConfig,
     #[serde(default)]
     pub mounts: Vec<MountConfig>,
@@ -51,7 +50,7 @@ struct StorageToml {
 #[derive(Debug, Clone, Deserialize)]
 struct MountToml {
     name: Option<String>,
-    guest_root: String,
+    guest_root: Option<String>,
     host_root: Option<PathBuf>,
     total_mbytes: Option<u64>,
     free_mbytes: Option<u64>,
@@ -97,10 +96,15 @@ impl StorageConfig {
             let mounts = parsed
                 .mounts
                 .into_iter()
-                .map(MountConfig::from_toml)
+                .filter_map(MountConfig::from_toml)
                 .collect();
             Self {
-                object_store: parsed.object_store.unwrap_or_else(default_object_store),
+                object_store: parsed.object_store.ok_or_else(|| {
+                    Error::InvalidArgument(format!(
+                        "{} is missing required [object_store]",
+                        path.display()
+                    ))
+                })?,
                 mounts,
             }
         } else {
@@ -133,18 +137,15 @@ impl ObjectStoreConfig {
 }
 
 impl MountConfig {
-    fn from_toml(raw: MountToml) -> Self {
-        let (default_total, default_free) =
-            default_mount_capacity(&raw.guest_root, raw.name.as_deref());
-        let writable = raw.writable.unwrap_or(true);
-        Self {
-            name: raw.name,
-            guest_root: raw.guest_root,
+    fn from_toml(raw: MountToml) -> Option<Self> {
+        Some(Self {
+            name: Some(raw.name?),
+            guest_root: raw.guest_root?,
             host_root: raw.host_root,
-            total_mbytes: raw.total_mbytes.unwrap_or(default_total),
-            free_mbytes: raw.free_mbytes.unwrap_or(default_free),
-            writable,
-        }
+            total_mbytes: raw.total_mbytes?,
+            free_mbytes: raw.free_mbytes?,
+            writable: raw.writable?,
+        })
     }
 
     pub fn total_bytes(&self) -> u64 {
@@ -160,17 +161,6 @@ fn default_object_store() -> ObjectStoreConfig {
     ObjectStoreConfig {
         total_mbytes: 256,
         free_mbytes: 128,
-    }
-}
-
-fn default_mount_capacity(guest_root: &str, name: Option<&str>) -> (u64, u64) {
-    let normalized = guest_root.trim_matches(['\\', '/']);
-    if normalized.eq_ignore_ascii_case("SDMMC Disk")
-        || name.is_some_and(|name| name.eq_ignore_ascii_case("sdmmc"))
-    {
-        (8192, 4096)
-    } else {
-        (2048, 1024)
     }
 }
 
@@ -203,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn mount_toml_defaults_capacity_and_forces_hostless_read_only() {
+    fn mount_toml_skips_entries_missing_required_fields() {
         let path =
             std::env::temp_dir().join(format!("wince-mount-config-{}.toml", std::process::id()));
         fs::write(
@@ -217,10 +207,26 @@ free_mbytes = 32
 name = "sdmmc"
 guest_root = "\\SDMMC Disk"
 host_root = "D:\\INAVI\\SDMMC"
+total_mbytes = 8192
+free_mbytes = 4096
+writable = true
 
 [[mounts]]
 name = "windows"
 guest_root = "\\Windows"
+writable = true
+
+[[mounts]]
+name = "resident_flash"
+guest_root = "\\ResidentFlash"
+total_mbytes = 2048
+free_mbytes = 1024
+
+[[mounts]]
+guest_root = "\\Nameless"
+host_root = "D:\\INAVI\\Nameless"
+total_mbytes = 512
+free_mbytes = 256
 writable = true
 "#,
         )
@@ -229,13 +235,36 @@ writable = true
         let storage = StorageConfig::load_or_default(Some(&path)).unwrap();
         assert_eq!(storage.object_store.total_mbytes, 64);
         assert_eq!(storage.object_store.free_mbytes, 32);
-        assert_eq!(storage.mounts.len(), 2);
+        assert_eq!(storage.mounts.len(), 1);
         assert_eq!(storage.mounts[0].total_mbytes, 8192);
         assert_eq!(storage.mounts[0].free_mbytes, 4096);
         assert!(storage.mounts[0].writable);
-        assert_eq!(storage.mounts[1].total_mbytes, 2048);
-        assert_eq!(storage.mounts[1].free_mbytes, 1024);
-        assert!(!storage.mounts[1].writable);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn mount_toml_requires_object_store() {
+        let path = std::env::temp_dir().join(format!(
+            "wince-mount-config-no-store-{}.toml",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            r#"
+[[mounts]]
+name = "sdmmc"
+guest_root = "\\SDMMC Disk"
+host_root = "D:\\INAVI\\SDMMC"
+total_mbytes = 8192
+free_mbytes = 4096
+writable = true
+"#,
+        )
+        .unwrap();
+
+        let err = StorageConfig::load_or_default(Some(&path)).unwrap_err();
+        assert!(err.to_string().contains("missing required [object_store]"));
 
         let _ = fs::remove_file(path);
     }
