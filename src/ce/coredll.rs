@@ -378,16 +378,22 @@ impl CoredllExportTable {
     pub fn from_static_ordinals() -> Self {
         let mut table = Self::empty();
         for ordinal in COREDLL_EXPORTS {
-            table.insert(CoredllExport::from_static_ordinal(ordinal));
+            if coredll_ordinals::is_current_map_export(ordinal) {
+                table.insert(CoredllExport::from_static_ordinal(ordinal));
+            }
         }
         for ordinal in SDK_ORDINALS {
-            table.insert(CoredllExport::from_static_ordinal(ordinal));
+            if coredll_ordinals::is_current_map_export(ordinal) {
+                table.insert(CoredllExport::from_static_ordinal(ordinal));
+            }
         }
         table
     }
 
     pub fn resolve_static_ordinal(ordinal: u32) -> Option<CoredllExport> {
-        coredll_ordinals::lookup(ordinal).map(CoredllExport::from_static_ordinal)
+        coredll_ordinals::lookup(ordinal)
+            .filter(|export| coredll_ordinals::is_current_map_export(export))
+            .map(CoredllExport::from_static_ordinal)
     }
 
     pub fn from_core_common_def_path(path: impl AsRef<Path>) -> Result<Self> {
@@ -1678,7 +1684,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
-        ORD_MEMCPY => Some(CoredllValue::Handle(crt::memcpy_raw(
+        ORD_MEMCPY | ORD_MEMMOVE => Some(CoredllValue::Handle(crt::memcpy_raw(
             kernel,
             memory,
             thread_id,
@@ -3556,12 +3562,12 @@ fn create_file_w_raw<M: CoredllGuestMemory>(
 ) -> u32 {
     let path_ptr = raw_arg(args, 0);
     let path = read_guest_wide_arg(memory, path_ptr);
+    let preview = create_file_w_arg_preview(memory, path_ptr);
     kernel.record_file_trace(crate::ce::kernel::FileTraceRecord {
         op: "CreateFileWArg",
         handle: None,
         path: path.clone(),
-        preview: read_guest_narrow_preview(memory, path_ptr, 96)
-            .map(|preview| format!("ptr=0x{path_ptr:08x}/ansi={preview}")),
+        preview,
         requested: Some(raw_arg(args, 1)),
         transferred: None,
         position: Some(u64::from(raw_arg(args, 4))),
@@ -3583,6 +3589,29 @@ fn create_file_w_raw<M: CoredllGuestMemory>(
             u32::MAX
         }
     }
+}
+
+fn create_file_w_arg_preview<M: CoredllGuestMemory>(memory: &M, path_ptr: u32) -> Option<String> {
+    let ansi = read_guest_narrow_preview(memory, path_ptr, 96)?;
+    let mut parts = vec![format!("ptr=0x{path_ptr:08x}"), format!("ansi={ansi}")];
+    if let Ok(first) = memory.read_u32(path_ptr) {
+        parts.push(format!("w0=0x{first:08x}"));
+        if let Ok(second) = memory.read_u32(path_ptr.wrapping_add(4)) {
+            parts.push(format!("w1=0x{second:08x}"));
+        }
+        if let Ok(third) = memory.read_u32(path_ptr.wrapping_add(8)) {
+            parts.push(format!("w2=0x{third:08x}"));
+        }
+        if first > 0xffff {
+            if let Some(wide) = read_guest_wide_arg(memory, first) {
+                parts.push(format!("deref_wide={wide:?}"));
+            }
+            if let Some(ansi) = read_guest_narrow_preview(memory, first, 96) {
+                parts.push(format!("deref_ansi={ansi}"));
+            }
+        }
+    }
+    Some(parts.join("/"))
 }
 
 fn is_comm_handle(kernel: &CeKernel, handle: u32) -> bool {

@@ -349,10 +349,7 @@ fn normalize_coredll_import_ordinal(ordinal: u32) -> u32 {
     if CoredllExportTable::resolve_static_ordinal(ordinal).is_some() {
         return ordinal;
     }
-    crate::ce::coredll_ordinals::COREDLL_EXPORTS
-        .get(ordinal as usize)
-        .map(|export| export.ordinal)
-        .unwrap_or(ordinal)
+    ordinal
 }
 
 impl ExternalImportTable {
@@ -724,7 +721,7 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_coredll_export_index_ordinals_when_no_real_ordinal_collides() {
+    fn leaves_unknown_coredll_ordinals_unmapped_by_export_index() {
         let imports = vec![ImportDescriptor {
             module_name: "COREDLL.dll".to_owned(),
             original_first_thunk: 0x2000,
@@ -749,11 +746,16 @@ mod tests {
         .unwrap();
 
         let trap = table.trap_at(IMPORT_TRAP_BASE).unwrap();
-        assert_eq!(
-            trap.ordinal,
-            Some(crate::ce::coredll_ordinals::ORD_GET_PALETTE_ENTRIES)
-        );
+        assert_eq!(trap.ordinal, Some(1576));
         assert_eq!(trap.name, None);
+
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut memory = TestMemory;
+        assert_eq!(
+            table.dispatch_trap(&mut kernel, &mut memory, 1, IMPORT_TRAP_BASE, vec![]),
+            None
+        );
     }
 
     #[test]

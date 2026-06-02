@@ -1,5 +1,6 @@
 // Generated from Windows CE core_common.def plus checked CRT ordinal additions.
 // Runtime dispatch uses these checked-in Rust constants, not the source .def file.
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CoredllOrdinalDef {
@@ -10,13 +11,53 @@ pub struct CoredllOrdinalDef {
     pub line: usize,
 }
 
+const CURRENT_COREDLL_MAP: &[u8] = include_bytes!("../../coredll.map");
+
+static CURRENT_COREDLL_MAP_EXPORTS: OnceLock<Vec<(String, u32)>> = OnceLock::new();
+
+fn current_coredll_map_exports() -> &'static [(String, u32)] {
+    CURRENT_COREDLL_MAP_EXPORTS
+        .get_or_init(|| {
+            let words: Vec<u16> = CURRENT_COREDLL_MAP
+                .chunks_exact(2)
+                .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                .collect();
+            let text = String::from_utf16_lossy(&words);
+            text.trim_start_matches('\u{feff}')
+                .lines()
+                .filter_map(|line| {
+                    let mut parts = line.split_whitespace();
+                    let ordinal = parts.next()?.parse::<u32>().ok()?;
+                    let name = parts.next()?;
+                    Some((name.to_owned(), ordinal))
+                })
+                .collect()
+        })
+        .as_slice()
+}
+
+pub fn is_current_map_export(export: &CoredllOrdinalDef) -> bool {
+    current_coredll_map_exports()
+        .iter()
+        .any(|(name, ordinal)| name == export.name && *ordinal == export.ordinal)
+}
+
+pub fn current_static_export_count() -> usize {
+    COREDLL_EXPORTS
+        .iter()
+        .chain(SDK_ORDINALS.iter())
+        .filter(|export| is_current_map_export(export))
+        .count()
+}
+
 pub const ORD_SYSTEM_MEMORY_LOW: u32 = 720;
 pub const ORD_WCSDUP: u32 = 74;
 pub const ORD_WCSRCHR: u32 = 69;
 pub const ORD_WCSNICMP: u32 = 229;
-pub const ORD_WCSNCPY: u32 = 1046;
+pub const ORD_WCSNCPY: u32 = 66;
 pub const ORD_MALLOC: u32 = 1041;
 pub const ORD_MEMCPY: u32 = 1044;
+pub const ORD_MEMMOVE: u32 = 1046;
 pub const ORD_MEMSET: u32 = 1047;
 pub const ORD_OPERATOR_DELETE: u32 = 1094;
 pub const ORD_OPERATOR_NEW: u32 = 1095;
@@ -1059,7 +1100,7 @@ pub const ORD_START_WATCH_DOG_TIMER: u32 = 2532;
 pub const ORD_STOP_WATCH_DOG_TIMER: u32 = 2533;
 pub const ORD_REFRESH_WATCH_DOG_TIMER: u32 = 2534;
 pub const ORD_ADD_EVENT_ACCESS: u32 = 558;
-pub const ORD_CREATE_APISET: u32 = 2539;
+pub const ORD_CREATE_APISET: u32 = 559;
 pub const ORD_VIRTUAL_COPY: u32 = 560;
 pub const ORD_VIRTUAL_COPY_EX: u32 = 2565;
 pub const ORD_VIRTUAL_ALLOC_COPY_EX: u32 = 2566;
@@ -1816,6 +1857,13 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef] = &[
         name: "memcpy",
         target: Some("SDK_Mipsii_coredll.lib"),
         ordinal: ORD_MEMCPY,
+        noname: false,
+        line: 0,
+    },
+    CoredllOrdinalDef {
+        name: "memmove",
+        target: Some("SDK_Mipsii_coredll.lib"),
+        ordinal: ORD_MEMMOVE,
         noname: false,
         line: 0,
     },
@@ -9217,7 +9265,7 @@ pub const COREDLL_EXPORTS: &[CoredllOrdinalDef] = &[
     CoredllOrdinalDef {
         name: "CreateAPISet",
         target: Some("xxx_CreateAPISet"),
-        ordinal: 2539,
+        ordinal: ORD_CREATE_APISET,
         noname: false,
         line: 1344,
     },

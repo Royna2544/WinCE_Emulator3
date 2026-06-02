@@ -9,12 +9,13 @@ use wince_emulation_v3::{
             ORD_FLUSH_INSTRUCTION_CACHE, ORD_FREE, ORD_GET_FILE_SIZE, ORD_GET_MODULE_FILE_NAME_W,
             ORD_GET_PROCESS_HEAP, ORD_HEAP_ALLOC, ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE,
             ORD_HEAP_SIZE, ORD_IS_BAD_READ_PTR, ORD_IS_BAD_WRITE_PTR, ORD_LOCAL_ALLOC,
-            ORD_LOCAL_FREE, ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_MALLOC, ORD_MEMCPY, ORD_MEMSET,
-            ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_OPERATOR_DELETE, ORD_OPERATOR_NEW, ORD_READ_FILE,
-            ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_VALUE_W,
-            ORD_REG_ENUM_VALUE_W, ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W,
-            ORD_SET_FILE_POINTER, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_WCSDUP, ORD_WCSNCPY,
-            ORD_WCSNICMP, ORD_WCSRCHR, ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W,
+            ORD_LOCAL_FREE, ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_MALLOC, ORD_MEMCPY,
+            ORD_MEMMOVE, ORD_MEMSET, ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_OPERATOR_DELETE,
+            ORD_OPERATOR_NEW, ORD_READ_FILE, ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W,
+            ORD_REG_DELETE_VALUE_W, ORD_REG_ENUM_VALUE_W, ORD_REG_QUERY_VALUE_EX_W,
+            ORD_REG_SET_VALUE_EX_W, ORD_SET_FILE_POINTER, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE,
+            ORD_WCSDUP, ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSRCHR, ORD_WIDE_CHAR_TO_MULTI_BYTE,
+            ORD_WRITE_FILE, ORD_WSPRINTF_W,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         kernel::CeKernel,
@@ -640,6 +641,20 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
             &mut kernel,
             &mut memory,
             thread_id,
+            ORD_MEMMOVE,
+            [0x6012, 0x6010, 6],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0x6012),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_bytes(0x6010, 8), b"ABABCDEF");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_MEMSET,
             [0x6010, 0x2a, 4],
         ),
@@ -648,7 +663,7 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
             ..
         }
     ));
-    assert_eq!(memory.read_bytes(0x6010, 8), b"****EFGH");
+    assert_eq!(memory.read_bytes(0x6010, 8), b"****CDEF");
 
     kernel.set_process_module_base(0x0001_0000);
     kernel.set_process_module_path("\\Program Files\\INavi\\INavi.exe");

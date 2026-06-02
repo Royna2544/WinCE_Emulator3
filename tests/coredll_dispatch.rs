@@ -8,11 +8,11 @@ use wince_emulation_v3::{
             CoredllStubPolicy, CoredllSubsystem, CoredllValue, EventModifyAction,
         },
         coredll_ordinals::{
-            COREDLL_EXPORTS, ORD_CLOSE_HANDLE, ORD_CREATE_FILE_W, ORD_CREATE_WINDOW_EX_W,
+            ORD_CLOSE_HANDLE, ORD_CREATE_APISET, ORD_CREATE_FILE_W, ORD_CREATE_WINDOW_EX_W,
             ORD_DISPATCH_MESSAGE_W, ORD_EVENT_MODIFY, ORD_GET_MESSAGE_W,
             ORD_INITIALIZE_CRITICAL_SECTION, ORD_LITOFP, ORD_LL_DIV, ORD_LONGJMP, ORD_LTD, ORD_NES,
             ORD_POST_MESSAGE_W, ORD_POW, ORD_REG_OPEN_KEY_EX_W, ORD_SETJMP, ORD_SQRT,
-            ORD_USER_CALL_WINDOW_PROC, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE, SDK_ORDINALS,
+            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE, current_static_export_count,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::WM_USER,
@@ -29,10 +29,7 @@ use support::{TestGuestMemory, unique_test_root};
 fn coredll_table_reads_full_static_rust_ordinals() -> Result<()> {
     let table = CoredllExportTable::default();
 
-    assert_eq!(
-        table.export_count(),
-        COREDLL_EXPORTS.len() + SDK_ORDINALS.len()
-    );
+    assert_eq!(table.export_count(), current_static_export_count());
     assert_eq!(
         table.resolve_name("CreateFileW").unwrap().ordinal,
         ORD_CREATE_FILE_W
@@ -59,14 +56,14 @@ fn coredll_table_reads_full_static_rust_ordinals() -> Result<()> {
             .name,
         "CreateFileW"
     );
-    assert_eq!(table.exports_by_ordinal(ORD_USER_CALL_WINDOW_PROC).len(), 1);
+    assert_eq!(ORD_CREATE_APISET, 559);
     assert_eq!(
-        table
-            .resolve_ordinal(ORD_USER_CALL_WINDOW_PROC)
-            .unwrap()
-            .name,
-        "UserCallWindowProc"
+        table.resolve_name("CreateAPISet").unwrap().ordinal,
+        ORD_CREATE_APISET
     );
+    assert!(table.resolve_name("ADBSetAccountProperties").is_none());
+    assert!(table.resolve_ordinal(1943).is_none());
+    assert!(CoredllExportTable::resolve_static_ordinal(1943).is_none());
 
     Ok(())
 }
