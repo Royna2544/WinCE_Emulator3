@@ -1471,6 +1471,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_PARENT => Some(CoredllValue::Handle(
             kernel.gwe.get_parent(raw_arg(args, 0)).unwrap_or(0),
         )),
+        ORD_GET_WINDOW => Some(CoredllValue::Handle(get_window_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
         ORD_GET_DESKTOP_WINDOW => Some(CoredllValue::Handle(kernel.gwe.get_desktop_window())),
         ORD_GET_ACTIVE_WINDOW => Some(CoredllValue::Handle(
             kernel.gwe.get_active_window().unwrap_or(0),
@@ -3069,6 +3075,22 @@ fn write_window_rect<M: CoredllGuestMemory>(
         return false;
     };
     write_guest_rect(kernel, memory, thread_id, rect_ptr, rect)
+}
+
+fn get_window_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32, cmd: u32) -> u32 {
+    if !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    }
+    if cmd > crate::ce::gwe::GW_CHILD {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    kernel.gwe.get_window(hwnd, cmd).unwrap_or(0)
 }
 
 fn map_single_point<M: CoredllGuestMemory>(

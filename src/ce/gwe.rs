@@ -31,6 +31,13 @@ pub const GWL_STYLE: i32 = -16;
 pub const GWL_EXSTYLE: i32 = -20;
 pub const GWL_USERDATA: i32 = -21;
 
+pub const GW_HWNDFIRST: u32 = 0;
+pub const GW_HWNDLAST: u32 = 1;
+pub const GW_HWNDNEXT: u32 = 2;
+pub const GW_HWNDPREV: u32 = 3;
+pub const GW_OWNER: u32 = 4;
+pub const GW_CHILD: u32 = 5;
+
 pub const SWP_NOSIZE: u32 = 0x0001;
 pub const SWP_NOMOVE: u32 = 0x0002;
 pub const SWP_NOZORDER: u32 = 0x0004;
@@ -418,6 +425,33 @@ impl Gwe {
         self.windows.get(&hwnd).and_then(|window| window.parent)
     }
 
+    pub fn get_window(&self, hwnd: u32, cmd: u32) -> Option<u32> {
+        let window = self.windows.get(&hwnd)?;
+        if window.destroyed {
+            return None;
+        }
+
+        match cmd {
+            GW_OWNER => None,
+            GW_CHILD => self.first_child(hwnd),
+            GW_HWNDFIRST | GW_HWNDLAST | GW_HWNDNEXT | GW_HWNDPREV => {
+                let siblings = self.sibling_windows(window.parent);
+                let index = siblings.iter().position(|candidate| *candidate == hwnd)?;
+                match cmd {
+                    GW_HWNDFIRST => siblings.first().copied(),
+                    GW_HWNDLAST => siblings.last().copied(),
+                    GW_HWNDNEXT => siblings.get(index + 1).copied(),
+                    GW_HWNDPREV => index
+                        .checked_sub(1)
+                        .and_then(|index| siblings.get(index))
+                        .copied(),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     pub fn get_desktop_window(&self) -> u32 {
         DESKTOP_HWND
     }
@@ -794,6 +828,27 @@ impl Gwe {
                 y: window.client_rect.top,
             })
             .unwrap_or_default()
+    }
+
+    fn first_child(&self, hwnd: u32) -> Option<u32> {
+        let parent = if hwnd == DESKTOP_HWND {
+            None
+        } else {
+            Some(hwnd)
+        };
+        self.sibling_windows(parent).first().copied()
+    }
+
+    fn sibling_windows(&self, parent: Option<u32>) -> Vec<u32> {
+        self.windows
+            .values()
+            .filter(|window| {
+                !window.destroyed
+                    && window.parent == parent
+                    && (parent.is_some() || window.hwnd != DESKTOP_HWND)
+            })
+            .map(|window| window.hwnd)
+            .collect()
     }
 }
 

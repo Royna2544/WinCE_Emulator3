@@ -94,6 +94,8 @@ anchors, not app-specific shortcuts.
 
 - GWE window surface:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp`
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\gweapiset1.hpp`, and
+  `/mnt/c/Program Files (x86)/Windows CE Tools/wce420/STANDARDSDK_420/Include/Mipsii/winuser.h`
   - Declares `SetWindowTextW_I`, `GetWindowTextW_I`, `SetWindowLongW_I`,
     `GetWindowLongW_I`, `DefWindowProcW_I`, and `DestroyWindow_I`.
   - `CWindow` stores `m_rc` for the whole window and `m_rcClient` for the
@@ -104,6 +106,11 @@ anchors, not app-specific shortcuts.
     `IsWindow_I`, `GetClassNameW_I`, and `EnableWindow_I`, which back the
     virtual HWND state, class/title text copying, visibility/enabled checks,
     parent lookup, and focus bookkeeping.
+  - Declares `GetWindow_I(HWND hwndThis, UINT32 relation)`, the GWE API set
+    exposes `m_pGetWindow`, and the CE Mipsii SDK defines `GW_HWNDFIRST`,
+    `GW_HWNDLAST`, `GW_HWNDNEXT`, `GW_HWNDPREV`, `GW_OWNER`, and `GW_CHILD`
+    as `0..5`. Raw ordinal 251 uses those command values over the virtual HWND
+    tree for desktop-child, child, sibling, and owner-null traversal.
 
 - GWE class/message surface:
   `/mnt/c/Program Files (x86)/Windows CE Tools/wce420/STANDARDSDK_420/Include/Mipsii/winuser.h`
@@ -148,11 +155,18 @@ anchors, not app-specific shortcuts.
 
 - MFC window layout behavior:
   `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/wincore.cpp`
+  `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/winfrm.cpp`,
+  `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/winutil.cpp`,
+  and
+  `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/thrdcore.cpp`
   - Layout and child reposition paths use `GetWindowRect`,
     `ScreenToClient`, `SetWindowPos`, and `GetClientRect`.
   - Subclassing/debug/text paths call `GetWindowLong`, `SetWindowLong`,
     `GetWindowTextLength`, `GetWindowText`, `GetClassName`, `DestroyWindow`,
     `GetParent`, and `SetFocus`.
+  - CE MFC idle/modal/layout paths walk windows with `GetWindow(...,
+    GW_CHILD)`, `GetWindow(..., GW_HWNDFIRST)`, `GW_HWNDNEXT`, `GW_HWNDPREV`,
+    and `GW_OWNER`, including `WM_IDLEUPDATECMDUI` descendant/frame traversal.
 
 - COREDLL resources:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/resource.cpp`

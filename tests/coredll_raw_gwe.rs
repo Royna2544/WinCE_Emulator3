@@ -7,16 +7,19 @@ use wince_emulation_v3::{
             ORD_DESTROY_WINDOW, ORD_ENABLE_WINDOW, ORD_END_PAINT, ORD_FIND_RESOURCE_W,
             ORD_FIND_WINDOW_W, ORD_GET_ACTIVE_WINDOW, ORD_GET_CLASS_INFO_W, ORD_GET_CLASS_NAME_W,
             ORD_GET_CLIENT_RECT, ORD_GET_CURSOR_POS, ORD_GET_FOCUS, ORD_GET_MESSAGE_W,
-            ORD_GET_PARENT, ORD_GET_SYSTEM_INFO, ORD_GET_UPDATE_RECT, ORD_GET_WINDOW_LONG_W,
-            ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W,
-            ORD_GLOBAL_MEMORY_STATUS, ORD_INVALIDATE_RECT, ORD_IS_WINDOW, ORD_IS_WINDOW_ENABLED,
-            ORD_IS_WINDOW_VISIBLE, ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_MAP_WINDOW_POINTS,
-            ORD_MESSAGE_BOX_W, ORD_MOVE_WINDOW, ORD_PEEK_MESSAGE_W, ORD_POST_MESSAGE_W,
-            ORD_REGISTER_CLASS_W, ORD_RELEASE_MUTEX, ORD_SCREEN_TO_CLIENT, ORD_SET_FOCUS,
-            ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_TEXT_W, ORD_SHOW_WINDOW,
-            ORD_SIZEOF_RESOURCE, ORD_UPDATE_WINDOW, ORD_VALIDATE_RECT,
+            ORD_GET_PARENT, ORD_GET_SYSTEM_INFO, ORD_GET_UPDATE_RECT, ORD_GET_WINDOW,
+            ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_TEXT_LENGTH_W,
+            ORD_GET_WINDOW_TEXT_W, ORD_GLOBAL_MEMORY_STATUS, ORD_INVALIDATE_RECT, ORD_IS_WINDOW,
+            ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE, ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W,
+            ORD_MAP_WINDOW_POINTS, ORD_MESSAGE_BOX_W, ORD_MOVE_WINDOW, ORD_PEEK_MESSAGE_W,
+            ORD_POST_MESSAGE_W, ORD_REGISTER_CLASS_W, ORD_RELEASE_MUTEX, ORD_SCREEN_TO_CLIENT,
+            ORD_SET_FOCUS, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_TEXT_W,
+            ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_UPDATE_WINDOW, ORD_VALIDATE_RECT,
         },
-        gwe::{GWL_USERDATA, HWND_BROADCAST, Point, WM_PAINT, WM_USER},
+        gwe::{
+            GW_CHILD, GW_HWNDFIRST, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER, GWL_USERDATA,
+            HWND_BROADCAST, Point, WM_PAINT, WM_USER,
+        },
         kernel::CeKernel,
         resource::ResourceId,
     },
@@ -121,6 +124,86 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
     let child_window = kernel.gwe.window(child).unwrap();
     assert_eq!(child_window.class_name, "child");
     assert_eq!(child_window.wndproc, 0x0040_1234);
+    let sibling = kernel.create_window_ex_w(thread_id, "CHILD", "sibling", Some(parent), 3, 0, 0);
+    let desktop = kernel.gwe.get_desktop_window();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_WINDOW,
+            [desktop, GW_CHILD],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } if hwnd == parent
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_WINDOW,
+            [parent, GW_HWNDFIRST],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } if hwnd == parent
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_WINDOW,
+            [parent, GW_CHILD],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } if hwnd == child
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_WINDOW,
+            [child, GW_HWNDNEXT],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } if hwnd == sibling
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_WINDOW,
+            [sibling, GW_HWNDPREV],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } if hwnd == child
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_WINDOW,
+            [child, GW_OWNER],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

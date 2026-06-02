@@ -25,16 +25,21 @@
     returned at the same `GetMessageW @861` `blocked_get_message` frontier. The
     framebuffer-plumbed run prints an attached 800x480 RGB565 virtual
     framebuffer before CPU execution, but no guest drawing/blit imports have
-    produced visible output. The earlier `pc=0`/reserved-instruction and
-    decoded `TerminateProcess` startup-cleanup states are no longer the current
-    stop.
+    produced visible output. After raw `GetWindow` ordinal 251 support was
+    added, a 1,000,000-instruction bounded launch still stopped at the same
+    empty `GetMessageW @861` diagnostic; the recent import ring shows
+    `GetWindow(hwnd=0x00020000, relation=GW_CHILD)` returning `0`, so the
+    observed MFC child traversal is no longer just a stubbed ordinal. The
+    earlier `pc=0`/reserved-instruction and decoded `TerminateProcess`
+    startup-cleanup states are no longer the current stop.
   - Status: active; `TlsCall` now returns real CE-style slots,
     `CallWindowProcW` now enters guest window-procedure targets, and
-    `CreateWindowExW` now delivers the first create-time message, but the
-    current path still reaches an empty message queue before useful framebuffer
-    output. Next work is to identify which CE/MFC-sourced queue, timer, paint,
-    or posted-message behavior should advance the guest path toward real
-    GDI/DC/surface drawing and blit imports.
+    `CreateWindowExW` now delivers the first create-time message. Raw
+    `GetWindow` ordinal 251 now handles CE SDK child/sibling/owner traversal.
+    The latest bounded launch confirms the current `GW_CHILD` query returns no
+    child HWNDs; next work is to identify which CE/MFC-sourced queue, timer,
+    paint, posted-message, window-child creation, or GDI behavior should
+    advance the guest path toward real GDI/DC/surface drawing and blit imports.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch

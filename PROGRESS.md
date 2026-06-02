@@ -84,7 +84,7 @@
   - CE/MFC-style HWND geometry/state ordinals: raw `CreateWindowExW`,
     `DestroyWindow`, `ShowWindow`, `UpdateWindow`, `EnableWindow`,
     `IsWindow`, `IsWindowEnabled`, `IsWindowVisible`, `GetParent`,
-    `GetDesktopWindow`, `SetFocus`, `GetFocus`, `SetWindowTextW`,
+    `GetWindow`, `GetDesktopWindow`, `SetFocus`, `GetFocus`, `SetWindowTextW`,
     `GetWindowTextW`, `GetWindowTextLengthW`, `GetClassNameW`,
     `SetWindowLongW`, `GetWindowLongW`, `SetWindowPos`, `MoveWindow`,
     `GetWindowRect`, `GetClientRect`, `ClientToScreen`, `ScreenToClient`,
@@ -288,6 +288,17 @@
   kernel/thread/sync, raw memory/file/find, raw GWE/resource/window behavior,
   and raw waveOut marshalling. Shared guest-memory helpers live under
   `tests/support/`.
+- Raw `GetWindow` ordinal 251 now follows the CE SDK `GW_HWNDFIRST`,
+  `GW_HWNDLAST`, `GW_HWNDNEXT`, `GW_HWNDPREV`, `GW_OWNER`, and `GW_CHILD`
+  command values over the virtual HWND tree. It can enumerate top-level
+  desktop children, child windows, and sibling windows for the MFC idle/modal
+  traversal paths without adding host windows or app-specific behavior.
+- A fresh 1,000,000-instruction bounded launch after raw `GetWindow` support
+  still returns at the empty `GetMessageW @861` `blocked_get_message`
+  diagnostic. The recent import ring now shows `GetWindow @251` called as
+  `GetWindow(hwnd=0x00020000, relation=GW_CHILD)` and returning `0`, meaning
+  the main window currently has no virtual child HWNDs for MFC idle/update
+  traversal. This is still not GUI success.
 
 ## Current State
 
