@@ -1268,6 +1268,18 @@ impl Gwe {
 
     fn normalize_create_rect(&self, parent: Option<u32>, style: u32, rect: Rect) -> Rect {
         let mut rect = self.parent_to_screen_rect(parent, rect);
+        let visible_child =
+            parent.is_some() && style & (WS_VISIBLE | WS_CHILD) == (WS_VISIBLE | WS_CHILD);
+        if visible_child && (rect.width() <= 0 || rect.height() <= 0) {
+            if let Some(parent_rect) = parent.and_then(|hwnd| self.windows.get(&hwnd)) {
+                if rect.width() <= 0 {
+                    rect.right = rect.left.saturating_add(parent_rect.client_rect.width());
+                }
+                if rect.height() <= 0 {
+                    rect.bottom = rect.top.saturating_add(parent_rect.client_rect.height());
+                }
+            }
+        }
         let visible_top_level = parent.is_none() && style & (WS_VISIBLE | WS_CHILD) == WS_VISIBLE;
         if !visible_top_level {
             return rect;
@@ -1496,7 +1508,7 @@ mod tests {
     }
 
     #[test]
-    fn hidden_and_child_zero_size_windows_keep_requested_rect() {
+    fn hidden_zero_size_windows_keep_requested_rect_and_visible_children_fill_parent() {
         let mut gwe = Gwe::default();
         let hidden =
             gwe.create_window_ex_with_rect(1, "STATIC", "hidden", None, 0, 0, 0, Rect::default());
@@ -1524,7 +1536,7 @@ mod tests {
         );
         assert_eq!(
             gwe.get_window_rect(child).unwrap(),
-            Rect::from_origin_size(10, 20, 0, 0)
+            Rect::from_origin_size(10, 20, 300, 200)
         );
     }
 
