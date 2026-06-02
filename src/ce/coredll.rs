@@ -2677,8 +2677,121 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 2),
         ))),
+        ORD_LTS | ORD_LES | ORD_EQS | ORD_GES | ORD_GTS | ORD_NES => {
+            Some(CoredllValue::Bool(compare_guest_f32_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                export.ordinal,
+            )))
+        }
+        ORD_LTD | ORD_LED | ORD_EQD | ORD_GED | ORD_GTD | ORD_NED => {
+            Some(CoredllValue::Bool(compare_guest_f64_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                export.ordinal,
+            )))
+        }
+        ORD_LITOFP => Some(CoredllValue::CeMath(
+            kernel
+                .math
+                .eval(CeMathCall::LongToFloat(raw_i32_arg(args, 0))),
+        )),
+        ORD_ULTOFP => Some(CoredllValue::CeMath(
+            kernel
+                .math
+                .eval(CeMathCall::UnsignedLongToFloat(raw_arg(args, 0))),
+        )),
         _ => None,
     }
+}
+
+fn compare_guest_f32_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    lhs_ptr: u32,
+    rhs_ptr: u32,
+    ordinal: u32,
+) -> bool {
+    let Some(lhs_bits) = read_guest_u32(kernel, memory, thread_id, lhs_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Some(rhs_bits) = read_guest_u32(kernel, memory, thread_id, rhs_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    compare_f32(f32::from_bits(lhs_bits), f32::from_bits(rhs_bits), ordinal)
+}
+
+fn compare_guest_f64_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    lhs_ptr: u32,
+    rhs_ptr: u32,
+    ordinal: u32,
+) -> bool {
+    let Some(lhs) = read_guest_f64(kernel, memory, thread_id, lhs_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Some(rhs) = read_guest_f64(kernel, memory, thread_id, rhs_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    compare_f64(lhs, rhs, ordinal)
+}
+
+fn compare_f32(lhs: f32, rhs: f32, ordinal: u32) -> bool {
+    match ordinal {
+        ORD_LTS => lhs < rhs,
+        ORD_LES => lhs <= rhs,
+        ORD_EQS => lhs == rhs,
+        ORD_GES => lhs >= rhs,
+        ORD_GTS => lhs > rhs,
+        ORD_NES => lhs != rhs,
+        _ => false,
+    }
+}
+
+fn compare_f64(lhs: f64, rhs: f64, ordinal: u32) -> bool {
+    match ordinal {
+        ORD_LTD => lhs < rhs,
+        ORD_LED => lhs <= rhs,
+        ORD_EQD => lhs == rhs,
+        ORD_GED => lhs >= rhs,
+        ORD_GTD => lhs > rhs,
+        ORD_NED => lhs != rhs,
+        _ => false,
+    }
+}
+
+fn read_guest_f64<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    addr: u32,
+) -> Option<f64> {
+    let low = read_guest_u32(kernel, memory, thread_id, addr)?;
+    let high = read_guest_u32(kernel, memory, thread_id, addr.wrapping_add(4))?;
+    Some(f64::from_bits((u64::from(high) << 32) | u64::from(low)))
 }
 
 fn write_global_memory_status<M: CoredllGuestMemory>(
@@ -10570,6 +10683,18 @@ const CEMATH_EXPORTS: &[(&str, u32)] = &[
     ("__dptofp", 2039),
     ("__fpcmp", 2040),
     ("__dpcmp", 2041),
+    ("__lts", 2042),
+    ("__les", 2043),
+    ("__eqs", 2044),
+    ("__ges", 2045),
+    ("__gts", 2046),
+    ("__nes", 2047),
+    ("__ltd", 2048),
+    ("__led", 2049),
+    ("__eqd", 2050),
+    ("__ged", 2051),
+    ("__gtd", 2052),
+    ("__ned", 2053),
 ];
 
 #[cfg(test)]

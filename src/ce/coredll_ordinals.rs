@@ -1763,6 +1763,18 @@ pub const ORD_FPTODP: u32 = 2038;
 pub const ORD_DPTOFP: u32 = 2039;
 pub const ORD_FPCMP: u32 = 2040;
 pub const ORD_DPCMP: u32 = 2041;
+pub const ORD_LTS: u32 = 2042;
+pub const ORD_LES: u32 = 2043;
+pub const ORD_EQS: u32 = 2044;
+pub const ORD_GES: u32 = 2045;
+pub const ORD_GTS: u32 = 2046;
+pub const ORD_NES: u32 = 2047;
+pub const ORD_LTD: u32 = 2048;
+pub const ORD_LED: u32 = 2049;
+pub const ORD_EQD: u32 = 2050;
+pub const ORD_GED: u32 = 2051;
+pub const ORD_GTD: u32 = 2052;
+pub const ORD_NED: u32 = 2053;
 
 pub const SDK_ORDINALS: &[CoredllOrdinalDef] = &[
     CoredllOrdinalDef {
@@ -14130,6 +14142,90 @@ pub const COREDLL_EXPORTS: &[CoredllOrdinalDef] = &[
         noname: false,
         line: 0,
     },
+    CoredllOrdinalDef {
+        name: "__lts",
+        target: None,
+        ordinal: 2042,
+        noname: false,
+        line: 0,
+    },
+    CoredllOrdinalDef {
+        name: "__les",
+        target: None,
+        ordinal: 2043,
+        noname: false,
+        line: 0,
+    },
+    CoredllOrdinalDef {
+        name: "__eqs",
+        target: None,
+        ordinal: 2044,
+        noname: false,
+        line: 0,
+    },
+    CoredllOrdinalDef {
+        name: "__ges",
+        target: None,
+        ordinal: 2045,
+        noname: false,
+        line: 0,
+    },
+    CoredllOrdinalDef {
+        name: "__gts",
+        target: None,
+        ordinal: 2046,
+        noname: false,
+        line: 0,
+    },
+    CoredllOrdinalDef {
+        name: "__nes",
+        target: None,
+        ordinal: 2047,
+        noname: false,
+        line: 0,
+    },
+    CoredllOrdinalDef {
+        name: "__ltd",
+        target: None,
+        ordinal: 2048,
+        noname: false,
+        line: 0,
+    },
+    CoredllOrdinalDef {
+        name: "__led",
+        target: None,
+        ordinal: 2049,
+        noname: false,
+        line: 0,
+    },
+    CoredllOrdinalDef {
+        name: "__eqd",
+        target: None,
+        ordinal: 2050,
+        noname: false,
+        line: 0,
+    },
+    CoredllOrdinalDef {
+        name: "__ged",
+        target: None,
+        ordinal: 2051,
+        noname: false,
+        line: 0,
+    },
+    CoredllOrdinalDef {
+        name: "__gtd",
+        target: None,
+        ordinal: 2052,
+        noname: false,
+        line: 0,
+    },
+    CoredllOrdinalDef {
+        name: "__ned",
+        target: None,
+        ordinal: 2053,
+        noname: false,
+        line: 0,
+    },
 ];
 
 pub fn lookup(ordinal: u32) -> Option<&'static CoredllOrdinalDef> {
@@ -15733,6 +15829,18 @@ pub fn lookup(ordinal: u32) -> Option<&'static CoredllOrdinalDef> {
         ORD_DPTOFP => Some(&COREDLL_EXPORTS[1749]),
         ORD_FPCMP => Some(&COREDLL_EXPORTS[1750]),
         ORD_DPCMP => Some(&COREDLL_EXPORTS[1751]),
+        ORD_LTS => Some(&COREDLL_EXPORTS[1752]),
+        ORD_LES => Some(&COREDLL_EXPORTS[1753]),
+        ORD_EQS => Some(&COREDLL_EXPORTS[1754]),
+        ORD_GES => Some(&COREDLL_EXPORTS[1755]),
+        ORD_GTS => Some(&COREDLL_EXPORTS[1756]),
+        ORD_NES => Some(&COREDLL_EXPORTS[1757]),
+        ORD_LTD => Some(&COREDLL_EXPORTS[1758]),
+        ORD_LED => Some(&COREDLL_EXPORTS[1759]),
+        ORD_EQD => Some(&COREDLL_EXPORTS[1760]),
+        ORD_GED => Some(&COREDLL_EXPORTS[1761]),
+        ORD_GTD => Some(&COREDLL_EXPORTS[1762]),
+        ORD_NED => Some(&COREDLL_EXPORTS[1763]),
         ORD_CE_REG_TEST_SET_VALUE_W => Some(&COREDLL_EXPORTS[825]),
         ORD_CE_REG_GET_INFO => Some(&COREDLL_EXPORTS[826]),
         ORD_CE_REG_GET_NOTIFICATION_INFO => Some(&COREDLL_EXPORTS[827]),

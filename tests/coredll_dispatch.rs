@@ -10,9 +10,9 @@ use wince_emulation_v3::{
         coredll_ordinals::{
             COREDLL_EXPORTS, ORD_CLOSE_HANDLE, ORD_CREATE_FILE_W, ORD_CREATE_WINDOW_EX_W,
             ORD_DISPATCH_MESSAGE_W, ORD_EVENT_MODIFY, ORD_GET_MESSAGE_W,
-            ORD_INITIALIZE_CRITICAL_SECTION, ORD_LL_DIV, ORD_LONGJMP, ORD_POST_MESSAGE_W, ORD_POW,
-            ORD_REG_OPEN_KEY_EX_W, ORD_SETJMP, ORD_SQRT, ORD_USER_CALL_WINDOW_PROC,
-            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE, SDK_ORDINALS,
+            ORD_INITIALIZE_CRITICAL_SECTION, ORD_LITOFP, ORD_LL_DIV, ORD_LONGJMP, ORD_LTD, ORD_NES,
+            ORD_POST_MESSAGE_W, ORD_POW, ORD_REG_OPEN_KEY_EX_W, ORD_SETJMP, ORD_SQRT,
+            ORD_USER_CALL_WINDOW_PROC, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE, SDK_ORDINALS,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::WM_USER,
@@ -23,7 +23,7 @@ use wince_emulation_v3::{
 };
 
 mod support;
-use support::unique_test_root;
+use support::{TestGuestMemory, unique_test_root};
 
 #[test]
 fn coredll_table_reads_full_static_rust_ordinals() -> Result<()> {
@@ -99,6 +99,88 @@ fn cemath_evaluates_crt_and_mips_helper_calls() -> Result<()> {
         kernel.math.eval(CeMathCall::UllRem { lhs: 22, rhs: 5 }),
         CeMathValue::U64(2)
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_dispatch_routes_mips_soft_float_compare_helpers() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 1;
+
+    assert_eq!(table.resolve_name("__nes").unwrap().ordinal, ORD_NES);
+    assert_eq!(table.resolve_name("__ltd").unwrap().ordinal, ORD_LTD);
+
+    memory.map_words(0x1000, 1);
+    memory.map_words(0x2000, 1);
+    memory.write_word(0x1000, 3.5_f32.to_bits());
+    memory.write_word(0x2000, 3.5_f32.to_bits());
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_NES,
+            [0x1000, 0x2000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    memory.write_word(0x2000, 4.0_f32.to_bits());
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_NES,
+            [0x1000, 0x2000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    let lhs = 1.25_f64.to_bits();
+    let rhs = 2.5_f64.to_bits();
+    memory.map_words(0x3000, 2);
+    memory.map_words(0x4000, 2);
+    memory.write_word(0x3000, lhs as u32);
+    memory.write_word(0x3004, (lhs >> 32) as u32);
+    memory.write_word(0x4000, rhs as u32);
+    memory.write_word(0x4004, (rhs >> 32) as u32);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LTD,
+            [0x3000, 0x4000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LITOFP,
+            [192_000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::F32(value)),
+            ..
+        } if value.to_bits() == (192_000_f32).to_bits()
+    ));
 
     Ok(())
 }

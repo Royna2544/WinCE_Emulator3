@@ -486,6 +486,16 @@
   traffic before stopping in an app-side date/geometry loop around
   `0x0024f80c`/`0x0024fa30`. The framebuffer dump remains all zero, so this is
   a run-depth/frontier improvement, not visible GUI success.
+- SDK CE 4.2 Mipsii `coredll.lib` evidence identified raw soft-float compare
+  helpers `__lts` through `__ned` at ordinals 2042 through 2053. COREDLL raw
+  dispatch now maps those helpers, reads guest float/double operands from their
+  pointer arguments, and routes `__litofp @2032`/`__ultofp @2033` through the
+  existing `cemath` conversion path. Focused dispatch coverage passes. A
+  release mounted run now gets past the previous `__nes @2047` and
+  `__litofp @2032` frontiers and stops at `__ll_div @2005` from SDK MFC
+  (`pc=0x7fff06b0`, `ra=0x6000cd80`, `a0:a1=0x00000000_09896800`,
+  `a2:a3=0x00000000_00989680`). The framebuffer dump remains blank, so this
+  is an ABI/helper frontier, not GUI success.
 
 ## Current State
 
@@ -503,11 +513,10 @@
   `RegisterGesture @2724` state, write basic system/local time structs, and
   stop long post-time runs through `--cpu-wall-clock-limit-ms` with a diagnostic
   snapshot plus framebuffer dump. The current mounted run progresses past the
-  previous `GetSystemTime @25` trap, but the wall-clock-bounded snapshot is
-  still in startup CRT/import activity, with compact import counts showing
-  `memset @1047` dominating and `WSAStartup` already reached. A longer bounded
-  run advances into app date/geometry logic and still leaves the framebuffer
-  blank. A generic virtual framebuffer is now
+  previous `GetSystemTime @25` trap, the previous soft-float `__nes @2047`/
+  `__litofp @2032` traps, and now stops at the next raw MIPS helper frontier,
+  `__ll_div @2005`, from loaded SDK MFC code. The framebuffer remains blank. A
+  generic virtual framebuffer is now
   attached to the emulator boundary, generic virtual presenter/desktop
   interfaces exist for host
   presentation/window management, and solid `FillRect` on a window/screen HDC
