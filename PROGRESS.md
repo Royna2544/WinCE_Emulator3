@@ -477,6 +477,15 @@
   `WINSOCK.dll!WSAStartup` once. This confirms the current post-time frontier
   is still legitimate startup/import churn before visible drawing, not a new
   unimplemented import trap.
+- The verbose Unicorn `last_code` diagnostic ring now samples ordinary
+  per-instruction records while still recording trampoline-sensitive code
+  points. A comparable 60,000 ms mounted iNavi run reaches the same MFC
+  create-window frontier as before, while a 180,000 ms run gets much farther
+  into app code: import counts now include `operator new @1095`, `SetRect @103`,
+  `MultiByteToWideChar @196`, and more `GetClassInfoW @878`/class-registration
+  traffic before stopping in an app-side date/geometry loop around
+  `0x0024f80c`/`0x0024fa30`. The framebuffer dump remains all zero, so this is
+  a run-depth/frontier improvement, not visible GUI success.
 
 ## Current State
 
@@ -496,8 +505,9 @@
   snapshot plus framebuffer dump. The current mounted run progresses past the
   previous `GetSystemTime @25` trap, but the wall-clock-bounded snapshot is
   still in startup CRT/import activity, with compact import counts showing
-  `memset @1047` dominating and `WSAStartup` already reached, and the
-  framebuffer remains blank. A generic virtual framebuffer is now
+  `memset @1047` dominating and `WSAStartup` already reached. A longer bounded
+  run advances into app date/geometry logic and still leaves the framebuffer
+  blank. A generic virtual framebuffer is now
   attached to the emulator boundary, generic virtual presenter/desktop
   interfaces exist for host
   presentation/window management, and solid `FillRect` on a window/screen HDC

@@ -73,7 +73,14 @@
     `target\inavi-import-counts.ppm`; its RGB body is still all zero, and the
     summary shows `memset @1047` 259 times plus
     `WINSOCK.dll!WSAStartup` once before the wall-clock stop. The app is still
-    in post-time startup/import churn before useful drawing.
+    in post-time startup/import churn before useful drawing. With sampled
+    Unicorn code tracing, a later 180,000 ms mounted run writes
+    `target\inavi-sampled-180s.ppm`; its RGB body is also still all zero, but
+    the run gets farther into app code before stopping in a date/geometry loop
+    around `0x0024f80c`/`0x0024fa30`. The compact import summary now includes
+    `operator new @1095`, `SetRect @103`, `MultiByteToWideChar @196`, and more
+    `GetClassInfoW @878`/class-registration traffic, so this is a deeper
+    frontier and still not GUI success.
   - Status: active; `TlsCall` now returns real CE-style slots,
     `CallWindowProcW` now enters guest window-procedure targets, and
     `CreateWindowExW` now delivers the first create-time message. Raw
@@ -87,10 +94,12 @@
     `FindResourceW(..., name=0x0e01, type=RT_STRING)` miss; LLVM resource
     dumping confirms the EXE has no RT_STRING table. The latest bounded launch
     confirms the current frontier is a post-time long-running startup path with
-    import-count evidence rather than an unimplemented import trap; next work is
-    to run longer bounded slices and implement the next CE-referenced raw
-    behavior that advances the guest path toward the newly connected framebuffer
-    drawing and the remaining GDI/DC/surface drawing and blit imports.
+    import-count evidence rather than an unimplemented import trap; sampled
+    trace runs now push that frontier into app-side date/geometry work while the
+    framebuffer stays blank. Next work is to use release/longer bounded slices
+    and implement the next CE-referenced raw behavior that advances the guest
+    path toward the newly connected framebuffer drawing and the remaining
+    GDI/DC/surface drawing and blit imports.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch

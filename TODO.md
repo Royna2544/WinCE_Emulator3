@@ -16,8 +16,12 @@
   returns snapshots and framebuffer dumps without external killing; the latest
   8,000 ms diagnostic dump is still all zero, and compact import counts show
   `memset @1047` dominating startup with `WINSOCK.dll!WSAStartup` already
-  reached once. Run longer bounded slices to find the next real startup
-  boundary before expecting guest drawing.
+  reached once. With sampled Unicorn code tracing, a 180,000 ms mounted run now
+  reaches app-side date/geometry logic around `0x0024f80c`/`0x0024fa30`, with
+  hot imports including `operator new @1095`, `SetRect @103`, and
+  `MultiByteToWideChar @196`; the framebuffer dump is still all zero. Use
+  release/longer bounded slices and implement the next real GWE/GDI/resource
+  behavior the trace demands before expecting guest drawing.
 - Replace launch-stub behavior for commctrl, WINSOCK, and OLE imports with
   real subsystem-backed implementations as import traces demand. Keep MFC on
   the loaded SDK DLL path only; do not add emulator MFC stubs.

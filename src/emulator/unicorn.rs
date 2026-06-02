@@ -247,6 +247,8 @@ const GUEST_HEAP_ARENA_SIZE: u32 = 0x0100_0000;
 #[cfg(feature = "unicorn")]
 const UNICORN_TRACE_LIMIT: usize = 256;
 #[cfg(feature = "unicorn")]
+const UNICORN_CODE_TRACE_SAMPLE_INTERVAL: u32 = 64;
+#[cfg(feature = "unicorn")]
 const IMPORT_TRAP_ARG_COUNT: usize = 12;
 #[cfg(feature = "unicorn")]
 const THREAD_EXIT_STUB_ADDR: u32 =
@@ -731,7 +733,7 @@ impl UnicornMips {
         limits: UnicornRunLimits,
     ) -> Result<()> {
         use std::{
-            cell::RefCell,
+            cell::{Cell, RefCell},
             collections::BTreeMap,
             rc::Rc,
             time::{Duration, Instant},
@@ -778,6 +780,8 @@ impl UnicornMips {
         let indirect_call_probe_hook = Rc::clone(&indirect_call_probe);
         let last_code = Rc::new(RefCell::new(Vec::<UnicornLastCode>::new()));
         let last_code_hook = Rc::clone(&last_code);
+        let code_trace_counter = Rc::new(Cell::new(0u32));
+        let code_trace_counter_hook = Rc::clone(&code_trace_counter);
         let host_wall_clock_stop = Rc::new(RefCell::new(None));
         let host_wall_clock_stop_hook = Rc::clone(&host_wall_clock_stop);
         let host_wall_clock_limit = (limits.wall_clock_limit_ms != 0)
@@ -791,6 +795,8 @@ impl UnicornMips {
         let trampoline_jumps = self.trampoline_jumps.clone();
         uc.add_code_hook(1, 0, move |uc, address, _size| {
             let pc = address as u32;
+            let code_trace_index = code_trace_counter_hook.get().wrapping_add(1);
+            code_trace_counter_hook.set(code_trace_index);
             let instruction = read_unicorn_u32(uc, pc);
             let next_instruction = read_unicorn_u32(uc, pc.wrapping_add(4));
             if let Some(limit) = host_wall_clock_limit {
@@ -861,16 +867,22 @@ impl UnicornMips {
                     .filter(|end| pc >= trampoline.stub && pc < *end)
                     .map(|_| trampoline.origin)
             });
-            {
+            let should_trace_code = code_trace_index % UNICORN_CODE_TRACE_SAMPLE_INTERVAL == 0
+                || direct_jump_target_in_trampoline
+                || direct_jump_trampoline_origin.is_some()
+                || current_trampoline_origin.is_some();
+            if should_trace_code {
+                let ra = read_mips_reg(uc, RegisterMIPS::RA);
+                let sp = read_mips_reg(uc, RegisterMIPS::SP);
                 let mut last_code = last_code_hook.borrow_mut();
                 if last_code.len() == UNICORN_TRACE_LIMIT {
                     last_code.remove(0);
                 }
                 last_code.push(UnicornLastCode {
                     pc,
-                    ra: read_mips_reg(uc, RegisterMIPS::RA),
-                    sp: read_mips_reg(uc, RegisterMIPS::SP),
-                    sp_return_slot: read_mips_reg(uc, RegisterMIPS::SP)
+                    ra,
+                    sp,
+                    sp_return_slot: sp
                         .checked_add(0x10)
                         .and_then(|addr| read_unicorn_u32(uc, addr)),
                     instruction,
