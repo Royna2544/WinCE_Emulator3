@@ -185,6 +185,7 @@ pub struct PeResourceString {
 pub struct PeResourceData {
     pub kind: u32,
     pub name: u32,
+    pub name_string: Option<String>,
     pub data_rva: u32,
     pub size: u32,
 }
@@ -282,7 +283,9 @@ impl PeImage {
             return Ok(Vec::new());
         }
         let mut out = Vec::new();
-        for type_entry in self.resource_directory_entries(directory.virtual_address)? {
+        for type_entry in
+            self.resource_directory_entries(directory.virtual_address, directory.virtual_address)?
+        {
             if type_entry.id != Some(RT_STRING) || !type_entry.is_directory {
                 continue;
             }
@@ -290,7 +293,9 @@ impl PeImage {
                 .virtual_address
                 .checked_add(type_entry.offset)
                 .ok_or_else(|| pe_error(&self.path, "resource type offset overflow"))?;
-            for name_entry in self.resource_directory_entries(name_dir_rva)? {
+            for name_entry in
+                self.resource_directory_entries(directory.virtual_address, name_dir_rva)?
+            {
                 let Some(block_id) = name_entry.id else {
                     continue;
                 };
@@ -301,7 +306,9 @@ impl PeImage {
                     .virtual_address
                     .checked_add(name_entry.offset)
                     .ok_or_else(|| pe_error(&self.path, "resource name offset overflow"))?;
-                for lang_entry in self.resource_directory_entries(lang_dir_rva)? {
+                for lang_entry in
+                    self.resource_directory_entries(directory.virtual_address, lang_dir_rva)?
+                {
                     if lang_entry.is_directory {
                         continue;
                     }
@@ -326,7 +333,9 @@ impl PeImage {
             return Ok(Vec::new());
         }
         let mut out = Vec::new();
-        for type_entry in self.resource_directory_entries(directory.virtual_address)? {
+        for type_entry in
+            self.resource_directory_entries(directory.virtual_address, directory.virtual_address)?
+        {
             let Some(kind) = type_entry.id else {
                 continue;
             };
@@ -337,10 +346,11 @@ impl PeImage {
                 .virtual_address
                 .checked_add(type_entry.offset)
                 .ok_or_else(|| pe_error(&self.path, "resource type offset overflow"))?;
-            for name_entry in self.resource_directory_entries(name_dir_rva)? {
-                let Some(name) = name_entry.id else {
-                    continue;
-                };
+            for name_entry in
+                self.resource_directory_entries(directory.virtual_address, name_dir_rva)?
+            {
+                let name_string = name_entry.name.clone();
+                let name = name_entry.id.unwrap_or(0);
                 if !name_entry.is_directory {
                     continue;
                 }
@@ -348,7 +358,9 @@ impl PeImage {
                     .virtual_address
                     .checked_add(name_entry.offset)
                     .ok_or_else(|| pe_error(&self.path, "resource name offset overflow"))?;
-                for lang_entry in self.resource_directory_entries(lang_dir_rva)? {
+                for lang_entry in
+                    self.resource_directory_entries(directory.virtual_address, lang_dir_rva)?
+                {
                     if lang_entry.is_directory {
                         continue;
                     }
@@ -359,6 +371,7 @@ impl PeImage {
                     out.push(PeResourceData {
                         kind,
                         name,
+                        name_string: name_string.clone(),
                         data_rva: self.read_u32_rva(entry_rva)?,
                         size: self.read_u32_rva(rva_add(entry_rva, 4, &self.path)?)?,
                     });
@@ -751,8 +764,20 @@ impl PeImage {
         PeReader::new(&self.path, &self.bytes).read_c_string(offset)
     }
 
+    fn read_resource_name_rva(&self, rva: u32) -> Result<String> {
+        let len = self.read_u16_rva(rva)? as u32;
+        let mut cursor = rva_add(rva, 2, &self.path)?;
+        let mut units = Vec::with_capacity(len as usize);
+        for _ in 0..len {
+            units.push(self.read_u16_rva(cursor)?);
+            cursor = rva_add(cursor, 2, &self.path)?;
+        }
+        Ok(String::from_utf16_lossy(&units))
+    }
+
     fn resource_directory_entries(
         &self,
+        resource_root_rva: u32,
         directory_rva: u32,
     ) -> Result<Vec<ResourceDirectoryEntry>> {
         let named = self.read_u16_rva(rva_add(directory_rva, 12, &self.path)?)? as u32;
@@ -763,8 +788,16 @@ impl PeImage {
         for _ in 0..count {
             let name_or_id = self.read_u32_rva(entry_rva)?;
             let offset_to_data = self.read_u32_rva(rva_add(entry_rva, 4, &self.path)?)?;
+            let name = if name_or_id & 0x8000_0000 != 0 {
+                Some(self.read_resource_name_rva(
+                    resource_root_rva.wrapping_add(name_or_id & 0x7fff_ffff),
+                )?)
+            } else {
+                None
+            };
             entries.push(ResourceDirectoryEntry {
                 id: (name_or_id & 0x8000_0000 == 0).then_some(name_or_id & 0xffff),
+                name,
                 is_directory: offset_to_data & 0x8000_0000 != 0,
                 offset: offset_to_data & 0x7fff_ffff,
             });
@@ -813,6 +846,7 @@ impl PeImage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ResourceDirectoryEntry {
     id: Option<u32>,
+    name: Option<String>,
     is_directory: bool,
     offset: u32,
 }

@@ -2,9 +2,50 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ce::gwe::Rect;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+const STOCK_OBJECT_BASE: u32 = 0x000b_5000;
+const WHITE_BRUSH: u32 = 0;
+const NULL_BRUSH: u32 = 5;
+const WHITE_PEN: u32 = 6;
+const NULL_PEN: u32 = 8;
+const OEM_FIXED_FONT: u32 = 10;
+const DEFAULT_GUI_FONT: u32 = 17;
+const DC_BRUSH: u32 = 18;
+const DC_PEN: u32 = 19;
+
+pub fn stock_object_handle(index: u32) -> Option<u32> {
+    let valid = matches!(
+        index,
+        WHITE_BRUSH..=NULL_BRUSH
+            | WHITE_PEN..=NULL_PEN
+            | OEM_FIXED_FONT..=DEFAULT_GUI_FONT
+            | DC_BRUSH
+            | DC_PEN
+    );
+    valid.then_some(STOCK_OBJECT_BASE | index)
+}
+
+fn stock_object_index(handle: u32) -> Option<u32> {
+    (handle & 0xffff_ff00 == STOCK_OBJECT_BASE).then_some(handle & 0xff)
+}
+
+fn is_stock_font(handle: u32) -> bool {
+    matches!(
+        stock_object_index(handle),
+        Some(OEM_FIXED_FONT..=DEFAULT_GUI_FONT)
+    )
+}
+
+fn is_stock_drawable(handle: u32) -> bool {
+    matches!(
+        stock_object_index(handle),
+        Some(WHITE_BRUSH..=NULL_BRUSH | WHITE_PEN..=NULL_PEN | DC_BRUSH | DC_PEN)
+    )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ResourceId {
     Integer(u16),
+    Name(String),
     NamePtr(u32),
 }
 
@@ -94,6 +135,7 @@ pub struct DcState {
     pub selected_object: u32,
     pub selected_font: u32,
     pub selected_brush: u32,
+    pub bk_color: u32,
     pub bk_mode: i32,
     pub text_color: u32,
     pub text_align: u32,
@@ -105,6 +147,7 @@ impl Default for DcState {
             selected_object: 0,
             selected_font: 0,
             selected_brush: 0,
+            bk_color: 0x00ff_ffff,
             bk_mode: 2,
             text_color: 0,
             text_align: 0,
@@ -164,7 +207,8 @@ impl ResourceSystem {
     ) -> u32 {
         let handle = self.next_handle;
         self.next_handle += 4;
-        self.by_key.insert((module, name, kind), handle);
+        self.by_key
+            .insert((module, name.clone(), kind.clone()), handle);
         self.entries.insert(
             handle,
             ResourceEntry {
@@ -319,6 +363,25 @@ impl ResourceSystem {
         Some(u32::from(previous) * 0x0000_0008)
     }
 
+    pub fn check_menu_radio_item(
+        &mut self,
+        handle: u32,
+        first: u32,
+        last: u32,
+        checked: u32,
+    ) -> bool {
+        let Some(menu) = self.menus.get_mut(&handle) else {
+            return false;
+        };
+        if first > last || checked < first || checked > last {
+            return false;
+        }
+        for item in first..=last {
+            menu.checked_items.insert(item, item == checked);
+        }
+        true
+    }
+
     pub fn remove_menu_item(&mut self, handle: u32, item: u32) -> bool {
         let Some(menu) = self.menus.get_mut(&handle) else {
             return false;
@@ -439,10 +502,11 @@ impl ResourceSystem {
         if hdc == 0 || object == 0 {
             return Some(0);
         }
-        let is_font = self.fonts.contains_key(&object);
+        let is_font = self.fonts.contains_key(&object) || is_stock_font(object);
         let is_drawable = self.brushes.contains_key(&object)
             || self.bitmaps.contains_key(&object)
-            || self.pens.contains_key(&object);
+            || self.pens.contains_key(&object)
+            || is_stock_drawable(object);
         let state = self.dc_states.entry(hdc).or_default();
         if is_font {
             let previous = state.selected_font;
@@ -466,6 +530,16 @@ impl ResourceSystem {
         let state = self.dc_states.entry(hdc).or_default();
         let previous = state.bk_mode;
         state.bk_mode = mode;
+        Some(previous)
+    }
+
+    pub fn set_dc_bk_color(&mut self, hdc: u32, color: u32) -> Option<u32> {
+        if hdc == 0 {
+            return None;
+        }
+        let state = self.dc_states.entry(hdc).or_default();
+        let previous = state.bk_color;
+        state.bk_color = color;
         Some(previous)
     }
 

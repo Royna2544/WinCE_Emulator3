@@ -389,8 +389,20 @@ impl CeKernel {
         self.handles.mark_thread_exited(handle, exit_code)
     }
 
+    pub fn suspend_thread(&mut self, handle: u32) -> Option<u32> {
+        self.handles.suspend_thread(handle)
+    }
+
     pub fn resume_thread(&mut self, handle: u32) -> Option<u32> {
         self.handles.resume_thread(handle)
+    }
+
+    pub fn thread_priority(&self, handle: u32) -> Option<i32> {
+        self.handles.thread_priority(handle)
+    }
+
+    pub fn set_thread_priority(&mut self, handle: u32, priority: i32) -> bool {
+        self.handles.set_thread_priority(handle, priority)
     }
 
     pub fn guest_thread_start(&self, handle: u32) -> Option<(u32, u32, u32)> {

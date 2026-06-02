@@ -91,13 +91,13 @@ impl ImportTrapTable {
         Some(match trap.module_kind {
             ImportModuleKind::Coredll => {
                 let Some(ordinal) = trap.ordinal else {
-                    return Some(0);
+                    return None;
                 };
                 let table = CoredllExportTable::default();
                 dispatch_return_to_u32(
                     table
                         .dispatch_raw_ordinal_with_memory(kernel, memory, thread_id, ordinal, args),
-                )
+                )?
             }
             ImportModuleKind::CommonControls
             | ImportModuleKind::Winsock
@@ -432,14 +432,14 @@ pub fn import_trap_code_page(table: &ImportTrapTable) -> Vec<u8> {
     page
 }
 
-fn dispatch_return_to_u32(dispatch: CoredllDispatch) -> u32 {
+fn dispatch_return_to_u32(dispatch: CoredllDispatch) -> Option<u32> {
     match dispatch {
-        CoredllDispatch::Returned { value, .. } => coredll_value_to_u32(value),
-        CoredllDispatch::Stubbed { stub, .. } => stub.return_value,
+        CoredllDispatch::Returned { value, .. } => Some(coredll_value_to_u32(value)),
+        CoredllDispatch::Stubbed { .. } => None,
         CoredllDispatch::UnresolvedOrdinal(_)
         | CoredllDispatch::UnresolvedName(_)
         | CoredllDispatch::Unimplemented { .. }
-        | CoredllDispatch::OrdinalMismatch { .. } => 0,
+        | CoredllDispatch::OrdinalMismatch { .. } => None,
     }
 }
 
@@ -535,6 +535,39 @@ fn write_mapped_u32(mapped: &mut [u8], rva: u32, value: u32) -> Result<()> {
 mod tests {
     use super::*;
     use crate::pe::ImportThunk;
+    use crate::{
+        ce::{coredll::CoredllGuestMemory, kernel::CeKernel},
+        config::RuntimeConfig,
+    };
+
+    #[derive(Default)]
+    struct TestMemory;
+
+    impl CoredllGuestMemory for TestMemory {
+        fn read_u8(&self, _addr: u32) -> Result<u8> {
+            Err(Error::Backend("unexpected read_u8".to_owned()))
+        }
+
+        fn write_u8(&mut self, _addr: u32, _value: u8) -> Result<()> {
+            Err(Error::Backend("unexpected write_u8".to_owned()))
+        }
+
+        fn read_u32(&self, _addr: u32) -> Result<u32> {
+            Err(Error::Backend("unexpected read_u32".to_owned()))
+        }
+
+        fn write_u32(&mut self, _addr: u32, _value: u32) -> Result<()> {
+            Err(Error::Backend("unexpected write_u32".to_owned()))
+        }
+
+        fn read_u16(&self, _addr: u32) -> Result<u16> {
+            Err(Error::Backend("unexpected read_u16".to_owned()))
+        }
+
+        fn write_u16(&mut self, _addr: u32, _value: u16) -> Result<()> {
+            Err(Error::Backend("unexpected write_u16".to_owned()))
+        }
+    }
 
     #[test]
     fn patches_coredll_iat_to_trap_addresses() {
@@ -583,6 +616,48 @@ mod tests {
         assert_eq!(
             table.trap_at(IMPORT_TRAP_BASE).unwrap().ordinal,
             Some(crate::ce::coredll_ordinals::ORD_GET_TICK_COUNT)
+        );
+    }
+
+    #[test]
+    fn unresolved_coredll_name_trap_does_not_fake_zero_return() {
+        let imports = vec![ImportDescriptor {
+            module_name: "COREDLL.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![ImportThunk {
+                thunk_rva: 0x2000,
+                iat_rva: 0x3000,
+                import: ImportBy::Name {
+                    hint: 0,
+                    name: "NotARealCeApi".to_owned(),
+                },
+            }],
+        }];
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_coredll_imports(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+        )
+        .unwrap();
+
+        let trap = table.trap_at(IMPORT_TRAP_BASE).unwrap();
+        assert_eq!(trap.module_kind, ImportModuleKind::Coredll);
+        assert_eq!(trap.ordinal, None);
+        assert_eq!(trap.name.as_deref(), Some("NotARealCeApi"));
+
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut memory = TestMemory;
+        assert_eq!(
+            table.dispatch_trap(&mut kernel, &mut memory, 1, IMPORT_TRAP_BASE, vec![]),
+            None
         );
     }
 

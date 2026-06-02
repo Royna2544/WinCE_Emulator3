@@ -14,9 +14,11 @@ pub const ORD_SYSTEM_MEMORY_LOW: u32 = 720;
 pub const ORD_WCSDUP: u32 = 74;
 pub const ORD_WCSRCHR: u32 = 69;
 pub const ORD_WCSNICMP: u32 = 229;
+pub const ORD_WCSNCPY: u32 = 1046;
 pub const ORD_MALLOC: u32 = 1041;
 pub const ORD_MEMCPY: u32 = 1044;
 pub const ORD_MEMSET: u32 = 1047;
+pub const ORD_OPERATOR_DELETE: u32 = 1094;
 pub const ORD_OPERATOR_NEW: u32 = 1095;
 pub const ORD_SWPRINTF: u32 = 1097;
 pub const ORD_PRINTF: u32 = 1102;
@@ -1785,6 +1787,13 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef] = &[
         line: 0,
     },
     CoredllOrdinalDef {
+        name: "wcsncpy",
+        target: Some("SDK_Mipsii_coredll.lib"),
+        ordinal: ORD_WCSNCPY,
+        noname: false,
+        line: 0,
+    },
+    CoredllOrdinalDef {
         name: "malloc",
         target: Some("SDK_Mipsii_coredll.lib"),
         ordinal: ORD_MALLOC,
@@ -1802,6 +1811,13 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef] = &[
         name: "memset",
         target: Some("SDK_Mipsii_coredll.lib"),
         ordinal: ORD_MEMSET,
+        noname: false,
+        line: 0,
+    },
+    CoredllOrdinalDef {
+        name: "??3@YAXPAX@Z",
+        target: Some("SDK_Mipsii_coredll.lib"),
+        ordinal: ORD_OPERATOR_DELETE,
         noname: false,
         line: 0,
     },

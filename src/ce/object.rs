@@ -68,8 +68,9 @@ pub struct ThreadObject {
     pub start_address: u32,
     pub parameter: u32,
     pub exit_code: u32,
+    pub priority: i32,
     pub signaled: bool,
-    pub suspended: bool,
+    pub suspend_count: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -174,8 +175,9 @@ impl HandleTable {
             start_address,
             parameter,
             exit_code: 259,
+            priority: 0,
             signaled: false,
-            suspended,
+            suspend_count: u32::from(suspended),
         }))
     }
 
@@ -279,20 +281,48 @@ impl HandleTable {
         true
     }
 
+    pub fn suspend_thread(&mut self, handle: u32) -> Option<u32> {
+        let Ok(KernelObject::Thread(thread)) = self.get_mut(handle) else {
+            return None;
+        };
+        let previous = thread.suspend_count;
+        thread.suspend_count = thread.suspend_count.saturating_add(1);
+        Some(previous)
+    }
+
     pub fn resume_thread(&mut self, handle: u32) -> Option<u32> {
         let Ok(KernelObject::Thread(thread)) = self.get_mut(handle) else {
             return None;
         };
-        let previous = u32::from(thread.suspended);
-        thread.suspended = false;
+        let previous = thread.suspend_count;
+        thread.suspend_count = thread.suspend_count.saturating_sub(1);
         Some(previous)
+    }
+
+    pub fn thread_priority(&self, handle: u32) -> Option<i32> {
+        let Ok(KernelObject::Thread(thread)) = self.get(handle) else {
+            return None;
+        };
+        Some(thread.priority)
+    }
+
+    pub fn set_thread_priority(&mut self, handle: u32, priority: i32) -> bool {
+        let Ok(KernelObject::Thread(thread)) = self.get_mut(handle) else {
+            return false;
+        };
+        thread.priority = priority;
+        true
     }
 
     pub fn thread_start(&self, handle: u32) -> Option<(u32, u32, u32)> {
         let Ok(KernelObject::Thread(thread)) = self.get(handle) else {
             return None;
         };
-        (!thread.signaled).then_some((thread.thread_id, thread.start_address, thread.parameter))
+        (!thread.signaled && thread.suspend_count == 0).then_some((
+            thread.thread_id,
+            thread.start_address,
+            thread.parameter,
+        ))
     }
 
     pub fn mark_process_exited(&mut self, handle: u32, exit_code: u32) -> bool {

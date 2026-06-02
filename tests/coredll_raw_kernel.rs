@@ -4,13 +4,15 @@ use wince_emulation_v3::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
             ORD_CLOSE_HANDLE, ORD_CREATE_EVENT_W, ORD_CREATE_THREAD, ORD_EVENT_MODIFY,
-            ORD_GET_LAST_ERROR, ORD_GET_TICK_COUNT, ORD_GET_VERSION_EX_W,
+            ORD_GET_LAST_ERROR, ORD_GET_THREAD_PRIORITY, ORD_GET_TICK_COUNT, ORD_GET_VERSION_EX_W,
             ORD_INITIALIZE_CRITICAL_SECTION, ORD_INTERLOCKED_COMPARE_EXCHANGE,
             ORD_INTERLOCKED_EXCHANGE_ADD, ORD_INTERLOCKED_INCREMENT, ORD_LEAVE_CRITICAL_SECTION,
-            ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_SET_LAST_ERROR,
-            ORD_SLEEP, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION,
-            ORD_WAIT_FOR_SINGLE_OBJECT,
+            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_QUERY_PERFORMANCE_COUNTER,
+            ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_RESUME_THREAD, ORD_SET_LAST_ERROR,
+            ORD_SET_THREAD_PRIORITY, ORD_SLEEP, ORD_SUSPEND_THREAD, ORD_TLS_GET_VALUE,
+            ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_FOR_SINGLE_OBJECT,
         },
+        gwe::Message,
         kernel::CeKernel,
         registry::ERROR_SUCCESS,
         thread::ERROR_INVALID_PARAMETER,
@@ -330,6 +332,73 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
             &mut kernel,
             &mut memory,
             thread_id,
+            ORD_SUSPEND_THREAD,
+            [worker_thread]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(kernel.guest_thread_start(worker_thread).is_none());
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_RESUME_THREAD,
+            [worker_thread]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert!(kernel.guest_thread_start(worker_thread).is_some());
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_THREAD_PRIORITY,
+            [worker_thread]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_THREAD_PRIORITY,
+            [worker_thread, 1]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_THREAD_PRIORITY,
+            [worker_thread]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_WAIT_FOR_SINGLE_OBJECT,
             [worker_thread, 0]
         ),
@@ -382,6 +451,53 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
         other => panic!("CreateEventW did not return a raw event handle: {other:?}"),
     };
     assert_ne!(event, 0);
+    let handles_ptr = 0x6000;
+    memory.map_words(handles_ptr, 1);
+    memory.write_word(handles_ptr, event);
+    kernel.gwe.post_message(
+        thread_id,
+        Message::new(0, 0x400 + 42, 77, 0, kernel.timers.tick_count()),
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX,
+            [0, 0, 1000, 0x04ff, 0x0004],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_OBJECT_0),
+            ..
+        }
+    ));
+    assert!(kernel.gwe.get_message(thread_id).is_some());
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EVENT_MODIFY,
+            [event, 3]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX,
+            [1, handles_ptr, 1000, 0x04ff, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_OBJECT_0),
+            ..
+        }
+    ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

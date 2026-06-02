@@ -184,7 +184,9 @@ impl MemorySystem {
     }
 
     pub fn heap_alloc(&mut self, heap: u32, flags: u32, bytes: u32) -> Option<u32> {
-        if flags & !(HEAP_NO_SERIALIZE | HEAP_ZERO_MEMORY) != 0 || !self.is_live_heap(heap) {
+        if flags & !(HEAP_GENERATE_EXCEPTIONS | HEAP_NO_SERIALIZE | HEAP_ZERO_MEMORY) != 0
+            || !self.is_live_heap(heap)
+        {
             return None;
         }
         let actual_size = sanitize_size(bytes)?;
@@ -220,7 +222,6 @@ impl MemorySystem {
                 | HEAP_REALLOC_IN_PLACE_ONLY
                 | HEAP_ZERO_MEMORY)
             != 0
-            || flags & HEAP_GENERATE_EXCEPTIONS != 0
             || !self.is_live_heap(heap)
         {
             return None;
@@ -359,6 +360,26 @@ impl MemorySystem {
         self.virtual_allocations.values()
     }
 
+    pub fn contains_allocated_range(&self, ptr: u32, size: u32) -> bool {
+        if size == 0 {
+            return true;
+        }
+        let Some(end) = ptr.checked_add(size) else {
+            return false;
+        };
+        self.allocations.values().any(|allocation| {
+            let Some(allocation_end) = allocation.ptr.checked_add(allocation.actual_size) else {
+                return false;
+            };
+            ptr >= allocation.ptr && end <= allocation_end
+        }) || self.virtual_allocations.values().any(|allocation| {
+            let Some(allocation_end) = allocation.base.checked_add(allocation.size) else {
+                return false;
+            };
+            ptr >= allocation.base && end <= allocation_end
+        })
+    }
+
     fn is_live_heap(&self, heap: u32) -> bool {
         self.heaps.get(&heap).is_some_and(|item| !item.destroyed)
     }
@@ -446,5 +467,20 @@ mod tests {
         );
         assert_eq!(memory.heap_size(PROCESS_HEAP_HANDLE, 0, first), None);
         assert_eq!(memory.heap_size(PROCESS_HEAP_HANDLE, 0, second), Some(16));
+    }
+
+    #[test]
+    fn contains_allocated_range_checks_heap_and_virtual_bounds() {
+        let mut memory = MemorySystem::default();
+        let heap_ptr = memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 16).unwrap();
+        let virtual_ptr = memory
+            .virtual_alloc(0, 0x1234, MEM_COMMIT | MEM_RESERVE, 4)
+            .unwrap();
+
+        assert!(memory.contains_allocated_range(heap_ptr, 16));
+        assert!(memory.contains_allocated_range(heap_ptr + 4, 8));
+        assert!(!memory.contains_allocated_range(heap_ptr + 8, 16));
+        assert!(memory.contains_allocated_range(virtual_ptr, 0x1234));
+        assert!(!memory.contains_allocated_range(virtual_ptr.wrapping_sub(1), 2));
     }
 }

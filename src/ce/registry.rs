@@ -20,6 +20,7 @@ pub const HKEY_USERS: HKey = 0x8000_0003;
 
 pub const REG_BINARY: u32 = 3;
 pub const REG_DWORD: u32 = 4;
+pub const REG_EXPAND_SZ: u32 = 2;
 pub const REG_MULTI_SZ: u32 = 7;
 pub const REG_SZ: u32 = 1;
 
@@ -50,6 +51,7 @@ pub struct RegistryValue {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RegistryType {
     RegDword,
+    RegExpandSz,
     RegSz,
     RegMultiSz,
     RegBinary,
@@ -251,6 +253,37 @@ impl Registry {
             required_name_chars: name.encode_utf16().count() as u32,
             required_data_len: data.len() as u32,
             data: data_capacity.map(|_| data),
+        }
+    }
+
+    pub fn reg_enum_key_ex_w(
+        &self,
+        hkey: HKey,
+        index: u32,
+        name_capacity: Option<usize>,
+    ) -> RegEnumKeyResult {
+        let Some(path) = self.resolve_handle_path(hkey) else {
+            return RegEnumKeyResult::status(ERROR_INVALID_HANDLE);
+        };
+        if !self.keys.contains_key(path) {
+            return RegEnumKeyResult::status(ERROR_INVALID_HANDLE);
+        }
+        let subkeys = self.enum_subkeys(path);
+        let Some(name) = subkeys.get(index as usize) else {
+            return RegEnumKeyResult::status(ERROR_NO_MORE_ITEMS);
+        };
+        let name_chars = name.encode_utf16().count();
+        if name_capacity.is_some_and(|capacity| capacity <= name_chars) {
+            return RegEnumKeyResult {
+                status: ERROR_MORE_DATA,
+                name: None,
+                required_name_chars: name_chars as u32,
+            };
+        }
+        RegEnumKeyResult {
+            status: ERROR_SUCCESS,
+            name: Some(name.clone()),
+            required_name_chars: name_chars as u32,
         }
     }
 
@@ -497,6 +530,23 @@ impl RegEnumValueResult {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegEnumKeyResult {
+    pub status: u32,
+    pub name: Option<String>,
+    pub required_name_chars: u32,
+}
+
+impl RegEnumKeyResult {
+    fn status(status: u32) -> Self {
+        Self {
+            status,
+            name: None,
+            required_name_chars: 0,
+        }
+    }
+}
+
 impl RegistryValue {
     pub fn dword(value: u32) -> Self {
         Self {
@@ -548,7 +598,9 @@ impl RegistryValue {
                 let bytes: [u8; 4] = data.get(..4)?.try_into().ok()?;
                 RegistryData::Dword(u32::from_le_bytes(bytes))
             }
-            RegistryType::RegSz => RegistryData::String(decode_utf16_nul(data)?),
+            RegistryType::RegExpandSz | RegistryType::RegSz => {
+                RegistryData::String(decode_utf16_nul(data)?)
+            }
             RegistryType::RegMultiSz => RegistryData::MultiString(decode_utf16_multi_sz(data)?),
             RegistryType::RegBinary => RegistryData::Binary(data.to_vec()),
         };
@@ -560,6 +612,7 @@ impl RegistryType {
     fn to_win32_type(&self) -> u32 {
         match self {
             RegistryType::RegDword => REG_DWORD,
+            RegistryType::RegExpandSz => REG_EXPAND_SZ,
             RegistryType::RegSz => REG_SZ,
             RegistryType::RegMultiSz => REG_MULTI_SZ,
             RegistryType::RegBinary => REG_BINARY,
@@ -569,6 +622,7 @@ impl RegistryType {
     fn from_win32_type(value: u32) -> Option<Self> {
         match value {
             REG_DWORD => Some(Self::RegDword),
+            REG_EXPAND_SZ => Some(Self::RegExpandSz),
             REG_SZ => Some(Self::RegSz),
             REG_MULTI_SZ => Some(Self::RegMultiSz),
             REG_BINARY => Some(Self::RegBinary),

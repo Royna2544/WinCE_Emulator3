@@ -116,6 +116,53 @@ pub(crate) fn wcsnicmp_raw<M: CoredllGuestMemory>(
     0
 }
 
+pub(crate) fn wcsncpy_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest: u32,
+    src: u32,
+    count: u32,
+) -> u32 {
+    if count == 0 {
+        return dest;
+    }
+    if dest == 0 || src == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+
+    let mut padding = false;
+    for index in 0..count {
+        let unit = if padding {
+            0
+        } else {
+            let Ok(unit) = memory.read_u16(src.wrapping_add(index * 2)) else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return 0;
+            };
+            if unit == 0 {
+                padding = true;
+            }
+            unit
+        };
+        if !write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            dest.wrapping_add(index * 2),
+            unit,
+        ) {
+            return 0;
+        }
+    }
+    dest
+}
+
 fn fold_ascii_wide(unit: u16) -> u16 {
     if (b'A' as u16..=b'Z' as u16).contains(&unit) {
         unit + 0x20
@@ -189,4 +236,129 @@ pub(crate) fn memset_raw<M: CoredllGuestMemory>(
 
 pub(crate) fn printf_family_raw(_kernel: &mut CeKernel, _thread_id: u32) -> u32 {
     0
+}
+
+pub(crate) fn wsprintf_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest: u32,
+    format: u32,
+    args: &[u32],
+) -> u32 {
+    if dest == 0 || format == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(format) = read_wide_z(memory, format, 4096) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let text = format_wide_printf(memory, &format, args);
+    for (index, unit) in text.encode_utf16().chain(std::iter::once(0)).enumerate() {
+        let addr = dest.wrapping_add(index as u32 * 2);
+        if !write_guest_u16(kernel, memory, thread_id, addr, unit) {
+            return 0;
+        }
+    }
+    text.encode_utf16().count() as u32
+}
+
+fn read_wide_z<M: CoredllGuestMemory>(memory: &M, ptr: u32, max_chars: usize) -> Option<String> {
+    let mut units = Vec::new();
+    for index in 0..max_chars {
+        let unit = memory.read_u16(ptr.wrapping_add(index as u32 * 2)).ok()?;
+        if unit == 0 {
+            return String::from_utf16(&units).ok();
+        }
+        units.push(unit);
+    }
+    None
+}
+
+fn format_wide_printf<M: CoredllGuestMemory>(memory: &M, format: &str, args: &[u32]) -> String {
+    let mut output = String::new();
+    let mut chars = format.chars().peekable();
+    let mut arg_index = 0usize;
+    while let Some(ch) = chars.next() {
+        if ch != '%' {
+            output.push(ch);
+            continue;
+        }
+        if chars.peek() == Some(&'%') {
+            chars.next();
+            output.push('%');
+            continue;
+        }
+
+        while matches!(
+            chars.peek(),
+            Some('0'..='9' | '-' | '+' | '#' | ' ' | '.' | '*')
+        ) {
+            if chars.next() == Some('*') {
+                arg_index = arg_index.saturating_add(1);
+            }
+        }
+
+        let mut long_count = 0usize;
+        while matches!(chars.peek(), Some('h' | 'l' | 'L' | 'w')) {
+            if chars.next() == Some('l') {
+                long_count += 1;
+            }
+        }
+        if chars.peek() == Some(&'I') {
+            chars.next();
+            if chars.peek() == Some(&'3') {
+                chars.next();
+                if chars.peek() == Some(&'2') {
+                    chars.next();
+                }
+            } else if chars.peek() == Some(&'6') {
+                chars.next();
+                if chars.peek() == Some(&'4') {
+                    chars.next();
+                }
+            }
+        }
+
+        let Some(spec) = chars.next() else {
+            output.push('%');
+            break;
+        };
+        let value = args.get(arg_index).copied().unwrap_or(0);
+        arg_index = arg_index.saturating_add(1);
+        match spec {
+            'p' => output.push_str(&format!("{value:08x}")),
+            'x' => output.push_str(&format!("{value:x}")),
+            'X' => output.push_str(&format!("{value:X}")),
+            'u' => output.push_str(&value.to_string()),
+            'd' | 'i' => output.push_str(&(value as i32).to_string()),
+            'c' | 'C' => {
+                if let Some(ch) = char::from_u32(value & 0xffff) {
+                    output.push(ch);
+                }
+            }
+            's' | 'S' => {
+                if value != 0 {
+                    if let Some(text) = read_wide_z(memory, value, 4096) {
+                        output.push_str(&text);
+                    }
+                } else {
+                    output.push_str("(null)");
+                }
+            }
+            _ => {
+                output.push('%');
+                for _ in 0..long_count {
+                    output.push('l');
+                }
+                output.push(spec);
+            }
+        }
+    }
+    output
 }

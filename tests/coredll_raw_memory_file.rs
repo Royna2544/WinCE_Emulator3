@@ -5,20 +5,22 @@ use wince_emulation_v3::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
             ORD_CHAR_LOWER_W, ORD_CHAR_UPPER_W, ORD_CLOSE_HANDLE, ORD_CREATE_FILE_W,
-            ORD_FIND_CLOSE, ORD_FIND_FIRST_FILE_W, ORD_FLUSH_FILE_BUFFERS, ORD_FREE,
-            ORD_GET_FILE_SIZE, ORD_GET_MODULE_FILE_NAME_W, ORD_GET_PROCESS_HEAP, ORD_HEAP_ALLOC,
-            ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_SIZE, ORD_LOCAL_ALLOC,
+            ORD_DEVICE_IO_CONTROL, ORD_FIND_CLOSE, ORD_FIND_FIRST_FILE_W, ORD_FLUSH_FILE_BUFFERS,
+            ORD_FLUSH_INSTRUCTION_CACHE, ORD_FREE, ORD_GET_FILE_SIZE, ORD_GET_MODULE_FILE_NAME_W,
+            ORD_GET_PROCESS_HEAP, ORD_HEAP_ALLOC, ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE,
+            ORD_HEAP_SIZE, ORD_IS_BAD_READ_PTR, ORD_IS_BAD_WRITE_PTR, ORD_LOCAL_ALLOC,
             ORD_LOCAL_FREE, ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_MALLOC, ORD_MEMCPY, ORD_MEMSET,
-            ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_OPERATOR_NEW, ORD_READ_FILE, ORD_REG_CLOSE_KEY,
-            ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_VALUE_W, ORD_REG_ENUM_VALUE_W,
-            ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W, ORD_SET_FILE_POINTER,
-            ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_WCSDUP, ORD_WCSNICMP, ORD_WCSRCHR,
-            ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE,
+            ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_OPERATOR_DELETE, ORD_OPERATOR_NEW, ORD_READ_FILE,
+            ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_VALUE_W,
+            ORD_REG_ENUM_VALUE_W, ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W,
+            ORD_SET_FILE_POINTER, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_WCSDUP, ORD_WCSNCPY,
+            ORD_WCSNICMP, ORD_WCSRCHR, ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         kernel::CeKernel,
         memory::{HEAP_NO_SERIALIZE, HEAP_ZERO_MEMORY, LMEM_ZEROINIT, MEM_COMMIT, MEM_RELEASE},
         registry::{ERROR_SUCCESS, HKEY_CURRENT_USER, REG_DWORD},
+        thread::ERROR_NOT_SUPPORTED,
     },
     config::RuntimeConfig,
 };
@@ -103,6 +105,69 @@ fn coredll_raw_string_conversion_ordinals_round_trip_ascii() -> Result<()> {
     ));
     assert_eq!(memory.read_wide_z(lower, 8), "ABC");
     assert_eq!(memory.read_wide_z(upper, 8), "xyz");
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_wsprintf_w_formats_mfc_class_names() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let dest = 0x1_0000;
+    let format = 0x1_0200;
+    memory.map_halfwords(dest, 128);
+    memory.map_halfwords(format, 64);
+    memory.write_wide_z(format, "Afx:%p:%x");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WSPRINTF_W,
+            [dest, format, 0x0001_0000, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(14),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(dest, 128), "Afx:00010000:0");
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_wcsncpy_copies_and_pads_wide_strings() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let dest = 0x1_0000;
+    let src = 0x1_0100;
+    memory.map_halfwords(dest, 8);
+    memory.map_halfwords(src, 8);
+    memory.write_wide_z(src, "WCE");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WCSNCPY,
+            [dest, src, 6],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } if ptr == dest
+    ));
+    assert_eq!(memory.read_wide_z(dest, 8), "WCE");
+    assert_eq!(memory.read_u16(dest + 6)?, 0);
+    assert_eq!(memory.read_u16(dest + 8)?, 0);
+    assert_eq!(memory.read_u16(dest + 10)?, 0);
     Ok(())
 }
 
@@ -369,6 +434,45 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         } => ptr,
         other => panic!("HeapAlloc did not return a pointer: {other:?}"),
     };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IS_BAD_READ_PTR,
+            [heap_ptr, 32],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IS_BAD_WRITE_PTR,
+            [heap_ptr, 32],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IS_BAD_READ_PTR,
+            [heap_ptr, 33],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
     assert_ne!(heap, process_heap);
     let malloc_ptr = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
@@ -401,6 +505,20 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         Some(16)
     );
     assert_eq!(kernel.memory.heap_size(process_heap, 0, new_ptr), Some(8));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_OPERATOR_DELETE,
+            [new_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(kernel.memory.heap_size(process_heap, 0, new_ptr).is_none());
 
     memory.map_bytes(0x6000, 8);
     memory.map_bytes(0x6010, 8);
@@ -628,8 +746,105 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
             &mut kernel,
             &mut memory,
             thread_id,
+            ORD_IS_BAD_WRITE_PTR,
+            [virtual_base, 0x1234],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FLUSH_INSTRUCTION_CACHE,
+            [0xffff_fffe, virtual_base, 0x1234],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_VIRTUAL_FREE,
             [virtual_base, 0, MEM_RELEASE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    let com_path_ptr = 0x1_0800;
+    let ioctl_in = 0x1_0900;
+    let ioctl_out = 0x1_0a00;
+    let ioctl_returned = 0x1_0b00;
+    memory.write_wide_z(com_path_ptr, "COM1:");
+    memory.write_bytes(ioctl_in, &[1, 2, 3, 4]);
+    memory.map_bytes(ioctl_out, 8);
+    memory.map_words(ioctl_returned, 1);
+    memory.write_word(ioctl_returned, 0xffff_ffff);
+    let com = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_W,
+        [
+            com_path_ptr,
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            0,
+            OPEN_EXISTING,
+            0,
+            0,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateFileW(COM1:) did not return a device handle: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEVICE_IO_CONTROL,
+            [
+                com,
+                0x1234_5678,
+                ioctl_in,
+                4,
+                ioctl_out,
+                8,
+                ioctl_returned,
+                0
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(ioctl_returned)?, 0);
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NOT_SUPPORTED
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CLOSE_HANDLE,
+            [com],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),

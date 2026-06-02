@@ -14,10 +14,10 @@ use crate::{
         file::FindData,
         gwe::{Message, PeekFlags, Point, Rect, WNDCLASSW_SIZE},
         kernel::{CeKernel, MessagePumpResult},
-        memory::{HEAP_GENERATE_EXCEPTIONS, HEAP_ZERO_MEMORY, PROCESS_HEAP_HANDLE},
+        memory::{HEAP_ZERO_MEMORY, PROCESS_HEAP_HANDLE},
         object::{CriticalSectionObject, KernelObject},
         registry::{HKey, RegOpenResult, RegQueryValueResult},
-        resource::{AcceleratorEntry, ResourceId},
+        resource::{AcceleratorEntry, ResourceId, stock_object_handle},
         thread::{
             ERROR_CLASS_DOES_NOT_EXIST, ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE,
             ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_ENOUGH_MEMORY,
@@ -1139,6 +1139,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_CREATE_THREAD => Some(CoredllValue::Handle(create_thread_raw(
             kernel, memory, thread_id, args,
         ))),
+        ORD_SET_THREAD_PRIORITY | ORD_CE_SET_THREAD_PRIORITY => Some(CoredllValue::Bool(
+            set_thread_priority_raw(kernel, thread_id, raw_arg(args, 0), raw_arg(args, 1)),
+        )),
+        ORD_GET_THREAD_PRIORITY | ORD_CE_GET_THREAD_PRIORITY => Some(CoredllValue::U32(
+            get_thread_priority_raw(kernel, thread_id, raw_arg(args, 0)),
+        )),
         ORD_GLOBAL_MEMORY_STATUS => {
             write_global_memory_status(kernel, memory, thread_id, raw_arg(args, 0));
             Some(CoredllValue::U32(0))
@@ -1153,6 +1159,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_SYSTEM_METRICS => Some(CoredllValue::U32(
             kernel.gwe.system_metric(raw_arg(args, 0)) as u32,
         )),
+        ORD_GET_SYS_COLOR => Some(CoredllValue::U32(get_sys_color(raw_arg(args, 0)))),
+        ORD_GET_SYS_COLOR_BRUSH => {
+            Some(CoredllValue::Handle(get_sys_color_brush(raw_arg(args, 0))))
+        }
+        ORD_SET_SYS_COLORS => Some(CoredllValue::Bool(true)),
         ORD_COPY_RECT => Some(CoredllValue::Bool(copy_rect_raw(
             kernel,
             memory,
@@ -1258,6 +1269,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_CREATE_EVENT_W => Some(CoredllValue::Handle(create_event_w_raw(
             kernel, memory, thread_id, args,
         ))),
+        ORD_SUSPEND_THREAD => Some(CoredllValue::U32(suspend_thread_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_RESUME_THREAD => Some(CoredllValue::U32(resume_thread_raw(
             kernel,
             thread_id,
@@ -1279,6 +1295,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_WAIT_FOR_MULTIPLE_OBJECTS => Some(CoredllValue::U32(wait_for_multiple_objects_raw(
             kernel, memory, thread_id, args,
         ))),
+        ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX => Some(CoredllValue::U32(
+            msg_wait_for_multiple_objects_ex_raw(kernel, memory, thread_id, args),
+        )),
         ORD_CREATE_FILE_W => Some(CoredllValue::Handle(create_file_w_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -1381,6 +1400,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_WRITE_FILE => Some(CoredllValue::Bool(write_file_raw(
             kernel, memory, thread_id, args,
         ))),
+        ORD_DEVICE_IO_CONTROL => Some(CoredllValue::Bool(device_io_control_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_SET_FILE_POINTER => Some(CoredllValue::U32(set_file_pointer_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -1417,6 +1439,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel, memory, thread_id, args,
         ))),
         ORD_REG_DELETE_VALUE_W => Some(CoredllValue::U32(reg_delete_value_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_REG_ENUM_KEY_EX_W => Some(CoredllValue::U32(reg_enum_key_ex_w_raw(
             kernel, memory, thread_id, args,
         ))),
         ORD_REG_ENUM_VALUE_W => Some(CoredllValue::U32(reg_enum_value_w_raw(
@@ -1483,6 +1508,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 2),
         ) as u32)),
+        ORD_WCSNCPY => Some(CoredllValue::Handle(crt::wcsncpy_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ))),
         ORD_MULTI_BYTE_TO_WIDE_CHAR => Some(CoredllValue::U32(multi_byte_to_wide_char_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -1540,10 +1573,16 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 2),
         ))),
-        ORD_SWPRINTF | ORD_PRINTF => {
-            Some(CoredllValue::U32(crt::printf_family_raw(kernel, thread_id)))
-        }
-        ORD_FREE => {
+        ORD_WSPRINTF_W | ORD_SWPRINTF => Some(CoredllValue::U32(crt::wsprintf_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            if args.len() > 2 { &args[2..] } else { &[] },
+        ))),
+        ORD_PRINTF => Some(CoredllValue::U32(crt::printf_family_raw(kernel, thread_id))),
+        ORD_FREE | ORD_OPERATOR_DELETE => {
             crt::free_raw(kernel, raw_arg(args, 0));
             Some(CoredllValue::U32(0))
         }
@@ -1688,6 +1727,22 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 2),
         ))),
+        ORD_IS_BAD_READ_PTR => Some(CoredllValue::Bool(is_bad_ptr_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            PointerProbe::Read,
+        ))),
+        ORD_IS_BAD_WRITE_PTR => Some(CoredllValue::Bool(is_bad_ptr_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            PointerProbe::Write,
+        ))),
         ORD_VIRTUAL_ALLOC => Some(CoredllValue::Handle(virtual_alloc_raw(
             kernel,
             thread_id,
@@ -1703,6 +1758,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 2),
         ))),
+        ORD_FLUSH_INSTRUCTION_CACHE => Some(CoredllValue::Bool(true)),
         ORD_CREATE_FILE_MAPPING_W => Some(CoredllValue::Handle(create_file_mapping_w_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -1824,6 +1880,15 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_i32_arg(args, 1),
             raw_i32_arg(args, 2),
         ))),
+        ORD_CREATE_BITMAP => Some(CoredllValue::Handle(create_bitmap_raw(
+            kernel,
+            thread_id,
+            raw_i32_arg(args, 0),
+            raw_i32_arg(args, 1),
+            raw_arg(args, 2) as u16,
+            raw_arg(args, 3) as u16,
+            raw_arg(args, 4),
+        ))),
         ORD_CREATE_DIBSECTION => Some(CoredllValue::Handle(create_dib_section_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -1847,6 +1912,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_i32_arg(args, 1),
             raw_arg(args, 2),
         ))),
+        ORD_GET_STOCK_OBJECT => Some(CoredllValue::Handle(get_stock_object_raw(raw_arg(args, 0)))),
         ORD_SELECT_OBJECT => Some(CoredllValue::Handle(select_object_raw(
             kernel,
             thread_id,
@@ -1858,6 +1924,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
             raw_i32_arg(args, 1),
+        ))),
+        ORD_SET_BK_COLOR => Some(CoredllValue::U32(set_bk_color_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
         ))),
         ORD_SET_TEXT_COLOR => Some(CoredllValue::U32(set_text_color_raw(
             kernel,
@@ -1914,7 +1986,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_SET_BRUSH_ORG_EX => Some(CoredllValue::Bool(set_brush_org_ex_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_RECTANGLE | ORD_ELLIPSE => {
+        ORD_RECTANGLE | ORD_ROUND_RECT | ORD_ELLIPSE | ORD_POLYGON | ORD_POLYLINE => {
             Some(CoredllValue::Bool(gdi_shape_raw(kernel, thread_id, args)))
         }
         ORD_MOVE_TO_EX => Some(CoredllValue::Bool(move_to_ex_raw(
@@ -2079,6 +2151,22 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_ACTIVE_WINDOW => Some(CoredllValue::Handle(
             kernel.gwe.get_active_window().unwrap_or(0),
         )),
+        ORD_LOAD_CURSOR_W => Some(CoredllValue::Handle(load_cursor_w_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_LOAD_ICON_W => Some(CoredllValue::Handle(load_icon_w_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_SET_CURSOR => Some(CoredllValue::Handle(
+            kernel.gwe.set_cursor(raw_arg(args, 0)).unwrap_or(0),
+        )),
+        ORD_GET_CURSOR => Some(CoredllValue::Handle(kernel.gwe.get_cursor().unwrap_or(0))),
         ORD_GET_CURSOR_POS => {
             let cursor_pos = kernel.gwe.get_cursor_pos();
             Some(CoredllValue::Bool(write_guest_point(
@@ -2220,6 +2308,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_MESSAGE_BOX_W => Some(CoredllValue::U32(1)),
         ORD_FIND_RESOURCE | ORD_FIND_RESOURCE_W => Some(CoredllValue::Handle(find_resource(
             kernel,
+            memory,
             thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
@@ -2256,6 +2345,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
             raw_arg(args, 2),
+        ))),
+        ORD_CHECK_MENU_RADIO_ITEM => Some(CoredllValue::Bool(check_menu_radio_item_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+            raw_arg(args, 3),
         ))),
         ORD_REMOVE_MENU => Some(CoredllValue::Bool(remove_menu_raw(
             kernel,
@@ -3702,6 +3799,53 @@ fn reg_enum_value_w_raw<M: CoredllGuestMemory>(
     result.status
 }
 
+fn reg_enum_key_ex_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let name_len_ptr = raw_arg(args, 3);
+    let name_capacity = if name_len_ptr == 0 {
+        None
+    } else {
+        let Some(capacity) = read_guest_u32(kernel, memory, thread_id, name_len_ptr) else {
+            return crate::ce::registry::ERROR_INVALID_PARAMETER;
+        };
+        Some(capacity as usize)
+    };
+    let result =
+        kernel
+            .registry
+            .reg_enum_key_ex_w(raw_arg(args, 0), raw_arg(args, 1), name_capacity);
+    if !write_optional_u32(
+        kernel,
+        memory,
+        thread_id,
+        name_len_ptr,
+        result.required_name_chars,
+    ) {
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    }
+    if result.status == crate::ce::registry::ERROR_SUCCESS {
+        if let Some(name) = result.name {
+            if raw_arg(args, 2) != 0
+                && write_wide_result(
+                    kernel,
+                    memory,
+                    thread_id,
+                    raw_arg(args, 2),
+                    name_capacity.unwrap_or(0),
+                    &name,
+                ) == 0
+            {
+                return crate::ce::registry::ERROR_INVALID_PARAMETER;
+            }
+        }
+    }
+    result.status
+}
+
 fn reg_delete_value_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
@@ -4022,6 +4166,71 @@ fn write_file_raw<M: CoredllGuestMemory>(
     ) && result.success
 }
 
+fn device_io_control_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let handle = raw_arg(args, 0);
+    let ioctl_code = raw_arg(args, 1);
+    let input_ptr = raw_arg(args, 2);
+    let input_len = raw_arg(args, 3);
+    let output_ptr = raw_arg(args, 4);
+    let output_capacity = raw_arg(args, 5);
+    let returned_ptr = raw_arg(args, 6);
+    let input = if input_len == 0 {
+        Vec::new()
+    } else if input_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    } else {
+        let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, input_ptr, input_len) else {
+            write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+            return false;
+        };
+        bytes
+    };
+    let result = match kernel.device_io_control(handle, ioctl_code, &input, output_capacity) {
+        Ok(result) => result,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+            return false;
+        }
+    };
+    if !result.output.is_empty()
+        && (output_ptr == 0
+            || !write_guest_bytes(kernel, memory, thread_id, output_ptr, &result.output))
+    {
+        write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        return false;
+    }
+    if !write_optional_count(
+        kernel,
+        memory,
+        thread_id,
+        returned_ptr,
+        result.bytes_returned,
+    ) {
+        return false;
+    }
+    kernel.threads.set_last_error(
+        thread_id,
+        if result.success {
+            0
+        } else {
+            ERROR_NOT_SUPPORTED
+        },
+    );
+    result.success
+}
+
 fn set_file_pointer_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -4186,6 +4395,73 @@ fn wait_for_multiple_objects_raw<M: CoredllGuestMemory>(
     result
 }
 
+fn msg_wait_for_multiple_objects_ex_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let count = raw_arg(args, 0);
+    let handles_ptr = raw_arg(args, 1);
+    let timeout_ms = raw_arg(args, 2);
+    let _wake_mask = raw_arg(args, 3);
+    let flags = raw_arg(args, 4);
+    const MWMO_WAITALL: u32 = 0x0001;
+    const MAXIMUM_WAIT_OBJECTS: u32 = 64;
+
+    if count > MAXIMUM_WAIT_OBJECTS || (count != 0 && handles_ptr == 0) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return crate::ce::timer::WAIT_FAILED;
+    }
+
+    let mut handles = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        let Some(handle) = read_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            handles_ptr.wrapping_add(index * 4),
+        ) else {
+            return crate::ce::timer::WAIT_FAILED;
+        };
+        handles.push(handle);
+    }
+
+    if !handles.is_empty() {
+        let result =
+            kernel.wait_for_multiple_objects(&handles, flags & MWMO_WAITALL != 0, 0, thread_id);
+        if result != crate::ce::timer::WAIT_TIMEOUT {
+            if result == crate::ce::timer::WAIT_FAILED {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            } else {
+                kernel.threads.set_last_error(thread_id, 0);
+            }
+            return result;
+        }
+    }
+
+    if kernel
+        .gwe
+        .peek_message_filtered(thread_id, None, 0, 0, PeekFlags::NO_REMOVE)
+        .is_some()
+    {
+        kernel.threads.set_last_error(thread_id, 0);
+        return crate::ce::timer::WAIT_OBJECT_0 + count;
+    }
+
+    let result = if timeout_ms == 0 {
+        crate::ce::timer::WAIT_TIMEOUT
+    } else {
+        crate::ce::timer::WAIT_TIMEOUT
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    result
+}
+
 fn local_alloc_raw(kernel: &mut CeKernel, thread_id: u32, flags: u32, bytes: u32) -> u32 {
     match kernel.memory.local_alloc(flags, bytes) {
         Some(ptr) => ptr,
@@ -4273,12 +4549,6 @@ fn heap_destroy_raw(kernel: &mut CeKernel, thread_id: u32, heap: u32) -> bool {
 }
 
 fn heap_alloc_raw(kernel: &mut CeKernel, thread_id: u32, heap: u32, flags: u32, bytes: u32) -> u32 {
-    if flags & HEAP_GENERATE_EXCEPTIONS != 0 {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-        return 0;
-    }
     match kernel.memory.heap_alloc(heap, flags, bytes) {
         Some(ptr) => ptr,
         None => {
@@ -4299,12 +4569,6 @@ fn heap_re_alloc_raw<M: CoredllGuestMemory>(
     ptr: u32,
     bytes: u32,
 ) -> u32 {
-    if flags & HEAP_GENERATE_EXCEPTIONS != 0 {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-        return 0;
-    }
     match kernel.memory.heap_re_alloc_detail(heap, flags, ptr, bytes) {
         Some(result) => copy_reallocated_bytes(kernel, memory, thread_id, &result),
         None => {
@@ -4396,6 +4660,79 @@ fn virtual_free_raw(
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         false
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PointerProbe {
+    Read,
+    Write,
+}
+
+fn is_bad_ptr_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    ptr: u32,
+    bytes: u32,
+    probe: PointerProbe,
+) -> bool {
+    if bytes == 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return false;
+    }
+    if ptr == 0 || ptr.checked_add(bytes).is_none() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return true;
+    }
+    if kernel.memory.contains_allocated_range(ptr, bytes) {
+        kernel.threads.set_last_error(thread_id, 0);
+        return false;
+    }
+    if probe_guest_range(memory, ptr, bytes, probe) {
+        kernel.threads.set_last_error(thread_id, 0);
+        false
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        true
+    }
+}
+
+fn probe_guest_range<M: CoredllGuestMemory>(
+    memory: &mut M,
+    ptr: u32,
+    bytes: u32,
+    probe: PointerProbe,
+) -> bool {
+    let end = ptr + bytes - 1;
+    let mut addr = ptr;
+    loop {
+        if !probe_guest_byte(memory, addr, probe) {
+            return false;
+        }
+        if addr == end {
+            return true;
+        }
+        let next_page = (addr & !0xfff).saturating_add(0x1000);
+        let next = next_page.min(end);
+        if next == addr {
+            return true;
+        }
+        addr = next;
+    }
+}
+
+fn probe_guest_byte<M: CoredllGuestMemory>(memory: &mut M, addr: u32, probe: PointerProbe) -> bool {
+    let Ok(value) = memory.read_u8(addr) else {
+        return false;
+    };
+    match probe {
+        PointerProbe::Read => true,
+        PointerProbe::Write => memory.write_u8(addr, value).is_ok(),
     }
 }
 
@@ -4660,6 +4997,21 @@ fn create_thread_raw<M: CoredllGuestMemory>(
     handle
 }
 
+fn suspend_thread_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {
+    match kernel.suspend_thread(handle) {
+        Some(previous) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            previous
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            u32::MAX
+        }
+    }
+}
+
 fn resume_thread_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {
     match kernel.resume_thread(handle) {
         Some(previous) => {
@@ -4672,6 +5024,40 @@ fn resume_thread_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 
                 .set_last_error(thread_id, ERROR_INVALID_HANDLE);
             u32::MAX
         }
+    }
+}
+
+fn get_thread_priority_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {
+    const THREAD_PRIORITY_ERROR_RETURN: u32 = 0x7fff_ffff;
+
+    match kernel.thread_priority(handle) {
+        Some(priority) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            priority as u32
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            THREAD_PRIORITY_ERROR_RETURN
+        }
+    }
+}
+
+fn set_thread_priority_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    handle: u32,
+    priority: u32,
+) -> bool {
+    if kernel.set_thread_priority(handle, priority as i32) {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        false
     }
 }
 
@@ -5825,18 +6211,41 @@ fn write_guest_wide_fixed<M: CoredllGuestMemory>(
     )
 }
 
-fn find_resource(kernel: &mut CeKernel, thread_id: u32, module: u32, name: u32, kind: u32) -> u32 {
-    let Some(handle) = kernel.resources.find_resource(
-        module,
-        ResourceId::from_guest_arg(name),
-        ResourceId::from_guest_arg(kind),
-    ) else {
+fn find_resource<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    module: u32,
+    name: u32,
+    kind: u32,
+) -> u32 {
+    let Some(name) = resource_id_from_guest_arg(memory, name) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_RESOURCE_NAME_NOT_FOUND);
+        return 0;
+    };
+    let Some(kind) = resource_id_from_guest_arg(memory, kind) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_RESOURCE_NAME_NOT_FOUND);
+        return 0;
+    };
+    let Some(handle) = kernel.resources.find_resource(module, name, kind) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_RESOURCE_NAME_NOT_FOUND);
         return 0;
     };
     handle
+}
+
+fn resource_id_from_guest_arg<M: CoredllGuestMemory>(memory: &M, value: u32) -> Option<ResourceId> {
+    if value <= u16::MAX as u32 {
+        Some(ResourceId::Integer(value as u16))
+    } else {
+        read_guest_wide_arg(memory, value).map(ResourceId::Name)
+    }
 }
 
 fn load_resource(kernel: &mut CeKernel, thread_id: u32, resource_handle: u32) -> u32 {
@@ -5915,7 +6324,7 @@ fn load_menu_w_raw(kernel: &mut CeKernel, thread_id: u32, module: u32, name: u32
     let Some(resource_handle) =
         kernel
             .resources
-            .find_resource(module, name, ResourceId::Integer(RT_MENU as u16))
+            .find_resource(module, name.clone(), ResourceId::Integer(RT_MENU as u16))
     else {
         kernel
             .threads
@@ -5944,6 +6353,27 @@ fn check_menu_item_raw(
     };
     kernel.threads.set_last_error(thread_id, 0);
     previous
+}
+
+fn check_menu_radio_item_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    menu: u32,
+    first: u32,
+    last: u32,
+    checked: u32,
+) -> bool {
+    if !kernel
+        .resources
+        .check_menu_radio_item(menu, first, last, checked)
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn remove_menu_raw(kernel: &mut CeKernel, thread_id: u32, menu: u32, item: u32) -> bool {
@@ -5977,11 +6407,11 @@ fn load_accelerators_w_raw<M: CoredllGuestMemory>(
 ) -> u32 {
     let module = normalized_module(kernel, module);
     let name = ResourceId::from_guest_arg(name);
-    let Some(resource_handle) =
-        kernel
-            .resources
-            .find_resource(module, name, ResourceId::Integer(RT_ACCELERATOR as u16))
-    else {
+    let Some(resource_handle) = kernel.resources.find_resource(
+        module,
+        name.clone(),
+        ResourceId::Integer(RT_ACCELERATOR as u16),
+    ) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_RESOURCE_NAME_NOT_FOUND);
@@ -6101,6 +6531,12 @@ fn load_image_w_raw<M: CoredllGuestMemory>(
     let image_type = raw_arg(args, 2);
     let flags = raw_arg(args, 5);
 
+    if image_type == IMAGE_CURSOR {
+        return load_cursor_w_raw(kernel, thread_id, module, name);
+    }
+    if image_type == IMAGE_ICON {
+        return load_icon_w_raw(kernel, thread_id, module, name);
+    }
     if image_type != IMAGE_BITMAP {
         kernel
             .threads
@@ -6113,6 +6549,57 @@ fn load_image_w_raw<M: CoredllGuestMemory>(
     }
 
     load_bitmap_resource(kernel, memory, thread_id, module, name)
+}
+
+fn load_cursor_w_raw(kernel: &mut CeKernel, thread_id: u32, module: u32, name: u32) -> u32 {
+    load_stock_or_resource_image(
+        kernel,
+        thread_id,
+        module,
+        name,
+        RT_GROUP_CURSOR as u16,
+        0x000b_0000,
+    )
+}
+
+fn load_icon_w_raw(kernel: &mut CeKernel, thread_id: u32, module: u32, name: u32) -> u32 {
+    load_stock_or_resource_image(
+        kernel,
+        thread_id,
+        module,
+        name,
+        RT_GROUP_ICON as u16,
+        0x000b_8000,
+    )
+}
+
+fn load_stock_or_resource_image(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    module: u32,
+    name: u32,
+    resource_kind: u16,
+    stock_base: u32,
+) -> u32 {
+    if module == 0 && name <= u16::MAX as u32 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return stock_base | name;
+    }
+
+    let module = normalized_module(kernel, module);
+    let name = ResourceId::from_guest_arg(name);
+    let Some(resource_handle) =
+        kernel
+            .resources
+            .find_resource(module, name, ResourceId::Integer(resource_kind))
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_RESOURCE_NAME_NOT_FOUND);
+        return 0;
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    resource_handle
 }
 
 fn load_bitmap_resource<M: CoredllGuestMemory>(
@@ -6212,6 +6699,27 @@ fn create_bitmap_from_dib_bytes(
         header.bits_pixel,
         bits_base,
     )
+}
+
+fn create_bitmap_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    width: i32,
+    height: i32,
+    planes: u16,
+    bits_pixel: u16,
+    bits_ptr: u32,
+) -> u32 {
+    if width <= 0 || height == 0 || planes == 0 || bits_pixel == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    kernel
+        .resources
+        .create_bitmap(width, height, planes, bits_pixel, bits_ptr)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -6780,6 +7288,10 @@ fn create_pen_raw(kernel: &mut CeKernel, style: u32, width: i32, color: u32) -> 
     kernel.resources.create_pen(style, width, color)
 }
 
+fn get_stock_object_raw(index: u32) -> u32 {
+    stock_object_handle(index).unwrap_or(0)
+}
+
 fn select_object_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, object: u32) -> u32 {
     let Some(previous) = kernel.resources.select_object(hdc, object) else {
         kernel
@@ -6800,6 +7312,17 @@ fn set_bk_mode_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, mode: i32) -
     };
     kernel.threads.set_last_error(thread_id, 0);
     previous as u32
+}
+
+fn set_bk_color_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, color: u32) -> u32 {
+    let Some(previous) = kernel.resources.set_dc_bk_color(hdc, color) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return CLR_INVALID;
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    previous
 }
 
 fn set_text_color_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, color: u32) -> u32 {
@@ -8037,6 +8560,37 @@ fn write_guest_message<M: CoredllGuestMemory>(
         && write_guest_i32(kernel, memory, thread_id, addr.wrapping_add(24), 0)
 }
 
+fn get_sys_color(index: u32) -> u32 {
+    match sys_color_index(index) {
+        0 => rgb(0xc0, 0xc0, 0xc0),
+        1 => rgb(0x00, 0x80, 0x80),
+        2 | 27 => rgb(0x00, 0x00, 0x80),
+        3 | 28 => rgb(0x80, 0x80, 0x80),
+        4 | 15 | 25 => rgb(0xc0, 0xc0, 0xc0),
+        5 => rgb(0xff, 0xff, 0xff),
+        6 => rgb(0x00, 0x00, 0x00),
+        7 | 8 | 9 | 18 | 23 | 26 => rgb(0x00, 0x00, 0x00),
+        10 | 11 | 12 | 16 | 17 | 19 | 21 => rgb(0x80, 0x80, 0x80),
+        13 => rgb(0x00, 0x00, 0x80),
+        14 => rgb(0xff, 0xff, 0xff),
+        20 | 22 => rgb(0xff, 0xff, 0xff),
+        24 => rgb(0xff, 0xff, 0xe1),
+        _ => rgb(0x00, 0x00, 0x00),
+    }
+}
+
+fn get_sys_color_brush(index: u32) -> u32 {
+    0x000b_4000 | sys_color_index(index)
+}
+
+fn sys_color_index(index: u32) -> u32 {
+    index & !SYS_COLOR_INDEX_FLAG
+}
+
+const fn rgb(red: u32, green: u32, blue: u32) -> u32 {
+    red | (green << 8) | (blue << 16)
+}
+
 fn raw_arg(args: &[u32], index: usize) -> u32 {
     args.get(index).copied().unwrap_or(0)
 }
@@ -8135,6 +8689,8 @@ const PLANES: u32 = 14;
 const LOGPIXELSX: u32 = 88;
 const LOGPIXELSY: u32 = 90;
 const IMAGE_BITMAP: u32 = 0;
+const IMAGE_ICON: u32 = 1;
+const IMAGE_CURSOR: u32 = 2;
 const BI_RGB: u32 = 0;
 const CLR_INVALID: u32 = 0xffff_ffff;
 const DIB_RGB_COLORS: u32 = 0;
@@ -8153,7 +8709,10 @@ const RGN_DIFF: u32 = 4;
 const RGN_COPY: u32 = 5;
 const RT_ACCELERATOR: u32 = 9;
 const RT_BITMAP: u32 = 2;
+const RT_GROUP_CURSOR: u32 = 12;
+const RT_GROUP_ICON: u32 = 14;
 const RT_MENU: u32 = 4;
+const SYS_COLOR_INDEX_FLAG: u32 = 0x4000_0000;
 const VER_PLATFORM_WIN32_CE: u32 = 3;
 const WIN32_FIND_DATAW_FILE_NAME: u32 = 40;
 const WIN32_FIND_DATAW_FILE_NAME_CHARS: usize = 260;
@@ -8214,6 +8773,8 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "HeapSize",
     "HeapFree",
     "HeapValidate",
+    "IsBadReadPtr",
+    "IsBadWritePtr",
     "malloc",
     "wcsrchr",
     "_wcsdup",
@@ -8235,6 +8796,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "RemoteHeapFree",
     "VirtualAlloc",
     "VirtualFree",
+    "FlushInstructionCache",
     "RegCloseKey",
     "RegCreateKeyExW",
     "RegDeleteKeyW",
@@ -8320,6 +8882,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "GetMessageW",
     "PeekMessageW",
     "PostMessageW",
+    "MsgWaitForMultipleObjectsEx",
     "PostQuitMessage",
     "SendMessageW",
     "DispatchMessageW",

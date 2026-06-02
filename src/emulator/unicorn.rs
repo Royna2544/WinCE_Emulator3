@@ -7,8 +7,8 @@ use crate::{
     emulator::{
         imports::{
             DYNAMIC_COREDLL_PROC_TRAP_BASE, ExternalImportTable, IMPORT_TRAP_BASE,
-            IMPORT_TRAP_PAGE_SIZE, ImportTrapTable, dynamic_coredll_proc_trap,
-            import_trap_code_page, patch_pe_coredll_imports, patch_pe_imports,
+            IMPORT_TRAP_PAGE_SIZE, ImportTrapTable, import_trap_code_page,
+            patch_pe_coredll_imports, patch_pe_imports,
         },
         memory::{MemoryMap, MemoryPerms},
     },
@@ -29,7 +29,7 @@ pub struct UnicornMips {
     #[cfg(feature = "unicorn")]
     trampoline_ranges: Vec<(u32, u32)>,
     #[cfg(feature = "unicorn")]
-    trampoline_jumps: Vec<(u32, u32)>,
+    trampoline_jumps: Vec<MipsTrampolineJump>,
     last_debug: Option<UnicornDebugSnapshot>,
 }
 
@@ -49,11 +49,10 @@ pub struct UnicornDebugSnapshot {
     pub trap_name: Option<String>,
     pub trap_ordinal: Option<u32>,
     pub memory_fault: Option<UnicornMemoryFault>,
-    pub function_pointer_probe: Option<UnicornFunctionPointerProbe>,
     pub indirect_call_probe: Option<UnicornIndirectCallProbe>,
-    pub memory_write_probe: Option<UnicornMemoryWriteProbe>,
     pub interrupt_probe: Option<UnicornInterruptProbe>,
     pub invalid_instruction_probe: Option<UnicornInvalidInstructionProbe>,
+    pub last_calls: Vec<UnicornLastCall>,
     pub last_imports: Vec<UnicornLastImport>,
     pub last_messages: Vec<UnicornLastMessage>,
     pub last_wndproc_returns: Vec<UnicornWndProcReturn>,
@@ -74,14 +73,6 @@ pub struct UnicornMemoryFault {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnicornFunctionPointerProbe {
-    pub pc: u32,
-    pub slot: u32,
-    pub value: u32,
-    pub slot_value: Option<u32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnicornIndirectCallProbe {
     pub pc: u32,
     pub ra: u32,
@@ -90,17 +81,6 @@ pub struct UnicornIndirectCallProbe {
     pub register: u32,
     pub register_name: &'static str,
     pub target: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnicornMemoryWriteProbe {
-    pub pc: u32,
-    pub ra: u32,
-    pub sp: u32,
-    pub address: u32,
-    pub size: usize,
-    pub value: i64,
-    pub slot_value_after: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,6 +97,19 @@ pub struct UnicornInvalidInstructionProbe {
     pub ra: u32,
     pub sp: u32,
     pub instruction: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornLastCall {
+    pub pc: u32,
+    pub target: u32,
+    pub kind: &'static str,
+    pub ra: u32,
+    pub sp: u32,
+    pub a0: u32,
+    pub a1: u32,
+    pub a2: u32,
+    pub a3: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,6 +172,8 @@ pub struct UnicornLastCode {
     pub direct_jump_target: Option<u32>,
     pub direct_jump_target_instruction: Option<u32>,
     pub direct_jump_target_in_trampoline: bool,
+    pub direct_jump_trampoline_origin: Option<u32>,
+    pub current_trampoline_origin: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -218,6 +213,8 @@ const GUEST_STACK_MIN_RESERVE: u32 = 0x0010_0000;
 const GUEST_HEAP_ARENA_BASE: u32 = 0x3000_0000;
 const GUEST_HEAP_ARENA_SIZE: u32 = 0x0100_0000;
 #[cfg(feature = "unicorn")]
+const UNICORN_TRACE_LIMIT: usize = 256;
+#[cfg(feature = "unicorn")]
 const IMPORT_TRAP_ARG_COUNT: usize = 12;
 #[cfg(feature = "unicorn")]
 const THREAD_EXIT_STUB_ADDR: u32 =
@@ -236,16 +233,6 @@ const RESERVED_IMPORT_TRAP_STUB_BYTES: u32 = crate::emulator::imports::IMPORT_TR
 const CREATESTRUCTW_SIZE: u32 = 48;
 #[cfg(feature = "unicorn")]
 const WM_INITDIALOG: u32 = 0x0110;
-#[cfg(feature = "unicorn")]
-const MAIN_DESTRUCTOR_BRANCH_PC: u32 = 0x0048_f9cc;
-#[cfg(feature = "unicorn")]
-const MAIN_DESTRUCTOR_JALR_PC: u32 = 0x0048_f9d4;
-#[cfg(feature = "unicorn")]
-const MAIN_DESTRUCTOR_BAD_SLOT: u32 = 0x3000_2390;
-#[cfg(feature = "unicorn")]
-const MAIN_DESTRUCTOR_TABLE_WATCH_BASE: u32 = 0x3000_2000;
-#[cfg(feature = "unicorn")]
-const MAIN_DESTRUCTOR_TABLE_WATCH_END: u32 = 0x3000_24ff;
 #[cfg(feature = "unicorn")]
 const IMAGE_SCN_MEM_EXECUTE: u32 = 0x2000_0000;
 #[cfg(feature = "unicorn")]
@@ -274,6 +261,7 @@ struct PendingWndProcReturn {
     class_name: Option<String>,
     api_result: Option<u32>,
     dialog_result_hwnd: Option<u32>,
+    finalize_destroy: bool,
 }
 
 #[cfg(feature = "unicorn")]
@@ -317,6 +305,9 @@ struct BlockedWaitThread {
     return_pc: u32,
 }
 
+#[cfg(feature = "unicorn")]
+type GuestThreadStackSlots = std::rc::Rc<std::cell::RefCell<std::collections::BTreeMap<u32, u32>>>;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MappedResourceString {
     module: u32,
@@ -329,6 +320,7 @@ struct MappedResourceString {
 struct MappedResource {
     module: u32,
     name: u32,
+    name_string: Option<String>,
     kind: u32,
     data_ptr: u32,
     size: u32,
@@ -558,6 +550,7 @@ impl UnicornMips {
             self.resources.push(MappedResource {
                 module: load_base,
                 name: resource.name,
+                name_string: resource.name_string,
                 kind: resource.kind,
                 data_ptr: load_base.wrapping_add(resource.data_rva),
                 size: resource.size,
@@ -610,7 +603,13 @@ impl UnicornMips {
         for resource in &self.resources {
             kernel.resources.register(
                 resource.module,
-                crate::ce::resource::ResourceId::Integer(resource.name as u16),
+                resource
+                    .name_string
+                    .as_ref()
+                    .map(|name| crate::ce::resource::ResourceId::Name(name.clone()))
+                    .unwrap_or(crate::ce::resource::ResourceId::Integer(
+                        resource.name as u16,
+                    )),
                 crate::ce::resource::ResourceId::Integer(resource.kind as u16),
                 resource.data_ptr,
                 resource.size,
@@ -720,31 +719,12 @@ impl UnicornMips {
             .map_err(|err| Error::Backend(format!("set guest RA: {err:?}")))?;
         self.write_process_entry_context(kernel, &mut uc)?;
 
-        let function_pointer_probe = Rc::new(RefCell::new(None));
-        let function_pointer_probe_hook = Rc::clone(&function_pointer_probe);
-        uc.add_code_hook(
-            u64::from(MAIN_DESTRUCTOR_BRANCH_PC),
-            u64::from(MAIN_DESTRUCTOR_JALR_PC),
-            move |uc, address, _size| {
-                let pc = address as u32;
-                if pc != MAIN_DESTRUCTOR_BRANCH_PC && pc != MAIN_DESTRUCTOR_JALR_PC {
-                    return;
-                }
-                let slot = read_mips_reg(uc, RegisterMIPS::FP);
-                *function_pointer_probe_hook.borrow_mut() = Some(UnicornFunctionPointerProbe {
-                    pc,
-                    slot,
-                    value: read_mips_reg(uc, RegisterMIPS::V0),
-                    slot_value: read_unicorn_u32(uc, slot),
-                });
-            },
-        )
-        .map_err(|err| Error::Backend(format!("install function-pointer probe: {err:?}")))?;
-
         let indirect_call_probe = Rc::new(RefCell::new(None));
         let indirect_call_probe_hook = Rc::clone(&indirect_call_probe);
         let last_code = Rc::new(RefCell::new(Vec::<UnicornLastCode>::new()));
         let last_code_hook = Rc::clone(&last_code);
+        let last_calls = Rc::new(RefCell::new(Vec::<UnicornLastCall>::new()));
+        let last_calls_hook = Rc::clone(&last_calls);
         let trampoline_ranges = self.trampoline_ranges.clone();
         let trampoline_jumps = self.trampoline_jumps.clone();
         uc.add_code_hook(1, 0, move |uc, address, _size| {
@@ -755,6 +735,18 @@ impl UnicornMips {
                 instruction.and_then(|instruction| decode_direct_jump_target(pc, instruction));
             let direct_jump_target_instruction =
                 direct_jump_target.and_then(|target| read_unicorn_u32(uc, target));
+            if let (Some(instruction), Some(target)) = (instruction, direct_jump_target) {
+                if instruction >> 26 == 0x03 {
+                    push_unicorn_last_call(&last_calls_hook, uc, pc, target, "jal");
+                }
+            }
+            if let Some((register, target)) = instruction
+                .and_then(decode_jalr_register)
+                .and_then(|register| read_mips_gpr(uc, register).map(|target| (register, target)))
+            {
+                let kind = mips_gpr_name(register);
+                push_unicorn_last_call(&last_calls_hook, uc, pc, target, kind);
+            }
             let sentinel_target =
                 instruction
                     .zip(next_instruction)
@@ -765,11 +757,11 @@ impl UnicornMips {
                 .and_then(decode_jr_register)
                 .and_then(|register| read_mips_gpr(uc, register).map(|target| (register, target)))
             {
-                if let Some((_, trampoline_target)) = trampoline_jumps
+                if let Some(trampoline) = trampoline_jumps
                     .iter()
-                    .find(|(origin, _)| *origin == target)
+                    .find(|trampoline| trampoline.origin == target)
                 {
-                    let _ = write_mips_gpr(uc, register, *trampoline_target);
+                    let _ = write_mips_gpr(uc, register, trampoline.stub);
                 }
             }
             if let Some(target) = sentinel_target {
@@ -780,9 +772,21 @@ impl UnicornMips {
             }
             let direct_jump_target_in_trampoline = direct_jump_target
                 .is_some_and(|target| target_in_ranges(target, &trampoline_ranges));
+            let direct_jump_trampoline_origin = direct_jump_target.and_then(|target| {
+                trampoline_jumps
+                    .iter()
+                    .find_map(|trampoline| (trampoline.stub == target).then_some(trampoline.origin))
+            });
+            let current_trampoline_origin = trampoline_jumps.iter().find_map(|trampoline| {
+                trampoline
+                    .stub
+                    .checked_add(trampoline.byte_len)
+                    .filter(|end| pc >= trampoline.stub && pc < *end)
+                    .map(|_| trampoline.origin)
+            });
             {
                 let mut last_code = last_code_hook.borrow_mut();
-                if last_code.len() == 12 {
+                if last_code.len() == UNICORN_TRACE_LIMIT {
                     last_code.remove(0);
                 }
                 last_code.push(UnicornLastCode {
@@ -797,6 +801,8 @@ impl UnicornMips {
                     direct_jump_target,
                     direct_jump_target_instruction,
                     direct_jump_target_in_trampoline,
+                    direct_jump_trampoline_origin,
+                    current_trampoline_origin,
                 });
             }
             if let (Some(instruction), Some(next_instruction), Some(target)) =
@@ -840,7 +846,7 @@ impl UnicornMips {
         let last_blocks_hook = Rc::clone(&last_blocks);
         uc.add_block_hook(1, 0, move |uc, address, size| {
             let mut last_blocks = last_blocks_hook.borrow_mut();
-            if last_blocks.len() == 16 {
+            if last_blocks.len() == UNICORN_TRACE_LIMIT {
                 last_blocks.remove(0);
             }
             let pc = address as u32;
@@ -854,7 +860,6 @@ impl UnicornMips {
         })
         .map_err(|err| Error::Backend(format!("install block trace hook: {err:?}")))?;
 
-        let memory_write_probe = Rc::new(RefCell::new(None));
         let blocked_get_message = Rc::new(RefCell::new(None));
         let blocked_get_message_hook = Rc::clone(&blocked_get_message);
         let last_imports = Rc::new(RefCell::new(Vec::<UnicornLastImport>::new()));
@@ -880,6 +885,8 @@ impl UnicornMips {
         let suspended_guest_thread_hook = Rc::clone(&suspended_guest_thread);
         let running_guest_thread = Rc::new(RefCell::new(None::<(u32, u32)>));
         let running_guest_thread_hook = Rc::clone(&running_guest_thread);
+        let guest_thread_stack_slots = Rc::new(RefCell::new(std::collections::BTreeMap::new()));
+        let guest_thread_stack_slots_hook = Rc::clone(&guest_thread_stack_slots);
         let traps = self.import_traps.clone();
         let kernel_ptr = kernel as *mut CeKernel;
         let stack_top = self.stack_top.unwrap_or(0);
@@ -888,7 +895,6 @@ impl UnicornMips {
             GUEST_HEAP_ARENA_SIZE,
         )]));
         let mapped_kernel_memory_hook = Rc::clone(&mapped_kernel_memory);
-        let import_memory_write_probe = Rc::clone(&memory_write_probe);
         uc.add_code_hook(
             u64::from(IMPORT_TRAP_BASE),
             u64::from(IMPORT_TRAP_BASE + IMPORT_TRAP_PAGE_SIZE - 1),
@@ -934,6 +940,12 @@ impl UnicornMips {
                             .gwe
                             .validate_window(callout.hwnd);
                     }
+                    if callout.finalize_destroy {
+                        let time_ms = unsafe { &*kernel_ptr }.timers.tick_count();
+                        unsafe { &mut *kernel_ptr }
+                            .gwe
+                            .destroy_window(callout.hwnd, time_ms);
+                    }
                     record_wndproc_return(
                         &last_wndproc_returns_hook,
                         UnicornWndProcReturn {
@@ -970,6 +982,10 @@ impl UnicornMips {
                     if let Some(callout) = pending_guest_thread_returns_hook.borrow_mut().pop() {
                         unsafe { &mut *kernel_ptr }
                             .mark_guest_thread_exited(callout.thread_handle, exit_code);
+                        release_guest_thread_stack_slot(
+                            &guest_thread_stack_slots_hook,
+                            callout.worker_thread_id,
+                        );
                         *current_thread_id_hook.borrow_mut() = callout.creator_thread_id;
                         *running_guest_thread_hook.borrow_mut() = None;
                         restore_mips_gprs(uc, &callout.creator_regs);
@@ -998,6 +1014,10 @@ impl UnicornMips {
                         return;
                     };
                     unsafe { &mut *kernel_ptr }.mark_guest_thread_exited(thread_handle, exit_code);
+                    release_guest_thread_stack_slot(
+                        &guest_thread_stack_slots_hook,
+                        worker_thread_id,
+                    );
                     let Some(suspended) = suspended_guest_thread_hook.borrow_mut().take() else {
                         let _ = uc.emu_stop();
                         return;
@@ -1017,7 +1037,7 @@ impl UnicornMips {
                 let trap = traps
                     .trap_at(address)
                     .cloned()
-                    .or_else(|| dynamic_coredll_proc_trap(address));
+                    .or_else(|| crate::emulator::imports::dynamic_coredll_proc_trap(address));
                 if trap.is_none() {
                     return;
                 }
@@ -1029,7 +1049,7 @@ impl UnicornMips {
                     let sp = read_mips_reg(uc, RegisterMIPS::SP);
                     {
                         let mut imports = last_imports_hook.borrow_mut();
-                        if imports.len() == 16 {
+                        if imports.len() == UNICORN_TRACE_LIMIT {
                             imports.remove(0);
                         }
                         imports.push(UnicornLastImport {
@@ -1099,10 +1119,23 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                let mut memory = UnicornGuestMemory {
-                    uc,
-                    memory_write_probe: Some(Rc::clone(&import_memory_write_probe)),
-                };
+                if trap.as_ref().is_some_and(|trap| {
+                    try_exit_guest_thread_callout(
+                        unsafe { &mut *kernel_ptr },
+                        uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        &pending_guest_thread_returns_hook,
+                        &current_thread_id_hook,
+                        &suspended_guest_thread_hook,
+                        &running_guest_thread_hook,
+                        &guest_thread_stack_slots_hook,
+                    )
+                }) {
+                    return;
+                }
+                let mut memory = UnicornGuestMemory { uc };
                 if let Some(setjmp_result) = trap.as_ref().and_then(|trap| {
                     try_handle_setjmp_longjmp(
                         &mut memory,
@@ -1164,6 +1197,18 @@ impl UnicornMips {
                     return;
                 }
                 if trap.as_ref().is_some_and(|trap| {
+                    try_enter_def_window_proc_callout(
+                        unsafe { &mut *kernel_ptr },
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        &pending_wndproc_returns_hook,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
                     try_enter_def_dlg_proc_callout(
                         unsafe { &*kernel_ptr },
                         memory.uc,
@@ -1213,6 +1258,7 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_call_window_proc_callout(
+                        unsafe { &mut *kernel_ptr },
                         memory.uc,
                         trap.module_kind,
                         trap.ordinal,
@@ -1233,6 +1279,7 @@ impl UnicornMips {
                         stack_top,
                         &current_thread_id_hook,
                         &running_guest_thread_hook,
+                        &guest_thread_stack_slots_hook,
                         &pending_guest_thread_returns_hook,
                     )
                 }) {
@@ -1245,6 +1292,7 @@ impl UnicornMips {
                     address,
                     args.clone(),
                 ) else {
+                    let _ = memory.uc.emu_stop();
                     return;
                 };
                 let _ = map_kernel_memory_allocations(
@@ -1332,6 +1380,7 @@ impl UnicornMips {
                         &current_thread_id_hook,
                         &suspended_guest_thread_hook,
                         &running_guest_thread_hook,
+                        &guest_thread_stack_slots_hook,
                     )
                 }) {
                     return;
@@ -1374,34 +1423,6 @@ impl UnicornMips {
             },
         )
         .map_err(|err| Error::Backend(format!("install thread-exit hook: {err:?}")))?;
-
-        let memory_write_probe_hook = Rc::clone(&memory_write_probe);
-        uc.add_mem_hook(
-            HookType::MEM_WRITE,
-            u64::from(MAIN_DESTRUCTOR_TABLE_WATCH_BASE),
-            u64::from(MAIN_DESTRUCTOR_TABLE_WATCH_END),
-            move |uc, _access, address, size, value| {
-                let address = address as u32;
-                let end = address.saturating_add(size as u32);
-                let touches_bad_slot = address < MAIN_DESTRUCTOR_BAD_SLOT.saturating_add(4)
-                    && end > MAIN_DESTRUCTOR_BAD_SLOT;
-                let writes_low_pointer = size == 4 && value as u32 == 0x0001_0000;
-                if !touches_bad_slot && !writes_low_pointer {
-                    return true;
-                }
-                *memory_write_probe_hook.borrow_mut() = Some(UnicornMemoryWriteProbe {
-                    pc: read_mips_reg(uc, RegisterMIPS::PC),
-                    ra: read_mips_reg(uc, RegisterMIPS::RA),
-                    sp: read_mips_reg(uc, RegisterMIPS::SP),
-                    address,
-                    size,
-                    value,
-                    slot_value_after: read_unicorn_u32(uc, MAIN_DESTRUCTOR_BAD_SLOT),
-                });
-                true
-            },
-        )
-        .map_err(|err| Error::Backend(format!("install memory-write probe: {err:?}")))?;
 
         let memory_fault = Rc::new(RefCell::new(None));
         let memory_fault_hook = Rc::clone(&memory_fault);
@@ -1457,11 +1478,10 @@ impl UnicornMips {
             &uc,
             &self.import_traps,
             memory_fault.borrow().clone(),
-            function_pointer_probe.borrow().clone(),
             indirect_call_probe.borrow().clone(),
-            memory_write_probe.borrow().clone(),
             interrupt_probe.borrow().clone(),
             invalid_instruction_probe.borrow().clone(),
+            last_calls.borrow().clone(),
             last_imports.borrow().clone(),
             last_messages.borrow().clone(),
             last_wndproc_returns.borrow().clone(),
@@ -1666,12 +1686,15 @@ fn patch_mips_unicorn_trampolines(
             encode_mips_ori(26, 26, stub_pc & 0xffff),
             &image.path,
         )?;
-        trampoline_jumps.push((patch.pc, stub_pc));
-
         let stub_offset = stub_rva as usize;
         let stub_end = stub_offset
             .checked_add(stub_words.len() * 4)
             .ok_or_else(|| Error::InvalidArgument("branch-likely stub overflow".to_owned()))?;
+        trampoline_jumps.push(MipsTrampolineJump {
+            origin: patch.pc,
+            stub: stub_pc,
+            byte_len: (stub_words.len() * 4) as u32,
+        });
         if mapped.len() < stub_end {
             mapped.resize(stub_end, 0);
         }
@@ -1702,7 +1725,15 @@ fn patch_mips_unicorn_trampolines(
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct MipsTrampolinePatchResult {
     range: Option<(u32, u32)>,
-    jumps: Vec<(u32, u32)>,
+    jumps: Vec<MipsTrampolineJump>,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct MipsTrampolineJump {
+    origin: u32,
+    stub: u32,
+    byte_len: u32,
 }
 
 #[cfg(feature = "unicorn")]
@@ -2358,16 +2389,6 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 fault.access, fault.address, fault.size, fault.value, fault.pc
             )?;
         }
-        if let Some(probe) = self.function_pointer_probe.as_ref() {
-            write!(
-                f,
-                " funcptr_pc=0x{:08x} funcptr_slot=0x{:08x} funcptr_value=0x{:08x}",
-                probe.pc, probe.slot, probe.value
-            )?;
-            if let Some(slot_value) = probe.slot_value {
-                write!(f, " funcptr_slot_value=0x{slot_value:08x}")?;
-            }
-        }
         if let Some(probe) = self.indirect_call_probe.as_ref() {
             write!(
                 f,
@@ -2380,16 +2401,6 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 probe.register_name,
                 probe.target
             )?;
-        }
-        if let Some(probe) = self.memory_write_probe.as_ref() {
-            write!(
-                f,
-                " write_pc=0x{:08x} write_ra=0x{:08x} write_sp=0x{:08x} write_addr=0x{:08x} write_size={} write_value=0x{:x}",
-                probe.pc, probe.ra, probe.sp, probe.address, probe.size, probe.value
-            )?;
-            if let Some(slot_value_after) = probe.slot_value_after {
-                write!(f, " write_slot_after=0x{slot_value_after:08x}")?;
-            }
         }
         if let Some(probe) = self.interrupt_probe.as_ref() {
             write!(
@@ -2431,6 +2442,28 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 } else {
                     write!(f, "/ret=<pending>")?;
                 }
+            }
+            write!(f, "]")?;
+        }
+        if !self.last_calls.is_empty() {
+            write!(f, " last_calls=[")?;
+            for (index, call) in self.last_calls.iter().enumerate() {
+                if index != 0 {
+                    write!(f, ",")?;
+                }
+                write!(
+                    f,
+                    "0x{:08x}->0x{:08x}/{}/ra=0x{:08x}/sp=0x{:08x}/a0=0x{:08x}/a1=0x{:08x}/a2=0x{:08x}/a3=0x{:08x}",
+                    call.pc,
+                    call.target,
+                    call.kind,
+                    call.ra,
+                    call.sp,
+                    call.a0,
+                    call.a1,
+                    call.a2,
+                    call.a3
+                )?;
             }
             write!(f, "]")?;
         }
@@ -2518,10 +2551,16 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 if let Some(next_instruction) = code.next_instruction {
                     write!(f, "/next=0x{next_instruction:08x}")?;
                 }
+                if let Some(origin) = code.current_trampoline_origin {
+                    write!(f, "/tramp_origin=0x{origin:08x}")?;
+                }
                 if let Some(target) = code.direct_jump_target {
                     write!(f, "/jt=0x{target:08x}")?;
                     if code.direct_jump_target_in_trampoline {
                         write!(f, "/jt_trampoline=true")?;
+                    }
+                    if let Some(origin) = code.direct_jump_trampoline_origin {
+                        write!(f, "/jt_origin=0x{origin:08x}")?;
                     }
                     if let Some(target_instruction) = code.direct_jump_target_instruction {
                         write!(f, "/jt_insn=0x{target_instruction:08x}")?;
@@ -2974,7 +3013,8 @@ fn try_block_wait_for_single_object<D>(
         return true;
     }
 
-    if let Some((_, thread_handle)) = *running_thread.borrow() {
+    let running = *running_thread.borrow();
+    if let Some((_, thread_handle)) = running {
         blocked_waits.borrow_mut().push(BlockedWaitThread {
             thread_id,
             thread_handle,
@@ -3046,6 +3086,60 @@ fn try_resume_blocked_wait<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn try_exit_guest_thread_callout<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+    stack_slots: &GuestThreadStackSlots,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_EXIT_THREAD)
+    {
+        return false;
+    }
+
+    let exit_code = args.first().copied().unwrap_or(0);
+    if let Some(callout) = pending_returns.borrow_mut().pop() {
+        kernel.mark_guest_thread_exited(callout.thread_handle, exit_code);
+        release_guest_thread_stack_slot(stack_slots, callout.worker_thread_id);
+        *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        *running_thread.borrow_mut() = None;
+        restore_mips_gprs(uc, &callout.creator_regs);
+        let writes = [
+            uc.reg_write(RegisterMIPS::V0, u64::from(callout.thread_handle)),
+            uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc)),
+            uc.reg_write(RegisterMIPS::RA, u64::from(callout.return_pc)),
+        ];
+        if writes.into_iter().any(|write| write.is_err()) {
+            let _ = uc.emu_stop();
+        }
+        return true;
+    }
+
+    let Some((worker_thread_id, thread_handle)) = running_thread.borrow_mut().take() else {
+        let _ = uc.emu_stop();
+        return true;
+    };
+    kernel.mark_guest_thread_exited(thread_handle, exit_code);
+    release_guest_thread_stack_slot(stack_slots, worker_thread_id);
+    let Some(suspended) = suspended_thread.borrow_mut().take() else {
+        let _ = uc.emu_stop();
+        return true;
+    };
+    *current_thread_id.borrow_mut() = suspended.thread_id;
+    restore_suspended_thread(uc, &suspended);
+    true
+}
+
+#[cfg(feature = "unicorn")]
 fn try_enter_create_thread_callout<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
@@ -3056,6 +3150,7 @@ fn try_enter_create_thread_callout<D>(
     process_stack_top: u32,
     current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+    stack_slots: &GuestThreadStackSlots,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
@@ -3110,7 +3205,8 @@ fn try_enter_create_thread_callout<D>(
     });
     *current_thread_id.borrow_mut() = worker_thread_id;
     *running_thread.borrow_mut() = Some((worker_thread_id, thread_handle));
-    let worker_stack = guest_thread_stack_top(process_stack_top, worker_thread_id);
+    let stack_slot = assign_guest_thread_stack_slot(stack_slots, worker_thread_id);
+    let worker_stack = guest_thread_stack_top(process_stack_top, stack_slot);
     let writes = [
         uc.reg_write(RegisterMIPS::PC, u64::from(start_address)),
         uc.reg_write(RegisterMIPS::RA, u64::from(GUEST_THREAD_RETURN_STUB_ADDR)),
@@ -3122,6 +3218,7 @@ fn try_enter_create_thread_callout<D>(
         target: "ce.imports",
         creator_thread_id,
         worker_thread_id,
+        stack_slot,
         handle = format_args!("0x{thread_handle:08x}"),
         start = format_args!("0x{start_address:08x}"),
         parameter = format_args!("0x{parameter:08x}"),
@@ -3148,6 +3245,7 @@ fn try_enter_resumed_thread_callout<D>(
     current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+    stack_slots: &GuestThreadStackSlots,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
@@ -3176,7 +3274,10 @@ fn try_enter_resumed_thread_callout<D>(
     *current_thread_id.borrow_mut() = worker_thread_id;
     *running_thread.borrow_mut() = Some((worker_thread_id, thread_handle));
 
-    let worker_stack = guest_thread_stack_top(process_stack_top, worker_thread_id);
+    let worker_stack = guest_thread_stack_top(
+        process_stack_top,
+        assign_guest_thread_stack_slot(stack_slots, worker_thread_id),
+    );
     let writes = [
         uc.reg_write(RegisterMIPS::PC, u64::from(start_address)),
         uc.reg_write(RegisterMIPS::RA, u64::from(GUEST_THREAD_RETURN_STUB_ADDR)),
@@ -3281,6 +3382,26 @@ fn guest_thread_stack_top(process_stack_top: u32, thread_id: u32) -> u32 {
 }
 
 #[cfg(feature = "unicorn")]
+fn assign_guest_thread_stack_slot(stack_slots: &GuestThreadStackSlots, thread_id: u32) -> u32 {
+    let mut stack_slots = stack_slots.borrow_mut();
+    if let Some(slot) = stack_slots.get(&thread_id).copied() {
+        return slot;
+    }
+
+    let mut slot = 1;
+    while stack_slots.values().any(|used| *used == slot) {
+        slot += 1;
+    }
+    stack_slots.insert(thread_id, slot);
+    slot
+}
+
+#[cfg(feature = "unicorn")]
+fn release_guest_thread_stack_slot(stack_slots: &GuestThreadStackSlots, thread_id: u32) {
+    stack_slots.borrow_mut().remove(&thread_id);
+}
+
+#[cfg(feature = "unicorn")]
 fn capture_mips_gprs<D>(uc: &unicorn_engine::Unicorn<'_, D>) -> [u32; 32] {
     let mut regs = [0; 32];
     for register in 1..32 {
@@ -3322,7 +3443,7 @@ fn record_message_import<D>(
         .filter(|result| *result != 0)
         .and_then(|_| read_unicorn_message(uc, msg_ptr));
     let mut messages = last_messages.borrow_mut();
-    if messages.len() == 64 {
+    if messages.len() == UNICORN_TRACE_LIMIT {
         messages.remove(0);
     }
     messages.push(UnicornLastMessage {
@@ -3371,7 +3492,7 @@ fn record_wndproc_return(
         "guest wndproc return"
     );
     let mut returns = last_wndproc_returns.borrow_mut();
-    if returns.len() == 32 {
+    if returns.len() == UNICORN_TRACE_LIMIT {
         returns.remove(0);
     }
     returns.push(record);
@@ -3448,6 +3569,7 @@ fn try_enter_dispatch_message_callout<D>(
         class_name: Some(window.class_name.clone()),
         api_result: None,
         dialog_result_hwnd: None,
+        finalize_destroy: false,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
@@ -3522,6 +3644,7 @@ fn try_enter_send_message_callout<D>(
         class_name: Some(window.class_name.clone()),
         api_result: None,
         dialog_result_hwnd: None,
+        finalize_destroy: false,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
@@ -3538,6 +3661,43 @@ fn try_enter_send_message_callout<D>(
         let _ = pending_returns.borrow_mut().pop();
         false
     }
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_def_window_proc_callout<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_DEF_WINDOW_PROC_W)
+    {
+        return false;
+    }
+
+    let hwnd = args.first().copied().unwrap_or(0);
+    let msg = args.get(1).copied().unwrap_or(0);
+    let wparam = args.get(2).copied().unwrap_or(0);
+    let lparam = args.get(3).copied().unwrap_or(0);
+    if msg == crate::ce::gwe::WM_CLOSE {
+        return enter_destroy_window_wm_destroy_callout(
+            kernel,
+            uc,
+            hwnd,
+            "DefWindowProcW/WM_CLOSE",
+            0,
+            pending_returns,
+        );
+    }
+
+    let result = crate::ce::gwe::default_send_message_result(msg, wparam, lparam);
+    let _ = uc.reg_write(RegisterMIPS::V0, u64::from(result));
+    true
 }
 
 #[cfg(feature = "unicorn")]
@@ -3596,6 +3756,7 @@ fn try_enter_def_dlg_proc_callout<D>(
         class_name,
         api_result: None,
         dialog_result_hwnd: None,
+        finalize_destroy: false,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
@@ -3623,8 +3784,6 @@ fn try_enter_destroy_window_callout<D>(
     args: &[u32],
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
 ) -> bool {
-    use unicorn_engine::RegisterMIPS;
-
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
         || ordinal != Some(crate::ce::coredll_ordinals::ORD_DESTROY_WINDOW)
     {
@@ -3632,14 +3791,40 @@ fn try_enter_destroy_window_callout<D>(
     }
 
     let hwnd = args.first().copied().unwrap_or(0);
+    enter_destroy_window_wm_destroy_callout(
+        kernel,
+        uc,
+        hwnd,
+        "DestroyWindow/WM_DESTROY",
+        1,
+        pending_returns,
+    )
+}
+
+#[cfg(feature = "unicorn")]
+fn enter_destroy_window_wm_destroy_callout<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    hwnd: u32,
+    source: &'static str,
+    api_result: u32,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
     let Some(window) = kernel.gwe.window(hwnd) else {
         return false;
     };
     let wndproc = window.wndproc;
     let class_name = window.class_name.clone();
-    let api_result = u32::from(kernel.gwe.destroy_window(hwnd, kernel.timers.tick_count()));
-    if api_result == 0 || !is_guest_wndproc(wndproc) {
-        let _ = uc.reg_write(RegisterMIPS::V0, u64::from(api_result));
+    if !is_guest_wndproc(wndproc) {
+        let destroyed = kernel.gwe.destroy_window(hwnd, kernel.timers.tick_count());
+        let result = if api_result == 0 {
+            0
+        } else {
+            u32::from(destroyed)
+        };
+        let _ = uc.reg_write(RegisterMIPS::V0, u64::from(result));
         return true;
     }
 
@@ -3653,7 +3838,7 @@ fn try_enter_destroy_window_callout<D>(
     );
 
     pending_returns.borrow_mut().push(PendingWndProcReturn {
-        source: "DestroyWindow/WM_DESTROY",
+        source,
         hwnd,
         msg: crate::ce::gwe::WM_DESTROY,
         wparam: 0,
@@ -3663,6 +3848,7 @@ fn try_enter_destroy_window_callout<D>(
         class_name: Some(class_name),
         api_result: Some(api_result),
         dialog_result_hwnd: None,
+        finalize_destroy: true,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
@@ -3748,6 +3934,7 @@ fn try_enter_is_dialog_message_callout<D>(
         class_name: Some(window.class_name.clone()),
         api_result: Some(1),
         dialog_result_hwnd: None,
+        finalize_destroy: false,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(target)),
@@ -3818,6 +4005,7 @@ fn try_enter_update_window_callout<D>(
         class_name: Some(window.class_name.clone()),
         api_result: Some(1),
         dialog_result_hwnd: None,
+        finalize_destroy: false,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
@@ -3898,6 +4086,7 @@ fn try_enter_dialog_init_callout<D>(
         class_name: Some(window.class_name.clone()),
         api_result: is_create.then_some(hwnd),
         dialog_result_hwnd: is_modal.then_some(hwnd),
+        finalize_destroy: false,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
@@ -4020,6 +4209,7 @@ fn create_structw_bytes(args: &[u32]) -> [u8; CREATESTRUCTW_SIZE as usize] {
 
 #[cfg(feature = "unicorn")]
 fn try_enter_call_window_proc_callout<D>(
+    kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
@@ -4043,6 +4233,16 @@ fn try_enter_call_window_proc_callout<D>(
     let wparam = args.get(3).copied().unwrap_or(0);
     let lparam = args.get(4).copied().unwrap_or(0);
     if wndproc == crate::ce::gwe::DEFAULT_WNDPROC {
+        if msg == crate::ce::gwe::WM_CLOSE {
+            return enter_destroy_window_wm_destroy_callout(
+                kernel,
+                uc,
+                hwnd,
+                "CallWindowProcW(DEFAULT)/WM_CLOSE",
+                0,
+                pending_returns,
+            );
+        }
         let result = crate::ce::gwe::default_send_message_result(msg, wparam, lparam);
         let _ = uc.reg_write(RegisterMIPS::V0, u64::from(result));
         return true;
@@ -4071,6 +4271,7 @@ fn try_enter_call_window_proc_callout<D>(
         class_name: None,
         api_result: None,
         dialog_result_hwnd: None,
+        finalize_destroy: false,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
@@ -4090,15 +4291,41 @@ fn try_enter_call_window_proc_callout<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn push_unicorn_last_call<D>(
+    last_calls: &std::rc::Rc<std::cell::RefCell<Vec<UnicornLastCall>>>,
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    pc: u32,
+    target: u32,
+    kind: &'static str,
+) {
+    use unicorn_engine::RegisterMIPS;
+
+    let mut last_calls = last_calls.borrow_mut();
+    if last_calls.len() == UNICORN_TRACE_LIMIT {
+        last_calls.remove(0);
+    }
+    last_calls.push(UnicornLastCall {
+        pc,
+        target,
+        kind,
+        ra: read_mips_reg(uc, RegisterMIPS::RA),
+        sp: read_mips_reg(uc, RegisterMIPS::SP),
+        a0: read_mips_reg(uc, RegisterMIPS::A0),
+        a1: read_mips_reg(uc, RegisterMIPS::A1),
+        a2: read_mips_reg(uc, RegisterMIPS::A2),
+        a3: read_mips_reg(uc, RegisterMIPS::A3),
+    });
+}
+
+#[cfg(feature = "unicorn")]
 fn capture_debug_snapshot<D>(
     uc: &unicorn_engine::Unicorn<'_, D>,
     traps: &ImportTrapTable,
     memory_fault: Option<UnicornMemoryFault>,
-    function_pointer_probe: Option<UnicornFunctionPointerProbe>,
     indirect_call_probe: Option<UnicornIndirectCallProbe>,
-    memory_write_probe: Option<UnicornMemoryWriteProbe>,
     interrupt_probe: Option<UnicornInterruptProbe>,
     invalid_instruction_probe: Option<UnicornInvalidInstructionProbe>,
+    last_calls: Vec<UnicornLastCall>,
     last_imports: Vec<UnicornLastImport>,
     last_messages: Vec<UnicornLastMessage>,
     last_wndproc_returns: Vec<UnicornWndProcReturn>,
@@ -4126,11 +4353,10 @@ fn capture_debug_snapshot<D>(
         trap_name: trap.and_then(|trap| trap.name.clone()),
         trap_ordinal: trap.and_then(|trap| trap.ordinal),
         memory_fault,
-        function_pointer_probe,
         indirect_call_probe,
-        memory_write_probe,
         interrupt_probe,
         invalid_instruction_probe,
+        last_calls,
         last_imports,
         last_messages,
         last_wndproc_returns,
@@ -4341,7 +4567,6 @@ fn decode_old_mips_kernel_call(target: u32) -> Option<(u32, u32)> {
 #[cfg(feature = "unicorn")]
 struct UnicornGuestMemory<'a, 'uc, D> {
     uc: &'a mut unicorn_engine::Unicorn<'uc, D>,
-    memory_write_probe: Option<std::rc::Rc<std::cell::RefCell<Option<UnicornMemoryWriteProbe>>>>,
 }
 
 #[cfg(feature = "unicorn")]
@@ -4358,7 +4583,6 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
         self.uc
             .mem_write(u64::from(addr), &[value])
             .map_err(|err| Error::Backend(format!("write_u8 0x{addr:08x}: {err:?}")))?;
-        self.record_write(addr, 1, i64::from(value));
         Ok(())
     }
 
@@ -4374,7 +4598,6 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
         self.uc
             .mem_write(u64::from(addr), &value.to_le_bytes())
             .map_err(|err| Error::Backend(format!("write_u32 0x{addr:08x}: {err:?}")))?;
-        self.record_write(addr, 4, i64::from(value));
         Ok(())
     }
 
@@ -4390,7 +4613,6 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
         self.uc
             .mem_write(u64::from(addr), &value.to_le_bytes())
             .map_err(|err| Error::Backend(format!("write_u16 0x{addr:08x}: {err:?}")))?;
-        self.record_write(addr, 2, i64::from(value));
         Ok(())
     }
 }
@@ -4813,30 +5035,5 @@ mod unicorn_tests {
         for (index, word) in words.iter().enumerate() {
             write_u32(uc, u64::from(address) + index as u64 * 4, *word);
         }
-    }
-}
-
-#[cfg(feature = "unicorn")]
-impl<D> UnicornGuestMemory<'_, '_, D> {
-    fn record_write(&self, address: u32, size: usize, value: i64) {
-        let Some(probe) = self.memory_write_probe.as_ref() else {
-            return;
-        };
-        let end = address.saturating_add(size as u32);
-        let touches_bad_slot =
-            address < MAIN_DESTRUCTOR_BAD_SLOT.saturating_add(4) && end > MAIN_DESTRUCTOR_BAD_SLOT;
-        let writes_low_pointer = size == 4 && value as u32 == 0x0001_0000;
-        if !touches_bad_slot && !writes_low_pointer {
-            return;
-        }
-        *probe.borrow_mut() = Some(UnicornMemoryWriteProbe {
-            pc: read_mips_reg(self.uc, unicorn_engine::RegisterMIPS::PC),
-            ra: read_mips_reg(self.uc, unicorn_engine::RegisterMIPS::RA),
-            sp: read_mips_reg(self.uc, unicorn_engine::RegisterMIPS::SP),
-            address,
-            size,
-            value,
-            slot_value_after: read_unicorn_u32(self.uc, MAIN_DESTRUCTOR_BAD_SLOT),
-        });
     }
 }

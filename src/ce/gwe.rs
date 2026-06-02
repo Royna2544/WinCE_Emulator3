@@ -201,6 +201,7 @@ pub struct Gwe {
     queues: BTreeMap<u32, VecDeque<Message>>,
     focus: Option<u32>,
     capture: Option<u32>,
+    cursor: Option<u32>,
     cursor_pos: Point,
     next_registered_message: u32,
     registered_messages: BTreeMap<String, u32>,
@@ -246,6 +247,7 @@ impl Default for Gwe {
             queues: BTreeMap::new(),
             focus: None,
             capture: None,
+            cursor: None,
             cursor_pos: Point::default(),
             next_registered_message: 0xc000,
             registered_messages: BTreeMap::new(),
@@ -666,6 +668,16 @@ impl Gwe {
     pub fn release_capture(&mut self) -> bool {
         self.capture = None;
         true
+    }
+
+    pub fn set_cursor(&mut self, cursor: u32) -> Option<u32> {
+        let previous = self.cursor;
+        self.cursor = (cursor != 0).then_some(cursor);
+        previous
+    }
+
+    pub fn get_cursor(&self) -> Option<u32> {
+        self.cursor
     }
 
     pub fn get_active_window(&self) -> Option<u32> {
