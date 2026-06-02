@@ -506,6 +506,11 @@
   now stops at `SetForegroundWindow @702` (`pc=0x7fff1410`,
   `ra=0x0089ecec`, `a0=0x00020000`). The framebuffer dump
   `target\inavi-release-timezone.ppm` is still all zero.
+- Raw `GetForegroundWindow @701`, `SetForegroundWindow @702`, and
+  `SetActiveWindow @703` now use the existing GWE focus/active-window model.
+  The mounted release run gets past the previous `SetForegroundWindow @702`
+  trap and now stops at `InputDebugCharW @595` (`pc=0x7fff0a90`,
+  `ra=0x600119c4`). `target\inavi-release-foreground.ppm` remains all zero.
 
 ## Current State
 
@@ -524,9 +529,9 @@
   stop long post-time runs through `--cpu-wall-clock-limit-ms` with a diagnostic
   snapshot plus framebuffer dump. The current mounted run progresses past the
   previous `GetSystemTime @25` trap, the previous soft-float `__nes @2047`/
-  `__litofp @2032` traps, the MIPS `__ll_div @2005` helper frontier, and
-  `GetTimeZoneInformation @27`. The current concrete stop is
-  `SetForegroundWindow @702`; the framebuffer remains blank. A
+  `__litofp @2032` traps, the MIPS `__ll_div @2005` helper frontier,
+  `GetTimeZoneInformation @27`, and `SetForegroundWindow @702`. The current
+  concrete stop is `InputDebugCharW @595`; the framebuffer remains blank. A
   generic virtual framebuffer is now
   attached to the emulator boundary, generic virtual presenter/desktop
   interfaces exist for host

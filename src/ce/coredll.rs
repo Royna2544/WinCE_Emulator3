@@ -2302,6 +2302,19 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
         ))),
         ORD_GET_DESKTOP_WINDOW => Some(CoredllValue::Handle(kernel.gwe.get_desktop_window())),
+        ORD_GET_FOREGROUND_WINDOW => Some(CoredllValue::Handle(
+            kernel.gwe.get_active_window().unwrap_or(0),
+        )),
+        ORD_SET_FOREGROUND_WINDOW => Some(CoredllValue::Bool(set_foreground_window_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_SET_ACTIVE_WINDOW => Some(CoredllValue::Handle(set_active_window_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_GET_ACTIVE_WINDOW => Some(CoredllValue::Handle(
             kernel.gwe.get_active_window().unwrap_or(0),
         )),
@@ -7778,6 +7791,31 @@ fn get_window_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32, cmd: u32) ->
         return 0;
     }
     kernel.gwe.get_window(hwnd, cmd).unwrap_or(0)
+}
+
+fn set_foreground_window_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> bool {
+    if hwnd == 0 || !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    }
+    kernel.gwe.set_focus(Some(hwnd));
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn set_active_window_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> u32 {
+    if hwnd != 0 && !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    }
+    let previous = kernel.gwe.get_active_window().unwrap_or(0);
+    kernel.gwe.set_focus((hwnd != 0).then_some(hwnd));
+    kernel.threads.set_last_error(thread_id, 0);
+    previous
 }
 
 fn map_single_point<M: CoredllGuestMemory>(

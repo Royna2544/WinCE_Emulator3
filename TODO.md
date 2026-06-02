@@ -22,13 +22,13 @@
   `MultiByteToWideChar @196`; the framebuffer dump is still all zero. Use
   release/longer bounded slices and implement the next real GWE/GDI/resource
   behavior the trace demands before expecting guest drawing.
-- Implement the next launch-demanded foreground/window activation boundary.
-  The latest release mounted run gets past `__nes @2047`, `__litofp @2032`,
-  `__ll_div @2005`, and `GetTimeZoneInformation @27`; it now traps at
-  `SetForegroundWindow @702` with `a0=0x00020000` on the MFC/app message path.
-  Route this through the existing GWE focus/active-window model instead of an
-  app-specific shortcut, then rerun the mounted slice and inspect the next
-  real frontier.
+- Implement the next launch-demanded debug/input helper boundary. The latest
+  release mounted run gets past `__nes @2047`, `__litofp @2032`,
+  `__ll_div @2005`, `GetTimeZoneInformation @27`, and
+  `SetForegroundWindow @702`; it now traps at `InputDebugCharW @595` from the
+  SDK MFC path. Confirm the CE return semantics and route it through a generic
+  debug/input shim rather than an app-specific shortcut, then rerun the mounted
+  slice and inspect the next real frontier.
 - Replace launch-stub behavior for commctrl, WINSOCK, and OLE imports with
   real subsystem-backed implementations as import traces demand. Keep MFC on
   the loaded SDK DLL path only; do not add emulator MFC stubs.
