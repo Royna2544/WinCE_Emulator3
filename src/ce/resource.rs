@@ -452,6 +452,10 @@ impl ResourceSystem {
         handle
     }
 
+    pub fn brush(&self, handle: u32) -> Option<&BrushObject> {
+        self.brushes.get(&handle)
+    }
+
     pub fn create_pattern_brush(&mut self, bitmap: u32) -> Option<u32> {
         if !self.bitmaps.contains_key(&bitmap) {
             return None;

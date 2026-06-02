@@ -3,16 +3,19 @@
 ## Immediate
 
 - Continue the launch path after the first synthetic `WM_PAINT` dispatch by
-  connecting CE-referenced GDI/surface drawing and blit behavior to the generic
-  virtual framebuffer and then to the generic presenter boundary. Do not treat
-  the timeout-running paint loop as GUI success.
+  expanding CE-referenced GDI/surface drawing and blit behavior beyond the
+  first solid `FillRect` framebuffer path, then verify those pixels through the
+  generic presenter boundary. Do not treat the timeout-running paint loop as
+  GUI success.
 - Replace launch-stub behavior for commctrl, WINSOCK, and OLE imports with
   real subsystem-backed implementations as import traces demand. Keep MFC on
   the loaded SDK DLL path only; do not add emulator MFC stubs.
 - Continue burning down COREDLL ordinals subsystem by subsystem, replacing
   stubbed ordinal plan entries with CE/MFC/SDK-referenced semantics. Next
-  likely tranche: GDI/DC/surface drawing into the virtual framebuffer,
-  PE-backed resource icon/bitmap loading beyond the string-resource path,
+  likely tranche: `BitBlt`, `PatBlt`, `StretchDIBits`, `SetDIBitsToDevice`,
+  basic shape/text drawing, and memory-DC bitmap surfaces into or through the
+  virtual framebuffer; PE-backed resource icon/bitmap loading beyond the
+  string-resource path,
   COM/OLE API dispatch when ole32 imports are connected, more GWE menu/dialog/
   control raw pointer marshalling, broader file attributes/directory metadata,
   and timer/system-time structs.
@@ -30,7 +33,7 @@
   latest trace also confirms `WCE_Solution_iNavi`, `wce_FirstDefWindowProc`,
   and `AfxWndProcBase` sequencing. Next work is to identify the next
   CE/MFC-sourced queue, timer, paint, posted-message, window-child creation, or
-  GDI behavior that should advance the path toward real framebuffer drawing.
+  GDI behavior that should advance the path toward target framebuffer drawing.
 - Use the new guest-WNDPROC return ring to compare creation-time sequencing
   against CE/MFC expectations. The latest diagnostic shows create/show/size/
   paint/idle messages returning `0`, `WM_PAINT` not reaching `BeginPaint`, MFC
@@ -74,8 +77,9 @@
 
 ## Later
 
-- Add host presentation/streaming of framebuffer snapshots through `Presenter`
-  implementations after guest drawing writes meaningful pixels.
+- Keep host presentation/streaming of framebuffer snapshots wired through
+  `Presenter` implementations as guest drawing paths start writing meaningful
+  pixels.
 - Add real low-latency host playback draining behind `HostAudioSink`; current
   waveOut work copies guest PCM into registered sinks and `main` registers the
   Windows `winmm` host-sink boundary, but the host backend still retains chunks

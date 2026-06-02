@@ -891,6 +891,7 @@ impl UnicornMips {
         let guest_thread_stack_slots_hook = Rc::clone(&guest_thread_stack_slots);
         let traps = self.import_traps.clone();
         let kernel_ptr = kernel as *mut CeKernel;
+        let framebuffer_ptr = framebuffer as *mut dyn Framebuffer;
         let stack_top = self.stack_top.unwrap_or(0);
         let mapped_kernel_memory = Rc::new(RefCell::new(vec![(
             GUEST_HEAP_ARENA_BASE,
@@ -1293,9 +1294,10 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                let Some(result) = traps.dispatch_trap(
+                let Some(result) = traps.dispatch_trap_with_framebuffer(
                     unsafe { &mut *kernel_ptr },
                     &mut memory,
+                    Some(unsafe { &mut *framebuffer_ptr }),
                     active_thread_id,
                     address,
                     args.clone(),

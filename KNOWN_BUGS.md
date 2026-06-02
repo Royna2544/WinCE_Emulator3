@@ -6,8 +6,10 @@
   - Symptom: a bounded debug launch gets past the earlier empty-queue
     `GetMessageW` self-stop and dispatches a synthetic `WM_PAINT`, but still
     produces no drawn framebuffer/window output and must be killed by the
-    timeout. A generic virtual framebuffer is attached, but guest GDI/surface
-    drawing is not connected to it yet. This is not GUI success.
+    timeout. A generic virtual framebuffer is attached, and raw solid-brush
+    `FillRect` can now draw into it when guest code reaches a window/screen
+    HDC, but the target launch has not yet reached useful drawing/blit imports.
+    This is not GUI success.
   - Evidence: latest bounded run with `--features unicorn`,
     `--dll-search-dir C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii`,
     and `--sdmmc-root D:\INAVI_Emulator\INAVI` previously timed out after 30
@@ -24,8 +26,10 @@
     bounded run after adding the generic presenter/desktop boundary still
     returned at the same `GetMessageW @861` `blocked_get_message` frontier. The
     framebuffer-plumbed run prints an attached 800x480 RGB565 virtual
-    framebuffer before CPU execution, but no guest drawing/blit imports have
-    produced visible output. After raw `GetWindow` ordinal 251 support was
+    framebuffer before CPU execution. Solid `FillRect` is now connected to that
+    attached framebuffer through COREDLL raw ordinal dispatch, but the target
+    trace still has not produced visible app pixels. After raw `GetWindow`
+    ordinal 251 support was
     added, a 1,000,000-instruction bounded launch still stopped at the same
     empty `GetMessageW @861` diagnostic; the recent import ring shows
     `GetWindow(hwnd=0x00020000, relation=GW_CHILD)` returning `0`, so the
@@ -60,7 +64,8 @@
     latest bounded launch confirms the current `GW_CHILD` query returns no
     child HWNDs; next work is to identify which remaining CE/MFC-sourced queue,
     timer, paint, posted-message, window-child creation, or GDI behavior should
-    advance the guest path toward real GDI/DC/surface drawing and blit imports.
+    advance the guest path toward the newly connected framebuffer drawing and
+    the remaining GDI/DC/surface drawing and blit imports.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch

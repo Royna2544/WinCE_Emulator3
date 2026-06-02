@@ -12,6 +12,7 @@ use crate::{
         devices::DeviceIoControlResult,
         file::FileIoResult,
         file::FindData,
+        framebuffer::{Framebuffer, FramebufferRect, PixelFormat},
         gwe::{Message, PeekFlags, Point, Rect, WNDCLASSW_SIZE},
         kernel::{CeKernel, MessagePumpResult},
         memory::{HEAP_ZERO_MEMORY, PROCESS_HEAP_HANDLE},
@@ -496,12 +497,33 @@ impl CoredllExportTable {
         M: CoredllGuestMemory,
         I: IntoIterator<Item = u32>,
     {
+        self.dispatch_raw_ordinal_with_framebuffer(kernel, memory, None, thread_id, ordinal, args)
+    }
+
+    pub fn dispatch_raw_ordinal_with_framebuffer<M, I>(
+        &self,
+        kernel: &mut CeKernel,
+        memory: &mut M,
+        framebuffer: Option<&mut dyn Framebuffer>,
+        thread_id: u32,
+        ordinal: u32,
+        args: I,
+    ) -> CoredllDispatch
+    where
+        M: CoredllGuestMemory,
+        I: IntoIterator<Item = u32>,
+    {
         match self.resolve_ordinal(ordinal).cloned() {
             Some(export) => {
                 let args = args.into_iter().collect::<Vec<_>>();
-                if let Some(value) =
-                    dispatch_real_raw_ordinal(kernel, memory, thread_id, &export, &args)
-                {
+                if let Some(value) = dispatch_real_raw_ordinal(
+                    kernel,
+                    memory,
+                    framebuffer,
+                    thread_id,
+                    &export,
+                    &args,
+                ) {
                     CoredllDispatch::Returned { export, value }
                 } else {
                     let stub = CoredllStubResult::for_export(&export, args);
@@ -1012,6 +1034,7 @@ fn dispatch_resolved(
 fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
+    framebuffer: Option<&mut dyn Framebuffer>,
     thread_id: u32,
     export: &CoredllExport,
     args: &[u32],
@@ -1988,6 +2011,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_FILL_RECT => Some(CoredllValue::U32(fill_rect_raw(
             kernel,
             memory,
+            framebuffer,
             thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
@@ -7653,6 +7677,7 @@ fn set_text_align_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, align: u3
 fn fill_rect_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
+    framebuffer: Option<&mut dyn Framebuffer>,
     thread_id: u32,
     hdc: u32,
     rect_ptr: u32,
@@ -7664,11 +7689,120 @@ fn fill_rect_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
-    if read_guest_rect(kernel, memory, thread_id, rect_ptr).is_none() {
+    let Some(rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
         return 0;
+    };
+    let Some(color) = brush_colorref(kernel, brush) else {
+        kernel.threads.set_last_error(thread_id, 0);
+        return 1;
+    };
+    if let Some(framebuffer) = framebuffer {
+        fill_framebuffer_rect_for_hdc(kernel, framebuffer, hdc, rect, color);
     }
     kernel.threads.set_last_error(thread_id, 0);
     1
+}
+
+fn fill_framebuffer_rect_for_hdc(
+    kernel: &CeKernel,
+    framebuffer: &mut dyn Framebuffer,
+    hdc: u32,
+    rect: Rect,
+    colorref: u32,
+) {
+    let Some(hwnd) = hdc_to_hwnd(hdc) else {
+        return;
+    };
+    let Some(client_origin) = kernel.gwe.client_to_screen(hwnd, Point { x: 0, y: 0 }) else {
+        return;
+    };
+    let Some(client_rect) = kernel.gwe.get_client_rect(hwnd) else {
+        return;
+    };
+    let mut rect = intersect_rect_value(normalize_rect(rect), client_rect).unwrap_or_default();
+    if let Some(clip) = kernel
+        .resources
+        .clip_region(hdc)
+        .and_then(|region| kernel.resources.region(region))
+        .map(|region| region.rect)
+    {
+        rect = intersect_rect_value(rect, clip).unwrap_or_default();
+    }
+    if is_rect_empty_value(rect) {
+        return;
+    }
+    let screen_rect = rect.offset(client_origin.x, client_origin.y);
+    fill_framebuffer_screen_rect(framebuffer, screen_rect, colorref);
+}
+
+fn fill_framebuffer_screen_rect(framebuffer: &mut dyn Framebuffer, rect: Rect, colorref: u32) {
+    let info = framebuffer.info();
+    let left = rect.left.max(0).min(info.width as i32) as u32;
+    let top = rect.top.max(0).min(info.height as i32) as u32;
+    let right = rect.right.max(0).min(info.width as i32) as u32;
+    let bottom = rect.bottom.max(0).min(info.height as i32) as u32;
+    if right <= left || bottom <= top {
+        return;
+    }
+    let pixel = pixel_bytes_for_colorref(info.format, colorref);
+    let bytes_per_pixel = info.format.bytes_per_pixel();
+    let pixels = framebuffer.pixels_mut();
+    for y in top as usize..bottom as usize {
+        let row_start = y * info.stride;
+        for x in left as usize..right as usize {
+            let offset = row_start + x * bytes_per_pixel;
+            pixels[offset..offset + bytes_per_pixel].copy_from_slice(&pixel[..bytes_per_pixel]);
+        }
+    }
+    framebuffer.mark_dirty(FramebufferRect::new(left, top, right - left, bottom - top));
+}
+
+fn pixel_bytes_for_colorref(format: PixelFormat, colorref: u32) -> [u8; 4] {
+    let red = (colorref & 0xff) as u8;
+    let green = ((colorref >> 8) & 0xff) as u8;
+    let blue = ((colorref >> 16) & 0xff) as u8;
+    match format {
+        PixelFormat::Rgb565 => {
+            let raw = colorref_to_rgb565(red, green, blue);
+            [raw as u8, (raw >> 8) as u8, 0, 0]
+        }
+        PixelFormat::Bgra8888 => [blue, green, red, 0xff],
+        PixelFormat::Rgba8888 => [red, green, blue, 0xff],
+        PixelFormat::Gray8 => {
+            let gray =
+                ((u16::from(red) * 30 + u16::from(green) * 59 + u16::from(blue) * 11) / 100) as u8;
+            [gray, 0, 0, 0]
+        }
+    }
+}
+
+fn colorref_to_rgb565(red: u8, green: u8, blue: u8) -> u16 {
+    ((u16::from(red) & 0xf8) << 8) | ((u16::from(green) & 0xfc) << 3) | (u16::from(blue) >> 3)
+}
+
+fn brush_colorref(kernel: &CeKernel, brush: u32) -> Option<u32> {
+    if brush & 0xffff_ff00 == 0x000b_4000 {
+        return Some(get_sys_color(brush & 0xff));
+    }
+    if Some(brush) == stock_object_handle(0) {
+        return Some(rgb(0xff, 0xff, 0xff));
+    }
+    if Some(brush) == stock_object_handle(1) {
+        return Some(rgb(0xc0, 0xc0, 0xc0));
+    }
+    if Some(brush) == stock_object_handle(2) {
+        return Some(rgb(0x80, 0x80, 0x80));
+    }
+    if Some(brush) == stock_object_handle(3) {
+        return Some(rgb(0x40, 0x40, 0x40));
+    }
+    if Some(brush) == stock_object_handle(4) {
+        return Some(rgb(0x00, 0x00, 0x00));
+    }
+    kernel
+        .resources
+        .brush(brush)
+        .and_then(|brush| brush.pattern_bitmap.is_none().then_some(brush.color))
 }
 
 fn bit_blt_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {

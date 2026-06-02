@@ -84,6 +84,18 @@ impl ImportTrapTable {
         address: u32,
         args: Vec<u32>,
     ) -> Option<u32> {
+        self.dispatch_trap_with_framebuffer(kernel, memory, None, thread_id, address, args)
+    }
+
+    pub fn dispatch_trap_with_framebuffer<M: CoredllGuestMemory>(
+        &self,
+        kernel: &mut CeKernel,
+        memory: &mut M,
+        framebuffer: Option<&mut dyn crate::ce::framebuffer::Framebuffer>,
+        thread_id: u32,
+        address: u32,
+        args: Vec<u32>,
+    ) -> Option<u32> {
         let trap = self
             .trap_at(address)
             .cloned()
@@ -94,10 +106,14 @@ impl ImportTrapTable {
                     return None;
                 };
                 let table = CoredllExportTable::default();
-                dispatch_return_to_u32(
-                    table
-                        .dispatch_raw_ordinal_with_memory(kernel, memory, thread_id, ordinal, args),
-                )?
+                dispatch_return_to_u32(table.dispatch_raw_ordinal_with_framebuffer(
+                    kernel,
+                    memory,
+                    framebuffer,
+                    thread_id,
+                    ordinal,
+                    args,
+                ))?
             }
             ImportModuleKind::CommonControls
             | ImportModuleKind::Winsock

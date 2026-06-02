@@ -23,6 +23,8 @@ shortcuts:
 - generic virtual framebuffer trait with an in-memory 800x480 RGB565
   implementation, dirty-rectangle tracking, optional PPM dumps, and no
   dependency on HWND/HDC/GDI concepts
+- raw `FillRect` drawing for solid brushes on window/screen HDCs into the
+  attached framebuffer, including RGB565 conversion and dirty-rectangle marking
 - generic presenter and desktop traits with virtual implementations, kept as
   host-side boundaries for presenting framebuffers and managing virtual windows
   without creating a host window yet
@@ -87,5 +89,7 @@ create-time `WM_CREATE` callout, dispatches the initial visible-window
 dispatches the first `WM_PAINT` through the SDK MFC window procedure, and then
 returns through the emulator's empty-queue `GetMessageW @861` diagnostic after
 MFC idle UI update handling. There are now virtual framebuffer, presenter, and
-desktop boundaries, but guest drawing is not connected to them yet, so this is
-a useful frontier, not a completed GUI launch.
+desktop boundaries, and the first solid `FillRect` path can draw into the
+attached framebuffer. The target still has not reached useful drawing/blit
+imports in the current launch trace, so this remains a useful frontier, not a
+completed GUI launch.

@@ -392,6 +392,14 @@
   CE `WIN32_FIND_DATAW` layout, DC/device-caps/capture APIs, `SetParent`,
   mutable z-order for `SetWindowPos`, raw `SetTimer`/`KillTimer`, correct
   `EnableWindow` previous-state returns, and packed `MapWindowPoints` deltas.
+- Raw `FillRect` now paints solid brushes into an attached framebuffer for
+  window/screen HDCs. The implementation resolves solid and stock/system brush
+  colors, clips to the client/update surface, converts CE `COLORREF` values to
+  the framebuffer pixel format including RGB565, and marks dirty rectangles.
+  The Unicorn import path now passes the active framebuffer into COREDLL raw
+  ordinal dispatch, while memory-only tests keep the existing dispatch path.
+  Focused coverage:
+  `cargo test --test coredll_raw_gwe coredll_raw_fill_rect_paints_attached_framebuffer`.
 
 ## Current State
 
@@ -406,9 +414,11 @@
   `_setjmp`/`longjmp` exception path, and then reach an empty-queue
   `GetMessageW` diagnostic snapshot after several dispatched main-window
   messages. A generic virtual framebuffer is now attached to the emulator
-  boundary, and generic virtual presenter/desktop interfaces exist for later
-  host presentation/window management, but guest drawing/blit behavior is not
-  connected yet and this must not be treated as GUI success.
+  boundary, generic virtual presenter/desktop interfaces exist for host
+  presentation/window management, and solid `FillRect` on a window/screen HDC
+  can write pixels into that framebuffer. Broader guest drawing/blit behavior
+  and the target app's own useful drawing path are still incomplete, so this
+  must not be treated as GUI success.
 - The latest launch diagnostics show the main window's delivered create/show/
   size/paint/idle messages all return through guest code, but no handler creates
   child HWNDs or enters GDI/DC drawing. The next launch-path question is whether
