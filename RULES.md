@@ -25,7 +25,7 @@ For this target, use `Mipsii` as the primary SDK directory.
 
 The Visual Studio installation is at: `C:\Program Files\Microsoft Visual Studio\18\Community`
 
-Windows CE Core-OS source is at: `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/`
+Windows CE Core-OS source is at: `C:\WINCE600`
 
 MFC reference source is at: `C:\Program Files (x86)\Microsoft Visual Studio 8\VC\ce\atlmfc\src\mfc`
 
