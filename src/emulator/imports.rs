@@ -38,6 +38,25 @@ pub struct ImportTrapTable {
     traps: BTreeMap<u32, ImportTrap>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImportTrapReturn {
+    pub v0: u32,
+    pub v1: Option<u32>,
+}
+
+impl ImportTrapReturn {
+    fn v0(value: u32) -> Self {
+        Self {
+            v0: value,
+            v1: None,
+        }
+    }
+
+    fn v0_v1(v0: u32, v1: u32) -> Self {
+        Self { v0, v1: Some(v1) }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ExternalImportTable {
     modules: BTreeMap<String, ExternalImportModule>,
@@ -84,7 +103,8 @@ impl ImportTrapTable {
         address: u32,
         args: Vec<u32>,
     ) -> Option<u32> {
-        self.dispatch_trap_with_framebuffer(kernel, memory, None, thread_id, address, args)
+        self.dispatch_trap_registers(kernel, memory, thread_id, address, args)
+            .map(|result| result.v0)
     }
 
     pub fn dispatch_trap_with_framebuffer<M: CoredllGuestMemory>(
@@ -96,6 +116,39 @@ impl ImportTrapTable {
         address: u32,
         args: Vec<u32>,
     ) -> Option<u32> {
+        self.dispatch_trap_registers_with_framebuffer(
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            address,
+            args,
+        )
+        .map(|result| result.v0)
+    }
+
+    pub fn dispatch_trap_registers<M: CoredllGuestMemory>(
+        &self,
+        kernel: &mut CeKernel,
+        memory: &mut M,
+        thread_id: u32,
+        address: u32,
+        args: Vec<u32>,
+    ) -> Option<ImportTrapReturn> {
+        self.dispatch_trap_registers_with_framebuffer(
+            kernel, memory, None, thread_id, address, args,
+        )
+    }
+
+    pub fn dispatch_trap_registers_with_framebuffer<M: CoredllGuestMemory>(
+        &self,
+        kernel: &mut CeKernel,
+        memory: &mut M,
+        framebuffer: Option<&mut dyn crate::ce::framebuffer::Framebuffer>,
+        thread_id: u32,
+        address: u32,
+        args: Vec<u32>,
+    ) -> Option<ImportTrapReturn> {
         let trap = self
             .trap_at(address)
             .cloned()
@@ -106,7 +159,7 @@ impl ImportTrapTable {
                     return None;
                 };
                 let table = CoredllExportTable::default();
-                dispatch_return_to_u32(table.dispatch_raw_ordinal_with_framebuffer(
+                dispatch_return_to_registers(table.dispatch_raw_ordinal_with_framebuffer(
                     kernel,
                     memory,
                     framebuffer,
@@ -117,7 +170,9 @@ impl ImportTrapTable {
             }
             ImportModuleKind::CommonControls
             | ImportModuleKind::Winsock
-            | ImportModuleKind::Ole => dispatch_external_stub_to_u32(&trap, memory, &args),
+            | ImportModuleKind::Ole => {
+                ImportTrapReturn::v0(dispatch_external_stub_to_u32(&trap, memory, &args))
+            }
             ImportModuleKind::Mfc => return None,
         })
     }
@@ -467,9 +522,9 @@ pub fn import_trap_code_page(table: &ImportTrapTable) -> Vec<u8> {
     page
 }
 
-fn dispatch_return_to_u32(dispatch: CoredllDispatch) -> Option<u32> {
+fn dispatch_return_to_registers(dispatch: CoredllDispatch) -> Option<ImportTrapReturn> {
     match dispatch {
-        CoredllDispatch::Returned { value, .. } => Some(coredll_value_to_u32(value)),
+        CoredllDispatch::Returned { value, .. } => Some(coredll_value_to_registers(value)),
         CoredllDispatch::Stubbed { .. } => None,
         CoredllDispatch::UnresolvedOrdinal(_)
         | CoredllDispatch::UnresolvedName(_)
@@ -478,45 +533,59 @@ fn dispatch_return_to_u32(dispatch: CoredllDispatch) -> Option<u32> {
     }
 }
 
-fn coredll_value_to_u32(value: CoredllValue) -> u32 {
+fn coredll_value_to_registers(value: CoredllValue) -> ImportTrapReturn {
     match value {
-        CoredllValue::Bool(value) => u32::from(value),
+        CoredllValue::Bool(value) => ImportTrapReturn::v0(u32::from(value)),
         CoredllValue::U32(value) | CoredllValue::Handle(value) | CoredllValue::MmResult(value) => {
-            value
+            ImportTrapReturn::v0(value)
         }
         CoredllValue::MmOpen { status, handle } => {
             if status == 0 {
-                handle.unwrap_or(0)
+                ImportTrapReturn::v0(handle.unwrap_or(0))
             } else {
-                status
+                ImportTrapReturn::v0(status)
             }
         }
-        CoredllValue::FileIo(value) => u32::from(value.success),
-        CoredllValue::DeviceIoControl(value) => u32::from(value.success),
-        CoredllValue::RegOpen(value) => value.status,
-        CoredllValue::RegQuery(value) => value.status,
-        CoredllValue::CeMath(value) => cemath_value_to_u32(value),
+        CoredllValue::FileIo(value) => ImportTrapReturn::v0(u32::from(value.success)),
+        CoredllValue::DeviceIoControl(value) => ImportTrapReturn::v0(u32::from(value.success)),
+        CoredllValue::RegOpen(value) => ImportTrapReturn::v0(value.status),
+        CoredllValue::RegQuery(value) => ImportTrapReturn::v0(value.status),
+        CoredllValue::CeMath(value) => cemath_value_to_registers(value),
         CoredllValue::Bytes(_)
         | CoredllValue::String(_)
         | CoredllValue::OptionalMessage(_)
-        | CoredllValue::MessagePump(_) => 0,
+        | CoredllValue::MessagePump(_) => ImportTrapReturn::v0(0),
     }
 }
 
-fn cemath_value_to_u32(value: crate::ce::cemath::CeMathValue) -> u32 {
+fn cemath_value_to_registers(value: crate::ce::cemath::CeMathValue) -> ImportTrapReturn {
     match value {
         crate::ce::cemath::CeMathValue::I32(value) | crate::ce::cemath::CeMathValue::Cmp(value) => {
-            value as u32
+            ImportTrapReturn::v0(value as u32)
         }
-        crate::ce::cemath::CeMathValue::U32(value) => value,
-        crate::ce::cemath::CeMathValue::I64(value) => value as u32,
-        crate::ce::cemath::CeMathValue::U64(value) => value as u32,
-        crate::ce::cemath::CeMathValue::F32(value) => value.to_bits(),
-        crate::ce::cemath::CeMathValue::F64(value) => value.to_bits() as u32,
-        crate::ce::cemath::CeMathValue::Div { quot, .. } => quot as u32,
-        crate::ce::cemath::CeMathValue::Frexp { fraction, .. } => fraction.to_bits() as u32,
-        crate::ce::cemath::CeMathValue::Modf { fraction, .. } => fraction.to_bits() as u32,
-        crate::ce::cemath::CeMathValue::DivideByZero => 0,
+        crate::ce::cemath::CeMathValue::U32(value) => ImportTrapReturn::v0(value),
+        crate::ce::cemath::CeMathValue::I64(value) => {
+            let bits = value as u64;
+            ImportTrapReturn::v0_v1(bits as u32, (bits >> 32) as u32)
+        }
+        crate::ce::cemath::CeMathValue::U64(value) => {
+            ImportTrapReturn::v0_v1(value as u32, (value >> 32) as u32)
+        }
+        crate::ce::cemath::CeMathValue::F32(value) => ImportTrapReturn::v0(value.to_bits()),
+        crate::ce::cemath::CeMathValue::F64(value) => {
+            let bits = value.to_bits();
+            ImportTrapReturn::v0_v1(bits as u32, (bits >> 32) as u32)
+        }
+        crate::ce::cemath::CeMathValue::Div { quot, .. } => ImportTrapReturn::v0(quot as u32),
+        crate::ce::cemath::CeMathValue::Frexp { fraction, .. } => {
+            let bits = fraction.to_bits();
+            ImportTrapReturn::v0_v1(bits as u32, (bits >> 32) as u32)
+        }
+        crate::ce::cemath::CeMathValue::Modf { fraction, .. } => {
+            let bits = fraction.to_bits();
+            ImportTrapReturn::v0_v1(bits as u32, (bits >> 32) as u32)
+        }
+        crate::ce::cemath::CeMathValue::DivideByZero => ImportTrapReturn::v0(0),
     }
 }
 
@@ -771,6 +840,49 @@ mod tests {
         assert_eq!(
             table.dispatch_trap(&mut kernel, &mut memory, 1, IMPORT_TRAP_BASE, vec![]),
             None
+        );
+    }
+
+    #[test]
+    fn coredll_import_trap_exposes_64_bit_return_registers() {
+        let mut table = ImportTrapTable::new();
+        table.insert(ImportTrap {
+            address: IMPORT_TRAP_BASE,
+            module_kind: ImportModuleKind::Coredll,
+            module_name: "COREDLL.dll".to_owned(),
+            ordinal: Some(crate::ce::coredll_ordinals::ORD_LL_DIV),
+            name: Some("__ll_div".to_owned()),
+            iat_va: 0x4000,
+        });
+
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut memory = TestMemory;
+        assert_eq!(
+            table.dispatch_trap_registers(
+                &mut kernel,
+                &mut memory,
+                1,
+                IMPORT_TRAP_BASE,
+                vec![0x0989_6800, 0, 0x0098_9680, 0],
+            ),
+            Some(ImportTrapReturn {
+                v0: 16,
+                v1: Some(0)
+            })
+        );
+        assert_eq!(
+            table.dispatch_trap_registers(
+                &mut kernel,
+                &mut memory,
+                1,
+                IMPORT_TRAP_BASE,
+                vec![(-21_i64) as u32, u32::MAX, 2, 0],
+            ),
+            Some(ImportTrapReturn {
+                v0: (-10_i64) as u32,
+                v1: Some(u32::MAX)
+            })
         );
     }
 

@@ -2677,6 +2677,44 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 2),
         ))),
+        ORD_LL_MUL => Some(CoredllValue::CeMath(kernel.math.eval(CeMathCall::LlMul {
+            lhs: raw_i64_pair(args, 0, 1),
+            rhs: raw_i64_pair(args, 2, 3),
+        }))),
+        ORD_LL_DIV => Some(CoredllValue::CeMath(kernel.math.eval(CeMathCall::LlDiv {
+            lhs: raw_i64_pair(args, 0, 1),
+            rhs: raw_i64_pair(args, 2, 3),
+        }))),
+        ORD_LL_REM => Some(CoredllValue::CeMath(kernel.math.eval(CeMathCall::LlRem {
+            lhs: raw_i64_pair(args, 0, 1),
+            rhs: raw_i64_pair(args, 2, 3),
+        }))),
+        ORD_ULL_DIV => Some(CoredllValue::CeMath(kernel.math.eval(CeMathCall::UllDiv {
+            lhs: raw_u64_pair(args, 0, 1),
+            rhs: raw_u64_pair(args, 2, 3),
+        }))),
+        ORD_ULL_REM => Some(CoredllValue::CeMath(kernel.math.eval(CeMathCall::UllRem {
+            lhs: raw_u64_pair(args, 0, 1),
+            rhs: raw_u64_pair(args, 2, 3),
+        }))),
+        ORD_LL_LSHIFT => Some(CoredllValue::CeMath(kernel.math.eval(
+            CeMathCall::LlLShift {
+                value: raw_i64_pair(args, 0, 1),
+                shift: raw_arg(args, 2),
+            },
+        ))),
+        ORD_LL_RSHIFT => Some(CoredllValue::CeMath(kernel.math.eval(
+            CeMathCall::LlRShift {
+                value: raw_i64_pair(args, 0, 1),
+                shift: raw_arg(args, 2),
+            },
+        ))),
+        ORD_ULL_RSHIFT => Some(CoredllValue::CeMath(kernel.math.eval(
+            CeMathCall::UllRShift {
+                value: raw_u64_pair(args, 0, 1),
+                shift: raw_arg(args, 2),
+            },
+        ))),
         ORD_LTS | ORD_LES | ORD_EQS | ORD_GES | ORD_GTS | ORD_NES => {
             Some(CoredllValue::Bool(compare_guest_f32_raw(
                 kernel,
@@ -9738,6 +9776,14 @@ fn raw_arg(args: &[u32], index: usize) -> u32 {
 
 fn raw_i32_arg(args: &[u32], index: usize) -> i32 {
     raw_arg(args, index) as i32
+}
+
+fn raw_u64_pair(args: &[u32], low_index: usize, high_index: usize) -> u64 {
+    u64::from(raw_arg(args, low_index)) | (u64::from(raw_arg(args, high_index)) << 32)
+}
+
+fn raw_i64_pair(args: &[u32], low_index: usize, high_index: usize) -> i64 {
+    raw_u64_pair(args, low_index, high_index) as i64
 }
 
 fn parse_export_line(line: &str, line_number: usize) -> Option<CoredllExport> {

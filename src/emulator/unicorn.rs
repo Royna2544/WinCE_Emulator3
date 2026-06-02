@@ -1391,7 +1391,7 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                let Some(result) = traps.dispatch_trap_with_framebuffer(
+                let Some(import_return) = traps.dispatch_trap_registers_with_framebuffer(
                     unsafe { &mut *kernel_ptr },
                     &mut memory,
                     Some(unsafe { &mut *framebuffer_ptr }),
@@ -1402,6 +1402,7 @@ impl UnicornMips {
                     let _ = memory.uc.emu_stop();
                     return;
                 };
+                let result = import_return.v0;
                 let _ = map_kernel_memory_allocations(
                     memory.uc,
                     unsafe { &*kernel_ptr },
@@ -1493,6 +1494,9 @@ impl UnicornMips {
                     return;
                 }
                 let _ = memory.uc.reg_write(RegisterMIPS::V0, u64::from(result));
+                if let Some(v1) = import_return.v1 {
+                    let _ = memory.uc.reg_write(RegisterMIPS::V1, u64::from(v1));
+                }
                 if try_resume_blocked_wait(
                     unsafe { &mut *kernel_ptr },
                     memory.uc,

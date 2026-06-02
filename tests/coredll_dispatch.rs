@@ -182,6 +182,20 @@ fn coredll_raw_dispatch_routes_mips_soft_float_compare_helpers() -> Result<()> {
         } if value.to_bits() == (192_000_f32).to_bits()
     ));
 
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LL_DIV,
+            [0x0989_6800, 0, 0x0098_9680, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::I64(16)),
+            ..
+        }
+    ));
+
     Ok(())
 }
 
