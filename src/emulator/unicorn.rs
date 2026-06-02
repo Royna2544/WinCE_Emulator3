@@ -298,6 +298,18 @@ pub struct UnicornInaviControllerTrace {
     pub selected_obj: Option<u32>,
     pub selected_vtable: Option<u32>,
     pub selected_target: Option<u32>,
+    pub paint_base: Option<u32>,
+    pub paint_gate: Option<u32>,
+    pub paint_render_obj: Option<u32>,
+    pub paint_render_target: Option<u32>,
+    pub render_surface: Option<u32>,
+    pub render_enabled: Option<u32>,
+    pub render_flush_obj: Option<u32>,
+    pub render_flush_target: Option<u32>,
+    pub render_poll_result: Option<u32>,
+    pub render_dim_ptr: Option<u32>,
+    pub render_dim_w: Option<u32>,
+    pub render_dim_h: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3383,6 +3395,42 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 if let Some(selected_target) = trace.selected_target {
                     write!(f, "/target=0x{selected_target:08x}")?;
                 }
+                if let Some(paint_base) = trace.paint_base {
+                    write!(f, "/paint_base=0x{paint_base:08x}")?;
+                }
+                if let Some(paint_gate) = trace.paint_gate {
+                    write!(f, "/paint_gate=0x{paint_gate:08x}")?;
+                }
+                if let Some(paint_render_obj) = trace.paint_render_obj {
+                    write!(f, "/paint_obj=0x{paint_render_obj:08x}")?;
+                }
+                if let Some(paint_render_target) = trace.paint_render_target {
+                    write!(f, "/paint_target=0x{paint_render_target:08x}")?;
+                }
+                if let Some(render_surface) = trace.render_surface {
+                    write!(f, "/render_surface=0x{render_surface:08x}")?;
+                }
+                if let Some(render_enabled) = trace.render_enabled {
+                    write!(f, "/render_enabled=0x{render_enabled:08x}")?;
+                }
+                if let Some(render_flush_obj) = trace.render_flush_obj {
+                    write!(f, "/render_flush_obj=0x{render_flush_obj:08x}")?;
+                }
+                if let Some(render_flush_target) = trace.render_flush_target {
+                    write!(f, "/render_flush_target=0x{render_flush_target:08x}")?;
+                }
+                if let Some(render_poll_result) = trace.render_poll_result {
+                    write!(f, "/render_poll=0x{render_poll_result:08x}")?;
+                }
+                if let Some(render_dim_ptr) = trace.render_dim_ptr {
+                    write!(f, "/dim_ptr=0x{render_dim_ptr:08x}")?;
+                }
+                if let Some(render_dim_w) = trace.render_dim_w {
+                    write!(f, "/dim_w=0x{render_dim_w:08x}")?;
+                }
+                if let Some(render_dim_h) = trace.render_dim_h {
+                    write!(f, "/dim_h=0x{render_dim_h:08x}")?;
+                }
             }
             write!(f, "]")?;
         }
@@ -3587,6 +3635,14 @@ fn read_unicorn_u32<D>(uc: &unicorn_engine::Unicorn<'_, D>, address: u32) -> Opt
     uc.mem_read(u64::from(address), &mut bytes)
         .ok()
         .map(|()| u32::from_le_bytes(bytes))
+}
+
+#[cfg(feature = "unicorn")]
+fn read_unicorn_u8<D>(uc: &unicorn_engine::Unicorn<'_, D>, address: u32) -> Option<u8> {
+    let mut bytes = [0; 1];
+    uc.mem_read(u64::from(address), &mut bytes)
+        .ok()
+        .map(|()| bytes[0])
 }
 
 #[cfg(feature = "unicorn")]
@@ -4762,6 +4818,74 @@ fn record_inavi_controller_trace<D>(
         "vtable_call" => Some(t4),
         _ => selected_vtable.and_then(|vtable| read_unicorn_u32(uc, vtable)),
     };
+    let paint_this = match label {
+        "paint_entry" => Some(a0),
+        "paint_after_begin"
+        | "paint_gate_check"
+        | "paint_render_obj_check"
+        | "paint_render_vtable"
+        | "paint_render_call"
+        | "paint_end" => Some(fp),
+        _ => None,
+    };
+    let paint_base = paint_this
+        .and_then(|this_ptr| this_ptr.checked_add(0x8))
+        .and_then(|addr| read_unicorn_u32(uc, addr));
+    let paint_gate = paint_base
+        .and_then(|base| base.checked_add(0x3_931c))
+        .and_then(|addr| read_unicorn_u32(uc, addr));
+    let paint_render_obj = paint_base
+        .and_then(|base| base.checked_add(0x10ec))
+        .and_then(|addr| read_unicorn_u32(uc, addr));
+    let paint_render_target = paint_render_obj
+        .and_then(|obj| read_unicorn_u32(uc, obj))
+        .and_then(|vtable| read_unicorn_u32(uc, vtable.wrapping_add(0x150)));
+    let render_this = match label {
+        "render_entry" | "render_resize_entry" | "render_size_entry" => Some(a0),
+        "render_surface_gate"
+        | "render_enabled_gate"
+        | "render_loop_call"
+        | "render_after_loop"
+        | "render_flush_call"
+        | "render_return"
+        | "render_ctor_surface_zero"
+        | "render_ctor_enabled_zero"
+        | "render_surface_clear"
+        | "render_dim_width_check"
+        | "render_dim_height_check"
+        | "render_surface_create_call"
+        | "render_surface_store"
+        | "render_surface_after_store" => Some(fp),
+        _ => None,
+    };
+    let render_surface = render_this
+        .and_then(|this_ptr| this_ptr.checked_add(0xb8))
+        .and_then(|addr| read_unicorn_u32(uc, addr));
+    let render_enabled = render_this
+        .and_then(|this_ptr| this_ptr.checked_add(0x8d68))
+        .and_then(|addr| read_unicorn_u8(uc, addr))
+        .map(u32::from);
+    let render_flush_obj = render_this
+        .and_then(|this_ptr| this_ptr.checked_add(0x91a8))
+        .and_then(|addr| read_unicorn_u32(uc, addr));
+    let render_flush_target = render_flush_obj
+        .and_then(|obj| read_unicorn_u32(uc, obj))
+        .and_then(|vtable| read_unicorn_u32(uc, vtable.wrapping_add(0x1c)));
+    let render_poll_result =
+        (label == "render_after_loop").then_some(read_mips_reg(uc, RegisterMIPS::V0));
+    let render_dim_ptr = matches!(label, "render_dim_width_check" | "render_dim_height_check")
+        .then_some(read_mips_reg(uc, RegisterMIPS::V0));
+    let render_dim_w = render_dim_ptr
+        .and_then(|ptr| read_unicorn_u32(uc, ptr))
+        .or_else(|| {
+            (label == "render_dim_width_check").then_some(read_mips_reg(uc, RegisterMIPS::T7))
+        });
+    let render_dim_h = render_dim_ptr
+        .and_then(|ptr| ptr.checked_add(4))
+        .and_then(|addr| read_unicorn_u32(uc, addr))
+        .or_else(|| {
+            (label == "render_dim_height_check").then_some(read_mips_reg(uc, RegisterMIPS::T6))
+        });
     let trace = UnicornInaviControllerTrace {
         pc,
         label,
@@ -4808,6 +4932,18 @@ fn record_inavi_controller_trace<D>(
         selected_obj,
         selected_vtable,
         selected_target,
+        paint_base,
+        paint_gate,
+        paint_render_obj,
+        paint_render_target,
+        render_surface,
+        render_enabled,
+        render_flush_obj,
+        render_flush_target,
+        render_poll_result,
+        render_dim_ptr,
+        render_dim_w,
+        render_dim_h,
     };
     let mut traces = traces.borrow_mut();
     if traces.len() == UNICORN_INAVI_CONTROLLER_TRACE_LIMIT {
@@ -4835,6 +4971,36 @@ fn inavi_controller_probe_label(pc: u32) -> Option<&'static str> {
         0x0001_a7a8 => Some("vtable_call"),
         0x0001_a7b0 => Some("vtable_return"),
         0x0001_a7b8 => Some("router_return"),
+        0x0002_c6e8 => Some("paint_entry"),
+        0x0002_c70c => Some("paint_after_begin"),
+        0x0002_c720 => Some("paint_gate_check"),
+        0x0002_c728 => Some("paint_render_obj_check"),
+        0x0002_c734 => Some("paint_render_vtable"),
+        0x0002_c73c => Some("paint_render_call"),
+        0x0002_c748 => Some("paint_end"),
+        0x0002_d158 => Some("wm_size_entry"),
+        0x0002_d198 => Some("wm_size_render_vtable"),
+        0x0002_d1a0 => Some("wm_size_render_call"),
+        0x0010_23e0 => Some("render_ctor_surface_zero"),
+        0x0010_28a8 => Some("render_ctor_enabled_zero"),
+        0x0010_33e4 => Some("render_resize_entry"),
+        0x0010_4878 => Some("render_surface_clear"),
+        0x0010_4890 => Some("render_dim_width_check"),
+        0x0010_48a8 => Some("render_dim_height_check"),
+        0x0010_4904 => Some("render_surface_create_call"),
+        0x0010_4910 => Some("render_surface_store"),
+        0x0010_4954 => Some("render_surface_after_store"),
+        0x0010_518c => Some("render_entry"),
+        0x0010_51ac => Some("render_surface_gate"),
+        0x0010_51c0 => Some("render_enabled_gate"),
+        0x0010_5244 => Some("render_loop_call"),
+        0x0010_524c => Some("render_after_loop"),
+        0x0010_525c => Some("render_flush_call"),
+        0x0010_5264 => Some("render_return"),
+        0x0011_ce60 => Some("render_size_entry"),
+        0x0011_ce7c => Some("render_size_return"),
+        0x0014_b30c => Some("render_poll_call"),
+        0x0014_b314 => Some("render_poll_return"),
         _ => None,
     }
 }
