@@ -3,7 +3,7 @@
 #include "../common/fixture_status.h"
 
 int WINAPI WinMain(HINSTANCE h, HINSTANCE, LPWSTR, int) {
-    HRSRC res = FindResourceW(h, L"CUSTOM_DATA", RT_RCDATA);
+    HRSRC res = FindResourceW(h, L"CUSTOM_DATA", MAKEINTRESOURCEW(10));
     if (!res) return FixtureFail(8601);
 
     DWORD size = SizeofResource(h, res);

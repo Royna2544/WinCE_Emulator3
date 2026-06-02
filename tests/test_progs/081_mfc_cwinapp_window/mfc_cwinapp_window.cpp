@@ -32,3 +32,13 @@ public:
 };
 
 CFixtureApp theApp;
+
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrev, LPWSTR cmd, int show) {
+    if (!AfxWinInit(hInstance, hPrev, cmd, show)) {
+        return FixtureFail(8101);
+    }
+    if (!theApp.InitInstance()) {
+        return FixtureFail(8102);
+    }
+    return FIXTURE_OK;
+}

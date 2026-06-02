@@ -9,13 +9,13 @@
 #endif
 
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
-    HANDLE cursor = LoadImageW(0, IDC_ARROW, IMAGE_CURSOR, 0, 0, LR_DEFAULTSIZE);
+    HANDLE cursor = LoadImageW(0, MAKEINTRESOURCEW(32512), IMAGE_CURSOR, 0, 0, LR_DEFAULTSIZE);
     if (!cursor) {
         /*
            On some CE builds LoadImageW for stock cursor may be stubbed.
            Treat LoadCursorW success as acceptable.
         */
-        if (!LoadCursorW(0, IDC_ARROW)) return FixtureFail(8401);
+        if (!LoadCursorW(0, MAKEINTRESOURCEW(32512))) return FixtureFail(8401);
     }
     return FIXTURE_OK;
 }

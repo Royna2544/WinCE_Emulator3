@@ -28,7 +28,7 @@ int WINAPI WinMain(HINSTANCE h, HINSTANCE, LPWSTR, int) {
     POINT cursor;
     if (!GetCursorPos(&cursor)) return FixtureFail(5606);
 
-    SetCursor(LoadCursorW(0, IDC_ARROW));
+    SetCursor(LoadCursorW(0, MAKEINTRESOURCEW(32512)));
     DestroyWindow(hwnd);
     return FIXTURE_OK;
 }

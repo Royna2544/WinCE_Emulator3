@@ -9,7 +9,7 @@ struct Shared {
 static DWORD WINAPI Waiter(LPVOID p) {
     Shared* s = (Shared*)p;
     DWORD r = WaitForSingleObject(s->eventHandle, 5000);
-    if (r == WAIT_OBJECT_0) InterlockedIncrement(&s->completed);
+    if (r == WAIT_OBJECT_0) InterlockedIncrement((LONG*)&s->completed);
     return r;
 }
 

@@ -37,3 +37,42 @@ static int BytesEq(const BYTE* left, const BYTE* right, DWORD count) {
     }
     return 1;
 }
+
+static int FileExistsW(const wchar_t* path) {
+    DWORD attrs;
+    if (!path) return 0;
+    attrs = GetFileAttributesW(path);
+    return attrs != 0xFFFFFFFF && ((attrs & FILE_ATTRIBUTE_DIRECTORY) == 0);
+}
+
+static int WriteMarkerFileW(const wchar_t* path, const char* bytes) {
+    HANDLE file;
+    DWORD length = 0;
+    DWORD written = 0;
+    if (!path || !bytes) return 0;
+    while (bytes[length]) ++length;
+    file = CreateFileW(path, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, 0);
+    if (file == INVALID_HANDLE_VALUE) return 0;
+    if (!WriteFile(file, bytes, length, &written, 0)) {
+        CloseHandle(file);
+        return 0;
+    }
+    CloseHandle(file);
+    return written == length;
+}
+
+static int WideContains(const wchar_t* haystack, const wchar_t* needle) {
+    const wchar_t* h;
+    if (!haystack || !needle) return 0;
+    if (!*needle) return 1;
+    for (h = haystack; *h; ++h) {
+        const wchar_t* a = h;
+        const wchar_t* b = needle;
+        while (*a && *b && *a == *b) {
+            ++a;
+            ++b;
+        }
+        if (!*b) return 1;
+    }
+    return 0;
+}

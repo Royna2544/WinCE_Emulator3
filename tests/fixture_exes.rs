@@ -47,6 +47,7 @@ mod fixtures {
         output_dir: PathBuf,
         exe_path: PathBuf,
         expected_exit_code: u32,
+        run_standalone: bool,
     }
 
     #[derive(Debug, Clone)]
@@ -78,7 +79,7 @@ mod fixtures {
             )));
         }
 
-        for fixture in fixtures {
+        for fixture in &fixtures {
             if needs_rebuild(&fixture, &manifest_dir, config.force_rebuild)? {
                 build_fixture(&fixture, &config, &manifest_dir)?;
             } else {
@@ -87,6 +88,16 @@ mod fixtures {
                     fixture.name,
                     fixture.exe_path.display()
                 );
+            }
+        }
+
+        for fixture in &fixtures {
+            if !fixture.run_standalone {
+                eprintln!(
+                    "fixture {} is child-only; built but not run standalone",
+                    fixture.name
+                );
+                continue;
             }
             run_fixture(&fixture, &manifest_dir)?;
         }
@@ -179,6 +190,10 @@ mod fixtures {
             let rc_sources = sorted_files_with_extension(&path, "rc")?;
             let output_dir = output_root.join(&name);
             let exe_path = output_dir.join(format!("{name}.exe"));
+            let run_standalone = !matches!(
+                name.as_str(),
+                "037_ipc_child" | "039_exit_marker_child" | "041_commandline_child"
+            );
             fixtures.push(Fixture {
                 name,
                 source_dir: path,
@@ -187,6 +202,7 @@ mod fixtures {
                 output_dir,
                 exe_path,
                 expected_exit_code: 0,
+                run_standalone,
             });
         }
 
@@ -289,7 +305,13 @@ mod fixtures {
             resources.push(res);
         }
 
-        run_link(config, &objects, &resources, &fixture.exe_path)?;
+        run_link(
+            config,
+            &objects,
+            &resources,
+            &fixture.exe_path,
+            fixture_uses_mfc(fixture)?,
+        )?;
         Ok(())
     }
 
@@ -360,6 +382,7 @@ mod fixtures {
         objects: &[PathBuf],
         resources: &[PathBuf],
         exe: &Path,
+        uses_mfc: bool,
     ) -> Result<()> {
         let mut command = Command::new(&config.link);
         command.args([
@@ -372,11 +395,27 @@ mod fixtures {
         for lib_dir in &config.lib_dirs {
             command.arg(format!("/LIBPATH:{}", lib_dir.display()));
         }
+        if uses_mfc {
+            command.arg("/FORCE:MULTIPLE");
+        }
         command.args(&config.lflags);
         command.args(objects);
         command.args(resources);
         command.args(["coredll.lib", "corelibc.lib"]);
         run_command("link fixture exe", &mut command)
+    }
+
+    fn fixture_uses_mfc(fixture: &Fixture) -> Result<bool> {
+        for source in &fixture.cpp_sources {
+            let text = fs::read_to_string(source).map_err(|source_err| Error::Read {
+                path: source.clone(),
+                source: source_err,
+            })?;
+            if text.contains("<afxwin.h>") {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     fn run_fixture(fixture: &Fixture, manifest_dir: &Path) -> Result<()> {
@@ -389,6 +428,7 @@ mod fixtures {
         let mut kernel = CeKernel::boot(config);
         kernel.set_process_module_base(image.image_base());
         kernel.set_process_module_path(format!("{}\\{}.exe", GUEST_SDMMC, fixture.name));
+        kernel.set_process_module_host_path(fixture.exe_path.clone());
         let sdmmc_root = manifest_dir.join(SDMMC_ROOT).join(&fixture.name);
         fs::create_dir_all(&sdmmc_root).map_err(|source| Error::Io {
             path: sdmmc_root.clone(),

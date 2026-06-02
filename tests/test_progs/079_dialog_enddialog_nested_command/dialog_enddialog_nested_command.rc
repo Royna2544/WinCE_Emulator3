@@ -1,4 +1,5 @@
 #include "resource.h"
+#include <windows.h>
 IDD_NESTED_COMMAND DIALOG 0, 0, 120, 60
 STYLE WS_POPUP | WS_VISIBLE | WS_CAPTION
 CAPTION "Nested"
