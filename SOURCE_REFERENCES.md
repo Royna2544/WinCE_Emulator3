@@ -217,6 +217,9 @@ anchors, not app-specific shortcuts.
   - `CWnd::WindowProc` calls message-map handling before `DefWindowProc`.
   - Window creation flows through `AfxCtxCreateWindowEx`, `PreCreateWindowEx`,
     and `PostCreateWindowEx`.
+  - `CWnd::DefWindowProc` and superclass paths call `CallWindowProc` for saved
+    guest window procedures; the Unicorn import hook therefore enters the guest
+    proc for CE `CallWindowProcW @285` instead of returning a raw stub value.
 
 ## Prior Emulator Reference
 

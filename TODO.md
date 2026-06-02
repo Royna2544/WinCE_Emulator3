@@ -16,10 +16,11 @@
   ole32 imports are connected, more GWE menu/dialog/control raw pointer
   marshalling, file attributes/directory metadata beyond the first
   `FindFirstFileW` tranche, and timer/system-time structs.
-- Continue tracing after CE `TlsCall` now returns real slots, using the
-  recent-import ring in instruction-limited snapshots. Current evidence is still
-  inside SDK MFC thread-local/pre-translation code rather than later GDI/DC
-  drawing imports.
+- Continue tracing after CE `CallWindowProcW` now enters guest window-procedure
+  targets. The latest bounded snapshot reaches SDK MFC default-window handling
+  and then an empty-queue `GetMessageW` diagnostic; next work is to identify
+  which CE/MFC-sourced queue, timer, paint, or posted-message behavior should
+  advance that path toward real GDI/DC drawing imports.
 - Continue connecting SDK CE 4.2 Mipsii COREDLL CRT ordinals from `coredll.lib`
   as the launch trace demands.
 - Implement CRT `_msize`/`realloc`/operator delete ordinals from SDK evidence so

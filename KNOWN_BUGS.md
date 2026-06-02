@@ -10,21 +10,22 @@
     drawing is not connected to it yet. This is not GUI success.
   - Evidence: latest bounded run with `--features unicorn`,
     `--dll-search-dir C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii`,
-    and `--sdmmc-root D:\INAVI_Emulator\INAVI` timed out after 30 seconds. The
-    debug trace shows `PeekMessageW`/`GetMessageW` returning a synthetic
-    `WM_PAINT` and `DispatchMessageW` entering the SDK MFC window procedure for
-    class `solution_inavi` at `0x6004eba8`. The framebuffer-plumbed run prints
-    an attached 800x480 RGB565 virtual framebuffer before CPU execution, but
-    the timeout-killed target run does not return far enough to write the
-    optional PPM dump. The previous hidden-window, empty-queue `GetMessageW`,
-    `pc=0`/reserved-instruction, and decoded `TerminateProcess`
-    startup-cleanup states are no longer the current stop.
-  - Status: active; `TlsCall` now returns real CE-style slots, but a short debug
-    trace still does not reach later drawing imports, and a 30-second non-debug
-    run still times out after the startup/framebuffer/PE mapping output. Next
-    work is to use bounded instruction snapshots to identify the post-TLS SDK
-    MFC path and continue toward CE-referenced GDI/DC/surface drawing and blit
-    behavior through the guest path.
+    and `--sdmmc-root D:\INAVI_Emulator\INAVI` previously timed out after 30
+    seconds. A later 1,000,000-instruction bounded run returned through the
+    emulator diagnostic path: `CallWindowProcW @285` now enters the guest SDK
+    MFC WNDPROC thunk at `0x6000e530`, then the import ring shows
+    `DefWindowProcW @264`, `GetWindow @251`, `PeekMessageW @864`, and a final
+    empty-queue `GetMessageW @861` `blocked_get_message` snapshot. The
+    framebuffer-plumbed run prints an attached 800x480 RGB565 virtual
+    framebuffer before CPU execution, but no guest drawing/blit imports have
+    produced visible output. The earlier `pc=0`/reserved-instruction and decoded
+    `TerminateProcess` startup-cleanup states are no longer the current stop.
+  - Status: active; `TlsCall` now returns real CE-style slots and
+    `CallWindowProcW` now enters guest window-procedure targets, but the current
+    path still reaches an empty message queue before useful framebuffer output.
+    Next work is to identify which CE/MFC-sourced queue, timer, paint, or
+    posted-message behavior should advance the guest path toward real
+    GDI/DC/surface drawing and blit imports.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch

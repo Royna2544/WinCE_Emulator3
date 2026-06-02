@@ -245,16 +245,24 @@
   kind, ordinal/name, the first four arguments, stack pointer, and return value.
   This is diagnostic tooling only and is used to continue launch tracing without
   enabling high-volume import logs.
+- CE `CallWindowProcW` ordinal 285 now enters nonzero guest window-procedure
+  targets directly from the Unicorn import hook. This follows the SDK MFC
+  `CWnd::DefWindowProc`/superclass path rather than adding emulator-side MFC
+  stubs. The latest 1,000,000-instruction bounded launch shows the prior
+  `CallWindowProcW(0x6000e530, hwnd=0x00020000, msg=0x363, ...)` call pending
+  inside guest MFC code, followed by `DefWindowProcW`, `GetWindow`,
+  `PeekMessageW`, and an intentional `blocked_get_message` snapshot on an empty
+  queue.
 
 ## Current State
 
 - CPU execution is wired far enough to load mapped PE images, dispatch import
   traps, run the target entry path, execute SDK MFC code through the current
   MIPS trampoline workaround, create/show the main HWND, synthesize and dispatch
-  the first `WM_PAINT`, and keep running until the bounded launcher kills the
-  process. A generic virtual framebuffer is now attached to the emulator
-  boundary, but guest drawing/blit behavior is not connected yet and this must
-  not be treated as GUI success.
+  the first `WM_PAINT`, enter guest `CallWindowProcW` targets, and then reach an
+  empty-queue `GetMessageW` diagnostic snapshot. A generic virtual framebuffer
+  is now attached to the emulator boundary, but guest drawing/blit behavior is
+  not connected yet and this must not be treated as GUI success.
 - Instruction-limited snapshots show the post-`WM_PAINT` path entering SDK MFC
   thread-local state and message pre-translation (`CThreadLocalObject::GetData`
   and later `CWnd::WalkPreTranslateTree`) rather than reaching guest drawing
