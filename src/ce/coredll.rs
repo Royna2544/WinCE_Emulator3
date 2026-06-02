@@ -5106,6 +5106,13 @@ fn read_file_raw<M: CoredllGuestMemory>(
     let buffer = raw_arg(args, 1);
     let requested = raw_arg(args, 2);
     let transferred_ptr = raw_arg(args, 3);
+    if requested != 0 && buffer == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        write_optional_count(kernel, memory, thread_id, transferred_ptr, 0);
+        return false;
+    }
     let bytes = match kernel.read_file(handle, requested) {
         Ok(bytes) => bytes,
         Err(_) => {

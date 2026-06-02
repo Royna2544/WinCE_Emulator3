@@ -22,7 +22,7 @@ use wince_emulation_v3::{
         kernel::CeKernel,
         memory::{HEAP_NO_SERIALIZE, HEAP_ZERO_MEMORY, LMEM_ZEROINIT, MEM_COMMIT, MEM_RELEASE},
         registry::{ERROR_SUCCESS, HKEY_CURRENT_USER, REG_DWORD},
-        thread::ERROR_NOT_SUPPORTED,
+        thread::{ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED},
     },
     config::RuntimeConfig,
 };
@@ -1268,5 +1268,93 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         }
     ));
 
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_read_file_null_buffer_does_not_advance_file_pointer() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("read_file_null_buffer");
+    fs::create_dir_all(&root).unwrap();
+    let sdmmc_root = root.join("sdmmc");
+    fs::create_dir_all(&sdmmc_root).unwrap();
+    fs::write(sdmmc_root.join("cursor.bin"), b"abcd").unwrap();
+    kernel.set_file_root(&root);
+    kernel.mount_guest_root("\\SDMMC Disk", &sdmmc_root);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let path_ptr = 0x1_0000;
+    let read_buffer = 0x1_0200;
+    let count_ptr = 0x1_0300;
+    memory.write_wide_z(path_ptr, "\\SDMMC Disk\\cursor.bin");
+    memory.map_bytes(read_buffer, 4);
+    memory.map_words(count_ptr, 1);
+
+    let file = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_W,
+        [path_ptr, GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateFileW did not return a file handle: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_READ_FILE,
+            [file, read_buffer, 1, count_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(count_ptr)?, 1);
+    assert_eq!(memory.read_bytes(read_buffer, 1), b"a");
+
+    memory.write_word(count_ptr, 0xffff_ffff);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_READ_FILE,
+            [file, 0, 2, count_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(count_ptr)?, 0);
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_READ_FILE,
+            [file, read_buffer, 2, count_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(count_ptr)?, 2);
+    assert_eq!(memory.read_bytes(read_buffer, 2), b"bc");
     Ok(())
 }
