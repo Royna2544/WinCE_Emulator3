@@ -17,7 +17,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     if (len <= 0) return FixtureFail(2601);
     if (!WideEqAscii(text, "resource-bitmap-ok")) return FixtureFail(2602);
 
-    HRSRC dataRes = FindResourceW(hInstance, MAKEINTRESOURCEW(IDR_TEST_DATA), RT_RCDATA);
+    HRSRC dataRes = FindResourceW(hInstance, MAKEINTRESOURCEW(IDR_TEST_DATA), MAKEINTRESOURCEW(10));
     if (!dataRes) return FixtureFail(2603);
     DWORD dataSize = SizeofResource(hInstance, dataRes);
     if (dataSize < 6) return FixtureFail(2604);
