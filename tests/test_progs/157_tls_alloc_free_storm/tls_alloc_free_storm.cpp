@@ -1,7 +1,7 @@
 #include <windows.h>
 #include "../common/fixture_status.h"
 static volatile LONG g_count = 0;
-static DWORD WINAPI Worker(LPVOID p) { InterlockedIncrement(&g_count); return 0; }
+static DWORD WINAPI Worker(LPVOID p) { InterlockedIncrement((LONG*)&g_count); return 0; }
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     int i;
     for (i = 0; i < 80; ++i) {

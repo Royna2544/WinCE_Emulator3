@@ -3,7 +3,7 @@
 struct Shared { HANDLE e; volatile LONG count; };
 static DWORD WINAPI Waiter(LPVOID p) {
     Shared* s = (Shared*)p;
-    if (WaitForSingleObject(s->e, 1000) == WAIT_OBJECT_0) InterlockedIncrement(&s->count);
+    if (WaitForSingleObject(s->e, 1000) == WAIT_OBJECT_0) InterlockedIncrement((LONG*)&s->count);
     return 0;
 }
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {

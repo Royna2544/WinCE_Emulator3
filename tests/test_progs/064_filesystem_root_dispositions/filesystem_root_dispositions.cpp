@@ -4,6 +4,7 @@
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     const wchar_t* dir = L"\\SDMMC Disk\\fixture_dispositions";
     const wchar_t* path = L"\\SDMMC Disk\\fixture_dispositions\\disp.txt";
+    DeleteFileW(path);
     CreateDirectoryW(dir, 0);
 
     HANDLE f = CreateFileW(path, GENERIC_READ | GENERIC_WRITE, 0, 0, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, 0);
