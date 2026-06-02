@@ -115,6 +115,11 @@ anchors, not app-specific shortcuts.
   - GWE queue declarations keep `GetMessageW` as the blocking message API;
     an empty queue is not modeled as a `FALSE` return because MFC treats that
     as `WM_QUIT`/thread exit.
+  - CE SDK headers define `CREATESTRUCTW` as
+    `lpCreateParams`, `hInstance`, `hMenu`, `hwndParent`, `cy`, `cx`, `y`, `x`,
+    `style`, `lpszName`, `lpszClass`, and `dwExStyle`, and define
+    `WM_CREATE` as `0x0001`. Unicorn raw `CreateWindowExW` uses that layout
+    when delivering the create-time guest WNDPROC callout.
 
 - GWE paint/update surface:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\gweapiset1.hpp`,
@@ -217,6 +222,10 @@ anchors, not app-specific shortcuts.
   - `CWnd::WindowProc` calls message-map handling before `DefWindowProc`.
   - Window creation flows through `AfxCtxCreateWindowEx`, `PreCreateWindowEx`,
     and `PostCreateWindowEx`.
+  - CE `PreCreateWindowEx` registers a hybrid `WCE_` class whose WNDPROC is
+    `DefWindowProcEx`; `DefWindowProcEx` is expected to run on the first
+    create-time message, restore the saved old proc through `SetWindowLong`, run
+    the MFC create hook, and delegate the same message to `AfxWndProc`.
   - `CWnd::DefWindowProc` and superclass paths call `CallWindowProc` for saved
     guest window procedures; the Unicorn import hook therefore enters the guest
     proc for CE `CallWindowProcW @285` instead of returning a raw stub value.

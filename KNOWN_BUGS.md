@@ -16,15 +16,21 @@
     MFC WNDPROC thunk at `0x6000e530`, then the import ring shows
     `DefWindowProcW @264`, `GetWindow @251`, `PeekMessageW @864`, and a final
     empty-queue `GetMessageW @861` `blocked_get_message` snapshot. The
-    framebuffer-plumbed run prints an attached 800x480 RGB565 virtual
-    framebuffer before CPU execution, but no guest drawing/blit imports have
-    produced visible output. The earlier `pc=0`/reserved-instruction and decoded
-    `TerminateProcess` startup-cleanup states are no longer the current stop.
-  - Status: active; `TlsCall` now returns real CE-style slots and
-    `CallWindowProcW` now enters guest window-procedure targets, but the current
-    path still reaches an empty message queue before useful framebuffer output.
-    Next work is to identify which CE/MFC-sourced queue, timer, paint, or
-    posted-message behavior should advance the guest path toward real
+    following bounded trace also logs a source-backed `CreateWindowExW` guest
+    `WM_CREATE` callout with a CE SDK `CREATESTRUCTW` lParam for
+    `hwnd=0x00020000`, but still reaches the same empty-queue
+    `GetMessageW @861` diagnostic without hitting `BeginPaint`, `GetDC`,
+    `GetWindowDC`, `SetTimer`, or `KillTimer`. The framebuffer-plumbed run
+    prints an attached 800x480 RGB565 virtual framebuffer before CPU execution,
+    but no guest drawing/blit imports have produced visible output. The earlier
+    `pc=0`/reserved-instruction and decoded `TerminateProcess` startup-cleanup
+    states are no longer the current stop.
+  - Status: active; `TlsCall` now returns real CE-style slots,
+    `CallWindowProcW` now enters guest window-procedure targets, and
+    `CreateWindowExW` now delivers the first create-time message, but the
+    current path still reaches an empty message queue before useful framebuffer
+    output. Next work is to identify which CE/MFC-sourced queue, timer, paint,
+    or posted-message behavior should advance the guest path toward real
     GDI/DC/surface drawing and blit imports.
 
 - Most COREDLL ordinals are still subsystem stubs.

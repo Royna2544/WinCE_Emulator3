@@ -75,8 +75,9 @@ cargo run --features unicorn -- --image D:\INAVI_Emulator\INAVI\INavi\INavi.exe 
 Use `--cpu-instruction-limit N` with `--run-cpu` to make Unicorn return a
 bounded diagnostic snapshot instead of relying on an external timeout.
 
-The current bounded target run creates and shows the main HWND, synthesizes and
-dispatches the first `WM_PAINT` through the SDK MFC window procedure, and then
-continues until the timeout kills it. There is now a virtual framebuffer
-boundary, but guest drawing is not connected to it yet, so this is a useful
-frontier, not a completed GUI launch.
+The current bounded target run creates and shows the main HWND, delivers the
+create-time `WM_CREATE` callout, synthesizes and dispatches the first
+`WM_PAINT` through the SDK MFC window procedure, and then returns through the
+emulator's empty-queue `GetMessageW` diagnostic. There is now a virtual
+framebuffer boundary, but guest drawing is not connected to it yet, so this is
+a useful frontier, not a completed GUI launch.

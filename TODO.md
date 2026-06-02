@@ -16,11 +16,14 @@
   ole32 imports are connected, more GWE menu/dialog/control raw pointer
   marshalling, file attributes/directory metadata beyond the first
   `FindFirstFileW` tranche, and timer/system-time structs.
-- Continue tracing after CE `CallWindowProcW` now enters guest window-procedure
-  targets. The latest bounded snapshot reaches SDK MFC default-window handling
-  and then an empty-queue `GetMessageW` diagnostic; next work is to identify
-  which CE/MFC-sourced queue, timer, paint, or posted-message behavior should
-  advance that path toward real GDI/DC drawing imports.
+- Continue tracing after CE `CreateWindowExW` now delivers the source-backed
+  create-time `WM_CREATE` callout and CE `CallWindowProcW` enters guest
+  window-procedure targets. The latest bounded snapshot still reaches SDK MFC
+  default/idle handling and then an empty-queue `GetMessageW` diagnostic before
+  any `BeginPaint`, `GetDC`, `GetWindowDC`, `SetTimer`, or `KillTimer` import.
+  Next work is to identify the CE/MFC-sourced queue, timer, paint, or
+  posted-message behavior that should advance the path toward real GDI/DC
+  drawing imports.
 - Continue connecting SDK CE 4.2 Mipsii COREDLL CRT ordinals from `coredll.lib`
   as the launch trace demands.
 - Implement CRT `_msize`/`realloc`/operator delete ordinals from SDK evidence so

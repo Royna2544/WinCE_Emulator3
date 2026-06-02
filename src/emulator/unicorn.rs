@@ -182,6 +182,12 @@ const IMPORT_TRAP_ARG_COUNT: usize = 12;
 const THREAD_EXIT_STUB_ADDR: u32 =
     IMPORT_TRAP_BASE + IMPORT_TRAP_PAGE_SIZE - crate::emulator::imports::IMPORT_TRAP_STRIDE;
 #[cfg(feature = "unicorn")]
+const CREATE_WINDOW_RETURN_STUB_ADDR: u32 =
+    THREAD_EXIT_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
+const RESERVED_IMPORT_TRAP_STUB_BYTES: u32 = crate::emulator::imports::IMPORT_TRAP_STRIDE * 2;
+#[cfg(feature = "unicorn")]
+const CREATESTRUCTW_SIZE: u32 = 48;
+#[cfg(feature = "unicorn")]
 const MAIN_DESTRUCTOR_BRANCH_PC: u32 = 0x0048_f9cc;
 #[cfg(feature = "unicorn")]
 const MAIN_DESTRUCTOR_JALR_PC: u32 = 0x0048_f9d4;
@@ -195,6 +201,13 @@ const MAIN_DESTRUCTOR_TABLE_WATCH_END: u32 = 0x3000_24ff;
 const IMAGE_SCN_MEM_EXECUTE: u32 = 0x2000_0000;
 #[cfg(feature = "unicorn")]
 const MIPS_NOP: u32 = 0x0000_0000;
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CreateWindowReturn {
+    return_pc: u32,
+    hwnd: u32,
+}
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -665,6 +678,8 @@ impl UnicornMips {
         let blocked_get_message_hook = Rc::clone(&blocked_get_message);
         let last_imports = Rc::new(RefCell::new(Vec::<UnicornLastImport>::new()));
         let last_imports_hook = Rc::clone(&last_imports);
+        let create_window_returns = Rc::new(RefCell::new(Vec::<CreateWindowReturn>::new()));
+        let create_window_returns_hook = Rc::clone(&create_window_returns);
         let traps = self.import_traps.clone();
         let kernel_ptr = kernel as *mut CeKernel;
         let mapped_kernel_memory = Rc::new(RefCell::new(vec![(
@@ -678,6 +693,20 @@ impl UnicornMips {
             u64::from(IMPORT_TRAP_BASE + IMPORT_TRAP_PAGE_SIZE - 1),
             move |uc, address, _size| {
                 let address = address as u32;
+                if address == CREATE_WINDOW_RETURN_STUB_ADDR {
+                    let Some(callout) = create_window_returns_hook.borrow_mut().pop() else {
+                        let _ = uc.emu_stop();
+                        return;
+                    };
+                    let writes = [
+                        uc.reg_write(RegisterMIPS::V0, u64::from(callout.hwnd)),
+                        uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc)),
+                    ];
+                    if writes.into_iter().any(|write| write.is_err()) {
+                        let _ = uc.emu_stop();
+                    }
+                    return;
+                }
                 if traps.trap_at(address).is_none() {
                     return;
                 }
@@ -760,9 +789,13 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                let Some(result) =
-                    traps.dispatch_trap(unsafe { &mut *kernel_ptr }, &mut memory, 1, address, args)
-                else {
+                let Some(result) = traps.dispatch_trap(
+                    unsafe { &mut *kernel_ptr },
+                    &mut memory,
+                    1,
+                    address,
+                    args.clone(),
+                ) else {
                     return;
                 };
                 let _ = map_kernel_memory_allocations(
@@ -789,6 +822,20 @@ impl UnicornMips {
                         result = format_args!("0x{result:08x}"),
                         "import trap return"
                     );
+                }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_enter_create_window_create_callout(
+                        unsafe { &mut *kernel_ptr },
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        result,
+                        &mapped_kernel_memory_hook,
+                        &create_window_returns_hook,
+                    )
+                }) {
+                    return;
                 }
                 let _ = memory.uc.reg_write(RegisterMIPS::V0, u64::from(result));
             },
@@ -1457,7 +1504,7 @@ fn advance_trap_base(current: u32, trap_count: usize) -> Result<u32> {
     let trap_end = IMPORT_TRAP_BASE
         .checked_add(IMPORT_TRAP_PAGE_SIZE)
         .ok_or_else(|| Error::InvalidArgument("import trap page overflow".to_owned()))?;
-    if next >= trap_end {
+    if next >= trap_end.saturating_sub(RESERVED_IMPORT_TRAP_STUB_BYTES) {
         return Err(Error::InvalidArgument(
             "import trap page is full".to_owned(),
         ));
@@ -1881,6 +1928,104 @@ fn try_enter_dispatch_message_callout<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn try_enter_create_window_create_callout<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    hwnd: u32,
+    mapped_kernel_memory: &std::rc::Rc<std::cell::RefCell<Vec<(u32, u32)>>>,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<CreateWindowReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_CREATE_WINDOW_EX_W)
+        || hwnd == 0
+    {
+        return false;
+    }
+
+    let Some(window) = kernel.gwe.window(hwnd) else {
+        return false;
+    };
+    let wndproc = window.wndproc;
+    if wndproc == 0 {
+        return false;
+    }
+    let class_name = window.class_name.clone();
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+    let Some(create_struct) = kernel.memory.heap_alloc(
+        crate::ce::memory::PROCESS_HEAP_HANDLE,
+        crate::ce::memory::HEAP_ZERO_MEMORY,
+        CREATESTRUCTW_SIZE,
+    ) else {
+        return false;
+    };
+    if map_kernel_memory_allocations(uc, kernel, &mut mapped_kernel_memory.borrow_mut()).is_err() {
+        return false;
+    }
+    let bytes = create_structw_bytes(args);
+    if uc.mem_write(u64::from(create_struct), &bytes).is_err() {
+        return false;
+    }
+
+    tracing::debug!(
+        target: "ce.gwe",
+        hwnd = format_args!("0x{hwnd:08x}"),
+        msg = format_args!("0x{:08x}", crate::ce::gwe::WM_CREATE),
+        lparam = format_args!("0x{create_struct:08x}"),
+        class = class_name.as_str(),
+        wndproc = format_args!("0x{wndproc:08x}"),
+        return_pc = format_args!("0x{return_pc:08x}"),
+        "CreateWindowExW guest WM_CREATE callout"
+    );
+
+    pending_returns
+        .borrow_mut()
+        .push(CreateWindowReturn { return_pc, hwnd });
+    let writes = [
+        uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(crate::ce::gwe::WM_CREATE)),
+        uc.reg_write(RegisterMIPS::A2, 0),
+        uc.reg_write(RegisterMIPS::A3, u64::from(create_struct)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(CREATE_WINDOW_RETURN_STUB_ADDR)),
+        uc.reg_write(RegisterMIPS::T9, u64::from(wndproc)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(wndproc)),
+    ];
+    if writes.into_iter().all(|write| write.is_ok()) {
+        true
+    } else {
+        let _ = pending_returns.borrow_mut().pop();
+        false
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn create_structw_bytes(args: &[u32]) -> [u8; CREATESTRUCTW_SIZE as usize] {
+    let fields = [
+        args.get(11).copied().unwrap_or(0),
+        args.get(10).copied().unwrap_or(0),
+        args.get(9).copied().unwrap_or(0),
+        args.get(8).copied().unwrap_or(0),
+        args.get(7).copied().unwrap_or(0),
+        args.get(6).copied().unwrap_or(0),
+        args.get(5).copied().unwrap_or(0),
+        args.get(4).copied().unwrap_or(0),
+        args.get(3).copied().unwrap_or(0),
+        args.get(2).copied().unwrap_or(0),
+        args.get(1).copied().unwrap_or(0),
+        args.first().copied().unwrap_or(0),
+    ];
+    let mut bytes = [0; CREATESTRUCTW_SIZE as usize];
+    for (index, value) in fields.into_iter().enumerate() {
+        bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    bytes
+}
+
+#[cfg(feature = "unicorn")]
 fn try_enter_call_window_proc_callout<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     module_kind: crate::emulator::imports::ImportModuleKind,
@@ -2234,6 +2379,46 @@ mod unicorn_tests {
         RegisterMIPS, Unicorn,
         unicorn_const::{Arch, Mode, Prot},
     };
+
+    #[test]
+    fn create_structw_bytes_match_ce_sdk_layout() {
+        let args = [
+            0x0000_00a1,
+            0x1000_0001,
+            0x1000_0002,
+            0x0000_00a4,
+            10,
+            20,
+            300,
+            200,
+            0x0002_0000,
+            0x0000_1234,
+            0x0040_0000,
+            0x3000_0008,
+        ];
+        let bytes = super::create_structw_bytes(&args);
+        let field = |offset: usize| {
+            u32::from_le_bytes(
+                bytes[offset..offset + 4]
+                    .try_into()
+                    .expect("aligned u32 field"),
+            )
+        };
+
+        assert_eq!(bytes.len(), 48);
+        assert_eq!(field(0), 0x3000_0008);
+        assert_eq!(field(4), 0x0040_0000);
+        assert_eq!(field(8), 0x0000_1234);
+        assert_eq!(field(12), 0x0002_0000);
+        assert_eq!(field(16), 200);
+        assert_eq!(field(20), 300);
+        assert_eq!(field(24), 20);
+        assert_eq!(field(28), 10);
+        assert_eq!(field(32), 0x0000_00a4);
+        assert_eq!(field(36), 0x1000_0002);
+        assert_eq!(field(40), 0x1000_0001);
+        assert_eq!(field(44), 0x0000_00a1);
+    }
 
     #[test]
     fn unicorn_executes_relocated_high_address_jal_with_delay_slot() {
