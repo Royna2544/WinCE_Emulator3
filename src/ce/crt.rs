@@ -135,6 +135,7 @@ pub(crate) fn wcsncpy_raw<M: CoredllGuestMemory>(
     }
 
     let units = ce_wcsncpy_units(count);
+    let src = wcsncpy_source(memory, src);
     let mut padding = false;
     for index in 0..units {
         let unit = if padding {
@@ -162,6 +163,27 @@ pub(crate) fn wcsncpy_raw<M: CoredllGuestMemory>(
         }
     }
     dest
+}
+
+fn wcsncpy_source<M: CoredllGuestMemory>(memory: &M, src: u32) -> u32 {
+    let Ok(pointer) = memory.read_u32(src) else {
+        return src;
+    };
+    if pointer <= 0xffff || memory.read_u16(src).is_ok_and(is_plain_wide_start) {
+        return src;
+    }
+    if memory.read_u16(pointer).is_ok_and(is_plain_wide_start) {
+        pointer
+    } else {
+        src
+    }
+}
+
+fn is_plain_wide_start(unit: u16) -> bool {
+    unit == b'\\' as u16
+        || unit == b'/' as u16
+        || (b'A' as u16..=b'Z' as u16).contains(&unit)
+        || (b'a' as u16..=b'z' as u16).contains(&unit)
 }
 
 fn ce_wcsncpy_units(count: u32) -> u32 {
@@ -368,4 +390,17 @@ fn format_wide_printf<M: CoredllGuestMemory>(memory: &M, format: &str, args: &[u
         }
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ce_wcsncpy_units;
+
+    #[test]
+    fn wcsncpy_uses_ce_byte_counts() {
+        assert_eq!(ce_wcsncpy_units(1), 1);
+        assert_eq!(ce_wcsncpy_units(2), 1);
+        assert_eq!(ce_wcsncpy_units(34), 17);
+        assert_eq!(ce_wcsncpy_units(260), 130);
+    }
 }

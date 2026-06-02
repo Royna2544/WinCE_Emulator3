@@ -209,6 +209,39 @@ fn coredll_raw_wcsncpy_uses_ce_byte_counts_for_path_prefixes() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_wcsncpy_accepts_pointer_backed_wide_source() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let dest = 0x1_0000;
+    let src_obj = 0x1_0100;
+    let src = 0x1_0200;
+    memory.map_halfwords(dest, 64);
+    memory.map_words(src_obj, 1);
+    memory.map_halfwords(src, 64);
+    memory.write_word(src_obj, src);
+    memory.write_wide_z(src, r"\SDMMC Disk\INavi\iNavi.exe");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WCSNCPY,
+            [dest, src_obj, 34],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } if ptr == dest
+    ));
+    assert_eq!(memory.read_wide_z(dest, 64), r"\SDMMC Disk\INavi");
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_registry_ordinals_create_query_enum_and_delete_values() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
