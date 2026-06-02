@@ -9,12 +9,6 @@ Target app:
 - MIPS R4000 PE
 - Uses COREDLL.dll, mfcce400.dll, CRT-like exports, WINSOCK.dll
 
-This project is worked from WSL, but the emulator itself is a Windows executable.
-
-Windows paths may need `/mnt/c/...` or `/mnt/d/...` translation when invoked from WSL.
-
-Windows `.exe` files can be launched from WSL.
-
 Use the installed Windows CE 4.2 Standard SDK import libraries for ordinal and
 decorated-name evidence:
 
@@ -29,7 +23,9 @@ Windows CE Core-OS source is at: `C:\WINCE600`
 
 MFC reference source is at: `C:\Program Files (x86)\Microsoft Visual Studio 8\VC\ce\atlmfc\src\mfc`
 
-The application targets latest Windows-only with x86 target at Zen5. You can add CPU specific-optimizations.
+Device sd-card firmware: `D:\INAVI_Emulator\INAVI`
+
+Main target right now: `D:\INAVI_Emulator\INAVI\INavi\iNavi.exe`
 
 ---
 
@@ -127,34 +123,3 @@ Maintain these files as durable memory across Codex sessions:
 If PC becomes `0x0`, it is not a normal guest exit. Treat it as an
 emulator control-flow/resume/return-address bug unless proven otherwise, and
 make runtime code fail the run instead of reporting success.
-
----
-
-## Running / Logging
-
-Prefer bounded runs.
-
-Build:
-
-```bash
-powershell.exe -NoProfile -Command "& 'C:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe' iNavi_Unicorn_Emulator.vcxproj /p:Configuration=Release /p:Platform=x64 /m"
-```
-
-For active running and testing, use the ps1 script at tools/
-
----
-
-## WSL / Windows Notes
-
-Expected pattern:
-
-- Use WSL for grep/sed/rg/tail/log inspection.
-- Use Windows MSBuild / Visual Studio toolchain for building.
-- Run the Windows emulator executable from WSL when useful.
-
-Possible path forms:
-
-- Windows: `D:\INAVI_Emulator\INAVI\\INavi\INavi.exe`
-- WSL: `/mnt/d/INAVI_Emulator/INAVI/INavi/INavi.exe`
-
-Do not assume path spelling until verified in logs.
