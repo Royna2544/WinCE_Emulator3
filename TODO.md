@@ -16,9 +16,10 @@
   ole32 imports are connected, more GWE menu/dialog/control raw pointer
   marshalling, file attributes/directory metadata beyond the first
   `FindFirstFileW` tranche, and timer/system-time structs.
-- Continue tracing after CE `TlsCall` now returns real slots; identify whether
-  the next demand is guest-side TLS/user-kdata setup, more loader/thread
-  behavior, or eventually GDI/DC drawing into the virtual framebuffer.
+- Continue tracing after CE `TlsCall` now returns real slots, using the
+  recent-import ring in instruction-limited snapshots. Current evidence is still
+  inside SDK MFC thread-local/pre-translation code rather than later GDI/DC
+  drawing imports.
 - Continue connecting SDK CE 4.2 Mipsii COREDLL CRT ordinals from `coredll.lib`
   as the launch trace demands.
 - Implement CRT `_msize`/`realloc`/operator delete ordinals from SDK evidence so
@@ -34,9 +35,8 @@
 
 ## Next
 
-- Extend bounded run tooling with structured trace summaries now that
-  `--cpu-instruction-limit N` can return snapshots without external process
-  kills.
+- Extend bounded run tooling beyond the current snapshot import ring if more
+  structured trace context is needed.
 - Add an HTTP/WebSocket transport over the Rust `CeRemote` API state when the
   host runtime is ready for remote UI/audio streaming; audio transport should
   honor the sink's per-client cursors and flush-marked chunks immediately.

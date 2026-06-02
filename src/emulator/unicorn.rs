@@ -51,6 +51,7 @@ pub struct UnicornDebugSnapshot {
     pub memory_write_probe: Option<UnicornMemoryWriteProbe>,
     pub interrupt_probe: Option<UnicornInterruptProbe>,
     pub invalid_instruction_probe: Option<UnicornInvalidInstructionProbe>,
+    pub last_imports: Vec<UnicornLastImport>,
     pub last_code: Vec<UnicornLastCode>,
     pub last_blocks: Vec<UnicornLastBlock>,
     pub blocked_get_message: Option<UnicornBlockedGetMessage>,
@@ -111,6 +112,21 @@ pub struct UnicornInvalidInstructionProbe {
     pub ra: u32,
     pub sp: u32,
     pub instruction: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornLastImport {
+    pub pc: u32,
+    pub module: String,
+    pub kind: crate::emulator::imports::ImportModuleKind,
+    pub ordinal: Option<u32>,
+    pub name: Option<String>,
+    pub a0: u32,
+    pub a1: u32,
+    pub a2: u32,
+    pub a3: u32,
+    pub sp: u32,
+    pub result: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -647,6 +663,8 @@ impl UnicornMips {
         let memory_write_probe = Rc::new(RefCell::new(None));
         let blocked_get_message = Rc::new(RefCell::new(None));
         let blocked_get_message_hook = Rc::clone(&blocked_get_message);
+        let last_imports = Rc::new(RefCell::new(Vec::<UnicornLastImport>::new()));
+        let last_imports_hook = Rc::clone(&last_imports);
         let traps = self.import_traps.clone();
         let kernel_ptr = kernel as *mut CeKernel;
         let mapped_kernel_memory = Rc::new(RefCell::new(vec![(
@@ -665,6 +683,30 @@ impl UnicornMips {
                 }
                 let trap = traps.trap_at(address).cloned();
                 if let Some(trap) = trap.as_ref() {
+                    let a0 = read_mips_reg(uc, RegisterMIPS::A0);
+                    let a1 = read_mips_reg(uc, RegisterMIPS::A1);
+                    let a2 = read_mips_reg(uc, RegisterMIPS::A2);
+                    let a3 = read_mips_reg(uc, RegisterMIPS::A3);
+                    let sp = read_mips_reg(uc, RegisterMIPS::SP);
+                    {
+                        let mut imports = last_imports_hook.borrow_mut();
+                        if imports.len() == 16 {
+                            imports.remove(0);
+                        }
+                        imports.push(UnicornLastImport {
+                            pc: address,
+                            module: trap.module_name.clone(),
+                            kind: trap.module_kind,
+                            ordinal: trap.ordinal,
+                            name: trap.name.clone(),
+                            a0,
+                            a1,
+                            a2,
+                            a3,
+                            sp,
+                            result: None,
+                        });
+                    }
                     tracing::debug!(
                         target: "ce.imports",
                         pc = format_args!("0x{address:08x}"),
@@ -672,11 +714,11 @@ impl UnicornMips {
                         kind = ?trap.module_kind,
                         ordinal = trap.ordinal,
                         name = trap.name.as_deref().unwrap_or("<ordinal>"),
-                        a0 = format_args!("0x{:08x}", read_mips_reg(uc, RegisterMIPS::A0)),
-                        a1 = format_args!("0x{:08x}", read_mips_reg(uc, RegisterMIPS::A1)),
-                        a2 = format_args!("0x{:08x}", read_mips_reg(uc, RegisterMIPS::A2)),
-                        a3 = format_args!("0x{:08x}", read_mips_reg(uc, RegisterMIPS::A3)),
-                        sp = format_args!("0x{:08x}", read_mips_reg(uc, RegisterMIPS::SP)),
+                        a0 = format_args!("0x{a0:08x}"),
+                        a1 = format_args!("0x{a1:08x}"),
+                        a2 = format_args!("0x{a2:08x}"),
+                        a3 = format_args!("0x{a3:08x}"),
+                        sp = format_args!("0x{sp:08x}"),
                         "import trap"
                     );
                 }
@@ -719,6 +761,14 @@ impl UnicornMips {
                     &mut mapped_kernel_memory_hook.borrow_mut(),
                 );
                 if let Some(trap) = trap.as_ref() {
+                    if let Some(import) = last_imports_hook
+                        .borrow_mut()
+                        .iter_mut()
+                        .rev()
+                        .find(|import| import.pc == address && import.result.is_none())
+                    {
+                        import.result = Some(result);
+                    }
                     tracing::debug!(
                         target: "ce.imports",
                         pc = format_args!("0x{address:08x}"),
@@ -834,6 +884,7 @@ impl UnicornMips {
             memory_write_probe.borrow().clone(),
             interrupt_probe.borrow().clone(),
             invalid_instruction_probe.borrow().clone(),
+            last_imports.borrow().clone(),
             last_code.borrow().clone(),
             last_blocks.borrow().clone(),
             blocked_get_message.borrow().clone(),
@@ -1551,6 +1602,32 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 write!(f, " invalid_insn=0x{instruction:08x}")?;
             }
         }
+        if !self.last_imports.is_empty() {
+            write!(f, " last_imports=[")?;
+            for (index, import) in self.last_imports.iter().enumerate() {
+                if index != 0 {
+                    write!(f, ",")?;
+                }
+                write!(f, "0x{:08x}/{:?}/{}", import.pc, import.kind, import.module)?;
+                if let Some(ordinal) = import.ordinal {
+                    write!(f, "/ord={ordinal}")?;
+                }
+                if let Some(name) = import.name.as_deref() {
+                    write!(f, "/name={name}")?;
+                }
+                write!(
+                    f,
+                    "/a0=0x{:08x}/a1=0x{:08x}/a2=0x{:08x}/a3=0x{:08x}/sp=0x{:08x}",
+                    import.a0, import.a1, import.a2, import.a3, import.sp
+                )?;
+                if let Some(result) = import.result {
+                    write!(f, "/ret=0x{result:08x}")?;
+                } else {
+                    write!(f, "/ret=<pending>")?;
+                }
+            }
+            write!(f, "]")?;
+        }
         if !self.last_code.is_empty() {
             write!(f, " last_code=[")?;
             for (index, code) in self.last_code.iter().enumerate() {
@@ -1803,6 +1880,7 @@ fn capture_debug_snapshot<D>(
     memory_write_probe: Option<UnicornMemoryWriteProbe>,
     interrupt_probe: Option<UnicornInterruptProbe>,
     invalid_instruction_probe: Option<UnicornInvalidInstructionProbe>,
+    last_imports: Vec<UnicornLastImport>,
     last_code: Vec<UnicornLastCode>,
     last_blocks: Vec<UnicornLastBlock>,
     blocked_get_message: Option<UnicornBlockedGetMessage>,
@@ -1832,6 +1910,7 @@ fn capture_debug_snapshot<D>(
         memory_write_probe,
         interrupt_probe,
         invalid_instruction_probe,
+        last_imports,
         last_code,
         last_blocks,
         blocked_get_message,

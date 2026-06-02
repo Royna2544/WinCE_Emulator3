@@ -241,6 +241,10 @@
   reaches SDK MFC code around `0x6004f6a0..0x6004f8dc` with PC near
   `0x600dd98c`. This is diagnostic tooling only; default `0` keeps the previous
   unbounded CPU behavior.
+- Unicorn debug snapshots now include a compact recent-import ring with module
+  kind, ordinal/name, the first four arguments, stack pointer, and return value.
+  This is diagnostic tooling only and is used to continue launch tracing without
+  enabling high-volume import logs.
 
 ## Current State
 
@@ -251,6 +255,10 @@
   process. A generic virtual framebuffer is now attached to the emulator
   boundary, but guest drawing/blit behavior is not connected yet and this must
   not be treated as GUI success.
+- Instruction-limited snapshots show the post-`WM_PAINT` path entering SDK MFC
+  thread-local state and message pre-translation (`CThreadLocalObject::GetData`
+  and later `CWnd::WalkPreTranslateTree`) rather than reaching guest drawing
+  imports yet.
 - The default bootstrap uses `regs.json` as backing storage for the fake CE
   registry API and creates base GWE, timer, audio, and memory-map state.
 - The virtual Win32/CE framework and COREDLL dispatcher are connected to Unicorn
