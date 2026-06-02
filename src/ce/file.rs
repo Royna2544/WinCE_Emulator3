@@ -194,36 +194,48 @@ impl HostFileSystem {
         }
         let host_path = self.translate_guest_path(guest_path)?;
         let exists = host_path.exists();
-        let writable = desired_access & GENERIC_WRITE != 0;
+        let is_directory = host_path.is_dir();
+        let writable = desired_access & GENERIC_WRITE != 0 && !is_directory;
 
-        let data = match creation_disposition {
-            CREATE_NEW if exists => {
-                return Err(Error::InvalidArgument(format!(
-                    "file already exists: {guest_path}"
-                )));
+        let data = if is_directory {
+            match creation_disposition {
+                OPEN_EXISTING | OPEN_ALWAYS => Vec::new(),
+                _ => {
+                    return Err(Error::InvalidArgument(format!(
+                        "cannot create or truncate directory: {guest_path}"
+                    )));
+                }
             }
-            CREATE_NEW | CREATE_ALWAYS => Vec::new(),
-            OPEN_EXISTING if !exists => {
-                return Err(Error::InvalidArgument(format!(
-                    "file does not exist: {guest_path}"
-                )));
-            }
-            OPEN_EXISTING | OPEN_ALWAYS => fs::read(&host_path).unwrap_or_default(),
-            TRUNCATE_EXISTING if exists && writable => Vec::new(),
-            TRUNCATE_EXISTING if !exists => {
-                return Err(Error::InvalidArgument(format!(
-                    "file does not exist: {guest_path}"
-                )));
-            }
-            TRUNCATE_EXISTING => {
-                return Err(Error::InvalidArgument(format!(
-                    "file is not writable: {guest_path}"
-                )));
-            }
-            _ => {
-                return Err(Error::InvalidArgument(format!(
-                    "unsupported creation disposition {creation_disposition}"
-                )));
+        } else {
+            match creation_disposition {
+                CREATE_NEW if exists => {
+                    return Err(Error::InvalidArgument(format!(
+                        "file already exists: {guest_path}"
+                    )));
+                }
+                CREATE_NEW | CREATE_ALWAYS => Vec::new(),
+                OPEN_EXISTING if !exists => {
+                    return Err(Error::InvalidArgument(format!(
+                        "file does not exist: {guest_path}"
+                    )));
+                }
+                OPEN_EXISTING | OPEN_ALWAYS => fs::read(&host_path).unwrap_or_default(),
+                TRUNCATE_EXISTING if exists && writable => Vec::new(),
+                TRUNCATE_EXISTING if !exists => {
+                    return Err(Error::InvalidArgument(format!(
+                        "file does not exist: {guest_path}"
+                    )));
+                }
+                TRUNCATE_EXISTING => {
+                    return Err(Error::InvalidArgument(format!(
+                        "file is not writable: {guest_path}"
+                    )));
+                }
+                _ => {
+                    return Err(Error::InvalidArgument(format!(
+                        "unsupported creation disposition {creation_disposition}"
+                    )));
+                }
             }
         };
 
@@ -511,6 +523,9 @@ impl HostFileSystem {
         let normalized = normalize_guest_path(guest_path);
 
         if normalized.is_empty() {
+            if is_root_relative_path(guest_path) {
+                return Ok(self.root.clone());
+            }
             return Err(Error::InvalidArgument("empty guest path".to_owned()));
         }
 
@@ -862,6 +877,31 @@ mod tests {
         let (_id, data) = fs.find_first_file_w("\\SDMMC Disk").unwrap();
         assert_eq!(data.file_name, "SDMMC Disk");
         assert!(fs.find_first_file_w("\\SDMMC Disk\\*").is_err());
+    }
+
+    #[test]
+    fn root_directory_can_be_opened_as_an_existing_readonly_handle() {
+        let root =
+            std::env::temp_dir().join(format!("wince_file_root_open_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+
+        let mut fs = HostFileSystem::new(&root);
+        let id = fs
+            .create_file_w("\\", GENERIC_READ | GENERIC_WRITE, OPEN_EXISTING)
+            .unwrap();
+        assert_eq!(fs.file_size(id).unwrap(), 0);
+        assert!(fs.read_file(id, 16).unwrap().is_empty());
+        let write = fs.write_file(id, b"ignored").unwrap();
+        assert!(!write.success);
+        assert_eq!(write.bytes_transferred, 0);
+        assert!(fs.close(id).is_ok());
+        assert!(
+            fs.create_file_w("\\", GENERIC_WRITE, CREATE_ALWAYS)
+                .is_err()
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
