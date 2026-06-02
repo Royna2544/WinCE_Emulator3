@@ -552,6 +552,28 @@
   epilogue at `0x00043e30`, and sends `0x5236` from trampoline return
   `0x008b7b70` back to origin `0x00043e38`; the `wce_solution_inavi` WNDPROC
   maps `0x5236` to `WM_CLOSE`.
+- `scripts/generate_coredll_ordinals.ps1` now rustfmt-formats its own generated
+  Rust output. A temp-output regeneration from `coredll.map` produced a
+  byte-identical `coredll_ordinals.rs`, confirming the script is the complete
+  map-to-Rust workflow without a separate manual `cargo fmt` step
+  (`1b6bc23`).
+- Unicorn debug snapshots now retain a bounded `inavi_render_milestones` ring
+  for `render_*`, `paint_*`, and `init_dialog_*` app probes, separate from the
+  rolling controller tail (`3d908f1`). Real mounted `--desktop host`
+  `--tap 400,240 --tap 400,240` runs with framebuffer dumps confirm the app
+  reaches `render_size_entry` with `800x480`, then later enters paint and calls
+  the render object at `0x0010518c`, but the renderer returns immediately with
+  `render_surface=0` and `render_enabled=0`; no
+  `render_surface_create_call`/`render_surface_store` milestone is observed,
+  and the framebuffer remains all zero.
+- `FindResource(W)` for `RT_STRING` now mirrors CE/MFC string-table lookup by
+  falling back from an individual string id to its containing string block
+  `((id >> 4) + 1)` (`80a88e4`). Focused regression coverage:
+  `cargo test rt_string_resource_lookup_falls_back_to_string_block --features unicorn,win32-desktop`.
+  A real mounted host/tap run after the fix no longer shows the previous
+  `FindResourceW(name="#3867", type="#6")` miss, but it still reaches paint
+  with `render_surface=0`, `render_enabled=0`, no useful GDI imports beyond
+  `BeginPaint`/`EndPaint`, and an all-zero framebuffer.
 
 ## Current State
 
@@ -579,9 +601,12 @@
   remains blank. The current decoded shutdown chain is app message `0x56d0`
   into guest function `0x0004390c`, then a `0x5236` send at `0x00043e30`/
   `0x00043e38` that the main `wce_solution_inavi` WNDPROC converts to
-  `WM_CLOSE`. A
-  generic virtual framebuffer is now
-  attached to the emulator boundary, generic virtual presenter/desktop
+  `WM_CLOSE`. Recent host-backed tap runs also show the app's internal render
+  object remains uninitialized at paint time: `render_size_entry` sees
+  `800x480`, but the surface allocation path around `0x00104878..0x00104954`
+  is skipped and the paint render call at `0x0010518c` returns with
+  `render_surface=0` and `render_enabled=0`. A generic virtual framebuffer is
+  now attached to the emulator boundary, generic virtual presenter/desktop
   interfaces exist for host
   presentation/window management, and solid `FillRect` on a window/screen HDC
   can write pixels into that framebuffer. Broader guest drawing/blit behavior

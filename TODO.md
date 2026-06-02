@@ -7,6 +7,14 @@
   first solid `FillRect` framebuffer path, then verify those pixels through the
   generic presenter boundary. Do not treat the timeout-running paint loop as
   GUI success.
+- Continue the iNavi render-surface path with targeted diagnostics around the
+  resize/surface allocation gate, not app-state forcing. Confirmed host/tap
+  evidence: `render_size_entry` receives `800x480`, but the path never reaches
+  `render_surface_create_call`/`render_surface_store` at
+  `0x00104904`/`0x00104910`; `WM_PAINT` later calls render entry
+  `0x0010518c`, which returns immediately because `render_surface=0` and
+  `render_enabled=0`. Next evidence should identify the branch/input state that
+  skips the allocation block around `0x00104878..0x00104954`.
 - Continue the post-time iNavi path from the new wall-clock diagnostic frontier.
   The latest mounted run now gets past the earlier export-index
   `GetPaletteEntries` trap via real palette/DC state, preserves SDK CRT
@@ -92,11 +100,12 @@
   `FindResourceW`, `LoadResource`, and `SizeofResource` can consume mapped
   icon/bitmap/dialog/menu data rather than only test-registered virtual
   resources and PE-backed strings.
-- Investigate the iNavi startup `FindResourceW(hModule=0x00010000,
-  name=0x0e01, type=RT_STRING)` miss as a real MFC/resource-loading path. LLVM
-  resource dumping confirms the main EXE has no RT_STRING table, so next
-  candidates are language/resource DLL loading, MFC fallback behavior after
-  missing `AFX_IDS_APP_TITLE`, or earlier app resource initialization state.
+- Keep resource lookup evidence current. `FindResource(W)` for `RT_STRING` now
+  falls back from an individual string id to its containing string block, which
+  removed the observed `#3867` string-resource miss in a real host/tap run.
+  The older `0x0e01` main-EXE RT_STRING miss remains explained by the EXE
+  having no RT_STRING table; continue resource-module/MFC fallback
+  investigation only if current traces demand it.
 - When GWE/DC behavior is ready, adapt window state to the generic `Desktop`
   trait boundary without replacing CE/MFC message, class, or window semantics
   with host-window shortcuts.

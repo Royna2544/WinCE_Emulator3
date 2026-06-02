@@ -142,7 +142,14 @@
     CE/MFC result feeds that branch, then continue with CE-referenced raw
     behavior that advances the guest path toward the newly connected
     framebuffer drawing and the remaining GDI/DC/surface drawing and blit
-    imports.
+    imports. Newer host/tap diagnostics add a direct render-surface gate:
+    durable render milestones show `render_size_entry` receives `800x480`, but
+    the app never reaches the surface-allocation probes at
+    `0x00104904`/`0x00104910`. The later `WM_PAINT` path reaches
+    `paint_render_call` and render entry `0x0010518c`, then returns
+    immediately with `render_surface=0` and `render_enabled=0`. The `RT_STRING`
+    block fallback fix removed the observed `#3867/type #6` miss, but did not
+    change the all-zero framebuffer.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch
