@@ -27,6 +27,7 @@ pub struct HostFileSystem {
     root: PathBuf,
     mounts: BTreeMap<String, FileMount>,
     object_store: ObjectStore,
+    root_relative_mount: Option<String>,
     next_id: u32,
     open_files: BTreeMap<u32, OpenFile>,
     open_finds: BTreeMap<u32, OpenFind>,
@@ -95,6 +96,7 @@ impl HostFileSystem {
                 total_bytes: 256 * 1024 * 1024,
                 free_bytes: 128 * 1024 * 1024,
             },
+            root_relative_mount: None,
             next_id: 1,
             open_files: BTreeMap::new(),
             open_finds: BTreeMap::new(),
@@ -148,6 +150,13 @@ impl HostFileSystem {
 
     pub fn object_store(&self) -> ObjectStore {
         self.object_store
+    }
+
+    pub fn set_root_relative_guest_path(&mut self, guest_path: &str) {
+        let normalized = normalize_guest_path(guest_path);
+        self.root_relative_mount = self
+            .mount_for_normalized_path(&normalized)
+            .map(|mount| mount.guest_root.clone());
     }
 
     pub fn host_path_to_guest_mount(&self, host_path: &Path) -> Option<String> {
@@ -532,6 +541,12 @@ impl HostFileSystem {
             }
         }
 
+        if is_root_relative_path(guest_path) {
+            if let Some(host_root) = self.root_relative_host_root() {
+                return join_normalized_host_path(host_root, &normalized, guest_path);
+            }
+        }
+
         join_normalized_host_path(&self.root, &normalized, guest_path)
     }
 
@@ -638,6 +653,14 @@ impl HostFileSystem {
             "enumerated root mount namespace"
         );
         entries
+    }
+
+    fn root_relative_host_root(&self) -> Option<&Path> {
+        let guest_root = self.root_relative_mount.as_ref()?;
+        self.mounts
+            .values()
+            .find(|mount| mount.guest_root.eq_ignore_ascii_case(&guest_root))
+            .and_then(|mount| mount.host_root.as_deref())
     }
 
     fn mount_for_guest_path(&self, guest_path: &str) -> Option<&FileMount> {
@@ -908,7 +931,7 @@ mod tests {
     }
 
     #[test]
-    fn absolute_paths_without_mount_prefix_do_not_probe_process_mount_backing() {
+    fn root_relative_paths_probe_process_mount_backing() {
         let root = std::env::temp_dir().join(format!("wince_file_mount_{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("iNaviData")).unwrap();
@@ -916,8 +939,10 @@ mod tests {
         let mut fs = HostFileSystem::new(".");
         fs.mount_guest_root("\\ResidentFlash", &root);
         assert!(fs.find_first_file_w("\\iNaviData").is_err());
-        assert!(fs.find_first_file_w("\\ResidentFlash\\iNaviData").is_ok());
-        assert!(fs.find_first_file_w("\\iNaviData").is_err());
+        fs.set_root_relative_guest_path("\\ResidentFlash\\INavi\\INavi.exe");
+        let (_id, data) = fs.find_first_file_w("\\iNaviData").unwrap();
+        assert_eq!(data.attributes, FILE_ATTRIBUTE_DIRECTORY);
+        assert_eq!(data.file_name, "iNaviData");
 
         fs::remove_dir_all(root).unwrap();
     }
