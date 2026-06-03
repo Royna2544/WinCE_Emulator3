@@ -330,7 +330,7 @@ fn run_monitor(
                     .map(parse_monitor_usize)
                     .transpose()?
                     .unwrap_or(args.cpu_instruction_limit);
-                monitor_run_once(
+                monitor_run_and_report(
                     cpu,
                     kernel,
                     desktop,
@@ -340,7 +340,7 @@ fn run_monitor(
                         stop_pc: None,
                     },
                     args.framebuffer_dump.as_deref(),
-                )?;
+                );
             }
             "until" | "run-until" => {
                 let address = words.next().ok_or_else(|| {
@@ -365,7 +365,7 @@ fn run_monitor(
                     .map(parse_monitor_usize)
                     .transpose()?
                     .unwrap_or(args.cpu_instruction_limit);
-                monitor_run_once(
+                monitor_run_and_report(
                     cpu,
                     kernel,
                     desktop,
@@ -375,25 +375,12 @@ fn run_monitor(
                         stop_pc: Some(stop_pc),
                     },
                     args.framebuffer_dump.as_deref(),
-                )?;
+                );
             }
             "step" | "s" | "si" => {
-                let instruction_limit = words
-                    .next()
-                    .map(parse_monitor_usize)
-                    .transpose()?
-                    .unwrap_or(1);
-                monitor_run_once(
-                    cpu,
-                    kernel,
-                    desktop,
-                    UnicornRunLimits {
-                        instruction_limit,
-                        wall_clock_limit_ms: 0,
-                        stop_pc: None,
-                    },
-                    args.framebuffer_dump.as_deref(),
-                )?;
+                println!(
+                    "  step needs persistent Unicorn CPU/RAM state; use until/continue for bounded stops"
+                );
             }
             "tap" => {
                 let x = words.next().ok_or_else(|| {
@@ -623,10 +610,26 @@ fn monitor_run_once(
     Ok(())
 }
 
+fn monitor_run_and_report(
+    cpu: &mut UnicornMips,
+    kernel: &mut CeKernel,
+    desktop: &mut DesktopRuntime,
+    limits: UnicornRunLimits,
+    framebuffer_dump: Option<&Path>,
+) {
+    if let Err(err) = monitor_run_once(cpu, kernel, desktop, limits, framebuffer_dump) {
+        if cpu.last_debug_snapshot().is_some() {
+            eprintln!("  stopped; use regs or trace for detail");
+        } else {
+            eprintln!("  stopped: {err}");
+        }
+    }
+}
+
 fn print_monitor_help() {
     println!("  continue [wall_ms] [insns]  run until stop or bounded limit; default 1000 ms");
     println!("  until ADDRESS [wall] [insns] run until mapped PC or bounded limit");
-    println!("  step [insns]                run one bounded slice, default 1 instruction");
+    println!("  step                        report why live stepping is unavailable");
     println!("  tap X Y                     queue a touch tap");
     println!("  dump [path]                 write framebuffer PPM");
     println!("  present                     present the current framebuffer");
