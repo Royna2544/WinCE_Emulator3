@@ -194,6 +194,13 @@
 - Launch-demanded CE 4.2 CRT raw helper bodies now live in `src/ce/crt.rs`,
   with COREDLL keeping ordinal dispatch ownership and delegating the actual
   CRT memory/string routines to that module.
+- CE wide printf handling now preserves the split between Win32 `wsprintfW`/
+  `wvsprintfW` and CRT `swprintf`/`vswprintf`: Win32 `%s` defaults to a wide
+  string, while CRT `%s` defaults to a narrow string and `%ls` forces wide.
+  Focused raw ordinal tests cover both paths. In the real mounted iNavi run,
+  this removed the previous wall-clock burn inside the `0x5946c` values parser;
+  the run reaches idle `GetMessageW @861` again, but the framebuffer dump is
+  still all zero.
 - The bounded Unicorn launch with SDK `mfcce400.dll` now progresses past the
   previous unmapped-write failures and stops at a null function-pointer call from
   the main image destructor/function-pointer table around `0x0048f9d4`.

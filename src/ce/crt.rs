@@ -275,6 +275,45 @@ pub(crate) fn wsprintf_w_raw<M: CoredllGuestMemory>(
     format: u32,
     args: &[u32],
 ) -> u32 {
+    wsprintf_w_raw_with_mode(
+        kernel,
+        memory,
+        thread_id,
+        dest,
+        format,
+        args,
+        WideStringMode::WideDefault,
+    )
+}
+
+pub(crate) fn swprintf_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest: u32,
+    format: u32,
+    args: &[u32],
+) -> u32 {
+    wsprintf_w_raw_with_mode(
+        kernel,
+        memory,
+        thread_id,
+        dest,
+        format,
+        args,
+        WideStringMode::NarrowDefault,
+    )
+}
+
+fn wsprintf_w_raw_with_mode<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest: u32,
+    format: u32,
+    args: &[u32],
+    string_mode: WideStringMode,
+) -> u32 {
     if dest == 0 || format == 0 {
         kernel
             .threads
@@ -287,7 +326,7 @@ pub(crate) fn wsprintf_w_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     };
-    let text = format_wide_printf(memory, &format, args);
+    let text = format_wide_printf(memory, &format, args, string_mode);
     for (index, unit) in text.encode_utf16().chain(std::iter::once(0)).enumerate() {
         let addr = dest.wrapping_add(index as u32 * 2);
         if !write_guest_u16(kernel, memory, thread_id, addr, unit) {
@@ -312,7 +351,41 @@ pub(crate) fn vswprintf_w_raw<M: CoredllGuestMemory>(
         return 0;
     }
     let args = read_va_list_words(memory, va_list, 64);
-    wsprintf_w_raw(kernel, memory, thread_id, dest, format, &args)
+    wsprintf_w_raw_with_mode(
+        kernel,
+        memory,
+        thread_id,
+        dest,
+        format,
+        &args,
+        WideStringMode::NarrowDefault,
+    )
+}
+
+pub(crate) fn wvsprintf_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest: u32,
+    format: u32,
+    va_list: u32,
+) -> u32 {
+    if va_list == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let args = read_va_list_words(memory, va_list, 64);
+    wsprintf_w_raw_with_mode(
+        kernel,
+        memory,
+        thread_id,
+        dest,
+        format,
+        &args,
+        WideStringMode::WideDefault,
+    )
 }
 
 fn read_va_list_words<M: CoredllGuestMemory>(memory: &M, va_list: u32, max_words: u32) -> Vec<u32> {
@@ -339,7 +412,30 @@ fn read_wide_z<M: CoredllGuestMemory>(memory: &M, ptr: u32, max_chars: usize) ->
     None
 }
 
-fn format_wide_printf<M: CoredllGuestMemory>(memory: &M, format: &str, args: &[u32]) -> String {
+fn read_narrow_z<M: CoredllGuestMemory>(memory: &M, ptr: u32, max_chars: usize) -> Option<String> {
+    let mut bytes = Vec::new();
+    for index in 0..max_chars {
+        let byte = memory.read_u8(ptr.wrapping_add(index as u32)).ok()?;
+        if byte == 0 {
+            return Some(String::from_utf8_lossy(&bytes).into_owned());
+        }
+        bytes.push(byte);
+    }
+    None
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WideStringMode {
+    WideDefault,
+    NarrowDefault,
+}
+
+fn format_wide_printf<M: CoredllGuestMemory>(
+    memory: &M,
+    format: &str,
+    args: &[u32],
+    string_mode: WideStringMode,
+) -> String {
     let mut output = String::new();
     let mut chars = format.chars().peekable();
     let mut arg_index = 0usize;
@@ -364,9 +460,12 @@ fn format_wide_printf<M: CoredllGuestMemory>(memory: &M, format: &str, args: &[u
         }
 
         let mut long_count = 0usize;
+        let mut short_count = 0usize;
         while matches!(chars.peek(), Some('h' | 'l' | 'L' | 'w')) {
-            if chars.next() == Some('l') {
-                long_count += 1;
+            match chars.next() {
+                Some('l') | Some('w') | Some('L') => long_count += 1,
+                Some('h') => short_count += 1,
+                _ => {}
             }
         }
         if chars.peek() == Some(&'I') {
@@ -403,7 +502,21 @@ fn format_wide_printf<M: CoredllGuestMemory>(memory: &M, format: &str, args: &[u
             }
             's' | 'S' => {
                 if value != 0 {
-                    if let Some(text) = read_wide_z(memory, value, 4096) {
+                    let read_wide = if spec == 'S' {
+                        string_mode == WideStringMode::NarrowDefault
+                    } else if short_count != 0 {
+                        false
+                    } else if long_count != 0 {
+                        true
+                    } else {
+                        string_mode == WideStringMode::WideDefault
+                    };
+                    let text = if read_wide {
+                        read_wide_z(memory, value, 4096)
+                    } else {
+                        read_narrow_z(memory, value, 4096)
+                    };
+                    if let Some(text) = text {
                         output.push_str(&text);
                     }
                 } else {

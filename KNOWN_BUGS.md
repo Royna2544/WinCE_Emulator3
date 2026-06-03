@@ -166,6 +166,14 @@
     (`0x001033e4`). The mounted run still idles at `GetMessageW @861` with an
     all-zero framebuffer, so the active display failure is the skipped real
     lifecycle path into `0x001033e4`, not a need to synthesize pixels.
+    Splitting CRT `vswprintf` from Win32 `wvsprintfW` fixes the observed
+    narrow `%s` parser formatting mismatch: a mounted trace-enabled monitor run
+    with real `tap 400 240` no longer gets stuck before `0x00058a6c` and
+    returns to idle `GetMessageW @861` within the bound. That run still records
+    `resource_ready_after_59718`/`resource_ready_fail_59718` with `v0=0`, and
+    `target\monitor_vswprintf_fix.ppm` remains all zero. The next active
+    failure is therefore the real `0x59718` readiness subcall result, not the
+    previous CRT string-width/parser churn.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch

@@ -1703,7 +1703,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 2),
         ))),
-        ORD_WSPRINTF_W | ORD_SWPRINTF => Some(CoredllValue::U32(crt::wsprintf_w_raw(
+        ORD_WSPRINTF_W => Some(CoredllValue::U32(crt::wsprintf_w_raw(
             kernel,
             memory,
             thread_id,
@@ -1711,7 +1711,23 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             if args.len() > 2 { &args[2..] } else { &[] },
         ))),
-        ORD_WVSPRINTF_W | ORD_VSWPRINTF => Some(CoredllValue::U32(crt::vswprintf_w_raw(
+        ORD_SWPRINTF => Some(CoredllValue::U32(crt::swprintf_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            if args.len() > 2 { &args[2..] } else { &[] },
+        ))),
+        ORD_WVSPRINTF_W => Some(CoredllValue::U32(crt::wvsprintf_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ))),
+        ORD_VSWPRINTF => Some(CoredllValue::U32(crt::vswprintf_w_raw(
             kernel,
             memory,
             thread_id,
