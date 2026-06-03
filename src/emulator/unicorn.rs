@@ -412,6 +412,8 @@ pub struct UnicornInaviControllerTrace {
     pub query_thunk_slot: Option<u32>,
     #[cfg(feature = "trace")]
     pub query_thunk_target: Option<u32>,
+    #[cfg(feature = "trace")]
+    pub resource_text: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3300,6 +3302,9 @@ fn write_inavi_controller_traces(
             if let Some(query_thunk_target) = trace.query_thunk_target {
                 write!(f, "/query_target=0x{query_thunk_target:08x}")?;
             }
+            if let Some(resource_text) = trace.resource_text.as_deref() {
+                write!(f, "/text={}", format_trace_string(resource_text))?;
+            }
         }
     }
     Ok(())
@@ -5422,6 +5427,21 @@ fn record_inavi_controller_trace<D>(
         "app_query_thunk_target" => Some(t0),
         _ => None,
     };
+    let resource_text = match label {
+        "resource_59718_path_ready"
+        | "resource_59718_lookup_call"
+        | "resource_59718_lookup_return" => sp
+            .checked_add(0x10)
+            .and_then(|addr| read_unicorn_wide_z(uc, addr, 260)),
+        "resource_lookup_entry" => {
+            read_unicorn_wide_z(uc, read_mips_reg(uc, RegisterMIPS::A1), 260)
+        }
+        "resource_lookup_after_source"
+        | "resource_lookup_after_check"
+        | "resource_lookup_success"
+        | "resource_lookup_fail" => read_unicorn_wide_z(uc, s7, 260),
+        _ => None,
+    };
     let trace = UnicornInaviControllerTrace {
         pc,
         label,
@@ -5504,6 +5524,8 @@ fn record_inavi_controller_trace<D>(
         query_thunk_slot,
         #[cfg(feature = "trace")]
         query_thunk_target,
+        #[cfg(feature = "trace")]
+        resource_text,
     };
     if is_inavi_render_milestone_label(label) || is_inavi_controller_focus_trace(&trace) {
         let mut milestones = milestones.borrow_mut();
@@ -5528,6 +5550,8 @@ fn is_inavi_render_milestone_label(label: &str) -> bool {
         || label.starts_with("app_query_")
         || label.starts_with("query_5237_")
         || label.starts_with("resource_ready_")
+        || label.starts_with("resource_59718_")
+        || label.starts_with("resource_lookup_")
 }
 
 #[cfg(all(feature = "unicorn", feature = "trace"))]
@@ -5595,6 +5619,11 @@ fn inavi_controller_probe_label(pc: u32) -> Option<&'static str> {
         0x0005_7b18 => Some("query_5237_success"),
         0x0005_7b20 => Some("query_5237_fail"),
         0x0005_7b24 => Some("query_5237_fail_zero"),
+        0x0001_ad94 => Some("resource_lookup_entry"),
+        0x0001_adb0 => Some("resource_lookup_after_source"),
+        0x0001_adc0 => Some("resource_lookup_after_check"),
+        0x0001_adc8 => Some("resource_lookup_success"),
+        0x0001_ade4 => Some("resource_lookup_fail"),
         0x0005_8790 => Some("resource_ready_entry"),
         0x0005_87ec => Some("resource_ready_after_589dc"),
         0x0005_87fc => Some("resource_ready_pass_589dc"),
@@ -5615,6 +5644,11 @@ fn inavi_controller_probe_label(pc: u32) -> Option<&'static str> {
         0x0005_8ad8 => Some("resource_ready_after_595b8"),
         0x0005_8ae0 => Some("resource_ready_fail_595b8"),
         0x0005_8b08 => Some("resource_ready_pass_inner"),
+        0x0005_9718 => Some("resource_59718_entry"),
+        0x0005_9744 => Some("resource_59718_token_ready"),
+        0x0005_9758 => Some("resource_59718_path_ready"),
+        0x0005_9764 => Some("resource_59718_lookup_call"),
+        0x0005_976c => Some("resource_59718_lookup_return"),
         0x0002_d158 => Some("wm_size_entry"),
         0x0002_d198 => Some("wm_size_render_vtable"),
         0x0002_d1a0 => Some("wm_size_render_call"),
@@ -7115,6 +7149,16 @@ fn is_inavi_readiness_probe_pc(pc: u32) -> bool {
             | 0x0005_8ad8
             | 0x0005_8ae0
             | 0x0005_8b08
+            | 0x0005_9718
+            | 0x0005_9744
+            | 0x0005_9758
+            | 0x0005_9764
+            | 0x0005_976c
+            | 0x0001_ad94
+            | 0x0001_adb0
+            | 0x0001_adc0
+            | 0x0001_adc8
+            | 0x0001_ade4
     )
 }
 
