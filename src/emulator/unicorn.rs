@@ -414,6 +414,12 @@ pub struct UnicornInaviControllerTrace {
     pub query_thunk_target: Option<u32>,
     #[cfg(feature = "trace")]
     pub resource_text: Option<String>,
+    #[cfg(feature = "trace")]
+    pub resource_format_text: Option<String>,
+    #[cfg(feature = "trace")]
+    pub resource_aux_text: Option<String>,
+    #[cfg(feature = "trace")]
+    pub resource_arg_text: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3305,6 +3311,15 @@ fn write_inavi_controller_traces(
             if let Some(resource_text) = trace.resource_text.as_deref() {
                 write!(f, "/text={}", format_trace_string(resource_text))?;
             }
+            if let Some(resource_format_text) = trace.resource_format_text.as_deref() {
+                write!(f, "/format={}", format_trace_string(resource_format_text))?;
+            }
+            if let Some(resource_aux_text) = trace.resource_aux_text.as_deref() {
+                write!(f, "/aux_text={}", format_trace_string(resource_aux_text))?;
+            }
+            if let Some(resource_arg_text) = trace.resource_arg_text.as_deref() {
+                write!(f, "/arg_text={}", format_trace_string(resource_arg_text))?;
+            }
         }
     }
     Ok(())
@@ -5228,7 +5243,10 @@ fn record_inavi_controller_trace<D>(
         return;
     };
     let sp = read_mips_reg(uc, RegisterMIPS::SP);
+    let v0 = read_mips_reg(uc, RegisterMIPS::V0);
     let a0 = read_mips_reg(uc, RegisterMIPS::A0);
+    let a1 = read_mips_reg(uc, RegisterMIPS::A1);
+    let a2 = read_mips_reg(uc, RegisterMIPS::A2);
     let s2 = read_mips_reg(uc, RegisterMIPS::S2);
     let s3 = read_mips_reg(uc, RegisterMIPS::S3);
     let s4 = read_mips_reg(uc, RegisterMIPS::S4);
@@ -5428,6 +5446,30 @@ fn record_inavi_controller_trace<D>(
         _ => None,
     };
     let resource_text = match label {
+        "resource_module_after_getmodule" => sp
+            .checked_add(0x18)
+            .and_then(|addr| read_unicorn_wide_z(uc, addr, 260)),
+        "resource_module_string_init_return"
+        | "resource_module_string_assign_return"
+        | "resource_module_findslash_return" => sp
+            .checked_add(0x10)
+            .and_then(|addr| read_unicorn_u32(uc, addr))
+            .and_then(|ptr| read_unicorn_wide_z(uc, ptr, 260)),
+        "resource_module_slice_return" => {
+            read_unicorn_u32(uc, v0).and_then(|ptr| read_unicorn_wide_z(uc, ptr, 260))
+        }
+        "resource_module_format_call" => read_unicorn_wide_z(uc, fp, 260),
+        "resource_module_format_return" | "resource_module_success" => {
+            read_unicorn_wide_z(uc, fp, 260)
+        }
+        "resource_596b4_helper_return" => sp
+            .checked_add(0x18)
+            .and_then(|addr| read_unicorn_wide_z(uc, addr, 260)),
+        "resource_596b4_after_set" => read_unicorn_wide_z(uc, 0x0079_c490, 260),
+        "resource_59718_base_return" | "resource_59718_source_ready" => {
+            read_unicorn_wide_z(uc, v0, 260)
+        }
+        "resource_59718_format_call" => read_unicorn_wide_z(uc, a2, 260),
         "resource_59718_path_ready"
         | "resource_59718_lookup_call"
         | "resource_59718_lookup_return" => sp
@@ -5440,6 +5482,48 @@ fn record_inavi_controller_trace<D>(
         | "resource_lookup_after_check"
         | "resource_lookup_success"
         | "resource_lookup_fail" => read_unicorn_wide_z(uc, s7, 260),
+        _ => None,
+    };
+    let resource_format_text = match label {
+        "resource_module_format_call" | "resource_module_format_return" => {
+            read_unicorn_wide_z(uc, 0x005b_b0d4, 260)
+        }
+        "resource_59718_format_call" => read_unicorn_wide_z(uc, a1, 260),
+        _ => None,
+    };
+    let resource_aux_text = match label {
+        "resource_596b4_after_set" => sp
+            .checked_add(0x18)
+            .and_then(|addr| read_unicorn_wide_z(uc, addr, 260)),
+        "resource_module_format_return" | "resource_module_success" => sp
+            .checked_add(0x18)
+            .and_then(|addr| read_unicorn_wide_z(uc, addr, 260)),
+        _ => None,
+    };
+    let resource_arg_text = match label {
+        "resource_module_string_init_return"
+        | "resource_module_string_assign_return"
+        | "resource_module_findslash_return" => sp
+            .checked_add(0x10)
+            .map(|addr| resource_pointer_preview(uc, addr, 260)),
+        "resource_module_slice_setup" => Some(format!(
+            "index={}/source={}",
+            v0,
+            sp.checked_add(0x10)
+                .map(|addr| resource_pointer_preview(uc, addr, 260))
+                .unwrap_or_else(|| "source=<overflow>".to_owned())
+        )),
+        "resource_module_slice_return" => Some(format!(
+            "ret={}/slice={}",
+            resource_pointer_preview(uc, v0, 260),
+            sp.checked_add(0x14)
+                .map(|addr| resource_pointer_preview(uc, addr, 260))
+                .unwrap_or_else(|| "slice=<overflow>".to_owned())
+        )),
+        "resource_module_format_call" => Some(resource_pointer_preview(uc, a2, 260)),
+        "resource_module_format_return" | "resource_module_success" => {
+            Some(resource_pointer_preview(uc, a2, 260))
+        }
         _ => None,
     };
     let trace = UnicornInaviControllerTrace {
@@ -5526,6 +5610,12 @@ fn record_inavi_controller_trace<D>(
         query_thunk_target,
         #[cfg(feature = "trace")]
         resource_text,
+        #[cfg(feature = "trace")]
+        resource_format_text,
+        #[cfg(feature = "trace")]
+        resource_aux_text,
+        #[cfg(feature = "trace")]
+        resource_arg_text,
     };
     if is_inavi_render_milestone_label(label) || is_inavi_controller_focus_trace(&trace) {
         let mut milestones = milestones.borrow_mut();
@@ -5550,6 +5640,8 @@ fn is_inavi_render_milestone_label(label: &str) -> bool {
         || label.starts_with("app_query_")
         || label.starts_with("query_5237_")
         || label.starts_with("resource_ready_")
+        || label.starts_with("resource_module_")
+        || label.starts_with("resource_596b4_")
         || label.starts_with("resource_59718_")
         || label.starts_with("resource_lookup_")
 }
@@ -5644,11 +5736,24 @@ fn inavi_controller_probe_label(pc: u32) -> Option<&'static str> {
         0x0005_8ad8 => Some("resource_ready_after_595b8"),
         0x0005_8ae0 => Some("resource_ready_fail_595b8"),
         0x0005_8b08 => Some("resource_ready_pass_inner"),
+        0x0005_96e8 => Some("resource_596b4_helper_return"),
+        0x0005_9704 => Some("resource_596b4_after_set"),
         0x0005_9718 => Some("resource_59718_entry"),
-        0x0005_9744 => Some("resource_59718_token_ready"),
+        0x0005_973c => Some("resource_59718_base_return"),
+        0x0005_9744 => Some("resource_59718_source_ready"),
+        0x0005_9750 => Some("resource_59718_format_call"),
         0x0005_9758 => Some("resource_59718_path_ready"),
         0x0005_9764 => Some("resource_59718_lookup_call"),
         0x0005_976c => Some("resource_59718_lookup_return"),
+        0x0012_9564 => Some("resource_module_after_getmodule"),
+        0x0012_956c => Some("resource_module_string_init_return"),
+        0x0012_9580 => Some("resource_module_string_assign_return"),
+        0x0012_958c => Some("resource_module_findslash_return"),
+        0x0012_95b0 => Some("resource_module_slice_setup"),
+        0x0012_95bc => Some("resource_module_slice_return"),
+        0x0012_95c8 => Some("resource_module_format_call"),
+        0x0012_95d0 => Some("resource_module_format_return"),
+        0x0012_95e0 => Some("resource_module_success"),
         0x0002_d158 => Some("wm_size_entry"),
         0x0002_d198 => Some("wm_size_render_vtable"),
         0x0002_d1a0 => Some("wm_size_render_call"),
@@ -6932,6 +7037,11 @@ fn import_detail_after_return<D>(
             }
             for (index, arg) in args.iter().skip(2).take(4).enumerate() {
                 parts.push(format!("arg{index}=0x{arg:08x}"));
+                #[cfg(feature = "trace")]
+                parts.push(format!(
+                    "arg{index}_text={}",
+                    resource_pointer_preview(uc, *arg, 128)
+                ));
             }
             if let Some(output) = read_unicorn_wide_z(uc, dest, 128) {
                 parts.push(format!("out={output:?}"));
@@ -6994,6 +7104,10 @@ fn is_import_milestone(
             | Some(crate::ce::coredll_ordinals::ORD_LOAD_MENU_W)
             | Some(crate::ce::coredll_ordinals::ORD_REGISTER_CLASS_W)
             | Some(crate::ce::coredll_ordinals::ORD_CREATE_WINDOW_EX_W)
+            | Some(crate::ce::coredll_ordinals::ORD_WSPRINTF_W)
+            | Some(crate::ce::coredll_ordinals::ORD_SWPRINTF)
+            | Some(crate::ce::coredll_ordinals::ORD_WVSPRINTF_W)
+            | Some(crate::ce::coredll_ordinals::ORD_VSWPRINTF)
     )
 }
 
@@ -7036,6 +7150,53 @@ fn read_unicorn_wide_z<D>(
         units.push(unit);
     }
     String::from_utf16(&units).ok()
+}
+
+#[cfg(all(feature = "unicorn", feature = "trace"))]
+fn read_unicorn_narrow_z<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    ptr: u32,
+    max_bytes: usize,
+) -> Option<String> {
+    if ptr == 0 {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    for index in 0..max_bytes {
+        let addr = ptr.wrapping_add(index as u32);
+        let mut byte = [0u8; 1];
+        uc.mem_read(u64::from(addr), &mut byte).ok()?;
+        if byte[0] == 0 {
+            break;
+        }
+        bytes.push(byte[0]);
+    }
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+#[cfg(all(feature = "unicorn", feature = "trace"))]
+fn resource_pointer_preview<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    ptr: u32,
+    max_units: usize,
+) -> String {
+    let mut parts = vec![format!("ptr=0x{ptr:08x}")];
+    if let Some(wide) = read_unicorn_wide_z(uc, ptr, max_units) {
+        parts.push(format!("wide={wide:?}"));
+    }
+    if let Some(narrow) = read_unicorn_narrow_z(uc, ptr, max_units.saturating_mul(2)) {
+        parts.push(format!("narrow={narrow:?}"));
+    }
+    if let Some(deref) = read_unicorn_u32(uc, ptr) {
+        parts.push(format!("deref=0x{deref:08x}"));
+        if let Some(wide) = read_unicorn_wide_z(uc, deref, max_units) {
+            parts.push(format!("deref_wide={wide:?}"));
+        }
+        if let Some(narrow) = read_unicorn_narrow_z(uc, deref, max_units.saturating_mul(2)) {
+            parts.push(format!("deref_narrow={narrow:?}"));
+        }
+    }
+    parts.join("/")
 }
 
 fn format_trace_string(value: &str) -> String {
@@ -7149,11 +7310,18 @@ fn is_inavi_readiness_probe_pc(pc: u32) -> bool {
             | 0x0005_8ad8
             | 0x0005_8ae0
             | 0x0005_8b08
+            | 0x0005_96e8
+            | 0x0005_9704
             | 0x0005_9718
+            | 0x0005_973c
             | 0x0005_9744
+            | 0x0005_9750
             | 0x0005_9758
             | 0x0005_9764
             | 0x0005_976c
+            | 0x0012_9564
+            | 0x0012_95d0
+            | 0x0012_95e0
             | 0x0001_ad94
             | 0x0001_adb0
             | 0x0001_adc0
