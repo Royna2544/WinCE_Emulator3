@@ -6,7 +6,7 @@ use crate::{
             MMSYSERR_BADDEVICEID, MMSYSERR_INVALHANDLE, MMSYSERR_NOERROR, MmResult,
             WAVERR_BADFORMAT, WaveBuffer, WaveFormat, WaveOutCallback,
         },
-        cemath::{CeMathCall, CeMathValue},
+        cemath::{CeMathBinaryF64, CeMathCall, CeMathUnaryF64, CeMathValue},
         coredll_ordinals::{self, *},
         crt,
         devices::DeviceIoControlResult,
@@ -1392,6 +1392,25 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX => Some(CoredllValue::U32(
             msg_wait_for_multiple_objects_ex_raw(kernel, memory, thread_id, args),
         )),
+        ORD_ACOS => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Acos)),
+        ORD_ASIN => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Asin)),
+        ORD_ATAN => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Atan)),
+        ORD_ATAN2 => Some(raw_binary_f64(kernel, args, CeMathBinaryF64::Atan2)),
+        ORD_CEIL => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Ceil)),
+        ORD_COS => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Cos)),
+        ORD_COSH => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Cosh)),
+        ORD_EXP => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Exp)),
+        ORD_FABS => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Fabs)),
+        ORD_FLOOR => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Floor)),
+        ORD_FMOD => Some(raw_binary_f64(kernel, args, CeMathBinaryF64::Fmod)),
+        ORD_LOG => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Log)),
+        ORD_LOG10 => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Log10)),
+        ORD_POW => Some(raw_binary_f64(kernel, args, CeMathBinaryF64::Pow)),
+        ORD_SIN => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Sin)),
+        ORD_SINH => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Sinh)),
+        ORD_SQRT => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Sqrt)),
+        ORD_TAN => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Tan)),
+        ORD_TANH => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Tanh)),
         ORD_CREATE_FILE_W => Some(CoredllValue::Handle(create_file_w_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -2756,6 +2775,74 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 shift: raw_arg(args, 2),
             },
         ))),
+        ORD_FPADD => Some(CoredllValue::CeMath(kernel.math.eval(
+            CeMathCall::FloatAdd {
+                lhs: raw_f32_arg(args, 0),
+                rhs: raw_f32_arg(args, 1),
+            },
+        ))),
+        ORD_FPSUB => Some(CoredllValue::CeMath(kernel.math.eval(
+            CeMathCall::FloatSub {
+                lhs: raw_f32_arg(args, 0),
+                rhs: raw_f32_arg(args, 1),
+            },
+        ))),
+        ORD_FPMUL => Some(CoredllValue::CeMath(kernel.math.eval(
+            CeMathCall::FloatMul {
+                lhs: raw_f32_arg(args, 0),
+                rhs: raw_f32_arg(args, 1),
+            },
+        ))),
+        ORD_FPDIV => Some(CoredllValue::CeMath(kernel.math.eval(
+            CeMathCall::FloatDiv {
+                lhs: raw_f32_arg(args, 0),
+                rhs: raw_f32_arg(args, 1),
+            },
+        ))),
+        ORD_DPADD => Some(CoredllValue::CeMath(kernel.math.eval(
+            CeMathCall::DoubleAdd {
+                lhs: raw_f64_pair(args, 0, 1),
+                rhs: raw_f64_pair(args, 2, 3),
+            },
+        ))),
+        ORD_DPSUB => Some(CoredllValue::CeMath(kernel.math.eval(
+            CeMathCall::DoubleSub {
+                lhs: raw_f64_pair(args, 0, 1),
+                rhs: raw_f64_pair(args, 2, 3),
+            },
+        ))),
+        ORD_DPMUL => Some(CoredllValue::CeMath(kernel.math.eval(
+            CeMathCall::DoubleMul {
+                lhs: raw_f64_pair(args, 0, 1),
+                rhs: raw_f64_pair(args, 2, 3),
+            },
+        ))),
+        ORD_DPDIV => Some(CoredllValue::CeMath(kernel.math.eval(
+            CeMathCall::DoubleDiv {
+                lhs: raw_f64_pair(args, 0, 1),
+                rhs: raw_f64_pair(args, 2, 3),
+            },
+        ))),
+        ORD_FPTOLI => Some(CoredllValue::CeMath(
+            kernel
+                .math
+                .eval(CeMathCall::FloatToLong(raw_f32_arg(args, 0))),
+        )),
+        ORD_FPTOUL => Some(CoredllValue::CeMath(
+            kernel
+                .math
+                .eval(CeMathCall::FloatToUnsignedLong(raw_f32_arg(args, 0))),
+        )),
+        ORD_DPTOLI => Some(CoredllValue::CeMath(
+            kernel
+                .math
+                .eval(CeMathCall::DoubleToLong(raw_f64_pair(args, 0, 1))),
+        )),
+        ORD_DPTOUL => {
+            Some(CoredllValue::CeMath(kernel.math.eval(
+                CeMathCall::DoubleToUnsignedLong(raw_f64_pair(args, 0, 1)),
+            )))
+        }
         ORD_LTS | ORD_LES | ORD_EQS | ORD_GES | ORD_GTS | ORD_NES => {
             Some(CoredllValue::Bool(compare_guest_f32_raw(
                 kernel,
@@ -2785,6 +2872,26 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel
                 .math
                 .eval(CeMathCall::UnsignedLongToFloat(raw_arg(args, 0))),
+        )),
+        ORD_LITODP => Some(CoredllValue::CeMath(
+            kernel
+                .math
+                .eval(CeMathCall::LongToDouble(raw_i32_arg(args, 0))),
+        )),
+        ORD_ULTODP => Some(CoredllValue::CeMath(
+            kernel
+                .math
+                .eval(CeMathCall::UnsignedLongToDouble(raw_arg(args, 0))),
+        )),
+        ORD_FPTODP => Some(CoredllValue::CeMath(
+            kernel
+                .math
+                .eval(CeMathCall::FloatToDouble(raw_f32_arg(args, 0))),
+        )),
+        ORD_DPTOFP => Some(CoredllValue::CeMath(
+            kernel
+                .math
+                .eval(CeMathCall::DoubleToFloat(raw_f64_pair(args, 0, 1))),
         )),
         _ => None,
     }
@@ -10359,12 +10466,35 @@ fn raw_i32_arg(args: &[u32], index: usize) -> i32 {
     raw_arg(args, index) as i32
 }
 
+fn raw_f32_arg(args: &[u32], index: usize) -> f32 {
+    f32::from_bits(raw_arg(args, index))
+}
+
 fn raw_u64_pair(args: &[u32], low_index: usize, high_index: usize) -> u64 {
     u64::from(raw_arg(args, low_index)) | (u64::from(raw_arg(args, high_index)) << 32)
 }
 
 fn raw_i64_pair(args: &[u32], low_index: usize, high_index: usize) -> i64 {
     raw_u64_pair(args, low_index, high_index) as i64
+}
+
+fn raw_f64_pair(args: &[u32], low_index: usize, high_index: usize) -> f64 {
+    f64::from_bits(raw_u64_pair(args, low_index, high_index))
+}
+
+fn raw_unary_f64(kernel: &CeKernel, args: &[u32], op: CeMathUnaryF64) -> CoredllValue {
+    CoredllValue::CeMath(kernel.math.eval(CeMathCall::UnaryF64 {
+        op,
+        value: raw_f64_pair(args, 0, 1),
+    }))
+}
+
+fn raw_binary_f64(kernel: &CeKernel, args: &[u32], op: CeMathBinaryF64) -> CoredllValue {
+    CoredllValue::CeMath(kernel.math.eval(CeMathCall::BinaryF64 {
+        op,
+        lhs: raw_f64_pair(args, 0, 1),
+        rhs: raw_f64_pair(args, 2, 3),
+    }))
 }
 
 fn normalize_name(name: &str) -> String {

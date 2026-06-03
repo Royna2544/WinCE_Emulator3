@@ -9,10 +9,11 @@ use wince_emulation_v3::{
         },
         coredll_ordinals::{
             ORD_CLOSE_HANDLE, ORD_CREATE_APISET, ORD_CREATE_FILE_W, ORD_CREATE_WINDOW_EX_W,
-            ORD_DISPATCH_MESSAGE_W, ORD_EVENT_MODIFY, ORD_GET_MESSAGE_W,
-            ORD_INITIALIZE_CRITICAL_SECTION, ORD_ISWCTYPE, ORD_LITOFP, ORD_LL_DIV, ORD_LONGJMP,
-            ORD_LTD, ORD_NES, ORD_POST_MESSAGE_W, ORD_POW, ORD_REG_OPEN_KEY_EX_W, ORD_SETJMP,
-            ORD_SQRT, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE, current_static_export_count,
+            ORD_DISPATCH_MESSAGE_W, ORD_DPMUL, ORD_DPTOFP, ORD_DPTOLI, ORD_EVENT_MODIFY, ORD_FPMUL,
+            ORD_FPTODP, ORD_FPTOUL, ORD_GET_MESSAGE_W, ORD_INITIALIZE_CRITICAL_SECTION,
+            ORD_ISWCTYPE, ORD_LITODP, ORD_LITOFP, ORD_LL_DIV, ORD_LONGJMP, ORD_LTD, ORD_NES,
+            ORD_POST_MESSAGE_W, ORD_POW, ORD_REG_OPEN_KEY_EX_W, ORD_SETJMP, ORD_SQRT, ORD_ULTODP,
+            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE, current_static_export_count,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::WM_USER,
@@ -110,6 +111,7 @@ fn coredll_raw_dispatch_routes_mips_soft_float_compare_helpers() -> Result<()> {
 
     assert_eq!(table.resolve_name("__nes").unwrap().ordinal, ORD_NES);
     assert_eq!(table.resolve_name("__ltd").unwrap().ordinal, ORD_LTD);
+    assert_eq!(table.resolve_name("__dpmul").unwrap().ordinal, ORD_DPMUL);
 
     memory.map_words(0x1000, 1);
     memory.map_words(0x2000, 1);
@@ -177,6 +179,153 @@ fn coredll_raw_dispatch_routes_mips_soft_float_compare_helpers() -> Result<()> {
             value: CoredllValue::CeMath(CeMathValue::F32(value)),
             ..
         } if value.to_bits() == (192_000_f32).to_bits()
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FPMUL,
+            [1.5_f32.to_bits(), (-2.0_f32).to_bits()],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::F32(value)),
+            ..
+        } if value.to_bits() == (-3.0_f32).to_bits()
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FPTOUL,
+            [17.75_f32.to_bits()],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::U32(17)),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LITODP,
+            [0xffff_ff9c],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::F64(value)),
+            ..
+        } if value.to_bits() == (-100.0_f64).to_bits()
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ULTODP,
+            [4_000_000_000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::F64(value)),
+            ..
+        } if value.to_bits() == (4_000_000_000_f64).to_bits()
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FPTODP,
+            [12.25_f32.to_bits()],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::F64(value)),
+            ..
+        } if value.to_bits() == (12.25_f64).to_bits()
+    ));
+    let dpmul_lhs = (-1.5_f64).to_bits();
+    let dpmul_rhs = 2.0_f64.to_bits();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DPMUL,
+            [
+                dpmul_lhs as u32,
+                (dpmul_lhs >> 32) as u32,
+                dpmul_rhs as u32,
+                (dpmul_rhs >> 32) as u32,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::F64(value)),
+            ..
+        } if value.to_bits() == (-3.0_f64).to_bits()
+    ));
+    let dptofp_value = 6.5_f64.to_bits();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DPTOFP,
+            [dptofp_value as u32, (dptofp_value >> 32) as u32],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::F32(value)),
+            ..
+        } if value.to_bits() == (6.5_f32).to_bits()
+    ));
+    let dptoli_value = (-42.25_f64).to_bits();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DPTOLI,
+            [dptoli_value as u32, (dptoli_value >> 32) as u32],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::I32(-42)),
+            ..
+        }
+    ));
+    let sqrt_value = 81.0_f64.to_bits();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SQRT,
+            [sqrt_value as u32, (sqrt_value >> 32) as u32],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::F64(9.0)),
+            ..
+        }
+    ));
+    let pow_lhs = 3.0_f64.to_bits();
+    let pow_rhs = 4.0_f64.to_bits();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_POW,
+            [
+                pow_lhs as u32,
+                (pow_lhs >> 32) as u32,
+                pow_rhs as u32,
+                (pow_rhs >> 32) as u32,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::F64(81.0)),
+            ..
+        }
     ));
 
     assert!(matches!(

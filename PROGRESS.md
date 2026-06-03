@@ -52,6 +52,11 @@
 - Added a simple `cemath` subsystem for common CE CRT math exports and MIPS
   helper routines, including `sqrt`, `pow`, `fmod`, `div`, `ldiv`, `__ll_div`,
   `__ll_mul`, soft-float add/sub/mul/div, conversion, and compare helpers.
+- Raw COREDLL import-trap dispatch now routes the observed MIPS soft-float
+  conversion/arithmetic helpers (`__litodp`, `__ultodp`, `__fp*`, `__dp*`,
+  `__fptodp`, `__dptofp`) and CRT double math exports (`sqrt`, `pow`, `fmod`,
+  trigonometric/log/rounding unary helpers) through the `cemath` backend using
+  the verified low-word/high-word MIPS double register ABI.
 - COREDLL ordinal work is now split by subsystem in code. Every static export
   can produce an ordinal plan entry with subsystem ownership and
   implemented-vs-stubbed status; raw ordinal dispatch preserves raw arguments

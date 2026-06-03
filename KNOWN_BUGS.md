@@ -114,7 +114,12 @@
     `1943` (`pc=0x7fff0900`, `ra=0x600110e4`). `ADBSetAccountProperties @1943`
     now returns `FALSE`/`ERROR_NOT_SUPPORTED`, moving the launch to an encoded
     guest `TerminateProcess` exit (`caller=0x0048fa90`, process `0x42`,
-    `exit_code=0`); the framebuffer is still all zero.
+    `exit_code=0`); the framebuffer is still all zero. A later mounted monitor
+    run with a real `tap 400 240` advances past the previous raw math traps
+    (`__litodp @2036`, `__dpmul @2027`, `sqrt @1060`) and stops in
+    `GetMessageW @861` with `blocked_get_message=thread:1 hwnd=any`, so the
+    current active failure remains missing useful paint/GDI/framebuffer output
+    after startup/input rather than those math imports.
   - Status: active; `TlsCall` now returns real CE-style slots,
     `CallWindowProcW` now enters guest window-procedure targets, and
     `CreateWindowExW` now delivers the first create-time message. Raw
