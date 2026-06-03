@@ -1,5 +1,6 @@
 use std::{
     collections::BTreeSet,
+    io::{self, Write},
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -35,6 +36,7 @@ struct Args {
     cpu_wall_clock_limit_ms: u64,
     startup_taps: Vec<(i32, i32)>,
     run_cpu: bool,
+    monitor: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,50 +194,10 @@ fn main() -> Result<()> {
     }
 
     if args.run_cpu {
-        enqueue_startup_taps(&mut kernel, &args.startup_taps)?;
-        let mut reported_blocked_message_wait = false;
-        loop {
-            if enqueue_desktop_input(&mut desktop, &mut kernel)? != 0 {
-                reported_blocked_message_wait = false;
-            }
-            if let Err(err) = cpu.run_until_import_trap_with_framebuffer_limits(
-                &mut kernel,
-                desktop.framebuffer_mut(),
-                UnicornRunLimits {
-                    instruction_limit: args.cpu_instruction_limit,
-                    wall_clock_limit_ms: args.cpu_wall_clock_limit_ms,
-                },
-            ) {
-                if let Some(snapshot) = cpu.last_debug_snapshot() {
-                    eprintln!("  Unicorn debug: {snapshot}");
-                }
-                if let Some(path) = args.framebuffer_dump.as_ref() {
-                    desktop.framebuffer().write_ppm(path)?;
-                    eprintln!("  framebuffer dump: {}", path.display());
-                }
-                return Err(err);
-            }
-            if enqueue_desktop_input(&mut desktop, &mut kernel)? != 0 {
-                reported_blocked_message_wait = false;
-            }
-            desktop.present()?;
-            if let Some(snapshot) = cpu.last_debug_snapshot() {
-                if args.desktop == DesktopMode::Host && snapshot.blocked_get_message.is_some() {
-                    if !reported_blocked_message_wait {
-                        println!("  Unicorn stopped: {snapshot}");
-                        if let Some(path) = args.framebuffer_dump.as_ref() {
-                            desktop.framebuffer().write_ppm(path)?;
-                            println!("  framebuffer dump: {}", path.display());
-                        }
-                        reported_blocked_message_wait = true;
-                    }
-                    std::thread::sleep(Duration::from_millis(16));
-                    continue;
-                }
-                println!("  Unicorn stopped: {snapshot}");
-            }
-            break;
-        }
+        run_cpu_loop(&mut cpu, &mut kernel, &mut desktop, &args)?;
+    }
+    if args.monitor {
+        run_monitor(&mut cpu, &mut kernel, &mut desktop, &args)?;
     }
     if let Some(path) = args.framebuffer_dump.as_ref() {
         desktop.framebuffer().write_ppm(path)?;
@@ -243,6 +205,279 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn run_cpu_loop(
+    cpu: &mut UnicornMips,
+    kernel: &mut CeKernel,
+    desktop: &mut DesktopRuntime,
+    args: &Args,
+) -> Result<()> {
+    enqueue_startup_taps(kernel, &args.startup_taps)?;
+    let mut reported_blocked_message_wait = false;
+    loop {
+        if enqueue_desktop_input(desktop, kernel)? != 0 {
+            reported_blocked_message_wait = false;
+        }
+        if let Err(err) = cpu.run_until_import_trap_with_framebuffer_limits(
+            kernel,
+            desktop.framebuffer_mut(),
+            UnicornRunLimits {
+                instruction_limit: args.cpu_instruction_limit,
+                wall_clock_limit_ms: args.cpu_wall_clock_limit_ms,
+            },
+        ) {
+            if let Some(snapshot) = cpu.last_debug_snapshot() {
+                eprintln!("  Unicorn debug: {snapshot}");
+            }
+            if let Some(path) = args.framebuffer_dump.as_ref() {
+                desktop.framebuffer().write_ppm(path)?;
+                eprintln!("  framebuffer dump: {}", path.display());
+            }
+            return Err(err);
+        }
+        if enqueue_desktop_input(desktop, kernel)? != 0 {
+            reported_blocked_message_wait = false;
+        }
+        desktop.present()?;
+        if let Some(snapshot) = cpu.last_debug_snapshot() {
+            if args.desktop == DesktopMode::Host && snapshot.blocked_get_message.is_some() {
+                if !reported_blocked_message_wait {
+                    println!("  Unicorn stopped: {snapshot}");
+                    if let Some(path) = args.framebuffer_dump.as_ref() {
+                        desktop.framebuffer().write_ppm(path)?;
+                        println!("  framebuffer dump: {}", path.display());
+                    }
+                    reported_blocked_message_wait = true;
+                }
+                std::thread::sleep(Duration::from_millis(16));
+                continue;
+            }
+            println!("  Unicorn stopped: {snapshot}");
+        }
+        break;
+    }
+    Ok(())
+}
+
+fn run_monitor(
+    cpu: &mut UnicornMips,
+    kernel: &mut CeKernel,
+    desktop: &mut DesktopRuntime,
+    args: &Args,
+) -> Result<()> {
+    enqueue_startup_taps(kernel, &args.startup_taps)?;
+    println!("  monitor: interactive commands enabled; type `help`");
+    let stdin = io::stdin();
+    loop {
+        print!("fakece> ");
+        io::stdout().flush().map_err(|err| {
+            wince_emulation_v3::Error::Backend(format!("flush monitor prompt: {err}"))
+        })?;
+        let mut line = String::new();
+        let read = stdin.read_line(&mut line).map_err(|err| {
+            wince_emulation_v3::Error::Backend(format!("read monitor command: {err}"))
+        })?;
+        if read == 0 {
+            println!();
+            break;
+        }
+        let mut words = line.split_whitespace();
+        let Some(command) = words.next() else {
+            continue;
+        };
+        match command {
+            "help" | "h" | "?" => print_monitor_help(),
+            "continue" | "c" => {
+                let wall_clock_limit_ms = words
+                    .next()
+                    .map(parse_monitor_u64)
+                    .transpose()?
+                    .unwrap_or_else(|| {
+                        if args.cpu_wall_clock_limit_ms == 0 && args.cpu_instruction_limit == 0 {
+                            1000
+                        } else {
+                            args.cpu_wall_clock_limit_ms
+                        }
+                    });
+                let instruction_limit = words
+                    .next()
+                    .map(parse_monitor_usize)
+                    .transpose()?
+                    .unwrap_or(args.cpu_instruction_limit);
+                monitor_run_once(
+                    cpu,
+                    kernel,
+                    desktop,
+                    UnicornRunLimits {
+                        instruction_limit,
+                        wall_clock_limit_ms,
+                    },
+                    args.framebuffer_dump.as_deref(),
+                )?;
+            }
+            "step" | "s" | "si" => {
+                let instruction_limit = words
+                    .next()
+                    .map(parse_monitor_usize)
+                    .transpose()?
+                    .unwrap_or(1);
+                monitor_run_once(
+                    cpu,
+                    kernel,
+                    desktop,
+                    UnicornRunLimits {
+                        instruction_limit,
+                        wall_clock_limit_ms: 0,
+                    },
+                    args.framebuffer_dump.as_deref(),
+                )?;
+            }
+            "tap" => {
+                let x = words.next().ok_or_else(|| {
+                    wince_emulation_v3::Error::InvalidArgument("tap needs X Y".to_owned())
+                })?;
+                let y = words.next().ok_or_else(|| {
+                    wince_emulation_v3::Error::InvalidArgument("tap needs X Y".to_owned())
+                })?;
+                let x = parse_monitor_i32(x)?;
+                let y = parse_monitor_i32(y)?;
+                kernel.remote.enqueue_touch("tap", x, y).map_err(|err| {
+                    wince_emulation_v3::Error::Backend(format!("monitor tap: {err}"))
+                })?;
+                println!("  queued tap {x},{y}");
+            }
+            "dump" => {
+                let path = words
+                    .next()
+                    .map(PathBuf::from)
+                    .or_else(|| args.framebuffer_dump.clone())
+                    .ok_or_else(|| {
+                        wince_emulation_v3::Error::InvalidArgument(
+                            "dump needs a path or --framebuffer-dump".to_owned(),
+                        )
+                    })?;
+                desktop.framebuffer().write_ppm(&path)?;
+                println!("  framebuffer dump: {}", path.display());
+            }
+            "present" => {
+                desktop.present()?;
+                println!("  presented framebuffer");
+            }
+            "regs" | "snapshot" | "info" => {
+                if let Some(snapshot) = cpu.last_debug_snapshot() {
+                    println!("  Unicorn stopped: {snapshot}");
+                } else {
+                    println!("  no Unicorn snapshot yet");
+                }
+            }
+            "quit" | "q" | "exit" => break,
+            other => {
+                println!("  unknown monitor command `{other}`; type `help`");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn monitor_run_once(
+    cpu: &mut UnicornMips,
+    kernel: &mut CeKernel,
+    desktop: &mut DesktopRuntime,
+    limits: UnicornRunLimits,
+    framebuffer_dump: Option<&Path>,
+) -> Result<()> {
+    let input_before = enqueue_desktop_input(desktop, kernel)?;
+    if input_before != 0 {
+        println!("  drained {input_before} host input event(s)");
+    }
+    if let Err(err) =
+        cpu.run_until_import_trap_with_framebuffer_limits(kernel, desktop.framebuffer_mut(), limits)
+    {
+        if let Some(snapshot) = cpu.last_debug_snapshot() {
+            eprintln!("  Unicorn debug: {snapshot}");
+        }
+        if let Some(path) = framebuffer_dump {
+            desktop.framebuffer().write_ppm(path)?;
+            eprintln!("  framebuffer dump: {}", path.display());
+        }
+        return Err(err);
+    }
+    let input_after = enqueue_desktop_input(desktop, kernel)?;
+    if input_after != 0 {
+        println!("  drained {input_after} host input event(s)");
+    }
+    desktop.present()?;
+    if let Some(snapshot) = cpu.last_debug_snapshot() {
+        println!("  Unicorn stopped: {snapshot}");
+    }
+    if let Some(path) = framebuffer_dump {
+        desktop.framebuffer().write_ppm(path)?;
+        println!("  framebuffer dump: {}", path.display());
+    }
+    Ok(())
+}
+
+fn print_monitor_help() {
+    println!("  continue [wall_ms] [insns]  run until stop or bounded limit; default 1000 ms");
+    println!("  step [insns]                run one bounded slice, default 1 instruction");
+    println!("  tap X Y                     queue a touch tap");
+    println!("  dump [path]                 write framebuffer PPM");
+    println!("  present                     present the current framebuffer");
+    println!("  regs                        print the last Unicorn snapshot");
+    println!("  quit                        exit the monitor");
+    println!("  note: live rewind/restore needs persistent CPU-state snapshots");
+}
+
+fn parse_monitor_u64(value: &str) -> Result<u64> {
+    parse_u64_value(value).map_err(|err| {
+        wince_emulation_v3::Error::InvalidArgument(format!("monitor integer {value}: {err}"))
+    })
+}
+
+fn parse_monitor_usize(value: &str) -> Result<usize> {
+    parse_u64_value(value)
+        .and_then(|value| {
+            usize::try_from(value)
+                .map_err(|err| wince_emulation_v3::Error::InvalidArgument(err.to_string()))
+        })
+        .map_err(|err| {
+            wince_emulation_v3::Error::InvalidArgument(format!("monitor integer {value}: {err}"))
+        })
+}
+
+fn parse_monitor_i32(value: &str) -> Result<i32> {
+    let parsed = parse_i64_value(value).map_err(|err| {
+        wince_emulation_v3::Error::InvalidArgument(format!("monitor integer {value}: {err}"))
+    })?;
+    i32::try_from(parsed).map_err(|err| {
+        wince_emulation_v3::Error::InvalidArgument(format!("monitor integer {value}: {err}"))
+    })
+}
+
+fn parse_u64_value(value: &str) -> Result<u64> {
+    if let Some(hex) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
+        u64::from_str_radix(hex, 16)
+            .map_err(|err| wince_emulation_v3::Error::InvalidArgument(err.to_string()))
+    } else {
+        value
+            .parse()
+            .map_err(|err| wince_emulation_v3::Error::InvalidArgument(format!("{err}")))
+    }
+}
+
+fn parse_i64_value(value: &str) -> Result<i64> {
+    let (sign, digits) = value
+        .strip_prefix('-')
+        .map(|digits| (-1i64, digits))
+        .unwrap_or((1, value));
+    let parsed = parse_u64_value(digits)?;
+    i64::try_from(parsed)
+        .map(|parsed| sign.saturating_mul(parsed))
+        .map_err(|err| wince_emulation_v3::Error::InvalidArgument(err.to_string()))
 }
 
 impl DesktopRuntime {
@@ -415,6 +650,7 @@ impl Args {
         let mut cpu_wall_clock_limit_ms = 0;
         let mut startup_taps = Vec::new();
         let mut run_cpu = false;
+        let mut monitor = false;
 
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -452,6 +688,9 @@ impl Args {
                 "--run-cpu" => {
                     run_cpu = true;
                 }
+                "--monitor" | "--debugger" => {
+                    monitor = true;
+                }
                 "--help" | "-h" => {
                     print_help();
                     std::process::exit(0);
@@ -476,6 +715,7 @@ impl Args {
             cpu_wall_clock_limit_ms,
             startup_taps,
             run_cpu,
+            monitor,
         })
     }
 }
@@ -537,7 +777,7 @@ fn next_tap(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<(i32,
 
 fn print_help() {
     println!(
-        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--mount-config mounts.toml] [--image INavi.exe] [--dll-search-dir DIR]... [--desktop virtual|host] [--framebuffer-dump OUT.ppm] [--cpu-instruction-limit N] [--cpu-wall-clock-limit-ms N] [--tap X,Y]... [--run-cpu]"
+        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--mount-config mounts.toml] [--image INavi.exe] [--dll-search-dir DIR]... [--desktop virtual|host] [--framebuffer-dump OUT.ppm] [--cpu-instruction-limit N] [--cpu-wall-clock-limit-ms N] [--tap X,Y]... [--run-cpu] [--monitor]"
     );
 }
 

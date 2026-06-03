@@ -648,6 +648,15 @@
   all zero, so the current target frontier is no longer startup input delivery;
   it is the missing app paint/GDI/surface path after the visible window and real
   tap are present.
+- The command-line runner now has an interactive `--monitor` mode for
+  repeatable emulator control. The first monitor command set supports
+  `continue [wall_ms] [insns]` bounded CPU slices, `step [insns]` bounded
+  instruction slices, `tap X Y`, `dump [path]`, `present`, `regs`, and `quit`.
+  A scripted smoke test with `help`/`quit` passed, and a scripted mounted iNavi
+  session verified `tap`, bounded `continue`, `dump`, and `regs`, writing
+  `target\monitor_slice.ppm` and `target\monitor_default.ppm`. This is a
+  command-loop/debugger front-end over the existing bounded runner; live
+  rewind/restore still requires persistent Unicorn CPU and memory snapshots.
 - Unicorn WNDPROC return handling no longer validates every `WM_PAINT`
   unconditionally. Plain guest WNDPROC returns leave the update region pending;
   `DefWindowProcW` and `CallWindowProcW(DEFAULT)` consume paint through the
