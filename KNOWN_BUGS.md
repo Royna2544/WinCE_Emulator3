@@ -175,6 +175,15 @@
     all zero after the 90 s bounded run, so the active bug remains the missing
     render/GDI/surface path after resources are loaded, not path translation or
     a need to mount app resource data at `\res`.
+    The next resource-loading frontier is now after device/OEM classification:
+    `SystemParametersInfoW(SPI_GETOEMINFO)` returns `iNavi GN 2010` from
+    `regs.json`, the resource selector chooses `mode=47`, and `values.dat`
+    record 47 is read into a 1746-byte payload. The parser reads a sane header
+    (`field_count=215`) and first key, then stops with interrupt 20 at
+    `pc=0`, `ra=0x0006bfb4`, `last_pc=0x0006bf8c` while reading/sign-extending
+    the second key. The latest framebuffer dump remains all zero.
+    `target\monitor_debugger_oeminfo.log` is compact; detailed evidence lives
+    in the sibling `tracefile` artifacts.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch

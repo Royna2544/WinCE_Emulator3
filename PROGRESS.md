@@ -754,6 +754,22 @@
   was lost by wide `vswprintf("%s", wide_path)` handling. Do not paper over
   this by mounting app resources at `\res`; `e52e402` fixes the wide printf
   semantics and the real run now reads `\SDMMC Disk\INavi\res\values.dat`.
+- `SystemParametersInfoW(SPI_GETOEMINFO)` now reads
+  `HKLM\System\Emulator\SystemParametersInfo` by action id/alias, with generic
+  CE fallbacks. The checked-in registry snapshot returns `iNavi GN 2010`, which
+  moves the mounted iNavi resource selector from the old `mode=0` table miss to
+  `mode=47`, finds record 47 in `values.dat`, reads the 1746-byte payload, and
+  enters the resource field parser. The current real run still dumps an
+  all-zero framebuffer, but the active stop is later: interrupt 20 at
+  `pc=0`, `ra=0x0006bfb4`, `last_pc=0x0006bf8c` while parsing the second
+  payload key. Monitor sessions now keep running after this stop so scripted
+  `tracefile` and `dump` commands complete; `target\monitor_debugger_oeminfo.*`
+  is the latest artifact set.
+- The monitor is intentionally honest about statefulness: `continue`, `until`,
+  `tap`, `dump`, `tracefile`, `checkpoint`, and `rewind` are usable, but
+  `step` now reports that live instruction stepping needs persistent Unicorn
+  CPU/RAM state instead of restarting from the image entry and pretending to
+  single-step.
 - The default bootstrap uses `regs.json` as backing storage for the fake CE
   registry API and creates base GWE, timer, audio, and memory-map state.
 - The virtual Win32/CE framework and COREDLL dispatcher are connected to Unicorn

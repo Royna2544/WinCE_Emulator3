@@ -134,8 +134,17 @@
   Rust-side CPU wrapper, CE kernel, and framebuffer, and current `map`/`x`/
   `disasm` commands inspect mapped static PE/DLL/trap bytes. The current
   `until ADDRESS` command can stop a bounded run at a requested guest PC.
+  `step` is deliberately disabled because the current Unicorn wrapper rebuilds
+  CPU/RAM state for each run and would otherwise restart from the image entry.
   Remaining pieces are to retain live Unicorn CPU/register/memory state across
   commands and expose live memory examine/write commands.
+- Continue the new resource payload frontier after the registry-backed
+  `SPI_GETOEMINFO` fix. The latest mounted run selects iNavi resource
+  `mode=47`, reads the 1746-byte record payload from
+  `\SDMMC Disk\INavi\res\values.dat`, parses the first key, then stops with
+  interrupt 20 at `pc=0`, `ra=0x0006bfb4`, `last_pc=0x0006bf8c` on the second
+  key. Use `target\monitor_debugger_oeminfo_render.txt` and
+  `target\monitor_debugger_oeminfo_code.txt` as the current compact evidence.
 - Extend bounded run tooling beyond the current snapshot import ring if more
   structured trace context is needed.
 - Trace why the now-consumed `--tap 400,240` messages do not trigger useful
