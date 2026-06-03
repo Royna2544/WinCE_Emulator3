@@ -3993,6 +3993,14 @@ fn read_unicorn_u8<D>(uc: &unicorn_engine::Unicorn<'_, D>, address: u32) -> Opti
         .map(|()| bytes[0])
 }
 
+#[cfg(all(feature = "unicorn", feature = "trace"))]
+fn read_unicorn_i16<D>(uc: &unicorn_engine::Unicorn<'_, D>, address: u32) -> Option<i16> {
+    let mut bytes = [0; 2];
+    uc.mem_read(u64::from(address), &mut bytes)
+        .ok()
+        .map(|()| i16::from_le_bytes(bytes))
+}
+
 #[cfg(feature = "unicorn")]
 fn read_mapped_blobs_u32(mapped_blobs: &[MappedBlob], address: u32) -> Option<u32> {
     for blob in mapped_blobs {
@@ -5244,12 +5252,15 @@ fn record_inavi_controller_trace<D>(
     };
     let sp = read_mips_reg(uc, RegisterMIPS::SP);
     let v0 = read_mips_reg(uc, RegisterMIPS::V0);
+    let v1 = read_mips_reg(uc, RegisterMIPS::V1);
     let a0 = read_mips_reg(uc, RegisterMIPS::A0);
     let a1 = read_mips_reg(uc, RegisterMIPS::A1);
     let a2 = read_mips_reg(uc, RegisterMIPS::A2);
+    let a3 = read_mips_reg(uc, RegisterMIPS::A3);
     let s2 = read_mips_reg(uc, RegisterMIPS::S2);
     let s3 = read_mips_reg(uc, RegisterMIPS::S3);
     let s4 = read_mips_reg(uc, RegisterMIPS::S4);
+    let s5 = read_mips_reg(uc, RegisterMIPS::S5);
     let s6 = read_mips_reg(uc, RegisterMIPS::S6);
     let s7 = read_mips_reg(uc, RegisterMIPS::S7);
     let fp = read_mips_reg(uc, RegisterMIPS::FP);
@@ -5475,6 +5486,12 @@ fn record_inavi_controller_trace<D>(
         | "resource_59718_lookup_return" => sp
             .checked_add(0x10)
             .and_then(|addr| read_unicorn_wide_z(uc, addr, 260)),
+        "resource_state_source_return"
+        | "resource_state_populate_return"
+        | "resource_state_set_call" => sp
+            .checked_add(0x1c)
+            .and_then(|addr| read_unicorn_wide_z(uc, addr, 260)),
+        "resource_state_set_entry" => read_unicorn_wide_z(uc, a3, 260),
         "resource_lookup_entry" => {
             read_unicorn_wide_z(uc, read_mips_reg(uc, RegisterMIPS::A1), 260)
         }
@@ -5482,6 +5499,7 @@ fn record_inavi_controller_trace<D>(
         | "resource_lookup_after_check"
         | "resource_lookup_success"
         | "resource_lookup_fail" => read_unicorn_wide_z(uc, s7, 260),
+        "resource_table_open_entry" => read_unicorn_wide_z(uc, a2, 260),
         _ => None,
     };
     let resource_format_text = match label {
@@ -5524,6 +5542,193 @@ fn record_inavi_controller_trace<D>(
         "resource_module_format_return" | "resource_module_success" => {
             Some(resource_pointer_preview(uc, a2, 260))
         }
+        "resource_mode_search_entry" => Some(format!(
+            "list=0x{a0:08x}/count={}/out=0x{a1:08x}",
+            read_unicorn_u32(uc, a0.wrapping_add(4)).unwrap_or_default()
+        )),
+        "resource_mode_search_count" => Some(format!("count={v0}/out=0x{s6:08x}")),
+        "resource_mode_record_read" => Some(format!(
+            "index={}/count={}/kind={}/raw0=0x{:08x}/raw1=0x{:08x}",
+            s7 as i16,
+            read_unicorn_u32(uc, fp.wrapping_add(4)).unwrap_or_default(),
+            read_unicorn_i16(uc, sp.wrapping_add(0x18)).unwrap_or_default(),
+            read_unicorn_u32(uc, sp.wrapping_add(0x18)).unwrap_or_default(),
+            read_unicorn_u32(uc, sp.wrapping_add(0x1c)).unwrap_or_default()
+        )),
+        "resource_mode_search_return" => Some(format!(
+            "result=0x{v0:08x}/mode={}/submode={}/path={}",
+            read_unicorn_i16(uc, s6).unwrap_or_default(),
+            read_unicorn_i16(uc, s6.wrapping_add(2)).unwrap_or_default(),
+            resource_pointer_preview(uc, s6.wrapping_add(4), 260)
+        )),
+        "resource_state_source_return" => Some(format!(
+            "mode={}/submode={}/path={}",
+            read_unicorn_i16(uc, sp.wrapping_add(0x18)).unwrap_or_default(),
+            read_unicorn_i16(uc, sp.wrapping_add(0x1a)).unwrap_or_default(),
+            sp.checked_add(0x1c)
+                .map(|addr| resource_pointer_preview(uc, addr, 260))
+                .unwrap_or_else(|| "path=<overflow>".to_owned())
+        )),
+        "resource_state_populate_return" => Some(format!(
+            "result=0x{v0:08x}/mode={}/submode={}/path={}",
+            read_unicorn_i16(uc, sp.wrapping_add(0x18)).unwrap_or_default(),
+            read_unicorn_i16(uc, sp.wrapping_add(0x1a)).unwrap_or_default(),
+            sp.checked_add(0x1c)
+                .map(|addr| resource_pointer_preview(uc, addr, 260))
+                .unwrap_or_else(|| "path=<overflow>".to_owned())
+        )),
+        "resource_state_acquire_return" => Some(format!(
+            "state=0x{v0:08x}/mode={}/submode={}/ready={}",
+            read_unicorn_i16(uc, v0).unwrap_or_default(),
+            read_unicorn_i16(uc, v0.wrapping_add(2)).unwrap_or_default(),
+            read_unicorn_u8(uc, v0.wrapping_add(0x20c)).unwrap_or_default()
+        )),
+        "resource_state_set_call" => Some(format!(
+            "state=0x{a0:08x}/mode={}/submode={}/path={}",
+            a1 as i16,
+            a2 as i16,
+            sp.checked_add(0x1c)
+                .map(|addr| resource_pointer_preview(uc, addr, 260))
+                .unwrap_or_else(|| "path=<overflow>".to_owned())
+        )),
+        "resource_state_set_entry" => Some(format!(
+            "state=0x{a0:08x}/mode={}/submode={}/path={}",
+            a1 as i16,
+            a2 as i16,
+            resource_pointer_preview(uc, a3, 260)
+        )),
+        "resource_state_after_mode" => Some(format!(
+            "state=0x{a0:08x}/mode={}/submode={}",
+            read_unicorn_i16(uc, a0).unwrap_or_default(),
+            read_unicorn_i16(uc, a0.wrapping_add(2)).unwrap_or_default()
+        )),
+        "resource_state_after_pair" | "resource_state_set_return" => Some(format!(
+            "state=0x{a0:08x}/mode={}/submode={}/ready={}",
+            read_unicorn_i16(uc, a0).unwrap_or_default(),
+            read_unicorn_i16(uc, a0.wrapping_add(2)).unwrap_or_default(),
+            read_unicorn_u8(uc, a0.wrapping_add(0x20c)).unwrap_or_default()
+        )),
+        "resource_state_set_done" => Some(format!(
+            "state=0x{a0:08x}/mode={}/submode={}/ready={}",
+            read_unicorn_i16(uc, a0).unwrap_or_default(),
+            read_unicorn_i16(uc, a0.wrapping_add(2)).unwrap_or_default(),
+            read_unicorn_u8(uc, a0.wrapping_add(0x20c)).unwrap_or_default()
+        )),
+        "resource_lookup_entry" => Some(format!(
+            "state=0x{a0:08x}/path={}",
+            resource_pointer_preview(uc, a1, 260)
+        )),
+        "resource_lookup_after_source" => Some(format!(
+            "table=0x{v0:08x}/mode={}/path={}",
+            read_unicorn_i16(uc, fp).unwrap_or_default(),
+            resource_pointer_preview(uc, s7, 260)
+        )),
+        "resource_lookup_after_check" => Some(format!(
+            "check_result=0x{v0:08x}/ready={}/path={}",
+            read_unicorn_u8(uc, fp.wrapping_add(0x20c)).unwrap_or_default(),
+            resource_pointer_preview(uc, s7, 260)
+        )),
+        "resource_lookup_success" | "resource_lookup_fail" => Some(format!(
+            "ready={}/path={}",
+            read_unicorn_u8(uc, fp.wrapping_add(0x20c)).unwrap_or_default(),
+            resource_pointer_preview(uc, s7, 260)
+        )),
+        "resource_table_open_entry" => Some(format!(
+            "table=0x{a0:08x}/mode={}/path={}",
+            a1 as i16,
+            resource_pointer_preview(uc, a2, 260)
+        )),
+        "resource_table_after_create" => Some(format!(
+            "handle=0x{fp:08x}/valid={}",
+            (fp != u32::MAX) as u8
+        )),
+        "resource_table_header_count" => Some(format!(
+            "count={}/bytes={}",
+            read_unicorn_i16(uc, sp.wrapping_add(0x20)).unwrap_or_default(),
+            read_unicorn_u32(uc, sp.wrapping_add(0x24)).unwrap_or_default()
+        )),
+        "resource_table_record_read" => Some(format!(
+            "index={}/want_mode={}/record_mode={}/bytes={}",
+            s5 as i16,
+            s3 as i16,
+            read_unicorn_i16(uc, sp.wrapping_add(0x38)).unwrap_or_default(),
+            read_unicorn_u32(uc, sp.wrapping_add(0x24)).unwrap_or_default()
+        )),
+        "resource_table_record_match" => Some(format!(
+            "index={}/offset={}/size={}/bytes={}",
+            s5 as i16,
+            read_unicorn_u32(uc, sp.wrapping_add(0x3c)).unwrap_or_default(),
+            read_unicorn_u32(uc, sp.wrapping_add(0x40)).unwrap_or_default(),
+            read_unicorn_u32(uc, sp.wrapping_add(0x24)).unwrap_or_default()
+        )),
+        "resource_table_data_seek" => Some(format!("seek_result=0x{v0:08x}/expected=0x{a1:08x}")),
+        "resource_table_data_read" => Some(format!(
+            "buffer=0x{:08x}/size={}/bytes={}",
+            read_unicorn_u32(uc, s6).unwrap_or_default(),
+            read_unicorn_u32(uc, sp.wrapping_add(0x40)).unwrap_or_default(),
+            read_unicorn_u32(uc, sp.wrapping_add(0x24)).unwrap_or_default()
+        )),
+        "resource_table_field_count" => {
+            let buffer = read_unicorn_u32(uc, s6).unwrap_or_default();
+            Some(format!(
+                "buffer=0x{buffer:08x}/field_count={}/raw0=0x{:08x}",
+                read_unicorn_i16(uc, buffer.wrapping_add(2)).unwrap_or_default(),
+                read_unicorn_u32(uc, buffer).unwrap_or_default()
+            ))
+        }
+        "resource_table_field_key" => {
+            let buffer = v0;
+            let offset = v1;
+            Some(format!(
+                "buffer=0x{buffer:08x}/offset={offset}/key={}/next=0x{:08x}",
+                read_mips_reg(uc, RegisterMIPS::T4) as i16,
+                buffer.wrapping_add(offset.wrapping_add(2))
+            ))
+        }
+        "resource_table_field_insert_return" => Some(format!(
+            "entry_key={}/entry_ptr=0x{:08x}/found=0x{:08x}/created={}",
+            read_unicorn_i16(uc, sp.wrapping_add(0x28)).unwrap_or_default(),
+            read_unicorn_u32(uc, sp.wrapping_add(0x2c)).unwrap_or_default(),
+            read_unicorn_u32(uc, sp.wrapping_add(0x30)).unwrap_or_default(),
+            read_unicorn_u8(uc, sp.wrapping_add(0x34)).unwrap_or_default()
+        )),
+        "resource_table_field_type" => Some(format!(
+            "offset={}/type={}/field_index={}/field_count={}",
+            v1,
+            read_mips_reg(uc, RegisterMIPS::A3) as i16,
+            s7 as i16,
+            read_unicorn_i16(uc, sp.wrapping_add(0x20)).unwrap_or_default()
+        )),
+        "resource_table_field_advance" => Some(format!(
+            "next_offset={}/field_index={}/field_count={}",
+            v1,
+            s7 as i16,
+            read_unicorn_i16(uc, sp.wrapping_add(0x20)).unwrap_or_default()
+        )),
+        "resource_table_field_bad_type" => Some(format!(
+            "offset={}/bad_type={}/field_index={}/field_count={}",
+            v1,
+            read_mips_reg(uc, RegisterMIPS::A3) as i16,
+            s7 as i16,
+            read_unicorn_i16(uc, sp.wrapping_add(0x20)).unwrap_or_default()
+        )),
+        "resource_tree_insert_entry" => Some(format!(
+            "tree=0x{a0:08x}/out=0x{a1:08x}/key_ptr=0x{a2:08x}/key={}/value_ptr=0x{:08x}",
+            read_unicorn_i16(uc, a2).unwrap_or_default(),
+            read_unicorn_u32(uc, sp.wrapping_add(0x50)).unwrap_or_default()
+        )),
+        "resource_tree_insert_link" => Some(format!(
+            "tree=0x{s7:08x}/parent=0x{s6:08x}/node=0x{fp:08x}/out=0x{s5:08x}"
+        )),
+        "resource_tree_insert_return" => Some(format!(
+            "out=0x{s5:08x}/node=0x{:08x}/tree_count={}",
+            read_unicorn_u32(uc, s5).unwrap_or_default(),
+            read_unicorn_u32(uc, s7.wrapping_add(0x10)).unwrap_or_default()
+        )),
+        "resource_table_success" | "resource_table_fail" => Some(format!(
+            "table_buffer=0x{:08x}/handle=0x{fp:08x}",
+            read_unicorn_u32(uc, s6).unwrap_or_default()
+        )),
         _ => None,
     };
     let trace = UnicornInaviControllerTrace {
@@ -5617,7 +5822,30 @@ fn record_inavi_controller_trace<D>(
         #[cfg(feature = "trace")]
         resource_arg_text,
     };
-    if is_inavi_render_milestone_label(label) || is_inavi_controller_focus_trace(&trace) {
+    let keep_table_record_sample = if label == "resource_table_record_read" {
+        let index = i32::from(s5 as i16);
+        let count = read_unicorn_i16(uc, sp.wrapping_add(0x20))
+            .map(i32::from)
+            .unwrap_or_default();
+        let record_mode = read_unicorn_i16(uc, sp.wrapping_add(0x38)).unwrap_or_default();
+        (0..4).contains(&index) || record_mode == s3 as i16 || (count > 0 && index >= count - 3)
+    } else {
+        false
+    };
+    let keep_mode_record_sample = if label == "resource_mode_record_read" {
+        let index = i32::from(s7 as i16);
+        let count = read_unicorn_u32(uc, fp.wrapping_add(4))
+            .map(|value| value as i32)
+            .unwrap_or_default();
+        (0..4).contains(&index) || (count > 0 && index >= count - 3)
+    } else {
+        false
+    };
+    if is_inavi_render_milestone_label(label)
+        || keep_table_record_sample
+        || keep_mode_record_sample
+        || is_inavi_controller_focus_trace(&trace)
+    {
         let mut milestones = milestones.borrow_mut();
         if milestones.len() == UNICORN_INAVI_RENDER_MILESTONE_LIMIT {
             milestones.remove(0);
@@ -5643,7 +5871,34 @@ fn is_inavi_render_milestone_label(label: &str) -> bool {
         || label.starts_with("resource_module_")
         || label.starts_with("resource_596b4_")
         || label.starts_with("resource_59718_")
+        || matches!(
+            label,
+            "resource_mode_search_entry"
+                | "resource_mode_search_count"
+                | "resource_mode_search_return"
+        )
+        || label.starts_with("resource_state_")
         || label.starts_with("resource_lookup_")
+        || matches!(
+            label,
+            "resource_table_open_entry"
+                | "resource_table_after_create"
+                | "resource_table_header_count"
+                | "resource_table_record_match"
+                | "resource_table_data_seek"
+                | "resource_table_data_read"
+                | "resource_table_field_count"
+                | "resource_table_field_key"
+                | "resource_table_field_insert_return"
+                | "resource_table_field_type"
+                | "resource_table_field_advance"
+                | "resource_table_field_bad_type"
+                | "resource_tree_insert_entry"
+                | "resource_tree_insert_link"
+                | "resource_tree_insert_return"
+                | "resource_table_success"
+                | "resource_table_fail"
+        )
 }
 
 #[cfg(all(feature = "unicorn", feature = "trace"))]
@@ -5687,6 +5942,10 @@ fn inavi_controller_probe_label(pc: u32) -> Option<&'static str> {
         0x0001_a7a8 => Some("vtable_call"),
         0x0001_a7b0 => Some("vtable_return"),
         0x0001_a7b8 => Some("router_return"),
+        0x0001_ad3c => Some("resource_state_set_entry"),
+        0x0001_ad48 => Some("resource_state_after_mode"),
+        0x0001_ad50 => Some("resource_state_after_pair"),
+        0x0001_ad88 => Some("resource_state_set_return"),
         0x0002_c6e8 => Some("paint_entry"),
         0x0002_c70c => Some("paint_after_begin"),
         0x0002_c720 => Some("paint_gate_check"),
@@ -5696,6 +5955,11 @@ fn inavi_controller_probe_label(pc: u32) -> Option<&'static str> {
         0x0002_c748 => Some("paint_end"),
         0x0002_bac8 => Some("init_dialog_surface_call"),
         0x0002_bc34 => Some("init_dialog_surface_entry"),
+        0x0002_bc70 => Some("init_dialog_after_text_setup"),
+        0x0002_bc78 => Some("init_dialog_after_text_lookup"),
+        0x0002_bc80 => Some("init_dialog_after_window_query"),
+        0x0002_bc88 => Some("init_dialog_before_tick_delta"),
+        0x0002_bcc0 => Some("init_dialog_before_query_5237"),
         0x0002_bcd0 => Some("init_dialog_query_5237_call"),
         0x0002_bcd8 => Some("init_dialog_resource_check"),
         0x0002_bcec => Some("init_dialog_query_56d0_call"),
@@ -5711,11 +5975,34 @@ fn inavi_controller_probe_label(pc: u32) -> Option<&'static str> {
         0x0005_7b18 => Some("query_5237_success"),
         0x0005_7b20 => Some("query_5237_fail"),
         0x0005_7b24 => Some("query_5237_fail_zero"),
+        0x0005_9484 => Some("resource_state_source_return"),
+        0x0005_9490 => Some("resource_state_populate_return"),
+        0x0005_9498 => Some("resource_state_acquire_return"),
+        0x0005_94a4 => Some("resource_state_set_call"),
+        0x0005_94ac => Some("resource_state_set_done"),
         0x0001_ad94 => Some("resource_lookup_entry"),
         0x0001_adb0 => Some("resource_lookup_after_source"),
         0x0001_adc0 => Some("resource_lookup_after_check"),
         0x0001_adc8 => Some("resource_lookup_success"),
         0x0001_ade4 => Some("resource_lookup_fail"),
+        0x0006_bd18 => Some("resource_table_open_entry"),
+        0x0006_bddc => Some("resource_table_after_create"),
+        0x0006_be38 => Some("resource_table_header_count"),
+        0x0006_be64 => Some("resource_table_record_read"),
+        0x0006_be90 => Some("resource_table_fail"),
+        0x0006_beac => Some("resource_table_record_match"),
+        0x0006_bee8 => Some("resource_table_data_seek"),
+        0x0006_bf28 => Some("resource_table_data_read"),
+        0x0006_bf3c => Some("resource_table_field_count"),
+        0x0006_bf8c => Some("resource_table_field_key"),
+        0x0006_bfb4 => Some("resource_table_field_insert_return"),
+        0x0006_bfd8 => Some("resource_table_field_type"),
+        0x0006_c05c => Some("resource_table_field_advance"),
+        0x0006_c0b4 => Some("resource_table_field_bad_type"),
+        0x0006_c080 => Some("resource_table_success"),
+        0x0006_c1a8 => Some("resource_tree_insert_entry"),
+        0x0006_c3ec => Some("resource_tree_insert_link"),
+        0x0006_c40c => Some("resource_tree_insert_return"),
         0x0005_8790 => Some("resource_ready_entry"),
         0x0005_87ec => Some("resource_ready_after_589dc"),
         0x0005_87fc => Some("resource_ready_pass_589dc"),
@@ -5745,6 +6032,10 @@ fn inavi_controller_probe_label(pc: u32) -> Option<&'static str> {
         0x0005_9758 => Some("resource_59718_path_ready"),
         0x0005_9764 => Some("resource_59718_lookup_call"),
         0x0005_976c => Some("resource_59718_lookup_return"),
+        0x0029_9544 => Some("resource_mode_search_entry"),
+        0x0029_9570 => Some("resource_mode_search_count"),
+        0x0029_9594 => Some("resource_mode_record_read"),
+        0x0029_9778 => Some("resource_mode_search_return"),
         0x0012_9564 => Some("resource_module_after_getmodule"),
         0x0012_956c => Some("resource_module_string_init_return"),
         0x0012_9580 => Some("resource_module_string_assign_return"),
@@ -7064,6 +7355,11 @@ fn import_detail_after_return<D>(
             for index in 0..4 {
                 if let Some(arg) = read_unicorn_u32(uc, va_list.wrapping_add(index * 4)) {
                     parts.push(format!("va{index}=0x{arg:08x}"));
+                    #[cfg(feature = "trace")]
+                    parts.push(format!(
+                        "va{index}_text={}",
+                        resource_pointer_preview(uc, arg, 128)
+                    ));
                 }
             }
             if let Some(output) = read_unicorn_wide_z(uc, dest, 128) {
