@@ -5604,6 +5604,17 @@ fn inavi_controller_probe_label(pc: u32) -> Option<&'static str> {
         0x0005_8904 => Some("resource_ready_after_5b068"),
         0x0005_891c => Some("resource_ready_after_58984"),
         0x0005_892c => Some("resource_ready_return"),
+        0x0005_89fc => Some("resource_ready_after_59430"),
+        0x0005_8a04 => Some("resource_ready_fail_59430"),
+        0x0005_8a34 => Some("resource_ready_after_594f8"),
+        0x0005_8a3c => Some("resource_ready_fail_594f8"),
+        0x0005_8a7c => Some("resource_ready_after_59718"),
+        0x0005_8a84 => Some("resource_ready_fail_59718"),
+        0x0005_8ab4 => Some("resource_ready_after_59778"),
+        0x0005_8abc => Some("resource_ready_fail_59778"),
+        0x0005_8ad8 => Some("resource_ready_after_595b8"),
+        0x0005_8ae0 => Some("resource_ready_fail_595b8"),
+        0x0005_8b08 => Some("resource_ready_pass_inner"),
         0x0002_d158 => Some("wm_size_entry"),
         0x0002_d198 => Some("wm_size_render_vtable"),
         0x0002_d1a0 => Some("wm_size_render_call"),
@@ -6864,6 +6875,58 @@ fn import_detail_after_return<D>(
             }
             Some(parts.join("/"))
         }
+        Some(crate::ce::coredll_ordinals::ORD_WTOL) => {
+            let text = args.first().copied().unwrap_or(0);
+            let preview = read_unicorn_wide_z(uc, text, 64).unwrap_or_default();
+            Some(format!("text_ptr=0x{text:08x}/text={preview:?}"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_ISWCTYPE) => {
+            let wch = args.first().copied().unwrap_or(0);
+            let ctype = args.get(1).copied().unwrap_or(0);
+            Some(format!("wch=0x{:04x}/ctype=0x{ctype:08x}", wch & 0xffff))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_WSPRINTF_W)
+        | Some(crate::ce::coredll_ordinals::ORD_SWPRINTF) => {
+            let dest = args.first().copied().unwrap_or(0);
+            let format = args.get(1).copied().unwrap_or(0);
+            let mut parts = vec![
+                format!("dest=0x{dest:08x}"),
+                format!("format=0x{format:08x}"),
+            ];
+            if let Some(format_preview) = read_unicorn_wide_z(uc, format, 128) {
+                parts.push(format!("fmt={format_preview:?}"));
+            }
+            for (index, arg) in args.iter().skip(2).take(4).enumerate() {
+                parts.push(format!("arg{index}=0x{arg:08x}"));
+            }
+            if let Some(output) = read_unicorn_wide_z(uc, dest, 128) {
+                parts.push(format!("out={output:?}"));
+            }
+            Some(parts.join("/"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_WVSPRINTF_W)
+        | Some(crate::ce::coredll_ordinals::ORD_VSWPRINTF) => {
+            let dest = args.first().copied().unwrap_or(0);
+            let format = args.get(1).copied().unwrap_or(0);
+            let va_list = args.get(2).copied().unwrap_or(0);
+            let mut parts = vec![
+                format!("dest=0x{dest:08x}"),
+                format!("format=0x{format:08x}"),
+                format!("va=0x{va_list:08x}"),
+            ];
+            if let Some(format_preview) = read_unicorn_wide_z(uc, format, 128) {
+                parts.push(format!("fmt={format_preview:?}"));
+            }
+            for index in 0..4 {
+                if let Some(arg) = read_unicorn_u32(uc, va_list.wrapping_add(index * 4)) {
+                    parts.push(format!("va{index}=0x{arg:08x}"));
+                }
+            }
+            if let Some(output) = read_unicorn_wide_z(uc, dest, 128) {
+                parts.push(format!("out={output:?}"));
+            }
+            Some(parts.join("/"))
+        }
         Some(crate::ce::coredll_ordinals::ORD_WCSRCHR) => {
             let string = args.first().copied().unwrap_or(0);
             let needle = args.get(1).copied().unwrap_or(0);
@@ -7042,10 +7105,16 @@ fn is_inavi_readiness_probe_pc(pc: u32) -> bool {
             | 0x0005_8904
             | 0x0005_891c
             | 0x0005_89fc
+            | 0x0005_8a04
             | 0x0005_8a34
+            | 0x0005_8a3c
             | 0x0005_8a7c
+            | 0x0005_8a84
             | 0x0005_8ab4
+            | 0x0005_8abc
             | 0x0005_8ad8
+            | 0x0005_8ae0
+            | 0x0005_8b08
     )
 }
 
