@@ -14,9 +14,9 @@ use wince_emulation_v3::{
             ORD_OPERATOR_DELETE_ARRAY, ORD_OPERATOR_NEW, ORD_OPERATOR_NEW_ARRAY, ORD_READ_FILE,
             ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_VALUE_W,
             ORD_REG_ENUM_VALUE_W, ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W,
-            ORD_SET_FILE_POINTER, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSWPRINTF, ORD_WCSDUP,
-            ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSRCHR, ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE,
-            ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
+            ORD_SET_FILE_POINTER, ORD_SWPRINTF, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSWPRINTF,
+            ORD_WCSDUP, ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSRCHR, ORD_WIDE_CHAR_TO_MULTI_BYTE,
+            ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         kernel::CeKernel,
@@ -153,10 +153,10 @@ fn coredll_raw_vswprintf_reads_guest_va_list() -> Result<()> {
     let va_list = 0x1_0400;
     memory.map_halfwords(dest, 128);
     memory.map_halfwords(format, 64);
-    memory.map_bytes(text, 32);
+    memory.map_halfwords(text, 32);
     memory.map_words(va_list, 4);
     memory.write_wide_z(format, "Afx:%p:%x:%s");
-    memory.write_bytes(text, b"class\0");
+    memory.write_wide_z(text, "class");
     memory.write_word(va_list, 0x0001_0000);
     memory.write_word(va_list + 4, 0x2a);
     memory.write_word(va_list + 8, text);
@@ -175,6 +175,27 @@ fn coredll_raw_vswprintf_reads_guest_va_list() -> Result<()> {
         }
     ));
     assert_eq!(memory.read_wide_z(dest, 128), "Afx:00010000:2a:class");
+
+    let narrow_text = 0x1_0600;
+    memory.map_bytes(narrow_text, 32);
+    memory.write_wide_z(format, "Afx:%hs");
+    memory.write_bytes(narrow_text, b"narrow\0");
+    memory.write_word(va_list, narrow_text);
+    memory.write_wide_z(dest, "");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_VSWPRINTF,
+            [dest, format, va_list],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(10),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(dest, 128), "Afx:narrow");
 
     let wide_text = 0x1_0500;
     memory.map_halfwords(wide_text, 32);
@@ -196,6 +217,39 @@ fn coredll_raw_vswprintf_reads_guest_va_list() -> Result<()> {
         }
     ));
     assert_eq!(memory.read_wide_z(dest, 128), "Afx:wide");
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_swprintf_uses_wide_default_for_percent_s() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let dest = 0x1_0000;
+    let format = 0x1_0200;
+    let text = 0x1_0300;
+    memory.map_halfwords(dest, 128);
+    memory.map_halfwords(format, 64);
+    memory.map_halfwords(text, 128);
+    memory.write_wide_z(format, r"%s\res");
+    memory.write_wide_z(text, r"\SDMMC Disk\INavi");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SWPRINTF,
+            [dest, format, text],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(21),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(dest, 128), r"\SDMMC Disk\INavi\res");
     Ok(())
 }
 

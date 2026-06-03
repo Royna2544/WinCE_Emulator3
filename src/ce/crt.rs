@@ -301,7 +301,7 @@ pub(crate) fn swprintf_w_raw<M: CoredllGuestMemory>(
         dest,
         format,
         args,
-        WideStringMode::NarrowDefault,
+        WideStringMode::WideDefault,
     )
 }
 
@@ -358,7 +358,7 @@ pub(crate) fn vswprintf_w_raw<M: CoredllGuestMemory>(
         dest,
         format,
         &args,
-        WideStringMode::NarrowDefault,
+        WideStringMode::WideDefault,
     )
 }
 
