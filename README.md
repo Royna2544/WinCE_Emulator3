@@ -94,5 +94,8 @@ desktop boundaries, and the first solid `FillRect` path can draw into the
 attached framebuffer. The mounted run now gets past the earlier
 `GetSystemTime @25` trap and can stop through the wall-clock limiter. Current
 host-mode runs are no longer blank: by a 60 s wall-clock stop they reach real
-paint/DC/DIB imports and sparse guest `Polyline` pixels in the framebuffer.
-This remains a useful frontier, not a completed GUI launch.
+paint/DC/DIB/resource work and sparse guest `Polyline` pixels in the
+framebuffer. Flamegraph-driven startup fixes now get the profiled run far
+enough to hit a later render-map dereference fault at `pc=0x0026f7e4`
+(`addr=0x0000005c`) after 61k+ `ReadFile` calls and 317 `CreateDIBSection`
+calls. This remains a useful frontier, not a completed GUI launch.

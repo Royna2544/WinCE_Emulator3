@@ -11,27 +11,27 @@
     target launch currently stops before useful drawing/blit output. This is
     not GUI success.
     Newer host-mode runs do produce sparse real pixels through guest GDI
-    `Polyline` (`target\host_mapped_code_index_progress_60s.ppm` has 301 red
-    pixels from `(0,160)..(300,160)`), so the framebuffer is no longer
-    strictly all-zero.
+    `Polyline` (`target\startup_flamegraph_after_heap_chunk.ppm` has 401 red
+    pixels from `(0,160)..(400,160)` in the latest profiled run), so the
+    framebuffer is no longer strictly all-zero.
     It is still not useful GUI output: the app is currently spending bounded
     host/tap time in RSImage/PNG resource loading and DIB creation without
     reaching a screen blit/presentation ordinal.
   - Latest evidence: flamegraph-driven startup fixes removed per-import
-    COREDLL export-table rebuilding, hot linear trampoline scans, and linear
-    mapped-blob instruction lookup from the hottest paths. The same mounted
-    `--desktop host --tap 400,240 --cpu-wall-clock-limit-ms 60000` run moved
-    from the old `pc=0x001704a4` 60 s frontier to app code at
-    `pc=0x003426f0`, `ra=0x002fd5e8`, while heap live stayed around
-    7,254 allocations / 21.5 MB and process private memory remained in the
-    normal ~100-150 MB range rather than the earlier multi-GB spike. The import
-    counts now include real paint/DC/DIB work by 60 s (`BeginPaint`,
-    `EndPaint`, `GetDC`, `ReleaseDC`, `CreateDIBSection`, `SelectObject`,
-    `Polyline`), but still no later screen `BitBlt`, `StretchDIBits`,
-    `SetDIBitsToDevice`, `PatBlt`, `AlphaBlend`, `GradientFill`, `DrawText`,
-    or palette-setting presentation path. The latest dump is sparse rather
-    than blank: `target\host_mapped_code_index_progress_60s.ppm` has 301 red
-    pixels from `(0,160)` through `(300,160)`.
+    COREDLL export-table rebuilding, hot linear trampoline scans, linear
+    mapped-blob instruction lookup, per-import heap/virtual allocation scans,
+    and per-page heap spillover mapping from the hottest paths. A current
+    mounted `--desktop host --tap 400,240 --cpu-wall-clock-limit-ms 60000` run
+    reaches `pc=0x00b55150`, `ra=0x0030f384`, while heap live remains about
+    7,530 allocations / 23.8 MB and the earlier multi-GB spike has not
+    returned. The import counts include much deeper resource/DIB work by 60 s:
+    `ReadFile=33759`, `CreateDIBSection=190`, `CreateRectRgn=3866`,
+    `CombineRgn=3863`, and `DeleteObject=3865`. The final admin flamegraph
+    runs farther and hits the next real guest/UI fault at `pc=0x0026f7e4`
+    (`render_map_pointer_deref`), `addr=0x0000005c`, after
+    `ReadFile=61825` and `CreateDIBSection=317`. The latest dump is sparse
+    rather than blank: `target\startup_flamegraph_after_heap_chunk.ppm` has
+    401 red pixels from `(0,160)` through `(400,160)`.
   - Evidence: latest bounded run with `--features unicorn`,
     `--dll-search-dir C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii`,
     and `--mount-config mounts.toml` previously timed out after 30

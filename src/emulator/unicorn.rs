@@ -3415,11 +3415,6 @@ fn map_guest_aligned_range<D>(
     uc.mem_map(u64::from(base), u64::from(size), unicorn_perms(perms))
         .map_err(|err| Error::Backend(format!("map {label} 0x{base:08x}+0x{size:x}: {err:?}")))?;
     mapped.ranges.push((base, size));
-    mapped.heap_spill_cursor = base
-        .checked_add(size)
-        .checked_add(0xfff)
-        .map(|end| end & !0xfff)
-        .ok_or_else(|| Error::InvalidArgument(format!("{label} cursor overflow")))?;
     Ok(())
 }
 

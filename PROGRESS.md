@@ -923,6 +923,18 @@
   `CombineRgn=3863`, `DeleteObject=3865`). The framebuffer is still only the
   301-pixel Polyline line, so this is a real startup-speed improvement, not
   complete UI progress.
+- Heap spillover mapping is now chunked in 1 MiB aligned regions instead of
+  committing one Unicorn page at a time. A 30 s host/tap run reaches
+  `pc=0x0034286c` with the same 301-pixel Polyline framebuffer and
+  `ReadFile=15867`; a 60 s host/tap run advances to `pc=0x00b55150`,
+  `ra=0x0030f384`, `heap_live=7530/23815449B`, `ReadFile=33759`,
+  `CreateDIBSection=190`, and the same sparse framebuffer. The follow-up admin
+  flamegraph (`target\startup_flamegraph_after_heap_chunk.svg`) no longer shows
+  heap mapping in the filtered top frames. It runs far enough to hit the next
+  real guest/UI fault: `READ_UNMAPPED` at `pc=0x0026f7e4`
+  (`render_map_pointer_deref`), `addr=0x0000005c`, with
+  `ReadFile=61825`, `CreateDIBSection=317`, and 401 red pixels spanning
+  `(0,160)..(400,160)`.
 
 ## False Leads
 

@@ -5,20 +5,19 @@
 - Continue from the latest stable host-mode UI frontier. Current
   `--desktop host --tap 400,240` evidence no longer has the multi-GB RAM spike
   and produces real but sparse framebuffer pixels through guest `Polyline`
-  (`target\host_mapped_code_index_progress_60s.ppm`: 301 red pixels from
-  `(0,160)..(300,160)`). Flamegraph-driven startup fixes removed per-import
-  COREDLL export-table rebuilding, replaced hot trampoline scans with lookup
-  maps/page sets, and indexed mapped code by page for the global Unicorn hook.
-  The same 60 s host/tap run moved from the old `pc=0x001704a4` frontier to
-  app code at `pc=0x003426f0`, reaches `BeginPaint`, `EndPaint`, `GetDC`,
-  `ReleaseDC`, `CreateDIBSection`, `SelectObject`, and `Polyline`, and stays
-  memory-stable with no multi-GB spike. The app still has no later screen `BitBlt`,
-  `StretchDIBits`, `SetDIBitsToDevice`, `PatBlt`, `AlphaBlend`,
-  `GradientFill`, `DrawText`, or palette-setting presentation call. Next
-  evidence should determine whether it eventually presents a composed memory
-  bitmap, or whether a missing CE resource/window/timer/device result keeps it
-  in resource loading. Do not fake-present DIBSections just because their bits
-  are populated.
+  (`target\startup_flamegraph_after_heap_chunk.ppm`: 401 red pixels from
+  `(0,160)..(400,160)` in the profiled run). Flamegraph-driven startup fixes
+  removed per-import COREDLL export-table rebuilding, replaced hot trampoline
+  scans with lookup maps/page sets, indexed mapped code by page for the global
+  Unicorn hook, generation-gated kernel memory mapping, and now map heap
+  spillover in 1 MiB chunks instead of one page at a time. A current 60 s
+  host/tap run reaches `pc=0x00b55150`, `ra=0x0030f384`, `ReadFile=33759`,
+  and `CreateDIBSection=190`; the admin flamegraph runs farther and hits the
+  next real guest/UI fault at `pc=0x0026f7e4` (`render_map_pointer_deref`),
+  `addr=0x0000005c`, with `ReadFile=61825` and `CreateDIBSection=317`. Next
+  work should debug the null/invalid render-map object path around
+  `0x0026f7c0..0x0026f7e4` using real guest state and existing probes. Do not
+  fake-present DIBSections just because their bits are populated.
 - Keep the new direct-DIB framebuffer path honest. `StretchDIBits` and
   `SetDIBitsToDevice` now draw `SRCCOPY` `DIB_RGB_COLORS` BITMAPINFO data in
   focused tests, but real iNavi traces have not reached those ordinals yet.
