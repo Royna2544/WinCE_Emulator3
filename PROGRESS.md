@@ -677,6 +677,11 @@
   `target\monitor_tracefile.log` compact while writing detailed imports to
   `target\monitor_trace_imports.txt` and import counts to
   `target\monitor_trace_counts.txt`.
+- Monitor `until ADDRESS [wall_ms] [insns]` now uses the Unicorn code hook to
+  stop on a requested guest PC and records `pc_stop` in the debug snapshot. A
+  scripted mounted iNavi session verified `until 0x0048f6d8 1000 100000`
+  stopped at the main EXE entry PC and wrote
+  `target\monitor_until_summary.txt` through `tracefile summary`.
 - Unicorn WNDPROC return handling no longer validates every `WM_PAINT`
   unconditionally. Plain guest WNDPROC returns leave the update region pending;
   `DefWindowProcW` and `CallWindowProcW(DEFAULT)` consume paint through the

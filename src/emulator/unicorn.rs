@@ -37,6 +37,7 @@ pub struct UnicornMips {
 pub struct UnicornRunLimits {
     pub instruction_limit: usize,
     pub wall_clock_limit_ms: u64,
+    pub stop_pc: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -61,6 +62,7 @@ pub struct UnicornDebugSnapshot {
     pub host_wall_clock_stop: Option<UnicornHostWallClockStop>,
     pub interrupt_probe: Option<UnicornInterruptProbe>,
     pub invalid_instruction_probe: Option<UnicornInvalidInstructionProbe>,
+    pub pc_stop: Option<UnicornPcStop>,
     pub last_calls: Vec<UnicornLastCall>,
     pub last_imports: Vec<UnicornLastImport>,
     pub import_milestones: Vec<UnicornLastImport>,
@@ -143,6 +145,9 @@ impl UnicornDebugSnapshot {
                     .unwrap_or_else(|| "unreadable".to_owned())
             ));
         }
+        if let Some(stop) = &self.pc_stop {
+            parts.push(format!("pc_stop=0x{:08x}", stop.pc));
+        }
         if !self.import_counts.is_empty() {
             let counts = self
                 .import_counts
@@ -210,6 +215,14 @@ pub struct UnicornInterruptProbe {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnicornInvalidInstructionProbe {
+    pub pc: u32,
+    pub ra: u32,
+    pub sp: u32,
+    pub instruction: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornPcStop {
     pub pc: u32,
     pub ra: u32,
     pub sp: u32,
@@ -956,6 +969,7 @@ impl UnicornMips {
             UnicornRunLimits {
                 instruction_limit,
                 wall_clock_limit_ms: 0,
+                stop_pc: None,
             },
         )
     }
@@ -1117,6 +1131,9 @@ impl UnicornMips {
         let host_wall_clock_started = Instant::now();
         let host_wall_clock_counter = Rc::new(RefCell::new(0u32));
         let host_wall_clock_counter_hook = Rc::clone(&host_wall_clock_counter);
+        let stop_pc = limits.stop_pc;
+        let pc_stop = Rc::new(RefCell::new(None));
+        let pc_stop_hook = Rc::clone(&pc_stop);
         let last_calls = Rc::new(RefCell::new(Vec::<UnicornLastCall>::new()));
         let last_calls_hook = Rc::clone(&last_calls);
         let last_mfc_dispatch = Rc::new(RefCell::new(Vec::<UnicornMfcDispatchTrace>::new()));
@@ -1146,6 +1163,16 @@ impl UnicornMips {
             let sampled_code_trace = code_trace_index % UNICORN_CODE_TRACE_SAMPLE_INTERVAL == 0;
             let instruction = read_unicorn_code_u32(uc, &mapped_blobs, pc);
             *last_code_probe_hook.borrow_mut() = Some((pc, instruction));
+            if stop_pc == Some(pc) {
+                *pc_stop_hook.borrow_mut() = Some(UnicornPcStop {
+                    pc,
+                    ra: read_mips_reg(uc, RegisterMIPS::RA),
+                    sp: read_mips_reg(uc, RegisterMIPS::SP),
+                    instruction,
+                });
+                let _ = uc.emu_stop();
+                return;
+            }
             if let Some(limit) = host_wall_clock_limit {
                 let mut counter = host_wall_clock_counter_hook.borrow_mut();
                 *counter = counter.wrapping_add(1);
@@ -2079,6 +2106,7 @@ impl UnicornMips {
             host_wall_clock_stop.borrow().clone(),
             interrupt_probe.borrow().clone(),
             invalid_instruction_probe.borrow().clone(),
+            pc_stop.borrow().clone(),
             last_calls.borrow().clone(),
             last_imports.borrow().clone(),
             import_milestones.borrow().clone(),
@@ -3397,6 +3425,16 @@ impl std::fmt::Display for UnicornDebugSnapshot {
             )?;
             if let Some(instruction) = probe.instruction {
                 write!(f, " invalid_insn=0x{instruction:08x}")?;
+            }
+        }
+        if let Some(stop) = self.pc_stop.as_ref() {
+            write!(
+                f,
+                " pc_stop=0x{:08x} pc_stop_ra=0x{:08x} pc_stop_sp=0x{:08x}",
+                stop.pc, stop.ra, stop.sp
+            )?;
+            if let Some(instruction) = stop.instruction {
+                write!(f, " pc_stop_insn=0x{instruction:08x}")?;
             }
         }
         if !self.last_imports.is_empty() {
@@ -6510,6 +6548,7 @@ fn capture_debug_snapshot<D>(
     host_wall_clock_stop: Option<UnicornHostWallClockStop>,
     interrupt_probe: Option<UnicornInterruptProbe>,
     invalid_instruction_probe: Option<UnicornInvalidInstructionProbe>,
+    pc_stop: Option<UnicornPcStop>,
     mut last_calls: Vec<UnicornLastCall>,
     last_imports: Vec<UnicornLastImport>,
     import_milestones: Vec<UnicornLastImport>,
@@ -6559,6 +6598,7 @@ fn capture_debug_snapshot<D>(
         host_wall_clock_stop,
         interrupt_probe,
         invalid_instruction_probe,
+        pc_stop,
         last_calls,
         last_imports,
         import_milestones,

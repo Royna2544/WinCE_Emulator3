@@ -235,6 +235,7 @@ fn run_cpu_loop(
             UnicornRunLimits {
                 instruction_limit: args.cpu_instruction_limit,
                 wall_clock_limit_ms: args.cpu_wall_clock_limit_ms,
+                stop_pc: None,
             },
         ) {
             if let Some(snapshot) = cpu.last_debug_snapshot() {
@@ -323,6 +324,42 @@ fn run_monitor(
                     UnicornRunLimits {
                         instruction_limit,
                         wall_clock_limit_ms,
+                        stop_pc: None,
+                    },
+                    args.framebuffer_dump.as_deref(),
+                )?;
+            }
+            "until" | "run-until" => {
+                let address = words.next().ok_or_else(|| {
+                    wince_emulation_v3::Error::InvalidArgument(
+                        "until needs ADDRESS [wall_ms] [insns]".to_owned(),
+                    )
+                })?;
+                let stop_pc = parse_monitor_u32(address)?;
+                let wall_clock_limit_ms = words
+                    .next()
+                    .map(parse_monitor_u64)
+                    .transpose()?
+                    .unwrap_or_else(|| {
+                        if args.cpu_wall_clock_limit_ms == 0 && args.cpu_instruction_limit == 0 {
+                            1000
+                        } else {
+                            args.cpu_wall_clock_limit_ms
+                        }
+                    });
+                let instruction_limit = words
+                    .next()
+                    .map(parse_monitor_usize)
+                    .transpose()?
+                    .unwrap_or(args.cpu_instruction_limit);
+                monitor_run_once(
+                    cpu,
+                    kernel,
+                    desktop,
+                    UnicornRunLimits {
+                        instruction_limit,
+                        wall_clock_limit_ms,
+                        stop_pc: Some(stop_pc),
                     },
                     args.framebuffer_dump.as_deref(),
                 )?;
@@ -340,6 +377,7 @@ fn run_monitor(
                     UnicornRunLimits {
                         instruction_limit,
                         wall_clock_limit_ms: 0,
+                        stop_pc: None,
                     },
                     args.framebuffer_dump.as_deref(),
                 )?;
@@ -574,6 +612,7 @@ fn monitor_run_once(
 
 fn print_monitor_help() {
     println!("  continue [wall_ms] [insns]  run until stop or bounded limit; default 1000 ms");
+    println!("  until ADDRESS [wall] [insns] run until mapped PC or bounded limit");
     println!("  step [insns]                run one bounded slice, default 1 instruction");
     println!("  tap X Y                     queue a touch tap");
     println!("  dump [path]                 write framebuffer PPM");
