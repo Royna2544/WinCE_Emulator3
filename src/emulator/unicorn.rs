@@ -329,7 +329,9 @@ pub struct UnicornInaviControllerTrace {
     pub aux_vtable_source_value: Option<u32>,
     pub aux_store_addr: Option<u32>,
     pub aux_store_value: Option<u32>,
+    #[cfg(feature = "trace")]
     pub query_thunk_slot: Option<u32>,
+    #[cfg(feature = "trace")]
     pub query_thunk_target: Option<u32>,
 }
 
@@ -422,7 +424,7 @@ const GUEST_HEAP_ARENA_BASE: u32 = 0x3000_0000;
 const GUEST_HEAP_ARENA_SIZE: u32 = 0x0100_0000;
 #[cfg(feature = "unicorn")]
 const UNICORN_TRACE_LIMIT: usize = 256;
-#[cfg(feature = "unicorn")]
+#[cfg(all(feature = "unicorn", feature = "trace"))]
 const UNICORN_IMPORT_MILESTONE_LIMIT: usize = 128;
 #[cfg(feature = "unicorn")]
 const UNICORN_WNDPROC_TRACE_LIMIT: usize = 32;
@@ -434,13 +436,13 @@ const UNICORN_WNDPROC_TRACE_IMPORT_LIMIT: usize = 64;
 const UNICORN_WNDPROC_TRACE_CODE_LIMIT: usize = 256;
 #[cfg(feature = "unicorn")]
 const UNICORN_WNDPROC_READINESS_TRACE_LIMIT: usize = 64;
-#[cfg(feature = "unicorn")]
+#[cfg(all(feature = "unicorn", feature = "trace"))]
 const UNICORN_MFC_DISPATCH_TRACE_LIMIT: usize = 64;
-#[cfg(feature = "unicorn")]
+#[cfg(all(feature = "unicorn", feature = "trace"))]
 const UNICORN_INAVI_DISPLAY_TRACE_LIMIT: usize = 96;
-#[cfg(feature = "unicorn")]
+#[cfg(all(feature = "unicorn", feature = "trace"))]
 const UNICORN_INAVI_CONTROLLER_TRACE_LIMIT: usize = 128;
-#[cfg(feature = "unicorn")]
+#[cfg(all(feature = "unicorn", feature = "trace"))]
 const UNICORN_INAVI_RENDER_MILESTONE_LIMIT: usize = 256;
 #[cfg(feature = "unicorn")]
 const UNICORN_CODE_TRACE_SAMPLE_INTERVAL: u32 = 64;
@@ -994,14 +996,18 @@ impl UnicornMips {
         let last_calls = Rc::new(RefCell::new(Vec::<UnicornLastCall>::new()));
         let last_calls_hook = Rc::clone(&last_calls);
         let last_mfc_dispatch = Rc::new(RefCell::new(Vec::<UnicornMfcDispatchTrace>::new()));
+        #[cfg(feature = "trace")]
         let last_mfc_dispatch_hook = Rc::clone(&last_mfc_dispatch);
         let last_inavi_display = Rc::new(RefCell::new(Vec::<UnicornInaviDisplayTrace>::new()));
+        #[cfg(feature = "trace")]
         let last_inavi_display_hook = Rc::clone(&last_inavi_display);
         let last_inavi_controller =
             Rc::new(RefCell::new(Vec::<UnicornInaviControllerTrace>::new()));
+        #[cfg(feature = "trace")]
         let last_inavi_controller_hook = Rc::clone(&last_inavi_controller);
         let inavi_render_milestones =
             Rc::new(RefCell::new(Vec::<UnicornInaviControllerTrace>::new()));
+        #[cfg(feature = "trace")]
         let inavi_render_milestones_hook = Rc::clone(&inavi_render_milestones);
         let late_inavi_init_dialog_posted = Rc::new(Cell::new(false));
         let late_inavi_init_dialog_posted_hook = Rc::clone(&late_inavi_init_dialog_posted);
@@ -1091,8 +1097,11 @@ impl UnicornMips {
                 })
             })
             .flatten();
-            record_mfc_dispatch_trace(&last_mfc_dispatch_hook, uc, pc);
-            record_inavi_display_trace(&last_inavi_display_hook, uc, pc);
+            #[cfg(feature = "trace")]
+            {
+                record_mfc_dispatch_trace(&last_mfc_dispatch_hook, uc, pc);
+                record_inavi_display_trace(&last_inavi_display_hook, uc, pc);
+            }
             maybe_post_late_inavi_init_dialog(
                 unsafe { &mut *kernel_ptr },
                 uc,
@@ -1100,12 +1109,15 @@ impl UnicornMips {
                 &late_inavi_init_dialog_posted_hook,
             );
             repair_inavi_aux_touch_alias(uc, pc);
-            record_inavi_controller_trace(
-                &last_inavi_controller_hook,
-                &inavi_render_milestones_hook,
-                uc,
-                pc,
-            );
+            #[cfg(feature = "trace")]
+            {
+                record_inavi_controller_trace(
+                    &last_inavi_controller_hook,
+                    &inavi_render_milestones_hook,
+                    uc,
+                    pc,
+                );
+            }
             let code_record = || UnicornLastCode {
                 pc,
                 ra: read_mips_reg(uc, RegisterMIPS::RA),
@@ -1215,6 +1227,7 @@ impl UnicornMips {
         let last_imports = Rc::new(RefCell::new(Vec::<UnicornLastImport>::new()));
         let last_imports_hook = Rc::clone(&last_imports);
         let import_milestones = Rc::new(RefCell::new(Vec::<UnicornLastImport>::new()));
+        #[cfg(feature = "trace")]
         let import_milestones_hook = Rc::clone(&import_milestones);
         let import_counts = Rc::new(RefCell::new(BTreeMap::<UnicornImportCountKey, u64>::new()));
         let import_counts_hook = Rc::clone(&import_counts);
@@ -1473,12 +1486,15 @@ impl UnicornMips {
                             detail: None,
                         };
                         imports.push(import.clone());
-                        if is_import_milestone(trap.module_kind, trap.ordinal) {
-                            let mut milestones = import_milestones_hook.borrow_mut();
-                            if milestones.len() == UNICORN_IMPORT_MILESTONE_LIMIT {
-                                milestones.remove(0);
+                        #[cfg(feature = "trace")]
+                        {
+                            if is_import_milestone(trap.module_kind, trap.ordinal) {
+                                let mut milestones = import_milestones_hook.borrow_mut();
+                                if milestones.len() == UNICORN_IMPORT_MILESTONE_LIMIT {
+                                    milestones.remove(0);
+                                }
+                                milestones.push(import);
                             }
-                            milestones.push(import);
                         }
                     }
                     tracing::debug!(
@@ -1750,16 +1766,19 @@ impl UnicornMips {
                         import.result = Some(result);
                         import.detail = detail.clone();
                     }
-                    if is_import_milestone(trap.module_kind, trap.ordinal)
-                        && let Some(import) = import_milestones_hook
-                            .borrow_mut()
-                            .iter_mut()
-                            .rev()
-                            .find(|import| import.pc == address && import.result.is_none())
+                    #[cfg(feature = "trace")]
                     {
-                        import.name = name.clone();
-                        import.result = Some(result);
-                        import.detail = detail.clone();
+                        if is_import_milestone(trap.module_kind, trap.ordinal)
+                            && let Some(import) = import_milestones_hook
+                                .borrow_mut()
+                                .iter_mut()
+                                .rev()
+                                .find(|import| import.pc == address && import.result.is_none())
+                        {
+                            import.name = name.clone();
+                            import.result = Some(result);
+                            import.detail = detail.clone();
+                        }
                     }
                     tracing::debug!(
                         target: "ce.imports",
@@ -3143,11 +3162,14 @@ fn write_inavi_controller_traces(
         if let Some(aux_store_value) = trace.aux_store_value {
             write!(f, "/aux_store_value=0x{aux_store_value:08x}")?;
         }
-        if let Some(query_thunk_slot) = trace.query_thunk_slot {
-            write!(f, "/query_slot=0x{query_thunk_slot:08x}")?;
-        }
-        if let Some(query_thunk_target) = trace.query_thunk_target {
-            write!(f, "/query_target=0x{query_thunk_target:08x}")?;
+        #[cfg(feature = "trace")]
+        {
+            if let Some(query_thunk_slot) = trace.query_thunk_slot {
+                write!(f, "/query_slot=0x{query_thunk_slot:08x}")?;
+            }
+            if let Some(query_thunk_target) = trace.query_thunk_target {
+                write!(f, "/query_target=0x{query_thunk_target:08x}")?;
+            }
         }
     }
     Ok(())
@@ -3803,7 +3825,7 @@ fn read_unicorn_u32<D>(uc: &unicorn_engine::Unicorn<'_, D>, address: u32) -> Opt
         .map(|()| u32::from_le_bytes(bytes))
 }
 
-#[cfg(feature = "unicorn")]
+#[cfg(all(feature = "unicorn", feature = "trace"))]
 fn read_unicorn_u8<D>(uc: &unicorn_engine::Unicorn<'_, D>, address: u32) -> Option<u8> {
     let mut bytes = [0; 1];
     uc.mem_read(u64::from(address), &mut bytes)
@@ -4781,7 +4803,7 @@ fn record_wndproc_call_trace(
     traces.push(trace);
 }
 
-#[cfg(feature = "unicorn")]
+#[cfg(all(feature = "unicorn", feature = "trace"))]
 fn record_mfc_dispatch_trace<D>(
     traces: &std::rc::Rc<std::cell::RefCell<Vec<UnicornMfcDispatchTrace>>>,
     uc: &unicorn_engine::Unicorn<'_, D>,
@@ -4863,7 +4885,7 @@ fn record_mfc_dispatch_trace<D>(
     traces.push(trace);
 }
 
-#[cfg(feature = "unicorn")]
+#[cfg(all(feature = "unicorn", feature = "trace"))]
 fn mfc_dispatch_probe_label(pc: u32) -> Option<&'static str> {
     match pc {
         0x6004_eba8 => Some("afx_wndproc"),
@@ -4877,7 +4899,7 @@ fn mfc_dispatch_probe_label(pc: u32) -> Option<&'static str> {
     }
 }
 
-#[cfg(feature = "unicorn")]
+#[cfg(all(feature = "unicorn", feature = "trace"))]
 fn record_inavi_display_trace<D>(
     traces: &std::rc::Rc<std::cell::RefCell<Vec<UnicornInaviDisplayTrace>>>,
     uc: &unicorn_engine::Unicorn<'_, D>,
@@ -4894,7 +4916,11 @@ fn record_inavi_display_trace<D>(
     let fp = read_mips_reg(uc, RegisterMIPS::FP);
     let this_ptr = match label {
         "child_wndproc_entry" | "renderer_init_entry" | "renderer_destroy_entry" => Some(a0),
-        "child_forward_controller" | "child_default_no_controller" => Some(s7),
+        "child_forward_controller" | "child_default_no_controller" | "child_return" => Some(s7),
+        "child_controller_result"
+        | "child_controller_unhandled"
+        | "child_classifier_fallback"
+        | "child_fallback_class" => Some(s7),
         "renderer_init_after_base"
         | "renderer_init_store"
         | "renderer_init_success"
@@ -4922,25 +4948,37 @@ fn record_inavi_display_trace<D>(
             "child_wndproc_entry" | "renderer_init_entry" | "renderer_destroy_entry" => {
                 Some(read_mips_reg(uc, RegisterMIPS::A1))
             }
-            "child_forward_controller" | "child_default_no_controller" => Some(fp),
+            "child_forward_controller" | "child_default_no_controller" | "child_return" => Some(fp),
+            "child_controller_result"
+            | "child_controller_unhandled"
+            | "child_classifier_fallback"
+            | "child_fallback_class" => Some(fp),
             _ => None,
         },
         wparam: match label {
             "child_wndproc_entry" | "renderer_init_entry" | "renderer_destroy_entry" => {
                 Some(read_mips_reg(uc, RegisterMIPS::A2))
             }
-            "child_forward_controller" | "child_default_no_controller" => {
+            "child_forward_controller" | "child_default_no_controller" | "child_return" => {
                 Some(read_mips_reg(uc, RegisterMIPS::S5))
             }
+            "child_controller_result"
+            | "child_controller_unhandled"
+            | "child_classifier_fallback"
+            | "child_fallback_class" => Some(read_mips_reg(uc, RegisterMIPS::S5)),
             _ => None,
         },
         lparam: match label {
             "child_wndproc_entry" | "renderer_init_entry" | "renderer_destroy_entry" => {
                 Some(read_mips_reg(uc, RegisterMIPS::A3))
             }
-            "child_forward_controller" | "child_default_no_controller" => {
+            "child_forward_controller" | "child_default_no_controller" | "child_return" => {
                 Some(read_mips_reg(uc, RegisterMIPS::S6))
             }
+            "child_controller_result"
+            | "child_controller_unhandled"
+            | "child_classifier_fallback"
+            | "child_fallback_class" => Some(read_mips_reg(uc, RegisterMIPS::S6)),
             "renderer_init_store" => sp10,
             _ => None,
         },
@@ -4961,12 +4999,17 @@ fn record_inavi_display_trace<D>(
     traces.push(trace);
 }
 
-#[cfg(feature = "unicorn")]
+#[cfg(all(feature = "unicorn", feature = "trace"))]
 fn inavi_display_probe_label(pc: u32) -> Option<&'static str> {
     match pc {
         0x0001_2860 => Some("child_wndproc_entry"),
         0x0001_2890 => Some("child_forward_controller"),
+        0x0001_28a4 => Some("child_controller_result"),
+        0x0001_28c8 => Some("child_controller_unhandled"),
+        0x0001_28d0 => Some("child_classifier_fallback"),
+        0x0001_28e0 => Some("child_fallback_class"),
         0x0001_28f4 => Some("child_default_no_controller"),
+        0x0001_2908 => Some("child_return"),
         0x0001_2924 => Some("renderer_init_entry"),
         0x0001_2940 => Some("renderer_init_after_base"),
         0x0001_2998 => Some("renderer_init_store"),
@@ -5027,7 +5070,7 @@ fn maybe_post_late_inavi_init_dialog<D>(
     }
 }
 
-#[cfg(feature = "unicorn")]
+#[cfg(all(feature = "unicorn", feature = "trace"))]
 fn record_inavi_controller_trace<D>(
     traces: &std::rc::Rc<std::cell::RefCell<Vec<UnicornInaviControllerTrace>>>,
     milestones: &std::rc::Rc<std::cell::RefCell<Vec<UnicornInaviControllerTrace>>>,
@@ -5047,6 +5090,7 @@ fn record_inavi_controller_trace<D>(
     let s6 = read_mips_reg(uc, RegisterMIPS::S6);
     let s7 = read_mips_reg(uc, RegisterMIPS::S7);
     let fp = read_mips_reg(uc, RegisterMIPS::FP);
+    #[cfg(feature = "trace")]
     let t0 = read_mips_reg(uc, RegisterMIPS::T0);
     let t4 = read_mips_reg(uc, RegisterMIPS::T4);
     let t6 = read_mips_reg(uc, RegisterMIPS::T6);
@@ -5208,10 +5252,12 @@ fn record_inavi_controller_trace<D>(
         "aux_ctor_store_vtable" => Some(read_mips_reg(uc, RegisterMIPS::T7)),
         _ => None,
     };
+    #[cfg(feature = "trace")]
     let query_thunk_slot = match label {
         "app_query_thunk_entry" | "app_query_thunk_target" => read_unicorn_u32(uc, 0x0052_5068),
         _ => None,
     };
+    #[cfg(feature = "trace")]
     let query_thunk_target = match label {
         "app_query_thunk_entry" => query_thunk_slot,
         "app_query_thunk_target" => Some(t0),
@@ -5290,10 +5336,12 @@ fn record_inavi_controller_trace<D>(
         aux_vtable_source_value,
         aux_store_addr,
         aux_store_value,
+        #[cfg(feature = "trace")]
         query_thunk_slot,
+        #[cfg(feature = "trace")]
         query_thunk_target,
     };
-    if is_inavi_render_milestone_label(label) {
+    if is_inavi_render_milestone_label(label) || is_inavi_controller_focus_trace(&trace) {
         let mut milestones = milestones.borrow_mut();
         if milestones.len() == UNICORN_INAVI_RENDER_MILESTONE_LIMIT {
             milestones.remove(0);
@@ -5307,7 +5355,7 @@ fn record_inavi_controller_trace<D>(
     traces.push(trace);
 }
 
-#[cfg(feature = "unicorn")]
+#[cfg(all(feature = "unicorn", feature = "trace"))]
 fn is_inavi_render_milestone_label(label: &str) -> bool {
     label.starts_with("render_")
         || label.starts_with("paint_")
@@ -5315,7 +5363,29 @@ fn is_inavi_render_milestone_label(label: &str) -> bool {
         || label.starts_with("app_query_")
 }
 
-#[cfg(feature = "unicorn")]
+#[cfg(all(feature = "unicorn", feature = "trace"))]
+fn is_inavi_controller_focus_trace(trace: &UnicornInaviControllerTrace) -> bool {
+    matches!(
+        trace.label,
+        "router_entry"
+            | "classifier_entry"
+            | "classifier_return"
+            | "jump_table"
+            | "select_bucket0"
+            | "select_bucket1"
+            | "select_bucket2"
+            | "select_bucket3"
+            | "select_bucket4"
+            | "select_bucket5"
+            | "selected_object"
+            | "vtable_load"
+            | "vtable_call"
+            | "vtable_return"
+            | "router_return"
+    ) && trace.msg == Some(0x5237)
+}
+
+#[cfg(all(feature = "unicorn", feature = "trace"))]
 fn inavi_controller_probe_label(pc: u32) -> Option<&'static str> {
     match pc {
         0x0001_a448 => Some("classifier_entry"),
@@ -6624,7 +6694,7 @@ fn import_detail_after_return<D>(
     }
 }
 
-#[cfg(feature = "unicorn")]
+#[cfg(all(feature = "unicorn", feature = "trace"))]
 fn is_import_milestone(
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
