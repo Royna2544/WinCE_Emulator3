@@ -148,28 +148,6 @@ impl UnicornDebugSnapshot {
         if let Some(stop) = &self.pc_stop {
             parts.push(format!("pc_stop=0x{:08x}", stop.pc));
         }
-        if !self.import_counts.is_empty() {
-            let counts = self
-                .import_counts
-                .iter()
-                .take(6)
-                .map(|count| {
-                    let name = count
-                        .name
-                        .as_deref()
-                        .or_else(|| count.ordinal.map(|_| "<ordinal>"))
-                        .unwrap_or("<name>");
-                    match count.ordinal {
-                        Some(ordinal) => {
-                            format!("{}/{}@{}={}", count.module, name, ordinal, count.count)
-                        }
-                        None => format!("{}/{}={}", count.module, name, count.count),
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(",");
-            parts.push(format!("imports={counts}"));
-        }
         parts.join(" ")
     }
 }

@@ -682,6 +682,13 @@
   scripted mounted iNavi session verified `until 0x0048f6d8 1000 100000`
   stopped at the main EXE entry PC and wrote
   `target\monitor_until_summary.txt` through `tracefile summary`.
+- Default logging now keeps diagnostics opt-in: the tracing subscriber defaults
+  to `warn` unless `RUST_LOG` is set, compact stop summaries no longer append
+  import-count diagnostics, and startup output is concise by default. The old
+  detailed registry/device/PE/DLL boot context remains available with
+  `--verbose`. Scripted monitor startup checks wrote
+  `target\monitor_default_startup.log` (compact) and
+  `target\monitor_verbose_startup.log` (detailed).
 - Unicorn WNDPROC return handling no longer validates every `WM_PAINT`
   unconditionally. Plain guest WNDPROC returns leave the update region pending;
   `DefWindowProcW` and `CallWindowProcW(DEFAULT)` consume paint through the

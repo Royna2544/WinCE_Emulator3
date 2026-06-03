@@ -39,6 +39,7 @@ struct Args {
     startup_taps: Vec<(i32, i32)>,
     run_cpu: bool,
     monitor: bool,
+    verbose: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,7 +70,7 @@ struct MonitorCheckpoint {
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),
         )
         .init();
 
@@ -128,37 +129,47 @@ fn main() -> Result<()> {
         format!("status={}", ident_key.status)
     };
 
-    println!("FakeCE base booted");
-    println!(
-        "  registry backing: {} ({} keys)",
-        args.registry.display(),
-        kernel.registry.key_count()
-    );
-    println!("  RegOpenKeyExW/RegQueryValueExW HKLM\\Ident\\Name: {device_name}");
-    println!("  devices: {}", kernel.devices.enabled_names().join(", "));
-    println!(
-        "  default serial: {} {}",
-        kernel.devices.default_baud(),
-        kernel.devices.default_mode()
-    );
-    println!("  host audio: {host_audio_status}");
-    if let Some((hwnd, timer_id, wave_id)) = bootstrap_handles {
-        println!("  bootstrap hwnd: 0x{hwnd:08x}");
-        println!("  bootstrap timer: {timer_id}");
-        println!("  bootstrap waveOut: {wave_id}");
+    if args.verbose {
+        println!("FakeCE base booted");
+        println!(
+            "  registry backing: {} ({} keys)",
+            args.registry.display(),
+            kernel.registry.key_count()
+        );
+        println!("  RegOpenKeyExW/RegQueryValueExW HKLM\\Ident\\Name: {device_name}");
+        println!("  devices: {}", kernel.devices.enabled_names().join(", "));
+        println!(
+            "  default serial: {} {}",
+            kernel.devices.default_baud(),
+            kernel.devices.default_mode()
+        );
+        println!("  host audio: {host_audio_status}");
+        if let Some((hwnd, timer_id, wave_id)) = bootstrap_handles {
+            println!("  bootstrap hwnd: 0x{hwnd:08x}");
+            println!("  bootstrap timer: {timer_id}");
+            println!("  bootstrap waveOut: {wave_id}");
+        } else {
+            println!("  bootstrap demo state: skipped for PE image");
+        }
+        println!("  memory regions: {}", cpu.memory().regions().count());
+        println!(
+            "  framebuffer: {}x{} {:?} stride={} bytes={}",
+            desktop.framebuffer().width(),
+            desktop.framebuffer().height(),
+            desktop.framebuffer().pixel_format(),
+            desktop.framebuffer().stride(),
+            desktop.framebuffer().pixels().len()
+        );
+        println!("  desktop: {}", desktop.describe());
     } else {
-        println!("  bootstrap demo state: skipped for PE image");
+        println!(
+            "FakeCE booted: desktop={} framebuffer={}x{} {:?}",
+            desktop.describe(),
+            desktop.framebuffer().width(),
+            desktop.framebuffer().height(),
+            desktop.framebuffer().pixel_format()
+        );
     }
-    println!("  memory regions: {}", cpu.memory().regions().count());
-    println!(
-        "  framebuffer: {}x{} {:?} stride={} bytes={}",
-        desktop.framebuffer().width(),
-        desktop.framebuffer().height(),
-        desktop.framebuffer().pixel_format(),
-        desktop.framebuffer().stride(),
-        desktop.framebuffer().pixels().len()
-    );
-    println!("  desktop: {}", desktop.describe());
     desktop.present()?;
 
     let pe_image = if let Some(image_path) = args.image.as_ref() {
@@ -166,22 +177,31 @@ fn main() -> Result<()> {
         kernel.set_process_module_base(image.image_base());
         kernel.set_process_module_path(ce_module_path_for_image(&kernel, &image.path));
         kernel.set_process_module_host_path(PathBuf::from(&image.path));
-        println!(
-            "  PE image: {} ({} bytes, lfanew=0x{:08x}, machine=0x{:04x})",
-            image.path, image.len, image.dos_lfanew, image.coff_header.machine
-        );
-        println!(
-            "  PE layout: image_base=0x{:08x} entry_va=0x{:08x} sections={} imports={} exports={} reloc_blocks={}",
-            image.image_base(),
-            image.entry_point_va(),
-            image.sections.len(),
-            image.imports.len(),
-            image
-                .exports
-                .as_ref()
-                .map_or(0, |exports| exports.functions.len()),
-            image.base_relocations.len()
-        );
+        if args.verbose {
+            println!(
+                "  PE image: {} ({} bytes, lfanew=0x{:08x}, machine=0x{:04x})",
+                image.path, image.len, image.dos_lfanew, image.coff_header.machine
+            );
+            println!(
+                "  PE layout: image_base=0x{:08x} entry_va=0x{:08x} sections={} imports={} exports={} reloc_blocks={}",
+                image.image_base(),
+                image.entry_point_va(),
+                image.sections.len(),
+                image.imports.len(),
+                image
+                    .exports
+                    .as_ref()
+                    .map_or(0, |exports| exports.functions.len()),
+                image.base_relocations.len()
+            );
+        } else {
+            println!(
+                "  PE: {} base=0x{:08x} entry=0x{:08x}",
+                image.path,
+                image.image_base(),
+                image.entry_point_va()
+            );
+        }
         Some(image)
     } else {
         None
@@ -189,18 +209,24 @@ fn main() -> Result<()> {
 
     if let Some(image) = pe_image.as_ref() {
         let dll_images = load_import_dlls(image, &args.dll_search_dirs)?;
-        for dll in &dll_images {
-            println!(
-                "  DLL image: {} image_base=0x{:08x} size=0x{:08x} reloc_stripped={} reloc_blocks={}",
-                dll.path,
-                dll.image_base(),
-                dll.optional_header.size_of_image,
-                dll.relocations_stripped(),
-                dll.base_relocations.len()
-            );
+        if args.verbose {
+            for dll in &dll_images {
+                println!(
+                    "  DLL image: {} image_base=0x{:08x} size=0x{:08x} reloc_stripped={} reloc_blocks={}",
+                    dll.path,
+                    dll.image_base(),
+                    dll.optional_header.size_of_image,
+                    dll.relocations_stripped(),
+                    dll.base_relocations.len()
+                );
+            }
         }
         cpu.load_pe_image_with_dlls(image, &dll_images)?;
-        println!("  import traps: {} slots patched", cpu.import_traps().len());
+        println!(
+            "  loader: {} DLL(s), {} import trap(s)",
+            dll_images.len(),
+            cpu.import_traps().len()
+        );
     }
 
     if args.run_cpu {
@@ -952,6 +978,7 @@ impl Args {
         let mut startup_taps = Vec::new();
         let mut run_cpu = false;
         let mut monitor = false;
+        let mut verbose = false;
 
         let mut args = std::env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -992,6 +1019,9 @@ impl Args {
                 "--monitor" | "--debugger" => {
                     monitor = true;
                 }
+                "--verbose" | "-v" => {
+                    verbose = true;
+                }
                 "--help" | "-h" => {
                     print_help();
                     std::process::exit(0);
@@ -1017,6 +1047,7 @@ impl Args {
             startup_taps,
             run_cpu,
             monitor,
+            verbose,
         })
     }
 }
@@ -1078,7 +1109,7 @@ fn next_tap(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<(i32,
 
 fn print_help() {
     println!(
-        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--mount-config mounts.toml] [--image INavi.exe] [--dll-search-dir DIR]... [--desktop virtual|host] [--framebuffer-dump OUT.ppm] [--cpu-instruction-limit N] [--cpu-wall-clock-limit-ms N] [--tap X,Y]... [--run-cpu] [--monitor]"
+        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--mount-config mounts.toml] [--image INavi.exe] [--dll-search-dir DIR]... [--desktop virtual|host] [--framebuffer-dump OUT.ppm] [--cpu-instruction-limit N] [--cpu-wall-clock-limit-ms N] [--tap X,Y]... [--run-cpu] [--monitor] [--verbose]"
     );
 }
 
