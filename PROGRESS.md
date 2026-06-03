@@ -662,6 +662,16 @@
   Monitor checkpoints clone and restore the CPU wrapper, CE kernel, and
   framebuffer state. Live in-core Unicorn register/memory rewind still requires
   persistent Unicorn CPU snapshots.
+- Monitor diagnostics now replace the previous always-explosive default stop
+  output with compact summaries. Detailed trace rings are still captured, but
+  are pulled explicitly through `trace all`, `trace imports`, `trace counts`,
+  `trace calls`, `trace code`, `trace blocks`, `trace messages`,
+  `trace wndproc`, `trace render`, or `trace files`. The monitor also exposes
+  `map`, `x ADDRESS [LEN]`, and `disasm ADDRESS [WORDS]` for mapped static
+  PE/DLL/trap bytes. Scripted verification wrote
+  `target\monitor_mapped_inspect.log` for `map`/`x`/`disasm` and
+  `target\monitor_quiet_default.log` plus `target\monitor_quiet_default.ppm`
+  for compact stop output with explicit trace selectors.
 - Unicorn WNDPROC return handling no longer validates every `WM_PAINT`
   unconditionally. Plain guest WNDPROC returns leave the update region pending;
   `DefWindowProcW` and `CallWindowProcW(DEFAULT)` consume paint through the

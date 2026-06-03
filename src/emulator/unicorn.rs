@@ -81,6 +81,94 @@ pub struct UnicornDebugSnapshot {
     pub encoded_kernel_exit: Option<EncodedKernelExit>,
 }
 
+impl UnicornDebugSnapshot {
+    pub fn summary(&self) -> String {
+        let mut parts = vec![
+            format!("pc=0x{:08x}", self.pc),
+            format!("ra=0x{:08x}", self.ra),
+            format!("sp=0x{:08x}", self.sp),
+            format!("v0=0x{:08x}", self.v0),
+            format!("a0=0x{:08x}", self.a0),
+            format!("a1=0x{:08x}", self.a1),
+        ];
+        if let Some(trap_address) = self.trap_address {
+            let mut trap = format!("trap=0x{trap_address:08x}");
+            if let Some(module) = self.trap_module_name.as_deref() {
+                trap.push_str(&format!("/{module}"));
+            }
+            if let Some(ordinal) = self.trap_ordinal {
+                trap.push_str(&format!("@{ordinal}"));
+            }
+            if let Some(name) = self.trap_name.as_deref() {
+                trap.push_str(&format!("/{name}"));
+            }
+            parts.push(trap);
+        }
+        if let Some(stop) = &self.host_wall_clock_stop {
+            parts.push(format!("wall_stop={}ms", stop.elapsed_ms));
+        }
+        if let Some(blocked) = &self.blocked_get_message {
+            parts.push(format!(
+                "blocked_get_message=thread:{} hwnd={}",
+                blocked.thread_id,
+                blocked
+                    .hwnd
+                    .map(|hwnd| format!("0x{hwnd:08x}"))
+                    .unwrap_or_else(|| "any".to_owned())
+            ));
+        }
+        if let Some(exit) = &self.encoded_kernel_exit {
+            parts.push(format!(
+                "encoded_exit=api{}.{} process=0x{:08x} code=0x{:08x}",
+                exit.api_set, exit.method, exit.process, exit.exit_code
+            ));
+        }
+        if let Some(interrupt) = &self.interrupt_probe {
+            parts.push(format!(
+                "interrupt={} last_pc={}",
+                interrupt.intno,
+                interrupt
+                    .last_code_pc
+                    .map(|pc| format!("0x{pc:08x}"))
+                    .unwrap_or_else(|| "none".to_owned())
+            ));
+        }
+        if let Some(invalid) = &self.invalid_instruction_probe {
+            parts.push(format!(
+                "invalid_instruction pc=0x{:08x} insn={}",
+                invalid.pc,
+                invalid
+                    .instruction
+                    .map(|insn| format!("0x{insn:08x}"))
+                    .unwrap_or_else(|| "unreadable".to_owned())
+            ));
+        }
+        if !self.import_counts.is_empty() {
+            let counts = self
+                .import_counts
+                .iter()
+                .take(6)
+                .map(|count| {
+                    let name = count
+                        .name
+                        .as_deref()
+                        .or_else(|| count.ordinal.map(|_| "<ordinal>"))
+                        .unwrap_or("<name>");
+                    match count.ordinal {
+                        Some(ordinal) => {
+                            format!("{}/{}@{}={}", count.module, name, ordinal, count.count)
+                        }
+                        None => format!("{}/{}={}", count.module, name, count.count),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            parts.push(format!("imports={counts}"));
+        }
+        parts.join(" ")
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnicornMemoryFault {
     pub access: String,
@@ -565,8 +653,16 @@ struct MappedResource {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 struct MappedBlob {
+    name: String,
     base: u32,
     bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornMappedBlobRange {
+    pub name: String,
+    pub base: u32,
+    pub size: u32,
 }
 
 impl UnicornMips {
@@ -612,6 +708,30 @@ impl UnicornMips {
 
     pub fn last_debug_snapshot(&self) -> Option<&UnicornDebugSnapshot> {
         self.last_debug.as_ref()
+    }
+
+    pub fn mapped_blob_ranges(&self) -> Vec<UnicornMappedBlobRange> {
+        self.mapped_blobs
+            .iter()
+            .map(|blob| UnicornMappedBlobRange {
+                name: blob.name.clone(),
+                base: blob.base,
+                size: blob.bytes.len() as u32,
+            })
+            .collect()
+    }
+
+    pub fn read_mapped_bytes(&self, address: u32, len: usize) -> Option<Vec<u8>> {
+        for blob in &self.mapped_blobs {
+            let Some(offset) = address.checked_sub(blob.base).map(|offset| offset as usize) else {
+                continue;
+            };
+            let end = offset.checked_add(len)?;
+            if end <= blob.bytes.len() {
+                return Some(blob.bytes[offset..end].to_vec());
+            }
+        }
+        None
     }
 
     pub fn load_pe_image(&mut self, image: &PeImage) -> Result<()> {
@@ -749,6 +869,7 @@ impl UnicornMips {
         self.register_image_resource_strings(image, image.image_base())?;
         self.import_traps.merge(traps);
         self.mapped_blobs.push(MappedBlob {
+            name: format!("image:{}", image.path),
             base: image.image_base(),
             bytes: mapped,
         });
@@ -757,16 +878,19 @@ impl UnicornMips {
                 self.register_image_resource_strings(dll, load_base)?;
             }
             self.mapped_blobs.push(MappedBlob {
+                name: format!("dll:{path}"),
                 base: load_base,
                 bytes: mapped,
             });
         }
         self.mapped_blobs.push(MappedBlob {
+            name: "user-kdata".to_owned(),
             base: USER_KDATA_PAGE_BASE,
             bytes: user_kdata_page(),
         });
         let trap_page = import_trap_code_page(&self.import_traps);
         self.mapped_blobs.push(MappedBlob {
+            name: "ce-import-traps".to_owned(),
             base: IMPORT_TRAP_BASE,
             bytes: trap_page,
         });

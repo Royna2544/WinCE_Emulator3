@@ -18,7 +18,7 @@ use wince_emulation_v3::{
     config::RuntimeConfig,
     emulator::{
         memory::MemoryPerms,
-        unicorn::{UnicornMips, UnicornRunLimits},
+        unicorn::{UnicornDebugSnapshot, UnicornMips, UnicornRunLimits},
     },
     pe::PeImage,
 };
@@ -236,7 +236,7 @@ fn run_cpu_loop(
             },
         ) {
             if let Some(snapshot) = cpu.last_debug_snapshot() {
-                eprintln!("  Unicorn debug: {snapshot}");
+                eprintln!("  Unicorn debug: {}", snapshot.summary());
             }
             if let Some(path) = args.framebuffer_dump.as_ref() {
                 desktop.framebuffer().write_ppm(path)?;
@@ -251,7 +251,7 @@ fn run_cpu_loop(
         if let Some(snapshot) = cpu.last_debug_snapshot() {
             if args.desktop == DesktopMode::Host && snapshot.blocked_get_message.is_some() {
                 if !reported_blocked_message_wait {
-                    println!("  Unicorn stopped: {snapshot}");
+                    println!("  Unicorn stopped: {}", snapshot.summary());
                     if let Some(path) = args.framebuffer_dump.as_ref() {
                         desktop.framebuffer().write_ppm(path)?;
                         println!("  framebuffer dump: {}", path.display());
@@ -261,7 +261,7 @@ fn run_cpu_loop(
                 std::thread::sleep(Duration::from_millis(16));
                 continue;
             }
-            println!("  Unicorn stopped: {snapshot}");
+            println!("  Unicorn stopped: {}", snapshot.summary());
         }
         break;
     }
@@ -375,9 +375,81 @@ fn run_monitor(
             }
             "regs" | "snapshot" | "info" => {
                 if let Some(snapshot) = cpu.last_debug_snapshot() {
-                    println!("  Unicorn stopped: {snapshot}");
+                    println!("  Unicorn stopped: {}", snapshot.summary());
                 } else {
                     println!("  no Unicorn snapshot yet");
+                }
+            }
+            "trace" | "detail" => {
+                let selector = words.next().unwrap_or("all");
+                let Some(snapshot) = cpu.last_debug_snapshot() else {
+                    println!("  no Unicorn snapshot yet");
+                    continue;
+                };
+                print_monitor_trace(snapshot, selector);
+            }
+            "map" | "regions" => {
+                println!("  memory regions:");
+                for region in cpu.memory().regions() {
+                    println!(
+                        "    0x{base:08x}-0x{end:08x} {perms:?} {name}",
+                        base = region.base,
+                        end = region.base.saturating_add(region.size),
+                        perms = region.perms,
+                        name = &region.name
+                    );
+                }
+                println!("  mapped blobs:");
+                for blob in cpu.mapped_blob_ranges() {
+                    println!(
+                        "    0x{base:08x}-0x{end:08x} {name}",
+                        base = blob.base,
+                        end = blob.base.saturating_add(blob.size),
+                        name = blob.name
+                    );
+                }
+            }
+            "x" | "examine" => {
+                let address = words.next().ok_or_else(|| {
+                    wince_emulation_v3::Error::InvalidArgument("x needs ADDRESS [LEN]".to_owned())
+                })?;
+                let address = parse_monitor_u32(address)?;
+                let len = words
+                    .next()
+                    .map(parse_monitor_usize)
+                    .transpose()?
+                    .unwrap_or(64)
+                    .min(4096);
+                let Some(bytes) = cpu.read_mapped_bytes(address, len) else {
+                    println!("  no mapped static bytes at 0x{address:08x} for {len} byte(s)");
+                    continue;
+                };
+                print_monitor_hexdump(address, &bytes);
+            }
+            "disasm" | "u32" | "words" => {
+                let address = words.next().ok_or_else(|| {
+                    wince_emulation_v3::Error::InvalidArgument(
+                        "disasm needs ADDRESS [WORDS]".to_owned(),
+                    )
+                })?;
+                let address = parse_monitor_u32(address)?;
+                let words_count = words
+                    .next()
+                    .map(parse_monitor_usize)
+                    .transpose()?
+                    .unwrap_or(8)
+                    .min(128);
+                let len = words_count.saturating_mul(4);
+                let Some(bytes) = cpu.read_mapped_bytes(address, len) else {
+                    println!(
+                        "  no mapped static words at 0x{address:08x} for {words_count} word(s)"
+                    );
+                    continue;
+                };
+                for (index, chunk) in bytes.chunks_exact(4).enumerate() {
+                    let value = u32::from_le_bytes(chunk.try_into().unwrap());
+                    let pc = address.wrapping_add((index * 4) as u32);
+                    println!("  0x{pc:08x}: 0x{value:08x}");
                 }
             }
             "checkpoint" | "save" => {
@@ -454,7 +526,7 @@ fn monitor_run_once(
         cpu.run_until_import_trap_with_framebuffer_limits(kernel, desktop.framebuffer_mut(), limits)
     {
         if let Some(snapshot) = cpu.last_debug_snapshot() {
-            eprintln!("  Unicorn debug: {snapshot}");
+            eprintln!("  Unicorn debug: {}", snapshot.summary());
         }
         if let Some(path) = framebuffer_dump {
             desktop.framebuffer().write_ppm(path)?;
@@ -468,7 +540,7 @@ fn monitor_run_once(
     }
     desktop.present()?;
     if let Some(snapshot) = cpu.last_debug_snapshot() {
-        println!("  Unicorn stopped: {snapshot}");
+        println!("  Unicorn stopped: {}", snapshot.summary());
     }
     if let Some(path) = framebuffer_dump {
         desktop.framebuffer().write_ppm(path)?;
@@ -483,12 +555,18 @@ fn print_monitor_help() {
     println!("  tap X Y                     queue a touch tap");
     println!("  dump [path]                 write framebuffer PPM");
     println!("  present                     present the current framebuffer");
-    println!("  regs                        print the last Unicorn snapshot");
+    println!("  regs                        print compact stop/register summary");
+    println!(
+        "  trace [kind]                print detailed trace: all/imports/calls/code/blocks/messages/render"
+    );
+    println!("  map                         list memory regions and mapped static blobs");
+    println!("  x ADDRESS [LEN]             hexdump mapped static PE/DLL/trap bytes");
+    println!("  disasm ADDRESS [WORDS]      print mapped static MIPS instruction words");
     println!("  checkpoint [name]           save CPU wrapper, CE kernel, and framebuffer");
     println!("  checkpoints                 list saved checkpoints");
     println!("  rewind [name|index]         restore a saved checkpoint, default last");
     println!("  quit                        exit the monitor");
-    println!("  note: live rewind/restore needs persistent CPU-state snapshots");
+    println!("  note: x/disasm read mapped static bytes; live memory needs persistent CPU state");
 }
 
 fn parse_monitor_u64(value: &str) -> Result<u64> {
@@ -508,6 +586,13 @@ fn parse_monitor_usize(value: &str) -> Result<usize> {
         })
 }
 
+fn parse_monitor_u32(value: &str) -> Result<u32> {
+    let parsed = parse_monitor_u64(value)?;
+    u32::try_from(parsed).map_err(|err| {
+        wince_emulation_v3::Error::InvalidArgument(format!("monitor integer {value}: {err}"))
+    })
+}
+
 fn parse_monitor_i32(value: &str) -> Result<i32> {
     let parsed = parse_i64_value(value).map_err(|err| {
         wince_emulation_v3::Error::InvalidArgument(format!("monitor integer {value}: {err}"))
@@ -515,6 +600,74 @@ fn parse_monitor_i32(value: &str) -> Result<i32> {
     i32::try_from(parsed).map_err(|err| {
         wince_emulation_v3::Error::InvalidArgument(format!("monitor integer {value}: {err}"))
     })
+}
+
+fn print_monitor_hexdump(base: u32, bytes: &[u8]) {
+    for (line_index, chunk) in bytes.chunks(16).enumerate() {
+        let address = base.wrapping_add((line_index * 16) as u32);
+        print!("  0x{address:08x}:");
+        for index in 0..16 {
+            if let Some(byte) = chunk.get(index) {
+                print!(" {byte:02x}");
+            } else {
+                print!("   ");
+            }
+        }
+        print!("  |");
+        for byte in chunk {
+            let ascii = if byte.is_ascii_graphic() || *byte == b' ' {
+                char::from(*byte)
+            } else {
+                '.'
+            };
+            print!("{ascii}");
+        }
+        println!("|");
+    }
+}
+
+fn print_monitor_trace(snapshot: &UnicornDebugSnapshot, selector: &str) {
+    match selector {
+        "all" | "full" => println!("  Unicorn detail: {snapshot}"),
+        "summary" | "regs" => println!("  Unicorn stopped: {}", snapshot.summary()),
+        "imports" => print_monitor_records("imports", &snapshot.last_imports),
+        "counts" | "import-counts" => {
+            print_monitor_records("import counts", &snapshot.import_counts)
+        }
+        "calls" => print_monitor_records("calls", &snapshot.last_calls),
+        "code" => print_monitor_records("code", &snapshot.last_code),
+        "blocks" => print_monitor_records("blocks", &snapshot.last_blocks),
+        "messages" | "msgs" => print_monitor_records("messages", &snapshot.last_messages),
+        "wndproc" => {
+            print_monitor_records("wndproc returns", &snapshot.last_wndproc_returns);
+            print_monitor_records("wndproc calls", &snapshot.last_wndproc_call_traces);
+        }
+        "render" => {
+            print_monitor_records("inavi display", &snapshot.last_inavi_display);
+            print_monitor_records("inavi controller", &snapshot.last_inavi_controller);
+            print_monitor_records("inavi render milestones", &snapshot.inavi_render_milestones);
+        }
+        "files" => {
+            print_monitor_records("file opens", &snapshot.recent_file_open_ops);
+            print_monitor_records("file ops", &snapshot.recent_file_ops);
+        }
+        other => {
+            println!(
+                "  unknown trace kind `{other}`; use all/imports/counts/calls/code/blocks/messages/wndproc/render/files"
+            );
+        }
+    }
+}
+
+fn print_monitor_records<T: std::fmt::Debug>(label: &str, records: &[T]) {
+    if records.is_empty() {
+        println!("  {label}: none");
+        return;
+    }
+    println!("  {label}:");
+    for (index, record) in records.iter().enumerate() {
+        println!("    {index}: {record:?}");
+    }
 }
 
 fn parse_u64_value(value: &str) -> Result<u64> {

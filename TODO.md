@@ -114,9 +114,10 @@
 
 - Extend `--monitor` from a bounded-run command loop into a persistent
   Unicorn debugger session. The current checkpoint/rewind commands restore the
-  Rust-side CPU wrapper, CE kernel, and framebuffer; remaining pieces are to
-  retain live Unicorn CPU/register/memory state across commands and expose
-  memory examine/write commands.
+  Rust-side CPU wrapper, CE kernel, and framebuffer, and current `map`/`x`/
+  `disasm` commands inspect mapped static PE/DLL/trap bytes; remaining pieces
+  are to retain live Unicorn CPU/register/memory state across commands and
+  expose live memory examine/write commands.
 - Extend bounded run tooling beyond the current snapshot import ring if more
   structured trace context is needed.
 - Trace why the now-consumed `--tap 400,240` messages do not trigger useful
