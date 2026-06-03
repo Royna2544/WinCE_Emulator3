@@ -5090,7 +5090,6 @@ fn record_inavi_controller_trace<D>(
     let s6 = read_mips_reg(uc, RegisterMIPS::S6);
     let s7 = read_mips_reg(uc, RegisterMIPS::S7);
     let fp = read_mips_reg(uc, RegisterMIPS::FP);
-    #[cfg(feature = "trace")]
     let t0 = read_mips_reg(uc, RegisterMIPS::T0);
     let t4 = read_mips_reg(uc, RegisterMIPS::T4);
     let t6 = read_mips_reg(uc, RegisterMIPS::T6);
@@ -5100,9 +5099,17 @@ fn record_inavi_controller_trace<D>(
     let sp48 = sp
         .checked_add(0x48)
         .and_then(|addr| read_unicorn_u32(uc, addr));
-    let controller = match label {
-        "router_entry" | "classifier_call" => Some(a0),
-        _ => Some(s6),
+    let controller = if label.starts_with("resource_ready_") {
+        if label == "resource_ready_entry" {
+            Some(a0)
+        } else {
+            Some(fp)
+        }
+    } else {
+        match label {
+            "router_entry" | "classifier_call" => Some(a0),
+            _ => Some(s6),
+        }
     };
     let selected_obj = match label {
         "selected_object" | "vtable_load" | "vtable_call" | "vtable_return" => Some(a0),
@@ -5252,12 +5259,10 @@ fn record_inavi_controller_trace<D>(
         "aux_ctor_store_vtable" => Some(read_mips_reg(uc, RegisterMIPS::T7)),
         _ => None,
     };
-    #[cfg(feature = "trace")]
     let query_thunk_slot = match label {
         "app_query_thunk_entry" | "app_query_thunk_target" => read_unicorn_u32(uc, 0x0052_5068),
         _ => None,
     };
-    #[cfg(feature = "trace")]
     let query_thunk_target = match label {
         "app_query_thunk_entry" => query_thunk_slot,
         "app_query_thunk_target" => Some(t0),
@@ -5285,26 +5290,31 @@ fn record_inavi_controller_trace<D>(
         controller,
         hwnd: match label {
             "router_entry" => Some(read_mips_reg(uc, RegisterMIPS::A1)),
+            _ if label.starts_with("resource_ready_") => None,
             _ => Some(s2),
         },
         msg: match label {
             "router_entry" => Some(read_mips_reg(uc, RegisterMIPS::A2)),
             "classifier_entry" => Some(read_mips_reg(uc, RegisterMIPS::A1)),
+            _ if label.starts_with("resource_ready_") => None,
             _ => Some(fp),
         },
         wparam: match label {
             "router_entry" => Some(read_mips_reg(uc, RegisterMIPS::A3)),
             "classifier_entry" => Some(read_mips_reg(uc, RegisterMIPS::A2)),
+            _ if label.starts_with("resource_ready_") => None,
             _ => Some(s4),
         },
         lparam: match label {
             "router_entry" => sp10,
+            _ if label.starts_with("resource_ready_") => None,
             _ => sp48,
         },
         classifier: match label {
             "router_entry" | "classifier_call" => None,
             "classifier_entry" => None,
             "classifier_return" => Some(read_mips_reg(uc, RegisterMIPS::V0)),
+            _ if label.starts_with("resource_ready_") => None,
             _ => Some(s7),
         },
         selected_obj,
@@ -5361,6 +5371,8 @@ fn is_inavi_render_milestone_label(label: &str) -> bool {
         || label.starts_with("paint_")
         || label.starts_with("init_dialog_")
         || label.starts_with("app_query_")
+        || label.starts_with("query_5237_")
+        || label.starts_with("resource_ready_")
 }
 
 #[cfg(all(feature = "unicorn", feature = "trace"))]
@@ -5422,6 +5434,21 @@ fn inavi_controller_probe_label(pc: u32) -> Option<&'static str> {
         0x0002_bde4 => Some("render_lifecycle_full_return"),
         0x0001_360c => Some("app_query_thunk_entry"),
         0x0001_3614 => Some("app_query_thunk_target"),
+        0x0005_7ac8 => Some("query_5237_entry"),
+        0x0005_7b08 => Some("query_5237_ready_call"),
+        0x0005_7b10 => Some("query_5237_ready_return"),
+        0x0005_7b18 => Some("query_5237_success"),
+        0x0005_7b20 => Some("query_5237_fail"),
+        0x0005_7b24 => Some("query_5237_fail_zero"),
+        0x0005_8790 => Some("resource_ready_entry"),
+        0x0005_87ec => Some("resource_ready_after_589dc"),
+        0x0005_87fc => Some("resource_ready_pass_589dc"),
+        0x0005_8834 => Some("resource_ready_after_58fac"),
+        0x0005_88a0 => Some("resource_ready_after_58b1c"),
+        0x0005_88ec => Some("resource_ready_after_58c3c"),
+        0x0005_8904 => Some("resource_ready_after_5b068"),
+        0x0005_891c => Some("resource_ready_after_58984"),
+        0x0005_892c => Some("resource_ready_return"),
         0x0002_d158 => Some("wm_size_entry"),
         0x0002_d198 => Some("wm_size_render_vtable"),
         0x0002_d1a0 => Some("wm_size_render_call"),
