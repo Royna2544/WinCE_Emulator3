@@ -378,7 +378,7 @@ fn coredll_raw_system_parameters_info_returns_ce_strings_and_work_area() -> Resu
             ..
         }
     ));
-    assert_eq!(memory.read_wide_z(text, 256), "WinCE Emulator");
+    assert_eq!(memory.read_wide_z(text, 256), "iNavi GN 2010");
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

@@ -47,6 +47,7 @@ const CTYPE_ALPHA: u32 = 0x0100;
 const SPI_GETWORKAREA: u32 = 0x0030;
 const SPI_GETPLATFORMTYPE: u32 = 0x0101;
 const SPI_GETOEMINFO: u32 = 0x0102;
+const SYSTEM_PARAMETERS_INFO_REGISTRY_PATH: &str = r"HKLM\System\Emulator\SystemParametersInfo";
 const IOCTL_HAL_GET_DEVICEID: u32 = 0x0101_207c;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -3495,22 +3496,21 @@ fn system_parameters_info_w_raw<M: CoredllGuestMemory>(
                 write_guest_rect(kernel, memory, thread_id, pv_param, rect)
             }
         }
-        SPI_GETPLATFORMTYPE => write_system_parameter_info_string(
-            kernel,
-            memory,
-            thread_id,
-            pv_param,
-            ui_param,
-            "Windows CE",
-        ),
-        SPI_GETOEMINFO => write_system_parameter_info_string(
-            kernel,
-            memory,
-            thread_id,
-            pv_param,
-            ui_param,
-            "WinCE Emulator",
-        ),
+        SPI_GETPLATFORMTYPE => {
+            let text = system_parameter_info_config_string(
+                kernel,
+                action,
+                &["platformtype", "platform_type"],
+            )
+            .unwrap_or_else(|| "Windows CE".to_owned());
+            write_system_parameter_info_string(kernel, memory, thread_id, pv_param, ui_param, &text)
+        }
+        SPI_GETOEMINFO => {
+            let text =
+                system_parameter_info_config_string(kernel, action, &["oeminfo", "oem_info"])
+                    .unwrap_or_else(|| "WinCE Emulator".to_owned());
+            write_system_parameter_info_string(kernel, memory, thread_id, pv_param, ui_param, &text)
+        }
         _ => true,
     };
     kernel
@@ -3538,6 +3538,25 @@ fn write_system_parameter_info_string<M: CoredllGuestMemory>(
         text,
         capacity_chars as usize,
     )
+}
+
+fn system_parameter_info_config_string(
+    kernel: &CeKernel,
+    action: u32,
+    aliases: &[&str],
+) -> Option<String> {
+    let action_name = format!("{action:08x}");
+    std::iter::once(action_name.as_str())
+        .chain(aliases.iter().copied())
+        .find_map(|name| {
+            kernel
+                .registry
+                .query_value(SYSTEM_PARAMETERS_INFO_REGISTRY_PATH, name)
+                .ok()
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        })
 }
 
 fn adjust_window_rect_ex_raw<M: CoredllGuestMemory>(
