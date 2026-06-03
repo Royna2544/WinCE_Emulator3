@@ -71,10 +71,13 @@ pub struct BitmapObject {
     pub handle: u32,
     pub width: i32,
     pub height: i32,
+    pub top_down: bool,
     pub width_bytes: i32,
     pub planes: u16,
     pub bits_pixel: u16,
+    pub rgb_masks: Option<[u32; 3]>,
     pub bits_ptr: u32,
+    pub bits_owned: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,6 +142,7 @@ pub struct PaletteObject {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DcState {
     pub selected_object: u32,
+    pub selected_bitmap: u32,
     pub selected_font: u32,
     pub selected_brush: u32,
     pub selected_palette: u32,
@@ -152,6 +156,7 @@ impl Default for DcState {
     fn default() -> Self {
         Self {
             selected_object: 0,
+            selected_bitmap: 0,
             selected_font: 0,
             selected_brush: 0,
             selected_palette: 0,
@@ -290,6 +295,58 @@ impl ResourceSystem {
         bits_pixel: u16,
         bits_ptr: u32,
     ) -> u32 {
+        self.create_bitmap_with_ownership(width, height, planes, bits_pixel, bits_ptr, None, false)
+    }
+
+    pub fn create_bitmap_with_masks(
+        &mut self,
+        width: i32,
+        height: i32,
+        planes: u16,
+        bits_pixel: u16,
+        bits_ptr: u32,
+        rgb_masks: Option<[u32; 3]>,
+    ) -> u32 {
+        self.create_bitmap_with_ownership(
+            width, height, planes, bits_pixel, bits_ptr, rgb_masks, false,
+        )
+    }
+
+    pub fn create_owned_bitmap(
+        &mut self,
+        width: i32,
+        height: i32,
+        planes: u16,
+        bits_pixel: u16,
+        bits_ptr: u32,
+    ) -> u32 {
+        self.create_bitmap_with_ownership(width, height, planes, bits_pixel, bits_ptr, None, true)
+    }
+
+    pub fn create_owned_bitmap_with_masks(
+        &mut self,
+        width: i32,
+        height: i32,
+        planes: u16,
+        bits_pixel: u16,
+        bits_ptr: u32,
+        rgb_masks: Option<[u32; 3]>,
+    ) -> u32 {
+        self.create_bitmap_with_ownership(
+            width, height, planes, bits_pixel, bits_ptr, rgb_masks, true,
+        )
+    }
+
+    fn create_bitmap_with_ownership(
+        &mut self,
+        width: i32,
+        height: i32,
+        planes: u16,
+        bits_pixel: u16,
+        bits_ptr: u32,
+        rgb_masks: Option<[u32; 3]>,
+        bits_owned: bool,
+    ) -> u32 {
         let handle = self.next_gdi_handle;
         self.next_gdi_handle += 4;
         let bits_per_row = (width.unsigned_abs() as u64) * (bits_pixel as u64);
@@ -300,10 +357,13 @@ impl ResourceSystem {
                 handle,
                 width,
                 height: height.abs(),
+                top_down: height < 0,
                 width_bytes,
                 planes,
                 bits_pixel,
+                rgb_masks,
                 bits_ptr,
+                bits_owned,
             },
         );
         handle
@@ -510,6 +570,10 @@ impl ResourceSystem {
         handle
     }
 
+    pub fn pen(&self, handle: u32) -> Option<&PenObject> {
+        self.pens.get(&handle)
+    }
+
     pub fn create_palette(&mut self, entries: Vec<[u8; 4]>) -> u32 {
         let handle = self.next_gdi_handle;
         self.next_gdi_handle += 4;
@@ -545,14 +609,19 @@ impl ResourceSystem {
             return Some(0);
         }
         let is_font = self.fonts.contains_key(&object) || is_stock_font(object);
+        let is_bitmap = self.bitmaps.contains_key(&object);
         let is_drawable = self.brushes.contains_key(&object)
-            || self.bitmaps.contains_key(&object)
             || self.pens.contains_key(&object)
             || is_stock_drawable(object);
         let state = self.dc_states.entry(hdc).or_default();
         if is_font {
             let previous = state.selected_font;
             state.selected_font = object;
+            state.selected_object = object;
+            Some(previous)
+        } else if is_bitmap {
+            let previous = state.selected_bitmap;
+            state.selected_bitmap = object;
             state.selected_object = object;
             Some(previous)
         } else if is_drawable {
@@ -563,6 +632,17 @@ impl ResourceSystem {
         } else {
             Some(state.selected_object)
         }
+    }
+
+    pub fn selected_bitmap(&self, hdc: u32) -> Option<u32> {
+        self.dc_states
+            .get(&hdc)
+            .map(|state| state.selected_bitmap)
+            .filter(|bitmap| *bitmap != 0)
+    }
+
+    pub fn is_memory_dc(&self, hdc: u32) -> bool {
+        self.memory_dcs.contains(&hdc)
     }
 
     pub fn select_palette(&mut self, hdc: u32, palette: u32) -> Option<u32> {
@@ -633,6 +713,9 @@ impl ResourceSystem {
         for state in self.dc_states.values_mut() {
             if state.selected_object == handle {
                 state.selected_object = 0;
+            }
+            if state.selected_bitmap == handle {
+                state.selected_bitmap = 0;
             }
             if state.selected_font == handle {
                 state.selected_font = 0;

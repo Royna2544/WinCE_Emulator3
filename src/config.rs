@@ -38,6 +38,9 @@ pub struct MountConfig {
     pub total_mbytes: u64,
     pub free_mbytes: u64,
     pub writable: bool,
+    pub removable: bool,
+    pub system: bool,
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -55,6 +58,9 @@ struct MountToml {
     total_mbytes: Option<u64>,
     free_mbytes: Option<u64>,
     writable: Option<bool>,
+    removable: Option<bool>,
+    system: Option<bool>,
+    hidden: Option<bool>,
 }
 
 impl RuntimeConfig {
@@ -145,6 +151,9 @@ impl MountConfig {
             total_mbytes: raw.total_mbytes?,
             free_mbytes: raw.free_mbytes?,
             writable: raw.writable?,
+            removable: raw.removable.unwrap_or(false),
+            system: raw.system.unwrap_or(false),
+            hidden: raw.hidden.unwrap_or(false),
         })
     }
 
@@ -210,6 +219,9 @@ host_root = "D:\\INAVI\\SDMMC"
 total_mbytes = 8192
 free_mbytes = 4096
 writable = true
+removable = true
+system = false
+hidden = false
 
 [[mounts]]
 name = "windows"
@@ -239,6 +251,9 @@ writable = true
         assert_eq!(storage.mounts[0].total_mbytes, 8192);
         assert_eq!(storage.mounts[0].free_mbytes, 4096);
         assert!(storage.mounts[0].writable);
+        assert!(storage.mounts[0].removable);
+        assert!(!storage.mounts[0].system);
+        assert!(!storage.mounts[0].hidden);
 
         let _ = fs::remove_file(path);
     }

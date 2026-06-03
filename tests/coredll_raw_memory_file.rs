@@ -4,25 +4,28 @@ use wince_emulation_v3::{
     ce::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
-            ORD_CHAR_LOWER_W, ORD_CHAR_UPPER_W, ORD_CLOSE_HANDLE, ORD_CREATE_FILE_W,
-            ORD_DEVICE_IO_CONTROL, ORD_FIND_CLOSE, ORD_FIND_FIRST_FILE_W, ORD_FLUSH_FILE_BUFFERS,
-            ORD_FLUSH_INSTRUCTION_CACHE, ORD_FREE, ORD_GET_FILE_SIZE, ORD_GET_MODULE_FILE_NAME_W,
+            ORD_ATOI, ORD_CHAR_LOWER_W, ORD_CHAR_UPPER_W, ORD_CLOSE_HANDLE, ORD_CREATE_FILE_W,
+            ORD_DEVICE_IO_CONTROL, ORD_FCLOSE, ORD_FEOF, ORD_FGETS, ORD_FIND_CLOSE,
+            ORD_FIND_FIRST_FILE_W, ORD_FIND_NEXT_FILE_W, ORD_FLUSH_FILE_BUFFERS,
+            ORD_FLUSH_INSTRUCTION_CACHE, ORD_FOPEN, ORD_FREAD, ORD_FREE, ORD_FSEEK, ORD_FTELL,
+            ORD_GET_FILE_ATTRIBUTES_W, ORD_GET_FILE_SIZE, ORD_GET_MODULE_FILE_NAME_W,
             ORD_GET_PROCESS_HEAP, ORD_HEAP_ALLOC, ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE,
             ORD_HEAP_SIZE, ORD_IS_BAD_READ_PTR, ORD_IS_BAD_WRITE_PTR, ORD_LOCAL_ALLOC,
-            ORD_LOCAL_FREE, ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_MALLOC, ORD_MEMCPY,
+            ORD_LOCAL_FREE, ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_MALLOC, ORD_MEMCMP, ORD_MEMCPY,
             ORD_MEMMOVE, ORD_MEMSET, ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_OPERATOR_DELETE,
-            ORD_OPERATOR_DELETE_ARRAY, ORD_OPERATOR_NEW, ORD_OPERATOR_NEW_ARRAY, ORD_READ_FILE,
-            ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_VALUE_W,
+            ORD_OPERATOR_DELETE_ARRAY, ORD_OPERATOR_NEW, ORD_OPERATOR_NEW_ARRAY, ORD_RAND,
+            ORD_READ_FILE, ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_VALUE_W,
             ORD_REG_ENUM_VALUE_W, ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W,
-            ORD_SET_FILE_POINTER, ORD_SWPRINTF, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSWPRINTF,
-            ORD_WCSDUP, ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSRCHR, ORD_WIDE_CHAR_TO_MULTI_BYTE,
+            ORD_SET_FILE_POINTER, ORD_SPRINTF, ORD_SRAND, ORD_STRCPY, ORD_STRTOK, ORD_SWPRINTF,
+            ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSWPRINTF, ORD_WCSDUP, ORD_WCSICMP,
+            ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSRCHR, ORD_WFOPEN, ORD_WIDE_CHAR_TO_MULTI_BYTE,
             ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         kernel::CeKernel,
         memory::{HEAP_NO_SERIALIZE, HEAP_ZERO_MEMORY, LMEM_ZEROINIT, MEM_COMMIT, MEM_RELEASE},
         registry::{ERROR_SUCCESS, HKEY_CURRENT_USER, REG_DWORD},
-        thread::{ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED},
+        thread::{ERROR_INVALID_PARAMETER, ERROR_NO_MORE_FILES, ERROR_NOT_SUPPORTED},
     },
     config::RuntimeConfig,
 };
@@ -288,6 +291,287 @@ fn coredll_raw_wvsprintf_w_uses_wide_default_for_percent_s() -> Result<()> {
         }
     ));
     assert_eq!(memory.read_wide_z(dest, 128), "Afx:00010000:2a:class");
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_sprintf_uses_narrow_default_for_percent_s() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let dest = 0x1_0000;
+    let format = 0x1_0200;
+    let narrow_text = 0x1_0300;
+    let wide_text = 0x1_0400;
+    memory.map_bytes(dest, 128);
+    memory.map_bytes(format, 64);
+    memory.map_bytes(narrow_text, 64);
+    memory.map_halfwords(wide_text, 64);
+    memory.write_bytes(format, b"%s\\%ls:%x\0");
+    memory.write_bytes(narrow_text, b"FontResHigh.utf\0");
+    memory.write_wide_z(wide_text, "wide");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SPRINTF,
+            [dest, format, narrow_text, wide_text, 0x2a],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(23),
+            ..
+        }
+    ));
+    assert_eq!(
+        String::from_utf8(memory.read_bytes(dest, 24).to_vec()).unwrap(),
+        "FontResHigh.utf\\wide:2a\0"
+    );
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_stdio_reads_host_backed_files() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("raw_stdio");
+    fs::create_dir_all(&root).unwrap();
+    let sdmmc_root = root.join("sdmmc");
+    fs::create_dir_all(&sdmmc_root).unwrap();
+    fs::write(sdmmc_root.join("font.bin"), b"abcdefg").unwrap();
+    fs::write(sdmmc_root.join("lines.txt"), b"one\ntwo").unwrap();
+    kernel.set_file_root(&root);
+    kernel.mount_guest_root("\\SDMMC Disk", &sdmmc_root);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let path = 0x1_0000;
+    let mode = 0x1_0100;
+    let buffer = 0x1_0200;
+    let wide_path = 0x1_0300;
+    let wide_mode = 0x1_0400;
+    memory.map_bytes(path, 64);
+    memory.map_bytes(mode, 8);
+    memory.map_bytes(buffer, 16);
+    memory.map_halfwords(wide_path, 64);
+    memory.map_halfwords(wide_mode, 8);
+    memory.write_bytes(path, b"\\SDMMC Disk\\font.bin\0");
+    memory.write_bytes(mode, b"rb\0");
+
+    let stream = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_FOPEN,
+        [path, mode],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("fopen did not return a stream: {other:?}"),
+    };
+    assert_ne!(stream, 0);
+    memory.write_wide_z(wide_path, "\\SDMMC Disk\\font.bin");
+    memory.write_wide_z(wide_mode, "rb");
+    let wide_stream = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_WFOPEN,
+        [wide_path, wide_mode],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("_wfopen did not return a stream: {other:?}"),
+    };
+    assert_ne!(wide_stream, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FCLOSE,
+            [wide_stream],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FREAD,
+            [buffer, 2, 3, stream],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(3),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_bytes(buffer, 6), b"abcdef");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FTELL,
+            [stream],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(6),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FSEEK,
+            [stream, (-2_i32) as u32, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FREAD,
+            [buffer, 1, 8, stream],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(3),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_bytes(buffer, 3), b"efg");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FEOF,
+            [stream],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FCLOSE,
+            [stream],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    memory.write_bytes(path, b"\\SDMMC Disk\\lines.txt\0");
+    let stream = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_FOPEN,
+        [path, mode],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("second fopen did not return a stream: {other:?}"),
+    };
+    assert_ne!(stream, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FGETS,
+            [buffer, 6, stream],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(value),
+            ..
+        } if value == buffer
+    ));
+    assert_eq!(memory.read_bytes(buffer, 5), b"one\n\0");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FREAD,
+            [buffer, 1, 8, stream],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(3),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_bytes(buffer, 3), b"two");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FCLOSE,
+            [stream],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_rand_uses_seeded_crt_sequence() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id, ORD_SRAND, [1]),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id, ORD_RAND, []),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(41),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id, ORD_RAND, []),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(18467),
+            ..
+        }
+    ));
     Ok(())
 }
 
@@ -584,6 +868,7 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
     let sdmmc_root = root.join("sdmmc");
     fs::create_dir_all(&sdmmc_root).unwrap();
     fs::write(sdmmc_root.join("mapinfo.bin"), b"mounted").unwrap();
+    fs::write(sdmmc_root.join("z-next.bin"), b"next").unwrap();
     kernel.set_file_root(&root);
     kernel.mount_guest_root("\\SDMMC Disk", &sdmmc_root);
     let mut memory = TestGuestMemory::default();
@@ -826,6 +1111,12 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
 
     memory.map_bytes(0x6000, 8);
     memory.map_bytes(0x6010, 8);
+    memory.map_bytes(0x6020, 8);
+    memory.map_bytes(0x6030, 16);
+    memory.map_bytes(0x6040, 16);
+    memory.map_bytes(0x6050, 16);
+    memory.map_bytes(0x6060, 32);
+    memory.map_bytes(0x6080, 8);
     memory.write_bytes(0x6000, b"ABCDEFGH");
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -855,6 +1146,28 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         }
     ));
     assert_eq!(memory.read_bytes(0x6010, 8), b"ABABCDEF");
+    let chunk_base = 0x7_0000;
+    let chunk_len = 0x1_1000u32;
+    memory.map_bytes(chunk_base, chunk_len + 8);
+    let pattern: Vec<u8> = (0..chunk_len).map(|index| (index & 0xff) as u8).collect();
+    memory.write_bytes(chunk_base, &pattern);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MEMMOVE,
+            [chunk_base + 8, chunk_base, chunk_len],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(value),
+            ..
+        } if value == chunk_base + 8
+    ));
+    assert_eq!(
+        memory.read_bytes(chunk_base + 8, chunk_len as usize),
+        pattern
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -869,6 +1182,99 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         }
     ));
     assert_eq!(memory.read_bytes(0x6010, 8), b"****CDEF");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MEMCMP,
+            [0x6010, 0x6010, 8],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    memory.write_bytes(0x6020, b"****CDFG");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MEMCMP,
+            [0x6010, 0x6020, 8],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(value),
+            ..
+        } if (value as i32) < 0
+    ));
+    memory.write_bytes(0x6030, b"MapPrefix\0");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_STRCPY,
+            [0x6040, 0x6030],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0x6040),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_bytes(0x6040, 10), b"MapPrefix\0");
+    memory.write_bytes(0x6050, b" \t-1234px\0");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id, ORD_ATOI, [0x6050]),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(value),
+            ..
+        } if value as i32 == -1234
+    ));
+    memory.write_bytes(0x6060, b" alpha,beta;gamma\0");
+    memory.write_bytes(0x6080, b" ,;\0");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_STRTOK,
+            [0x6060, 0x6080],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0x6061),
+            ..
+        }
+    ));
+    assert_eq!(&memory.read_bytes(0x6061, 6), b"alpha\0");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_STRTOK,
+            [0, 0x6080],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0x6067),
+            ..
+        }
+    ));
+    assert_eq!(&memory.read_bytes(0x6067, 5), b"beta\0");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_STRTOK,
+            [0, 0x6080],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0x606c),
+            ..
+        }
+    ));
 
     kernel.set_process_module_base(0x0001_0000);
     kernel.set_process_module_path("\\Program Files\\INavi\\INavi.exe");
@@ -971,6 +1377,32 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
             thread_id,
             ORD_WCSNICMP,
             [solution, afx, 3],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(value),
+            ..
+        } if value != 0
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WCSICMP,
+            [solution, solution],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WCSICMP,
+            [afx_lower, afx],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::U32(value),
@@ -1346,7 +1778,7 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         other => panic!("FindFirstFileW did not return a root find handle: {other:?}"),
     };
     assert_ne!(root_find, u32::MAX);
-    assert_eq!(memory.read_u32(find_data_ptr)?, 0x10);
+    assert_eq!(memory.read_u32(find_data_ptr)?, 0x110);
     assert_eq!(memory.read_wide_z(find_data_ptr + 40, 260), "SDMMC Disk");
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -1355,6 +1787,51 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
             thread_id,
             ORD_FIND_CLOSE,
             [root_find],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    memory.write_wide_z(find_pattern_ptr, "\\SDMMC Disk");
+    let sdmmc_attrs = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_FILE_ATTRIBUTES_W,
+        [find_pattern_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(attributes),
+            ..
+        } => attributes,
+        other => panic!("GetFileAttributesW did not return attributes: {other:?}"),
+    };
+    assert_eq!(sdmmc_attrs, 0x110);
+    let exact_sdmmc_find = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_FIND_FIRST_FILE_W,
+        [find_pattern_ptr, find_data_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("FindFirstFileW did not return an exact mount handle: {other:?}"),
+    };
+    assert_ne!(exact_sdmmc_find, u32::MAX);
+    assert_eq!(memory.read_u32(find_data_ptr)?, 0x110);
+    assert_eq!(memory.read_wide_z(find_data_ptr + 40, 260), "SDMMC Disk");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_CLOSE,
+            [exact_sdmmc_find],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
@@ -1380,6 +1857,39 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
     assert_eq!(memory.read_u32(find_data_ptr)?, 0x20);
     assert_eq!(memory.read_u32(find_data_ptr + 32)?, 7);
     assert_eq!(memory.read_wide_z(find_data_ptr + 40, 260), "mapinfo.bin");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_NEXT_FILE_W,
+            [find, find_data_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(find_data_ptr)?, 0x20);
+    assert_eq!(memory.read_u32(find_data_ptr + 32)?, 4);
+    assert_eq!(memory.read_wide_z(find_data_ptr + 40, 260), "z-next.bin");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_NEXT_FILE_W,
+            [find, find_data_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NO_MORE_FILES
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

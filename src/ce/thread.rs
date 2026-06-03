@@ -4,6 +4,7 @@ pub const ERROR_SUCCESS: u32 = 0;
 pub const ERROR_FILE_NOT_FOUND: u32 = 2;
 pub const ERROR_INVALID_HANDLE: u32 = 6;
 pub const ERROR_NOT_ENOUGH_MEMORY: u32 = 8;
+pub const ERROR_NO_MORE_FILES: u32 = 18;
 pub const ERROR_NOT_SUPPORTED: u32 = 50;
 pub const ERROR_INVALID_PARAMETER: u32 = 87;
 pub const ERROR_ALREADY_EXISTS: u32 = 183;

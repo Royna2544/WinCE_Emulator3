@@ -2,6 +2,23 @@
 
 ## Immediate
 
+- Continue from the post-PNG singleton/already-running exit frontier. Current
+  mounted trace evidence gets through RSImage stream reads and PNG decode, then
+  returns at `0x0030f384` and exits through the app singleton routine at
+  `0x0001199c`: `CreateMutexW(L"iNavi")` returns
+  `ERROR_ALREADY_EXISTS`, `FindWindowW(title=L"iNavi")` finds hwnd
+  `0x00020000`, `SetForegroundWindow` succeeds, and the app terminates via
+  `0x0048fa90`. Do not mask this by weakening CE `CreateMutexW` semantics.
+  Trace why `0x0001199c` is reached after an existing `iNavi` window/mutex is
+  already present, including caller `0x00011d28`, startup/CRT sequencing around
+  `0x0048f8c0`/`0x0048f920`, and whether the second invocation is real app
+  re-entry, constructor ordering, or handle/window lifecycle state.
+- Use `tracefile milestones PATH` for long monitor runs that need durable
+  resource/window/singleton import context. The normal last-import ring can be
+  flooded by `memset`/CRT activity during PNG/resource loops; the milestone ring
+  now keeps `CreateMutexW`, `ReleaseMutex`, `FindWindowW`,
+  `CreateWindowExW`, resource, and string-format milestones with decoded
+  argument details.
 - Continue the launch path after the first synthetic `WM_PAINT` dispatch by
   expanding CE-referenced GDI/surface drawing and blit behavior beyond the
   first solid `FillRect` framebuffer path, then verify those pixels through the

@@ -33,6 +33,7 @@ struct Args {
     dll_search_dirs: Vec<PathBuf>,
     mount_config: Option<PathBuf>,
     framebuffer_dump: Option<PathBuf>,
+    tracefiles: Vec<(String, PathBuf)>,
     desktop: DesktopMode,
     cpu_instruction_limit: usize,
     cpu_wall_clock_limit_ms: u64,
@@ -218,6 +219,7 @@ fn main() -> Result<()> {
 
     if args.run_cpu {
         run_cpu_loop(&mut cpu, &mut kernel, &mut desktop, &args)?;
+        write_requested_tracefiles(&cpu, &args.tracefiles)?;
     }
     if args.monitor {
         run_monitor(&mut cpu, &mut kernel, &mut desktop, &args)?;
@@ -254,6 +256,7 @@ fn run_cpu_loop(
             if let Some(snapshot) = cpu.last_debug_snapshot() {
                 eprintln!("  Unicorn debug: {}", snapshot.summary());
             }
+            write_requested_tracefiles(cpu, &args.tracefiles)?;
             if let Some(path) = args.framebuffer_dump.as_ref() {
                 desktop.framebuffer().write_ppm(path)?;
                 eprintln!("  framebuffer dump: {}", path.display());
@@ -280,6 +283,25 @@ fn run_cpu_loop(
             println!("  Unicorn stopped: {}", snapshot.summary());
         }
         break;
+    }
+    Ok(())
+}
+
+fn write_requested_tracefiles(cpu: &UnicornMips, tracefiles: &[(String, PathBuf)]) -> Result<()> {
+    if tracefiles.is_empty() {
+        return Ok(());
+    }
+    let Some(snapshot) = cpu.last_debug_snapshot() else {
+        return Err(wince_emulation_v3::Error::Backend(
+            "tracefile requested but no Unicorn snapshot is available".to_owned(),
+        ));
+    };
+    for (selector, path) in tracefiles {
+        let text = monitor_trace_text(snapshot, selector);
+        fs::write(path, text).map_err(|err| {
+            wince_emulation_v3::Error::Backend(format!("write tracefile {}: {err}", path.display()))
+        })?;
+        println!("  trace {selector} written to {}", path.display());
     }
     Ok(())
 }
@@ -719,6 +741,9 @@ fn monitor_trace_text(snapshot: &UnicornDebugSnapshot, selector: &str) -> String
             let _ = writeln!(&mut out, "  Unicorn stopped: {}", snapshot.summary());
         }
         "imports" => push_monitor_records(&mut out, "imports", &snapshot.last_imports),
+        "milestones" | "import-milestones" => {
+            push_monitor_records(&mut out, "import milestones", &snapshot.import_milestones)
+        }
         "counts" | "import-counts" => {
             push_monitor_records(&mut out, "import counts", &snapshot.import_counts)
         }
@@ -761,7 +786,7 @@ fn monitor_trace_text(snapshot: &UnicornDebugSnapshot, selector: &str) -> String
         other => {
             let _ = writeln!(
                 &mut out,
-                "  unknown trace kind `{other}`; use all/imports/counts/calls/code/blocks/messages/wndproc/render/files/files-full"
+                "  unknown trace kind `{other}`; use all/imports/milestones/counts/calls/code/blocks/messages/wndproc/render/files/files-full"
             );
         }
     }
@@ -1063,6 +1088,7 @@ impl Args {
         let mut dll_search_dirs = Vec::new();
         let mut mount_config = None;
         let mut framebuffer_dump = None;
+        let mut tracefiles = Vec::new();
         let mut desktop = DesktopMode::Virtual;
         let mut cpu_instruction_limit = 0;
         let mut cpu_wall_clock_limit_ms = 0;
@@ -1091,6 +1117,11 @@ impl Args {
                 }
                 "--framebuffer-dump" => {
                     framebuffer_dump = Some(next_path(&mut args, "--framebuffer-dump")?);
+                }
+                "--tracefile" | "--trace-file" => {
+                    let selector = next_string(&mut args, "--tracefile")?;
+                    let path = next_path(&mut args, "--tracefile")?;
+                    tracefiles.push((selector, path));
                 }
                 "--desktop" => {
                     desktop = next_desktop_mode(&mut args, "--desktop")?;
@@ -1132,6 +1163,7 @@ impl Args {
             dll_search_dirs,
             mount_config,
             framebuffer_dump,
+            tracefiles,
             desktop,
             cpu_instruction_limit,
             cpu_wall_clock_limit_ms,
@@ -1147,6 +1179,11 @@ fn next_path(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<Path
     args.next()
         .map(PathBuf::from)
         .ok_or_else(|| wince_emulation_v3::Error::InvalidArgument(format!("{flag} needs a path")))
+}
+
+fn next_string(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<String> {
+    args.next()
+        .ok_or_else(|| wince_emulation_v3::Error::InvalidArgument(format!("{flag} needs a value")))
 }
 
 fn next_usize(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<usize> {
@@ -1200,7 +1237,7 @@ fn next_tap(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<(i32,
 
 fn print_help() {
     println!(
-        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--mount-config mounts.toml] [--image INavi.exe] [--dll-search-dir DIR]... [--desktop virtual|host] [--framebuffer-dump OUT.ppm] [--cpu-instruction-limit N] [--cpu-wall-clock-limit-ms N] [--tap X,Y]... [--run-cpu] [--monitor] [--verbose]"
+        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--mount-config mounts.toml] [--image INavi.exe] [--dll-search-dir DIR]... [--desktop virtual|host] [--framebuffer-dump OUT.ppm] [--tracefile KIND OUT.txt]... [--cpu-instruction-limit N] [--cpu-wall-clock-limit-ms N] [--tap X,Y]... [--run-cpu] [--monitor] [--verbose]"
     );
 }
 
@@ -1299,6 +1336,9 @@ mod tests {
                 total_mbytes: 8192,
                 free_mbytes: 4096,
                 writable: true,
+                removable: true,
+                system: false,
+                hidden: false,
             });
         let kernel = CeKernel::boot(config);
         let path = ce_module_path_for_image(&kernel, r"D:\INAVI_Emulator\INAVI\INavi\INavi.exe");

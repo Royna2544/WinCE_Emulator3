@@ -173,6 +173,7 @@ pub struct Point {
 pub struct Window {
     pub hwnd: u32,
     pub thread_id: u32,
+    pub process_id: u32,
     pub class_name: String,
     pub title: String,
     pub visible: bool,
@@ -246,6 +247,7 @@ impl Default for Gwe {
             Window {
                 hwnd: DESKTOP_HWND,
                 thread_id: 0,
+                process_id: 0,
                 class_name: "Desktop".to_owned(),
                 title: String::new(),
                 visible: true,
@@ -328,6 +330,23 @@ impl Gwe {
         ex_style: u32,
         rect: Rect,
     ) -> u32 {
+        self.create_window_ex_with_process_and_rect(
+            thread_id, 0, class_name, title, parent, id, style, ex_style, rect,
+        )
+    }
+
+    pub fn create_window_ex_with_process_and_rect(
+        &mut self,
+        thread_id: u32,
+        process_id: u32,
+        class_name: &str,
+        title: &str,
+        parent: Option<u32>,
+        id: u32,
+        style: u32,
+        ex_style: u32,
+        rect: Rect,
+    ) -> u32 {
         let rect = self.normalize_create_rect(parent, style, rect);
         let class_name = self.resolve_class_name(class_name);
         let wndproc = self
@@ -357,6 +376,7 @@ impl Gwe {
             Window {
                 hwnd,
                 thread_id,
+                process_id,
                 class_name,
                 title: title.to_owned(),
                 visible,

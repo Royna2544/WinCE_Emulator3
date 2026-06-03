@@ -184,6 +184,18 @@
     the second key. The latest framebuffer dump remains all zero.
     `target\monitor_debugger_oeminfo.log` is compact; detailed evidence lives
     in the sibling `tracefile` artifacts.
+    The active mounted frontier has since advanced beyond `values.dat` and PNG
+    resource reads. RSImage stream diagnostics show `ReadFile` callbacks from
+    `resi_800x480.bin` with full requested-byte transfers and valid embedded
+    PNG headers, and the PNG loop returns at `0x0030f384`. Continuing from that
+    point exits through the app singleton/already-running branch:
+    `CreateMutexW(L"iNavi")` returns `ERROR_ALREADY_EXISTS`,
+    `FindWindowW(title=L"iNavi")` finds hwnd `0x00020000`, then
+    `SetForegroundWindow`, `ReleaseMutex`, and encoded `TerminateProcess`
+    follow. The framebuffer remains all zero because the app exits before useful
+    render output. Current work should identify why the singleton routine is
+    reached with an existing `iNavi` mutex/window in this same mounted run, not
+    fake success or suppress `ERROR_ALREADY_EXISTS`.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch

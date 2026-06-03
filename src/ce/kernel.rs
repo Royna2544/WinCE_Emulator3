@@ -23,7 +23,7 @@ use crate::{
     error::Result,
 };
 
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessagePumpResult {
@@ -51,8 +51,11 @@ pub struct CeKernel {
     process_module_path: String,
     process_module_host_path: Option<PathBuf>,
     process_command_line: String,
+    current_process_id: u32,
     pending_process_launches: Vec<PendingProcessLaunch>,
     next_process_id: u32,
+    crt_rand_state: u32,
+    crt_strtok_next_by_thread: BTreeMap<u32, u32>,
     recent_file_ops: Vec<FileTraceRecord>,
     recent_file_open_ops: Vec<FileTraceRecord>,
 }
@@ -103,10 +106,40 @@ impl CeKernel {
             process_module_path: "\\FakeCE\\process.exe".to_owned(),
             process_module_host_path: None,
             process_command_line: String::new(),
+            current_process_id: 0,
             pending_process_launches: Vec::new(),
             next_process_id: 0x42,
+            crt_rand_state: 1,
+            crt_strtok_next_by_thread: BTreeMap::new(),
             recent_file_ops: Vec::new(),
             recent_file_open_ops: Vec::new(),
+        }
+    }
+
+    pub fn crt_srand(&mut self, seed: u32) {
+        self.crt_rand_state = seed;
+    }
+
+    pub fn crt_rand(&mut self) -> u32 {
+        self.crt_rand_state = self
+            .crt_rand_state
+            .wrapping_mul(214013)
+            .wrapping_add(2531011);
+        (self.crt_rand_state >> 16) & 0x7fff
+    }
+
+    pub fn crt_strtok_next(&self, thread_id: u32) -> u32 {
+        self.crt_strtok_next_by_thread
+            .get(&thread_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub fn crt_set_strtok_next(&mut self, thread_id: u32, ptr: u32) {
+        if ptr == 0 {
+            self.crt_strtok_next_by_thread.remove(&thread_id);
+        } else {
+            self.crt_strtok_next_by_thread.insert(thread_id, ptr);
         }
     }
 
@@ -142,6 +175,14 @@ impl CeKernel {
 
     pub fn process_command_line(&self) -> &str {
         &self.process_command_line
+    }
+
+    pub fn set_current_process_id(&mut self, process_id: u32) {
+        self.current_process_id = process_id;
+    }
+
+    pub fn current_process_id(&self) -> u32 {
+        self.current_process_id
     }
 
     pub fn queue_process_launch(
@@ -348,6 +389,59 @@ impl CeKernel {
         result
     }
 
+    pub fn read_file_into<F>(&mut self, handle: u32, requested: u32, mut write: F) -> Result<u32>
+    where
+        F: FnMut(&[u8]) -> Result<()>,
+    {
+        let path = self.path_for_handle(handle);
+        let start_position = match self.handles.get(handle) {
+            Ok(KernelObject::File(file)) => self
+                .files
+                .open_file(file.file_id)
+                .ok()
+                .map(|file| file.cursor() as u64),
+            _ => None,
+        };
+        let result = match self.handles.get_mut(handle) {
+            Ok(object) => match object {
+                KernelObject::File(file) => {
+                    self.files
+                        .read_file_into(file.file_id, requested, |bytes| write(bytes))
+                }
+                KernelObject::Device(device) => {
+                    let bytes = device.read_file(requested);
+                    let transferred = bytes.len() as u32;
+                    write(&bytes).map(|_| transferred)
+                }
+                _ => write(&[]).map(|_| 0),
+            },
+            Err(err) => Err(err),
+        };
+        let end_position = match self.handles.get(handle) {
+            Ok(KernelObject::File(file)) => self
+                .files
+                .open_file(file.file_id)
+                .ok()
+                .map(|file| file.cursor() as u64),
+            _ => None,
+        };
+        self.push_file_trace(FileTraceRecord {
+            op: "ReadFile",
+            handle: Some(handle),
+            path,
+            preview: match (start_position, end_position) {
+                (Some(start), Some(end)) => Some(format!("pos={start}..{end}")),
+                _ => None,
+            },
+            requested: Some(requested),
+            transferred: result.as_ref().ok().copied(),
+            position: start_position,
+            result: result.as_ref().ok().map(|_| 1),
+            error: result.as_ref().err().map(ToString::to_string),
+        });
+        result
+    }
+
     pub fn read_file_at(&self, file_id: u32, offset: usize, requested: usize) -> Result<Vec<u8>> {
         self.files.read_at(file_id, offset, requested)
     }
@@ -491,6 +585,19 @@ impl CeKernel {
         self.files.file_size(file.file_id)
     }
 
+    pub fn file_position(&self, handle: u32) -> Result<usize> {
+        let KernelObject::File(file) = self.handles.get(handle)? else {
+            return Err(crate::error::Error::InvalidHandle(handle));
+        };
+        Ok(self.files.open_file(file.file_id)?.cursor())
+    }
+
+    pub fn file_is_eof(&self, handle: u32) -> Result<bool> {
+        let position = self.file_position(handle)?;
+        let size = self.get_file_size(handle)?;
+        Ok(position >= size)
+    }
+
     pub fn flush_file_buffers(&mut self, handle: u32) -> Result<bool> {
         let KernelObject::File(file) = self.handles.get(handle)? else {
             return Err(crate::error::Error::InvalidHandle(handle));
@@ -525,7 +632,7 @@ impl CeKernel {
             op: "FindFirstFileW",
             handle: Some(handle),
             path: Some(pattern.to_owned()),
-            preview: None,
+            preview: Some(format!("{} attr=0x{:08x}", data.file_name, data.attributes)),
             requested: None,
             transferred: Some(data.file_size as u32),
             position: None,
@@ -533,6 +640,50 @@ impl CeKernel {
             error: None,
         });
         Ok((handle, data))
+    }
+
+    pub fn find_next_file_w(&mut self, handle: u32) -> Result<Option<FindData>> {
+        let KernelObject::FindFile(find) = self.handles.get(handle)?.clone() else {
+            return Err(crate::error::Error::InvalidHandle(handle));
+        };
+        let guest_pattern = find.guest_pattern.clone();
+        let result = self.files.find_next_file_w(find.find_id);
+        match &result {
+            Ok(Some(data)) => self.push_file_trace(FileTraceRecord {
+                op: "FindNextFileW",
+                handle: Some(handle),
+                path: Some(guest_pattern.clone()),
+                preview: Some(format!("{} attr=0x{:08x}", data.file_name, data.attributes)),
+                requested: None,
+                transferred: Some(data.file_size as u32),
+                position: None,
+                result: Some(1),
+                error: None,
+            }),
+            Ok(None) => self.push_file_trace(FileTraceRecord {
+                op: "FindNextFileW",
+                handle: Some(handle),
+                path: Some(guest_pattern.clone()),
+                preview: None,
+                requested: None,
+                transferred: None,
+                position: None,
+                result: Some(0),
+                error: None,
+            }),
+            Err(err) => self.push_file_trace(FileTraceRecord {
+                op: "FindNextFileW",
+                handle: Some(handle),
+                path: Some(guest_pattern),
+                preview: None,
+                requested: None,
+                transferred: None,
+                position: None,
+                result: Some(0),
+                error: Some(err.to_string()),
+            }),
+        }
+        result
     }
 
     pub fn find_close(&mut self, handle: u32) -> Result<bool> {
@@ -763,8 +914,16 @@ impl CeKernel {
         ex_style: u32,
         rect: Rect,
     ) -> u32 {
-        let hwnd = self.gwe.create_window_ex_with_rect(
-            thread_id, class_name, title, parent, id, style, ex_style, rect,
+        let hwnd = self.gwe.create_window_ex_with_process_and_rect(
+            thread_id,
+            self.current_process_id,
+            class_name,
+            title,
+            parent,
+            id,
+            style,
+            ex_style,
+            rect,
         );
         self.handles.insert(KernelObject::Window(hwnd));
         self.post_window_rect_messages(hwnd, Some(Rect::default()), self.gwe.get_window_rect(hwnd));

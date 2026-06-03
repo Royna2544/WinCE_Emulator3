@@ -754,6 +754,27 @@
   was lost by wide `vswprintf("%s", wide_path)` handling. Do not paper over
   this by mounting app resources at `\res`; `e52e402` fixes the wide printf
   semantics and the real run now reads `\SDMMC Disk\INavi\res\values.dat`.
+- CE FSDMGR source backs the removable mount attribute behavior now modeled by
+  `mounts.toml`: `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\virtroot.cpp`
+  `FindNextMountDir` sets `FILE_ATTRIBUTE_DIRECTORY`, then ORs
+  `FILE_ATTRIBUTE_TEMPORARY` when `AFS_FLAG_PERMANENT` is absent and ORs
+  `FILE_ATTRIBUTE_SYSTEM` for system mounts. The emulator's `removable = true`
+  flag is this non-permanent mount behavior, so exact `\SDMMC Disk` and root
+  enumeration now report `0x110` (`DIRECTORY|TEMPORARY`) while normal child
+  directories remain `0x10`.
+- The checked-in map-backed COREDLL ordinal path now covers the latest
+  launch-demanded CRT/file tranche from `coredll.map`: `_wcsicmp @230`,
+  `atoi @993`, `strcpy @1066`, `strtok @1073`, `fgets @1109`, and `_wfopen
+  @1145`. Focused raw dispatch coverage verifies decimal parsing,
+  per-thread `strtok` continuation, narrow/wide stdio file opens, `fgets`, and
+  exact `\SDMMC Disk` file attributes/find data.
+- A mounted monitor run after `_wfopen @1145` no longer stops on a COREDLL
+  import ordinal. It opens and reads deeper map/SearchDB/MRData files plus
+  `\SDMMC Disk\INavi\res\InaviMainConfig.bin`, then stops at
+  `pc=0x3004a0a8`, `ra=0x3004a0a8`, `sp=0x7ffdf1f0`, `a0=0x0002000c`,
+  `a1=0x00000401`; the framebuffer dump remains all zero. The current evidence
+  points at a guest control-flow/callback frontier near the app query thunk
+  rather than another missing COREDLL ordinal.
 - `SystemParametersInfoW(SPI_GETOEMINFO)` now reads
   `HKLM\System\Emulator\SystemParametersInfo` by action id/alias, with generic
   CE fallbacks. The checked-in registry snapshot returns `iNavi GN 2010`, which
@@ -788,6 +809,31 @@
   subsystem by subsystem.
 - Remote server socket/WebSocket binding is not implemented in Rust yet; the
   emulator-facing remote API state and dispatch behavior are present.
+- The mounted iNavi trace now gets beyond the earlier `values.dat` and map
+  resource checks into RSImage/PNG resource loading. A trace-enabled monitor run
+  with `tap 400 240` opened `\SDMMC Disk\INavi\res\FontResHigh.utf`,
+  `resi_800x480.bin`, and `resmapi_800x480.bin`; `FindFirstFileW("\*")`
+  reports the removable `SDMMC Disk` mount as `0x110`. Targeted RSImage probes
+  at `0x00307d18`/`0x00307d44`/`0x00307d58`/`0x00307d84` show the stream
+  callback is real `ReadFile` on `resi_800x480.bin`, with actual bytes matching
+  requested bytes. The first PNG resource has a 28-byte record prefix followed
+  by an 800x160 PNG; the later one is 800x320. No short-read path at
+  `0x00307d74` was hit.
+- The PNG decode/unfilter path is slow but valid rather than a broken
+  trampoline: a long run parked in the trampoline for app origin `0x003447ac`,
+  which disassembles as a normal PNG filter loop, then returns from the caller at
+  `0x0030f384` with `v0=0x101`. Continuing after that return exits through the
+  app's singleton/already-running branch, not through drawing. The preserved
+  milestone trace `target\monitor_after_png_milestones.txt` shows
+  `FindResourceW(#3585, #6) -> 0`, then `CreateMutexW(L"iNavi")` returning
+  handle `0x11c` with `last_error=183`, `FindWindowW(title=L"iNavi") ->
+  0x00020000`, `SetForegroundWindow`, `ReleaseMutex`, and finally encoded
+  `TerminateProcess` from `0x0048fa90`. The framebuffer remains all zero.
+- Monitor trace output now has a `tracefile milestones PATH` selector for the
+  existing import milestone ring. `CreateMutexW`, `ReleaseMutex`, and
+  `FindWindowW` milestones include decoded wide-string names/titles plus
+  last-error/result details, so long resource/PNG runs do not lose the important
+  singleton/window imports behind CRT noise.
 
 ## False Leads
 

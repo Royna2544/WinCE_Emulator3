@@ -11621,12 +11621,17 @@ pub const ORD_SYSTEM_MEMORY_LOW: u32 = 720;
 pub const ORD_WCSDUP: u32 = 74;
 pub const ORD_WTOL: u32 = 78;
 pub const ORD_WCSRCHR: u32 = 69;
+pub const ORD_WCSICMP: u32 = 230;
 pub const ORD_WCSNICMP: u32 = 229;
 pub const ORD_WCSNCPY: u32 = 66;
 pub const ORD_MALLOC: u32 = 1041;
+pub const ORD_MEMCMP: u32 = 1043;
 pub const ORD_MEMCPY: u32 = 1044;
 pub const ORD_MEMMOVE: u32 = 1046;
 pub const ORD_MEMSET: u32 = 1047;
+pub const ORD_ATOI: u32 = 993;
+pub const ORD_STRCPY: u32 = 1066;
+pub const ORD_STRTOK: u32 = 1073;
 pub const ORD_OPERATOR_DELETE: u32 = 1094;
 pub const ORD_OPERATOR_NEW: u32 = 1095;
 pub const ORD_OPERATOR_NEW_ARRAY: u32 = 1456;
@@ -11635,7 +11640,21 @@ pub const ORD_OPERATOR_NEW_ARRAY_NOTHROW: u32 = 1661;
 pub const ORD_OPERATOR_DELETE_ARRAY_NOTHROW: u32 = 1663;
 pub const ORD_SWPRINTF: u32 = 1097;
 pub const ORD_VSWPRINTF: u32 = 1099;
+pub const ORD_SPRINTF: u32 = 719;
 pub const ORD_PRINTF: u32 = 1102;
+pub const ORD_FGETS: u32 = 1109;
+pub const ORD_FOPEN: u32 = 1113;
+pub const ORD_WFOPEN: u32 = 1145;
+pub const ORD_FCLOSE: u32 = 1118;
+pub const ORD_FREAD: u32 = 1120;
+pub const ORD_FWRITE: u32 = 1121;
+pub const ORD_FFLUSH: u32 = 1122;
+pub const ORD_FEOF: u32 = 1125;
+pub const ORD_FERROR: u32 = 1126;
+pub const ORD_FSEEK: u32 = 1130;
+pub const ORD_FTELL: u32 = 1131;
+pub const ORD_RAND: u32 = 1053;
+pub const ORD_SRAND: u32 = 1061;
 pub const ORD_FREE: u32 = 1018;
 pub const ORD_LONGJMP: u32 = 1036;
 pub const ORD_SETJMP: u32 = 2000;
@@ -13360,7 +13379,7 @@ pub const ORD_GED: u32 = 2051;
 pub const ORD_GTD: u32 = 2052;
 pub const ORD_NED: u32 = 2053;
 
-pub const SDK_ORDINALS: &[CoredllOrdinalDef; 20] = &[
+pub const SDK_ORDINALS: &[CoredllOrdinalDef; 26] = &[
     CoredllOrdinalDef {
         name: "wcsrchr",
         ordinal: ORD_WCSRCHR,
@@ -13372,6 +13391,10 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef; 20] = &[
     CoredllOrdinalDef {
         name: "_wtol",
         ordinal: ORD_WTOL,
+    },
+    CoredllOrdinalDef {
+        name: "_wcsicmp",
+        ordinal: ORD_WCSICMP,
     },
     CoredllOrdinalDef {
         name: "_wcsnicmp",
@@ -13396,6 +13419,18 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef; 20] = &[
     CoredllOrdinalDef {
         name: "memset",
         ordinal: ORD_MEMSET,
+    },
+    CoredllOrdinalDef {
+        name: "atoi",
+        ordinal: ORD_ATOI,
+    },
+    CoredllOrdinalDef {
+        name: "strcpy",
+        ordinal: ORD_STRCPY,
+    },
+    CoredllOrdinalDef {
+        name: "strtok",
+        ordinal: ORD_STRTOK,
     },
     CoredllOrdinalDef {
         name: "??3@YAXPAX@Z",
@@ -13430,6 +13465,14 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef; 20] = &[
         ordinal: ORD_PRINTF,
     },
     CoredllOrdinalDef {
+        name: "fgets",
+        ordinal: ORD_FGETS,
+    },
+    CoredllOrdinalDef {
+        name: "_wfopen",
+        ordinal: ORD_WFOPEN,
+    },
+    CoredllOrdinalDef {
         name: "free",
         ordinal: ORD_FREE,
     },
@@ -13443,10 +13486,35 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef; 20] = &[
     },
 ];
 
+pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 4] = &[
+    CoredllOrdinalDef {
+        name: "GetSystemTimeAsFileTime",
+        ordinal: ORD_GET_SYSTEM_TIME_AS_FILE_TIME,
+    },
+    CoredllOrdinalDef {
+        name: "GetProcessId",
+        ordinal: ORD_GET_PROCESS_ID,
+    },
+    CoredllOrdinalDef {
+        name: "GetThreadId",
+        ordinal: ORD_GET_THREAD_ID,
+    },
+    CoredllOrdinalDef {
+        name: "RegisterGesture",
+        ordinal: ORD_REGISTER_GESTURE,
+    },
+];
+
 pub fn lookup(ordinal: u32) -> Option<&'static CoredllOrdinalDef> {
     COREDLL_EXPORTS
         .iter()
         .find(|export| export.ordinal == ordinal)
+        .or_else(|| SDK_ORDINALS.iter().find(|export| export.ordinal == ordinal))
+        .or_else(|| {
+            SUPPLEMENTAL_ORDINALS
+                .iter()
+                .find(|export| export.ordinal == ordinal)
+        })
 }
 
 pub fn lookup_export_index(index: u32) -> Option<&'static CoredllOrdinalDef> {

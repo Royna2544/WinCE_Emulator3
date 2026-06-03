@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     fs,
+    io::{Read, Seek, SeekFrom},
     path::{Component, Path, PathBuf},
 };
 
@@ -19,13 +20,17 @@ pub const OPEN_ALWAYS: u32 = 4;
 pub const TRUNCATE_EXISTING: u32 = 5;
 
 pub const FILE_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
+pub const FILE_ATTRIBUTE_HIDDEN: u32 = 0x0000_0002;
+pub const FILE_ATTRIBUTE_SYSTEM: u32 = 0x0000_0004;
 pub const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
 pub const FILE_ATTRIBUTE_ARCHIVE: u32 = 0x0000_0020;
+pub const FILE_ATTRIBUTE_TEMPORARY: u32 = 0x0000_0100;
 
 #[derive(Debug, Clone)]
 pub struct HostFileSystem {
     root: PathBuf,
     mounts: BTreeMap<String, FileMount>,
+    mount_order: Vec<String>,
     object_store: ObjectStore,
     root_relative_mount: Option<String>,
     next_id: u32,
@@ -41,6 +46,9 @@ pub struct FileMount {
     pub total_bytes: u64,
     pub free_bytes: u64,
     pub writable: bool,
+    pub removable: bool,
+    pub system: bool,
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +64,8 @@ pub struct OpenFile {
     pub host_path: PathBuf,
     cursor: usize,
     data: Vec<u8>,
+    streamed_readonly: bool,
+    file_len: usize,
     writable: bool,
     dirty: bool,
 }
@@ -92,6 +102,7 @@ impl HostFileSystem {
         Self {
             root: root.into(),
             mounts: BTreeMap::new(),
+            mount_order: Vec::new(),
             object_store: ObjectStore {
                 total_bytes: 256 * 1024 * 1024,
                 free_bytes: 128 * 1024 * 1024,
@@ -123,6 +134,9 @@ impl HostFileSystem {
             total_mbytes: 8192,
             free_mbytes: 4096,
             writable: true,
+            removable: true,
+            system: false,
+            hidden: false,
         });
     }
 
@@ -135,6 +149,9 @@ impl HostFileSystem {
         let free_bytes = mount.free_bytes();
         let host_root = mount.host_root;
         let writable = mount.writable && host_root.is_some();
+        if !self.mounts.contains_key(&guest_root) {
+            self.mount_order.push(guest_root.clone());
+        }
         self.mounts.insert(
             guest_root.clone(),
             FileMount {
@@ -144,6 +161,9 @@ impl HostFileSystem {
                 total_bytes,
                 free_bytes,
                 writable,
+                removable: mount.removable,
+                system: mount.system,
+                hidden: mount.hidden,
             },
         );
     }
@@ -160,7 +180,7 @@ impl HostFileSystem {
     }
 
     pub fn host_path_to_guest_mount(&self, host_path: &Path) -> Option<String> {
-        for mount in self.mounts.values() {
+        for mount in self.mounts_in_order() {
             let Some(host_root) = mount.host_root.as_ref() else {
                 continue;
             };
@@ -197,9 +217,9 @@ impl HostFileSystem {
         let is_directory = host_path.is_dir();
         let writable = desired_access & GENERIC_WRITE != 0 && !is_directory;
 
-        let data = if is_directory {
+        let (data, streamed_readonly, file_len) = if is_directory {
             match creation_disposition {
-                OPEN_EXISTING | OPEN_ALWAYS => Vec::new(),
+                OPEN_EXISTING | OPEN_ALWAYS => (Vec::new(), false, 0),
                 _ => {
                     return Err(Error::InvalidArgument(format!(
                         "cannot create or truncate directory: {guest_path}"
@@ -213,14 +233,26 @@ impl HostFileSystem {
                         "file already exists: {guest_path}"
                     )));
                 }
-                CREATE_NEW | CREATE_ALWAYS => Vec::new(),
+                CREATE_NEW | CREATE_ALWAYS => (Vec::new(), false, 0),
                 OPEN_EXISTING if !exists => {
                     return Err(Error::InvalidArgument(format!(
                         "file does not exist: {guest_path}"
                     )));
                 }
-                OPEN_EXISTING | OPEN_ALWAYS => fs::read(&host_path).unwrap_or_default(),
-                TRUNCATE_EXISTING if exists && writable => Vec::new(),
+                OPEN_EXISTING | OPEN_ALWAYS if writable => {
+                    let data = fs::read(&host_path).unwrap_or_default();
+                    let file_len = data.len();
+                    (data, false, file_len)
+                }
+                OPEN_EXISTING | OPEN_ALWAYS => {
+                    let file_len = fs::metadata(&host_path)
+                        .map(|metadata| metadata.len())
+                        .unwrap_or_default()
+                        .try_into()
+                        .unwrap_or(usize::MAX);
+                    (Vec::new(), true, file_len)
+                }
+                TRUNCATE_EXISTING if exists && writable => (Vec::new(), false, 0),
                 TRUNCATE_EXISTING if !exists => {
                     return Err(Error::InvalidArgument(format!(
                         "file does not exist: {guest_path}"
@@ -249,6 +281,8 @@ impl HostFileSystem {
                 host_path,
                 cursor: 0,
                 data,
+                streamed_readonly,
+                file_len,
                 writable,
                 dirty: matches!(
                     creation_disposition,
@@ -262,21 +296,67 @@ impl HostFileSystem {
     pub fn read_file(&mut self, id: u32, requested: u32) -> Result<Vec<u8>> {
         let file = self.open_file_mut(id)?;
         let requested = requested as usize;
-        if file.cursor >= file.data.len() {
+        if file.streamed_readonly {
+            if file.cursor >= file.file_len {
+                return Ok(Vec::new());
+            }
+            let start = file.cursor;
+            let end = start.saturating_add(requested).min(file.file_len);
+            let bytes = read_host_file_range(&file.host_path, start, end - start)?;
+            file.cursor = start + bytes.len();
+            return Ok(bytes);
+        }
+        if file.cursor >= file.file_len {
             return Ok(Vec::new());
         }
-        let end = file.cursor.saturating_add(requested).min(file.data.len());
+        let end = file.cursor.saturating_add(requested).min(file.file_len);
         let bytes = file.data[file.cursor..end].to_vec();
         file.cursor = end;
         Ok(bytes)
     }
 
+    pub fn read_file_into<F>(&mut self, id: u32, requested: u32, mut write: F) -> Result<u32>
+    where
+        F: FnMut(&[u8]) -> Result<()>,
+    {
+        let file = self.open_file_mut(id)?;
+        let requested = requested as usize;
+        if file.streamed_readonly {
+            if file.cursor >= file.file_len {
+                write(&[])?;
+                return Ok(0);
+            }
+            let start = file.cursor;
+            let end = start.saturating_add(requested).min(file.file_len);
+            let transferred =
+                read_host_file_range_into(&file.host_path, start, end - start, &mut write)?;
+            file.cursor = start + transferred as usize;
+            return Ok(transferred);
+        }
+        if file.cursor >= file.file_len {
+            write(&[])?;
+            return Ok(0);
+        }
+        let start = file.cursor;
+        let end = file.cursor.saturating_add(requested).min(file.file_len);
+        write(&file.data[start..end])?;
+        file.cursor = end;
+        Ok((end - start) as u32)
+    }
+
     pub fn read_at(&self, id: u32, offset: usize, requested: usize) -> Result<Vec<u8>> {
         let file = self.open_file(id)?;
-        if offset >= file.data.len() {
+        if file.streamed_readonly {
+            if offset >= file.file_len {
+                return Ok(Vec::new());
+            }
+            let end = offset.saturating_add(requested).min(file.file_len);
+            return read_host_file_range(&file.host_path, offset, end - offset);
+        }
+        if offset >= file.file_len {
             return Ok(Vec::new());
         }
-        let end = offset.saturating_add(requested).min(file.data.len());
+        let end = offset.saturating_add(requested).min(file.file_len);
         Ok(file.data[offset..end].to_vec())
     }
 
@@ -414,6 +494,7 @@ impl HostFileSystem {
         }
         file.data[file.cursor..end].copy_from_slice(bytes);
         file.cursor = end;
+        file.file_len = file.data.len();
         file.dirty = true;
         Ok(FileIoResult {
             success: true,
@@ -435,6 +516,7 @@ impl HostFileSystem {
             file.data.resize(end, 0);
         }
         file.data[offset..end].copy_from_slice(bytes);
+        file.file_len = file.data.len();
         file.dirty = true;
         Ok(FileIoResult {
             success: true,
@@ -449,7 +531,7 @@ impl HostFileSystem {
     }
 
     pub fn file_size(&self, id: u32) -> Result<usize> {
-        Ok(self.open_file(id)?.data.len())
+        Ok(self.open_file(id)?.file_len)
     }
 
     pub fn flush(&mut self, id: u32) -> Result<()> {
@@ -466,6 +548,7 @@ impl HostFileSystem {
                 source,
             })?;
             file.dirty = false;
+            file.file_len = file.data.len();
         }
         Ok(())
     }
@@ -500,6 +583,15 @@ impl HostFileSystem {
         Ok((id, first))
     }
 
+    pub fn find_next_file_w(&mut self, id: u32) -> Result<Option<FindData>> {
+        let find = self
+            .open_finds
+            .get_mut(&id)
+            .ok_or(Error::InvalidHandle(id))?;
+        find.cursor = find.cursor.saturating_add(1);
+        Ok(find.entries.get(find.cursor).cloned())
+    }
+
     pub fn find_close(&mut self, id: u32) -> Result<()> {
         self.open_finds
             .remove(&id)
@@ -529,7 +621,7 @@ impl HostFileSystem {
             return Err(Error::InvalidArgument("empty guest path".to_owned()));
         }
 
-        for mount in self.mounts.values().rev() {
+        for mount in self.mounts_longest_first() {
             let remainder = mount_remainder(&normalized, &mount.guest_root);
             if let Some(remainder) = remainder {
                 let Some(host_root) = mount.host_root.as_ref() else {
@@ -630,7 +722,10 @@ impl HostFileSystem {
 
     fn root_namespace_entries(&self, pattern: &str) -> Vec<FindData> {
         let mut entries = Vec::new();
-        for mount in self.mounts.values() {
+        for mount in self.mounts_in_order() {
+            if mount.hidden {
+                continue;
+            }
             let file_name = mount
                 .guest_root
                 .rsplit('/')
@@ -639,13 +734,8 @@ impl HostFileSystem {
             if !pattern.is_empty() && !wildcard_match(pattern, file_name) {
                 continue;
             }
-            entries.push(FindData {
-                attributes: FILE_ATTRIBUTE_DIRECTORY,
-                file_size: 0,
-                file_name: file_name.to_owned(),
-            });
+            entries.push(mount_root_find_data(mount, file_name.to_owned()));
         }
-        entries.sort_by(|lhs, rhs| lhs.file_name.cmp(&rhs.file_name));
         tracing::debug!(
             target: "ce.file",
             guest_pattern = pattern,
@@ -657,9 +747,8 @@ impl HostFileSystem {
 
     fn root_relative_host_root(&self) -> Option<&Path> {
         let guest_root = self.root_relative_mount.as_ref()?;
-        self.mounts
-            .values()
-            .find(|mount| mount.guest_root.eq_ignore_ascii_case(&guest_root))
+        self.mounts_in_order()
+            .find(|mount| mount.guest_root.eq_ignore_ascii_case(guest_root))
             .and_then(|mount| mount.host_root.as_deref())
     }
 
@@ -669,8 +758,7 @@ impl HostFileSystem {
     }
 
     fn mount_for_normalized_path(&self, normalized: &str) -> Option<&FileMount> {
-        self.mounts
-            .values()
+        self.mounts_longest_first()
             .find(|mount| mount_remainder(normalized, &mount.guest_root).is_some())
     }
 
@@ -690,19 +778,52 @@ impl HostFileSystem {
             return None;
         }
 
-        self.mounts
-            .values()
+        self.mounts_in_order()
             .find(|mount| mount.guest_root.eq_ignore_ascii_case(normalized))
-            .map(|mount| FindData {
-                attributes: FILE_ATTRIBUTE_DIRECTORY,
-                file_size: 0,
-                file_name: mount
+            .map(|mount| {
+                let file_name = mount
                     .guest_root
                     .rsplit('/')
                     .next()
                     .unwrap_or(&mount.guest_root)
-                    .to_owned(),
+                    .to_owned();
+                mount_root_find_data(mount, file_name)
             })
+    }
+
+    fn mounts_in_order(&self) -> impl Iterator<Item = &FileMount> {
+        self.mount_order
+            .iter()
+            .filter_map(|guest_root| self.mounts.get(guest_root))
+    }
+
+    fn mounts_longest_first(&self) -> impl Iterator<Item = &FileMount> {
+        let mut mounts: Vec<_> = self.mounts_in_order().collect();
+        mounts.sort_by(|lhs, rhs| {
+            rhs.guest_root
+                .len()
+                .cmp(&lhs.guest_root.len())
+                .then_with(|| lhs.guest_root.cmp(&rhs.guest_root))
+        });
+        mounts.into_iter()
+    }
+}
+
+fn mount_root_find_data(mount: &FileMount, file_name: String) -> FindData {
+    let mut attributes = FILE_ATTRIBUTE_DIRECTORY;
+    if mount.removable {
+        attributes |= FILE_ATTRIBUTE_TEMPORARY;
+    }
+    if mount.system {
+        attributes |= FILE_ATTRIBUTE_SYSTEM;
+    }
+    if mount.hidden {
+        attributes |= FILE_ATTRIBUTE_HIDDEN;
+    }
+    FindData {
+        attributes,
+        file_size: 0,
+        file_name,
     }
 }
 
@@ -839,6 +960,52 @@ fn wildcard_match(pattern: &str, name: &str) -> bool {
     matches[pattern.len()][name.len()]
 }
 
+fn read_host_file_range(path: &Path, offset: usize, len: usize) -> Result<Vec<u8>> {
+    let mut bytes = Vec::with_capacity(len);
+    read_host_file_range_into(path, offset, len, |chunk| {
+        bytes.extend_from_slice(chunk);
+        Ok(())
+    })?;
+    Ok(bytes)
+}
+
+fn read_host_file_range_into<F>(path: &Path, offset: usize, len: usize, mut write: F) -> Result<u32>
+where
+    F: FnMut(&[u8]) -> Result<()>,
+{
+    const STREAM_CHUNK: usize = 64 * 1024;
+
+    let mut file = fs::File::open(path).map_err(|source| Error::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    file.seek(SeekFrom::Start(offset as u64))
+        .map_err(|source| Error::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+
+    let mut remaining = len;
+    let mut transferred = 0usize;
+    let mut buffer = vec![0u8; STREAM_CHUNK.min(len.max(1))];
+    while remaining != 0 {
+        let chunk_len = remaining.min(buffer.len());
+        let read = file
+            .read(&mut buffer[..chunk_len])
+            .map_err(|source| Error::Io {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        if read == 0 {
+            break;
+        }
+        write(&buffer[..read])?;
+        transferred += read;
+        remaining -= read;
+    }
+    Ok(transferred as u32)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -868,14 +1035,38 @@ mod tests {
             total_mbytes: 8192,
             free_mbytes: 4096,
             writable: false,
+            removable: true,
+            system: false,
+            hidden: false,
+        });
+        fs.mount(MountConfig {
+            name: Some("resident_flash".to_owned()),
+            guest_root: "\\ResidentFlash".to_owned(),
+            host_root: None,
+            total_mbytes: 2048,
+            free_mbytes: 1024,
+            writable: false,
+            removable: false,
+            system: false,
+            hidden: false,
         });
         let (_id, data) = fs.find_first_file_w("\\").unwrap();
-        assert_eq!(data.attributes, FILE_ATTRIBUTE_DIRECTORY);
+        assert_eq!(
+            data.attributes,
+            FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_TEMPORARY
+        );
         assert_eq!(data.file_name, "SDMMC Disk");
+        let next = fs.find_next_file_w(_id).unwrap().unwrap();
+        assert_eq!(next.file_name, "ResidentFlash");
+        assert_eq!(next.attributes, FILE_ATTRIBUTE_DIRECTORY);
         let (_id, data) = fs.find_first_file_w("\\S*").unwrap();
         assert_eq!(data.file_name, "SDMMC Disk");
         let (_id, data) = fs.find_first_file_w("\\SDMMC Disk").unwrap();
         assert_eq!(data.file_name, "SDMMC Disk");
+        assert_eq!(
+            data.attributes,
+            FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_TEMPORARY
+        );
         assert!(fs.find_first_file_w("\\SDMMC Disk\\*").is_err());
     }
 
@@ -905,6 +1096,41 @@ mod tests {
     }
 
     #[test]
+    fn readonly_host_files_stream_without_preloading_contents() {
+        let root = std::env::temp_dir().join(format!("wince_file_stream_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("large.bin");
+        let bytes: Vec<u8> = (0..=255).cycle().take(256 * 1024).collect();
+        fs::write(&path, &bytes).unwrap();
+
+        let mut fs = HostFileSystem::new(&root);
+        let id = fs
+            .create_file_w("\\large.bin", GENERIC_READ, OPEN_EXISTING)
+            .unwrap();
+        let open = fs.open_file(id).unwrap();
+        assert!(open.streamed_readonly);
+        assert!(open.data.is_empty());
+        assert_eq!(open.file_len, bytes.len());
+
+        let first = fs.read_file(id, 17).unwrap();
+        assert_eq!(first, bytes[..17]);
+        let mut streamed = Vec::new();
+        let copied = fs
+            .read_file_into(id, 70 * 1024, |chunk| {
+                streamed.extend_from_slice(chunk);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(copied as usize, 70 * 1024);
+        assert_eq!(streamed, bytes[17..17 + 70 * 1024]);
+        assert_eq!(fs.open_file(id).unwrap().cursor(), 17 + 70 * 1024);
+
+        fs.close(id).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn hostless_mount_is_empty_and_read_only() {
         let mut fs = HostFileSystem::new(".");
         fs.mount(MountConfig {
@@ -914,10 +1140,17 @@ mod tests {
             total_mbytes: 2048,
             free_mbytes: 1024,
             writable: true,
+            removable: false,
+            system: true,
+            hidden: false,
         });
 
         let (_id, data) = fs.find_first_file_w("\\Windows").unwrap();
         assert_eq!(data.file_name, "Windows");
+        assert_eq!(
+            data.attributes,
+            FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_SYSTEM
+        );
         assert!(fs.find_first_file_w("\\Windows\\*").is_err());
         assert!(
             fs.create_file_w("\\Windows\\x.txt", GENERIC_WRITE, CREATE_ALWAYS)

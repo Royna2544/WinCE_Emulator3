@@ -78,6 +78,10 @@ pub struct UnicornDebugSnapshot {
     pub last_code: Vec<UnicornLastCode>,
     pub last_blocks: Vec<UnicornLastBlock>,
     pub import_counts: Vec<UnicornImportCount>,
+    pub heap_allocation_count: usize,
+    pub heap_allocation_bytes: u64,
+    pub virtual_allocation_count: usize,
+    pub virtual_allocation_bytes: u64,
     pub blocked_get_message: Option<UnicornBlockedGetMessage>,
     pub thread_exit_reached: bool,
     pub encoded_kernel_exit: Option<EncodedKernelExit>,
@@ -108,6 +112,24 @@ impl UnicornDebugSnapshot {
         }
         if let Some(stop) = &self.host_wall_clock_stop {
             parts.push(format!("wall_stop={}ms", stop.elapsed_ms));
+        }
+        if self.heap_allocation_count != 0 || self.heap_allocation_bytes != 0 {
+            parts.push(format!(
+                "heap_live={}/{}B",
+                self.heap_allocation_count, self.heap_allocation_bytes
+            ));
+        }
+        if self.virtual_allocation_count != 0 || self.virtual_allocation_bytes != 0 {
+            parts.push(format!(
+                "virtual_live={}/{}B",
+                self.virtual_allocation_count, self.virtual_allocation_bytes
+            ));
+        }
+        if let Some(indirect) = &self.indirect_call_probe {
+            parts.push(format!(
+                "indirect={} pc=0x{:08x} target=0x{:08x}",
+                indirect.register_name, indirect.pc, indirect.target
+            ));
         }
         if let Some(blocked) = &self.blocked_get_message {
             parts.push(format!(
@@ -227,6 +249,7 @@ pub struct UnicornLastCall {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnicornLastImport {
     pub pc: u32,
+    pub ra: u32,
     pub module: String,
     pub kind: crate::emulator::imports::ImportModuleKind,
     pub ordinal: Option<u32>,
@@ -246,6 +269,10 @@ pub struct UnicornImportCount {
     pub ordinal: Option<u32>,
     pub name: Option<String>,
     pub count: u64,
+    pub max_a0: u32,
+    pub max_a1: u32,
+    pub max_a2: u32,
+    pub max_a3: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -253,6 +280,25 @@ struct UnicornImportCountKey {
     module: String,
     ordinal: Option<u32>,
     name: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct UnicornImportStats {
+    count: u64,
+    max_a0: u32,
+    max_a1: u32,
+    max_a2: u32,
+    max_a3: u32,
+}
+
+impl UnicornImportStats {
+    fn record(&mut self, a0: u32, a1: u32, a2: u32, a3: u32) {
+        self.count = self.count.saturating_add(1);
+        self.max_a0 = self.max_a0.max(a0);
+        self.max_a1 = self.max_a1.max(a1);
+        self.max_a2 = self.max_a2.max(a2);
+        self.max_a3 = self.max_a3.max(a3);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -474,6 +520,7 @@ pub struct UnicornTimerSnapshot {
 pub struct UnicornWindowSnapshot {
     pub hwnd: u32,
     pub thread_id: u32,
+    pub process_id: u32,
     pub class_name: String,
     pub title: String,
     pub visible: bool,
@@ -511,8 +558,10 @@ const GUEST_HEAP_ARENA_BASE: u32 = 0x3000_0000;
 const GUEST_HEAP_ARENA_SIZE: u32 = 0x0100_0000;
 #[cfg(feature = "unicorn")]
 const UNICORN_TRACE_LIMIT: usize = 256;
+#[cfg(feature = "unicorn")]
+const UNICORN_TB_CACHE_FLUSH_INTERVAL: u32 = 0x0004_0000;
 #[cfg(all(feature = "unicorn", feature = "trace"))]
-const UNICORN_IMPORT_MILESTONE_LIMIT: usize = 128;
+const UNICORN_IMPORT_MILESTONE_LIMIT: usize = 1024;
 #[cfg(feature = "unicorn")]
 const UNICORN_WNDPROC_TRACE_LIMIT: usize = 32;
 #[cfg(feature = "unicorn")]
@@ -530,11 +579,13 @@ const UNICORN_INAVI_DISPLAY_TRACE_LIMIT: usize = 96;
 #[cfg(all(feature = "unicorn", feature = "trace"))]
 const UNICORN_INAVI_CONTROLLER_TRACE_LIMIT: usize = 128;
 #[cfg(all(feature = "unicorn", feature = "trace"))]
-const UNICORN_INAVI_RENDER_MILESTONE_LIMIT: usize = 256;
+const UNICORN_INAVI_RENDER_MILESTONE_LIMIT: usize = 4096;
 #[cfg(feature = "unicorn")]
 const UNICORN_CODE_TRACE_SAMPLE_INTERVAL: u32 = 64;
 #[cfg(feature = "unicorn")]
 const UNICORN_BLOCK_TRACE_SAMPLE_INTERVAL: u32 = 16;
+#[cfg(feature = "unicorn")]
+const MIPS_JUMP_TABLE_SELECTOR_SEARCH_BACK: u32 = 512;
 #[cfg(feature = "unicorn")]
 const IMPORT_TRAP_ARG_COUNT: usize = 12;
 #[cfg(feature = "unicorn")]
@@ -1146,6 +1197,9 @@ impl UnicornMips {
             let pc = address as u32;
             let code_trace_index = code_trace_counter_hook.get().wrapping_add(1);
             code_trace_counter_hook.set(code_trace_index);
+            if code_trace_index % UNICORN_TB_CACHE_FLUSH_INTERVAL == 0 {
+                let _ = uc.ctl_remove_cache(0, u64::MAX);
+            }
             let sampled_code_trace = code_trace_index % UNICORN_CODE_TRACE_SAMPLE_INTERVAL == 0;
             let instruction = read_unicorn_code_u32(uc, &mapped_blobs, pc);
             *last_code_probe_hook.borrow_mut() = Some((pc, instruction));
@@ -1319,7 +1373,7 @@ impl UnicornMips {
             let Some(target) = read_mips_gpr(uc, register) else {
                 return;
             };
-            if target != 0 && target >= 0x0001_0000 {
+            if target != 0 && target >= 0x0001_0000 && target % 4 == 0 {
                 return;
             }
             *indirect_call_probe_hook.borrow_mut() = Some(UnicornIndirectCallProbe {
@@ -1366,7 +1420,10 @@ impl UnicornMips {
         let import_milestones = Rc::new(RefCell::new(Vec::<UnicornLastImport>::new()));
         #[cfg(feature = "trace")]
         let import_milestones_hook = Rc::clone(&import_milestones);
-        let import_counts = Rc::new(RefCell::new(BTreeMap::<UnicornImportCountKey, u64>::new()));
+        let import_counts = Rc::new(RefCell::new(BTreeMap::<
+            UnicornImportCountKey,
+            UnicornImportStats,
+        >::new()));
         let import_counts_hook = Rc::clone(&import_counts);
         let last_messages = Rc::new(RefCell::new(Vec::<UnicornLastMessage>::new()));
         let last_messages_hook = Rc::clone(&last_messages);
@@ -1593,16 +1650,18 @@ impl UnicornMips {
                     let a2 = read_mips_reg(uc, RegisterMIPS::A2);
                     let a3 = read_mips_reg(uc, RegisterMIPS::A3);
                     let sp = read_mips_reg(uc, RegisterMIPS::SP);
+                    let ra = read_mips_reg(uc, RegisterMIPS::RA);
                     let trace_name =
                         trace_import_name(trap.module_kind, trap.ordinal, trap.name.as_deref());
-                    *import_counts_hook
+                    import_counts_hook
                         .borrow_mut()
                         .entry(UnicornImportCountKey {
                             module: trap.module_name.clone(),
                             ordinal: trap.ordinal,
                             name: trace_name.clone(),
                         })
-                        .or_insert(0) += 1;
+                        .or_default()
+                        .record(a0, a1, a2, a3);
                     {
                         let mut imports = last_imports_hook.borrow_mut();
                         if imports.len() == UNICORN_TRACE_LIMIT {
@@ -1610,6 +1669,7 @@ impl UnicornMips {
                         }
                         let import = UnicornLastImport {
                             pc: address,
+                            ra,
                             module: trap.module_name.clone(),
                             kind: trap.module_kind,
                             ordinal: trap.ordinal,
@@ -1637,6 +1697,7 @@ impl UnicornMips {
                     tracing::debug!(
                         target: "ce.imports",
                         pc = format_args!("0x{address:08x}"),
+                        ra = format_args!("0x{ra:08x}"),
                         module = trap.module_name.as_str(),
                         kind = ?trap.module_kind,
                         ordinal = trap.ordinal,
@@ -1759,6 +1820,7 @@ impl UnicornMips {
                         trap.module_kind,
                         trap.ordinal,
                         &args,
+                        active_thread_id,
                         &pending_wndproc_returns_hook,
                     )
                 }) {
@@ -1892,6 +1954,7 @@ impl UnicornMips {
                         trap.ordinal,
                         &args,
                         result,
+                        active_thread_id,
                     );
                     if let Some(import) = last_imports_hook
                         .borrow_mut()
@@ -2108,6 +2171,18 @@ impl UnicornMips {
             last_code.borrow().clone(),
             last_blocks.borrow().clone(),
             import_count_snapshot(&import_counts.borrow()),
+            kernel.memory.allocations().count(),
+            kernel
+                .memory
+                .allocations()
+                .map(|allocation| u64::from(allocation.actual_size))
+                .sum(),
+            kernel.memory.virtual_allocations().count(),
+            kernel
+                .memory
+                .virtual_allocations()
+                .map(|allocation| u64::from(allocation.size))
+                .sum(),
             blocked_get_message.borrow().clone(),
             *thread_exit_reached.borrow(),
         ));
@@ -2234,11 +2309,18 @@ fn patch_mips_unicorn_trampolines(
                 image.path, section.name
             )));
         };
-        let halfword_jump_table_ranges =
+        let mut jump_table_data_ranges =
             mips_halfword_jump_table_ranges(mapped, load_base, start, end, &image.path)?;
+        jump_table_data_ranges.extend(mips_byte_jump_table_ranges(
+            mapped,
+            load_base,
+            start,
+            end,
+            &image.path,
+        )?);
         let mut rva = start;
         while rva.checked_add(8).is_some_and(|next| next <= end) {
-            if mips_patch_rva_overlaps_data_ranges(rva, &halfword_jump_table_ranges) {
+            if mips_patch_rva_overlaps_data_ranges(rva, &jump_table_data_ranges) {
                 rva = rva
                     .checked_add(4)
                     .ok_or_else(|| Error::InvalidArgument("section scan overflow".to_owned()))?;
@@ -2551,6 +2633,33 @@ fn mips_halfword_jump_table_ranges(
 }
 
 #[cfg(feature = "unicorn")]
+fn mips_byte_jump_table_ranges(
+    mapped: &[u8],
+    load_base: u32,
+    start: u32,
+    end: u32,
+    path: &str,
+) -> Result<Vec<(u32, u32)>> {
+    let mut ranges = Vec::new();
+    let mut rva = start;
+    while rva.checked_add(28).is_some_and(|next| next <= end) {
+        let Some(range) =
+            decode_mips_byte_jump_table_range(mapped, load_base, start, end, rva, path)?
+        else {
+            rva = rva
+                .checked_add(4)
+                .ok_or_else(|| Error::InvalidArgument("section scan overflow".to_owned()))?;
+            continue;
+        };
+        ranges.push(range);
+        rva = rva
+            .checked_add(4)
+            .ok_or_else(|| Error::InvalidArgument("section scan overflow".to_owned()))?;
+    }
+    Ok(ranges)
+}
+
+#[cfg(feature = "unicorn")]
 fn decode_mips_halfword_jump_table_range(
     mapped: &[u8],
     load_base: u32,
@@ -2621,6 +2730,68 @@ fn decode_mips_halfword_jump_table_range(
 }
 
 #[cfg(feature = "unicorn")]
+fn decode_mips_byte_jump_table_range(
+    mapped: &[u8],
+    load_base: u32,
+    section_start: u32,
+    section_end: u32,
+    rva: u32,
+    path: &str,
+) -> Result<Option<(u32, u32)>> {
+    let lui = read_mapped_word(mapped, rva, path)?;
+    let addiu = read_mapped_word(mapped, rva + 4, path)?;
+    let addu_index = read_mapped_word(mapped, rva + 8, path)?;
+    let lb = read_mapped_word(mapped, rva + 12, path)?;
+    let addu_target = read_mapped_word(mapped, rva + 16, path)?;
+    let jr = read_mapped_word(mapped, rva + 20, path)?;
+    let delay_slot = read_mapped_word(mapped, rva + 24, path)?;
+
+    let Some(base_register) = decode_mips_lui_rt(lui) else {
+        return Ok(None);
+    };
+    if !is_mips_addiu_same_register(addiu, base_register) {
+        return Ok(None);
+    }
+    let Some((index_register, selector_register)) =
+        decode_mips_addu_with_base(addu_index, base_register)
+    else {
+        return Ok(None);
+    };
+    if !is_mips_lb_same_register(lb, index_register) {
+        return Ok(None);
+    }
+    if !is_mips_addu(addu_target, base_register, base_register, index_register) {
+        return Ok(None);
+    }
+    if !is_mips_jr(jr, base_register) || delay_slot != MIPS_NOP {
+        return Ok(None);
+    }
+
+    let table_pc = ((lui & 0xffff) << 16).wrapping_add(addiu as u16 as i16 as i32 as u32);
+    let Some(table_rva) = table_pc.checked_sub(load_base) else {
+        return Ok(None);
+    };
+    if table_rva != rva + 28 || table_rva >= section_end {
+        return Ok(None);
+    }
+    let Some(entry_count) =
+        find_mips_jump_table_entry_count(mapped, section_start, rva, selector_register, path)?
+    else {
+        return Ok(None);
+    };
+    if entry_count == 0 {
+        return Ok(None);
+    }
+    let Some(table_end) = table_rva.checked_add(entry_count) else {
+        return Ok(None);
+    };
+    if table_end > section_end {
+        return Ok(None);
+    }
+    Ok(Some((table_rva, entry_count)))
+}
+
+#[cfg(feature = "unicorn")]
 fn find_mips_halfword_jump_table_entry_count(
     mapped: &[u8],
     section_start: u32,
@@ -2628,7 +2799,20 @@ fn find_mips_halfword_jump_table_entry_count(
     selector_register: u32,
     path: &str,
 ) -> Result<Option<u32>> {
-    let search_start = setup_rva.saturating_sub(64).max(section_start);
+    find_mips_jump_table_entry_count(mapped, section_start, setup_rva, selector_register, path)
+}
+
+#[cfg(feature = "unicorn")]
+fn find_mips_jump_table_entry_count(
+    mapped: &[u8],
+    section_start: u32,
+    setup_rva: u32,
+    selector_register: u32,
+    path: &str,
+) -> Result<Option<u32>> {
+    let search_start = setup_rva
+        .saturating_sub(MIPS_JUMP_TABLE_SELECTOR_SEARCH_BACK)
+        .max(section_start);
     let mut cursor = setup_rva;
     while cursor >= search_start + 4 {
         cursor -= 4;
@@ -2675,6 +2859,23 @@ fn decode_mips_sll_by_one(instruction: u32) -> Option<(u32, u32)> {
 }
 
 #[cfg(feature = "unicorn")]
+fn decode_mips_addu_with_base(instruction: u32, base_register: u32) -> Option<(u32, u32)> {
+    if instruction >> 26 != 0 || (instruction & 0x3f) != 0x21 {
+        return None;
+    }
+    let rs = (instruction >> 21) & 0x1f;
+    let rt = (instruction >> 16) & 0x1f;
+    let rd = (instruction >> 11) & 0x1f;
+    if rt == base_register {
+        Some((rd, rs))
+    } else if rs == base_register {
+        Some((rd, rt))
+    } else {
+        None
+    }
+}
+
+#[cfg(feature = "unicorn")]
 fn is_mips_addu(instruction: u32, rd: u32, rs: u32, rt: u32) -> bool {
     instruction >> 26 == 0
         && ((instruction >> 21) & 0x1f) == rs
@@ -2686,6 +2887,14 @@ fn is_mips_addu(instruction: u32, rd: u32, rs: u32, rt: u32) -> bool {
 #[cfg(feature = "unicorn")]
 fn is_mips_lh_same_register(instruction: u32, register: u32) -> bool {
     instruction >> 26 == 0x21
+        && ((instruction >> 21) & 0x1f) == register
+        && ((instruction >> 16) & 0x1f) == register
+        && (instruction & 0xffff) == 0
+}
+
+#[cfg(feature = "unicorn")]
+fn is_mips_lb_same_register(instruction: u32, register: u32) -> bool {
+    instruction >> 26 == 0x20
         && ((instruction >> 21) & 0x1f) == register
         && ((instruction >> 16) & 0x1f) == register
         && (instruction & 0xffff) == 0
@@ -2884,6 +3093,7 @@ fn map_kernel_memory_allocations<D>(
     kernel: &CeKernel,
     mapped: &mut Vec<(u32, u32)>,
 ) -> Result<()> {
+    reclaim_stale_kernel_memory_pages(uc, kernel, mapped)?;
     for allocation in kernel.memory.allocations() {
         map_guest_range(
             uc,
@@ -2912,6 +3122,73 @@ fn map_kernel_memory_allocations<D>(
                     ))
                 })?;
         }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "unicorn")]
+fn reclaim_stale_kernel_memory_pages<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    kernel: &CeKernel,
+    mapped: &mut Vec<(u32, u32)>,
+) -> Result<()> {
+    let live_pages = live_kernel_memory_pages(kernel)?;
+    let mut retained = Vec::with_capacity(mapped.len());
+    for (base, size) in mapped.drain(..) {
+        if size != 0x1000 || live_pages.contains(&base) {
+            retained.push((base, size));
+            continue;
+        }
+        uc.mem_unmap(u64::from(base), u64::from(size))
+            .map_err(|err| {
+                Error::Backend(format!("unmap stale kernel page 0x{base:08x}: {err:?}"))
+            })?;
+    }
+    *mapped = retained;
+    Ok(())
+}
+
+#[cfg(feature = "unicorn")]
+fn live_kernel_memory_pages(kernel: &CeKernel) -> Result<std::collections::BTreeSet<u32>> {
+    let mut pages = std::collections::BTreeSet::new();
+    for allocation in kernel.memory.allocations() {
+        insert_guest_range_pages(
+            &mut pages,
+            allocation.ptr,
+            allocation.actual_size,
+            "heap allocation",
+        )?;
+    }
+    for allocation in kernel.memory.virtual_allocations() {
+        insert_guest_range_pages(
+            &mut pages,
+            allocation.base,
+            allocation.size,
+            "virtual allocation",
+        )?;
+    }
+    Ok(pages)
+}
+
+#[cfg(feature = "unicorn")]
+fn insert_guest_range_pages(
+    pages: &mut std::collections::BTreeSet<u32>,
+    base: u32,
+    size: u32,
+    label: &str,
+) -> Result<()> {
+    let first_page = base & !0xfff;
+    let page_end = base
+        .checked_add(size.max(1))
+        .and_then(|end| end.checked_add(0xfff))
+        .map(|end| end & !0xfff)
+        .ok_or_else(|| Error::InvalidArgument(format!("{label} range overflow")))?;
+    let mut page_base = first_page;
+    while page_base < page_end {
+        pages.insert(page_base);
+        page_base = page_base
+            .checked_add(0x1000)
+            .ok_or_else(|| Error::InvalidArgument(format!("{label} page overflow")))?;
     }
     Ok(())
 }
@@ -2991,6 +3268,7 @@ fn run_pending_process_launches<D>(
         let saved_path = kernel.process_module_path().to_owned();
         let saved_host_path = kernel.process_module_host_path().cloned();
         let saved_command_line = kernel.process_command_line().to_owned();
+        let saved_process_id = kernel.current_process_id();
 
         kernel.set_process_module_base(image.image_base());
         let child_module_path = kernel
@@ -2999,25 +3277,27 @@ fn run_pending_process_launches<D>(
         kernel.set_process_module_path(child_module_path);
         kernel.set_process_module_host_path(path.clone());
         kernel.set_process_command_line(launch.command_line.clone().unwrap_or_default());
+        kernel.set_current_process_id(launch.process_id);
 
-        let mut child = UnicornMips::new()?;
-        child.load_pe_image(&image)?;
-        let mut child_framebuffer = VirtualFramebuffer::default_primary()?;
-        child.run_until_import_trap_with_framebuffer_limit(
-            kernel,
-            &mut child_framebuffer,
-            instruction_limit,
-        )?;
-        let exit_code = child
-            .last_debug_snapshot()
-            .and_then(|snapshot| {
-                snapshot
-                    .encoded_kernel_exit
-                    .as_ref()
-                    .map(|exit| exit.exit_code)
-            })
-            .unwrap_or(0);
-        kernel.mark_process_launch_exited(&launch, exit_code);
+        let child_result = (|| -> Result<u32> {
+            let mut child = UnicornMips::new()?;
+            child.load_pe_image(&image)?;
+            let mut child_framebuffer = VirtualFramebuffer::default_primary()?;
+            child.run_until_import_trap_with_framebuffer_limit(
+                kernel,
+                &mut child_framebuffer,
+                instruction_limit,
+            )?;
+            Ok(child
+                .last_debug_snapshot()
+                .and_then(|snapshot| {
+                    snapshot
+                        .encoded_kernel_exit
+                        .as_ref()
+                        .map(|exit| exit.exit_code)
+                })
+                .unwrap_or(0))
+        })();
 
         kernel.set_process_module_base(saved_base);
         kernel.set_process_module_path(saved_path);
@@ -3025,6 +3305,10 @@ fn run_pending_process_launches<D>(
             kernel.set_process_module_host_path(saved_host_path);
         }
         kernel.set_process_command_line(saved_command_line);
+        kernel.set_current_process_id(saved_process_id);
+
+        let exit_code = child_result?;
+        kernel.mark_process_launch_exited(&launch, exit_code);
     }
     Ok(())
 }
@@ -3399,9 +3683,22 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 if let Some(name) = count.name.as_deref() {
                     write!(f, "/name={name}")?;
                 }
+                write!(
+                    f,
+                    "/max_a0=0x{:08x}/max_a1=0x{:08x}/max_a2=0x{:08x}/max_a3=0x{:08x}",
+                    count.max_a0, count.max_a1, count.max_a2, count.max_a3
+                )?;
             }
             write!(f, "]")?;
         }
+        write!(
+            f,
+            " heap_live_count={} heap_live_bytes={} virtual_live_count={} virtual_live_bytes={}",
+            self.heap_allocation_count,
+            self.heap_allocation_bytes,
+            self.virtual_allocation_count,
+            self.virtual_allocation_bytes
+        )?;
         if let Some(probe) = self.interrupt_probe.as_ref() {
             write!(
                 f,
@@ -3870,9 +4167,10 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                     }
                     write!(
                         f,
-                        "0x{:08x}/tid={}/class={}/title={}/vis={}/dead={}/upd={}/erase={}/rect={},{}-{},{}",
+                        "0x{:08x}/tid={}/pid={}/class={}/title={}/vis={}/dead={}/upd={}/erase={}/rect={},{}-{},{}",
                         window.hwnd,
                         window.thread_id,
+                        window.process_id,
                         format_trace_string(&window.class_name),
                         format_trace_string(&window.title),
                         window.visible,
@@ -4332,6 +4630,7 @@ fn try_block_empty_get_message<D>(
             .map(|window| UnicornWindowSnapshot {
                 hwnd: window.hwnd,
                 thread_id: window.thread_id,
+                process_id: window.process_id,
                 class_name: window.class_name,
                 title: window.title,
                 visible: window.visible,
@@ -5265,6 +5564,7 @@ fn record_inavi_controller_trace<D>(
     let s7 = read_mips_reg(uc, RegisterMIPS::S7);
     let fp = read_mips_reg(uc, RegisterMIPS::FP);
     let t0 = read_mips_reg(uc, RegisterMIPS::T0);
+    let t8 = read_mips_reg(uc, RegisterMIPS::T8);
     let t4 = read_mips_reg(uc, RegisterMIPS::T4);
     let t6 = read_mips_reg(uc, RegisterMIPS::T6);
     let sp10 = sp
@@ -5729,6 +6029,230 @@ fn record_inavi_controller_trace<D>(
             "table_buffer=0x{:08x}/handle=0x{fp:08x}",
             read_unicorn_u32(uc, s6).unwrap_or_default()
         )),
+        "map_asset_ready_entry" => Some(format!(
+            "controller=0x{a0:08x}/state=0x{:08x}",
+            read_unicorn_u32(uc, a0.wrapping_add(8)).unwrap_or_default()
+        )),
+        "map_asset_probe_entry" => Some(format!(
+            "state=0x{a0:08x}/name={}",
+            resource_pointer_preview(uc, a1, 260)
+        )),
+        "map_asset_probe_open_return" => Some(format!(
+            "open_result=0x{v0:08x}/name={}",
+            resource_pointer_preview(uc, fp, 260)
+        )),
+        "map_asset_probe_return" => Some(format!(
+            "result=0x{v0:08x}/query={}/state={}",
+            sp.checked_add(0x10)
+                .map(|addr| resource_pointer_preview(uc, addr, 260))
+                .unwrap_or_else(|| "query=<overflow>".to_owned()),
+            sp.checked_add(0x18)
+                .map(|addr| resource_pointer_preview(uc, addr, 260))
+                .unwrap_or_else(|| "state=<overflow>".to_owned())
+        )),
+        "map_asset_probe_fail" => Some(format!(
+            "query={}/state={}",
+            sp.checked_add(0x10)
+                .map(|addr| resource_pointer_preview(uc, addr, 260))
+                .unwrap_or_else(|| "query=<overflow>".to_owned()),
+            sp.checked_add(0x18)
+                .map(|addr| resource_pointer_preview(uc, addr, 260))
+                .unwrap_or_else(|| "state=<overflow>".to_owned())
+        )),
+        "map_asset_metric_call" => Some(format!(
+            "state={}",
+            sp.checked_add(0x18)
+                .map(|addr| resource_pointer_preview(uc, addr, 260))
+                .unwrap_or_else(|| "state=<overflow>".to_owned())
+        )),
+        "map_asset_metric_entry" => {
+            Some(format!("state={}", resource_pointer_preview(uc, a0, 260)))
+        }
+        "map_asset_metric_value" => Some(format!(
+            "metric=0x{fp:08x}/state={}",
+            resource_pointer_preview(uc, sp.wrapping_add(0x10), 260)
+        )),
+        "map_asset_probe_exit" => Some(format!("result=0x{v0:08x}")),
+        "map_asset_ready_success" => Some(format!(
+            "stored_metric=0x{:08x}/state=0x{:08x}",
+            read_unicorn_u32(
+                uc,
+                read_unicorn_u32(uc, fp.wrapping_add(8))
+                    .unwrap_or_default()
+                    .wrapping_add(0x462a0)
+            )
+            .unwrap_or_default(),
+            read_unicorn_u32(uc, fp.wrapping_add(8)).unwrap_or_default()
+        )),
+        "map_prefix_static_init_entry" => Some(format!(
+            "flag=0x{:02x}/prefix={}",
+            read_unicorn_u8(uc, 0x0079_c464).unwrap_or_default(),
+            resource_pointer_preview(uc, 0x0079_c468u32.wrapping_add(0x230), 260)
+        )),
+        "map_prefix_static_init_ready" => Some(format!(
+            "flag=0x{:02x}/prefix={}",
+            read_unicorn_u8(uc, 0x0079_c464).unwrap_or_default(),
+            resource_pointer_preview(uc, 0x0079_c468u32.wrapping_add(0x230), 260)
+        )),
+        "map_prefix_object_getter" => Some(format!(
+            "object=0x0079c468/prefix={}",
+            resource_pointer_preview(uc, 0x0079_c468u32.wrapping_add(0x230), 260)
+        )),
+        "map_prefix_ctor_entry" => Some(format!(
+            "object=0x{a0:08x}/prefix={}",
+            resource_pointer_preview(uc, a0.wrapping_add(0x230), 260)
+        )),
+        "map_prefix_setter_entry" => Some(format!(
+            "object=0x{a0:08x}/source={}/old_prefix={}",
+            resource_pointer_preview(uc, a1, 260),
+            resource_pointer_preview(uc, a0.wrapping_add(0x230), 260)
+        )),
+        "map_prefix_setter_return" => Some(format!(
+            "object=0x{:08x}/prefix={}",
+            read_mips_reg(uc, RegisterMIPS::A0).wrapping_sub(0x230),
+            resource_pointer_preview(uc, read_mips_reg(uc, RegisterMIPS::A0), 260)
+        )),
+        "map_prefix_getter_entry" => Some(format!(
+            "object=0x{a0:08x}/prefix={}",
+            resource_pointer_preview(uc, a0.wrapping_add(0x230), 260)
+        )),
+        "map_prefix_builder_entry" => Some(format!(
+            "object=0x{a0:08x}/source={}/slot438={}",
+            resource_pointer_preview(uc, a1, 260),
+            resource_pointer_preview(uc, a0.wrapping_add(0x438), 260)
+        )),
+        "map_prefix_source_module_path" => Some(format!(
+            "buffer={}/fp={}/v23={}",
+            resource_pointer_preview(uc, sp.wrapping_add(0x258), 260),
+            resource_pointer_preview(uc, fp, 260),
+            resource_pointer_preview(uc, s7, 260)
+        )),
+        "map_prefix_set_from_module" | "map_prefix_set_from_fallback" => Some(format!(
+            "source={}/prefix={}",
+            resource_pointer_preview(uc, fp, 260),
+            resource_pointer_preview(uc, 0x0079_c468u32.wrapping_add(0x230), 260)
+        )),
+        "map_prefix_set_from_stack" | "map_prefix_set_from_resolved" => Some(format!(
+            "source={}/prefix={}",
+            resource_pointer_preview(uc, sp.wrapping_add(0x460), 260),
+            resource_pointer_preview(uc, 0x0079_c468u32.wrapping_add(0x230), 260)
+        )),
+        "map_prefix_after_set" => Some(format!(
+            "prefix={}",
+            resource_pointer_preview(uc, 0x0079_c468u32.wrapping_add(0x230), 260)
+        )),
+        "rsimage_stream_read_entry" => Some(format!(
+            "stream=0x{a0:08x}/buffer=0x{a1:08x}/requested={a2}"
+        )),
+        "rsimage_stream_read_before_callback" => Some(format!(
+            "stream=0x{fp:08x}/callback_obj=0x{:08x}/callback=0x{:08x}/requested={}",
+            read_unicorn_u32(uc, fp.wrapping_add(0x94)).unwrap_or_default(),
+            read_unicorn_u32(uc, 0x0052_5360).unwrap_or_default(),
+            read_mips_reg(uc, RegisterMIPS::S7)
+        )),
+        "rsimage_stream_read_after_callback" => Some(format!(
+            "result=0x{v0:08x}/actual={}/requested={}",
+            read_unicorn_u32(uc, sp.wrapping_add(0x18)).unwrap_or_default(),
+            read_mips_reg(uc, RegisterMIPS::S7)
+        )),
+        "rsimage_stream_read_short" => Some(format!(
+            "stream=0x{fp:08x}/actual={}/requested={}",
+            read_unicorn_u32(uc, sp.wrapping_add(0x18)).unwrap_or_default(),
+            read_mips_reg(uc, RegisterMIPS::S7)
+        )),
+        "rsimage_stream_read_return" => Some(format!(
+            "stream=0x{fp:08x}/actual={}/requested={}",
+            read_unicorn_u32(uc, sp.wrapping_add(0x18)).unwrap_or_default(),
+            read_mips_reg(uc, RegisterMIPS::S7)
+        )),
+        "map_sort_partition_entry" => Some(format!(
+            "base=0x{a0:08x}/end=0x{a1:08x}/pivot_lo=0x{a2:08x}/pivot_hi=0x{a3:08x}/callback=0x{:08x}/span_bytes={}",
+            read_unicorn_u32(uc, sp.wrapping_add(0x38)).unwrap_or_default(),
+            a1.wrapping_sub(a0)
+        )),
+        "map_sort_forward_probe" => Some(format!(
+            "cursor=0x{fp:08x}/end=0x{s7:08x}/pivot_lo=0x{s5:08x}/pivot_hi=0x{s6:08x}/callback=0x{:08x}/result=0x{v0:08x}/left=0x{:08x}{:08x}",
+            read_unicorn_u32(uc, sp.wrapping_add(0x38)).unwrap_or_default(),
+            read_unicorn_u32(uc, fp).unwrap_or_default(),
+            read_unicorn_u32(uc, fp.wrapping_add(4)).unwrap_or_default()
+        )),
+        "map_sort_backward_probe" => Some(format!(
+            "cursor=0x{s7:08x}/begin=0x{fp:08x}/pivot_lo=0x{s5:08x}/pivot_hi=0x{s6:08x}/callback=0x{:08x}/result=0x{v0:08x}/right=0x{:08x}{:08x}",
+            read_unicorn_u32(uc, sp.wrapping_add(0x38)).unwrap_or_default(),
+            read_unicorn_u32(uc, s7).unwrap_or_default(),
+            read_unicorn_u32(uc, s7.wrapping_add(4)).unwrap_or_default()
+        )),
+        "map_sort_partition_return" => Some(format!(
+            "cursor=0x{v0:08x}/begin=0x{fp:08x}/end=0x{s7:08x}/callback=0x{:08x}",
+            read_unicorn_u32(uc, sp.wrapping_add(0x38)).unwrap_or_default()
+        )),
+        "main_init_entry" => Some(format!(
+            "app=0x{a0:08x}/caller_ra=0x{:08x}",
+            read_mips_reg(uc, RegisterMIPS::RA)
+        )),
+        "main_init_singleton_call" => Some(format!(
+            "app=0x{:08x}/mutex_handle=0x{:08x}",
+            read_mips_reg(uc, RegisterMIPS::S6),
+            read_unicorn_u32(uc, read_mips_reg(uc, RegisterMIPS::S6).wrapping_add(0xb4))
+                .unwrap_or_default()
+        )),
+        "main_init_singleton_return" => Some(format!(
+            "result=0x{v0:08x}/app=0x{:08x}/mutex_handle=0x{:08x}",
+            read_mips_reg(uc, RegisterMIPS::S6),
+            read_unicorn_u32(uc, read_mips_reg(uc, RegisterMIPS::S6).wrapping_add(0xb4))
+                .unwrap_or_default()
+        )),
+        "main_init_abort_after_singleton" => Some(format!(
+            "result=0x{v0:08x}/app=0x{:08x}",
+            read_mips_reg(uc, RegisterMIPS::S6)
+        )),
+        "main_init_continue_after_singleton" => Some(format!(
+            "result=0x{v0:08x}/app=0x{:08x}",
+            read_mips_reg(uc, RegisterMIPS::S6)
+        )),
+        "main_init_return" => Some(format!(
+            "result=0x{v0:08x}/app=0x{:08x}/child=0x{:08x}",
+            read_mips_reg(uc, RegisterMIPS::S6),
+            read_unicorn_u32(uc, read_mips_reg(uc, RegisterMIPS::S6).wrapping_add(0x20))
+                .unwrap_or_default()
+        )),
+        "singleton_entry" => Some(format!(
+            "app=0x{a0:08x}/stored_mutex=0x{:08x}",
+            read_unicorn_u32(uc, a0.wrapping_add(0xb4)).unwrap_or_default()
+        )),
+        "singleton_after_create_mutex" => Some(format!(
+            "handle=0x{v0:08x}/app=0x{fp:08x}/stored_mutex=0x{:08x}",
+            read_unicorn_u32(uc, fp.wrapping_add(0xb4)).unwrap_or_default()
+        )),
+        "singleton_after_get_last_error" => Some(format!(
+            "last_error=0x{v0:08x}/app=0x{fp:08x}/stored_mutex=0x{:08x}",
+            read_unicorn_u32(uc, fp.wrapping_add(0xb4)).unwrap_or_default()
+        )),
+        "singleton_existing_window_branch" => Some(format!(
+            "last_error=0x{v0:08x}/app=0x{fp:08x}/stored_mutex=0x{:08x}",
+            read_unicorn_u32(uc, fp.wrapping_add(0xb4)).unwrap_or_default()
+        )),
+        "singleton_existing_return" => Some(format!(
+            "result=1/app=0x{fp:08x}/stored_mutex=0x{:08x}",
+            read_unicorn_u32(uc, fp.wrapping_add(0xb4)).unwrap_or_default()
+        )),
+        "singleton_new_return" => Some(format!(
+            "result=0/app=0x{fp:08x}/stored_mutex=0x{:08x}",
+            read_unicorn_u32(uc, fp.wrapping_add(0xb4)).unwrap_or_default()
+        )),
+        "auth_proc_call" | "auth_proc_loop_call" | "auth_proc_loop_return" => Some(format!(
+            "a0=0x{a0:08x}/a0_text={}/a1=0x{a1:08x}/a1_text={}/static_615874={}/static_615878={}/v0=0x{v0:08x}",
+            resource_pointer_preview(uc, a0, 128),
+            resource_pointer_preview(uc, a1, 128),
+            resource_pointer_preview(uc, 0x0061_5874, 128),
+            resource_pointer_preview(uc, 0x0061_5878, 128)
+        )),
+        "dynamic_loader_thunk_entry" | "dynamic_loader_thunk_jump" => Some(format!(
+            "slot=0x{:08x}/t0=0x{t0:08x}/t8=0x{t8:08x}/a0=0x{a0:08x}/a0_text={}/a1=0x{a1:08x}/a1_text={}",
+            read_unicorn_u32(uc, 0x0052_538c).unwrap_or_default(),
+            resource_pointer_preview(uc, a0, 128),
+            resource_pointer_preview(uc, a1, 128)
+        )),
         _ => None,
     };
     let trace = UnicornInaviControllerTrace {
@@ -5867,6 +6391,14 @@ fn is_inavi_render_milestone_label(label: &str) -> bool {
         || label.starts_with("init_dialog_")
         || label.starts_with("app_query_")
         || label.starts_with("query_5237_")
+        || label.starts_with("map_asset_")
+        || label.starts_with("map_prefix_")
+        || label.starts_with("map_sort_")
+        || label.starts_with("rsimage_")
+        || label.starts_with("singleton_")
+        || label.starts_with("main_init_")
+        || label.starts_with("auth_")
+        || label.starts_with("dynamic_loader_")
         || label.starts_with("resource_ready_")
         || label.starts_with("resource_module_")
         || label.starts_with("resource_596b4_")
@@ -6012,6 +6544,11 @@ fn inavi_controller_probe_label(pc: u32) -> Option<&'static str> {
         0x0005_8904 => Some("resource_ready_after_5b068"),
         0x0005_891c => Some("resource_ready_after_58984"),
         0x0005_892c => Some("resource_ready_return"),
+        0x0005_b8cc => Some("map_asset_ready_entry"),
+        0x0005_b91c => Some("map_asset_probe_return"),
+        0x0005_b924 => Some("map_asset_probe_fail"),
+        0x0005_b948 => Some("map_asset_metric_call"),
+        0x0005_b974 => Some("map_asset_ready_success"),
         0x0005_89fc => Some("resource_ready_after_59430"),
         0x0005_8a04 => Some("resource_ready_fail_59430"),
         0x0005_8a34 => Some("resource_ready_after_594f8"),
@@ -6045,6 +6582,51 @@ fn inavi_controller_probe_label(pc: u32) -> Option<&'static str> {
         0x0012_95c8 => Some("resource_module_format_call"),
         0x0012_95d0 => Some("resource_module_format_return"),
         0x0012_95e0 => Some("resource_module_success"),
+        0x0006_c838 => Some("map_prefix_static_init_entry"),
+        0x0006_c870 => Some("map_prefix_static_init_ready"),
+        0x0006_c87c => Some("map_prefix_object_getter"),
+        0x0006_c888 => Some("map_prefix_ctor_entry"),
+        0x0006_c9d8 => Some("map_prefix_setter_entry"),
+        0x0006_c9f4 => Some("map_prefix_setter_return"),
+        0x0006_ca00 => Some("map_prefix_getter_entry"),
+        0x0006_ca08 => Some("map_prefix_builder_entry"),
+        0x0012_97c0 => Some("map_prefix_source_module_path"),
+        0x0012_980c => Some("map_prefix_set_from_module"),
+        0x0012_985c => Some("map_prefix_set_from_fallback"),
+        0x0012_9944 => Some("map_prefix_set_from_stack"),
+        0x0012_9a00 => Some("map_prefix_set_from_resolved"),
+        0x0012_9814 | 0x0012_9864 | 0x0012_994c | 0x0012_9a08 => Some("map_prefix_after_set"),
+        0x0013_fe30 => Some("map_asset_probe_entry"),
+        0x0013_fe80 => Some("map_asset_probe_open_return"),
+        0x0013_ff38 => Some("map_asset_probe_exit"),
+        0x0013_ff54 => Some("map_asset_metric_entry"),
+        0x0013_ffd4 => Some("map_asset_metric_value"),
+        0x0030_7d18 => Some("rsimage_stream_read_entry"),
+        0x0030_7d44 => Some("rsimage_stream_read_before_callback"),
+        0x0030_7d58 => Some("rsimage_stream_read_after_callback"),
+        0x0030_7d74 => Some("rsimage_stream_read_short"),
+        0x0030_7d84 => Some("rsimage_stream_read_return"),
+        0x000b_8714 => Some("map_sort_partition_entry"),
+        0x000b_8764 => Some("map_sort_forward_probe"),
+        0x000b_8784 => Some("map_sort_backward_probe"),
+        0x000b_87f4 => Some("map_sort_partition_return"),
+        0x0001_199c => Some("singleton_entry"),
+        0x0001_19cc => Some("singleton_after_create_mutex"),
+        0x0001_19e8 => Some("singleton_after_get_last_error"),
+        0x0001_19f4 => Some("singleton_existing_window_branch"),
+        0x0001_1a28 => Some("singleton_existing_return"),
+        0x0001_1a40 => Some("singleton_new_return"),
+        0x0001_1cc8 => Some("main_init_entry"),
+        0x0001_1d20 => Some("main_init_singleton_call"),
+        0x0001_1d28 => Some("main_init_singleton_return"),
+        0x0001_1d30 => Some("main_init_abort_after_singleton"),
+        0x0001_1d88 => Some("main_init_continue_after_singleton"),
+        0x0001_1ea0 => Some("main_init_return"),
+        0x0020_17a4 => Some("auth_proc_call"),
+        0x0020_17c8 => Some("auth_proc_loop_call"),
+        0x0020_17d0 => Some("auth_proc_loop_return"),
+        0x0049_6a44 => Some("dynamic_loader_thunk_entry"),
+        0x0049_6a4c => Some("dynamic_loader_thunk_jump"),
         0x0002_d158 => Some("wm_size_entry"),
         0x0002_d198 => Some("wm_size_render_vtable"),
         0x0002_d1a0 => Some("wm_size_render_call"),
@@ -6101,12 +6683,44 @@ fn inavi_controller_probe_label(pc: u32) -> Option<&'static str> {
 
 #[cfg(feature = "unicorn")]
 fn should_trace_wndproc_message(msg: u32) -> bool {
-    msg >= crate::ce::gwe::WM_USER
+    msg >= crate::ce::gwe::WM_USER || (cfg!(feature = "trace") && is_display_lifecycle_message(msg))
+}
+
+#[cfg(feature = "unicorn")]
+fn is_display_lifecycle_message(msg: u32) -> bool {
+    matches!(
+        msg,
+        crate::ce::gwe::WM_CREATE
+            | crate::ce::gwe::WM_DESTROY
+            | crate::ce::gwe::WM_MOVE
+            | crate::ce::gwe::WM_SIZE
+            | crate::ce::gwe::WM_PAINT
+            | crate::ce::gwe::WM_SHOWWINDOW
+            | crate::ce::gwe::WM_WINDOWPOSCHANGED
+            | crate::ce::gwe::WM_COMMAND
+            | crate::ce::gwe::WM_TIMER
+            | 0x0200
+            | 0x0201
+            | 0x0202
+    )
 }
 
 #[cfg(feature = "unicorn")]
 fn is_guest_wndproc(wndproc: u32) -> bool {
     wndproc != 0 && wndproc != crate::ce::gwe::DEFAULT_WNDPROC
+}
+
+#[cfg(feature = "unicorn")]
+fn should_direct_call_send_message_wndproc(
+    active_thread_id: u32,
+    active_process_id: u32,
+    target_thread_id: u32,
+    target_process_id: u32,
+    wndproc: u32,
+) -> bool {
+    active_thread_id == target_thread_id
+        && active_process_id == target_process_id
+        && is_guest_wndproc(wndproc)
 }
 
 #[cfg(feature = "unicorn")]
@@ -6203,6 +6817,7 @@ fn try_enter_send_message_callout<D>(
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
+    active_thread_id: u32,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
@@ -6225,8 +6840,32 @@ fn try_enter_send_message_callout<D>(
     };
     let wndproc = window.wndproc;
     let target_thread_id = window.thread_id;
+    let target_process_id = window.process_id;
     let class_name = window.class_name.clone();
-    if !is_guest_wndproc(wndproc) {
+    let active_process_id = kernel.current_process_id();
+    if !should_direct_call_send_message_wndproc(
+        active_thread_id,
+        active_process_id,
+        target_thread_id,
+        target_process_id,
+        wndproc,
+    ) {
+        if (active_thread_id != target_thread_id || active_process_id != target_process_id)
+            && is_guest_wndproc(wndproc)
+        {
+            tracing::debug!(
+                target: "ce.gwe",
+                source = if is_send_message_timeout { "SendMessageTimeout" } else { "SendMessageW" },
+                hwnd = format_args!("0x{hwnd:08x}"),
+                class = class_name.as_str(),
+                wndproc = format_args!("0x{wndproc:08x}"),
+                active_thread_id,
+                active_process_id,
+                target_thread_id,
+                target_process_id,
+                "SendMessage guest wndproc not entered across emulated context"
+            );
+        }
         return false;
     }
     let msg = args.get(1).copied().unwrap_or(0);
@@ -6998,6 +7637,10 @@ fn capture_debug_snapshot<D>(
     last_code: Vec<UnicornLastCode>,
     last_blocks: Vec<UnicornLastBlock>,
     import_counts: Vec<UnicornImportCount>,
+    heap_allocation_count: usize,
+    heap_allocation_bytes: u64,
+    virtual_allocation_count: usize,
+    virtual_allocation_bytes: u64,
     blocked_get_message: Option<UnicornBlockedGetMessage>,
     thread_exit_reached: bool,
 ) -> UnicornDebugSnapshot {
@@ -7048,6 +7691,10 @@ fn capture_debug_snapshot<D>(
         last_code,
         last_blocks,
         import_counts,
+        heap_allocation_count,
+        heap_allocation_bytes,
+        virtual_allocation_count,
+        virtual_allocation_bytes,
         blocked_get_message,
         thread_exit_reached,
         encoded_kernel_exit: None,
@@ -7114,11 +7761,75 @@ fn import_detail_after_return<D>(
     ordinal: Option<u32>,
     args: &[u32],
     result: u32,
+    thread_id: u32,
 ) -> Option<String> {
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll {
         return None;
     }
     match ordinal {
+        Some(crate::ce::coredll_ordinals::ORD_LOAD_LIBRARY_W)
+        | Some(crate::ce::coredll_ordinals::ORD_LOAD_LIBRARY_EX_W) => {
+            let name_ptr = args.first().copied().unwrap_or(0);
+            let last_error = kernel.threads.get_last_error(thread_id);
+            let mut parts = vec![
+                format!("name_ptr=0x{name_ptr:08x}"),
+                format!("handle=0x{result:08x}"),
+                format!("last_error={last_error}"),
+            ];
+            if let Some(name) = import_pointer_or_wide_arg(uc, name_ptr) {
+                parts.push(format!("name={name:?}"));
+            }
+            if ordinal == Some(crate::ce::coredll_ordinals::ORD_LOAD_LIBRARY_EX_W) {
+                parts.push(format!(
+                    "file=0x{:08x}",
+                    args.get(1).copied().unwrap_or_default()
+                ));
+                parts.push(format!(
+                    "flags=0x{:08x}",
+                    args.get(2).copied().unwrap_or_default()
+                ));
+            }
+            Some(parts.join("/"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_GET_PROC_ADDRESS_W) => {
+            let module = args.first().copied().unwrap_or(0);
+            let name_ptr = args.get(1).copied().unwrap_or(0);
+            let last_error = kernel.threads.get_last_error(thread_id);
+            let mut parts = vec![
+                format!("module=0x{module:08x}"),
+                format!("name_ptr=0x{name_ptr:08x}"),
+                format!("proc=0x{result:08x}"),
+                format!("last_error={last_error}"),
+            ];
+            if let Some(name) = import_pointer_or_wide_arg(uc, name_ptr) {
+                parts.push(format!("name={name:?}"));
+            }
+            Some(parts.join("/"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_GET_PROC_ADDRESS_A) => {
+            let module = args.first().copied().unwrap_or(0);
+            let name_ptr = args.get(1).copied().unwrap_or(0);
+            let last_error = kernel.threads.get_last_error(thread_id);
+            let mut parts = vec![
+                format!("module=0x{module:08x}"),
+                format!("name_ptr=0x{name_ptr:08x}"),
+                format!("proc=0x{result:08x}"),
+                format!("last_error={last_error}"),
+            ];
+            if name_ptr <= 0xffff && name_ptr != 0 {
+                parts.push(format!("name=#{name_ptr}"));
+            } else if let Some(name) = read_unicorn_narrow_z(uc, name_ptr, 128) {
+                parts.push(format!("name={name:?}"));
+            }
+            Some(parts.join("/"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_FREE_LIBRARY) => {
+            let module = args.first().copied().unwrap_or(0);
+            let last_error = kernel.threads.get_last_error(thread_id);
+            Some(format!(
+                "module=0x{module:08x}/ok={result}/last_error={last_error}"
+            ))
+        }
         Some(crate::ce::coredll_ordinals::ORD_GET_MODULE_FILE_NAME_W) => {
             let module = args.first().copied().unwrap_or(0);
             let buffer = args.get(1).copied().unwrap_or(0);
@@ -7214,6 +7925,132 @@ fn import_detail_after_return<D>(
                 parts.push(format!("title={title:?}"));
             }
             Some(parts.join("/"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_CREATE_MUTEX_W) => {
+            let attributes = args.first().copied().unwrap_or(0);
+            let initial_owner = args.get(1).copied().unwrap_or(0);
+            let name_ptr = args.get(2).copied().unwrap_or(0);
+            let last_error = kernel.threads.get_last_error(thread_id);
+            let mut parts = vec![
+                format!("attributes=0x{attributes:08x}"),
+                format!("initial_owner={initial_owner}"),
+                format!("name_ptr=0x{name_ptr:08x}"),
+                format!("handle=0x{result:08x}"),
+                format!("last_error={last_error}"),
+            ];
+            if let Some(name) = import_pointer_or_wide_arg(uc, name_ptr) {
+                parts.push(format!("name={name:?}"));
+            }
+            Some(parts.join("/"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_RELEASE_MUTEX) => {
+            let handle = args.first().copied().unwrap_or(0);
+            let last_error = kernel.threads.get_last_error(thread_id);
+            Some(format!(
+                "handle=0x{handle:08x}/ok={result}/last_error={last_error}"
+            ))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_FIND_WINDOW_W) => {
+            let class_ptr = args.first().copied().unwrap_or(0);
+            let title_ptr = args.get(1).copied().unwrap_or(0);
+            let last_error = kernel.threads.get_last_error(thread_id);
+            let mut parts = vec![
+                format!("class_ptr=0x{class_ptr:08x}"),
+                format!("title_ptr=0x{title_ptr:08x}"),
+                format!("hwnd=0x{result:08x}"),
+                format!("last_error={last_error}"),
+            ];
+            if let Some(class_name) = import_pointer_or_wide_arg(uc, class_ptr) {
+                parts.push(format!("class={class_name:?}"));
+            }
+            if let Some(title) = import_pointer_or_wide_arg(uc, title_ptr) {
+                parts.push(format!("title={title:?}"));
+            }
+            Some(parts.join("/"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_GET_DC) => {
+            let hwnd = args.first().copied().unwrap_or(0);
+            let last_error = kernel.threads.get_last_error(thread_id);
+            Some(format!(
+                "hwnd=0x{hwnd:08x}/hdc=0x{result:08x}/last_error={last_error}"
+            ))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_RELEASE_DC) => {
+            let hwnd = args.first().copied().unwrap_or(0);
+            let hdc = args.get(1).copied().unwrap_or(0);
+            let last_error = kernel.threads.get_last_error(thread_id);
+            Some(format!(
+                "hwnd=0x{hwnd:08x}/hdc=0x{hdc:08x}/ok={result}/last_error={last_error}"
+            ))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_CREATE_COMPATIBLE_DC) => {
+            let hdc = args.first().copied().unwrap_or(0);
+            let last_error = kernel.threads.get_last_error(thread_id);
+            Some(format!(
+                "source_hdc=0x{hdc:08x}/mem_hdc=0x{result:08x}/last_error={last_error}"
+            ))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_CREATE_DIBSECTION) => {
+            let hdc = args.first().copied().unwrap_or(0);
+            let info = args.get(1).copied().unwrap_or(0);
+            let bits_out = args.get(3).copied().unwrap_or(0);
+            let section = args.get(4).copied().unwrap_or(0);
+            let offset = args.get(5).copied().unwrap_or(0);
+            let bits = (bits_out != 0)
+                .then(|| read_unicorn_u32(uc, bits_out))
+                .flatten()
+                .unwrap_or(0);
+            let header_size = read_unicorn_u32(uc, info).unwrap_or(0);
+            let width = read_unicorn_u32(uc, info.wrapping_add(4)).unwrap_or(0) as i32;
+            let height = read_unicorn_u32(uc, info.wrapping_add(8)).unwrap_or(0) as i32;
+            let planes_bits = read_unicorn_u32(uc, info.wrapping_add(12)).unwrap_or(0);
+            let compression = read_unicorn_u32(uc, info.wrapping_add(16)).unwrap_or(0);
+            let last_error = kernel.threads.get_last_error(thread_id);
+            Some(format!(
+                "hdc=0x{hdc:08x}/info=0x{info:08x}/header={header_size}/width={width}/height={height}/planes={}/bpp={}/compression={compression}/bits_out=0x{bits_out:08x}/bits=0x{bits:08x}/section=0x{section:08x}/offset={offset}/bitmap=0x{result:08x}/last_error={last_error}",
+                planes_bits & 0xffff,
+                (planes_bits >> 16) & 0xffff
+            ))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_SELECT_OBJECT) => {
+            let hdc = args.first().copied().unwrap_or(0);
+            let object = args.get(1).copied().unwrap_or(0);
+            let last_error = kernel.threads.get_last_error(thread_id);
+            Some(format!(
+                "hdc=0x{hdc:08x}/object=0x{object:08x}/previous=0x{result:08x}/last_error={last_error}"
+            ))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_BIT_BLT)
+        | Some(crate::ce::coredll_ordinals::ORD_STRETCH_BLT) => {
+            let dst = args.first().copied().unwrap_or(0);
+            let dst_x = args.get(1).copied().unwrap_or(0) as i32;
+            let dst_y = args.get(2).copied().unwrap_or(0) as i32;
+            let width = args.get(3).copied().unwrap_or(0) as i32;
+            let height = args.get(4).copied().unwrap_or(0) as i32;
+            let src = args.get(5).copied().unwrap_or(0);
+            let src_x = args.get(6).copied().unwrap_or(0) as i32;
+            let src_y = args.get(7).copied().unwrap_or(0) as i32;
+            let rop = args.get(8).copied().unwrap_or(0);
+            let last_error = kernel.threads.get_last_error(thread_id);
+            Some(format!(
+                "dst=0x{dst:08x}/dst_rect={dst_x},{dst_y},{width},{height}/src=0x{src:08x}/src_origin={src_x},{src_y}/rop=0x{rop:08x}/ok={result}/last_error={last_error}"
+            ))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_STRETCH_DIBITS)
+        | Some(crate::ce::coredll_ordinals::ORD_SET_DIBITS_TO_DEVICE) => {
+            let hdc = args.first().copied().unwrap_or(0);
+            let bits = args.get(9).copied().unwrap_or(0);
+            let info = args.get(10).copied().unwrap_or(0);
+            let header_size = read_unicorn_u32(uc, info).unwrap_or(0);
+            let width = read_unicorn_u32(uc, info.wrapping_add(4)).unwrap_or(0) as i32;
+            let height = read_unicorn_u32(uc, info.wrapping_add(8)).unwrap_or(0) as i32;
+            let planes_bits = read_unicorn_u32(uc, info.wrapping_add(12)).unwrap_or(0);
+            let last_error = kernel.threads.get_last_error(thread_id);
+            Some(format!(
+                "hdc=0x{hdc:08x}/bits=0x{bits:08x}/info=0x{info:08x}/header={header_size}/width={width}/height={height}/planes={}/bpp={}/result={result}/last_error={last_error}",
+                planes_bits & 0xffff,
+                (planes_bits >> 16) & 0xffff
+            ))
         }
         Some(crate::ce::coredll_ordinals::ORD_CREATE_FILE_W) => {
             let path_ptr = args.first().copied().unwrap_or(0);
@@ -7391,7 +8228,12 @@ fn is_import_milestone(
     }
     matches!(
         ordinal,
-        Some(crate::ce::coredll_ordinals::ORD_GET_MODULE_FILE_NAME_W)
+        Some(crate::ce::coredll_ordinals::ORD_LOAD_LIBRARY_W)
+            | Some(crate::ce::coredll_ordinals::ORD_LOAD_LIBRARY_EX_W)
+            | Some(crate::ce::coredll_ordinals::ORD_GET_PROC_ADDRESS_W)
+            | Some(crate::ce::coredll_ordinals::ORD_GET_PROC_ADDRESS_A)
+            | Some(crate::ce::coredll_ordinals::ORD_FREE_LIBRARY)
+            | Some(crate::ce::coredll_ordinals::ORD_GET_MODULE_FILE_NAME_W)
             | Some(crate::ce::coredll_ordinals::ORD_FIND_RESOURCE)
             | Some(crate::ce::coredll_ordinals::ORD_FIND_RESOURCE_W)
             | Some(crate::ce::coredll_ordinals::ORD_LOAD_RESOURCE)
@@ -7400,6 +8242,18 @@ fn is_import_milestone(
             | Some(crate::ce::coredll_ordinals::ORD_LOAD_MENU_W)
             | Some(crate::ce::coredll_ordinals::ORD_REGISTER_CLASS_W)
             | Some(crate::ce::coredll_ordinals::ORD_CREATE_WINDOW_EX_W)
+            | Some(crate::ce::coredll_ordinals::ORD_CREATE_MUTEX_W)
+            | Some(crate::ce::coredll_ordinals::ORD_RELEASE_MUTEX)
+            | Some(crate::ce::coredll_ordinals::ORD_FIND_WINDOW_W)
+            | Some(crate::ce::coredll_ordinals::ORD_GET_DC)
+            | Some(crate::ce::coredll_ordinals::ORD_RELEASE_DC)
+            | Some(crate::ce::coredll_ordinals::ORD_CREATE_COMPATIBLE_DC)
+            | Some(crate::ce::coredll_ordinals::ORD_CREATE_DIBSECTION)
+            | Some(crate::ce::coredll_ordinals::ORD_SELECT_OBJECT)
+            | Some(crate::ce::coredll_ordinals::ORD_BIT_BLT)
+            | Some(crate::ce::coredll_ordinals::ORD_STRETCH_BLT)
+            | Some(crate::ce::coredll_ordinals::ORD_STRETCH_DIBITS)
+            | Some(crate::ce::coredll_ordinals::ORD_SET_DIBITS_TO_DEVICE)
             | Some(crate::ce::coredll_ordinals::ORD_WSPRINTF_W)
             | Some(crate::ce::coredll_ordinals::ORD_SWPRINTF)
             | Some(crate::ce::coredll_ordinals::ORD_WVSPRINTF_W)
@@ -7448,7 +8302,7 @@ fn read_unicorn_wide_z<D>(
     String::from_utf16(&units).ok()
 }
 
-#[cfg(all(feature = "unicorn", feature = "trace"))]
+#[cfg(feature = "unicorn")]
 fn read_unicorn_narrow_z<D>(
     uc: &unicorn_engine::Unicorn<'_, D>,
     ptr: u32,
@@ -7516,8 +8370,8 @@ fn write_unicorn_import_records(
         }
         write!(
             f,
-            "/a0=0x{:08x}/a1=0x{:08x}/a2=0x{:08x}/a3=0x{:08x}/sp=0x{:08x}",
-            import.a0, import.a1, import.a2, import.a3, import.sp
+            "/ra=0x{:08x}/a0=0x{:08x}/a1=0x{:08x}/a2=0x{:08x}/a3=0x{:08x}/sp=0x{:08x}",
+            import.ra, import.a0, import.a1, import.a2, import.a3, import.sp
         )?;
         if let Some(result) = import.result {
             write!(f, "/ret=0x{result:08x}")?;
@@ -7648,17 +8502,21 @@ fn mips_trampoline_origin_for_pc(pc: u32, trampoline_jumps: &[MipsTrampolineJump
 }
 
 fn import_count_snapshot(
-    counts: &std::collections::BTreeMap<UnicornImportCountKey, u64>,
+    counts: &std::collections::BTreeMap<UnicornImportCountKey, UnicornImportStats>,
 ) -> Vec<UnicornImportCount> {
-    const IMPORT_COUNT_SNAPSHOT_LIMIT: usize = 16;
+    const IMPORT_COUNT_SNAPSHOT_LIMIT: usize = 256;
 
     let mut counts = counts
         .iter()
-        .map(|(key, count)| UnicornImportCount {
+        .map(|(key, stats)| UnicornImportCount {
             module: key.module.clone(),
             ordinal: key.ordinal,
             name: key.name.clone(),
-            count: *count,
+            count: stats.count,
+            max_a0: stats.max_a0,
+            max_a1: stats.max_a1,
+            max_a2: stats.max_a2,
+            max_a3: stats.max_a3,
         })
         .collect::<Vec<_>>();
     counts.sort_by(|lhs, rhs| {
@@ -8451,6 +9309,41 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn send_message_direct_wndproc_requires_same_thread_context() {
+        assert!(super::should_direct_call_send_message_wndproc(
+            1,
+            0,
+            1,
+            0,
+            0x0001_3570
+        ));
+        assert!(!super::should_direct_call_send_message_wndproc(
+            1,
+            0,
+            2,
+            0,
+            0x0001_3570
+        ));
+        assert!(!super::should_direct_call_send_message_wndproc(
+            1,
+            0,
+            1,
+            0x42,
+            0x0001_3570
+        ));
+        assert!(!super::should_direct_call_send_message_wndproc(
+            1, 0, 1, 0, 0
+        ));
+        assert!(!super::should_direct_call_send_message_wndproc(
+            1,
+            0,
+            1,
+            0,
+            crate::ce::gwe::DEFAULT_WNDPROC
+        ));
+    }
+
+    #[test]
     fn trampoline_scan_skips_halfword_jump_table_data() {
         let mut mapped = vec![0; 0x80];
         write_vec_u32(&mut mapped, 0x10, 0x2c43_0005);
@@ -8478,6 +9371,59 @@ mod unicorn_tests {
         assert!(super::mips_patch_rva_overlaps_data_ranges(0x44, &ranges));
         assert!(super::mips_patch_rva_overlaps_data_ranges(0x48, &ranges));
         assert!(!super::mips_patch_rva_overlaps_data_ranges(0x4c, &ranges));
+    }
+
+    #[test]
+    fn trampoline_scan_finds_halfword_jump_table_after_long_setup() {
+        let mut mapped = vec![0; 0x180];
+        write_vec_u32(&mut mapped, 0x10, 0x2c6b_001d);
+        let setup = 0x118;
+        write_vec_u32(&mut mapped, setup, 0x3c06_0000);
+        write_vec_u32(&mut mapped, setup + 4, 0x24c6_0138);
+        write_vec_u32(&mut mapped, setup + 8, 0x0003_2840);
+        write_vec_u32(&mut mapped, setup + 12, 0x00a6_2821);
+        write_vec_u32(&mut mapped, setup + 16, 0x84a5_0000);
+        write_vec_u32(&mut mapped, setup + 20, 0x00c5_3021);
+        write_vec_u32(&mut mapped, setup + 24, 0x00c0_0008);
+        write_vec_u32(&mut mapped, setup + 28, 0x0000_0000);
+        for index in 0..0x1d {
+            let entry = (0x40 + index * 4) as u16;
+            let offset = 0x138 + index * 2;
+            mapped[offset..offset + 2].copy_from_slice(&entry.to_le_bytes());
+        }
+
+        let ranges =
+            super::mips_halfword_jump_table_ranges(&mapped, 0, 0, mapped.len() as u32, "test")
+                .unwrap();
+
+        assert_eq!(ranges, vec![(0x138, 0x3a)]);
+        assert!(super::mips_patch_rva_overlaps_data_ranges(0x138, &ranges));
+        assert!(super::mips_patch_rva_overlaps_data_ranges(0x170, &ranges));
+        assert!(!super::mips_patch_rva_overlaps_data_ranges(0x174, &ranges));
+    }
+
+    #[test]
+    fn trampoline_scan_skips_byte_jump_table_data() {
+        let mut mapped = vec![0; 0x80];
+        write_vec_u32(&mut mapped, 0x10, 0x2ce6_0006);
+        write_vec_u32(&mut mapped, 0x20, 0x3c05_0000);
+        write_vec_u32(&mut mapped, 0x24, 0x24a5_003c);
+        write_vec_u32(&mut mapped, 0x28, 0x00e5_2021);
+        write_vec_u32(&mut mapped, 0x2c, 0x8084_0000);
+        write_vec_u32(&mut mapped, 0x30, 0x00a4_2821);
+        write_vec_u32(&mut mapped, 0x34, 0x00a0_0008);
+        write_vec_u32(&mut mapped, 0x38, 0x0000_0000);
+        mapped[0x3c..0x42].copy_from_slice(&[0x08, 0x14, 0x20, 0x2c, 0x38, 0x44]);
+
+        let ranges =
+            super::mips_byte_jump_table_ranges(&mapped, 0, 0, mapped.len() as u32, "test").unwrap();
+
+        assert_eq!(ranges, vec![(0x3c, 6)]);
+        assert!(!super::mips_patch_rva_overlaps_data_ranges(0x34, &ranges));
+        assert!(super::mips_patch_rva_overlaps_data_ranges(0x38, &ranges));
+        assert!(super::mips_patch_rva_overlaps_data_ranges(0x3c, &ranges));
+        assert!(super::mips_patch_rva_overlaps_data_ranges(0x40, &ranges));
+        assert!(!super::mips_patch_rva_overlaps_data_ranges(0x44, &ranges));
     }
 
     fn write_u32(uc: &mut Unicorn<'_, ()>, address: u64, value: u32) {

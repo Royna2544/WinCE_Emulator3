@@ -12,8 +12,9 @@ use wince_emulation_v3::{
             ORD_DISPATCH_MESSAGE_W, ORD_DPMUL, ORD_DPTOFP, ORD_DPTOLI, ORD_EVENT_MODIFY, ORD_FPMUL,
             ORD_FPTODP, ORD_FPTOUL, ORD_GET_MESSAGE_W, ORD_INITIALIZE_CRITICAL_SECTION,
             ORD_ISWCTYPE, ORD_LITODP, ORD_LITOFP, ORD_LL_DIV, ORD_LONGJMP, ORD_LTD, ORD_NES,
-            ORD_POST_MESSAGE_W, ORD_POW, ORD_REG_OPEN_KEY_EX_W, ORD_SETJMP, ORD_SQRT, ORD_ULTODP,
-            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE, current_static_export_count,
+            ORD_POST_MESSAGE_W, ORD_POW, ORD_REG_OPEN_KEY_EX_W, ORD_REGISTER_GESTURE, ORD_SETJMP,
+            ORD_SQRT, ORD_ULTODP, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE,
+            current_static_export_count,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::WM_USER,
@@ -30,7 +31,7 @@ use support::{TestGuestMemory, unique_test_root};
 fn coredll_table_reads_full_static_rust_ordinals() -> Result<()> {
     let table = CoredllExportTable::default();
 
-    assert_eq!(table.export_count(), current_static_export_count());
+    assert!(table.export_count() >= current_static_export_count());
     assert_eq!(
         table.resolve_name("CreateFileW").unwrap().ordinal,
         ORD_CREATE_FILE_W
@@ -51,6 +52,10 @@ fn coredll_table_reads_full_static_rust_ordinals() -> Result<()> {
     assert_eq!(table.resolve_name("__ll_div").unwrap().ordinal, ORD_LL_DIV);
     assert_eq!(table.resolve_name("longjmp").unwrap().ordinal, ORD_LONGJMP);
     assert_eq!(table.resolve_name("_setjmp").unwrap().ordinal, ORD_SETJMP);
+    assert_eq!(
+        table.resolve_name("RegisterGesture").unwrap().ordinal,
+        ORD_REGISTER_GESTURE
+    );
     assert_eq!(
         CoredllExportTable::resolve_static_ordinal(ORD_CREATE_FILE_W)
             .unwrap()
@@ -598,8 +603,9 @@ fn coredll_raw_dispatch_has_defined_path_for_every_parsed_ordinal() -> Result<()
             && item.export.name == "LocalAlloc"
     }));
 
+    let ordinals: Vec<_> = table.ordinals().collect();
     let mut covered = 0;
-    for ordinal in table.ordinals() {
+    for ordinal in ordinals.iter().copied() {
         match table.dispatch_raw_ordinal(ordinal, [0x1111_0000, 0x2222_0000]) {
             CoredllDispatch::Stubbed { stub, .. } => {
                 assert_eq!(stub.args, vec![0x1111_0000, 0x2222_0000]);
@@ -640,7 +646,7 @@ fn coredll_raw_dispatch_has_defined_path_for_every_parsed_ordinal() -> Result<()
         }
     }
 
-    assert!(covered >= 1_700);
+    assert_eq!(covered, ordinals.len());
 
     Ok(())
 }

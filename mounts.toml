@@ -9,6 +9,9 @@ host_root = "D:\\INAVI_Emulator\\INAVI"
 total_mbytes = 8192
 free_mbytes = 4096
 writable = true
+removable = true
+system = false
+hidden = false
 
 [[mounts]]
 name = "resident_flash"
@@ -16,6 +19,9 @@ guest_root = "\\ResidentFlash"
 total_mbytes = 2048
 free_mbytes = 1024
 writable = false
+removable = false
+system = false
+hidden = false
 
 [[mounts]]
 name = "windows"
@@ -23,3 +29,6 @@ guest_root = "\\Windows"
 total_mbytes = 2048
 free_mbytes = 1024
 writable = false
+removable = false
+system = true
+hidden = false
