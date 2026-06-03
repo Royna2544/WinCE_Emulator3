@@ -194,13 +194,13 @@
 - Launch-demanded CE 4.2 CRT raw helper bodies now live in `src/ce/crt.rs`,
   with COREDLL keeping ordinal dispatch ownership and delegating the actual
   CRT memory/string routines to that module.
-- CE wide printf handling now preserves the split between Win32 `wsprintfW`/
-  `wvsprintfW` and CRT `swprintf`/`vswprintf`: Win32 `%s` defaults to a wide
-  string, while CRT `%s` defaults to a narrow string and `%ls` forces wide.
-  Focused raw ordinal tests cover both paths. In the real mounted iNavi run,
-  this removed the previous wall-clock burn inside the `0x5946c` values parser;
-  the run reaches idle `GetMessageW @861` again, but the framebuffer dump is
-  still all zero.
+- CE wide printf handling now matches the observed CE/MFC wide-format path:
+  `wsprintfW`, `wvsprintfW`, CRT `swprintf`, and CRT `vswprintf` all treat
+  default `%s` as a wide string, while `%hs` remains the explicit narrow-string
+  form and `%ls` forces wide. Focused raw ordinal tests cover the wide default
+  and narrow override. In the real mounted iNavi run, this fixed the
+  `CString::Format("%s", module_path)` truncation that produced `\res`; the
+  app now opens and repeatedly reads `\SDMMC Disk\INavi\res\values.dat`.
 - The bounded Unicorn launch with SDK `mfcce400.dll` now progresses past the
   previous unmapped-write failures and stops at a null function-pointer call from
   the main image destructor/function-pointer table around `0x0048f9d4`.
@@ -586,6 +586,15 @@
   `FindResourceW(name="#3867", type="#6")` miss, but it still reaches paint
   with `render_surface=0`, `render_enabled=0`, no useful GDI imports beyond
   `BeginPaint`/`EndPaint`, and an all-zero framebuffer.
+- Trace-only resource-root diagnostics around `0x129524`, `0x596b4`,
+  `0x59718`, and `0x1ad94` confirmed the bad `\res\values.dat` path came from
+  COREDLL `vswprintf @1099` formatting a wide module path with `%s` as narrow.
+  After `e52e402`, a scripted mounted monitor run with real `tap 400 240`,
+  `until 0x00058a84 90000 0`, `tracefile imports`, `tracefile render`, and
+  `tracefile files-full` no longer hits the old `0x00058a84` failure. It
+  wall-stops at `pc=0x600972e0` after 90 s with successful `ReadFile` records
+  on `\SDMMC Disk\INavi\res\values.dat`; `target\monitor_resource_fixed.ppm`
+  remains all zero.
 
 ## Current State
 
@@ -736,6 +745,15 @@
   `render_surface_store` milestone appears, so the current gap is the real
   lifecycle path that should call the resize/allocation slot `+0xf4`
   (`0x001033e4`), not missing WM_SIZE dimensions.
+- CE source evidence rejected treating rooted ordinary file opens as
+  EXE-directory-relative: `cnnclpth.h` says CE paths are absolute whether
+  explicitly or implicitly rooted, and FSDMGR `InternalCreateFileW`
+  canonicalizes before resolving the volume. A trace-only `0x59718`/`0x1ad94`
+  readiness diagnostic identified the previous failing lookup text as
+  `\res\values.dat`, and a follow-up formatter trace proved the source string
+  was lost by wide `vswprintf("%s", wide_path)` handling. Do not paper over
+  this by mounting app resources at `\res`; `e52e402` fixes the wide printf
+  semantics and the real run now reads `\SDMMC Disk\INavi\res\values.dat`.
 - The default bootstrap uses `regs.json` as backing storage for the fake CE
   registry API and creates base GWE, timer, audio, and memory-map state.
 - The virtual Win32/CE framework and COREDLL dispatcher are connected to Unicorn
@@ -757,7 +775,10 @@
 
 ## False Leads
 
-- None yet.
+- A process-directory fallback for rooted `CreateFileW` paths was tested and
+  removed before commit. Windows CE loader code does search the current EXE
+  directory for DLL/module names, but ordinary FSDMGR file opens canonicalize
+  the supplied path and resolve it through the mount table/root filesystem.
 
 ## Regressions
 

@@ -18,14 +18,13 @@
   `render_enabled=0`. Next evidence should identify which lifecycle branch
   should call `0x001033e4` and which real CE/window/resource input causes it to
   be skipped.
-- Continue the first resource-readiness gate now that file cursor semantics and
-  CRT `vswprintf` string width are fixed. The previous mounted monitor run no
-  longer burns the wall-clock budget inside `0x5946c`; it reaches
-  `resource_ready_after_59718` at `0x00058a7c`, where `v0=0`, then fails the
-  `0x59718` check and later returns to idle `GetMessageW @861` with an all-zero
-  framebuffer. Disassemble/probe the `0x59718` subcall and its CE/file/resource
-  inputs to determine the real result that should satisfy it. Do not force the
-  readiness result.
+- Continue from the post-resource-read display frontier. The old
+  `\res\values.dat` lookup is fixed: real mounted monitor evidence now shows
+  successful reads from `\SDMMC Disk\INavi\res\values.dat`, and the previous
+  `0x00058a84` readiness failure is no longer hit. The 90 s bounded run still
+  produces an all-zero framebuffer and wall-stops in SDK MFC code, so the next
+  work is to trace the real render lifecycle/GDI/surface path after
+  `values.dat` is loaded.
 - Continue from the new real mounted monitor frontier after raw MIPS/CRT math
   dispatch. A `tap 400 240` + `until 0x00058a04 180000 0` run now clears the
   previous `__litodp @2036`, `__dpmul @2027`, and `sqrt @1060` import traps and

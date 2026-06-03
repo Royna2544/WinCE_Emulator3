@@ -32,6 +32,19 @@ anchors, not app-specific shortcuts.
   - SDK signatures define the low/high file-pointer and high-size output
     pointer shapes mirrored by the raw dispatcher.
 
+- FSDMGR path canonicalization and volume resolution:
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\INC\cnnclpth.h`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\apis.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\pathapi.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\mounttable.cpp`, and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\loader.c`
+  - CE canonicalization treats paths without a leading slash as implicitly
+    absolute, not current-directory relative.
+  - FSDMGR `InternalCreateFileW` canonicalizes before resolving the owning
+    volume through the mount table.
+  - Loader same-directory probing is limited to executable/module loading and
+    should not be copied into ordinary `CreateFileW` path translation.
+
 - Kernel sync/wait:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/KERNEL/syncobj.c`
   and

@@ -157,8 +157,8 @@
     change the all-zero framebuffer. The signed `SetFilePointer` fix moved the
     real monitor probe past the prior non-returning `values.dat` parser path:
     `until 0x000587ec 180000 0` now stops at
-    `resource_ready_after_589dc` with `v0=0`. The active bug is therefore a
-    false first resource-readiness result, not that the subcall never returns.
+    `resource_ready_after_589dc` with `v0=0`; the later wide-printf fix below
+    moves the run past the subsequent resource-root/readiness failure.
     The latest trace decoder update shows the `WM_SIZE` path itself is not
     missing dimensions: the call at `0x0002d1a0` passes `800x480` to render
     object `0x3006b360`, but dispatches vtable slot `+0xf0`
@@ -166,14 +166,15 @@
     (`0x001033e4`). The mounted run still idles at `GetMessageW @861` with an
     all-zero framebuffer, so the active display failure is the skipped real
     lifecycle path into `0x001033e4`, not a need to synthesize pixels.
-    Splitting CRT `vswprintf` from Win32 `wvsprintfW` fixes the observed
-    narrow `%s` parser formatting mismatch: a mounted trace-enabled monitor run
-    with real `tap 400 240` no longer gets stuck before `0x00058a6c` and
-    returns to idle `GetMessageW @861` within the bound. That run still records
-    `resource_ready_after_59718`/`resource_ready_fail_59718` with `v0=0`, and
-    `target\monitor_vswprintf_fix.ppm` remains all zero. The next active
-    failure is therefore the real `0x59718` readiness subcall result, not the
-    previous CRT string-width/parser churn.
+    The `\res\values.dat` resource-root failure is fixed by CE wide printf
+    semantics: COREDLL `vswprintf @1099` must treat default `%s` as a wide
+    string in the MFC `CString::Format("%s", module_path)` path. A mounted
+    trace-enabled monitor run with real `tap 400 240` no longer hits the old
+    `0x00058a84` readiness failure and shows successful repeated `ReadFile`
+    calls from `\SDMMC Disk\INavi\res\values.dat`. The framebuffer is still
+    all zero after the 90 s bounded run, so the active bug remains the missing
+    render/GDI/surface path after resources are loaded, not path translation or
+    a need to mount app resource data at `\res`.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch
