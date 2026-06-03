@@ -56,6 +56,14 @@ enum DesktopRuntime {
     ),
 }
 
+#[derive(Clone)]
+struct MonitorCheckpoint {
+    name: String,
+    cpu: UnicornMips,
+    kernel: CeKernel,
+    framebuffer: VirtualFramebuffer,
+}
+
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -269,6 +277,7 @@ fn run_monitor(
     enqueue_startup_taps(kernel, &args.startup_taps)?;
     println!("  monitor: interactive commands enabled; type `help`");
     let stdin = io::stdin();
+    let mut checkpoints = Vec::<MonitorCheckpoint>::new();
     loop {
         print!("fakece> ");
         io::stdout().flush().map_err(|err| {
@@ -371,6 +380,40 @@ fn run_monitor(
                     println!("  no Unicorn snapshot yet");
                 }
             }
+            "checkpoint" | "save" => {
+                let name = words
+                    .next()
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| format!("#{}", checkpoints.len()));
+                checkpoints.push(MonitorCheckpoint {
+                    name: name.clone(),
+                    cpu: cpu.clone(),
+                    kernel: kernel.clone(),
+                    framebuffer: desktop.framebuffer().clone(),
+                });
+                println!("  checkpoint {} saved as {name}", checkpoints.len() - 1);
+            }
+            "checkpoints" | "saves" => {
+                if checkpoints.is_empty() {
+                    println!("  no checkpoints");
+                } else {
+                    for (index, checkpoint) in checkpoints.iter().enumerate() {
+                        println!("  {index}: {}", checkpoint.name);
+                    }
+                }
+            }
+            "rewind" | "restore" => {
+                let selector = words.next().unwrap_or("#last");
+                let Some(checkpoint) = select_checkpoint(&checkpoints, selector) else {
+                    println!("  no checkpoint matching `{selector}`");
+                    continue;
+                };
+                *cpu = checkpoint.cpu.clone();
+                *kernel = checkpoint.kernel.clone();
+                *desktop.framebuffer_mut() = checkpoint.framebuffer.clone();
+                desktop.present()?;
+                println!("  restored checkpoint {}", checkpoint.name);
+            }
             "quit" | "q" | "exit" => break,
             other => {
                 println!("  unknown monitor command `{other}`; type `help`");
@@ -378,6 +421,22 @@ fn run_monitor(
         }
     }
     Ok(())
+}
+
+fn select_checkpoint<'a>(
+    checkpoints: &'a [MonitorCheckpoint],
+    selector: &str,
+) -> Option<&'a MonitorCheckpoint> {
+    if selector == "#last" || selector == "last" {
+        return checkpoints.last();
+    }
+    if let Ok(index) = selector.parse::<usize>() {
+        return checkpoints.get(index);
+    }
+    checkpoints
+        .iter()
+        .rev()
+        .find(|checkpoint| checkpoint.name == selector)
 }
 
 fn monitor_run_once(
@@ -425,6 +484,9 @@ fn print_monitor_help() {
     println!("  dump [path]                 write framebuffer PPM");
     println!("  present                     present the current framebuffer");
     println!("  regs                        print the last Unicorn snapshot");
+    println!("  checkpoint [name]           save CPU wrapper, CE kernel, and framebuffer");
+    println!("  checkpoints                 list saved checkpoints");
+    println!("  rewind [name|index]         restore a saved checkpoint, default last");
     println!("  quit                        exit the monitor");
     println!("  note: live rewind/restore needs persistent CPU-state snapshots");
 }
