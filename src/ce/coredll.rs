@@ -5339,15 +5339,15 @@ fn set_file_pointer_raw<M: CoredllGuestMemory>(
     let low = raw_arg(args, 1);
     let high_ptr = raw_arg(args, 2);
     let method = raw_arg(args, 3);
-    let high = if high_ptr == 0 {
-        0
+    let distance = if high_ptr == 0 {
+        low as i32 as i64
     } else {
-        match read_guest_u32(kernel, memory, thread_id, high_ptr) {
+        let high = match read_guest_u32(kernel, memory, thread_id, high_ptr) {
             Some(high) => high,
             None => return u32::MAX,
-        }
+        };
+        (((high as u64) << 32) | low as u64) as i64
     };
-    let distance = (((high as u64) << 32) | low as u64) as i64;
     let position = match kernel.set_file_pointer(handle, distance, method) {
         Ok(position) => position as u64,
         Err(_) => {

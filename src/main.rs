@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fmt::Write as FmtWrite,
     fs,
     io::{self, Write},
@@ -757,18 +757,119 @@ fn monitor_trace_text(snapshot: &UnicornDebugSnapshot, selector: &str) -> String
                 &snapshot.inavi_render_milestones,
             );
         }
-        "files" => {
+        "files" | "file-summary" => {
+            push_monitor_file_summary(
+                &mut out,
+                &snapshot.recent_file_open_ops,
+                &snapshot.recent_file_ops,
+            );
+        }
+        "files-full" | "file-full" => {
             push_monitor_records(&mut out, "file opens", &snapshot.recent_file_open_ops);
             push_monitor_records(&mut out, "file ops", &snapshot.recent_file_ops);
         }
         other => {
             let _ = writeln!(
                 &mut out,
-                "  unknown trace kind `{other}`; use all/imports/counts/calls/code/blocks/messages/wndproc/render/files"
+                "  unknown trace kind `{other}`; use all/imports/counts/calls/code/blocks/messages/wndproc/render/files/files-full"
             );
         }
     }
     out
+}
+
+fn push_monitor_file_summary(
+    out: &mut String,
+    open_records: &[wince_emulation_v3::ce::kernel::FileTraceRecord],
+    records: &[wince_emulation_v3::ce::kernel::FileTraceRecord],
+) {
+    if open_records.is_empty() && records.is_empty() {
+        let _ = writeln!(out, "  file summary: none");
+        return;
+    }
+
+    let _ = writeln!(out, "  file opens:");
+    if open_records.is_empty() {
+        let _ = writeln!(out, "    none");
+    } else {
+        for record in open_records {
+            let path = record.path.as_deref().unwrap_or("<unknown>");
+            let handle = record
+                .handle
+                .map(|handle| format!("0x{handle:08x}"))
+                .unwrap_or_else(|| "-".to_owned());
+            let result = record
+                .result
+                .map(|result| format!("0x{result:08x}"))
+                .unwrap_or_else(|| "-".to_owned());
+            let detail = record.preview.as_deref().unwrap_or("");
+            let _ = writeln!(
+                out,
+                "    {} handle={} result={} {}",
+                record.op, handle, result, path
+            );
+            if !detail.is_empty() {
+                let _ = writeln!(out, "      {detail}");
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct FileSummary {
+        count: usize,
+        requested: u64,
+        transferred: u64,
+        last_position: Option<u64>,
+        last_preview: Option<String>,
+        last_error: Option<String>,
+    }
+
+    let mut summaries: BTreeMap<(String, &'static str), FileSummary> = BTreeMap::new();
+    for record in records {
+        if record.op.ends_with("Arg") || record.op == "CreateFileW" || record.op == "FindFirstFileW"
+        {
+            continue;
+        }
+        let key = (
+            record
+                .path
+                .clone()
+                .unwrap_or_else(|| "<unknown>".to_owned()),
+            record.op,
+        );
+        let summary = summaries.entry(key).or_default();
+        summary.count += 1;
+        summary.requested += u64::from(record.requested.unwrap_or(0));
+        summary.transferred += u64::from(record.transferred.unwrap_or(0));
+        summary.last_position = record.position;
+        summary.last_preview = record.preview.clone();
+        summary.last_error = record.error.clone();
+    }
+
+    let _ = writeln!(out, "  file activity:");
+    if summaries.is_empty() {
+        let _ = writeln!(out, "    none");
+    } else {
+        for ((path, op), summary) in summaries {
+            let last_position = summary
+                .last_position
+                .map(|position| position.to_string())
+                .unwrap_or_else(|| "-".to_owned());
+            let last_preview = summary.last_preview.unwrap_or_default();
+            let last_error = summary.last_error.unwrap_or_default();
+            let _ = writeln!(
+                out,
+                "    {op} count={} requested={} transferred={} last_pos={} {}",
+                summary.count, summary.requested, summary.transferred, last_position, path
+            );
+            if !last_preview.is_empty() {
+                let _ = writeln!(out, "      {last_preview}");
+            }
+            if !last_error.is_empty() {
+                let _ = writeln!(out, "      error={last_error}");
+            }
+        }
+    }
 }
 
 fn push_monitor_records<T: std::fmt::Debug>(out: &mut String, label: &str, records: &[T]) {

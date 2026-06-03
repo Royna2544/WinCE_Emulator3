@@ -1200,6 +1200,35 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
     assert_eq!(memory.read_u32(count_ptr)?, 8);
     assert_eq!(memory.read_bytes(read_buffer, 8), b"raw-file");
 
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_FILE_POINTER,
+            [file, 0xffff_fffc, 0, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(4),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_READ_FILE,
+            [file, read_buffer, 4, count_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(count_ptr)?, 4);
+    assert_eq!(memory.read_bytes(read_buffer, 4), b"file");
+
     let find_pattern_ptr = 0x1_5000;
     let find_data_ptr = 0x1_6000;
     memory.map_words(find_data_ptr, 11);

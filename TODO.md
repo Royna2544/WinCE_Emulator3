@@ -15,6 +15,13 @@
   `0x0010518c`, which returns immediately because `render_surface=0` and
   `render_enabled=0`. Next evidence should identify the branch/input state that
   skips the allocation block around `0x00104878..0x00104954`.
+- Continue the first resource-readiness gate now that the file cursor semantics
+  are fixed. The previous `0x589dc` subcall no longer burns the whole wall
+  budget in `values.dat`; a real mounted monitor run hits
+  `resource_ready_after_589dc` at `0x000587ec` with `v0=0`. Disassemble/probe
+  the `0x589dc` internal checks (`0x59414`, `0x59430`, `0x594f8`,
+  `0x5946c`, `0x594c8`, `0x59718`, etc.) and determine which real CE/file/
+  resource result makes it fail. Do not force the readiness result.
 - Continue the post-time iNavi path from the new wall-clock diagnostic frontier.
   The latest mounted run now gets past the earlier export-index
   `GetPaletteEntries` trap via real palette/DC state, preserves SDK CRT

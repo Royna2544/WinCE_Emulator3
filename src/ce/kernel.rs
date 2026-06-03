@@ -307,6 +307,14 @@ impl CeKernel {
 
     pub fn read_file(&mut self, handle: u32, requested: u32) -> Result<Vec<u8>> {
         let path = self.path_for_handle(handle);
+        let start_position = match self.handles.get(handle) {
+            Ok(KernelObject::File(file)) => self
+                .files
+                .open_file(file.file_id)
+                .ok()
+                .map(|file| file.cursor() as u64),
+            _ => None,
+        };
         let result = match self.handles.get_mut(handle) {
             Ok(object) => match object {
                 KernelObject::File(file) => self.files.read_file(file.file_id, requested),
@@ -315,14 +323,25 @@ impl CeKernel {
             },
             Err(err) => Err(err),
         };
+        let end_position = match self.handles.get(handle) {
+            Ok(KernelObject::File(file)) => self
+                .files
+                .open_file(file.file_id)
+                .ok()
+                .map(|file| file.cursor() as u64),
+            _ => None,
+        };
         self.push_file_trace(FileTraceRecord {
             op: "ReadFile",
             handle: Some(handle),
             path,
-            preview: None,
+            preview: match (start_position, end_position) {
+                (Some(start), Some(end)) => Some(format!("pos={start}..{end}")),
+                _ => None,
+            },
             requested: Some(requested),
             transferred: result.as_ref().ok().map(|bytes| bytes.len() as u32),
-            position: None,
+            position: start_position,
             result: result.as_ref().ok().map(|_| 1),
             error: result.as_ref().err().map(ToString::to_string),
         });
@@ -455,7 +474,7 @@ impl CeKernel {
             op: "SetFilePointer",
             handle: Some(handle),
             path,
-            preview: None,
+            preview: Some(format!("distance={distance} method={move_method}")),
             requested: Some(move_method),
             transferred: None,
             position: result.as_ref().ok().map(|position| *position as u64),

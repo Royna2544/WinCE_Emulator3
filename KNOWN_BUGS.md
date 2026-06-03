@@ -149,7 +149,11 @@
     `paint_render_call` and render entry `0x0010518c`, then returns
     immediately with `render_surface=0` and `render_enabled=0`. The `RT_STRING`
     block fallback fix removed the observed `#3867/type #6` miss, but did not
-    change the all-zero framebuffer.
+    change the all-zero framebuffer. The signed `SetFilePointer` fix moved the
+    real monitor probe past the prior non-returning `values.dat` parser path:
+    `until 0x000587ec 180000 0` now stops at
+    `resource_ready_after_589dc` with `v0=0`. The active bug is therefore a
+    false first resource-readiness result, not that the subcall never returns.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch

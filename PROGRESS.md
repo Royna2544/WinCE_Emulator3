@@ -689,6 +689,17 @@
   `--verbose`. Scripted monitor startup checks wrote
   `target\monitor_default_startup.log` (compact) and
   `target\monitor_verbose_startup.log` (detailed).
+- Raw `SetFilePointer` now treats `lDistanceToMove` as a signed 32-bit `LONG`
+  when `lpDistanceToMoveHigh == NULL`, matching the Win32/CE API shape instead
+  of converting negative low-word seeks into large positive offsets. Explicit
+  monitor file traces now record read cursor ranges and `trace files` prints a
+  compact activity summary by default; the old raw 512-record dump remains
+  available as `trace files-full`. Focused raw file regression coverage passes,
+  and the real mounted iNavi monitor probe advanced: `until 0x000587ec
+  180000 0` now hits `pc_stop=0x000587ec` with `v0=0` instead of wall-stopping
+  inside the `values.dat` parser. This proves the `0x589dc` readiness subcall
+  now returns; the next frontier is why that first readiness check returns
+  false.
 - Unicorn WNDPROC return handling no longer validates every `WM_PAINT`
   unconditionally. Plain guest WNDPROC returns leave the update region pending;
   `DefWindowProcW` and `CallWindowProcW(DEFAULT)` consume paint through the
