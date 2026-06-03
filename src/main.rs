@@ -1,5 +1,7 @@
 use std::{
     collections::BTreeSet,
+    fmt::Write as FmtWrite,
+    fs,
     io::{self, Write},
     path::{Path, PathBuf},
     time::Duration,
@@ -388,6 +390,27 @@ fn run_monitor(
                 };
                 print_monitor_trace(snapshot, selector);
             }
+            "tracefile" | "trace-file" => {
+                let selector = words.next().ok_or_else(|| {
+                    wince_emulation_v3::Error::InvalidArgument(
+                        "tracefile needs KIND PATH".to_owned(),
+                    )
+                })?;
+                let path = words.next().ok_or_else(|| {
+                    wince_emulation_v3::Error::InvalidArgument(
+                        "tracefile needs KIND PATH".to_owned(),
+                    )
+                })?;
+                let Some(snapshot) = cpu.last_debug_snapshot() else {
+                    println!("  no Unicorn snapshot yet");
+                    continue;
+                };
+                let text = monitor_trace_text(snapshot, selector);
+                fs::write(path, text).map_err(|err| {
+                    wince_emulation_v3::Error::Backend(format!("write tracefile {path}: {err}"))
+                })?;
+                println!("  trace {selector} written to {path}");
+            }
             "map" | "regions" => {
                 println!("  memory regions:");
                 for region in cpu.memory().regions() {
@@ -559,6 +582,7 @@ fn print_monitor_help() {
     println!(
         "  trace [kind]                print detailed trace: all/imports/calls/code/blocks/messages/render"
     );
+    println!("  tracefile KIND PATH         write selected trace detail to a file");
     println!("  map                         list memory regions and mapped static blobs");
     println!("  x ADDRESS [LEN]             hexdump mapped static PE/DLL/trap bytes");
     println!("  disasm ADDRESS [WORDS]      print mapped static MIPS instruction words");
@@ -627,46 +651,69 @@ fn print_monitor_hexdump(base: u32, bytes: &[u8]) {
 }
 
 fn print_monitor_trace(snapshot: &UnicornDebugSnapshot, selector: &str) {
+    print!("{}", monitor_trace_text(snapshot, selector));
+}
+
+fn monitor_trace_text(snapshot: &UnicornDebugSnapshot, selector: &str) -> String {
+    let mut out = String::new();
     match selector {
-        "all" | "full" => println!("  Unicorn detail: {snapshot}"),
-        "summary" | "regs" => println!("  Unicorn stopped: {}", snapshot.summary()),
-        "imports" => print_monitor_records("imports", &snapshot.last_imports),
-        "counts" | "import-counts" => {
-            print_monitor_records("import counts", &snapshot.import_counts)
+        "all" | "full" => {
+            let _ = writeln!(&mut out, "  Unicorn detail: {snapshot}");
         }
-        "calls" => print_monitor_records("calls", &snapshot.last_calls),
-        "code" => print_monitor_records("code", &snapshot.last_code),
-        "blocks" => print_monitor_records("blocks", &snapshot.last_blocks),
-        "messages" | "msgs" => print_monitor_records("messages", &snapshot.last_messages),
+        "summary" | "regs" => {
+            let _ = writeln!(&mut out, "  Unicorn stopped: {}", snapshot.summary());
+        }
+        "imports" => push_monitor_records(&mut out, "imports", &snapshot.last_imports),
+        "counts" | "import-counts" => {
+            push_monitor_records(&mut out, "import counts", &snapshot.import_counts)
+        }
+        "calls" => push_monitor_records(&mut out, "calls", &snapshot.last_calls),
+        "code" => push_monitor_records(&mut out, "code", &snapshot.last_code),
+        "blocks" => push_monitor_records(&mut out, "blocks", &snapshot.last_blocks),
+        "messages" | "msgs" => push_monitor_records(&mut out, "messages", &snapshot.last_messages),
         "wndproc" => {
-            print_monitor_records("wndproc returns", &snapshot.last_wndproc_returns);
-            print_monitor_records("wndproc calls", &snapshot.last_wndproc_call_traces);
+            push_monitor_records(&mut out, "wndproc returns", &snapshot.last_wndproc_returns);
+            push_monitor_records(
+                &mut out,
+                "wndproc calls",
+                &snapshot.last_wndproc_call_traces,
+            );
         }
         "render" => {
-            print_monitor_records("inavi display", &snapshot.last_inavi_display);
-            print_monitor_records("inavi controller", &snapshot.last_inavi_controller);
-            print_monitor_records("inavi render milestones", &snapshot.inavi_render_milestones);
+            push_monitor_records(&mut out, "inavi display", &snapshot.last_inavi_display);
+            push_monitor_records(
+                &mut out,
+                "inavi controller",
+                &snapshot.last_inavi_controller,
+            );
+            push_monitor_records(
+                &mut out,
+                "inavi render milestones",
+                &snapshot.inavi_render_milestones,
+            );
         }
         "files" => {
-            print_monitor_records("file opens", &snapshot.recent_file_open_ops);
-            print_monitor_records("file ops", &snapshot.recent_file_ops);
+            push_monitor_records(&mut out, "file opens", &snapshot.recent_file_open_ops);
+            push_monitor_records(&mut out, "file ops", &snapshot.recent_file_ops);
         }
         other => {
-            println!(
+            let _ = writeln!(
+                &mut out,
                 "  unknown trace kind `{other}`; use all/imports/counts/calls/code/blocks/messages/wndproc/render/files"
             );
         }
     }
+    out
 }
 
-fn print_monitor_records<T: std::fmt::Debug>(label: &str, records: &[T]) {
+fn push_monitor_records<T: std::fmt::Debug>(out: &mut String, label: &str, records: &[T]) {
     if records.is_empty() {
-        println!("  {label}: none");
+        let _ = writeln!(out, "  {label}: none");
         return;
     }
-    println!("  {label}:");
+    let _ = writeln!(out, "  {label}:");
     for (index, record) in records.iter().enumerate() {
-        println!("    {index}: {record:?}");
+        let _ = writeln!(out, "    {index}: {record:?}");
     }
 }
 

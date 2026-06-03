@@ -672,6 +672,11 @@
   `target\monitor_mapped_inspect.log` for `map`/`x`/`disasm` and
   `target\monitor_quiet_default.log` plus `target\monitor_quiet_default.ppm`
   for compact stop output with explicit trace selectors.
+- Monitor `tracefile KIND PATH` writes selected detailed trace rings to disk
+  instead of stdout. A scripted mounted session kept
+  `target\monitor_tracefile.log` compact while writing detailed imports to
+  `target\monitor_trace_imports.txt` and import counts to
+  `target\monitor_trace_counts.txt`.
 - Unicorn WNDPROC return handling no longer validates every `WM_PAINT`
   unconditionally. Plain guest WNDPROC returns leave the update region pending;
   `DefWindowProcW` and `CallWindowProcW(DEFAULT)` consume paint through the
