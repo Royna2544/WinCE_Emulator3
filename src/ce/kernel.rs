@@ -119,9 +119,7 @@ impl CeKernel {
     }
 
     pub fn set_process_module_path(&mut self, path: impl Into<String>) {
-        let path = path.into();
-        self.files.set_root_relative_guest_path(&path);
-        self.process_module_path = path;
+        self.process_module_path = path.into();
     }
 
     pub fn process_module_path(&self) -> &str {

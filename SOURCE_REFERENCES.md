@@ -290,9 +290,11 @@ anchors, not app-specific shortcuts.
   `../WinCE_Emulator_v2/src/coredll_fs.cpp`
   - v2 exposed `SDMMC Disk` as a CE virtual root and mapped the main module
     under `\SDMMC Disk\...` when the host image lived beneath that root.
-  - Root-relative probes under the SDMMC backing were supported, but `\`
-    itself represented the CE namespace and should enumerate mount-point
-    prefixes such as `SDMMC Disk` rather than the host filesystem root.
+  - v2 supported root-relative probes under the SDMMC backing, but CE file opens
+    do not get an EXE-directory fallback. v3 now keeps `\` as the CE namespace
+    root: it enumerates mount-point prefixes such as `SDMMC Disk`, and an
+    absolute path without a mount prefix no longer probes the process module's
+    backing mount.
 
 - CE process entry / module-name precedent:
   `../WinCE_Emulator_v2/src/main.cpp` and
