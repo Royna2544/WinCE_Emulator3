@@ -694,6 +694,10 @@
   `--verbose`. Scripted monitor startup checks wrote
   `target\monitor_default_startup.log` (compact) and
   `target\monitor_verbose_startup.log` (detailed).
+- Default startup output is now quiet unless `--verbose` is requested. Normal
+  run/monitor output keeps stop summaries, framebuffer dump paths, explicit
+  monitor command responses, and error diagnostics; PE/layout/DLL/import-count
+  boot context is opt-in through `--verbose`.
 - Raw `SetFilePointer` now treats `lDistanceToMove` as a signed 32-bit `LONG`
   when `lpDistanceToMoveHigh == NULL`, matching the Win32/CE API shape instead
   of converting negative low-word seeks into large positive offsets. Explicit
@@ -714,6 +718,17 @@
   app WNDPROC `0x000135cc`, then falling through `DefWindowProcW @264` without
   `BeginPaint` or GDI/DC imports. The next display frontier is the app
   WNDPROC/message-map branch that decides not to paint.
+- WM_SIZE render diagnostics now annotate the render object/vtable/target and
+  dimensions for the call at `0x0002d1a0`. A mounted monitor run with
+  `tap 400 240`, `until 0x00058a04 180000 0`, `dump`, and
+  `tracefile render` reached idle `GetMessageW @861` with an all-zero dump.
+  The render milestones show `WM_SIZE` passing `800x480` to render object
+  `0x3006b360`, vtable slot `+0xf0` target `0x0011ce60`, while the same object
+  still reports `render_surface=0` and `render_enabled=0`. No
+  `render_resize_entry`, `render_surface_create_call`, or
+  `render_surface_store` milestone appears, so the current gap is the real
+  lifecycle path that should call the resize/allocation slot `+0xf4`
+  (`0x001033e4`), not missing WM_SIZE dimensions.
 - The default bootstrap uses `regs.json` as backing storage for the fake CE
   registry API and creates base GWE, timer, audio, and memory-map state.
 - The virtual Win32/CE framework and COREDLL dispatcher are connected to Unicorn

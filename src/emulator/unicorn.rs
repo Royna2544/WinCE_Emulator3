@@ -5253,14 +5253,20 @@ fn record_inavi_controller_trace<D>(
     };
     let selected_obj = match label {
         "selected_object" | "vtable_load" | "vtable_call" | "vtable_return" => Some(a0),
+        "wm_size_render_vtable" | "wm_size_render_call" => Some(a0),
         _ => None,
     };
     let selected_vtable = match label {
         "vtable_call" => Some(t6),
+        "wm_size_render_call" => Some(read_mips_reg(uc, RegisterMIPS::T7)),
         _ => selected_obj.and_then(|obj| read_unicorn_u32(uc, obj)),
     };
     let selected_target = match label {
         "vtable_call" => Some(t4),
+        "wm_size_render_vtable" => {
+            selected_vtable.and_then(|vtable| read_unicorn_u32(uc, vtable.wrapping_add(0xf0)))
+        }
+        "wm_size_render_call" => Some(read_mips_reg(uc, RegisterMIPS::T6)),
         _ => selected_vtable.and_then(|vtable| read_unicorn_u32(uc, vtable)),
     };
     let paint_this = match label {
@@ -5294,7 +5300,9 @@ fn record_inavi_controller_trace<D>(
         | "render_resize_entry"
         | "render_size_entry"
         | "render_full_resize_obj"
-        | "render_full_resize_call" => Some(a0),
+        | "render_full_resize_call"
+        | "wm_size_render_vtable"
+        | "wm_size_render_call" => Some(a0),
         "render_surface_gate"
         | "render_enabled_gate"
         | "render_loop_call"
@@ -5344,12 +5352,18 @@ fn record_inavi_controller_trace<D>(
         .and_then(|addr| read_unicorn_u32(uc, addr))
         .or_else(|| {
             (label == "render_dim_width_check").then_some(read_mips_reg(uc, RegisterMIPS::T7))
+        })
+        .or_else(|| {
+            (label == "wm_size_render_call").then_some(read_mips_reg(uc, RegisterMIPS::A1))
         });
     let render_dim_h = render_dim_ptr
         .and_then(|ptr| ptr.checked_add(render_dim_offset.wrapping_add(4)))
         .and_then(|addr| read_unicorn_u32(uc, addr))
         .or_else(|| {
             (label == "render_dim_height_check").then_some(read_mips_reg(uc, RegisterMIPS::T6))
+        })
+        .or_else(|| {
+            (label == "wm_size_render_call").then_some(read_mips_reg(uc, RegisterMIPS::A2))
         });
     let aux_base = match label {
         "aux_update_loaded_base"
@@ -5508,6 +5522,7 @@ fn record_inavi_controller_trace<D>(
 #[cfg(all(feature = "unicorn", feature = "trace"))]
 fn is_inavi_render_milestone_label(label: &str) -> bool {
     label.starts_with("render_")
+        || label.starts_with("wm_size_")
         || label.starts_with("paint_")
         || label.starts_with("init_dialog_")
         || label.starts_with("app_query_")

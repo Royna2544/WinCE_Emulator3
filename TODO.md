@@ -9,12 +9,15 @@
   GUI success.
 - Continue the iNavi render-surface path with targeted diagnostics around the
   resize/surface allocation gate, not app-state forcing. Confirmed host/tap
-  evidence: `render_size_entry` receives `800x480`, but the path never reaches
+  evidence: `WM_SIZE` passes `800x480` to render object `0x3006b360`, but it
+  calls vtable slot `+0xf0` target `0x0011ce60`; the path never reaches resize
+  slot `+0xf4` target `0x001033e4` or
   `render_surface_create_call`/`render_surface_store` at
-  `0x00104904`/`0x00104910`; `WM_PAINT` later calls render entry
+  `0x00104904`/`0x00104910`. `WM_PAINT` later calls render entry
   `0x0010518c`, which returns immediately because `render_surface=0` and
-  `render_enabled=0`. Next evidence should identify the branch/input state that
-  skips the allocation block around `0x00104878..0x00104954`.
+  `render_enabled=0`. Next evidence should identify which lifecycle branch
+  should call `0x001033e4` and which real CE/window/resource input causes it to
+  be skipped.
 - Continue the first resource-readiness gate now that the file cursor semantics
   are fixed. The previous `0x589dc` subcall no longer burns the whole wall
   budget in `values.dat`; a real mounted monitor run hits

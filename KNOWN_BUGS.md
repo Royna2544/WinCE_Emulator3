@@ -159,6 +159,13 @@
     `until 0x000587ec 180000 0` now stops at
     `resource_ready_after_589dc` with `v0=0`. The active bug is therefore a
     false first resource-readiness result, not that the subcall never returns.
+    The latest trace decoder update shows the `WM_SIZE` path itself is not
+    missing dimensions: the call at `0x0002d1a0` passes `800x480` to render
+    object `0x3006b360`, but dispatches vtable slot `+0xf0`
+    (`0x0011ce60`) instead of the resize/allocation slot `+0xf4`
+    (`0x001033e4`). The mounted run still idles at `GetMessageW @861` with an
+    all-zero framebuffer, so the active display failure is the skipped real
+    lifecycle path into `0x001033e4`, not a need to synthesize pixels.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch
