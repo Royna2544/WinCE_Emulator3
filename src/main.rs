@@ -161,14 +161,6 @@ fn main() -> Result<()> {
             desktop.framebuffer().pixels().len()
         );
         println!("  desktop: {}", desktop.describe());
-    } else {
-        println!(
-            "FakeCE booted: desktop={} framebuffer={}x{} {:?}",
-            desktop.describe(),
-            desktop.framebuffer().width(),
-            desktop.framebuffer().height(),
-            desktop.framebuffer().pixel_format()
-        );
     }
     desktop.present()?;
 
@@ -194,13 +186,6 @@ fn main() -> Result<()> {
                     .map_or(0, |exports| exports.functions.len()),
                 image.base_relocations.len()
             );
-        } else {
-            println!(
-                "  PE: {} base=0x{:08x} entry=0x{:08x}",
-                image.path,
-                image.image_base(),
-                image.entry_point_va()
-            );
         }
         Some(image)
     } else {
@@ -222,11 +207,13 @@ fn main() -> Result<()> {
             }
         }
         cpu.load_pe_image_with_dlls(image, &dll_images)?;
-        println!(
-            "  loader: {} DLL(s), {} import trap(s)",
-            dll_images.len(),
-            cpu.import_traps().len()
-        );
+        if args.verbose {
+            println!(
+                "  loader: {} DLL(s), {} import trap(s)",
+                dll_images.len(),
+                cpu.import_traps().len()
+            );
+        }
     }
 
     if args.run_cpu {
