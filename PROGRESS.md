@@ -595,6 +595,67 @@
   wall-stops at `pc=0x600972e0` after 90 s with successful `ReadFile` records
   on `\SDMMC Disk\INavi\res\values.dat`; `target\monitor_resource_fixed.ppm`
   remains all zero.
+- Host-backed read-only files are now streamed instead of being fully
+  preloaded into `OpenFile` data buffers. The RAM spike was traced to normal
+  app opens of huge map/search files such as `searchdb\united.db` (~1.7 GB)
+  and `image_800x480.db` (~1.09 GB); after the streaming change, bounded
+  mounted host runs stay around 100-150 MB private memory instead of climbing
+  into the multi-GB range.
+- GDI pen state and raw `Polyline`/`LineTo` now write real pixels to the
+  attached framebuffer. The latest host/tap evidence is still sparse, but
+  nonzero: `target\host_directdib_tap_300s.ppm` has 301 red pixels spanning
+  `(0,160)..(300,160)`. This is guest-driven drawing through COREDLL/GDI, not
+  manual app painting, and it is not full GUI success.
+- Raw `StretchDIBits` and `SetDIBitsToDevice` now have a framebuffer-backed
+  `SRCCOPY` path for `DIB_RGB_COLORS` BITMAPINFO data, sharing the existing DIB
+  pixel decoder used by memory-DC `BitBlt`. Focused coverage:
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe`
+  passes 20 tests, including direct DIB framebuffer drawing. Real iNavi host
+  runs have not reached these blit ordinals yet.
+- Latest bounded `--desktop host` runs built with
+  `--features unicorn,trace,win32-desktop` stay memory-stable:
+  120 s no-tap produced 101 red Polyline pixels; 180 s tap produced 301 red
+  Polyline pixels and reached RSImage/PNG resource loading with 11
+  `CreateDIBSection` calls; 300 s tap stayed around 147 MB private memory with
+  77 `CreateDIBSection` calls and 9 `CreateCompatibleDC` calls while loading
+  RSImage PNG chunks. At that point the app still had not reached screen
+  `BitBlt`, `StretchDIBits`, `SetDIBitsToDevice`, `TransparentImage`,
+  `PatBlt`, or full UI framebuffer output.
+- A 420-500 s tapped host-mode sequence moved the current GDI frontier past the
+  first reached `TransparentImage @906` call. `TransparentImage` now supports
+  both source memory-DC to screen/window-HDC drawing and memory-DC to memory-DC
+  composition with COLORREF keying, using selected DIBSection bitmap bits
+  rather than app-specific painting. Focused GDI coverage now passes 23 tests,
+  including `NULL_PEN`, direct DIB framebuffer drawing, screen-HDC
+  `TransparentImage`, and memory-DC `TransparentImage` composition. Real iNavi
+  evidence: `target\host_memdc_transparent_tap_500s_milestones.txt` shows
+  `TransparentImage(dst=0x000a00e0, src=0x000a00f8, 90x64,
+  transparent=0x00ff00ff)` compositing a 90x64 8-bpp top-down source bitmap
+  into a 90x64 16-bpp top-down destination bitmap. The app still has not
+  reached a later screen `BitBlt`, `StretchDIBits`, `SetDIBitsToDevice`,
+  `PatBlt`, or full UI framebuffer output; the framebuffer dump remains the
+  same 301 red Polyline pixels.
+- A longer 900 s tapped host-mode run confirms the RAM spike remains fixed and
+  resource loading is still advancing. `target\host_more_tap_900s.out.log`
+  stops by wall time at `pc=0x60096458`, `ra=0x60010000` with private memory
+  samples rising only to about 155 MB. Import counts reached 317
+  `CreateDIBSection`, 30 `CreateCompatibleDC`, 40 `SelectObject`, 5
+  `Polyline`, and the same single `TransparentImage`; there is still no screen
+  `BitBlt`, `StretchDIBits`, `SetDIBitsToDevice`, `PatBlt`, `AlphaBlend`,
+  `GradientFill`, `DrawText`, or palette-setting presentation path. The latest
+  dump `target\host_more_tap_900s.ppm` is nonblank but still sparse: 401 red
+  pixels from `(0,160)` through `(400,160)`.
+- A 1200 s tapped host-mode rerun with file-summary tracing advanced beyond
+  the prior SDK stop into app/resource code (`pc=0x00b23a5c`,
+  `ra=0x00309cb4`) and still stayed memory-stable at roughly 155 MB private
+  memory. GDI/import counts and the framebuffer remained unchanged from the
+  900 s run: 317 `CreateDIBSection`, 30 `CreateCompatibleDC`, 40
+  `SelectObject`, 5 `Polyline`, 1 `TransparentImage`, and 401 red framebuffer
+  pixels only. File evidence moved forward: the app opened
+  `SDMMC Disk\inavidata\locuspos.bin`, failed to open absent
+  `SDMMC Disk\inavidata\goallocuspos.bin`, then opened
+  `SDMMC Disk\mapdata\resource\displayreshigh.bin` and read 685090 bytes from
+  that 23067871-byte host file before the wall stop.
 
 ## Current State
 
@@ -834,6 +895,34 @@
   `FindWindowW` milestones include decoded wide-string names/titles plus
   last-error/result details, so long resource/PNG runs do not lose the important
   singleton/window imports behind CRT noise.
+- Admin `cargo flamegraph` confirmed startup time was dominated by emulator
+  overhead, not the 2.7 GB file-memory issue. The fixed runtime now uses a
+  shared static COREDLL export table for hot import dispatch/GetProcAddress
+  paths, resolves import trace names directly from ordinal metadata, uses
+  precomputed trampoline origin/stub maps plus page sets in the global Unicorn
+  code hook, and indexes mapped PE/DLL code by page for hook instruction reads.
+  The same 60 s host/tap bounded run moved from `pc=0x001704a4` to
+  `pc=0x003426f0`, reaches real paint/DC/DIB imports and sparse framebuffer
+  pixels (`target\host_mapped_code_index_progress_60s.ppm`: 301 red pixels,
+  `(0,160)..(300,160)`), and stays memory-stable instead of returning to the
+  multi-GB RAM spike. The opt-in `WINCE_EMU_FAST_START=1` path remains broken:
+  it immediately reaches the thread-exit stub with no import counts, so do not
+  enable it by default.
+- The next flamegraph-guided startup fix removed the hottest
+  `map_kernel_memory_allocations` cost. `MemorySystem` now exposes heap/virtual
+  generation counters and the heap high-water mark, while Unicorn maps only
+  heap spillover beyond the initially mapped 16 MiB arena and refreshes virtual
+  mappings only when virtual state changes. A 30 s mounted host/tap run now
+  reaches the old 60 s sparse-pixel frontier:
+  `target\after_heap_mapper_30s.ppm` has the same 301 red pixels from
+  `(0,160)..(300,160)`, while the stop advances to `pc=0x00339d9c` with
+  `heap_live=7348/22215084B`, `ReadFile=15559`, and `CreateDIBSection=71`.
+  The new 60 s run stops at `pc=0x0030f3c8`, `ra=0x002fd4cc`,
+  `heap_live=7504/23541185B`, with `ReadFile=24712`,
+  `CreateDIBSection=147`, and region churn visible (`CreateRectRgn=3866`,
+  `CombineRgn=3863`, `DeleteObject=3865`). The framebuffer is still only the
+  301-pixel Polyline line, so this is a real startup-speed improvement, not
+  complete UI progress.
 
 ## False Leads
 

@@ -35,10 +35,17 @@ fn is_stock_font(handle: u32) -> bool {
     )
 }
 
-fn is_stock_drawable(handle: u32) -> bool {
+fn is_stock_brush(handle: u32) -> bool {
     matches!(
         stock_object_index(handle),
-        Some(WHITE_BRUSH..=NULL_BRUSH | WHITE_PEN..=NULL_PEN | DC_BRUSH | DC_PEN)
+        Some(WHITE_BRUSH..=NULL_BRUSH | DC_BRUSH)
+    )
+}
+
+fn is_stock_pen(handle: u32) -> bool {
+    matches!(
+        stock_object_index(handle),
+        Some(WHITE_PEN..=NULL_PEN | DC_PEN)
     )
 }
 
@@ -145,7 +152,9 @@ pub struct DcState {
     pub selected_bitmap: u32,
     pub selected_font: u32,
     pub selected_brush: u32,
+    pub selected_pen: u32,
     pub selected_palette: u32,
+    pub current_pos: crate::ce::gwe::Point,
     pub bk_color: u32,
     pub bk_mode: i32,
     pub text_color: u32,
@@ -159,7 +168,9 @@ impl Default for DcState {
             selected_bitmap: 0,
             selected_font: 0,
             selected_brush: 0,
+            selected_pen: 0,
             selected_palette: 0,
+            current_pos: crate::ce::gwe::Point { x: 0, y: 0 },
             bk_color: 0x00ff_ffff,
             bk_mode: 2,
             text_color: 0,
@@ -610,9 +621,8 @@ impl ResourceSystem {
         }
         let is_font = self.fonts.contains_key(&object) || is_stock_font(object);
         let is_bitmap = self.bitmaps.contains_key(&object);
-        let is_drawable = self.brushes.contains_key(&object)
-            || self.pens.contains_key(&object)
-            || is_stock_drawable(object);
+        let is_brush = self.brushes.contains_key(&object) || is_stock_brush(object);
+        let is_pen = self.pens.contains_key(&object) || is_stock_pen(object);
         let state = self.dc_states.entry(hdc).or_default();
         if is_font {
             let previous = state.selected_font;
@@ -624,7 +634,12 @@ impl ResourceSystem {
             state.selected_bitmap = object;
             state.selected_object = object;
             Some(previous)
-        } else if is_drawable {
+        } else if is_pen {
+            let previous = state.selected_pen;
+            state.selected_pen = object;
+            state.selected_object = object;
+            Some(previous)
+        } else if is_brush {
             let previous = state.selected_brush;
             state.selected_brush = object;
             state.selected_object = object;
@@ -639,6 +654,31 @@ impl ResourceSystem {
             .get(&hdc)
             .map(|state| state.selected_bitmap)
             .filter(|bitmap| *bitmap != 0)
+    }
+
+    pub fn selected_pen(&self, hdc: u32) -> Option<u32> {
+        self.dc_states
+            .get(&hdc)
+            .map(|state| state.selected_pen)
+            .filter(|pen| *pen != 0)
+    }
+
+    pub fn current_pos(&self, hdc: u32) -> Option<crate::ce::gwe::Point> {
+        self.dc_states.get(&hdc).map(|state| state.current_pos)
+    }
+
+    pub fn move_to(
+        &mut self,
+        hdc: u32,
+        point: crate::ce::gwe::Point,
+    ) -> Option<crate::ce::gwe::Point> {
+        if hdc == 0 {
+            return None;
+        }
+        let state = self.dc_states.entry(hdc).or_default();
+        let previous = state.current_pos;
+        state.current_pos = point;
+        Some(previous)
     }
 
     pub fn is_memory_dc(&self, hdc: u32) -> bool {

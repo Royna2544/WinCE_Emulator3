@@ -16,10 +16,10 @@ use wince_emulation_v3::{
             ORD_OPERATOR_DELETE_ARRAY, ORD_OPERATOR_NEW, ORD_OPERATOR_NEW_ARRAY, ORD_RAND,
             ORD_READ_FILE, ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_VALUE_W,
             ORD_REG_ENUM_VALUE_W, ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W,
-            ORD_SET_FILE_POINTER, ORD_SPRINTF, ORD_SRAND, ORD_STRCPY, ORD_STRTOK, ORD_SWPRINTF,
-            ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSWPRINTF, ORD_WCSDUP, ORD_WCSICMP,
-            ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSRCHR, ORD_WFOPEN, ORD_WIDE_CHAR_TO_MULTI_BYTE,
-            ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
+            ORD_SET_FILE_POINTER, ORD_SPRINTF, ORD_SRAND, ORD_STRCPY, ORD_STRTOK, ORD_STRTOUL,
+            ORD_SWPRINTF, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSWPRINTF, ORD_WCSDUP,
+            ORD_WCSICMP, ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSRCHR, ORD_WCSSTR, ORD_WFOPEN,
+            ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         kernel::CeKernel,
@@ -140,6 +140,36 @@ fn coredll_raw_wsprintf_w_formats_mfc_class_names() -> Result<()> {
         }
     ));
     assert_eq!(memory.read_wide_z(dest, 128), "Afx:00010000:0");
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_swprintf_formats_zero_padded_integer_widths() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let dest = 0x1_0000;
+    let format = 0x1_0200;
+    memory.map_halfwords(dest, 128);
+    memory.map_halfwords(format, 64);
+    memory.write_wide_z(format, r"Sky\%03d:%04X:%5u");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SWPRINTF,
+            [dest, format, 1, 0x2a, 7],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(18),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(dest, 128), r"Sky\001:002A:    7");
     Ok(())
 }
 
@@ -703,6 +733,173 @@ fn coredll_raw_wcsrchr_keeps_match_before_unmapped_tail() -> Result<()> {
         other => panic!("wcsrchr did not return a pointer: {other:?}"),
     };
     assert_eq!(slash, string);
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_wcsstr_finds_wide_substrings() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let haystack = 0x1_0000;
+    let needle = 0x1_0100;
+    let empty = 0x1_0200;
+    let absent = 0x1_0300;
+    memory.map_halfwords(haystack, 32);
+    memory.map_halfwords(needle, 16);
+    memory.map_halfwords(empty, 1);
+    memory.map_halfwords(absent, 16);
+    memory.write_wide_z(haystack, r"\SDMMC Disk\INavi\res");
+    memory.write_wide_z(needle, "INavi");
+    memory.write_halfword(empty, 0);
+    memory.write_wide_z(absent, "Windows");
+
+    let found = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_WCSSTR,
+        [haystack, needle],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("wcsstr did not return a pointer: {other:?}"),
+    };
+    assert_eq!(memory.read_wide_z(found, 16), "INavi\\res");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WCSSTR,
+            [haystack, empty],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } if ptr == haystack
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WCSSTR,
+            [haystack, absent],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_wcsstr_keeps_match_before_unmapped_tail() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let haystack = 0x1_0000;
+    let needle = 0x1_0100;
+    memory.map_halfwords(haystack, 4);
+    memory.map_halfwords(needle, 4);
+    memory.write_wide_z(haystack, "abc");
+    memory.write_wide_z(needle, "abc");
+
+    let found = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_WCSSTR,
+        [haystack, needle],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("wcsstr did not return a pointer: {other:?}"),
+    };
+    assert_eq!(found, haystack);
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_strtoul_parses_base_prefixes_and_endptr() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let input = 0x1_0000;
+    let endptr = 0x1_0100;
+    memory.map_bytes(input, 16);
+    memory.map_words(endptr, 1);
+    memory.write_bytes(input, b"  0x2aZ\0");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_STRTOUL,
+            [input, endptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(42),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(endptr)?, input + 6);
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_strtoul_honors_explicit_base_and_negative_wrap() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let hex = 0x1_0000;
+    let negative = 0x1_0100;
+    memory.map_bytes(hex, 8);
+    memory.map_bytes(negative, 8);
+    memory.write_bytes(hex, b"ff00;\0");
+    memory.write_bytes(negative, b"-1,\0");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_STRTOUL,
+            [hex, 0, 16],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0xff00),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_STRTOUL,
+            [negative, 0, 10],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(u32::MAX),
+            ..
+        }
+    ));
     Ok(())
 }
 

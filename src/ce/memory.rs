@@ -30,6 +30,8 @@ pub struct MemorySystem {
     next_heap: u32,
     next_heap_ptr: u32,
     next_virtual_ptr: u32,
+    heap_generation: u64,
+    virtual_generation: u64,
     heaps: BTreeMap<u32, Heap>,
     allocations: BTreeMap<u32, MemoryAllocation>,
     virtual_allocations: BTreeMap<u32, VirtualAllocation>,
@@ -89,6 +91,8 @@ impl Default for MemorySystem {
             next_heap: PROCESS_HEAP_HANDLE + 0x1000,
             next_heap_ptr: HEAP_PTR_BASE,
             next_virtual_ptr: VIRTUAL_PTR_BASE,
+            heap_generation: 0,
+            virtual_generation: 0,
             heaps,
             allocations: BTreeMap::new(),
             virtual_allocations: BTreeMap::new(),
@@ -164,6 +168,7 @@ impl MemorySystem {
                 destroyed: false,
             },
         );
+        self.bump_heap_generation();
         Some(handle)
     }
 
@@ -180,6 +185,7 @@ impl MemorySystem {
         item.destroyed = true;
         self.allocations
             .retain(|_, allocation| allocation.heap != heap);
+        self.bump_heap_generation();
         true
     }
 
@@ -201,6 +207,7 @@ impl MemorySystem {
                 zeroed: flags & HEAP_ZERO_MEMORY != 0,
             },
         );
+        self.bump_heap_generation();
         Some(ptr)
     }
 
@@ -237,6 +244,7 @@ impl MemorySystem {
             allocation.requested_size = bytes;
             allocation.actual_size = actual_size;
             allocation.zeroed |= flags & HEAP_ZERO_MEMORY != 0;
+            self.bump_heap_generation();
             return Some(Reallocation {
                 ptr,
                 old_ptr: ptr,
@@ -260,6 +268,7 @@ impl MemorySystem {
                 zeroed: allocation.zeroed || flags & HEAP_ZERO_MEMORY != 0,
             },
         );
+        self.bump_heap_generation();
         Some(Reallocation {
             ptr: new_ptr,
             old_ptr: ptr,
@@ -273,7 +282,15 @@ impl MemorySystem {
         if flags & !HEAP_NO_SERIALIZE != 0 || ptr < POINTER_FLOOR || !self.is_live_heap(heap) {
             return false;
         }
-        matches!(self.allocations.remove(&ptr), Some(allocation) if allocation.heap == heap)
+        let Some(allocation) = self.allocations.remove(&ptr) else {
+            return false;
+        };
+        if allocation.heap != heap {
+            self.allocations.insert(ptr, allocation);
+            return false;
+        }
+        self.bump_heap_generation();
+        true
     }
 
     pub fn heap_size(&self, heap: u32, flags: u32, ptr: u32) -> Option<u32> {
@@ -322,6 +339,7 @@ impl MemorySystem {
                 initial_bytes: Vec::new(),
             },
         );
+        self.bump_virtual_generation();
         Some(base)
     }
 
@@ -330,12 +348,19 @@ impl MemorySystem {
             return false;
         };
         allocation.initial_bytes = bytes;
+        self.bump_virtual_generation();
         true
     }
 
     pub fn virtual_free(&mut self, address: u32, size: u32, free_type: u32) -> bool {
         match free_type {
-            MEM_RELEASE => size == 0 && self.virtual_allocations.remove(&address).is_some(),
+            MEM_RELEASE => {
+                if size != 0 || self.virtual_allocations.remove(&address).is_none() {
+                    return false;
+                }
+                self.bump_virtual_generation();
+                true
+            }
             MEM_DECOMMIT => self
                 .virtual_allocations
                 .get(&address)
@@ -358,6 +383,18 @@ impl MemorySystem {
 
     pub fn virtual_allocations(&self) -> impl Iterator<Item = &VirtualAllocation> {
         self.virtual_allocations.values()
+    }
+
+    pub fn heap_high_water_mark(&self) -> u32 {
+        self.next_heap_ptr
+    }
+
+    pub fn heap_generation(&self) -> u64 {
+        self.heap_generation
+    }
+
+    pub fn virtual_generation(&self) -> u64 {
+        self.virtual_generation
     }
 
     pub fn contains_allocated_range(&self, ptr: u32, size: u32) -> bool {
@@ -397,6 +434,14 @@ impl MemorySystem {
             let other_end = allocation.base.saturating_add(allocation.size);
             base < other_end && end > allocation.base
         })
+    }
+
+    fn bump_heap_generation(&mut self) {
+        self.heap_generation = self.heap_generation.wrapping_add(1);
+    }
+
+    fn bump_virtual_generation(&mut self) {
+        self.virtual_generation = self.virtual_generation.wrapping_add(1);
     }
 }
 

@@ -2,6 +2,30 @@
 
 ## Immediate
 
+- Continue from the latest stable host-mode UI frontier. Current
+  `--desktop host --tap 400,240` evidence no longer has the multi-GB RAM spike
+  and produces real but sparse framebuffer pixels through guest `Polyline`
+  (`target\host_mapped_code_index_progress_60s.ppm`: 301 red pixels from
+  `(0,160)..(300,160)`). Flamegraph-driven startup fixes removed per-import
+  COREDLL export-table rebuilding, replaced hot trampoline scans with lookup
+  maps/page sets, and indexed mapped code by page for the global Unicorn hook.
+  The same 60 s host/tap run moved from the old `pc=0x001704a4` frontier to
+  app code at `pc=0x003426f0`, reaches `BeginPaint`, `EndPaint`, `GetDC`,
+  `ReleaseDC`, `CreateDIBSection`, `SelectObject`, and `Polyline`, and stays
+  memory-stable with no multi-GB spike. The app still has no later screen `BitBlt`,
+  `StretchDIBits`, `SetDIBitsToDevice`, `PatBlt`, `AlphaBlend`,
+  `GradientFill`, `DrawText`, or palette-setting presentation call. Next
+  evidence should determine whether it eventually presents a composed memory
+  bitmap, or whether a missing CE resource/window/timer/device result keeps it
+  in resource loading. Do not fake-present DIBSections just because their bits
+  are populated.
+- Keep the new direct-DIB framebuffer path honest. `StretchDIBits` and
+  `SetDIBitsToDevice` now draw `SRCCOPY` `DIB_RGB_COLORS` BITMAPINFO data in
+  focused tests, but real iNavi traces have not reached those ordinals yet.
+  `TransparentImage` now handles the reached memory-DC composition shape. Extend
+  only as real traces demand: likely next GDI work includes palette tables for
+  8-bpp DIBs, broader ROPs, screen presentation blits, and text/shape paths if
+  they appear in import counts.
 - Continue from the post-PNG singleton/already-running exit frontier. Current
   mounted trace evidence gets through RSImage stream reads and PNG decode, then
   returns at `0x0030f384` and exits through the app singleton routine at

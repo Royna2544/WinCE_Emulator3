@@ -158,15 +158,16 @@ impl ImportTrapTable {
                 let Some(ordinal) = trap.ordinal else {
                     return None;
                 };
-                let table = CoredllExportTable::default();
-                dispatch_return_to_registers(table.dispatch_raw_ordinal_with_framebuffer(
-                    kernel,
-                    memory,
-                    framebuffer,
-                    thread_id,
-                    ordinal,
-                    args,
-                ))?
+                dispatch_return_to_registers(
+                    CoredllExportTable::static_ordinals().dispatch_raw_ordinal_with_framebuffer(
+                        kernel,
+                        memory,
+                        framebuffer,
+                        thread_id,
+                        ordinal,
+                        args,
+                    ),
+                )?
             }
             ImportModuleKind::CommonControls
             | ImportModuleKind::Winsock

@@ -92,6 +92,7 @@ returns through the emulator's empty-queue `GetMessageW @861` diagnostic after
 MFC idle UI update handling. There are now virtual framebuffer, presenter, and
 desktop boundaries, and the first solid `FillRect` path can draw into the
 attached framebuffer. The mounted run now gets past the earlier
-`GetSystemTime @25` trap and can stop through the wall-clock limiter, but the
-current snapshot is still in startup CRT/import activity and the framebuffer
-dump remains blank. This remains a useful frontier, not a completed GUI launch.
+`GetSystemTime @25` trap and can stop through the wall-clock limiter. Current
+host-mode runs are no longer blank: by a 60 s wall-clock stop they reach real
+paint/DC/DIB imports and sparse guest `Polyline` pixels in the framebuffer.
+This remains a useful frontier, not a completed GUI launch.

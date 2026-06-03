@@ -10,6 +10,28 @@
     can now draw into it when guest code reaches a window/screen HDC, but the
     target launch currently stops before useful drawing/blit output. This is
     not GUI success.
+    Newer host-mode runs do produce sparse real pixels through guest GDI
+    `Polyline` (`target\host_mapped_code_index_progress_60s.ppm` has 301 red
+    pixels from `(0,160)..(300,160)`), so the framebuffer is no longer
+    strictly all-zero.
+    It is still not useful GUI output: the app is currently spending bounded
+    host/tap time in RSImage/PNG resource loading and DIB creation without
+    reaching a screen blit/presentation ordinal.
+  - Latest evidence: flamegraph-driven startup fixes removed per-import
+    COREDLL export-table rebuilding, hot linear trampoline scans, and linear
+    mapped-blob instruction lookup from the hottest paths. The same mounted
+    `--desktop host --tap 400,240 --cpu-wall-clock-limit-ms 60000` run moved
+    from the old `pc=0x001704a4` 60 s frontier to app code at
+    `pc=0x003426f0`, `ra=0x002fd5e8`, while heap live stayed around
+    7,254 allocations / 21.5 MB and process private memory remained in the
+    normal ~100-150 MB range rather than the earlier multi-GB spike. The import
+    counts now include real paint/DC/DIB work by 60 s (`BeginPaint`,
+    `EndPaint`, `GetDC`, `ReleaseDC`, `CreateDIBSection`, `SelectObject`,
+    `Polyline`), but still no later screen `BitBlt`, `StretchDIBits`,
+    `SetDIBitsToDevice`, `PatBlt`, `AlphaBlend`, `GradientFill`, `DrawText`,
+    or palette-setting presentation path. The latest dump is sparse rather
+    than blank: `target\host_mapped_code_index_progress_60s.ppm` has 301 red
+    pixels from `(0,160)` through `(300,160)`.
   - Evidence: latest bounded run with `--features unicorn`,
     `--dll-search-dir C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii`,
     and `--mount-config mounts.toml` previously timed out after 30

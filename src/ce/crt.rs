@@ -26,6 +26,50 @@ pub(crate) fn wcsrchr_raw<M: CoredllGuestMemory>(memory: &M, string: u32, needle
     last_match
 }
 
+pub(crate) fn wcsstr_raw<M: CoredllGuestMemory>(memory: &M, haystack: u32, needle: u32) -> u32 {
+    if haystack == 0 || needle == 0 {
+        return 0;
+    }
+    let Ok(first_needle) = memory.read_u16(needle) else {
+        return 0;
+    };
+    if first_needle == 0 {
+        return haystack;
+    }
+
+    for hay_index in 0..0x8000u32 {
+        let candidate = haystack.wrapping_add(hay_index * 2);
+        let Ok(hay_unit) = memory.read_u16(candidate) else {
+            return 0;
+        };
+        if hay_unit == 0 {
+            return 0;
+        }
+        if hay_unit != first_needle {
+            continue;
+        }
+
+        for match_index in 1..0x8000u32.saturating_sub(hay_index) {
+            let Ok(needle_unit) = memory.read_u16(needle.wrapping_add(match_index * 2)) else {
+                return 0;
+            };
+            if needle_unit == 0 {
+                return candidate;
+            }
+            let Ok(hay_unit) = memory.read_u16(candidate.wrapping_add(match_index * 2)) else {
+                return 0;
+            };
+            if hay_unit != needle_unit {
+                break;
+            }
+            if hay_unit == 0 {
+                return 0;
+            }
+        }
+    }
+    0
+}
+
 pub(crate) fn wcsdup_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -505,6 +549,41 @@ pub(crate) fn atoi_raw<M: CoredllGuestMemory>(memory: &M, text_ptr: u32) -> i32 
         return 0;
     };
     parse_decimal_prefix(text.trim_start())
+}
+
+pub(crate) fn strtoul_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    text_ptr: u32,
+    end_ptr: u32,
+    base: u32,
+) -> u32 {
+    if text_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(text) = read_narrow_z(memory, text_ptr, 4096) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let parsed = parse_unsigned_prefix(&text, base);
+    if end_ptr != 0
+        && memory
+            .write_u32(end_ptr, text_ptr.wrapping_add(parsed.consumed as u32))
+            .is_err()
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    parsed.value
 }
 
 pub(crate) fn fopen_raw<M: CoredllGuestMemory>(
@@ -1038,6 +1117,94 @@ fn parse_decimal_prefix(text: &str) -> i32 {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ParsedUnsigned {
+    value: u32,
+    consumed: usize,
+}
+
+fn parse_unsigned_prefix(text: &str, requested_base: u32) -> ParsedUnsigned {
+    let bytes = text.as_bytes();
+    let mut index = 0usize;
+    while bytes.get(index).is_some_and(u8::is_ascii_whitespace) {
+        index += 1;
+    }
+    let number_start = index;
+    let negative = match bytes.get(index) {
+        Some(b'-') => {
+            index += 1;
+            true
+        }
+        Some(b'+') => {
+            index += 1;
+            false
+        }
+        _ => false,
+    };
+
+    let mut base = requested_base;
+    if base != 0 && !(2..=36).contains(&base) {
+        return ParsedUnsigned {
+            value: 0,
+            consumed: number_start,
+        };
+    }
+    if base == 0 {
+        if bytes.get(index) == Some(&b'0')
+            && matches!(bytes.get(index + 1), Some(b'x' | b'X'))
+            && bytes
+                .get(index + 2)
+                .and_then(|byte| (*byte as char).to_digit(16))
+                .is_some()
+        {
+            base = 16;
+            index += 2;
+        } else if bytes.get(index) == Some(&b'0') {
+            base = 8;
+        } else {
+            base = 10;
+        }
+    } else if base == 16
+        && bytes.get(index) == Some(&b'0')
+        && matches!(bytes.get(index + 1), Some(b'x' | b'X'))
+        && bytes
+            .get(index + 2)
+            .and_then(|byte| (*byte as char).to_digit(16))
+            .is_some()
+    {
+        index += 2;
+    }
+
+    let digits_start = index;
+    let mut value = 0u64;
+    while let Some(digit) = bytes
+        .get(index)
+        .and_then(|byte| (*byte as char).to_digit(base))
+    {
+        value = value
+            .saturating_mul(u64::from(base))
+            .saturating_add(u64::from(digit))
+            .min(u64::from(u32::MAX));
+        index += 1;
+    }
+
+    if index == digits_start {
+        return ParsedUnsigned {
+            value: 0,
+            consumed: number_start,
+        };
+    }
+    let value = value as u32;
+    ParsedUnsigned {
+        value: if negative {
+            value.wrapping_neg()
+        } else {
+            value
+        },
+        consumed: index,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WideStringMode {
     WideDefault,
     NarrowDefault,
@@ -1063,12 +1230,41 @@ fn format_wide_printf<M: CoredllGuestMemory>(
             continue;
         }
 
-        while matches!(
-            chars.peek(),
-            Some('0'..='9' | '-' | '+' | '#' | ' ' | '.' | '*')
-        ) {
-            if chars.next() == Some('*') {
+        let mut zero_pad = false;
+        let mut left_align = false;
+        while matches!(chars.peek(), Some('0' | '-' | '+' | '#' | ' ')) {
+            match chars.next() {
+                Some('0') => zero_pad = true,
+                Some('-') => left_align = true,
+                _ => {}
+            }
+        }
+        let mut width = 0usize;
+        if chars.peek() == Some(&'*') {
+            chars.next();
+            let raw_width = args.get(arg_index).copied().unwrap_or(0) as i32;
+            arg_index = arg_index.saturating_add(1);
+            if raw_width < 0 {
+                left_align = true;
+                width = raw_width.unsigned_abs() as usize;
+            } else {
+                width = raw_width as usize;
+            }
+        } else {
+            while let Some(digit) = chars.peek().and_then(|ch| ch.to_digit(10)) {
+                chars.next();
+                width = width.saturating_mul(10).saturating_add(digit as usize);
+            }
+        }
+        if chars.peek() == Some(&'.') {
+            chars.next();
+            if chars.peek() == Some(&'*') {
+                chars.next();
                 arg_index = arg_index.saturating_add(1);
+            } else {
+                while chars.peek().is_some_and(|ch| ch.is_ascii_digit()) {
+                    chars.next();
+                }
             }
         }
 
@@ -1104,10 +1300,28 @@ fn format_wide_printf<M: CoredllGuestMemory>(
         arg_index = arg_index.saturating_add(1);
         match spec {
             'p' => output.push_str(&format!("{value:08x}")),
-            'x' => output.push_str(&format!("{value:x}")),
-            'X' => output.push_str(&format!("{value:X}")),
-            'u' => output.push_str(&value.to_string()),
-            'd' | 'i' => output.push_str(&(value as i32).to_string()),
+            'x' => push_padded(
+                &mut output,
+                format!("{value:x}"),
+                width,
+                zero_pad,
+                left_align,
+            ),
+            'X' => push_padded(
+                &mut output,
+                format!("{value:X}"),
+                width,
+                zero_pad,
+                left_align,
+            ),
+            'u' => push_padded(&mut output, value.to_string(), width, zero_pad, left_align),
+            'd' | 'i' => push_padded(
+                &mut output,
+                (value as i32).to_string(),
+                width,
+                zero_pad,
+                left_align,
+            ),
             'c' | 'C' => {
                 if let Some(ch) = char::from_u32(value & 0xffff) {
                     output.push(ch);
@@ -1146,6 +1360,32 @@ fn format_wide_printf<M: CoredllGuestMemory>(
         }
     }
     output
+}
+
+fn push_padded(output: &mut String, text: String, width: usize, zero_pad: bool, left_align: bool) {
+    let len = text.chars().count();
+    if width <= len {
+        output.push_str(&text);
+        return;
+    }
+
+    let pad_len = width - len;
+    if left_align {
+        output.push_str(&text);
+        output.extend(std::iter::repeat_n(' ', pad_len));
+    } else if zero_pad {
+        if let Some(sign @ ('-' | '+')) = text.chars().next() {
+            output.push(sign);
+            output.extend(std::iter::repeat_n('0', pad_len));
+            output.push_str(&text[sign.len_utf8()..]);
+        } else {
+            output.extend(std::iter::repeat_n('0', pad_len));
+            output.push_str(&text);
+        }
+    } else {
+        output.extend(std::iter::repeat_n(' ', pad_len));
+        output.push_str(&text);
+    }
 }
 
 #[cfg(test)]

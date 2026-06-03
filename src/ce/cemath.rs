@@ -19,6 +19,11 @@ pub enum CeMathCall {
         lhs: f64,
         rhs: f64,
     },
+    BinaryF32 {
+        op: CeMathBinaryF32,
+        lhs: f32,
+        rhs: f32,
+    },
     Frexp(f64),
     Ldexp {
         value: f64,
@@ -136,6 +141,11 @@ pub enum CeMathBinaryF64 {
     Pow,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CeMathBinaryF32 {
+    Fmod,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum CeMathValue {
     I32(i32),
@@ -173,6 +183,9 @@ impl CeMath {
             CeMathCall::UnaryF64 { op, value } => CeMathValue::F64(eval_unary_f64(op, value)),
             CeMathCall::BinaryF64 { op, lhs, rhs } => {
                 CeMathValue::F64(eval_binary_f64(op, lhs, rhs))
+            }
+            CeMathCall::BinaryF32 { op, lhs, rhs } => {
+                CeMathValue::F32(eval_binary_f32(op, lhs, rhs))
             }
             CeMathCall::Frexp(value) => {
                 let (fraction, exp) = frexp(value);
@@ -241,6 +254,7 @@ impl CeMathCall {
             Self::Ldiv { .. } => "ldiv",
             Self::UnaryF64 { op, .. } => op.export_name(),
             Self::BinaryF64 { op, .. } => op.export_name(),
+            Self::BinaryF32 { op, .. } => op.export_name(),
             Self::Frexp(_) => "frexp",
             Self::Ldexp { .. } => "ldexp",
             Self::Modf(_) => "modf",
@@ -309,6 +323,14 @@ impl CeMathBinaryF64 {
     }
 }
 
+impl CeMathBinaryF32 {
+    fn export_name(self) -> &'static str {
+        match self {
+            Self::Fmod => "fmodf",
+        }
+    }
+}
+
 fn eval_unary_f64(op: CeMathUnaryF64, value: f64) -> f64 {
     match op {
         CeMathUnaryF64::Acos => value.acos(),
@@ -335,6 +357,12 @@ fn eval_binary_f64(op: CeMathBinaryF64, lhs: f64, rhs: f64) -> f64 {
         CeMathBinaryF64::Atan2 => lhs.atan2(rhs),
         CeMathBinaryF64::Fmod => lhs % rhs,
         CeMathBinaryF64::Pow => lhs.powf(rhs),
+    }
+}
+
+fn eval_binary_f32(op: CeMathBinaryF32, lhs: f32, rhs: f32) -> f32 {
+    match op {
+        CeMathBinaryF32::Fmod => lhs % rhs,
     }
 }
 
@@ -400,6 +428,14 @@ mod tests {
                 rhs: 8.0,
             }),
             CeMathValue::F64(256.0)
+        );
+        assert_eq!(
+            math.eval(CeMathCall::BinaryF32 {
+                op: CeMathBinaryF32::Fmod,
+                lhs: 17.5,
+                rhs: 5.0,
+            }),
+            CeMathValue::F32(2.5)
         );
     }
 

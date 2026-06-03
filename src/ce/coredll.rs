@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::OnceLock};
 
 use crate::{
     ce::{
@@ -6,7 +6,7 @@ use crate::{
             MMSYSERR_BADDEVICEID, MMSYSERR_INVALHANDLE, MMSYSERR_NOERROR, MmResult,
             WAVERR_BADFORMAT, WaveBuffer, WaveFormat, WaveOutCallback,
         },
-        cemath::{CeMathBinaryF64, CeMathCall, CeMathUnaryF64, CeMathValue},
+        cemath::{CeMathBinaryF32, CeMathBinaryF64, CeMathCall, CeMathUnaryF64, CeMathValue},
         coredll_ordinals::{self, *},
         crt,
         devices::DeviceIoControlResult,
@@ -385,6 +385,11 @@ impl CoredllExportTable {
             by_name: BTreeMap::new(),
             by_ordinal: BTreeMap::new(),
         }
+    }
+
+    pub fn static_ordinals() -> &'static Self {
+        static TABLE: OnceLock<CoredllExportTable> = OnceLock::new();
+        TABLE.get_or_init(Self::from_static_ordinals)
     }
 
     pub fn from_static_ordinals() -> Self {
@@ -1416,6 +1421,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_FABS => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Fabs)),
         ORD_FLOOR => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Floor)),
         ORD_FMOD => Some(raw_binary_f64(kernel, args, CeMathBinaryF64::Fmod)),
+        ORD_FMODF => Some(raw_binary_f32(kernel, args, CeMathBinaryF32::Fmod)),
         ORD_LOG => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Log)),
         ORD_LOG10 => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Log10)),
         ORD_POW => Some(raw_binary_f64(kernel, args, CeMathBinaryF64::Pow)),
@@ -1639,6 +1645,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
+        ORD_WCSSTR => Some(CoredllValue::Handle(crt::wcsstr_raw(
+            memory,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
         ORD_ISWCTYPE => Some(CoredllValue::U32(iswctype_raw(
             raw_arg(args, 0),
             raw_arg(args, 1),
@@ -1751,6 +1762,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
+        ))),
+        ORD_STRTOUL => Some(CoredllValue::U32(crt::strtoul_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
         ))),
         ORD_WSPRINTF_W => Some(CoredllValue::U32(crt::wsprintf_w_raw(
             kernel,
@@ -2321,10 +2340,18 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             args,
         ))),
         ORD_STRETCH_DIBITS => Some(CoredllValue::U32(stretch_dibits_raw(
-            kernel, memory, thread_id, args,
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            args,
         ))),
         ORD_SET_DIBITS_TO_DEVICE => Some(CoredllValue::U32(set_dibits_to_device_raw(
-            kernel, memory, thread_id, args,
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            args,
         ))),
         ORD_SET_DIBCOLOR_TABLE => Some(CoredllValue::U32(set_dib_color_table_raw(
             kernel,
@@ -2348,18 +2375,36 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_PAT_BLT => Some(CoredllValue::Bool(pat_blt_raw(kernel, thread_id, args))),
         ORD_TRANSPARENT_IMAGE => Some(CoredllValue::Bool(transparent_image_raw(
-            kernel, thread_id, args,
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            args,
         ))),
         ORD_SET_BRUSH_ORG_EX => Some(CoredllValue::Bool(set_brush_org_ex_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_RECTANGLE | ORD_ROUND_RECT | ORD_ELLIPSE | ORD_POLYGON | ORD_POLYLINE => {
+        ORD_POLYLINE => Some(CoredllValue::Bool(polyline_raw(
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_i32_arg(args, 2),
+        ))),
+        ORD_RECTANGLE | ORD_ROUND_RECT | ORD_ELLIPSE | ORD_POLYGON => {
             Some(CoredllValue::Bool(gdi_shape_raw(kernel, thread_id, args)))
         }
         ORD_MOVE_TO_EX => Some(CoredllValue::Bool(move_to_ex_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_LINE_TO => Some(CoredllValue::Bool(line_to_raw(kernel, thread_id, args))),
+        ORD_LINE_TO => Some(CoredllValue::Bool(line_to_raw(
+            kernel,
+            framebuffer,
+            thread_id,
+            args,
+        ))),
         ORD_DRAW_TEXT_W => Some(CoredllValue::U32(draw_text_w_raw(
             kernel,
             memory,
@@ -5367,7 +5412,7 @@ fn get_coredll_proc_address_raw(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     }
-    let table = CoredllExportTable::default();
+    let table = CoredllExportTable::static_ordinals();
     let Some(export) = table.resolve_name(name) else {
         kernel
             .threads
@@ -9433,10 +9478,16 @@ fn fill_framebuffer_screen_rect(framebuffer: &mut dyn Framebuffer, rect: Rect, c
 }
 
 fn pixel_bytes_for_colorref(format: PixelFormat, colorref: u32) -> [u8; 4] {
-    let red = (colorref & 0xff) as u8;
-    let green = ((colorref >> 8) & 0xff) as u8;
-    let blue = ((colorref >> 16) & 0xff) as u8;
+    let [red, green, blue] = colorref_rgb(colorref);
     pixel_bytes_for_rgb(format, [red, green, blue])
+}
+
+fn colorref_rgb(colorref: u32) -> [u8; 3] {
+    [
+        (colorref & 0xff) as u8,
+        ((colorref >> 8) & 0xff) as u8,
+        ((colorref >> 16) & 0xff) as u8,
+    ]
 }
 
 fn pixel_bytes_for_rgb(format: PixelFormat, rgb: [u8; 3]) -> [u8; 4] {
@@ -9483,6 +9534,32 @@ fn brush_colorref(kernel: &CeKernel, brush: u32) -> Option<u32> {
         .resources
         .brush(brush)
         .and_then(|brush| brush.pattern_bitmap.is_none().then_some(brush.color))
+}
+
+fn pen_colorref(kernel: &CeKernel, pen: u32) -> Option<u32> {
+    if Some(pen) == stock_object_handle(6) {
+        return Some(rgb(0xff, 0xff, 0xff));
+    }
+    if Some(pen) == stock_object_handle(7) {
+        return Some(rgb(0x00, 0x00, 0x00));
+    }
+    if Some(pen) == stock_object_handle(8) {
+        return None;
+    }
+    if Some(pen) == stock_object_handle(19) {
+        return Some(rgb(0x00, 0x00, 0x00));
+    }
+    kernel
+        .resources
+        .pen(pen)
+        .and_then(|pen| (pen.style != 5).then_some(pen.color))
+}
+
+fn selected_pen_colorref(kernel: &CeKernel, hdc: u32) -> Option<u32> {
+    match kernel.resources.selected_pen(hdc) {
+        Some(pen) => pen_colorref(kernel, pen),
+        None => Some(rgb(0x00, 0x00, 0x00)),
+    }
 }
 
 fn bit_blt_raw<M: CoredllGuestMemory>(
@@ -9620,6 +9697,316 @@ fn blit_selected_bitmap_to_framebuffer<M: CoredllGuestMemory>(
     ));
 }
 
+fn draw_dib_to_framebuffer<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    framebuffer: &mut dyn Framebuffer,
+    hdc: u32,
+    dst_x: i32,
+    dst_y: i32,
+    dst_width: i32,
+    dst_height: i32,
+    src_x: i32,
+    src_y: i32,
+    src_width: i32,
+    src_height: i32,
+    bits_ptr: u32,
+    info_ptr: u32,
+) {
+    let Some((bitmap, bitmap_bytes)) =
+        read_dib_source(kernel, memory, thread_id, bits_ptr, info_ptr)
+    else {
+        return;
+    };
+    draw_bitmap_bytes_to_framebuffer(
+        kernel,
+        framebuffer,
+        hdc,
+        dst_x,
+        dst_y,
+        dst_width,
+        dst_height,
+        src_x,
+        src_y,
+        src_width,
+        src_height,
+        &bitmap,
+        &bitmap_bytes,
+        None,
+    );
+}
+
+fn read_dib_source<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    bits_ptr: u32,
+    info_ptr: u32,
+) -> Option<(crate::ce::resource::BitmapObject, Vec<u8>)> {
+    let header_size = read_guest_u32(kernel, memory, thread_id, info_ptr)?;
+    if !(12..=124).contains(&header_size) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
+    let header_bytes = read_guest_bytes(kernel, memory, thread_id, info_ptr, header_size)?;
+    let Some(header) = parse_dib_header(&header_bytes) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    };
+    if header.width <= 0 || header.height == 0 || header.planes != 1 || header.bits_pixel == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
+    let compression = if header_size >= 40 {
+        read_le_u32(&header_bytes, 16)?
+    } else {
+        BI_RGB
+    };
+    let rgb_masks = dib_rgb_masks(
+        kernel,
+        memory,
+        thread_id,
+        info_ptr,
+        header_size,
+        compression,
+        header.bits_pixel,
+    )?;
+    let height = header.height.checked_abs()?;
+    let byte_count = bitmap_byte_count(header.width, header.height, header.bits_pixel)?;
+    let width_bytes = (byte_count / height as u32) as i32;
+    let bytes = read_guest_bytes(kernel, memory, thread_id, bits_ptr, byte_count)?;
+    Some((
+        crate::ce::resource::BitmapObject {
+            handle: 0,
+            width: header.width,
+            height,
+            top_down: header.height < 0,
+            width_bytes,
+            planes: header.planes,
+            bits_pixel: header.bits_pixel,
+            rgb_masks,
+            bits_ptr,
+            bits_owned: false,
+        },
+        bytes,
+    ))
+}
+
+fn draw_bitmap_bytes_to_framebuffer(
+    kernel: &CeKernel,
+    framebuffer: &mut dyn Framebuffer,
+    hdc: u32,
+    dst_x: i32,
+    dst_y: i32,
+    dst_width: i32,
+    dst_height: i32,
+    src_x: i32,
+    src_y: i32,
+    src_width: i32,
+    src_height: i32,
+    bitmap: &crate::ce::resource::BitmapObject,
+    bitmap_bytes: &[u8],
+    transparent_rgb: Option<[u8; 3]>,
+) {
+    if dst_width == 0 || dst_height == 0 || src_width == 0 || src_height == 0 {
+        return;
+    }
+    let Some(hwnd) = hdc_to_hwnd(hdc) else {
+        return;
+    };
+    let Some(client_origin) = kernel.gwe.client_to_screen(hwnd, Point { x: 0, y: 0 }) else {
+        return;
+    };
+    let Some(client_rect) = kernel.gwe.get_client_rect(hwnd) else {
+        return;
+    };
+    let mut dst_rect = Rect {
+        left: dst_x,
+        top: dst_y,
+        right: dst_x.saturating_add(dst_width),
+        bottom: dst_y.saturating_add(dst_height),
+    };
+    dst_rect = intersect_rect_value(normalize_rect(dst_rect), client_rect).unwrap_or_default();
+    if let Some(clip) = kernel
+        .resources
+        .clip_region(hdc)
+        .and_then(|region| kernel.resources.region(region))
+        .map(|region| region.rect)
+    {
+        dst_rect = intersect_rect_value(dst_rect, clip).unwrap_or_default();
+    }
+    if is_rect_empty_value(dst_rect) {
+        return;
+    }
+
+    let info = framebuffer.info();
+    let screen_rect = dst_rect.offset(client_origin.x, client_origin.y);
+    let left = screen_rect.left.max(0).min(info.width as i32);
+    let top = screen_rect.top.max(0).min(info.height as i32);
+    let right = screen_rect.right.max(0).min(info.width as i32);
+    let bottom = screen_rect.bottom.max(0).min(info.height as i32);
+    if right <= left || bottom <= top {
+        return;
+    }
+
+    let dst_width_abs = dst_width.abs().max(1);
+    let dst_height_abs = dst_height.abs().max(1);
+    let src_width_abs = src_width.abs();
+    let src_height_abs = src_height.abs();
+    let bytes_per_pixel = info.format.bytes_per_pixel();
+    let dst_stride = info.stride;
+    let pixels = framebuffer.pixels_mut();
+    for screen_y in top..bottom {
+        let client_y = screen_y - client_origin.y;
+        let dst_rel_y = client_y - dst_y;
+        let source_y = src_y + (dst_rel_y * src_height_abs / dst_height_abs);
+        for screen_x in left..right {
+            let client_x = screen_x - client_origin.x;
+            let dst_rel_x = client_x - dst_x;
+            let source_x = src_x + (dst_rel_x * src_width_abs / dst_width_abs);
+            let Some(rgb) = bitmap_pixel_rgb(bitmap, bitmap_bytes, source_x, source_y) else {
+                continue;
+            };
+            if let Some(transparent) = transparent_rgb
+                && rgb == transparent
+            {
+                continue;
+            }
+            let pixel = pixel_bytes_for_rgb(info.format, rgb);
+            let offset = (screen_y as usize * dst_stride) + (screen_x as usize * bytes_per_pixel);
+            pixels[offset..offset + bytes_per_pixel].copy_from_slice(&pixel[..bytes_per_pixel]);
+        }
+    }
+    framebuffer.mark_dirty(FramebufferRect::new(
+        left as u32,
+        top as u32,
+        (right - left) as u32,
+        (bottom - top) as u32,
+    ));
+}
+
+fn draw_bitmap_bytes_to_bitmap<M: CoredllGuestMemory>(
+    memory: &mut M,
+    dst: &crate::ce::resource::BitmapObject,
+    dst_x: i32,
+    dst_y: i32,
+    dst_width: i32,
+    dst_height: i32,
+    src_x: i32,
+    src_y: i32,
+    src_width: i32,
+    src_height: i32,
+    src: &crate::ce::resource::BitmapObject,
+    src_bytes: &[u8],
+    transparent_rgb: Option<[u8; 3]>,
+) {
+    if dst.bits_ptr == 0
+        || dst.width <= 0
+        || dst.height <= 0
+        || dst.width_bytes <= 0
+        || dst_width == 0
+        || dst_height == 0
+        || src_width == 0
+        || src_height == 0
+    {
+        return;
+    }
+    let left = dst_x.max(0).min(dst.width);
+    let top = dst_y.max(0).min(dst.height);
+    let right = dst_x.saturating_add(dst_width).max(0).min(dst.width);
+    let bottom = dst_y.saturating_add(dst_height).max(0).min(dst.height);
+    if right <= left || bottom <= top {
+        return;
+    }
+    let dst_width_abs = dst_width.abs().max(1);
+    let dst_height_abs = dst_height.abs().max(1);
+    let src_width_abs = src_width.abs();
+    let src_height_abs = src_height.abs();
+    for y in top..bottom {
+        let dst_rel_y = y - dst_y;
+        let source_y = src_y + (dst_rel_y * src_height_abs / dst_height_abs);
+        for x in left..right {
+            let dst_rel_x = x - dst_x;
+            let source_x = src_x + (dst_rel_x * src_width_abs / dst_width_abs);
+            let Some(rgb) = bitmap_pixel_rgb(src, src_bytes, source_x, source_y) else {
+                continue;
+            };
+            if let Some(transparent) = transparent_rgb
+                && rgb == transparent
+            {
+                continue;
+            }
+            let _ = write_bitmap_pixel_rgb(memory, dst, x, y, rgb);
+        }
+    }
+}
+
+fn write_bitmap_pixel_rgb<M: CoredllGuestMemory>(
+    memory: &mut M,
+    bitmap: &crate::ce::resource::BitmapObject,
+    x: i32,
+    y: i32,
+    rgb: [u8; 3],
+) -> Result<()> {
+    if x < 0 || y < 0 || x >= bitmap.width || y >= bitmap.height {
+        return Ok(());
+    }
+    let row = if bitmap.top_down {
+        y
+    } else {
+        bitmap.height - 1 - y
+    } as u32;
+    let x = x as u32;
+    let row_start = row.saturating_mul(bitmap.width_bytes as u32);
+    let addr = match bitmap.bits_pixel {
+        32 => bitmap.bits_ptr.wrapping_add(row_start).wrapping_add(x * 4),
+        24 => bitmap.bits_ptr.wrapping_add(row_start).wrapping_add(x * 3),
+        16 => bitmap.bits_ptr.wrapping_add(row_start).wrapping_add(x * 2),
+        8 => bitmap.bits_ptr.wrapping_add(row_start).wrapping_add(x),
+        _ => return Ok(()),
+    };
+    let [red, green, blue] = rgb;
+    match bitmap.bits_pixel {
+        32 => {
+            if let Some([red_mask, green_mask, blue_mask]) = bitmap.rgb_masks {
+                let Some(raw) = rgb_to_masks(red, green, blue, red_mask, green_mask, blue_mask)
+                else {
+                    return Ok(());
+                };
+                memory.write_bytes(addr, &raw.to_le_bytes())
+            } else {
+                memory.write_bytes(addr, &[blue, green, red, 0xff])
+            }
+        }
+        24 => memory.write_bytes(addr, &[blue, green, red]),
+        16 => {
+            let raw = if let Some([red_mask, green_mask, blue_mask]) = bitmap.rgb_masks {
+                let Some(raw) = rgb_to_masks(red, green, blue, red_mask, green_mask, blue_mask)
+                else {
+                    return Ok(());
+                };
+                raw
+            } else {
+                u32::from(colorref_to_rgb565(red, green, blue))
+            };
+            memory.write_u16(addr, raw as u16)
+        }
+        8 => {
+            let gray =
+                ((u16::from(red) * 30 + u16::from(green) * 59 + u16::from(blue) * 11) / 100) as u8;
+            memory.write_u8(addr, gray)
+        }
+        _ => Ok(()),
+    }
+}
+
 fn bitmap_pixel_rgb(
     bitmap: &crate::ce::resource::BitmapObject,
     bytes: &[u8],
@@ -9694,6 +10081,32 @@ fn component_from_mask(raw: u32, mask: u32) -> Option<u8> {
     Some(((value * 255 + (max / 2)) / max) as u8)
 }
 
+fn component_to_mask(value: u8, mask: u32) -> Option<u32> {
+    if mask == 0 {
+        return None;
+    }
+    let shift = mask.trailing_zeros();
+    let bits = mask.count_ones();
+    let max = (1u32.checked_shl(bits)?).checked_sub(1)?;
+    let scaled = (u32::from(value) * max + 127) / 255;
+    Some((scaled << shift) & mask)
+}
+
+fn rgb_to_masks(
+    red: u8,
+    green: u8,
+    blue: u8,
+    red_mask: u32,
+    green_mask: u32,
+    blue_mask: u32,
+) -> Option<u32> {
+    Some(
+        component_to_mask(red, red_mask)?
+            | component_to_mask(green, green_mask)?
+            | component_to_mask(blue, blue_mask)?,
+    )
+}
+
 fn pat_blt_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
     let dst = raw_arg(args, 0);
     let width = raw_i32_arg(args, 3);
@@ -9708,13 +10121,24 @@ fn pat_blt_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
     true
 }
 
-fn transparent_image_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+fn transparent_image_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
     let dst = raw_arg(args, 0);
+    let dst_x = raw_i32_arg(args, 1);
+    let dst_y = raw_i32_arg(args, 2);
     let dst_width = raw_i32_arg(args, 3);
     let dst_height = raw_i32_arg(args, 4);
     let src = raw_arg(args, 5);
+    let src_x = raw_i32_arg(args, 6);
+    let src_y = raw_i32_arg(args, 7);
     let src_width = raw_i32_arg(args, 8);
     let src_height = raw_i32_arg(args, 9);
+    let transparent_color = raw_arg(args, 10);
     if dst == 0
         || src == 0
         || dst_width <= 0
@@ -9727,6 +10151,57 @@ fn transparent_image_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) ->
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
+    if kernel.resources.is_memory_dc(src)
+        && let Some(src_bitmap_handle) = kernel.resources.selected_bitmap(src)
+        && let Some(src_bitmap) = kernel.resources.bitmap(src_bitmap_handle).cloned()
+        && src_bitmap.bits_ptr != 0
+        && src_bitmap.width > 0
+        && src_bitmap.height > 0
+        && src_bitmap.width_bytes > 0
+    {
+        let byte_count = src_bitmap.width_bytes.saturating_mul(src_bitmap.height) as u32;
+        if let Some(bitmap_bytes) =
+            read_guest_bytes(kernel, memory, thread_id, src_bitmap.bits_ptr, byte_count)
+        {
+            if kernel.resources.is_memory_dc(dst)
+                && let Some(dst_bitmap_handle) = kernel.resources.selected_bitmap(dst)
+                && let Some(dst_bitmap) = kernel.resources.bitmap(dst_bitmap_handle).cloned()
+            {
+                draw_bitmap_bytes_to_bitmap(
+                    memory,
+                    &dst_bitmap,
+                    dst_x,
+                    dst_y,
+                    dst_width,
+                    dst_height,
+                    src_x,
+                    src_y,
+                    src_width,
+                    src_height,
+                    &src_bitmap,
+                    &bitmap_bytes,
+                    Some(colorref_rgb(transparent_color)),
+                );
+            } else if let Some(framebuffer) = framebuffer {
+                draw_bitmap_bytes_to_framebuffer(
+                    kernel,
+                    framebuffer,
+                    dst,
+                    dst_x,
+                    dst_y,
+                    dst_width,
+                    dst_height,
+                    src_x,
+                    src_y,
+                    src_width,
+                    src_height,
+                    &src_bitmap,
+                    &bitmap_bytes,
+                    Some(colorref_rgb(transparent_color)),
+                );
+            }
+        }
+    }
     kernel.threads.set_last_error(thread_id, 0);
     true
 }
@@ -9734,15 +10209,32 @@ fn transparent_image_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) ->
 fn stretch_dibits_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
+    framebuffer: Option<&mut dyn Framebuffer>,
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
     let hdc = raw_arg(args, 0);
+    let dst_x = raw_i32_arg(args, 1);
+    let dst_y = raw_i32_arg(args, 2);
+    let dst_width = raw_i32_arg(args, 3);
     let dst_height = raw_i32_arg(args, 4);
+    let src_x = raw_i32_arg(args, 5);
+    let src_y = raw_i32_arg(args, 6);
+    let src_width = raw_i32_arg(args, 7);
     let src_height = raw_i32_arg(args, 8);
     let bits = raw_arg(args, 9);
     let info = raw_arg(args, 10);
-    if hdc == 0 || dst_height == 0 || src_height == 0 || bits == 0 || info == 0 {
+    let usage = raw_arg(args, 11);
+    let rop = raw_arg(args, 12);
+    if hdc == 0
+        || dst_width == 0
+        || dst_height == 0
+        || src_width == 0
+        || src_height == 0
+        || bits == 0
+        || info == 0
+        || usage != DIB_RGB_COLORS
+    {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -9750,6 +10242,27 @@ fn stretch_dibits_raw<M: CoredllGuestMemory>(
     }
     if read_guest_u32(kernel, memory, thread_id, info).is_none() {
         return 0;
+    }
+    if rop == SRCCOPY
+        && let Some(framebuffer) = framebuffer
+    {
+        draw_dib_to_framebuffer(
+            kernel,
+            memory,
+            thread_id,
+            framebuffer,
+            hdc,
+            dst_x,
+            dst_y,
+            dst_width,
+            dst_height,
+            src_x,
+            src_y,
+            src_width,
+            src_height,
+            bits,
+            info,
+        );
     }
     kernel.threads.set_last_error(thread_id, 0);
     src_height.unsigned_abs()
@@ -9758,14 +10271,30 @@ fn stretch_dibits_raw<M: CoredllGuestMemory>(
 fn set_dibits_to_device_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
+    framebuffer: Option<&mut dyn Framebuffer>,
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
     let hdc = raw_arg(args, 0);
+    let dst_x = raw_i32_arg(args, 1);
+    let dst_y = raw_i32_arg(args, 2);
+    let dst_width = raw_i32_arg(args, 3);
+    let dst_height = raw_i32_arg(args, 4);
+    let src_x = raw_i32_arg(args, 5);
+    let src_y = raw_i32_arg(args, 6);
+    let start_scan = raw_i32_arg(args, 7);
     let lines = raw_arg(args, 8);
     let bits = raw_arg(args, 9);
     let info = raw_arg(args, 10);
-    if hdc == 0 || lines == 0 || bits == 0 || info == 0 {
+    let usage = raw_arg(args, 11);
+    if hdc == 0
+        || dst_width == 0
+        || dst_height == 0
+        || lines == 0
+        || bits == 0
+        || info == 0
+        || usage != DIB_RGB_COLORS
+    {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -9773,6 +10302,25 @@ fn set_dibits_to_device_raw<M: CoredllGuestMemory>(
     }
     if read_guest_u32(kernel, memory, thread_id, info).is_none() {
         return 0;
+    }
+    if let Some(framebuffer) = framebuffer {
+        draw_dib_to_framebuffer(
+            kernel,
+            memory,
+            thread_id,
+            framebuffer,
+            hdc,
+            dst_x,
+            dst_y,
+            dst_width,
+            dst_height,
+            src_x,
+            src_y.saturating_add(start_scan),
+            dst_width,
+            lines as i32,
+            bits,
+            info,
+        );
     }
     kernel.threads.set_last_error(thread_id, 0);
     lines
@@ -9864,6 +10412,150 @@ fn set_brush_org_ex_raw<M: CoredllGuestMemory>(
     true
 }
 
+fn polyline_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    hdc: u32,
+    points_ptr: u32,
+    point_count: i32,
+) -> bool {
+    if hdc == 0 || points_ptr == 0 || point_count <= 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let mut points = Vec::new();
+    for index in 0..point_count as u32 {
+        let Some(point) = read_guest_point(
+            kernel,
+            memory,
+            thread_id,
+            points_ptr.wrapping_add(index * 8),
+        ) else {
+            return false;
+        };
+        points.push(point);
+    }
+    if let Some(framebuffer) = framebuffer
+        && let Some(color) = selected_pen_colorref(kernel, hdc)
+    {
+        draw_polyline_for_hdc(kernel, framebuffer, hdc, &points, color);
+    }
+    if let Some(last) = points.last().copied() {
+        let _ = kernel.resources.move_to(hdc, last);
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn draw_polyline_for_hdc(
+    kernel: &CeKernel,
+    framebuffer: &mut dyn Framebuffer,
+    hdc: u32,
+    points: &[Point],
+    colorref: u32,
+) {
+    let Some(hwnd) = hdc_to_hwnd(hdc) else {
+        return;
+    };
+    let Some(client_origin) = kernel.gwe.client_to_screen(hwnd, Point { x: 0, y: 0 }) else {
+        return;
+    };
+    let Some(client_rect) = kernel.gwe.get_client_rect(hwnd) else {
+        return;
+    };
+    let clip = kernel
+        .resources
+        .clip_region(hdc)
+        .and_then(|region| kernel.resources.region(region))
+        .and_then(|region| intersect_rect_value(client_rect, region.rect))
+        .unwrap_or(client_rect)
+        .offset(client_origin.x, client_origin.y);
+    let screen_points: Vec<Point> = points
+        .iter()
+        .map(|point| Point {
+            x: point.x + client_origin.x,
+            y: point.y + client_origin.y,
+        })
+        .collect();
+    for segment in screen_points.windows(2) {
+        draw_framebuffer_line(framebuffer, segment[0], segment[1], clip, colorref);
+    }
+}
+
+fn draw_framebuffer_line(
+    framebuffer: &mut dyn Framebuffer,
+    start: Point,
+    end: Point,
+    clip: Rect,
+    colorref: u32,
+) {
+    let info = framebuffer.info();
+    let pixel = pixel_bytes_for_colorref(info.format, colorref);
+    let bytes_per_pixel = info.format.bytes_per_pixel();
+    let mut x0 = start.x;
+    let mut y0 = start.y;
+    let x1 = end.x;
+    let y1 = end.y;
+    let dx = (x1 - x0).abs();
+    let sx = if x0 < x1 { 1 } else { -1 };
+    let dy = -(y1 - y0).abs();
+    let sy = if y0 < y1 { 1 } else { -1 };
+    let mut err = dx + dy;
+    let mut dirty: Option<Rect> = None;
+
+    loop {
+        if x0 >= clip.left
+            && x0 < clip.right
+            && y0 >= clip.top
+            && y0 < clip.bottom
+            && x0 >= 0
+            && y0 >= 0
+            && x0 < info.width as i32
+            && y0 < info.height as i32
+        {
+            let offset = y0 as usize * info.stride + x0 as usize * bytes_per_pixel;
+            framebuffer.pixels_mut()[offset..offset + bytes_per_pixel]
+                .copy_from_slice(&pixel[..bytes_per_pixel]);
+            let pixel_rect = Rect {
+                left: x0,
+                top: y0,
+                right: x0 + 1,
+                bottom: y0 + 1,
+            };
+            dirty = Some(
+                dirty
+                    .map(|rect| union_rect_value(rect, pixel_rect))
+                    .unwrap_or(pixel_rect),
+            );
+        }
+        if x0 == x1 && y0 == y1 {
+            break;
+        }
+        let e2 = 2 * err;
+        if e2 >= dy {
+            err += dy;
+            x0 += sx;
+        }
+        if e2 <= dx {
+            err += dx;
+            y0 += sy;
+        }
+    }
+
+    if let Some(rect) = dirty {
+        framebuffer.mark_dirty(FramebufferRect::new(
+            rect.left as u32,
+            rect.top as u32,
+            (rect.right - rect.left) as u32,
+            (rect.bottom - rect.top) as u32,
+        ));
+    }
+}
+
 fn gdi_shape_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
     if raw_arg(args, 0) == 0 {
         kernel
@@ -9882,6 +10574,10 @@ fn move_to_ex_raw<M: CoredllGuestMemory>(
     args: &[u32],
 ) -> bool {
     let hdc = raw_arg(args, 0);
+    let point = Point {
+        x: raw_i32_arg(args, 1),
+        y: raw_i32_arg(args, 2),
+    };
     let out_ptr = raw_arg(args, 3);
     if hdc == 0 {
         kernel
@@ -9889,21 +10585,48 @@ fn move_to_ex_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    if out_ptr != 0 && !write_guest_point(kernel, memory, thread_id, out_ptr, Point { x: 0, y: 0 })
-    {
+    let Some(previous) = kernel.resources.move_to(hdc, point) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    if out_ptr != 0 && !write_guest_point(kernel, memory, thread_id, out_ptr, previous) {
         return false;
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
 }
 
-fn line_to_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
-    if raw_arg(args, 0) == 0 {
+fn line_to_raw(
+    kernel: &mut CeKernel,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let hdc = raw_arg(args, 0);
+    let end = Point {
+        x: raw_i32_arg(args, 1),
+        y: raw_i32_arg(args, 2),
+    };
+    if hdc == 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
+    let Some(start) = kernel.resources.current_pos(hdc) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    if let Some(framebuffer) = framebuffer
+        && let Some(color) = selected_pen_colorref(kernel, hdc)
+    {
+        draw_polyline_for_hdc(kernel, framebuffer, hdc, &[start, end], color);
+    }
+    let _ = kernel.resources.move_to(hdc, end);
     kernel.threads.set_last_error(thread_id, 0);
     true
 }
@@ -10980,6 +11703,14 @@ fn raw_binary_f64(kernel: &CeKernel, args: &[u32], op: CeMathBinaryF64) -> Cored
         op,
         lhs: raw_f64_pair(args, 0, 1),
         rhs: raw_f64_pair(args, 2, 3),
+    }))
+}
+
+fn raw_binary_f32(kernel: &CeKernel, args: &[u32], op: CeMathBinaryF32) -> CoredllValue {
+    CoredllValue::CeMath(kernel.math.eval(CeMathCall::BinaryF32 {
+        op,
+        lhs: raw_f32_arg(args, 0),
+        rhs: raw_f32_arg(args, 1),
     }))
 }
 

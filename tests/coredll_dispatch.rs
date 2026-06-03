@@ -2,15 +2,15 @@ use std::fs;
 use wince_emulation_v3::{
     Result,
     ce::{
-        cemath::{CeMathBinaryF64, CeMathCall, CeMathUnaryF64, CeMathValue},
+        cemath::{CeMathBinaryF32, CeMathBinaryF64, CeMathCall, CeMathUnaryF64, CeMathValue},
         coredll::{
             CoredllCall, CoredllDispatch, CoredllExportTable, CoredllImplementationStatus,
             CoredllStubPolicy, CoredllSubsystem, CoredllValue, EventModifyAction,
         },
         coredll_ordinals::{
             ORD_CLOSE_HANDLE, ORD_CREATE_APISET, ORD_CREATE_FILE_W, ORD_CREATE_WINDOW_EX_W,
-            ORD_DISPATCH_MESSAGE_W, ORD_DPMUL, ORD_DPTOFP, ORD_DPTOLI, ORD_EVENT_MODIFY, ORD_FPMUL,
-            ORD_FPTODP, ORD_FPTOUL, ORD_GET_MESSAGE_W, ORD_INITIALIZE_CRITICAL_SECTION,
+            ORD_DISPATCH_MESSAGE_W, ORD_DPMUL, ORD_DPTOFP, ORD_DPTOLI, ORD_EVENT_MODIFY, ORD_FMODF,
+            ORD_FPMUL, ORD_FPTODP, ORD_FPTOUL, ORD_GET_MESSAGE_W, ORD_INITIALIZE_CRITICAL_SECTION,
             ORD_ISWCTYPE, ORD_LITODP, ORD_LITOFP, ORD_LL_DIV, ORD_LONGJMP, ORD_LTD, ORD_NES,
             ORD_POST_MESSAGE_W, ORD_POW, ORD_REG_OPEN_KEY_EX_W, ORD_REGISTER_GESTURE, ORD_SETJMP,
             ORD_SQRT, ORD_ULTODP, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE,
@@ -95,6 +95,14 @@ fn cemath_evaluates_crt_and_mips_helper_calls() -> Result<()> {
         CeMathValue::F64(2.5)
     );
     assert_eq!(
+        kernel.math.eval(CeMathCall::BinaryF32 {
+            op: CeMathBinaryF32::Fmod,
+            lhs: 17.5,
+            rhs: 5.0,
+        }),
+        CeMathValue::F32(2.5)
+    );
+    assert_eq!(
         kernel.math.eval(CeMathCall::LlDiv { lhs: -21, rhs: 2 }),
         CeMathValue::I64(-10)
     );
@@ -134,6 +142,19 @@ fn coredll_raw_dispatch_routes_mips_soft_float_compare_helpers() -> Result<()> {
             value: CoredllValue::Bool(false),
             ..
         }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FMODF,
+            [17.5_f32.to_bits(), 5.0_f32.to_bits()],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::F32(value)),
+            ..
+        } if value.to_bits() == 2.5_f32.to_bits()
     ));
     memory.write_word(0x2000, 4.0_f32.to_bits());
     assert!(matches!(
@@ -686,6 +707,22 @@ fn coredll_dispatcher_routes_cemath_ordinals() -> Result<()> {
             value: CoredllValue::CeMath(CeMathValue::F64(81.0)),
             ..
         }
+    ));
+
+    assert!(matches!(
+        table.dispatch_by_ordinal(
+            &mut kernel,
+            ORD_FMODF,
+            CoredllCall::CeMath(CeMathCall::BinaryF32 {
+                op: CeMathBinaryF32::Fmod,
+                lhs: 17.5,
+                rhs: 5.0,
+            }),
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::F32(value)),
+            ..
+        } if value.to_bits() == 2.5_f32.to_bits()
     ));
 
     assert!(matches!(
