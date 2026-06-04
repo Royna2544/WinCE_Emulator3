@@ -8,17 +8,21 @@
   `MsgWaitForMultipleObjectsEx` attempts/outcomes, blocked Unicorn waits,
   resumed waits, max wait handle count, and max timeout. `CeKernel` exposes the
   scheduler stats, Unicorn debug snapshots include compact `sched=...`
-  summaries, and `SOURCE_REFERENCES.md`/`TODO.md` now carry the first CE
-  scheduler ledger entry. This is foundational observability/ownership only:
-  guest-visible wait return behavior is intended to remain unchanged, and full
-  waiter queues/context switching remain open. A short mounted host/tap probe
-  wrote `target\scheduler_fidelity_summary.txt`,
-  `target\scheduler_fidelity_files.txt`,
-  `target\scheduler_fidelity_render.txt`,
-  `target\scheduler_fidelity_milestones.txt`, and
-  `target\scheduler_fidelity_probe.ppm`; it stopped at the normal early
-  resource-loading wall-clock frontier before scheduler-visible waits appeared,
-  so it is a regression check rather than UI progress.
+  summaries, and `SOURCE_REFERENCES.md`/`TODO.md` carry the CE scheduler ledger
+  entry. Parked Unicorn `WaitForSingleObject` waits now keep start tick/timeout
+  metadata and resume with `WAIT_TIMEOUT` when the bounded wait expires, while
+  signaled object resumes still acquire the object first and `INFINITE` waits
+  remain untimed. CE6 `WaitForMultipleObjects(TRUE)` remains rejected at the raw
+  API boundary per `NKWaitForMultipleObjects`. Full scheduler-owned waiter
+  queues/context switching remain open. A short mounted host/tap probe after
+  the timeout slice wrote `target\scheduler_timeout_summary.txt`,
+  `target\scheduler_timeout_files.txt`,
+  `target\scheduler_timeout_render.txt`,
+  `target\scheduler_timeout_milestones.txt`, and
+  `target\scheduler_timeout_probe.ppm`; it stopped at the normal 10 s
+  wall-clock frontier (`pc=0x00339da8`, `ra=0x0033a624`) with compact file/RSS
+  counters (`host_read=4219/486039B`, `heap_live=5948/2767663B`) and no render
+  milestones, so it is a regression check rather than UI progress.
 - Window/GWE fidelity planning now has a durable ledger in `TODO.md` with CE
   source anchors, v2 corroboration, port order, fixture gates, and latest iNavi
   evidence. The first concrete window fix changes raw `UpdateWindow` from a
@@ -34,9 +38,10 @@
   not UI success.
 - The same paint/update slice now includes raw `RedrawWindow`: rectangle and
   HRGN invalidation feed the pending update state, repeated invalidations union
-  their rectangles, `RDW_ALLCHILDREN` reaches descendants, `RDW_VALIDATE` clears
-  pending paint, erase state reaches `BeginPaint`, and `RDW_UPDATENOW` forces
-  synchronous `WM_PAINT` through `CeKernel::update_window`. Focused coverage:
+  their rectangles, `RDW_ALLCHILDREN` reaches descendants, `RDW_VALIDATE`
+  validates pending paint, erase state reaches `BeginPaint`, and
+  `RDW_UPDATENOW` forces synchronous `WM_PAINT` through
+  `CeKernel::update_window`. Focused coverage:
   `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
   coredll_raw_redraw_window_invalidates_regions_children_and_updates_now`, plus
   the full raw GWE integration test. A short mounted host/tap regression probe
@@ -45,6 +50,144 @@
   `target\redraw_window_probe.ppm`; it stopped at the expected 10 s wall limit
   with small file/RSS counters (`host_read=4221/499832B`,
   `heap_live=5948/2767663B`) and no render milestones, so it is not UI success.
+- Paint/update validation now preserves remaining dirty bounds instead of
+  clearing the whole window for every rect validation. `ValidateRect(hwnd,
+  rect)` and `RedrawWindow(..., hrgn, RDW_VALIDATE)` subtract representable
+  rectangular update bounds, while `ValidateRect(hwnd, NULL)` still clears the
+  full update state. Focused coverage:
+  `ce::gwe::tests::validate_window_rect_subtracts_representable_update_bounds`
+  and `coredll_raw_validate_rect_preserves_remaining_update_bounds`, plus the
+  full raw GWE integration test. A short mounted host/tap regression probe
+  wrote `target\validate_rect_summary.txt`, `target\validate_rect_files.txt`,
+  `target\validate_rect_render.txt`, `target\validate_rect_milestones.txt`, and
+  `target\validate_rect_probe.ppm`; it stopped at the expected 10 s wall limit
+  with small file/RSS counters (`host_read=4221/495853B`,
+  `heap_live=5948/2767663B`) and no render milestones, so it is not UI success.
+- Raw `GetUpdateRgn` now bridges GWE pending-paint state into existing GDI
+  region objects: no pending update returns `NULLREGION` and clears the output
+  HRGN to an empty rectangle, pending paint copies the update bounds and returns
+  `SIMPLEREGION`, and invalid HWND/HRGN cases return `ERROR_REGION`. Focused
+  coverage: `coredll_raw_get_update_rgn_copies_pending_paint_bounds`, plus the
+  full raw GWE integration test. A short mounted host/tap regression probe
+  wrote `target\get_update_rgn_summary.txt`, `target\get_update_rgn_files.txt`,
+  `target\get_update_rgn_render.txt`, `target\get_update_rgn_milestones.txt`,
+  and `target\get_update_rgn_probe.ppm`; it stopped at the expected 10 s wall
+  limit with small file/RSS counters (`host_read=4221/499832B`,
+  `heap_live=5948/2767663B`) and no render milestones, so it is not UI success.
+- Raw `GetWindowThreadProcessId` now reports stored HWND owner metadata from
+  GWE: it returns the creating thread ID, writes the owner process ID when the
+  caller supplies an output pointer, accepts a null process-output pointer, and
+  rejects destroyed/invalid HWNDs. Focused coverage:
+  `coredll_raw_get_window_thread_process_id_reports_owner_ids`, plus the full
+  raw GWE integration test. A short mounted host/tap regression probe wrote
+  `target\window_owner_ids_summary.txt`, `target\window_owner_ids_files.txt`,
+  `target\window_owner_ids_render.txt`,
+  `target\window_owner_ids_milestones.txt`, and
+  `target\window_owner_ids_probe.ppm`; it stopped at the expected 10 s wall
+  limit with small file/RSS counters (`host_read=4219/486039B`,
+  `heap_live=5948/2767663B`) and no render milestones, so it is not UI success.
+- Raw `IsChild` now uses the virtual HWND tree instead of a generic stub:
+  direct children and descendants return true, self/sibling/invalid/destroyed
+  relationships return false. Focused coverage:
+  `coredll_raw_is_child_checks_descendant_relationships`, plus the full raw GWE
+  integration test. A short mounted host/tap regression probe wrote
+  `target\is_child_summary.txt`, `target\is_child_files.txt`,
+  `target\is_child_render.txt`, `target\is_child_milestones.txt`, and
+  `target\is_child_probe.ppm`; it stopped at the expected 10 s wall limit with
+  small file/RSS counters (`host_read=4235/491369B`,
+  `heap_live=5649/19244201B`) and no render milestones. The short probe did
+  reach later map/device file activity (`mapinfo.bin`, `UID1:`), but this is
+  not UI success.
+- Raw `SendNotifyMessageW` now follows the CE GWE no-wait notification split:
+  sends to windows owned by the caller thread still execute synchronously
+  through `SendMessageW`, while sends to windows on a different thread are
+  queued to the receiver instead of immediately running or destroying the
+  target. Focused coverage:
+  `coredll_raw_send_notify_message_is_async_across_threads`, plus the full raw
+  GWE integration test. A short mounted host/tap regression probe wrote
+  `target\send_notify_summary.txt`, `target\send_notify_files.txt`,
+  `target\send_notify_render.txt`, `target\send_notify_milestones.txt`, and
+  `target\send_notify_probe.ppm`; it stopped at the 10 s wall limit with small
+  file/RSS counters (`host_read=4225/486559B`,
+  `heap_live=5624/2461398B`). The run reached later map/device and window/DC
+  activity (`mapinfo.bin`, repeated `UID1:`, an additional child window, and
+  `GetDC`), but `target\send_notify_render.txt` still reports no render
+  milestones and the framebuffer body has only one nonzero byte, so this is not
+  UI success. Full scheduler-owned cross-thread
+  `SendMessageW`/`SendMessageTimeout` blocking and receiver-context execution
+  remain open.
+- Raw/kernel `DestroyWindow` now routes through the kernel window lifecycle
+  instead of deleting GWE HWND state directly. Virtual windows carry a CE
+  `CWindow::fSentWmDestroy`-style bit, raw/kernel destroy sends `WM_DESTROY`
+  through `SendMessageW` before final cleanup, and the default `WM_CLOSE`
+  shortcut records the same destroy-message observation before deleting the
+  target. Focused coverage extends raw parent/child destroy cleanup and
+  `SendNotifyMessageW(..., WM_CLOSE, ...)` delivery. A bounded mounted host/tap
+  probe wrote `target\destroy_window_lifecycle_summary.txt`,
+  `target\destroy_window_lifecycle_files.txt`,
+  `target\destroy_window_lifecycle_render.txt`,
+  `target\destroy_window_lifecycle_milestones.txt`, and
+  `target\destroy_window_lifecycle_probe.ppm`; it stopped at 10 s with
+  `pc=0x00b2171c`, small file/RSS counters
+  (`host_read=4223/486055B`, `heap_live=5868/2705123B`), reached RSImage DIB
+  creation, but had no render milestones and an all-zero framebuffer body.
+  automatic OS-side `WM_NCDESTROY` synthesis, exact child destroy-message
+  ordering, and guest-WNDPROC receiver-context scheduling remain open, so this
+  is another lifecycle fidelity slice rather than UI success.
+- `WM_NCDESTROY` is now represented as an explicit window lifecycle message
+  when it is actually delivered, matching the CE MFC source where
+  `AfxWndProc` post-processes `WM_DESTROY` by sending `WM_NCDESTROY` itself.
+  GWE windows now track `nc_destroy_message_sent`; raw `SendMessageW` records
+  both `WM_DESTROY` and `WM_NCDESTROY`, and Unicorn direct guest-WNDPROC
+  returns record those lifecycle messages before final destroy cleanup. Focused
+  coverage: `coredll_raw_send_message_records_nc_destroy_lifecycle`, plus the
+  full raw GWE suite. A bounded mounted host/tap probe wrote
+  `target\nc_destroy_lifecycle_summary.txt`,
+  `target\nc_destroy_lifecycle_files.txt`,
+  `target\nc_destroy_lifecycle_render.txt`,
+  `target\nc_destroy_lifecycle_milestones.txt`, and
+  `target\nc_destroy_lifecycle_probe.ppm`; it stopped at 10 s with
+  `pc=0x00b4bc24`, small file/RSS counters
+  (`host_read=4221/495853B`, `heap_live=5948/2767663B`), no render
+  milestones, and an all-zero framebuffer body. Automatic synthesis is not
+  added at the GWE boundary because the CE MFC source explicitly fakes the
+  message in MFC; full child destroy ordering remains open.
+- Raw/kernel parent `DestroyWindow` now delivers `WM_DESTROY` to live
+  descendants before the parent and before final GWE cleanup, with a lightweight
+  lifecycle order counter on virtual windows to prove the child-first sequence
+  in fixtures. Focused coverage extends
+  `coredll_raw_destroy_parent_invalidates_children_and_purges_messages` to a
+  parent/child/grandchild tree and asserts grandchild-before-child-before-parent
+  `WM_DESTROY` observation plus queued-message purge. A bounded mounted
+  host/tap probe wrote `target\child_destroy_lifecycle_summary.txt`,
+  `target\child_destroy_lifecycle_files.txt`,
+  `target\child_destroy_lifecycle_render.txt`,
+  `target\child_destroy_lifecycle_milestones.txt`, and
+  `target\child_destroy_lifecycle_probe.ppm`; it stopped at 10 s with
+  `pc=0x00339c3c`, small file/RSS counters
+  (`host_read=4221/499832B`, `heap_live=5948/2767663B`), no render milestones,
+  and an all-zero framebuffer body. The Unicorn direct guest-WNDPROC
+  `DestroyWindow` callout still sends only the target window's guest
+  `WM_DESTROY` before final cleanup; chaining guest child-WNDPROC destroy
+  callouts remains open.
+- Unicorn direct guest-WNDPROC `DestroyWindow` now follows the same child-first
+  lifecycle model before final root cleanup. The callout planner walks the
+  virtual descendant tree, records default/non-guest `WM_DESTROY` observations,
+  chains guest WNDPROC `WM_DESTROY` callbacks in descendant-before-parent order
+  through the existing return stub, and destroys the root subtree only after the
+  final guest callback returns. Focused coverage:
+  `emulator::unicorn::unicorn_tests::destroy_wndproc_callouts_are_guest_child_first`,
+  plus the full raw GWE suite and full
+  `cargo test --features unicorn,trace,win32-desktop`. A bounded mounted
+  host/tap probe wrote `target\guest_destroy_chain_summary.txt`,
+  `target\guest_destroy_chain_files.txt`,
+  `target\guest_destroy_chain_render.txt`,
+  `target\guest_destroy_chain_milestones.txt`, and
+  `target\guest_destroy_chain_probe.ppm`; it stopped at the 10 s wall limit
+  with `pc=0x600c9aec`, small file/RSS counters
+  (`host_read=4226/500100B`, `heap_live=5620/2459096B`), no render milestones,
+  and an all-zero framebuffer body. This closes the specific guest child
+  destroy-callout gap, not the broader UI/render frontier.
 - Repository started with `RULES.md`, `regs.json`, and `serial_devices.json`.
 - `regs.json` contains the registry snapshot used to seed the CE registry model.
 - `serial_devices.json` contains enabled guest devices including `COM7:`, `COM3:`,

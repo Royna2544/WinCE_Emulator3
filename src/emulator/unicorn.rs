@@ -669,8 +669,18 @@ struct PendingWndProcReturn {
     api_result: Option<u32>,
     dialog_result_hwnd: Option<u32>,
     finalize_destroy: bool,
+    destroy_root_hwnd: Option<u32>,
+    remaining_destroy_callouts: Vec<DestroyWndProcCallout>,
     send_thread_id: Option<u32>,
     send_timeout_result_ptr: Option<u32>,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DestroyWndProcCallout {
+    hwnd: u32,
+    wndproc: u32,
+    class_name: Option<String>,
 }
 
 #[cfg(feature = "unicorn")]
@@ -710,6 +720,8 @@ struct BlockedWaitThread {
     thread_id: u32,
     thread_handle: u32,
     wait_handle: u32,
+    wait_started_ms: u32,
+    timeout_ms: u32,
     regs: [u32; 32],
     return_pc: u32,
 }
@@ -1743,11 +1755,13 @@ impl UnicornMips {
                             },
                         );
                     }
-                    if callout.finalize_destroy {
-                        let time_ms = unsafe { &*kernel_ptr }.timers.tick_count();
+                    if matches!(
+                        callout.msg,
+                        crate::ce::gwe::WM_DESTROY | crate::ce::gwe::WM_NCDESTROY
+                    ) {
                         unsafe { &mut *kernel_ptr }
                             .gwe
-                            .destroy_window(callout.hwnd, time_ms);
+                            .record_destroy_lifecycle_message(callout.hwnd, callout.msg);
                     }
                     record_wndproc_return(
                         &last_wndproc_returns_hook,
@@ -1761,9 +1775,55 @@ impl UnicornMips {
                             return_pc: callout.return_pc,
                             return_pc_trampoline_origin: None,
                             result,
-                            class_name: callout.class_name,
+                            class_name: callout.class_name.clone(),
                         },
                     );
+                    if callout.finalize_destroy && !callout.remaining_destroy_callouts.is_empty() {
+                        let mut remaining = callout.remaining_destroy_callouts;
+                        let next = remaining.remove(0);
+                        let next_hwnd = next.hwnd;
+                        let next_wndproc = next.wndproc;
+                        pending_wndproc_returns_hook
+                            .borrow_mut()
+                            .push(PendingWndProcReturn {
+                                source: callout.source,
+                                hwnd: next_hwnd,
+                                msg: crate::ce::gwe::WM_DESTROY,
+                                wparam: 0,
+                                lparam: 0,
+                                wndproc: next_wndproc,
+                                return_pc: callout.return_pc,
+                                class_name: next.class_name,
+                                api_result: callout.api_result,
+                                dialog_result_hwnd: callout.dialog_result_hwnd,
+                                finalize_destroy: true,
+                                destroy_root_hwnd: callout.destroy_root_hwnd,
+                                remaining_destroy_callouts: remaining,
+                                send_thread_id: None,
+                                send_timeout_result_ptr: None,
+                            });
+                        if write_wndproc_call_registers(
+                            uc,
+                            next_hwnd,
+                            crate::ce::gwe::WM_DESTROY,
+                            0,
+                            0,
+                            next_wndproc,
+                            WNDPROC_RETURN_STUB_ADDR,
+                        ) {
+                            return;
+                        }
+                        let _ = pending_wndproc_returns_hook.borrow_mut().pop();
+                        let _ = uc.emu_stop();
+                        return;
+                    }
+                    if callout.finalize_destroy {
+                        let destroy_root = callout.destroy_root_hwnd.unwrap_or(callout.hwnd);
+                        let time_ms = unsafe { &*kernel_ptr }.timers.tick_count();
+                        unsafe { &mut *kernel_ptr }
+                            .gwe
+                            .destroy_window(destroy_root, time_ms);
+                    }
                     let api_result = callout.api_result.or_else(|| {
                         callout
                             .dialog_result_hwnd
@@ -5082,6 +5142,7 @@ fn try_block_wait_for_single_object<D>(
         return false;
     }
     kernel.record_blocked_single_wait(timeout);
+    let wait_started_ms = kernel.timers.tick_count();
 
     let regs = capture_mips_gprs(uc);
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
@@ -5090,6 +5151,8 @@ fn try_block_wait_for_single_object<D>(
             thread_id,
             thread_handle: callout.thread_handle,
             wait_handle,
+            wait_started_ms,
+            timeout_ms: timeout,
             regs,
             return_pc,
         });
@@ -5113,6 +5176,8 @@ fn try_block_wait_for_single_object<D>(
             thread_id,
             thread_handle,
             wait_handle,
+            wait_started_ms,
+            timeout_ms: timeout,
             regs,
             return_pc,
         });
@@ -5144,12 +5209,14 @@ fn try_resume_blocked_wait<D>(
 
     let ready_index = {
         let blocked_waits = blocked_waits.borrow();
+        let now_ms = kernel.timers.tick_count();
         blocked_waits
             .iter()
             .enumerate()
             .filter(|(_, blocked)| {
                 blocked.thread_id != active_thread_id
-                    && kernel.is_wait_ready(blocked.wait_handle, blocked.thread_id) == Some(true)
+                    && (kernel.is_wait_ready(blocked.wait_handle, blocked.thread_id) == Some(true)
+                        || blocked_wait_timed_out(blocked, now_ms))
             })
             .max_by_key(|(index, blocked)| {
                 (
@@ -5163,11 +5230,15 @@ fn try_resume_blocked_wait<D>(
         return false;
     };
     let blocked = blocked_waits.borrow_mut().remove(index);
-    let wait_result = kernel.wait_for_single_object_without_scheduler_record(
-        blocked.wait_handle,
-        0,
-        blocked.thread_id,
-    );
+    let wait_result = match kernel.is_wait_ready(blocked.wait_handle, blocked.thread_id) {
+        Some(true) => kernel.wait_for_single_object_without_scheduler_record(
+            blocked.wait_handle,
+            0,
+            blocked.thread_id,
+        ),
+        Some(false) => crate::ce::timer::WAIT_TIMEOUT,
+        None => crate::ce::timer::WAIT_FAILED,
+    };
     kernel.record_resumed_single_wait(wait_result);
 
     let mut current = SuspendedGuestThread {
@@ -5192,6 +5263,42 @@ fn try_resume_blocked_wait<D>(
     *current_thread_id.borrow_mut() = blocked.thread_id;
     *running_thread.borrow_mut() = Some((blocked.thread_id, blocked.thread_handle));
     true
+}
+
+#[cfg(feature = "unicorn")]
+fn blocked_wait_timed_out(blocked: &BlockedWaitThread, now_ms: u32) -> bool {
+    blocked.timeout_ms != crate::ce::timer::INFINITE
+        && now_ms.wrapping_sub(blocked.wait_started_ms) >= blocked.timeout_ms
+}
+
+#[cfg(all(test, feature = "unicorn"))]
+mod wait_scheduler_tests {
+    use super::{BlockedWaitThread, blocked_wait_timed_out};
+
+    fn blocked_wait(start: u32, timeout: u32) -> BlockedWaitThread {
+        BlockedWaitThread {
+            thread_id: 1,
+            thread_handle: 0x100,
+            wait_handle: 0x104,
+            wait_started_ms: start,
+            timeout_ms: timeout,
+            regs: [0; 32],
+            return_pc: 0,
+        }
+    }
+
+    #[test]
+    fn blocked_wait_timeout_uses_wrapping_tick_elapsed_time() {
+        let wait = blocked_wait(u32::MAX - 5, 10);
+        assert!(!blocked_wait_timed_out(&wait, 3));
+        assert!(blocked_wait_timed_out(&wait, 4));
+    }
+
+    #[test]
+    fn blocked_wait_timeout_respects_infinite_timeout() {
+        let wait = blocked_wait(10, crate::ce::timer::INFINITE);
+        assert!(!blocked_wait_timed_out(&wait, 10_000));
+    }
 }
 
 #[cfg(feature = "unicorn")]
@@ -7350,6 +7457,7 @@ fn is_display_lifecycle_message(msg: u32) -> bool {
             | crate::ce::gwe::WM_PAINT
             | crate::ce::gwe::WM_SHOWWINDOW
             | crate::ce::gwe::WM_WINDOWPOSCHANGED
+            | crate::ce::gwe::WM_NCDESTROY
             | crate::ce::gwe::WM_COMMAND
             | crate::ce::gwe::WM_TIMER
             | 0x0200
@@ -7443,6 +7551,8 @@ fn try_enter_dispatch_message_callout<D>(
         api_result: None,
         dialog_result_hwnd: None,
         finalize_destroy: false,
+        destroy_root_hwnd: None,
+        remaining_destroy_callouts: Vec::new(),
         send_thread_id: None,
         send_timeout_result_ptr: None,
     });
@@ -7559,6 +7669,8 @@ fn try_enter_send_message_callout<D>(
         api_result: None,
         dialog_result_hwnd: None,
         finalize_destroy: false,
+        destroy_root_hwnd: None,
+        remaining_destroy_callouts: Vec::new(),
         send_thread_id: Some(target_thread_id),
         send_timeout_result_ptr: result_ptr,
     });
@@ -7688,6 +7800,8 @@ fn try_enter_def_dlg_proc_callout<D>(
         api_result: None,
         dialog_result_hwnd: None,
         finalize_destroy: false,
+        destroy_root_hwnd: None,
+        remaining_destroy_callouts: Vec::new(),
         send_thread_id: None,
         send_timeout_result_ptr: None,
     });
@@ -7745,13 +7859,12 @@ fn enter_destroy_window_wm_destroy_callout<D>(
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
-    let Some(window) = kernel.gwe.window(hwnd) else {
+    let Some(mut callouts) = collect_destroy_wndproc_callouts(kernel, hwnd) else {
         return false;
     };
-    let wndproc = window.wndproc;
-    let class_name = window.class_name.clone();
-    if !is_guest_wndproc(wndproc) {
-        let destroyed = kernel.gwe.destroy_window(hwnd, kernel.timers.tick_count());
+    if callouts.is_empty() {
+        let time_ms = kernel.timers.tick_count();
+        let destroyed = kernel.gwe.destroy_window(hwnd, time_ms);
         let result = if api_result == 0 {
             0
         } else {
@@ -7761,45 +7874,105 @@ fn enter_destroy_window_wm_destroy_callout<D>(
         return true;
     }
 
+    let first = callouts.remove(0);
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
     tracing::debug!(
         target: "ce.gwe",
-        hwnd = format_args!("0x{hwnd:08x}"),
-        wndproc = format_args!("0x{wndproc:08x}"),
+        hwnd = format_args!("0x{:08x}", first.hwnd),
+        root = format_args!("0x{hwnd:08x}"),
+        remaining = callouts.len(),
+        wndproc = format_args!("0x{:08x}", first.wndproc),
         ra = format_args!("0x{return_pc:08x}"),
         "DestroyWindow guest WM_DESTROY callout"
     );
 
     pending_returns.borrow_mut().push(PendingWndProcReturn {
         source,
-        hwnd,
+        hwnd: first.hwnd,
         msg: crate::ce::gwe::WM_DESTROY,
         wparam: 0,
         lparam: 0,
-        wndproc,
+        wndproc: first.wndproc,
         return_pc,
-        class_name: Some(class_name),
+        class_name: first.class_name,
         api_result: Some(api_result),
         dialog_result_hwnd: None,
         finalize_destroy: true,
+        destroy_root_hwnd: Some(hwnd),
+        remaining_destroy_callouts: callouts,
         send_thread_id: None,
         send_timeout_result_ptr: None,
     });
-    let writes = [
-        uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
-        uc.reg_write(RegisterMIPS::A1, u64::from(crate::ce::gwe::WM_DESTROY)),
-        uc.reg_write(RegisterMIPS::A2, 0),
-        uc.reg_write(RegisterMIPS::A3, 0),
-        uc.reg_write(RegisterMIPS::RA, u64::from(WNDPROC_RETURN_STUB_ADDR)),
-        uc.reg_write(RegisterMIPS::T9, u64::from(wndproc)),
-        uc.reg_write(RegisterMIPS::PC, u64::from(wndproc)),
-    ];
-    if writes.into_iter().all(|write| write.is_ok()) {
+    if write_wndproc_call_registers(
+        uc,
+        first.hwnd,
+        crate::ce::gwe::WM_DESTROY,
+        0,
+        0,
+        first.wndproc,
+        WNDPROC_RETURN_STUB_ADDR,
+    ) {
         true
     } else {
         let _ = pending_returns.borrow_mut().pop();
         false
     }
+}
+
+#[cfg(feature = "unicorn")]
+fn collect_destroy_wndproc_callouts(
+    kernel: &mut CeKernel,
+    hwnd: u32,
+) -> Option<Vec<DestroyWndProcCallout>> {
+    let targets = kernel.gwe.window_and_descendants(hwnd)?;
+    let mut callouts = Vec::new();
+    for target in targets.into_iter().rev() {
+        let Some(window) = kernel.gwe.window(target) else {
+            continue;
+        };
+        if window.destroyed || window.destroy_message_sent {
+            continue;
+        }
+        let wndproc = window.wndproc;
+        let class_name = Some(window.class_name.clone());
+        if is_guest_wndproc(wndproc) {
+            callouts.push(DestroyWndProcCallout {
+                hwnd: target,
+                wndproc,
+                class_name,
+            });
+        } else {
+            let _ = kernel
+                .gwe
+                .record_destroy_lifecycle_message(target, crate::ce::gwe::WM_DESTROY);
+        }
+    }
+    Some(callouts)
+}
+
+#[cfg(feature = "unicorn")]
+fn write_wndproc_call_registers<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    hwnd: u32,
+    msg: u32,
+    wparam: u32,
+    lparam: u32,
+    wndproc: u32,
+    return_stub: u32,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    [
+        uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(msg)),
+        uc.reg_write(RegisterMIPS::A2, u64::from(wparam)),
+        uc.reg_write(RegisterMIPS::A3, u64::from(lparam)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(return_stub)),
+        uc.reg_write(RegisterMIPS::T9, u64::from(wndproc)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(wndproc)),
+    ]
+    .into_iter()
+    .all(|write| write.is_ok())
 }
 
 #[cfg(feature = "unicorn")]
@@ -7870,6 +8043,8 @@ fn try_enter_is_dialog_message_callout<D>(
         api_result: Some(1),
         dialog_result_hwnd: None,
         finalize_destroy: false,
+        destroy_root_hwnd: None,
+        remaining_destroy_callouts: Vec::new(),
         send_thread_id: None,
         send_timeout_result_ptr: None,
     });
@@ -7943,6 +8118,8 @@ fn try_enter_update_window_callout<D>(
         api_result: Some(1),
         dialog_result_hwnd: None,
         finalize_destroy: false,
+        destroy_root_hwnd: None,
+        remaining_destroy_callouts: Vec::new(),
         send_thread_id: None,
         send_timeout_result_ptr: None,
     });
@@ -8026,6 +8203,8 @@ fn try_enter_dialog_init_callout<D>(
         api_result: is_create.then_some(hwnd),
         dialog_result_hwnd: is_modal.then_some(hwnd),
         finalize_destroy: false,
+        destroy_root_hwnd: None,
+        remaining_destroy_callouts: Vec::new(),
         send_thread_id: None,
         send_timeout_result_ptr: None,
     });
@@ -8213,6 +8392,8 @@ fn try_enter_call_window_proc_callout<D>(
         api_result: None,
         dialog_result_hwnd: None,
         finalize_destroy: false,
+        destroy_root_hwnd: None,
+        remaining_destroy_callouts: Vec::new(),
         send_thread_id: None,
         send_timeout_result_ptr: None,
     });
@@ -9527,6 +9708,7 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
 
 #[cfg(all(test, feature = "unicorn"))]
 mod unicorn_tests {
+    use crate::{ce::gwe::GWL_WNDPROC, ce::kernel::CeKernel, config::RuntimeConfig};
     use unicorn_engine::{
         RegisterMIPS, Unicorn,
         unicorn_const::{Arch, Mode, Prot},
@@ -9570,6 +9752,37 @@ mod unicorn_tests {
         assert_eq!(field(36), 0x1000_0002);
         assert_eq!(field(40), 0x1000_0001);
         assert_eq!(field(44), 0x0000_00a1);
+    }
+
+    #[test]
+    fn destroy_wndproc_callouts_are_guest_child_first() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let thread_id = 1;
+        let parent = kernel.create_window_ex_w(thread_id, "PARENT", "", None, 0, 0, 0);
+        let child = kernel.create_window_ex_w(thread_id, "CHILD", "", Some(parent), 1, 0, 0);
+        let grandchild =
+            kernel.create_window_ex_w(thread_id, "GRANDCHILD", "", Some(child), 2, 0, 0);
+        let default_sibling =
+            kernel.create_window_ex_w(thread_id, "DEFAULT", "", Some(parent), 3, 0, 0);
+        kernel.gwe.set_window_long(parent, GWL_WNDPROC, 0x0010_1000);
+        kernel.gwe.set_window_long(child, GWL_WNDPROC, 0x0010_2000);
+        kernel
+            .gwe
+            .set_window_long(grandchild, GWL_WNDPROC, 0x0010_3000);
+
+        let callouts = super::collect_destroy_wndproc_callouts(&mut kernel, parent).unwrap();
+        let hwnds: Vec<u32> = callouts.iter().map(|callout| callout.hwnd).collect();
+        let wndprocs: Vec<u32> = callouts.iter().map(|callout| callout.wndproc).collect();
+
+        assert_eq!(hwnds, vec![grandchild, child, parent]);
+        assert_eq!(wndprocs, vec![0x0010_3000, 0x0010_2000, 0x0010_1000]);
+        assert!(
+            kernel
+                .gwe
+                .window(default_sibling)
+                .is_some_and(|window| window.destroy_message_sent)
+        );
     }
 
     #[test]

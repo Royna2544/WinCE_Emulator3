@@ -17,6 +17,11 @@ anchors, not app-specific shortcuts.
   - The Rust `Scheduler` subsystem now owns compact wait accounting for
     `WaitForSingleObject`, `WaitForMultipleObjects`,
     `MsgWaitForMultipleObjectsEx`, and Unicorn blocked-wait resume diagnostics.
+    Parked Unicorn `WaitForSingleObject` waits now preserve start tick/timeout
+    metadata and use CE-style `WAIT_TIMEOUT` resume for bounded waits, with
+    object-signaled acquisition taking precedence. `NKWaitForMultipleObjects`
+    rejects `fWaitAll` before dispatching to the lower wait helper, so v3 keeps
+    that raw API behavior even though v2 had corroborating wait-all machinery.
     Full waiter queues and context-switch ownership remain the next scheduler
     port step.
 
@@ -130,6 +135,18 @@ anchors, not app-specific shortcuts.
   `/mnt/c/Program Files (x86)/Windows CE Tools/wce420/STANDARDSDK_420/Include/Mipsii/winuser.h`
   - Declares `SetWindowTextW_I`, `GetWindowTextW_I`, `SetWindowLongW_I`,
     `GetWindowLongW_I`, `DefWindowProcW_I`, and `DestroyWindow_I`.
+  - `CWindow` tracks `fSentWmDestroy`; Rust virtual windows now carry the same
+    lifecycle bit, and raw/kernel `DestroyWindow` sends `WM_DESTROY` before
+    final HWND cleanup instead of deleting state directly. The current default
+    `WM_CLOSE` shortcut records that same destroy-message observation before
+    cleanup.
+  - Raw/kernel parent `DestroyWindow` now walks the virtual descendant tree and
+    sends `WM_DESTROY` to descendants before the parent, then performs final
+    GWE cleanup. Unicorn direct guest-WNDPROC destroy callouts use the same
+    descendant-before-parent target order and delay final root cleanup until
+    the last guest `WM_DESTROY` callback returns. A virtual lifecycle order
+    counter exists only to verify this child-first sequence in focused
+    fixtures.
   - Declares `UpdateWindow_I`; CE/MFC uses this as a synchronous paint forcing
     boundary. Rust raw `UpdateWindow` now validates pending update state by
     sending `WM_PAINT` through the window send path when an update region exists.
@@ -137,6 +154,12 @@ anchors, not app-specific shortcuts.
     client area in screen coordinates; it declares `SetWindowPos_I`,
     `MoveWindow_I`, `GetWindowRect_I`, `GetClientRect_I`,
     `ClientToScreen_I`, and `ScreenToClient_I`.
+  - Declares `GetWindowThreadProcessId_I`; Rust raw ordinal 292 now reports
+    the HWND owner thread and optional process ID from the virtual GWE window
+    table instead of returning a generic stub value.
+  - Declares `IsChild_I`; Rust raw ordinal 277 now uses recursive parent-chain
+    checks so direct children and descendants are reported through the virtual
+    HWND tree.
   - Also declares `ShowWindow_I`, `UpdateWindow_I`, `GetParent_I`,
     `IsWindow_I`, `GetClassNameW_I`, and `EnableWindow_I`, which back the
     virtual HWND state, class/title text copying, visibility/enabled checks,
@@ -157,6 +180,11 @@ anchors, not app-specific shortcuts.
   - GWE queue declarations keep `GetMessageW` as the blocking message API;
     an empty queue is not modeled as a `FALSE` return because MFC treats that
     as `WM_QUIT`/thread exit.
+  - `cmsgque.h` defines `smfSenderNoWait`,
+    `smfSenderNoWaitIfDifferentThread`, and `smfNotifyMessage` for no-wait
+    notification sends. Rust raw `SendNotifyMessageW` now preserves that CE
+    split at the syscall boundary: same-thread targets use synchronous send,
+    while different-thread targets are queued without sender blocking.
   - CE SDK headers define `CREATESTRUCTW` as
     `lpCreateParams`, `hInstance`, `hMenu`, `hwndParent`, `cy`, `cx`, `y`, `x`,
     `style`, `lpszName`, `lpszClass`, and `dwExStyle`, and define
@@ -173,8 +201,9 @@ anchors, not app-specific shortcuts.
   `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\ARMV4I\RETAIL\coredll.def`, and
   `/mnt/c/Program Files (x86)/Windows CE Tools/wce420/STANDARDSDK_420/Include/Mipsii/winuser.h`
   - CE exposes `InvalidateRect`, `BeginPaint`, `EndPaint`, `UpdateWindow`,
-    `GetUpdateRect`, `ValidateRect`, and `RedrawWindow` through the GWE API set
-    and coredll ordinals `250`, `260`, `261`, `267`, `274`, `278`, and `286`.
+    `GetUpdateRgn`, `GetUpdateRect`, `ValidateRect`, and `RedrawWindow` through
+    the GWE API set and coredll ordinals `250`, `260`, `261`, `267`, `273`,
+    `274`, `278`, and `286`.
   - The SDK `PAINTSTRUCT` layout is `hdc`, `fErase`, `rcPaint`, `fRestore`,
     `fIncUpdate`, and 32 reserved bytes; raw `BeginPaint` writes that shape.
   - `WM_PAINT` is `0x000F`; the virtual GWE subsystem generates it from a
@@ -182,8 +211,12 @@ anchors, not app-specific shortcuts.
     `ValidateRect`.
   - Raw `RedrawWindow` now follows the same pending-paint model for rectangle
     and HRGN invalidation, update-region unioning, descendant invalidation, and
-    `RDW_UPDATENOW`. Remaining gaps are tracked in `TODO.md`: partial validate
-    subtraction, internal-paint-only requests, and full child clipping.
+    `RDW_UPDATENOW`. Raw `ValidateRect` and `RDW_VALIDATE` now subtract
+    representable rectangular update bounds. Raw `GetUpdateRgn` copies the
+    current pending update bounds into an existing HRGN and returns region
+    status. Remaining gaps are tracked in `TODO.md`: complex update-region
+    precision, erase-on-query behavior, internal-paint-only requests, and full
+    child clipping.
 
 - Display surface boundary:
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\gpe.h` and
@@ -290,6 +323,15 @@ anchors, not app-specific shortcuts.
   - `CWnd::DefWindowProc` and superclass paths call `CallWindowProc` for saved
     guest window procedures; the Unicorn import hook therefore enters the guest
     proc for CE `CallWindowProcW @285` instead of returning a raw stub value.
+  - CE MFC post-processes `WM_DESTROY` by sending `WM_NCDESTROY`; Rust now
+    covers the raw/kernel `WM_DESTROY` cleanup boundary and records
+    `WM_NCDESTROY` when raw `SendMessageW` or a Unicorn guest-WNDPROC return
+    actually delivers it. Rust does not add an OS-side automatic
+    `WM_NCDESTROY` send because this CE MFC source path explicitly fakes the
+    message above GWE. Guest child destroy-message ordering is now chained
+    through Unicorn WNDPROC callouts before final root cleanup; remaining
+    lifecycle work is focused on synchronous-send ownership and destroyed-target
+    behavior.
 
 ## Prior Emulator Reference
 

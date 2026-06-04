@@ -13,18 +13,28 @@
   - Current v3 status: scheduler ownership has begun with a `Scheduler`
     subsystem that records single/multiple/msg wait attempts, wait outcomes,
     blocked waits, resumed waits, max handle count, and max timeout in monitor
-    summaries. Existing guest-visible wait return behavior is preserved.
-  - Open gaps: real waiter queues, unified timer/serial/audio/process wake
-    ownership, wait timeout expiry, blocked thread priority/fairness, and
-    fuller Unicorn thread context switching still need the next scheduler port
-    slice.
+    summaries. Parked Unicorn `WaitForSingleObject` calls now carry their
+    start tick and timeout and can resume with `WAIT_TIMEOUT` when the bounded
+    wait expires; object-signaled resumes still acquire/consume the waited
+    object first. Existing CE6 `WaitForMultipleObjects(TRUE)` rejection is
+    preserved from `NKWaitForMultipleObjects`.
+  - Open gaps: real scheduler-owned waiter queues, unified timer/serial/audio/
+    process wake ownership, blocked thread priority/fairness across all wait
+    kinds, multiple-object parking, message-wait parking, and fuller Unicorn
+    thread context switching still need the next scheduler port slices.
   - Fixture gates: keep existing wait/thread fixtures passing, then graduate
     pending scheduler fixtures for multiple waiters, `MsgWait*`, serial
     parking, waveOut callback wakeups, child-process waits, and scheduler mini
     app.
-  - Latest iNavi evidence: active frontier remains the render-map/surface path
-    around `0x0026f7e4`; this scheduler slice is foundational and should not be
-    counted as UI success until the mounted host/tap run advances.
+  - Latest iNavi evidence: active long-run frontier remains the render-map/
+    surface path around `0x0026f7e4`. The bounded timeout-slice host/tap probe
+    wrote `target\scheduler_timeout_*` artifacts and stopped at the familiar
+    10 s resource-loading frontier with no render milestones. This scheduler
+    slice is foundational and should not be counted as UI success until the
+    mounted host/tap run advances. The bounded `SendNotifyMessageW` slice probe
+    wrote `target\send_notify_*` artifacts and reached later file/window
+    activity (`mapinfo.bin`, `UID1:`, child HWND, `GetDC`), but still had no
+    render milestones and no useful framebuffer output.
 
 - Window/GWE subsystem:
   - Source refs:
@@ -43,11 +53,29 @@
     `WM_PAINT` synchronously instead of acting as a no-op. Raw `RedrawWindow`
     now covers the first CE-backed paint slice: rectangle/region invalidation,
     invalidation unioning, `RDW_VALIDATE`, `RDW_ALLCHILDREN`, erase state, and
-    `RDW_UPDATENOW` through the same synchronous paint path.
-  - Open gaps: `ValidateRect`/`RedrawWindow(RDW_VALIDATE)` still validate the
-    whole window instead of subtracting a partial rectangle or HRGN, internal
-    paint requests are represented as normal pending update state, and full
-    child clipping/z-order invalidation remains for the later GWE/GDI pass.
+    `RDW_UPDATENOW` through the same synchronous paint path. Raw `GetUpdateRgn`
+    now copies pending paint bounds into an existing HRGN and returns CE-style
+    region status. Raw `GetWindowThreadProcessId` now returns stored HWND owner
+    thread/process metadata from the GWE window table. Raw `IsChild` now uses
+    recursive parent-chain checks over the virtual HWND tree. Raw
+    `SendNotifyMessageW` now executes same-thread notifications synchronously
+    but queues different-thread notifications without blocking the sender.
+    Raw/kernel `DestroyWindow` now records and sends `WM_DESTROY` before final
+    GWE cleanup, and the default `WM_CLOSE` shortcut records the same destroy
+    observation before deleting HWND state. `WM_NCDESTROY` is now tracked when
+    actually delivered through raw `SendMessageW` or a Unicorn guest-WNDPROC
+    return, matching CE MFC's source-backed fake-NC-destroy path instead of
+    adding an OS-side synthetic send. Raw/kernel parent `DestroyWindow` now
+    sends `WM_DESTROY` to descendants before the parent and before final GWE
+    cleanup. Unicorn direct guest-WNDPROC `DestroyWindow` now chains guest
+    descendant `WM_DESTROY` callbacks child-first before final root cleanup.
+  - Open gaps: update regions are still represented as one bounding rectangle,
+    so partial `ValidateRect`/`RedrawWindow(RDW_VALIDATE)` subtracts the
+    representable remainder but keeps a conservative bounding rectangle for
+    disjoint leftovers. Internal paint requests are represented as normal
+    pending update state, `GetUpdateRect`/`GetUpdateRgn` do not yet send
+    background erase when `bErase` is true, and full child clipping/z-order
+    invalidation remains for the later GWE/GDI pass.
   - Port order:
     1. Paint/update correctness: keep `WM_PAINT` synthetic rather than posted,
        finish `UpdateWindow`/`RedrawWindow`/region invalidation semantics, and
@@ -55,13 +83,21 @@
     2. Window creation/destruction lifecycle: complete create/show/size/move/
        activate/focus/enable/destroy ordering, `WM_NCCREATE`/`WM_CREATE`,
        `WM_DESTROY`/`WM_NCDESTROY`, parent/child invalidation, and z-order
-       effects.
+       effects. `WM_DESTROY` is now sent and recorded before raw/kernel
+       cleanup, delivered `WM_NCDESTROY` is now recorded, and raw/kernel
+       parent destroy sends descendant `WM_DESTROY` before parent cleanup.
+       Unicorn guest-WNDPROC destroy callouts now follow the same child-first
+       chain before final root cleanup. Remaining lifecycle work includes exact
+       create/activate/focus/z-order side effects and destroyed-target behavior
+       under synchronous sends.
     3. Message queues and synchronous sends: replace same-thread-only shortcuts
        with scheduler-owned sent queues, sender blocking, receiver-context
-       execution, `ReplyMessage`, `InSendMessage`, timeout, destroyed-target,
-       and reentrant send behavior.
+       execution, `InSendMessage`, timeout, destroyed-target, and reentrant
+       send behavior. `SendNotifyMessageW` has the first CE-backed no-wait
+       split, but full sent-message queue ownership remains open.
     4. Window data/class/dialog/control surface: class atoms/extra bytes,
-       `SetWindowLong`/`GetWindowLong`, dialog procs/results, child lookup,
+       `SetWindowLong`/`GetWindowLong`, owner thread/process queries, dialog
+       procs/results, child/descendant relationship queries, child lookup,
        command routing, accelerator/menu state, and MFC attach/subclass paths.
     5. Input/focus/capture/hit testing: keyboard char translation, mouse
        capture, coordinate mapping, modal blockers, active/foreground window
@@ -76,7 +112,18 @@
     pixels but still misses useful UI. Current render evidence says `WM_SIZE`
     reaches dimensions while the app skips its resize/surface allocation path;
     window work should keep tracing real lifecycle/message causes rather than
-    faking pixels.
+    faking pixels. The bounded destroy-lifecycle probe wrote
+    `target\destroy_window_lifecycle_*` artifacts, reached RSImage DIB
+    creation by the 10 s wall stop, but still reported no render milestones and
+    an all-zero framebuffer body. The bounded `WM_NCDESTROY` lifecycle probe
+    wrote `target\nc_destroy_lifecycle_*` artifacts and likewise stopped at the
+    10 s resource/DIB frontier with no render milestones and an all-zero
+    framebuffer body. The bounded child-destroy probe wrote
+    `target\child_destroy_lifecycle_*` artifacts with the same no-render,
+    all-zero framebuffer result. The bounded guest-destroy-chain probe wrote
+    `target\guest_destroy_chain_*` artifacts, stopped at `pc=0x600c9aec` with
+    `host_read=4226/500100B` and `heap_live=5620/2459096B`, and still had no
+    render milestones or framebuffer pixels.
 
 ## Immediate
 

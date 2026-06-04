@@ -1139,6 +1139,52 @@ impl CeKernel {
         result
     }
 
+    pub fn destroy_window(&mut self, hwnd: u32) -> bool {
+        let Some(targets) = self.gwe.window_and_descendants(hwnd) else {
+            return false;
+        };
+        for target in targets.iter().rev().copied() {
+            if self
+                .gwe
+                .window(target)
+                .is_some_and(|window| !window.destroyed && !window.destroy_message_sent)
+            {
+                let _ = self.send_message_w(target, crate::ce::gwe::WM_DESTROY, 0, 0);
+            }
+        }
+        self.gwe.destroy_window(hwnd, self.timers.tick_count())
+    }
+
+    pub fn send_notify_message_w(
+        &mut self,
+        caller_thread_id: u32,
+        hwnd: u32,
+        msg: u32,
+        wparam: u32,
+        lparam: u32,
+    ) -> bool {
+        if hwnd == HWND_BROADCAST {
+            return self
+                .gwe
+                .post_broadcast_message(msg, wparam, lparam, self.timers.tick_count());
+        }
+        let Some(target_thread) = self
+            .gwe
+            .window(hwnd)
+            .filter(|window| !window.destroyed)
+            .map(|window| window.thread_id)
+        else {
+            return false;
+        };
+        if target_thread == caller_thread_id {
+            return self.send_message_w(hwnd, msg, wparam, lparam).is_some();
+        }
+        self.gwe.post_message_for_window(
+            hwnd,
+            Message::new(hwnd, msg, wparam, lparam, self.timers.tick_count()),
+        )
+    }
+
     pub fn dispatch_message_w(&mut self, message: Message) -> u32 {
         if message.msg == crate::ce::gwe::WM_QUIT {
             return message.wparam;

@@ -219,8 +219,12 @@
     The active mounted frontier has since advanced beyond `values.dat` and PNG
     resource reads. RSImage stream diagnostics show `ReadFile` callbacks from
     `resi_800x480.bin` with full requested-byte transfers and valid embedded
-    PNG headers, and the PNG loop returns at `0x0030f384`. Continuing from that
-    point exits through the app singleton/already-running branch:
+    PNG headers, and the PNG loop returns at `0x0030f384`. Scheduler work now
+    lets bounded parked `WaitForSingleObject` waits time out instead of
+    depending solely on object signaling. This is a CE scheduler fix, not UI
+    success; the active display bug remains missing useful render/GDI/surface
+    output. Continuing from that point exits through the app
+    singleton/already-running branch:
     `CreateMutexW(L"iNavi")` returns `ERROR_ALREADY_EXISTS`,
     `FindWindowW(title=L"iNavi")` finds hwnd `0x00020000`, then
     `SetForegroundWindow`, `ReleaseMutex`, and encoded `TerminateProcess`
@@ -231,8 +235,32 @@
     longer a no-op: it now synchronously sends pending `WM_PAINT` through the
     window send path. Raw `RedrawWindow` also handles the first CE-backed
     rectangle/region invalidation, descendant, validate, erase, and update-now
-    paths, but the broader window/GWE subsystem still needs the ledgered
-    lifecycle/send/input/GDI fidelity work before this bug can be closed.
+    paths, and raw `ValidateRect` preserves representable remaining update
+    bounds. Raw `GetUpdateRgn` now copies pending paint bounds into HRGN
+    objects, and `GetWindowThreadProcessId` now reports real HWND owner IDs
+    from the virtual GWE table. Raw `IsChild` now reports direct and descendant
+    HWND relationships from the parent chain. Raw `SendNotifyMessageW` no
+    longer executes different-thread notifications synchronously, so queued
+    no-wait sends are closer to CE GWE behavior. Raw/kernel `DestroyWindow`
+    now sends and records `WM_DESTROY` before final HWND cleanup, and the
+    default `WM_CLOSE` shortcut records the same destroy observation. Delivered
+    `WM_NCDESTROY` is now recorded through raw `SendMessageW` and Unicorn
+    guest-WNDPROC returns, matching the CE MFC fake-NC-destroy path without
+    inventing an OS-side automatic send. Raw/kernel parent `DestroyWindow` now
+    records descendant `WM_DESTROY` before parent cleanup, and Unicorn guest
+    child-WNDPROC destroy-callout chaining now delivers guest descendant
+    `WM_DESTROY` callbacks child-first before final root cleanup. The short
+    mounted destroy-lifecycle probes reached RSImage/resource file work by
+    10 s but still reported no render milestones and all-zero framebuffer
+    bodies. The latest guest-destroy-chain probe wrote
+    `target\guest_destroy_chain_*`, stopped at `pc=0x600c9aec`, and likewise
+    had no render milestones or framebuffer pixels. The earlier short mounted
+    `SendNotifyMessageW` probe reached later `mapinfo.bin`/`UID1:` file
+    activity, another child HWND, and `GetDC`, but still produced no render
+    milestones and only one nonzero framebuffer byte. The broader window/GWE
+    subsystem still needs scheduler-owned synchronous sends, destroyed-target
+    behavior, input/focus/modal fidelity, and GDI/DC integration before this
+    bug can be closed.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch

@@ -19,6 +19,7 @@ pub const WM_QUIT: u32 = 0x0012;
 pub const WM_ERASEBKGND: u32 = 0x0014;
 pub const WM_SHOWWINDOW: u32 = 0x0018;
 pub const WM_WINDOWPOSCHANGED: u32 = 0x0047;
+pub const WM_NCDESTROY: u32 = 0x0082;
 pub const WM_SETTEXT: u32 = 0x000c;
 pub const WM_GETTEXT: u32 = 0x000d;
 pub const WM_GETTEXTLENGTH: u32 = 0x000e;
@@ -203,6 +204,48 @@ impl Rect {
         };
         (!rect.is_empty()).then_some(rect)
     }
+
+    pub fn subtract_bounding(self, other: Self) -> Option<Self> {
+        let lhs = self.normalized();
+        let Some(intersection) = lhs.intersect(other) else {
+            return Some(lhs);
+        };
+        if intersection == lhs {
+            return None;
+        }
+
+        let candidates = [
+            Self {
+                left: lhs.left,
+                top: lhs.top,
+                right: lhs.right,
+                bottom: intersection.top,
+            },
+            Self {
+                left: lhs.left,
+                top: intersection.bottom,
+                right: lhs.right,
+                bottom: lhs.bottom,
+            },
+            Self {
+                left: lhs.left,
+                top: intersection.top,
+                right: intersection.left,
+                bottom: intersection.bottom,
+            },
+            Self {
+                left: intersection.right,
+                top: intersection.top,
+                right: lhs.right,
+                bottom: intersection.bottom,
+            },
+        ];
+
+        candidates
+            .into_iter()
+            .filter(|rect| !rect.is_empty())
+            .reduce(|acc, rect| acc.union(rect))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -233,6 +276,10 @@ pub struct Window {
     pub erase_pending: bool,
     pub update_rect: Rect,
     pub destroyed: bool,
+    pub destroy_message_sent: bool,
+    pub nc_destroy_message_sent: bool,
+    pub destroy_message_order: Option<u64>,
+    pub nc_destroy_message_order: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -279,6 +326,7 @@ pub struct Gwe {
     send_depth_by_thread: BTreeMap<u32, u32>,
     last_message_source_by_thread: BTreeMap<u32, u32>,
     replied_send_depth_by_thread: BTreeMap<u32, u32>,
+    next_lifecycle_message_order: u64,
 }
 
 impl Default for Gwe {
@@ -307,6 +355,10 @@ impl Default for Gwe {
                 erase_pending: false,
                 update_rect: Rect::default(),
                 destroyed: false,
+                destroy_message_sent: false,
+                nc_destroy_message_sent: false,
+                destroy_message_order: None,
+                nc_destroy_message_order: None,
             },
         );
         Self {
@@ -330,6 +382,7 @@ impl Default for Gwe {
             send_depth_by_thread: BTreeMap::new(),
             last_message_source_by_thread: BTreeMap::new(),
             replied_send_depth_by_thread: BTreeMap::new(),
+            next_lifecycle_message_order: 1,
         }
     }
 }
@@ -436,6 +489,10 @@ impl Gwe {
                 erase_pending: visible,
                 update_rect,
                 destroyed: false,
+                destroy_message_sent: false,
+                nc_destroy_message_sent: false,
+                destroy_message_order: None,
+                nc_destroy_message_order: None,
             },
         );
         self.z_order.push(hwnd);
@@ -625,6 +682,41 @@ impl Gwe {
         true
     }
 
+    pub fn validate_window_rect(&mut self, hwnd: u32, rect: Option<Rect>) -> bool {
+        let Some(window) = self.windows.get_mut(&hwnd) else {
+            return false;
+        };
+        if window.destroyed {
+            return false;
+        }
+        let Some(rect) = rect else {
+            window.update_pending = false;
+            window.erase_pending = false;
+            window.update_rect = Rect::default();
+            return true;
+        };
+        if !window.update_pending {
+            return true;
+        }
+        let Some(rect) = rect
+            .normalized()
+            .intersect(window.client_rect.zero_origin())
+        else {
+            return true;
+        };
+        match window.update_rect.subtract_bounding(rect) {
+            Some(remaining) => {
+                window.update_rect = remaining;
+            }
+            None => {
+                window.update_pending = false;
+                window.erase_pending = false;
+                window.update_rect = Rect::default();
+            }
+        }
+        true
+    }
+
     pub fn update_rect(&self, hwnd: u32) -> Option<PaintUpdate> {
         let window = self.windows.get(&hwnd)?;
         (!window.destroyed && window.update_pending).then_some(PaintUpdate {
@@ -673,6 +765,20 @@ impl Gwe {
 
     pub fn get_parent(&self, hwnd: u32) -> Option<u32> {
         self.windows.get(&hwnd).and_then(|window| window.parent)
+    }
+
+    pub fn is_child(&self, parent: u32, child: u32) -> bool {
+        if parent == child || !self.is_window(parent) || !self.is_window(child) {
+            return false;
+        }
+        let mut current = self.windows.get(&child).and_then(|window| window.parent);
+        while let Some(hwnd) = current {
+            if hwnd == parent {
+                return true;
+            }
+            current = self.windows.get(&hwnd).and_then(|window| window.parent);
+        }
+        false
     }
 
     pub fn get_dlg_item(&self, parent: u32, id: u32) -> Option<u32> {
@@ -1056,7 +1162,11 @@ impl Gwe {
         }
         match msg {
             WM_CLOSE => {
+                let _ = self.send_message(hwnd, WM_DESTROY, 0, 0);
                 self.destroy_window(hwnd, 0);
+            }
+            WM_DESTROY | WM_NCDESTROY => {
+                self.record_destroy_lifecycle_message(hwnd, msg);
             }
             WM_PAINT => {
                 self.validate_window(hwnd);
@@ -1064,6 +1174,36 @@ impl Gwe {
             _ => {}
         }
         Some(default_send_message_result(msg, wparam, lparam))
+    }
+
+    pub fn record_destroy_lifecycle_message(&mut self, hwnd: u32, msg: u32) -> bool {
+        let Some(window) = self.windows.get_mut(&hwnd) else {
+            return false;
+        };
+        if window.destroyed {
+            return false;
+        }
+        match msg {
+            WM_DESTROY => {
+                if !window.destroy_message_sent {
+                    window.destroy_message_sent = true;
+                    window.destroy_message_order = Some(self.next_lifecycle_message_order);
+                    self.next_lifecycle_message_order =
+                        self.next_lifecycle_message_order.saturating_add(1);
+                }
+                true
+            }
+            WM_NCDESTROY => {
+                if !window.nc_destroy_message_sent {
+                    window.nc_destroy_message_sent = true;
+                    window.nc_destroy_message_order = Some(self.next_lifecycle_message_order);
+                    self.next_lifecycle_message_order =
+                        self.next_lifecycle_message_order.saturating_add(1);
+                }
+                true
+            }
+            _ => false,
+        }
     }
 
     pub fn begin_send_message(&mut self, thread_id: u32) {
@@ -1253,6 +1393,11 @@ impl Gwe {
 
     pub fn window(&self, hwnd: u32) -> Option<&Window> {
         self.windows.get(&hwnd)
+    }
+
+    pub fn window_thread_process_id(&self, hwnd: u32) -> Option<(u32, u32)> {
+        let window = self.windows.get(&hwnd)?;
+        (!window.destroyed).then_some((window.thread_id, window.process_id))
     }
 
     pub fn window_and_descendants(&self, hwnd: u32) -> Option<Vec<u32>> {
@@ -1704,5 +1849,45 @@ mod tests {
         assert!(!gwe.is_window_visible(hwnd));
         assert!(!gwe.show_window(hwnd, true));
         assert!(gwe.is_window_visible(hwnd));
+    }
+
+    #[test]
+    fn validate_window_rect_subtracts_representable_update_bounds() {
+        let mut gwe = Gwe::default();
+        let hwnd = gwe.create_window_ex_with_rect(
+            1,
+            "STATIC",
+            "ready",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 100, 80),
+        );
+        assert!(gwe.validate_window(hwnd));
+        assert!(gwe.invalidate_window(hwnd, None, true));
+
+        assert!(gwe.validate_window_rect(hwnd, Some(Rect::from_origin_size(0, 0, 100, 20))));
+        assert_eq!(
+            gwe.update_rect(hwnd).unwrap().rect,
+            Rect::from_origin_size(0, 20, 100, 60)
+        );
+
+        assert!(gwe.validate_window_rect(hwnd, Some(Rect::from_origin_size(200, 200, 20, 20))));
+        assert_eq!(
+            gwe.update_rect(hwnd).unwrap().rect,
+            Rect::from_origin_size(0, 20, 100, 60)
+        );
+
+        assert!(gwe.validate_window(hwnd));
+        assert!(gwe.invalidate_window(hwnd, None, true));
+        assert!(gwe.validate_window_rect(hwnd, Some(Rect::from_origin_size(25, 20, 50, 40))));
+        assert_eq!(
+            gwe.update_rect(hwnd).unwrap().rect,
+            Rect::from_origin_size(0, 0, 100, 80)
+        );
+
+        assert!(gwe.validate_window_rect(hwnd, None));
+        assert!(gwe.update_rect(hwnd).is_none());
     }
 }

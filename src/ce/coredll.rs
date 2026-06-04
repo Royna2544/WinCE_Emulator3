@@ -956,9 +956,7 @@ fn dispatch_resolved(
             style,
             ex_style,
         )),
-        CoredllCall::DestroyWindow { hwnd } => {
-            CoredllValue::Bool(kernel.gwe.destroy_window(hwnd, kernel.timers.tick_count()))
-        }
+        CoredllCall::DestroyWindow { hwnd } => CoredllValue::Bool(kernel.destroy_window(hwnd)),
         CoredllCall::SetWindowTextW { hwnd, title } => {
             CoredllValue::Bool(kernel.gwe.set_window_text(hwnd, &title))
         }
@@ -2141,11 +2139,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_CREATE_WINDOW_EX_W => Some(CoredllValue::Handle(create_window_ex_w_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_DESTROY_WINDOW => Some(CoredllValue::Bool(
-            kernel
-                .gwe
-                .destroy_window(raw_arg(args, 0), kernel.timers.tick_count()),
-        )),
+        ORD_DESTROY_WINDOW => Some(CoredllValue::Bool(kernel.destroy_window(raw_arg(args, 0)))),
         ORD_SHOW_WINDOW => Some(CoredllValue::Bool(
             kernel.show_window(raw_arg(args, 0), raw_arg(args, 1) != 0),
         )),
@@ -2157,9 +2151,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel, memory, thread_id, args,
         ))),
         ORD_VALIDATE_RECT => Some(CoredllValue::Bool(validate_rect_raw(
-            kernel,
-            thread_id,
-            raw_arg(args, 0),
+            kernel, memory, thread_id, args,
         ))),
         ORD_GET_UPDATE_RECT => Some(CoredllValue::Bool(get_update_rect_raw(
             kernel,
@@ -2167,6 +2159,13 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
+        ))),
+        ORD_GET_UPDATE_RGN => Some(CoredllValue::U32(get_update_rgn_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2) != 0,
         ))),
         ORD_BEGIN_PAINT => Some(CoredllValue::Handle(begin_paint_raw(
             kernel,
@@ -2518,6 +2517,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_PARENT => Some(CoredllValue::Handle(
             kernel.gwe.get_parent(raw_arg(args, 0)).unwrap_or(0),
         )),
+        ORD_IS_CHILD => Some(CoredllValue::Bool(
+            kernel.gwe.is_child(raw_arg(args, 0), raw_arg(args, 1)),
+        )),
+        ORD_GET_WINDOW_THREAD_PROCESS_ID => Some(CoredllValue::U32(
+            get_window_thread_process_id_raw(kernel, memory, thread_id, args),
+        )),
         ORD_GET_DLG_ITEM => Some(CoredllValue::Handle(
             kernel
                 .gwe
@@ -2736,15 +2741,20 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .unwrap_or(0),
         )),
         ORD_SEND_NOTIFY_MESSAGE_W => {
-            let ok = kernel.gwe.is_window(raw_arg(args, 0))
-                && kernel
-                    .send_message_w(
-                        raw_arg(args, 0),
-                        raw_arg(args, 1),
-                        raw_arg(args, 2),
-                        raw_arg(args, 3),
-                    )
-                    .is_some();
+            let ok = kernel.send_notify_message_w(
+                thread_id,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                raw_arg(args, 2),
+                raw_arg(args, 3),
+            );
+            if ok {
+                kernel.threads.set_last_error(thread_id, 0);
+            } else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+            }
             Some(CoredllValue::Bool(ok))
         }
         ORD_SEND_MESSAGE_TIMEOUT => Some(CoredllValue::U32(send_message_timeout_raw(
@@ -8841,7 +8851,7 @@ fn redraw_window_raw<M: CoredllGuestMemory>(
     let erase = flags & RDW_NOERASE == 0 && flags & (RDW_ERASE | RDW_ERASENOW) != 0;
 
     for target in targets.iter().copied() {
-        if should_validate && !kernel.gwe.validate_window(target) {
+        if should_validate && !kernel.gwe.validate_window_rect(target, rect) {
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
@@ -8870,8 +8880,23 @@ fn redraw_window_raw<M: CoredllGuestMemory>(
     true
 }
 
-fn validate_rect_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> bool {
-    if !kernel.gwe.validate_window(hwnd) {
+fn validate_rect_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let hwnd = raw_arg(args, 0);
+    let rect_ptr = raw_arg(args, 1);
+    let rect = if rect_ptr == 0 {
+        None
+    } else {
+        match read_guest_rect(kernel, memory, thread_id, rect_ptr) {
+            Some(rect) => Some(rect),
+            None => return false,
+        }
+    };
+    if !kernel.gwe.validate_window_rect(hwnd, rect) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
@@ -8903,6 +8928,64 @@ fn get_update_rect_raw<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn get_update_rgn_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    hwnd: u32,
+    region: u32,
+    _erase: bool,
+) -> u32 {
+    if region == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return ERROR_REGION;
+    }
+    if !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return ERROR_REGION;
+    }
+    let rect = kernel
+        .gwe
+        .update_rect(hwnd)
+        .map(|update| update.rect)
+        .unwrap_or_default();
+    if !kernel.resources.set_region(region, rect) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return ERROR_REGION;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    region_status(rect)
+}
+
+fn get_window_thread_process_id_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let hwnd = raw_arg(args, 0);
+    let process_id_ptr = raw_arg(args, 1);
+    let Some((owner_thread_id, owner_process_id)) = kernel.gwe.window_thread_process_id(hwnd)
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    };
+    if process_id_ptr != 0
+        && !write_guest_u32(kernel, memory, thread_id, process_id_ptr, owner_process_id)
+    {
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    owner_thread_id
 }
 
 fn begin_paint_raw<M: CoredllGuestMemory>(
