@@ -12,6 +12,7 @@ pub const THREAD_PRIORITY_NORMAL: u32 = 3;
 pub const CE_THREAD_PRIORITY_NORMAL: i32 =
     MAX_CE_PRIORITY_LEVELS - MAX_WIN32_PRIORITY_LEVELS as i32 + THREAD_PRIORITY_NORMAL as i32;
 pub const MAX_SUSPEND_COUNT: u32 = 127;
+pub const MUTEX_MAX_LOCK_COUNT: u32 = 0x7fff;
 
 #[derive(Debug, Clone)]
 pub enum KernelObject {
@@ -40,6 +41,7 @@ pub struct EventObject {
 pub struct MutexObject {
     pub name: Option<String>,
     pub owner_thread: Option<u32>,
+    pub lock_count: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -211,6 +213,7 @@ impl HandleTable {
         let handle = self.insert(KernelObject::Mutex(MutexObject {
             name,
             owner_thread: initial_owner,
+            lock_count: u32::from(initial_owner.is_some()),
         }));
         (handle, false)
     }
@@ -393,6 +396,18 @@ impl HandleTable {
         let Ok(KernelObject::Thread(thread)) = self.get_mut(handle) else {
             return ThreadSuspendResult::InvalidHandle;
         };
+        Self::suspend_thread_object(thread)
+    }
+
+    pub fn suspend_thread_by_id(&mut self, thread_id: u32) -> Option<ThreadSuspendResult> {
+        let thread = self.objects.values_mut().find_map(|object| match object {
+            KernelObject::Thread(thread) if thread.thread_id == thread_id => Some(thread),
+            _ => None,
+        })?;
+        Some(Self::suspend_thread_object(thread))
+    }
+
+    fn suspend_thread_object(thread: &mut ThreadObject) -> ThreadSuspendResult {
         let previous = thread.suspend_count;
         if previous == MAX_SUSPEND_COUNT {
             return ThreadSuspendResult::SignalRefused;
@@ -405,6 +420,18 @@ impl HandleTable {
         let Ok(KernelObject::Thread(thread)) = self.get_mut(handle) else {
             return ThreadResumeResult::InvalidHandle;
         };
+        Self::resume_thread_object(thread)
+    }
+
+    pub fn resume_thread_by_id(&mut self, thread_id: u32) -> Option<ThreadResumeResult> {
+        let thread = self.objects.values_mut().find_map(|object| match object {
+            KernelObject::Thread(thread) if thread.thread_id == thread_id => Some(thread),
+            _ => None,
+        })?;
+        Some(Self::resume_thread_object(thread))
+    }
+
+    fn resume_thread_object(thread: &mut ThreadObject) -> ThreadResumeResult {
         let previous = thread.suspend_count;
         if previous > 0 {
             thread.suspend_count -= 1;
@@ -435,6 +462,18 @@ impl HandleTable {
         };
         thread.priority = priority;
         true
+    }
+
+    pub fn set_thread_priority_by_id(&mut self, thread_id: u32, priority: i32) -> Option<bool> {
+        if !(0..MAX_CE_PRIORITY_LEVELS).contains(&priority) {
+            return Some(false);
+        }
+        let thread = self.objects.values_mut().find_map(|object| match object {
+            KernelObject::Thread(thread) if thread.thread_id == thread_id => Some(thread),
+            _ => None,
+        })?;
+        thread.priority = priority;
+        Some(true)
     }
 
     pub fn thread_start(&self, handle: u32) -> Option<(u32, u32, u32)> {
@@ -491,12 +530,27 @@ impl HandleTable {
         let Ok(KernelObject::Mutex(mutex)) = self.get_mut(handle) else {
             return false;
         };
-        if mutex.owner_thread == Some(thread_id) || mutex.owner_thread.is_none() {
-            mutex.owner_thread = None;
-            true
-        } else {
-            false
+        if mutex.owner_thread != Some(thread_id) {
+            return false;
         }
+        if mutex.lock_count > 1 {
+            mutex.lock_count -= 1;
+        } else {
+            mutex.lock_count = 0;
+            mutex.owner_thread = None;
+        }
+        true
+    }
+
+    pub fn mutex_lock_count(&self, handle: u32) -> Option<u32> {
+        let Ok(KernelObject::Mutex(mutex)) = self.get(handle) else {
+            return None;
+        };
+        Some(mutex.lock_count)
+    }
+
+    pub fn is_mutex(&self, handle: u32) -> bool {
+        matches!(self.get(handle), Ok(KernelObject::Mutex(_)))
     }
 
     pub fn wait_for_single_object(
@@ -519,7 +573,15 @@ impl HandleTable {
             KernelObject::Mutex(mutex)
                 if mutex.owner_thread.is_none() || mutex.owner_thread == Some(thread_id) =>
             {
+                if mutex.owner_thread == Some(thread_id) {
+                    if mutex.lock_count == MUTEX_MAX_LOCK_COUNT {
+                        return WaitResult::Failed;
+                    }
+                    mutex.lock_count += 1;
+                    return WaitResult::Object0;
+                }
                 mutex.owner_thread = Some(thread_id);
+                mutex.lock_count = 1;
                 WaitResult::Object0
             }
             KernelObject::Semaphore(semaphore) if semaphore.count > 0 => {

@@ -51,7 +51,16 @@
     `host_file_open_count=633`, `host_file_read_count=64995`,
     `host_file_read_bytes=3787819`, `memory_backed_open_count=2`, and
     `max_read_request=685080`, so the active blocker is no longer bulk file
-    preload or per-read reopen. The latest GWE fidelity regression probe for
+    preload or per-read reopen. A follow-up file-open fix now falls back to a
+    read-only live host handle when existing files are requested read/write but
+    Windows denies write access. The mounted virtual
+    `target\file_rw_fallback_virtual_60s_*` probe stops at `pc=0x003426d0`,
+    `ra=0x002fd5e8`, stays memory-stable (`heap_live=7482/23071147B`,
+    `virtual_live=3/196608B`), reaches much deeper file activity
+    (`host_open=235`, `host_read=38930/2229372B`), and has zero remaining
+    `Access is denied`/failed `SDMMC Disk\mapdata\SearchDB\*.db` open records,
+    but still reports render milestones `none` and only red tap pixels
+    (`nonzero=301`). The latest GWE fidelity regression probe for
     dumped-runtime commctrl loading wrote `target\commctrl_virtual_60s_*`:
     verbose loader validation now maps
     `D:\INAVI_Emulator\DUMPPLZ\Windows\commctrl.dll` alongside
@@ -60,7 +69,13 @@
     `ra=0x00135bc8`, stayed memory-stable (`heap_live=6981/21280227B`,
     `host_open=112`, `host_read=7840/1760751B`, `mem_open=2`), but render
     milestones were still `none` and the framebuffer contained only the
-    101-pixel red tap marker. The follow-up scheduler/thread priority and
+    101-pixel red tap marker. After removing the remaining common-controls
+    import trap path, the follow-up `target\commctrl_searchpath_virtual_60s_*`
+    probe stopped at `pc=0x6000d9b8`, `ra=0x6004fc6c`, stayed memory-stable
+    (`heap_live=6927/21256913B`, `host_open=91`,
+    `host_read=4302/1718377B`, `mem_open=2`), and still had render milestones
+    `none` with only the same 101-pixel red tap marker. The follow-up
+    scheduler/thread priority and
     multi-wait slice wrote `target\scheduler_priority_wait_virtual_60s_*`,
     stopped at `pc=0x00a4a1f4`, `ra=0x002017e0`, stayed memory-stable
     (`heap_live=6930/21296145B`, `host_open=92`,
@@ -77,7 +92,25 @@
     `host_read=4304/1732170B`, `mem_open=2`), and likewise had render
     milestones `none` with only the 101-pixel tap marker; this iNavi path did
     not exercise a multiple-wait block (`sched=wait:1/0/0`). This keeps the
-    no-useful-UI bug open. The latest GWE fidelity regression probe for
+    no-useful-UI bug open. The first Unicorn `MsgWaitForMultipleObjectsEx`
+    parking bridge follow-up wrote `target\msgwait_parking_virtual_60s_*`,
+    stopped at `pc=0x0006cbd4`, `ra=0x000bdfa0`, stayed memory-stable
+    (`heap_live=6927/21273103B`, `host_open=92`,
+    `host_read=4305/1769298B`, `mem_open=2`), but also did not exercise a
+    parked msg-wait and still reported render milestones `none` with only the
+    101-pixel tap marker. The CE pseudo current process/thread and KData
+    current-ID slice wrote `target\pseudo_handle_kdata_virtual_60s_*`, stopped
+    at `pc=0x6000cee4`, `ra=0x6000d06c`, stayed memory-stable
+    (`heap_live=6921/21255717B`, `host_open=91`,
+    `host_read=4304/1728191B`, `mem_open=2`), and still reported render
+    milestones `none` with only the 101-pixel tap marker. The follow-up raw
+    current-thread pseudo mutation slice wrote
+    `target\pseudo_thread_mutation_virtual_60s_*`, stopped at
+    `pc=0x6000cfd4`, `ra=0x6000d044`, stayed memory-stable
+    (`heap_live=6921/21255717B`, `host_open=91`,
+    `host_read=4304/1732170B`, `mem_open=2`), and still reported render
+    milestones `none` with only the 101-pixel tap marker. The latest GWE
+    fidelity regression probe for
     `GetQueueStatus`/`MsgWaitForMultipleObjectsEx` wrote
     `target\queue_status_msgwait_*` artifacts and stayed memory-stable
     (`host_read=4221/495853B`, `heap_live=5948/2767663B`), but still had no
@@ -524,8 +557,17 @@
     real CE waiter queues, timeout expiry, unified timer/serial/audio/process
     wake ownership, and full blocked-thread context scheduling are still open.
   - Evidence: `SOURCE_REFERENCES.md` records the CE scheduler/sync source
-    anchors, and `TODO.md` has the first CE fidelity ledger entry. Existing
-    guest-visible wait return behavior is preserved in this slice.
+    anchors, and `TODO.md` has the first CE fidelity ledger entry. Mutex
+    recursive ownership/release count handling is now source-backed and covered
+    by focused Rust tests plus `tests/test_progs/163_mutex_recursive_ownership`.
+    Scheduler-owned blocked-wait registration/per-handle queues now exist for
+    parked Unicorn waits, but object state transitions still do not directly
+    wake through those queues and the broader timer/serial/audio/process wake
+    model remains partial. The mounted
+    `target\scheduler_wait_registry_virtual_60s_*` probe stayed memory-stable
+    but did not exercise a parked wait (`reg:0/0 maxreg:0`) and still had no
+    render milestones. Existing guest-visible wait return behavior is preserved
+    in this slice.
   - Status: active first CE-fidelity port; next scheduler work should replace
     the remaining ad hoc blocked-wait vectors and subsystem wake paths.
 

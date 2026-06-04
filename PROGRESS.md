@@ -39,7 +39,43 @@
   addresses. Focused coverage:
   `patches_loaded_commctrl_exports_from_external_table_without_stub_trap`,
   `patches_winsock_and_ole_imports_as_supported_traps_without_mfc_or_commctrl_stub`,
-  and `coredll_raw_module_apis_resolve_preloaded_search_dll_exports`.
+  and `coredll_raw_module_apis_resolve_preloaded_search_dll_exports`. A
+  follow-up bounded virtual probe with the dumped DLL search path wrote
+  `target\commctrl_searchpath_virtual_60s_summary.txt`,
+  `target\commctrl_searchpath_virtual_60s_render.txt`,
+  `target\commctrl_searchpath_virtual_60s_milestones.txt`,
+  `target\commctrl_searchpath_virtual_60s_files.txt`, and
+  `target\commctrl_searchpath_virtual_60s.ppm`; it stopped at the 60 s wall
+  limit (`pc=0x6000d9b8`, `ra=0x6004fc6c`) with stable memory
+  (`heap_live=6927/21256913B`, `host_open=91`,
+  `host_read=4302/1718377B`, `mem_open=2`, `max_read=497178`). Render
+  milestones remain `none`, and framebuffer stats are still only the 101-pixel
+  red tap marker (`nonzero=101`, colors `0,0,0;255,0,0`).
+- Existing host-file opens requested as `GENERIC_READ | GENERIC_WRITE` now keep
+  the file host-backed even when the host denies write access. v3 first tries a
+  read/write host handle for write-through, then falls back to a read-only live
+  host handle instead of failing `CreateFileW` or preloading the file into a
+  `Vec`; writes on that fallback handle return an unsupported write result.
+  Focused coverage:
+  `readwrite_existing_readonly_host_files_fall_back_to_read_handle`, plus the
+  existing host-backed file streaming tests. Full `cargo check --features
+  unicorn,trace,win32-desktop` and
+  `cargo test --features unicorn,trace,win32-desktop` pass, with the existing
+  non-fatal Windows incremental-finalize warning. A mounted virtual probe using
+  `D:\INAVI_Emulator\DUMPPLZ\Windows` wrote
+  `target\file_rw_fallback_virtual_60s_summary.txt`,
+  `target\file_rw_fallback_virtual_60s_render.txt`,
+  `target\file_rw_fallback_virtual_60s_milestones.txt`,
+  `target\file_rw_fallback_virtual_60s_files.txt`, and
+  `target\file_rw_fallback_virtual_60s.ppm`; it stopped at the 60 s wall limit
+  at `pc=0x003426d0`, `ra=0x002fd5e8` with stable memory
+  (`heap_live=7482/23071147B`, `virtual_live=3/196608B`) and much deeper file
+  activity (`host_open=235`, `host_read=38930/2229372B`, `mem_open=2`,
+  `max_read=497178`). The previous `Access is denied` churn for
+  `SDMMC Disk\mapdata\SearchDB\*.db` is gone (`0` matching failures), but
+  render milestones remain `none` and the framebuffer still contains only red
+  tap pixels (`nonzero=301`, color `255,0,0`), so this is startup/file-I/O
+  progress rather than useful UI output.
 - Scheduler/wait fidelity now has a source-backed priority and waitable-handle
   slice. Parked Unicorn `WaitForSingleObject` resumes now choose the ready
   blocked waiter by CE priority ordering, where lower numeric priorities win,
@@ -134,6 +170,118 @@
   did not exercise a multiple wait block in 60 s. Render milestones are still
   `none`; framebuffer output remains black except the 101-pixel red tap
   marker, so this is scheduler fidelity rather than UI progress.
+- Scheduler/GWE bridging now also has the first Unicorn
+  `MsgWaitForMultipleObjectsEx` parking path. The import-boundary bridge reads
+  and validates the handle array, rejects wait-all parking, honors the existing
+  GWE queue changed/input-available bits, parks only when no waited handle and
+  no requested queue input is ready, wakes by CE priority/FIFO selection, and
+  returns either `WAIT_OBJECT_0 + handle_index`, `WAIT_OBJECT_0 + handle_count`
+  for message input, or `WAIT_TIMEOUT`. Source anchors are CE GWE
+  `cmsgque.h` `MsgWaitForMultipleObjectsEx_*` wrappers, CE SDK `winuser.h`
+  `MWMO_INPUTAVAILABLE`/queue flags, and NK
+  `schedule.c::DoWaitForObjects` for the shared handle-wait proxy shape.
+  Focused coverage extends `wait_scheduler_tests` with
+  `blocked_msg_wait_wakes_on_queue_input`; full
+  `cargo check --features unicorn,trace,win32-desktop` and
+  `cargo test --features unicorn,trace,win32-desktop` pass with the existing
+  non-fatal Windows incremental-finalize warning. A fresh mounted virtual
+  probe wrote `target\msgwait_parking_virtual_60s_summary.txt`,
+  `target\msgwait_parking_virtual_60s_render.txt`,
+  `target\msgwait_parking_virtual_60s_milestones.txt`,
+  `target\msgwait_parking_virtual_60s_files.txt`, and
+  `target\msgwait_parking_virtual_60s.ppm`; it stopped at the 60 s wall limit
+  (`pc=0x0006cbd4`, `ra=0x000bdfa0`) with stable counters
+  (`heap_live=6927/21273103B`, `virtual_live=3/196608B`,
+  `host_open=92`, `host_read=4305/1769298B`, `mem_open=2`,
+  `max_read=497178`, and
+  `sched=wait:1/0/0 ok:1 timeout:0 fail:0 block:0 wake:0`). This run did not
+  exercise a parked msg-wait; render milestones are still `none`, and the
+  framebuffer contains only the 101-pixel red tap marker.
+- Scheduler/thread pseudo-handle fidelity now follows CE's current
+  process/thread handle and KData contracts. `kfuncs.h` defines
+  `SYS_HANDLE_BASE == 64`, `SH_CURTHREAD == 1`, and `SH_CURPROC == 2`, so
+  `GetCurrentThread()`/`GetCurrentProcess()` return pseudo handles `65`/`66`
+  while `GetCurrentThreadId()`/`GetCurrentProcessId()` read KData system-handle
+  slots. `handle.c::LockHandleParam`, `schedule.c::LockWaitableObject`, and
+  `thread.c::THRDGetCode`/`THRDGetTimes` map those pseudo handles to the active
+  process/thread where appropriate. v3 now exposes pseudo-aware raw COREDLL
+  `GetThreadId`, `GetExitCodeThread`, `GetThreadTimes`, `GetProcessId`,
+  `GetExitCodeProcess`, `TerminateProcess`, and wait behavior, and Unicorn
+  refreshes the KData current thread/process ID slots during guest thread,
+  wait, and `SendMessageW` context switches. The same pseudo current-thread
+  mapping now covers raw `SetThreadPriority`, `CeSetThreadPriority`,
+  `SuspendThread`, and `ResumeThread`; real guest-thread objects are updated
+  by thread id, while the main thread keeps CE priority/suspend metadata
+  without inventing an app-specific handle. Focused coverage:
+  `current_process_pseudo_handle_is_waitable_after_terminate`,
+  `current_thread_pseudo_handle_updates_priority_and_suspend_state`,
+  `user_kdata_page_exposes_current_thread_and_process_ids`, and
+  `coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics`. Full
+  `cargo check --features unicorn,trace,win32-desktop` and
+  `cargo test --features unicorn,trace,win32-desktop` pass, with the existing
+  non-fatal Windows incremental-finalize warning. Mounted virtual probes wrote
+  `target\pseudo_handle_kdata_virtual_60s_summary.txt`,
+  `target\pseudo_handle_kdata_virtual_60s_render.txt`,
+  `target\pseudo_handle_kdata_virtual_60s_milestones.txt`,
+  `target\pseudo_handle_kdata_virtual_60s_files.txt`, and
+  `target\pseudo_handle_kdata_virtual_60s.ppm`; it stopped at the 60 s wall
+  limit (`pc=0x6000cee4`, `ra=0x6000d06c`) with stable counters
+  (`heap_live=6921/21255717B`, `host_open=91`,
+  `host_read=4304/1728191B`, `mem_open=2`, `max_read=497178`, and
+  `sched=wait:1/0/0 ok:1 timeout:0 fail:0 block:0 wake:0`), and
+  `target\pseudo_thread_mutation_virtual_60s_summary.txt`,
+  `target\pseudo_thread_mutation_virtual_60s_render.txt`,
+  `target\pseudo_thread_mutation_virtual_60s_milestones.txt`,
+  `target\pseudo_thread_mutation_virtual_60s_files.txt`, and
+  `target\pseudo_thread_mutation_virtual_60s.ppm`; the follow-up stopped at
+  `pc=0x6000cfd4`, `ra=0x6000d044` with stable counters
+  (`heap_live=6921/21255717B`, `host_open=91`,
+  `host_read=4304/1732170B`, `mem_open=2`, `max_read=497178`, and
+  `sched=wait:1/0/0 ok:1 timeout:0 fail:0 block:0 wake:0`). Render milestones
+  remain `none`; the framebuffer still contains only the 101-pixel red tap
+  marker, so this is CE scheduler/thread fidelity rather than UI progress.
+- Mutex wait/release fidelity now follows the CE recursive ownership contract
+  from `syncobj.c`, `kcalls.c`, `syncobj.h`, and `winerror.h`. `CreateMutexW`
+  with initial ownership seeds owner/current-thread state with lock count `1`,
+  recursive owner waits increment the count up to `MUTEX_MAXLOCKCNT == 0x7fff`,
+  `ReleaseMutex` unwinds one count at a time, and wrong-owner/unowned release
+  now fails with `ERROR_NOT_OWNER` while invalid handles still report
+  `ERROR_INVALID_HANDLE`. Focused Rust coverage:
+  `mutex_waits_track_recursive_owner_lock_count`,
+  `mutex_recursive_wait_fails_at_ce_max_lock_count`, and the raw
+  `ReleaseMutex` path in
+  `coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics`. Added
+  `tests/test_progs/163_mutex_recursive_ownership` so the eVC4 MIPSII fixture
+  suite can pin the same guest-visible behavior at the Win32 API boundary.
+  Full `cargo check --features unicorn,trace,win32-desktop` and
+  `cargo test --features unicorn,trace,win32-desktop` pass, with the existing
+  non-fatal Windows incremental-finalize warning.
+- Scheduler wait ownership now has the first real registry for blocked waits.
+  Parked Unicorn `WaitForSingleObject`, `WaitForMultipleObjects(FALSE)`, and
+  `MsgWaitForMultipleObjectsEx` still keep their saved MIPS register payload in
+  Unicorn, but each parked wait is now registered in `Scheduler` with a wait id,
+  thread id/handle, waited handles, kind, start tick, timeout, FIFO sequence,
+  and per-handle waiter queues. Resume selection now asks the scheduler for the
+  ready wait id using CE lower-numeric priority ordering and FIFO tie-breaks,
+  then removes the scheduler registration when Unicorn restores the saved CPU
+  context. Monitor/debug summaries now include waiter register/remove/max
+  counters. Focused coverage: scheduler registry unit tests plus
+  `wait_scheduler_tests`; `cargo check --features unicorn,trace,win32-desktop`
+  passes with the existing non-fatal Windows incremental-finalize warning, and
+  full `cargo test --features unicorn,trace,win32-desktop` passes. A mounted
+  virtual probe using `D:\INAVI_Emulator\DUMPPLZ\Windows` wrote
+  `target\scheduler_wait_registry_virtual_60s_summary.txt`,
+  `target\scheduler_wait_registry_virtual_60s_render.txt`,
+  `target\scheduler_wait_registry_virtual_60s_milestones.txt`,
+  `target\scheduler_wait_registry_virtual_60s_files.txt`, and
+  `target\scheduler_wait_registry_virtual_60s.ppm`; it stopped at the 60 s wall
+  limit at `pc=0x00339ca4`, `ra=0x00b4bb1c` with stable memory
+  (`heap_live=7471/23006007B`, `virtual_live=3/196608B`) and file activity
+  (`host_open=231`, `host_read=38664/2226093B`, `mem_open=2`,
+  `max_read=497178`). This path did not park a wait in 60 s
+  (`reg:0/0 maxreg:0`), had no actual `SearchDB` `CreateFileW` failures and no
+  `Access is denied` records, and still produced no render milestones; the
+  framebuffer remains only the 301-pixel red tap line.
 - Raw `SetAssociatedMenu @299` and `GetAssociatedMenu @300` now reach the same
   CE HWND-associated menu state as `SetMenu`/`GetMenu`. The raw dispatcher
   validates live HWNDs through the GWE window table and keeps the CE

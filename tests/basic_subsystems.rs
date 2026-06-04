@@ -6,9 +6,13 @@ use wince_emulation_v3::{
         com::{REGDB_E_CLASSNOTREG, S_FALSE, S_OK},
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::{GWL_USERDATA, Rect, WM_QUIT, WM_TIMER, WM_USER, WS_CHILD, WS_VISIBLE},
-        kernel::{CeKernel, MessagePumpResult},
+        kernel::{
+            CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
+            MessagePumpResult,
+        },
         object::{
-            EventObject, KernelObject, MAX_SUSPEND_COUNT, ThreadResumeResult, ThreadSuspendResult,
+            EventObject, KernelObject, MAX_SUSPEND_COUNT, MUTEX_MAX_LOCK_COUNT, ThreadResumeResult,
+            ThreadSuspendResult,
         },
         registry::{ERROR_SUCCESS, HKEY_LOCAL_MACHINE, REG_SZ},
         remote::{WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP},
@@ -201,6 +205,138 @@ fn suspend_resume_thread_counts_follow_ce_cap() -> Result<()> {
         kernel.resume_thread(thread),
         ThreadResumeResult::Previous(0)
     );
+
+    Ok(())
+}
+
+#[test]
+fn current_thread_pseudo_handle_updates_priority_and_suspend_state() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let main_thread_id = 1;
+
+    assert_eq!(
+        kernel.thread_win32_priority_for_handle(CE_CURRENT_THREAD_PSEUDO_HANDLE, main_thread_id),
+        Some(3)
+    );
+    assert!(kernel.set_thread_win32_priority_for_handle(
+        CE_CURRENT_THREAD_PSEUDO_HANDLE,
+        1,
+        main_thread_id
+    ));
+    assert_eq!(
+        kernel.thread_win32_priority_for_handle(CE_CURRENT_THREAD_PSEUDO_HANDLE, main_thread_id),
+        Some(1)
+    );
+    assert_eq!(
+        kernel.thread_priority_for_handle(CE_CURRENT_THREAD_PSEUDO_HANDLE, main_thread_id),
+        Some(249)
+    );
+    assert_eq!(
+        kernel.suspend_thread_for_handle(CE_CURRENT_THREAD_PSEUDO_HANDLE, main_thread_id),
+        ThreadSuspendResult::Previous(0)
+    );
+    assert_eq!(
+        kernel.resume_thread_for_handle(CE_CURRENT_THREAD_PSEUDO_HANDLE, main_thread_id),
+        ThreadResumeResult::Previous(1)
+    );
+
+    let (worker_handle, worker_thread_id) = kernel.create_guest_thread(0x1000, 0x2000, false);
+    assert!(kernel.set_thread_ce_priority_for_handle(
+        CE_CURRENT_THREAD_PSEUDO_HANDLE,
+        42,
+        worker_thread_id
+    ));
+    assert_eq!(kernel.thread_priority(worker_handle), Some(42));
+    assert_eq!(
+        kernel.suspend_thread_for_handle(CE_CURRENT_THREAD_PSEUDO_HANDLE, worker_thread_id),
+        ThreadSuspendResult::Previous(0)
+    );
+    assert!(kernel.guest_thread_start(worker_handle).is_none());
+    assert_eq!(
+        kernel.resume_thread_for_handle(CE_CURRENT_THREAD_PSEUDO_HANDLE, worker_thread_id),
+        ThreadResumeResult::Previous(1)
+    );
+    assert!(kernel.guest_thread_start(worker_handle).is_some());
+
+    Ok(())
+}
+
+#[test]
+fn current_process_pseudo_handle_is_waitable_after_terminate() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let thread_id = 7;
+
+    assert_eq!(
+        kernel.is_wait_ready(CE_CURRENT_PROCESS_PSEUDO_HANDLE, thread_id),
+        Some(false)
+    );
+    assert_eq!(
+        kernel.wait_for_single_object(CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0, thread_id),
+        WAIT_TIMEOUT
+    );
+    assert!(kernel.terminate_process(CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0x1234));
+    assert_eq!(
+        kernel.is_wait_ready(CE_CURRENT_PROCESS_PSEUDO_HANDLE, thread_id),
+        Some(true)
+    );
+    assert_eq!(
+        kernel.wait_for_single_object(CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0, thread_id),
+        WAIT_OBJECT_0
+    );
+    assert_eq!(
+        kernel.process_exit_code_for_handle(CE_CURRENT_PROCESS_PSEUDO_HANDLE),
+        Some(0x1234)
+    );
+
+    Ok(())
+}
+
+#[test]
+fn mutex_waits_track_recursive_owner_lock_count() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mutex = kernel.create_mutex_w(Some("recursive-mx".to_owned()), None);
+
+    assert_eq!(kernel.wait_for_single_object(mutex, 0, 7), WAIT_OBJECT_0);
+    assert_eq!(kernel.wait_for_single_object(mutex, 0, 7), WAIT_OBJECT_0);
+    assert_eq!(kernel.wait_for_single_object(mutex, 0, 8), WAIT_TIMEOUT);
+
+    let KernelObject::Mutex(state) = kernel.handles.get(mutex)? else {
+        panic!("expected mutex object")
+    };
+    assert_eq!(state.owner_thread, Some(7));
+    assert_eq!(state.lock_count, 2);
+
+    assert!(!kernel.release_mutex(mutex, 8));
+    assert!(kernel.release_mutex(mutex, 7));
+    assert_eq!(kernel.wait_for_single_object(mutex, 0, 8), WAIT_TIMEOUT);
+
+    let KernelObject::Mutex(state) = kernel.handles.get(mutex)? else {
+        panic!("expected mutex object")
+    };
+    assert_eq!(state.owner_thread, Some(7));
+    assert_eq!(state.lock_count, 1);
+
+    assert!(kernel.release_mutex(mutex, 7));
+    assert_eq!(kernel.wait_for_single_object(mutex, 0, 8), WAIT_OBJECT_0);
+
+    Ok(())
+}
+
+#[test]
+fn mutex_recursive_wait_fails_at_ce_max_lock_count() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mutex = kernel.create_mutex_w(None, Some(7));
+    let KernelObject::Mutex(state) = kernel.handles.get_mut(mutex)? else {
+        panic!("expected mutex object")
+    };
+    state.lock_count = MUTEX_MAX_LOCK_COUNT;
+
+    assert_eq!(kernel.wait_for_single_object(mutex, 0, 7), WAIT_FAILED);
+    assert_eq!(kernel.threads.get_last_error(7), ERROR_INVALID_HANDLE);
 
     Ok(())
 }

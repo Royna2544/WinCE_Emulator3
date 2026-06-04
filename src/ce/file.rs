@@ -403,11 +403,11 @@ impl HostFileSystem {
         let host_path = self.translate_guest_path(guest_path)?;
         let exists = host_path.exists();
         let is_directory = host_path.is_dir();
-        let writable = desired_access & GENERIC_WRITE != 0 && !is_directory;
+        let requested_writable = desired_access & GENERIC_WRITE != 0 && !is_directory;
 
-        let (backing, file_len) = if is_directory {
+        let (backing, file_len, writable) = if is_directory {
             match creation_disposition {
-                OPEN_EXISTING | OPEN_ALWAYS => (FileBacking::Memory(Vec::new()), 0),
+                OPEN_EXISTING | OPEN_ALWAYS => (FileBacking::Memory(Vec::new()), 0, false),
                 _ => {
                     return Err(Error::InvalidArgument(format!(
                         "cannot create or truncate directory: {guest_path}"
@@ -421,7 +421,9 @@ impl HostFileSystem {
                         "file already exists: {guest_path}"
                     )));
                 }
-                CREATE_NEW | CREATE_ALWAYS => (FileBacking::Memory(Vec::new()), 0),
+                CREATE_NEW | CREATE_ALWAYS => {
+                    (FileBacking::Memory(Vec::new()), 0, requested_writable)
+                }
                 OPEN_EXISTING if !exists => {
                     return Err(Error::InvalidArgument(format!(
                         "file does not exist: {guest_path}"
@@ -433,18 +435,13 @@ impl HostFileSystem {
                         .unwrap_or_default()
                         .try_into()
                         .unwrap_or(usize::MAX);
-                    let file = fs::OpenOptions::new()
-                        .read(true)
-                        .write(writable)
-                        .open(&host_path)
-                        .map_err(|source| Error::Io {
-                            path: host_path.clone(),
-                            source,
-                        })?;
-                    (FileBacking::HostFile(file), file_len)
+                    let (file, writable) = open_existing_host_file(&host_path, requested_writable)?;
+                    (FileBacking::HostFile(file), file_len, writable)
                 }
-                OPEN_ALWAYS => (FileBacking::Memory(Vec::new()), 0),
-                TRUNCATE_EXISTING if exists && writable => (FileBacking::Memory(Vec::new()), 0),
+                OPEN_ALWAYS => (FileBacking::Memory(Vec::new()), 0, requested_writable),
+                TRUNCATE_EXISTING if exists && requested_writable => {
+                    (FileBacking::Memory(Vec::new()), 0, true)
+                }
                 TRUNCATE_EXISTING if !exists => {
                     return Err(Error::InvalidArgument(format!(
                         "file does not exist: {guest_path}"
@@ -1108,6 +1105,32 @@ fn wildcard_match(pattern: &str, name: &str) -> bool {
     matches[pattern.len()][name.len()]
 }
 
+fn open_existing_host_file(host_path: &Path, requested_writable: bool) -> Result<(fs::File, bool)> {
+    if requested_writable {
+        match fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(host_path)
+        {
+            Ok(file) => return Ok((file, true)),
+            Err(source) if source.kind() == std::io::ErrorKind::PermissionDenied => {}
+            Err(source) => {
+                return Err(Error::Io {
+                    path: host_path.to_path_buf(),
+                    source,
+                });
+            }
+        }
+    }
+
+    fs::File::open(host_path)
+        .map(|file| (file, false))
+        .map_err(|source| Error::Io {
+            path: host_path.to_path_buf(),
+            source,
+        })
+}
+
 const HOST_READ_CACHE_CHUNK: usize = 64 * 1024;
 
 fn read_cached_host_file_into<F>(
@@ -1359,6 +1382,45 @@ mod tests {
         fs.set_file_pointer(id, 1024 * 1024).unwrap();
         assert_eq!(fs.read_file(id, 9).unwrap(), b"rw-window");
         fs.close(id).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn readwrite_existing_readonly_host_files_fall_back_to_read_handle() {
+        let root = std::env::temp_dir().join(format!(
+            "wince_file_readwrite_readonly_stream_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("readonly-rw.bin");
+        fs::write(&path, b"readonly-window").unwrap();
+        let mut permissions = fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&path, permissions).unwrap();
+
+        let mut fs = HostFileSystem::new(&root);
+        let id = fs
+            .create_file_w(
+                "\\readonly-rw.bin",
+                GENERIC_READ | GENERIC_WRITE,
+                OPEN_EXISTING,
+            )
+            .unwrap();
+        let open = fs.open_file(id).unwrap();
+        assert!(open.is_host_file_backed());
+        assert!(!open.writable);
+        assert_eq!(open.memory_len(), 0);
+        assert_eq!(open.file_len(), b"readonly-window".len());
+        assert_eq!(fs.read_file(id, 15).unwrap(), b"readonly-window");
+        let write = fs.write_file(id, b"ignored").unwrap();
+        assert!(!write.success);
+        assert_eq!(write.bytes_transferred, 0);
+
+        fs.close(id).unwrap();
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(false);
+        std::fs::set_permissions(&path, permissions).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 

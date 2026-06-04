@@ -27,7 +27,7 @@ use crate::{
         thread::{
             ERROR_ALREADY_EXISTS, ERROR_CLASS_DOES_NOT_EXIST, ERROR_FILE_NOT_FOUND,
             ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE,
-            ERROR_NO_MORE_FILES, ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_SUPPORTED,
+            ERROR_NO_MORE_FILES, ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_OWNER, ERROR_NOT_SUPPORTED,
             ERROR_RESOURCE_NAME_NOT_FOUND, ERROR_SIGNAL_REFUSED,
         },
     },
@@ -6718,7 +6718,7 @@ fn create_thread_raw<M: CoredllGuestMemory>(
 }
 
 fn suspend_thread_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {
-    match kernel.suspend_thread(handle) {
+    match kernel.suspend_thread_for_handle(handle, thread_id) {
         ThreadSuspendResult::Previous(previous) => {
             kernel.threads.set_last_error(thread_id, 0);
             previous
@@ -6739,7 +6739,7 @@ fn suspend_thread_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32
 }
 
 fn resume_thread_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {
-    match kernel.resume_thread(handle) {
+    match kernel.resume_thread_for_handle(handle, thread_id) {
         ThreadResumeResult::Previous(previous) => {
             kernel.threads.set_last_error(thread_id, 0);
             previous
@@ -6754,7 +6754,7 @@ fn resume_thread_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 
 }
 
 fn get_thread_id_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {
-    match kernel.guest_thread_id(handle) {
+    match kernel.guest_thread_id_for_handle(handle, thread_id) {
         Some(target_thread_id) => {
             kernel.threads.set_last_error(thread_id, 0);
             target_thread_id
@@ -6782,7 +6782,7 @@ fn get_thread_exit_code_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    let Some(exit_code) = kernel.guest_thread_exit_code(handle) else {
+    let Some(exit_code) = kernel.guest_thread_exit_code_for_handle(handle, thread_id) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -6809,7 +6809,7 @@ fn get_process_exit_code_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    let Some(exit_code) = kernel.process_exit_code(handle) else {
+    let Some(exit_code) = kernel.process_exit_code_for_handle(handle) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -6832,7 +6832,7 @@ fn get_process_version_raw(
 }
 
 fn get_process_id_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {
-    match kernel.process_id(handle) {
+    match kernel.process_id_for_handle(handle) {
         Some(process_id) => {
             kernel.threads.set_last_error(thread_id, 0);
             process_id
@@ -6853,7 +6853,10 @@ fn get_thread_times_raw<M: CoredllGuestMemory>(
     args: &[u32],
 ) -> bool {
     let handle = raw_arg(args, 0);
-    if kernel.guest_thread_id(handle).is_none() {
+    if kernel
+        .guest_thread_id_for_handle(handle, thread_id)
+        .is_none()
+    {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -6905,10 +6908,10 @@ fn get_thread_priority_raw(
 
     let priority = if ce_priority {
         kernel
-            .thread_priority(handle)
+            .thread_priority_for_handle(handle, thread_id)
             .map(|priority| priority as u32)
     } else {
-        kernel.thread_win32_priority(handle)
+        kernel.thread_win32_priority_for_handle(handle, thread_id)
     };
 
     match priority {
@@ -6945,9 +6948,9 @@ fn set_thread_priority_raw(
     }
 
     let success = if ce_priority {
-        kernel.set_thread_ce_priority(handle, priority as i32)
+        kernel.set_thread_ce_priority_for_handle(handle, priority as i32, thread_id)
     } else {
-        kernel.set_thread_win32_priority(handle, priority)
+        kernel.set_thread_win32_priority_for_handle(handle, priority, thread_id)
     };
 
     if success {
@@ -6965,6 +6968,9 @@ fn release_mutex_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool
     if kernel.release_mutex(handle, thread_id) {
         kernel.threads.set_last_error(thread_id, 0);
         true
+    } else if kernel.is_mutex_handle(handle) {
+        kernel.threads.set_last_error(thread_id, ERROR_NOT_OWNER);
+        false
     } else {
         kernel
             .threads

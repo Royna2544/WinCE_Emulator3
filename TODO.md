@@ -50,26 +50,53 @@
     Unicorn parked waits now also cover the first
     `WaitForMultipleObjects(FALSE)` bridge: the blocked record owns the full
     handle list, wakes when any handle becomes ready, and returns
-    `WAIT_OBJECT_0 + index` through the raw import boundary.
-  - Open gaps: real scheduler-owned waiter queues, unified timer/serial/audio/
-    process wake ownership, blocked thread priority/fairness across all wait
-    kinds beyond the current Unicorn bridge, message-wait parking, waiter queue
-    insertion/removal on object state transitions, wake reasons beyond the
-    current single/multiple wait bridge, priority inheritance/boosting around
+    `WAIT_OBJECT_0 + index` through the raw import boundary. The first
+    `MsgWaitForMultipleObjectsEx` Unicorn bridge also parks raw imports after
+    handle validation and GWE queue-input checks, then resumes with either the
+    ready handle index, the message-input pseudo-index, or timeout. CE current
+    process/thread pseudo handles are now modeled from `kfuncs.h`
+    `SYS_HANDLE_BASE`/`SH_CURTHREAD`/`SH_CURPROC`: raw thread/process ID,
+    exit-code, thread-times, terminate-process, and wait paths accept the
+    pseudo current handles where CE does, and Unicorn initializes/refreshes the
+    KData current thread/process ID slots during guest thread, wait, and
+    `SendMessageW` context switches. Raw current-thread pseudo handle mutation
+    now also covers `SetThreadPriority`, `CeSetThreadPriority`,
+    `SuspendThread`, and `ResumeThread`; worker-thread objects are updated by
+    current thread id, while main-thread priority/suspend metadata is kept in
+    kernel state because v3 does not yet have a normal handle object for the
+    initial thread. Mutex ownership now tracks CE recursive lock counts:
+    initial-owner mutexes start owned with count `1`, owner waits recurse up to
+    `MUTEX_MAXLOCKCNT == 0x7fff`, releases unwind one count at a time, and raw
+    `ReleaseMutex` reports `ERROR_NOT_OWNER` for unowned/wrong-owner mutexes
+    while still using `ERROR_INVALID_HANDLE` for non-mutex handles.
+    The first scheduler-owned blocked-wait registry is also in place: parked
+    Unicorn single/multiple/msg waits register a wait id, waited handles, kind,
+    timeout, and FIFO sequence in `Scheduler`, with per-handle waiter queues
+    and scheduler-side ready selection. Unicorn still stores the saved MIPS
+    context payload locally beside that wait id.
+  - Open gaps: object state transitions do not yet wake directly from the
+    scheduler per-handle queues; unified timer/serial/audio/process wake
+    ownership, blocked thread priority/fairness across all wait kinds beyond
+    the current Unicorn bridge, full scheduler-owned message wait queues/
+    lifetime rather than the first import-boundary bridge, richer wake reasons
+    across serial/audio/process/GWE waits, priority inheritance/boosting around
     mutex/critical-section ownership, pending self-suspend/PSL late-suspend
     state, resume-to-run-queue wake ownership, and fuller Unicorn thread
     context switching still need the next scheduler port slices.
-  - Fixture gates: keep existing wait/thread fixtures passing, then graduate
-    pending scheduler fixtures for multiple waiters, `MsgWait*`, serial
-    parking, waveOut callback wakeups, child-process waits, and scheduler mini
-    app.
+  - Fixture gates: keep existing wait/thread fixtures passing, including
+    `tests/test_progs/163_mutex_recursive_ownership` when the eVC4 MIPSII
+    fixture suite is enabled, then graduate pending scheduler fixtures for
+    multiple waiters, `MsgWait*`, serial parking, waveOut callback wakeups,
+    child-process waits, and scheduler mini app.
   - Latest iNavi evidence: active long-run frontier remains the render-map/
     surface path around `0x0026f7e4` in prior host-mode runs. The latest
-    scheduler/thread virtual probe wrote
-    `target\multiple_wait_virtual_60s_*`, loaded dumped runtime
-    DLLs, stayed memory-stable (`heap_live=6921/21255717B`,
-    `host_read=4304/1732170B`), but still had no render milestones and only
-    the 101-pixel tap marker. This scheduler/loader/thread slice is
+    scheduler registry virtual probe wrote
+    `target\scheduler_wait_registry_virtual_60s_*`, loaded dumped runtime DLLs,
+    stayed memory-stable (`heap_live=7471/23006007B`,
+    `host_read=38664/2226093B`), and still had no render milestones with only
+    the 301-pixel red tap line. This mounted path did not park a wait in 60 s
+    (`reg:0/0 maxreg:0`), so the registry slice is covered by focused tests but
+    not exercised by this iNavi window. This scheduler/loader/thread work is
     foundational and should not be counted as UI success until the mounted run
     advances through guest GDI/render paths.
 
@@ -91,6 +118,9 @@
   - Fixture gates: keep PE zero-fill tests and module-loader tests passing;
     add focused runtime `LoadLibraryW`/`GetProcAddress` fixtures before
     expanding on-demand DLL mapping.
+  - Latest iNavi evidence: `target\commctrl_searchpath_virtual_60s_*` confirms
+    the loaded-`commctrl` path remains memory-stable, but it still does not
+    produce render milestones or useful framebuffer output.
 
 - Window/GWE subsystem:
   - Source refs:
@@ -492,9 +522,14 @@
   `addr=0x0000005c`, with `ReadFile=61825` and `CreateDIBSection=317`. Next
   File I/O is no longer the bulk-RAM bottleneck: existing host files stay
   host-backed even when opened writable, `ReadFile` streams from the stored
-  handle with bounded small-read caching, and the latest release host/tap run
-  reports only 3,787,819 host-file bytes read before this fault. Next work
-  should debug the null/invalid
+  handle with bounded small-read caching, and existing host files requested
+  read/write now fall back to read-only live host handles when Windows denies
+  write access. The latest virtual probe,
+  `target\file_rw_fallback_virtual_60s_*`, eliminates the previous
+  `Access is denied` failures for `SDMMC Disk\mapdata\SearchDB\*.db` and
+  advances to `pc=0x003426d0`, `ra=0x002fd5e8`, with
+  `host_open=235` and `host_read=38930/2229372B`, but still no render
+  milestones and only red tap pixels. Next work should debug the null/invalid
   render-map object path around
   `0x0026f7c0..0x0026f7e4` using real guest state and existing probes. Do not
   fake-present DIBSections just because their bits are populated.

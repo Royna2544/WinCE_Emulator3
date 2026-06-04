@@ -35,8 +35,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\syncobj.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\thread.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\handle.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kcalls.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\schedule.h`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\kfuncs.h`,
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`, and
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pkfuncs.h`
   - CE waits are kernel scheduler decisions over signaled kernel objects, not
@@ -76,7 +78,38 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     The first Unicorn multiple-wait parking bridge mirrors the same
     `DoWaitForObjects` proxy shape at the emulator boundary: one parked record
     owns all input handles, readiness scans every handle, and resume returns
-    `WAIT_OBJECT_0 + idx` for the first ready handle.
+    `WAIT_OBJECT_0 + idx` for the first ready handle. The first Unicorn
+    `MsgWaitForMultipleObjectsEx` parking bridge uses the same handle-wait
+    shape, with GWE queue input acting as the extra `WAIT_OBJECT_0 + count`
+    wake slot; source anchors are
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`
+    `MsgWaitForMultipleObjectsEx_E`/`_IWrapper`/`_I` and CE SDK
+    `winuser.h` `MWMO_INPUTAVAILABLE`/queue-status flags.
+    `kfuncs.h` defines `SYS_HANDLE_BASE == 64`, `SH_CURTHREAD == 1`, and
+    `SH_CURPROC == 2`; `GetCurrentThread()`/`GetCurrentProcess()` return the
+    resulting pseudo handles, while `GetCurrentThreadId()`/
+    `GetCurrentProcessId()` read the KData system-handle slots. `handle.c`
+    `LockHandleParam` converts those pseudo handles to the active process or
+    current thread for APIs that lock handles, `schedule.c` `LockWaitableObject`
+    accepts the current-process pseudo handle by waiting the process event and
+    accepts current-thread waits, and `thread.c` `THRDGetCode`/`THRDGetTimes`
+    map pseudo current handles where CE exposes thread/process status.
+    `thread.c` `THRDSuspend`, `THRDResume`, `THRDSetPrio`, and
+    `THRDSetPrio256` receive locked thread pointers after that pseudo-handle
+    mapping, so raw current-thread priority and suspend/resume paths should
+    update the active thread rather than rejecting the pseudo handle. CE mutex
+    recursion follows `syncobj.c`/`kcalls.c`: `InitMutex` starts with
+    `LockCount=1` when the creating thread requests initial ownership,
+    recursive waits by the owner increment `LockCount` up to
+    `MUTEX_MAXLOCKCNT == 0x7fff` from `syncobj.h`, and `MUTXRelease` returns
+    `ERROR_NOT_OWNER` (`288` from `winerror.h`) when the current thread is not
+    the owner. Releases decrement the recursive count until the final release
+    clears ownership and wakes waiters. The first v3 scheduler registry now
+    mirrors the CE proxy ownership shape by registering parked waits under a
+    scheduler wait id plus each waited handle; live Unicorn resume selection
+    uses that scheduler-owned wait metadata for CE priority/FIFO ordering while
+    the saved CPU context remains in the Unicorn bridge for the next context
+    switch slice.
     Full waiter queues and context-switch ownership remain the next scheduler
     port step.
 
@@ -106,6 +139,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `ReadFile`, `WriteFile`, and `FlushFileBuffers`-style handle behavior.
   - SDK signatures define the low/high file-pointer and high-size output
     pointer shapes mirrored by the raw dispatcher.
+  - Mounted iNavi evidence shows large map/SearchDB files are often opened
+    read/write but used read-heavy. v3 must keep those existing files
+    host-backed and readable without bulk preload; when the host denies
+    write-through access, a read-only live host handle is preferable to
+    failing `CreateFileW` or reverting to memory backing.
 
 - FSDMGR path canonicalization and volume resolution:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\INC\cnnclpth.h`,

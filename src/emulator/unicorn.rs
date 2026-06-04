@@ -156,7 +156,7 @@ impl UnicornDebugSnapshot {
             || self.scheduler_stats.msg_wait_count != 0
         {
             parts.push(format!(
-                "sched=wait:{}/{}/{} ok:{} timeout:{} fail:{} block:{} wake:{}",
+                "sched=wait:{}/{}/{} ok:{} timeout:{} fail:{} block:{} wake:{} reg:{}/{} maxreg:{}",
                 self.scheduler_stats.wait_single_count,
                 self.scheduler_stats.wait_multiple_count,
                 self.scheduler_stats.msg_wait_count,
@@ -164,7 +164,10 @@ impl UnicornDebugSnapshot {
                 self.scheduler_stats.wait_timeout_count,
                 self.scheduler_stats.wait_failed_count,
                 self.scheduler_stats.wait_block_count,
-                self.scheduler_stats.wait_wake_count
+                self.scheduler_stats.wait_wake_count,
+                self.scheduler_stats.waiter_register_count,
+                self.scheduler_stats.waiter_remove_count,
+                self.scheduler_stats.max_registered_waits
             ));
         }
         if self.gwe_stats.send_transaction_count != 0 {
@@ -745,7 +748,7 @@ struct BlockedGuestThread {
 }
 
 #[cfg(feature = "unicorn")]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BlockedWaitKind {
     Kernel,
     MsgWait {
@@ -757,6 +760,7 @@ enum BlockedWaitKind {
 #[cfg(feature = "unicorn")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BlockedWaitThread {
+    wait_id: u64,
     thread_id: u32,
     thread_handle: u32,
     wait_handles: Vec<u32>,
@@ -765,6 +769,22 @@ struct BlockedWaitThread {
     timeout_ms: u32,
     regs: [u32; 32],
     return_pc: u32,
+}
+
+#[cfg(feature = "unicorn")]
+fn scheduler_blocked_wait_kind(
+    kind: BlockedWaitKind,
+) -> crate::ce::scheduler::SchedulerBlockedWaitKind {
+    match kind {
+        BlockedWaitKind::Kernel => crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel,
+        BlockedWaitKind::MsgWait {
+            wake_mask,
+            input_available,
+        } => crate::ce::scheduler::SchedulerBlockedWaitKind::MsgWait {
+            wake_mask,
+            input_available,
+        },
+    }
 }
 
 #[cfg(feature = "unicorn")]
@@ -1287,6 +1307,7 @@ impl UnicornMips {
         uc.reg_write(RegisterMIPS::RA, u64::from(THREAD_EXIT_STUB_ADDR))
             .map_err(|err| Error::Backend(format!("set guest RA: {err:?}")))?;
         self.write_process_entry_context(kernel, &mut uc)?;
+        update_user_kdata_current_ids(&mut uc, 1, kernel.current_process_id())?;
 
         let indirect_call_probe = Rc::new(RefCell::new(None));
         let indirect_call_probe_hook = Rc::clone(&indirect_call_probe);
@@ -1883,6 +1904,11 @@ impl UnicornMips {
                             .unwrap_or(result);
                         restore_mips_gprs(uc, &restore.sender_regs);
                         *current_thread_id_hook.borrow_mut() = restore.sender_thread_id;
+                        let _ = update_user_kdata_current_ids(
+                            uc,
+                            restore.sender_thread_id,
+                            unsafe { &*kernel_ptr }.current_process_id(),
+                        );
                         *running_guest_thread_hook.borrow_mut() = restore.previous_running_thread;
                         let writes = [
                             uc.reg_write(RegisterMIPS::V0, u64::from(completed)),
@@ -1913,6 +1939,11 @@ impl UnicornMips {
                             callout.worker_thread_id,
                         );
                         *current_thread_id_hook.borrow_mut() = callout.creator_thread_id;
+                        let _ = update_user_kdata_current_ids(
+                            uc,
+                            callout.creator_thread_id,
+                            unsafe { &*kernel_ptr }.current_process_id(),
+                        );
                         *running_guest_thread_hook.borrow_mut() = None;
                         restore_mips_gprs(uc, &callout.creator_regs);
                         let writes = [
@@ -1949,6 +1980,11 @@ impl UnicornMips {
                         return;
                     };
                     *current_thread_id_hook.borrow_mut() = suspended.thread_id;
+                    let _ = update_user_kdata_current_ids(
+                        uc,
+                        suspended.thread_id,
+                        unsafe { &*kernel_ptr }.current_process_id(),
+                    );
                     restore_suspended_thread(uc, &suspended);
                     tracing::debug!(
                         target: "ce.imports",
@@ -2690,10 +2726,32 @@ fn user_kdata_page() -> Vec<u8> {
     page
 }
 
+fn user_kdata_handle_address(index: usize) -> u32 {
+    USER_KDATA_BASE + USER_KDATA_SYSHANDLE_OFFSET + index as u32 * 4
+}
+
 fn write_user_kdata_handle(page: &mut [u8], index: usize, value: u32) {
-    let offset =
-        (USER_KDATA_BASE - USER_KDATA_PAGE_BASE + USER_KDATA_SYSHANDLE_OFFSET) as usize + index * 4;
+    let offset = user_kdata_handle_address(index).saturating_sub(USER_KDATA_PAGE_BASE) as usize;
     page[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+#[cfg(feature = "unicorn")]
+fn update_user_kdata_current_ids<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    thread_id: u32,
+    process_id: u32,
+) -> Result<()> {
+    uc.mem_write(
+        u64::from(user_kdata_handle_address(SYS_HANDLE_CURRENT_THREAD)),
+        &thread_id.to_le_bytes(),
+    )
+    .map_err(|err| Error::Backend(format!("write current thread id to KData: {err:?}")))?;
+    uc.mem_write(
+        u64::from(user_kdata_handle_address(SYS_HANDLE_CURRENT_PROCESS)),
+        &process_id.to_le_bytes(),
+    )
+    .map_err(|err| Error::Backend(format!("write current process id to KData: {err:?}")))?;
+    Ok(())
 }
 
 #[cfg(feature = "unicorn")]
@@ -4218,7 +4276,7 @@ impl std::fmt::Display for UnicornDebugSnapshot {
         }
         write!(
             f,
-            " heap_live_count={} heap_live_bytes={} virtual_live_count={} virtual_live_bytes={} file_host_open_count={} file_host_read_count={} file_host_read_bytes={} file_memory_backed_open_count={} file_max_read_request={} sched_wait_single_count={} sched_wait_multiple_count={} sched_msg_wait_count={} sched_wait_acquired_count={} sched_wait_timeout_count={} sched_wait_failed_count={} sched_wait_block_count={} sched_wait_wake_count={} gwe_send_transaction_count={} gwe_send_completed_count={} gwe_send_timeout_count={} gwe_send_receiver_terminated_count={} gwe_max_sent_queue_depth={}",
+            " heap_live_count={} heap_live_bytes={} virtual_live_count={} virtual_live_bytes={} file_host_open_count={} file_host_read_count={} file_host_read_bytes={} file_memory_backed_open_count={} file_max_read_request={} sched_wait_single_count={} sched_wait_multiple_count={} sched_msg_wait_count={} sched_wait_acquired_count={} sched_wait_timeout_count={} sched_wait_failed_count={} sched_wait_block_count={} sched_wait_wake_count={} sched_waiter_register_count={} sched_waiter_remove_count={} sched_max_registered_waits={} gwe_send_transaction_count={} gwe_send_completed_count={} gwe_send_timeout_count={} gwe_send_receiver_terminated_count={} gwe_max_sent_queue_depth={}",
             self.heap_allocation_count,
             self.heap_allocation_bytes,
             self.virtual_allocation_count,
@@ -4236,6 +4294,9 @@ impl std::fmt::Display for UnicornDebugSnapshot {
             self.scheduler_stats.wait_failed_count,
             self.scheduler_stats.wait_block_count,
             self.scheduler_stats.wait_wake_count,
+            self.scheduler_stats.waiter_register_count,
+            self.scheduler_stats.waiter_remove_count,
+            self.scheduler_stats.max_registered_waits,
             self.gwe_stats.send_transaction_count,
             self.gwe_stats.send_transaction_completed_count,
             self.gwe_stats.send_transaction_timeout_count,
@@ -5207,6 +5268,11 @@ fn try_block_empty_get_message<D>(
         });
         *running_thread.borrow_mut() = None;
         *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        let _ = update_user_kdata_current_ids(
+            uc,
+            callout.creator_thread_id,
+            kernel.current_process_id(),
+        );
         restore_mips_gprs(uc, &callout.creator_regs);
         let writes = [
             uc.reg_write(RegisterMIPS::V0, u64::from(callout.thread_handle)),
@@ -5234,6 +5300,8 @@ fn try_block_empty_get_message<D>(
         *running_thread.borrow_mut() = None;
         if let Some(suspended) = suspended_thread.borrow_mut().take() {
             *current_thread_id.borrow_mut() = suspended.thread_id;
+            let _ =
+                update_user_kdata_current_ids(uc, suspended.thread_id, kernel.current_process_id());
             restore_suspended_thread(uc, &suspended);
             return true;
         }
@@ -5275,11 +5343,22 @@ fn try_block_wait_for_single_object<D>(
     let regs = capture_mips_gprs(uc);
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
     if let Some(callout) = pending_returns.borrow_mut().pop() {
+        let kind = BlockedWaitKind::Kernel;
+        let wait_handles = vec![wait_handle];
+        let wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            callout.thread_handle,
+            wait_handles.clone(),
+            scheduler_blocked_wait_kind(kind),
+            wait_started_ms,
+            timeout,
+        );
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            wait_id,
             thread_id,
             thread_handle: callout.thread_handle,
-            wait_handles: vec![wait_handle],
-            kind: BlockedWaitKind::Kernel,
+            wait_handles,
+            kind,
             wait_started_ms,
             timeout_ms: timeout,
             regs,
@@ -5287,6 +5366,11 @@ fn try_block_wait_for_single_object<D>(
         });
         *running_thread.borrow_mut() = None;
         *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        let _ = update_user_kdata_current_ids(
+            uc,
+            callout.creator_thread_id,
+            kernel.current_process_id(),
+        );
         restore_mips_gprs(uc, &callout.creator_regs);
         let writes = [
             uc.reg_write(RegisterMIPS::V0, u64::from(callout.thread_handle)),
@@ -5301,11 +5385,22 @@ fn try_block_wait_for_single_object<D>(
 
     let running = *running_thread.borrow();
     if let Some((_, thread_handle)) = running {
-        blocked_waits.borrow_mut().push(BlockedWaitThread {
+        let kind = BlockedWaitKind::Kernel;
+        let wait_handles = vec![wait_handle];
+        let wait_id = kernel.register_blocked_waiter(
             thread_id,
             thread_handle,
-            wait_handles: vec![wait_handle],
-            kind: BlockedWaitKind::Kernel,
+            wait_handles.clone(),
+            scheduler_blocked_wait_kind(kind),
+            wait_started_ms,
+            timeout,
+        );
+        blocked_waits.borrow_mut().push(BlockedWaitThread {
+            wait_id,
+            thread_id,
+            thread_handle,
+            wait_handles,
+            kind,
             wait_started_ms,
             timeout_ms: timeout,
             regs,
@@ -5314,6 +5409,8 @@ fn try_block_wait_for_single_object<D>(
         *running_thread.borrow_mut() = None;
         if let Some(suspended) = suspended_thread.borrow_mut().take() {
             *current_thread_id.borrow_mut() = suspended.thread_id;
+            let _ =
+                update_user_kdata_current_ids(uc, suspended.thread_id, kernel.current_process_id());
             restore_suspended_thread(uc, &suspended);
             return true;
         }
@@ -5379,11 +5476,21 @@ fn try_block_wait_for_multiple_objects<D>(
     let regs = capture_mips_gprs(uc);
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
     if let Some(callout) = pending_returns.borrow_mut().pop() {
+        let kind = BlockedWaitKind::Kernel;
+        let wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            callout.thread_handle,
+            wait_handles.clone(),
+            scheduler_blocked_wait_kind(kind),
+            wait_started_ms,
+            timeout,
+        );
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            wait_id,
             thread_id,
             thread_handle: callout.thread_handle,
             wait_handles,
-            kind: BlockedWaitKind::Kernel,
+            kind,
             wait_started_ms,
             timeout_ms: timeout,
             regs,
@@ -5391,6 +5498,11 @@ fn try_block_wait_for_multiple_objects<D>(
         });
         *running_thread.borrow_mut() = None;
         *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        let _ = update_user_kdata_current_ids(
+            uc,
+            callout.creator_thread_id,
+            kernel.current_process_id(),
+        );
         restore_mips_gprs(uc, &callout.creator_regs);
         let writes = [
             uc.reg_write(RegisterMIPS::V0, u64::from(callout.thread_handle)),
@@ -5405,11 +5517,21 @@ fn try_block_wait_for_multiple_objects<D>(
 
     let running = *running_thread.borrow();
     if let Some((_, thread_handle)) = running {
+        let kind = BlockedWaitKind::Kernel;
+        let wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            thread_handle,
+            wait_handles.clone(),
+            scheduler_blocked_wait_kind(kind),
+            wait_started_ms,
+            timeout,
+        );
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            wait_id,
             thread_id,
             thread_handle,
             wait_handles,
-            kind: BlockedWaitKind::Kernel,
+            kind,
             wait_started_ms,
             timeout_ms: timeout,
             regs,
@@ -5418,6 +5540,8 @@ fn try_block_wait_for_multiple_objects<D>(
         *running_thread.borrow_mut() = None;
         if let Some(suspended) = suspended_thread.borrow_mut().take() {
             *current_thread_id.borrow_mut() = suspended.thread_id;
+            let _ =
+                update_user_kdata_current_ids(uc, suspended.thread_id, kernel.current_process_id());
             restore_suspended_thread(uc, &suspended);
             return true;
         }
@@ -5508,7 +5632,16 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
         input_available,
     };
     if let Some(callout) = pending_returns.borrow_mut().pop() {
+        let wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            callout.thread_handle,
+            wait_handles.clone(),
+            scheduler_blocked_wait_kind(kind),
+            wait_started_ms,
+            timeout,
+        );
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            wait_id,
             thread_id,
             thread_handle: callout.thread_handle,
             wait_handles,
@@ -5520,6 +5653,11 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
         });
         *running_thread.borrow_mut() = None;
         *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        let _ = update_user_kdata_current_ids(
+            uc,
+            callout.creator_thread_id,
+            kernel.current_process_id(),
+        );
         restore_mips_gprs(uc, &callout.creator_regs);
         let writes = [
             uc.reg_write(RegisterMIPS::V0, u64::from(callout.thread_handle)),
@@ -5534,7 +5672,16 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
 
     let running = *running_thread.borrow();
     if let Some((_, thread_handle)) = running {
+        let wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            thread_handle,
+            wait_handles.clone(),
+            scheduler_blocked_wait_kind(kind),
+            wait_started_ms,
+            timeout,
+        );
         blocked_waits.borrow_mut().push(BlockedWaitThread {
+            wait_id,
             thread_id,
             thread_handle,
             wait_handles,
@@ -5547,6 +5694,8 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
         *running_thread.borrow_mut() = None;
         if let Some(suspended) = suspended_thread.borrow_mut().take() {
             *current_thread_id.borrow_mut() = suspended.thread_id;
+            let _ =
+                update_user_kdata_current_ids(uc, suspended.thread_id, kernel.current_process_id());
             restore_suspended_thread(uc, &suspended);
             return true;
         }
@@ -5580,21 +5729,23 @@ fn try_resume_blocked_wait<D>(
         kernel.pump_timers_to_gwe(thread_id);
     }
 
-    let ready_index = {
-        let blocked_waits = blocked_waits.borrow();
-        let now_ms = kernel.timers.tick_count();
-        select_ready_blocked_wait_index(
-            &blocked_waits,
-            active_thread_id,
-            now_ms,
-            |blocked| blocked_wait_is_ready(blocked, kernel),
-            |thread_id| kernel.thread_priority_by_id(thread_id),
-        )
+    let now_ms = kernel.timers.tick_count();
+    let Some(ready_wait_id) =
+        kernel.select_ready_blocked_waiter(active_thread_id, now_ms, |blocked, kernel| {
+            scheduler_blocked_wait_is_ready(blocked, kernel)
+        })
+    else {
+        return false;
     };
-    let Some(index) = ready_index else {
+    let Some(index) = blocked_waits
+        .borrow()
+        .iter()
+        .position(|blocked| blocked.wait_id == ready_wait_id)
+    else {
         return false;
     };
     let blocked = blocked_waits.borrow_mut().remove(index);
+    let _ = kernel.remove_blocked_waiter(blocked.wait_id);
     let has_ready_handle = blocked_wait_has_ready_handle(&blocked, kernel);
     let message_input_ready = !has_ready_handle && blocked_msg_wait_has_input(&blocked, kernel);
     let wait_result = if has_ready_handle {
@@ -5647,6 +5798,7 @@ fn try_resume_blocked_wait<D>(
         return true;
     }
     *current_thread_id.borrow_mut() = blocked.thread_id;
+    let _ = update_user_kdata_current_ids(uc, blocked.thread_id, kernel.current_process_id());
     *running_thread.borrow_mut() = Some((blocked.thread_id, blocked.thread_handle));
     true
 }
@@ -5666,10 +5818,41 @@ fn blocked_wait_has_ready_handle(blocked: &BlockedWaitThread, kernel: &CeKernel)
 }
 
 #[cfg(feature = "unicorn")]
+fn scheduler_blocked_wait_has_ready_handle(
+    blocked: &crate::ce::scheduler::SchedulerBlockedWait,
+    kernel: &CeKernel,
+) -> bool {
+    blocked
+        .wait_handles
+        .iter()
+        .any(|handle| kernel.is_wait_ready(*handle, blocked.thread_id) == Some(true))
+}
+
+#[cfg(feature = "unicorn")]
 fn blocked_msg_wait_has_input(blocked: &BlockedWaitThread, kernel: &CeKernel) -> bool {
     match blocked.kind {
         BlockedWaitKind::Kernel => false,
         BlockedWaitKind::MsgWait {
+            wake_mask,
+            input_available,
+        } => {
+            if input_available {
+                kernel.gwe.has_queue_input(blocked.thread_id, wake_mask)
+            } else {
+                kernel.gwe.has_new_queue_input(blocked.thread_id, wake_mask)
+            }
+        }
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn scheduler_blocked_msg_wait_has_input(
+    blocked: &crate::ce::scheduler::SchedulerBlockedWait,
+    kernel: &CeKernel,
+) -> bool {
+    match blocked.kind {
+        crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel => false,
+        crate::ce::scheduler::SchedulerBlockedWaitKind::MsgWait {
             wake_mask,
             input_available,
         } => {
@@ -5699,11 +5882,15 @@ fn consume_blocked_msg_wait_input(blocked: &BlockedWaitThread, kernel: &mut CeKe
 }
 
 #[cfg(feature = "unicorn")]
-fn blocked_wait_is_ready(blocked: &BlockedWaitThread, kernel: &CeKernel) -> bool {
-    blocked_wait_has_ready_handle(blocked, kernel) || blocked_msg_wait_has_input(blocked, kernel)
+fn scheduler_blocked_wait_is_ready(
+    blocked: &crate::ce::scheduler::SchedulerBlockedWait,
+    kernel: &CeKernel,
+) -> bool {
+    scheduler_blocked_wait_has_ready_handle(blocked, kernel)
+        || scheduler_blocked_msg_wait_has_input(blocked, kernel)
 }
 
-#[cfg(feature = "unicorn")]
+#[cfg(all(test, feature = "unicorn"))]
 fn select_ready_blocked_wait_index(
     blocked_waits: &[BlockedWaitThread],
     active_thread_id: u32,
@@ -5732,6 +5919,7 @@ mod wait_scheduler_tests {
 
     fn blocked_wait(start: u32, timeout: u32) -> BlockedWaitThread {
         BlockedWaitThread {
+            wait_id: 1,
             thread_id: 1,
             thread_handle: 0x100,
             wait_handles: vec![0x104],
@@ -5745,6 +5933,7 @@ mod wait_scheduler_tests {
 
     fn blocked_wait_for_thread(thread_id: u32, wait_handle: u32) -> BlockedWaitThread {
         BlockedWaitThread {
+            wait_id: u64::from(thread_id),
             thread_id,
             thread_handle: 0x100 + thread_id,
             wait_handles: vec![wait_handle],
@@ -5843,6 +6032,24 @@ mod wait_scheduler_tests {
             .post_message(thread_id, crate::ce::gwe::Message::new(0, 0x400, 0, 0, 10));
         assert!(blocked_msg_wait_has_input(&blocked, &kernel));
     }
+
+    #[test]
+    fn user_kdata_page_exposes_current_thread_and_process_ids() {
+        let page = super::user_kdata_page();
+        let thread_offset = super::user_kdata_handle_address(super::SYS_HANDLE_CURRENT_THREAD)
+            .saturating_sub(super::USER_KDATA_PAGE_BASE) as usize;
+        let process_offset = super::user_kdata_handle_address(super::SYS_HANDLE_CURRENT_PROCESS)
+            .saturating_sub(super::USER_KDATA_PAGE_BASE) as usize;
+
+        assert_eq!(
+            u32::from_le_bytes(page[thread_offset..thread_offset + 4].try_into().unwrap()),
+            1
+        );
+        assert_eq!(
+            u32::from_le_bytes(page[process_offset..process_offset + 4].try_into().unwrap()),
+            1
+        );
+    }
 }
 
 #[cfg(feature = "unicorn")]
@@ -5871,6 +6078,11 @@ fn try_exit_guest_thread_callout<D>(
         kernel.mark_guest_thread_exited(callout.thread_handle, exit_code);
         release_guest_thread_stack_slot(stack_slots, callout.worker_thread_id);
         *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        let _ = update_user_kdata_current_ids(
+            uc,
+            callout.creator_thread_id,
+            kernel.current_process_id(),
+        );
         *running_thread.borrow_mut() = None;
         restore_mips_gprs(uc, &callout.creator_regs);
         let writes = [
@@ -5895,6 +6107,7 @@ fn try_exit_guest_thread_callout<D>(
         return true;
     };
     *current_thread_id.borrow_mut() = suspended.thread_id;
+    let _ = update_user_kdata_current_ids(uc, suspended.thread_id, kernel.current_process_id());
     restore_suspended_thread(uc, &suspended);
     true
 }
@@ -5964,6 +6177,7 @@ fn try_enter_create_thread_callout<D>(
         creator_regs,
     });
     *current_thread_id.borrow_mut() = worker_thread_id;
+    let _ = update_user_kdata_current_ids(uc, worker_thread_id, kernel.current_process_id());
     *running_thread.borrow_mut() = Some((worker_thread_id, thread_handle));
     let stack_slot = assign_guest_thread_stack_slot(stack_slots, worker_thread_id);
     let worker_stack = guest_thread_stack_top(process_stack_top, stack_slot);
@@ -6032,6 +6246,7 @@ fn try_enter_resumed_thread_callout<D>(
     creator.regs[2] = result;
     *suspended_thread.borrow_mut() = Some(creator);
     *current_thread_id.borrow_mut() = worker_thread_id;
+    let _ = update_user_kdata_current_ids(uc, worker_thread_id, kernel.current_process_id());
     *running_thread.borrow_mut() = Some((worker_thread_id, thread_handle));
 
     let worker_stack = guest_thread_stack_top(
@@ -6103,6 +6318,7 @@ fn try_resume_blocked_get_message<D>(
         return true;
     }
     *current_thread_id.borrow_mut() = blocked.thread_id;
+    let _ = update_user_kdata_current_ids(uc, blocked.thread_id, kernel.current_process_id());
     *running_thread.borrow_mut() = Some((blocked.thread_id, blocked.thread_handle));
     *blocked_thread.borrow_mut() = None;
     true
@@ -8250,6 +8466,7 @@ fn try_enter_send_message_callout<D>(
         let sender_regs = capture_mips_gprs(uc);
         let previous_running_thread = *running_thread.borrow();
         *current_thread_id.borrow_mut() = target_thread_id;
+        let _ = update_user_kdata_current_ids(uc, target_thread_id, kernel.current_process_id());
         *running_thread.borrow_mut() = None;
         Some(SendMessageRestoreContext {
             sender_thread_id: active_thread_id,
@@ -8301,6 +8518,11 @@ fn try_enter_send_message_callout<D>(
                 let _ = kernel.take_completed_send_message_result(restore.send_id);
                 restore_mips_gprs(uc, &restore.sender_regs);
                 *current_thread_id.borrow_mut() = restore.sender_thread_id;
+                let _ = update_user_kdata_current_ids(
+                    uc,
+                    restore.sender_thread_id,
+                    kernel.current_process_id(),
+                );
                 *running_thread.borrow_mut() = restore.previous_running_thread;
             } else if let Some(thread_id) = callout.send_thread_id {
                 kernel.gwe.end_send_message(thread_id);

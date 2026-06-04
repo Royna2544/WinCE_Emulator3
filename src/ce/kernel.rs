@@ -17,13 +17,16 @@ use crate::{
         memory::{MemorySystem, PROCESS_HEAP_HANDLE},
         object::{
             CE_THREAD_PRIORITY_NORMAL, FileObject, FindFileObject, HandleTable, KernelObject,
-            ThreadResumeResult, ThreadSuspendResult, WaitMultipleResult, WaitResult,
-            ce_thread_priority_to_win32, win32_thread_priority_to_ce,
+            MAX_SUSPEND_COUNT, ThreadResumeResult, ThreadSuspendResult, WaitMultipleResult,
+            WaitResult, ce_thread_priority_to_win32, win32_thread_priority_to_ce,
         },
         registry::Registry,
         remote::{CeRemote, RemoteStatus, WM_LBUTTONDOWN, WM_MOUSEMOVE, make_lparam},
         resource::ResourceSystem,
-        scheduler::{Scheduler, SchedulerStats, SchedulerWaitKind, SchedulerWakeReason},
+        scheduler::{
+            Scheduler, SchedulerBlockedWait, SchedulerBlockedWaitKind, SchedulerStats,
+            SchedulerWaitKind, SchedulerWakeReason,
+        },
         thread::ThreadSystem,
         timer::{TimerSystem, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
@@ -61,6 +64,10 @@ pub struct CeKernel {
     process_module_host_path: Option<PathBuf>,
     process_command_line: String,
     current_process_id: u32,
+    current_process_exit_code: u32,
+    current_process_signaled: bool,
+    thread_priority_overrides: BTreeMap<u32, i32>,
+    thread_suspend_counts: BTreeMap<u32, u32>,
     pending_process_launches: Vec<PendingProcessLaunch>,
     next_process_id: u32,
     loaded_modules: BTreeMap<String, LoadedModule>,
@@ -131,6 +138,12 @@ fn wait_result_to_wake_reason(result: u32) -> SchedulerWakeReason {
 }
 
 const MAXIMUM_WAIT_OBJECTS: usize = 64;
+pub const CE_SYS_HANDLE_BASE: u32 = 64;
+pub const CE_SH_CURTHREAD: u32 = 1;
+pub const CE_SH_CURPROC: u32 = 2;
+pub const CE_CURRENT_THREAD_PSEUDO_HANDLE: u32 = CE_SYS_HANDLE_BASE + CE_SH_CURTHREAD;
+pub const CE_CURRENT_PROCESS_PSEUDO_HANDLE: u32 = CE_SYS_HANDLE_BASE + CE_SH_CURPROC;
+pub const STILL_ACTIVE: u32 = 259;
 
 impl CeKernel {
     pub fn boot(config: RuntimeConfig) -> Self {
@@ -153,7 +166,11 @@ impl CeKernel {
             process_module_path: "\\FakeCE\\process.exe".to_owned(),
             process_module_host_path: None,
             process_command_line: String::new(),
-            current_process_id: 0,
+            current_process_id: 1,
+            current_process_exit_code: STILL_ACTIVE,
+            current_process_signaled: false,
+            thread_priority_overrides: BTreeMap::new(),
+            thread_suspend_counts: BTreeMap::new(),
             pending_process_launches: Vec::new(),
             next_process_id: 0x42,
             loaded_modules: BTreeMap::new(),
@@ -285,6 +302,14 @@ impl CeKernel {
 
     pub fn current_process_id(&self) -> u32 {
         self.current_process_id
+    }
+
+    pub fn is_current_thread_pseudo_handle(handle: u32) -> bool {
+        handle == CE_CURRENT_THREAD_PSEUDO_HANDLE
+    }
+
+    pub fn is_current_process_pseudo_handle(handle: u32) -> bool {
+        handle == CE_CURRENT_PROCESS_PSEUDO_HANDLE
     }
 
     pub fn queue_process_launch(
@@ -882,7 +907,25 @@ impl CeKernel {
         self.handles.thread_id(handle)
     }
 
+    pub fn guest_thread_id_for_handle(&self, handle: u32, current_thread_id: u32) -> Option<u32> {
+        if Self::is_current_thread_pseudo_handle(handle) {
+            return Some(current_thread_id);
+        }
+        self.handles.thread_id(handle)
+    }
+
     pub fn guest_thread_exit_code(&self, handle: u32) -> Option<u32> {
+        self.handles.thread_exit_code(handle)
+    }
+
+    pub fn guest_thread_exit_code_for_handle(
+        &self,
+        handle: u32,
+        _current_thread_id: u32,
+    ) -> Option<u32> {
+        if Self::is_current_thread_pseudo_handle(handle) {
+            return Some(STILL_ACTIVE);
+        }
         self.handles.thread_exit_code(handle)
     }
 
@@ -890,11 +933,30 @@ impl CeKernel {
         self.handles.process_exit_code(handle)
     }
 
+    pub fn process_exit_code_for_handle(&self, handle: u32) -> Option<u32> {
+        if Self::is_current_process_pseudo_handle(handle) {
+            return Some(self.current_process_exit_code);
+        }
+        self.handles.process_exit_code(handle)
+    }
+
     pub fn process_id(&self, handle: u32) -> Option<u32> {
         self.handles.process_id(handle)
     }
 
+    pub fn process_id_for_handle(&self, handle: u32) -> Option<u32> {
+        if Self::is_current_process_pseudo_handle(handle) {
+            return Some(self.current_process_id);
+        }
+        self.handles.process_id(handle)
+    }
+
     pub fn terminate_process(&mut self, handle: u32, exit_code: u32) -> bool {
+        if Self::is_current_process_pseudo_handle(handle) {
+            self.current_process_exit_code = exit_code;
+            self.current_process_signaled = true;
+            return true;
+        }
         self.handles.mark_process_exited(handle, exit_code)
     }
 
@@ -902,11 +964,73 @@ impl CeKernel {
         self.handles.suspend_thread(handle)
     }
 
+    pub fn suspend_thread_for_handle(
+        &mut self,
+        handle: u32,
+        current_thread_id: u32,
+    ) -> ThreadSuspendResult {
+        if Self::is_current_thread_pseudo_handle(handle) {
+            if let Some(result) = self.handles.suspend_thread_by_id(current_thread_id) {
+                return result;
+            }
+            return self.suspend_thread_by_id_fallback(current_thread_id);
+        }
+        self.suspend_thread(handle)
+    }
+
+    fn suspend_thread_by_id_fallback(&mut self, thread_id: u32) -> ThreadSuspendResult {
+        let previous = self
+            .thread_suspend_counts
+            .get(&thread_id)
+            .copied()
+            .unwrap_or(0);
+        if previous == MAX_SUSPEND_COUNT {
+            return ThreadSuspendResult::SignalRefused;
+        }
+        self.thread_suspend_counts.insert(thread_id, previous + 1);
+        ThreadSuspendResult::Previous(previous)
+    }
+
     pub fn resume_thread(&mut self, handle: u32) -> ThreadResumeResult {
         self.handles.resume_thread(handle)
     }
 
+    pub fn resume_thread_for_handle(
+        &mut self,
+        handle: u32,
+        current_thread_id: u32,
+    ) -> ThreadResumeResult {
+        if Self::is_current_thread_pseudo_handle(handle) {
+            if let Some(result) = self.handles.resume_thread_by_id(current_thread_id) {
+                return result;
+            }
+            return self.resume_thread_by_id_fallback(current_thread_id);
+        }
+        self.resume_thread(handle)
+    }
+
+    fn resume_thread_by_id_fallback(&mut self, thread_id: u32) -> ThreadResumeResult {
+        let previous = self
+            .thread_suspend_counts
+            .get(&thread_id)
+            .copied()
+            .unwrap_or(0);
+        if previous > 1 {
+            self.thread_suspend_counts.insert(thread_id, previous - 1);
+        } else {
+            self.thread_suspend_counts.remove(&thread_id);
+        }
+        ThreadResumeResult::Previous(previous)
+    }
+
     pub fn thread_priority(&self, handle: u32) -> Option<i32> {
+        self.handles.thread_priority(handle)
+    }
+
+    pub fn thread_priority_for_handle(&self, handle: u32, current_thread_id: u32) -> Option<i32> {
+        if Self::is_current_thread_pseudo_handle(handle) {
+            return Some(self.thread_priority_by_id(current_thread_id));
+        }
         self.handles.thread_priority(handle)
     }
 
@@ -916,7 +1040,19 @@ impl CeKernel {
             .and_then(ce_thread_priority_to_win32)
     }
 
+    pub fn thread_win32_priority_for_handle(
+        &self,
+        handle: u32,
+        current_thread_id: u32,
+    ) -> Option<u32> {
+        self.thread_priority_for_handle(handle, current_thread_id)
+            .and_then(ce_thread_priority_to_win32)
+    }
+
     pub fn thread_priority_by_id(&self, thread_id: u32) -> i32 {
+        if let Some(priority) = self.thread_priority_overrides.get(&thread_id) {
+            return *priority;
+        }
         self.handles
             .thread_priority_by_id(thread_id)
             .unwrap_or(CE_THREAD_PRIORITY_NORMAL)
@@ -926,6 +1062,32 @@ impl CeKernel {
         self.handles.set_thread_priority(handle, priority)
     }
 
+    pub fn set_thread_ce_priority_for_handle(
+        &mut self,
+        handle: u32,
+        priority: i32,
+        current_thread_id: u32,
+    ) -> bool {
+        if Self::is_current_thread_pseudo_handle(handle) {
+            return self.set_thread_ce_priority_by_id(current_thread_id, priority);
+        }
+        self.set_thread_ce_priority(handle, priority)
+    }
+
+    fn set_thread_ce_priority_by_id(&mut self, thread_id: u32, priority: i32) -> bool {
+        if let Some(success) = self.handles.set_thread_priority_by_id(thread_id, priority) {
+            if success {
+                self.thread_priority_overrides.remove(&thread_id);
+            }
+            return success;
+        }
+        if !(0..crate::ce::object::MAX_CE_PRIORITY_LEVELS).contains(&priority) {
+            return false;
+        }
+        self.thread_priority_overrides.insert(thread_id, priority);
+        true
+    }
+
     pub fn set_thread_win32_priority(&mut self, handle: u32, priority: u32) -> bool {
         let Some(priority) = win32_thread_priority_to_ce(priority) else {
             return false;
@@ -933,12 +1095,28 @@ impl CeKernel {
         self.handles.set_thread_priority(handle, priority)
     }
 
+    pub fn set_thread_win32_priority_for_handle(
+        &mut self,
+        handle: u32,
+        priority: u32,
+        current_thread_id: u32,
+    ) -> bool {
+        let Some(priority) = win32_thread_priority_to_ce(priority) else {
+            return false;
+        };
+        self.set_thread_ce_priority_for_handle(handle, priority, current_thread_id)
+    }
+
     pub fn guest_thread_start(&self, handle: u32) -> Option<(u32, u32, u32)> {
         self.handles.thread_start(handle)
     }
 
     pub fn set_event(&mut self, handle: u32) -> bool {
-        self.handles.set_event(handle)
+        let success = self.handles.set_event(handle);
+        if success {
+            self.queue_object_wake_candidates(handle);
+        }
+        success
     }
 
     pub fn reset_event(&mut self, handle: u32) -> bool {
@@ -973,20 +1151,75 @@ impl CeKernel {
     }
 
     pub fn release_semaphore(&mut self, handle: u32, release_count: i32) -> Option<i32> {
-        self.handles.release_semaphore(handle, release_count)
+        let previous = self.handles.release_semaphore(handle, release_count)?;
+        self.queue_object_wake_candidates(handle);
+        Some(previous)
     }
 
     pub fn release_mutex(&mut self, handle: u32, thread_id: u32) -> bool {
-        self.handles.release_mutex(handle, thread_id)
+        let previous_lock_count = self.handles.mutex_lock_count(handle);
+        let success = self.handles.release_mutex(handle, thread_id);
+        if success && previous_lock_count == Some(1) {
+            self.queue_object_wake_candidates(handle);
+        }
+        success
+    }
+
+    pub fn is_mutex_handle(&self, handle: u32) -> bool {
+        self.handles.is_mutex(handle)
+    }
+
+    fn wait_for_single_object_core(
+        &mut self,
+        handle: u32,
+        timeout_ms: u32,
+        thread_id: u32,
+    ) -> WaitResult {
+        if Self::is_current_thread_pseudo_handle(handle) {
+            return if timeout_ms == 0 {
+                WaitResult::Timeout
+            } else {
+                WaitResult::Timeout
+            };
+        }
+        if Self::is_current_process_pseudo_handle(handle) {
+            return if self.current_process_signaled {
+                WaitResult::Object0
+            } else {
+                WaitResult::Timeout
+            };
+        }
+        self.handles
+            .wait_for_single_object(handle, timeout_ms, thread_id)
+    }
+
+    fn wait_for_any_object_core(&mut self, handles: &[u32], thread_id: u32) -> WaitMultipleResult {
+        if handles
+            .iter()
+            .any(|handle| self.is_wait_ready(*handle, thread_id).is_none())
+        {
+            return WaitMultipleResult::Failed;
+        }
+
+        let Some((index, handle)) = handles
+            .iter()
+            .enumerate()
+            .find(|(_, handle)| self.is_wait_ready(**handle, thread_id) == Some(true))
+        else {
+            return WaitMultipleResult::Timeout;
+        };
+
+        match self.wait_for_single_object_core(*handle, 0, thread_id) {
+            WaitResult::Object0 => WaitMultipleResult::Object(index as u32),
+            WaitResult::Timeout => WaitMultipleResult::Timeout,
+            WaitResult::Failed => WaitMultipleResult::Failed,
+        }
     }
 
     pub fn wait_for_single_object(&mut self, handle: u32, timeout_ms: u32, thread_id: u32) -> u32 {
         self.scheduler
             .record_wait_attempt(SchedulerWaitKind::Single, 1, timeout_ms);
-        let result = match self
-            .handles
-            .wait_for_single_object(handle, timeout_ms, thread_id)
-        {
+        let result = match self.wait_for_single_object_core(handle, timeout_ms, thread_id) {
             WaitResult::Object0 => WAIT_OBJECT_0,
             WaitResult::Timeout => WAIT_TIMEOUT,
             WaitResult::Failed => WAIT_FAILED,
@@ -1052,6 +1285,52 @@ impl CeKernel {
             .record_wait_wake(wait_result_to_wake_reason(result));
     }
 
+    pub fn register_blocked_waiter(
+        &mut self,
+        thread_id: u32,
+        thread_handle: u32,
+        wait_handles: Vec<u32>,
+        kind: SchedulerBlockedWaitKind,
+        wait_started_ms: u32,
+        timeout_ms: u32,
+    ) -> u64 {
+        self.scheduler.register_blocked_wait(
+            thread_id,
+            thread_handle,
+            wait_handles,
+            kind,
+            wait_started_ms,
+            timeout_ms,
+        )
+    }
+
+    pub fn remove_blocked_waiter(&mut self, wait_id: u64) -> Option<SchedulerBlockedWait> {
+        self.scheduler.remove_blocked_wait(wait_id)
+    }
+
+    pub fn blocked_waiter(&self, wait_id: u64) -> Option<&SchedulerBlockedWait> {
+        self.scheduler.blocked_wait(wait_id)
+    }
+
+    fn queue_object_wake_candidates(&mut self, handle: u32) {
+        let wait_ids = self.scheduler.waiter_ids_for_handle(handle);
+        self.scheduler.queue_pending_wake_ids(wait_ids);
+    }
+
+    pub fn select_ready_blocked_waiter(
+        &self,
+        active_thread_id: u32,
+        now_ms: u32,
+        mut is_ready: impl FnMut(&SchedulerBlockedWait, &Self) -> bool,
+    ) -> Option<u64> {
+        self.scheduler.select_ready_blocked_wait_id(
+            active_thread_id,
+            now_ms,
+            |wait| is_ready(wait, self),
+            |thread_id| self.thread_priority_by_id(thread_id),
+        )
+    }
+
     pub fn record_multiple_wait_attempt(
         &mut self,
         handle_count: u32,
@@ -1070,10 +1349,7 @@ impl CeKernel {
         timeout_ms: u32,
         thread_id: u32,
     ) -> u32 {
-        match self
-            .handles
-            .wait_for_single_object(handle, timeout_ms, thread_id)
-        {
+        match self.wait_for_single_object_core(handle, timeout_ms, thread_id) {
             WaitResult::Object0 => WAIT_OBJECT_0,
             WaitResult::Timeout => WAIT_TIMEOUT,
             WaitResult::Failed => {
@@ -1085,6 +1361,12 @@ impl CeKernel {
     }
 
     pub fn is_wait_ready(&self, handle: u32, thread_id: u32) -> Option<bool> {
+        if Self::is_current_thread_pseudo_handle(handle) {
+            return Some(false);
+        }
+        if Self::is_current_process_pseudo_handle(handle) {
+            return Some(self.current_process_signaled);
+        }
         self.handles.is_wait_ready(handle, thread_id)
     }
 
@@ -1100,7 +1382,7 @@ impl CeKernel {
                 .set_last_error(thread_id, crate::ce::thread::ERROR_INVALID_PARAMETER);
             WAIT_FAILED
         } else {
-            match self.handles.wait_for_any_object(handles, thread_id) {
+            match self.wait_for_any_object_core(handles, thread_id) {
                 WaitMultipleResult::Object(index) => WAIT_OBJECT_0 + index,
                 WaitMultipleResult::Timeout => WAIT_TIMEOUT,
                 WaitMultipleResult::Failed => {
@@ -1125,7 +1407,7 @@ impl CeKernel {
                 .set_last_error(thread_id, crate::ce::thread::ERROR_INVALID_PARAMETER);
             return WAIT_FAILED;
         }
-        match self.handles.wait_for_any_object(handles, thread_id) {
+        match self.wait_for_any_object_core(handles, thread_id) {
             WaitMultipleResult::Object(index) => WAIT_OBJECT_0 + index,
             WaitMultipleResult::Timeout => WAIT_TIMEOUT,
             WaitMultipleResult::Failed => {
