@@ -78,7 +78,18 @@
   `0x0002006c`, but this did not move the final frontier. Continue with the
   remaining generic presentation question: why the guest-composed 800x54
   memory surface under hidden child `0x0002006c` is never shown or copied to a
-  display HDC.
+  display HDC. Changed `QS_PAINT` now follows effective visibility instead of
+  raw hidden invalidation. The follow-up
+  `target\hidden_paint_qs_virtual_150s_*` probe stayed at the same frontier but
+  exposed a stronger CE gap: hidden geometry changes were delivering immediate
+  `WM_MOVE`/`WM_SIZE` despite CE `window.hpp` documenting pending size/move
+  delivery until `ShowWindow`. v3 now defers those move/size messages for
+  direct-hidden windows; `target\hidden_sizemove_virtual_150s_*` and
+  `target\filtered_paint_visibility_virtual_150s_*` both keep the same
+  `COREDLL.dll@861 blocked_get_message` frontier while reducing message input
+  signals from `227` to `174`. Continue from the cleaner state by tracing why
+  the guest-composed 800x54 offscreen surface is never shown or copied to a
+  display HDC through normal GWE/GDI paths.
 - Decide the safe host-write policy for mounted external dumps. The refreshed
   `target\createfile_access_virtual_150s_files.txt` proves iNavi opens
   `SDMMC Disk\iNaviData\config.bin` as `GENERIC_WRITE` + `OPEN_EXISTING`, but

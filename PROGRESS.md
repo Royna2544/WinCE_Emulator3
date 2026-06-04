@@ -9,6 +9,45 @@
 
 ## Confirmed
 
+- GWE invalidation/show/create/set-window-position now only marks changed
+  `QS_PAINT` when the target HWND is effectively visible. Hidden or
+  ancestor-hidden windows can still keep a simplified pending update rectangle
+  for later presentation, but they no longer wake `MsgWaitForMultipleObjectsEx`
+  or `GetQueueStatus` as new paint input when `GetMessageW` cannot synthesize a
+  `WM_PAINT`. This follows CE's `m_hrgnUpdate == Invalid /\ Visible` model in
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\window.hpp` and paint-request
+  queueing shape in `cmsgque.h`. Focused coverage:
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_hidden_invalidated_child_does_not_signal_paint_until_visible`
+  passes with the known non-fatal Windows incremental-finalize warning.
+- Filtered synthetic paint selection now observes effective ancestor
+  visibility too. `PeekMessageW(hwnd, WM_PAINT, WM_PAINT, ...)` no longer
+  exposes `WM_PAINT` for a child hidden by its parent while unfiltered
+  `GetMessageW` correctly suppresses it. Focused coverage:
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_update_window_observes_hidden_ancestors`. The mounted
+  `target\filtered_paint_visibility_virtual_150s_*` follow-up remains at the
+  same `COREDLL.dll@861 blocked_get_message` frontier with stable counters and
+  the reduced `msgsig=174` hidden-size/move state, confirming this paint
+  selection fix did not regress the first real splash present or file/RSS
+  behavior.
+- GWE/kernel window-position delivery now models CE's pending size/move
+  behavior for direct-hidden windows. Hidden `MoveWindow`/`SetWindowPos`
+  changes still queue `WM_WINDOWPOSCHANGED` with the CE `WINDOWPOS` payload,
+  but `WM_MOVE` and `WM_SIZE` are deferred in per-HWND pending bits and flushed
+  on the next direct `ShowWindow`. Focused coverage:
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_hidden_move_defers_size_move_until_show_window` and
+  `coredll_raw_window_state_changes_queue_lifecycle_messages` pass with the
+  known non-fatal Windows incremental-finalize warning. The mounted
+  `target\hidden_sizemove_virtual_150s_*` probe remains at the same
+  `COREDLL.dll@861 blocked_get_message` frontier, with stable RSS/file-I/O
+  (`heap_live=13697/13300954B`, `virtual_live=3/196608B`, `host_open=665`,
+  `host_read=80196/4047089B`), but message input signals dropped from the
+  previous `227` to `174`. The `0x0002006c` strip child now receives the later
+  hidden geometry update as `WM_WINDOWPOSCHANGED` only; its old hidden
+  `WM_MOVE`/`WM_SIZE` traffic is gone. Window snapshots now expose
+  `pending_move`/`pending_size` for future mounted trace comparison.
 - Raw/kernel `ShowWindow` now treats `WM_SHOWWINDOW` as a direct HWND
   visibility transition instead of comparing effective ancestor visibility to
   the requested state. Hiding a child that is already effectively invisible

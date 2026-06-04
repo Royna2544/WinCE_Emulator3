@@ -98,6 +98,13 @@
     `host_read=25713/1949108B`) with the same window-HDC 800x480 `BitBlt` and
     populated framebuffer (`1151398/1152000` nonzero RGB bytes), so TimerProc
     lParam/callout support did not regress first UI presentation.
+    Current GWE follow-up: `target\hidden_sizemove_virtual_150s_*` keeps the
+    same first display present and memory/file-I/O stability, and removes the
+    non-CE immediate `WM_MOVE`/`WM_SIZE` traffic for direct-hidden geometry
+    changes (`msgsig` dropped from `227` to `174`). It still parks at
+    `COREDLL.dll@861 blocked_get_message`, so the open bug is now a cleaner
+    post-splash presentation/state progression problem, not hidden move/size
+    spam.
     GWE hidden-window follow-up: `target\hide_update_clear_virtual_20s_*`
     proves stale create-time update state is no longer left on immediately
     hidden MFC child controls. `ShowWindow(SW_HIDE)`/`SWP_HIDEWINDOW` now clear

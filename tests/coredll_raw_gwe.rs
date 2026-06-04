@@ -2948,7 +2948,9 @@ fn coredll_raw_update_window_observes_hidden_ancestors() -> Result<()> {
     let mut memory = TestGuestMemory::default();
     let thread_id = 9;
     let rect_ptr = 0x2_1000;
+    let msg_ptr = 0x2_1100;
     memory.map_words(rect_ptr, 4);
+    memory.map_words(msg_ptr, 7);
 
     let parent = kernel.create_window_ex_w_with_rect(
         thread_id,
@@ -3016,6 +3018,19 @@ fn coredll_raw_update_window_observes_hidden_ancestors() -> Result<()> {
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PEEK_MESSAGE_W,
+            [msg_ptr, child, WM_PAINT, WM_PAINT, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
             ..
         }
     ));
@@ -4096,11 +4111,50 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
             [msg_ptr, child, WM_PAINT, WM_PAINT],
         ),
         CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHOW_WINDOW,
+            [parent, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_MESSAGE_W,
+            [msg_ptr, child, WM_PAINT, WM_PAINT],
+        ),
+        CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
             ..
         }
     ));
     assert_eq!(memory.read_u32(msg_ptr + 4)?, WM_PAINT);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHOW_WINDOW,
+            [parent, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -5095,6 +5149,117 @@ fn coredll_raw_set_window_pos_show_hide_queues_windowpos_without_rect_change() -
 }
 
 #[test]
+fn coredll_raw_hidden_move_defers_size_move_until_show_window() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 3;
+    let msg_ptr = 0x7280;
+    memory.map_words(msg_ptr, 7);
+
+    let hwnd = kernel.create_window_ex_w(thread_id, "HIDDENMOVE", "", None, 0, 0, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MOVE_WINDOW,
+            [hwnd, 12, 34, 120, 90, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        hwnd,
+        WM_WINDOWPOSCHANGED,
+        0,
+        0,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PEEK_MESSAGE_W,
+            [msg_ptr, hwnd, WM_MOVE, WM_SIZE, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHOW_WINDOW,
+            [hwnd, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        hwnd,
+        WM_SHOWWINDOW,
+        1,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        hwnd,
+        WM_WINDOWPOSCHANGED,
+        0,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        hwnd,
+        WM_MOVE,
+        0,
+        0x0022_000c,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        hwnd,
+        WM_SIZE,
+        0,
+        0x005a_0078,
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_show_window_queues_direct_visibility_windowpos_under_hidden_parent() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
@@ -5580,6 +5745,112 @@ fn coredll_raw_get_message_delivers_invalidated_visible_child_paint() -> Result<
     ));
     assert_eq!(memory.read_u32(msg_ptr)?, child);
     assert_eq!(memory.read_u32(msg_ptr + 4)?, WM_PAINT);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_hidden_invalidated_child_does_not_signal_paint_until_visible() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 4;
+    let msg_ptr = 0x8400;
+    memory.map_words(msg_ptr, 7);
+
+    let parent = kernel
+        .gwe
+        .create_window_ex(thread_id, "HIDDEN_PARENT_PAINT", "", None, 0, 0, 0);
+    let child = kernel.gwe.create_window_ex(
+        thread_id,
+        "HIDDEN_CHILD_PAINT",
+        "",
+        Some(parent),
+        0,
+        WS_CHILD | WS_VISIBLE,
+        0,
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_QUEUE_STATUS,
+            [QS_PAINT],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_INVALIDATE_RECT,
+            [child, 0, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_QUEUE_STATUS,
+            [QS_PAINT],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PEEK_MESSAGE_W,
+            [msg_ptr, 0, WM_PAINT, WM_PAINT, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHOW_WINDOW,
+            [parent, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_QUEUE_STATUS,
+            [QS_PAINT],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(v),
+            ..
+        } if v == ((QS_PAINT << 16) | QS_PAINT)
+    ));
 
     Ok(())
 }

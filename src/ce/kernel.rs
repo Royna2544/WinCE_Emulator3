@@ -1651,6 +1651,9 @@ impl CeKernel {
                 flags,
                 true,
             );
+            if is_direct_visible {
+                self.post_pending_size_move(hwnd);
+            }
         }
         if visible && activate {
             let target = self.top_level_window(hwnd);
@@ -1721,6 +1724,9 @@ impl CeKernel {
                 flags,
                 flags & (SWP_SHOWWINDOW | SWP_HIDEWINDOW) != 0 || flags & SWP_NOZORDER == 0,
             );
+            if flags & SWP_SHOWWINDOW != 0 && self.direct_window_visible(hwnd) {
+                self.post_pending_size_move(hwnd);
+            }
             if flags & (SWP_NOACTIVATE | SWP_HIDEWINDOW) == 0 {
                 let target = self.top_level_window(hwnd);
                 let _ = self.activate_window(Some(target));
@@ -2342,15 +2348,34 @@ impl CeKernel {
                 .unwrap_or(0);
             self.post_window_message(hwnd, WM_WINDOWPOSCHANGED, 0, lparam);
         }
-        if before.left != after.left || before.top != after.top {
-            self.post_window_message(hwnd, WM_MOVE, 0, make_lparam_i16(after.left, after.top));
+        let moved = before.left != after.left || before.top != after.top;
+        let sized = before.width() != after.width() || before.height() != after.height();
+        if moved || sized {
+            if self.direct_window_visible(hwnd) {
+                self.post_size_move(hwnd, after, moved, sized);
+            } else {
+                let _ = self.gwe.mark_pending_size_move(hwnd, moved, sized);
+            }
         }
-        if before.width() != after.width() || before.height() != after.height() {
+    }
+
+    fn post_pending_size_move(&mut self, hwnd: u32) {
+        let Some((rect, moved, sized)) = self.gwe.take_pending_size_move(hwnd) else {
+            return;
+        };
+        self.post_size_move(hwnd, rect, moved, sized);
+    }
+
+    fn post_size_move(&mut self, hwnd: u32, rect: Rect, moved: bool, sized: bool) {
+        if moved {
+            self.post_window_message(hwnd, WM_MOVE, 0, make_lparam_i16(rect.left, rect.top));
+        }
+        if sized {
             self.post_window_message(
                 hwnd,
                 WM_SIZE,
                 0,
-                make_lparam_i16(after.width(), after.height()),
+                make_lparam_i16(rect.width(), rect.height()),
             );
         }
     }

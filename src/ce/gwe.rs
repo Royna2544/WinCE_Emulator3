@@ -334,6 +334,8 @@ pub struct Window {
     pub update_pending: bool,
     pub erase_pending: bool,
     pub update_rect: Rect,
+    pub pending_move: bool,
+    pub pending_size: bool,
     pub destroyed: bool,
     pub destroy_message_sent: bool,
     pub nc_destroy_message_sent: bool,
@@ -435,6 +437,8 @@ impl Default for Gwe {
                 update_pending: false,
                 erase_pending: false,
                 update_rect: Rect::default(),
+                pending_move: false,
+                pending_size: false,
                 destroyed: false,
                 destroy_message_sent: false,
                 nc_destroy_message_sent: false,
@@ -601,6 +605,8 @@ impl Gwe {
                 update_pending: visible,
                 erase_pending: visible,
                 update_rect,
+                pending_move: false,
+                pending_size: false,
                 destroyed: false,
                 destroy_message_sent: false,
                 nc_destroy_message_sent: false,
@@ -609,7 +615,7 @@ impl Gwe {
             },
         );
         self.z_order.push(hwnd);
-        if visible {
+        if self.is_window_visible(hwnd) {
             self.mark_queue_status_changed(thread_id, QS_PAINT);
         }
         hwnd
@@ -785,7 +791,9 @@ impl Gwe {
             window.update_rect = window.client_rect.zero_origin();
             let thread_id = window.thread_id;
             let _ = window;
-            self.mark_queue_status_changed(thread_id, QS_PAINT);
+            if self.is_window_visible(hwnd) {
+                self.mark_queue_status_changed(thread_id, QS_PAINT);
+            }
         } else if !visible {
             Self::clear_window_update(window);
         }
@@ -816,7 +824,9 @@ impl Gwe {
         window.erase_pending |= erase;
         let thread_id = window.thread_id;
         let _ = window;
-        self.mark_queue_status_changed(thread_id, QS_PAINT);
+        if self.is_window_visible(hwnd) {
+            self.mark_queue_status_changed(thread_id, QS_PAINT);
+        }
         true
     }
 
@@ -874,6 +884,31 @@ impl Gwe {
             rect: window.update_rect,
             erase: window.erase_pending,
         })
+    }
+
+    pub fn mark_pending_size_move(&mut self, hwnd: u32, moved: bool, sized: bool) -> bool {
+        let Some(window) = self.windows.get_mut(&hwnd) else {
+            return false;
+        };
+        if window.destroyed {
+            return false;
+        }
+        window.pending_move |= moved;
+        window.pending_size |= sized;
+        true
+    }
+
+    pub fn take_pending_size_move(&mut self, hwnd: u32) -> Option<(Rect, bool, bool)> {
+        let window = self.windows.get_mut(&hwnd)?;
+        if window.destroyed || (!window.pending_move && !window.pending_size) {
+            return None;
+        }
+        let rect = window.rect;
+        let pending_move = window.pending_move;
+        let pending_size = window.pending_size;
+        window.pending_move = false;
+        window.pending_size = false;
+        Some((rect, pending_move, pending_size))
     }
 
     pub fn clear_update_erase(&mut self, hwnd: u32) -> bool {
@@ -1328,7 +1363,7 @@ impl Gwe {
         if flags & SWP_NOZORDER == 0 {
             self.apply_z_order(hwnd, parent, insert_after.unwrap_or(HWND_TOP));
         }
-        if let Some(thread_id) = paint_changed_thread {
+        if let Some(thread_id) = paint_changed_thread.filter(|_| self.is_window_visible(hwnd)) {
             self.mark_queue_status_changed(thread_id, QS_PAINT);
         }
         true
@@ -2173,10 +2208,7 @@ impl Gwe {
             let window = self.windows.get(candidate)?;
             (!window.destroyed
                 && window.thread_id == thread_id
-                && hwnd
-                    .is_some()
-                    .then_some(window.visible && window.style & WS_VISIBLE != 0)
-                    .unwrap_or_else(|| self.is_window_visible(window.hwnd))
+                && self.is_window_visible(window.hwnd)
                 && window.update_pending
                 && hwnd.is_none_or(|wanted| window.hwnd == wanted))
             .then(|| Message::new(window.hwnd, WM_PAINT, 0, 0, 0))

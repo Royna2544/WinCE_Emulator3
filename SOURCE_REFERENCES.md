@@ -68,6 +68,23 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `target\update_effective_visibility_virtual_150s_*` confirms the current
     iNavi `0x0002006c` child remains a hidden offscreen-composition target,
     not a window v3 should force-paint.
+  - Synthetic `WM_PAINT` selection for `GetMessageW`/`PeekMessageW` now uses
+    the same effective ancestor-aware visibility for both unfiltered queues and
+    explicit-HWND filters. This keeps filtered `PeekMessage(hwnd, WM_PAINT,
+    WM_PAINT, ...)` from exposing paint for windows CE would consider hidden
+    through an ancestor.
+  - CE `window.hpp` models `m_hrgnUpdate` as `Invalid /\ Visible`, and
+    `cmsgque.h` keeps paint requests as queue-visible work. v3 now lets hidden
+    windows remember a simplified pending update rectangle for later visible
+    presentation, but it does not set the changed `QS_PAINT` bit until the HWND
+    is effectively visible. This keeps `MsgWaitForMultipleObjectsEx`/queue
+    wakeups aligned with paint messages that `GetMessageW` can actually
+    synthesize.
+  - CE `window.hpp` also carries `fPendingSizeMove`, documented as waiting to
+    send `WM_SIZE` and `WM_MOVE` when `ShowWindow` happens. v3 now preserves
+    `WM_WINDOWPOSCHANGED` for hidden geometry changes, but defers direct-hidden
+    `WM_MOVE`/`WM_SIZE` until a later direct show, rather than delivering size
+    and move messages into an HWND that is still hidden.
 
 - Explorer/COREDLL startup ordinals:
   `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\MIPSII\RETAIL\coredll.def`,
