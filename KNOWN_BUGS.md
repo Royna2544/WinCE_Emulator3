@@ -129,6 +129,12 @@
     the same hidden `0x0002006c` 800x54 pending update, and no later display
     present. Continue with remaining GWE window-position ordering gaps such as
     MFC show/idle sequencing or the missing screen-HDC blit path.
+    Message-trace decode follow-up:
+    `target\windowpos_trace_decode_virtual_150s_*` now prints the guest
+    `WINDOWPOS` fields for queued `WM_WINDOWPOSCHANGED` records. It confirms
+    the current stall is not due to an unreadable/opaque message payload:
+    `0x0002006c` received `rect=0,0,800,480/flags=0x00000000`, while the run
+    still ends at the same hidden-child/offscreen-composition frontier.
     Historical evidence: the mounted virtual run with dumped runtime DLLs
     and real sibling app DLLs wrote `target\inavi_trampoline_virtual_*`. It
     preloaded `AuthLibrary.dll`, `TpSysAuth.dll`, `mMbcAuth.dll`,

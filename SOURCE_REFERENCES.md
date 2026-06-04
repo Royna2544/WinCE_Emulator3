@@ -457,6 +457,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     actual geometry deltas. Mounted evidence
     `target\setwindowpos_showhide_virtual_150s_*` confirms the additional
     message traffic without adding app-specific painting or state forcing.
+  - Monitor message snapshots now decode queued `WM_WINDOWPOSCHANGED`
+    `lParam` pointers using the CE SDK `WINDOWPOS` layout. This is trace-only
+    evidence plumbing: it does not alter GWE dispatch, but it lets mounted
+    probes report `hwnd`, `hwndInsertAfter`, `x/y/cx/cy`, and `flags` beside
+    opaque `MSG.lParam` values.
   - `window.hpp` and `gweapiset1.hpp` expose `BringWindowToTop_I`, and CE SDK
     `winuser.h` exposes `BringWindowToTop(HWND)` beside `GetWindow` and the
     `HWND_TOP`/`HWND_BOTTOM`/`HWND_TOPMOST` constants. Rust raw ordinal 275 now

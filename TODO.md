@@ -63,7 +63,13 @@
   idle/message ordering, resource replay, or screen-HDC blit ownership.
   Basic show/hide/z-order-only `SetWindowPos`
   `WM_WINDOWPOSCHANGED` payload delivery is now covered and did not by itself
-  move the frontier.
+  move the frontier. The newest diagnostic trace
+  `target\windowpos_trace_decode_virtual_150s_*` decodes queued
+  `WM_WINDOWPOSCHANGED` payloads in-place; it confirms HWND `0x0002006c`
+  received a normal `WINDOWPOS` notification for `rect=0,0,800,480` with
+  `flags=0` before the run later parks with that child hidden and holding the
+  pending 800x54 update. Use this decoded message evidence for the next
+  show/idle/presentation slice instead of adding opaque pointer-only traces.
 - Decide the safe host-write policy for mounted external dumps. The refreshed
   `target\createfile_access_virtual_150s_files.txt` proves iNavi opens
   `SDMMC Disk\iNaviData\config.bin` as `GENERIC_WRITE` + `OPEN_EXISTING`, but

@@ -9,6 +9,24 @@
 
 ## Confirmed
 
+- Message trace records now decode queued `WM_WINDOWPOSCHANGED` `WINDOWPOS`
+  payloads from guest memory. This is diagnostic only: it exposes `hwnd`,
+  `hwndInsertAfter`, `x/y/cx/cy`, and `flags` in monitor message snapshots
+  without changing GWE behavior. Verification:
+  `cargo fmt`, `cargo check --features unicorn,trace,win32-desktop`,
+  focused
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_windowposchanged_carries_guest_windowpos_payload`,
+  `cargo build --features unicorn,trace,win32-desktop`, and full
+  `cargo test --features unicorn,trace,win32-desktop` pass with the known
+  non-fatal Windows incremental-finalize warning. A mounted 150 s virtual
+  probe wrote `target\windowpos_trace_decode_virtual_150s_*`; it reaches the
+  same stable `COREDLL.dll@861 blocked_get_message` frontier
+  (`heap_live=13697/13300954B`, `virtual_live=3/196608B`,
+  `host_open=665`, `host_read=80196/4047089B`, `mem_open=3`,
+  `max_read=685080`) but the message log now shows decoded `WINDOWPOS`
+  details, including HWND `0x0002006c` receiving
+  `rect=0,0,800,480/flags=0x00000000`.
 - Raw/kernel `SetWindowPos` now queues `WM_WINDOWPOSCHANGED` with a
   `WINDOWPOS` payload for CE-visible metadata changes even when the rectangle
   is unchanged. Show-only, hide-only, and z-order-only calls no longer vanish

@@ -422,6 +422,7 @@ pub struct UnicornMessageRecord {
     pub wparam: u32,
     pub lparam: u32,
     pub time_ms: u32,
+    pub detail: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -6002,6 +6003,7 @@ fn unicorn_blocked_get_message_snapshot(
                         wparam: message.wparam,
                         lparam: message.lparam,
                         time_ms: message.time_ms,
+                        detail: None,
                     })
                     .collect(),
             })
@@ -7809,13 +7811,39 @@ fn read_unicorn_message<D>(
     uc: &unicorn_engine::Unicorn<'_, D>,
     msg_ptr: u32,
 ) -> Option<UnicornMessageRecord> {
+    let hwnd = read_unicorn_u32(uc, msg_ptr)?;
+    let msg = read_unicorn_u32(uc, msg_ptr.wrapping_add(4))?;
+    let wparam = read_unicorn_u32(uc, msg_ptr.wrapping_add(8))?;
+    let lparam = read_unicorn_u32(uc, msg_ptr.wrapping_add(12))?;
     Some(UnicornMessageRecord {
-        hwnd: read_unicorn_u32(uc, msg_ptr)?,
-        msg: read_unicorn_u32(uc, msg_ptr.wrapping_add(4))?,
-        wparam: read_unicorn_u32(uc, msg_ptr.wrapping_add(8))?,
-        lparam: read_unicorn_u32(uc, msg_ptr.wrapping_add(12))?,
+        hwnd,
+        msg,
+        wparam,
+        lparam,
         time_ms: read_unicorn_u32(uc, msg_ptr.wrapping_add(16))?,
+        detail: decode_unicorn_message_detail(uc, msg, lparam),
     })
+}
+
+#[cfg(feature = "unicorn")]
+fn decode_unicorn_message_detail<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    msg: u32,
+    lparam: u32,
+) -> Option<String> {
+    if msg != crate::ce::gwe::WM_WINDOWPOSCHANGED || lparam == 0 {
+        return None;
+    }
+    let hwnd = read_unicorn_u32(uc, lparam)?;
+    let insert_after = read_unicorn_u32(uc, lparam.wrapping_add(4))?;
+    let x = read_unicorn_u32(uc, lparam.wrapping_add(8))? as i32;
+    let y = read_unicorn_u32(uc, lparam.wrapping_add(12))? as i32;
+    let width = read_unicorn_u32(uc, lparam.wrapping_add(16))? as i32;
+    let height = read_unicorn_u32(uc, lparam.wrapping_add(20))? as i32;
+    let flags = read_unicorn_u32(uc, lparam.wrapping_add(24))?;
+    Some(format!(
+        "WINDOWPOS hwnd=0x{hwnd:08x}/insert_after=0x{insert_after:08x}/rect={x},{y},{width},{height}/flags=0x{flags:08x}"
+    ))
 }
 
 #[cfg(feature = "unicorn")]
