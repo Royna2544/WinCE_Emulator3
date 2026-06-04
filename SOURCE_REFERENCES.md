@@ -187,7 +187,16 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     owner thread id on timers, posts due no-HWND `WM_TIMER` messages to that
     owner queue, and keeps `HWND` timers routed through their window owner when
     a window is known. CE virtual time is advanced inside the emulator timer
-    system for sleeps/timer pumping instead of sleeping the host thread.
+    system for sleeps/timer pumping instead of sleeping the host thread. The
+    raw Unicorn `GetMessageW` bridge now keeps that timer pumping narrow: it
+    only fast-forwards short, imminent timers up to 100 ms before queue
+    retrieval, and lets longer future timers park as blocked message waits.
+    This keeps CE's blocking `GetMessageW` shape for long periodic timers while
+    preserving the current emulator bridge needed for near-term GUI-settling
+    timers. Mounted evidence in `target\timer_cap_virtual_*` shows the id-1000
+    7.5 s no-HWND timer now remains recorded as the next due timer instead of
+    driving thousands of synthetic idle-update dispatches, while the real
+    first-present framebuffer remains populated.
     The same GWE header declares
     blocking `GetMessageW_I` separately from
     `GetMessageWNoWait_I`, and documents paint requests as queue conditions

@@ -9,6 +9,26 @@
 
 ## Confirmed
 
+- Raw Unicorn `GetMessageW` empty-queue handling no longer fast-forwards every
+  future timer unconditionally. The bridge now only advances short, imminent
+  timers up to 100 ms so GUI-settling timers can fire without host sleeping;
+  longer timers park as blocked scheduler/message waits with their due time in
+  the monitor summary. This preserves the real mounted iNavi first-present
+  frame while removing the pathological id-1000 idle loop burn. Focused
+  coverage: `cargo check --features unicorn,trace,win32-desktop` and
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_get_message_prioritizes_paint_over_generated_timer` pass with
+  the known non-fatal Windows incremental-finalize warning. A fresh mounted
+  virtual probe wrote `target\timer_cap_virtual_*`, stopped quickly at
+  `COREDLL.dll@861 blocked_get_message` instead of the 20 s wall-clock limit,
+  stayed memory-stable (`heap_live=13697/13300954B`,
+  `virtual_live=3/196608B`, `host_open=665`,
+  `host_read=80198/4056903B`, `mem_open=3`, `max_read=685080`), and parked on
+  the long no-HWND timer (`id=0x3e8`, `due=21876`, `period=7500`). The hot
+  idle/message churn is now bounded (`PeekMessageW=194`, `GetMessageW=190`,
+  `DispatchMessageW=189`, versus the previous thousands), and the framebuffer
+  remains populated (`575800` nonzero pixels) with the same real 800x480
+  memory-DC-to-window-HDC present.
 - Mounted iNavi now reaches real guest-driven UI presentation in virtual
   desktop mode. The `UpdateWindow` guest trampoline now honors the CE paint
   update shape by entering the guest WNDPROC with `WM_ERASEBKGND` when

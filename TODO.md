@@ -13,17 +13,21 @@
 ## Current Slice
 
 - Continue from the new mounted iNavi first-present frontier. The latest
-  virtual probe `target\update_erase_virtual_*` proves guest GDI now presents a
-  real 800x480 memory surface to a window HDC:
+  virtual probes `target\update_erase_virtual_*` and
+  `target\timer_cap_virtual_*` prove guest GDI now presents a real 800x480
+  memory surface to a window HDC:
   `BitBlt(dst=0x02020008, dst_memdc=false, dst_hwnd=0x00020008,
   src=0x000a0044, src_memdc=true)`. The framebuffer dump is fully populated
-  (`384000` nonzero pixels) and `target\update_erase_virtual.png` shows the
-  real iNavi SE splash/art frame. The remaining blocker is no longer first
-  pixels or memory-DC-to-screen presentation. Next steps: trace the post-splash
-  flow after the presented child window, identify why the app falls back into
-  the id-1000 7.5 s no-HWND thread `WM_TIMER`/MFC idle-update loop, and design
-  CE-backed timer/idle/scheduler behavior that sustains UI progress without
-  forcing hidden child paints or app-specific state.
+  (`575800` nonzero pixels in the latest run) and
+  `target\update_erase_virtual.png` shows the real iNavi SE splash/art frame.
+  The raw `GetMessageW` bridge now lets short <=100 ms GUI timers fire but
+  parks on the long id-1000 7.5 s no-HWND timer instead of fast-forwarding
+  thousands of MFC idle-update cycles. The remaining blocker is no longer
+  first pixels, memory-DC-to-screen presentation, or runaway synthetic timer
+  churn. Next steps: implement the next scheduler/timer wake slice so blocked
+  message waits can resume from real timer expiry/run-queue ownership, then
+  continue tracing the post-splash transition without forcing hidden child
+  paints or app-specific state.
 - Continue the mounted iNavi resource-ready investigation from the
   `resource_59718`/mode-47 table frontier. Current evidence says
   `\SDMMC Disk\INavi\res\values.dat` opens and reads correctly, but by the

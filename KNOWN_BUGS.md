@@ -64,6 +64,16 @@
     timer id `0x3e8`/1000 due in virtual time, so this bug remains open as a
     post-splash scheduler/timer/GWE progression problem rather than a blank
     framebuffer problem.
+    Follow-up evidence: `target\timer_cap_virtual_*` keeps the same real
+    present and stable memory, but the raw Unicorn `GetMessageW` bridge now
+    parks on the long no-HWND timer instead of fast-forwarding it indefinitely.
+    The run stops quickly at `COREDLL.dll@861 blocked_get_message` with
+    `timers=[id=0x3e8/thr=1/hwnd=0/msg=0x113/due=21876/period=7500]`,
+    `PeekMessageW=194`, `GetMessageW=190`, and `DispatchMessageW=189`
+    instead of thousands of idle-loop iterations. The framebuffer remains
+    populated (`575800` nonzero pixels), so the remaining failure is now a
+    scheduler-owned timer wake/resume gap after the first-present frame, not
+    runaway timer fast-forward.
     Historical evidence: the mounted virtual run with dumped runtime DLLs
     and real sibling app DLLs wrote `target\inavi_trampoline_virtual_*`. It
     preloaded `AuthLibrary.dll`, `TpSysAuth.dll`, `mMbcAuth.dll`,

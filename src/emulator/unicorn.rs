@@ -5727,6 +5727,7 @@ fn try_block_empty_get_message<D>(
     last_messages: &std::rc::Rc<std::cell::RefCell<Vec<UnicornLastMessage>>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
+    const MAX_EMPTY_QUEUE_TIMER_FAST_FORWARD_MS: u32 = 100;
 
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
         || ordinal != Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W)
@@ -5751,21 +5752,23 @@ fn try_block_empty_get_message<D>(
     }
 
     if let Some(delay_ms) = kernel.timers.next_due_delay_ms() {
-        if delay_ms != 0 {
-            kernel.timers.sleep_ms(delay_ms);
-        }
-        kernel.pump_timers_to_gwe(thread_id);
-        if kernel
-            .peek_message_w_filtered(
-                thread_id,
-                hwnd,
-                min_msg,
-                max_msg,
-                crate::ce::gwe::PeekFlags::empty(),
-            )
-            .is_some()
-        {
-            return false;
+        if delay_ms <= MAX_EMPTY_QUEUE_TIMER_FAST_FORWARD_MS {
+            if delay_ms != 0 {
+                kernel.timers.sleep_ms(delay_ms);
+            }
+            kernel.pump_timers_to_gwe(thread_id);
+            if kernel
+                .peek_message_w_filtered(
+                    thread_id,
+                    hwnd,
+                    min_msg,
+                    max_msg,
+                    crate::ce::gwe::PeekFlags::empty(),
+                )
+                .is_some()
+            {
+                return false;
+            }
         }
     }
 
