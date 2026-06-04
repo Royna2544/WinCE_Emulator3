@@ -24,6 +24,7 @@ pub struct UnicornMips {
     entry_image_base: Option<u32>,
     stack_top: Option<u32>,
     mapped_blobs: Vec<MappedBlob>,
+    loaded_modules: Vec<LoadedPeModuleInfo>,
     import_traps: ImportTrapTable,
     resource_strings: Vec<MappedResourceString>,
     resources: Vec<MappedResource>,
@@ -32,6 +33,14 @@ pub struct UnicornMips {
     #[cfg(feature = "unicorn")]
     trampoline_jumps: Vec<MipsTrampolineJump>,
     last_debug: Option<UnicornDebugSnapshot>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LoadedPeModuleInfo {
+    pub name: String,
+    pub base: u32,
+    pub exports_by_name: HashMap<String, u32>,
+    pub exports_by_ordinal: HashMap<u32, u32>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -833,6 +842,7 @@ impl UnicornMips {
             entry_image_base: None,
             stack_top: None,
             mapped_blobs: Vec::new(),
+            loaded_modules: Vec::new(),
             import_traps: ImportTrapTable::new(),
             resource_strings: Vec::new(),
             resources: Vec::new(),
@@ -864,6 +874,10 @@ impl UnicornMips {
 
     pub fn import_traps(&self) -> &ImportTrapTable {
         &self.import_traps
+    }
+
+    pub fn loaded_modules(&self) -> &[LoadedPeModuleInfo] {
+        &self.loaded_modules
     }
 
     pub fn last_debug_snapshot(&self) -> Option<&UnicornDebugSnapshot> {
@@ -903,6 +917,7 @@ impl UnicornMips {
         let mut loaded_dlls = Vec::new();
         let mut next_dll_base = 0x6000_0000u32;
         let mut next_trap_base = IMPORT_TRAP_BASE;
+        self.loaded_modules.clear();
 
         for dll in dlls {
             let load_base = if ranges_overlap(
@@ -938,6 +953,8 @@ impl UnicornMips {
                 }
                 self.trampoline_jumps.extend(trampoline_patch.jumps);
             }
+            self.loaded_modules
+                .push(loaded_module_info(dll, load_base));
             loaded_dlls.push((dll.path.clone(), load_base, mapped));
         }
 
@@ -2597,6 +2614,29 @@ fn ranges_overlap(lhs_base: u32, lhs_size: u32, rhs_base: u32, rhs_size: u32) ->
 
 fn module_file_name(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
+}
+
+fn loaded_module_info(image: &PeImage, load_base: u32) -> LoadedPeModuleInfo {
+    let mut exports_by_name = HashMap::new();
+    let mut exports_by_ordinal = HashMap::new();
+    if let Some(exports) = image.exports.as_ref() {
+        for export in &exports.functions {
+            if export.rva == 0 || export.forwarder.is_some() {
+                continue;
+            }
+            let va = load_base.wrapping_add(export.rva);
+            exports_by_ordinal.insert(export.ordinal, va);
+            if let Some(name) = export.name.as_deref() {
+                exports_by_name.insert(crate::ce::kernel::normalize_symbol_name(name), va);
+            }
+        }
+    }
+    LoadedPeModuleInfo {
+        name: module_file_name(&image.path).to_owned(),
+        base: load_base,
+        exports_by_name,
+        exports_by_ordinal,
+    }
 }
 
 fn user_kdata_page() -> Vec<u8> {

@@ -59,10 +59,19 @@ pub struct CeKernel {
     current_process_id: u32,
     pending_process_launches: Vec<PendingProcessLaunch>,
     next_process_id: u32,
+    loaded_modules: BTreeMap<String, LoadedModule>,
     crt_rand_state: u32,
     crt_strtok_next_by_thread: BTreeMap<u32, u32>,
     recent_file_ops: Vec<FileTraceRecord>,
     recent_file_open_ops: Vec<FileTraceRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedModule {
+    pub name: String,
+    pub base: u32,
+    pub exports_by_name: BTreeMap<String, u32>,
+    pub exports_by_ordinal: BTreeMap<u32, u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +99,22 @@ pub struct FileTraceRecord {
 
 const FILE_TRACE_LIMIT: usize = 512;
 const FILE_TRACE_PREVIEW_LIMIT: usize = 64;
+
+pub fn normalize_module_name(name: &str) -> String {
+    name.trim()
+        .trim_end_matches('\0')
+        .trim_end_matches(".dll")
+        .trim_end_matches(".DLL")
+        .to_ascii_lowercase()
+}
+
+pub fn normalize_symbol_name(name: &str) -> String {
+    name.trim_start_matches('_')
+        .split('@')
+        .next()
+        .unwrap_or(name)
+        .to_ascii_lowercase()
+}
 
 fn wait_result_to_wake_reason(result: u32) -> SchedulerWakeReason {
     if result == WAIT_FAILED {
@@ -125,6 +150,7 @@ impl CeKernel {
             current_process_id: 0,
             pending_process_launches: Vec::new(),
             next_process_id: 0x42,
+            loaded_modules: BTreeMap::new(),
             crt_rand_state: 1,
             crt_strtok_next_by_thread: BTreeMap::new(),
             recent_file_ops: Vec::new(),
@@ -165,6 +191,56 @@ impl CeKernel {
 
     pub fn process_module_base(&self) -> u32 {
         self.process_module_base
+    }
+
+    pub fn register_loaded_module(
+        &mut self,
+        name: impl Into<String>,
+        base: u32,
+        exports_by_name: BTreeMap<String, u32>,
+        exports_by_ordinal: BTreeMap<u32, u32>,
+    ) {
+        let name = name.into();
+        self.loaded_modules.insert(
+            normalize_module_name(&name),
+            LoadedModule {
+                name,
+                base,
+                exports_by_name,
+                exports_by_ordinal,
+            },
+        );
+    }
+
+    pub fn loaded_module_handle(&self, name: &str) -> Option<u32> {
+        self.loaded_modules
+            .get(&normalize_module_name(name))
+            .map(|module| module.base)
+    }
+
+    pub fn is_loaded_module_handle(&self, module: u32) -> bool {
+        self.loaded_modules
+            .values()
+            .any(|loaded| loaded.base == module)
+    }
+
+    pub fn resolve_loaded_module_proc_by_name(&self, module: u32, name: &str) -> Option<u32> {
+        let symbol = normalize_symbol_name(name);
+        self.loaded_modules
+            .values()
+            .find(|loaded| loaded.base == module)?
+            .exports_by_name
+            .get(&symbol)
+            .copied()
+    }
+
+    pub fn resolve_loaded_module_proc_by_ordinal(&self, module: u32, ordinal: u32) -> Option<u32> {
+        self.loaded_modules
+            .values()
+            .find(|loaded| loaded.base == module)?
+            .exports_by_ordinal
+            .get(&ordinal)
+            .copied()
     }
 
     pub fn set_process_module_path(&mut self, path: impl Into<String>) {

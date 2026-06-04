@@ -5460,6 +5460,10 @@ fn get_module_handle_w_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return COREDLL_MODULE_HANDLE;
     }
+    if let Some(handle) = kernel.loaded_module_handle(&name) {
+        kernel.threads.set_last_error(thread_id, 0);
+        return handle;
+    }
     kernel
         .threads
         .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
@@ -5482,6 +5486,10 @@ fn load_library_w_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return COREDLL_MODULE_HANDLE;
     }
+    if let Some(handle) = kernel.loaded_module_handle(&name) {
+        kernel.threads.set_last_error(thread_id, 0);
+        return handle;
+    }
     kernel
         .threads
         .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
@@ -5489,7 +5497,10 @@ fn load_library_w_raw<M: CoredllGuestMemory>(
 }
 
 fn free_library_raw(kernel: &mut CeKernel, thread_id: u32, module: u32) -> bool {
-    if module == COREDLL_MODULE_HANDLE || module == kernel.process_module_base() {
+    if module == COREDLL_MODULE_HANDLE
+        || module == kernel.process_module_base()
+        || kernel.is_loaded_module_handle(module)
+    {
         kernel.threads.set_last_error(thread_id, 0);
         return true;
     }
@@ -5505,13 +5516,18 @@ fn get_proc_address_w_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
-    let Some(name) = read_guest_wide_arg(memory, raw_arg(args, 1)) else {
+    let module = raw_arg(args, 0);
+    let name_ptr = raw_arg(args, 1);
+    if name_ptr <= 0xffff {
+        return get_proc_address_ordinal_raw(kernel, thread_id, module, name_ptr);
+    }
+    let Some(name) = read_guest_wide_arg(memory, name_ptr) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     };
-    get_coredll_proc_address_raw(kernel, thread_id, raw_arg(args, 0), &name)
+    get_proc_address_name_raw(kernel, thread_id, module, &name)
 }
 
 fn get_proc_address_a_raw<M: CoredllGuestMemory>(
@@ -5520,27 +5536,75 @@ fn get_proc_address_a_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
-    let Some(name) = read_guest_ascii_z(memory, raw_arg(args, 1), 256) else {
+    let module = raw_arg(args, 0);
+    let name_ptr = raw_arg(args, 1);
+    if name_ptr <= 0xffff {
+        return get_proc_address_ordinal_raw(kernel, thread_id, module, name_ptr);
+    }
+    let Some(name) = read_guest_ascii_z(memory, name_ptr, 256) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     };
-    get_coredll_proc_address_raw(kernel, thread_id, raw_arg(args, 0), &name)
+    get_proc_address_name_raw(kernel, thread_id, module, &name)
 }
 
-fn get_coredll_proc_address_raw(
+fn get_proc_address_name_raw(
     kernel: &mut CeKernel,
     thread_id: u32,
     module: u32,
     name: &str,
 ) -> u32 {
-    if module != COREDLL_MODULE_HANDLE {
+    if module == COREDLL_MODULE_HANDLE {
+        return get_coredll_proc_address_name_raw(kernel, thread_id, name);
+    }
+    if kernel.is_loaded_module_handle(module) {
+        if let Some(address) = kernel.resolve_loaded_module_proc_by_name(module, name) {
+            kernel.threads.set_last_error(thread_id, 0);
+            return address;
+        }
         kernel
             .threads
-            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
         return 0;
     }
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+    0
+}
+
+fn get_proc_address_ordinal_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    module: u32,
+    ordinal: u32,
+) -> u32 {
+    if module == COREDLL_MODULE_HANDLE {
+        return get_coredll_proc_address_ordinal_raw(kernel, thread_id, ordinal);
+    }
+    if kernel.is_loaded_module_handle(module) {
+        if let Some(address) = kernel.resolve_loaded_module_proc_by_ordinal(module, ordinal) {
+            kernel.threads.set_last_error(thread_id, 0);
+            return address;
+        }
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+        return 0;
+    }
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+    0
+}
+
+fn get_coredll_proc_address_name_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    name: &str,
+) -> u32 {
     let table = CoredllExportTable::static_ordinals();
     let Some(export) = table.resolve_name(name) else {
         kernel
@@ -5548,8 +5612,21 @@ fn get_coredll_proc_address_raw(
             .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
         return 0;
     };
-    let Some(address) = crate::emulator::imports::dynamic_coredll_proc_address(export.ordinal)
-    else {
+    get_coredll_proc_address_ordinal_raw(kernel, thread_id, export.ordinal)
+}
+
+fn get_coredll_proc_address_ordinal_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    ordinal: u32,
+) -> u32 {
+    if CoredllExportTable::resolve_static_ordinal(ordinal).is_none() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+        return 0;
+    }
+    let Some(address) = crate::emulator::imports::dynamic_coredll_proc_address(ordinal) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);

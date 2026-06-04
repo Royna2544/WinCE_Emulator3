@@ -208,6 +208,7 @@ fn main() -> Result<()> {
             }
         }
         cpu.load_pe_image_with_dlls(image, &dll_images)?;
+        register_loaded_modules(&mut kernel, &cpu);
         if args.verbose {
             println!(
                 "  loader: {} DLL(s), {} import trap(s)",
@@ -1268,8 +1269,44 @@ fn load_import_dlls(image: &PeImage, search_dirs: &[PathBuf]) -> Result<Vec<PeIm
         })?;
         loaded.push(PeImage::inspect(path)?);
     }
+    preload_search_dll_if_present("commctrl.dll", search_dirs, &mut seen, &mut loaded)?;
 
     Ok(loaded)
+}
+
+fn preload_search_dll_if_present(
+    module_name: &str,
+    search_dirs: &[PathBuf],
+    seen: &mut BTreeSet<String>,
+    loaded: &mut Vec<PeImage>,
+) -> Result<()> {
+    let normalized = normalize_module_name(module_name);
+    if emulator_provided_import_module(&normalized) || !seen.insert(normalized) {
+        return Ok(());
+    }
+    if let Some(path) = resolve_dll_path(module_name, search_dirs) {
+        loaded.push(PeImage::inspect(path)?);
+    }
+    Ok(())
+}
+
+fn register_loaded_modules(kernel: &mut CeKernel, cpu: &UnicornMips) {
+    for module in cpu.loaded_modules() {
+        kernel.register_loaded_module(
+            module.name.clone(),
+            module.base,
+            module
+                .exports_by_name
+                .iter()
+                .map(|(name, address)| (name.clone(), *address))
+                .collect::<BTreeMap<_, _>>(),
+            module
+                .exports_by_ordinal
+                .iter()
+                .map(|(ordinal, address)| (*ordinal, *address))
+                .collect::<BTreeMap<_, _>>(),
+        );
+    }
 }
 
 fn emulator_provided_import_module(normalized_module_name: &str) -> bool {
