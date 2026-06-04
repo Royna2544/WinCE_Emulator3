@@ -9,6 +9,29 @@
 
 ## Confirmed
 
+- Dumped-runtime `explorer.exe` now gets past the earlier host-presenter
+  trampoline and missing-ordinal startup blockers when run with
+  `D:\INAVI_Emulator\DUMPPLZ\Windows` as the DLL search path. The old
+  high-address MIPS trampoline failure (`0xffff832c` from `0x00057108`) no
+  longer reproduces, and the follow-up COREDLL frontier ordinals have been
+  filled with source-backed shims: `__security_gen_cookie2 @2696`,
+  `OpenEventW @1496`, `SHGetSpecialFolderPath @295` with
+  `HKLM\System\Explorer\Shell Folders` lookup/fallbacks, `StringCbCatW @1694`,
+  `CopyFileW @164`, `StringCchCatW @1693`, `wcsncmp @65`, and
+  `DestroyIcon @725`. The latest bounded host-presented probe wrote
+  `target\explorer_win32_host_destroyicon_summary.txt`,
+  `target\explorer_win32_host_destroyicon_render.txt`, and
+  `target\explorer_win32_host_destroyicon_milestones.txt`; it reaches the
+  emulator sentinel (`pc=0x7ffffff0`, `ra=0x7ffffff0`, `v0=1`) instead of a
+  COREDLL trap. Render milestones remain `none`, so this is explorer launch
+  fidelity rather than UI progress.
+- Storage mount configuration now supports a `[root].host_root` backing root.
+  If the root value is absent or not an existing directory, v3 falls back to
+  `"."`. Mount entries without their own `host_root` inherit
+  `<root>\<guest-root-components>`, while explicit mount `host_root` values
+  still override the root. The current `mounts.toml` can therefore back
+  `\Windows` from the configured root while keeping explicit `\SDMMC Disk` and
+  `\ResidentFlash` paths authoritative.
 - Dumped-runtime `commctrl.dll` now loads from the configured DLL search path
   instead of failing PE inspection. The loader already preloads
   `commctrl.dll` from `--dll-search-dir`; the missing piece was PE mapped-RVA

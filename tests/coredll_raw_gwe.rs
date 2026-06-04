@@ -9,9 +9,9 @@ use wince_emulation_v3::{
             ORD_CREATE_COMPATIBLE_BITMAP, ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIBSECTION,
             ORD_CREATE_MENU, ORD_CREATE_MUTEX_W, ORD_CREATE_PALETTE, ORD_CREATE_PEN_INDIRECT,
             ORD_CREATE_POPUP_MENU, ORD_CREATE_RECT_RGN, ORD_CREATE_SOLID_BRUSH,
-            ORD_CREATE_WINDOW_EX_W, ORD_DELETE_OBJECT, ORD_DESTROY_WINDOW, ORD_DISPATCH_MESSAGE_W,
-            ORD_DRAW_MENU_BAR, ORD_ENABLE_MENU_ITEM, ORD_ENABLE_WINDOW, ORD_END_PAINT,
-            ORD_EQUAL_RECT, ORD_FILL_RECT, ORD_FIND_RESOURCE_W, ORD_FIND_WINDOW_W,
+            ORD_CREATE_WINDOW_EX_W, ORD_DELETE_OBJECT, ORD_DESTROY_ICON, ORD_DESTROY_WINDOW,
+            ORD_DISPATCH_MESSAGE_W, ORD_DRAW_MENU_BAR, ORD_ENABLE_MENU_ITEM, ORD_ENABLE_WINDOW,
+            ORD_END_PAINT, ORD_EQUAL_RECT, ORD_FILL_RECT, ORD_FIND_RESOURCE_W, ORD_FIND_WINDOW_W,
             ORD_GET_ACTIVE_WINDOW, ORD_GET_ASSOCIATED_MENU, ORD_GET_CAPTURE, ORD_GET_CLASS_INFO_W,
             ORD_GET_CLASS_NAME_W, ORD_GET_CLIENT_RECT, ORD_GET_CURSOR_POS, ORD_GET_DC,
             ORD_GET_DEVICE_CAPS, ORD_GET_DIALOG_BASE_UNITS, ORD_GET_DIBCOLOR_TABLE,
@@ -28,16 +28,17 @@ use wince_emulation_v3::{
             ORD_GLOBAL_MEMORY_STATUS, ORD_IN_SEND_MESSAGE, ORD_INFLATE_RECT, ORD_INSERT_MENU_W,
             ORD_INTERSECT_RECT, ORD_INVALIDATE_RECT, ORD_IS_CHILD, ORD_IS_RECT_EMPTY,
             ORD_IS_WINDOW, ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE, ORD_KILL_TIMER,
-            ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_MAP_DIALOG_RECT, ORD_MAP_WINDOW_POINTS,
-            ORD_MESSAGE_BOX_W, ORD_MOVE_WINDOW, ORD_OFFSET_RECT, ORD_PEEK_MESSAGE_W, ORD_POLYGON,
-            ORD_POLYLINE, ORD_POST_MESSAGE_W, ORD_POST_QUIT_MESSAGE, ORD_POST_THREAD_MESSAGE_W,
-            ORD_PT_IN_RECT, ORD_REALIZE_PALETTE, ORD_REDRAW_WINDOW, ORD_REGISTER_CLASS_W,
-            ORD_REGISTER_GESTURE, ORD_RELEASE_CAPTURE, ORD_RELEASE_DC, ORD_RELEASE_MUTEX,
-            ORD_REMOVE_MENU, ORD_ROUND_RECT, ORD_SCREEN_TO_CLIENT, ORD_SELECT_OBJECT,
-            ORD_SELECT_PALETTE, ORD_SEND_DLG_ITEM_MESSAGE_W, ORD_SEND_MESSAGE_TIMEOUT,
-            ORD_SEND_MESSAGE_W, ORD_SEND_NOTIFY_MESSAGE_W, ORD_SET_ACTIVE_WINDOW,
-            ORD_SET_ASSOCIATED_MENU, ORD_SET_BK_COLOR, ORD_SET_CAPTURE, ORD_SET_DIBCOLOR_TABLE,
-            ORD_SET_DIBITS_TO_DEVICE, ORD_SET_DLG_ITEM_INT, ORD_SET_DLG_ITEM_TEXT_W, ORD_SET_FOCUS,
+            ORD_LOAD_ICON_W, ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_MAP_DIALOG_RECT,
+            ORD_MAP_WINDOW_POINTS, ORD_MESSAGE_BOX_W, ORD_MOVE_WINDOW, ORD_OFFSET_RECT,
+            ORD_PEEK_MESSAGE_W, ORD_POLYGON, ORD_POLYLINE, ORD_POST_MESSAGE_W,
+            ORD_POST_QUIT_MESSAGE, ORD_POST_THREAD_MESSAGE_W, ORD_PT_IN_RECT, ORD_REALIZE_PALETTE,
+            ORD_REDRAW_WINDOW, ORD_REGISTER_CLASS_W, ORD_REGISTER_GESTURE, ORD_RELEASE_CAPTURE,
+            ORD_RELEASE_DC, ORD_RELEASE_MUTEX, ORD_REMOVE_MENU, ORD_ROUND_RECT,
+            ORD_SCREEN_TO_CLIENT, ORD_SELECT_OBJECT, ORD_SELECT_PALETTE,
+            ORD_SEND_DLG_ITEM_MESSAGE_W, ORD_SEND_MESSAGE_TIMEOUT, ORD_SEND_MESSAGE_W,
+            ORD_SEND_NOTIFY_MESSAGE_W, ORD_SET_ACTIVE_WINDOW, ORD_SET_ASSOCIATED_MENU,
+            ORD_SET_BK_COLOR, ORD_SET_CAPTURE, ORD_SET_DIBCOLOR_TABLE, ORD_SET_DIBITS_TO_DEVICE,
+            ORD_SET_DLG_ITEM_INT, ORD_SET_DLG_ITEM_TEXT_W, ORD_SET_FOCUS,
             ORD_SET_FOREGROUND_WINDOW, ORD_SET_MENU, ORD_SET_MENU_ITEM_INFO_W,
             ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_RECT, ORD_SET_RECT_EMPTY,
             ORD_SET_TIMER, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_TEXT_W,
@@ -371,6 +372,62 @@ fn coredll_raw_gwe_rect_helpers_match_win32_semantics() -> Result<()> {
             ..
         }
     ));
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_destroy_icon_accepts_loaded_icon_handles() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+
+    let icon = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOAD_ICON_W,
+        [0, 32512],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(icon),
+            ..
+        } => icon,
+        other => panic!("LoadIconW did not return a handle: {other:?}"),
+    };
+    assert_ne!(icon, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DESTROY_ICON,
+            [icon],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DESTROY_ICON,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
     Ok(())
 }
 

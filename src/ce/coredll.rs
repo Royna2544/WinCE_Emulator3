@@ -1719,6 +1719,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 2),
         ) as u32)),
+        ORD_WCSNCMP => Some(CoredllValue::U32(crt::wcsncmp_raw(
+            memory,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ) as u32)),
         ORD_STRING_CCH_CAT_W => Some(CoredllValue::U32(string_cch_cat_w_raw(
             kernel,
             memory,
@@ -2708,6 +2714,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
+        ))),
+        ORD_DESTROY_ICON => Some(CoredllValue::Bool(destroy_icon_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
         ))),
         ORD_SET_CURSOR => Some(CoredllValue::Handle(
             kernel.gwe.set_cursor(raw_arg(args, 0)).unwrap_or(0),
@@ -9395,6 +9406,17 @@ fn load_icon_w_raw(kernel: &mut CeKernel, thread_id: u32, module: u32, name: u32
     )
 }
 
+fn destroy_icon_raw(kernel: &mut CeKernel, thread_id: u32, icon: u32) -> bool {
+    if icon == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
 fn load_stock_or_resource_image(
     kernel: &mut CeKernel,
     thread_id: u32,
@@ -13551,6 +13573,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "LoadResource",
     "LoadStringW",
     "SizeofResource",
+    "DestroyIcon",
     "LocalAlloc",
     "LocalAllocTrace",
     "LocalReAlloc",
@@ -13594,6 +13617,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "wcsrchr",
     "_wcsdup",
     "iswctype",
+    "wcsncmp",
     "MultiByteToWideChar",
     "WideCharToMultiByte",
     "StringCchCatW",

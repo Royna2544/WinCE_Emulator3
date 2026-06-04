@@ -10,6 +10,19 @@
   `D:\INAVI_Emulator\DUMPPLZ\Windows`; SDK DLL/library paths are now evidence
   or fallback, not the primary DLL source.
 
+## Current Slice
+
+- Keep the storage root/mount inheritance behavior covered while continuing
+  fidelity ports: `[root].host_root` is the default backing root, missing or
+  non-directory root values fall back to `"."`, and per-mount `host_root`
+  values override the root. Add overlap diagnostics later if real mounted
+  traces show ambiguous reverse host-path mapping.
+- Treat the latest `explorer.exe` host-presented probe as a launch-fidelity
+  checkpoint, not UI success. It now reaches the emulator sentinel instead of
+  missing COREDLL ordinals after adding `StringCchCatW`, `wcsncmp`, and
+  `DestroyIcon`; validate whether the sentinel is a clean process return or a
+  too-early control-flow exit before using explorer as a broader shell fixture.
+
 ## CE Fidelity Ledger
 
 - Scheduler/waits/thread contexts:

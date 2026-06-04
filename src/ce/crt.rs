@@ -161,6 +161,43 @@ pub(crate) fn wcsnicmp_raw<M: CoredllGuestMemory>(
     0
 }
 
+pub(crate) fn wcsncmp_raw<M: CoredllGuestMemory>(
+    memory: &M,
+    left: u32,
+    right: u32,
+    count: u32,
+) -> i32 {
+    if count == 0 {
+        return 0;
+    }
+    if left == 0 || right == 0 {
+        return if left == right {
+            0
+        } else if left == 0 {
+            -1
+        } else {
+            1
+        };
+    }
+    for index in 0..count.min(0x8000) {
+        let left_addr = left.wrapping_add(index * 2);
+        let right_addr = right.wrapping_add(index * 2);
+        let Ok(left_unit) = memory.read_u16(left_addr) else {
+            return -1;
+        };
+        let Ok(right_unit) = memory.read_u16(right_addr) else {
+            return 1;
+        };
+        if left_unit != right_unit {
+            return i32::from(left_unit).saturating_sub(i32::from(right_unit));
+        }
+        if left_unit == 0 {
+            return 0;
+        }
+    }
+    0
+}
+
 pub(crate) fn wcsicmp_raw<M: CoredllGuestMemory>(memory: &M, left: u32, right: u32) -> i32 {
     if left == 0 || right == 0 {
         return if left == right {

@@ -28,13 +28,37 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     DLL exports before shim classification, and `commctrl.dll`/`commctrlce.dll`
     are not classified as emulator common-controls shims; they must come from
     the configured runtime DLL search paths.
-  - A host-presented probe of dumped `explorer.exe` using this same runtime
-    DLL directory fails before startup summaries because the current MIPS
-    trampoline encoder cannot direct-jump from `0x00057108` to high target
-    `0xffff832c`. That is recorded as trampoline reachability evidence, not as
-    CE API behavior.
+  - Host-presented probes of dumped `explorer.exe` using this same runtime DLL
+    directory no longer fail on the old high-address trampoline from
+    `0x00057108` to `0xffff832c`. After the COREDLL startup ordinal slice, the
+    latest probe reaches the emulator sentinel (`pc=0x7ffffff0`) rather than a
+    missing import trap.
 
 ## Windows CE Core OS
+
+- Explorer/COREDLL startup ordinals:
+  `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\MIPSII\RETAIL\coredll.def`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\MIPSII\RETAIL\k.coredll.def`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\core_common.def`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\crt_ordinals.h`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\syncobj.c`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\shellapi.h`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\strsafe.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`
+  - Dumped `explorer.exe` startup identified real COREDLL import needs rather
+    than app-specific shortcuts. The ordinal sources map
+    `__security_gen_cookie2 @2696`, `OpenEventW @1496`,
+    `SHGetSpecialFolderPath @295`, `CopyFileW @164`, `StringCchCatW @1693`,
+    `StringCbCatW @1694`, `wcsncmp @65`, and `DestroyIcon @725`.
+  - `syncobj.c` anchors `OpenEventW` as an existing named event open with
+    access validation. `shellapi.h` anchors the CE CSIDL values used by
+    `SHGetSpecialFolderPath`; v3 consults
+    `HKLM\System\Explorer\Shell Folders` first and uses CE-shaped fallbacks
+    when the dump lacks those values. `strsafe.h` anchors the `StringCch*`
+    character-count and `StringCb*` byte-count distinction plus truncation
+    HRESULTs. `winuser.h` anchors the icon/cursor signatures; v3 currently
+    has lightweight synthetic stock icon handles and `DestroyIcon` validation
+    rather than a full icon resource manager.
 
 - Scheduler and wait ownership:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c`,

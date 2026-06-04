@@ -11628,6 +11628,7 @@ pub const ORD_WCSRCHR: u32 = 69;
 pub const ORD_WCSSTR: u32 = 73;
 pub const ORD_WCSICMP: u32 = 230;
 pub const ORD_WCSNICMP: u32 = 229;
+pub const ORD_WCSNCMP: u32 = 65;
 pub const ORD_WCSNCPY: u32 = 66;
 pub const ORD_MALLOC: u32 = 1041;
 pub const ORD_MEMCMP: u32 = 1043;

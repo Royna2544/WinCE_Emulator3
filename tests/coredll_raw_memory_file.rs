@@ -19,7 +19,7 @@ use wince_emulation_v3::{
             ORD_SECURITY_GEN_COOKIE2, ORD_SET_FILE_POINTER, ORD_SPRINTF, ORD_SRAND, ORD_STRCPY,
             ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W, ORD_STRTOK, ORD_STRTOUL, ORD_SWPRINTF,
             ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSWPRINTF, ORD_WCSDUP, ORD_WCSICMP,
-            ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSRCHR, ORD_WCSSTR, ORD_WFOPEN,
+            ORD_WCSNCMP, ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSRCHR, ORD_WCSSTR, ORD_WFOPEN,
             ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
@@ -1703,6 +1703,45 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
             value: CoredllValue::U32(value),
             ..
         } if value != 0
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WCSNCMP,
+            [solution, solution, 16],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WCSNCMP,
+            [afx_lower, afx, 3],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(value),
+            ..
+        } if value != 0
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WCSNCMP,
+            [afx_lower, afx, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
     ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

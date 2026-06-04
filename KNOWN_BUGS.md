@@ -12,19 +12,24 @@
 
 ## Open
 
-- Dumped `explorer.exe` host-presented launch fails before startup summaries.
+- Dumped `explorer.exe` host-presented launch now exits through the emulator
+  sentinel before useful UI.
   - Symptom: running
     `D:\INAVI_Emulator\DUMPPLZ\Windows\explorer.exe` with `--desktop host` and
-    `D:\INAVI_Emulator\DUMPPLZ\Windows` as the DLL search path exits before any
-    `target\explorer_host_once_*` or `target\explorer_win32_host_once_*` trace
-    files are written.
-  - Evidence: the direct run and the 2026-06-04 repeat run with the Win32 host
-    presenter both failed while building a MIPS trampoline with
-    `MIPS jump target 0xffff832c is outside direct jump region from
-    0x00057108`.
-  - Status: open loader/trampoline reachability gap for high-address targets;
-    this is separate from the iNavi UI frontier and from the virtual desktop
-    audio sink selection.
+    `D:\INAVI_Emulator\DUMPPLZ\Windows` as the DLL search path no longer stops
+    on missing COREDLL ordinals or the old high-address trampoline failure,
+    but the bounded probe reaches `pc=0x7ffffff0`, `ra=0x7ffffff0`, `v0=1`
+    without render milestones.
+  - Evidence: the latest run wrote
+    `target\explorer_win32_host_destroyicon_summary.txt`,
+    `target\explorer_win32_host_destroyicon_render.txt`, and
+    `target\explorer_win32_host_destroyicon_milestones.txt`. The old
+    `0xffff832c` trampoline failure is no longer the active blocker. The
+    missing COREDLL frontier moved through `StringCchCatW @1693`,
+    `wcsncmp @65`, and `DestroyIcon @725` before reaching the sentinel.
+  - Status: launcher fidelity improved; still validate whether the sentinel is
+    a clean guest process return or a too-early control-flow exit before
+    treating explorer as a complete shell fixture.
 
 - Main process launch reaches the paint loop without useful GUI output.
   - Symptom: a bounded debug launch gets past the earlier empty-queue
