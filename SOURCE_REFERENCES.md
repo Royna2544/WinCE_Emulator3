@@ -170,13 +170,23 @@ anchors, not app-specific shortcuts.
     `IsWindow_I`, `GetClassNameW_I`, and `EnableWindow_I`, which back the
     virtual HWND state, class/title text copying, visibility/enabled checks,
     parent lookup, and focus bookkeeping.
+  - `window.hpp` declares `IsWindowVisible_I`, and `CWindow::IsVisibleEnabled_I`
+    checks `WS_VISIBLE`/`WS_DISABLED` style state. Rust now keeps direct
+    visible state synchronized with `WS_VISIBLE` for `ShowWindow`,
+    `SetWindowPos(SWP_SHOWWINDOW/SWP_HIDEWINDOW)`, and `SetWindowLong(GWL_STYLE)`;
+    raw `IsWindowVisible` and point hit-testing walk ancestors so children of
+    hidden parents are effectively invisible without mutating the child HWND.
   - CE SDK `winuser.h` exposes `EnableWindow`/`IsWindowEnabled` and defines
     `WM_ENABLE`; the same header defines `WM_CANCELMODE`. Rust raw
     `EnableWindow` now preserves the CE previous-enabled return shape, routes
     through `CeKernel::enable_window`, and queues `WM_CANCELMODE` before a
     disable transition plus `WM_ENABLE` when the enabled state actually
-    changes. Full synchronous message-send timing remains part of the broader
-    GWE send/scheduler port.
+    changes. Initial `WS_DISABLED` windows and `EnableWindow` transitions now
+    keep the virtual style bit and direct enabled bit in sync, while
+    `IsWindowEnabled`, dialog traversal, and point hit-testing walk the parent
+    chain so descendants of disabled windows are effectively disabled without
+    receiving child `WM_ENABLE` notifications. Full synchronous message-send
+    timing remains part of the broader GWE send/scheduler port.
   - Declares `GetWindow_I(HWND hwndThis, UINT32 relation)`, the GWE API set
     exposes `m_pGetWindow`, and the CE Mipsii SDK defines `GW_HWNDFIRST`,
     `GW_HWNDLAST`, `GW_HWNDNEXT`, `GW_HWNDPREV`, `GW_OWNER`, and `GW_CHILD`
@@ -290,7 +300,8 @@ anchors, not app-specific shortcuts.
     dialog-unit conversion and raw `GetNextDlgTabItem`/
     `GetNextDlgGroupItem` through the real child HWND tree. `winuser.h`
     supplies the public `WS_TABSTOP`, `WS_GROUP`, and `WS_DISABLED` styles used
-    by the traversal.
+    by the traversal, and disabled ancestor checks now keep controls beneath a
+    disabled dialog out of traversal without mutating the child HWND state.
 
 - GWE paint/update surface:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\gweapiset1.hpp`,

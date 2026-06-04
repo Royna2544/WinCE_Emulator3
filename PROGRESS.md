@@ -1445,6 +1445,34 @@
   showing the host presenter window; it stopped at `pc=0x00343750` with
   `heap_live=7200/21843325B`, `host_read=26122/1952147B`, the same 301-pixel
   red line, and still no named render milestone.
+- Added the CE-backed disabled-ancestor enabled-state slice. Window creation
+  now seeds direct enabled state from `WS_DISABLED`, `EnableWindow` keeps the
+  direct enabled bit and `WS_DISABLED` style synchronized, and raw
+  `IsWindowEnabled`, dialog tab/group traversal, and HWND point hit-testing now
+  walk ancestor HWNDs so children under a disabled parent are effectively
+  disabled without receiving child `WM_ENABLE` notifications. Focused coverage
+  `coredll_raw_is_window_enabled_observes_disabled_ancestors` passes, the
+  dialog-navigation fixture now checks disabled parents, the raw GWE suite now
+  has 45 passing tests, and full
+  `cargo test --features unicorn,trace,win32-desktop` passes. Mounted
+  validation used virtual desktop mode per current workflow and wrote
+  `target\disabled_ancestor_virtual_*`: the 30 s run stopped at
+  `pc=0x00339d90`, stayed memory-stable (`heap_live=7304/21886404B`,
+  `host_read=25878/1940731B`), preserved the same 301-pixel red line, and had
+  no named render milestone.
+- Added the matching CE-backed hidden-ancestor visibility slice. `ShowWindow`,
+  `SetWindowPos(SWP_SHOWWINDOW/SWP_HIDEWINDOW)`, and `SetWindowLong(GWL_STYLE)`
+  now keep direct visibility synchronized with `WS_VISIBLE`, while raw
+  `IsWindowVisible` and point hit-testing treat children of hidden parents as
+  effectively invisible without changing the child HWND. Focused coverage
+  `coredll_raw_is_window_visible_observes_hidden_ancestors` passes, the raw
+  GWE suite now has 46 passing tests, and full
+  `cargo test --features unicorn,trace,win32-desktop` passes. Mounted
+  validation again used virtual desktop mode and wrote
+  `target\visibility_enabled_virtual_final_*`: the 30 s run stopped at
+  `pc=0x00344780`, stayed memory-stable (`heap_live=7305/21887532B`,
+  `host_read=26160/1961105B`), preserved the same 301-pixel red line, and had
+  no named render milestone.
 
 ## False Leads
 

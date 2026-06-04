@@ -98,7 +98,16 @@
     no named render milestone. A virtual-desktop rerun wrote
     `target\virtual_after_bring_window_top_*`, stopped at `pc=0x00343750`,
     and again had 301 red pixels with no render milestone, but avoided showing
-    the black host presenter window.
+    the black host presenter window. The disabled-ancestor enabled-state slice
+    wrote `target\disabled_ancestor_virtual_*` in virtual desktop mode, stopped
+    at `pc=0x00339d90`, stayed memory-stable
+    (`heap_live=7304/21886404B`, `host_read=25878/1940731B`), and preserved
+    the same 301-pixel red line with no render milestone. The matching
+    effective-visibility slice wrote
+    `target\visibility_enabled_virtual_final_*`, stopped at `pc=0x00344780`,
+    stayed memory-stable (`heap_live=7305/21887532B`,
+    `host_read=26160/1961105B`), and again kept the same 301-pixel red line
+    with no render milestone.
   - Evidence: latest bounded run with `--features unicorn`,
     `--dll-search-dir C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii`,
     and `--mount-config mounts.toml` previously timed out after 30

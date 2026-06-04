@@ -13,7 +13,7 @@ use crate::{
         file::FileIoResult,
         file::FindData,
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat},
-        gwe::{Message, PeekFlags, Point, Rect, WNDCLASSW_SIZE},
+        gwe::{Message, MessagePointerPayload, PeekFlags, Point, Rect, WNDCLASSW_SIZE, WindowPos},
         kernel::{CeKernel, MessagePumpResult},
         memory::{HEAP_ZERO_MEMORY, PROCESS_HEAP_HANDLE},
         object::{CriticalSectionObject, KernelObject},
@@ -12286,6 +12286,9 @@ fn write_guest_message<M: CoredllGuestMemory>(
     addr: u32,
     message: &Message,
 ) -> bool {
+    if !write_message_pointer_payload(kernel, memory, thread_id, message) {
+        return false;
+    }
     write_guest_u32(kernel, memory, thread_id, addr, message.hwnd)
         && write_guest_u32(kernel, memory, thread_id, addr.wrapping_add(4), message.msg)
         && write_guest_u32(
@@ -12311,6 +12314,77 @@ fn write_guest_message<M: CoredllGuestMemory>(
         )
         && write_guest_i32(kernel, memory, thread_id, addr.wrapping_add(20), 0)
         && write_guest_i32(kernel, memory, thread_id, addr.wrapping_add(24), 0)
+}
+
+fn write_message_pointer_payload<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    message: &Message,
+) -> bool {
+    if message.lparam == 0 {
+        return true;
+    }
+    match kernel.message_pointer_payload(message.lparam) {
+        Some(MessagePointerPayload::WindowPos(window_pos))
+            if message.msg == crate::ce::gwe::WM_WINDOWPOSCHANGED =>
+        {
+            write_guest_window_pos(kernel, memory, thread_id, message.lparam, window_pos)
+        }
+        Some(_) | None => true,
+    }
+}
+
+fn write_guest_window_pos<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    addr: u32,
+    window_pos: WindowPos,
+) -> bool {
+    write_guest_u32(kernel, memory, thread_id, addr, window_pos.hwnd)
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            addr.wrapping_add(4),
+            window_pos.insert_after,
+        )
+        && write_guest_i32(
+            kernel,
+            memory,
+            thread_id,
+            addr.wrapping_add(8),
+            window_pos.x,
+        )
+        && write_guest_i32(
+            kernel,
+            memory,
+            thread_id,
+            addr.wrapping_add(12),
+            window_pos.y,
+        )
+        && write_guest_i32(
+            kernel,
+            memory,
+            thread_id,
+            addr.wrapping_add(16),
+            window_pos.width,
+        )
+        && write_guest_i32(
+            kernel,
+            memory,
+            thread_id,
+            addr.wrapping_add(20),
+            window_pos.height,
+        )
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            addr.wrapping_add(24),
+            window_pos.flags,
+        )
 }
 
 fn get_sys_color(index: u32) -> u32 {

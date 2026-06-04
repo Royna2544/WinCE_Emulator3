@@ -109,7 +109,12 @@
     transitions, and leaves unchanged-state calls message-free. Raw
     `BringWindowToTop` now reaches the virtual z-order model through the
     kernel lifecycle boundary, moves the target to `HWND_TOP`, and activates
-    the top-level target.
+    the top-level target. Raw `IsWindowEnabled`, dialog tab/group traversal,
+    and HWND point hit-testing now use effective enabled state through the
+    parent chain, while `EnableWindow` still mutates and reports only the
+    target HWND's direct enabled state. Raw `IsWindowVisible` and point
+    hit-testing likewise walk hidden ancestors, while show/hide APIs keep
+    direct visibility synchronized with `WS_VISIBLE`.
   - Open gaps: update regions are still represented as one bounding rectangle,
     so partial `ValidateRect`/`RedrawWindow(RDW_VALIDATE)` subtracts the
     representable remainder but keeps a conservative bounding rectangle for
@@ -133,13 +138,15 @@
        `WM_ACTIVATE`/`WM_SETFOCUS`/`WM_KILLFOCUS` queueing, and the first
        enable slice now covers `WM_CANCELMODE`/`WM_ENABLE` queueing plus CE
        previous-state returns. Raw `BringWindowToTop` now covers the first
-       dedicated top-of-z-order activation path. Remaining lifecycle work
+       dedicated top-of-z-order activation path. Effective disabled-state
+       checks now walk ancestors for `IsWindowEnabled`, dialog traversal, and
+       hit-testing without sending child `WM_ENABLE`. Remaining lifecycle work
        includes exact create/z-order side effects such as
        `WM_WINDOWPOSCHANGING`/`WINDOWPOS` marshalling and owner/topmost rules,
        deeper activate/focus/enable edge cases such as top-level owner
-       activation, disabled-focus transfer, child implicit disabled state,
-       no-activate show variants, and destroyed-target behavior under
-       synchronous sends.
+       activation, disabled-focus transfer, no-activate show variants, richer
+       hidden-window edge cases around owner/popups, and destroyed-target
+       behavior under synchronous sends.
     3. Message queues and synchronous sends: replace same-thread-only shortcuts
        with scheduler-owned sent queues, sender blocking, receiver-context
        execution, `InSendMessage`, timeout, destroyed-target, and reentrant
@@ -260,7 +267,14 @@
     `host_read=26122/1952147B`, preserved the same 301-pixel red line, and did
     not show a host presenter window. Prefer `--desktop virtual` for future
     bounded mounted probes unless host presentation/input behavior is the
-    thing being tested.
+    thing being tested. The disabled-ancestor enabled-state probe wrote
+    `target\disabled_ancestor_virtual_*`, stopped at `pc=0x00339d90` with
+    `heap_live=7304/21886404B` and `host_read=25878/1940731B`, preserved the
+    same 301-pixel red line, and still had no render milestones. The
+    visibility/enabled effective-state probe wrote
+    `target\visibility_enabled_virtual_final_*`, stopped at `pc=0x00344780`
+    with `heap_live=7305/21887532B` and `host_read=26160/1961105B`, again kept
+    the same 301-pixel red line, and still had no render milestones.
 
 ## Immediate
 

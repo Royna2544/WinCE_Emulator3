@@ -4,6 +4,9 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use wince_emulation_v3::{Error, Result, ce::coredll::CoredllGuestMemory};
 
+const TEST_HEAP_RANGE_START: u32 = 0x3000_0000;
+const TEST_HEAP_RANGE_END: u32 = 0x5000_0000;
+
 #[derive(Debug, Default)]
 pub struct TestGuestMemory {
     bytes: BTreeMap<u32, u8>,
@@ -105,6 +108,9 @@ impl CoredllGuestMemory for TestGuestMemory {
         if let Some(byte) = self.bytes.get_mut(&addr) {
             *byte = value;
             Ok(())
+        } else if is_test_heap_address(addr) {
+            self.bytes.insert(addr, value);
+            Ok(())
         } else {
             Err(Error::Backend(format!("unmapped test byte 0x{addr:08x}")))
         }
@@ -120,6 +126,9 @@ impl CoredllGuestMemory for TestGuestMemory {
     fn write_u32(&mut self, addr: u32, value: u32) -> Result<()> {
         if let Some(word) = self.words.get_mut(&addr) {
             *word = value;
+            Ok(())
+        } else if is_test_heap_address(addr) {
+            self.words.insert(addr, value);
             Ok(())
         } else {
             Err(Error::Backend(format!("unmapped test word 0x{addr:08x}")))
@@ -143,6 +152,10 @@ impl CoredllGuestMemory for TestGuestMemory {
             )))
         }
     }
+}
+
+fn is_test_heap_address(addr: u32) -> bool {
+    (TEST_HEAP_RANGE_START..TEST_HEAP_RANGE_END).contains(&addr)
 }
 
 pub fn unique_test_root(name: &str) -> PathBuf {

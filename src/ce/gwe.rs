@@ -143,6 +143,22 @@ pub struct Message {
     pub mouse_pos_at_post: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WindowPos {
+    pub hwnd: u32,
+    pub insert_after: u32,
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessagePointerPayload {
+    WindowPos(WindowPos),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SentMessage {
     pub id: u64,
@@ -383,6 +399,7 @@ pub struct Gwe {
     ready_timestamp_by_thread: BTreeMap<u32, u32>,
     changed_queue_status_by_thread: BTreeMap<u32, u32>,
     quit_by_thread: BTreeMap<u32, QuitState>,
+    message_pointer_payloads: BTreeMap<u32, MessagePointerPayload>,
     replied_send_depth_by_thread: BTreeMap<u32, u32>,
     next_lifecycle_message_order: u64,
     stats: GweStats,
@@ -449,6 +466,7 @@ impl Default for Gwe {
             ready_timestamp_by_thread: BTreeMap::new(),
             changed_queue_status_by_thread: BTreeMap::new(),
             quit_by_thread: BTreeMap::new(),
+            message_pointer_payloads: BTreeMap::new(),
             replied_send_depth_by_thread: BTreeMap::new(),
             next_lifecycle_message_order: 1,
             stats: GweStats::default(),
@@ -534,6 +552,7 @@ impl Gwe {
         let hwnd = self.next_hwnd;
         self.next_hwnd += 4;
         let visible = style & WS_VISIBLE != 0;
+        let enabled = style & WS_DISABLED == 0;
         let update_rect = rect.zero_origin();
         self.windows.insert(
             hwnd,
@@ -544,7 +563,7 @@ impl Gwe {
                 class_name,
                 title: title.to_owned(),
                 visible,
-                enabled: true,
+                enabled,
                 parent,
                 id,
                 style,
@@ -730,6 +749,11 @@ impl Gwe {
         };
         let previous = window.visible;
         window.visible = visible;
+        if visible {
+            window.style |= WS_VISIBLE;
+        } else {
+            window.style &= !WS_VISIBLE;
+        }
         if visible && !previous {
             window.update_pending = true;
             window.erase_pending = true;
@@ -851,19 +875,40 @@ impl Gwe {
         }
         let previous = window.enabled;
         window.enabled = enabled;
+        if enabled {
+            window.style &= !WS_DISABLED;
+        } else {
+            window.style |= WS_DISABLED;
+        }
         previous
     }
 
     pub fn is_window_enabled(&self, hwnd: u32) -> bool {
-        self.windows
-            .get(&hwnd)
-            .is_some_and(|window| !window.destroyed && window.enabled)
+        let mut current = Some(hwnd);
+        while let Some(hwnd) = current {
+            let Some(window) = self.windows.get(&hwnd) else {
+                return false;
+            };
+            if window.destroyed || !window.enabled || window.style & WS_DISABLED != 0 {
+                return false;
+            }
+            current = window.parent;
+        }
+        true
     }
 
     pub fn is_window_visible(&self, hwnd: u32) -> bool {
-        self.windows
-            .get(&hwnd)
-            .is_some_and(|window| !window.destroyed && window.visible)
+        let mut current = Some(hwnd);
+        while let Some(hwnd) = current {
+            let Some(window) = self.windows.get(&hwnd) else {
+                return false;
+            };
+            if window.destroyed || !window.visible || window.style & WS_VISIBLE == 0 {
+                return false;
+            }
+            current = window.parent;
+        }
+        true
     }
 
     pub fn get_parent(&self, hwnd: u32) -> Option<u32> {
@@ -1175,6 +1220,7 @@ impl Gwe {
         let mut paint_changed_thread = None;
         if flags & SWP_SHOWWINDOW != 0 {
             window.visible = true;
+            window.style |= WS_VISIBLE;
             window.update_pending = true;
             window.erase_pending = true;
             window.update_rect = window.client_rect.zero_origin();
@@ -1182,6 +1228,7 @@ impl Gwe {
         }
         if flags & SWP_HIDEWINDOW != 0 {
             window.visible = false;
+            window.style &= !WS_VISIBLE;
         }
         if flags & SWP_NOZORDER == 0 {
             self.apply_z_order(hwnd, parent, insert_after.unwrap_or(HWND_TOP));
@@ -1214,6 +1261,26 @@ impl Gwe {
 
     pub fn get_client_rect(&self, hwnd: u32) -> Option<Rect> {
         Some(self.windows.get(&hwnd)?.client_rect.zero_origin())
+    }
+
+    pub fn window_pos_for_rect(
+        &self,
+        hwnd: u32,
+        rect: Rect,
+        insert_after: u32,
+        flags: u32,
+    ) -> Option<WindowPos> {
+        let window = self.windows.get(&hwnd)?;
+        let origin = self.parent_client_origin(window.parent);
+        Some(WindowPos {
+            hwnd,
+            insert_after,
+            x: rect.left.saturating_sub(origin.x),
+            y: rect.top.saturating_sub(origin.y),
+            width: rect.width(),
+            height: rect.height(),
+            flags,
+        })
     }
 
     pub fn client_to_screen(&self, hwnd: u32, point: Point) -> Option<Point> {
@@ -1284,6 +1351,26 @@ impl Gwe {
         }
         self.post_message(window.thread_id, message);
         true
+    }
+
+    pub fn insert_message_pointer_payload(
+        &mut self,
+        ptr: u32,
+        payload: MessagePointerPayload,
+    ) -> bool {
+        if ptr == 0 {
+            return false;
+        }
+        self.message_pointer_payloads.insert(ptr, payload);
+        true
+    }
+
+    pub fn message_pointer_payload(&self, ptr: u32) -> Option<MessagePointerPayload> {
+        self.message_pointer_payloads.get(&ptr).copied()
+    }
+
+    pub fn take_message_pointer_payload(&mut self, ptr: u32) -> Option<MessagePointerPayload> {
+        self.message_pointer_payloads.remove(&ptr)
     }
 
     pub fn queue_sent_message_for_window(&mut self, hwnd: u32, message: Message) -> bool {
@@ -1816,6 +1903,10 @@ impl Gwe {
         let slot = window_long_slot_mut(window, index)?;
         let previous = *slot;
         *slot = value;
+        if index == GWL_STYLE {
+            window.enabled = value & WS_DISABLED == 0;
+            window.visible = value & WS_VISIBLE != 0;
+        }
         Some(previous)
     }
 
@@ -2097,9 +2188,8 @@ impl Gwe {
             .into_iter()
             .filter(|hwnd| {
                 self.windows.get(hwnd).is_some_and(|window| {
-                    window.visible
-                        && window.enabled
-                        && window.style & WS_DISABLED == 0
+                    self.is_window_visible(*hwnd)
+                        && self.is_window_enabled(*hwnd)
                         && (required_style == 0 || window.style & required_style != 0)
                 })
             })
@@ -2163,7 +2253,10 @@ impl Gwe {
             let Some(window) = self.windows.get(&hwnd) else {
                 continue;
             };
-            if !window.visible || !window.enabled || !window.client_rect.contains_point(point) {
+            if !self.is_window_visible(hwnd)
+                || !self.is_window_enabled(hwnd)
+                || !window.client_rect.contains_point(point)
+            {
                 continue;
             }
             if let Some(child) = self.window_from_point_in_parent(thread_id, Some(hwnd), point) {

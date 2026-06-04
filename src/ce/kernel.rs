@@ -9,12 +9,12 @@ use crate::{
             OPEN_EXISTING,
         },
         gwe::{
-            Gwe, GweStats, HWND_BROADCAST, HWND_TOP, Message, Point, Rect, SMF_NULL,
-            SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WA_ACTIVE, WA_INACTIVE,
-            WM_ACTIVATE, WM_CANCELMODE, WM_ENABLE, WM_KILLFOCUS, WM_MOVE, WM_SETFOCUS,
-            WM_SHOWWINDOW, WM_SIZE, WM_WINDOWPOSCHANGED,
+            Gwe, GweStats, HWND_BROADCAST, HWND_TOP, Message, MessagePointerPayload, Point, Rect,
+            SMF_NULL, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WA_ACTIVE,
+            WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE, WM_ENABLE, WM_KILLFOCUS, WM_MOVE, WM_SETFOCUS,
+            WM_SHOWWINDOW, WM_SIZE, WM_WINDOWPOSCHANGED, WindowPos,
         },
-        memory::MemorySystem,
+        memory::{MemorySystem, PROCESS_HEAP_HANDLE},
         object::{FileObject, FindFileObject, HandleTable, KernelObject, WaitResult},
         registry::Registry,
         remote::{CeRemote, RemoteStatus, WM_LBUTTONDOWN, WM_MOUSEMOVE, make_lparam},
@@ -1025,7 +1025,13 @@ impl CeKernel {
             rect,
         );
         self.handles.insert(KernelObject::Window(hwnd));
-        self.post_window_rect_messages(hwnd, Some(Rect::default()), self.gwe.get_window_rect(hwnd));
+        self.post_window_rect_messages(
+            hwnd,
+            Some(Rect::default()),
+            self.gwe.get_window_rect(hwnd),
+            HWND_TOP,
+            0,
+        );
         hwnd
     }
 
@@ -1085,7 +1091,13 @@ impl CeKernel {
             let after = self.gwe.get_window_rect(hwnd);
             let is_visible = self.gwe.is_window_visible(hwnd);
             self.post_window_visibility_message(hwnd, was_visible, is_visible);
-            self.post_window_rect_messages(hwnd, before, after);
+            self.post_window_rect_messages(
+                hwnd,
+                before,
+                after,
+                insert_after.unwrap_or(HWND_TOP),
+                flags,
+            );
             if flags & (SWP_NOACTIVATE | SWP_HIDEWINDOW) == 0 {
                 let target = self.top_level_window(hwnd);
                 let _ = self.activate_window(Some(target));
@@ -1131,7 +1143,7 @@ impl CeKernel {
         let before = self.gwe.get_window_rect(hwnd);
         let moved = self.gwe.move_window(hwnd, x, y, width, height, repaint);
         if moved {
-            self.post_window_rect_messages(hwnd, before, self.gwe.get_window_rect(hwnd));
+            self.post_window_rect_messages(hwnd, before, self.gwe.get_window_rect(hwnd), 0, 0);
         }
         moved
     }
@@ -1345,7 +1357,20 @@ impl CeKernel {
             self.gwe
                 .complete_active_sent_message(sent_context_thread, result);
         }
+        if message.msg == WM_WINDOWPOSCHANGED {
+            self.release_message_pointer_payload(message.lparam);
+        }
         result
+    }
+
+    pub fn message_pointer_payload(&self, ptr: u32) -> Option<MessagePointerPayload> {
+        self.gwe.message_pointer_payload(ptr)
+    }
+
+    pub fn release_message_pointer_payload(&mut self, ptr: u32) -> Option<MessagePointerPayload> {
+        let payload = self.gwe.take_message_pointer_payload(ptr)?;
+        let _ = self.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
+        Some(payload)
     }
 
     pub fn message_pump_step(&mut self, thread_id: u32) -> MessagePumpResult {
@@ -1494,14 +1519,26 @@ impl CeKernel {
         }
     }
 
-    fn post_window_rect_messages(&mut self, hwnd: u32, before: Option<Rect>, after: Option<Rect>) {
+    fn post_window_rect_messages(
+        &mut self,
+        hwnd: u32,
+        before: Option<Rect>,
+        after: Option<Rect>,
+        insert_after: u32,
+        flags: u32,
+    ) {
         let (Some(before), Some(after)) = (before, after) else {
             return;
         };
         if before == after {
             return;
         }
-        self.post_window_message(hwnd, WM_WINDOWPOSCHANGED, 0, 0);
+        let lparam = self
+            .gwe
+            .window_pos_for_rect(hwnd, after, insert_after, flags)
+            .map(|payload| self.queue_window_pos_payload(payload))
+            .unwrap_or(0);
+        self.post_window_message(hwnd, WM_WINDOWPOSCHANGED, 0, lparam);
         if before.left != after.left || before.top != after.top {
             self.post_window_message(hwnd, WM_MOVE, 0, make_lparam_i16(after.left, after.top));
         }
@@ -1512,6 +1549,21 @@ impl CeKernel {
                 0,
                 make_lparam_i16(after.width(), after.height()),
             );
+        }
+    }
+
+    fn queue_window_pos_payload(&mut self, payload: WindowPos) -> u32 {
+        let Some(ptr) = self.memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 28) else {
+            return 0;
+        };
+        if self
+            .gwe
+            .insert_message_pointer_payload(ptr, MessagePointerPayload::WindowPos(payload))
+        {
+            ptr
+        } else {
+            let _ = self.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
+            0
         }
     }
 

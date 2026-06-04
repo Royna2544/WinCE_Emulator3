@@ -1794,6 +1794,10 @@ impl UnicornMips {
                             .gwe
                             .record_destroy_lifecycle_message(callout.hwnd, callout.msg);
                     }
+                    if callout.msg == crate::ce::gwe::WM_WINDOWPOSCHANGED {
+                        let _ = unsafe { &mut *kernel_ptr }
+                            .release_message_pointer_payload(callout.lparam);
+                    }
                     record_wndproc_return(
                         &last_wndproc_returns_hook,
                         UnicornWndProcReturn {
