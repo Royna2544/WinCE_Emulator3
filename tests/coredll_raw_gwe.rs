@@ -4845,6 +4845,17 @@ fn coredll_raw_window_state_changes_queue_lifecycle_messages() -> Result<()> {
         thread_id,
         msg_ptr,
         hwnd,
+        WM_WINDOWPOSCHANGED,
+        0,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        hwnd,
         WM_ACTIVATE,
         WA_ACTIVE,
         0,
@@ -5079,6 +5090,75 @@ fn coredll_raw_set_window_pos_show_hide_queues_windowpos_without_rect_change() -
     assert_ne!(hide_pos_ptr, 0);
     assert_eq!(memory.read_u32(hide_pos_ptr)?, hwnd);
     assert_eq!(memory.read_u32(hide_pos_ptr + 24)?, hide_flags);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_show_window_queues_direct_visibility_windowpos_under_hidden_parent() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 3;
+    let msg_ptr = 0x7300;
+    memory.map_words(msg_ptr, 7);
+
+    let parent = kernel.create_window_ex_w(thread_id, "HIDDENPARENT", "", None, 0, 0, 0);
+    let child =
+        kernel.create_window_ex_w(thread_id, "VISIBLECHILD", "", Some(parent), 0, WS_CHILD, 0);
+    assert!(!kernel.gwe.is_window_visible(child));
+
+    assert!(!kernel.gwe.show_window(child, true));
+    assert!(kernel.gwe.window(child).expect("child").visible);
+    assert!(!kernel.gwe.is_window_visible(child));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHOW_WINDOW,
+            [child, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        child,
+        WM_SHOWWINDOW,
+        0,
+        0,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_MESSAGE_W,
+            [msg_ptr, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(msg_ptr)?, child);
+    assert_eq!(memory.read_u32(msg_ptr + 4)?, WM_WINDOWPOSCHANGED);
+    let window_pos_ptr = memory.read_u32(msg_ptr + 12)?;
+    assert_ne!(window_pos_ptr, 0);
+    assert_eq!(memory.read_u32(window_pos_ptr)?, child);
+    assert_eq!(
+        memory.read_u32(window_pos_ptr + 24)?,
+        SWP_HIDEWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
+    );
 
     Ok(())
 }
@@ -7388,6 +7468,17 @@ fn coredll_raw_disable_or_hide_clears_focus_and_activation() -> Result<()> {
         thread_id,
         msg_ptr,
         parent,
+        WM_WINDOWPOSCHANGED,
+        0,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        parent,
         WM_ACTIVATE,
         WA_ACTIVE,
         0,
@@ -7414,6 +7505,17 @@ fn coredll_raw_disable_or_hide_clears_focus_and_activation() -> Result<()> {
         child,
         WM_SHOWWINDOW,
         1,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        child,
+        WM_WINDOWPOSCHANGED,
+        0,
         0,
     );
     assert!(matches!(
@@ -7494,6 +7596,17 @@ fn coredll_raw_disable_or_hide_clears_focus_and_activation() -> Result<()> {
         thread_id,
         msg_ptr,
         child,
+        WM_WINDOWPOSCHANGED,
+        0,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        child,
         WM_KILLFOCUS,
         0,
         0,
@@ -7536,6 +7649,17 @@ fn coredll_raw_disable_or_hide_clears_focus_and_activation() -> Result<()> {
         child2,
         WM_SHOWWINDOW,
         1,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        child2,
+        WM_WINDOWPOSCHANGED,
+        0,
         0,
     );
     assert_next_message(

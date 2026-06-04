@@ -9,6 +9,26 @@
 
 ## Confirmed
 
+- Raw/kernel `ShowWindow` now treats `WM_SHOWWINDOW` as a direct HWND
+  visibility transition instead of comparing effective ancestor visibility to
+  the requested state. Hiding a child that is already effectively invisible
+  because its parent is hidden still queues the child's own `WM_SHOWWINDOW`,
+  and direct show/hide transitions now also queue `WM_WINDOWPOSCHANGED` with a
+  CE `WINDOWPOS` payload using no-move/no-size/no-zorder show/hide flags.
+  Focused coverage:
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_show_window_queues_direct_visibility_windowpos_under_hidden_parent`,
+  `coredll_raw_window_state_changes_queue_lifecycle_messages`,
+  `coredll_raw_focus_and_activation_queue_ce_messages`, and the full raw GWE
+  binary pass. `cargo fmt`, `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo build --features unicorn,trace,win32-desktop`, and full
+  `cargo test --features unicorn,trace,win32-desktop` pass with the known
+  non-fatal Windows incremental-finalize warning. A mounted 150 s virtual/tap
+  probe wrote `target\showwindow_direct_visibility_virtual_150s_*`; it confirms
+  the real app path now emits decoded hide `WINDOWPOS` records such as
+  `0x0002006c/flags=0x00000097`, but the run still stops at the same
+  `COREDLL.dll@861 blocked_get_message` frontier with stable memory/file-I/O
+  counters and no later display-HDC present.
 - Message trace records now decode queued `WM_WINDOWPOSCHANGED` `WINDOWPOS`
   payloads from guest memory. This is diagnostic only: it exposes `hwnd`,
   `hwndInsertAfter`, `x/y/cx/cy`, and `flags` in monitor message snapshots

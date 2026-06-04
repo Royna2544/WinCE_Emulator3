@@ -478,6 +478,14 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `IsWindow_I`, `GetClassNameW_I`, and `EnableWindow_I`, which back the
     virtual HWND state, class/title text copying, visibility/enabled checks,
     parent lookup, and focus bookkeeping.
+  - CE SDK `winuser.h` distinguishes a window's direct `WS_VISIBLE` style bit
+    from effective ancestor visibility. Raw/kernel `ShowWindow` now uses the
+    direct HWND visible state for `WM_SHOWWINDOW` and queues a changed
+    `WINDOWPOS` payload for direct show/hide transitions even when
+    `IsWindowVisible` remains false because an ancestor is hidden. Mounted
+    evidence `target\showwindow_direct_visibility_virtual_150s_*` confirms the
+    real app receives hide payloads with `SWP_HIDEWINDOW`, no-move/no-size,
+    no-zorder, and no-activate flags without forcing any paint.
   - `window.hpp` declares `SetParent_I(HWND hwnd, HWND hwndParent)` and
     `GetParent_I(HWND hwnd)`, and CE SDK `winuser.h` exposes `SetParent`/
     `GetParent` beside `GW_CHILD` traversal and `WS_CHILD` style checks used

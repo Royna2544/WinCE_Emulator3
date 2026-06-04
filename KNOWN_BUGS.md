@@ -135,6 +135,14 @@
     the current stall is not due to an unreadable/opaque message payload:
     `0x0002006c` received `rect=0,0,800,480/flags=0x00000000`, while the run
     still ends at the same hidden-child/offscreen-composition frontier.
+    Direct `ShowWindow` visibility follow-up:
+    `target\showwindow_direct_visibility_virtual_150s_*` confirms raw/kernel
+    `ShowWindow` now queues direct-state `WM_SHOWWINDOW` plus
+    `WM_WINDOWPOSCHANGED` for children that were already effectively hidden by
+    their parent. The real app path now shows decoded hide payloads with
+    `flags=0x00000097` (`SWP_HIDEWINDOW|SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE`),
+    including HWND `0x0002006c`. This still does not produce the later
+    display-HDC blit; the child remains hidden with a pending 800x54 update.
     Historical evidence: the mounted virtual run with dumped runtime DLLs
     and real sibling app DLLs wrote `target\inavi_trampoline_virtual_*`. It
     preloaded `AuthLibrary.dll`, `TpSysAuth.dll`, `mMbcAuth.dll`,

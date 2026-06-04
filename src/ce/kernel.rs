@@ -1628,10 +1628,29 @@ impl CeKernel {
         if !self.gwe.is_window(hwnd) {
             return false;
         }
-        let was_visible = self.gwe.is_window_visible(hwnd);
+        let before = self.gwe.get_window_rect(hwnd);
+        let was_direct_visible = self.direct_window_visible(hwnd);
         let previous = self.gwe.show_window(hwnd, visible);
-        if was_visible != visible {
-            self.post_window_message(hwnd, WM_SHOWWINDOW, u32::from(visible), 0);
+        let is_direct_visible = self.direct_window_visible(hwnd);
+        if was_direct_visible != is_direct_visible {
+            self.post_window_message(hwnd, WM_SHOWWINDOW, u32::from(is_direct_visible), 0);
+            let mut flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER;
+            if is_direct_visible {
+                flags |= SWP_SHOWWINDOW;
+                if !activate {
+                    flags |= SWP_NOACTIVATE;
+                }
+            } else {
+                flags |= SWP_HIDEWINDOW | SWP_NOACTIVATE;
+            }
+            self.post_window_rect_messages(
+                hwnd,
+                before,
+                self.gwe.get_window_rect(hwnd),
+                HWND_TOP,
+                flags,
+                true,
+            );
         }
         if visible && activate {
             let target = self.top_level_window(hwnd);
@@ -1686,13 +1705,13 @@ impl CeKernel {
         flags: u32,
     ) -> bool {
         let before = self.gwe.get_window_rect(hwnd);
-        let was_visible = self.gwe.is_window_visible(hwnd);
+        let was_visible = self.direct_window_visible(hwnd);
         let moved = self
             .gwe
             .set_window_pos(hwnd, insert_after, x, y, width, height, flags);
         if moved {
             let after = self.gwe.get_window_rect(hwnd);
-            let is_visible = self.gwe.is_window_visible(hwnd);
+            let is_visible = self.direct_window_visible(hwnd);
             self.post_window_visibility_message(hwnd, was_visible, is_visible);
             self.post_window_rect_messages(
                 hwnd,
@@ -2295,6 +2314,12 @@ impl CeKernel {
         if before != after {
             self.post_window_message(hwnd, WM_SHOWWINDOW, u32::from(after), 0);
         }
+    }
+
+    fn direct_window_visible(&self, hwnd: u32) -> bool {
+        self.gwe
+            .window(hwnd)
+            .is_some_and(|window| window.visible && window.style & crate::ce::gwe::WS_VISIBLE != 0)
     }
 
     fn post_window_rect_messages(

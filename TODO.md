@@ -70,6 +70,15 @@
   `flags=0` before the run later parks with that child hidden and holding the
   pending 800x54 update. Use this decoded message evidence for the next
   show/idle/presentation slice instead of adding opaque pointer-only traces.
+  Direct `ShowWindow` visibility changes now queue `WM_SHOWWINDOW` and
+  `WM_WINDOWPOSCHANGED` even when the target is already effectively invisible
+  through a hidden parent; the mounted
+  `target\showwindow_direct_visibility_virtual_150s_*` probe confirms the
+  app-visible hide messages now carry flags `0x97`, including for
+  `0x0002006c`, but this did not move the final frontier. Continue with the
+  remaining generic presentation question: why the guest-composed 800x54
+  memory surface under hidden child `0x0002006c` is never shown or copied to a
+  display HDC.
 - Decide the safe host-write policy for mounted external dumps. The refreshed
   `target\createfile_access_virtual_150s_files.txt` proves iNavi opens
   `SDMMC Disk\iNaviData\config.bin` as `GENERIC_WRITE` + `OPEN_EXISTING`, but
