@@ -9907,6 +9907,50 @@ fn try_enter_dispatch_message_callout<D>(
     let Some(lparam) = read_unicorn_u32(uc, msg_ptr.wrapping_add(12)) else {
         return false;
     };
+    if msg == crate::ce::gwe::WM_TIMER && lparam != 0 && is_guest_wndproc(lparam) {
+        let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+        tracing::debug!(
+            target: "ce.gwe",
+            msg_ptr = format_args!("0x{msg_ptr:08x}"),
+            hwnd = format_args!("0x{hwnd:08x}"),
+            wparam = format_args!("0x{wparam:08x}"),
+            callback = format_args!("0x{lparam:08x}"),
+            ra = format_args!("0x{return_pc:08x}"),
+            "DispatchMessageW timer callback callout"
+        );
+        pending_returns.borrow_mut().push(PendingWndProcReturn {
+            source: "DispatchMessageW/TimerProc",
+            hwnd,
+            msg,
+            wparam,
+            lparam,
+            wndproc: lparam,
+            return_pc,
+            class_name: None,
+            api_result: Some(0),
+            dialog_result_hwnd: None,
+            finalize_destroy: false,
+            destroy_root_hwnd: None,
+            remaining_destroy_callouts: Vec::new(),
+            send_thread_id: None,
+            send_timeout_result_ptr: None,
+            send_restore: None,
+            continuation: None,
+        });
+        if write_wndproc_call_registers(
+            uc,
+            hwnd,
+            msg,
+            wparam,
+            kernel.timers.tick_count(),
+            lparam,
+            WNDPROC_RETURN_STUB_ADDR,
+        ) {
+            return true;
+        }
+        let _ = pending_returns.borrow_mut().pop();
+        return false;
+    }
     let Some(window) = kernel.gwe.window(hwnd) else {
         return false;
     };
@@ -13543,6 +13587,65 @@ mod unicorn_tests {
             Some(restore.send_id)
         );
         assert!(kernel.gwe.sent_message(restore.send_id).is_some());
+    }
+
+    #[test]
+    fn dispatch_message_callout_enters_timerproc_callback() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let msg_ptr = 0x3000_0100;
+        let hwnd = 0x0002_0008;
+        let timer_id = 77;
+        let timerproc = 0x0001_3570;
+        let return_pc = 0x0040_1000;
+        uc.mem_map(0x3000_0000, 0x1000, Prot::ALL).unwrap();
+        for (offset, value) in [
+            (0, hwnd),
+            (4, crate::ce::gwe::WM_TIMER),
+            (8, timer_id),
+            (12, timerproc),
+        ] {
+            uc.mem_write(u64::from(msg_ptr + offset), &value.to_le_bytes())
+                .unwrap();
+        }
+        uc.reg_write(RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        kernel.timers.sleep_ms(1234);
+        let before_tick = kernel.timers.tick_count();
+
+        let pending = Rc::new(RefCell::new(Vec::new()));
+        assert!(super::try_enter_dispatch_message_callout(
+            &kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_DISPATCH_MESSAGE_W),
+            &[msg_ptr],
+            1,
+            &pending,
+        ));
+
+        assert_eq!(uc.reg_read(RegisterMIPS::A0).unwrap() as u32, hwnd);
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::A1).unwrap() as u32,
+            crate::ce::gwe::WM_TIMER
+        );
+        assert_eq!(uc.reg_read(RegisterMIPS::A2).unwrap() as u32, timer_id);
+        let callback_tick = uc.reg_read(RegisterMIPS::A3).unwrap() as u32;
+        assert!(callback_tick >= before_tick);
+        assert!(callback_tick <= kernel.timers.tick_count());
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, timerproc);
+        assert_eq!(uc.reg_read(RegisterMIPS::T9).unwrap() as u32, timerproc);
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::RA).unwrap() as u32,
+            super::WNDPROC_RETURN_STUB_ADDR
+        );
+        let pending = pending.borrow();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].source, "DispatchMessageW/TimerProc");
+        assert_eq!(pending[0].api_result, Some(0));
+        assert_eq!(pending[0].wndproc, timerproc);
+        assert_eq!(pending[0].return_pc, return_pc);
     }
 
     #[test]

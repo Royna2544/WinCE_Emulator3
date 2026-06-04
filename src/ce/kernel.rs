@@ -365,7 +365,7 @@ impl CeKernel {
                 timer.hwnd.unwrap_or(0),
                 timer.message,
                 timer.id,
-                0,
+                timer.callback.unwrap_or(0),
                 self.timers.tick_count(),
             );
             self.post_gwe_message(target_thread_id, message);

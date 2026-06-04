@@ -20,7 +20,13 @@
   timer. Destroying a window now also removes timers for that HWND subtree
   while preserving no-HWND owner-thread timers, matching the same header's
   `TimerQueuesRemoveAllMsgQueueOrHwnd` /
-  `TimerQueueWindowDestroyedNotification` cleanup shape. Focused coverage:
+  `TimerQueueWindowDestroyedNotification` cleanup shape. Callback timer
+  entries now propagate the stored `TIMERPROC` through `MSG.lParam`, and the
+  Unicorn `DispatchMessageW` bridge enters that guest callback with CE/Win32
+  timer-proc arguments instead of dispatching through the window WNDPROC. The
+  CE-internal callback-timer path that bypasses the normal message queue is
+  still future work if traces demand it.
+  Focused coverage:
   `cargo test --features unicorn,trace,win32-desktop ce::timer`,
   `cargo test --features unicorn,trace,win32-desktop
   window_timers_with_same_id_keep_independent_owners`,
@@ -29,7 +35,13 @@
   `cargo test --features unicorn,trace,win32-desktop
   coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources`,
   `cargo test --features unicorn,trace,win32-desktop
-  coredll_raw_destroy_parent_invalidates_children_and_purges_messages` pass with
+  coredll_raw_destroy_parent_invalidates_children_and_purges_messages`,
+  `cargo test --features unicorn,trace,win32-desktop
+  send_message_callout_enters_cross_thread_receiver_context`,
+  `cargo test --features unicorn,trace,win32-desktop
+  dispatch_message_callout_enters_timerproc_callback`, and
+  `cargo test --features unicorn,trace,win32-desktop
+  create_window_callout_returns_hwnd_or_null_after_wm_create` pass with
   the known non-fatal Windows incremental-finalize warning. A mounted virtual
   iNavi probe wrote `target\timer_scope_virtual_30s_*`; it still reaches the
   real guest GDI present (`BitBlt` from memory DC `0x000a0044` to window HDC
@@ -41,7 +53,15 @@
   `target\timer_destroy_virtual_30s_*`; it remains in the same stable real
   present band (`heap_live=7329/5146375B`, `host_open=160`,
   `host_read=25977/1955740B`, framebuffer nonzero `1151398/1152000`) and
-  continues RSImage PNG/DIB activity without regressing to a blank screen.
+  continues RSImage PNG/DIB activity without regressing to a blank screen. The
+  TimerProc bridge follow-up wrote `target\timer_callback_virtual_30s_*` and
+  likewise stopped only on the 30 s wall limit at `pc=0x0030faec`, stayed
+  memory/file-I/O stable (`heap_live=7327/5135247B`, `virtual_live=3/196608B`,
+  `host_open=159`, `host_read=25713/1949108B`, `mem_open=2`), retained the
+  real screen present
+  `BitBlt(dst=0x02020008,dst_memdc=false,dst_hwnd=0x00020008,src=0x000a0044,800x480)`,
+  and wrote a populated framebuffer (`1151398` nonzero RGB bytes out of
+  `1152000`).
 - Long `GetMessageW` timer waits can now mature inside a single live Unicorn
   invocation without rebuilding CPU state. When the current thread parks in an
   empty message queue and the next timer is beyond the <=100 ms fast-forward

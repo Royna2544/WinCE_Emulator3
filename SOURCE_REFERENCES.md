@@ -204,7 +204,14 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     exposes `TimerQueuesRemoveAllMsgQueueOrHwnd` and
     `TimerQueueWindowDestroyedNotification`; v3 now removes timers for a
     destroyed HWND subtree while leaving no-HWND thread timers owned by the
-    message queue. CE virtual time is advanced inside the emulator timer
+    message queue. `TimerEntry_t` also carries `TIMERPROC m_tmprc` and
+    `bool m_Callback`, and the queue API exposes `TestAndReset(...,
+    TIMERPROC *pTimerProc, ...)`; v3 now preserves the guest-visible
+    `SetTimer` callback pointer in `MSG.lParam` and the Unicorn
+    `DispatchMessageW` bridge enters that callback with `(hwnd, WM_TIMER,
+    timer-id, tick-count)`. The CE-internal `m_Callback` path whose timer
+    entries bypass the normal message queue remains a future fidelity slice if
+    trace evidence reaches it. CE virtual time is advanced inside the emulator timer
     system for sleeps/timer pumping instead of sleeping the host thread. The
     raw Unicorn `GetMessageW` bridge now keeps that timer pumping narrow: it
     only fast-forwards short, imminent timers up to 100 ms before queue

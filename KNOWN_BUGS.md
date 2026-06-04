@@ -85,11 +85,19 @@
     aliasing as a likely explanation for the post-splash loop. Destroyed HWND
     subtrees also remove their window timers while preserving no-HWND thread
     timers, closing destroyed-window timer leaks as a likely explanation;
-    callback delivery and message/timer ordering remain open timer fidelity
-    suspects. The bounded mounted follow-up
-    `target\timer_scope_virtual_30s_*` still reaches the real 800x480
-    memory-DC-to-window-HDC `BitBlt`, stays memory/file-I/O stable, and writes
-    a populated framebuffer (`1151398` nonzero RGB bytes out of `1152000`).
+    guest-visible TimerProc delivery through `DispatchMessageW` now has a
+    first bridge, while CE internal callback-timer bypass semantics and
+    message/timer ordering remain open timer fidelity suspects. The bounded
+    mounted follow-up `target\timer_scope_virtual_30s_*` still reaches the real
+    800x480 memory-DC-to-window-HDC `BitBlt`, stays memory/file-I/O stable, and
+    writes a populated framebuffer (`1151398` nonzero RGB bytes out of
+    `1152000`).
+    The TimerProc bridge follow-up `target\timer_callback_virtual_30s_*`
+    likewise stays in the same real-present band (`pc=0x0030faec`,
+    `heap_live=7327/5135247B`, `host_open=159`,
+    `host_read=25713/1949108B`) with the same window-HDC 800x480 `BitBlt` and
+    populated framebuffer (`1151398/1152000` nonzero RGB bytes), so TimerProc
+    lParam/callout support did not regress first UI presentation.
     GWE hidden-window follow-up: `target\hide_update_clear_virtual_20s_*`
     proves stale create-time update state is no longer left on immediately
     hidden MFC child controls. `ShowWindow(SW_HIDE)`/`SWP_HIDEWINDOW` now clear
