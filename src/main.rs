@@ -1275,15 +1275,7 @@ fn load_import_dlls(image: &PeImage, search_dirs: &[PathBuf]) -> Result<Vec<PeIm
 fn emulator_provided_import_module(normalized_module_name: &str) -> bool {
     matches!(
         normalized_module_name,
-        "coredll"
-            | "winsock"
-            | "ws2"
-            | "ws2_32"
-            | "commctrl"
-            | "commctrlce"
-            | "ole32"
-            | "oleaut32"
-            | "olece"
+        "coredll" | "winsock" | "ws2" | "ws2_32" | "ole32" | "oleaut32" | "olece"
     )
 }
 
@@ -1410,5 +1402,14 @@ mod tests {
 
         let _ = std::fs::remove_file(dll);
         let _ = std::fs::remove_dir(root);
+    }
+
+    #[test]
+    fn commctrl_imports_are_loaded_from_search_dirs_not_emulator_provided() {
+        assert!(!emulator_provided_import_module("commctrl"));
+        assert!(!emulator_provided_import_module("commctrlce"));
+        assert!(emulator_provided_import_module("coredll"));
+        assert!(emulator_provided_import_module("winsock"));
+        assert!(emulator_provided_import_module("ole32"));
     }
 }

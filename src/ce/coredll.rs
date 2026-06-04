@@ -21,7 +21,9 @@ use crate::{
         memory::{HEAP_ZERO_MEMORY, PROCESS_HEAP_HANDLE},
         object::{CriticalSectionObject, KernelObject},
         registry::{HKey, RegOpenResult, RegQueryValueResult},
-        resource::{AcceleratorEntry, ResourceId, stock_object_handle},
+        resource::{
+            AcceleratorEntry, MenuItem, PopupMenuTracking, ResourceId, stock_object_handle,
+        },
         thread::{
             ERROR_ALREADY_EXISTS, ERROR_CLASS_DOES_NOT_EXIST, ERROR_FILE_NOT_FOUND,
             ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE,
@@ -63,6 +65,8 @@ const RDW_NOCHILDREN: u32 = 0x0040;
 const RDW_ALLCHILDREN: u32 = 0x0080;
 const RDW_UPDATENOW: u32 = 0x0100;
 const RDW_ERASENOW: u32 = 0x0200;
+const TPM_RETURNCMD: u32 = 0x0100;
+const TPMPARAMS_SIZE: u32 = 20;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CoredllSubsystem {
@@ -2556,6 +2560,17 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
+        ORD_SET_ASSOCIATED_MENU => Some(CoredllValue::U32(set_associated_menu_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_GET_ASSOCIATED_MENU => Some(CoredllValue::Handle(get_menu_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_DRAW_MENU_BAR => Some(CoredllValue::Bool(draw_menu_bar_raw(
             kernel,
             thread_id,
@@ -2867,6 +2882,38 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
+        ORD_CREATE_MENU => Some(CoredllValue::Handle(create_menu_raw(kernel, thread_id))),
+        ORD_CREATE_POPUP_MENU => Some(CoredllValue::Handle(create_popup_menu_raw(
+            kernel, thread_id,
+        ))),
+        ORD_INSERT_MENU_W => Some(CoredllValue::Bool(insert_menu_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_APPEND_MENU_W => Some(CoredllValue::Bool(append_menu_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_TRACK_POPUP_MENU_EX => Some(CoredllValue::U32(track_popup_menu_ex_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_GET_SUB_MENU => Some(CoredllValue::Handle(get_sub_menu_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_GET_MENU_ITEM_INFO_W => Some(CoredllValue::Bool(get_menu_item_info_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_SET_MENU_ITEM_INFO_W => Some(CoredllValue::Bool(set_menu_item_info_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_ENABLE_MENU_ITEM => Some(CoredllValue::U32(enable_menu_item_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ))),
         ORD_CHECK_MENU_ITEM => Some(CoredllValue::U32(check_menu_item_raw(
             kernel,
             thread_id,
@@ -2887,6 +2934,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
+            raw_arg(args, 2),
+        ))),
+        ORD_DELETE_MENU => Some(CoredllValue::Bool(remove_menu_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
         ))),
         ORD_DESTROY_MENU => Some(CoredllValue::Bool(destroy_menu_raw(
             kernel,
@@ -8299,6 +8354,20 @@ fn load_menu_w_raw(kernel: &mut CeKernel, thread_id: u32, module: u32, name: u32
         .create_menu(module, name, Some(resource_handle))
 }
 
+fn create_menu_raw(kernel: &mut CeKernel, thread_id: u32) -> u32 {
+    let handle = kernel
+        .resources
+        .create_menu(0, ResourceId::Integer(0), None);
+    kernel.threads.set_last_error(thread_id, 0);
+    handle
+}
+
+fn create_popup_menu_raw(kernel: &mut CeKernel, thread_id: u32) -> u32 {
+    let handle = kernel.resources.create_popup_menu();
+    kernel.threads.set_last_error(thread_id, 0);
+    handle
+}
+
 fn set_menu_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32, menu: u32) -> bool {
     if !kernel.gwe.set_menu(hwnd, menu) {
         kernel
@@ -8321,6 +8390,17 @@ fn get_menu_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> u32 {
     menu
 }
 
+fn set_associated_menu_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32, menu: u32) -> u32 {
+    if !kernel.gwe.set_menu(hwnd, menu) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    0
+}
+
 fn draw_menu_bar_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> bool {
     if !kernel.gwe.draw_menu_bar(hwnd) {
         kernel
@@ -8332,6 +8412,350 @@ fn draw_menu_bar_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> bool {
     true
 }
 
+fn insert_menu_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let menu = raw_arg(args, 0);
+    let position = raw_arg(args, 1);
+    let flags = raw_arg(args, 2);
+    let id_or_submenu = raw_arg(args, 3);
+    let item = menu_item_from_insert_args(memory, flags, id_or_submenu, raw_arg(args, 4));
+    if !kernel
+        .resources
+        .insert_menu_item(menu, position, flags, item)
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn append_menu_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let menu = raw_arg(args, 0);
+    let flags = raw_arg(args, 1);
+    let id_or_submenu = raw_arg(args, 2);
+    let item = menu_item_from_insert_args(memory, flags, id_or_submenu, raw_arg(args, 3));
+    if !kernel.resources.append_menu_item(menu, item) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn track_popup_menu_ex_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let menu = raw_arg(args, 0);
+    if kernel.resources.menu(menu).is_none() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
+    let hwnd = raw_arg(args, 4);
+    if hwnd != 0 && !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    }
+    let lptpm = raw_arg(args, 5);
+    let exclude_rect = if lptpm == 0 {
+        None
+    } else {
+        let Some(cb_size) = read_guest_u32(kernel, memory, thread_id, lptpm) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        if cb_size < TPMPARAMS_SIZE {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+        let Some(rect) = read_guest_rect(kernel, memory, thread_id, lptpm.wrapping_add(4)) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        Some([rect.left, rect.top, rect.right, rect.bottom])
+    };
+    let flags = raw_arg(args, 1);
+    let tracking = PopupMenuTracking {
+        menu,
+        flags,
+        x: raw_i32_arg(args, 2),
+        y: raw_i32_arg(args, 3),
+        hwnd,
+        exclude_rect,
+    };
+    if !kernel.resources.track_popup_menu(tracking) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    if flags & TPM_RETURNCMD != 0 { 0 } else { 1 }
+}
+
+fn get_sub_menu_raw(kernel: &mut CeKernel, thread_id: u32, menu: u32, position: u32) -> u32 {
+    let submenu = kernel.resources.get_sub_menu(menu, position).unwrap_or(0);
+    kernel.threads.set_last_error(
+        thread_id,
+        if submenu == 0 {
+            ERROR_INVALID_PARAMETER
+        } else {
+            0
+        },
+    );
+    submenu
+}
+
+fn get_menu_item_info_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let menu = raw_arg(args, 0);
+    let item_or_pos = raw_arg(args, 1);
+    let by_position = raw_arg(args, 2) != 0;
+    let info_ptr = raw_arg(args, 3);
+    let Some(cb_size) = read_guest_u32(kernel, memory, thread_id, info_ptr) else {
+        return false;
+    };
+    if cb_size < MENUITEMINFOW_SIZE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(mask) = read_guest_u32(kernel, memory, thread_id, info_ptr + 4) else {
+        return false;
+    };
+    let Some(item) = kernel
+        .resources
+        .get_menu_item(menu, item_or_pos, by_position)
+        .cloned()
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if !write_menu_item_info(kernel, memory, thread_id, info_ptr, mask, &item) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn set_menu_item_info_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let menu = raw_arg(args, 0);
+    let item_or_pos = raw_arg(args, 1);
+    let by_position = raw_arg(args, 2) != 0;
+    let info_ptr = raw_arg(args, 3);
+    let Some((mask, patch)) = read_menu_item_info(kernel, memory, thread_id, info_ptr) else {
+        return false;
+    };
+    let Some(mut item) = kernel
+        .resources
+        .get_menu_item(menu, item_or_pos, by_position)
+        .cloned()
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    apply_menu_item_info_mask(&mut item, mask, patch);
+    if !kernel
+        .resources
+        .set_menu_item(menu, item_or_pos, by_position, item)
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn menu_item_from_insert_args<M: CoredllGuestMemory>(
+    memory: &M,
+    flags: u32,
+    id_or_submenu: u32,
+    text_ptr: u32,
+) -> MenuItem {
+    let text = if flags & crate::ce::resource::MF_SEPARATOR != 0 || text_ptr == 0 {
+        None
+    } else {
+        read_guest_wide_arg(memory, text_ptr)
+    };
+    MenuItem::from_insert_flags(flags, id_or_submenu, text)
+}
+
+fn read_menu_item_info<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    info_ptr: u32,
+) -> Option<(u32, MenuItem)> {
+    let cb_size = read_guest_u32(kernel, memory, thread_id, info_ptr)?;
+    if cb_size < MENUITEMINFOW_SIZE {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
+    let mask = read_guest_u32(kernel, memory, thread_id, info_ptr + 4)?;
+    let text_ptr = read_guest_u32(kernel, memory, thread_id, info_ptr + 36).unwrap_or(0);
+    let text = if menu_info_wants_text(mask) && text_ptr != 0 {
+        read_guest_wide_arg(memory, text_ptr)
+    } else {
+        None
+    };
+    Some((
+        mask,
+        MenuItem {
+            id: read_guest_u32(kernel, memory, thread_id, info_ptr + 16).unwrap_or(0),
+            item_type: read_guest_u32(kernel, memory, thread_id, info_ptr + 8).unwrap_or(0),
+            state: read_guest_u32(kernel, memory, thread_id, info_ptr + 12).unwrap_or(0),
+            submenu: read_guest_u32(kernel, memory, thread_id, info_ptr + 20).unwrap_or(0),
+            checked_bitmap: read_guest_u32(kernel, memory, thread_id, info_ptr + 24).unwrap_or(0),
+            unchecked_bitmap: read_guest_u32(kernel, memory, thread_id, info_ptr + 28).unwrap_or(0),
+            data: read_guest_u32(kernel, memory, thread_id, info_ptr + 32).unwrap_or(0),
+            text,
+        },
+    ))
+}
+
+fn apply_menu_item_info_mask(item: &mut MenuItem, mask: u32, patch: MenuItem) {
+    if mask & MIIM_TYPE != 0 {
+        item.item_type = patch.item_type;
+    }
+    if mask & MIIM_STATE != 0 {
+        item.state = patch.state;
+    }
+    if mask & MIIM_ID != 0 {
+        item.id = patch.id;
+    }
+    if mask & MIIM_SUBMENU != 0 {
+        item.submenu = patch.submenu;
+        if patch.submenu != 0 && item.id == 0 {
+            item.id = u32::MAX;
+        }
+    }
+    if mask & MIIM_CHECKMARKS != 0 {
+        item.checked_bitmap = patch.checked_bitmap;
+        item.unchecked_bitmap = patch.unchecked_bitmap;
+    }
+    if mask & MIIM_DATA != 0 {
+        item.data = patch.data;
+    }
+    if menu_info_wants_text(mask) {
+        item.text = patch.text;
+    }
+}
+
+fn write_menu_item_info<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    info_ptr: u32,
+    mask: u32,
+    item: &MenuItem,
+) -> bool {
+    if mask & MIIM_TYPE != 0
+        && !write_guest_u32(kernel, memory, thread_id, info_ptr + 8, item.item_type)
+    {
+        return false;
+    }
+    if mask & MIIM_STATE != 0
+        && !write_guest_u32(kernel, memory, thread_id, info_ptr + 12, item.state)
+    {
+        return false;
+    }
+    if mask & MIIM_ID != 0 && !write_guest_u32(kernel, memory, thread_id, info_ptr + 16, item.id) {
+        return false;
+    }
+    if mask & MIIM_SUBMENU != 0
+        && !write_guest_u32(kernel, memory, thread_id, info_ptr + 20, item.submenu)
+    {
+        return false;
+    }
+    if mask & MIIM_CHECKMARKS != 0 {
+        if !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            info_ptr + 24,
+            item.checked_bitmap,
+        ) || !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            info_ptr + 28,
+            item.unchecked_bitmap,
+        ) {
+            return false;
+        }
+    }
+    if mask & MIIM_DATA != 0
+        && !write_guest_u32(kernel, memory, thread_id, info_ptr + 32, item.data)
+    {
+        return false;
+    }
+    if menu_info_wants_text(mask) {
+        let text = item.text.as_deref().unwrap_or("");
+        let full_len = text.encode_utf16().count() as u32;
+        let buffer = read_guest_u32(kernel, memory, thread_id, info_ptr + 36).unwrap_or(0);
+        let capacity = read_guest_u32(kernel, memory, thread_id, info_ptr + 40).unwrap_or(0);
+        if buffer != 0
+            && capacity != 0
+            && write_wide_result(kernel, memory, thread_id, buffer, capacity as usize, text) == 0
+            && !text.is_empty()
+        {
+            return false;
+        }
+        if !write_guest_u32(kernel, memory, thread_id, info_ptr + 40, full_len) {
+            return false;
+        }
+    }
+    true
+}
+
+fn menu_info_wants_text(mask: u32) -> bool {
+    mask & (MIIM_TYPE | MIIM_STRING) != 0
+}
+
 fn check_menu_item_raw(
     kernel: &mut CeKernel,
     thread_id: u32,
@@ -8339,8 +8763,24 @@ fn check_menu_item_raw(
     item: u32,
     flags: u32,
 ) -> u32 {
-    let checked = flags & MF_CHECKED != 0;
-    let Some(previous) = kernel.resources.check_menu_item(menu, item, checked) else {
+    let Some(previous) = kernel.resources.check_menu_item(menu, item, flags) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return u32::MAX;
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    previous
+}
+
+fn enable_menu_item_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    menu: u32,
+    item: u32,
+    flags: u32,
+) -> u32 {
+    let Some(previous) = kernel.resources.enable_menu_item(menu, item, flags) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -8371,8 +8811,14 @@ fn check_menu_radio_item_raw(
     true
 }
 
-fn remove_menu_raw(kernel: &mut CeKernel, thread_id: u32, menu: u32, item: u32) -> bool {
-    if !kernel.resources.remove_menu_item(menu, item) {
+fn remove_menu_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    menu: u32,
+    item: u32,
+    flags: u32,
+) -> bool {
+    if !kernel.resources.remove_menu_item(menu, item, flags) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -12662,7 +13108,14 @@ const PALETTE_ENTRY_SIZE_U32: u32 = 4;
 const MAX_LOG_PALETTE_ENTRIES: u32 = 4096;
 const DS_SETFONT: u32 = 0x0000_0040;
 const LR_LOADFROMFILE: u32 = 0x0000_0010;
-const MF_CHECKED: u32 = 0x0000_0008;
+const MIIM_STATE: u32 = 0x0000_0001;
+const MIIM_ID: u32 = 0x0000_0002;
+const MIIM_SUBMENU: u32 = 0x0000_0004;
+const MIIM_CHECKMARKS: u32 = 0x0000_0008;
+const MIIM_TYPE: u32 = 0x0000_0010;
+const MIIM_DATA: u32 = 0x0000_0020;
+const MIIM_STRING: u32 = 0x0000_0040;
+const MENUITEMINFOW_SIZE: u32 = 44;
 const MAX_CONVERSION_CHARS: u32 = 0x1_0000;
 const OSVERSIONINFO_CSD_WCHARS: u32 = 128;
 const ERROR_REGION: u32 = 0;

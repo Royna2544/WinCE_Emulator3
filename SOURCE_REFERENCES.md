@@ -232,6 +232,30 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     state while preserving child `hMenu` as the control id, and exposes
     `SetMenu`/`GetMenu`/`DrawMenuBar` through raw COREDLL without drawing fake
     menu pixels.
+  - CE GWE `window.hpp` declares `SetAssociatedMenu_I(HWND, HMENU)` and
+    `GetAssociatedMenu_I(HWND)`, and `gweapiset1.hpp` exposes the same entries
+    in the GWE API set. Rust raw ordinals `299` and `300` now use the same
+    virtual HWND menu association as `SetMenu`/`GetMenu`, preserving live-HWND
+    validation while avoiding host menu widgets or fake menu painting.
+  - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h` defines the CE menu API
+    surface and flags used by the next virtual menu slice: `CreateMenu`,
+    `CreatePopupMenu`, `AppendMenuW`, `InsertMenuW`, `RemoveMenu`,
+    `DeleteMenu`, `GetSubMenu`, `EnableMenuItem`, `SetMenuItemInfoW`,
+    `GetMenuItemInfoW`, `MF_BYPOSITION`, `MF_POPUP`, `MF_SEPARATOR`,
+    `MF_ENABLED`, `MF_GRAYED`, `MF_CHECKED`, `MIIM_STATE`, `MIIM_ID`,
+    `MIIM_SUBMENU`, `MIIM_CHECKMARKS`, `MIIM_TYPE`, `MIIM_DATA`, and the
+    44-byte MIPS CE `MENUITEMINFOW` layout. CE MFC
+    `C:\Program Files (x86)\Microsoft Visual Studio 8\VC\ce\atlmfc\src\mfc\winfrm.cpp`
+    traverses menus with `GetMenu`, `GetSubMenu`, item counts/IDs, and
+    `MENUITEMINFO` during frame/menu-bar handling. CE MFC
+    `cmdtarg.cpp::CCmdUI::Enable`/`SetCheck` uses `EnableMenuItem` and
+    `CheckMenuItem` with `MF_BYPOSITION` to update command UI state. Rust now
+    keeps ordered virtual menu items with command IDs, popup submenu handles,
+    type/state, checkmark bitmap handles, item data, and wide text through raw
+    COREDLL menu ordinals; `EnableMenuItem` and by-position `CheckMenuItem`
+    update that state without drawing fake menu UI. v2 corroborated that menu
+    handles were a viable emulation path, but v3 keeps the state in CE-like
+    Rust menu objects rather than host menu widgets.
   - `window.hpp` declares `IsWindowVisible_I`, and `CWindow::IsVisibleEnabled_I`
     checks `WS_VISIBLE`/`WS_DISABLED` style state. Rust now keeps direct
     visible state synchronized with `WS_VISIBLE` for `ShowWindow`,

@@ -172,7 +172,26 @@
     memory/file stable (`heap_live=6917/21255371B`, `host_open=91`,
     `host_read=4302/1718377B`, `mem_open=2`, `max_read=497178`), still had no
     render milestones, and still had only the same 101 red pixels from
-    `(0,160)` through `(100,160)`. This remains no-useful-UI.
+    `(0,160)` through `(100,160)`. The ordered CE menu item slice wrote
+    `target\menu_items_virtual_60s_*` using the same dumped runtime DLL source;
+    it stopped at `pc=0x00496a44`, stayed memory/file stable
+    (`heap_live=6930/21302289B`, `virtual_live=2/131072B`,
+    `host_open=92`, `host_read=4305/1769298B`, `mem_open=2`,
+    `max_read=497178`), still had no render milestones, and still had only the
+    same 101 red pixels from `(0,160)` through `(100,160)`. The follow-up
+    menu enable/check-state slice wrote `target\menu_enable_virtual_60s_*`,
+    stopped at `pc=0x000b9940`, stayed memory/file stable
+    (`heap_live=6929/21276863B`, `virtual_live=3/196608B`,
+    `host_open=97`, `host_read=5581/1766846B`, `mem_open=2`,
+    `max_read=497178`), still had no render milestones, and still had only the
+    same 101 red pixels from `(0,160)` through `(100,160)`. The associated
+    menu raw-GWE slice wrote `target\associated_menu_virtual_60s_*`, stopped
+    at `pc=0x00929804`, stayed memory/file stable
+    (`heap_live=6929/21276863B`, `virtual_live=3/196608B`,
+    `host_open=97`, `host_read=4332/1769576B`, `mem_open=2`,
+    `max_read=497178`), still had no render milestones, and still had only the
+    same 101 red pixels from `(0,160)` through `(100,160)`. This remains
+    no-useful-UI.
   - Evidence: latest bounded run with `--features unicorn`,
     `--dll-search-dir C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii`,
     and `--mount-config mounts.toml` previously timed out after 30

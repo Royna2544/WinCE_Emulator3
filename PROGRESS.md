@@ -9,6 +9,81 @@
 
 ## Confirmed
 
+- Raw `SetAssociatedMenu @299` and `GetAssociatedMenu @300` now reach the same
+  CE HWND-associated menu state as `SetMenu`/`GetMenu`. The raw dispatcher
+  validates live HWNDs through the GWE window table and keeps the CE
+  `SetAssociatedMenu_I` void-style return at the trap boundary while still
+  setting last error on invalid HWNDs. Source anchors are CE GWE
+  `window.hpp::SetAssociatedMenu_I`/`GetAssociatedMenu_I` and
+  `gweapiset1.hpp` entries for those functions. Focused coverage extends
+  `coredll_raw_window_menu_state_preserves_child_control_ids`; the raw GWE
+  suite passes (`54 passed`), `cargo check --features
+  unicorn,trace,win32-desktop` passes, and
+  `cargo test --features unicorn,trace,win32-desktop` passes (`94` unit tests
+  plus integration suites). A mounted virtual-desktop iNavi probe using
+  `D:\INAVI_Emulator\DUMPPLZ\Windows` wrote
+  `target\associated_menu_virtual_60s_summary.txt`,
+  `target\associated_menu_virtual_60s_render.txt`,
+  `target\associated_menu_virtual_60s_milestones.txt`,
+  `target\associated_menu_virtual_60s_files.txt`, and
+  `target\associated_menu_virtual_60s.ppm`; it stopped at the 60 s wall limit
+  (`pc=0x00929804`, `ra=0x000b9980`) with stable counters
+  (`heap_live=6929/21276863B`, `virtual_live=3/196608B`,
+  `host_open=97`, `host_read=4332/1769576B`, `mem_open=2`,
+  `max_read=497178`) and no render milestones. The framebuffer still contains
+  only 101 red pixels from `(0,160)` through `(100,160)`, color `255,0,0`, so
+  this is associated-menu API fidelity rather than useful UI output.
+- Raw menu enable/check state now honors CE by-position command UI updates.
+  `EnableMenuItem @847` mutates ordered virtual menu items and returns the
+  previous enabled/disabled/grayed state, and raw `CheckMenuItem` now respects
+  `MF_BYPOSITION` instead of treating the item argument only as a command ID.
+  Source anchors are CE SDK `winuser.h` menu flags/`EnableMenuItem` and CE MFC
+  `cmdtarg.cpp::CCmdUI::Enable`/`SetCheck`, which update menu items by
+  position with `MF_DISABLED | MF_GRAYED` and `MF_CHECKED`. Focused coverage is
+  folded into `coredll_raw_menu_items_round_trip_through_ce_menuiteminfo`; the
+  raw GWE suite passes (`54 passed`), `cargo check --features
+  unicorn,trace,win32-desktop` passes, and
+  `cargo test --features unicorn,trace,win32-desktop` passes (`94` unit tests
+  plus integration suites). A mounted virtual-desktop iNavi probe using
+  `D:\INAVI_Emulator\DUMPPLZ\Windows` wrote
+  `target\menu_enable_virtual_60s_summary.txt`,
+  `target\menu_enable_virtual_60s_render.txt`,
+  `target\menu_enable_virtual_60s_milestones.txt`,
+  `target\menu_enable_virtual_60s_files.txt`, and
+  `target\menu_enable_virtual_60s.ppm`; it stopped at the 60 s wall limit
+  (`pc=0x000b9940`, `ra=0x000b993c`) with stable counters
+  (`heap_live=6929/21276863B`, `virtual_live=3/196608B`,
+  `host_open=97`, `host_read=5581/1766846B`, `mem_open=2`,
+  `max_read=497178`) and no render milestones. The framebuffer still contains
+  only 101 red pixels from `(0,160)` through `(100,160)`, color `255,0,0`, so
+  this is CE menu command-state progress rather than useful UI output.
+- Raw CE menu item state now covers ordered virtual menu entries and the
+  common `MENUITEMINFOW` boundary. `CreateMenu`, `CreatePopupMenu`,
+  `AppendMenuW`, `InsertMenuW`, `RemoveMenu`/`DeleteMenu`, `GetSubMenu`,
+  `GetMenuItemInfoW`, and `SetMenuItemInfoW` now dispatch through raw COREDLL
+  into `ResourceSystem` menu objects instead of acting as generic success
+  stubs. Menu items preserve command IDs, popup submenu handles, type/state
+  flags, checkmark bitmap handles, item data, and wide text; `CheckMenuItem`
+  and `CheckMenuRadioItem` also update ordered item state where present. Source
+  anchors are CE SDK `winuser.h` menu flags/`MENUITEMINFOW`/`MIIM_*` and CE MFC
+  `winfrm.cpp` menu traversal/item-info use. Focused coverage:
+  `coredll_raw_menu_items_round_trip_through_ce_menuiteminfo`; the raw GWE
+  suite passes (`54 passed`), `cargo check --features
+  unicorn,trace,win32-desktop` passes, and
+  `cargo test --features unicorn,trace,win32-desktop` passes (`94` unit tests
+  plus integration suites). A mounted virtual-desktop iNavi probe using
+  `D:\INAVI_Emulator\DUMPPLZ\Windows` wrote
+  `target\menu_items_virtual_60s_summary.txt`,
+  `target\menu_items_virtual_60s_render.txt`,
+  `target\menu_items_virtual_60s_milestones.txt`,
+  `target\menu_items_virtual_60s_files.txt`, and
+  `target\menu_items_virtual_60s.ppm`; it stopped at the 60 s wall limit
+  (`pc=0x00496a44`, `ra=0x002017d0`) with stable counters
+  (`heap_live=6930/21302289B`, `virtual_live=2/131072B`,
+  `host_open=92`, `host_read=4305/1769298B`, `mem_open=2`,
+  `max_read=497178`) and no render milestones. The framebuffer still contains
+  only 101 red pixels from `(0,160)` through `(100,160)`, color `255,0,0`, so
+  this is menu-resource fidelity progress rather than useful UI output.
 - Raw HWND menu association now covers the first CE/MFC menu-state slice.
   Virtual GWE windows store an optional `HMENU`; raw `CreateWindowExW` treats
   the `hMenu` argument as a top-level window menu when `WS_CHILD` is absent and

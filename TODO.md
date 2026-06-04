@@ -155,12 +155,25 @@
     argument as HWND menu state while preserving the same argument as the child
     control id under `WS_CHILD`, and raw `SetMenu`/`GetMenu`/`DrawMenuBar` now
     reach that virtual window menu state without menu painting shortcuts.
+    Raw CE menu item APIs now keep ordered virtual `HMENU` entries:
+    `CreateMenu`, `CreatePopupMenu`, `AppendMenuW`, `InsertMenuW`,
+    `RemoveMenu`/`DeleteMenu`, `GetSubMenu`, `GetMenuItemInfoW`, and
+    `SetMenuItemInfoW` preserve command IDs, popup submenu handles, CE
+    type/state flags, checkmark bitmap handles, item data, and wide text
+    through `MENUITEMINFOW`. Raw `EnableMenuItem` and by-position
+    `CheckMenuItem` now update the same ordered state and preserve CE previous
+    state return values for MFC command UI updates. Raw
+    `SetAssociatedMenu`/`GetAssociatedMenu` now reach the same virtual HWND
+    menu association as `SetMenu`/`GetMenu`.
   - Open gaps: update regions are still represented as one bounding rectangle,
     so partial `ValidateRect`/`RedrawWindow(RDW_VALIDATE)` subtracts the
     representable remainder but keeps a conservative bounding rectangle for
     disjoint leftovers. Internal paint requests are represented as normal
     pending update state, and full child clipping/z-order invalidation remains
-    for the later GWE/GDI pass.
+    for the later GWE/GDI pass. Menu item count/ID exports are not currently
+    wired because the parsed runtime ordinal surface has not exposed them yet;
+    popup tracking/display, menu command routing, accelerators, and menu
+    painting remain open.
   - Port order:
     1. Paint/update correctness: keep `WM_PAINT` synthetic rather than posted,
        finish `UpdateWindow`/`RedrawWindow`/region invalidation semantics, and
@@ -231,8 +244,13 @@
        `SendDlgItemMessageW` now forwards `WM_SETTEXT`, `WM_GETTEXT`, and
        `WM_GETTEXTLENGTH` through the same child-control message boundary.
        HWND menu attachment now covers top-level `CreateWindowExW` menus plus
-       `SetMenu`/`GetMenu`/`DrawMenuBar`; deeper menu item info, popup
-       tracking, command routing, and menu painting remain open.
+       `SetMenu`/`GetMenu`/`DrawMenuBar` plus GWE
+       `SetAssociatedMenu`/`GetAssociatedMenu`. Ordered menu item state and
+       `MENUITEMINFOW` round-tripping now cover create/popup/append/insert/
+       remove/submenu/get/set info, plus enable/disable/check command-state
+       updates by position. Popup display/tracking, command routing, menu
+       painting, and any confirmed exported menu count/ID accessors remain
+       open.
        `GetDialogBaseUnits`/`MapDialogRect` and
        `GetNextDlgTabItem`/`GetNextDlgGroupItem` cover the first CE-backed
        dialog layout/navigation slice. Fuller dialog default-proc,

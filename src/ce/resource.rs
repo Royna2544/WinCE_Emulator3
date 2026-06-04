@@ -100,9 +100,66 @@ pub struct MenuObject {
     pub module: u32,
     pub name: ResourceId,
     pub resource_handle: Option<u32>,
+    pub popup: bool,
+    pub items: Vec<MenuItem>,
     pub checked_items: BTreeMap<u32, bool>,
     pub removed_items: Vec<u32>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PopupMenuTracking {
+    pub menu: u32,
+    pub flags: u32,
+    pub x: i32,
+    pub y: i32,
+    pub hwnd: u32,
+    pub exclude_rect: Option<[i32; 4]>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MenuItem {
+    pub id: u32,
+    pub item_type: u32,
+    pub state: u32,
+    pub submenu: u32,
+    pub checked_bitmap: u32,
+    pub unchecked_bitmap: u32,
+    pub data: u32,
+    pub text: Option<String>,
+}
+
+impl MenuItem {
+    pub fn from_insert_flags(flags: u32, id_or_submenu: u32, text: Option<String>) -> Self {
+        let popup = flags & MF_POPUP != 0;
+        Self {
+            id: if popup { u32::MAX } else { id_or_submenu },
+            item_type: flags & MENU_ITEM_TYPE_MASK,
+            state: flags & MENU_ITEM_STATE_MASK,
+            submenu: if popup { id_or_submenu } else { 0 },
+            checked_bitmap: 0,
+            unchecked_bitmap: 0,
+            data: 0,
+            text,
+        }
+    }
+}
+
+pub const MF_BYPOSITION: u32 = 0x0000_0400;
+pub const MF_POPUP: u32 = 0x0000_0010;
+pub const MF_SEPARATOR: u32 = 0x0000_0800;
+pub const MF_ENABLED: u32 = 0x0000_0000;
+pub const MF_DISABLED: u32 = 0x0000_0002;
+pub const MF_CHECKED: u32 = 0x0000_0008;
+pub const MF_GRAYED: u32 = 0x0000_0001;
+pub const MF_OWNERDRAW: u32 = 0x0000_0100;
+pub const MF_MENUBARBREAK: u32 = 0x0000_0020;
+pub const MF_MENUBREAK: u32 = 0x0000_0040;
+pub const MF_HILITE: u32 = 0x0000_0080;
+pub const MFT_RADIOCHECK: u32 = 0x0000_0200;
+pub const MFS_DEFAULT: u32 = 0x0000_1000;
+const MENU_ITEM_TYPE_MASK: u32 =
+    MF_SEPARATOR | MF_OWNERDRAW | MF_MENUBARBREAK | MF_MENUBREAK | MFT_RADIOCHECK;
+const MENU_ITEM_STATE_MASK: u32 = MF_CHECKED | MF_DISABLED | MF_GRAYED | MF_HILITE | MFS_DEFAULT;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcceleratorEntry {
@@ -198,6 +255,7 @@ pub struct ResourceSystem {
     memory_dcs: BTreeSet<u32>,
     dc_states: BTreeMap<u32, DcState>,
     dc_clips: BTreeMap<u32, u32>,
+    last_popup_tracking: Option<PopupMenuTracking>,
 }
 
 impl Default for ResourceSystem {
@@ -219,6 +277,7 @@ impl Default for ResourceSystem {
             memory_dcs: BTreeSet::new(),
             dc_states: BTreeMap::new(),
             dc_clips: BTreeMap::new(),
+            last_popup_tracking: None,
         }
     }
 }
@@ -445,6 +504,8 @@ impl ResourceSystem {
                 module,
                 name,
                 resource_handle,
+                popup: false,
+                items: Vec::new(),
                 checked_items: BTreeMap::new(),
                 removed_items: Vec::new(),
             },
@@ -452,14 +513,110 @@ impl ResourceSystem {
         handle
     }
 
+    pub fn create_popup_menu(&mut self) -> u32 {
+        let handle = self.create_menu(0, ResourceId::Integer(0), None);
+        if let Some(menu) = self.menus.get_mut(&handle) {
+            menu.popup = true;
+        }
+        handle
+    }
+
     pub fn menu(&self, handle: u32) -> Option<&MenuObject> {
         self.menus.get(&handle)
     }
 
-    pub fn check_menu_item(&mut self, handle: u32, item: u32, checked: bool) -> Option<u32> {
+    pub fn append_menu_item(&mut self, handle: u32, item: MenuItem) -> bool {
+        let Some(menu) = self.menus.get_mut(&handle) else {
+            return false;
+        };
+        menu.items.push(item);
+        true
+    }
+
+    pub fn insert_menu_item(
+        &mut self,
+        handle: u32,
+        position_or_id: u32,
+        flags: u32,
+        item: MenuItem,
+    ) -> bool {
+        let Some(menu) = self.menus.get_mut(&handle) else {
+            return false;
+        };
+        let index = if flags & MF_BYPOSITION != 0 {
+            position_or_id as usize
+        } else {
+            match menu.items.iter().position(|item| item.id == position_or_id) {
+                Some(index) => index,
+                None => return false,
+            }
+        };
+        if index > menu.items.len() {
+            return false;
+        }
+        menu.items.insert(index, item);
+        true
+    }
+
+    pub fn set_menu_item(
+        &mut self,
+        handle: u32,
+        item_or_pos: u32,
+        by_position: bool,
+        item: MenuItem,
+    ) -> bool {
+        let Some(menu) = self.menus.get_mut(&handle) else {
+            return false;
+        };
+        let Some(index) = menu_item_index(menu, item_or_pos, by_position) else {
+            return false;
+        };
+        menu.items[index] = item;
+        true
+    }
+
+    pub fn get_menu_item(
+        &self,
+        handle: u32,
+        item_or_pos: u32,
+        by_position: bool,
+    ) -> Option<&MenuItem> {
+        let menu = self.menus.get(&handle)?;
+        let index = menu_item_index(menu, item_or_pos, by_position)?;
+        menu.items.get(index)
+    }
+
+    pub fn get_sub_menu(&self, handle: u32, position: u32) -> Option<u32> {
+        let menu = self.menus.get(&handle)?;
+        let item = menu.items.get(position as usize)?;
+        (item.submenu != 0).then_some(item.submenu)
+    }
+
+    pub fn enable_menu_item(&mut self, handle: u32, item_or_pos: u32, flags: u32) -> Option<u32> {
         let menu = self.menus.get_mut(&handle)?;
-        let previous = menu.checked_items.insert(item, checked).unwrap_or(false);
-        Some(u32::from(previous) * 0x0000_0008)
+        let by_position = flags & MF_BYPOSITION != 0;
+        let index = menu_item_index(menu, item_or_pos, by_position)?;
+        let item = menu.items.get_mut(index)?;
+        let previous = item.state & (MF_DISABLED | MF_GRAYED);
+        item.state =
+            (item.state & !(MF_DISABLED | MF_GRAYED)) | (flags & (MF_DISABLED | MF_GRAYED));
+        Some(previous)
+    }
+
+    pub fn check_menu_item(&mut self, handle: u32, item: u32, flags: u32) -> Option<u32> {
+        let menu = self.menus.get_mut(&handle)?;
+        let by_position = flags & MF_BYPOSITION != 0;
+        let index = menu_item_index(menu, item, by_position)?;
+        let menu_item = menu.items.get_mut(index)?;
+        let previous = menu_item.state & MF_CHECKED;
+        let checked = flags & MF_CHECKED != 0;
+        if checked {
+            menu_item.state |= MF_CHECKED;
+        } else {
+            menu_item.state &= !MF_CHECKED;
+        }
+        menu.checked_items.insert(menu_item.id, checked);
+        Some(previous)
     }
 
     pub fn check_menu_radio_item(
@@ -477,21 +634,57 @@ impl ResourceSystem {
         }
         for item in first..=last {
             menu.checked_items.insert(item, item == checked);
+            if let Some(menu_item) = menu.items.iter_mut().find(|menu_item| menu_item.id == item) {
+                if item == checked {
+                    menu_item.state |= MF_CHECKED;
+                } else {
+                    menu_item.state &= !MF_CHECKED;
+                }
+            }
         }
         true
     }
 
-    pub fn remove_menu_item(&mut self, handle: u32, item: u32) -> bool {
+    pub fn remove_menu_item(&mut self, handle: u32, item: u32, flags: u32) -> bool {
         let Some(menu) = self.menus.get_mut(&handle) else {
             return false;
         };
+        let by_position = flags & MF_BYPOSITION != 0;
+        let Some(index) = menu_item_index(menu, item, by_position) else {
+            return false;
+        };
+        let removed = menu.items.remove(index);
         menu.removed_items.push(item);
         menu.checked_items.remove(&item);
+        if removed.id != item {
+            menu.checked_items.remove(&removed.id);
+        }
         true
     }
 
     pub fn delete_menu(&mut self, handle: u32) -> bool {
-        self.menus.remove(&handle).is_some()
+        let removed = self.menus.remove(&handle).is_some();
+        if removed
+            && self
+                .last_popup_tracking
+                .as_ref()
+                .is_some_and(|tracking| tracking.menu == handle)
+        {
+            self.last_popup_tracking = None;
+        }
+        removed
+    }
+
+    pub fn track_popup_menu(&mut self, tracking: PopupMenuTracking) -> bool {
+        if !self.menus.contains_key(&tracking.menu) {
+            return false;
+        }
+        self.last_popup_tracking = Some(tracking);
+        true
+    }
+
+    pub fn last_popup_tracking(&self) -> Option<&PopupMenuTracking> {
+        self.last_popup_tracking.as_ref()
     }
 
     pub fn create_accelerator(
@@ -774,6 +967,15 @@ impl ResourceSystem {
             }
         }
         removed
+    }
+}
+
+fn menu_item_index(menu: &MenuObject, item_or_pos: u32, by_position: bool) -> Option<usize> {
+    if by_position {
+        let index = item_or_pos as usize;
+        (index < menu.items.len()).then_some(index)
+    } else {
+        menu.items.iter().position(|item| item.id == item_or_pos)
     }
 }
 
