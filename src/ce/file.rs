@@ -807,6 +807,10 @@ impl HostFileSystem {
         &self.root
     }
 
+    pub fn host_path_for_guest(&self, guest_path: &str) -> Result<PathBuf> {
+        self.translate_guest_path(guest_path)
+    }
+
     fn open_file_mut(&mut self, id: u32) -> Result<&mut OpenFile> {
         self.open_files.get_mut(&id).ok_or(Error::InvalidHandle(id))
     }

@@ -76,6 +76,7 @@ pub struct CeKernel {
     crt_strtok_next_by_thread: BTreeMap<u32, u32>,
     recent_file_ops: Vec<FileTraceRecord>,
     recent_file_open_ops: Vec<FileTraceRecord>,
+    recent_process_ops: Vec<ProcessTraceRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,8 +110,23 @@ pub struct FileTraceRecord {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessTraceRecord {
+    pub op: &'static str,
+    pub application: Option<String>,
+    pub command_line: Option<String>,
+    pub path: Option<String>,
+    pub process_handle: Option<u32>,
+    pub thread_handle: Option<u32>,
+    pub process_id: Option<u32>,
+    pub thread_id: Option<u32>,
+    pub result: Option<u32>,
+    pub error: Option<String>,
+}
+
 const FILE_TRACE_LIMIT: usize = 512;
 const FILE_TRACE_PREVIEW_LIMIT: usize = 64;
+const PROCESS_TRACE_LIMIT: usize = 128;
 
 pub fn normalize_module_name(name: &str) -> String {
     name.trim()
@@ -179,6 +195,7 @@ impl CeKernel {
             crt_strtok_next_by_thread: BTreeMap::new(),
             recent_file_ops: Vec::new(),
             recent_file_open_ops: Vec::new(),
+            recent_process_ops: Vec::new(),
         }
     }
 
@@ -332,6 +349,18 @@ impl CeKernel {
             thread_id,
         };
         self.pending_process_launches.push(launch.clone());
+        self.record_process_trace(ProcessTraceRecord {
+            op: "CreateProcessWQueued",
+            application: launch.application.clone(),
+            command_line: launch.command_line.clone(),
+            path: None,
+            process_handle: Some(process_handle),
+            thread_handle: Some(thread_handle),
+            process_id: Some(process_id),
+            thread_id: Some(thread_id),
+            result: Some(1),
+            error: None,
+        });
         launch
     }
 
@@ -340,6 +369,7 @@ impl CeKernel {
     }
 
     pub fn mark_process_launch_exited(&mut self, launch: &PendingProcessLaunch, exit_code: u32) {
+        self.destroy_process_windows(launch.process_id, launch.thread_id);
         if self
             .handles
             .mark_process_exited(launch.process_handle, exit_code)
@@ -351,6 +381,38 @@ impl CeKernel {
             .mark_thread_exited(launch.thread_handle, exit_code)
         {
             self.queue_object_wake_candidates(launch.thread_handle);
+        }
+        self.record_process_trace(ProcessTraceRecord {
+            op: "CreateProcessExited",
+            application: launch.application.clone(),
+            command_line: launch.command_line.clone(),
+            path: None,
+            process_handle: Some(launch.process_handle),
+            thread_handle: Some(launch.thread_handle),
+            process_id: Some(launch.process_id),
+            thread_id: Some(launch.thread_id),
+            result: Some(exit_code),
+            error: None,
+        });
+    }
+
+    fn destroy_process_windows(&mut self, process_id: u32, thread_id: u32) {
+        let hwnds = self
+            .gwe
+            .windows_snapshot()
+            .into_iter()
+            .filter(|window| {
+                !window.destroyed
+                    && window.hwnd != crate::ce::gwe::DESKTOP_HWND
+                    && (window.process_id == process_id || window.thread_id == thread_id)
+            })
+            .map(|window| window.hwnd)
+            .collect::<Vec<_>>();
+        for hwnd in &hwnds {
+            let _ = self.gwe.destroy_window(*hwnd, self.timers.tick_count());
+        }
+        if !hwnds.is_empty() {
+            self.timers.remove_window_timers(&hwnds);
         }
     }
 
@@ -395,12 +457,20 @@ impl CeKernel {
         self.files.host_path_to_guest_mount(host_path)
     }
 
+    pub fn host_path_for_guest(&self, guest_path: &str) -> Result<std::path::PathBuf> {
+        self.files.host_path_for_guest(guest_path)
+    }
+
     pub fn recent_file_ops(&self) -> &[FileTraceRecord] {
         &self.recent_file_ops
     }
 
     pub fn recent_file_open_ops(&self) -> &[FileTraceRecord] {
         &self.recent_file_open_ops
+    }
+
+    pub fn recent_process_ops(&self) -> &[ProcessTraceRecord] {
+        &self.recent_process_ops
     }
 
     pub fn file_io_stats(&self) -> FileIoStats {
@@ -417,6 +487,13 @@ impl CeKernel {
 
     pub fn record_file_trace(&mut self, record: FileTraceRecord) {
         self.push_file_trace(record);
+    }
+
+    pub fn record_process_trace(&mut self, record: ProcessTraceRecord) {
+        if self.recent_process_ops.len() == PROCESS_TRACE_LIMIT {
+            self.recent_process_ops.remove(0);
+        }
+        self.recent_process_ops.push(record);
     }
 
     fn push_file_trace(&mut self, record: FileTraceRecord) {
@@ -1313,6 +1390,36 @@ impl CeKernel {
         if result == WAIT_FAILED {
             self.threads
                 .set_last_error(thread_id, crate::ce::thread::ERROR_INVALID_HANDLE);
+        }
+        let wait_trace = match self.handles.get(handle).ok() {
+            Some(KernelObject::Process(process)) => Some(ProcessTraceRecord {
+                op: "WaitForSingleObjectProcess",
+                application: None,
+                command_line: None,
+                path: None,
+                process_handle: Some(handle),
+                thread_handle: None,
+                process_id: Some(process.process_id),
+                thread_id: None,
+                result: Some(result),
+                error: Some(format!("exit=0x{:08x}", process.exit_code)),
+            }),
+            Some(KernelObject::Thread(thread)) => Some(ProcessTraceRecord {
+                op: "WaitForSingleObjectThread",
+                application: None,
+                command_line: None,
+                path: None,
+                process_handle: None,
+                thread_handle: Some(handle),
+                process_id: None,
+                thread_id: Some(thread.thread_id),
+                result: Some(result),
+                error: Some(format!("exit=0x{:08x}", thread.exit_code)),
+            }),
+            _ => None,
+        };
+        if let Some(record) = wait_trace {
+            self.record_process_trace(record);
         }
         self.scheduler
             .record_wait_result(wait_result_to_wake_reason(result));

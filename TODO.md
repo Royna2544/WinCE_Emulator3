@@ -12,6 +12,21 @@
 
 ## Current Slice
 
+- Continue from the process-clean mounted frontier in
+  `target\process_lifetime_virtual_150s_*`. The current generic child-launch
+  path now resolves all three iNavi companion process launches through the CE
+  mount table and runs them to exit code `0`; `happyway_win.exe` no longer
+  fails DLL layout on `AuthLibrary.dll`, and its top-level HWND is marked
+  `dead=true` after child exit instead of remaining a live parent-dispatched
+  WNDPROC. The process trace selector is `tracefile processes PATH`. The run
+  still ends at `COREDLL.dll@861 blocked_get_message` with stable file/RSS
+  counters and a real splash framebuffer. The next UI slice should compare the
+  post-child window/message/render state against the previous hidden-strip
+  frontier: the active hidden pending-update child is now `0x00020070`
+  (`rect=0,426-800,480`, `update=0,0-800,54`) after extra child work, while
+  the child-owned `happyway_win` top-level `0x0002000c` is dead and absent from
+  z-order. Do not resurrect child windows or force hidden paints; continue
+  with CE process/window lifetime and GWE presentation semantics.
 - File mapping single-view aliasing is no longer the active current-gap
   suspect. v3 now stores per-mapping `FileMappingView` records, maps distinct
   bases, flushes guest bytes into shared backing, refreshes sibling views on

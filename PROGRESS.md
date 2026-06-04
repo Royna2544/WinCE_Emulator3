@@ -9,6 +9,28 @@
 
 ## Confirmed
 
+- Child process launch fidelity advanced on the mounted iNavi path. Rooted CE
+  `CreateProcessW` application names now resolve through the mount table before
+  falling back to parent-relative lookup, so
+  `\SDMMC Disk\INavi\res\DeviceParser.exe` resolves to
+  `D:\INAVI_Emulator\INAVI\INavi\res\DeviceParser.exe` instead of failing as
+  not found. Child PE/DLL loading now reserves the trampoline-expanded main
+  image range before placing imported DLLs, fixing the
+  `AuthLibrary.dll overlaps pe-image` failure seen when launching
+  `happyway_win.exe`. Child runs also start under their own CE thread id, and
+  windows owned by that child process/thread are destroyed at child exit so the
+  parent no longer dispatches into a stale child WNDPROC after the child
+  returns. Mounted validation wrote `target\process_lifetime_virtual_150s_*`:
+  `DeviceParser.exe`, `happyway_win.exe`, and `iSearch.exe` all resolved and
+  returned exit code `0`; the previous `pc=0x00000000` stale-WNDPROC crash did
+  not reproduce. Memory/file I/O stayed bounded
+  (`heap_live=13705/30071199B`, `virtual_live=2/131072B`,
+  `host_open=665`, `host_read=80127/4046053B`, `mem_open=3`,
+  `max_read=685080`). This is real launch/process progress, not complete UI:
+  the run still parks at `COREDLL.dll@861 blocked_get_message`, the
+  framebuffer remains the real iNavi splash/art frame, and the later hidden
+  child update frontier shifted to HWND `0x00020070` after the child process
+  work created and cleaned up additional windows.
 - File mappings now track explicit mapped views instead of one reusable
   `view_base` per mapping object. `MapViewOfFile` allocates a distinct virtual
   allocation for each view, honors the requested offset/remaining size, seeds

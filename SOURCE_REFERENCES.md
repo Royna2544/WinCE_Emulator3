@@ -121,6 +121,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
 - File mapping and process IPC:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\MAPFILE\mapfile.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\SHELL\MAPFILE\mapfile.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\handle.c`,
   CE SDK `winbase.h`, and v2 process/mapping fixtures as corroborating
   evidence only.
   - CE file mappings are objects with per-view lifetime. v3 now records
@@ -131,6 +133,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     gap is full page aliasing/immediate cross-view coherence, richer access
     protection validation, and growing this into a dedicated `MappingSystem`
     as process IPC fixtures demand it.
+  - CE process and thread handles are waitable kernel objects whose exit
+    transitions signal waiters through the scheduler/handle model. v3 now
+    records mounted process launch traces and signals process/thread handles
+    when a child run completes. Rooted CE application paths are resolved
+    through the mounted CE filesystem namespace before parent-directory module
+    fallback, matching the existing FSDMGR-style namespace boundary rather
+    than treating rooted names as host-relative strings.
 
 - Scheduler and wait ownership:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c`,

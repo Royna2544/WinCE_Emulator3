@@ -172,6 +172,19 @@
     `update=0,0-800,54`. Continue with the generic guest state/resource/MFC
     progression that should eventually show or present those controls, not
     hidden-child forced painting.
+    Child-process launch follow-up:
+    `target\process_lifetime_virtual_150s_*` confirms the app now gets past the
+    latest companion-process launch blockers. Rooted CE process names resolve
+    through the mount table, `DeviceParser.exe`, `happyway_win.exe`, and
+    `iSearch.exe` all run and return `0`, and the previous
+    `AuthLibrary.dll overlaps pe-image` plus subsequent stale child-WNDPROC
+    `pc=0` crash no longer reproduce. The run remains in the same broad
+    post-splash class of bug: it parks at `COREDLL.dll@861
+    blocked_get_message`, keeps bounded host-file reads
+    (`80127/4046053B`), and still has no named render milestone after the
+    first splash/art present. The hidden pending-update child is now
+    `0x00020070` because the real child process work created/removed extra
+    HWNDs before the final state.
     Historical evidence: the mounted virtual run with dumped runtime DLLs
     and real sibling app DLLs wrote `target\inavi_trampoline_virtual_*`. It
     preloaded `AuthLibrary.dll`, `TpSysAuth.dll`, `mMbcAuth.dll`,

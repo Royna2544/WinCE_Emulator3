@@ -25,6 +25,7 @@ pub struct UnicornMips {
     entry: Option<u32>,
     entry_image_base: Option<u32>,
     stack_top: Option<u32>,
+    initial_thread_id: u32,
     dll_search_dirs: Vec<std::path::PathBuf>,
     mapped_blobs: Vec<MappedBlob>,
     loaded_modules: Vec<LoadedPeModuleInfo>,
@@ -85,6 +86,7 @@ pub struct UnicornDebugSnapshot {
     pub active_timers: Vec<UnicornTimerSnapshot>,
     pub recent_file_open_ops: Vec<crate::ce::kernel::FileTraceRecord>,
     pub recent_file_ops: Vec<crate::ce::kernel::FileTraceRecord>,
+    pub recent_process_ops: Vec<crate::ce::kernel::ProcessTraceRecord>,
     pub last_messages: Vec<UnicornLastMessage>,
     pub last_wndproc_returns: Vec<UnicornWndProcReturn>,
     pub last_wndproc_call_traces: Vec<UnicornWndProcCallTrace>,
@@ -1005,6 +1007,7 @@ impl UnicornMips {
             entry: None,
             entry_image_base: None,
             stack_top: None,
+            initial_thread_id: MAIN_GUEST_THREAD_ID,
             dll_search_dirs: Vec::new(),
             mapped_blobs: Vec::new(),
             loaded_modules: Vec::new(),
@@ -1035,6 +1038,10 @@ impl UnicornMips {
 
     pub fn set_entry(&mut self, entry: u32) {
         self.entry = Some(entry);
+    }
+
+    pub fn set_initial_thread_id(&mut self, thread_id: u32) {
+        self.initial_thread_id = thread_id;
     }
 
     pub fn memory(&self) -> &MemoryMap {
@@ -1090,10 +1097,18 @@ impl UnicornMips {
         #[cfg(feature = "unicorn")]
         let mut next_trampoline_base = EXTERNAL_TRAMPOLINE_BASE;
         let mut next_trap_base = IMPORT_TRAP_BASE;
-        let mut occupied_image_ranges = vec![(
-            image.image_base(),
-            align_up_4k(image.optional_header.size_of_image)?,
-        )];
+        let mut image_occupancy = image.mapped_image()?;
+        #[cfg(feature = "unicorn")]
+        {
+            let _ = patch_mips_unicorn_trampolines(
+                image,
+                image.image_base(),
+                &mut image_occupancy,
+                None,
+            )?;
+        }
+        let image_mapped_size = align_up_4k(image_occupancy.len() as u32)?;
+        let mut occupied_image_ranges = vec![(image.image_base(), image_mapped_size)];
         self.loaded_modules.clear();
 
         for dll in dlls {
@@ -1919,7 +1934,7 @@ impl UnicornMips {
         let pending_wndproc_returns_hook = Rc::clone(&pending_wndproc_returns);
         let create_window_returns = Rc::new(RefCell::new(Vec::<CreateWindowReturn>::new()));
         let create_window_returns_hook = Rc::clone(&create_window_returns);
-        let current_thread_id = Rc::new(RefCell::new(MAIN_GUEST_THREAD_ID));
+        let current_thread_id = Rc::new(RefCell::new(self.initial_thread_id));
         let current_thread_id_hook = Rc::clone(&current_thread_id);
         let pending_guest_thread_returns =
             Rc::new(RefCell::new(Vec::<PendingGuestThreadReturn>::new()));
@@ -2930,6 +2945,7 @@ impl UnicornMips {
                 .collect(),
             kernel.recent_file_open_ops().to_vec(),
             kernel.recent_file_ops().to_vec(),
+            kernel.recent_process_ops().to_vec(),
             last_messages.borrow().clone(),
             last_wndproc_returns.borrow().clone(),
             last_wndproc_call_traces.borrow().clone(),
@@ -4294,9 +4310,33 @@ fn run_pending_process_launches<D>(
     sync_file_mapping_views_from_unicorn(parent_uc, kernel)?;
     for launch in launches {
         let Some(path) = resolve_process_launch_path(kernel, &launch)? else {
+            kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
+                op: "CreateProcessResolveFailed",
+                application: launch.application.clone(),
+                command_line: launch.command_line.clone(),
+                path: None,
+                process_handle: Some(launch.process_handle),
+                thread_handle: Some(launch.thread_handle),
+                process_id: Some(launch.process_id),
+                thread_id: Some(launch.thread_id),
+                result: Some(0),
+                error: Some("path not found".to_owned()),
+            });
             kernel.mark_process_launch_exited(&launch, u32::MAX);
             continue;
         };
+        kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
+            op: "CreateProcessResolved",
+            application: launch.application.clone(),
+            command_line: launch.command_line.clone(),
+            path: Some(path.display().to_string()),
+            process_handle: Some(launch.process_handle),
+            thread_handle: Some(launch.thread_handle),
+            process_id: Some(launch.process_id),
+            thread_id: Some(launch.thread_id),
+            result: Some(1),
+            error: None,
+        });
         let image = PeImage::inspect(&path)?;
         let saved_base = kernel.process_module_base();
         let saved_path = kernel.process_module_path().to_owned();
@@ -4316,6 +4356,7 @@ fn run_pending_process_launches<D>(
         let child_result = (|| -> Result<u32> {
             let mut child = UnicornMips::new()?;
             child.set_dll_search_dirs(dll_search_dirs.to_vec());
+            child.set_initial_thread_id(launch.thread_id);
             let dll_images = load_child_import_dlls(&image, dll_search_dirs)?;
             child.load_pe_image_with_dlls(&image, &dll_images)?;
             let mut child_framebuffer = VirtualFramebuffer::default_primary()?;
@@ -4347,7 +4388,36 @@ fn run_pending_process_launches<D>(
         kernel.set_process_command_line(saved_command_line);
         kernel.set_current_process_id(saved_process_id);
 
-        let exit_code = child_result?;
+        let exit_code = match child_result {
+            Ok(exit_code) => exit_code,
+            Err(err) => {
+                kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
+                    op: "CreateProcessChildError",
+                    application: launch.application.clone(),
+                    command_line: launch.command_line.clone(),
+                    path: Some(path.display().to_string()),
+                    process_handle: Some(launch.process_handle),
+                    thread_handle: Some(launch.thread_handle),
+                    process_id: Some(launch.process_id),
+                    thread_id: Some(launch.thread_id),
+                    result: None,
+                    error: Some(err.to_string()),
+                });
+                return Err(err);
+            }
+        };
+        kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
+            op: "CreateProcessChildReturned",
+            application: launch.application.clone(),
+            command_line: launch.command_line.clone(),
+            path: Some(path.display().to_string()),
+            process_handle: Some(launch.process_handle),
+            thread_handle: Some(launch.thread_handle),
+            process_id: Some(launch.process_id),
+            thread_id: Some(launch.thread_id),
+            result: Some(exit_code),
+            error: None,
+        });
         kernel.mark_process_launch_exited(&launch, exit_code);
     }
     Ok(())
@@ -4369,6 +4439,13 @@ fn resolve_process_launch_path(
     } else {
         return Ok(None);
     };
+    if raw_path.starts_with(['\\', '/']) {
+        if let Ok(host_path) = kernel.host_path_for_guest(&raw_path) {
+            if host_path.exists() {
+                return Ok(Some(host_path));
+            }
+        }
+    }
     let separator = std::path::MAIN_SEPARATOR.to_string();
     let relative = raw_path.replace('\\', &separator);
     let relative_path = std::path::Path::new(&relative);
@@ -4947,6 +5024,11 @@ impl std::fmt::Display for UnicornDebugSnapshot {
         if !self.recent_file_open_ops.is_empty() {
             write!(f, " recent_file_open_ops=[")?;
             write_file_trace_records(f, &self.recent_file_open_ops)?;
+            write!(f, "]")?;
+        }
+        if !self.recent_process_ops.is_empty() {
+            write!(f, " recent_process_ops=[")?;
+            write_process_trace_records(f, &self.recent_process_ops)?;
             write!(f, "]")?;
         }
         if !self.last_calls.is_empty() {
@@ -11233,6 +11315,7 @@ fn capture_debug_snapshot<D>(
     active_timers: Vec<UnicornTimerSnapshot>,
     recent_file_open_ops: Vec<crate::ce::kernel::FileTraceRecord>,
     recent_file_ops: Vec<crate::ce::kernel::FileTraceRecord>,
+    recent_process_ops: Vec<crate::ce::kernel::ProcessTraceRecord>,
     last_messages: Vec<UnicornLastMessage>,
     mut last_wndproc_returns: Vec<UnicornWndProcReturn>,
     mut last_wndproc_call_traces: Vec<UnicornWndProcCallTrace>,
@@ -11295,6 +11378,7 @@ fn capture_debug_snapshot<D>(
         active_timers,
         recent_file_open_ops,
         recent_file_ops,
+        recent_process_ops,
         last_messages,
         last_wndproc_returns,
         last_wndproc_call_traces,
@@ -11446,6 +11530,97 @@ fn import_detail_after_return<D>(
             let last_error = kernel.threads.get_last_error(thread_id);
             Some(format!(
                 "module=0x{module:08x}/ok={result}/last_error={last_error}"
+            ))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_CREATE_PROCESS_W) => {
+            let application_ptr = args.first().copied().unwrap_or(0);
+            let command_line_ptr = args.get(1).copied().unwrap_or(0);
+            let flags = args.get(5).copied().unwrap_or(0);
+            let current_dir_ptr = args.get(7).copied().unwrap_or(0);
+            let startup_info = args.get(8).copied().unwrap_or(0);
+            let process_information = args.get(9).copied().unwrap_or(0);
+            let last_error = kernel.threads.get_last_error(thread_id);
+            let process_handle = read_unicorn_u32(uc, process_information).unwrap_or(0);
+            let thread_handle =
+                read_unicorn_u32(uc, process_information.wrapping_add(4)).unwrap_or(0);
+            let process_id = read_unicorn_u32(uc, process_information.wrapping_add(8)).unwrap_or(0);
+            let child_thread_id =
+                read_unicorn_u32(uc, process_information.wrapping_add(12)).unwrap_or(0);
+            let process_exit_code = kernel
+                .process_exit_code_for_handle(process_handle)
+                .unwrap_or(u32::MAX);
+            let thread_exit_code = kernel
+                .guest_thread_exit_code_for_handle(thread_handle, thread_id)
+                .unwrap_or(u32::MAX);
+            let mut parts = vec![
+                format!("ok={result}"),
+                format!("app_ptr=0x{application_ptr:08x}"),
+                format!("cmd_ptr=0x{command_line_ptr:08x}"),
+                format!("flags=0x{flags:08x}"),
+                format!("current_dir_ptr=0x{current_dir_ptr:08x}"),
+                format!("startup=0x{startup_info:08x}"),
+                format!("pi=0x{process_information:08x}"),
+                format!("process=0x{process_handle:08x}"),
+                format!("thread=0x{thread_handle:08x}"),
+                format!("pid={process_id}"),
+                format!("tid={child_thread_id}"),
+                format!("process_exit=0x{process_exit_code:08x}"),
+                format!("thread_exit=0x{thread_exit_code:08x}"),
+                format!("last_error={last_error}"),
+            ];
+            if let Some(application) = import_pointer_or_wide_arg(uc, application_ptr) {
+                parts.push(format!("app={application:?}"));
+            }
+            if let Some(command_line) = import_pointer_or_wide_arg(uc, command_line_ptr) {
+                parts.push(format!("cmd={command_line:?}"));
+            }
+            if let Some(current_dir) = import_pointer_or_wide_arg(uc, current_dir_ptr) {
+                parts.push(format!("current_dir={current_dir:?}"));
+            }
+            Some(parts.join("/"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_SINGLE_OBJECT) => {
+            let handle = args.first().copied().unwrap_or(0);
+            let timeout = args.get(1).copied().unwrap_or(0);
+            let last_error = kernel.threads.get_last_error(thread_id);
+            let process_exit = kernel.process_exit_code_for_handle(handle);
+            let thread_exit = kernel.guest_thread_exit_code_for_handle(handle, thread_id);
+            let mut parts = vec![
+                format!("handle=0x{handle:08x}"),
+                format!("timeout={timeout}"),
+                format!("result=0x{result:08x}"),
+                format!("last_error={last_error}"),
+            ];
+            if let Some(exit_code) = process_exit {
+                parts.push(format!("process_exit=0x{exit_code:08x}"));
+            }
+            if let Some(exit_code) = thread_exit {
+                parts.push(format!("thread_exit=0x{exit_code:08x}"));
+            }
+            Some(parts.join("/"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_MULTIPLE_OBJECTS) => {
+            let count = args.first().copied().unwrap_or(0);
+            let handles_ptr = args.get(1).copied().unwrap_or(0);
+            let wait_all = args.get(2).copied().unwrap_or(0);
+            let timeout = args.get(3).copied().unwrap_or(0);
+            let last_error = kernel.threads.get_last_error(thread_id);
+            let handles = (0..count.min(8))
+                .filter_map(|index| read_unicorn_u32(uc, handles_ptr.wrapping_add(index * 4)))
+                .map(|handle| format!("0x{handle:08x}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            Some(format!(
+                "count={count}/handles_ptr=0x{handles_ptr:08x}/handles=[{handles}]/wait_all={wait_all}/timeout={timeout}/result=0x{result:08x}/last_error={last_error}"
+            ))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_GET_EXIT_CODE_PROCESS) => {
+            let handle = args.first().copied().unwrap_or(0);
+            let exit_ptr = args.get(1).copied().unwrap_or(0);
+            let exit_code = read_unicorn_u32(uc, exit_ptr).unwrap_or(u32::MAX);
+            let last_error = kernel.threads.get_last_error(thread_id);
+            Some(format!(
+                "handle=0x{handle:08x}/exit_ptr=0x{exit_ptr:08x}/exit=0x{exit_code:08x}/ok={result}/last_error={last_error}"
             ))
         }
         Some(crate::ce::coredll_ordinals::ORD_GET_MODULE_FILE_NAME_W) => {
@@ -12098,6 +12273,10 @@ fn is_import_milestone(
             | Some(crate::ce::coredll_ordinals::ORD_GET_PROC_ADDRESS_W)
             | Some(crate::ce::coredll_ordinals::ORD_GET_PROC_ADDRESS_A)
             | Some(crate::ce::coredll_ordinals::ORD_FREE_LIBRARY)
+            | Some(crate::ce::coredll_ordinals::ORD_CREATE_PROCESS_W)
+            | Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_SINGLE_OBJECT)
+            | Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_MULTIPLE_OBJECTS)
+            | Some(crate::ce::coredll_ordinals::ORD_GET_EXIT_CODE_PROCESS)
             | Some(crate::ce::coredll_ordinals::ORD_GET_MODULE_FILE_NAME_W)
             | Some(crate::ce::coredll_ordinals::ORD_FIND_RESOURCE)
             | Some(crate::ce::coredll_ordinals::ORD_FIND_RESOURCE_W)
@@ -12422,6 +12601,46 @@ fn write_file_trace_records(
         }
         if let Some(position) = op.position {
             write!(f, "/pos=0x{position:08x}")?;
+        }
+        if let Some(result) = op.result {
+            write!(f, "/ret=0x{result:08x}")?;
+        }
+        if let Some(error) = op.error.as_deref() {
+            write!(f, "/err={}", format_trace_string(error))?;
+        }
+    }
+    Ok(())
+}
+
+fn write_process_trace_records(
+    f: &mut std::fmt::Formatter<'_>,
+    records: &[crate::ce::kernel::ProcessTraceRecord],
+) -> std::fmt::Result {
+    for (index, op) in records.iter().enumerate() {
+        if index != 0 {
+            write!(f, ",")?;
+        }
+        write!(f, "{}", op.op)?;
+        if let Some(application) = op.application.as_deref() {
+            write!(f, "/app={}", format_trace_string(application))?;
+        }
+        if let Some(command_line) = op.command_line.as_deref() {
+            write!(f, "/cmd={}", format_trace_string(command_line))?;
+        }
+        if let Some(path) = op.path.as_deref() {
+            write!(f, "/path={}", format_trace_string(path))?;
+        }
+        if let Some(handle) = op.process_handle {
+            write!(f, "/process=0x{handle:08x}")?;
+        }
+        if let Some(handle) = op.thread_handle {
+            write!(f, "/thread=0x{handle:08x}")?;
+        }
+        if let Some(process_id) = op.process_id {
+            write!(f, "/pid={process_id}")?;
+        }
+        if let Some(thread_id) = op.thread_id {
+            write!(f, "/tid={thread_id}")?;
         }
         if let Some(result) = op.result {
             write!(f, "/ret=0x{result:08x}")?;
