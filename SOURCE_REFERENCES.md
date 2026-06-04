@@ -51,6 +51,16 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     and no hidden-child paint. The mounted `target\update_erase_virtual_*`
     trace confirms this ordering unlocks a real memory-DC-to-window-HDC
     `BitBlt` and a populated iNavi framebuffer.
+  - The same CE paint-request shape means hidden windows should not keep
+    queue-visible stale paint work from a previous visible state. MFC
+    `wincore.cpp` `CWnd::SendMessageToDescendants` does still enumerate hidden
+    permanent children for idle UI updates, so v3 must not skip the children;
+    instead, GWE now clears a window's own pending update/erase state when it
+    is hidden and clips surviving update rectangles when `SetWindowPos`
+    changes client bounds. Mounted evidence
+    `target\hide_update_clear_virtual_20s_*` confirms immediately hidden
+    `AfxWnd42u` children no longer carry full-screen create-time dirty
+    rectangles.
 
 - Explorer/COREDLL startup ordinals:
   `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\MIPSII\RETAIL\coredll.def`,

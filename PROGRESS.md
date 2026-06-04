@@ -9,6 +9,28 @@
 
 ## Confirmed
 
+- GWE now keeps hidden-window paint/update state coherent during MFC child
+  control creation. `ShowWindow(SW_HIDE)` and `SWP_HIDEWINDOW` clear the
+  window's own pending update/erase state, while `SetWindowPos` clips any
+  surviving pending update rectangle to the current zero-origin client bounds.
+  This matches the existing `InvalidateRect` clipping model and CE GWE's
+  paint-request-as-window-state shape from
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`/
+  `window.hpp`, without painting hidden children or special-casing iNavi.
+  Focused coverage: `cargo test --features unicorn,trace,win32-desktop
+  ce::gwe::tests`, raw GWE coverage:
+  `cargo test --features unicorn,trace,win32-desktop coredll_raw_gwe`, and the
+  full `cargo test --features unicorn,trace,win32-desktop` all pass. A mounted
+  virtual probe wrote `target\hide_update_clear_virtual_20s_*`; the bulk
+  hidden `AfxWnd42u` controls now show `upd=false`/`erase=false` instead of
+  carrying stale full-screen dirty rectangles from visible zero-size creation,
+  while a later legitimately resized/invalidated hidden child is clipped to
+  `update=0,0-100,135`. The run remains memory/file-I/O stable
+  (`heap_live=7286/4855918B`, `virtual_live=3/196608B`,
+  `host_open=142`, `host_read=22508/1829377B`, `mem_open=2`,
+  `max_read=497178`) and keeps the real populated framebuffer
+  (`1151398` nonzero RGB bytes). This is GWE state fidelity progress; it does
+  not yet solve the post-splash resource/UI progression loop.
 - Main-thread `GetMessageW` waits can now resume from scheduler-owned timer
   expiry instead of stopping as diagnostic-only waits. The Unicorn bridge
   gives the initial guest thread a CE current-thread pseudo-handle wait

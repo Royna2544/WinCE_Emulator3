@@ -13,8 +13,9 @@
 ## Current Slice
 
 - Continue from the new mounted iNavi first-present frontier. The latest
-  virtual probes `target\update_erase_virtual_*` and
-  `target\timer_cap_virtual_*` prove guest GDI now presents a real 800x480
+  virtual probes `target\update_erase_virtual_*`,
+  `target\timer_cap_virtual_*`, and
+  `target\hide_update_clear_virtual_20s_*` prove guest GDI now presents a real 800x480
   memory surface to a window HDC:
   `BitBlt(dst=0x02020008, dst_memdc=false, dst_hwnd=0x00020008,
   src=0x000a0044, src_memdc=true)`. The framebuffer dump is fully populated
@@ -24,14 +25,19 @@
   the initial guest thread now registers/resumes scheduler-owned
   `GetMessageW` waits from long timer expiry instead of stopping with
   `reg=0`; the latest `target\main_getmessage_timer_resume_virtual_*` run
-  shows `reg=4214/4214`, `wake=4214`, and `msgcand=4214`. The remaining
-  blocker is no longer first pixels, memory-DC-to-screen presentation, or a
-  diagnostic-only timer wait. It is the real post-splash id-1000
-  `WM_TIMER`/MFC idle-update/resource loop: the run still reaches the 20 s
-  wall-clock limit while repeatedly dispatching no-HWND `WM_TIMER` 1000 and
-  `WM_IDLEUPDATECMDUI` fan-out. Next steps: trace why that CE/MFC idle cycle
-  never exits into sustained UI/resource-ready progress, without forcing
-  hidden child paints or app-specific state.
+  shows `reg=4214/4214`, `wake=4214`, and `msgcand=4214`. The latest GWE
+  cleanup also clears stale create-time update state when MFC immediately
+  hides visible zero-size `AfxWnd42u` children; hidden controls in
+  `target\hide_update_clear_virtual_20s_windows.txt` now mostly report
+  `upd=false` rather than stale full-screen dirty rectangles. The remaining
+  blocker is no longer first pixels, memory-DC-to-screen presentation,
+  diagnostic-only timer wait ownership, or hidden-child stale paint state. It
+  is the real post-splash id-1000 `WM_TIMER`/MFC idle-update/resource loop:
+  the long mounted run still reaches the wall-clock limit while repeatedly
+  dispatching no-HWND `WM_TIMER` 1000 and `WM_IDLEUPDATECMDUI` fan-out. Next
+  steps: trace why that CE/MFC idle cycle never exits into sustained
+  UI/resource-ready progress, without forcing hidden child paints or
+  app-specific state.
 - Continue the mounted iNavi resource-ready investigation from the
   `resource_59718`/mode-47 table frontier. Current evidence says
   `\SDMMC Disk\INavi\res\values.dat` opens and reads correctly, but by the

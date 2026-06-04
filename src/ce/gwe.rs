@@ -786,6 +786,8 @@ impl Gwe {
             let thread_id = window.thread_id;
             let _ = window;
             self.mark_queue_status_changed(thread_id, QS_PAINT);
+        } else if !visible {
+            Self::clear_window_update(window);
         }
         previous
     }
@@ -883,6 +885,28 @@ impl Gwe {
         }
         window.erase_pending = false;
         true
+    }
+
+    fn clamp_window_update_to_client(window: &mut Window) {
+        if !window.update_pending {
+            return;
+        }
+        let Some(rect) = window
+            .update_rect
+            .intersect(window.client_rect.zero_origin())
+        else {
+            window.update_pending = false;
+            window.erase_pending = false;
+            window.update_rect = Rect::default();
+            return;
+        };
+        window.update_rect = rect;
+    }
+
+    fn clear_window_update(window: &mut Window) {
+        window.update_pending = false;
+        window.erase_pending = false;
+        window.update_rect = Rect::default();
     }
 
     pub fn begin_paint(&mut self, hwnd: u32) -> Option<PaintUpdate> {
@@ -1286,6 +1310,7 @@ impl Gwe {
             bottom,
         };
         window.client_rect = window.rect;
+        Self::clamp_window_update_to_client(window);
         let mut paint_changed_thread = None;
         if flags & SWP_SHOWWINDOW != 0 {
             window.visible = true;
@@ -1298,6 +1323,7 @@ impl Gwe {
         if flags & SWP_HIDEWINDOW != 0 {
             window.visible = false;
             window.style &= !WS_VISIBLE;
+            Self::clear_window_update(window);
         }
         if flags & SWP_NOZORDER == 0 {
             self.apply_z_order(hwnd, parent, insert_after.unwrap_or(HWND_TOP));
@@ -2838,10 +2864,16 @@ mod tests {
         let hwnd = gwe.create_window_ex(1, "STATIC", "ready", None, 0, WS_VISIBLE, 0);
 
         assert!(gwe.is_window_visible(hwnd));
+        assert!(gwe.update_rect(hwnd).is_some());
         assert!(gwe.show_window(hwnd, false));
         assert!(!gwe.is_window_visible(hwnd));
+        assert!(gwe.update_rect(hwnd).is_none());
         assert!(!gwe.show_window(hwnd, true));
         assert!(gwe.is_window_visible(hwnd));
+        assert_eq!(
+            gwe.update_rect(hwnd).unwrap().rect,
+            Rect::from_origin_size(0, 0, 800, 480)
+        );
     }
 
     #[test]
@@ -2881,6 +2913,54 @@ mod tests {
         );
 
         assert!(gwe.validate_window_rect(hwnd, None));
+        assert!(gwe.update_rect(hwnd).is_none());
+    }
+
+    #[test]
+    fn set_window_pos_clips_pending_update_to_new_client_rect() {
+        let mut gwe = Gwe::default();
+        let hwnd = gwe.create_window_ex_with_rect(
+            1,
+            "STATIC",
+            "ready",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 800, 480),
+        );
+        assert_eq!(
+            gwe.update_rect(hwnd).unwrap().rect,
+            Rect::from_origin_size(0, 0, 800, 480)
+        );
+
+        assert!(gwe.set_window_pos(hwnd, None, 10, 20, 64, 62, 0));
+
+        let update = gwe
+            .update_rect(hwnd)
+            .expect("pending update remains clipped");
+        assert_eq!(update.rect, Rect::from_origin_size(0, 0, 64, 62));
+        assert!(update.erase);
+    }
+
+    #[test]
+    fn set_window_pos_hide_clears_pending_update() {
+        let mut gwe = Gwe::default();
+        let hwnd = gwe.create_window_ex_with_rect(
+            1,
+            "STATIC",
+            "ready",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 100, 80),
+        );
+        assert!(gwe.update_rect(hwnd).is_some());
+
+        assert!(gwe.set_window_pos(hwnd, None, 0, 0, 100, 80, SWP_HIDEWINDOW));
+
+        assert!(!gwe.is_window_visible(hwnd));
         assert!(gwe.update_rect(hwnd).is_none());
     }
 }

@@ -83,6 +83,16 @@
     file I/O remain stable and the framebuffer stays populated (`575800`
     nonzero pixels). The active failure is therefore the real post-splash
     idle/resource progression loop, not missing timer-wait ownership.
+    GWE hidden-window follow-up: `target\hide_update_clear_virtual_20s_*`
+    proves stale create-time update state is no longer left on immediately
+    hidden MFC child controls. `ShowWindow(SW_HIDE)`/`SWP_HIDEWINDOW` now clear
+    the hidden window's own update/erase state and `SetWindowPos` clips any
+    surviving update rectangle to current client bounds. The bulk hidden
+    `AfxWnd42u` controls now show `upd=false`; a later resized/invalidated
+    hidden child is clipped to `update=0,0-100,135`. The probe remains
+    memory-stable and the framebuffer remains populated (`1151398` nonzero RGB
+    bytes), so stale hidden-child paint state is closed as a likely cause of
+    the post-splash stall.
     Historical evidence: the mounted virtual run with dumped runtime DLLs
     and real sibling app DLLs wrote `target\inavi_trampoline_virtual_*`. It
     preloaded `AuthLibrary.dll`, `TpSysAuth.dll`, `mMbcAuth.dll`,
