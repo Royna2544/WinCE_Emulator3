@@ -154,6 +154,17 @@ anchors, not app-specific shortcuts.
     client area in screen coordinates; it declares `SetWindowPos_I`,
     `MoveWindow_I`, `GetWindowRect_I`, `GetClientRect_I`,
     `ClientToScreen_I`, and `ScreenToClient_I`.
+  - CE SDK `winuser.h` defines `WINDOWPOS` as
+    `HWND hwnd`, `HWND hwndInsertAfter`, `int x/y/cx/cy`, and `UINT flags`,
+    and says `WM_WINDOWPOSCHANGED` points at that struct through `lParam`.
+    GWE `cmsgque.h` classifies `WM_WINDOWPOSCHANGED` as an `IsLParamPtr`
+    message, and CE MFC `wincore.cpp` dispatches the message-map handler by
+    casting `lParam` directly to `WINDOWPOS*`. Rust now allocates a stable
+    guest heap payload for queued `WM_WINDOWPOSCHANGED`, writes the CE struct
+    during raw `GetMessageW`/`PeekMessageW` marshalling, and releases the
+    registered payload when `DispatchMessageW`/guest WNDPROC return consumes
+    it. CE MFC compiles out `WM_WINDOWPOSCHANGING` under `_WIN32_WCE`, so this
+    slice intentionally covers the changed notification only.
   - `window.hpp` and `gweapiset1.hpp` expose `BringWindowToTop_I`, and CE SDK
     `winuser.h` exposes `BringWindowToTop(HWND)` beside `GetWindow` and the
     `HWND_TOP`/`HWND_BOTTOM`/`HWND_TOPMOST` constants. Rust raw ordinal 275 now
@@ -170,6 +181,14 @@ anchors, not app-specific shortcuts.
     `IsWindow_I`, `GetClassNameW_I`, and `EnableWindow_I`, which back the
     virtual HWND state, class/title text copying, visibility/enabled checks,
     parent lookup, and focus bookkeeping.
+  - `window.hpp` declares `SetParent_I(HWND hwnd, HWND hwndParent)` and
+    `GetParent_I(HWND hwnd)`, and CE SDK `winuser.h` exposes `SetParent`/
+    `GetParent` beside `GW_CHILD` traversal and `WS_CHILD` style checks used
+    heavily by CE MFC docking/control code. Rust raw `SetParent` now enters the
+    kernel window lifecycle boundary, preserves the previous-parent return,
+    rejects invalid handles and descendant-parent cycles, relinks the HWND into
+    the new parent's sibling z-order, and reconciles descendant focus/explicit
+    activation when the new ancestry is effectively hidden or disabled.
   - `window.hpp` declares `IsWindowVisible_I`, and `CWindow::IsVisibleEnabled_I`
     checks `WS_VISIBLE`/`WS_DISABLED` style state. Rust now keeps direct
     visible state synchronized with `WS_VISIBLE` for `ShowWindow`,
@@ -187,6 +206,17 @@ anchors, not app-specific shortcuts.
     chain so descendants of disabled windows are effectively disabled without
     receiving child `WM_ENABLE` notifications. Full synchronous message-send
     timing remains part of the broader GWE send/scheduler port.
+  - `cmsgque.h` exposes `SetFocus_I`, `GetFocus_I`,
+    `GetKeyboardTarget_I`, `GetActiveWindow_I`, `SetActiveWindow_I`, and
+    `SetForegroundWindow_I`; `window.hpp` exposes `ShowWindow_I`,
+    `EnableWindow_I`, `IsWindowVisible_I`, and `IsWindowEnabled_I`; CE SDK
+    `winuser.h` defines `WM_SETFOCUS`, `WM_KILLFOCUS`, `WM_ACTIVATE`,
+    `SWP_HIDEWINDOW`, and `SWP_NOACTIVATE`. CE MFC modal-dialog code disables
+    owners around modal execution and restores active focus through normal
+    window APIs. Rust now clears focus and explicit activation for a disabled
+    or hidden target/descendant through the same message path already used by
+    `SetFocus(NULL)` and `SetActiveWindow(NULL)`, rather than silently dropping
+    the virtual state.
   - Declares `GetWindow_I(HWND hwndThis, UINT32 relation)`, the GWE API set
     exposes `m_pGetWindow`, and the CE Mipsii SDK defines `GW_HWNDFIRST`,
     `GW_HWNDLAST`, `GW_HWNDNEXT`, `GW_HWNDPREV`, `GW_OWNER`, and `GW_CHILD`

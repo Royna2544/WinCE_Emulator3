@@ -2,6 +2,51 @@
 
 ## Confirmed
 
+- Raw `SetParent` now goes through the kernel window lifecycle boundary instead
+  of mutating GWE state directly. The raw ordinal preserves the previous-parent
+  return, reports invalid HWNDs and parent-cycle attempts distinctly, rejects
+  descendant-parent cycles, relinks the HWND into the new parent's z-order
+  sibling set, and clears descendant focus/explicit activation through normal
+  `WM_KILLFOCUS`/`WM_ACTIVATE(WA_INACTIVE)` messages when the new ancestry
+  makes the subtree effectively hidden or disabled. Focused coverage:
+  `coredll_raw_set_parent_relinks_tree_and_clears_invalid_focus`, plus the raw
+  GWE integration suite (`49 passed`) and
+  `cargo test --features unicorn,trace,win32-desktop` (`93` unit tests plus
+  integration suites passed). A mounted virtual-desktop iNavi probe wrote
+  `target\set_parent_virtual_60s_summary.txt`,
+  `target\set_parent_virtual_60s_render.txt`,
+  `target\set_parent_virtual_60s_milestones.txt`,
+  `target\set_parent_virtual_60s_files.txt`, and
+  `target\set_parent_virtual_60s.ppm`; it stopped at the 60 s wall limit
+  (`pc=0x000be6e4`, `ra=0x000be6e0`) with stable memory/file counters
+  (`heap_live=6921/21255717B`, `host_open=91`,
+  `host_read=4302/1718377B`, `mem_open=2`, `max_read=497178`) and no render
+  milestones. The framebuffer still contains only 101 red pixels from
+  `(0,160)` through `(100,160)`, color `255,0,0`, so this is fidelity progress
+  rather than UI success.
+- GWE focus/activation lifecycle is now cleared through normal CE-style
+  messages when disabling or hiding the focused/active HWND or one of its
+  ancestors. `EnableWindow(FALSE)` queues `WM_CANCELMODE`, `WM_ENABLE(FALSE)`,
+  then clears descendant focus/explicit activation through `WM_KILLFOCUS` and
+  `WM_ACTIVATE(WA_INACTIVE)`. `ShowWindow(SW_HIDE)` and
+  `SetWindowPos(SWP_HIDEWINDOW)` use the same focus/activation cleanup path.
+  Focused coverage:
+  `coredll_raw_disable_or_hide_clears_focus_and_activation`, plus the full raw
+  GWE integration suite (`48 passed`) and
+  `cargo test --features unicorn,trace,win32-desktop` (`93` unit tests plus
+  integration suites passed). A mounted virtual-desktop iNavi probe wrote
+  `target\focus_activation_virtual_60s_summary.txt`,
+  `target\focus_activation_virtual_60s_render.txt`,
+  `target\focus_activation_virtual_60s_milestones.txt`,
+  `target\focus_activation_virtual_60s_files.txt`, and
+  `target\focus_activation_virtual_60s.ppm`; it stopped at the 60 s wall limit
+  (`pc=0x002036fc`, `ra=0x000c47f8`) with stable memory/file counters
+  (`heap_live=7089/21301763B`, `virtual_live=3/196608B`,
+  `host_open=115`, `host_read=7852/1765593B`, `mem_open=2`,
+  `max_read=497178`) and no render milestones. The framebuffer still contains
+  only the known sparse red line: 301 pixels from `(0,160)` through
+  `(300,160)`, color `255,0,0`. This is lifecycle fidelity progress, not UI
+  success.
 - CE fidelity catch-up has started with a dedicated scheduler/wait owner rather
   than another local stub layer. `src/ce/scheduler.rs` now records
   `WaitForSingleObject`, `WaitForMultipleObjects`, and
@@ -1473,6 +1518,26 @@
   `pc=0x00344780`, stayed memory-stable (`heap_live=7305/21887532B`,
   `host_read=26160/1961105B`), preserved the same 301-pixel red line, and had
   no named render milestone.
+- Added the CE-backed `WM_WINDOWPOSCHANGED` payload slice. The SDK `WINDOWPOS`
+  layout, GWE `IsLParamPtr(WM_WINDOWPOSCHANGED)`, and CE MFC
+  `reinterpret_cast<WINDOWPOS*>(lParam)` dispatch path now have a matching raw
+  emulator path: window move/size/create lifecycle posts allocate a stable
+  guest heap payload, raw `GetMessageW`/`PeekMessageW` materialize the
+  28-byte `WINDOWPOS` struct into guest memory, and raw/Unicorn
+  `DispatchMessageW` return paths release the registered payload after
+  consumption. Focused coverage
+  `coredll_raw_windowposchanged_carries_guest_windowpos_payload` verifies the
+  guest struct fields and heap release, the raw GWE suite now has 47 passing
+  tests, and full `cargo test --features unicorn,trace,win32-desktop` passes.
+  Mounted validation used virtual desktop mode to avoid the host black window
+  and wrote `target\windowpos_virtual_*` plus
+  `target\windowpos_virtual_60s_*`: the 60 s run reached RSImage
+  `CreateDIBSection` work, stopped at `pc=0x00073684`, stayed memory-stable
+  (`heap_live=6929/21276879B`, `host_read=7839/1759291B`), and produced a
+  101-pixel red line from `(0,160)` through `(100,160)`, but still had no
+  named render milestone or useful UI output. The reduced 30/60 s pixel extent
+  versus the previous null-`lParam` run is recorded as a fidelity-cost
+  observation, not UI progress.
 
 ## False Leads
 

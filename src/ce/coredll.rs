@@ -2584,16 +2584,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_IS_DIALOG_MESSAGE_W => Some(CoredllValue::Bool(is_dialog_message_w_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_SET_PARENT => Some(CoredllValue::Handle(
-            kernel
-                .gwe
-                .set_parent(
-                    raw_arg(args, 0),
-                    (raw_arg(args, 1) != 0).then_some(raw_arg(args, 1)),
-                )
-                .flatten()
-                .unwrap_or(0),
-        )),
+        ORD_SET_PARENT => Some(CoredllValue::Handle(set_parent_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
         ORD_GET_WINDOW => Some(CoredllValue::Handle(get_window_raw(
             kernel,
             thread_id,
@@ -8886,6 +8882,25 @@ fn get_window_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32, cmd: u32) ->
         return 0;
     }
     kernel.gwe.get_window(hwnd, cmd).unwrap_or(0)
+}
+
+fn set_parent_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32, parent: u32) -> u32 {
+    let parent = (parent != 0).then_some(parent);
+    if !kernel.gwe.is_window(hwnd) || parent.is_some_and(|parent| !kernel.gwe.is_window(parent)) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    }
+    if parent.is_some_and(|parent| parent == hwnd || kernel.gwe.is_child(hwnd, parent)) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let previous = kernel.set_parent(hwnd, parent).flatten().unwrap_or(0);
+    kernel.threads.set_last_error(thread_id, 0);
+    previous
 }
 
 fn show_window_raw(kernel: &mut CeKernel, args: &[u32]) -> bool {

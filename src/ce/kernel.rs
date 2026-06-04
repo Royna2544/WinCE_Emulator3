@@ -1056,8 +1056,8 @@ impl CeKernel {
         if visible && activate {
             let target = self.top_level_window(hwnd);
             let _ = self.activate_window(Some(target));
-        } else if !visible && self.gwe.get_active_window() == Some(hwnd) {
-            let _ = self.activate_window(None);
+        } else if !visible {
+            self.clear_focus_and_activation_within(hwnd);
         }
         previous
     }
@@ -1101,6 +1101,8 @@ impl CeKernel {
             if flags & (SWP_NOACTIVATE | SWP_HIDEWINDOW) == 0 {
                 let target = self.top_level_window(hwnd);
                 let _ = self.activate_window(Some(target));
+            } else if flags & SWP_HIDEWINDOW != 0 {
+                self.clear_focus_and_activation_within(hwnd);
             }
         }
         moved
@@ -1116,8 +1118,19 @@ impl CeKernel {
                 self.post_window_message(hwnd, WM_CANCELMODE, 0, 0);
             }
             self.post_window_message(hwnd, WM_ENABLE, u32::from(enabled), 0);
+            if !enabled {
+                self.clear_focus_and_activation_within(hwnd);
+            }
         }
         Some(was_enabled)
+    }
+
+    pub fn set_parent(&mut self, hwnd: u32, parent: Option<u32>) -> Option<Option<u32>> {
+        let previous = self.gwe.set_parent(hwnd, parent)?;
+        if !self.gwe.is_window_visible(hwnd) || !self.gwe.is_window_enabled(hwnd) {
+            self.clear_focus_and_activation_within(hwnd);
+        }
+        Some(previous)
     }
 
     pub fn bring_window_to_top(&mut self, hwnd: u32) -> bool {
@@ -1184,6 +1197,15 @@ impl CeKernel {
             }
         }
         previous
+    }
+
+    fn clear_focus_and_activation_within(&mut self, hwnd: u32) {
+        if self.gwe.focus_is_within(hwnd) {
+            let _ = self.set_focus(None);
+        }
+        if self.gwe.active_window_is_within(hwnd) {
+            let _ = self.activate_window(None);
+        }
     }
 
     fn top_level_window(&self, hwnd: u32) -> u32 {

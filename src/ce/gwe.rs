@@ -996,15 +996,18 @@ impl Gwe {
     }
 
     pub fn set_parent(&mut self, hwnd: u32, parent: Option<u32>) -> Option<Option<u32>> {
-        if parent.is_some_and(|parent| !self.is_window(parent) || parent == hwnd) {
+        if parent.is_some_and(|parent| {
+            !self.is_window(parent) || parent == hwnd || self.is_child(hwnd, parent)
+        }) {
+            return None;
+        }
+        if !self.is_window(hwnd) {
             return None;
         }
         let window = self.windows.get_mut(&hwnd)?;
-        if window.destroyed {
-            return None;
-        }
         let previous = window.parent;
         window.parent = parent;
+        self.apply_z_order(hwnd, parent, HWND_TOP);
         Some(previous)
     }
 
@@ -1088,6 +1091,11 @@ impl Gwe {
         self.focus
     }
 
+    pub fn focus_is_within(&self, hwnd: u32) -> bool {
+        self.focus
+            .is_some_and(|focus| focus == hwnd || self.is_child(hwnd, focus))
+    }
+
     pub fn set_active_window(&mut self, hwnd: Option<u32>) -> Option<u32> {
         if hwnd.is_some_and(|hwnd| !self.is_window(hwnd)) {
             return None;
@@ -1138,6 +1146,11 @@ impl Gwe {
                 !window.destroyed && window.parent.is_none() && window.hwnd != DESKTOP_HWND
             })
             .map(|window| window.hwnd)
+    }
+
+    pub fn active_window_is_within(&self, hwnd: u32) -> bool {
+        self.active_window
+            .is_some_and(|active| active == hwnd || self.is_child(hwnd, active))
     }
 
     pub fn set_cursor_pos(&mut self, point: Point) {

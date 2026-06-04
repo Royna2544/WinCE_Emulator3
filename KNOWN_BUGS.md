@@ -107,7 +107,26 @@
     `target\visibility_enabled_virtual_final_*`, stopped at `pc=0x00344780`,
     stayed memory-stable (`heap_live=7305/21887532B`,
     `host_read=26160/1961105B`), and again kept the same 301-pixel red line
-    with no render milestone.
+    with no render milestone. The CE `WM_WINDOWPOSCHANGED` payload slice wrote
+    `target\windowpos_virtual_*` and `target\windowpos_virtual_60s_*` in
+    virtual desktop mode, so it avoided the black host presenter window. The
+    60 s probe reached RSImage `CreateDIBSection` work and stayed
+    memory-stable (`heap_live=6929/21276879B`,
+    `host_read=7839/1759291B`), but the framebuffer only contained 101 red
+    pixels from `(0,160)` through `(100,160)` and the render trace still
+    reported no named render milestones. The fresh focus/activation cleanup
+    rerun wrote `target\focus_activation_virtual_60s_*`, also in virtual
+    desktop mode, stopped at `pc=0x002036fc`, and stayed memory-stable
+    (`heap_live=7089/21301763B`, `virtual_live=3/196608B`,
+    `host_open=115`, `host_read=7852/1765593B`, `mem_open=2`,
+    `max_read=497178`). Its framebuffer still contained only 301 red pixels
+    from `(0,160)` through `(300,160)` and the render trace still reported no
+    named render milestones. The raw `SetParent` lifecycle slice wrote
+    `target\set_parent_virtual_60s_*`, stopped at `pc=0x000be6e4`, and stayed
+    memory-stable (`heap_live=6921/21255717B`, `host_open=91`,
+    `host_read=4302/1718377B`, `mem_open=2`, `max_read=497178`), but still had
+    no named render milestone and only 101 red pixels from `(0,160)` through
+    `(100,160)`. This remains no-useful-UI.
   - Evidence: latest bounded run with `--features unicorn`,
     `--dll-search-dir C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii`,
     and `--mount-config mounts.toml` previously timed out after 30

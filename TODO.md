@@ -78,7 +78,11 @@
     `PostQuitMessage` now records queue-owned quit state instead of an ordinary
     posted `WM_QUIT`, so `GetMessageW`/`PeekMessageW` observe quit even through
     nonmatching HWND/message filters. Raw `GetMessageWNoWait` now reaches the
-    same GWE queue retrieval path instead of default ordinal handling. Raw
+    same GWE queue retrieval path instead of default ordinal handling. GWE
+    focus/activation cleanup now also covers disabled or hidden focused/active
+    targets: `EnableWindow` disable transitions, `ShowWindow(SW_HIDE)`, and
+    `SetWindowPos(SWP_HIDEWINDOW)` clear descendant focus and explicit active
+    HWND state through queued `WM_KILLFOCUS`/`WM_ACTIVATE(WA_INACTIVE)`. Raw
     `GetMessagePos` and `GetMessageQueueReadyTimeStamp` now use per-queue and
     per-message metadata from the GWE model: mouse-message screen positions are
     preserved separately from client `lParam`, and ready timestamps update when
@@ -114,7 +118,16 @@
     parent chain, while `EnableWindow` still mutates and reports only the
     target HWND's direct enabled state. Raw `IsWindowVisible` and point
     hit-testing likewise walk hidden ancestors, while show/hide APIs keep
-    direct visibility synchronized with `WS_VISIBLE`.
+    direct visibility synchronized with `WS_VISIBLE`. Raw
+    `WM_WINDOWPOSCHANGED` messages now carry a stable guest `WINDOWPOS`
+    payload instead of `lParam = 0`; `GetMessageW`/`PeekMessageW` materialize
+    the SDK struct and `DispatchMessageW`/guest-WNDPROC return paths release
+    the registered heap payload after consumption. Raw `SetParent` now routes
+    through the kernel lifecycle boundary, rejects invalid handles and
+    descendant-parent cycles, preserves previous-parent returns, relinks the
+    HWND into the new parent's sibling z-order, and clears descendant focus/
+    explicit activation if the new ancestry makes the subtree effectively
+    hidden or disabled.
   - Open gaps: update regions are still represented as one bounding rectangle,
     so partial `ValidateRect`/`RedrawWindow(RDW_VALIDATE)` subtracts the
     representable remainder but keeps a conservative bounding rectangle for
@@ -140,13 +153,16 @@
        previous-state returns. Raw `BringWindowToTop` now covers the first
        dedicated top-of-z-order activation path. Effective disabled-state
        checks now walk ancestors for `IsWindowEnabled`, dialog traversal, and
-       hit-testing without sending child `WM_ENABLE`. Remaining lifecycle work
-       includes exact create/z-order side effects such as
-       `WM_WINDOWPOSCHANGING`/`WINDOWPOS` marshalling and owner/topmost rules,
-       deeper activate/focus/enable edge cases such as top-level owner
-       activation, disabled-focus transfer, no-activate show variants, richer
-       hidden-window edge cases around owner/popups, and destroyed-target
-       behavior under synchronous sends.
+       hit-testing without sending child `WM_ENABLE`. `WM_WINDOWPOSCHANGED`
+       now carries the CE SDK `WINDOWPOS` payload through guest memory.
+       `SetParent` now covers previous-parent returns, invalid/cyclic parent
+       rejection, new-parent z-order insertion, and focus/activation cleanup
+       when reparenting under hidden/disabled ancestry.
+       Remaining lifecycle work includes exact create/z-order side effects
+       such as owner/topmost rules, deeper activate/focus/enable edge cases
+       such as top-level owner activation, disabled-focus transfer,
+       no-activate show variants, richer hidden-window edge cases around
+       owner/popups, and destroyed-target behavior under synchronous sends.
     3. Message queues and synchronous sends: replace same-thread-only shortcuts
        with scheduler-owned sent queues, sender blocking, receiver-context
        execution, `InSendMessage`, timeout, destroyed-target, and reentrant
@@ -274,7 +290,23 @@
     visibility/enabled effective-state probe wrote
     `target\visibility_enabled_virtual_final_*`, stopped at `pc=0x00344780`
     with `heap_live=7305/21887532B` and `host_read=26160/1961105B`, again kept
-    the same 301-pixel red line, and still had no render milestones.
+    the same 301-pixel red line, and still had no render milestones. The
+    `WM_WINDOWPOSCHANGED` payload probe wrote `target\windowpos_virtual_*` and
+    `target\windowpos_virtual_60s_*`; the 60 s virtual run avoided the host
+    presenter window, reached RSImage `CreateDIBSection` work, stopped at
+    `pc=0x00073684` with `heap_live=6929/21276879B` and
+    `host_read=7839/1759291B`, and produced only a 101-pixel red line with no
+    render milestone. The follow-up focus/activation cleanup rerun wrote
+    `target\focus_activation_virtual_60s_*`, also in virtual desktop mode,
+    stopped at `pc=0x002036fc` with `heap_live=7089/21301763B`,
+    `host_read=7852/1765593B`, and the familiar 301-pixel red line from
+    `(0,160)` through `(300,160)`, again with no render milestone. The
+    `SetParent` lifecycle rerun wrote `target\set_parent_virtual_60s_*`,
+    stopped at `pc=0x000be6e4` with `heap_live=6921/21255717B`,
+    `host_read=4302/1718377B`, and only a 101-pixel red line from `(0,160)` to
+    `(100,160)`, also with no render milestone. Treat this as fidelity
+    evidence and a possible performance/lifecycle frontier, not useful UI
+    progress.
 
 ## Immediate
 

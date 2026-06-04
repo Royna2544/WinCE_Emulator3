@@ -43,16 +43,16 @@ use wince_emulation_v3::{
         gwe::{
             GW_CHILD, GW_HWNDFIRST, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER, GWL_USERDATA,
             HWND_BROADCAST, MSGSRC_SOFTWARE_POST, MSGSRC_SOFTWARE_SEND, Message, Point, QS_PAINT,
-            QS_POSTMESSAGE, QS_SENDMESSAGE, Rect, SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN, WA_ACTIVE,
-            WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE, WM_CLOSE, WM_DESTROY, WM_ENABLE,
-            WM_ERASEBKGND, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_MOVE, WM_NCDESTROY, WM_PAINT, WM_QUIT,
-            WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_CHILD,
-            WS_DISABLED, WS_GROUP, WS_TABSTOP, WS_VISIBLE,
+            QS_POSTMESSAGE, QS_SENDMESSAGE, Rect, SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN,
+            SWP_HIDEWINDOW, WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE, WM_CLOSE,
+            WM_DESTROY, WM_ENABLE, WM_ERASEBKGND, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_MOVE,
+            WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WM_TIMER,
+            WM_USER, WM_WINDOWPOSCHANGED, WS_CHILD, WS_DISABLED, WS_GROUP, WS_TABSTOP, WS_VISIBLE,
         },
         kernel::CeKernel,
         memory::PROCESS_HEAP_HANDLE,
         resource::ResourceId,
-        thread::{ERROR_ALREADY_EXISTS, ERROR_INVALID_PARAMETER},
+        thread::{ERROR_ALREADY_EXISTS, ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE},
     },
     config::RuntimeConfig,
 };
@@ -5148,6 +5148,605 @@ fn coredll_raw_is_child_checks_descendant_relationships() -> Result<()> {
             ..
         }
     ));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_set_parent_relinks_tree_and_clears_invalid_focus() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 31;
+    let msg_ptr = 0x7570;
+    memory.map_words(msg_ptr, 7);
+
+    let old_parent = kernel.create_window_ex_w(thread_id, "OLDPARENT", "", None, 0, 0, 0);
+    let hidden_parent = kernel.create_window_ex_w(thread_id, "HIDDENPARENT", "", None, 0, 0, 0);
+    let child =
+        kernel.create_window_ex_w(thread_id, "REPARENTCHILD", "", Some(old_parent), 7, 0, 0);
+    let grandchild =
+        kernel.create_window_ex_w(thread_id, "REPARENTGRANDCHILD", "", Some(child), 8, 0, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_FOCUS,
+            [grandchild],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        grandchild,
+        WM_ACTIVATE,
+        WA_ACTIVE,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        grandchild,
+        WM_SETFOCUS,
+        0,
+        0,
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_PARENT,
+            [child, hidden_parent],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } if hwnd == old_parent
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        grandchild,
+        WM_KILLFOCUS,
+        0,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        grandchild,
+        WM_ACTIVATE,
+        WA_INACTIVE,
+        0,
+    );
+    assert_eq!(kernel.gwe.get_focus(), None);
+    assert!(!kernel.gwe.active_window_is_within(child));
+    assert!(!kernel.gwe.is_window_visible(child));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_PARENT,
+            [child],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } if hwnd == hidden_parent
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_WINDOW,
+            [hidden_parent, GW_CHILD],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } if hwnd == child
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_PARENT,
+            [hidden_parent, grandchild],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(kernel.gwe.get_parent(hidden_parent), None);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_PARENT,
+            [child, 0xdead_beef],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_WINDOW_HANDLE
+    );
+    assert_eq!(kernel.gwe.get_parent(child), Some(hidden_parent));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_PARENT,
+            [child, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } if hwnd == hidden_parent
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(kernel.gwe.get_parent(child), None);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_disable_or_hide_clears_focus_and_activation() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 3;
+    let msg_ptr = 0x7650;
+    memory.map_words(msg_ptr, 7);
+
+    let parent = kernel.create_window_ex_w(thread_id, "FOCUSPARENT", "", None, 0, 0, 0);
+    let child =
+        kernel.create_window_ex_w(thread_id, "FOCUSCHILD", "", Some(parent), 0, WS_CHILD, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_FOCUS,
+            [child],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        child,
+        WM_ACTIVATE,
+        WA_ACTIVE,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        child,
+        WM_SETFOCUS,
+        0,
+        0,
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ENABLE_WINDOW,
+            [parent, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        parent,
+        WM_CANCELMODE,
+        0,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        parent,
+        WM_ENABLE,
+        0,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        child,
+        WM_KILLFOCUS,
+        0,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        child,
+        WM_ACTIVATE,
+        WA_INACTIVE,
+        0,
+    );
+    assert_eq!(kernel.gwe.get_focus(), None);
+    assert!(!kernel.gwe.active_window_is_within(parent));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ENABLE_WINDOW,
+            [parent, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        parent,
+        WM_ENABLE,
+        1,
+        0,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHOW_WINDOW,
+            [parent, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        parent,
+        WM_SHOWWINDOW,
+        1,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        parent,
+        WM_ACTIVATE,
+        WA_ACTIVE,
+        0,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHOW_WINDOW,
+            [child, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        child,
+        WM_SHOWWINDOW,
+        1,
+        0,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_FOCUS,
+            [child],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        parent,
+        WM_ACTIVATE,
+        WA_INACTIVE,
+        child,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        child,
+        WM_ACTIVATE,
+        WA_ACTIVE,
+        parent,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        child,
+        WM_SETFOCUS,
+        0,
+        0,
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHOW_WINDOW,
+            [child, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        child,
+        WM_SHOWWINDOW,
+        0,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        child,
+        WM_KILLFOCUS,
+        0,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        child,
+        WM_ACTIVATE,
+        WA_INACTIVE,
+        0,
+    );
+    assert_eq!(kernel.gwe.get_focus(), None);
+    assert!(!kernel.gwe.active_window_is_within(child));
+
+    let child2 =
+        kernel.create_window_ex_w(thread_id, "FOCUSCHILD2", "", Some(parent), 0, WS_CHILD, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHOW_WINDOW,
+            [child2, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        child2,
+        WM_SHOWWINDOW,
+        1,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        parent,
+        WM_ACTIVATE,
+        WA_ACTIVE,
+        0,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_FOCUS,
+            [child2],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        parent,
+        WM_ACTIVATE,
+        WA_INACTIVE,
+        child2,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        child2,
+        WM_ACTIVATE,
+        WA_ACTIVE,
+        parent,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        child2,
+        WM_SETFOCUS,
+        0,
+        0,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_WINDOW_POS,
+            [child2, 0, 0, 0, 0, 0, SWP_HIDEWINDOW],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        child2,
+        WM_SHOWWINDOW,
+        0,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        child2,
+        WM_KILLFOCUS,
+        0,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        child2,
+        WM_ACTIVATE,
+        WA_INACTIVE,
+        0,
+    );
+    assert_eq!(kernel.gwe.get_focus(), None);
+    assert!(!kernel.gwe.active_window_is_within(child2));
 
     Ok(())
 }
