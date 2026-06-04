@@ -428,18 +428,25 @@
   return value `0` after the scheduler timeout expires. `Sleep(0)` now records
   a scheduler yield and swaps to a saved peer context when the current
   one-slot Unicorn bridge has one available; the no-peer path still returns
-  immediately through raw dispatch. Run summaries now include
+  immediately through raw dispatch. `Sleep(INFINITE)` now increments the CE
+  current-thread suspend count in raw dispatch and, for guest worker contexts
+  with a real thread handle, saves the worker CPU context until `ResumeThread`
+  drops that suspend count from `1` to `0`; the resume hook then restores the
+  saved context instead of restarting the thread entry point. Run summaries now include
   `sched_sleep_count` and `sched_yield_count`. Focused coverage:
   `ce_sleep_request_matches_nksleep_timeout_shape`,
   `scheduler_selects_timeout_only_sleep_wait_after_timeout`,
   `scheduler_records_thread_yield_as_sleep_attempt_without_blocking`, and the raw
   `coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics`
-  `Sleep`/`SleepTillTick` path. `cargo check --features
-  unicorn,trace,win32-desktop` and focused tests pass with the existing
-  non-fatal Windows incremental-finalize warning. Full scheduler-owned run
-  queues beyond the current one-slot yield swap, `Sleep(INFINITE)` true
-  suspend, long-sleep chunking, and scheduler-owned main-thread run-queue
-  state remain open.
+  `Sleep`/`SleepTillTick`/current-thread suspend path. Added
+  `tests/test_progs/167_sleep_infinite_resume` to pin the guest-visible worker
+  `Sleep(INFINITE)`/`ResumeThread` contract. `cargo check --features
+  unicorn,trace,win32-desktop`, the focused raw/suspend tests, and
+  `cargo test --features unicorn,trace,win32-desktop fixture_exes -- --ignored`
+  pass with the existing non-fatal Windows incremental-finalize warning. Full
+  scheduler-owned run queues beyond the current one-slot yield/suspend swaps,
+  pending PSL late-suspend, long-sleep chunking, and scheduler-owned
+  main-thread run-queue state remain open.
 - Scheduler/device wake ownership now has a first serial-read slice. The
   `Scheduler` can register blocked `SerialRead` waits by COM handle and queue
   pending wake candidates when remote serial/NMEA input arrives; serial device

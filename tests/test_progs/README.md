@@ -39,6 +39,7 @@ These are intentionally tiny. Each fixture should test one layer or invariant be
 | `164_object_transition_wake` | Event, semaphore, and mutex transitions wake blocked worker threads. |
 | `165_thread_exit_wait_wake` | Thread handle exit signaling wakes waits and remains signaled for wait-any. |
 | `166_msgwait_message_timer_wake` | Posted messages and timers wake `MsgWaitForMultipleObjectsEx`. |
+| `167_sleep_infinite_resume` | Worker `Sleep(INFINITE)` self-suspends until `ResumeThread` makes it runnable again. |
 | `asm/` | Optional assembly/reference snippets for executable-section branch/delay tests. |
 | `tools/make_raw_mips_blobs.py` | Generates raw MIPS little-endian blobs for CPU-only unit tests. |
 

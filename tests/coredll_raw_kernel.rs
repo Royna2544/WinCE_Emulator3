@@ -455,6 +455,19 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
             &mut kernel,
             &mut memory,
             thread_id,
+            ORD_RESUME_THREAD,
+            [CE_CURRENT_THREAD_PSEUDO_HANDLE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_SLEEP_TILL_TICK,
             [],
         ),

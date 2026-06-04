@@ -117,12 +117,16 @@
     `SleepTillTick` now uses the same bridge with a one-tick timeout.
     `Sleep(0)` now records a scheduler yield and, in the current one-slot
     Unicorn context model, swaps to a saved peer context when one exists
-    without pumping messages or waiting for a tick.
+    without pumping messages or waiting for a tick. `Sleep(INFINITE)` now
+    records the current-thread suspend count in raw dispatch and self-suspends
+    guest worker contexts with a saved CPU context that `ResumeThread` can
+    restore once the suspend count reaches zero.
   - Open gaps: full serial semantics beyond the first empty-read wake bridge,
     audio wake ownership, fuller timer ownership beyond message-queue posts
     and bounded worker-thread sleeps, full multi-thread run-queue ownership
-    beyond the one-slot `Sleep(0)` yield swap, `Sleep(INFINITE)` true suspend,
-    long-sleep chunking, fuller child-process
+    beyond the one-slot `Sleep(0)`/`Sleep(INFINITE)` worker-context swaps,
+    pending PSL late-suspend, main-thread suspend blocking, long-sleep
+    chunking, fuller child-process
     lifecycle scheduling beyond handle signaling, blocked
     thread priority/fairness across all wait kinds beyond
     the current Unicorn bridge, moving saved `GetMessageW`/wait MIPS contexts
@@ -133,9 +137,10 @@
     and fuller Unicorn thread context switching still need the next scheduler
     port slices.
   - Fixture gates: keep existing wait/thread fixtures passing, including
-    `tests/test_progs/163_mutex_recursive_ownership` and
-    `tests/test_progs/164_object_transition_wake` and
-    `tests/test_progs/165_thread_exit_wait_wake` when the eVC4 MIPSII fixture
+    `tests/test_progs/163_mutex_recursive_ownership`,
+    `tests/test_progs/164_object_transition_wake`,
+    `tests/test_progs/165_thread_exit_wait_wake`, and
+    `tests/test_progs/167_sleep_infinite_resume` when the eVC4 MIPSII fixture
     suite is enabled, then graduate pending scheduler fixtures for multiple
     waiters, `GetMessageW` blocking, `MsgWait*`, fuller serial parking,
     waveOut callback wakeups, child-process waits, and scheduler mini app.

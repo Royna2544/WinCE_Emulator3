@@ -595,8 +595,10 @@
     register timeout-only scheduler waits; `SleepTillTick` uses the same
     bridge with a one-tick timeout. `Sleep(0)` now records a scheduler yield
     and swaps with a saved peer context when the current Unicorn bridge has one
-    available, but full CE run-queue ownership, `Sleep(INFINITE)`, long
-    sleeps, and main-thread scheduler ownership remain partial. Remote
+    available. `Sleep(INFINITE)` now updates current-thread suspend counts and
+    self-suspends/restores guest worker contexts through `ResumeThread`, but
+    full CE run-queue ownership, pending PSL late-suspend, main-thread suspend
+    blocking, long sleeps, and main-thread scheduler ownership remain partial. Remote
     serial/NMEA injection now queues registered serial-read waiters by COM
     handle, and parked raw serial `ReadFile` can resume by streaming bytes into
     the original guest buffer. Full serial stack semantics, audio wake model,

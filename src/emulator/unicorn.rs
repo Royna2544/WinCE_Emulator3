@@ -1812,6 +1812,11 @@ impl UnicornMips {
         let blocked_wait_threads_hook = Rc::clone(&blocked_wait_threads);
         let suspended_guest_thread = Rc::new(RefCell::new(None::<SuspendedGuestThread>));
         let suspended_guest_thread_hook = Rc::clone(&suspended_guest_thread);
+        let self_suspended_guest_threads = Rc::new(RefCell::new(std::collections::BTreeMap::<
+            u32,
+            SuspendedGuestThread,
+        >::new()));
+        let self_suspended_guest_threads_hook = Rc::clone(&self_suspended_guest_threads);
         let running_guest_thread = Rc::new(RefCell::new(None::<(u32, u32)>));
         let running_guest_thread_hook = Rc::clone(&running_guest_thread);
         let guest_thread_stack_slots = Rc::new(RefCell::new(std::collections::BTreeMap::new()));
@@ -2179,6 +2184,7 @@ impl UnicornMips {
                         &pending_guest_thread_returns_hook,
                         &current_thread_id_hook,
                         &suspended_guest_thread_hook,
+                        &self_suspended_guest_threads_hook,
                         &running_guest_thread_hook,
                     )
                 }) {
@@ -2551,6 +2557,7 @@ impl UnicornMips {
                         stack_top,
                         &current_thread_id_hook,
                         &suspended_guest_thread_hook,
+                        &self_suspended_guest_threads_hook,
                         &running_guest_thread_hook,
                         &guest_thread_stack_slots_hook,
                     )
@@ -5661,6 +5668,9 @@ fn try_block_sleep<D>(
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
     current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    self_suspended_threads: &std::rc::Rc<
+        std::cell::RefCell<std::collections::BTreeMap<u32, SuspendedGuestThread>>,
+    >,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
@@ -5684,7 +5694,18 @@ fn try_block_sleep<D>(
                         running_thread,
                     );
                 }
-                crate::ce::timer::CeSleepRequest::Suspend => return false,
+                crate::ce::timer::CeSleepRequest::Suspend => {
+                    return try_suspend_sleep(
+                        kernel,
+                        uc,
+                        thread_id,
+                        pending_returns,
+                        current_thread_id,
+                        suspended_thread,
+                        self_suspended_threads,
+                        running_thread,
+                    );
+                }
             }
         }
         Some(crate::ce::coredll_ordinals::ORD_SLEEP_TILL_TICK) => 1,
@@ -5764,6 +5785,83 @@ fn try_block_sleep<D>(
         }
     }
     false
+}
+
+#[cfg(feature = "unicorn")]
+fn try_suspend_sleep<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    thread_id: u32,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    self_suspended_threads: &std::rc::Rc<
+        std::cell::RefCell<std::collections::BTreeMap<u32, SuspendedGuestThread>>,
+    >,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    let capture = |thread_handle| {
+        let mut suspended = SuspendedGuestThread {
+            thread_id,
+            thread_handle: Some(thread_handle),
+            regs: capture_mips_gprs(uc),
+            pc: read_mips_reg(uc, RegisterMIPS::RA),
+        };
+        suspended.regs[2] = 0;
+        self_suspended_threads
+            .borrow_mut()
+            .insert(thread_handle, suspended);
+    };
+
+    if let Some(callout) = pending_returns.borrow_mut().pop() {
+        if !matches!(
+            kernel.suspend_thread(callout.thread_handle),
+            crate::ce::object::ThreadSuspendResult::Previous(_)
+        ) {
+            return false;
+        }
+        capture(callout.thread_handle);
+
+        let mut creator_regs = callout.creator_regs;
+        creator_regs[2] = callout.thread_handle;
+        restore_mips_gprs(uc, &creator_regs);
+        *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        let _ = update_user_kdata_current_ids(
+            uc,
+            callout.creator_thread_id,
+            kernel.current_process_id(),
+        );
+        *running_thread.borrow_mut() = None;
+        let writes = [
+            uc.reg_write(RegisterMIPS::V0, u64::from(callout.thread_handle)),
+            uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc)),
+            uc.reg_write(RegisterMIPS::RA, u64::from(callout.return_pc)),
+        ];
+        if writes.into_iter().any(|write| write.is_err()) {
+            let _ = uc.emu_stop();
+        }
+        return true;
+    }
+
+    let Some((_, thread_handle)) = *running_thread.borrow() else {
+        return false;
+    };
+    if !matches!(
+        kernel.suspend_thread(thread_handle),
+        crate::ce::object::ThreadSuspendResult::Previous(_)
+    ) {
+        return false;
+    }
+    capture(thread_handle);
+    *running_thread.borrow_mut() = None;
+    if let Some(suspended) = suspended_thread.borrow_mut().take() {
+        activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
+    } else {
+        let _ = uc.emu_stop();
+    }
+    true
 }
 
 #[cfg(feature = "unicorn")]
@@ -6828,6 +6926,9 @@ fn try_enter_resumed_thread_callout<D>(
     process_stack_top: u32,
     current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    self_suspended_threads: &std::rc::Rc<
+        std::cell::RefCell<std::collections::BTreeMap<u32, SuspendedGuestThread>>,
+    >,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     stack_slots: &GuestThreadStackSlots,
 ) -> bool {
@@ -6842,6 +6943,22 @@ fn try_enter_resumed_thread_callout<D>(
         return false;
     }
     let thread_handle = args.first().copied().unwrap_or(0);
+    if result == 1
+        && let Some(resumed) = self_suspended_threads.borrow_mut().remove(&thread_handle)
+    {
+        let mut creator = SuspendedGuestThread {
+            thread_id: creator_thread_id,
+            thread_handle: running_thread
+                .borrow()
+                .and_then(|(id, handle)| (id == creator_thread_id).then_some(handle)),
+            regs: capture_mips_gprs(uc),
+            pc: read_mips_reg(uc, RegisterMIPS::RA),
+        };
+        creator.regs[2] = result;
+        *suspended_thread.borrow_mut() = Some(creator);
+        activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &resumed);
+        return true;
+    }
     let Some((worker_thread_id, start_address, parameter)) =
         kernel.guest_thread_start(thread_handle)
     else {

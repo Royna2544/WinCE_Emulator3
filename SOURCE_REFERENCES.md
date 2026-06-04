@@ -183,10 +183,14 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     worker with a zero return after timeout expiry. `Sleep(0)` now follows
     the same `NKSleep` branch by recording a scheduler yield and swapping
     between the active guest context and the currently saved peer context when
-    the Unicorn bridge has one available; full scheduler-owned run queues,
-    `Sleep(INFINITE)`, and long-sleep chunking remain open. The first
-    serial-read bridge is anchored to `SERDEV\serial.c`, CE comm `ReadFile`
-    behavior through
+    the Unicorn bridge has one available. `Sleep(INFINITE)` now follows the
+    CE suspend branch far enough for v3 worker contexts: raw dispatch updates
+    the current-thread suspend count, and Unicorn saves a worker CPU context
+    until `ResumeThread` decrements the count from `1` to `0`, matching
+    `kcalls.c::ThreadResume` making a blocked thread runnable. Full
+    scheduler-owned run queues, pending PSL late-suspend, main-thread suspend
+    blocking, and long-sleep chunking remain open. The first serial-read
+    bridge is anchored to `SERDEV\serial.c`, CE comm `ReadFile` behavior through
     `DEVCORE\devfile.c`, and the same scheduler wait ownership rule: empty
     serial `ReadFile` calls can register a scheduler `SerialRead` wait by COM
     handle, remote serial injection queues candidate wait ids, and resumed

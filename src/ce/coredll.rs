@@ -1210,7 +1210,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             match crate::ce::timer::ce_sleep_request(raw_arg(args, 0)) {
                 crate::ce::timer::CeSleepRequest::Yield => kernel.record_thread_yield(),
                 crate::ce::timer::CeSleepRequest::Bounded(ms) => kernel.timers.sleep_ms(ms),
-                crate::ce::timer::CeSleepRequest::Suspend => {}
+                crate::ce::timer::CeSleepRequest::Suspend => {
+                    let _ = kernel.suspend_thread_for_handle(
+                        crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE,
+                        thread_id,
+                    );
+                }
             }
             Some(CoredllValue::U32(0))
         }
