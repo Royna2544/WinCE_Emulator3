@@ -19,6 +19,32 @@
   `target\scheduler_fidelity_probe.ppm`; it stopped at the normal early
   resource-loading wall-clock frontier before scheduler-visible waits appeared,
   so it is a regression check rather than UI progress.
+- Window/GWE fidelity planning now has a durable ledger in `TODO.md` with CE
+  source anchors, v2 corroboration, port order, fixture gates, and latest iNavi
+  evidence. The first concrete window fix changes raw `UpdateWindow` from a
+  valid-HWND no-op into a synchronous pending-paint delivery: if an update
+  region exists, `CeKernel::update_window` sends `WM_PAINT` through the normal
+  window send path, which validates the synthetic paint request. This matches
+  the CE paint-request model from `cmsgque.h`: paint is not an ordinary posted
+  message and is canceled by paint processing. A short mounted host/tap
+  regression probe wrote `target\window_update_summary.txt`,
+  `target\window_update_files.txt`, `target\window_update_render.txt`,
+  `target\window_update_milestones.txt`, and `target\window_update_probe.ppm`;
+  it stayed on the expected early resource-loading wall-clock frontier and is
+  not UI success.
+- The same paint/update slice now includes raw `RedrawWindow`: rectangle and
+  HRGN invalidation feed the pending update state, repeated invalidations union
+  their rectangles, `RDW_ALLCHILDREN` reaches descendants, `RDW_VALIDATE` clears
+  pending paint, erase state reaches `BeginPaint`, and `RDW_UPDATENOW` forces
+  synchronous `WM_PAINT` through `CeKernel::update_window`. Focused coverage:
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_redraw_window_invalidates_regions_children_and_updates_now`, plus
+  the full raw GWE integration test. A short mounted host/tap regression probe
+  wrote `target\redraw_window_summary.txt`, `target\redraw_window_files.txt`,
+  `target\redraw_window_render.txt`, `target\redraw_window_milestones.txt`, and
+  `target\redraw_window_probe.ppm`; it stopped at the expected 10 s wall limit
+  with small file/RSS counters (`host_read=4221/499832B`,
+  `heap_live=5948/2767663B`) and no render milestones, so it is not UI success.
 - Repository started with `RULES.md`, `regs.json`, and `serial_devices.json`.
 - `regs.json` contains the registry snapshot used to seed the CE registry model.
 - `serial_devices.json` contains enabled guest devices including `COM7:`, `COM3:`,

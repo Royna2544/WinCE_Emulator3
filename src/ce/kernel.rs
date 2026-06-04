@@ -1029,6 +1029,16 @@ impl CeKernel {
         previous
     }
 
+    pub fn update_window(&mut self, hwnd: u32) -> bool {
+        if !self.gwe.is_window(hwnd) {
+            return false;
+        }
+        if self.gwe.update_rect(hwnd).is_some() {
+            let _ = self.send_message_w(hwnd, crate::ce::gwe::WM_PAINT, 0, 0);
+        }
+        true
+    }
+
     pub fn set_window_pos(
         &mut self,
         hwnd: u32,

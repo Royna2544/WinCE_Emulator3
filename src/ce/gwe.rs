@@ -161,6 +161,48 @@ impl Rect {
     pub fn contains_point(self, point: Point) -> bool {
         point.x >= self.left && point.x < self.right && point.y >= self.top && point.y < self.bottom
     }
+
+    pub fn normalized(self) -> Self {
+        Self {
+            left: self.left.min(self.right),
+            top: self.top.min(self.bottom),
+            right: self.left.max(self.right),
+            bottom: self.top.max(self.bottom),
+        }
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.width() <= 0 || self.height() <= 0
+    }
+
+    pub fn union(self, other: Self) -> Self {
+        let lhs = self.normalized();
+        let rhs = other.normalized();
+        if lhs.is_empty() {
+            return rhs;
+        }
+        if rhs.is_empty() {
+            return lhs;
+        }
+        Self {
+            left: lhs.left.min(rhs.left),
+            top: lhs.top.min(rhs.top),
+            right: lhs.right.max(rhs.right),
+            bottom: lhs.bottom.max(rhs.bottom),
+        }
+    }
+
+    pub fn intersect(self, other: Self) -> Option<Self> {
+        let lhs = self.normalized();
+        let rhs = other.normalized();
+        let rect = Self {
+            left: lhs.left.max(rhs.left),
+            top: lhs.top.max(rhs.top),
+            right: lhs.right.min(rhs.right),
+            bottom: lhs.bottom.min(rhs.bottom),
+        };
+        (!rect.is_empty()).then_some(rect)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -545,10 +587,6 @@ impl Gwe {
         previous
     }
 
-    pub fn update_window(&self, hwnd: u32) -> bool {
-        self.is_window(hwnd)
-    }
-
     pub fn invalidate_window(&mut self, hwnd: u32, rect: Option<Rect>, erase: bool) -> bool {
         let Some(window) = self.windows.get_mut(&hwnd) else {
             return false;
@@ -556,9 +594,21 @@ impl Gwe {
         if window.destroyed {
             return false;
         }
+        let full_client = window.client_rect.zero_origin();
+        let Some(rect) = rect
+            .unwrap_or(full_client)
+            .normalized()
+            .intersect(full_client)
+        else {
+            return true;
+        };
+        window.update_rect = if window.update_pending {
+            window.update_rect.union(rect)
+        } else {
+            rect
+        };
         window.update_pending = true;
         window.erase_pending |= erase;
-        window.update_rect = rect.unwrap_or_else(|| window.client_rect.zero_origin());
         true
     }
 
@@ -1203,6 +1253,25 @@ impl Gwe {
 
     pub fn window(&self, hwnd: u32) -> Option<&Window> {
         self.windows.get(&hwnd)
+    }
+
+    pub fn window_and_descendants(&self, hwnd: u32) -> Option<Vec<u32>> {
+        if !self.is_window(hwnd) {
+            return None;
+        }
+        let mut targets = vec![hwnd];
+        let mut index = 0;
+        while let Some(parent) = targets.get(index).copied() {
+            index += 1;
+            let children: Vec<u32> = self
+                .windows
+                .values()
+                .filter(|window| !window.destroyed && window.parent == Some(parent))
+                .map(|window| window.hwnd)
+                .collect();
+            targets.extend(children);
+        }
+        Some(targets)
     }
 
     fn take_matching_message(

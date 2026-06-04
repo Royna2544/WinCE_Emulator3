@@ -50,6 +50,16 @@ const SPI_GETPLATFORMTYPE: u32 = 0x0101;
 const SPI_GETOEMINFO: u32 = 0x0102;
 const SYSTEM_PARAMETERS_INFO_REGISTRY_PATH: &str = r"HKLM\System\Emulator\SystemParametersInfo";
 const IOCTL_HAL_GET_DEVICEID: u32 = 0x0101_207c;
+const RDW_INVALIDATE: u32 = 0x0001;
+const RDW_INTERNALPAINT: u32 = 0x0002;
+const RDW_ERASE: u32 = 0x0004;
+const RDW_VALIDATE: u32 = 0x0008;
+const RDW_NOINTERNALPAINT: u32 = 0x0010;
+const RDW_NOERASE: u32 = 0x0020;
+const RDW_NOCHILDREN: u32 = 0x0040;
+const RDW_ALLCHILDREN: u32 = 0x0080;
+const RDW_UPDATENOW: u32 = 0x0100;
+const RDW_ERASENOW: u32 = 0x0200;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CoredllSubsystem {
@@ -2139,10 +2149,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_SHOW_WINDOW => Some(CoredllValue::Bool(
             kernel.show_window(raw_arg(args, 0), raw_arg(args, 1) != 0),
         )),
-        ORD_UPDATE_WINDOW => Some(CoredllValue::Bool(
-            kernel.gwe.update_window(raw_arg(args, 0)),
-        )),
+        ORD_UPDATE_WINDOW => Some(CoredllValue::Bool(kernel.update_window(raw_arg(args, 0)))),
         ORD_INVALIDATE_RECT => Some(CoredllValue::Bool(invalidate_rect_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_REDRAW_WINDOW => Some(CoredllValue::Bool(redraw_window_raw(
             kernel, memory, thread_id, args,
         ))),
         ORD_VALIDATE_RECT => Some(CoredllValue::Bool(validate_rect_raw(
@@ -8769,6 +8780,92 @@ fn invalidate_rect_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
         return false;
     }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn redraw_window_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let hwnd = raw_arg(args, 0);
+    let rect_ptr = raw_arg(args, 1);
+    let region_handle = raw_arg(args, 2);
+    let flags = raw_arg(args, 3);
+
+    if !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    }
+
+    let rect = if region_handle != 0 {
+        match kernel.resources.region(region_handle) {
+            Some(region) => Some(region.rect),
+            None => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                return false;
+            }
+        }
+    } else if rect_ptr != 0 {
+        match read_guest_rect(kernel, memory, thread_id, rect_ptr) {
+            Some(rect) => Some(rect),
+            None => return false,
+        }
+    } else {
+        None
+    };
+
+    let include_children = flags & RDW_ALLCHILDREN != 0 && flags & RDW_NOCHILDREN == 0;
+    let targets = if include_children {
+        match kernel.gwe.window_and_descendants(hwnd) {
+            Some(targets) => targets,
+            None => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+                return false;
+            }
+        }
+    } else {
+        vec![hwnd]
+    };
+
+    let should_validate = flags & (RDW_VALIDATE | RDW_NOINTERNALPAINT) != 0;
+    let should_invalidate = flags & (RDW_INVALIDATE | RDW_INTERNALPAINT) != 0;
+    let erase = flags & RDW_NOERASE == 0 && flags & (RDW_ERASE | RDW_ERASENOW) != 0;
+
+    for target in targets.iter().copied() {
+        if should_validate && !kernel.gwe.validate_window(target) {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+            return false;
+        }
+        if should_invalidate && !kernel.gwe.invalidate_window(target, rect, erase) {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+            return false;
+        }
+    }
+
+    if flags & (RDW_UPDATENOW | RDW_ERASENOW) != 0 {
+        for target in targets {
+            if !kernel.update_window(target) {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+                return false;
+            }
+        }
+    }
+
     kernel.threads.set_last_error(thread_id, 0);
     true
 }

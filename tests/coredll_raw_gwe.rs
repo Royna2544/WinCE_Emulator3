@@ -6,38 +6,39 @@ use wince_emulation_v3::{
             ORD_ADJUST_WINDOW_RECT_EX, ORD_BEGIN_PAINT, ORD_BIT_BLT, ORD_CHECK_MENU_RADIO_ITEM,
             ORD_CLIENT_TO_SCREEN, ORD_COPY_RECT, ORD_CREATE_COMPATIBLE_BITMAP,
             ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIBSECTION, ORD_CREATE_MUTEX_W,
-            ORD_CREATE_PALETTE, ORD_CREATE_PEN_INDIRECT, ORD_CREATE_SOLID_BRUSH,
-            ORD_CREATE_WINDOW_EX_W, ORD_DELETE_OBJECT, ORD_DESTROY_WINDOW, ORD_ENABLE_WINDOW,
-            ORD_END_PAINT, ORD_EQUAL_RECT, ORD_FILL_RECT, ORD_FIND_RESOURCE_W, ORD_FIND_WINDOW_W,
-            ORD_GET_ACTIVE_WINDOW, ORD_GET_CAPTURE, ORD_GET_CLASS_INFO_W, ORD_GET_CLASS_NAME_W,
-            ORD_GET_CLIENT_RECT, ORD_GET_CURSOR_POS, ORD_GET_DC, ORD_GET_DEVICE_CAPS,
-            ORD_GET_FOCUS, ORD_GET_FOREGROUND_WINDOW, ORD_GET_MESSAGE_SOURCE, ORD_GET_MESSAGE_W,
-            ORD_GET_NEAREST_PALETTE_INDEX, ORD_GET_PALETTE_ENTRIES, ORD_GET_PARENT,
-            ORD_GET_QUEUE_STATUS, ORD_GET_STOCK_OBJECT, ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH,
-            ORD_GET_SYSTEM_INFO, ORD_GET_SYSTEM_METRICS, ORD_GET_SYSTEM_PALETTE_ENTRIES,
-            ORD_GET_UPDATE_RECT, ORD_GET_WINDOW, ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_RECT,
-            ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W, ORD_GLOBAL_MEMORY_STATUS,
-            ORD_IN_SEND_MESSAGE, ORD_INFLATE_RECT, ORD_INTERSECT_RECT, ORD_INVALIDATE_RECT,
-            ORD_IS_RECT_EMPTY, ORD_IS_WINDOW, ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE,
-            ORD_KILL_TIMER, ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_MAP_WINDOW_POINTS,
-            ORD_MESSAGE_BOX_W, ORD_MOVE_WINDOW, ORD_OFFSET_RECT, ORD_PEEK_MESSAGE_W, ORD_POLYGON,
-            ORD_POLYLINE, ORD_POST_MESSAGE_W, ORD_POST_QUIT_MESSAGE, ORD_POST_THREAD_MESSAGE_W,
-            ORD_PT_IN_RECT, ORD_REALIZE_PALETTE, ORD_REGISTER_CLASS_W, ORD_REGISTER_GESTURE,
-            ORD_RELEASE_CAPTURE, ORD_RELEASE_DC, ORD_RELEASE_MUTEX, ORD_ROUND_RECT,
-            ORD_SCREEN_TO_CLIENT, ORD_SELECT_OBJECT, ORD_SELECT_PALETTE, ORD_SEND_MESSAGE_TIMEOUT,
-            ORD_SET_ACTIVE_WINDOW, ORD_SET_BK_COLOR, ORD_SET_CAPTURE, ORD_SET_DIBITS_TO_DEVICE,
-            ORD_SET_FOCUS, ORD_SET_FOREGROUND_WINDOW, ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT,
-            ORD_SET_RECT, ORD_SET_RECT_EMPTY, ORD_SET_TIMER, ORD_SET_WINDOW_LONG_W,
-            ORD_SET_WINDOW_POS, ORD_SET_WINDOW_TEXT_W, ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE,
-            ORD_SLEEP, ORD_STRETCH_DIBITS, ORD_SYSTEM_PARAMETERS_INFO_W, ORD_TRANSPARENT_IMAGE,
+            ORD_CREATE_PALETTE, ORD_CREATE_PEN_INDIRECT, ORD_CREATE_RECT_RGN,
+            ORD_CREATE_SOLID_BRUSH, ORD_CREATE_WINDOW_EX_W, ORD_DELETE_OBJECT, ORD_DESTROY_WINDOW,
+            ORD_ENABLE_WINDOW, ORD_END_PAINT, ORD_EQUAL_RECT, ORD_FILL_RECT, ORD_FIND_RESOURCE_W,
+            ORD_FIND_WINDOW_W, ORD_GET_ACTIVE_WINDOW, ORD_GET_CAPTURE, ORD_GET_CLASS_INFO_W,
+            ORD_GET_CLASS_NAME_W, ORD_GET_CLIENT_RECT, ORD_GET_CURSOR_POS, ORD_GET_DC,
+            ORD_GET_DEVICE_CAPS, ORD_GET_FOCUS, ORD_GET_FOREGROUND_WINDOW, ORD_GET_MESSAGE_SOURCE,
+            ORD_GET_MESSAGE_W, ORD_GET_NEAREST_PALETTE_INDEX, ORD_GET_PALETTE_ENTRIES,
+            ORD_GET_PARENT, ORD_GET_QUEUE_STATUS, ORD_GET_STOCK_OBJECT, ORD_GET_SYS_COLOR,
+            ORD_GET_SYS_COLOR_BRUSH, ORD_GET_SYSTEM_INFO, ORD_GET_SYSTEM_METRICS,
+            ORD_GET_SYSTEM_PALETTE_ENTRIES, ORD_GET_UPDATE_RECT, ORD_GET_WINDOW,
+            ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_TEXT_LENGTH_W,
+            ORD_GET_WINDOW_TEXT_W, ORD_GLOBAL_MEMORY_STATUS, ORD_IN_SEND_MESSAGE, ORD_INFLATE_RECT,
+            ORD_INTERSECT_RECT, ORD_INVALIDATE_RECT, ORD_IS_RECT_EMPTY, ORD_IS_WINDOW,
+            ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE, ORD_KILL_TIMER, ORD_LOAD_RESOURCE,
+            ORD_LOAD_STRING_W, ORD_MAP_WINDOW_POINTS, ORD_MESSAGE_BOX_W, ORD_MOVE_WINDOW,
+            ORD_OFFSET_RECT, ORD_PEEK_MESSAGE_W, ORD_POLYGON, ORD_POLYLINE, ORD_POST_MESSAGE_W,
+            ORD_POST_QUIT_MESSAGE, ORD_POST_THREAD_MESSAGE_W, ORD_PT_IN_RECT, ORD_REALIZE_PALETTE,
+            ORD_REDRAW_WINDOW, ORD_REGISTER_CLASS_W, ORD_REGISTER_GESTURE, ORD_RELEASE_CAPTURE,
+            ORD_RELEASE_DC, ORD_RELEASE_MUTEX, ORD_ROUND_RECT, ORD_SCREEN_TO_CLIENT,
+            ORD_SELECT_OBJECT, ORD_SELECT_PALETTE, ORD_SEND_MESSAGE_TIMEOUT, ORD_SET_ACTIVE_WINDOW,
+            ORD_SET_BK_COLOR, ORD_SET_CAPTURE, ORD_SET_DIBITS_TO_DEVICE, ORD_SET_FOCUS,
+            ORD_SET_FOREGROUND_WINDOW, ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_RECT,
+            ORD_SET_RECT_EMPTY, ORD_SET_TIMER, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS,
+            ORD_SET_WINDOW_TEXT_W, ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_SLEEP,
+            ORD_STRETCH_DIBITS, ORD_SYSTEM_PARAMETERS_INFO_W, ORD_TRANSPARENT_IMAGE,
             ORD_UNION_RECT, ORD_UPDATE_WINDOW, ORD_VALIDATE_RECT,
         },
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat, VirtualFramebuffer},
         gwe::{
             GW_CHILD, GW_HWNDFIRST, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER, GWL_USERDATA,
-            HWND_BROADCAST, MSGSRC_SOFTWARE_POST, Point, QS_PAINT, QS_POSTMESSAGE, SM_CXBORDER,
-            SM_CXSCREEN, SM_CYSCREEN, WM_MOVE, WM_PAINT, WM_QUIT, WM_SHOWWINDOW, WM_SIZE, WM_TIMER,
-            WM_USER, WM_WINDOWPOSCHANGED, WS_VISIBLE,
+            HWND_BROADCAST, MSGSRC_SOFTWARE_POST, Point, QS_PAINT, QS_POSTMESSAGE, Rect,
+            SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN, WM_MOVE, WM_PAINT, WM_QUIT, WM_SHOWWINDOW,
+            WM_SIZE, WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_CHILD, WS_VISIBLE,
         },
         kernel::CeKernel,
         memory::PROCESS_HEAP_HANDLE,
@@ -2497,6 +2498,23 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
             &mut kernel,
             &mut memory,
             thread_id,
+            ORD_GET_UPDATE_RECT,
+            [child, rect_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_i32(rect_ptr)?, 0);
+    assert_eq!(memory.read_i32(rect_ptr + 4)?, 0);
+    assert_eq!(memory.read_i32(rect_ptr + 8)?, 70);
+    assert_eq!(memory.read_i32(rect_ptr + 12)?, 80);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_UPDATE_WINDOW,
             [child],
         ),
@@ -2510,33 +2528,40 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
             &mut kernel,
             &mut memory,
             thread_id,
-            ORD_PEEK_MESSAGE_W,
-            [msg_ptr, child, WM_PAINT, WM_PAINT, 0],
+            ORD_GET_UPDATE_RECT,
+            [child, rect_ptr, 0],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Bool(true),
+            value: CoredllValue::Bool(false),
             ..
         }
     ));
-    assert_eq!(memory.read_u32(msg_ptr)?, child);
-    assert_eq!(memory.read_u32(msg_ptr + 4)?, WM_PAINT);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
             &mut memory,
             thread_id,
-            ORD_GET_UPDATE_RECT,
-            [child, rect_ptr, 0],
+            ORD_PEEK_MESSAGE_W,
+            [msg_ptr, child, WM_PAINT, WM_PAINT, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_INVALIDATE_RECT,
+            [child, 0, 1],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
             ..
         }
     ));
-    assert_eq!(memory.read_i32(rect_ptr)?, 0);
-    assert_eq!(memory.read_i32(rect_ptr + 4)?, 0);
-    assert_eq!(memory.read_i32(rect_ptr + 8)?, 70);
-    assert_eq!(memory.read_i32(rect_ptr + 12)?, 80);
 
     let paint_ptr = 0x3400;
     memory.map_words(paint_ptr, 16);
@@ -3670,6 +3695,282 @@ fn coredll_raw_queue_status_tracks_thread_posts_and_paint() -> Result<()> {
         0,
         0,
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_redraw_window_invalidates_regions_children_and_updates_now() -> Result<()> {
+    const RDW_INVALIDATE: u32 = 0x0001;
+    const RDW_ERASE: u32 = 0x0004;
+    const RDW_VALIDATE: u32 = 0x0008;
+    const RDW_NOERASE: u32 = 0x0020;
+    const RDW_ALLCHILDREN: u32 = 0x0080;
+    const RDW_UPDATENOW: u32 = 0x0100;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 12;
+    let rect_ptr = 0xb000;
+    let paint_ptr = 0xb100;
+    let msg_ptr = 0xb200;
+    memory.map_words(rect_ptr, 4);
+    memory.map_words(paint_ptr, 16);
+    memory.map_bytes(paint_ptr, 64);
+    memory.map_words(msg_ptr, 7);
+
+    let parent = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "REDRAW_PARENT",
+        "",
+        None,
+        0,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(0, 0, 100, 80),
+    );
+    let child = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "REDRAW_CHILD",
+        "",
+        Some(parent),
+        1,
+        WS_VISIBLE | WS_CHILD,
+        0,
+        Rect::from_origin_size(10, 10, 50, 40),
+    );
+    assert!(kernel.gwe.validate_window(parent));
+    assert!(kernel.gwe.validate_window(child));
+
+    let region = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [4, 5, 14, 16],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn did not return a region: {other:?}"),
+    };
+    assert_ne!(region, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REDRAW_WINDOW,
+            [parent, 0, region, RDW_INVALIDATE | RDW_NOERASE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_UPDATE_RECT,
+            [parent, rect_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_i32(rect_ptr)?, 4);
+    assert_eq!(memory.read_i32(rect_ptr + 4)?, 5);
+    assert_eq!(memory.read_i32(rect_ptr + 8)?, 14);
+    assert_eq!(memory.read_i32(rect_ptr + 12)?, 16);
+
+    memory.write_word(rect_ptr, 10);
+    memory.write_word(rect_ptr + 4, 12);
+    memory.write_word(rect_ptr + 8, 25);
+    memory.write_word(rect_ptr + 12, 30);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REDRAW_WINDOW,
+            [parent, rect_ptr, 0, RDW_INVALIDATE | RDW_ERASE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_UPDATE_RECT,
+            [parent, rect_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_i32(rect_ptr)?, 4);
+    assert_eq!(memory.read_i32(rect_ptr + 4)?, 5);
+    assert_eq!(memory.read_i32(rect_ptr + 8)?, 25);
+    assert_eq!(memory.read_i32(rect_ptr + 12)?, 30);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_BEGIN_PAINT,
+            [parent, paint_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hdc),
+            ..
+        } if hdc != 0
+    ));
+    assert_eq!(memory.read_u32(paint_ptr + 4)?, 1);
+    assert_eq!(memory.read_i32(paint_ptr + 8)?, 4);
+    assert_eq!(memory.read_i32(paint_ptr + 12)?, 5);
+    assert_eq!(memory.read_i32(paint_ptr + 16)?, 25);
+    assert_eq!(memory.read_i32(paint_ptr + 20)?, 30);
+
+    assert!(kernel.gwe.validate_window(parent));
+    assert!(kernel.gwe.validate_window(child));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REDRAW_WINDOW,
+            [parent, 0, 0, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_NOERASE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_UPDATE_RECT,
+            [parent, rect_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_i32(rect_ptr)?, 0);
+    assert_eq!(memory.read_i32(rect_ptr + 4)?, 0);
+    assert_eq!(memory.read_i32(rect_ptr + 8)?, 100);
+    assert_eq!(memory.read_i32(rect_ptr + 12)?, 80);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_UPDATE_RECT,
+            [child, rect_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_i32(rect_ptr)?, 0);
+    assert_eq!(memory.read_i32(rect_ptr + 4)?, 0);
+    assert_eq!(memory.read_i32(rect_ptr + 8)?, 50);
+    assert_eq!(memory.read_i32(rect_ptr + 12)?, 40);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REDRAW_WINDOW,
+            [parent, 0, 0, RDW_VALIDATE | RDW_ALLCHILDREN],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_UPDATE_RECT,
+            [parent, rect_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_UPDATE_RECT,
+            [child, rect_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REDRAW_WINDOW,
+            [parent, 0, 0, RDW_INVALIDATE | RDW_UPDATENOW],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_UPDATE_RECT,
+            [parent, rect_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PEEK_MESSAGE_W,
+            [msg_ptr, parent, WM_PAINT, WM_PAINT, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
 
     Ok(())
 }

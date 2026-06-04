@@ -227,7 +227,12 @@
     follow. The framebuffer remains all zero because the app exits before useful
     render output. Current work should identify why the singleton routine is
     reached with an existing `iNavi` mutex/window in this same mounted run, not
-    fake success or suppress `ERROR_ALREADY_EXISTS`.
+    fake success or suppress `ERROR_ALREADY_EXISTS`. Raw `UpdateWindow` is no
+    longer a no-op: it now synchronously sends pending `WM_PAINT` through the
+    window send path. Raw `RedrawWindow` also handles the first CE-backed
+    rectangle/region invalidation, descendant, validate, erase, and update-now
+    paths, but the broader window/GWE subsystem still needs the ledgered
+    lifecycle/send/input/GDI fidelity work before this bug can be closed.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch

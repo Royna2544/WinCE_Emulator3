@@ -26,6 +26,58 @@
     around `0x0026f7e4`; this scheduler slice is foundational and should not be
     counted as UI success until the mounted host/tap run advances.
 
+- Window/GWE subsystem:
+  - Source refs:
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`,
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\window.hpp`,
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\gweapiset1.hpp`, CE SDK
+    `winuser.h`, and MFC `wincore.cpp`/`thrdcore.cpp`/`wingdi.cpp`.
+  - v2 corroboration: v2 had owner-thread queues, pending message transfers,
+    `PendingUpdateWindow`, paint bounds, and host presenter refresh paths. Use
+    that only as proof that those emulator paths were viable; CE source remains
+    the behavior authority.
+  - Current v3 status: raw class/HWND geometry, basic lifecycle messages,
+    queue retrieval, guest WNDPROC callouts, subclass `CallWindowProcW`,
+    paint/update state, `BeginPaint`/`EndPaint`, and basic `SendMessageW`/
+    `DispatchMessageW` are present. `UpdateWindow` now forces pending
+    `WM_PAINT` synchronously instead of acting as a no-op. Raw `RedrawWindow`
+    now covers the first CE-backed paint slice: rectangle/region invalidation,
+    invalidation unioning, `RDW_VALIDATE`, `RDW_ALLCHILDREN`, erase state, and
+    `RDW_UPDATENOW` through the same synchronous paint path.
+  - Open gaps: `ValidateRect`/`RedrawWindow(RDW_VALIDATE)` still validate the
+    whole window instead of subtracting a partial rectangle or HRGN, internal
+    paint requests are represented as normal pending update state, and full
+    child clipping/z-order invalidation remains for the later GWE/GDI pass.
+  - Port order:
+    1. Paint/update correctness: keep `WM_PAINT` synthetic rather than posted,
+       finish `UpdateWindow`/`RedrawWindow`/region invalidation semantics, and
+       verify `BeginPaint`/`ValidateRect` cancellation behavior.
+    2. Window creation/destruction lifecycle: complete create/show/size/move/
+       activate/focus/enable/destroy ordering, `WM_NCCREATE`/`WM_CREATE`,
+       `WM_DESTROY`/`WM_NCDESTROY`, parent/child invalidation, and z-order
+       effects.
+    3. Message queues and synchronous sends: replace same-thread-only shortcuts
+       with scheduler-owned sent queues, sender blocking, receiver-context
+       execution, `ReplyMessage`, `InSendMessage`, timeout, destroyed-target,
+       and reentrant send behavior.
+    4. Window data/class/dialog/control surface: class atoms/extra bytes,
+       `SetWindowLong`/`GetWindowLong`, dialog procs/results, child lookup,
+       command routing, accelerator/menu state, and MFC attach/subclass paths.
+    5. Input/focus/capture/hit testing: keyboard char translation, mouse
+       capture, coordinate mapping, modal blockers, active/foreground window
+       semantics, and queue-status/source bits.
+    6. GDI/DC integration: tie HWND update regions to HDC clipping, memory DCs,
+       DIB/palette/text/region drawing, and framebuffer presentation without
+       host-window shortcuts.
+  - Fixture gates: prioritize existing window fixtures around paint/update,
+    create/destroy order, cross-thread sends, dialogs, MFC lifecycle, menus,
+    accelerators, hit testing, region clipping, and full UI stress.
+  - Latest iNavi evidence: the app reaches real windows and some sparse GDI
+    pixels but still misses useful UI. Current render evidence says `WM_SIZE`
+    reaches dimensions while the app skips its resize/surface allocation path;
+    window work should keep tracing real lifecycle/message causes rather than
+    faking pixels.
+
 ## Immediate
 
 - Continue from the latest stable host-mode UI frontier. Current

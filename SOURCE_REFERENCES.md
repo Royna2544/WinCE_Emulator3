@@ -119,6 +119,10 @@ anchors, not app-specific shortcuts.
     `PostMessageW_I`, and `SendMessageW_*` queue entry points.
   - Raw dispatcher support now writes and reads CE-style `MSG` memory records
     for `GetMessageW`, `PeekMessageW`, and `DispatchMessageW`.
+  - Paint requests are a separate queue/list from posted messages: `WM_PAINT`
+    retrieval does not remove the paint request; processing paint cancels the
+    request. Rust models this as synthetic paint from `update_pending`, not as
+    an ordinary posted message.
 
 - GWE window surface:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp`
@@ -126,6 +130,9 @@ anchors, not app-specific shortcuts.
   `/mnt/c/Program Files (x86)/Windows CE Tools/wce420/STANDARDSDK_420/Include/Mipsii/winuser.h`
   - Declares `SetWindowTextW_I`, `GetWindowTextW_I`, `SetWindowLongW_I`,
     `GetWindowLongW_I`, `DefWindowProcW_I`, and `DestroyWindow_I`.
+  - Declares `UpdateWindow_I`; CE/MFC uses this as a synchronous paint forcing
+    boundary. Rust raw `UpdateWindow` now validates pending update state by
+    sending `WM_PAINT` through the window send path when an update region exists.
   - `CWindow` stores `m_rc` for the whole window and `m_rcClient` for the
     client area in screen coordinates; it declares `SetWindowPos_I`,
     `MoveWindow_I`, `GetWindowRect_I`, `GetClientRect_I`,
@@ -166,13 +173,17 @@ anchors, not app-specific shortcuts.
   `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\ARMV4I\RETAIL\coredll.def`, and
   `/mnt/c/Program Files (x86)/Windows CE Tools/wce420/STANDARDSDK_420/Include/Mipsii/winuser.h`
   - CE exposes `InvalidateRect`, `BeginPaint`, `EndPaint`, `UpdateWindow`,
-    `GetUpdateRect`, and `ValidateRect` through the GWE API set and coredll
-    ordinals `250`, `260`, `261`, `267`, `274`, and `278`.
+    `GetUpdateRect`, `ValidateRect`, and `RedrawWindow` through the GWE API set
+    and coredll ordinals `250`, `260`, `261`, `267`, `274`, `278`, and `286`.
   - The SDK `PAINTSTRUCT` layout is `hdc`, `fErase`, `rcPaint`, `fRestore`,
     `fIncUpdate`, and 32 reserved bytes; raw `BeginPaint` writes that shape.
   - `WM_PAINT` is `0x000F`; the virtual GWE subsystem generates it from a
     pending update region and clears the region through `BeginPaint` or
     `ValidateRect`.
+  - Raw `RedrawWindow` now follows the same pending-paint model for rectangle
+    and HRGN invalidation, update-region unioning, descendant invalidation, and
+    `RDW_UPDATENOW`. Remaining gaps are tracked in `TODO.md`: partial validate
+    subtraction, internal-paint-only requests, and full child clipping.
 
 - Display surface boundary:
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\gpe.h` and
