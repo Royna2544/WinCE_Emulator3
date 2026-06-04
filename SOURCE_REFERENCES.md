@@ -196,7 +196,17 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     timers. Mounted evidence in `target\timer_cap_virtual_*` shows the id-1000
     7.5 s no-HWND timer now remains recorded as the next due timer instead of
     driving thousands of synthetic idle-update dispatches, while the real
-    first-present framebuffer remains populated.
+    first-present framebuffer remains populated. The next mounted probe
+    `target\main_getmessage_timer_resume_virtual_*` confirms the corresponding
+    blocking wait can now resume through the scheduler path: the initial guest
+    thread uses the CE current-thread pseudo-handle as its wait identity, a due
+    timer post queues the GWE message waiter, the waiter is selected/removed,
+    and the raw `GetMessageW` syscall returns the timer `MSG` through the saved
+    MIPS return site. This matches the CE source shape where blocking
+    `GetMessageW_I` and message-queue timer ownership are part of queue/scheduler
+    wake behavior, while v3 still lacks the fuller run-queue model needed to
+    prevent the app's long MFC idle-update loop from consuming the wall-clock
+    probe budget.
     The same GWE header declares
     blocking `GetMessageW_I` separately from
     `GetMessageWNoWait_I`, and documents paint requests as queue conditions

@@ -698,6 +698,7 @@ const USER_KDATA_BASE: u32 = 0x0000_5800;
 const USER_KDATA_SYSHANDLE_OFFSET: u32 = 0x0000_0004;
 const SYS_HANDLE_CURRENT_THREAD: usize = 1;
 const SYS_HANDLE_CURRENT_PROCESS: usize = 2;
+const MAIN_GUEST_THREAD_ID: u32 = 1;
 const GUEST_STACK_MIN_RESERVE: u32 = 0x0010_0000;
 const GUEST_HEAP_ARENA_BASE: u32 = 0x3000_0000;
 const GUEST_HEAP_ARENA_SIZE: u32 = 0x0100_0000;
@@ -1911,7 +1912,7 @@ impl UnicornMips {
         let pending_wndproc_returns_hook = Rc::clone(&pending_wndproc_returns);
         let create_window_returns = Rc::new(RefCell::new(Vec::<CreateWindowReturn>::new()));
         let create_window_returns_hook = Rc::clone(&create_window_returns);
-        let current_thread_id = Rc::new(RefCell::new(1u32));
+        let current_thread_id = Rc::new(RefCell::new(MAIN_GUEST_THREAD_ID));
         let current_thread_id_hook = Rc::clone(&current_thread_id);
         let pending_guest_thread_returns =
             Rc::new(RefCell::new(Vec::<PendingGuestThreadReturn>::new()));
@@ -5772,7 +5773,171 @@ fn try_block_empty_get_message<D>(
         }
     }
 
-    *blocked.borrow_mut() = Some(UnicornBlockedGetMessage {
+    *blocked.borrow_mut() = Some(unicorn_blocked_get_message_snapshot(
+        kernel, thread_id, hwnd, min_msg, max_msg,
+    ));
+
+    let mut pending_returns = pending_returns.borrow_mut();
+    if let Some(callout) = pending_returns.pop() {
+        kernel.record_blocked_msg_wait(0, crate::ce::timer::INFINITE);
+        let wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            callout.thread_handle,
+            Vec::new(),
+            crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
+                hwnd,
+                min_msg,
+                max_msg,
+            },
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        *blocked_thread.borrow_mut() = Some(BlockedGuestThread {
+            wait_id,
+            thread_id,
+            thread_handle: callout.thread_handle,
+            regs: capture_mips_gprs(uc),
+            return_pc: read_mips_reg(uc, RegisterMIPS::RA),
+            msg_ptr: args.first().copied().unwrap_or(0),
+            hwnd,
+            min_msg,
+            max_msg,
+        });
+        record_message_import(uc, module_kind, ordinal, args, None, last_messages);
+        *running_thread.borrow_mut() = None;
+        *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        let _ = update_user_kdata_current_ids(
+            uc,
+            callout.creator_thread_id,
+            kernel.current_process_id(),
+        );
+        restore_mips_gprs(uc, &callout.creator_regs);
+        let writes = [
+            uc.reg_write(RegisterMIPS::V0, u64::from(callout.thread_handle)),
+            uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc)),
+            uc.reg_write(RegisterMIPS::RA, u64::from(callout.return_pc)),
+        ];
+        if writes.into_iter().any(|write| write.is_err()) {
+            let _ = uc.emu_stop();
+        }
+        return true;
+    }
+
+    let running = *running_thread.borrow();
+    if let Some((_, thread_handle)) = running {
+        kernel.record_blocked_msg_wait(0, crate::ce::timer::INFINITE);
+        let wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            thread_handle,
+            Vec::new(),
+            crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
+                hwnd,
+                min_msg,
+                max_msg,
+            },
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        if suspended_thread.borrow().is_none()
+            && try_complete_current_get_message_timer_wait(
+                kernel,
+                uc,
+                thread_id,
+                wait_id,
+                args.first().copied().unwrap_or(0),
+                hwnd,
+                min_msg,
+                max_msg,
+                read_mips_reg(uc, RegisterMIPS::RA),
+            )
+        {
+            *blocked.borrow_mut() = None;
+            let result = read_mips_reg(uc, RegisterMIPS::V0);
+            record_message_import(uc, module_kind, ordinal, args, Some(result), last_messages);
+            return true;
+        }
+        *blocked_thread.borrow_mut() = Some(BlockedGuestThread {
+            wait_id,
+            thread_id,
+            thread_handle,
+            regs: capture_mips_gprs(uc),
+            return_pc: read_mips_reg(uc, RegisterMIPS::RA),
+            msg_ptr: args.first().copied().unwrap_or(0),
+            hwnd,
+            min_msg,
+            max_msg,
+        });
+        record_message_import(uc, module_kind, ordinal, args, None, last_messages);
+        *running_thread.borrow_mut() = None;
+        if let Some(suspended) = suspended_thread.borrow_mut().take() {
+            activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
+            return true;
+        }
+    }
+
+    if thread_id == MAIN_GUEST_THREAD_ID {
+        let thread_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
+        kernel.record_blocked_msg_wait(0, crate::ce::timer::INFINITE);
+        let wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            thread_handle,
+            Vec::new(),
+            crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
+                hwnd,
+                min_msg,
+                max_msg,
+            },
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        if suspended_thread.borrow().is_none()
+            && try_complete_current_get_message_timer_wait(
+                kernel,
+                uc,
+                thread_id,
+                wait_id,
+                args.first().copied().unwrap_or(0),
+                hwnd,
+                min_msg,
+                max_msg,
+                read_mips_reg(uc, RegisterMIPS::RA),
+            )
+        {
+            *blocked.borrow_mut() = None;
+            let result = read_mips_reg(uc, RegisterMIPS::V0);
+            record_message_import(uc, module_kind, ordinal, args, Some(result), last_messages);
+            return true;
+        }
+        *blocked_thread.borrow_mut() = Some(BlockedGuestThread {
+            wait_id,
+            thread_id,
+            thread_handle,
+            regs: capture_mips_gprs(uc),
+            return_pc: read_mips_reg(uc, RegisterMIPS::RA),
+            msg_ptr: args.first().copied().unwrap_or(0),
+            hwnd,
+            min_msg,
+            max_msg,
+        });
+        record_message_import(uc, module_kind, ordinal, args, None, last_messages);
+        if let Some(suspended) = suspended_thread.borrow_mut().take() {
+            activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
+            return true;
+        }
+    }
+    let _ = uc.emu_stop();
+    true
+}
+
+#[cfg(feature = "unicorn")]
+fn unicorn_blocked_get_message_snapshot(
+    kernel: &CeKernel,
+    thread_id: u32,
+    hwnd: Option<u32>,
+    min_msg: u32,
+    max_msg: u32,
+) -> UnicornBlockedGetMessage {
+    UnicornBlockedGetMessage {
         thread_id,
         hwnd,
         min_msg,
@@ -5810,85 +5975,60 @@ fn try_block_empty_get_message<D>(
                     .collect(),
             })
             .collect(),
-    });
-    record_message_import(uc, module_kind, ordinal, args, None, last_messages);
+    }
+}
 
-    let mut pending_returns = pending_returns.borrow_mut();
-    if let Some(callout) = pending_returns.pop() {
-        let wait_id = kernel.register_blocked_waiter(
-            thread_id,
-            callout.thread_handle,
-            Vec::new(),
-            crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
-                hwnd,
-                min_msg,
-                max_msg,
-            },
-            kernel.timers.tick_count(),
-            crate::ce::timer::INFINITE,
-        );
-        *blocked_thread.borrow_mut() = Some(BlockedGuestThread {
-            wait_id,
-            thread_id,
-            thread_handle: callout.thread_handle,
-            regs: capture_mips_gprs(uc),
-            return_pc: read_mips_reg(uc, RegisterMIPS::RA),
-            msg_ptr: args.first().copied().unwrap_or(0),
-            hwnd,
-            min_msg,
-            max_msg,
-        });
-        *running_thread.borrow_mut() = None;
-        *current_thread_id.borrow_mut() = callout.creator_thread_id;
-        let _ = update_user_kdata_current_ids(
-            uc,
-            callout.creator_thread_id,
-            kernel.current_process_id(),
-        );
-        restore_mips_gprs(uc, &callout.creator_regs);
-        let writes = [
-            uc.reg_write(RegisterMIPS::V0, u64::from(callout.thread_handle)),
-            uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc)),
-            uc.reg_write(RegisterMIPS::RA, u64::from(callout.return_pc)),
-        ];
-        if writes.into_iter().any(|write| write.is_err()) {
-            let _ = uc.emu_stop();
-        }
+#[cfg(feature = "unicorn")]
+fn try_complete_current_get_message_timer_wait<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    thread_id: u32,
+    wait_id: u64,
+    msg_ptr: u32,
+    hwnd: Option<u32>,
+    min_msg: u32,
+    max_msg: u32,
+    return_pc: u32,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    let Some(delay_ms) = kernel.timers.next_due_delay_ms() else {
+        return false;
+    };
+    if delay_ms != 0 {
+        kernel.timers.sleep_ms(delay_ms);
+    }
+    kernel.pump_timers_to_gwe(thread_id);
+    let now_ms = kernel.timers.tick_count();
+    let Some(ready_wait_id) = kernel.select_ready_blocked_waiter(0, now_ms, |blocked, kernel| {
+        scheduler_blocked_msg_wait_has_input(blocked, kernel)
+    }) else {
+        return false;
+    };
+    if ready_wait_id != wait_id {
+        return false;
+    }
+    let Some(message) = kernel
+        .gwe
+        .get_message_filtered(thread_id, hwnd, min_msg, max_msg)
+    else {
+        return false;
+    };
+    let _ = kernel.remove_blocked_waiter(wait_id);
+    if write_unicorn_message(uc, msg_ptr, &message).is_err() {
+        let _ = uc.emu_stop();
         return true;
     }
-
-    let running = *running_thread.borrow();
-    if let Some((_, thread_handle)) = running {
-        let wait_id = kernel.register_blocked_waiter(
-            thread_id,
-            thread_handle,
-            Vec::new(),
-            crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
-                hwnd,
-                min_msg,
-                max_msg,
-            },
-            kernel.timers.tick_count(),
-            crate::ce::timer::INFINITE,
-        );
-        *blocked_thread.borrow_mut() = Some(BlockedGuestThread {
-            wait_id,
-            thread_id,
-            thread_handle,
-            regs: capture_mips_gprs(uc),
-            return_pc: read_mips_reg(uc, RegisterMIPS::RA),
-            msg_ptr: args.first().copied().unwrap_or(0),
-            hwnd,
-            min_msg,
-            max_msg,
-        });
-        *running_thread.borrow_mut() = None;
-        if let Some(suspended) = suspended_thread.borrow_mut().take() {
-            activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
-            return true;
-        }
+    kernel.record_resumed_msg_wait_input();
+    let result = u32::from(message.msg != crate::ce::gwe::WM_QUIT);
+    let writes = [
+        uc.reg_write(RegisterMIPS::V0, u64::from(result)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(return_pc)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(return_pc)),
+    ];
+    if writes.into_iter().any(|write| write.is_err()) {
+        let _ = uc.emu_stop();
     }
-    let _ = uc.emu_stop();
     true
 }
 

@@ -74,6 +74,15 @@
     populated (`575800` nonzero pixels), so the remaining failure is now a
     scheduler-owned timer wake/resume gap after the first-present frame, not
     runaway timer fast-forward.
+    Current follow-up: `target\main_getmessage_timer_resume_virtual_*` closes
+    that diagnostic-only wake gap for the initial thread. The same long
+    no-HWND timer now resumes through registered scheduler message waits
+    (`block=4221`, `wake=4214`, `reg=4214/4214`, `msgcand=4214`) using the CE
+    current-thread pseudo-handle, but the mounted run again reaches the 20 s
+    wall-clock limit in the id-1000 `WM_TIMER`/MFC idle-update loop. Memory and
+    file I/O remain stable and the framebuffer stays populated (`575800`
+    nonzero pixels). The active failure is therefore the real post-splash
+    idle/resource progression loop, not missing timer-wait ownership.
     Historical evidence: the mounted virtual run with dumped runtime DLLs
     and real sibling app DLLs wrote `target\inavi_trampoline_virtual_*`. It
     preloaded `AuthLibrary.dll`, `TpSysAuth.dll`, `mMbcAuth.dll`,

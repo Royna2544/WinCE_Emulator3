@@ -20,14 +20,18 @@
   src=0x000a0044, src_memdc=true)`. The framebuffer dump is fully populated
   (`575800` nonzero pixels in the latest run) and
   `target\update_erase_virtual.png` shows the real iNavi SE splash/art frame.
-  The raw `GetMessageW` bridge now lets short <=100 ms GUI timers fire but
-  parks on the long id-1000 7.5 s no-HWND timer instead of fast-forwarding
-  thousands of MFC idle-update cycles. The remaining blocker is no longer
-  first pixels, memory-DC-to-screen presentation, or runaway synthetic timer
-  churn. Next steps: implement the next scheduler/timer wake slice so blocked
-  message waits can resume from real timer expiry/run-queue ownership, then
-  continue tracing the post-splash transition without forcing hidden child
-  paints or app-specific state.
+  The raw `GetMessageW` bridge now lets short <=100 ms GUI timers fire, and
+  the initial guest thread now registers/resumes scheduler-owned
+  `GetMessageW` waits from long timer expiry instead of stopping with
+  `reg=0`; the latest `target\main_getmessage_timer_resume_virtual_*` run
+  shows `reg=4214/4214`, `wake=4214`, and `msgcand=4214`. The remaining
+  blocker is no longer first pixels, memory-DC-to-screen presentation, or a
+  diagnostic-only timer wait. It is the real post-splash id-1000
+  `WM_TIMER`/MFC idle-update/resource loop: the run still reaches the 20 s
+  wall-clock limit while repeatedly dispatching no-HWND `WM_TIMER` 1000 and
+  `WM_IDLEUPDATECMDUI` fan-out. Next steps: trace why that CE/MFC idle cycle
+  never exits into sustained UI/resource-ready progress, without forcing
+  hidden child paints or app-specific state.
 - Continue the mounted iNavi resource-ready investigation from the
   `resource_59718`/mode-47 table frontier. Current evidence says
   `\SDMMC Disk\INavi\res\values.dat` opens and reads correctly, but by the
@@ -144,7 +148,12 @@
     calls now also register in the scheduler's message-wait queue with their
     HWND/min/max filters; GWE message transitions enqueue them as pending wake
     candidates, and resume rechecks immutable filtered queue readiness before
-    consuming the message and restoring the guest context. Raw no-HWND
+    consuming the message and restoring the guest context. The initial guest
+    thread now participates in that path through CE's current-thread
+    pseudo-handle when no worker thread handle exists, so an idle main-thread
+    `GetMessageW` can advance to a due timer, post it to GWE, remove the
+    scheduler waiter, and return the `MSG` through the saved syscall ABI rather
+    than stopping with a diagnostic-only blocked snapshot. Raw no-HWND
     `SetTimer` now records the current thread as timer owner, following
     `GWE\INC\cmsgque.h` queue-owned timer entries, and expired no-HWND timers
     post `WM_TIMER` to that owner thread instead of being dropped. CE timer
@@ -162,7 +171,8 @@
     restore once the suspend count reaches zero.
   - Open gaps: full serial semantics beyond the first empty-read wake bridge,
     audio wake ownership, fuller timer ownership beyond thread-owned
-    message-queue posts and bounded worker-thread sleeps, bounded idle
+    message-queue posts, bounded worker-thread sleeps, and main-thread
+    timer-expiry `GetMessageW` resumes, bounded idle
     fast-forward policy for long periodic timer loops, full multi-thread run-queue ownership
     beyond the one-slot `Sleep(0)`/`Sleep(INFINITE)` worker-context swaps,
     pending PSL late-suspend, main-thread suspend blocking, long-sleep

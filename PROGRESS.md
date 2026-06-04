@@ -9,6 +9,29 @@
 
 ## Confirmed
 
+- Main-thread `GetMessageW` waits can now resume from scheduler-owned timer
+  expiry instead of stopping as diagnostic-only waits. The Unicorn bridge
+  gives the initial guest thread a CE current-thread pseudo-handle wait
+  identity, records blocked `GetMessageW` as a scheduler message wait, advances
+  virtual time to the next due timer only when there is no alternate guest
+  context to run, pumps due timers into the owning GWE queue, selects the ready
+  waiter, writes the `MSG`, removes the waiter, and returns through the saved
+  MIPS syscall return site. Focused coverage:
+  `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_get_message_prioritizes_paint_over_generated_timer`, and
+  `cargo test --features unicorn,trace,win32-desktop --test basic_subsystems
+  get_message_waiter_uses_filtered_scheduler_message_readiness` pass with the
+  known non-fatal Windows incremental-finalize warning. A mounted virtual probe
+  wrote `target\main_getmessage_timer_resume_virtual_*` and now shows real
+  scheduler wait ownership for the long id-1000 timer loop
+  (`block=4221`, `wake=4214`, `reg=4214/4214`, `msgcand=4214`) instead of the
+  previous `reg=0` blocked diagnostic stop. The run still reaches the 20 s
+  wall-clock limit in the MFC idle-update/resource loop, with stable memory and
+  file I/O (`heap_live=13697/13300954B`, `virtual_live=3/196608B`,
+  `host_open=665`, `host_read=80198/4060882B`, `mem_open=3`,
+  `max_read=685080`) and the same populated framebuffer (`575800` nonzero
+  pixels). This is scheduler fidelity progress, not new post-splash UI.
 - Raw Unicorn `GetMessageW` empty-queue handling no longer fast-forwards every
   future timer unconditionally. The bridge now only advances short, imminent
   timers up to 100 ms so GUI-settling timers can fire without host sleeping;
