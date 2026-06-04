@@ -2001,6 +2001,7 @@ impl CeKernel {
         }
         let destroyed = self.gwe.destroy_window(hwnd, self.timers.tick_count());
         if destroyed {
+            self.timers.remove_window_timers(&targets);
             for send_id in doomed_send_ids {
                 self.queue_send_reply_wake_candidates(send_id);
             }

@@ -82,9 +82,11 @@
     same numeric id into one global entry. Timers are now scoped by owner
     thread/message queue, optional `HWND`, and id, and raw `KillTimer(hwnd,id)`
     only removes the matching scoped timer. This closes duplicate timer-id
-    aliasing as a likely explanation for the post-splash loop; callback
-    delivery, destroyed-window cleanup, and message/timer ordering remain open
-    timer fidelity suspects. The bounded mounted follow-up
+    aliasing as a likely explanation for the post-splash loop. Destroyed HWND
+    subtrees also remove their window timers while preserving no-HWND thread
+    timers, closing destroyed-window timer leaks as a likely explanation;
+    callback delivery and message/timer ordering remain open timer fidelity
+    suspects. The bounded mounted follow-up
     `target\timer_scope_virtual_30s_*` still reaches the real 800x480
     memory-DC-to-window-HDC `BitBlt`, stays memory/file-I/O stable, and writes
     a populated framebuffer (`1151398` nonzero RGB bytes out of `1152000`).

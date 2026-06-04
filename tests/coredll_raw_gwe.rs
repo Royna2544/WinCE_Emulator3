@@ -8949,6 +8949,10 @@ fn coredll_raw_destroy_parent_invalidates_children_and_purges_messages() -> Resu
             .gwe
             .queue_sent_message_for_window(child, Message::new(child, WM_USER + 7, 3, 4, 0))
     );
+    assert_eq!(kernel.set_timer(Some(parent), Some(71), 0), 71);
+    assert_eq!(kernel.set_timer(Some(child), Some(72), 0), 72);
+    assert_eq!(kernel.set_timer(Some(grandchild), Some(73), 0), 73);
+    assert_eq!(kernel.timers.timer_count(), 3);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -9001,6 +9005,7 @@ fn coredll_raw_destroy_parent_invalidates_children_and_purges_messages() -> Resu
     assert!(!kernel.gwe.is_window(parent));
     assert!(!kernel.gwe.is_window(child));
     assert!(!kernel.gwe.is_window(grandchild));
+    assert_eq!(kernel.timers.timer_count(), 0);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

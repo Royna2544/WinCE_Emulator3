@@ -104,6 +104,20 @@ mod tests {
         assert!(timers.kill_timer(2, Some(0x20001), 7));
         assert_eq!(timers.timer_count(), 0);
     }
+
+    #[test]
+    fn removing_window_timers_keeps_thread_timers_alive() {
+        let mut timers = TimerSystem::default();
+        timers.set_timer(1, Some(0x10001), Some(7), 0, 0x0113, None);
+        timers.set_timer(1, Some(0x10005), Some(8), 0, 0x0113, None);
+        timers.set_timer(1, None, Some(7), 0, 0x0113, None);
+
+        assert_eq!(timers.remove_window_timers(&[0x10001, 0x10005]), 2);
+        let remaining = timers.pending_timers();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].hwnd, None);
+        assert_eq!(remaining[0].id, 7);
+    }
 }
 
 impl Default for TimerSystem {
@@ -193,6 +207,24 @@ impl TimerSystem {
                 id,
             })
             .is_some()
+    }
+
+    pub fn remove_window_timers(&mut self, hwnds: &[u32]) -> usize {
+        let doomed: Vec<TimerKey> = self
+            .timers
+            .iter()
+            .filter_map(|(key, timer)| {
+                timer
+                    .hwnd
+                    .is_some_and(|hwnd| hwnds.contains(&hwnd))
+                    .then_some(*key)
+            })
+            .collect();
+        let removed = doomed.len();
+        for key in doomed {
+            self.timers.remove(&key);
+        }
+        removed
     }
 
     pub fn timer_count(&self) -> usize {

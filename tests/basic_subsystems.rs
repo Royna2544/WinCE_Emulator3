@@ -690,6 +690,26 @@ fn window_timers_with_same_id_keep_independent_owners() -> Result<()> {
 }
 
 #[test]
+fn destroy_window_removes_hwnd_timers_but_keeps_thread_timers() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+
+    let hwnd = kernel.gwe.create_window(63, "TimerDestroy", "timer");
+    assert_eq!(kernel.set_timer(Some(hwnd), Some(9), 0), 9);
+    assert_eq!(kernel.set_timer_for_thread(63, None, Some(9), 0, None), 9);
+    assert_eq!(kernel.timers.timer_count(), 2);
+
+    assert!(kernel.destroy_window(hwnd));
+    let remaining = kernel.timers.pending_timers();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].hwnd, None);
+    assert_eq!(remaining[0].thread_id, 63);
+    assert_eq!(remaining[0].id, 9);
+
+    Ok(())
+}
+
+#[test]
 fn send_message_transitions_queue_scheduler_reply_wait_candidates() -> Result<()> {
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
     let mut kernel = CeKernel::boot(config);

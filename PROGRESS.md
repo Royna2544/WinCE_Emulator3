@@ -17,19 +17,31 @@
   v3 can keep duplicate numeric timer ids alive for different windows or a
   window timer plus a no-HWND thread timer; raw `KillTimer(hwnd,id)` now routes
   through the real COREDLL ordinal path and only removes the matching scoped
-  timer. Focused coverage:
+  timer. Destroying a window now also removes timers for that HWND subtree
+  while preserving no-HWND owner-thread timers, matching the same header's
+  `TimerQueuesRemoveAllMsgQueueOrHwnd` /
+  `TimerQueueWindowDestroyedNotification` cleanup shape. Focused coverage:
   `cargo test --features unicorn,trace,win32-desktop ce::timer`,
   `cargo test --features unicorn,trace,win32-desktop
-  window_timers_with_same_id_keep_independent_owners`, and
+  window_timers_with_same_id_keep_independent_owners`,
   `cargo test --features unicorn,trace,win32-desktop
-  coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources` pass with
+  destroy_window_removes_hwnd_timers_but_keeps_thread_timers`, and
+  `cargo test --features unicorn,trace,win32-desktop
+  coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources`,
+  `cargo test --features unicorn,trace,win32-desktop
+  coredll_raw_destroy_parent_invalidates_children_and_purges_messages` pass with
   the known non-fatal Windows incremental-finalize warning. A mounted virtual
   iNavi probe wrote `target\timer_scope_virtual_30s_*`; it still reaches the
   real guest GDI present (`BitBlt` from memory DC `0x000a0044` to window HDC
   `0x02020008`, 800x480), keeps memory/file I/O stable
   (`heap_live=7333/5168631B`, `virtual_live=3/196608B`,
   `host_open=162`, `host_read=26479/1958374B`, `mem_open=2`), and the
-  framebuffer dump has `1151398` nonzero RGB bytes out of `1152000`.
+  framebuffer dump has `1151398` nonzero RGB bytes out of `1152000`. The
+  follow-up mounted probe after destroyed-window timer cleanup wrote
+  `target\timer_destroy_virtual_30s_*`; it remains in the same stable real
+  present band (`heap_live=7329/5146375B`, `host_open=160`,
+  `host_read=25977/1955740B`, framebuffer nonzero `1151398/1152000`) and
+  continues RSImage PNG/DIB activity without regressing to a blank screen.
 - Long `GetMessageW` timer waits can now mature inside a single live Unicorn
   invocation without rebuilding CPU state. When the current thread parks in an
   empty message queue and the next timer is beyond the <=100 ms fast-forward

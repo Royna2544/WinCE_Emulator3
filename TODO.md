@@ -47,10 +47,11 @@
   or app-specific state.
 - Timer identity no longer has the known global-id collapse: v3 now keys
   timers by owner thread/message queue, optional `HWND`, and id, and raw
-  `KillTimer(hwnd,id)` only removes the matching scoped timer. Remaining timer
-  work should focus on CE callback delivery, destroyed-window cleanup, and how
+  `KillTimer(hwnd,id)` only removes the matching scoped timer. Destroyed HWND
+  subtrees also clean up their window timers without deleting no-HWND thread
+  timers. Remaining timer work should focus on CE callback delivery and how
   timer lifecycle/order interacts with the post-splash MFC resource replay,
-  not duplicate numeric id handling.
+  not duplicate numeric id handling or destroyed-window timer leaks.
 - Continue the mounted iNavi resource-ready investigation from the
   `resource_59718`/mode-47 table frontier. Current evidence says
   `\SDMMC Disk\INavi\res\values.dat` opens and reads correctly, but by the
@@ -189,8 +190,8 @@
     guest worker contexts with a saved CPU context that `ResumeThread` can
     restore once the suspend count reaches zero.
   - Open gaps: full serial semantics beyond the first empty-read wake bridge,
-    audio wake ownership, fuller timer callback/destroy cleanup behavior beyond
-    scoped window/thread message-queue posts, bounded worker-thread sleeps, and main-thread
+    audio wake ownership, fuller timer callback behavior beyond scoped
+    window/thread message-queue posts, bounded worker-thread sleeps, and main-thread
     timer-expiry `GetMessageW` resumes, bounded idle
     fast-forward policy for long periodic timer loops, full multi-thread run-queue ownership
     beyond the one-slot `Sleep(0)`/`Sleep(INFINITE)` worker-context swaps,
