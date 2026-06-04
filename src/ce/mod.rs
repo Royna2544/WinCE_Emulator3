@@ -12,6 +12,7 @@ pub mod gwe;
 pub mod kernel;
 pub mod memory;
 pub mod object;
+pub mod ole;
 pub mod registry;
 pub mod remote;
 pub mod resource;

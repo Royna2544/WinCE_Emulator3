@@ -965,8 +965,10 @@ impl UnicornMips {
     pub fn load_pe_image_with_dlls(&mut self, image: &PeImage, dlls: &[PeImage]) -> Result<()> {
         let mut external = ExternalImportTable::default();
         let mut loaded_dlls = Vec::new();
-        let mut trampoline_blobs = Vec::new();
+        #[cfg(feature = "unicorn")]
+        let mut trampoline_blobs: Vec<(String, u32, Vec<u8>)> = Vec::new();
         let mut next_dll_base = 0x6000_0000u32;
+        #[cfg(feature = "unicorn")]
         let mut next_trampoline_base = 0x5000_0000u32;
         let mut next_trap_base = IMPORT_TRAP_BASE;
         let mut occupied_image_ranges = vec![(
@@ -1021,6 +1023,8 @@ impl UnicornMips {
             next_trap_base = advance_trap_base(next_trap_base, traps.len())?;
             self.import_traps.merge(traps);
             external.add_pe_image(module_file_name(&dll.path), dll, load_base);
+            #[cfg(not(feature = "unicorn"))]
+            let _ = trampoline_patch;
             #[cfg(feature = "unicorn")]
             if let Some(mut trampoline_patch) = trampoline_patch {
                 if let Some(range) = trampoline_patch.range {
@@ -1067,6 +1071,7 @@ impl UnicornMips {
                 &format!("dll:{path}"),
             )?;
         }
+        #[cfg(feature = "unicorn")]
         for (name, base, mapped) in &trampoline_blobs {
             self.map_region(
                 *base,
@@ -1146,6 +1151,7 @@ impl UnicornMips {
                 bytes: mapped,
             });
         }
+        #[cfg(feature = "unicorn")]
         for (name, base, mapped) in trampoline_blobs {
             self.mapped_blobs.push(MappedBlob {
                 name,

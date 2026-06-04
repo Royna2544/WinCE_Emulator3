@@ -4,6 +4,7 @@ use crate::{
     ce::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         kernel::CeKernel,
+        ole,
     },
     error::{Error, Result},
     pe::{ImportBy, ImportDescriptor, PeImage},
@@ -168,9 +169,9 @@ impl ImportTrapTable {
                     ),
                 )?
             }
-            ImportModuleKind::Winsock | ImportModuleKind::Ole => {
-                ImportTrapReturn::v0(dispatch_external_stub_to_u32(&trap, memory, &args))
-            }
+            ImportModuleKind::Winsock | ImportModuleKind::Ole => ImportTrapReturn::v0(
+                dispatch_external_stub_to_u32(kernel, &trap, memory, thread_id, &args),
+            ),
             ImportModuleKind::Mfc => return None,
         })
     }
@@ -387,8 +388,10 @@ impl ExternalImportTable {
 }
 
 fn dispatch_external_stub_to_u32<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
     trap: &ImportTrap,
     memory: &mut M,
+    thread_id: u32,
     args: &[u32],
 ) -> u32 {
     let name = trap.name.as_deref().unwrap_or("");
@@ -406,7 +409,7 @@ fn dispatch_external_stub_to_u32<M: CoredllGuestMemory>(
     );
     match trap.module_kind {
         ImportModuleKind::Winsock => winsock_stub_return(trap, memory, args),
-        ImportModuleKind::Ole => ole_stub_return(name),
+        ImportModuleKind::Ole => ole_stub_return(kernel, memory, thread_id, name, args),
         ImportModuleKind::Coredll => 0,
         ImportModuleKind::Mfc => {
             unreachable!("MFC imports must resolve to SDK DLL exports, not emulator stubs")
@@ -482,9 +485,26 @@ fn write_guest_bytes<M: CoredllGuestMemory>(
     Ok(())
 }
 
-fn ole_stub_return(name: &str) -> u32 {
+fn ole_stub_return<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    name: &str,
+    args: &[u32],
+) -> u32 {
     match normalize_symbol(name).as_str() {
         "coinitialize" | "coinitializeex" | "couninitialize" | "oleinitialize" => 0,
+        "stringfromclsid" => ole::string_from_clsid_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_import_arg(args, 0),
+            raw_import_arg(args, 1),
+        ),
+        "cotaskmemfree" => {
+            ole::co_task_mem_free_raw(kernel, raw_import_arg(args, 0));
+            0
+        }
         "cocreateinstance" | "cogetclassobject" => 0x8000_4001,
         _ => 0,
     }

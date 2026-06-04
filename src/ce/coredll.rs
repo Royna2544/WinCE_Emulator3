@@ -1741,6 +1741,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 2),
         ))),
+        ORD_STRING_CCH_LENGTH_W => Some(CoredllValue::U32(string_cch_length_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ))),
         ORD_WCSNCPY => Some(CoredllValue::Handle(crt::wcsncpy_raw(
             kernel,
             memory,
@@ -3801,6 +3809,26 @@ fn string_cch_cat_w_raw<M: CoredllGuestMemory>(
     src: u32,
 ) -> u32 {
     string_cat_w_raw(kernel, memory, thread_id, dest, cch_dest as usize, src)
+}
+
+fn string_cch_length_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    src: u32,
+    cch_max: u32,
+    out_len: u32,
+) -> u32 {
+    if src == 0 || cch_max == 0 {
+        return STRSAFE_E_INVALID_PARAMETER;
+    }
+    let Some(len) = guest_wide_len_bounded(kernel, memory, thread_id, src, cch_max as usize) else {
+        return STRSAFE_E_INVALID_PARAMETER;
+    };
+    if out_len != 0 && !write_guest_u32(kernel, memory, thread_id, out_len, len as u32) {
+        return STRSAFE_E_INVALID_PARAMETER;
+    }
+    0
 }
 
 fn string_cat_w_raw<M: CoredllGuestMemory>(

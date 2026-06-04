@@ -17,10 +17,11 @@ use wince_emulation_v3::{
             ORD_READ_FILE, ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_VALUE_W,
             ORD_REG_ENUM_VALUE_W, ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W,
             ORD_SECURITY_GEN_COOKIE2, ORD_SET_FILE_POINTER, ORD_SPRINTF, ORD_SRAND, ORD_STRCPY,
-            ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W, ORD_STRTOK, ORD_STRTOUL, ORD_SWPRINTF,
-            ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSWPRINTF, ORD_WCSDUP, ORD_WCSICMP,
-            ORD_WCSNCMP, ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSRCHR, ORD_WCSSTR, ORD_WFOPEN,
-            ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
+            ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W, ORD_STRING_CCH_LENGTH_W, ORD_STRTOK,
+            ORD_STRTOUL, ORD_SWPRINTF, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSWPRINTF,
+            ORD_WCSDUP, ORD_WCSICMP, ORD_WCSNCMP, ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSRCHR,
+            ORD_WCSSTR, ORD_WFOPEN, ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W,
+            ORD_WTOL, ORD_WVSPRINTF_W,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         kernel::CeKernel,
@@ -699,6 +700,50 @@ fn coredll_raw_string_cch_cat_w_appends_with_character_capacity() -> Result<()> 
         }
     ));
     assert_eq!(memory.read_wide_z(dest, 16), "abcde");
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_string_cch_length_w_counts_bounded_wide_chars() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let src = 0x1_0000;
+    let out_len = 0x1_0100;
+    memory.map_halfwords(src, 64);
+    memory.map_words(out_len, 1);
+    memory.write_wide_z(src, "{01234567-89ab-cdef-0123-456789abcdef}");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_STRING_CCH_LENGTH_W,
+            [src, 260, out_len],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(out_len)?, 38);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_STRING_CCH_LENGTH_W,
+            [src, 3, out_len],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0x8007_0057),
+            ..
+        }
+    ));
     Ok(())
 }
 
