@@ -705,15 +705,20 @@
     8 bpp blits now resolve palette indices before writing RGB565 pixels.
     Direct `BITMAPINFO` sources now parse embedded color tables for 1/4/8 bpp
     `DIB_RGB_COLORS`, covering indexed `StretchDIBits`/`SetDIBitsToDevice`
-    source pixels.
+    source pixels. DCs now seed CE stock/default selected objects from
+    `wingdi.h` (`SYSTEM_FONT`, `WHITE_BRUSH`, `BLACK_PEN`,
+    `DEFAULT_PALETTE`, plus a restorable default bitmap), so the normal
+    `old = SelectObject(...); SelectObject(..., old)` path no longer gets a
+    zero previous object on newly created compatible DCs.
   - Open gaps: complete palette/brush/pen/text/font/menu/dialog/icon/cursor
     behavior as trace evidence demands, broaden indexed DIB coverage beyond
     the currently reached RGBQUAD/RGBTRIPLE table shapes, and connect later
     blit/update transitions to real paint invalidation without app-specific
     shortcuts.
   - Fixture gates: keep raw GWE/GDI tests passing, then add focused fixtures
-    for additional indexed palette edge cases, region clipping, text/font
-    metrics, menu/accelerator, and MFC mini-app paint.
+    for additional indexed palette edge cases, selected-object lifetime edge
+    cases, region clipping, text/font metrics, menu/accelerator, and MFC
+    mini-app paint.
   - Latest iNavi evidence: mounted traces now reach paint, many DIBSections,
     and the first real screen/window-HDC presentation. `target\update_erase_virtual_*`
     records `BitBlt(dst=0x02020008, dst_memdc=false, dst_hwnd=0x00020008,

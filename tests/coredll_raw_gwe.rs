@@ -198,9 +198,9 @@ fn coredll_raw_gwe_rect_helpers_match_win32_semantics() -> Result<()> {
             [desktop_dc, system_font],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Handle(0),
+            value: CoredllValue::Handle(handle),
             ..
-        }
+        } if handle == system_font
     ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -620,9 +620,9 @@ fn coredll_raw_polyline_paints_attached_framebuffer_with_selected_pen() -> Resul
             [hdc, pen],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Handle(0),
+            value: CoredllValue::Handle(handle),
             ..
-        }
+        } if handle != 0
     ));
 
     assert!(matches!(
@@ -715,9 +715,9 @@ fn coredll_raw_polyline_with_null_pen_does_not_touch_framebuffer() -> Result<()>
             [hdc, null_pen],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Handle(0),
+            value: CoredllValue::Handle(handle),
             ..
-        }
+        } if handle != 0
     ));
 
     assert!(matches!(
@@ -766,6 +766,195 @@ fn coredll_raw_create_compatible_dc_accepts_null_screen_dc() -> Result<()> {
     assert_ne!(mem_dc, 0);
     assert!(kernel.resources.is_memory_dc(mem_dc));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_select_object_returns_restorable_dc_defaults() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+
+    let black_pen = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_STOCK_OBJECT,
+        [7],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetStockObject(BLACK_PEN) did not return a handle: {other:?}"),
+    };
+    let white_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_STOCK_OBJECT,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetStockObject(WHITE_BRUSH) did not return a handle: {other:?}"),
+    };
+    let default_palette = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_STOCK_OBJECT,
+        [15],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetStockObject(DEFAULT_PALETTE) did not return a handle: {other:?}"),
+    };
+    assert_eq!(kernel.resources.gdi_object_kind(default_palette), "palette");
+
+    let mem_dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateCompatibleDC(NULL) did not return a handle: {other:?}"),
+    };
+
+    let info = 0x1_0000;
+    let bits_out = 0x1_0100;
+    memory.map_bytes(info, 40);
+    memory.map_words(bits_out, 1);
+    let mut header = [0u8; 40];
+    header[0..4].copy_from_slice(&40u32.to_le_bytes());
+    header[4..8].copy_from_slice(&1i32.to_le_bytes());
+    header[8..12].copy_from_slice(&(-1i32).to_le_bytes());
+    header[12..14].copy_from_slice(&1u16.to_le_bytes());
+    header[14..16].copy_from_slice(&16u16.to_le_bytes());
+    memory.write_bytes(info, &header);
+    memory.write_word(info, 40);
+
+    let bitmap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_DIBSECTION,
+        [mem_dc, info, 0, bits_out, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateDIBSection did not return a bitmap: {other:?}"),
+    };
+    assert_ne!(bitmap, 0);
+
+    let old_bitmap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SELECT_OBJECT,
+        [mem_dc, bitmap],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("SelectObject(bitmap) did not return a handle: {other:?}"),
+    };
+    assert_ne!(old_bitmap, 0);
+    assert_eq!(kernel.resources.gdi_object_kind(old_bitmap), "bitmap");
+    assert_eq!(kernel.resources.selected_bitmap(mem_dc), Some(bitmap));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [mem_dc, old_bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle == bitmap
+    ));
+    assert_eq!(kernel.resources.selected_bitmap(mem_dc), None);
+
+    let logpen_ptr = 0x1_0200;
+    memory.map_bytes(logpen_ptr, 16);
+    memory.write_bytes(
+        logpen_ptr,
+        &[
+            0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff,
+            0x00, 0x00,
+        ],
+    );
+    let pen = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_PEN_INDIRECT,
+        [logpen_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreatePenIndirect did not return a pen: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [mem_dc, pen],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle == black_pen
+    ));
+
+    let brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_SOLID_BRUSH,
+        [0x0000_00ff],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateSolidBrush did not return a brush: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [mem_dc, brush],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle == white_brush
+    ));
 
     Ok(())
 }
@@ -869,9 +1058,9 @@ fn coredll_raw_bitblt_decodes_16bpp_bitfields_dib() -> Result<()> {
             [mem_dc, bitmap],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Handle(0),
+            value: CoredllValue::Handle(handle),
             ..
-        }
+        } if handle != 0
     ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_framebuffer(
@@ -991,9 +1180,9 @@ fn coredll_raw_dib_color_table_drives_8bpp_blit() -> Result<()> {
             [mem_dc, bitmap],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Handle(0),
+            value: CoredllValue::Handle(handle),
             ..
-        }
+        } if handle != 0
     ));
 
     memory.write_bytes(colors, &[0, 0, 255, 0, 0, 255, 0, 0]);
@@ -1160,9 +1349,9 @@ fn coredll_raw_create_dibsection_accepts_1bpp_pal_colors_and_blits() -> Result<(
             [mem_dc, bitmap],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Handle(0),
+            value: CoredllValue::Handle(handle),
             ..
-        }
+        } if handle != 0
     ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_framebuffer(
@@ -1441,9 +1630,9 @@ fn coredll_raw_bitblt_copies_selected_dib_to_attached_framebuffer() -> Result<()
             [mem_dc, bitmap],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Handle(0),
+            value: CoredllValue::Handle(handle),
             ..
-        }
+        } if handle != 0
     ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_framebuffer(
@@ -1604,9 +1793,9 @@ fn coredll_raw_bitblt_copies_between_memory_dcs() -> Result<()> {
             [src_dc, src_bitmap],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Handle(0),
+            value: CoredllValue::Handle(handle),
             ..
-        }
+        } if handle != 0
     ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -1617,9 +1806,9 @@ fn coredll_raw_bitblt_copies_between_memory_dcs() -> Result<()> {
             [dst_dc, dst_bitmap],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Handle(0),
+            value: CoredllValue::Handle(handle),
             ..
-        }
+        } if handle != 0
     ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -1764,9 +1953,9 @@ fn coredll_raw_stretchblt_uses_stretch_abi_and_scales_between_memory_dcs() -> Re
             [src_dc, src_bitmap],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Handle(0),
+            value: CoredllValue::Handle(handle),
             ..
-        }
+        } if handle != 0
     ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -1777,9 +1966,9 @@ fn coredll_raw_stretchblt_uses_stretch_abi_and_scales_between_memory_dcs() -> Re
             [dst_dc, dst_bitmap],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Handle(0),
+            value: CoredllValue::Handle(handle),
             ..
-        }
+        } if handle != 0
     ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -1895,9 +2084,9 @@ fn coredll_raw_transparent_image_copies_selected_bitmap_with_color_key() -> Resu
             [mem_dc, bitmap],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Handle(0),
+            value: CoredllValue::Handle(handle),
             ..
-        }
+        } if handle != 0
     ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_framebuffer(
@@ -2569,9 +2758,9 @@ fn coredll_raw_palette_entries_round_trip_and_select() -> Result<()> {
             [hdc, palette, 0],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Handle(0),
+            value: CoredllValue::Handle(handle),
             ..
-        }
+        } if handle != 0
     ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

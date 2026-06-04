@@ -760,6 +760,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   - CE exposes `CreateDIBSection`, `GetDIBColorTable`, `SetDIBColorTable`,
     `RGBQUAD`, `BITMAPINFOHEADER`, `BITMAPINFO`, `DIB_RGB_COLORS`, and indexed
     DIB color-table conventions through the public GDI header.
+  - The same header defines CE stock-object indexes for `GetStockObject`,
+    including `WHITE_BRUSH == 0`, `BLACK_PEN == 7`, `SYSTEM_FONT == 13`, and
+    `DEFAULT_PALETTE == 15`. Rust compatible/window DC state now uses those
+    stock selections, plus a nondeletable default bitmap slot for memory DCs,
+    so `SelectObject` returns restorable previous objects instead of `0` for
+    newly created DCs.
   - Rust now stores RGBQUAD color-table entries on bitmap objects selected into
     memory DCs, routes raw `SetDIBColorTable`/`GetDIBColorTable` through guest
     memory, and uses the selected bitmap table when 8 bpp blits write RGB565

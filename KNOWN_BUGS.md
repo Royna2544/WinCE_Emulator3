@@ -776,6 +776,17 @@
     display-surface blit. The milestones trace also shows
     `InvalidateRect(hwnd=0x0002006c, rect=NULL, erase=true)` where that child
     is hidden/effectively invisible.
+    Current GDI selected-object follow-up: newly created DCs now have
+    CE-backed stock/default selected objects and `SelectObject` returns
+    restorable previous handles instead of `0`, matching the save/restore
+    pattern used by MFC and the fixture programs. This fixes a generic GDI
+    fidelity gap visible in mounted traces as `previous=0`. Fresh mounted
+    validation in `target\gdi_stock_defaults_virtual_150s_*` confirms the real
+    path now returns `previous=0x000b5080` for memory-DC bitmap selects and
+    `previous=0x000b5007` for the stock black pen, but the post-splash frontier
+    remains open: later work still composes the 800x54 strip into a memory DC,
+    invalidates hidden HWND `0x0002006c`, and parks in `GetMessageW` with no
+    later display-HDC present.
   - Status: active UI frontier. Investigate generic GWE visibility,
     invalidation propagation, paint/update ordering, and timer/message
     progression; do not force hidden child paints or app-specific pixels.

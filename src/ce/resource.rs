@@ -6,18 +6,21 @@ const STOCK_OBJECT_BASE: u32 = 0x000b_5000;
 const WHITE_BRUSH: u32 = 0;
 const NULL_BRUSH: u32 = 5;
 const WHITE_PEN: u32 = 6;
+const BLACK_PEN: u32 = 7;
 const NULL_PEN: u32 = 8;
-const OEM_FIXED_FONT: u32 = 10;
-const DEFAULT_GUI_FONT: u32 = 17;
+const SYSTEM_FONT: u32 = 13;
+const DEFAULT_PALETTE: u32 = 15;
 const DC_BRUSH: u32 = 18;
 const DC_PEN: u32 = 19;
+const DEFAULT_BITMAP_HANDLE: u32 = STOCK_OBJECT_BASE | 0x80;
 
 pub fn stock_object_handle(index: u32) -> Option<u32> {
     let valid = matches!(
         index,
         WHITE_BRUSH..=NULL_BRUSH
             | WHITE_PEN..=NULL_PEN
-            | OEM_FIXED_FONT..=DEFAULT_GUI_FONT
+            | SYSTEM_FONT
+            | DEFAULT_PALETTE
             | DC_BRUSH
             | DC_PEN
     );
@@ -29,10 +32,7 @@ fn stock_object_index(handle: u32) -> Option<u32> {
 }
 
 fn is_stock_font(handle: u32) -> bool {
-    matches!(
-        stock_object_index(handle),
-        Some(OEM_FIXED_FONT..=DEFAULT_GUI_FONT)
-    )
+    matches!(stock_object_index(handle), Some(SYSTEM_FONT))
 }
 
 fn is_stock_brush(handle: u32) -> bool {
@@ -47,6 +47,14 @@ fn is_stock_pen(handle: u32) -> bool {
         stock_object_index(handle),
         Some(WHITE_PEN..=NULL_PEN | DC_PEN)
     )
+}
+
+fn is_stock_palette(handle: u32) -> bool {
+    matches!(stock_object_index(handle), Some(DEFAULT_PALETTE))
+}
+
+fn is_default_bitmap(handle: u32) -> bool {
+    handle == DEFAULT_BITMAP_HANDLE
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -223,11 +231,11 @@ impl Default for DcState {
     fn default() -> Self {
         Self {
             selected_object: 0,
-            selected_bitmap: 0,
-            selected_font: 0,
-            selected_brush: 0,
-            selected_pen: 0,
-            selected_palette: 0,
+            selected_bitmap: DEFAULT_BITMAP_HANDLE,
+            selected_font: stock_object_handle(SYSTEM_FONT).unwrap_or(0),
+            selected_brush: stock_object_handle(WHITE_BRUSH).unwrap_or(0),
+            selected_pen: stock_object_handle(BLACK_PEN).unwrap_or(0),
+            selected_palette: stock_object_handle(DEFAULT_PALETTE).unwrap_or(0),
             current_pos: crate::ce::gwe::Point { x: 0, y: 0 },
             bk_color: 0x00ff_ffff,
             bk_mode: 2,
@@ -785,7 +793,7 @@ impl ResourceSystem {
     }
 
     pub fn gdi_object_kind(&self, handle: u32) -> &'static str {
-        if self.bitmaps.contains_key(&handle) {
+        if self.bitmaps.contains_key(&handle) || is_default_bitmap(handle) {
             "bitmap"
         } else if self.fonts.contains_key(&handle) || is_stock_font(handle) {
             "font"
@@ -793,7 +801,7 @@ impl ResourceSystem {
             "brush"
         } else if self.pens.contains_key(&handle) || is_stock_pen(handle) {
             "pen"
-        } else if self.palettes.contains_key(&handle) {
+        } else if self.palettes.contains_key(&handle) || is_stock_palette(handle) {
             "palette"
         } else if self.regions.contains_key(&handle) {
             "region"
@@ -839,7 +847,7 @@ impl ResourceSystem {
             return Some(0);
         }
         let is_font = self.fonts.contains_key(&object) || is_stock_font(object);
-        let is_bitmap = self.bitmaps.contains_key(&object);
+        let is_bitmap = self.bitmaps.contains_key(&object) || is_default_bitmap(object);
         let is_brush = self.brushes.contains_key(&object) || is_stock_brush(object);
         let is_pen = self.pens.contains_key(&object) || is_stock_pen(object);
         let state = self.dc_states.entry(hdc).or_default();
@@ -872,7 +880,7 @@ impl ResourceSystem {
         self.dc_states
             .get(&hdc)
             .map(|state| state.selected_bitmap)
-            .filter(|bitmap| *bitmap != 0)
+            .filter(|bitmap| *bitmap != 0 && !is_default_bitmap(*bitmap))
     }
 
     pub fn selected_pen(&self, hdc: u32) -> Option<u32> {
@@ -974,16 +982,19 @@ impl ResourceSystem {
                 state.selected_object = 0;
             }
             if state.selected_bitmap == handle {
-                state.selected_bitmap = 0;
+                state.selected_bitmap = DEFAULT_BITMAP_HANDLE;
             }
             if state.selected_font == handle {
-                state.selected_font = 0;
+                state.selected_font = stock_object_handle(SYSTEM_FONT).unwrap_or(0);
             }
             if state.selected_brush == handle {
-                state.selected_brush = 0;
+                state.selected_brush = stock_object_handle(WHITE_BRUSH).unwrap_or(0);
+            }
+            if state.selected_pen == handle {
+                state.selected_pen = stock_object_handle(BLACK_PEN).unwrap_or(0);
             }
             if state.selected_palette == handle {
-                state.selected_palette = 0;
+                state.selected_palette = stock_object_handle(DEFAULT_PALETTE).unwrap_or(0);
             }
         }
         removed

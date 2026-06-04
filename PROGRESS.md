@@ -9,6 +9,31 @@
 
 ## Confirmed
 
+- GDI DCs now start with CE stock/default selections instead of all-zero
+  selected-object slots. `DcState` seeds a default bitmap handle, `SYSTEM_FONT`,
+  `WHITE_BRUSH`, `BLACK_PEN`, and `DEFAULT_PALETTE`; `SelectObject` returns
+  those previous handles for the common save/restore drawing pattern, and
+  selecting the default bitmap back restores the no-user-bitmap memory-DC
+  state. Stock-object classification now treats CE `GetStockObject(15)` as
+  `DEFAULT_PALETTE` instead of a desktop-style font index. This follows
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h`. Focused coverage:
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_select_object_returns_restorable_dc_defaults`, and the full raw
+  GWE/GDI test binary now pass with the known non-fatal Windows
+  incremental-finalize warning. Full `cargo check --features
+  unicorn,trace,win32-desktop` and full
+  `cargo test --features unicorn,trace,win32-desktop` pass. Mounted
+  validation wrote `target\gdi_stock_defaults_virtual_150s_*`; it confirms the
+  real iNavi path now returns stock/default previous objects in trace
+  (`previous=0x000b5080` for memory-DC bitmaps and `previous=0x000b5007` for
+  the stock black pen) and restores selected bitmaps back to the default state.
+  The run remains memory/file-I/O stable
+  (`heap_live=13697/13300954B`, `virtual_live=3/196608B`,
+  `host_open=665`, `host_read=80196/4047089B`, `mem_open=3`) and keeps the
+  real splash framebuffer populated (`1151198` nonzero RGB bytes). This did
+  not advance the post-splash frontier: later work still composes the 800x54
+  strip into a memory DC, invalidates hidden HWND `0x0002006c`, and parks at
+  `COREDLL.dll@861 blocked_get_message` with no later display-HDC blit.
 - GWE invalidation/show/create/set-window-position now only marks changed
   `QS_PAINT` when the target HWND is effectively visible. Hidden or
   ancestor-hidden windows can still keep a simplified pending update rectangle
