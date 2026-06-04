@@ -12847,9 +12847,7 @@ fn send_message_timeout_raw<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
             return 0;
         };
-        let expired = kernel
-            .gwe
-            .expire_timed_out_sent_messages(kernel.timers.tick_count());
+        let expired = kernel.expire_timed_out_send_messages();
         if expired.contains(&send_id) {
             let _ = kernel.take_completed_send_message_result(send_id);
         }

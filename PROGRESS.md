@@ -927,6 +927,16 @@
   queue is not left with a stale sent message. Focused coverage:
   `coredll_raw_send_message_timeout_zero_cross_thread_expires_transaction` and
   eVC fixture `168_sendmessage_timeout_zero_cross_thread`.
+- Scheduler/GWE ownership now includes send-reply waiters keyed by sent-message
+  transaction id. `SchedulerBlockedWaitKind::SendMessage` tracks blocked
+  senders separately from object/message/serial waits, compact monitor
+  summaries include send-reply signal/candidate counters, and kernel/GWE
+  transitions enqueue those waiters when a sent message completes normally,
+  times out, or is receiver-terminated by target HWND destruction. Focused
+  coverage: `scheduler_queues_send_reply_waiters_by_send_id` and
+  `send_message_transitions_queue_scheduler_reply_wait_candidates`. The saved
+  sender MIPS context still lives in the Unicorn send bridge; moving that
+  payload into scheduler-owned blocked thread state remains open.
 - Unicorn raw `SendMessageW`/`SendMessageTimeoutW` now has the first real
   cross-thread receiver-context guest WNDPROC path. Same-process sends to a
   guest WNDPROC create a GWE sent-message transaction, activate it on the

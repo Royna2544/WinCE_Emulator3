@@ -370,8 +370,13 @@ impl CeKernel {
     }
 
     pub fn expire_timed_out_send_messages(&mut self) -> Vec<u64> {
-        self.gwe
-            .expire_timed_out_sent_messages(self.timers.tick_count())
+        let expired = self
+            .gwe
+            .expire_timed_out_sent_messages(self.timers.tick_count());
+        for send_id in &expired {
+            self.queue_send_reply_wake_candidates(*send_id);
+        }
+        expired
     }
 
     pub fn set_file_root(&mut self, root: impl Into<std::path::PathBuf>) {
@@ -1420,6 +1425,14 @@ impl CeKernel {
         self.scheduler.queue_message_wake_candidates(thread_id)
     }
 
+    pub fn queue_send_reply_wake_candidates(&mut self, send_id: u64) -> usize {
+        self.scheduler.queue_send_reply_wake_candidates(send_id)
+    }
+
+    pub fn sent_message_result_ready(&self, send_id: u64) -> bool {
+        self.gwe.sent_message_result_ready(send_id)
+    }
+
     pub fn select_ready_blocked_waiter(
         &self,
         active_thread_id: u32,
@@ -1911,10 +1924,17 @@ impl CeKernel {
         self.gwe.take_completed_sent_message_result(send_id)
     }
 
+    pub fn complete_active_sent_message(&mut self, thread_id: u32, result: u32) -> Option<u64> {
+        let send_id = self.gwe.complete_active_sent_message(thread_id, result)?;
+        self.queue_send_reply_wake_candidates(send_id);
+        Some(send_id)
+    }
+
     pub fn destroy_window(&mut self, hwnd: u32) -> bool {
         let Some(targets) = self.gwe.window_and_descendants(hwnd) else {
             return false;
         };
+        let doomed_send_ids = self.gwe.sent_message_ids_for_windows(&targets);
         for target in targets.iter().rev().copied() {
             if self
                 .gwe
@@ -1924,7 +1944,13 @@ impl CeKernel {
                 let _ = self.send_message_w(target, crate::ce::gwe::WM_DESTROY, 0, 0);
             }
         }
-        self.gwe.destroy_window(hwnd, self.timers.tick_count())
+        let destroyed = self.gwe.destroy_window(hwnd, self.timers.tick_count());
+        if destroyed {
+            for send_id in doomed_send_ids {
+                self.queue_send_reply_wake_candidates(send_id);
+            }
+        }
+        destroyed
     }
 
     pub fn send_notify_message_w(
@@ -2005,8 +2031,7 @@ impl CeKernel {
         }
         .unwrap_or(0);
         if let Some(sent_context_thread) = sent_context_thread {
-            self.gwe
-                .complete_active_sent_message(sent_context_thread, result);
+            self.complete_active_sent_message(sent_context_thread, result);
         }
         if message.msg == WM_WINDOWPOSCHANGED {
             self.release_message_pointer_payload(message.lparam);

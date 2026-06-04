@@ -36,6 +36,8 @@ pub struct SchedulerStats {
     pub message_input_wake_candidate_count: u64,
     pub serial_read_signal_count: u64,
     pub serial_read_wake_candidate_count: u64,
+    pub send_reply_signal_count: u64,
+    pub send_reply_wake_candidate_count: u64,
     pub max_wait_handles: u32,
     pub max_timeout_ms: u32,
     pub max_registered_waits: u32,
@@ -57,6 +59,9 @@ pub enum SchedulerBlockedWaitKind {
     },
     SerialRead {
         handle: u32,
+    },
+    SendMessage {
+        send_id: u64,
     },
 }
 
@@ -81,6 +86,7 @@ pub struct Scheduler {
     wait_queues: BTreeMap<u32, VecDeque<u64>>,
     message_wait_queues: BTreeMap<u32, VecDeque<u64>>,
     serial_read_queues: BTreeMap<u32, VecDeque<u64>>,
+    send_reply_queues: BTreeMap<u64, VecDeque<u64>>,
     pending_wake_ids: VecDeque<u64>,
     pending_wake_set: BTreeSet<u64>,
 }
@@ -170,6 +176,12 @@ impl Scheduler {
                 .or_default()
                 .push_back(id);
         }
+        if let SchedulerBlockedWaitKind::SendMessage { send_id } = wait.kind {
+            self.send_reply_queues
+                .entry(send_id)
+                .or_default()
+                .push_back(id);
+        }
         self.blocked_waits.insert(id, wait);
         self.stats.waiter_register_count += 1;
         self.stats.max_registered_waits = self
@@ -214,6 +226,17 @@ impl Scheduler {
                 self.serial_read_queues.remove(&handle);
             }
         }
+        if let SchedulerBlockedWaitKind::SendMessage { send_id } = wait.kind {
+            let remove_send_queue = if let Some(queue) = self.send_reply_queues.get_mut(&send_id) {
+                queue.retain(|id| *id != wait_id);
+                queue.is_empty()
+            } else {
+                false
+            };
+            if remove_send_queue {
+                self.send_reply_queues.remove(&send_id);
+            }
+        }
         if self.pending_wake_set.remove(&wait_id) {
             self.pending_wake_ids.retain(|id| *id != wait_id);
         }
@@ -255,6 +278,13 @@ impl Scheduler {
             .values()
             .flat_map(|queue| queue.iter().copied())
             .collect()
+    }
+
+    pub fn send_reply_waiter_ids_for_send(&self, send_id: u64) -> Vec<u64> {
+        self.send_reply_queues
+            .get(&send_id)
+            .map(|queue| queue.iter().copied().collect())
+            .unwrap_or_default()
     }
 
     fn enqueue_pending_wake_ids(&mut self, wait_ids: impl IntoIterator<Item = u64>) -> usize {
@@ -302,6 +332,14 @@ impl Scheduler {
         let wait_ids = self.all_serial_read_waiter_ids();
         let queued = self.enqueue_pending_wake_ids(wait_ids);
         self.stats.serial_read_wake_candidate_count += queued as u64;
+        queued
+    }
+
+    pub fn queue_send_reply_wake_candidates(&mut self, send_id: u64) -> usize {
+        self.stats.send_reply_signal_count += 1;
+        let wait_ids = self.send_reply_waiter_ids_for_send(send_id);
+        let queued = self.enqueue_pending_wake_ids(wait_ids);
+        self.stats.send_reply_wake_candidate_count += queued as u64;
         queued
     }
 
@@ -571,6 +609,49 @@ mod tests {
                 .serial_read_waiter_ids_for_handle(0x300)
                 .is_empty()
         );
+        scheduler.remove_blocked_wait(global_ready).unwrap();
+    }
+
+    #[test]
+    fn scheduler_queues_send_reply_waiters_by_send_id() {
+        let mut scheduler = Scheduler::default();
+        let global_ready = scheduler.register_blocked_wait(
+            2,
+            0x102,
+            vec![0x200],
+            SchedulerBlockedWaitKind::Kernel,
+            0,
+            crate::ce::timer::INFINITE,
+        );
+        let send_waiter = scheduler.register_blocked_wait(
+            5,
+            0x105,
+            Vec::new(),
+            SchedulerBlockedWaitKind::SendMessage { send_id: 0x700 },
+            0,
+            crate::ce::timer::INFINITE,
+        );
+
+        assert_eq!(
+            scheduler.send_reply_waiter_ids_for_send(0x700),
+            vec![send_waiter]
+        );
+        assert_eq!(scheduler.queue_send_reply_wake_candidates(0x700), 1);
+        let stats = scheduler.stats();
+        assert_eq!(stats.send_reply_signal_count, 1);
+        assert_eq!(stats.send_reply_wake_candidate_count, 1);
+        assert_eq!(
+            scheduler.select_ready_blocked_wait_id(
+                1,
+                0,
+                |wait| wait.id == global_ready || wait.id == send_waiter,
+                |_| 20,
+            ),
+            Some(send_waiter)
+        );
+
+        scheduler.remove_blocked_wait(send_waiter).unwrap();
+        assert!(scheduler.send_reply_waiter_ids_for_send(0x700).is_empty());
         scheduler.remove_blocked_wait(global_ready).unwrap();
     }
 

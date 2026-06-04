@@ -1690,6 +1690,20 @@ impl Gwe {
         self.sent_messages.get(&id)
     }
 
+    pub fn sent_message_result_ready(&self, id: u64) -> bool {
+        self.sent_messages
+            .get(&id)
+            .is_some_and(|sent| sent.flags & SMF_RESULT_READY != 0)
+    }
+
+    pub fn sent_message_ids_for_windows(&self, hwnds: &[u32]) -> Vec<u64> {
+        self.sent_messages
+            .iter()
+            .filter(|(_, sent)| sent.message.hwnd != 0 && hwnds.contains(&sent.message.hwnd))
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
     pub fn expire_timed_out_sent_messages(&mut self, now_ms: u32) -> Vec<u64> {
         let expired: Vec<u64> = self
             .sent_messages

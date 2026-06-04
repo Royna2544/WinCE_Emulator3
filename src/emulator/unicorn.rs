@@ -159,9 +159,10 @@ impl UnicornDebugSnapshot {
             || self.scheduler_stats.object_signal_count != 0
             || self.scheduler_stats.message_input_signal_count != 0
             || self.scheduler_stats.serial_read_signal_count != 0
+            || self.scheduler_stats.send_reply_signal_count != 0
         {
             parts.push(format!(
-                "sched=wait:{}/{}/{} sleep:{} yield:{} ok:{} timeout:{} fail:{} block:{} wake:{} reg:{}/{} maxreg:{} sig:{} cand:{} msgsig:{} msgcand:{} sersig:{} sercand:{} maxpend:{}",
+                "sched=wait:{}/{}/{} sleep:{} yield:{} ok:{} timeout:{} fail:{} block:{} wake:{} reg:{}/{} maxreg:{} sig:{} cand:{} msgsig:{} msgcand:{} sersig:{} sercand:{} sendsig:{} sendcand:{} maxpend:{}",
                 self.scheduler_stats.wait_single_count,
                 self.scheduler_stats.wait_multiple_count,
                 self.scheduler_stats.msg_wait_count,
@@ -181,6 +182,8 @@ impl UnicornDebugSnapshot {
                 self.scheduler_stats.message_input_wake_candidate_count,
                 self.scheduler_stats.serial_read_signal_count,
                 self.scheduler_stats.serial_read_wake_candidate_count,
+                self.scheduler_stats.send_reply_signal_count,
+                self.scheduler_stats.send_reply_wake_candidate_count,
                 self.scheduler_stats.max_pending_wakes
             ));
         }
@@ -1852,12 +1855,11 @@ impl UnicornMips {
                     let result = read_mips_reg(uc, RegisterMIPS::V0);
                     if let Some(restore) = callout.send_restore.as_ref() {
                         let _ = unsafe { &mut *kernel_ptr }
-                            .gwe
                             .complete_active_sent_message(restore.receiver_thread_id, result);
                     } else if let Some(thread_id) = callout.send_thread_id {
                         let kernel = unsafe { &mut *kernel_ptr };
                         if kernel.gwe.active_sent_message_id(thread_id).is_some() {
-                            let _ = kernel.gwe.complete_active_sent_message(thread_id, result);
+                            let _ = kernel.complete_active_sent_message(thread_id, result);
                         } else {
                             kernel.gwe.end_send_message(thread_id);
                         }
@@ -4485,7 +4487,7 @@ impl std::fmt::Display for UnicornDebugSnapshot {
         }
         write!(
             f,
-            " heap_live_count={} heap_live_bytes={} virtual_live_count={} virtual_live_bytes={} file_host_open_count={} file_host_read_count={} file_host_read_bytes={} file_memory_backed_open_count={} file_max_read_request={} sched_wait_single_count={} sched_wait_multiple_count={} sched_msg_wait_count={} sched_sleep_count={} sched_yield_count={} sched_wait_acquired_count={} sched_wait_timeout_count={} sched_wait_failed_count={} sched_wait_block_count={} sched_wait_wake_count={} sched_waiter_register_count={} sched_waiter_remove_count={} sched_object_signal_count={} sched_object_wake_candidate_count={} sched_message_input_signal_count={} sched_message_input_wake_candidate_count={} sched_serial_read_signal_count={} sched_serial_read_wake_candidate_count={} sched_max_registered_waits={} sched_max_pending_wakes={} gwe_send_transaction_count={} gwe_send_completed_count={} gwe_send_timeout_count={} gwe_send_receiver_terminated_count={} gwe_max_sent_queue_depth={}",
+            " heap_live_count={} heap_live_bytes={} virtual_live_count={} virtual_live_bytes={} file_host_open_count={} file_host_read_count={} file_host_read_bytes={} file_memory_backed_open_count={} file_max_read_request={} sched_wait_single_count={} sched_wait_multiple_count={} sched_msg_wait_count={} sched_sleep_count={} sched_yield_count={} sched_wait_acquired_count={} sched_wait_timeout_count={} sched_wait_failed_count={} sched_wait_block_count={} sched_wait_wake_count={} sched_waiter_register_count={} sched_waiter_remove_count={} sched_object_signal_count={} sched_object_wake_candidate_count={} sched_message_input_signal_count={} sched_message_input_wake_candidate_count={} sched_serial_read_signal_count={} sched_serial_read_wake_candidate_count={} sched_send_reply_signal_count={} sched_send_reply_wake_candidate_count={} sched_max_registered_waits={} sched_max_pending_wakes={} gwe_send_transaction_count={} gwe_send_completed_count={} gwe_send_timeout_count={} gwe_send_receiver_terminated_count={} gwe_max_sent_queue_depth={}",
             self.heap_allocation_count,
             self.heap_allocation_bytes,
             self.virtual_allocation_count,
@@ -4513,6 +4515,8 @@ impl std::fmt::Display for UnicornDebugSnapshot {
             self.scheduler_stats.message_input_wake_candidate_count,
             self.scheduler_stats.serial_read_signal_count,
             self.scheduler_stats.serial_read_wake_candidate_count,
+            self.scheduler_stats.send_reply_signal_count,
+            self.scheduler_stats.send_reply_wake_candidate_count,
             self.scheduler_stats.max_registered_waits,
             self.scheduler_stats.max_pending_wakes,
             self.gwe_stats.send_transaction_count,
@@ -6548,7 +6552,8 @@ fn scheduler_blocked_msg_wait_has_input(
     match blocked.kind {
         crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel
         | crate::ce::scheduler::SchedulerBlockedWaitKind::Sleep
-        | crate::ce::scheduler::SchedulerBlockedWaitKind::SerialRead { .. } => false,
+        | crate::ce::scheduler::SchedulerBlockedWaitKind::SerialRead { .. }
+        | crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { .. } => false,
         crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
             hwnd,
             min_msg,
@@ -6595,6 +6600,9 @@ fn scheduler_blocked_wait_is_ready(
         || match blocked.kind {
             crate::ce::scheduler::SchedulerBlockedWaitKind::SerialRead { handle } => {
                 kernel.serial_read_ready(handle)
+            }
+            crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { send_id } => {
+                kernel.sent_message_result_ready(send_id)
             }
             _ => false,
         }
@@ -9264,9 +9272,7 @@ fn try_enter_send_message_callout<D>(
     } else {
         if let Some(callout) = pending_returns.borrow_mut().pop() {
             if let Some(restore) = callout.send_restore {
-                let _ = kernel
-                    .gwe
-                    .complete_active_sent_message(restore.receiver_thread_id, 0);
+                let _ = kernel.complete_active_sent_message(restore.receiver_thread_id, 0);
                 let _ = kernel.take_completed_send_message_result(restore.send_id);
                 restore_mips_gprs(uc, &restore.sender_regs);
                 *current_thread_id.borrow_mut() = restore.sender_thread_id;

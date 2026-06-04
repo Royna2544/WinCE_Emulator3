@@ -359,9 +359,12 @@
        marks queued timed sends result-ready and removes them from receiver
        retrieval; raw `SendMessageTimeout(..., timeout=0)` across threads now
        creates and expires that transaction immediately instead of running the
-       receiver shortcut. The first Unicorn raw-send path now runs same-process
-       cross-thread guest WNDPROCs in the receiver context and restores the
-       sender result. `GetQueueStatus` changed-bit tracking and
+       receiver shortcut. Scheduler send-reply waiters are now keyed by
+       sent-message id and wake when the sent transaction completes, times out,
+       or is receiver-terminated by target HWND destruction. The first Unicorn
+       raw-send path now runs same-process cross-thread guest WNDPROCs in the
+       receiver context and restores the sender result. `GetQueueStatus`
+       changed-bit tracking and
        `MsgWaitForMultipleObjectsEx` `MWMO_INPUTAVAILABLE` semantics now cover
        the first CE queue-status slice. `PostQuitMessage` now uses
        `msgqfGotWMQuitMessage`-style queue state and ignores caller filters
@@ -369,11 +372,12 @@
        nonblocking get-message API path. Raw `GetMessagePos` and
        `GetMessageQueueReadyTimeStamp` now cover the first CE
        `PostedMsgQueueEntry_t.time`/`MousePosAtPost` and queue
-       `m_ReadyTimeStamp` metadata slice. Full scheduler-owned sender
-       parking/resume across longer waits, reentrant cross-thread scheduling,
-       nested modal loop unwinding, `ReplyMessage` wake semantics if a real
-       export is confirmed, richer queue-source/filter precision, and complete
-       destroyed-target behavior remain open.
+       `m_ReadyTimeStamp` metadata slice. Full scheduler-owned storage of the
+       saved sender CPU context, parking/resume across longer waits, reentrant
+       cross-thread scheduling, nested modal loop unwinding, `ReplyMessage`
+       wake semantics if a real export is confirmed, richer
+       queue-source/filter precision, and complete destroyed-target behavior
+       remain open.
     4. Window data/class/dialog/control surface: class atoms/extra bytes,
        `SetWindowLong`/`GetWindowLong`, owner thread/process queries, dialog
        procs/results, child/descendant relationship queries, child lookup,

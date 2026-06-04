@@ -6,8 +6,8 @@ use wince_emulation_v3::{
         com::{REGDB_E_CLASSNOTREG, S_FALSE, S_OK},
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::{
-            GWL_USERDATA, QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER, Rect, WM_QUIT, WM_TIMER,
-            WM_USER, WS_CHILD, WS_VISIBLE,
+            GWL_USERDATA, QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER, Rect, WM_ERASEBKGND, WM_QUIT,
+            WM_TIMER, WM_USER, WS_CHILD, WS_VISIBLE,
         },
         kernel::{
             CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
@@ -559,6 +559,9 @@ fn message_and_timer_transitions_queue_scheduler_msg_wait_candidates() -> Result
                 SchedulerBlockedWaitKind::Kernel => true,
                 SchedulerBlockedWaitKind::Sleep => false,
                 SchedulerBlockedWaitKind::SerialRead { handle } => kernel.serial_read_ready(handle),
+                SchedulerBlockedWaitKind::SendMessage { send_id } => {
+                    kernel.sent_message_result_ready(send_id)
+                }
                 SchedulerBlockedWaitKind::GetMessage {
                     hwnd,
                     min_msg,
@@ -645,6 +648,115 @@ fn message_and_timer_transitions_queue_scheduler_msg_wait_candidates() -> Result
     let stats = kernel.scheduler_stats();
     assert_eq!(stats.message_input_signal_count, 4);
     assert_eq!(stats.message_input_wake_candidate_count, 4);
+    Ok(())
+}
+
+#[test]
+fn send_message_transitions_queue_scheduler_reply_wait_candidates() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+
+    let select_send_wait =
+        |kernel: &CeKernel, active_thread_id: u32, now_ms: u32| {
+            kernel.select_ready_blocked_waiter(active_thread_id, now_ms, |blocked, kernel| {
+                match blocked.kind {
+                    SchedulerBlockedWaitKind::SendMessage { send_id } => {
+                        kernel.sent_message_result_ready(send_id)
+                    }
+                    _ => false,
+                }
+            })
+        };
+    let register_send_wait = |kernel: &mut CeKernel, sender_thread: u32, send_id: u64| {
+        kernel.register_blocked_waiter(
+            sender_thread,
+            0x700 + sender_thread,
+            Vec::new(),
+            SchedulerBlockedWaitKind::SendMessage { send_id },
+            0,
+            INFINITE,
+        )
+    };
+
+    let completion_sender = 60;
+    let completion_receiver = 61;
+    let completion_hwnd = kernel
+        .gwe
+        .create_window(completion_receiver, "SendCompleteWake", "send");
+    let completion_send = kernel
+        .begin_cross_thread_send_message_w(
+            completion_sender,
+            completion_hwnd,
+            WM_ERASEBKGND,
+            0,
+            0,
+            Some(500),
+        )
+        .expect("queued completing send");
+    let completion_wait = register_send_wait(&mut kernel, completion_sender, completion_send);
+    let message = kernel.gwe.get_message(completion_receiver).unwrap();
+    assert_eq!(
+        kernel.dispatch_message_w_for_thread(completion_receiver, message),
+        1
+    );
+    assert_eq!(select_send_wait(&kernel, 1, 0), Some(completion_wait));
+    kernel.remove_blocked_waiter(completion_wait).unwrap();
+    assert_eq!(
+        kernel.take_completed_send_message_result(completion_send),
+        Some(1)
+    );
+
+    let timeout_sender = 62;
+    let timeout_receiver = 63;
+    let timeout_hwnd = kernel
+        .gwe
+        .create_window(timeout_receiver, "SendTimeoutWake", "send");
+    let timeout_send = kernel
+        .begin_cross_thread_send_message_w(
+            timeout_sender,
+            timeout_hwnd,
+            WM_USER + 63,
+            0,
+            0,
+            Some(0),
+        )
+        .expect("queued timeout send");
+    let timeout_wait = register_send_wait(&mut kernel, timeout_sender, timeout_send);
+    assert_eq!(kernel.expire_timed_out_send_messages(), vec![timeout_send]);
+    assert_eq!(select_send_wait(&kernel, 1, 0), Some(timeout_wait));
+    kernel.remove_blocked_waiter(timeout_wait).unwrap();
+    assert_eq!(
+        kernel.take_completed_send_message_result(timeout_send),
+        Some(0)
+    );
+
+    let destroy_sender = 64;
+    let destroy_receiver = 65;
+    let destroy_hwnd = kernel
+        .gwe
+        .create_window(destroy_receiver, "SendDestroyWake", "send");
+    let destroy_send = kernel
+        .begin_cross_thread_send_message_w(
+            destroy_sender,
+            destroy_hwnd,
+            WM_USER + 65,
+            0,
+            0,
+            Some(500),
+        )
+        .expect("queued destroy send");
+    let destroy_wait = register_send_wait(&mut kernel, destroy_sender, destroy_send);
+    assert!(kernel.destroy_window(destroy_hwnd));
+    assert_eq!(select_send_wait(&kernel, 1, 0), Some(destroy_wait));
+    kernel.remove_blocked_waiter(destroy_wait).unwrap();
+    assert_eq!(
+        kernel.take_completed_send_message_result(destroy_send),
+        Some(0)
+    );
+
+    let stats = kernel.scheduler_stats();
+    assert_eq!(stats.send_reply_signal_count, 3);
+    assert_eq!(stats.send_reply_wake_candidate_count, 3);
     Ok(())
 }
 
@@ -752,6 +864,9 @@ fn remote_serial_injection_queues_scheduler_serial_read_candidates() -> Result<(
             SchedulerBlockedWaitKind::SerialRead { handle } => kernel.serial_read_ready(handle),
             SchedulerBlockedWaitKind::GetMessage { .. } => false,
             SchedulerBlockedWaitKind::MsgWait { .. } => false,
+            SchedulerBlockedWaitKind::SendMessage { send_id } => {
+                kernel.sent_message_result_ready(send_id)
+            }
         }),
         Some(serial_wait)
     );
