@@ -201,6 +201,10 @@ impl CeKernel {
         exports_by_ordinal: BTreeMap<u32, u32>,
     ) {
         let name = name.into();
+        let exports_by_name = exports_by_name
+            .into_iter()
+            .map(|(name, address)| (normalize_symbol_name(&name), address))
+            .collect();
         self.loaded_modules.insert(
             normalize_module_name(&name),
             LoadedModule {

@@ -5600,11 +5600,7 @@ fn get_proc_address_ordinal_raw(
     0
 }
 
-fn get_coredll_proc_address_name_raw(
-    kernel: &mut CeKernel,
-    thread_id: u32,
-    name: &str,
-) -> u32 {
+fn get_coredll_proc_address_name_raw(kernel: &mut CeKernel, thread_id: u32, name: &str) -> u32 {
     let table = CoredllExportTable::static_ordinals();
     let Some(export) = table.resolve_name(name) else {
         kernel

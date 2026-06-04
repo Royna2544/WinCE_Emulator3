@@ -953,8 +953,7 @@ impl UnicornMips {
                 }
                 self.trampoline_jumps.extend(trampoline_patch.jumps);
             }
-            self.loaded_modules
-                .push(loaded_module_info(dll, load_base));
+            self.loaded_modules.push(loaded_module_info(dll, load_base));
             loaded_dlls.push((dll.path.clone(), load_base, mapped));
         }
 
