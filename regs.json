@@ -29925,6 +29925,844 @@
     },
     "hku": {
       "values": {}
+    },
+    "hkcr\\mime\\database\\content type\\video/ogm": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{22D6F312-B0F6-11D0-94AB-0080C74C7E95}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".ogm"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\video/mpeg": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{22D6F312-B0F6-11D0-94AB-0080C74C7E95}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".m2v"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\video/mov": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{22D6F312-B0F6-11D0-94AB-0080C74C7E95}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".mov"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\video/mkv": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{22D6F312-B0F6-11D0-94AB-0080C74C7E95}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".mkv"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\video/xvid": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{22D6F312-B0F6-11D0-94AB-0080C74C7E95}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".xvid"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\video/mp4": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{22D6F312-B0F6-11D0-94AB-0080C74C7E95}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".mp4"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\audio/spx": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{CDDCA2D5-6D75-4F98-840E-737BEDD5C63C}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".spx"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\audio/ape": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{3E2FDE9E-72D5-44fb-A43D-a53604FC19BE}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".ape"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\audio/flac": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{22D6F312-B0F6-11D0-94AB-0080C74C7E95}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".flac"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\audio/ogg": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{22D6F312-B0F6-11D0-94AB-0080C74C7E95}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".ogg"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\audio/mp3": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{cd3afa76-b84f-48f0-9393-7edc34128127}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".mp3"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\audio/ac3": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{22D6F312-B0F6-11D0-94AB-0080C74C7E95}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".ac3"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\audio/m4a": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{22D6F312-B0F6-11D0-94AB-0080C74C7E95}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".m4a"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\audio/aac": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{22D6F312-B0F6-11D0-94AB-0080C74C7E95}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".aac"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\application/x-drm": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{22D6F312-B0F6-11D0-94AB-0080C74C7E95}"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\video/x-ms-wm": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{22D6F312-B0F6-11D0-94AB-0080C74C7E95}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".wm"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\video/x-ms-wmv": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{22D6F312-B0F6-11D0-94AB-0080C74C7E95}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".wmv"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\video/x-ms-asf": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{22D6F312-B0F6-11D0-94AB-0080C74C7E95}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".asx"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\video/x-ms-wmx": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{22D6F312-B0F6-11D0-94AB-0080C74C7E95}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".wmx"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\video/x-ms-wvx": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{22D6F312-B0F6-11D0-94AB-0080C74C7E95}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".wvx"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\audio/x-ms-wax": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{22D6F312-B0F6-11D0-94AB-0080C74C7E95}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".wax"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\audio/x-ms-wma": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{22D6F312-B0F6-11D0-94AB-0080C74C7E95}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".wma"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\video/msvideo": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{22D6F312-B0F6-11D0-94AB-0080C74C7E95}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".avi"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\video/x-msvideo": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{22D6F312-B0F6-11D0-94AB-0080C74C7E95}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".avi"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\video/avi": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{22D6F312-B0F6-11D0-94AB-0080C74C7E95}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".avi"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\text/x-scriptlet": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{ae24fdae-03c6-11d1-8b76-0080c744f389}"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\text/x-component": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{3050f4f8-98b5-11cf-bb82-00aa00bdce0b}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".htc"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\application/x-msdownload": {
+      "values": {
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".exe"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\text/plain": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{25336920-03F9-11cf-8FD0-00AA00686F13}"
+        },
+        "encoding": {
+          "type": "REG_BINARY",
+          "data": [
+            7,
+            0,
+            0,
+            0
+          ]
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".txt"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\text/html": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{25336920-03F9-11cf-8FD0-00AA00686F13}"
+        },
+        "encoding": {
+          "type": "REG_BINARY",
+          "data": [
+            8,
+            0,
+            0,
+            0
+          ]
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".htm"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\text/css": {
+      "values": {
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".css"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\message/rfc822": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{3050F3D9-98B5-11CF-BB82-00AA00BDCE0B}"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\image/x-xbitmap": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{25336920-03F9-11cf-8FD0-00AA00686F13}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".xbm"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\image/xbm": {
+      "values": {
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".xbm"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\image/pjpeg": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{25336920-03F9-11cf-8FD0-00AA00686F13}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".jpg"
+        },
+        "image filter clsid": {
+          "type": "REG_SZ",
+          "data": "{607fd4e8-0a03-11d1-ab1d-00c04fc9b304}"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\image/pjpeg\\bits": {
+      "values": {
+        "0": {
+          "type": "REG_BINARY",
+          "data": [
+            2,
+            0,
+            0,
+            0,
+            255,
+            255,
+            255,
+            216
+          ]
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\image/jpeg": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{25336920-03F9-11cf-8FD0-00AA00686F13}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".jpg"
+        },
+        "image filter clsid": {
+          "type": "REG_SZ",
+          "data": "{607fd4e8-0a03-11d1-ab1d-00c04fc9b304}"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\image/jpeg\\bits": {
+      "values": {
+        "0": {
+          "type": "REG_BINARY",
+          "data": [
+            2,
+            0,
+            0,
+            0,
+            255,
+            255,
+            255,
+            216
+          ]
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\image/gif": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{25336920-03F9-11cf-8FD0-00AA00686F13}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".gif"
+        },
+        "image filter clsid": {
+          "type": "REG_SZ",
+          "data": "{607fd4e8-0a03-11d1-ab1d-00c04fc9b304}"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\image/gif\\bits": {
+      "values": {
+        "0": {
+          "type": "REG_BINARY",
+          "data": [
+            4,
+            0,
+            0,
+            0,
+            255,
+            255,
+            255,
+            255,
+            71,
+            73,
+            70,
+            56
+          ]
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\image/bmp": {
+      "values": {
+        "clsid": {
+          "type": "REG_SZ",
+          "data": "{25336920-03F9-11cf-8FD0-00AA00686F13}"
+        },
+        "extension": {
+          "type": "REG_SZ",
+          "data": ".bmp"
+        },
+        "image filter clsid": {
+          "type": "REG_SZ",
+          "data": "{607fd4e8-0a03-11d1-ab1d-00c04fc9b304}"
+        }
+      }
+    },
+    "hkcr\\mime\\database\\content type\\image/bmp\\bits": {
+      "values": {
+        "0": {
+          "type": "REG_BINARY",
+          "data": [
+            2,
+            0,
+            0,
+            0,
+            255,
+            255,
+            66,
+            77
+          ]
+        }
+      }
+    },
+    "hkcr\\autoproxytypes\\application/x-ns-proxy-autoconfig": {
+      "values": {
+        "default": {
+          "type": "REG_BINARY",
+          "data": [
+            1,
+            0,
+            0,
+            0
+          ]
+        },
+        "dllfile": {
+          "type": "REG_SZ",
+          "data": "jsproxy.dll"
+        },
+        "fileextensions": {
+          "type": "REG_SZ",
+          "data": ".pac;.jvs;.js"
+        },
+        "flags": {
+          "type": "REG_BINARY",
+          "data": [
+            1,
+            0,
+            0,
+            0
+          ]
+        }
+      }
+    },
+    "hklm\\drivers\\pccard\\pcmcia\\pnp\\motorola-montana_v.34_fax/modem-9e9c": {
+      "values": {}
+    },
+    "hklm\\drivers\\pccard\\pcmcia\\pnp\\motorola-montana_v.34_fax/modem-9e9c\\option1": {
+      "values": {
+        "devicearrayindex": {
+          "type": "REG_DWORD",
+          "data": 0
+        },
+        "dll": {
+          "type": "REG_SZ",
+          "data": "com16550.dll"
+        },
+        "iclass": {
+          "type": "REG_SZ",
+          "data": "{CC5195AC-BA49-48a0-BE17-DF6D1B0173DD}"
+        },
+        "isrdll": {
+          "type": "REG_SZ",
+          "data": "isr16550.dll"
+        },
+        "isrhandler": {
+          "type": "REG_SZ",
+          "data": "ISRHandler"
+        },
+        "prefix": {
+          "type": "REG_SZ",
+          "data": "COM"
+        }
+      }
+    },
+    "hklm\\drivers\\pccard\\pcmcia\\pnp\\motorola-montana_v.34_fax/modem-9e9c\\option1\\unimodem": {
+      "values": {
+        "devicetype": {
+          "type": "REG_DWORD",
+          "data": 3
+        },
+        "friendlyname": {
+          "type": "REG_SZ",
+          "data": "Motorola Montana 28.8"
+        },
+        "tsp": {
+          "type": "REG_SZ",
+          "data": "Unimodem.dll"
+        }
+      }
+    },
+    "hklm\\drivers\\pccard\\pcmcia\\pnp\\motorola-montana_v.34_fax/modem-9e9c\\option1\\unimodem\\settings": {
+      "values": {
+        "flowhard": {
+          "type": "REG_SZ",
+          "data": "AT\\Q3<cr>"
+        },
+        "flowoff": {
+          "type": "REG_SZ",
+          "data": "AT\\Q<cr>"
+        },
+        "flowsoft": {
+          "type": "REG_SZ",
+          "data": "AT\\Q1<cr>"
+        }
+      }
+    },
+    "hklm\\drivers\\pccard\\pcmcia\\pnp\\motorola-montana_v.34_fax/modem-9e9c\\option1\\unimodem\\init": {
+      "values": {
+        "3": {
+          "type": "REG_SZ",
+          "data": "ATS7=60M1<cr>"
+        }
+      }
+    },
+    "hklm\\drivers\\pccard\\pcmcia\\pnp\\usrobotics-pcmcia_28800_data/fax-92a2": {
+      "values": {}
+    },
+    "hklm\\drivers\\pccard\\pcmcia\\pnp\\usrobotics-pcmcia_28800_data/fax-92a2\\option1": {
+      "values": {
+        "devicearrayindex": {
+          "type": "REG_DWORD",
+          "data": 0
+        },
+        "dll": {
+          "type": "REG_SZ",
+          "data": "com16550.dll"
+        },
+        "iclass": {
+          "type": "REG_SZ",
+          "data": "{CC5195AC-BA49-48a0-BE17-DF6D1B0173DD}"
+        },
+        "isrdll": {
+          "type": "REG_SZ",
+          "data": "isr16550.dll"
+        },
+        "isrhandler": {
+          "type": "REG_SZ",
+          "data": "ISRHandler"
+        },
+        "prefix": {
+          "type": "REG_SZ",
+          "data": "COM"
+        },
+        "resetdelay": {
+          "type": "REG_DWORD",
+          "data": 2048
+        }
+      }
+    },
+    "hklm\\drivers\\pccard\\pcmcia\\pnp\\usrobotics-pcmcia_28800_data/fax-92a2\\option1\\unimodem": {
+      "values": {
+        "devicetype": {
+          "type": "REG_DWORD",
+          "data": 3
+        },
+        "friendlyname": {
+          "type": "REG_SZ",
+          "data": "Sportster 28.8"
+        },
+        "tsp": {
+          "type": "REG_SZ",
+          "data": "Unimodem.dll"
+        }
+      }
+    },
+    "hklm\\drivers\\pccard\\pcmcia\\pnp\\usrobotics-pcmcia_28800_data/fax-92a2\\option1\\unimodem\\settings": {
+      "values": {
+        "flowhard": {
+          "type": "REG_SZ",
+          "data": "AT&K3<cr>"
+        },
+        "flowoff": {
+          "type": "REG_SZ",
+          "data": "AT&K0<cr>"
+        },
+        "flowsoft": {
+          "type": "REG_SZ",
+          "data": "AT&K4<cr>"
+        }
+      }
+    },
+    "hklm\\drivers\\pccard\\pcmcia\\pnp\\usrobotics-pcmcia_28800_data/fax-92a2\\option1\\unimodem\\init": {
+      "values": {
+        "3": {
+          "type": "REG_SZ",
+          "data": "AT &F1 E0 V1 &C1 &D2 &B1 &A3 S0=0<cr>"
+        }
+      }
+    },
+    "hklm\\drivers\\pcmcia\\motorola-montana_v.34_fax/modem-9e9c": {
+      "values": {
+        "devicearrayindex": {
+          "type": "REG_DWORD",
+          "data": 1
+        },
+        "dll": {
+          "type": "REG_SZ",
+          "data": "Serial.dll"
+        },
+        "iclass": {
+          "type": "REG_SZ",
+          "data": "{CC5195AC-BA49-48a0-BE17-DF6D1B0173DD}"
+        },
+        "prefix": {
+          "type": "REG_SZ",
+          "data": "COM"
+        }
+      }
+    },
+    "hklm\\drivers\\pcmcia\\motorola-montana_v.34_fax/modem-9e9c\\unimodem": {
+      "values": {
+        "devicetype": {
+          "type": "REG_DWORD",
+          "data": 3
+        },
+        "friendlyname": {
+          "type": "REG_SZ",
+          "data": "Motorola Montana 28.8"
+        },
+        "tsp": {
+          "type": "REG_SZ",
+          "data": "Unimodem.dll"
+        }
+      }
+    },
+    "hklm\\drivers\\pcmcia\\motorola-montana_v.34_fax/modem-9e9c\\unimodem\\settings": {
+      "values": {
+        "flowhard": {
+          "type": "REG_SZ",
+          "data": "AT\\Q3<cr>"
+        },
+        "flowoff": {
+          "type": "REG_SZ",
+          "data": "AT\\Q<cr>"
+        },
+        "flowsoft": {
+          "type": "REG_SZ",
+          "data": "AT\\Q1<cr>"
+        }
+      }
+    },
+    "hklm\\drivers\\pcmcia\\motorola-montana_v.34_fax/modem-9e9c\\unimodem\\init": {
+      "values": {
+        "3": {
+          "type": "REG_SZ",
+          "data": "ATS7=60M1<cr>"
+        }
+      }
+    },
+    "hklm\\drivers\\pcmcia\\usrobotics-pcmcia_28800_data/fax-92a2": {
+      "values": {
+        "devicearrayindex": {
+          "type": "REG_DWORD",
+          "data": 1
+        },
+        "dll": {
+          "type": "REG_SZ",
+          "data": "Serial.dll"
+        },
+        "iclass": {
+          "type": "REG_SZ",
+          "data": "{CC5195AC-BA49-48a0-BE17-DF6D1B0173DD}"
+        },
+        "prefix": {
+          "type": "REG_SZ",
+          "data": "COM"
+        },
+        "resetdelay": {
+          "type": "REG_DWORD",
+          "data": 2048
+        }
+      }
+    },
+    "hklm\\drivers\\pcmcia\\usrobotics-pcmcia_28800_data/fax-92a2\\unimodem": {
+      "values": {
+        "devicetype": {
+          "type": "REG_DWORD",
+          "data": 3
+        },
+        "friendlyname": {
+          "type": "REG_SZ",
+          "data": "Sportster 28.8"
+        },
+        "tsp": {
+          "type": "REG_SZ",
+          "data": "Unimodem.dll"
+        }
+      }
+    },
+    "hklm\\drivers\\pcmcia\\usrobotics-pcmcia_28800_data/fax-92a2\\unimodem\\settings": {
+      "values": {
+        "flowhard": {
+          "type": "REG_SZ",
+          "data": "AT&K3<cr>"
+        },
+        "flowoff": {
+          "type": "REG_SZ",
+          "data": "AT&K0<cr>"
+        },
+        "flowsoft": {
+          "type": "REG_SZ",
+          "data": "AT&K4<cr>"
+        }
+      }
+    },
+    "hklm\\drivers\\pcmcia\\usrobotics-pcmcia_28800_data/fax-92a2\\unimodem\\init": {
+      "values": {
+        "3": {
+          "type": "REG_SZ",
+          "data": "AT &F1 E0 V1 &C1 &D2 &B1 &A3 S0=0<cr>"
+        }
+      }
     }
   }
 }
