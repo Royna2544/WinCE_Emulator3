@@ -78,6 +78,16 @@
     splash/art UI, so the remaining failure is post-splash MFC/resource
     progression after valid timer wakes, not runaway timer fast-forward,
     blank framebuffer presentation, or lost blocked-thread context.
+    Timer-id scoping follow-up: v3 no longer collapses all timers with the
+    same numeric id into one global entry. Timers are now scoped by owner
+    thread/message queue, optional `HWND`, and id, and raw `KillTimer(hwnd,id)`
+    only removes the matching scoped timer. This closes duplicate timer-id
+    aliasing as a likely explanation for the post-splash loop; callback
+    delivery, destroyed-window cleanup, and message/timer ordering remain open
+    timer fidelity suspects. The bounded mounted follow-up
+    `target\timer_scope_virtual_30s_*` still reaches the real 800x480
+    memory-DC-to-window-HDC `BitBlt`, stays memory/file-I/O stable, and writes
+    a populated framebuffer (`1151398` nonzero RGB bytes out of `1152000`).
     GWE hidden-window follow-up: `target\hide_update_clear_virtual_20s_*`
     proves stale create-time update state is no longer left on immediately
     hidden MFC child controls. `ShowWindow(SW_HIDE)`/`SWP_HIDEWINDOW` now clear

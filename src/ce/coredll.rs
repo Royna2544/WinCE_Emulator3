@@ -272,6 +272,7 @@ pub enum CoredllCall {
         period_ms: u32,
     },
     KillTimer {
+        hwnd: Option<u32>,
         id: u32,
     },
     GetTickCount,
@@ -1029,7 +1030,7 @@ fn dispatch_resolved(
             requested_id,
             period_ms,
         } => CoredllValue::U32(kernel.set_timer(hwnd, requested_id, period_ms)),
-        CoredllCall::KillTimer { id } => CoredllValue::Bool(kernel.kill_timer(id)),
+        CoredllCall::KillTimer { hwnd, id } => CoredllValue::Bool(kernel.kill_timer(hwnd, id)),
         CoredllCall::GetTickCount => CoredllValue::U32(kernel.timers.tick_count()),
         CoredllCall::Sleep { ms } => {
             kernel.timers.sleep_ms(ms);
@@ -1224,7 +1225,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 2),
             (raw_arg(args, 3) != 0).then_some(raw_arg(args, 3)),
         ))),
-        ORD_KILL_TIMER => Some(CoredllValue::Bool(kernel.kill_timer(raw_arg(args, 1)))),
+        ORD_KILL_TIMER => Some(CoredllValue::Bool(kernel.kill_timer_for_thread(
+            thread_id,
+            (raw_arg(args, 0) != 0).then_some(raw_arg(args, 0)),
+            raw_arg(args, 1),
+        ))),
         ORD_CREATE_THREAD => Some(CoredllValue::Handle(create_thread_raw(
             kernel, memory, thread_id, args,
         ))),

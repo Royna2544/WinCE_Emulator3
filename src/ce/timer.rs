@@ -5,7 +5,7 @@ pub struct TimerSystem {
     boot: Instant,
     virtual_elapsed_ms: u64,
     next_timer: u32,
-    timers: BTreeMap<u32, KernelTimer>,
+    timers: BTreeMap<TimerKey, KernelTimer>,
 }
 
 pub const INFINITE: u32 = 0xffff_ffff;
@@ -41,6 +41,13 @@ pub struct KernelTimer {
     pub period_ms: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct TimerKey {
+    thread_id: u32,
+    hwnd: Option<u32>,
+    id: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{CeSleepRequest, INFINITE, TimerSystem, ce_sleep_request};
@@ -74,6 +81,28 @@ mod tests {
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].id, 1000);
         assert_eq!(due[0].thread_id, 1);
+    }
+
+    #[test]
+    fn timers_with_same_id_are_scoped_by_owner_and_hwnd() {
+        let mut timers = TimerSystem::default();
+        assert_eq!(
+            timers.set_timer(1, Some(0x10001), Some(7), 0, 0x0113, None),
+            7
+        );
+        assert_eq!(
+            timers.set_timer(2, Some(0x20001), Some(7), 0, 0x0113, None),
+            7
+        );
+        assert_eq!(timers.set_timer(1, None, Some(7), 0, 0x0113, None), 7);
+        assert_eq!(timers.timer_count(), 3);
+
+        assert!(timers.kill_timer(1, Some(0x10001), 7));
+        assert_eq!(timers.timer_count(), 2);
+        assert!(!timers.kill_timer(1, Some(0x10001), 7));
+        assert!(timers.kill_timer(1, None, 7));
+        assert!(timers.kill_timer(2, Some(0x20001), 7));
+        assert_eq!(timers.timer_count(), 0);
     }
 }
 
@@ -124,13 +153,25 @@ impl TimerSystem {
         callback: Option<u32>,
     ) -> u32 {
         let id = requested_id.unwrap_or_else(|| {
-            let id = self.next_timer;
-            self.next_timer += 1;
+            let mut id = self.next_timer;
+            while self.timers.contains_key(&TimerKey {
+                thread_id,
+                hwnd,
+                id,
+            }) {
+                id = id.wrapping_add(1).max(1);
+            }
+            self.next_timer = id.wrapping_add(1).max(1);
             id
         });
         let due_ms = self.tick_count().wrapping_add(period_ms);
-        self.timers.insert(
+        let key = TimerKey {
+            thread_id,
+            hwnd,
             id,
+        };
+        self.timers.insert(
+            key,
             KernelTimer {
                 id,
                 thread_id,
@@ -144,8 +185,14 @@ impl TimerSystem {
         id
     }
 
-    pub fn kill_timer(&mut self, id: u32) -> bool {
-        self.timers.remove(&id).is_some()
+    pub fn kill_timer(&mut self, thread_id: u32, hwnd: Option<u32>, id: u32) -> bool {
+        self.timers
+            .remove(&TimerKey {
+                thread_id,
+                hwnd,
+                id,
+            })
+            .is_some()
     }
 
     pub fn timer_count(&self) -> usize {
@@ -166,18 +213,18 @@ impl TimerSystem {
 
     pub fn due_timers(&mut self) -> Vec<KernelTimer> {
         let now = self.tick_count();
-        let due_ids: Vec<u32> = self
+        let due_keys: Vec<TimerKey> = self
             .timers
             .iter()
-            .filter_map(|(id, timer)| (timer.due_ms <= now).then_some(*id))
+            .filter_map(|(key, timer)| (timer.due_ms <= now).then_some(*key))
             .collect();
 
         let mut due = Vec::new();
-        for id in due_ids {
-            if let Some(mut timer) = self.timers.remove(&id) {
+        for key in due_keys {
+            if let Some(mut timer) = self.timers.remove(&key) {
                 if let Some(period) = timer.period_ms {
                     timer.due_ms = now.wrapping_add(period);
-                    self.timers.insert(id, timer.clone());
+                    self.timers.insert(key, timer.clone());
                 }
                 due.push(timer);
             }

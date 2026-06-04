@@ -196,7 +196,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     timer rather than a window timer that can be ignored. v3 now stores the
     owner thread id on timers, posts due no-HWND `WM_TIMER` messages to that
     owner queue, and keeps `HWND` timers routed through their window owner when
-    a window is known. CE virtual time is advanced inside the emulator timer
+    a window is known. The same header's `TimerQueuesRemoveSingleEvent(HWND,
+    idTimer, MsgQueue*)` removal shape means numeric ids are not global; v3 now
+    keys timers by owner thread/message queue, optional `HWND`, and id, so
+    `KillTimer(hwnd,id)` removes only the matching window/thread timer and
+    duplicate numeric ids can coexist across owners. CE virtual time is
+    advanced inside the emulator timer
     system for sleeps/timer pumping instead of sleeping the host thread. The
     raw Unicorn `GetMessageW` bridge now keeps that timer pumping narrow: it
     only fast-forwards short, imminent timers up to 100 ms before queue

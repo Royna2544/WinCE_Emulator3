@@ -4324,6 +4324,20 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
     assert_eq!(memory.read_u32(timer_msg_ptr)?, child);
     assert_eq!(memory.read_u32(timer_msg_ptr + 4)?, WM_TIMER);
     assert_eq!(memory.read_u32(timer_msg_ptr + 8)?, timer_id);
+    let other_timer_hwnd = kernel.gwe.create_window(thread_id, "TimerPeer", "peer");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KILL_TIMER,
+            [other_timer_hwnd, timer_id],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

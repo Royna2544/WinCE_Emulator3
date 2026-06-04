@@ -2150,8 +2150,16 @@ impl CeKernel {
         )
     }
 
-    pub fn kill_timer(&mut self, id: u32) -> bool {
-        self.timers.kill_timer(id)
+    pub fn kill_timer(&mut self, hwnd: Option<u32>, id: u32) -> bool {
+        let thread_id = hwnd
+            .and_then(|hwnd| self.gwe.window_thread_process_id(hwnd))
+            .map(|(thread_id, _)| thread_id)
+            .unwrap_or(0);
+        self.kill_timer_for_thread(thread_id, hwnd, id)
+    }
+
+    pub fn kill_timer_for_thread(&mut self, thread_id: u32, hwnd: Option<u32>, id: u32) -> bool {
+        self.timers.kill_timer(thread_id, hwnd, id)
     }
 
     pub fn remote_gps_target(&self) -> String {

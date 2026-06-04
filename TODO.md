@@ -16,7 +16,8 @@
   virtual probes `target\update_erase_virtual_*`,
   `target\timer_cap_startup_tap_virtual_20s_*`,
   `target\unicorn_realtime_timer_virtual_30s_*`, and
-  `target\hide_update_clear_virtual_20s_*` prove guest GDI now presents a real 800x480
+  `target\hide_update_clear_virtual_20s_*`, with follow-up timer-scope probe
+  `target\timer_scope_virtual_30s_*`, prove guest GDI now presents a real 800x480
   memory surface to a window HDC:
   `BitBlt(dst=0x02020008, dst_memdc=false, dst_hwnd=0x00020008,
   src=0x000a0044, src_memdc=true)`. The framebuffer dump is fully populated
@@ -44,6 +45,12 @@
   another GWE message ordering/detail gap, resource/module state behavior, or
   broader scheduler thread-state ownership. Do not force hidden child paints
   or app-specific state.
+- Timer identity no longer has the known global-id collapse: v3 now keys
+  timers by owner thread/message queue, optional `HWND`, and id, and raw
+  `KillTimer(hwnd,id)` only removes the matching scoped timer. Remaining timer
+  work should focus on CE callback delivery, destroyed-window cleanup, and how
+  timer lifecycle/order interacts with the post-splash MFC resource replay,
+  not duplicate numeric id handling.
 - Continue the mounted iNavi resource-ready investigation from the
   `resource_59718`/mode-47 table frontier. Current evidence says
   `\SDMMC Disk\INavi\res\values.dat` opens and reads correctly, but by the
@@ -182,8 +189,8 @@
     guest worker contexts with a saved CPU context that `ResumeThread` can
     restore once the suspend count reaches zero.
   - Open gaps: full serial semantics beyond the first empty-read wake bridge,
-    audio wake ownership, fuller timer ownership beyond thread-owned
-    message-queue posts, bounded worker-thread sleeps, and main-thread
+    audio wake ownership, fuller timer callback/destroy cleanup behavior beyond
+    scoped window/thread message-queue posts, bounded worker-thread sleeps, and main-thread
     timer-expiry `GetMessageW` resumes, bounded idle
     fast-forward policy for long periodic timer loops, full multi-thread run-queue ownership
     beyond the one-slot `Sleep(0)`/`Sleep(INFINITE)` worker-context swaps,

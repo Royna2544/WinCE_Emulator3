@@ -666,6 +666,30 @@ fn message_and_timer_transitions_queue_scheduler_msg_wait_candidates() -> Result
 }
 
 #[test]
+fn window_timers_with_same_id_keep_independent_owners() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+
+    let hwnd_a = kernel.gwe.create_window(61, "TimerA", "a");
+    let hwnd_b = kernel.gwe.create_window(62, "TimerB", "b");
+    assert_eq!(kernel.set_timer(Some(hwnd_a), Some(5), 0), 5);
+    assert_eq!(kernel.set_timer(Some(hwnd_b), Some(5), 0), 5);
+    assert_eq!(kernel.timers.timer_count(), 2);
+
+    assert!(kernel.kill_timer(Some(hwnd_a), 5));
+    assert_eq!(kernel.timers.timer_count(), 1);
+
+    kernel.pump_timers_to_gwe(62);
+    assert!(kernel.gwe.get_message(61).is_none());
+    let timer_msg = kernel.gwe.get_message(62).unwrap();
+    assert_eq!(timer_msg.hwnd, hwnd_b);
+    assert_eq!(timer_msg.msg, WM_TIMER);
+    assert_eq!(timer_msg.wparam, 5);
+
+    Ok(())
+}
+
+#[test]
 fn send_message_transitions_queue_scheduler_reply_wait_candidates() -> Result<()> {
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
     let mut kernel = CeKernel::boot(config);

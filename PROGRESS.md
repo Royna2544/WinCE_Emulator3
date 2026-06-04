@@ -9,6 +9,27 @@
 
 ## Confirmed
 
+- CE/GWE timers are now scoped by owner thread/message queue plus optional
+  `HWND` plus timer id instead of by id globally. This follows
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`, where
+  `TimerEntry_t` carries `m_pmsgqOwner`, `m_hwnd`, and `m_idTimer`, and
+  `TimerQueuesRemoveSingleEvent(HWND,id,MsgQueue*)` removes one scoped timer.
+  v3 can keep duplicate numeric timer ids alive for different windows or a
+  window timer plus a no-HWND thread timer; raw `KillTimer(hwnd,id)` now routes
+  through the real COREDLL ordinal path and only removes the matching scoped
+  timer. Focused coverage:
+  `cargo test --features unicorn,trace,win32-desktop ce::timer`,
+  `cargo test --features unicorn,trace,win32-desktop
+  window_timers_with_same_id_keep_independent_owners`, and
+  `cargo test --features unicorn,trace,win32-desktop
+  coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources` pass with
+  the known non-fatal Windows incremental-finalize warning. A mounted virtual
+  iNavi probe wrote `target\timer_scope_virtual_30s_*`; it still reaches the
+  real guest GDI present (`BitBlt` from memory DC `0x000a0044` to window HDC
+  `0x02020008`, 800x480), keeps memory/file I/O stable
+  (`heap_live=7333/5168631B`, `virtual_live=3/196608B`,
+  `host_open=162`, `host_read=26479/1958374B`, `mem_open=2`), and the
+  framebuffer dump has `1151398` nonzero RGB bytes out of `1152000`.
 - Long `GetMessageW` timer waits can now mature inside a single live Unicorn
   invocation without rebuilding CPU state. When the current thread parks in an
   empty message queue and the next timer is beyond the <=100 ms fast-forward
