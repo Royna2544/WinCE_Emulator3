@@ -12312,6 +12312,105 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn send_message_blocked_wait_resume_restores_sender_context() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let sender_thread = 11;
+        let receiver_thread = 12;
+        let sender_handle = 0x0000_0220;
+        let result_ptr = 0x0001_0040;
+        let return_pc = 0x0040_2200;
+        uc.mem_map(0x0001_0000, 0x1000, Prot::ALL).unwrap();
+        uc.mem_write(u64::from(result_ptr), &0u32.to_le_bytes())
+            .unwrap();
+        uc.reg_write(RegisterMIPS::S0, 0xaaaa_0001).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 0xeeee_0002).unwrap();
+        uc.reg_write(RegisterMIPS::RA, 0x0040_1200).unwrap();
+
+        let hwnd = kernel
+            .gwe
+            .create_window(receiver_thread, "SendResume", "send");
+        let send_id = kernel
+            .begin_cross_thread_send_message_w(
+                sender_thread,
+                hwnd,
+                crate::ce::gwe::WM_USER + 212,
+                0,
+                0,
+                Some(1000),
+            )
+            .expect("queued send");
+        let wait_started_ms = kernel.timers.tick_count();
+        let mut sender_regs = [0u32; 32];
+        sender_regs[16] = 0x7777_0011;
+        let kind = super::BlockedWaitKind::SendMessage {
+            send_id,
+            receiver_thread_id: receiver_thread,
+            result_ptr: Some(result_ptr),
+            previous_running_thread: Some((sender_thread, sender_handle)),
+        };
+        let wait_id = kernel.register_blocked_waiter(
+            sender_thread,
+            sender_handle,
+            Vec::new(),
+            super::scheduler_blocked_wait_kind(kind),
+            wait_started_ms,
+            crate::ce::timer::INFINITE,
+        );
+        let blocked_waits = Rc::new(RefCell::new(vec![super::BlockedWaitThread {
+            wait_id,
+            thread_id: sender_thread,
+            thread_handle: sender_handle,
+            wait_handles: Vec::new(),
+            kind,
+            wait_started_ms,
+            timeout_ms: crate::ce::timer::INFINITE,
+            regs: sender_regs,
+            return_pc,
+        }]));
+        assert!(
+            kernel
+                .gwe
+                .activate_sent_message_for_receiver(receiver_thread, send_id)
+        );
+        assert_eq!(
+            kernel.complete_active_sent_message(receiver_thread, 0x2468_ace0),
+            Some(send_id)
+        );
+
+        let current_thread_id = Rc::new(RefCell::new(receiver_thread));
+        let suspended = Rc::new(RefCell::new(None));
+        let running_thread = Rc::new(RefCell::new(None));
+        assert!(super::try_resume_blocked_wait(
+            &mut kernel,
+            &mut uc,
+            receiver_thread,
+            &current_thread_id,
+            &blocked_waits,
+            &suspended,
+            &running_thread,
+        ));
+
+        assert_eq!(*current_thread_id.borrow(), sender_thread);
+        assert_eq!(
+            *running_thread.borrow(),
+            Some((sender_thread, sender_handle))
+        );
+        assert!(blocked_waits.borrow().is_empty());
+        assert!(kernel.blocked_waiter(wait_id).is_none());
+        assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, 0x7777_0011);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 0x2468_ace0);
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap() as u32, return_pc);
+        let mut result_bytes = [0; 4];
+        uc.mem_read(u64::from(result_ptr), &mut result_bytes)
+            .unwrap();
+        assert_eq!(u32::from_le_bytes(result_bytes), 0x2468_ace0);
+        assert!(kernel.take_completed_send_message_result(send_id).is_none());
+    }
+
+    #[test]
     fn trampoline_scan_skips_halfword_jump_table_data() {
         let mut mapped = vec![0; 0x80];
         write_vec_u32(&mut mapped, 0x10, 0x2c43_0005);
