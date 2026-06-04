@@ -5,24 +5,26 @@ use wince_emulation_v3::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
             ORD_ATOI, ORD_CHAR_LOWER_W, ORD_CHAR_UPPER_W, ORD_CLOSE_HANDLE, ORD_COPY_FILE_W,
-            ORD_CREATE_FILE_W, ORD_DEVICE_IO_CONTROL, ORD_FCLOSE, ORD_FEOF, ORD_FGETS,
-            ORD_FIND_CLOSE, ORD_FIND_FIRST_FILE_W, ORD_FIND_NEXT_FILE_W, ORD_FLUSH_FILE_BUFFERS,
-            ORD_FLUSH_INSTRUCTION_CACHE, ORD_FOPEN, ORD_FREAD, ORD_FREE, ORD_FSEEK, ORD_FTELL,
-            ORD_GET_FILE_ATTRIBUTES_W, ORD_GET_FILE_SIZE, ORD_GET_MODULE_FILE_NAME_W,
-            ORD_GET_PROCESS_HEAP, ORD_HEAP_ALLOC, ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE,
-            ORD_HEAP_SIZE, ORD_IS_BAD_READ_PTR, ORD_IS_BAD_WRITE_PTR, ORD_LOCAL_ALLOC,
-            ORD_LOCAL_FREE, ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_MALLOC, ORD_MEMCMP, ORD_MEMCPY,
-            ORD_MEMMOVE, ORD_MEMSET, ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_OPERATOR_DELETE,
+            ORD_CREATE_FILE_MAPPING_W, ORD_CREATE_FILE_W, ORD_DEVICE_IO_CONTROL, ORD_FCLOSE,
+            ORD_FEOF, ORD_FGETS, ORD_FIND_CLOSE, ORD_FIND_FIRST_FILE_W, ORD_FIND_NEXT_FILE_W,
+            ORD_FLUSH_FILE_BUFFERS, ORD_FLUSH_INSTRUCTION_CACHE, ORD_FLUSH_VIEW_OF_FILE, ORD_FOPEN,
+            ORD_FREAD, ORD_FREE, ORD_FSEEK, ORD_FTELL, ORD_GET_FILE_ATTRIBUTES_W,
+            ORD_GET_FILE_SIZE, ORD_GET_MODULE_FILE_NAME_W, ORD_GET_PROCESS_HEAP, ORD_HEAP_ALLOC,
+            ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_SIZE, ORD_IS_BAD_READ_PTR,
+            ORD_IS_BAD_WRITE_PTR, ORD_LOCAL_ALLOC, ORD_LOCAL_FREE, ORD_LOCAL_RE_ALLOC,
+            ORD_LOCAL_SIZE, ORD_MALLOC, ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP, ORD_MEMCPY, ORD_MEMMOVE,
+            ORD_MEMSET, ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_OPERATOR_DELETE,
             ORD_OPERATOR_DELETE_ARRAY, ORD_OPERATOR_NEW, ORD_OPERATOR_NEW_ARRAY, ORD_RAND,
             ORD_READ_FILE, ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_VALUE_W,
             ORD_REG_ENUM_VALUE_W, ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W,
             ORD_SECURITY_GEN_COOKIE2, ORD_SET_FILE_POINTER, ORD_SNPRINTF, ORD_SNWPRINTF,
             ORD_SPRINTF, ORD_SRAND, ORD_STRCAT, ORD_STRCPY, ORD_STRING_CB_CAT_W,
             ORD_STRING_CCH_CAT_W, ORD_STRING_CCH_LENGTH_W, ORD_STRTOK, ORD_STRTOUL, ORD_SWPRINTF,
-            ORD_TOLOWER, ORD_TOUPPER, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSNPRINTF,
-            ORD_VSNWPRINTF, ORD_VSWPRINTF, ORD_WCSCHR, ORD_WCSCPY, ORD_WCSDUP, ORD_WCSICMP,
-            ORD_WCSNCMP, ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSRCHR, ORD_WCSSTR, ORD_WFOPEN,
-            ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
+            ORD_TOLOWER, ORD_TOUPPER, ORD_UNMAP_VIEW_OF_FILE, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE,
+            ORD_VSNPRINTF, ORD_VSNWPRINTF, ORD_VSWPRINTF, ORD_WCSCHR, ORD_WCSCPY, ORD_WCSDUP,
+            ORD_WCSICMP, ORD_WCSNCMP, ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSRCHR, ORD_WCSSTR,
+            ORD_WFOPEN, ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL,
+            ORD_WVSPRINTF_W,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         kernel::CeKernel,
@@ -2854,6 +2856,144 @@ fn coredll_raw_read_file_null_buffer_does_not_advance_file_pointer() -> Result<(
     ));
     assert_eq!(memory.read_u32(count_ptr)?, 2);
     assert_eq!(memory.read_bytes(read_buffer, 2), b"bc");
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_file_mapping_multiple_views_share_flushed_backing() -> Result<()> {
+    const INVALID_HANDLE_VALUE: u32 = 0xffff_ffff;
+    const PAGE_READWRITE: u32 = 0x04;
+    const FILE_MAP_ALL_ACCESS: u32 = 0x000f_001f;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+
+    let mapping = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_MAPPING_W,
+        [INVALID_HANDLE_VALUE, 0, PAGE_READWRITE, 0, 4096, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateFileMappingW did not return a handle: {other:?}"),
+    };
+    assert_ne!(mapping, 0);
+
+    let view_a = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_MAP_VIEW_OF_FILE,
+        [mapping, FILE_MAP_ALL_ACCESS, 0, 0, 4096],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(base),
+            ..
+        } => base,
+        other => panic!("MapViewOfFile A did not return a base: {other:?}"),
+    };
+    let view_b = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_MAP_VIEW_OF_FILE,
+        [mapping, FILE_MAP_ALL_ACCESS, 0, 0, 4096],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(base),
+            ..
+        } => base,
+        other => panic!("MapViewOfFile B did not return a base: {other:?}"),
+    };
+    assert_ne!(view_a, 0);
+    assert_ne!(view_b, 0);
+    assert_ne!(view_a, view_b);
+    memory.map_bytes(view_a, 4096);
+    memory.map_bytes(view_b, 4096);
+
+    let payload = b"shared-map";
+    memory.write_bytes(view_a, payload);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FLUSH_VIEW_OF_FILE,
+            [view_a, payload.len() as u32],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_bytes(view_b, payload.len()), payload);
+
+    memory.write_bytes(view_b + 16, b"Z");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FLUSH_VIEW_OF_FILE,
+            [view_b, 17],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_bytes(view_a + 16, 1), b"Z");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_UNMAP_VIEW_OF_FILE,
+            [view_b],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FLUSH_VIEW_OF_FILE,
+            [view_b, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FLUSH_VIEW_OF_FILE,
+            [view_a, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
     Ok(())
 }
 

@@ -159,6 +159,19 @@
     windows back toward the existing main path, but the run still ends at the
     same hidden `0x0002006c` pending-update frontier with no later display-HDC
     blit. This closes the old tap-to-older-window path as a false lead.
+    File-mapping follow-up:
+    `target\mapping_views_virtual_150s_*` confirms the new per-view mapping
+    model is active in the mounted app: the real `UnmapViewOfFile` path now
+    removes/releases one mapped view and the summary ends with
+    `virtual_live=2/131072B` instead of the earlier three live virtual
+    allocations. This did not advance visible UI. The run still ends at
+    `COREDLL.dll@861 blocked_get_message`; the final state has no active
+    timers, all the `AfxWnd42u` child controls were explicitly hidden by guest
+    `ShowWindow(SW_HIDE)`, later `SetWindowPos` calls only move/size them
+    without `SWP_SHOWWINDOW`, and HWND `0x0002006c` remains hidden with
+    `update=0,0-800,54`. Continue with the generic guest state/resource/MFC
+    progression that should eventually show or present those controls, not
+    hidden-child forced painting.
     Historical evidence: the mounted virtual run with dumped runtime DLLs
     and real sibling app DLLs wrote `target\inavi_trampoline_virtual_*`. It
     preloaded `AuthLibrary.dll`, `TpSysAuth.dll`, `mMbcAuth.dll`,

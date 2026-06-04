@@ -18,8 +18,11 @@ use crate::{
             WindowPos,
         },
         kernel::{CeKernel, MessagePumpResult},
-        memory::{HEAP_ZERO_MEMORY, PROCESS_HEAP_HANDLE},
-        object::{CriticalSectionObject, KernelObject, ThreadResumeResult, ThreadSuspendResult},
+        memory::{HEAP_ZERO_MEMORY, MEM_RELEASE, PROCESS_HEAP_HANDLE},
+        object::{
+            CriticalSectionObject, FileMappingView, KernelObject, ThreadResumeResult,
+            ThreadSuspendResult,
+        },
         registry::{HKey, RegOpenResult, RegQueryValueResult},
         resource::{
             AcceleratorEntry, MenuItem, PopupMenuTracking, ResourceId, stock_object_handle,
@@ -6708,7 +6711,7 @@ fn create_file_mapping_w_raw<M: CoredllGuestMemory>(
 
 fn map_view_of_file_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
-    _memory: &mut M,
+    memory: &mut M,
     thread_id: u32,
     mapping_handle: u32,
     offset_high: u32,
@@ -6731,16 +6734,24 @@ fn map_view_of_file_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     };
-    if let Some(base) = mapping.view_base {
-        kernel.threads.set_last_error(thread_id, 0);
-        return base;
+    if offset_low >= mapping.size {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
     }
-
+    let remaining = mapping.size - offset_low;
     let size = if bytes_to_map == 0 {
-        mapping.size
+        remaining
     } else {
-        bytes_to_map.min(mapping.size)
+        bytes_to_map.min(remaining)
     };
+    if size == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
     let file_id = mapping.file_id;
     let mut initial_bytes = if let Some(file_id) = file_id {
         match kernel.read_file_at(file_id, offset_low as usize, size as usize) {
@@ -6779,6 +6790,7 @@ fn map_view_of_file_raw<M: CoredllGuestMemory>(
     kernel
         .memory
         .set_virtual_initial_bytes(base, std::mem::take(&mut initial_bytes));
+    try_seed_guest_bytes(memory, base, &mapping_bytes);
     let Ok(mapping) = kernel.handles.file_mapping_mut(mapping_handle) else {
         kernel
             .threads
@@ -6791,47 +6803,69 @@ fn map_view_of_file_raw<M: CoredllGuestMemory>(
         mapping.data.resize(end, 0);
     }
     mapping.data[start..end].copy_from_slice(&mapping_bytes);
-    mapping.view_base = Some(base);
-    mapping.view_size = size;
-    mapping.view_offset = offset_low;
+    mapping.views.push(FileMappingView {
+        base,
+        size,
+        offset: offset_low,
+    });
     kernel.threads.set_last_error(thread_id, 0);
     base
 }
 
+fn try_seed_guest_bytes<M: CoredllGuestMemory>(memory: &mut M, base: u32, bytes: &[u8]) {
+    for (offset, byte) in bytes.iter().copied().enumerate() {
+        if memory
+            .write_u8(base.wrapping_add(offset as u32), byte)
+            .is_err()
+        {
+            break;
+        }
+    }
+}
+
 fn flush_view_of_file_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
-    memory: &M,
+    memory: &mut M,
     thread_id: u32,
     base: u32,
     bytes_to_flush: u32,
 ) -> bool {
-    let Some(mapping) = kernel.handles.file_mapping_by_view(base).cloned() else {
+    let Some((mapping, view)) = kernel
+        .handles
+        .file_mapping_view(base)
+        .map(|(mapping, view)| (mapping.clone(), view))
+    else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     };
     let count = if bytes_to_flush == 0 {
-        mapping.view_size
+        view.size
     } else {
-        bytes_to_flush.min(mapping.view_size)
+        bytes_to_flush.min(view.size)
     };
     let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, base, count) else {
         return false;
     };
-    if let Some(mapping) = kernel.handles.file_mapping_by_view_mut(base) {
-        let start = mapping.view_offset as usize;
+    let (views, data) = if let Some((mapping, view)) = kernel.handles.file_mapping_by_view_mut(base)
+    {
+        let start = view.offset as usize;
         let end = start.saturating_add(bytes.len());
         if end > mapping.data.len() {
             mapping.data.resize(end, 0);
         }
         mapping.data[start..end].copy_from_slice(&bytes);
-    }
+        (mapping.views.clone(), mapping.data.clone())
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    sync_file_mapping_views_to_guest(memory, base, &views, &data);
     let Some(file_id) = mapping.file_id else {
         kernel.threads.set_last_error(thread_id, 0);
         return true;
     };
-    match kernel.write_file_at(file_id, mapping.view_offset as usize, &bytes) {
+    match kernel.write_file_at(file_id, view.offset as usize, &bytes) {
         Ok(result) if result.success && result.bytes_transferred == count => {
             kernel.threads.set_last_error(thread_id, 0);
             true
@@ -6845,8 +6879,29 @@ fn flush_view_of_file_raw<M: CoredllGuestMemory>(
     }
 }
 
+fn sync_file_mapping_views_to_guest<M: CoredllGuestMemory>(
+    memory: &mut M,
+    source_base: u32,
+    views: &[FileMappingView],
+    data: &[u8],
+) {
+    for view in views
+        .iter()
+        .copied()
+        .filter(|view| view.base != source_base)
+    {
+        let start = view.offset as usize;
+        let end = start.saturating_add(view.size as usize).min(data.len());
+        if start >= end {
+            continue;
+        }
+        try_seed_guest_bytes(memory, view.base, &data[start..end]);
+    }
+}
+
 fn unmap_view_of_file_raw(kernel: &mut CeKernel, thread_id: u32, base: u32) -> bool {
-    if kernel.handles.has_file_mapping_view(base) {
+    if kernel.handles.remove_file_mapping_view(base).is_some() {
+        let _ = kernel.memory.virtual_free(base, 0, MEM_RELEASE);
         kernel.threads.set_last_error(thread_id, 0);
         true
     } else {

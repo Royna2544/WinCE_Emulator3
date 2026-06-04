@@ -9,6 +9,29 @@
 
 ## Confirmed
 
+- File mappings now track explicit mapped views instead of one reusable
+  `view_base` per mapping object. `MapViewOfFile` allocates a distinct virtual
+  allocation for each view, honors the requested offset/remaining size, seeds
+  the view from pagefile or file backing, and records `FileMappingView`
+  lifetime. `FlushViewOfFile` copies guest bytes into the shared mapping
+  backing, writes through to file-backed mappings at the view offset, and
+  best-effort refreshes sibling views after a flush. `UnmapViewOfFile` now
+  removes the view and releases the CE virtual allocation instead of only
+  returning success. Unicorn child-process mapping sync now loops all live
+  views. Focused coverage:
+  `cargo test --features unicorn,trace,win32-desktop --test
+  coredll_raw_memory_file
+  coredll_raw_file_mapping_multiple_views_share_flushed_backing`; the full raw
+  memory/file test binary and `cargo check --features
+  unicorn,trace,win32-desktop` pass with the known non-fatal Windows
+  incremental-finalize warning. Mounted validation wrote
+  `target\mapping_views_virtual_150s_*`; it remains memory/file-I/O stable
+  (`heap_live=13694/13292926B`, `host_open=665`,
+  `host_read=80129/4055867B`, `mem_open=3`) and confirms the real
+  `UnmapViewOfFile` call now drops `virtual_live` to `2/131072B`. This is a CE
+  fidelity fix, not the post-splash UI breakthrough: the run still parks at
+  `COREDLL.dll@861 blocked_get_message` with hidden child HWND `0x0002006c`
+  holding the later `800x54` update.
 - GWE top-level creation now puts newly-created top-level windows at the front
   of the z-order instead of behind older overlapping top-levels. Child window
   append order is unchanged. This makes `WindowFromPoint`/remote touch choose

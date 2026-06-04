@@ -12,6 +12,17 @@
 
 ## Current Slice
 
+- File mapping single-view aliasing is no longer the active current-gap
+  suspect. v3 now stores per-mapping `FileMappingView` records, maps distinct
+  bases, flushes guest bytes into shared backing, refreshes sibling views on
+  flush, and removes/releases views on `UnmapViewOfFile`. The mounted
+  `target\mapping_views_virtual_150s_*` probe proves this changed real iNavi
+  state (`virtual_live=2/131072B` after the app's `UnmapViewOfFile`) while
+  preserving stable file/RSS counters, but it did not advance the visible UI.
+  Remaining mapping work is broader CE fidelity: immediate cross-view write
+  coherence without `FlushViewOfFile`, page-protection/access validation,
+  richer file-backed lifetime/flush semantics, and a dedicated
+  `MappingSystem` manager as the catch-up plan grows.
 - Continue from the cleaner tap/input frontier in
   `target\touch_focus_virtual_150s_*`. New top-level windows are now placed at
   the front of z-order, so the full-screen popup HWND `0x00020008` receives the

@@ -116,7 +116,21 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     character-count and `StringCb*` byte-count distinction plus truncation
     HRESULTs. `winuser.h` anchors the icon/cursor signatures; v3 currently
     has lightweight synthetic stock icon handles and `DestroyIcon` validation
-    rather than a full icon resource manager.
+  rather than a full icon resource manager.
+
+- File mapping and process IPC:
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\MAPFILE\mapfile.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\SHELL\MAPFILE\mapfile.c`,
+  CE SDK `winbase.h`, and v2 process/mapping fixtures as corroborating
+  evidence only.
+  - CE file mappings are objects with per-view lifetime. v3 now records
+    explicit `FileMappingView` entries instead of treating a mapping as one
+    reusable address. `MapViewOfFile` allocates a view, `FlushViewOfFile`
+    updates shared backing and sibling views after flush, and
+    `UnmapViewOfFile` removes/releases only that view. The remaining fidelity
+    gap is full page aliasing/immediate cross-view coherence, richer access
+    protection validation, and growing this into a dedicated `MappingSystem`
+    as process IPC fixtures demand it.
 
 - Scheduler and wait ownership:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c`,

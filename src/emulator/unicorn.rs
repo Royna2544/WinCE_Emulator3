@@ -4231,20 +4231,21 @@ fn sync_file_mapping_views_from_unicorn<D>(
 ) -> Result<()> {
     let mut updates = Vec::new();
     for mapping in kernel.handles.file_mappings() {
-        let Some(base) = mapping.view_base else {
-            continue;
-        };
-        let size = mapping.view_size.min(mapping.size) as usize;
-        let mut bytes = vec![0; size];
-        uc.mem_read(u64::from(base), &mut bytes).map_err(|err| {
-            Error::Backend(format!(
-                "read mapped view 0x{base:08x} before process launch: {err:?}"
-            ))
-        })?;
-        updates.push((base, mapping.view_offset as usize, bytes));
+        for view in mapping.views.iter().copied() {
+            let size = view.size.min(mapping.size.saturating_sub(view.offset)) as usize;
+            let mut bytes = vec![0; size];
+            uc.mem_read(u64::from(view.base), &mut bytes)
+                .map_err(|err| {
+                    Error::Backend(format!(
+                        "read mapped view 0x{:08x} before process launch: {err:?}",
+                        view.base
+                    ))
+                })?;
+            updates.push((view.base, view.offset as usize, bytes));
+        }
     }
     for (base, offset, bytes) in updates {
-        if let Some(mapping) = kernel.handles.file_mapping_by_view_mut(base) {
+        if let Some((mapping, _view)) = kernel.handles.file_mapping_by_view_mut(base) {
             let end = offset.saturating_add(bytes.len());
             if end > mapping.data.len() {
                 mapping.data.resize(end, 0);
@@ -4262,18 +4263,19 @@ fn sync_file_mapping_views_to_unicorn<D>(
     kernel: &CeKernel,
 ) -> Result<()> {
     for mapping in kernel.handles.file_mappings() {
-        let Some(base) = mapping.view_base else {
-            continue;
-        };
-        let start = mapping.view_offset as usize;
-        let end = start
-            .saturating_add(mapping.view_size as usize)
-            .min(mapping.data.len());
-        if start >= end {
-            continue;
+        for view in mapping.views.iter().copied() {
+            let start = view.offset as usize;
+            let end = start
+                .saturating_add(view.size as usize)
+                .min(mapping.data.len());
+            if start >= end {
+                continue;
+            }
+            uc.mem_write(u64::from(view.base), &mapping.data[start..end])
+                .map_err(|err| {
+                    Error::Backend(format!("write mapped view 0x{:08x}: {err:?}", view.base))
+                })?;
         }
-        uc.mem_write(u64::from(base), &mapping.data[start..end])
-            .map_err(|err| Error::Backend(format!("write mapped view 0x{base:08x}: {err:?}")))?;
     }
     Ok(())
 }

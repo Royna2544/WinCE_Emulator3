@@ -70,9 +70,14 @@ pub struct FileMappingObject {
     pub protect: u32,
     pub file_id: Option<u32>,
     pub data: Vec<u8>,
-    pub view_base: Option<u32>,
-    pub view_size: u32,
-    pub view_offset: u32,
+    pub views: Vec<FileMappingView>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileMappingView {
+    pub base: u32,
+    pub size: u32,
+    pub offset: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -310,9 +315,7 @@ impl HandleTable {
             protect,
             file_id,
             data: vec![0; size as usize],
-            view_base: None,
-            view_size: 0,
-            view_offset: 0,
+            views: Vec::new(),
         }))
     }
 
@@ -342,24 +345,45 @@ impl HandleTable {
         self.objects.values().any(|object| {
             matches!(
                 object,
-                KernelObject::FileMapping(FileMappingObject {
-                    view_base: Some(view_base),
-                    ..
-                }) if *view_base == base
+                KernelObject::FileMapping(mapping) if mapping.views.iter().any(|view| view.base == base)
             )
         })
     }
 
-    pub fn file_mapping_by_view(&self, base: u32) -> Option<&FileMappingObject> {
+    pub fn file_mapping_view(&self, base: u32) -> Option<(&FileMappingObject, FileMappingView)> {
         self.objects.values().find_map(|object| match object {
-            KernelObject::FileMapping(mapping) if mapping.view_base == Some(base) => Some(mapping),
+            KernelObject::FileMapping(mapping) => mapping
+                .views
+                .iter()
+                .copied()
+                .find(|view| view.base == base)
+                .map(|view| (mapping, view)),
             _ => None,
         })
     }
 
-    pub fn file_mapping_by_view_mut(&mut self, base: u32) -> Option<&mut FileMappingObject> {
+    pub fn file_mapping_by_view_mut(
+        &mut self,
+        base: u32,
+    ) -> Option<(&mut FileMappingObject, FileMappingView)> {
         self.objects.values_mut().find_map(|object| match object {
-            KernelObject::FileMapping(mapping) if mapping.view_base == Some(base) => Some(mapping),
+            KernelObject::FileMapping(mapping) => mapping
+                .views
+                .iter()
+                .copied()
+                .find(|view| view.base == base)
+                .map(|view| (mapping, view)),
+            _ => None,
+        })
+    }
+
+    pub fn remove_file_mapping_view(&mut self, base: u32) -> Option<FileMappingView> {
+        self.objects.values_mut().find_map(|object| match object {
+            KernelObject::FileMapping(mapping) => mapping
+                .views
+                .iter()
+                .position(|view| view.base == base)
+                .map(|index| mapping.views.remove(index)),
             _ => None,
         })
     }
