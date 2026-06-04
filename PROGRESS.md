@@ -116,6 +116,109 @@
   UI success. Full scheduler-owned cross-thread
   `SendMessageW`/`SendMessageTimeout` blocking and receiver-context execution
   remain open.
+- GWE now has a separate receiver-side sent-message queue in front of the
+  posted-message and synthetic-paint paths. `GetMessageW`/`PeekMessageW(PM_REMOVE)`
+  retrieval can now take a sent message first, mark the receiver as
+  `InSendMessage`, expose `QS_SENDMESSAGE`, and preserve `GetMessageSource`
+  as a send source. Focused coverage:
+  `ce::gwe::tests::sent_messages_are_retrieved_before_posts_and_mark_receiver_send_state`,
+  `coredll_raw_message_ipc_state_tracks_source_send_and_timeout`, the full raw
+  GWE suite, and full `cargo test --features unicorn,trace,win32-desktop`. A
+  bounded mounted host/tap probe wrote `target\sent_queue_summary.txt`,
+  `target\sent_queue_files.txt`, `target\sent_queue_render.txt`,
+  `target\sent_queue_milestones.txt`, and `target\sent_queue_probe.ppm`; it
+  stopped at the familiar 10 s resource frontier (`pc=0x00b4bc1c`) with
+  `host_read=4221/495853B`, `heap_live=5948/2767663B`, no render milestones,
+  and an all-zero framebuffer body. Sender blocking/resume and cross-thread
+  guest WNDPROC receiver-context execution are still open.
+- Cross-thread raw `SendNotifyMessageW` now uses the receiver-side sent-message
+  queue instead of the posted-message queue, matching the CE no-wait send
+  split more closely. The receiver observes `QS_SENDMESSAGE`, retrieves the
+  notify as a send source, enters `InSendMessage`, and raw `DispatchMessageW`
+  now clears that receiver send context after dispatch; the Unicorn
+  `DispatchMessageW` guest-WNDPROC callout path also clears receiver send depth
+  on return. Focused coverage extends
+  `coredll_raw_send_notify_message_is_async_across_threads` and the full raw
+  GWE suite; full `cargo test --features unicorn,trace,win32-desktop` passes.
+  A bounded mounted host/tap probe wrote
+  `target\send_notify_sent_queue_summary.txt`,
+  `target\send_notify_sent_queue_files.txt`,
+  `target\send_notify_sent_queue_render.txt`,
+  `target\send_notify_sent_queue_milestones.txt`, and
+  `target\send_notify_sent_queue_probe.ppm`; it stopped at the familiar 10 s
+  resource frontier (`pc=0x00339d8c`) with `host_read=4221/499832B`,
+  `heap_live=5948/2767663B`, no render milestones, and an all-zero framebuffer
+  body. Scheduler-owned sender blocking/resume and true cross-thread guest
+  receiver-context execution for `SendMessageW`/`SendMessageTimeout` remain
+  open.
+- GWE sent messages now carry CE `SendMsgEntry_t`-style transaction state:
+  sender thread id, receiver thread id, flags, timeout metadata, WNDPROC
+  result, active receiver send stack, and result-ready/receiver-terminated
+  completion. Receiver retrieval still exposes the normal `Message` shape, but
+  raw `DispatchMessageW` now completes the active sent transaction with the
+  receiver result, and destroying a target marks queued synchronous sends as
+  receiver-terminated/result-ready instead of losing the sender-side state.
+  Compact Unicorn summaries now include `gwe=send:...` counters when send
+  transactions occur. Focused coverage:
+  `ce::gwe::tests::synchronous_sent_message_records_result_for_sender`,
+  `ce::gwe::tests::destroying_target_marks_queued_sync_send_receiver_terminated`,
+  `coredll_raw_dispatch_completes_queued_cross_thread_send`, the full raw GWE
+  suite, and full `cargo test --features unicorn,trace,win32-desktop`. A
+  bounded mounted host/tap probe wrote
+  `target\sync_send_transaction_summary.txt`,
+  `target\sync_send_transaction_files.txt`,
+  `target\sync_send_transaction_render.txt`,
+  `target\sync_send_transaction_milestones.txt`, and
+  `target\sync_send_transaction_probe.ppm`; it stopped at the familiar 10 s
+  resource/DIB frontier (`pc=0x00b4bc24`) with
+  `host_read=4221/495853B`, `heap_live=5948/2767663B`, no render milestones,
+  and an all-zero framebuffer body. This is sender/receiver bookkeeping for
+  the blocking-send port, not live cross-thread guest scheduling yet.
+- Sent-message timeout metadata is now active instead of just stored. GWE
+  expires non-result-ready sent transactions using wrapping tick arithmetic
+  from the message timestamp plus timeout, marks `SMF_TIMEOUT|SMF_RESULT_READY`,
+  removes the entry from the receiver queue, and leaves a zero result for the
+  sender side to consume. `CeKernel::pump_timers_to_gwe` runs the expiry pass
+  before delivering timers/messages, so raw `GetMessageW` observes expired
+  sends as gone instead of dispatchable. Compact Unicorn summaries now include
+  a send-timeout counter when the path is exercised. Focused coverage:
+  `ce::gwe::tests::timed_out_sent_message_is_removed_from_receiver_queue`,
+  `coredll_raw_get_message_expires_timed_out_cross_thread_send`, the full raw
+  GWE suite, and full `cargo test --features unicorn,trace,win32-desktop`.
+  A bounded mounted host/tap probe wrote
+  `target\send_timeout_expiry_summary.txt`,
+  `target\send_timeout_expiry_files.txt`,
+  `target\send_timeout_expiry_render.txt`,
+  `target\send_timeout_expiry_milestones.txt`, and
+  `target\send_timeout_expiry_probe.ppm`; it stopped at the familiar 10 s
+  resource frontier (`pc=0x00339c3c`) with `host_read=4219/486039B`,
+  `heap_live=5948/2767663B`, no render milestones, and an all-zero framebuffer
+  body. Live sender parking/resume and receiver-context guest execution remain
+  open.
+- Unicorn raw `SendMessageW`/`SendMessageTimeoutW` now has the first real
+  cross-thread receiver-context guest WNDPROC path. Same-process sends to a
+  guest WNDPROC create a GWE sent-message transaction, activate it on the
+  receiver thread, save the sender MIPS registers/running-thread metadata, run
+  the target WNDPROC with the receiver thread as the active CE thread, complete
+  the sent transaction with the WNDPROC result on return, write the
+  `SendMessageTimeoutW` result pointer when supplied, and restore the sender
+  context/result instead of falling back to host-side default behavior. Focused
+  coverage:
+  `emulator::unicorn::unicorn_tests::send_message_callout_enters_cross_thread_receiver_context`,
+  `emulator::unicorn::unicorn_tests::send_message_receiver_context_requires_same_process_guest_wndproc`,
+  the full raw GWE suite, and full
+  `cargo test --features unicorn,trace,win32-desktop`. A bounded mounted
+  host/tap probe wrote `target\receiver_context_send_summary.txt`,
+  `target\receiver_context_send_files.txt`,
+  `target\receiver_context_send_render.txt`,
+  `target\receiver_context_send_milestones.txt`, and
+  `target\receiver_context_send_probe.ppm`; the final rerun after the return-
+  path fix stopped at `pc=0x00b4bc24` after 10 s with small file/RSS counters
+  (`host_open=7`, `host_read=4221/495853B`,
+  `heap_live=5948/2767663B`). The milestones show real window/resource/DIB
+  activity including `CreateDIBSection` for 800x160 and 800x320 resources, but
+  the render trace still reports no iNavi render milestones and the framebuffer
+  body has zero nonzero bytes, so this is not visible UI success.
 - Raw/kernel `DestroyWindow` now routes through the kernel window lifecycle
   instead of deleting GWE HWND state directly. Virtual windows carry a CE
   `CWindow::fSentWmDestroy`-style bit, raw/kernel destroy sends `WM_DESTROY`

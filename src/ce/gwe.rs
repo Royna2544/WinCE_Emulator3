@@ -31,6 +31,15 @@ pub const WM_USER: u32 = 0x0400;
 pub const MSGSRC_UNKNOWN: u32 = 0;
 pub const MSGSRC_SOFTWARE_POST: u32 = 1;
 pub const MSGSRC_HARDWARE_KEYBOARD: u32 = 2;
+pub const MSGSRC_SOFTWARE_SEND: u32 = 4;
+pub const SMF_NULL: u32 = 0x0000_0000;
+pub const SMF_SENDER_NO_WAIT: u32 = 0x0000_0001;
+pub const SMF_SENDER_NO_WAIT_IF_DIFFERENT_THREAD: u32 = 0x0000_0002;
+pub const SMF_RESULT_READY: u32 = 0x8000_0000;
+pub const SMF_SENDER_TERMINATED: u32 = 0x4000_0000;
+pub const SMF_RECEIVER_TERMINATED: u32 = 0x2000_0000;
+pub const SMF_TIMEOUT: u32 = 0x1000_0000;
+pub const SMF_NOTIFY_MESSAGE: u32 = 0x0800_0000;
 pub const QS_KEY: u32 = 0x0001;
 pub const QS_MOUSEMOVE: u32 = 0x0002;
 pub const QS_MOUSEBUTTON: u32 = 0x0004;
@@ -118,6 +127,17 @@ pub struct Message {
     pub lparam: u32,
     pub time_ms: u32,
     pub source: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SentMessage {
+    pub id: u64,
+    pub sender_thread_id: Option<u32>,
+    pub receiver_thread_id: u32,
+    pub message: Message,
+    pub flags: u32,
+    pub timeout_ms: Option<u32>,
+    pub result: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -304,6 +324,15 @@ pub struct PaintUpdate {
     pub erase: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GweStats {
+    pub send_transaction_count: u64,
+    pub send_transaction_completed_count: u64,
+    pub send_transaction_timeout_count: u64,
+    pub send_transaction_receiver_terminated_count: u64,
+    pub max_sent_queue_depth: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct Gwe {
     next_hwnd: u32,
@@ -313,6 +342,10 @@ pub struct Gwe {
     windows: BTreeMap<u32, Window>,
     z_order: Vec<u32>,
     queues: BTreeMap<u32, VecDeque<Message>>,
+    sent_queues: BTreeMap<u32, VecDeque<u64>>,
+    sent_messages: BTreeMap<u64, SentMessage>,
+    active_sent_stack_by_thread: BTreeMap<u32, Vec<u64>>,
+    next_sent_message_id: u64,
     focus: Option<u32>,
     capture: Option<u32>,
     cursor: Option<u32>,
@@ -325,8 +358,10 @@ pub struct Gwe {
     window_regions: BTreeMap<u32, Rect>,
     send_depth_by_thread: BTreeMap<u32, u32>,
     last_message_source_by_thread: BTreeMap<u32, u32>,
+    changed_queue_status_by_thread: BTreeMap<u32, u32>,
     replied_send_depth_by_thread: BTreeMap<u32, u32>,
     next_lifecycle_message_order: u64,
+    stats: GweStats,
 }
 
 impl Default for Gwe {
@@ -369,6 +404,10 @@ impl Default for Gwe {
             windows,
             z_order: vec![DESKTOP_HWND],
             queues: BTreeMap::new(),
+            sent_queues: BTreeMap::new(),
+            sent_messages: BTreeMap::new(),
+            active_sent_stack_by_thread: BTreeMap::new(),
+            next_sent_message_id: 1,
             focus: None,
             capture: None,
             cursor: None,
@@ -381,8 +420,10 @@ impl Default for Gwe {
             window_regions: BTreeMap::new(),
             send_depth_by_thread: BTreeMap::new(),
             last_message_source_by_thread: BTreeMap::new(),
+            changed_queue_status_by_thread: BTreeMap::new(),
             replied_send_depth_by_thread: BTreeMap::new(),
             next_lifecycle_message_order: 1,
+            stats: GweStats::default(),
         }
     }
 }
@@ -496,6 +537,9 @@ impl Gwe {
             },
         );
         self.z_order.push(hwnd);
+        if visible {
+            self.mark_queue_status_changed(thread_id, QS_PAINT);
+        }
         hwnd
     }
 
@@ -627,6 +671,25 @@ impl Gwe {
         for queue in self.queues.values_mut() {
             queue.retain(|message| message.hwnd == 0 || !targets.contains(&message.hwnd));
         }
+        let doomed_sent: Vec<u64> = self
+            .sent_messages
+            .iter()
+            .filter(|(_, sent)| sent.message.hwnd != 0 && targets.contains(&sent.message.hwnd))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &doomed_sent {
+            if let Some(sent) = self.sent_messages.get_mut(id) {
+                sent.flags |= SMF_RECEIVER_TERMINATED | SMF_RESULT_READY;
+                sent.result = Some(0);
+                self.stats.send_transaction_receiver_terminated_count = self
+                    .stats
+                    .send_transaction_receiver_terminated_count
+                    .saturating_add(1);
+            }
+        }
+        for queue in self.sent_queues.values_mut() {
+            queue.retain(|id| !doomed_sent.contains(id));
+        }
         true
     }
 
@@ -640,6 +703,9 @@ impl Gwe {
             window.update_pending = true;
             window.erase_pending = true;
             window.update_rect = window.client_rect.zero_origin();
+            let thread_id = window.thread_id;
+            let _ = window;
+            self.mark_queue_status_changed(thread_id, QS_PAINT);
         }
         previous
     }
@@ -666,6 +732,9 @@ impl Gwe {
         };
         window.update_pending = true;
         window.erase_pending |= erase;
+        let thread_id = window.thread_id;
+        let _ = window;
+        self.mark_queue_status_changed(thread_id, QS_PAINT);
         true
     }
 
@@ -1021,17 +1090,22 @@ impl Gwe {
             bottom,
         };
         window.client_rect = window.rect;
+        let mut paint_changed_thread = None;
         if flags & SWP_SHOWWINDOW != 0 {
             window.visible = true;
             window.update_pending = true;
             window.erase_pending = true;
             window.update_rect = window.client_rect.zero_origin();
+            paint_changed_thread = Some(window.thread_id);
         }
         if flags & SWP_HIDEWINDOW != 0 {
             window.visible = false;
         }
         if flags & SWP_NOZORDER == 0 {
             self.apply_z_order(hwnd, parent, insert_after.unwrap_or(HWND_TOP));
+        }
+        if let Some(thread_id) = paint_changed_thread {
+            self.mark_queue_status_changed(thread_id, QS_PAINT);
         }
         true
     }
@@ -1109,7 +1183,9 @@ impl Gwe {
         if message.source == MSGSRC_UNKNOWN {
             message.source = MSGSRC_SOFTWARE_POST;
         }
+        let status_bit = queue_status_bit_for_message(message.msg);
         self.queues.entry(thread_id).or_default().push_back(message);
+        self.mark_queue_status_changed(thread_id, status_bit);
     }
 
     pub fn post_message_for_window(&mut self, hwnd: u32, message: Message) -> bool {
@@ -1121,6 +1197,52 @@ impl Gwe {
         }
         self.post_message(window.thread_id, message);
         true
+    }
+
+    pub fn queue_sent_message_for_window(&mut self, hwnd: u32, message: Message) -> bool {
+        self.queue_send_message_for_window(None, hwnd, message, SMF_SENDER_NO_WAIT, None)
+            .is_some()
+    }
+
+    pub fn queue_send_message_for_window(
+        &mut self,
+        sender_thread_id: Option<u32>,
+        hwnd: u32,
+        mut message: Message,
+        flags: u32,
+        timeout_ms: Option<u32>,
+    ) -> Option<u64> {
+        let Some(window) = self.windows.get(&hwnd) else {
+            return None;
+        };
+        if window.destroyed {
+            return None;
+        }
+        if message.source == MSGSRC_UNKNOWN {
+            message.source = MSGSRC_SOFTWARE_SEND;
+        }
+        let id = self.next_sent_message_id;
+        self.next_sent_message_id = self.next_sent_message_id.saturating_add(1).max(1);
+        self.sent_messages.insert(
+            id,
+            SentMessage {
+                id,
+                sender_thread_id,
+                receiver_thread_id: window.thread_id,
+                message,
+                flags,
+                timeout_ms,
+                result: None,
+            },
+        );
+        let receiver_thread_id = window.thread_id;
+        let queue = self.sent_queues.entry(receiver_thread_id).or_default();
+        queue.push_back(id);
+        let queue_depth = queue.len();
+        self.mark_queue_status_changed(receiver_thread_id, QS_SENDMESSAGE);
+        self.stats.send_transaction_count = self.stats.send_transaction_count.saturating_add(1);
+        self.stats.max_sent_queue_depth = self.stats.max_sent_queue_depth.max(queue_depth);
+        Some(id)
     }
 
     pub fn post_broadcast_message(
@@ -1211,6 +1333,26 @@ impl Gwe {
     }
 
     pub fn end_send_message(&mut self, thread_id: u32) {
+        let popped_send = self
+            .active_sent_stack_by_thread
+            .get_mut(&thread_id)
+            .and_then(|stack| stack.pop());
+        if self
+            .active_sent_stack_by_thread
+            .get(&thread_id)
+            .is_some_and(|stack| stack.is_empty())
+        {
+            self.active_sent_stack_by_thread.remove(&thread_id);
+        }
+        if let Some(id) = popped_send {
+            if self
+                .sent_messages
+                .get(&id)
+                .is_some_and(|sent| sent.sender_thread_id.is_none())
+            {
+                self.sent_messages.remove(&id);
+            }
+        }
         let Some(depth) = self.send_depth_by_thread.get_mut(&thread_id) else {
             return;
         };
@@ -1242,6 +1384,99 @@ impl Gwe {
         true
     }
 
+    pub fn active_sent_message_id(&self, thread_id: u32) -> Option<u64> {
+        self.active_sent_stack_by_thread
+            .get(&thread_id)
+            .and_then(|stack| stack.last())
+            .copied()
+    }
+
+    pub fn complete_active_sent_message(&mut self, thread_id: u32, result: u32) -> Option<u64> {
+        let id = self.active_sent_message_id(thread_id)?;
+        if let Some(sent) = self.sent_messages.get_mut(&id) {
+            sent.flags |= SMF_RESULT_READY;
+            sent.result = Some(result);
+            self.stats.send_transaction_completed_count = self
+                .stats
+                .send_transaction_completed_count
+                .saturating_add(1);
+        }
+        self.end_send_message(thread_id);
+        Some(id)
+    }
+
+    pub fn activate_sent_message_for_receiver(&mut self, thread_id: u32, id: u64) -> bool {
+        let Some(sent) = self.sent_messages.get(&id) else {
+            return false;
+        };
+        if sent.receiver_thread_id != thread_id || sent.flags & SMF_RESULT_READY != 0 {
+            return false;
+        }
+        let Some(queue) = self.sent_queues.get_mut(&thread_id) else {
+            return false;
+        };
+        let Some(index) = queue.iter().position(|candidate| *candidate == id) else {
+            return false;
+        };
+        queue.remove(index);
+        self.last_message_source_by_thread
+            .insert(thread_id, MSGSRC_SOFTWARE_SEND);
+        self.active_sent_stack_by_thread
+            .entry(thread_id)
+            .or_default()
+            .push(id);
+        self.begin_send_message(thread_id);
+        true
+    }
+
+    pub fn take_completed_sent_message_result(&mut self, id: u64) -> Option<u32> {
+        if !self
+            .sent_messages
+            .get(&id)
+            .is_some_and(|sent| sent.flags & SMF_RESULT_READY != 0)
+        {
+            return None;
+        }
+        self.sent_messages.remove(&id)?.result
+    }
+
+    pub fn sent_message(&self, id: u64) -> Option<&SentMessage> {
+        self.sent_messages.get(&id)
+    }
+
+    pub fn expire_timed_out_sent_messages(&mut self, now_ms: u32) -> Vec<u64> {
+        let expired: Vec<u64> = self
+            .sent_messages
+            .iter()
+            .filter(|(_, sent)| sent.flags & SMF_RESULT_READY == 0)
+            .filter(|(_, sent)| {
+                sent.timeout_ms
+                    .is_some_and(|timeout| now_ms.wrapping_sub(sent.message.time_ms) >= timeout)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        if expired.is_empty() {
+            return expired;
+        }
+
+        for id in &expired {
+            if let Some(sent) = self.sent_messages.get_mut(id) {
+                sent.flags |= SMF_TIMEOUT | SMF_RESULT_READY;
+                sent.result = Some(0);
+                self.stats.send_transaction_timeout_count =
+                    self.stats.send_transaction_timeout_count.saturating_add(1);
+            }
+        }
+        for queue in self.sent_queues.values_mut() {
+            queue.retain(|id| !expired.contains(id));
+        }
+        expired
+    }
+
+    pub fn stats(&self) -> GweStats {
+        self.stats
+    }
+
     pub fn get_message_source(&self, thread_id: u32) -> u32 {
         self.last_message_source_by_thread
             .get(&thread_id)
@@ -1249,9 +1484,32 @@ impl Gwe {
             .unwrap_or(MSGSRC_UNKNOWN)
     }
 
-    pub fn get_queue_status(&self, thread_id: u32, flags: u32) -> u32 {
+    pub fn get_queue_status(&mut self, thread_id: u32, flags: u32) -> u32 {
         let current = self.queue_status_bits(thread_id) & flags;
-        (current << 16) | current
+        let changed_for_flags = self
+            .changed_queue_status_by_thread
+            .get(&thread_id)
+            .copied()
+            .unwrap_or(0)
+            & flags;
+        if let Some(changed) = self.changed_queue_status_by_thread.get_mut(&thread_id) {
+            *changed &= !flags;
+            if *changed == 0 {
+                self.changed_queue_status_by_thread.remove(&thread_id);
+            }
+        }
+        (current << 16) | changed_for_flags
+    }
+
+    pub fn peek_queue_status(&self, thread_id: u32, flags: u32) -> u32 {
+        let current = self.queue_status_bits(thread_id) & flags;
+        let changed = self
+            .changed_queue_status_by_thread
+            .get(&thread_id)
+            .copied()
+            .unwrap_or(0)
+            & flags;
+        (current << 16) | changed
     }
 
     pub fn windows_snapshot(&self) -> Vec<Window> {
@@ -1265,6 +1523,22 @@ impl Gwe {
             .collect()
     }
 
+    pub fn sent_queue_snapshot(&self) -> Vec<(u32, Vec<Message>)> {
+        self.sent_queues
+            .iter()
+            .map(|(thread_id, queue)| {
+                (
+                    *thread_id,
+                    queue
+                        .iter()
+                        .filter_map(|id| self.sent_messages.get(id))
+                        .map(|sent| sent.message.clone())
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
     pub fn z_order_snapshot(&self) -> Vec<u32> {
         self.z_order.clone()
     }
@@ -1275,6 +1549,25 @@ impl Gwe {
 
     pub fn has_queue_input(&self, thread_id: u32, flags: u32) -> bool {
         self.queue_status_bits(thread_id) & flags != 0
+    }
+
+    pub fn has_new_queue_input(&self, thread_id: u32, flags: u32) -> bool {
+        self.changed_queue_status_by_thread
+            .get(&thread_id)
+            .copied()
+            .unwrap_or(0)
+            & flags
+            != 0
+    }
+
+    pub fn clear_new_queue_input(&mut self, thread_id: u32, flags: u32) {
+        let Some(changed) = self.changed_queue_status_by_thread.get_mut(&thread_id) else {
+            return;
+        };
+        *changed &= !flags;
+        if *changed == 0 {
+            self.changed_queue_status_by_thread.remove(&thread_id);
+        }
     }
 
     pub fn get_message(&mut self, thread_id: u32) -> Option<Message> {
@@ -1296,6 +1589,9 @@ impl Gwe {
         min_msg: u32,
         max_msg: u32,
     ) -> Option<Message> {
+        if let Some(message) = self.take_matching_sent_message(thread_id, hwnd, min_msg, max_msg) {
+            return Some(message);
+        }
         if let Some(message) = self.take_matching_message(thread_id, hwnd, min_msg, max_msg) {
             return Some(message);
         }
@@ -1313,6 +1609,11 @@ impl Gwe {
         max_msg: u32,
         flags: PeekFlags,
     ) -> Option<Message> {
+        if let Some(message) =
+            self.peek_matching_sent_message(thread_id, hwnd, min_msg, max_msg, flags)
+        {
+            return Some(message);
+        }
         if let Some(queue) = self.queues.get_mut(&thread_id) {
             if let Some(index) = queue
                 .iter()
@@ -1436,6 +1737,64 @@ impl Gwe {
         Some(message)
     }
 
+    fn take_matching_sent_message(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
+        let queue = self.sent_queues.get_mut(&thread_id)?;
+        let index = queue.iter().position(|id| {
+            self.sent_messages
+                .get(id)
+                .is_some_and(|sent| message_matches(&sent.message, hwnd, min_msg, max_msg))
+        })?;
+        let id = queue.remove(index)?;
+        let message = self.sent_messages.get(&id)?.message.clone();
+        self.last_message_source_by_thread
+            .insert(thread_id, message.source);
+        self.active_sent_stack_by_thread
+            .entry(thread_id)
+            .or_default()
+            .push(id);
+        self.begin_send_message(thread_id);
+        Some(message)
+    }
+
+    fn peek_matching_sent_message(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+        flags: PeekFlags,
+    ) -> Option<Message> {
+        let queue = self.sent_queues.get_mut(&thread_id)?;
+        let index = queue.iter().position(|id| {
+            self.sent_messages
+                .get(id)
+                .is_some_and(|sent| message_matches(&sent.message, hwnd, min_msg, max_msg))
+        })?;
+        if flags.contains(PeekFlags::REMOVE) {
+            let id = queue.remove(index)?;
+            let message = self.sent_messages.get(&id)?.message.clone();
+            self.last_message_source_by_thread
+                .insert(thread_id, message.source);
+            self.active_sent_stack_by_thread
+                .entry(thread_id)
+                .or_default()
+                .push(id);
+            self.begin_send_message(thread_id);
+            Some(message)
+        } else {
+            queue
+                .get(index)
+                .and_then(|id| self.sent_messages.get(id))
+                .map(|sent| sent.message.clone())
+        }
+    }
+
     fn synthetic_paint_message(
         &self,
         thread_id: u32,
@@ -1460,19 +1819,17 @@ impl Gwe {
 
     fn queue_status_bits(&self, thread_id: u32) -> u32 {
         let mut status = 0;
-        if self.in_send_message(thread_id) {
+        if self.in_send_message(thread_id)
+            || self
+                .sent_queues
+                .get(&thread_id)
+                .is_some_and(|queue| !queue.is_empty())
+        {
             status |= QS_SENDMESSAGE;
         }
         if let Some(queue) = self.queues.get(&thread_id) {
             for message in queue {
-                status |= match message.msg {
-                    WM_TIMER => QS_TIMER,
-                    WM_PAINT => QS_PAINT,
-                    WM_KEYDOWN | WM_CHAR => QS_KEY,
-                    0x0201 | 0x0202 => QS_MOUSEBUTTON,
-                    0x0200 => QS_MOUSEMOVE,
-                    _ => QS_POSTMESSAGE,
-                };
+                status |= queue_status_bit_for_message(message.msg);
             }
         }
         if self.windows.values().any(|window| {
@@ -1484,6 +1841,16 @@ impl Gwe {
             status |= QS_PAINT;
         }
         status
+    }
+
+    fn mark_queue_status_changed(&mut self, thread_id: u32, bits: u32) {
+        if bits == 0 {
+            return;
+        }
+        *self
+            .changed_queue_status_by_thread
+            .entry(thread_id)
+            .or_default() |= bits;
     }
 
     fn parent_to_screen_rect(&self, parent: Option<u32>, rect: Rect) -> Rect {
@@ -1666,6 +2033,17 @@ pub fn default_send_message_result(msg: u32, _wparam: u32, _lparam: u32) -> u32 
     }
 }
 
+fn queue_status_bit_for_message(msg: u32) -> u32 {
+    match msg {
+        WM_TIMER => QS_TIMER,
+        WM_PAINT => QS_PAINT,
+        WM_KEYDOWN | WM_CHAR => QS_KEY,
+        0x0201 | 0x0202 => QS_MOUSEBUTTON,
+        0x0200 => QS_MOUSEMOVE,
+        _ => QS_POSTMESSAGE,
+    }
+}
+
 fn message_matches(message: &Message, hwnd: Option<u32>, min_msg: u32, max_msg: u32) -> bool {
     if hwnd.is_some_and(|wanted| message.hwnd != wanted) {
         return false;
@@ -1836,6 +2214,154 @@ mod tests {
         assert_eq!(
             gwe.window_from_point_for_thread(2, Point { x: 400, y: 240 }),
             None
+        );
+    }
+
+    #[test]
+    fn sent_messages_are_retrieved_before_posts_and_mark_receiver_send_state() {
+        let mut gwe = Gwe::default();
+        let thread_id = 7;
+        let hwnd = gwe.create_window(thread_id, "target", "");
+        gwe.post_message(thread_id, Message::new(hwnd, WM_USER + 1, 0x11, 0x12, 10));
+        assert!(
+            gwe.queue_sent_message_for_window(
+                hwnd,
+                Message::new(hwnd, WM_USER + 2, 0x21, 0x22, 11)
+            )
+        );
+
+        assert_eq!(
+            gwe.get_queue_status(thread_id, QS_SENDMESSAGE),
+            (QS_SENDMESSAGE << 16) | QS_SENDMESSAGE
+        );
+        assert!(!gwe.in_send_message(thread_id));
+
+        let sent = gwe.get_message(thread_id).unwrap();
+        assert_eq!(sent.msg, WM_USER + 2);
+        assert_eq!(sent.source, MSGSRC_SOFTWARE_SEND);
+        assert!(gwe.in_send_message(thread_id));
+        assert_eq!(gwe.get_message_source(thread_id), MSGSRC_SOFTWARE_SEND);
+
+        gwe.end_send_message(thread_id);
+        assert!(!gwe.in_send_message(thread_id));
+
+        let posted = gwe.get_message(thread_id).unwrap();
+        assert_eq!(posted.msg, WM_USER + 1);
+        assert_eq!(posted.source, MSGSRC_SOFTWARE_POST);
+        assert_eq!(gwe.get_message_source(thread_id), MSGSRC_SOFTWARE_POST);
+    }
+
+    #[test]
+    fn synchronous_sent_message_records_result_for_sender() {
+        let mut gwe = Gwe::default();
+        let sender_thread = 11;
+        let receiver_thread = 12;
+        let hwnd = gwe.create_window(receiver_thread, "target", "");
+
+        let send_id = gwe
+            .queue_send_message_for_window(
+                Some(sender_thread),
+                hwnd,
+                Message::new(hwnd, WM_ERASEBKGND, 0xaa, 0xbb, 0),
+                SMF_NULL,
+                Some(250),
+            )
+            .expect("queued sync send");
+        assert_eq!(
+            gwe.sent_message(send_id)
+                .and_then(|sent| sent.sender_thread_id),
+            Some(sender_thread)
+        );
+
+        let message = gwe.get_message(receiver_thread).expect("receiver message");
+        assert_eq!(message.msg, WM_ERASEBKGND);
+        assert_eq!(gwe.active_sent_message_id(receiver_thread), Some(send_id));
+        assert!(gwe.in_send_message(receiver_thread));
+
+        assert_eq!(
+            gwe.complete_active_sent_message(receiver_thread, 0x1234),
+            Some(send_id)
+        );
+        assert!(!gwe.in_send_message(receiver_thread));
+        assert_eq!(
+            gwe.take_completed_sent_message_result(send_id),
+            Some(0x1234)
+        );
+        assert!(gwe.sent_message(send_id).is_none());
+    }
+
+    #[test]
+    fn destroying_target_marks_queued_sync_send_receiver_terminated() {
+        let mut gwe = Gwe::default();
+        let sender_thread = 21;
+        let receiver_thread = 22;
+        let hwnd = gwe.create_window(receiver_thread, "target", "");
+
+        let send_id = gwe
+            .queue_send_message_for_window(
+                Some(sender_thread),
+                hwnd,
+                Message::new(hwnd, WM_USER + 55, 1, 2, 0),
+                SMF_NULL,
+                None,
+            )
+            .expect("queued sync send");
+
+        assert!(gwe.destroy_window(hwnd, 0));
+        let sent = gwe.sent_message(send_id).expect("terminated send state");
+        assert_ne!(sent.flags & SMF_RECEIVER_TERMINATED, 0);
+        assert_ne!(sent.flags & SMF_RESULT_READY, 0);
+        assert_eq!(gwe.get_message(receiver_thread), None);
+        assert_eq!(gwe.take_completed_sent_message_result(send_id), Some(0));
+    }
+
+    #[test]
+    fn timed_out_sent_message_is_removed_from_receiver_queue() {
+        let mut gwe = Gwe::default();
+        let sender_thread = 31;
+        let receiver_thread = 32;
+        let hwnd = gwe.create_window(receiver_thread, "target", "");
+
+        let send_id = gwe
+            .queue_send_message_for_window(
+                Some(sender_thread),
+                hwnd,
+                Message::new(hwnd, WM_USER + 56, 1, 2, 100),
+                SMF_TIMEOUT,
+                Some(25),
+            )
+            .expect("queued timeout send");
+
+        assert!(gwe.expire_timed_out_sent_messages(124).is_empty());
+        assert!(gwe.get_queue_status(receiver_thread, QS_SENDMESSAGE) != 0);
+        assert_eq!(gwe.expire_timed_out_sent_messages(125), vec![send_id]);
+        let sent = gwe.sent_message(send_id).expect("timed out send state");
+        assert_ne!(sent.flags & SMF_TIMEOUT, 0);
+        assert_ne!(sent.flags & SMF_RESULT_READY, 0);
+        assert_eq!(gwe.get_message(receiver_thread), None);
+        assert_eq!(gwe.take_completed_sent_message_result(send_id), Some(0));
+        assert_eq!(gwe.stats().send_transaction_timeout_count, 1);
+    }
+
+    #[test]
+    fn queue_status_low_word_tracks_changed_bits_until_observed() {
+        let mut gwe = Gwe::default();
+        let thread_id = 41;
+
+        gwe.post_message(thread_id, Message::new(0, WM_USER + 1, 0, 0, 0));
+        assert_eq!(
+            gwe.get_queue_status(thread_id, QS_POSTMESSAGE),
+            (QS_POSTMESSAGE << 16) | QS_POSTMESSAGE
+        );
+        assert_eq!(
+            gwe.get_queue_status(thread_id, QS_POSTMESSAGE),
+            QS_POSTMESSAGE << 16
+        );
+
+        gwe.post_message(thread_id, Message::new(0, WM_USER + 2, 0, 0, 0));
+        assert_eq!(
+            gwe.get_queue_status(thread_id, QS_POSTMESSAGE),
+            (QS_POSTMESSAGE << 16) | QS_POSTMESSAGE
         );
     }
 

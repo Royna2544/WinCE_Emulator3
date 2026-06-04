@@ -5884,6 +5884,7 @@ fn msg_wait_for_multiple_objects_ex_raw<M: CoredllGuestMemory>(
     let wake_mask = raw_arg(args, 3);
     let flags = raw_arg(args, 4);
     const MWMO_WAITALL: u32 = 0x0001;
+    const MWMO_INPUTAVAILABLE: u32 = 0x0004;
     const MAXIMUM_WAIT_OBJECTS: u32 = 64;
 
     if count > MAXIMUM_WAIT_OBJECTS || (count != 0 && handles_ptr == 0) {
@@ -5924,7 +5925,15 @@ fn msg_wait_for_multiple_objects_ex_raw<M: CoredllGuestMemory>(
     }
 
     kernel.pump_timers_to_gwe(thread_id);
-    if kernel.gwe.has_queue_input(thread_id, wake_mask) {
+    let has_input = if flags & MWMO_INPUTAVAILABLE != 0 {
+        kernel.gwe.has_queue_input(thread_id, wake_mask)
+    } else {
+        kernel.gwe.has_new_queue_input(thread_id, wake_mask)
+    };
+    if has_input {
+        if flags & MWMO_INPUTAVAILABLE == 0 {
+            kernel.gwe.clear_new_queue_input(thread_id, wake_mask);
+        }
         kernel.threads.set_last_error(thread_id, 0);
         kernel.record_msg_wait_input(count, timeout_ms);
         return crate::ce::timer::WAIT_OBJECT_0 + count;
@@ -11262,7 +11271,7 @@ fn dispatch_message_w_raw<M: CoredllGuestMemory>(
         wndproc = format_args!("0x{wndproc:08x}"),
         "DispatchMessageW"
     );
-    kernel.dispatch_message_w(message)
+    kernel.dispatch_message_w_for_thread(thread_id, message)
 }
 
 fn send_message_timeout_raw<M: CoredllGuestMemory>(

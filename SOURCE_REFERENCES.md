@@ -184,7 +184,29 @@ anchors, not app-specific shortcuts.
     `smfSenderNoWaitIfDifferentThread`, and `smfNotifyMessage` for no-wait
     notification sends. Rust raw `SendNotifyMessageW` now preserves that CE
     split at the syscall boundary: same-thread targets use synchronous send,
-    while different-thread targets are queued without sender blocking.
+    while different-thread targets enter the receiver-side sent-message queue
+    without sender blocking.
+  - GWE now keeps a receiver-side sent-message queue distinct from posted
+    messages and paint requests. Retrieval prefers sent messages, marks
+    `InSendMessage`, exposes `QS_SENDMESSAGE`, and records a send source.
+    Raw and Unicorn `DispatchMessageW` paths now clear the receiver send
+    context after dispatch returns. `cmsgque.h`'s `SendMsgEntry_t` fields
+    (`pReceivedNext`, `pSentNext`, `pmsgqReply`, `smFlags`, HWND/message
+    parameters, and `WndProcResult`) now map to explicit Rust sent-message
+    transaction state with sender/receiver thread ids, flags, timeout metadata,
+    an active receiver send stack, result-ready completion, and
+    receiver-terminated completion when a target is destroyed. `cmsgque.h`'s
+    `MessageTimeout` comment and `smfTimeout` flag now map to GWE timeout
+    expiry: non-result-ready sent transactions compare the current tick against
+    the message timestamp plus timeout, set `SMF_TIMEOUT|SMF_RESULT_READY`,
+    leave a zero result, and leave receiver retrieval. Unicorn raw
+    `SendMessageW`/`SendMessageTimeoutW` now uses that transaction state for
+    same-process cross-thread guest WNDPROCs: the receiver thread becomes the
+    active CE thread for the guest WNDPROC callout, the sender MIPS context is
+    restored after the WNDPROC result is captured, and the result flows back to
+    the sender and optional timeout result pointer. Full scheduler-owned sender
+    parking, reply wakeups, reentrant cross-thread scheduling, and destroyed-
+    target edge behavior remain open.
   - CE SDK headers define `CREATESTRUCTW` as
     `lpCreateParams`, `hInstance`, `hMenu`, `hwndParent`, `cy`, `cx`, `y`, `x`,
     `style`, `lpszName`, `lpszClass`, and `dwExStyle`, and define

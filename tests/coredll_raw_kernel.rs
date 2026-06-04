@@ -19,7 +19,7 @@ use wince_emulation_v3::{
             ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION,
             ORD_WAIT_FOR_SINGLE_OBJECT,
         },
-        gwe::Message,
+        gwe::{Message, QS_POSTMESSAGE},
         kernel::CeKernel,
         registry::ERROR_SUCCESS,
         thread::{ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER},
@@ -1159,6 +1159,65 @@ fn coredll_input_debug_char_w_formats_when_called_like_wsprintf() -> Result<()> 
         memory.read_wide_z(dest, 32),
         "\\SDMMC Disk\\INavi\\iNavi.exe"
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_msgwait_requires_new_input_unless_inputavailable() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 77;
+
+    kernel.gwe.post_message(
+        thread_id,
+        Message::new(0, 0x400 + 77, 0x77, 0, kernel.timers.tick_count()),
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX,
+            [0, 0, 1000, QS_POSTMESSAGE, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_OBJECT_0),
+            ..
+        }
+    ));
+    assert!(kernel.gwe.has_queue_input(thread_id, QS_POSTMESSAGE));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX,
+            [0, 0, 0, QS_POSTMESSAGE, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_TIMEOUT),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX,
+            [0, 0, 0, QS_POSTMESSAGE, 0x0004],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_OBJECT_0),
+            ..
+        }
+    ));
 
     Ok(())
 }

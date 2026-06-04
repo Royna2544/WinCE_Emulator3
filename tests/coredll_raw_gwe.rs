@@ -38,10 +38,10 @@ use wince_emulation_v3::{
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat, VirtualFramebuffer},
         gwe::{
             GW_CHILD, GW_HWNDFIRST, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER, GWL_USERDATA,
-            HWND_BROADCAST, MSGSRC_SOFTWARE_POST, Point, QS_PAINT, QS_POSTMESSAGE, Rect,
-            SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN, WM_CLOSE, WM_DESTROY, WM_MOVE, WM_NCDESTROY,
-            WM_PAINT, WM_QUIT, WM_SHOWWINDOW, WM_SIZE, WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED,
-            WS_CHILD, WS_VISIBLE,
+            HWND_BROADCAST, MSGSRC_SOFTWARE_POST, MSGSRC_SOFTWARE_SEND, Message, Point, QS_PAINT,
+            QS_POSTMESSAGE, QS_SENDMESSAGE, Rect, SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN, WM_CLOSE,
+            WM_DESTROY, WM_ERASEBKGND, WM_MOVE, WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SHOWWINDOW,
+            WM_SIZE, WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_CHILD, WS_VISIBLE,
         },
         kernel::CeKernel,
         memory::PROCESS_HEAP_HANDLE,
@@ -3558,6 +3558,63 @@ fn coredll_raw_message_ipc_state_tracks_source_send_and_timeout() -> Result<()> 
     ));
     kernel.gwe.end_send_message(thread_id);
 
+    assert!(
+        kernel
+            .gwe
+            .queue_sent_message_for_window(hwnd, Message::new(hwnd, WM_USER + 16, 0x16, 0x17, 0))
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_QUEUE_STATUS,
+            [QS_SENDMESSAGE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(v),
+            ..
+        } if v == ((QS_SENDMESSAGE << 16) | QS_SENDMESSAGE)
+    ));
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        hwnd,
+        WM_USER + 16,
+        0x16,
+        0x17,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IN_SEND_MESSAGE,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_MESSAGE_SOURCE,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(MSGSRC_SOFTWARE_SEND),
+            ..
+        }
+    ));
+    kernel.gwe.end_send_message(thread_id);
+
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -3630,6 +3687,19 @@ fn coredll_raw_send_notify_message_is_async_across_threads() -> Result<()> {
     assert!(kernel.gwe.is_window(cross_thread_hwnd));
     assert!(!kernel.gwe.in_send_message(caller_thread));
     assert!(!kernel.gwe.in_send_message(receiver_thread));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            receiver_thread,
+            ORD_GET_QUEUE_STATUS,
+            [QS_SENDMESSAGE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(v),
+            ..
+        } if v == ((QS_SENDMESSAGE << 16) | QS_SENDMESSAGE)
+    ));
 
     assert_next_message(
         &table,
@@ -3647,6 +3717,32 @@ fn coredll_raw_send_notify_message_is_async_across_threads() -> Result<()> {
             &mut kernel,
             &mut memory,
             receiver_thread,
+            ORD_IN_SEND_MESSAGE,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            receiver_thread,
+            ORD_GET_MESSAGE_SOURCE,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(MSGSRC_SOFTWARE_SEND),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            receiver_thread,
             ORD_DISPATCH_MESSAGE_W,
             [msg_ptr],
         ),
@@ -3655,6 +3751,7 @@ fn coredll_raw_send_notify_message_is_async_across_threads() -> Result<()> {
             ..
         }
     ));
+    assert!(!kernel.gwe.in_send_message(receiver_thread));
     assert!(!kernel.gwe.is_window(cross_thread_hwnd));
     assert!(
         kernel
@@ -3662,6 +3759,115 @@ fn coredll_raw_send_notify_message_is_async_across_threads() -> Result<()> {
             .window(cross_thread_hwnd)
             .is_some_and(|window| window.destroy_message_sent)
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_dispatch_completes_queued_cross_thread_send() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let sender_thread = 46;
+    let receiver_thread = 47;
+    let msg_ptr = 0xb000;
+    memory.map_words(msg_ptr, 7);
+
+    let hwnd = kernel.create_window_ex_w(receiver_thread, "SYNC_SEND", "", None, 0, 0, 0);
+    let send_id = kernel
+        .begin_cross_thread_send_message_w(
+            sender_thread,
+            hwnd,
+            WM_ERASEBKGND,
+            0x1234,
+            0x5678,
+            Some(500),
+        )
+        .expect("queued cross-thread send");
+    assert!(!kernel.gwe.in_send_message(sender_thread));
+    assert!(!kernel.gwe.in_send_message(receiver_thread));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            receiver_thread,
+            ORD_GET_QUEUE_STATUS,
+            [QS_SENDMESSAGE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(v),
+            ..
+        } if v == ((QS_SENDMESSAGE << 16) | QS_SENDMESSAGE)
+    ));
+
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        receiver_thread,
+        msg_ptr,
+        hwnd,
+        WM_ERASEBKGND,
+        0x1234,
+        0x5678,
+    );
+    assert!(kernel.gwe.in_send_message(receiver_thread));
+    assert_eq!(
+        kernel.gwe.active_sent_message_id(receiver_thread),
+        Some(send_id)
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            receiver_thread,
+            ORD_DISPATCH_MESSAGE_W,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert!(!kernel.gwe.in_send_message(receiver_thread));
+    assert_eq!(kernel.take_completed_send_message_result(send_id), Some(1));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_get_message_expires_timed_out_cross_thread_send() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let sender_thread = 48;
+    let receiver_thread = 49;
+    let msg_ptr = 0xb100;
+    memory.map_words(msg_ptr, 7);
+
+    let hwnd = kernel.create_window_ex_w(receiver_thread, "SYNC_SEND_TIMEOUT", "", None, 0, 0, 0);
+    let send_id = kernel
+        .begin_cross_thread_send_message_w(sender_thread, hwnd, WM_USER + 57, 0x57, 0x58, Some(0))
+        .expect("queued cross-thread send");
+    assert!(kernel.gwe.sent_message(send_id).is_some());
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            receiver_thread,
+            ORD_GET_MESSAGE_W,
+            [msg_ptr, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(kernel.take_completed_send_message_result(send_id), Some(0));
+    assert_eq!(kernel.gwe.stats().send_transaction_timeout_count, 1);
 
     Ok(())
 }
@@ -4547,6 +4753,11 @@ fn coredll_raw_destroy_parent_invalidates_children_and_purges_messages() -> Resu
     let child = kernel.create_window_ex_w(thread_id, "CHILD", "", Some(parent), 1, 0, 0);
     let grandchild = kernel.create_window_ex_w(thread_id, "GRANDCHILD", "", Some(child), 2, 0, 0);
     assert!(kernel.post_message_w_for_thread(thread_id, grandchild, WM_USER + 6, 1, 2));
+    assert!(
+        kernel
+            .gwe
+            .queue_sent_message_for_window(child, Message::new(child, WM_USER + 7, 3, 4, 0))
+    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

@@ -59,7 +59,19 @@
     thread/process metadata from the GWE window table. Raw `IsChild` now uses
     recursive parent-chain checks over the virtual HWND tree. Raw
     `SendNotifyMessageW` now executes same-thread notifications synchronously
-    but queues different-thread notifications without blocking the sender.
+    but routes different-thread notifications through the receiver-side sent
+    queue without blocking the sender.
+    GWE now has a separate receiver-side sent-message queue; message retrieval
+    prefers it over posted messages, marks `InSendMessage`, and reports
+    `QS_SENDMESSAGE`/send source state. Sent messages now also carry
+    `SendMsgEntry_t`-style transaction state: sender/receiver thread ids,
+    flags, timeout metadata, active receiver stack, result-ready completion,
+    timeout expiry, and receiver-terminated completion when a target is
+    destroyed. Unicorn raw `SendMessageW`/`SendMessageTimeoutW` now enters a
+    same-process different-thread guest WNDPROC in the receiver context by
+    saving the sender MIPS registers/running-thread metadata, activating the
+    GWE sent transaction on the receiver, and restoring the sender with the
+    WNDPROC result after the callout returns.
     Raw/kernel `DestroyWindow` now records and sends `WM_DESTROY` before final
     GWE cleanup, and the default `WM_CLOSE` shortcut records the same destroy
     observation before deleting HWND state. `WM_NCDESTROY` is now tracked when
@@ -94,7 +106,18 @@
        with scheduler-owned sent queues, sender blocking, receiver-context
        execution, `InSendMessage`, timeout, destroyed-target, and reentrant
        send behavior. `SendNotifyMessageW` has the first CE-backed no-wait
-       split, but full sent-message queue ownership remains open.
+       split, and receiver-side sent-message retrieval/source/depth state now
+       exists; cross-thread `SendNotifyMessageW` now uses that queue and clears
+       receiver send depth after dispatch. Sender-side transaction bookkeeping
+       now exists for blocking sends, and raw receiver `DispatchMessageW`
+       stores the WNDPROC result back into that transaction. Timeout expiry now
+       marks queued timed sends result-ready and removes them from receiver
+       retrieval. The first Unicorn raw-send path now runs same-process
+       cross-thread guest WNDPROCs in the receiver context and restores the
+       sender result. Full scheduler-owned sender parking/resume across longer
+       waits, reentrant cross-thread scheduling, `ReplyMessage` wake semantics
+       if a real export is confirmed, and complete destroyed-target behavior
+       remain open.
     4. Window data/class/dialog/control surface: class atoms/extra bytes,
        `SetWindowLong`/`GetWindowLong`, owner thread/process queries, dialog
        procs/results, child/descendant relationship queries, child lookup,
@@ -123,7 +146,25 @@
     all-zero framebuffer result. The bounded guest-destroy-chain probe wrote
     `target\guest_destroy_chain_*` artifacts, stopped at `pc=0x600c9aec` with
     `host_read=4226/500100B` and `heap_live=5620/2459096B`, and still had no
-    render milestones or framebuffer pixels.
+    render milestones or framebuffer pixels. The bounded sent-queue probe wrote
+    `target\sent_queue_*` artifacts, stopped at `pc=0x00b4bc1c` with
+    `host_read=4221/495853B` and `heap_live=5948/2767663B`, and likewise had
+    no render milestones or framebuffer pixels. The bounded
+    send-notify-sent-queue probe wrote `target\send_notify_sent_queue_*`
+    artifacts, stopped at `pc=0x00339d8c` with `host_read=4221/499832B` and
+    `heap_live=5948/2767663B`, and still had no render milestones or
+    framebuffer pixels. The bounded sync-send-transaction probe wrote
+    `target\sync_send_transaction_*` artifacts, stopped at `pc=0x00b4bc24`
+    with `host_read=4221/495853B` and `heap_live=5948/2767663B`, and likewise
+    had no render milestones or framebuffer pixels. The bounded
+    send-timeout-expiry probe wrote `target\send_timeout_expiry_*` artifacts,
+    stopped at `pc=0x00339c3c` with `host_read=4219/486039B` and
+    `heap_live=5948/2767663B`, and still had no render milestones or
+    framebuffer pixels. The bounded receiver-context-send probe wrote
+    `target\receiver_context_send_*` artifacts, stopped at `pc=0x00b4bc24`
+    with `host_read=4221/495853B` and `heap_live=5948/2767663B`, reached
+    real resource/DIB work, but still had no render milestones and an all-zero
+    framebuffer body.
 
 ## Immediate
 

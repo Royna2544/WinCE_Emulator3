@@ -254,13 +254,37 @@
     10 s but still reported no render milestones and all-zero framebuffer
     bodies. The latest guest-destroy-chain probe wrote
     `target\guest_destroy_chain_*`, stopped at `pc=0x600c9aec`, and likewise
-    had no render milestones or framebuffer pixels. The earlier short mounted
-    `SendNotifyMessageW` probe reached later `mapinfo.bin`/`UID1:` file
-    activity, another child HWND, and `GetDC`, but still produced no render
-    milestones and only one nonzero framebuffer byte. The broader window/GWE
-    subsystem still needs scheduler-owned synchronous sends, destroyed-target
-    behavior, input/focus/modal fidelity, and GDI/DC integration before this
-    bug can be closed.
+    had no render milestones or framebuffer pixels. Receiver-side sent-message
+    retrieval now has its own queue ahead of posted messages and marks
+    `InSendMessage`/`QS_SENDMESSAGE`/send source state; the bounded
+    `target\sent_queue_*` probe stopped at `pc=0x00b4bc1c` with no render
+    milestones or framebuffer pixels. Cross-thread `SendNotifyMessageW` now
+    uses that sent queue instead of a normal post and clears receiver send depth
+    after dispatch; the bounded `target\send_notify_sent_queue_*` probe stopped
+    at `pc=0x00339d8c` with no render milestones or framebuffer pixels.
+    Sender-side sent-message transaction bookkeeping now records CE-style
+    sender/receiver thread ids, flags, timeout metadata, active receiver send
+    stack, WNDPROC result completion, and receiver-terminated completion for
+    destroyed targets; raw receiver `DispatchMessageW` stores the dispatch
+    result back into that transaction. Timeout expiry now marks queued timed
+    sends result-ready and removes them from receiver retrieval. The bounded
+    `target\sync_send_transaction_*` probe stopped at `pc=0x00b4bc24` with no
+    render milestones and an all-zero framebuffer body, and the bounded
+    `target\send_timeout_expiry_*` probe stopped at `pc=0x00339c3c` with no
+    render milestones and an all-zero framebuffer body. Unicorn raw
+    `SendMessageW`/`SendMessageTimeoutW` now has a same-process cross-thread
+    receiver-context guest WNDPROC callout that saves/restores the sender MIPS
+    context and completes the GWE sent transaction with the WNDPROC result; the
+    bounded `target\receiver_context_send_*` probe stopped at `pc=0x00b4bc24`,
+    reached real resource/DIB activity, but still had no render milestones and
+    an all-zero framebuffer body. The earlier short mounted `SendNotifyMessageW`
+    probe reached later
+    `mapinfo.bin`/`UID1:` file activity, another child HWND, and `GetDC`, but
+    still produced no render milestones and only one nonzero framebuffer byte.
+    The broader window/GWE subsystem still needs scheduler-owned sender
+    parking/resume across longer waits, reentrant cross-thread scheduling,
+    destroyed-target behavior, input/focus/modal fidelity, and GDI/DC
+    integration before this bug can be closed.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch

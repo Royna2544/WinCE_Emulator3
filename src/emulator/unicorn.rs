@@ -69,6 +69,7 @@ pub struct UnicornDebugSnapshot {
     pub import_milestones: Vec<UnicornLastImport>,
     pub file_io_stats: crate::ce::file::FileIoStats,
     pub scheduler_stats: crate::ce::scheduler::SchedulerStats,
+    pub gwe_stats: crate::ce::gwe::GweStats,
     pub recent_file_open_ops: Vec<crate::ce::kernel::FileTraceRecord>,
     pub recent_file_ops: Vec<crate::ce::kernel::FileTraceRecord>,
     pub last_messages: Vec<UnicornLastMessage>,
@@ -155,6 +156,16 @@ impl UnicornDebugSnapshot {
                 self.scheduler_stats.wait_failed_count,
                 self.scheduler_stats.wait_block_count,
                 self.scheduler_stats.wait_wake_count
+            ));
+        }
+        if self.gwe_stats.send_transaction_count != 0 {
+            parts.push(format!(
+                "gwe=send:{} done:{} timeout:{} dead:{} maxq:{}",
+                self.gwe_stats.send_transaction_count,
+                self.gwe_stats.send_transaction_completed_count,
+                self.gwe_stats.send_transaction_timeout_count,
+                self.gwe_stats.send_transaction_receiver_terminated_count,
+                self.gwe_stats.max_sent_queue_depth
             ));
         }
         if let Some(indirect) = &self.indirect_call_probe {
@@ -657,6 +668,16 @@ struct CreateWindowReturn {
 
 #[cfg(feature = "unicorn")]
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct SendMessageRestoreContext {
+    sender_thread_id: u32,
+    receiver_thread_id: u32,
+    send_id: u64,
+    previous_running_thread: Option<(u32, u32)>,
+    sender_regs: [u32; 32],
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingWndProcReturn {
     source: &'static str,
     hwnd: u32,
@@ -673,6 +694,7 @@ struct PendingWndProcReturn {
     remaining_destroy_callouts: Vec<DestroyWndProcCallout>,
     send_thread_id: Option<u32>,
     send_timeout_result_ptr: Option<u32>,
+    send_restore: Option<SendMessageRestoreContext>,
 }
 
 #[cfg(feature = "unicorn")]
@@ -1716,8 +1738,17 @@ impl UnicornMips {
                         return;
                     };
                     let result = read_mips_reg(uc, RegisterMIPS::V0);
-                    if let Some(thread_id) = callout.send_thread_id {
-                        unsafe { &mut *kernel_ptr }.gwe.end_send_message(thread_id);
+                    if let Some(restore) = callout.send_restore.as_ref() {
+                        let _ = unsafe { &mut *kernel_ptr }
+                            .gwe
+                            .complete_active_sent_message(restore.receiver_thread_id, result);
+                    } else if let Some(thread_id) = callout.send_thread_id {
+                        let kernel = unsafe { &mut *kernel_ptr };
+                        if kernel.gwe.active_sent_message_id(thread_id).is_some() {
+                            let _ = kernel.gwe.complete_active_sent_message(thread_id, result);
+                        } else {
+                            kernel.gwe.end_send_message(thread_id);
+                        }
                     }
                     if let Some(result_ptr) = callout.send_timeout_result_ptr {
                         let _ = uc.mem_write(u64::from(result_ptr), &result.to_le_bytes());
@@ -1801,6 +1832,7 @@ impl UnicornMips {
                                 remaining_destroy_callouts: remaining,
                                 send_thread_id: None,
                                 send_timeout_result_ptr: None,
+                                send_restore: None,
                             });
                         if write_wndproc_call_registers(
                             uc,
@@ -1831,6 +1863,23 @@ impl UnicornMips {
                     });
                     if let Some(api_result) = api_result {
                         let _ = uc.reg_write(RegisterMIPS::V0, u64::from(api_result));
+                    }
+                    if let Some(restore) = callout.send_restore {
+                        let completed = unsafe { &mut *kernel_ptr }
+                            .take_completed_send_message_result(restore.send_id)
+                            .unwrap_or(result);
+                        restore_mips_gprs(uc, &restore.sender_regs);
+                        *current_thread_id_hook.borrow_mut() = restore.sender_thread_id;
+                        *running_guest_thread_hook.borrow_mut() = restore.previous_running_thread;
+                        let writes = [
+                            uc.reg_write(RegisterMIPS::V0, u64::from(completed)),
+                            uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc)),
+                            uc.reg_write(RegisterMIPS::RA, u64::from(callout.return_pc)),
+                        ];
+                        if writes.into_iter().any(|write| write.is_err()) {
+                            let _ = uc.emu_stop();
+                        }
+                        return;
                     }
                     let writes = [
                         uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc)),
@@ -2069,6 +2118,7 @@ impl UnicornMips {
                         trap.module_kind,
                         trap.ordinal,
                         &args,
+                        active_thread_id,
                         &pending_wndproc_returns_hook,
                     )
                 }) {
@@ -2082,6 +2132,8 @@ impl UnicornMips {
                         trap.ordinal,
                         &args,
                         active_thread_id,
+                        &current_thread_id_hook,
+                        &running_guest_thread_hook,
                         &pending_wndproc_returns_hook,
                     )
                 }) {
@@ -2442,6 +2494,7 @@ impl UnicornMips {
             import_milestones.borrow().clone(),
             kernel.file_io_stats(),
             kernel.scheduler_stats(),
+            kernel.gwe_stats(),
             kernel.recent_file_open_ops().to_vec(),
             kernel.recent_file_ops().to_vec(),
             last_messages.borrow().clone(),
@@ -4095,7 +4148,7 @@ impl std::fmt::Display for UnicornDebugSnapshot {
         }
         write!(
             f,
-            " heap_live_count={} heap_live_bytes={} virtual_live_count={} virtual_live_bytes={} file_host_open_count={} file_host_read_count={} file_host_read_bytes={} file_memory_backed_open_count={} file_max_read_request={} sched_wait_single_count={} sched_wait_multiple_count={} sched_msg_wait_count={} sched_wait_acquired_count={} sched_wait_timeout_count={} sched_wait_failed_count={} sched_wait_block_count={} sched_wait_wake_count={}",
+            " heap_live_count={} heap_live_bytes={} virtual_live_count={} virtual_live_bytes={} file_host_open_count={} file_host_read_count={} file_host_read_bytes={} file_memory_backed_open_count={} file_max_read_request={} sched_wait_single_count={} sched_wait_multiple_count={} sched_msg_wait_count={} sched_wait_acquired_count={} sched_wait_timeout_count={} sched_wait_failed_count={} sched_wait_block_count={} sched_wait_wake_count={} gwe_send_transaction_count={} gwe_send_completed_count={} gwe_send_timeout_count={} gwe_send_receiver_terminated_count={} gwe_max_sent_queue_depth={}",
             self.heap_allocation_count,
             self.heap_allocation_bytes,
             self.virtual_allocation_count,
@@ -4112,7 +4165,12 @@ impl std::fmt::Display for UnicornDebugSnapshot {
             self.scheduler_stats.wait_timeout_count,
             self.scheduler_stats.wait_failed_count,
             self.scheduler_stats.wait_block_count,
-            self.scheduler_stats.wait_wake_count
+            self.scheduler_stats.wait_wake_count,
+            self.gwe_stats.send_transaction_count,
+            self.gwe_stats.send_transaction_completed_count,
+            self.gwe_stats.send_transaction_timeout_count,
+            self.gwe_stats.send_transaction_receiver_terminated_count,
+            self.gwe_stats.max_sent_queue_depth
         )?;
         if let Some(probe) = self.interrupt_probe.as_ref() {
             write!(
@@ -5011,7 +5069,7 @@ fn try_block_empty_get_message<D>(
         hwnd,
         min_msg,
         max_msg,
-        queue_status: kernel.gwe.get_queue_status(thread_id, u32::MAX),
+        queue_status: kernel.gwe.peek_queue_status(thread_id, u32::MAX),
         next_timer_due_ms: kernel.timers.next_due_delay_ms(),
         timers: kernel
             .timers
@@ -7485,12 +7543,26 @@ fn should_direct_call_send_message_wndproc(
 }
 
 #[cfg(feature = "unicorn")]
+fn should_receiver_context_send_message_wndproc(
+    active_thread_id: u32,
+    active_process_id: u32,
+    target_thread_id: u32,
+    target_process_id: u32,
+    wndproc: u32,
+) -> bool {
+    active_thread_id != target_thread_id
+        && active_process_id == target_process_id
+        && is_guest_wndproc(wndproc)
+}
+
+#[cfg(feature = "unicorn")]
 fn try_enter_dispatch_message_callout<D>(
     kernel: &CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
+    active_thread_id: u32,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
@@ -7553,8 +7625,12 @@ fn try_enter_dispatch_message_callout<D>(
         finalize_destroy: false,
         destroy_root_hwnd: None,
         remaining_destroy_callouts: Vec::new(),
-        send_thread_id: None,
+        send_thread_id: kernel
+            .gwe
+            .in_send_message(active_thread_id)
+            .then_some(active_thread_id),
         send_timeout_result_ptr: None,
+        send_restore: None,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
@@ -7581,6 +7657,8 @@ fn try_enter_send_message_callout<D>(
     ordinal: Option<u32>,
     args: &[u32],
     active_thread_id: u32,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
@@ -7606,31 +7684,6 @@ fn try_enter_send_message_callout<D>(
     let target_process_id = window.process_id;
     let class_name = window.class_name.clone();
     let active_process_id = kernel.current_process_id();
-    if !should_direct_call_send_message_wndproc(
-        active_thread_id,
-        active_process_id,
-        target_thread_id,
-        target_process_id,
-        wndproc,
-    ) {
-        if (active_thread_id != target_thread_id || active_process_id != target_process_id)
-            && is_guest_wndproc(wndproc)
-        {
-            tracing::debug!(
-                target: "ce.gwe",
-                source = if is_send_message_timeout { "SendMessageTimeout" } else { "SendMessageW" },
-                hwnd = format_args!("0x{hwnd:08x}"),
-                class = class_name.as_str(),
-                wndproc = format_args!("0x{wndproc:08x}"),
-                active_thread_id,
-                active_process_id,
-                target_thread_id,
-                target_process_id,
-                "SendMessage guest wndproc not entered across emulated context"
-            );
-        }
-        return false;
-    }
     let msg = args.get(1).copied().unwrap_or(0);
     let wparam = args.get(2).copied().unwrap_or(0);
     let lparam = args.get(3).copied().unwrap_or(0);
@@ -7638,10 +7691,47 @@ fn try_enter_send_message_callout<D>(
         .then(|| args.get(6).copied().unwrap_or(0))
         .filter(|ptr| *ptr != 0);
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+    let source = if is_send_message_timeout {
+        "SendMessageTimeout"
+    } else {
+        "SendMessageW"
+    };
+
+    let should_direct = should_direct_call_send_message_wndproc(
+        active_thread_id,
+        active_process_id,
+        target_thread_id,
+        target_process_id,
+        wndproc,
+    );
+    let should_receiver_context = should_receiver_context_send_message_wndproc(
+        active_thread_id,
+        active_process_id,
+        target_thread_id,
+        target_process_id,
+        wndproc,
+    );
+    if !should_direct && !should_receiver_context {
+        if is_guest_wndproc(wndproc) {
+            tracing::debug!(
+                target: "ce.gwe",
+                source,
+                hwnd = format_args!("0x{hwnd:08x}"),
+                class = class_name.as_str(),
+                wndproc = format_args!("0x{wndproc:08x}"),
+                active_thread_id,
+                active_process_id,
+                target_thread_id,
+                target_process_id,
+                "SendMessage guest wndproc not entered"
+            );
+        }
+        return false;
+    }
 
     tracing::debug!(
         target: "ce.gwe",
-        source = if is_send_message_timeout { "SendMessageTimeout" } else { "SendMessageW" },
+        source,
         hwnd = format_args!("0x{hwnd:08x}"),
         msg = format_args!("0x{msg:08x}"),
         wparam = format_args!("0x{wparam:08x}"),
@@ -7652,13 +7742,42 @@ fn try_enter_send_message_callout<D>(
         "SendMessage guest wndproc callout"
     );
 
-    kernel.gwe.begin_send_message(target_thread_id);
+    let send_restore = if should_receiver_context {
+        let timeout_ms = is_send_message_timeout.then(|| args.get(5).copied().unwrap_or(0));
+        let Some(send_id) = kernel.begin_cross_thread_send_message_w(
+            active_thread_id,
+            hwnd,
+            msg,
+            wparam,
+            lparam,
+            timeout_ms,
+        ) else {
+            return false;
+        };
+        if !kernel
+            .gwe
+            .activate_sent_message_for_receiver(target_thread_id, send_id)
+        {
+            return false;
+        }
+        let sender_regs = capture_mips_gprs(uc);
+        let previous_running_thread = *running_thread.borrow();
+        *current_thread_id.borrow_mut() = target_thread_id;
+        *running_thread.borrow_mut() = None;
+        Some(SendMessageRestoreContext {
+            sender_thread_id: active_thread_id,
+            receiver_thread_id: target_thread_id,
+            send_id,
+            previous_running_thread,
+            sender_regs,
+        })
+    } else {
+        kernel.gwe.begin_send_message(target_thread_id);
+        None
+    };
+
     pending_returns.borrow_mut().push(PendingWndProcReturn {
-        source: if is_send_message_timeout {
-            "SendMessageTimeout"
-        } else {
-            "SendMessageW"
-        },
+        source,
         hwnd,
         msg,
         wparam,
@@ -7671,8 +7790,9 @@ fn try_enter_send_message_callout<D>(
         finalize_destroy: false,
         destroy_root_hwnd: None,
         remaining_destroy_callouts: Vec::new(),
-        send_thread_id: Some(target_thread_id),
+        send_thread_id: should_direct.then_some(target_thread_id),
         send_timeout_result_ptr: result_ptr,
+        send_restore,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
@@ -7686,8 +7806,19 @@ fn try_enter_send_message_callout<D>(
     if writes.into_iter().all(|write| write.is_ok()) {
         true
     } else {
-        let _ = pending_returns.borrow_mut().pop();
-        kernel.gwe.end_send_message(target_thread_id);
+        if let Some(callout) = pending_returns.borrow_mut().pop() {
+            if let Some(restore) = callout.send_restore {
+                let _ = kernel
+                    .gwe
+                    .complete_active_sent_message(restore.receiver_thread_id, 0);
+                let _ = kernel.take_completed_send_message_result(restore.send_id);
+                restore_mips_gprs(uc, &restore.sender_regs);
+                *current_thread_id.borrow_mut() = restore.sender_thread_id;
+                *running_thread.borrow_mut() = restore.previous_running_thread;
+            } else if let Some(thread_id) = callout.send_thread_id {
+                kernel.gwe.end_send_message(thread_id);
+            }
+        }
         false
     }
 }
@@ -7804,6 +7935,7 @@ fn try_enter_def_dlg_proc_callout<D>(
         remaining_destroy_callouts: Vec::new(),
         send_thread_id: None,
         send_timeout_result_ptr: None,
+        send_restore: None,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
@@ -7902,6 +8034,7 @@ fn enter_destroy_window_wm_destroy_callout<D>(
         remaining_destroy_callouts: callouts,
         send_thread_id: None,
         send_timeout_result_ptr: None,
+        send_restore: None,
     });
     if write_wndproc_call_registers(
         uc,
@@ -8047,6 +8180,7 @@ fn try_enter_is_dialog_message_callout<D>(
         remaining_destroy_callouts: Vec::new(),
         send_thread_id: None,
         send_timeout_result_ptr: None,
+        send_restore: None,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(target)),
@@ -8122,6 +8256,7 @@ fn try_enter_update_window_callout<D>(
         remaining_destroy_callouts: Vec::new(),
         send_thread_id: None,
         send_timeout_result_ptr: None,
+        send_restore: None,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
@@ -8207,6 +8342,7 @@ fn try_enter_dialog_init_callout<D>(
         remaining_destroy_callouts: Vec::new(),
         send_thread_id: None,
         send_timeout_result_ptr: None,
+        send_restore: None,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
@@ -8396,6 +8532,7 @@ fn try_enter_call_window_proc_callout<D>(
         remaining_destroy_callouts: Vec::new(),
         send_thread_id: None,
         send_timeout_result_ptr: None,
+        send_restore: None,
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
@@ -8461,6 +8598,7 @@ fn capture_debug_snapshot<D>(
     import_milestones: Vec<UnicornLastImport>,
     file_io_stats: crate::ce::file::FileIoStats,
     scheduler_stats: crate::ce::scheduler::SchedulerStats,
+    gwe_stats: crate::ce::gwe::GweStats,
     recent_file_open_ops: Vec<crate::ce::kernel::FileTraceRecord>,
     recent_file_ops: Vec<crate::ce::kernel::FileTraceRecord>,
     last_messages: Vec<UnicornLastMessage>,
@@ -8517,6 +8655,7 @@ fn capture_debug_snapshot<D>(
         import_milestones,
         file_io_stats,
         scheduler_stats,
+        gwe_stats,
         recent_file_open_ops,
         recent_file_ops,
         last_messages,
@@ -9709,6 +9848,7 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
 #[cfg(all(test, feature = "unicorn"))]
 mod unicorn_tests {
     use crate::{ce::gwe::GWL_WNDPROC, ce::kernel::CeKernel, config::RuntimeConfig};
+    use std::{cell::RefCell, rc::Rc};
     use unicorn_engine::{
         RegisterMIPS, Unicorn,
         unicorn_const::{Arch, Mode, Prot},
@@ -10269,6 +10409,106 @@ mod unicorn_tests {
             0,
             crate::ce::gwe::DEFAULT_WNDPROC
         ));
+    }
+
+    #[test]
+    fn send_message_receiver_context_requires_same_process_guest_wndproc() {
+        assert!(super::should_receiver_context_send_message_wndproc(
+            1,
+            0,
+            2,
+            0,
+            0x0001_3570
+        ));
+        assert!(!super::should_receiver_context_send_message_wndproc(
+            1,
+            0,
+            1,
+            0,
+            0x0001_3570
+        ));
+        assert!(!super::should_receiver_context_send_message_wndproc(
+            1,
+            0,
+            2,
+            0x42,
+            0x0001_3570
+        ));
+        assert!(!super::should_receiver_context_send_message_wndproc(
+            1, 0, 2, 0, 0
+        ));
+        assert!(!super::should_receiver_context_send_message_wndproc(
+            1,
+            0,
+            2,
+            0,
+            crate::ce::gwe::DEFAULT_WNDPROC
+        ));
+    }
+
+    #[test]
+    fn send_message_callout_enters_cross_thread_receiver_context() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let sender_thread = 1;
+        let receiver_thread = 2;
+        let wndproc: u32 = 0x0001_3570;
+        let return_pc: u32 = 0x0040_1000;
+        let hwnd = kernel.create_window_ex_w(receiver_thread, "CROSS_SEND", "", None, 0, 0, 0);
+        kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, wndproc);
+        uc.reg_write(RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        uc.reg_write(RegisterMIPS::S0, 0x7777_0001).unwrap();
+
+        let current_thread_id = Rc::new(RefCell::new(sender_thread));
+        let running_thread = Rc::new(RefCell::new(Some((sender_thread, 0x0000_0120))));
+        let pending = Rc::new(RefCell::new(Vec::new()));
+        assert!(super::try_enter_send_message_callout(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_W),
+            &[hwnd, crate::ce::gwe::WM_USER + 88, 0x55, 0x66],
+            sender_thread,
+            &current_thread_id,
+            &running_thread,
+            &pending,
+        ));
+
+        assert_eq!(*current_thread_id.borrow(), receiver_thread);
+        assert_eq!(*running_thread.borrow(), None);
+        assert_eq!(uc.reg_read(RegisterMIPS::A0).unwrap() as u32, hwnd);
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::A1).unwrap() as u32,
+            crate::ce::gwe::WM_USER + 88
+        );
+        assert_eq!(uc.reg_read(RegisterMIPS::A2).unwrap() as u32, 0x55);
+        assert_eq!(uc.reg_read(RegisterMIPS::A3).unwrap() as u32, 0x66);
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, wndproc);
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::RA).unwrap() as u32,
+            super::WNDPROC_RETURN_STUB_ADDR
+        );
+        let pending = pending.borrow();
+        assert_eq!(pending.len(), 1);
+        let restore = pending[0]
+            .send_restore
+            .as_ref()
+            .expect("cross-thread send restore context");
+        assert_eq!(restore.sender_thread_id, sender_thread);
+        assert_eq!(restore.receiver_thread_id, receiver_thread);
+        assert_eq!(
+            restore.previous_running_thread,
+            Some((sender_thread, 0x120))
+        );
+        assert_eq!(restore.sender_regs[16], 0x7777_0001);
+        assert!(kernel.gwe.in_send_message(receiver_thread));
+        assert_eq!(
+            kernel.gwe.active_sent_message_id(receiver_thread),
+            Some(restore.send_id)
+        );
+        assert!(kernel.gwe.sent_message(restore.send_id).is_some());
     }
 
     #[test]

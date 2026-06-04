@@ -9,8 +9,8 @@ use crate::{
             OPEN_EXISTING,
         },
         gwe::{
-            Gwe, HWND_BROADCAST, Message, Point, Rect, WM_MOVE, WM_SHOWWINDOW, WM_SIZE,
-            WM_WINDOWPOSCHANGED,
+            Gwe, GweStats, HWND_BROADCAST, Message, Point, Rect, SMF_NULL, WM_MOVE, WM_SHOWWINDOW,
+            WM_SIZE, WM_WINDOWPOSCHANGED,
         },
         memory::MemorySystem,
         object::{FileObject, FindFileObject, HandleTable, KernelObject, WaitResult},
@@ -233,6 +233,7 @@ impl CeKernel {
     }
 
     pub fn pump_timers_to_gwe(&mut self, thread_id: u32) {
+        self.expire_timed_out_send_messages();
         for timer in self.timers.due_timers() {
             if let Some(hwnd) = timer.hwnd {
                 let message = crate::ce::gwe::Message::new(
@@ -245,6 +246,11 @@ impl CeKernel {
                 self.gwe.post_message(thread_id, message);
             }
         }
+    }
+
+    pub fn expire_timed_out_send_messages(&mut self) -> Vec<u64> {
+        self.gwe
+            .expire_timed_out_sent_messages(self.timers.tick_count())
     }
 
     pub fn set_file_root(&mut self, root: impl Into<std::path::PathBuf>) {
@@ -273,6 +279,10 @@ impl CeKernel {
 
     pub fn scheduler_stats(&self) -> SchedulerStats {
         self.scheduler.stats()
+    }
+
+    pub fn gwe_stats(&self) -> GweStats {
+        self.gwe.stats()
     }
 
     pub fn record_file_trace(&mut self, record: FileTraceRecord) {
@@ -1139,6 +1149,36 @@ impl CeKernel {
         result
     }
 
+    pub fn begin_cross_thread_send_message_w(
+        &mut self,
+        caller_thread_id: u32,
+        hwnd: u32,
+        msg: u32,
+        wparam: u32,
+        lparam: u32,
+        timeout_ms: Option<u32>,
+    ) -> Option<u64> {
+        let target_thread = self
+            .gwe
+            .window(hwnd)
+            .filter(|window| !window.destroyed)
+            .map(|window| window.thread_id)?;
+        if target_thread == caller_thread_id {
+            return None;
+        }
+        self.gwe.queue_send_message_for_window(
+            Some(caller_thread_id),
+            hwnd,
+            Message::new(hwnd, msg, wparam, lparam, self.timers.tick_count()),
+            SMF_NULL,
+            timeout_ms,
+        )
+    }
+
+    pub fn take_completed_send_message_result(&mut self, send_id: u64) -> Option<u32> {
+        self.gwe.take_completed_sent_message_result(send_id)
+    }
+
     pub fn destroy_window(&mut self, hwnd: u32) -> bool {
         let Some(targets) = self.gwe.window_and_descendants(hwnd) else {
             return false;
@@ -1179,18 +1219,41 @@ impl CeKernel {
         if target_thread == caller_thread_id {
             return self.send_message_w(hwnd, msg, wparam, lparam).is_some();
         }
-        self.gwe.post_message_for_window(
+        self.gwe.queue_sent_message_for_window(
             hwnd,
             Message::new(hwnd, msg, wparam, lparam, self.timers.tick_count()),
         )
     }
 
     pub fn dispatch_message_w(&mut self, message: Message) -> u32 {
+        self.dispatch_message_w_for_thread(0, message)
+    }
+
+    pub fn dispatch_message_w_for_thread(&mut self, thread_id: u32, message: Message) -> u32 {
         if message.msg == crate::ce::gwe::WM_QUIT {
             return message.wparam;
         }
-        self.send_message_w(message.hwnd, message.msg, message.wparam, message.lparam)
-            .unwrap_or(0)
+        let sent_context_thread = if message.source == crate::ce::gwe::MSGSRC_SOFTWARE_SEND {
+            self.gwe
+                .window(message.hwnd)
+                .map(|window| window.thread_id)
+                .filter(|thread_id| self.gwe.in_send_message(*thread_id))
+        } else {
+            None
+        }
+        .or_else(|| (thread_id != 0 && self.gwe.in_send_message(thread_id)).then_some(thread_id));
+        let result = if sent_context_thread.is_some() {
+            self.gwe
+                .send_message(message.hwnd, message.msg, message.wparam, message.lparam)
+        } else {
+            self.send_message_w(message.hwnd, message.msg, message.wparam, message.lparam)
+        }
+        .unwrap_or(0);
+        if let Some(sent_context_thread) = sent_context_thread {
+            self.gwe
+                .complete_active_sent_message(sent_context_thread, result);
+        }
+        result
     }
 
     pub fn message_pump_step(&mut self, thread_id: u32) -> MessagePumpResult {
@@ -1200,7 +1263,7 @@ impl CeKernel {
         if message.msg == crate::ce::gwe::WM_QUIT {
             return MessagePumpResult::Quit(message.wparam);
         }
-        MessagePumpResult::Dispatched(self.dispatch_message_w(message))
+        MessagePumpResult::Dispatched(self.dispatch_message_w_for_thread(thread_id, message))
     }
 
     pub fn set_timer(
