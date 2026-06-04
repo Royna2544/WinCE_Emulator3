@@ -115,6 +115,11 @@
     sends `WM_DESTROY` to descendants before the parent and before final GWE
     cleanup. Unicorn direct guest-WNDPROC `DestroyWindow` now chains guest
     descendant `WM_DESTROY` callbacks child-first before final root cleanup.
+    Unicorn `CreateWindowExW` guest-WNDPROC callouts now honor `WM_CREATE`
+    failure returns by returning `NULL` and destroying the just-created virtual
+    HWND when guest code returns `-1`. A mounted probe showed that
+    unconditionally injecting `WM_NCCREATE` at this import boundary regresses
+    CE/MFC startup, so that behavior is not part of the current runtime path.
     GWE now stores explicit active-window state separately from focus, and raw
     `SetFocus`, `SetActiveWindow`, `SetForegroundWindow`, activating
     `ShowWindow` commands, and `SetWindowPos` without `SWP_NOACTIVATE` queue
@@ -178,7 +183,9 @@
        when reparenting under hidden/disabled ancestry.
        Raw `CreateWindowExW` now splits `hWndParent` into child parent versus
        top-level owner according to `WS_CHILD`, matching CE MFC
-       `AfxGetParentOwner` usage.
+       `AfxGetParentOwner` usage. Unicorn create callouts now abort
+       creation on guest `WM_CREATE == -1`; unconditional `WM_NCCREATE`
+       injection is a rejected false lead for this target/runtime path.
        Remaining lifecycle work includes exact create/z-order side effects
        such as owner/topmost rules, deeper activate/focus/enable edge cases
        such as top-level owner activation, disabled-focus transfer,
@@ -343,7 +350,15 @@
     `pc=0x0001362c` with `heap_live=7041/21284917B`,
     `virtual_live=3/196608B`, `host_open=113`,
     `host_read=7843/1763759B`, `mem_open=2`, `max_read=497178`, no render
-    milestones, and the same 101-pixel red line.
+    milestones, and the same 101-pixel red line. The create-failure contract
+    probe wrote `target\create_abort_virtual_60s_*`; it stopped at
+    `pc=0x001e5408` with `heap_live=6926/21256719B`, `host_open=91`,
+    `host_read=4304/1732170B`, `mem_open=2`, `max_read=497178`, no render
+    milestones, and the same 101-pixel red line. An earlier experimental
+    `WM_NCCREATE` injection probe wrote `target\nc_create_virtual_60s_*` and
+    regressed to an immediate empty-queue stop (`pc=0x7fff0b60`,
+    `heap_live=24/12914B`, `host_read=0/0B`), so do not count that path as
+    progress.
     Treat this as fidelity evidence and a possible performance/lifecycle
     frontier, not useful UI progress.
 

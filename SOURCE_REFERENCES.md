@@ -148,6 +148,15 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     final HWND cleanup instead of deleting state directly. The current default
     `WM_CLOSE` shortcut records that same destroy-message observation before
     cleanup.
+  - `CWindow` also tracks `fSentWmCreate`, and CE SDK/MFC code treats a
+    `WM_CREATE` return of `-1` as create failure. Rust's Unicorn
+    `CreateWindowExW` guest-WNDPROC callout now preserves that return contract
+    by returning `NULL` and removing the just-created virtual HWND when guest
+    `WM_CREATE` fails. CE MFC `_WIN32_WCE` sources (`wincore.cpp`,
+    `dlgcore.cpp`) contain special first-message/dialog create glue, and a
+    mounted iNavi probe showed that unconditional `WM_NCCREATE` injection at
+    the `CreateWindowExW` import boundary regresses startup, so v3 does not
+    synthesize `WM_NCCREATE` there by default.
   - Raw/kernel parent `DestroyWindow` now walks the virtual descendant tree and
     sends `WM_DESTROY` to descendants before the parent, then performs final
     GWE cleanup. Unicorn direct guest-WNDPROC destroy callouts use the same

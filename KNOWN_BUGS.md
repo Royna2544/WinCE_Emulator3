@@ -156,8 +156,17 @@
     (`heap_live=7041/21284917B`, `virtual_live=3/196608B`,
     `host_open=113`, `host_read=7843/1763759B`, `mem_open=2`,
     `max_read=497178`), still had no render milestones, and still had only the
-    same 101 red pixels from `(0,160)` through `(100,160)`. This remains
-    no-useful-UI.
+    same 101 red pixels from `(0,160)` through `(100,160)`. An experimental
+    unconditional `WM_NCCREATE` create-callout probe wrote
+    `target\nc_create_virtual_60s_*` and regressed mounted startup to an
+    immediate empty `GetMessageW` stop (`pc=0x7fff0b60`,
+    `heap_live=24/12914B`, `host_read=0/0B`); that behavior was removed. The
+    retained `WM_CREATE == -1` create-abort slice wrote
+    `target\create_abort_virtual_60s_*`, stopped at `pc=0x001e5408`, stayed
+    memory/file stable (`heap_live=6926/21256719B`, `host_open=91`,
+    `host_read=4304/1732170B`, `mem_open=2`, `max_read=497178`), still had no
+    render milestones, and still had only the same 101 red pixels from
+    `(0,160)` through `(100,160)`. This remains no-useful-UI.
   - Evidence: latest bounded run with `--features unicorn`,
     `--dll-search-dir C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii`,
     and `--mount-config mounts.toml` previously timed out after 30

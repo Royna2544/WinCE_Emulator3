@@ -9,6 +9,32 @@
 
 ## Confirmed
 
+- The Unicorn `CreateWindowExW` guest-WNDPROC callout now preserves the CE/MFC
+  `WM_CREATE` failure contract: a guest `WM_CREATE` return of `-1` makes the
+  raw API return `NULL` and destroys the just-created virtual HWND, while a
+  normal return still returns the created HWND. Focused coverage:
+  `emulator::unicorn::unicorn_tests::create_window_callout_returns_hwnd_or_null_after_wm_create`;
+  the raw GWE suite still passes (`52 passed`), `cargo check --features
+  unicorn,trace,win32-desktop` passes, and
+  `cargo test --features unicorn,trace,win32-desktop` passes (`94` unit tests
+  plus integration suites). A source/probe correction happened in the same
+  slice: an experimental unconditional `WM_NCCREATE` callout at
+  `CreateWindowExW` regressed mounted startup to an immediate empty
+  `GetMessageW` frontier (`target\nc_create_virtual_60s_*`,
+  `pc=0x7fff0b60`, `heap_live=24/12914B`, `host_read=0/0B`), so that runtime
+  behavior was removed. The corrected mounted virtual-desktop iNavi probe using
+  `D:\INAVI_Emulator\DUMPPLZ\Windows` wrote
+  `target\create_abort_virtual_60s_summary.txt`,
+  `target\create_abort_virtual_60s_render.txt`,
+  `target\create_abort_virtual_60s_milestones.txt`,
+  `target\create_abort_virtual_60s_files.txt`, and
+  `target\create_abort_virtual_60s.ppm`; it stopped at the 60 s wall limit
+  (`pc=0x001e5408`, `ra=0x000c1944`) with stable counters
+  (`heap_live=6926/21256719B`, `host_open=91`,
+  `host_read=4304/1732170B`, `mem_open=2`, `max_read=497178`) and no render
+  milestones. The framebuffer still contains only 101 red pixels from
+  `(0,160)` through `(100,160)`, color `255,0,0`, so this is create-lifecycle
+  fidelity progress rather than useful UI output.
 - Raw dialog/control text APIs now share the virtual child-window text model
   with raw message forwarding. `GetDlgItem`, `SetDlgItemTextW`,
   `GetDlgItemTextW`, `SendDlgItemMessageW(WM_SETTEXT/WM_GETTEXT/
