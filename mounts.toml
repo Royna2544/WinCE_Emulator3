@@ -16,8 +16,9 @@ hidden = false
 [[mounts]]
 name = "resident_flash"
 guest_root = "\\ResidentFlash"
-total_mbytes = 2048
-free_mbytes = 1024
+host_root = "D:\\INAVI_Emulator\\DUMPPLZ\\ResidentFlash"
+total_mbytes = 64
+free_mbytes = 38
 writable = false
 removable = false
 system = false
