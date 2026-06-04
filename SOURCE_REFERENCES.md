@@ -3,6 +3,14 @@
 Bounded source references used to shape emulator behavior. These are evidence
 anchors, not app-specific shortcuts.
 
+Artifact note: `target\` was cleared on 2026-06-04 to recover disk space.
+Source references below remain authoritative anchors; any mentioned
+`target\...` artifact names are historical unless regenerated.
+
+Runtime DLL note: mounted iNavi execution should load DLL images from
+`D:\INAVI_Emulator\DUMPPLZ\Windows`. SDK import libraries and CE/MFC source
+trees remain behavior/reference evidence, not the primary runtime DLL source.
+
 ## Windows CE Core OS
 
 - Scheduler and wait ownership:
@@ -150,6 +158,14 @@ anchors, not app-specific shortcuts.
   - Declares `UpdateWindow_I`; CE/MFC uses this as a synchronous paint forcing
     boundary. Rust raw `UpdateWindow` now validates pending update state by
     sending `WM_PAINT` through the window send path when an update region exists.
+  - `window.hpp` declares `GetUpdateRect_I`, `GetUpdateRgn_I`, and
+    `BeginPaint_I`, while `CWindow` stores `fHasUpdateRegion` and
+    `fEraseBkgnd`. CE SDK `winuser.h` exposes the `bErase` arguments, and MFC
+    paint code expects the OS paint/update path to manage `WM_ERASEBKGND`
+    before `BeginPaint` reports `PAINTSTRUCT.fErase`. Rust raw
+    `GetUpdateRect`/`GetUpdateRgn` now preserve the pending update bounds but
+    synchronously send `WM_ERASEBKGND` with the HWND paint HDC and clear only
+    the pending erase bit when `bErase` is true.
   - `CWindow` stores `m_rc` for the whole window and `m_rcClient` for the
     client area in screen coordinates; it declares `SetWindowPos_I`,
     `MoveWindow_I`, `GetWindowRect_I`, `GetClientRect_I`,
@@ -189,6 +205,13 @@ anchors, not app-specific shortcuts.
     rejects invalid handles and descendant-parent cycles, relinks the HWND into
     the new parent's sibling z-order, and reconciles descendant focus/explicit
     activation when the new ancestry is effectively hidden or disabled.
+  - CE SDK `winuser.h` defines `WS_CHILD` and `GW_OWNER`; CE MFC
+    `wincore.cpp::AfxGetParentOwner` explicitly uses
+    `GetParent(hwnd)` for `WS_CHILD` windows and `GetWindow(hwnd, GW_OWNER)`
+    for non-child windows. Rust raw `CreateWindowExW` now mirrors that split:
+    `hWndParent` becomes the parent only for `WS_CHILD` creates, otherwise it
+    becomes the owner while geometry remains screen-relative and
+    `GW_OWNER` reports the owner HWND.
   - `window.hpp` declares `IsWindowVisible_I`, and `CWindow::IsVisibleEnabled_I`
     checks `WS_VISIBLE`/`WS_DISABLED` style state. Rust now keeps direct
     visible state synchronized with `WS_VISIBLE` for `ShowWindow`,
@@ -326,6 +349,14 @@ anchors, not app-specific shortcuts.
     signed or unsigned decimal text to the child control, and integer getters
     parse that text and update the optional success flag. This is dialog
     manager behavior, not app-specific resource shaping.
+  - Rust now also routes raw `GetDlgItem`, `SetDlgItemTextW`,
+    `GetDlgItemTextW`, and `SendDlgItemMessageW` text messages through the
+    same child-control HWND and guest-memory boundary. `SendDlgItemMessageW`
+    forwards `WM_SETTEXT`, `WM_GETTEXT`, and `WM_GETTEXTLENGTH` to the child
+    using the raw `SendMessageW` text path, while preserving the existing
+    `BM_GETCHECK`/`BM_SETCHECK` button-state behavior. CE treats low pointer
+    values as resource IDs/atoms, so focused tests use pointer-backed UTF-16
+    buffers above `0xffff`.
   - Rust now routes raw `GetDialogBaseUnits`/`MapDialogRect` through CE-style
     dialog-unit conversion and raw `GetNextDlgTabItem`/
     `GetNextDlgGroupItem` through the real child HWND tree. `winuser.h`

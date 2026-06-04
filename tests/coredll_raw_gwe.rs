@@ -12,7 +12,8 @@ use wince_emulation_v3::{
             ORD_EQUAL_RECT, ORD_FILL_RECT, ORD_FIND_RESOURCE_W, ORD_FIND_WINDOW_W,
             ORD_GET_ACTIVE_WINDOW, ORD_GET_CAPTURE, ORD_GET_CLASS_INFO_W, ORD_GET_CLASS_NAME_W,
             ORD_GET_CLIENT_RECT, ORD_GET_CURSOR_POS, ORD_GET_DC, ORD_GET_DEVICE_CAPS,
-            ORD_GET_DIALOG_BASE_UNITS, ORD_GET_DIBCOLOR_TABLE, ORD_GET_DLG_ITEM_INT, ORD_GET_FOCUS,
+            ORD_GET_DIALOG_BASE_UNITS, ORD_GET_DIBCOLOR_TABLE, ORD_GET_DLG_ITEM,
+            ORD_GET_DLG_ITEM_INT, ORD_GET_DLG_ITEM_TEXT_W, ORD_GET_FOCUS,
             ORD_GET_FOREGROUND_WINDOW, ORD_GET_MESSAGE_POS, ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP,
             ORD_GET_MESSAGE_SOURCE, ORD_GET_MESSAGE_W, ORD_GET_MESSAGE_WNO_WAIT,
             ORD_GET_NEAREST_PALETTE_INDEX, ORD_GET_NEXT_DLG_GROUP_ITEM, ORD_GET_NEXT_DLG_TAB_ITEM,
@@ -29,10 +30,11 @@ use wince_emulation_v3::{
             ORD_POST_MESSAGE_W, ORD_POST_QUIT_MESSAGE, ORD_POST_THREAD_MESSAGE_W, ORD_PT_IN_RECT,
             ORD_REALIZE_PALETTE, ORD_REDRAW_WINDOW, ORD_REGISTER_CLASS_W, ORD_REGISTER_GESTURE,
             ORD_RELEASE_CAPTURE, ORD_RELEASE_DC, ORD_RELEASE_MUTEX, ORD_ROUND_RECT,
-            ORD_SCREEN_TO_CLIENT, ORD_SELECT_OBJECT, ORD_SELECT_PALETTE, ORD_SEND_MESSAGE_TIMEOUT,
-            ORD_SEND_MESSAGE_W, ORD_SEND_NOTIFY_MESSAGE_W, ORD_SET_ACTIVE_WINDOW, ORD_SET_BK_COLOR,
-            ORD_SET_CAPTURE, ORD_SET_DIBCOLOR_TABLE, ORD_SET_DIBITS_TO_DEVICE,
-            ORD_SET_DLG_ITEM_INT, ORD_SET_FOCUS, ORD_SET_FOREGROUND_WINDOW,
+            ORD_SCREEN_TO_CLIENT, ORD_SELECT_OBJECT, ORD_SELECT_PALETTE,
+            ORD_SEND_DLG_ITEM_MESSAGE_W, ORD_SEND_MESSAGE_TIMEOUT, ORD_SEND_MESSAGE_W,
+            ORD_SEND_NOTIFY_MESSAGE_W, ORD_SET_ACTIVE_WINDOW, ORD_SET_BK_COLOR, ORD_SET_CAPTURE,
+            ORD_SET_DIBCOLOR_TABLE, ORD_SET_DIBITS_TO_DEVICE, ORD_SET_DLG_ITEM_INT,
+            ORD_SET_DLG_ITEM_TEXT_W, ORD_SET_FOCUS, ORD_SET_FOREGROUND_WINDOW,
             ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_RECT, ORD_SET_RECT_EMPTY,
             ORD_SET_TIMER, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_TEXT_W,
             ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_SLEEP, ORD_STRETCH_DIBITS,
@@ -45,9 +47,10 @@ use wince_emulation_v3::{
             HWND_BROADCAST, MSGSRC_SOFTWARE_POST, MSGSRC_SOFTWARE_SEND, Message, Point, QS_PAINT,
             QS_POSTMESSAGE, QS_SENDMESSAGE, Rect, SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN,
             SWP_HIDEWINDOW, WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE, WM_CLOSE,
-            WM_DESTROY, WM_ENABLE, WM_ERASEBKGND, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_MOVE,
-            WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WM_TIMER,
-            WM_USER, WM_WINDOWPOSCHANGED, WS_CHILD, WS_DISABLED, WS_GROUP, WS_TABSTOP, WS_VISIBLE,
+            WM_DESTROY, WM_ENABLE, WM_ERASEBKGND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KILLFOCUS,
+            WM_LBUTTONDOWN, WM_MOVE, WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETFOCUS, WM_SETTEXT,
+            WM_SHOWWINDOW, WM_SIZE, WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_CHILD, WS_DISABLED,
+            WS_GROUP, WS_TABSTOP, WS_VISIBLE,
         },
         kernel::CeKernel,
         memory::PROCESS_HEAP_HANDLE,
@@ -2822,7 +2825,9 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
         &mut memory,
         thread_id,
         ORD_CREATE_WINDOW_EX_W,
-        [0, class_ptr, title_ptr, 0, 5, 6, 70, 80, parent, 2, 0, 0],
+        [
+            0, class_ptr, title_ptr, WS_CHILD, 5, 6, 70, 80, parent, 2, 0, 0,
+        ],
     ) {
         CoredllDispatch::Returned {
             value: CoredllValue::Handle(hwnd),
@@ -5153,6 +5158,215 @@ fn coredll_raw_is_child_checks_descendant_relationships() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_create_window_distinguishes_owner_from_child_parent() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 32;
+    let owner_class_ptr = 0x7400;
+    let owned_class_ptr = 0x7440;
+    let child_class_ptr = 0x7480;
+    let title_ptr = 0x74c0;
+    let rect_ptr = 0x7500;
+    memory.write_wide_z(owner_class_ptr, "OWNER_TOP");
+    memory.write_wide_z(owned_class_ptr, "OWNED_TOP");
+    memory.write_wide_z(child_class_ptr, "REAL_CHILD");
+    memory.write_wide_z(title_ptr, "");
+    memory.map_words(rect_ptr, 4);
+
+    let owner = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_WINDOW_EX_W,
+        [
+            0,
+            owner_class_ptr,
+            title_ptr,
+            0,
+            30,
+            40,
+            200,
+            120,
+            0,
+            0,
+            0,
+            0,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } => hwnd,
+        other => panic!("CreateWindowExW did not create owner hwnd: {other:?}"),
+    };
+    let owned = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_WINDOW_EX_W,
+        [
+            0,
+            owned_class_ptr,
+            title_ptr,
+            0,
+            5,
+            6,
+            70,
+            80,
+            owner,
+            0,
+            0,
+            0,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } => hwnd,
+        other => panic!("CreateWindowExW did not create owned hwnd: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_WINDOW,
+            [owned, GW_OWNER],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } if hwnd == owner
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_PARENT,
+            [owned],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_WINDOW,
+            [owner, GW_CHILD],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_WINDOW_RECT,
+            [owned, rect_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_i32(rect_ptr).unwrap(), 5);
+    assert_eq!(memory.read_i32(rect_ptr + 4).unwrap(), 6);
+
+    let child = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_WINDOW_EX_W,
+        [
+            0,
+            child_class_ptr,
+            title_ptr,
+            WS_CHILD,
+            5,
+            6,
+            70,
+            80,
+            owner,
+            0,
+            0,
+            0,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } => hwnd,
+        other => panic!("CreateWindowExW did not create child hwnd: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_PARENT,
+            [child],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } if hwnd == owner
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_WINDOW,
+            [child, GW_OWNER],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_WINDOW,
+            [owner, GW_CHILD],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } if hwnd == child
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_WINDOW_RECT,
+            [child, rect_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_i32(rect_ptr).unwrap(), 35);
+    assert_eq!(memory.read_i32(rect_ptr + 4).unwrap(), 46);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_set_parent_relinks_tree_and_clears_invalid_focus() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
@@ -6889,6 +7103,133 @@ fn coredll_raw_get_update_rgn_copies_pending_paint_bounds() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_get_update_queries_consume_pending_erase_only() -> Result<()> {
+    const SIMPLEREGION: u32 = 2;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 14;
+    let rect_ptr = 0xb000;
+    let paint_ptr = 0xb100;
+    memory.map_words(rect_ptr, 4);
+    memory.map_words(paint_ptr, 16);
+    memory.map_bytes(paint_ptr, 64);
+
+    let hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "UPDATE_ERASE",
+        "",
+        None,
+        0,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(0, 0, 100, 80),
+    );
+    assert!(kernel.gwe.validate_window(hwnd));
+    assert!(
+        kernel
+            .gwe
+            .invalidate_window(hwnd, Some(Rect::from_origin_size(5, 6, 30, 20)), true)
+    );
+    assert_eq!(
+        kernel.gwe.update_rect(hwnd),
+        Some(wince_emulation_v3::ce::gwe::PaintUpdate {
+            rect: Rect::from_origin_size(5, 6, 30, 20),
+            erase: true,
+        })
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_UPDATE_RECT,
+            [hwnd, rect_ptr, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_i32(rect_ptr)?, 5);
+    assert_eq!(memory.read_i32(rect_ptr + 4)?, 6);
+    assert_eq!(memory.read_i32(rect_ptr + 8)?, 35);
+    assert_eq!(memory.read_i32(rect_ptr + 12)?, 26);
+    assert_eq!(
+        kernel.gwe.update_rect(hwnd),
+        Some(wince_emulation_v3::ce::gwe::PaintUpdate {
+            rect: Rect::from_origin_size(5, 6, 30, 20),
+            erase: false,
+        })
+    );
+
+    let paint_hdc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_BEGIN_PAINT,
+        [hwnd, paint_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hdc),
+            ..
+        } => hdc,
+        other => panic!("BeginPaint did not return a virtual HDC: {other:?}"),
+    };
+    assert_ne!(paint_hdc, 0);
+    assert_eq!(memory.read_u32(paint_ptr + 4)?, 0);
+    assert!(kernel.gwe.update_rect(hwnd).is_none());
+
+    assert!(
+        kernel
+            .gwe
+            .invalidate_window(hwnd, Some(Rect::from_origin_size(10, 12, 30, 22)), true)
+    );
+    let region = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [0, 0, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn did not return a region: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_UPDATE_RGN,
+            [hwnd, region, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(SIMPLEREGION),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.resources.region(region).map(|region| region.rect),
+        Some(Rect::from_origin_size(10, 12, 30, 22))
+    );
+    assert_eq!(
+        kernel.gwe.update_rect(hwnd),
+        Some(wince_emulation_v3::ce::gwe::PaintUpdate {
+            rect: Rect::from_origin_size(10, 12, 30, 22),
+            erase: false,
+        })
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_redraw_window_invalidates_regions_children_and_updates_now() -> Result<()> {
     const RDW_INVALIDATE: u32 = 0x0001;
     const RDW_ERASE: u32 = 0x0004;
@@ -7341,6 +7682,179 @@ fn coredll_raw_dialog_item_int_uses_child_window_text_and_ok_flag() -> Result<()
         }
     ));
     assert_eq!(memory.read_u32(ok_ptr)?, 0);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_dialog_controls_support_text_and_message_forwarding() -> Result<()> {
+    const BM_GETCHECK: u32 = 0x00f0;
+    const BM_SETCHECK: u32 = 0x00f1;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let text_ptr = 0x1_0000;
+    let buffer_ptr = 0x1_0100;
+    memory.map_halfwords(text_ptr, 64);
+    memory.map_halfwords(buffer_ptr, 64);
+
+    let dialog = kernel.create_window_ex_w(thread_id, "Dialog", "", None, 0, 0, 0);
+    let edit = kernel.create_window_ex_w(thread_id, "edit", "initial", Some(dialog), 102, 0, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DLG_ITEM,
+            [dialog, 102],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(found),
+            ..
+        } if found == edit
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DLG_ITEM,
+            [dialog, 999],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+
+    memory.write_wide_z(text_ptr, "hello");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_DLG_ITEM_TEXT_W,
+            [dialog, 102, text_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.gwe.get_window_text(edit, 32).as_deref(),
+        Some("hello")
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DLG_ITEM_TEXT_W,
+            [dialog, 102, buffer_ptr, 16],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(5),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(buffer_ptr, 16), "hello");
+
+    memory.write_wide_z(text_ptr, "via message");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SEND_DLG_ITEM_MESSAGE_W,
+            [dialog, 102, WM_SETTEXT, 0, text_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.gwe.get_window_text(edit, 32).as_deref(),
+        Some("via message")
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SEND_DLG_ITEM_MESSAGE_W,
+            [dialog, 102, WM_GETTEXTLENGTH, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(11),
+            ..
+        }
+    ));
+    memory.write_wide_z(buffer_ptr, "");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SEND_DLG_ITEM_MESSAGE_W,
+            [dialog, 102, WM_GETTEXT, 16, buffer_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(11),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(buffer_ptr, 16), "via message");
+
+    memory.write_wide_z(buffer_ptr, "");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SEND_MESSAGE_W,
+            [edit, WM_GETTEXT, 5, buffer_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(4),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(buffer_ptr, 5), "via ");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SEND_DLG_ITEM_MESSAGE_W,
+            [dialog, 102, BM_SETCHECK, 1, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SEND_DLG_ITEM_MESSAGE_W,
+            [dialog, 102, BM_GETCHECK, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
 
     Ok(())
 }

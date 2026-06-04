@@ -1,5 +1,15 @@
 # TODO
 
+## Artifact Note
+
+- `target\` was cleared on 2026-06-04 to recover disk space. Any existing
+  `target\...` names in this ledger are historical evidence labels, not
+  guaranteed local files. Use fresh virtual-desktop probe prefixes for new
+  validation artifacts.
+- Mounted iNavi probes should use dumped runtime DLLs from
+  `D:\INAVI_Emulator\DUMPPLZ\Windows`; SDK DLL/library paths are now evidence
+  or fallback, not the primary DLL source.
+
 ## CE Fidelity Ledger
 
 - Scheduler/waits/thread contexts:
@@ -87,11 +97,13 @@
     per-message metadata from the GWE model: mouse-message screen positions are
     preserved separately from client `lParam`, and ready timestamps update when
     posts, sends, or queue-owned quit state make a thread queue ready. Raw
-    `SetDlgItemInt`/`GetDlgItemInt` now reach the dialog child-window text
-    model instead of generic ordinal fallback. Raw `WindowFromPoint` and
-    `ChildWindowFromPoint` now route through GWE visible/enabled HWND hit
-    testing instead of generic ordinal fallback. Raw `GetDialogBaseUnits` and
-    `MapDialogRect` now cover CE dialog-unit mapping, and raw
+    `SetDlgItemInt`/`GetDlgItemInt`, `SetDlgItemTextW`/`GetDlgItemTextW`,
+    `GetDlgItem`, and `SendDlgItemMessageW` text-message forwarding now reach
+    the dialog child-window text model instead of generic ordinal/message
+    fallback. Raw `WindowFromPoint` and `ChildWindowFromPoint` now route
+    through GWE visible/enabled HWND hit testing instead of generic ordinal
+    fallback. Raw `GetDialogBaseUnits` and `MapDialogRect` now cover CE
+    dialog-unit mapping, and raw
     `GetNextDlgTabItem`/`GetNextDlgGroupItem` now walk real dialog children
     using visible/enabled state plus `WS_TABSTOP`/`WS_GROUP` boundaries.
     Raw/kernel `DestroyWindow` now records and sends `WM_DESTROY` before final
@@ -127,14 +139,20 @@
     descendant-parent cycles, preserves previous-parent returns, relinks the
     HWND into the new parent's sibling z-order, and clears descendant focus/
     explicit activation if the new ancestry makes the subtree effectively
-    hidden or disabled.
+    hidden or disabled. Raw `CreateWindowExW` now distinguishes `WS_CHILD`
+    parent semantics from top-level owner semantics: non-child windows keep
+    screen-relative top-level geometry and report the supplied owner through
+    `GetWindow(GW_OWNER)`, while child windows use parent-relative geometry and
+    `GetParent`. Raw `GetUpdateRect`/`GetUpdateRgn` now honor `bErase=TRUE` by
+    sending `WM_ERASEBKGND` with the HWND paint HDC through the same window send
+    path and clearing only the pending erase bit, leaving the dirty update
+    bounds for paint.
   - Open gaps: update regions are still represented as one bounding rectangle,
     so partial `ValidateRect`/`RedrawWindow(RDW_VALIDATE)` subtracts the
     representable remainder but keeps a conservative bounding rectangle for
     disjoint leftovers. Internal paint requests are represented as normal
-    pending update state, `GetUpdateRect`/`GetUpdateRgn` do not yet send
-    background erase when `bErase` is true, and full child clipping/z-order
-    invalidation remains for the later GWE/GDI pass.
+    pending update state, and full child clipping/z-order invalidation remains
+    for the later GWE/GDI pass.
   - Port order:
     1. Paint/update correctness: keep `WM_PAINT` synthetic rather than posted,
        finish `UpdateWindow`/`RedrawWindow`/region invalidation semantics, and
@@ -158,6 +176,9 @@
        `SetParent` now covers previous-parent returns, invalid/cyclic parent
        rejection, new-parent z-order insertion, and focus/activation cleanup
        when reparenting under hidden/disabled ancestry.
+       Raw `CreateWindowExW` now splits `hWndParent` into child parent versus
+       top-level owner according to `WS_CHILD`, matching CE MFC
+       `AfxGetParentOwner` usage.
        Remaining lifecycle work includes exact create/z-order side effects
        such as owner/topmost rules, deeper activate/focus/enable edge cases
        such as top-level owner activation, disabled-focus transfer,
@@ -192,8 +213,11 @@
        `SetWindowLong`/`GetWindowLong`, owner thread/process queries, dialog
        procs/results, child/descendant relationship queries, child lookup,
        command routing, accelerator/menu state, and MFC attach/subclass paths.
-       `SetDlgItemInt`/`GetDlgItemInt` now cover the first CE dialog integer
-       item text path; `GetDialogBaseUnits`/`MapDialogRect` and
+       `SetDlgItemInt`/`GetDlgItemInt` and `SetDlgItemTextW`/
+       `GetDlgItemTextW` now cover the first CE dialog item text paths, and
+       `SendDlgItemMessageW` now forwards `WM_SETTEXT`, `WM_GETTEXT`, and
+       `WM_GETTEXTLENGTH` through the same child-control message boundary.
+       `GetDialogBaseUnits`/`MapDialogRect` and
        `GetNextDlgTabItem`/`GetNextDlgGroupItem` cover the first CE-backed
        dialog layout/navigation slice. Fuller dialog default-proc,
        modal-loop, command-routing, default button, and keyboard traversal
@@ -304,9 +328,24 @@
     `SetParent` lifecycle rerun wrote `target\set_parent_virtual_60s_*`,
     stopped at `pc=0x000be6e4` with `heap_live=6921/21255717B`,
     `host_read=4302/1718377B`, and only a 101-pixel red line from `(0,160)` to
-    `(100,160)`, also with no render milestone. Treat this as fidelity
-    evidence and a possible performance/lifecycle frontier, not useful UI
-    progress.
+    `(100,160)`, also with no render milestone. The owner/child raw-create
+    rerun wrote `target\owner_child_virtual_60s_*`, stopped at
+    `pc=0x002a252c` with `heap_live=6940/21278707B`,
+    `host_read=7840/1760751B`, and the same 101-pixel red line with no render
+    milestone. The fresh `GetUpdateRect`/`GetUpdateRgn` erase-query probe used
+    `D:\INAVI_Emulator\DUMPPLZ\Windows` as the DLL source and wrote
+    `target\get_update_erase_virtual_60s_*`; it stopped at `pc=0x00a436e0`
+    with `heap_live=6930/21294161B`, `virtual_live=2/131072B`,
+    `host_open=92`, `host_read=4305/1769298B`, `mem_open=2`,
+    `max_read=497178`, no render milestones, and the same 101-pixel red line.
+    The dialog/control text-forwarding probe used the same dumped DLL source
+    and wrote `target\dialog_text_virtual_60s_*`; it stopped at
+    `pc=0x0001362c` with `heap_live=7041/21284917B`,
+    `virtual_live=3/196608B`, `host_open=113`,
+    `host_read=7843/1763759B`, `mem_open=2`, `max_read=497178`, no render
+    milestones, and the same 101-pixel red line.
+    Treat this as fidelity evidence and a possible performance/lifecycle
+    frontier, not useful UI progress.
 
 ## Immediate
 

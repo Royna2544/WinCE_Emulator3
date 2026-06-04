@@ -77,7 +77,7 @@ cargo run -- --image /mnt/d/INAVI_Emulator/INAVI/INavi/iNavi.exe
 CPU execution is behind the `unicorn` feature:
 
 ```bash
-cargo run --features unicorn -- --mount-config mounts.toml --image D:\INAVI_Emulator\INAVI\INavi\iNavi.exe --dll-search-dir "C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii" --framebuffer-dump target\last-framebuffer.ppm --run-cpu
+cargo run --features unicorn -- --mount-config mounts.toml --image D:\INAVI_Emulator\INAVI\INavi\iNavi.exe --dll-search-dir "D:\INAVI_Emulator\DUMPPLZ\Windows" --desktop virtual --framebuffer-dump target\last-framebuffer.ppm --run-cpu
 ```
 
 Use `--cpu-instruction-limit N` or `--cpu-wall-clock-limit-ms N` with

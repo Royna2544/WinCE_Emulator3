@@ -1013,17 +1013,37 @@ impl CeKernel {
         ex_style: u32,
         rect: Rect,
     ) -> u32 {
-        let hwnd = self.gwe.create_window_ex_with_process_and_rect(
-            thread_id,
-            self.current_process_id,
-            class_name,
-            title,
-            parent,
-            id,
-            style,
-            ex_style,
-            rect,
-        );
+        self.create_window_ex_w_with_parent_owner_and_rect(
+            thread_id, class_name, title, parent, None, id, style, ex_style, rect,
+        )
+    }
+
+    pub fn create_window_ex_w_with_parent_owner_and_rect(
+        &mut self,
+        thread_id: u32,
+        class_name: &str,
+        title: &str,
+        parent: Option<u32>,
+        owner: Option<u32>,
+        id: u32,
+        style: u32,
+        ex_style: u32,
+        rect: Rect,
+    ) -> u32 {
+        let hwnd = self
+            .gwe
+            .create_window_ex_with_process_parent_owner_and_rect(
+                thread_id,
+                self.current_process_id,
+                class_name,
+                title,
+                parent,
+                owner,
+                id,
+                style,
+                ex_style,
+                rect,
+            );
         self.handles.insert(KernelObject::Window(hwnd));
         self.post_window_rect_messages(
             hwnd,
@@ -1070,6 +1090,20 @@ impl CeKernel {
             let _ = self.send_message_w(hwnd, crate::ce::gwe::WM_PAINT, 0, 0);
         }
         true
+    }
+
+    pub fn erase_window_background(&mut self, hwnd: u32, hdc: u32) -> bool {
+        if !self.gwe.is_window(hwnd) {
+            return false;
+        }
+        let Some(result) = self.send_message_w(hwnd, crate::ce::gwe::WM_ERASEBKGND, hdc, 0) else {
+            return false;
+        };
+        if result != 0 {
+            self.gwe.clear_update_erase(hwnd)
+        } else {
+            true
+        }
     }
 
     pub fn set_window_pos(

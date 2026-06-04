@@ -13,7 +13,10 @@ use crate::{
         file::FileIoResult,
         file::FindData,
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat},
-        gwe::{Message, MessagePointerPayload, PeekFlags, Point, Rect, WNDCLASSW_SIZE, WindowPos},
+        gwe::{
+            Message, MessagePointerPayload, PeekFlags, Point, Rect, WNDCLASSW_SIZE, WS_CHILD,
+            WindowPos,
+        },
         kernel::{CeKernel, MessagePumpResult},
         memory::{HEAP_ZERO_MEMORY, PROCESS_HEAP_HANDLE},
         object::{CriticalSectionObject, KernelObject},
@@ -2157,6 +2160,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
+            raw_arg(args, 2) != 0,
         ))),
         ORD_GET_UPDATE_RGN => Some(CoredllValue::U32(get_update_rgn_raw(
             kernel,
@@ -2576,7 +2580,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel, memory, thread_id, args,
         ))),
         ORD_SEND_DLG_ITEM_MESSAGE_W => Some(CoredllValue::U32(send_dlg_item_message_w_raw(
-            kernel, thread_id, args,
+            kernel, memory, thread_id, args,
         ))),
         ORD_CHECK_RADIO_BUTTON => Some(CoredllValue::Bool(check_radio_button_raw(
             kernel, thread_id, args,
@@ -2768,16 +2772,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .post_quit_message(thread_id, raw_arg(args, 0), kernel.timers.tick_count());
             Some(CoredllValue::U32(0))
         }
-        ORD_SEND_MESSAGE_W | ORD_DEF_WINDOW_PROC_W => Some(CoredllValue::U32(
-            kernel
-                .send_message_w(
-                    raw_arg(args, 0),
-                    raw_arg(args, 1),
-                    raw_arg(args, 2),
-                    raw_arg(args, 3),
-                )
-                .unwrap_or(0),
-        )),
+        ORD_SEND_MESSAGE_W | ORD_DEF_WINDOW_PROC_W => Some(CoredllValue::U32(send_message_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_SEND_NOTIFY_MESSAGE_W => {
             let ok = kernel.send_notify_message_w(
                 thread_id,
@@ -6989,13 +6986,16 @@ fn create_window_ex_w_raw<M: CoredllGuestMemory>(
         raw_i32_arg(args, 6),
         raw_i32_arg(args, 7),
     );
-    let parent = (raw_arg(args, 8) != 0).then_some(raw_arg(args, 8));
+    let parent_or_owner = (raw_arg(args, 8) != 0).then_some(raw_arg(args, 8));
+    let style = raw_arg(args, 3);
+    let parent = parent_or_owner.filter(|_| style & WS_CHILD != 0);
+    let owner = parent_or_owner.filter(|_| style & WS_CHILD == 0);
     tracing::debug!(
         target: "ce.gwe",
         class_name = class_name.as_str(),
         class_ptr = format_args!("0x{:08x}", raw_arg(args, 1)),
         title = title.as_str(),
-        style = format_args!("0x{:08x}", raw_arg(args, 3)),
+        style = format_args!("0x{:08x}", style),
         ex_style = format_args!("0x{:08x}", raw_arg(args, 0)),
         x = raw_i32_arg(args, 4),
         y = raw_i32_arg(args, 5),
@@ -7006,13 +7006,14 @@ fn create_window_ex_w_raw<M: CoredllGuestMemory>(
         create_params = format_args!("0x{:08x}", raw_arg(args, 11)),
         "CreateWindowExW"
     );
-    kernel.create_window_ex_w_with_rect(
+    kernel.create_window_ex_w_with_parent_owner_and_rect(
         thread_id,
         &class_name,
         &title,
         parent,
+        owner,
         raw_arg(args, 9),
-        raw_arg(args, 3),
+        style,
         raw_arg(args, 0),
         rect,
     )
@@ -7410,7 +7411,72 @@ fn check_radio_button_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -
 const BM_GETCHECK: u32 = 0x00f0;
 const BM_SETCHECK: u32 = 0x00f1;
 
-fn send_dlg_item_message_w_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
+fn send_message_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let hwnd = raw_arg(args, 0);
+    let msg = raw_arg(args, 1);
+    let wparam = raw_arg(args, 2);
+    let lparam = raw_arg(args, 3);
+    match msg {
+        crate::ce::gwe::WM_SETTEXT => {
+            let Some(text) = read_guest_wide_arg(memory, lparam) else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return 0;
+            };
+            if !kernel.gwe.set_window_text(hwnd, &text) {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+                return 0;
+            }
+            kernel.threads.set_last_error(thread_id, 0);
+            1
+        }
+        crate::ce::gwe::WM_GETTEXT => {
+            let Some(text) = kernel.gwe.get_window_text(hwnd, wparam as usize) else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+                return 0;
+            };
+            write_wide_result(kernel, memory, thread_id, lparam, wparam as usize, &text)
+        }
+        crate::ce::gwe::WM_GETTEXTLENGTH => {
+            let Some(length) = kernel.gwe.get_window_text_length(hwnd) else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+                return 0;
+            };
+            kernel.threads.set_last_error(thread_id, 0);
+            length as u32
+        }
+        _ => {
+            if let Some(result) = kernel.send_message_w(hwnd, msg, wparam, lparam) {
+                kernel.threads.set_last_error(thread_id, 0);
+                result
+            } else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+                0
+            }
+        }
+    }
+}
+
+fn send_dlg_item_message_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
     let hwnd = raw_arg(args, 0);
     let id = raw_arg(args, 1);
     let msg = raw_arg(args, 2);
@@ -7434,9 +7500,7 @@ fn send_dlg_item_message_w_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u3
             }
             0
         }
-        _ => kernel
-            .send_message_w(child, msg, wparam, lparam)
-            .unwrap_or(0),
+        _ => return send_message_w_raw(kernel, memory, thread_id, &[child, msg, wparam, lparam]),
     };
     kernel.threads.set_last_error(thread_id, 0);
     result
@@ -9280,6 +9344,7 @@ fn get_update_rect_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     hwnd: u32,
     rect_ptr: u32,
+    erase: bool,
 ) -> bool {
     if !kernel.gwe.is_window(hwnd) {
         kernel
@@ -9294,6 +9359,15 @@ fn get_update_rect_raw<M: CoredllGuestMemory>(
     if rect_ptr != 0 && !write_guest_rect(kernel, memory, thread_id, rect_ptr, update.rect) {
         return false;
     }
+    if erase && update.erase {
+        let hdc = paint_hdc_for_hwnd(hwnd);
+        if !kernel.erase_window_background(hwnd, hdc) {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+            return false;
+        }
+    }
     kernel.threads.set_last_error(thread_id, 0);
     true
 }
@@ -9303,7 +9377,7 @@ fn get_update_rgn_raw(
     thread_id: u32,
     hwnd: u32,
     region: u32,
-    _erase: bool,
+    erase: bool,
 ) -> u32 {
     if region == 0 {
         kernel
@@ -9317,16 +9391,22 @@ fn get_update_rgn_raw(
             .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
         return ERROR_REGION;
     }
-    let rect = kernel
-        .gwe
-        .update_rect(hwnd)
-        .map(|update| update.rect)
-        .unwrap_or_default();
+    let update = kernel.gwe.update_rect(hwnd);
+    let rect = update.map(|update| update.rect).unwrap_or_default();
     if !kernel.resources.set_region(region, rect) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return ERROR_REGION;
+    }
+    if erase && update.is_some_and(|update| update.erase) {
+        let hdc = paint_hdc_for_hwnd(hwnd);
+        if !kernel.erase_window_background(hwnd, hdc) {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+            return ERROR_REGION;
+        }
     }
     kernel.threads.set_last_error(thread_id, 0);
     region_status(rect)

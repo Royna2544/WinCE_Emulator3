@@ -656,7 +656,6 @@ const IMAGE_SCN_MEM_EXECUTE: u32 = 0x2000_0000;
 #[cfg(feature = "unicorn")]
 const MIPS_NOP: u32 = 0x0000_0000;
 
-#[cfg(feature = "unicorn")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CreateWindowReturn {
     return_pc: u32,
@@ -1703,31 +1702,14 @@ impl UnicornMips {
             move |uc, address, _size| {
                 let address = address as u32;
                 if address == CREATE_WINDOW_RETURN_STUB_ADDR {
-                    let Some(callout) = create_window_returns_hook.borrow_mut().pop() else {
-                        let _ = uc.emu_stop();
-                        return;
-                    };
-                    record_wndproc_return(
+                    if handle_create_window_return_stub(
+                        unsafe { &mut *kernel_ptr },
+                        uc,
+                        &create_window_returns_hook,
                         &last_wndproc_returns_hook,
-                        UnicornWndProcReturn {
-                            source: "CreateWindowExW/WM_CREATE",
-                            hwnd: callout.hwnd,
-                            msg: crate::ce::gwe::WM_CREATE,
-                            wparam: 0,
-                            lparam: callout.lparam,
-                            wndproc: callout.wndproc,
-                            return_pc: callout.return_pc,
-                            return_pc_trampoline_origin: None,
-                            result: read_mips_reg(uc, RegisterMIPS::V0),
-                            class_name: callout.class_name,
-                        },
-                    );
-                    let writes = [
-                        uc.reg_write(RegisterMIPS::V0, u64::from(callout.hwnd)),
-                        uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc)),
-                        uc.reg_write(RegisterMIPS::RA, u64::from(callout.return_pc)),
-                    ];
-                    if writes.into_iter().any(|write| write.is_err()) {
+                    )
+                    .is_err()
+                    {
                         let _ = uc.emu_stop();
                     }
                     return;
@@ -7513,6 +7495,7 @@ fn is_display_lifecycle_message(msg: u32) -> bool {
     matches!(
         msg,
         crate::ce::gwe::WM_CREATE
+            | crate::ce::gwe::WM_NCCREATE
             | crate::ce::gwe::WM_DESTROY
             | crate::ce::gwe::WM_MOVE
             | crate::ce::gwe::WM_SIZE
@@ -8420,26 +8403,17 @@ fn try_enter_create_window_create_callout<D>(
         "CreateWindowExW guest WM_CREATE callout"
     );
 
-    pending_returns.borrow_mut().push(CreateWindowReturn {
+    let callout = CreateWindowReturn {
         return_pc,
         hwnd,
         wndproc,
         lparam: create_struct,
         class_name: Some(class_name),
-    });
-    let writes = [
-        uc.reg_write(RegisterMIPS::A0, u64::from(hwnd)),
-        uc.reg_write(RegisterMIPS::A1, u64::from(crate::ce::gwe::WM_CREATE)),
-        uc.reg_write(RegisterMIPS::A2, 0),
-        uc.reg_write(RegisterMIPS::A3, u64::from(create_struct)),
-        uc.reg_write(RegisterMIPS::RA, u64::from(CREATE_WINDOW_RETURN_STUB_ADDR)),
-        uc.reg_write(RegisterMIPS::T9, u64::from(wndproc)),
-        uc.reg_write(RegisterMIPS::PC, u64::from(wndproc)),
-    ];
-    if writes.into_iter().all(|write| write.is_ok()) {
+    };
+    if write_create_window_wndproc_call_registers(uc, &callout) {
+        pending_returns.borrow_mut().push(callout);
         true
     } else {
-        let _ = pending_returns.borrow_mut().pop();
         false
     }
 }
@@ -8465,6 +8439,84 @@ fn create_structw_bytes(args: &[u32]) -> [u8; CREATESTRUCTW_SIZE as usize] {
         bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
     }
     bytes
+}
+
+#[cfg(feature = "unicorn")]
+fn handle_create_window_return_stub<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<CreateWindowReturn>>>,
+    last_wndproc_returns: &std::rc::Rc<std::cell::RefCell<Vec<UnicornWndProcReturn>>>,
+) -> std::result::Result<(), ()> {
+    use unicorn_engine::RegisterMIPS;
+
+    let Some(callout) = pending_returns.borrow_mut().pop() else {
+        return Err(());
+    };
+    let result = read_mips_reg(uc, RegisterMIPS::V0);
+    record_wndproc_return(
+        last_wndproc_returns,
+        UnicornWndProcReturn {
+            source: "CreateWindowExW/WM_CREATE",
+            hwnd: callout.hwnd,
+            msg: crate::ce::gwe::WM_CREATE,
+            wparam: 0,
+            lparam: callout.lparam,
+            wndproc: callout.wndproc,
+            return_pc: callout.return_pc,
+            return_pc_trampoline_origin: None,
+            result,
+            class_name: callout.class_name.clone(),
+        },
+    );
+
+    if result == u32::MAX {
+        let _ = kernel
+            .gwe
+            .destroy_window(callout.hwnd, kernel.timers.tick_count());
+        return_create_window_result(uc, callout.return_pc, 0)
+    } else {
+        return_create_window_result(uc, callout.return_pc, callout.hwnd)
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn return_create_window_result<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    return_pc: u32,
+    result: u32,
+) -> std::result::Result<(), ()> {
+    use unicorn_engine::RegisterMIPS;
+
+    let writes = [
+        uc.reg_write(RegisterMIPS::V0, u64::from(result)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(return_pc)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(return_pc)),
+    ];
+    if writes.into_iter().all(|write| write.is_ok()) {
+        Ok(())
+    } else {
+        Err(())
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn write_create_window_wndproc_call_registers<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    callout: &CreateWindowReturn,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    let writes = [
+        uc.reg_write(RegisterMIPS::A0, u64::from(callout.hwnd)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(crate::ce::gwe::WM_CREATE)),
+        uc.reg_write(RegisterMIPS::A2, 0),
+        uc.reg_write(RegisterMIPS::A3, u64::from(callout.lparam)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(CREATE_WINDOW_RETURN_STUB_ADDR)),
+        uc.reg_write(RegisterMIPS::T9, u64::from(callout.wndproc)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(callout.wndproc)),
+    ];
+    writes.into_iter().all(|write| write.is_ok())
 }
 
 #[cfg(feature = "unicorn")]
@@ -9901,6 +9953,59 @@ mod unicorn_tests {
         assert_eq!(field(36), 0x1000_0002);
         assert_eq!(field(40), 0x1000_0001);
         assert_eq!(field(44), 0x0000_00a1);
+    }
+
+    #[test]
+    fn create_window_callout_returns_hwnd_or_null_after_wm_create() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let thread_id = 9;
+        let return_pc = 0x0040_2000;
+        let wndproc = 0x0001_3570;
+        let hwnd = kernel.create_window_ex_w(thread_id, "CREATE_OK", "", None, 0, 0, 0);
+        kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, wndproc);
+        let lparam = 0x3000_0100;
+        let pending = Rc::new(RefCell::new(vec![super::CreateWindowReturn {
+            return_pc,
+            hwnd,
+            wndproc,
+            lparam,
+            class_name: Some("CREATE_OK".to_owned()),
+        }]));
+        let returns = Rc::new(RefCell::new(Vec::new()));
+
+        uc.reg_write(RegisterMIPS::V0, 0).unwrap();
+        assert!(
+            super::handle_create_window_return_stub(&mut kernel, &mut uc, &pending, &returns,)
+                .is_ok()
+        );
+        assert!(pending.borrow().is_empty());
+        assert_eq!(returns.borrow().len(), 1);
+        assert_eq!(returns.borrow()[0].source, "CreateWindowExW/WM_CREATE");
+        assert_eq!(returns.borrow()[0].msg, crate::ce::gwe::WM_CREATE);
+        assert_eq!(returns.borrow()[0].result, 0);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, hwnd);
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
+
+        let failed = kernel.create_window_ex_w(thread_id, "CREATE_FAIL", "", None, 0, 0, 0);
+        kernel.gwe.set_window_long(failed, GWL_WNDPROC, wndproc);
+        let pending = Rc::new(RefCell::new(vec![super::CreateWindowReturn {
+            return_pc,
+            hwnd: failed,
+            wndproc,
+            lparam,
+            class_name: Some("CREATE_FAIL".to_owned()),
+        }]));
+        uc.reg_write(RegisterMIPS::V0, u64::from(u32::MAX)).unwrap();
+        assert!(
+            super::handle_create_window_return_stub(&mut kernel, &mut uc, &pending, &returns,)
+                .is_ok()
+        );
+        assert!(pending.borrow().is_empty());
+        assert!(!kernel.gwe.is_window(failed));
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 0);
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
     }
 
     #[test]

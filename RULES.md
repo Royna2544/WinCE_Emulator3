@@ -9,7 +9,15 @@ Target app:
 - MIPS R4000 PE
 - Uses COREDLL.dll, mfcce400.dll, CRT-like exports, WINSOCK.dll
 
-Use the installed Windows CE 4.2 Standard SDK import libraries:
+Runtime DLL source for mounted iNavi runs:
+
+- `D:\INAVI_Emulator\DUMPPLZ\Windows`
+
+Treat this dumped Windows directory as the true source of target DLL images.
+Use SDK paths below only as import-library/header/source evidence or fallback
+when a dumped runtime DLL is genuinely unavailable.
+
+Installed Windows CE 4.2 Standard SDK import libraries:
 
 - `C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Lib`
 - `C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib`

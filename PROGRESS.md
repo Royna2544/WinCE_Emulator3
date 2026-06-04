@@ -1,7 +1,84 @@
 # PROGRESS
 
+## Artifact Note
+
+- `target\` was cleared on 2026-06-04 to recover disk space after accumulated
+  build directories and probe artifacts reached roughly 50 GB. Historical
+  `target\...` paths below remain evidence labels only; regenerate fresh
+  artifacts under a new prefix before relying on local files.
+
 ## Confirmed
 
+- Raw dialog/control text APIs now share the virtual child-window text model
+  with raw message forwarding. `GetDlgItem`, `SetDlgItemTextW`,
+  `GetDlgItemTextW`, `SendDlgItemMessageW(WM_SETTEXT/WM_GETTEXT/
+  WM_GETTEXTLENGTH)`, and direct `SendMessageW(WM_GETTEXT*)` now move text
+  through the raw COREDLL guest-memory boundary instead of returning generic
+  message defaults or allocating helper-only values. `SendDlgItemMessageW`
+  still preserves the existing `BM_GETCHECK`/`BM_SETCHECK` button-state path.
+  Focused coverage:
+  `coredll_raw_dialog_controls_support_text_and_message_forwarding`; the full
+  raw GWE suite passes (`52 passed`), `cargo check --features
+  unicorn,trace,win32-desktop` passes, and
+  `cargo test --features unicorn,trace,win32-desktop` passes (`93` unit tests
+  plus integration suites). A mounted virtual-desktop iNavi probe using
+  `D:\INAVI_Emulator\DUMPPLZ\Windows` as the DLL source wrote
+  `target\dialog_text_virtual_60s_summary.txt`,
+  `target\dialog_text_virtual_60s_render.txt`,
+  `target\dialog_text_virtual_60s_milestones.txt`,
+  `target\dialog_text_virtual_60s_files.txt`, and
+  `target\dialog_text_virtual_60s.ppm`; it stopped at the 60 s wall limit
+  (`pc=0x0001362c`, `ra=0x0013dfc0`) with stable counters
+  (`heap_live=7041/21284917B`, `virtual_live=3/196608B`,
+  `host_open=113`, `host_read=7843/1763759B`, `mem_open=2`,
+  `max_read=497178`) and no render milestones. The framebuffer still contains
+  only 101 red pixels from `(0,160)` through `(100,160)`, color `255,0,0`, so
+  this is dialog/control fidelity progress rather than useful UI output.
+- Raw `GetUpdateRect` and `GetUpdateRgn` now honor CE's `bErase` path for
+  pending paint without validating the update region. When a HWND has
+  `erase_pending`, the raw query writes/copies the pending bounds, sends
+  `WM_ERASEBKGND` with the HWND paint HDC through the normal window send path,
+  and clears only the erase bit so subsequent `BeginPaint` reports
+  `PAINTSTRUCT.fErase = FALSE` while the dirty bounds remain pending. Focused
+  coverage: `coredll_raw_get_update_queries_consume_pending_erase_only`; the
+  full raw GWE suite passes (`51 passed`), `cargo check --features
+  unicorn,trace,win32-desktop` passes, and
+  `cargo test --features unicorn,trace,win32-desktop` passes (`93` unit tests
+  plus integration suites). A mounted virtual-desktop iNavi probe using
+  `D:\INAVI_Emulator\DUMPPLZ\Windows` as the DLL source wrote
+  `target\get_update_erase_virtual_60s_summary.txt`,
+  `target\get_update_erase_virtual_60s_render.txt`,
+  `target\get_update_erase_virtual_60s_milestones.txt`,
+  `target\get_update_erase_virtual_60s_files.txt`, and
+  `target\get_update_erase_virtual_60s.ppm`; it stopped at the 60 s wall limit
+  (`pc=0x00a436e0`, `ra=0x002017e0`) with stable counters
+  (`heap_live=6930/21294161B`, `virtual_live=2/131072B`,
+  `host_open=92`, `host_read=4305/1769298B`, `mem_open=2`,
+  `max_read=497178`) and no render milestones. The framebuffer still contains
+  only 101 red pixels from `(0,160)` through `(100,160)`, color `255,0,0`, so
+  this is paint/update fidelity progress rather than useful UI output.
+- Raw `CreateWindowExW` now distinguishes CE child parenting from top-level
+  ownership at the syscall boundary. When `WS_CHILD` is present, the
+  `hWndParent` argument becomes the virtual parent and child coordinates are
+  parent-client-relative; when `WS_CHILD` is absent, the argument becomes the
+  owner reported by `GetWindow(GW_OWNER)` and the window remains a top-level
+  desktop child with screen-relative coordinates. Existing direct kernel/GWE
+  test helpers keep their explicit parent semantics. Focused coverage:
+  `coredll_raw_create_window_distinguishes_owner_from_child_parent`, plus the
+  raw GWE integration suite (`50 passed`) and
+  `cargo test --features unicorn,trace,win32-desktop` (`93` unit tests plus
+  integration suites passed). A mounted virtual-desktop iNavi probe wrote
+  `target\owner_child_virtual_60s_summary.txt`,
+  `target\owner_child_virtual_60s_render.txt`,
+  `target\owner_child_virtual_60s_milestones.txt`,
+  `target\owner_child_virtual_60s_files.txt`, and
+  `target\owner_child_virtual_60s.ppm`; it stopped at the 60 s wall limit
+  (`pc=0x002a252c`, `ra=0x00135468`) with stable counters
+  (`heap_live=6940/21278707B`, `virtual_live=3/196608B`,
+  `host_open=112`, `host_read=7840/1760751B`, `mem_open=2`,
+  `max_read=497178`) and no render milestones. The framebuffer still contains
+  only 101 red pixels from `(0,160)` through `(100,160)`, color `255,0,0`, so
+  this remains fidelity progress rather than UI success.
 - Raw `SetParent` now goes through the kernel window lifecycle boundary instead
   of mutating GWE state directly. The raw ordinal preserves the previous-parent
   return, reports invalid HWNDs and parent-cycle attempts distinctly, rejects

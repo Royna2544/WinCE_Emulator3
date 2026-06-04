@@ -24,6 +24,7 @@ pub const WM_ACTIVATE: u32 = 0x0006;
 pub const WM_SETFOCUS: u32 = 0x0007;
 pub const WM_KILLFOCUS: u32 = 0x0008;
 pub const WM_ENABLE: u32 = 0x000a;
+pub const WM_NCCREATE: u32 = 0x0081;
 pub const WM_NCDESTROY: u32 = 0x0082;
 pub const WM_SETTEXT: u32 = 0x000c;
 pub const WM_GETTEXT: u32 = 0x000d;
@@ -320,6 +321,7 @@ pub struct Window {
     pub visible: bool,
     pub enabled: bool,
     pub parent: Option<u32>,
+    pub owner: Option<u32>,
     pub id: u32,
     pub style: u32,
     pub ex_style: u32,
@@ -419,6 +421,7 @@ impl Default for Gwe {
                 visible: true,
                 enabled: true,
                 parent: None,
+                owner: None,
                 id: 0,
                 style: 0,
                 ex_style: 0,
@@ -529,6 +532,24 @@ impl Gwe {
         ex_style: u32,
         rect: Rect,
     ) -> u32 {
+        self.create_window_ex_with_process_parent_owner_and_rect(
+            thread_id, process_id, class_name, title, parent, None, id, style, ex_style, rect,
+        )
+    }
+
+    pub fn create_window_ex_with_process_parent_owner_and_rect(
+        &mut self,
+        thread_id: u32,
+        process_id: u32,
+        class_name: &str,
+        title: &str,
+        parent: Option<u32>,
+        owner: Option<u32>,
+        id: u32,
+        style: u32,
+        ex_style: u32,
+        rect: Rect,
+    ) -> u32 {
         let rect = self.normalize_create_rect(parent, style, rect);
         let class_name = self.resolve_class_name(class_name);
         let wndproc = self
@@ -565,6 +586,7 @@ impl Gwe {
                 visible,
                 enabled,
                 parent,
+                owner,
                 id,
                 style,
                 ex_style,
@@ -849,6 +871,17 @@ impl Gwe {
         })
     }
 
+    pub fn clear_update_erase(&mut self, hwnd: u32) -> bool {
+        let Some(window) = self.windows.get_mut(&hwnd) else {
+            return false;
+        };
+        if window.destroyed {
+            return false;
+        }
+        window.erase_pending = false;
+        true
+    }
+
     pub fn begin_paint(&mut self, hwnd: u32) -> Option<PaintUpdate> {
         let window = self.windows.get(&hwnd)?;
         if window.destroyed {
@@ -1018,7 +1051,7 @@ impl Gwe {
         }
 
         match cmd {
-            GW_OWNER => None,
+            GW_OWNER => window.owner.filter(|owner| self.is_window(*owner)),
             GW_CHILD => self.first_child(hwnd),
             GW_HWNDFIRST | GW_HWNDLAST | GW_HWNDNEXT | GW_HWNDPREV => {
                 let siblings = self.sibling_windows(window.parent);

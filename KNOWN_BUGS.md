@@ -1,5 +1,15 @@
 # KNOWN_BUGS
 
+## Artifact Note
+
+- `target\` was cleared on 2026-06-04 after generated build/probe output grew
+  to roughly 50 GB. Historical artifact names in this file document observed
+  evidence but may no longer exist locally; rerun the relevant probe to
+  regenerate fresh files.
+- Future mounted validation should use `D:\INAVI_Emulator\DUMPPLZ\Windows` as
+  the true runtime DLL source. Older notes that mention SDK MFC `--dll-search-dir`
+  are historical evidence labels.
+
 ## Open
 
 - Main process launch reaches the paint loop without useful GUI output.
@@ -126,7 +136,28 @@
     memory-stable (`heap_live=6921/21255717B`, `host_open=91`,
     `host_read=4302/1718377B`, `mem_open=2`, `max_read=497178`), but still had
     no named render milestone and only 101 red pixels from `(0,160)` through
-    `(100,160)`. This remains no-useful-UI.
+    `(100,160)`. The owner/child raw-create slice wrote
+    `target\owner_child_virtual_60s_*`, stopped at `pc=0x002a252c`, and stayed
+    memory-stable (`heap_live=6940/21278707B`,
+    `virtual_live=3/196608B`, `host_open=112`,
+    `host_read=7840/1760751B`, `mem_open=2`, `max_read=497178`), but still had
+    no named render milestone and only the same 101 red pixels from `(0,160)`
+    through `(100,160)`. The first post-cleanup probe using
+    `D:\INAVI_Emulator\DUMPPLZ\Windows` as the DLL source, after the
+    `GetUpdateRect`/`GetUpdateRgn` erase-query slice, wrote
+    `target\get_update_erase_virtual_60s_*`; it stopped at `pc=0x00a436e0`
+    with stable memory/file counters (`heap_live=6930/21294161B`,
+    `virtual_live=2/131072B`, `host_open=92`,
+    `host_read=4305/1769298B`, `mem_open=2`, `max_read=497178`), still had no
+    render milestones, and still had only 101 red pixels from `(0,160)` through
+    `(100,160)`. The follow-up dialog/control text-forwarding slice wrote
+    `target\dialog_text_virtual_60s_*` with the same dumped DLL source; it
+    stopped at `pc=0x0001362c`, stayed memory/file stable
+    (`heap_live=7041/21284917B`, `virtual_live=3/196608B`,
+    `host_open=113`, `host_read=7843/1763759B`, `mem_open=2`,
+    `max_read=497178`), still had no render milestones, and still had only the
+    same 101 red pixels from `(0,160)` through `(100,160)`. This remains
+    no-useful-UI.
   - Evidence: latest bounded run with `--features unicorn`,
     `--dll-search-dir C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii`,
     and `--mount-config mounts.toml` previously timed out after 30
