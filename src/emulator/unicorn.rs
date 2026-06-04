@@ -2324,6 +2324,8 @@ impl UnicornMips {
                         &suspended_guest_thread_hook,
                         &running_guest_thread_hook,
                         &last_messages_hook,
+                        host_wall_clock_started,
+                        host_wall_clock_limit,
                     )
                 }) {
                     return;
@@ -5728,6 +5730,8 @@ fn try_block_empty_get_message<D>(
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     last_messages: &std::rc::Rc<std::cell::RefCell<Vec<UnicornLastMessage>>>,
+    host_wall_clock_started: std::time::Instant,
+    host_wall_clock_limit: Option<std::time::Duration>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
@@ -5839,8 +5843,9 @@ fn try_block_empty_get_message<D>(
             kernel.timers.tick_count(),
             crate::ce::timer::INFINITE,
         );
-        if suspended_thread.borrow().is_none()
-            && try_complete_current_get_message_timer_wait(
+        let can_complete_current_wait = suspended_thread.borrow().is_none();
+        if can_complete_current_wait
+            && (try_complete_current_get_message_timer_wait(
                 kernel,
                 uc,
                 thread_id,
@@ -5850,7 +5855,19 @@ fn try_block_empty_get_message<D>(
                 min_msg,
                 max_msg,
                 read_mips_reg(uc, RegisterMIPS::RA),
-            )
+            ) || try_wait_and_complete_current_get_message_timer_wait(
+                kernel,
+                uc,
+                thread_id,
+                wait_id,
+                args.first().copied().unwrap_or(0),
+                hwnd,
+                min_msg,
+                max_msg,
+                read_mips_reg(uc, RegisterMIPS::RA),
+                host_wall_clock_started,
+                host_wall_clock_limit,
+            ))
         {
             *blocked.borrow_mut() = None;
             let result = read_mips_reg(uc, RegisterMIPS::V0);
@@ -5891,8 +5908,9 @@ fn try_block_empty_get_message<D>(
             kernel.timers.tick_count(),
             crate::ce::timer::INFINITE,
         );
-        if suspended_thread.borrow().is_none()
-            && try_complete_current_get_message_timer_wait(
+        let can_complete_current_wait = suspended_thread.borrow().is_none();
+        if can_complete_current_wait
+            && (try_complete_current_get_message_timer_wait(
                 kernel,
                 uc,
                 thread_id,
@@ -5902,7 +5920,19 @@ fn try_block_empty_get_message<D>(
                 min_msg,
                 max_msg,
                 read_mips_reg(uc, RegisterMIPS::RA),
-            )
+            ) || try_wait_and_complete_current_get_message_timer_wait(
+                kernel,
+                uc,
+                thread_id,
+                wait_id,
+                args.first().copied().unwrap_or(0),
+                hwnd,
+                min_msg,
+                max_msg,
+                read_mips_reg(uc, RegisterMIPS::RA),
+                host_wall_clock_started,
+                host_wall_clock_limit,
+            ))
         {
             *blocked.borrow_mut() = None;
             let result = read_mips_reg(uc, RegisterMIPS::V0);
@@ -5982,6 +6012,52 @@ fn unicorn_blocked_get_message_snapshot(
 #[cfg(feature = "unicorn")]
 fn should_fast_forward_empty_queue_timer(delay_ms: u32) -> bool {
     delay_ms <= MAX_EMPTY_QUEUE_TIMER_FAST_FORWARD_MS
+}
+
+#[cfg(feature = "unicorn")]
+fn timer_delay_fits_host_wall_budget(
+    delay_ms: u32,
+    started: std::time::Instant,
+    limit: Option<std::time::Duration>,
+) -> bool {
+    let Some(limit) = limit else {
+        return true;
+    };
+    let Some(remaining) = limit.checked_sub(started.elapsed()) else {
+        return false;
+    };
+    std::time::Duration::from_millis(u64::from(delay_ms)) <= remaining
+}
+
+#[cfg(feature = "unicorn")]
+#[allow(clippy::too_many_arguments)]
+fn try_wait_and_complete_current_get_message_timer_wait<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    thread_id: u32,
+    wait_id: u64,
+    msg_ptr: u32,
+    hwnd: Option<u32>,
+    min_msg: u32,
+    max_msg: u32,
+    return_pc: u32,
+    host_wall_clock_started: std::time::Instant,
+    host_wall_clock_limit: Option<std::time::Duration>,
+) -> bool {
+    let Some(delay_ms) = kernel.timers.next_due_delay_ms() else {
+        return false;
+    };
+    if should_fast_forward_empty_queue_timer(delay_ms) {
+        return false;
+    }
+    if !timer_delay_fits_host_wall_budget(delay_ms, host_wall_clock_started, host_wall_clock_limit)
+    {
+        return false;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(u64::from(delay_ms)));
+    try_complete_current_get_message_timer_wait(
+        kernel, uc, thread_id, wait_id, msg_ptr, hwnd, min_msg, max_msg, return_pc,
+    )
 }
 
 #[cfg(feature = "unicorn")]
@@ -13578,6 +13654,25 @@ mod unicorn_tests {
             super::MAX_EMPTY_QUEUE_TIMER_FAST_FORWARD_MS + 1
         ));
         assert!(!super::should_fast_forward_empty_queue_timer(7500));
+    }
+
+    #[test]
+    fn long_getmessage_timer_wait_respects_host_wall_budget() {
+        let started = std::time::Instant::now();
+
+        assert!(super::timer_delay_fits_host_wall_budget(
+            7500, started, None
+        ));
+        assert!(super::timer_delay_fits_host_wall_budget(
+            7500,
+            started,
+            Some(std::time::Duration::from_secs(30))
+        ));
+        assert!(!super::timer_delay_fits_host_wall_budget(
+            7500,
+            started,
+            Some(std::time::Duration::from_millis(1))
+        ));
     }
 
     #[test]

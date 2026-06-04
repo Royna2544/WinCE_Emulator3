@@ -213,6 +213,15 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     fuller run-queue/real-time wake slice that resumes such long future timers
     after their real CE due time instead of either spinning or treating the
     parked state as completed UI progress.
+    The follow-up `target\unicorn_realtime_timer_virtual_30s_*` probe moved
+    that maturation into the live Unicorn import hook instead of the outer
+    runner: if a long timer can become due inside the existing host wall-clock
+    budget, v3 lets real time pass and then resumes the scheduler-owned
+    `GetMessageW` wait before tearing down the Unicorn instance. That preserves
+    the saved MIPS context and matches the CE source shape where the blocked
+    message wait remains owned by the queue/scheduler until a timer/input wake
+    occurs. The outer `run_cpu_loop` still is not a persistent CPU-state
+    scheduler; fuller saved-thread context ownership remains a future port.
     The same GWE header declares
     blocking `GetMessageW_I` separately from
     `GetMessageWNoWait_I`, and documents paint requests as queue conditions

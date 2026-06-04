@@ -64,19 +64,20 @@
     timer id `0x3e8`/1000 due in virtual time, so this bug remains open as a
     post-splash scheduler/timer/GWE progression problem rather than a blank
     framebuffer problem.
-    Current follow-up: `target\timer_cap_startup_tap_virtual_20s_*` keeps the
-    same real present and stable memory, but the raw Unicorn `GetMessageW`
-    bridge now parks on the long no-HWND timer instead of fast-forwarding it
-    indefinitely through the just-registered wait path. The run stops quickly
-    at `COREDLL.dll@861 blocked_get_message` with
-    `timers=[id=0x3e8/thr=1/hwnd=0/msg=0x113/due=22086/period=7500]`,
-    `sched=wait:3/0/1`, `reg=1/0`, `PeekMessageW=194`, and
-    `GetMessageW=190`; the previous startup-tap probe consumed the full
-    60 s wall-clock budget with about 22,924 timer wakes. The framebuffer
-    remains populated with the real iNavi SE splash/art UI, so the remaining
-    failure is now sustained timer/message wake and post-splash MFC/resource
-    progression after a legitimate long-timer park, not runaway timer
-    fast-forward or blank framebuffer presentation.
+    Current follow-up: `target\unicorn_realtime_timer_virtual_30s_*` keeps the
+    same real present and stable memory, and the raw Unicorn `GetMessageW`
+    bridge now lets long no-HWND timers mature inside the same live CPU run
+    when the wall-clock budget permits. The run delivers two real `WM_TIMER`
+    id-1000 messages (`time_ms` about `21829` and `29329`), then stops cleanly
+    at `COREDLL.dll@861 blocked_get_message` because the next 7.5 s timer
+    period does not fit the 30 s run budget. Counters are bounded
+    (`PeekMessageW=200`, `GetMessageW=192`, `DispatchMessageW=191`,
+    `sched=wait:3/0/3`, `wake=2`, `reg=3/2`, `msgcand=2`) and the earlier
+    unsafe outer-loop continuation that reproduced `pc=0x00000000` is not the
+    committed path. The framebuffer remains populated with the real iNavi SE
+    splash/art UI, so the remaining failure is post-splash MFC/resource
+    progression after valid timer wakes, not runaway timer fast-forward,
+    blank framebuffer presentation, or lost blocked-thread context.
     GWE hidden-window follow-up: `target\hide_update_clear_virtual_20s_*`
     proves stale create-time update state is no longer left on immediately
     hidden MFC child controls. `ShowWindow(SW_HIDE)`/`SWP_HIDEWINDOW` now clear

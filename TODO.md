@@ -14,7 +14,8 @@
 
 - Continue from the new mounted iNavi first-present frontier. The latest
   virtual probes `target\update_erase_virtual_*`,
-  `target\timer_cap_startup_tap_virtual_20s_*`, and
+  `target\timer_cap_startup_tap_virtual_20s_*`,
+  `target\unicorn_realtime_timer_virtual_30s_*`, and
   `target\hide_update_clear_virtual_20s_*` prove guest GDI now presents a real 800x480
   memory surface to a window HDC:
   `BitBlt(dst=0x02020008, dst_memdc=false, dst_hwnd=0x00020008,
@@ -24,23 +25,25 @@
   The raw `GetMessageW` bridge now lets short <=100 ms GUI timers fire, and
   the initial guest thread now registers scheduler-owned `GetMessageW` waits
   instead of a diagnostic-only stop. Long future timers are no longer
-  fast-forwarded in a tight loop: the latest startup-tap probe parks with
-  `sched=wait:3/0/1`, `reg:1/0`, and the 7.5 s no-HWND timer still pending
-  (`id=0x3e8`, `due=22086`, `period=7500`) after delivering the real tap and
-  first UI frame. The latest GWE
+  fast-forwarded in a tight loop, and they can now mature inside the same live
+  Unicorn run when the host wall-clock budget allows it. The latest
+  30 s virtual/tap probe delivered two real no-HWND `WM_TIMER` 1000 messages
+  (`time_ms` about `21829` and `29329`) before parking on the next 7.5 s
+  period outside the run budget with `sched=wait:3/0/3`, `wake=2`, and
+  `msgcand=2`. The latest GWE
   cleanup also clears stale create-time update state when MFC immediately
   hides visible zero-size `AfxWnd42u` children; hidden controls in
   `target\hide_update_clear_virtual_20s_windows.txt` now mostly report
   `upd=false` rather than stale full-screen dirty rectangles. The remaining
   blocker is no longer first pixels, memory-DC-to-screen presentation,
   diagnostic-only timer wait ownership, or hidden-child stale paint state. It
-  is the real post-splash timer/message lifecycle: v3 can present the frame
-  and can park the long id-1000 no-HWND timer, but it does not yet have a
-  sustained real-time/run-queue wake model for that long timer in virtual mode.
-  Next steps: use host/monitor input plus timer tracing to decide whether the
-  next slice is wall-clock timer wake/resume ownership, MFC idle/resource
-  progression after the first timer, or another GWE message ordering gap,
-  without forcing hidden child paints or app-specific state.
+  is now the real post-splash MFC/resource progression after valid timer
+  wakes. Next steps: trace what the app does on the first two real
+  no-HWND `WM_TIMER` deliveries, correlate that with the `resource_59718` /
+  mode-47 table replay evidence, and decide whether the next fidelity slice is
+  another GWE message ordering/detail gap, resource/module state behavior, or
+  broader scheduler thread-state ownership. Do not force hidden child paints
+  or app-specific state.
 - Continue the mounted iNavi resource-ready investigation from the
   `resource_59718`/mode-47 table frontier. Current evidence says
   `\SDMMC Disk\INavi\res\values.dat` opens and reads correctly, but by the

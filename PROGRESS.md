@@ -9,6 +9,28 @@
 
 ## Confirmed
 
+- Long `GetMessageW` timer waits can now mature inside a single live Unicorn
+  invocation without rebuilding CPU state. When the current thread parks in an
+  empty message queue and the next timer is beyond the <=100 ms fast-forward
+  window, the raw COREDLL bridge checks the run's host wall-clock budget,
+  waits only if the timer can become due inside that budget, then reuses the
+  existing scheduler-owned `GetMessageW` resume path while the saved MIPS
+  registers/RAM are still live. This fixes the unsafe outer-runner re-entry
+  experiment that reproduced `pc=0x00000000` after a blocked wait. Focused
+  coverage: `cargo test --features unicorn,trace,win32-desktop
+  long_getmessage_timer_wait_respects_host_wall_budget` and
+  `cargo test --features unicorn,trace,win32-desktop
+  empty_queue_getmessage_only_fast_forwards_near_due_timers` pass. A mounted
+  virtual/tap probe wrote `target\unicorn_realtime_timer_virtual_30s_*`: it
+  keeps the real iNavi SE splash/art framebuffer, delivers two real no-HWND
+  timer messages (`WM_TIMER` id 1000 at about `21829 ms` and `29329 ms`),
+  then parks cleanly at `COREDLL.dll@861 blocked_get_message` because the next
+  7.5 s period does not fit the 30 s run budget. Scheduler counters now show
+  bounded live timer wake/resume instead of spin or control-flow loss
+  (`sched=wait:3/0/3`, `wake=2`, `reg=3/2`, `msgcand=2`), with stable
+  memory/file I/O (`heap_live=13697/13300954B`,
+  `virtual_live=3/196608B`, `host_open=665`,
+  `host_read=80198/4060882B`, `mem_open=3`, `max_read=685080`).
 - Raw Unicorn `GetMessageW` empty-queue handling no longer fast-forwards long
   future timers in the current blocked-wait completion path. Both the
   pre-block and just-registered blocked-wait paths now share the same
