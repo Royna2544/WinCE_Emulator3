@@ -2531,6 +2531,15 @@
   shows additional offscreen DIB/StretchBlt/BitBlt work into an 800x54 memory
   surface and invalidation of hidden/effectively invisible child HWND
   `0x0002006c`, but no later display-surface blit or named render milestone.
+- Added file-open access/disposition fields to the monitor file summary. The
+  follow-up mounted probe `target\createfile_access_virtual_150s_*` shows
+  `SDMMC Disk\iNaviData\config.bin` is opened with `req=0x40000000`
+  (`GENERIC_WRITE`) and `pos=0x00000003` (`OPEN_EXISTING`), yet the write still
+  reports zero bytes and the host file hash remains unchanged. Because the raw
+  fixture proves writable host-backed handles write through, this is now
+  evidence that the active mounted run is getting a non-writable host handle,
+  likely from current host/sandbox permissions around the external SD-card
+  dump, not from a guest read-only open.
 
 ## False Leads
 

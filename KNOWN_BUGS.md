@@ -747,7 +747,22 @@
     `ERROR_ACCESS_DENIED` for valid non-writable handles and clears it on
     success; focused raw tests cover host write-through and read-only-handle
     failure.
-  - Status: fixed in the current working tree; commit after final validation.
+  - Status: fixed in commit `24edd3f`.
+
+- Writable external SD-card dump opens can still become non-writable in the
+  active mounted run.
+  - Symptom: iNavi opens `SDMMC Disk\iNaviData\config.bin` for write, seeks to
+    EOF minus six bytes, then `WriteFile("E\0O\0F\0")` reports zero bytes.
+  - Evidence: `target\createfile_access_virtual_150s_files.txt` prints the
+    `CreateFileWArg` fields `req=0x40000000 pos=0x00000003` for
+    `SDMMC Disk\iNaviData\config.bin`, proving `GENERIC_WRITE` +
+    `OPEN_EXISTING`. The host file SHA-256 remained
+    `1F04AE1349063D3A79F74733B233D8872F9A0D808309C33158DCF2EF9A86188A`, and
+    focused raw tests prove writable host-backed files write through when the
+    host handle is writable.
+  - Status: likely environment/permission downgrade for the external mounted
+    dump. Prefer overlay/copy-on-write validation before permitting mounted
+    probes to mutate the source SD-card tree.
 
 - Host desktop windows may be inaccessible from the current automation session.
   - Symptom: `--desktop host` initializes the Win32 presenter and reports

@@ -52,12 +52,14 @@
   offscreen DIB/StretchBlt/BitBlt composition into an 800x54 memory surface is
   not copied to a display HDC, and why invalidation is landing on hidden or
   effectively invisible child HWND `0x0002006c`.
-- Improve file-open trace summaries to include raw `CreateFileW` desired access
-  and creation disposition when needed. The current iNavi `config.bin`
-  `WriteFile` still reports zero bytes in the mounted trace, but the dump hash
-  remains unchanged and the new raw fixtures prove writable host-backed handles
-  write through; the remaining question is whether that specific guest open was
-  read-only or host-permission downgraded.
+- Decide the safe host-write policy for mounted external dumps. The refreshed
+  `target\createfile_access_virtual_150s_files.txt` proves iNavi opens
+  `SDMMC Disk\iNaviData\config.bin` as `GENERIC_WRITE` + `OPEN_EXISTING`, but
+  the run still reports zero write bytes and leaves the source hash unchanged.
+  Since focused fixtures prove writable host-backed handles write through, the
+  remaining issue is likely host/sandbox permission downgrade for the external
+  dump. Prefer an overlay/copy-on-write mount strategy before allowing mounted
+  iNavi probes to mutate `D:\INAVI_Emulator\INAVI`.
 - Timer identity no longer has the known global-id collapse: v3 now keys
   timers by owner thread/message queue, optional `HWND`, and id, and raw
   `KillTimer(hwnd,id)` only removes the matching scoped timer. Destroyed HWND

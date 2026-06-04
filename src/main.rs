@@ -898,11 +898,19 @@ fn push_monitor_file_summary(
                 .result
                 .map(|result| format!("0x{result:08x}"))
                 .unwrap_or_else(|| "-".to_owned());
+            let requested = record
+                .requested
+                .map(|requested| format!(" req=0x{requested:08x}"))
+                .unwrap_or_default();
+            let position = record
+                .position
+                .map(|position| format!(" pos=0x{position:08x}"))
+                .unwrap_or_default();
             let detail = record.preview.as_deref().unwrap_or("");
             let _ = writeln!(
                 out,
-                "    {} handle={} result={} {}",
-                record.op, handle, result, path
+                "    {} handle={} result={}{}{} {}",
+                record.op, handle, result, requested, position, path
             );
             if !detail.is_empty() {
                 let _ = writeln!(out, "      {detail}");
