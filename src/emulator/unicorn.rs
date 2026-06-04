@@ -965,7 +965,9 @@ impl UnicornMips {
     pub fn load_pe_image_with_dlls(&mut self, image: &PeImage, dlls: &[PeImage]) -> Result<()> {
         let mut external = ExternalImportTable::default();
         let mut loaded_dlls = Vec::new();
+        let mut trampoline_blobs = Vec::new();
         let mut next_dll_base = 0x6000_0000u32;
+        let mut next_trampoline_base = 0x5000_0000u32;
         let mut next_trap_base = IMPORT_TRAP_BASE;
         let mut occupied_image_ranges = vec![(
             image.image_base(),
@@ -990,8 +992,19 @@ impl UnicornMips {
                     next_trap_base,
                 )?;
                 #[cfg(feature = "unicorn")]
-                let trampoline_patch =
-                    Some(patch_mips_unicorn_trampolines(dll, load_base, &mut mapped)?);
+                let trampoline_patch = {
+                    let trampoline_base = allocate_relocated_dll_base(
+                        0x0010_0000,
+                        &occupied_image_ranges,
+                        &mut next_trampoline_base,
+                    )?;
+                    Some(patch_mips_unicorn_trampolines(
+                        dll,
+                        load_base,
+                        &mut mapped,
+                        Some(trampoline_base),
+                    )?)
+                };
                 #[cfg(not(feature = "unicorn"))]
                 let trampoline_patch: Option<MipsTrampolinePatchResult> = None;
                 let mapped_size = align_up_4k(mapped.len() as u32)?;
@@ -1009,9 +1022,13 @@ impl UnicornMips {
             self.import_traps.merge(traps);
             external.add_pe_image(module_file_name(&dll.path), dll, load_base);
             #[cfg(feature = "unicorn")]
-            if let Some(trampoline_patch) = trampoline_patch {
+            if let Some(mut trampoline_patch) = trampoline_patch {
                 if let Some(range) = trampoline_patch.range {
                     self.trampoline_ranges.push(range);
+                    if let Some(bytes) = trampoline_patch.external_mapped.take() {
+                        occupied_image_ranges.push((range.0, range.1));
+                        trampoline_blobs.push((format!("trampoline:{}", dll.path), range.0, bytes));
+                    }
                 }
                 self.trampoline_jumps.extend(trampoline_patch.jumps);
             }
@@ -1030,7 +1047,7 @@ impl UnicornMips {
         #[cfg(feature = "unicorn")]
         {
             let trampoline_patch =
-                patch_mips_unicorn_trampolines(image, image.image_base(), &mut mapped)?;
+                patch_mips_unicorn_trampolines(image, image.image_base(), &mut mapped, None)?;
             if let Some(range) = trampoline_patch.range {
                 self.trampoline_ranges.push(range);
             }
@@ -1048,6 +1065,14 @@ impl UnicornMips {
                 align_up_4k(mapped.len() as u32)?,
                 MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC,
                 &format!("dll:{path}"),
+            )?;
+        }
+        for (name, base, mapped) in &trampoline_blobs {
+            self.map_region(
+                *base,
+                align_up_4k(mapped.len() as u32)?,
+                MemoryPerms::READ | MemoryPerms::EXEC,
+                name,
             )?;
         }
         if !self
@@ -1118,6 +1143,13 @@ impl UnicornMips {
             self.mapped_blobs.push(MappedBlob {
                 name: format!("dll:{path}"),
                 base: load_base,
+                bytes: mapped,
+            });
+        }
+        for (name, base, mapped) in trampoline_blobs {
+            self.mapped_blobs.push(MappedBlob {
+                name,
+                base,
                 bytes: mapped,
             });
         }
@@ -2846,6 +2878,7 @@ fn patch_mips_unicorn_trampolines(
     image: &PeImage,
     load_base: u32,
     mapped: &mut Vec<u8>,
+    external_stub_base: Option<u32>,
 ) -> Result<MipsTrampolinePatchResult> {
     let mut patches = Vec::new();
     for section in &image.sections {
@@ -2918,13 +2951,20 @@ fn patch_mips_unicorn_trampolines(
     }
 
     let aligned_len = align_up_4k(mapped.len() as u32)? as usize;
-    if mapped.len() < aligned_len {
+    let mut stub_bytes = Vec::new();
+    if external_stub_base.is_none() && mapped.len() < aligned_len {
         mapped.resize(aligned_len, 0);
     }
-    let mut stub_rva = aligned_len as u32;
+    let mut stub_rva = if external_stub_base.is_some() {
+        0
+    } else {
+        aligned_len as u32
+    };
     let mut trampoline_jumps = Vec::with_capacity(patches.len());
     for patch in patches {
-        let stub_pc = load_base.wrapping_add(stub_rva);
+        let stub_pc = external_stub_base
+            .unwrap_or(load_base)
+            .wrapping_add(stub_rva);
         let stub_words = match patch.kind {
             MipsUnicornPatchKind::BranchLikely { branch, delay_slot } => {
                 branch_likely_stub_words(patch.pc, branch, delay_slot, stub_pc)?
@@ -2948,7 +2988,11 @@ fn patch_mips_unicorn_trampolines(
             encode_mips_ori(26, 26, stub_pc & 0xffff),
             &image.path,
         )?;
-        let stub_offset = stub_rva as usize;
+        let stub_offset = if external_stub_base.is_some() {
+            stub_rva as usize
+        } else {
+            stub_rva as usize
+        };
         let stub_end = stub_offset
             .checked_add(stub_words.len() * 4)
             .ok_or_else(|| Error::InvalidArgument("branch-likely stub overflow".to_owned()))?;
@@ -2957,29 +3001,44 @@ fn patch_mips_unicorn_trampolines(
             stub: stub_pc,
             byte_len: (stub_words.len() * 4) as u32,
         });
-        if mapped.len() < stub_end {
-            mapped.resize(stub_end, 0);
+        let target_bytes = if external_stub_base.is_some() {
+            &mut stub_bytes
+        } else {
+            &mut *mapped
+        };
+        if target_bytes.len() < stub_end {
+            target_bytes.resize(stub_end, 0);
         }
         for (index, word) in stub_words.into_iter().enumerate() {
             let offset = stub_offset + index * 4;
-            mapped[offset..offset + 4].copy_from_slice(&word.to_le_bytes());
+            target_bytes[offset..offset + 4].copy_from_slice(&word.to_le_bytes());
         }
         stub_rva = stub_rva
             .checked_add((stub_end - stub_offset) as u32)
             .ok_or_else(|| Error::InvalidArgument("branch-likely stub RVA overflow".to_owned()))?;
     }
-    let final_len = align_up_4k(stub_rva)? as usize;
-    if mapped.len() < final_len {
-        mapped.resize(final_len, 0);
-    }
-    let range_base = load_base.wrapping_add(aligned_len as u32);
-    let range_size = final_len
-        .checked_sub(aligned_len)
-        .and_then(|size| u32::try_from(size).ok())
-        .ok_or_else(|| Error::InvalidArgument("branch trampoline range overflow".to_owned()))?;
+    let (range_base, range_size, external_mapped) = if let Some(stub_base) = external_stub_base {
+        let final_len = align_up_4k(stub_rva)? as usize;
+        if stub_bytes.len() < final_len {
+            stub_bytes.resize(final_len, 0);
+        }
+        (stub_base, final_len as u32, Some(stub_bytes))
+    } else {
+        let final_len = align_up_4k(stub_rva)? as usize;
+        if mapped.len() < final_len {
+            mapped.resize(final_len, 0);
+        }
+        let range_base = load_base.wrapping_add(aligned_len as u32);
+        let range_size = final_len
+            .checked_sub(aligned_len)
+            .and_then(|size| u32::try_from(size).ok())
+            .ok_or_else(|| Error::InvalidArgument("branch trampoline range overflow".to_owned()))?;
+        (range_base, range_size, None)
+    };
     Ok(MipsTrampolinePatchResult {
         range: Some((range_base, range_size)),
         jumps: trampoline_jumps,
+        external_mapped,
     })
 }
 
@@ -2987,6 +3046,7 @@ fn patch_mips_unicorn_trampolines(
 struct MipsTrampolinePatchResult {
     range: Option<(u32, u32)>,
     jumps: Vec<MipsTrampolineJump>,
+    external_mapped: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

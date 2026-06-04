@@ -54,7 +54,9 @@ const SPI_GETWORKAREA: u32 = 0x0030;
 const SPI_GETPLATFORMTYPE: u32 = 0x0101;
 const SPI_GETOEMINFO: u32 = 0x0102;
 const SYSTEM_PARAMETERS_INFO_REGISTRY_PATH: &str = r"HKLM\System\Emulator\SystemParametersInfo";
+const SHELL_FOLDERS_REGISTRY_PATH: &str = r"HKLM\System\Explorer\Shell Folders";
 const IOCTL_HAL_GET_DEVICEID: u32 = 0x0101_207c;
+const EVENT_ALL_ACCESS: u32 = 0x001f_0003;
 const RDW_INVALIDATE: u32 = 0x0001;
 const RDW_INTERNALPAINT: u32 = 0x0002;
 const RDW_ERASE: u32 = 0x0004;
@@ -67,6 +69,8 @@ const RDW_UPDATENOW: u32 = 0x0100;
 const RDW_ERASENOW: u32 = 0x0200;
 const TPM_RETURNCMD: u32 = 0x0100;
 const TPMPARAMS_SIZE: u32 = 20;
+const STRSAFE_E_INSUFFICIENT_BUFFER: u32 = 0x8007_007a;
+const STRSAFE_E_INVALID_PARAMETER: u32 = 0x8007_0057;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CoredllSubsystem {
@@ -1380,6 +1384,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_CREATE_EVENT_W => Some(CoredllValue::Handle(create_event_w_raw(
             kernel, memory, thread_id, args,
         ))),
+        ORD_OPEN_EVENT_W => Some(CoredllValue::Handle(open_event_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_SUSPEND_THREAD => Some(CoredllValue::U32(suspend_thread_raw(
             kernel,
             thread_id,
@@ -1709,6 +1716,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 2),
         ) as u32)),
+        ORD_STRING_CB_CAT_W => Some(CoredllValue::U32(string_cb_cat_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ))),
         ORD_WCSNCPY => Some(CoredllValue::Handle(crt::wcsncpy_raw(
             kernel,
             memory,
@@ -1928,6 +1943,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
         ))),
         ORD_RAND => Some(CoredllValue::U32(crt::rand_raw(kernel, thread_id))),
+        ORD_SECURITY_GEN_COOKIE2 => Some(CoredllValue::U32(security_gen_cookie2_raw(
+            kernel, thread_id,
+        ))),
         ORD_FREE
         | ORD_OPERATOR_DELETE
         | ORD_OPERATOR_DELETE_ARRAY
@@ -2867,6 +2885,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
         ))),
         ORD_MESSAGE_BOX_W => Some(CoredllValue::U32(message_box_w_raw(memory, args))),
+        ORD_SHGET_SPECIAL_FOLDER_PATH => Some(CoredllValue::Bool(sh_get_special_folder_path_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_FIND_RESOURCE | ORD_FIND_RESOURCE_W => Some(CoredllValue::Handle(find_resource(
             kernel,
             memory,
@@ -3736,6 +3757,70 @@ fn write_conversion_byte_result<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     bytes.len() as u32
+}
+
+fn string_cb_cat_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest: u32,
+    cb_dest: u32,
+    src: u32,
+) -> u32 {
+    if dest == 0 || src == 0 || cb_dest == 0 {
+        return STRSAFE_E_INVALID_PARAMETER;
+    }
+    let cch_dest = (cb_dest / 2) as usize;
+    let Some(dest_len) = guest_wide_len_bounded(kernel, memory, thread_id, dest, cch_dest) else {
+        return STRSAFE_E_INVALID_PARAMETER;
+    };
+    let mut remaining = cch_dest.saturating_sub(dest_len);
+    if remaining == 0 {
+        return STRSAFE_E_INVALID_PARAMETER;
+    }
+    let mut write_addr = dest.wrapping_add((dest_len as u32) * 2);
+    let mut read_addr = src;
+    loop {
+        let Some(unit) = read_guest_u16(kernel, memory, thread_id, read_addr) else {
+            return STRSAFE_E_INVALID_PARAMETER;
+        };
+        if unit == 0 {
+            return if write_guest_u16(kernel, memory, thread_id, write_addr, 0) {
+                0
+            } else {
+                STRSAFE_E_INVALID_PARAMETER
+            };
+        }
+        if remaining == 1 {
+            return if write_guest_u16(kernel, memory, thread_id, write_addr, 0) {
+                STRSAFE_E_INSUFFICIENT_BUFFER
+            } else {
+                STRSAFE_E_INVALID_PARAMETER
+            };
+        }
+        if !write_guest_u16(kernel, memory, thread_id, write_addr, unit) {
+            return STRSAFE_E_INVALID_PARAMETER;
+        }
+        write_addr = write_addr.wrapping_add(2);
+        read_addr = read_addr.wrapping_add(2);
+        remaining -= 1;
+    }
+}
+
+fn guest_wide_len_bounded<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    ptr: u32,
+    max_chars: usize,
+) -> Option<usize> {
+    for index in 0..max_chars {
+        let addr = ptr.wrapping_add((index as u32) * 2);
+        if read_guest_u16(kernel, memory, thread_id, addr)? == 0 {
+            return Some(index);
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -6659,6 +6744,42 @@ fn create_event_w_raw<M: CoredllGuestMemory>(
     handle
 }
 
+fn open_event_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    if raw_arg(args, 0) != EVENT_ALL_ACCESS || raw_arg(args, 1) != 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let name_ptr = raw_arg(args, 2);
+    if name_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(name) = read_guest_wide_arg(memory, name_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if let Some(handle) = kernel.open_event_w(&name) {
+        kernel.threads.set_last_error(thread_id, 0);
+        handle
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+        0
+    }
+}
+
 fn create_semaphore_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
@@ -8358,6 +8479,67 @@ fn write_guest_wide_fixed<M: CoredllGuestMemory>(
         thread_id,
         addr.wrapping_add((len as u32) * 2),
         0,
+    )
+}
+
+fn sh_get_special_folder_path_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let path_ptr = raw_arg(args, 1);
+    if path_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(path) = special_folder_path(kernel, raw_arg(args, 2)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if write_guest_wide_fixed(
+        kernel,
+        memory,
+        thread_id,
+        path_ptr,
+        &path,
+        WIN32_FIND_DATAW_FILE_NAME_CHARS,
+    ) {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        false
+    }
+}
+
+fn special_folder_path(kernel: &CeKernel, folder: u32) -> Option<String> {
+    let (value_name, fallback) = match folder {
+        0x0000 | 0x0010 => ("Desktop", r"\Windows\Desktop"),
+        0x0002 => ("Programs", r"\Windows\Programs"),
+        0x0005 => ("Personal", r"\My Documents"),
+        0x0006 => ("Favorites", r"\Windows\Favorites"),
+        0x0007 => ("Startup", r"\Windows\Startup"),
+        0x0008 => ("Recent", r"\Windows\Recent"),
+        0x000b => ("Start Menu", r"\Windows\Start Menu"),
+        0x0014 => ("Fonts", r"\Windows\Fonts"),
+        0x001a => ("AppData", r"\Application Data"),
+        0x0024 => ("Windows", r"\Windows"),
+        0x0026 => ("Program Files", r"\Program Files"),
+        0x0028 => ("Profile", r"\Windows\Profiles"),
+        _ => return None,
+    };
+    Some(
+        kernel
+            .registry
+            .query_value(SHELL_FOLDERS_REGISTRY_PATH, value_name)
+            .ok()
+            .and_then(|value| value.as_str())
+            .unwrap_or(fallback)
+            .to_owned(),
     )
 }
 
@@ -13181,6 +13363,19 @@ fn raw_f64_pair(args: &[u32], low_index: usize, high_index: usize) -> f64 {
     f64::from_bits(raw_u64_pair(args, low_index, high_index))
 }
 
+fn security_gen_cookie2_raw(kernel: &CeKernel, thread_id: u32) -> u32 {
+    let mut cookie = 0xa5a5_5a5a_u32
+        ^ kernel.current_process_id().rotate_left(5)
+        ^ thread_id.rotate_left(13)
+        ^ kernel.timers.tick_count().rotate_left(17);
+    cookie ^= cookie >> 16;
+    cookie = cookie.wrapping_mul(0x045d_9f3b);
+    if cookie == 0 || cookie == 0xbb40_e64e {
+        cookie ^= 0x4711_2010;
+    }
+    if cookie == 0 { 0x4711_2010 } else { cookie }
+}
+
 fn raw_unary_f64(kernel: &CeKernel, args: &[u32], op: CeMathUnaryF64) -> CoredllValue {
     CoredllValue::CeMath(kernel.math.eval(CeMathCall::UnaryF64 {
         op,
@@ -13309,6 +13504,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "GetVersionEx",
     "GetVersionExW",
     "GetSystemMetrics",
+    "SHGetSpecialFolderPath",
     "SystemParametersInfoW",
     "CopyRect",
     "EqualRect",
@@ -13336,6 +13532,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "iswctype",
     "MultiByteToWideChar",
     "WideCharToMultiByte",
+    "StringCbCatW",
     "CharLowerW",
     "CharLowerBuffW",
     "CharUpperBuffW",
@@ -13348,6 +13545,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "swprintf",
     "vswprintf",
     "printf",
+    "__security_gen_cookie2",
     "free",
     "RemoteHeapAlloc",
     "RemoteHeapReAlloc",
@@ -13392,6 +13590,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "WaitCommEvent",
     "CloseHandle",
     "CreateEventW",
+    "OpenEventW",
     "EventModify",
     "WaitForSingleObject",
     "WaitForMultipleObjects",

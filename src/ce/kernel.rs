@@ -939,6 +939,10 @@ impl CeKernel {
         self.handles.create_event(name, manual_reset, initial_state)
     }
 
+    pub fn open_event_w(&self, name: &str) -> Option<u32> {
+        self.handles.open_event(name)
+    }
+
     pub fn create_guest_thread(
         &mut self,
         start_address: u32,

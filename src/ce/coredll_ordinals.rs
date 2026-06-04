@@ -4,7 +4,7 @@ pub struct CoredllOrdinalDef {
     pub ordinal: u32,
 }
 
-pub const COREDLL_EXPORTS: &[CoredllOrdinalDef; 1520] = &[
+pub const COREDLL_EXPORTS: &[CoredllOrdinalDef; 1521] = &[
     CoredllOrdinalDef {
         name: "??2@YAPAXI@Z",
         ordinal: 1095,
@@ -76,6 +76,10 @@ pub const COREDLL_EXPORTS: &[CoredllOrdinalDef; 1520] = &[
     CoredllOrdinalDef {
         name: "?__set_inconsistency@@YAP6AXXZP6AXXZ@Z",
         ordinal: 1555,
+    },
+    CoredllOrdinalDef {
+        name: "__security_gen_cookie2",
+        ordinal: 2696,
     },
     CoredllOrdinalDef {
         name: "?_inconsistency@@YAXXZ",
@@ -11657,6 +11661,7 @@ pub const ORD_FSEEK: u32 = 1130;
 pub const ORD_FTELL: u32 = 1131;
 pub const ORD_RAND: u32 = 1053;
 pub const ORD_SRAND: u32 = 1061;
+pub const ORD_SECURITY_GEN_COOKIE2: u32 = 2696;
 pub const ORD_FREE: u32 = 1018;
 pub const ORD_LONGJMP: u32 = 1036;
 pub const ORD_SETJMP: u32 = 2000;

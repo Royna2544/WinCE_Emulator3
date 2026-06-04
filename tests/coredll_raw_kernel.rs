@@ -15,19 +15,21 @@ use wince_emulation_v3::{
             ORD_INPUT_DEBUG_CHAR_W, ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_KERNEL_IO_CONTROL, ORD_LEAVE_CRITICAL_SECTION,
             ORD_LOAD_LIBRARY_W, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR,
-            ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_RELEASE_MUTEX,
-            ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
-            ORD_SLEEP, ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS,
-            ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION,
-            ORD_WAIT_FOR_MULTIPLE_OBJECTS, ORD_WAIT_FOR_SINGLE_OBJECT,
+            ORD_OPEN_EVENT_W, ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY,
+            ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD, ORD_SET_LAST_ERROR,
+            ORD_SET_THREAD_PRIORITY, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SLEEP, ORD_SUSPEND_THREAD,
+            ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS, ORD_TLS_GET_VALUE,
+            ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_FOR_MULTIPLE_OBJECTS,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
         },
         gwe::{Message, QS_POSTMESSAGE},
         kernel::{CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel},
         object::MAX_SUSPEND_COUNT,
-        registry::ERROR_SUCCESS,
+        registry::{ERROR_SUCCESS, RegistryValue},
         scheduler::SchedulerBlockedWaitKind,
         thread::{
-            ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOT_OWNER, ERROR_SIGNAL_REFUSED,
+            ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOT_OWNER,
+            ERROR_SIGNAL_REFUSED,
         },
         timer::{INFINITE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
@@ -1441,6 +1443,138 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
         }
     ));
 
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_open_event_w_opens_existing_named_event_only() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let event_name = 0x4000;
+    let event_all_access = 0x001f_0003;
+    memory.map_halfwords(event_name, 32);
+    memory.write_wide_z(event_name, "WAIT_EXPLORER");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_OPEN_EVENT_W,
+            [event_all_access, 0, event_name],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_FILE_NOT_FOUND
+    );
+
+    let created = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_EVENT_W,
+        [0, 1, 0, event_name],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateEventW did not return a handle: {other:?}"),
+    };
+    assert_ne!(created, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_OPEN_EVENT_W,
+            [event_all_access, 0, event_name],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle == created
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_OPEN_EVENT_W,
+            [event_all_access, 1, event_name],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_shget_special_folder_path_returns_ce_paths() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let path_ptr = 0x5000;
+    memory.map_halfwords(path_ptr, 260);
+
+    kernel.registry.set_value(
+        r"HKLM\System\Explorer\Shell Folders",
+        "Windows",
+        RegistryValue::string(r"\ResidentFlash\Windows"),
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHGET_SPECIAL_FOLDER_PATH,
+            [0, path_ptr, 0x0024, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(path_ptr, 260), r"\ResidentFlash\Windows");
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHGET_SPECIAL_FOLDER_PATH,
+            [0, path_ptr, 0xffff, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
     Ok(())
 }
 
