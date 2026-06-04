@@ -282,6 +282,135 @@
   (`reg:0/0 maxreg:0`), had no actual `SearchDB` `CreateFileW` failures and no
   `Access is denied` records, and still produced no render milestones; the
   framebuffer remains only the 301-pixel red tap line.
+- Scheduler object-transition wake ownership now uses that blocked-wait
+  registry for the first signal/release paths. Successful `SetEvent`,
+  `ReleaseSemaphore`, and only the final recursive `ReleaseMutex` collect
+  wait ids from the scheduler per-handle queues and enqueue them as pending
+  wake candidates; live resume selection prefers those candidates before the
+  global ready scan, then rechecks/consumes the underlying CE object state
+  through the existing wait path. This keeps auto-reset events, semaphores, and
+  recursive mutexes from being consumed by scheduler bookkeeping. Monitor and
+  debug summaries now include object signal/candidate/max-pending counters.
+  Focused coverage: scheduler pending-wake unit tests plus
+  `object_transitions_queue_scheduler_wait_candidates`; full
+  `cargo check --features unicorn,trace,win32-desktop` and
+  `cargo test --features unicorn,trace,win32-desktop` pass, with the existing
+  non-fatal Windows incremental-finalize warning. Added
+  `tests/test_progs/164_object_transition_wake` so the eVC4 MIPSII fixture
+  suite can pin event/semaphore/mutex wake behavior at the guest Win32 API
+  boundary when enabled. A mounted virtual probe using
+  `D:\INAVI_Emulator\DUMPPLZ\Windows` wrote
+  `target\scheduler_object_wake_virtual_60s_summary.txt`,
+  `target\scheduler_object_wake_virtual_60s_render.txt`,
+  `target\scheduler_object_wake_virtual_60s_milestones.txt`,
+  `target\scheduler_object_wake_virtual_60s_files.txt`, and
+  `target\scheduler_object_wake_virtual_60s.ppm`; it stopped at the 60 s wall
+  limit at `pc=0x00b54128`, `ra=0x002fd5e8` with stable memory
+  (`heap_live=7488/23106403B`, `virtual_live=3/196608B`) and file activity
+  (`host_open=237`, `host_read=38970/2222793B`, `mem_open=2`,
+  `max_read=497178`). The real app path exercised one object signal but no
+  registered waiter on that handle (`sig:1 cand:0 maxpend:0`) and still
+  produced no render milestones; the framebuffer remains only the 301-pixel
+  red tap line. `Access is denied` and actual failed `SearchDB` opens both
+  remained at zero.
+- Scheduler waitable-handle wake ownership now also covers thread and process
+  exit transitions. `mark_guest_thread_exited`, child process completion via
+  `mark_process_launch_exited`, child initial-thread completion, and raw
+  `TerminateProcess` now enqueue scheduler wait ids registered under the
+  corresponding thread/process handles after the handle is marked signaled,
+  including waiters registered on the CE current-process pseudo handle.
+  Existing `GetExitCodeThread`/`GetExitCodeProcess` state remains unchanged;
+  the scheduler only owns wake-candidate routing. Focused coverage:
+  `thread_and_process_exit_queue_scheduler_wait_candidates` and the raw
+  `TerminateProcess` path inside
+  `coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics`; full
+  `cargo check --features unicorn,trace,win32-desktop` and
+  `cargo test --features unicorn,trace,win32-desktop` pass, with the existing
+  non-fatal Windows incremental-finalize warning. Added
+  `tests/test_progs/165_thread_exit_wait_wake` so the eVC4 MIPSII fixture
+  suite can pin thread-handle exit signaling through `WaitForSingleObject`,
+  `GetExitCodeThread`, and wait-any. A mounted virtual probe using
+  `D:\INAVI_Emulator\DUMPPLZ\Windows` wrote
+  `target\scheduler_exit_wake_virtual_60s_summary.txt`,
+  `target\scheduler_exit_wake_virtual_60s_render.txt`,
+  `target\scheduler_exit_wake_virtual_60s_milestones.txt`,
+  `target\scheduler_exit_wake_virtual_60s_files.txt`, and
+  `target\scheduler_exit_wake_virtual_60s.ppm`; it stopped at the 60 s wall
+  limit at `pc=0x00b54128`, `ra=0x002fd5e8` with stable memory
+  (`heap_live=7586/23006573B`, `virtual_live=3/196608B`) and file activity
+  (`host_open=227`, `host_read=37888/2191219B`, `mem_open=2`,
+  `max_read=497178`). The real app path exercised seven object signals but no
+  registered waiters on those handles (`sig:7 cand:0 maxpend:0`) and still
+  produced no render milestones; the framebuffer remains only the 301-pixel
+  red tap line. `Access is denied` and actual failed `SearchDB` opens both
+  remained at zero.
+- Scheduler message-input wake ownership now covers the first GWE/timer input
+  transitions. `Scheduler` keeps a per-thread message-wait queue for parked
+  `MsgWaitForMultipleObjectsEx` waits, and kernel/GWE transitions for posted
+  messages, thread messages, broadcast messages, quit messages, queued sent
+  messages, remote input, and `WM_TIMER` posts enqueue pending message-wake
+  candidates. Resume selection still rechecks real GWE queue status and wake
+  masks before returning, so queue status consumption remains GWE-owned.
+  Monitor/debug summaries now include `msgsig`/`msgcand` counters. Focused
+  coverage: `scheduler_queues_message_waiters_by_thread` and
+  `message_and_timer_transitions_queue_scheduler_msg_wait_candidates`; full
+  `cargo check --features unicorn,trace,win32-desktop` and
+  `cargo test --features unicorn,trace,win32-desktop` pass, with the existing
+  non-fatal Windows incremental-finalize warning. Added
+  `tests/test_progs/166_msgwait_message_timer_wake` so the eVC4 MIPSII fixture
+  suite can pin posted-message and timer wake behavior through
+  `MsgWaitForMultipleObjectsEx`. A mounted virtual probe using
+  `D:\INAVI_Emulator\DUMPPLZ\Windows` wrote
+  `target\scheduler_msgwait_virtual_60s_summary.txt`,
+  `target\scheduler_msgwait_virtual_60s_render.txt`,
+  `target\scheduler_msgwait_virtual_60s_milestones.txt`,
+  `target\scheduler_msgwait_virtual_60s_files.txt`, and
+  `target\scheduler_msgwait_virtual_60s.ppm`; it stopped at the 60 s wall
+  limit at `pc=0x00339c44`, `ra=0x00b4bb1c` with stable memory
+  (`heap_live=7588/23317613B`, `virtual_live=3/196608B`) and file activity
+  (`host_open=227`, `host_read=37890/2211452B`, `mem_open=2`,
+  `max_read=497178`). The real app path exercised message-input transitions
+  (`msgsig:148`) but no registered message waiters in this window
+  (`msgcand:0`), still produced no render milestones, and the framebuffer
+  remains only the 301-pixel red tap line. `Access is denied` and actual
+  failed `SearchDB` opens both remained at zero.
+- Scheduler/device wake ownership now has a first serial-read slice. The
+  `Scheduler` can register blocked `SerialRead` waits by COM handle and queue
+  pending wake candidates when remote serial/NMEA input arrives; serial device
+  sessions now expose normalized target matching so `COM7:`, `COM7`, and
+  `\\.\COM7` style names line up with the remote GPS target. `CeKernel`
+  drains matching `CeRemote` serial bytes into the target device session just
+  before `ReadFile`/`ReadFileInto`, and the Unicorn raw `ReadFile` bridge can
+  park an empty serial read, then resume by streaming bytes directly into the
+  original guest buffer via `kernel.read_file_into`. This is a generic
+  scheduler/device path, not an iNavi-specific serial shortcut. Focused
+  coverage: `scheduler_queues_serial_read_waiters_by_handle` and
+  `remote_serial_injection_queues_scheduler_serial_read_candidates`; full
+  `cargo check --features unicorn,trace,win32-desktop` and
+  `cargo test --features unicorn,trace,win32-desktop` pass. Remaining serial
+  gaps include COMMTIMEOUTS, `WaitCommEvent`, masks, purge/error state, active
+  remote-server wake/resume integration, the optional `win32_com` host backend,
+  and the no-alternate-thread read-blocking edge.
+- Virtual-desktop runs no longer register the WinMM host audio sink. Audio
+  registration now follows the presenter mode: `--desktop host` keeps the
+  existing host sink behavior, while `--desktop virtual` registers a debug
+  `LoggingAudioSink` in debug builds and a release `NullAudioSink` that accepts
+  and discards PCM without queuing playback. Focused coverage:
+  `null_audio_sink_accepts_and_discards_pcm` and
+  `virtual_desktop_uses_headless_audio_sink`; `cargo check --features
+  unicorn,trace,win32-desktop` passes. A verbose virtual boot now reports
+  `host audio: virtual desktop logging sink registered`, confirming headless
+  probes do not attempt host playback.
+- A requested one-shot host-presented probe of dumped
+  `D:\INAVI_Emulator\DUMPPLZ\Windows\explorer.exe` did not reach CE startup or
+  emit trace summaries. The run used `--desktop host` and the dumped Windows
+  directory as `--dll-search-dir`, but failed while building a MIPS trampoline:
+  `MIPS jump target 0xffff832c is outside direct jump region from 0x00057108`.
+  A repeat run on 2026-06-04 using the Win32 host presenter and fresh
+  `target\explorer_win32_host_once_*` trace paths reproduced the same failure
+  before any summaries were written. This is a loader/trampoline reachability
+  gap for high-address targets, not evidence that the host presenter or
+  virtual/null-audio path is blocking.
 - Raw `SetAssociatedMenu @299` and `GetAssociatedMenu @300` now reach the same
   CE HWND-associated menu state as `SetMenu`/`GetMenu`. The raw dispatcher
   validates live HWNDs through the GWE window table and keeps the CE

@@ -150,6 +150,23 @@ impl DeviceNamespace {
 }
 
 impl DeviceSession {
+    pub fn is_serial(&self) -> bool {
+        self.kind == DeviceKind::Serial
+    }
+
+    pub fn rx_len(&self) -> usize {
+        self.rx.len()
+    }
+
+    pub fn accepts_remote_serial_target(&self, target: &str) -> bool {
+        let normalized_target = normalize_device_name(target);
+        normalize_device_name(&self.guest_name) == normalized_target
+            || self
+                .host
+                .as_deref()
+                .is_some_and(|host| normalize_device_name(host) == normalized_target)
+    }
+
     pub fn read_file(&mut self, requested: u32) -> Vec<u8> {
         let count = (requested as usize).min(self.rx.len());
         self.rx.drain(..count).collect()
@@ -195,7 +212,10 @@ impl DeviceSession {
 }
 
 fn normalize_device_name(name: &str) -> String {
-    name.trim().trim_end_matches(':').to_ascii_uppercase()
+    name.trim()
+        .trim_start_matches("\\\\.\\")
+        .trim_end_matches(':')
+        .to_ascii_uppercase()
 }
 
 fn default_baud() -> u32 {

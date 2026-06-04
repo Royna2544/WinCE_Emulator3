@@ -29,6 +29,10 @@ pub struct SchedulerStats {
     pub waiter_remove_count: u64,
     pub object_signal_count: u64,
     pub object_wake_candidate_count: u64,
+    pub message_input_signal_count: u64,
+    pub message_input_wake_candidate_count: u64,
+    pub serial_read_signal_count: u64,
+    pub serial_read_wake_candidate_count: u64,
     pub max_wait_handles: u32,
     pub max_timeout_ms: u32,
     pub max_registered_waits: u32,
@@ -41,6 +45,9 @@ pub enum SchedulerBlockedWaitKind {
     MsgWait {
         wake_mask: u32,
         input_available: bool,
+    },
+    SerialRead {
+        handle: u32,
     },
 }
 
@@ -63,6 +70,8 @@ pub struct Scheduler {
     next_wait_sequence: u64,
     blocked_waits: BTreeMap<u64, SchedulerBlockedWait>,
     wait_queues: BTreeMap<u32, VecDeque<u64>>,
+    message_wait_queues: BTreeMap<u32, VecDeque<u64>>,
+    serial_read_queues: BTreeMap<u32, VecDeque<u64>>,
     pending_wake_ids: VecDeque<u64>,
     pending_wake_set: BTreeSet<u64>,
 }
@@ -131,6 +140,18 @@ impl Scheduler {
         for handle in &wait.wait_handles {
             self.wait_queues.entry(*handle).or_default().push_back(id);
         }
+        if matches!(wait.kind, SchedulerBlockedWaitKind::MsgWait { .. }) {
+            self.message_wait_queues
+                .entry(wait.thread_id)
+                .or_default()
+                .push_back(id);
+        }
+        if let SchedulerBlockedWaitKind::SerialRead { handle } = wait.kind {
+            self.serial_read_queues
+                .entry(handle)
+                .or_default()
+                .push_back(id);
+        }
         self.blocked_waits.insert(id, wait);
         self.stats.waiter_register_count += 1;
         self.stats.max_registered_waits = self
@@ -151,6 +172,28 @@ impl Scheduler {
             };
             if remove_queue {
                 self.wait_queues.remove(handle);
+            }
+        }
+        let remove_message_queue =
+            if let Some(queue) = self.message_wait_queues.get_mut(&wait.thread_id) {
+                queue.retain(|id| *id != wait_id);
+                queue.is_empty()
+            } else {
+                false
+            };
+        if remove_message_queue {
+            self.message_wait_queues.remove(&wait.thread_id);
+        }
+        if let SchedulerBlockedWaitKind::SerialRead { handle } = wait.kind {
+            let remove_serial_queue = if let Some(queue) = self.serial_read_queues.get_mut(&handle)
+            {
+                queue.retain(|id| *id != wait_id);
+                queue.is_empty()
+            } else {
+                false
+            };
+            if remove_serial_queue {
+                self.serial_read_queues.remove(&handle);
             }
         }
         if self.pending_wake_set.remove(&wait_id) {
@@ -175,8 +218,28 @@ impl Scheduler {
             .unwrap_or_default()
     }
 
-    pub fn queue_pending_wake_ids(&mut self, wait_ids: impl IntoIterator<Item = u64>) -> usize {
-        self.stats.object_signal_count += 1;
+    pub fn message_waiter_ids_for_thread(&self, thread_id: u32) -> Vec<u64> {
+        self.message_wait_queues
+            .get(&thread_id)
+            .map(|queue| queue.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    pub fn serial_read_waiter_ids_for_handle(&self, handle: u32) -> Vec<u64> {
+        self.serial_read_queues
+            .get(&handle)
+            .map(|queue| queue.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    pub fn all_serial_read_waiter_ids(&self) -> Vec<u64> {
+        self.serial_read_queues
+            .values()
+            .flat_map(|queue| queue.iter().copied())
+            .collect()
+    }
+
+    fn enqueue_pending_wake_ids(&mut self, wait_ids: impl IntoIterator<Item = u64>) -> usize {
         let mut queued = 0;
         for wait_id in wait_ids {
             if !self.blocked_waits.contains_key(&wait_id) || !self.pending_wake_set.insert(wait_id)
@@ -186,11 +249,41 @@ impl Scheduler {
             self.pending_wake_ids.push_back(wait_id);
             queued += 1;
         }
-        self.stats.object_wake_candidate_count += queued as u64;
         self.stats.max_pending_wakes = self
             .stats
             .max_pending_wakes
             .max(self.pending_wake_ids.len() as u32);
+        queued
+    }
+
+    pub fn queue_pending_wake_ids(&mut self, wait_ids: impl IntoIterator<Item = u64>) -> usize {
+        self.stats.object_signal_count += 1;
+        let queued = self.enqueue_pending_wake_ids(wait_ids);
+        self.stats.object_wake_candidate_count += queued as u64;
+        queued
+    }
+
+    pub fn queue_message_wake_candidates(&mut self, thread_id: u32) -> usize {
+        self.stats.message_input_signal_count += 1;
+        let wait_ids = self.message_waiter_ids_for_thread(thread_id);
+        let queued = self.enqueue_pending_wake_ids(wait_ids);
+        self.stats.message_input_wake_candidate_count += queued as u64;
+        queued
+    }
+
+    pub fn queue_serial_read_wake_candidates(&mut self, handle: u32) -> usize {
+        self.stats.serial_read_signal_count += 1;
+        let wait_ids = self.serial_read_waiter_ids_for_handle(handle);
+        let queued = self.enqueue_pending_wake_ids(wait_ids);
+        self.stats.serial_read_wake_candidate_count += queued as u64;
+        queued
+    }
+
+    pub fn queue_all_serial_read_wake_candidates(&mut self) -> usize {
+        self.stats.serial_read_signal_count += 1;
+        let wait_ids = self.all_serial_read_waiter_ids();
+        let queued = self.enqueue_pending_wake_ids(wait_ids);
+        self.stats.serial_read_wake_candidate_count += queued as u64;
         queued
     }
 
@@ -320,15 +413,24 @@ mod tests {
             crate::ce::timer::INFINITE,
         );
 
-        assert_eq!(scheduler.queue_pending_wake_ids([wait_id, wait_id, 0xdead]), 1);
+        assert_eq!(
+            scheduler.queue_pending_wake_ids([wait_id, wait_id, 0xdead]),
+            1
+        );
         let stats = scheduler.stats();
         assert_eq!(stats.object_signal_count, 1);
         assert_eq!(stats.object_wake_candidate_count, 1);
         assert_eq!(stats.max_pending_wakes, 1);
-        assert_eq!(scheduler.select_ready_blocked_wait_id(1, 0, |_| true, |_| 20), Some(wait_id));
+        assert_eq!(
+            scheduler.select_ready_blocked_wait_id(1, 0, |_| true, |_| 20),
+            Some(wait_id)
+        );
 
         scheduler.remove_blocked_wait(wait_id).unwrap();
-        assert_eq!(scheduler.select_ready_blocked_wait_id(1, 0, |_| true, |_| 20), None);
+        assert_eq!(
+            scheduler.select_ready_blocked_wait_id(1, 0, |_| true, |_| 20),
+            None
+        );
     }
 
     #[test]
@@ -359,5 +461,98 @@ mod tests {
             |_| 20,
         );
         assert_eq!(selected, Some(signaled_waiter));
+    }
+
+    #[test]
+    fn scheduler_queues_message_waiters_by_thread() {
+        let mut scheduler = Scheduler::default();
+        let global_ready = scheduler.register_blocked_wait(
+            2,
+            0x102,
+            vec![0x200],
+            SchedulerBlockedWaitKind::Kernel,
+            0,
+            crate::ce::timer::INFINITE,
+        );
+        let message_waiter = scheduler.register_blocked_wait(
+            3,
+            0x103,
+            Vec::new(),
+            SchedulerBlockedWaitKind::MsgWait {
+                wake_mask: 0x0008,
+                input_available: false,
+            },
+            0,
+            crate::ce::timer::INFINITE,
+        );
+
+        assert_eq!(
+            scheduler.message_waiter_ids_for_thread(3),
+            vec![message_waiter]
+        );
+        assert_eq!(scheduler.queue_message_wake_candidates(3), 1);
+        let stats = scheduler.stats();
+        assert_eq!(stats.message_input_signal_count, 1);
+        assert_eq!(stats.message_input_wake_candidate_count, 1);
+        assert_eq!(
+            scheduler.select_ready_blocked_wait_id(
+                1,
+                0,
+                |wait| wait.id == global_ready || wait.id == message_waiter,
+                |_| 20,
+            ),
+            Some(message_waiter)
+        );
+
+        scheduler.remove_blocked_wait(message_waiter).unwrap();
+        assert!(scheduler.message_waiter_ids_for_thread(3).is_empty());
+        scheduler.remove_blocked_wait(global_ready).unwrap();
+    }
+
+    #[test]
+    fn scheduler_queues_serial_read_waiters_by_handle() {
+        let mut scheduler = Scheduler::default();
+        let global_ready = scheduler.register_blocked_wait(
+            2,
+            0x102,
+            vec![0x200],
+            SchedulerBlockedWaitKind::Kernel,
+            0,
+            crate::ce::timer::INFINITE,
+        );
+        let serial_waiter = scheduler.register_blocked_wait(
+            4,
+            0x104,
+            Vec::new(),
+            SchedulerBlockedWaitKind::SerialRead { handle: 0x300 },
+            0,
+            crate::ce::timer::INFINITE,
+        );
+
+        assert_eq!(
+            scheduler.serial_read_waiter_ids_for_handle(0x300),
+            vec![serial_waiter]
+        );
+        assert_eq!(scheduler.queue_serial_read_wake_candidates(0x300), 1);
+        let stats = scheduler.stats();
+        assert_eq!(stats.serial_read_signal_count, 1);
+        assert_eq!(stats.serial_read_wake_candidate_count, 1);
+        assert_eq!(
+            scheduler.select_ready_blocked_wait_id(
+                1,
+                0,
+                |wait| wait.id == global_ready || wait.id == serial_waiter,
+                |_| 20,
+            ),
+            Some(serial_waiter)
+        );
+
+        scheduler.remove_blocked_wait(serial_waiter).unwrap();
+        assert!(
+            scheduler
+                .serial_read_waiter_ids_for_handle(0x300)
+                .is_empty()
+        );
+        scheduler.remove_blocked_wait(global_ready).unwrap();
     }
 }

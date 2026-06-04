@@ -36,6 +36,9 @@ These are intentionally tiny. Each fixture should test one layer or invariant be
 | `019_coordinate_map` | `ClientToScreen`, `ScreenToClient`, and `MapWindowPoints` across parent/child HWNDs. |
 | `020_subsystem_smoke` | System/memory/heap/local/virtual allocation plus registry open/query/close. |
 | `021_rect_math` | RECT helpers: `SetRect`, `CopyRect`, `EqualRect`, `OffsetRect`, `IntersectRect`, empty rects. |
+| `164_object_transition_wake` | Event, semaphore, and mutex transitions wake blocked worker threads. |
+| `165_thread_exit_wait_wake` | Thread handle exit signaling wakes waits and remains signaled for wait-any. |
+| `166_msgwait_message_timer_wake` | Posted messages and timers wake `MsgWaitForMultipleObjectsEx`. |
 | `asm/` | Optional assembly/reference snippets for executable-section branch/delay tests. |
 | `tools/make_raw_mips_blobs.py` | Generates raw MIPS little-endian blobs for CPU-only unit tests. |
 

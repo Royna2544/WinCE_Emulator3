@@ -2818,9 +2818,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 3),
         ))),
         ORD_POST_QUIT_MESSAGE => {
-            kernel
-                .gwe
-                .post_quit_message(thread_id, raw_arg(args, 0), kernel.timers.tick_count());
+            kernel.post_quit_message(thread_id, raw_arg(args, 0));
             Some(CoredllValue::U32(0))
         }
         ORD_SEND_MESSAGE_W | ORD_DEF_WINDOW_PROC_W => Some(CoredllValue::U32(send_message_w_raw(

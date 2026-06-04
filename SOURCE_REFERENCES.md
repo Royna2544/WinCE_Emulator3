@@ -28,6 +28,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     DLL exports before shim classification, and `commctrl.dll`/`commctrlce.dll`
     are not classified as emulator common-controls shims; they must come from
     the configured runtime DLL search paths.
+  - A host-presented probe of dumped `explorer.exe` using this same runtime
+    DLL directory fails before startup summaries because the current MIPS
+    trampoline encoder cannot direct-jump from `0x00057108` to high target
+    `0xffff832c`. That is recorded as trampoline reachability evidence, not as
+    CE API behavior.
 
 ## Windows CE Core OS
 
@@ -38,6 +43,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\handle.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kcalls.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\schedule.h`,
+  `C:\WINCE600\PRIVATE\WINCEOS\DRIVERS\SERDEV\serial.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\DEVICE\DEVCORE\devfile.c`,
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\kfuncs.h`,
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`, and
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pkfuncs.h`
@@ -110,8 +117,37 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     uses that scheduler-owned wait metadata for CE priority/FIFO ordering while
     the saved CPU context remains in the Unicorn bridge for the next context
     switch slice.
-    Full waiter queues and context-switch ownership remain the next scheduler
-    port step.
+    Object transitions now take the next CE-shaped step: successful
+    `SetEvent`, `ReleaseSemaphore`, and final recursive `ReleaseMutex`
+    enqueue the scheduler wait ids registered under that handle as pending wake
+    candidates. Resume selection prefers those object-transition candidates,
+    then rechecks and consumes the real object state through the existing wait
+    path so auto-reset events, semaphore counts, and mutex ownership are not
+    consumed by the bookkeeping itself. Full run-queue ownership, wait-all,
+    timer/serial/audio wake integration, and scheduler-owned saved CPU
+    contexts remain the next scheduler port steps. Thread and process handle
+    signaling now follows the same waitable-object transition path:
+    `mark_guest_thread_exited`, child-process completion, child initial-thread
+    completion, and `TerminateProcess` enqueue scheduler wait ids registered
+    under the corresponding real thread/process handles or the CE
+    current-process pseudo handle after those handles are marked signaled.
+    Wait acquisition and exit-code visibility remain owned by the existing
+    thread/process handle state. The first GWE message-wait wake path is
+    anchored to `GWE\INC\cmsgque.h` `MsgQueue::MsgWaitForMultipleObjectsEx_I`,
+    `InputQueuePostMessage`, `PostMessageW_I`, `PostThreadMessageW`,
+    `GetMessageW_I`, and the timer queue entries. v3 now records parked
+    `MsgWaitForMultipleObjectsEx` waits in a per-thread scheduler
+    message-wait queue; message, quit, sent-message, remote-input, and
+    `WM_TIMER` posting transitions enqueue those wait ids as pending
+    message-input candidates, then live resume rechecks the actual GWE queue
+    status and wake mask before returning. The first serial-read bridge is
+    anchored to `SERDEV\serial.c`, CE comm `ReadFile` behavior through
+    `DEVCORE\devfile.c`, and the same scheduler wait ownership rule: empty
+    serial `ReadFile` calls can register a scheduler `SerialRead` wait by COM
+    handle, remote serial injection queues candidate wait ids, and resumed
+    reads complete by streaming device bytes into the original guest buffer.
+    Full COMMTIMEOUTS, `WaitCommEvent`, masks, purge/error state, host
+    `win32_com`, and complete run-queue ownership remain open.
 
 - Registry API boundary:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/KERNEL/fscall.c`
@@ -127,9 +163,14 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `CloseHandle_t` signatures used by the virtual file/device facade.
 
 - Device manager file API:
-  `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/DEVICE/DEVCORE/devfile.c`
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\DEVICE\DEVCORE\devfile.c`
+  and `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/DEVICE/DEVCORE/devfile.c`
   - `DM_DevReadFile`, `DM_DevWriteFile`, and `DM_DevDeviceIoControl` show the
     device-file split beneath Win32 file handles.
+  - v3 keeps serial input beneath device-file handles: remote serial bytes are
+    drained into the matching COM session before `ReadFile`/`ReadFileInto`, and
+    scheduler wake candidates are keyed by the serial device handle rather than
+    by an app-specific path.
 
 - COREDLL file cursor/size helpers:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/apis.c`

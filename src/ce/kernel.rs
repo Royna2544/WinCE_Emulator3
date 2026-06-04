@@ -339,10 +339,18 @@ impl CeKernel {
     }
 
     pub fn mark_process_launch_exited(&mut self, launch: &PendingProcessLaunch, exit_code: u32) {
-        self.handles
-            .mark_process_exited(launch.process_handle, exit_code);
-        self.handles
-            .mark_thread_exited(launch.thread_handle, exit_code);
+        if self
+            .handles
+            .mark_process_exited(launch.process_handle, exit_code)
+        {
+            self.queue_object_wake_candidates(launch.process_handle);
+        }
+        if self
+            .handles
+            .mark_thread_exited(launch.thread_handle, exit_code)
+        {
+            self.queue_object_wake_candidates(launch.thread_handle);
+        }
     }
 
     pub fn pump_timers_to_gwe(&mut self, thread_id: u32) {
@@ -356,7 +364,7 @@ impl CeKernel {
                     0,
                     self.timers.tick_count(),
                 );
-                self.gwe.post_message(thread_id, message);
+                self.post_gwe_message(thread_id, message);
             }
         }
     }
@@ -421,6 +429,49 @@ impl CeKernel {
             KernelObject::Device(device) => Some(device.guest_name.clone()),
             _ => None,
         }
+    }
+
+    pub fn is_serial_device_handle(&self, handle: u32) -> bool {
+        matches!(
+            self.handles.get(handle),
+            Ok(KernelObject::Device(device)) if device.is_serial()
+        )
+    }
+
+    pub fn serial_read_ready(&self, handle: u32) -> bool {
+        let Ok(KernelObject::Device(device)) = self.handles.get(handle) else {
+            return false;
+        };
+        if !device.is_serial() {
+            return false;
+        }
+        device.rx_len() != 0
+            || (device.accepts_remote_serial_target(&self.remote_gps_target())
+                && self.remote.serial_byte_count() != 0)
+    }
+
+    fn drain_remote_serial_to_handle(&mut self, handle: u32, max_bytes: usize) -> usize {
+        if max_bytes == 0 {
+            return 0;
+        }
+        let target = self.remote_gps_target();
+        let should_drain = matches!(
+            self.handles.get(handle),
+            Ok(KernelObject::Device(device))
+                if device.is_serial() && device.accepts_remote_serial_target(&target)
+        );
+        if !should_drain || self.remote.serial_byte_count() == 0 {
+            return 0;
+        }
+        let bytes = self.remote.read_serial_bytes(max_bytes);
+        let count = bytes.len();
+        if count == 0 {
+            return 0;
+        }
+        if let Ok(KernelObject::Device(device)) = self.handles.get_mut(handle) {
+            device.enqueue_rx(&bytes);
+        }
+        count
     }
 
     pub fn create_file_w(
@@ -492,6 +543,7 @@ impl CeKernel {
     }
 
     pub fn read_file(&mut self, handle: u32, requested: u32) -> Result<Vec<u8>> {
+        self.drain_remote_serial_to_handle(handle, requested as usize);
         let path = self.path_for_handle(handle);
         let start_position = match self.handles.get(handle) {
             Ok(KernelObject::File(file)) => self
@@ -538,6 +590,7 @@ impl CeKernel {
     where
         F: FnMut(&[u8]) -> Result<()>,
     {
+        self.drain_remote_serial_to_handle(handle, requested as usize);
         let path = self.path_for_handle(handle);
         let start_position = match self.handles.get(handle) {
             Ok(KernelObject::File(file)) => self
@@ -900,7 +953,11 @@ impl CeKernel {
     }
 
     pub fn mark_guest_thread_exited(&mut self, handle: u32, exit_code: u32) -> bool {
-        self.handles.mark_thread_exited(handle, exit_code)
+        let success = self.handles.mark_thread_exited(handle, exit_code);
+        if success {
+            self.queue_object_wake_candidates(handle);
+        }
+        success
     }
 
     pub fn guest_thread_id(&self, handle: u32) -> Option<u32> {
@@ -955,9 +1012,14 @@ impl CeKernel {
         if Self::is_current_process_pseudo_handle(handle) {
             self.current_process_exit_code = exit_code;
             self.current_process_signaled = true;
+            self.queue_object_wake_candidates(handle);
             return true;
         }
-        self.handles.mark_process_exited(handle, exit_code)
+        let success = self.handles.mark_process_exited(handle, exit_code);
+        if success {
+            self.queue_object_wake_candidates(handle);
+        }
+        success
     }
 
     pub fn suspend_thread(&mut self, handle: u32) -> ThreadSuspendResult {
@@ -1315,6 +1377,18 @@ impl CeKernel {
     fn queue_object_wake_candidates(&mut self, handle: u32) {
         let wait_ids = self.scheduler.waiter_ids_for_handle(handle);
         self.scheduler.queue_pending_wake_ids(wait_ids);
+    }
+
+    pub fn queue_serial_read_wake_candidates(&mut self, handle: u32) -> usize {
+        self.scheduler.queue_serial_read_wake_candidates(handle)
+    }
+
+    pub fn queue_all_serial_read_wake_candidates(&mut self) -> usize {
+        self.scheduler.queue_all_serial_read_wake_candidates()
+    }
+
+    pub fn queue_message_wake_candidates(&mut self, thread_id: u32) -> usize {
+        self.scheduler.queue_message_wake_candidates(thread_id)
     }
 
     pub fn select_ready_blocked_waiter(
@@ -1708,17 +1782,43 @@ impl CeKernel {
     ) -> bool {
         let time_ms = self.timers.tick_count();
         match hwnd {
-            HWND_BROADCAST => self
-                .gwe
-                .post_broadcast_message(msg, wparam, lparam, time_ms),
+            HWND_BROADCAST => {
+                let target_threads: Vec<u32> = self
+                    .gwe
+                    .windows_snapshot()
+                    .into_iter()
+                    .filter(|window| !window.destroyed && window.parent.is_none())
+                    .map(|window| window.thread_id)
+                    .collect();
+                let posted = self
+                    .gwe
+                    .post_broadcast_message(msg, wparam, lparam, time_ms);
+                if posted {
+                    for target_thread in target_threads {
+                        self.queue_message_wake_candidates(target_thread);
+                    }
+                }
+                posted
+            }
             0 => {
                 self.gwe
                     .post_thread_message(thread_id, msg, wparam, lparam, time_ms);
+                self.queue_message_wake_candidates(thread_id);
                 true
             }
-            hwnd => self
-                .gwe
-                .post_message_for_window(hwnd, Message::new(hwnd, msg, wparam, lparam, time_ms)),
+            hwnd => {
+                let target_thread = self.gwe.window(hwnd).map(|window| window.thread_id);
+                let posted = self.gwe.post_message_for_window(
+                    hwnd,
+                    Message::new(hwnd, msg, wparam, lparam, time_ms),
+                );
+                if posted {
+                    if let Some(target_thread) = target_thread {
+                        self.queue_message_wake_candidates(target_thread);
+                    }
+                }
+                posted
+            }
         }
     }
 
@@ -1736,6 +1836,7 @@ impl CeKernel {
             lparam,
             self.timers.tick_count(),
         );
+        self.queue_message_wake_candidates(target_thread_id);
         true
     }
 
@@ -1764,13 +1865,17 @@ impl CeKernel {
         if target_thread == caller_thread_id {
             return None;
         }
-        self.gwe.queue_send_message_for_window(
+        let send_id = self.gwe.queue_send_message_for_window(
             Some(caller_thread_id),
             hwnd,
             Message::new(hwnd, msg, wparam, lparam, self.timers.tick_count()),
             SMF_NULL,
             timeout_ms,
-        )
+        );
+        if send_id.is_some() {
+            self.queue_message_wake_candidates(target_thread);
+        }
+        send_id
     }
 
     pub fn take_completed_send_message_result(&mut self, send_id: u64) -> Option<u32> {
@@ -1802,9 +1907,22 @@ impl CeKernel {
         lparam: u32,
     ) -> bool {
         if hwnd == HWND_BROADCAST {
-            return self
+            let target_threads: Vec<u32> = self
                 .gwe
-                .post_broadcast_message(msg, wparam, lparam, self.timers.tick_count());
+                .windows_snapshot()
+                .into_iter()
+                .filter(|window| !window.destroyed && window.parent.is_none())
+                .map(|window| window.thread_id)
+                .collect();
+            let posted =
+                self.gwe
+                    .post_broadcast_message(msg, wparam, lparam, self.timers.tick_count());
+            if posted {
+                for target_thread in target_threads {
+                    self.queue_message_wake_candidates(target_thread);
+                }
+            }
+            return posted;
         }
         let Some(target_thread) = self
             .gwe
@@ -1817,10 +1935,20 @@ impl CeKernel {
         if target_thread == caller_thread_id {
             return self.send_message_w(hwnd, msg, wparam, lparam).is_some();
         }
-        self.gwe.queue_sent_message_for_window(
+        let queued = self.gwe.queue_sent_message_for_window(
             hwnd,
             Message::new(hwnd, msg, wparam, lparam, self.timers.tick_count()),
-        )
+        );
+        if queued {
+            self.queue_message_wake_candidates(target_thread);
+        }
+        queued
+    }
+
+    pub fn post_quit_message(&mut self, thread_id: u32, exit_code: u32) {
+        self.gwe
+            .post_quit_message(thread_id, exit_code, self.timers.tick_count());
+        self.queue_message_wake_candidates(thread_id);
     }
 
     pub fn dispatch_message_w(&mut self, message: Message) -> u32 {
@@ -1877,6 +2005,11 @@ impl CeKernel {
         MessagePumpResult::Dispatched(self.dispatch_message_w_for_thread(thread_id, message))
     }
 
+    fn post_gwe_message(&mut self, thread_id: u32, message: Message) {
+        self.gwe.post_message(thread_id, message);
+        self.queue_message_wake_candidates(thread_id);
+    }
+
     pub fn set_timer(
         &mut self,
         hwnd: Option<u32>,
@@ -1908,7 +2041,12 @@ impl CeKernel {
         message: &serde_json::Value,
     ) -> serde_json::Value {
         let gps_target = self.remote_gps_target();
-        self.remote.dispatch_control_message(message, gps_target)
+        let serial_before = self.remote.serial_byte_count();
+        let response = self.remote.dispatch_control_message(message, gps_target);
+        if self.remote.serial_byte_count() > serial_before {
+            self.queue_all_serial_read_wake_candidates();
+        }
+        response
     }
 
     pub fn read_remote_serial_bytes(&mut self, max_bytes: usize) -> Vec<u8> {
@@ -1955,7 +2093,7 @@ impl CeKernel {
             } else {
                 0
             };
-            self.gwe.post_message(
+            self.post_gwe_message(
                 thread_id,
                 Message::new(
                     target,
@@ -1976,7 +2114,7 @@ impl CeKernel {
             let Some(key_target) = key_target.filter(|hwnd| self.gwe.is_window(*hwnd)) else {
                 continue;
             };
-            self.gwe.post_message(
+            self.post_gwe_message(
                 thread_id,
                 Message::new(key_target, event.message, event.vk, 1, time_ms)
                     .with_source(crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD),
@@ -2066,7 +2204,7 @@ impl CeKernel {
             return;
         };
         let message = Message::new(hwnd, msg, wparam, lparam, self.timers.tick_count());
-        self.gwe.post_message(window.thread_id, message);
+        self.post_gwe_message(window.thread_id, message);
     }
 }
 

@@ -87,6 +87,12 @@ pub struct HostAudioSink {
     max_chunks: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NullAudioSink {
+    name: String,
+    sequence: u64,
+}
+
 #[derive(Debug)]
 pub enum HostAudioBackend {
     Unplugged,
@@ -634,6 +640,15 @@ impl HostAudioSink {
     }
 }
 
+impl NullAudioSink {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            sequence: 0,
+        }
+    }
+}
+
 impl HostAudioBackend {
     #[cfg(windows)]
     pub fn device_count(&self) -> Option<u32> {
@@ -923,6 +938,33 @@ impl AudioSink for HostAudioSink {
 
     fn queued_chunk_count(&self) -> usize {
         HostAudioSink::queued_chunk_count(self)
+    }
+}
+
+impl AudioSink for NullAudioSink {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn submit_pcm(
+        &mut self,
+        payload: &[u8],
+        _format: &WaveFormat,
+        _pts_ms: u64,
+        _duration_ms: u32,
+        _flush: bool,
+    ) -> Option<u64> {
+        if payload.is_empty() {
+            return None;
+        }
+        self.sequence = self.sequence.saturating_add(1);
+        Some(self.sequence)
+    }
+
+    fn flush(&mut self) {}
+
+    fn queued_chunk_count(&self) -> usize {
+        0
     }
 }
 
@@ -1328,6 +1370,19 @@ mod tests {
         assert_eq!(registry.queued_chunk_count("host-debug"), Some(1));
         assert_eq!(registry.queued_chunk_count("remote"), Some(1));
         registry.flush_all();
+    }
+
+    #[test]
+    fn null_audio_sink_accepts_and_discards_pcm() {
+        let mut sink = NullAudioSink::new("null");
+        let format = WaveFormat::pcm_16bit(2, 44_100);
+
+        assert_eq!(
+            sink.submit_pcm(&[1, 2, 3, 4], &format, 10, 1, true),
+            Some(1)
+        );
+        assert_eq!(sink.submit_pcm(&[5, 6], &format, 11, 1, false), Some(2));
+        assert_eq!(sink.queued_chunk_count(), 0);
     }
 
     #[test]

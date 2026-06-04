@@ -12,6 +12,20 @@
 
 ## Open
 
+- Dumped `explorer.exe` host-presented launch fails before startup summaries.
+  - Symptom: running
+    `D:\INAVI_Emulator\DUMPPLZ\Windows\explorer.exe` with `--desktop host` and
+    `D:\INAVI_Emulator\DUMPPLZ\Windows` as the DLL search path exits before any
+    `target\explorer_host_once_*` or `target\explorer_win32_host_once_*` trace
+    files are written.
+  - Evidence: the direct run and the 2026-06-04 repeat run with the Win32 host
+    presenter both failed while building a MIPS trampoline with
+    `MIPS jump target 0xffff832c is outside direct jump region from
+    0x00057108`.
+  - Status: open loader/trampoline reachability gap for high-address targets;
+    this is separate from the iNavi UI frontier and from the virtual desktop
+    audio sink selection.
+
 - Main process launch reaches the paint loop without useful GUI output.
   - Symptom: a bounded debug launch gets past the earlier empty-queue
     `GetMessageW` self-stop and the later SD-card validation dialog, creates
@@ -554,20 +568,33 @@
 - Scheduler/wait ownership is only partially ported to CE fidelity.
   - Symptom: wait calls now flow through scheduler accounting, and Unicorn
     blocked/resumed `WaitForSingleObject` paths report scheduler counters, but
-    real CE waiter queues, timeout expiry, unified timer/serial/audio/process
-    wake ownership, and full blocked-thread context scheduling are still open.
+    complete CE waiter queues, timeout expiry, unified timer/serial/audio wake
+    ownership, fuller child-process lifecycle scheduling, and full
+    blocked-thread context scheduling are still open.
   - Evidence: `SOURCE_REFERENCES.md` records the CE scheduler/sync source
     anchors, and `TODO.md` has the first CE fidelity ledger entry. Mutex
     recursive ownership/release count handling is now source-backed and covered
     by focused Rust tests plus `tests/test_progs/163_mutex_recursive_ownership`.
     Scheduler-owned blocked-wait registration/per-handle queues now exist for
-    parked Unicorn waits, but object state transitions still do not directly
-    wake through those queues and the broader timer/serial/audio/process wake
-    model remains partial. The mounted
-    `target\scheduler_wait_registry_virtual_60s_*` probe stayed memory-stable
-    but did not exercise a parked wait (`reg:0/0 maxreg:0`) and still had no
-    render milestones. Existing guest-visible wait return behavior is preserved
-    in this slice.
+    parked Unicorn waits, and event/semaphore/final-mutex-release transitions
+    now enqueue wait ids from those queues as pending wake candidates. Thread
+    and process handle exit signaling now does the same for guest-thread exit,
+    child-launch completion, raw process-handle `TerminateProcess`, and the CE
+    current-process pseudo handle. Posted/thread/broadcast/quit/sent messages,
+    remote input, and queued `WM_TIMER` posts now enqueue registered
+    per-thread message waiters as pending wake candidates too. Remote
+    serial/NMEA injection now queues registered serial-read waiters by COM
+    handle, and parked raw serial `ReadFile` can resume by streaming bytes into
+    the original guest buffer. The broader `GetMessageW` blocking model, full
+    serial stack semantics, audio wake model, fuller timer ownership, and full
+    scheduler-owned CPU-context/
+    run-queue ownership remain partial. The mounted
+    `target\scheduler_msgwait_virtual_60s_*` probe stayed memory-stable,
+    exercised seven object signals and 148 message-input transitions without
+    registered waiters on those handles/threads
+    (`sig:7 cand:0 msgsig:148 msgcand:0 maxpend:0`), and still had no render
+    milestones. Existing
+    guest-visible wait return behavior is preserved in this slice.
   - Status: active first CE-fidelity port; next scheduler work should replace
     the remaining ad hoc blocked-wait vectors and subsystem wake paths.
 

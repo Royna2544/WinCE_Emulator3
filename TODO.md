@@ -72,31 +72,61 @@
     The first scheduler-owned blocked-wait registry is also in place: parked
     Unicorn single/multiple/msg waits register a wait id, waited handles, kind,
     timeout, and FIFO sequence in `Scheduler`, with per-handle waiter queues
-    and scheduler-side ready selection. Unicorn still stores the saved MIPS
-    context payload locally beside that wait id.
-  - Open gaps: object state transitions do not yet wake directly from the
-    scheduler per-handle queues; unified timer/serial/audio/process wake
-    ownership, blocked thread priority/fairness across all wait kinds beyond
-    the current Unicorn bridge, full scheduler-owned message wait queues/
-    lifetime rather than the first import-boundary bridge, richer wake reasons
+    and scheduler-side ready selection. The first object-transition wake path
+    now feeds those queues: successful `SetEvent`, `ReleaseSemaphore`, and
+    final recursive `ReleaseMutex` enqueue registered wait ids as pending wake
+    candidates, and resume selection prefers those candidates while still
+    rechecking/acquiring the real object state in the wait path. Thread and
+    process handle exit transitions now use the same pending-wake path when
+    guest threads exit, child process launches complete, or raw
+    `TerminateProcess` marks a real process handle or the CE current-process
+    pseudo handle signaled. Message input has the first matching queue:
+    parked `MsgWaitForMultipleObjectsEx` waits register in a per-thread
+    message-wait queue, and posted/thread/broadcast/quit/sent messages, remote
+    input, and queued `WM_TIMER` posts enqueue those waits as pending
+    candidates while GWE still owns queue status consumption. Unicorn still
+    stores the saved MIPS context payload locally beside that wait id. Serial
+    reads now have the first matching scheduler hook as a device-wait slice:
+    parked raw Unicorn `ReadFile` on an empty serial handle can register a
+    `SerialRead` wait under the COM handle, remote NMEA/serial injection queues
+    serial-read wake candidates, and the resumed path streams the completed
+    read into the original guest buffer through `kernel.read_file_into`.
+    Matching remote serial bytes are drained into the target COM session just
+    before `ReadFile`/`ReadFileInto`, so the device-file path remains the data
+    owner rather than a special app branch.
+  - Open gaps: full scheduler-owned `GetMessageW` blocking rather than raw
+    no-message false returns, full serial semantics beyond the first
+    empty-read wake bridge, audio wake ownership, fuller timer ownership beyond
+    message-queue posts, fuller child-process
+    lifecycle scheduling beyond handle signaling, blocked
+    thread priority/fairness across all wait kinds beyond
+    the current Unicorn bridge, full scheduler-owned message wait lifetime
+    rather than the first import-boundary bridge, richer wake reasons
     across serial/audio/process/GWE waits, priority inheritance/boosting around
     mutex/critical-section ownership, pending self-suspend/PSL late-suspend
     state, resume-to-run-queue wake ownership, and fuller Unicorn thread
     context switching still need the next scheduler port slices.
   - Fixture gates: keep existing wait/thread fixtures passing, including
-    `tests/test_progs/163_mutex_recursive_ownership` when the eVC4 MIPSII
-    fixture suite is enabled, then graduate pending scheduler fixtures for
-    multiple waiters, `MsgWait*`, serial parking, waveOut callback wakeups,
+    `tests/test_progs/163_mutex_recursive_ownership` and
+    `tests/test_progs/164_object_transition_wake` and
+    `tests/test_progs/165_thread_exit_wait_wake` when the eVC4 MIPSII fixture
+    suite is enabled, then graduate pending scheduler fixtures for multiple
+    waiters, `MsgWait*`, fuller serial parking, waveOut callback wakeups,
     child-process waits, and scheduler mini app.
   - Latest iNavi evidence: active long-run frontier remains the render-map/
     surface path around `0x0026f7e4` in prior host-mode runs. The latest
-    scheduler registry virtual probe wrote
-    `target\scheduler_wait_registry_virtual_60s_*`, loaded dumped runtime DLLs,
-    stayed memory-stable (`heap_live=7471/23006007B`,
-    `host_read=38664/2226093B`), and still had no render milestones with only
-    the 301-pixel red tap line. This mounted path did not park a wait in 60 s
-    (`reg:0/0 maxreg:0`), so the registry slice is covered by focused tests but
-    not exercised by this iNavi window. This scheduler/loader/thread work is
+    scheduler message-wake virtual probe wrote
+    `target\scheduler_msgwait_virtual_60s_*`, loaded dumped runtime DLLs,
+    stayed memory-stable (`heap_live=7588/23317613B`,
+    `host_read=37890/2211452B`), and still had no render milestones with only
+    the 301-pixel red tap line. This mounted path exercised seven object
+    signals and 148 message-input transitions but no registered waiters on
+    those handles/threads (`sig:7 cand:0 msgsig:148 msgcand:0 maxpend:0`), so
+    the wake slices are covered by focused tests but only lightly exercised by
+    this iNavi window. The serial-read wake slice is currently covered by
+    focused tests (`scheduler_queues_serial_read_waiters_by_handle` and
+    `remote_serial_injection_queues_scheduler_serial_read_candidates`) rather
+    than by mounted iNavi evidence. This scheduler/loader/thread work is
     foundational and should not be counted as UI success until the mounted run
     advances through guest GDI/render paths.
 
@@ -531,8 +561,11 @@
   `host_open=235` and `host_read=38930/2229372B`, but still no render
   milestones and only red tap pixels. Next work should debug the null/invalid
   render-map object path around
-  `0x0026f7c0..0x0026f7e4` using real guest state and existing probes. Do not
-  fake-present DIBSections just because their bits are populated.
+  `0x0026f7c0..0x0026f7e4` using real guest state and existing probes. Also
+  fix the loader/trampoline reachability gap exposed by the host-presented
+  dumped `explorer.exe` probe, where the current low trampoline cannot
+  direct-jump to high target `0xffff832c`. Do not fake-present DIBSections
+  just because their bits are populated.
 - Keep the new direct-DIB framebuffer path honest. `StretchDIBits` and
   `SetDIBitsToDevice` now draw `SRCCOPY` `DIB_RGB_COLORS` BITMAPINFO data in
   focused tests, but real iNavi traces have not reached those ordinals yet.

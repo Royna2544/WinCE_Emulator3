@@ -82,7 +82,7 @@ fn main() -> Result<()> {
         args.mount_config.as_deref(),
     )?;
     let mut kernel = CeKernel::boot(config);
-    let host_audio_status = attach_host_audio(&mut kernel);
+    let host_audio_status = attach_audio_for_desktop(&mut kernel, args.desktop);
     let mut desktop = create_desktop(args.desktop)?;
     kernel.remote.set_framebuffer_size(
         desktop.framebuffer().width(),
@@ -1061,6 +1061,45 @@ fn enqueue_startup_taps(kernel: &mut CeKernel, taps: &[(i32, i32)]) -> Result<()
     Ok(())
 }
 
+fn attach_audio_for_desktop(kernel: &mut CeKernel, desktop: DesktopMode) -> String {
+    match desktop {
+        DesktopMode::Virtual => attach_virtual_audio(kernel),
+        DesktopMode::Host => attach_host_audio(kernel),
+    }
+}
+
+fn attach_virtual_audio(kernel: &mut CeKernel) -> String {
+    #[cfg(debug_assertions)]
+    {
+        let registered =
+            kernel
+                .audio
+                .register_sink(wince_emulation_v3::ce::audio::LoggingAudioSink::new(
+                    "virtual-log",
+                    32,
+                ));
+        if registered {
+            "virtual desktop logging sink registered".to_owned()
+        } else {
+            "virtual desktop logging sink already registered".to_owned()
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let registered =
+            kernel
+                .audio
+                .register_sink(wince_emulation_v3::ce::audio::NullAudioSink::new(
+                    "virtual-null",
+                ));
+        if registered {
+            "virtual desktop null sink registered".to_owned()
+        } else {
+            "virtual desktop null sink already registered".to_owned()
+        }
+    }
+}
+
 fn attach_host_audio(kernel: &mut CeKernel) -> String {
     #[cfg(windows)]
     {
@@ -1448,5 +1487,23 @@ mod tests {
         assert!(emulator_provided_import_module("coredll"));
         assert!(emulator_provided_import_module("winsock"));
         assert!(emulator_provided_import_module("ole32"));
+    }
+
+    #[test]
+    fn virtual_desktop_uses_headless_audio_sink() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let status = attach_audio_for_desktop(&mut kernel, DesktopMode::Virtual);
+
+        #[cfg(debug_assertions)]
+        {
+            assert_eq!(status, "virtual desktop logging sink registered");
+            assert_eq!(kernel.audio.sink_names(), vec!["virtual-log".to_owned()]);
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            assert_eq!(status, "virtual desktop null sink registered");
+            assert_eq!(kernel.audio.sink_names(), vec!["virtual-null".to_owned()]);
+        }
     }
 }

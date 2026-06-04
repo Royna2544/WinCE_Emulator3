@@ -25,10 +25,11 @@ use wince_emulation_v3::{
         kernel::{CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel},
         object::MAX_SUSPEND_COUNT,
         registry::ERROR_SUCCESS,
+        scheduler::SchedulerBlockedWaitKind,
         thread::{
             ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOT_OWNER, ERROR_SIGNAL_REFUSED,
         },
-        timer::{WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
+        timer::{INFINITE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
     config::RuntimeConfig,
 };
@@ -1038,6 +1039,14 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
         }
     ));
     assert_eq!(memory.read_u32(process_exit_ptr)?, 259);
+    let process_wait = kernel.register_blocked_waiter(
+        8,
+        0x108,
+        vec![launch.process_handle],
+        SchedulerBlockedWaitKind::Kernel,
+        0,
+        INFINITE,
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -1051,6 +1060,16 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
             ..
         }
     ));
+    assert_eq!(
+        kernel.select_ready_blocked_waiter(thread_id, 0, |blocked, kernel| {
+            blocked
+                .wait_handles
+                .iter()
+                .any(|handle| kernel.is_wait_ready(*handle, blocked.thread_id) == Some(true))
+        }),
+        Some(process_wait)
+    );
+    kernel.remove_blocked_waiter(process_wait).unwrap();
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -1065,6 +1084,14 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
         }
     ));
     assert_eq!(memory.read_u32(process_exit_ptr)?, 0x66);
+    let current_process_wait = kernel.register_blocked_waiter(
+        9,
+        0x109,
+        vec![CE_CURRENT_PROCESS_PSEUDO_HANDLE],
+        SchedulerBlockedWaitKind::Kernel,
+        0,
+        INFINITE,
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -1078,6 +1105,15 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
             ..
         }
     ));
+    assert_eq!(
+        kernel.select_ready_blocked_waiter(thread_id, 0, |blocked, kernel| {
+            blocked
+                .wait_handles
+                .iter()
+                .any(|handle| kernel.is_wait_ready(*handle, blocked.thread_id) == Some(true))
+        }),
+        Some(current_process_wait)
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

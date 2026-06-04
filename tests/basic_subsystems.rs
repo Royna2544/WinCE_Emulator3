@@ -5,7 +5,10 @@ use wince_emulation_v3::{
         audio::{MMSYSERR_NOERROR, WaveBuffer, WaveFormat, WaveOutState},
         com::{REGDB_E_CLASSNOTREG, S_FALSE, S_OK},
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
-        gwe::{GWL_USERDATA, Rect, WM_QUIT, WM_TIMER, WM_USER, WS_CHILD, WS_VISIBLE},
+        gwe::{
+            GWL_USERDATA, QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER, Rect, WM_QUIT, WM_TIMER,
+            WM_USER, WS_CHILD, WS_VISIBLE,
+        },
         kernel::{
             CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
             MessagePumpResult,
@@ -16,8 +19,9 @@ use wince_emulation_v3::{
         },
         registry::{ERROR_SUCCESS, HKEY_LOCAL_MACHINE, REG_SZ},
         remote::{WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP},
+        scheduler::SchedulerBlockedWaitKind,
         thread::{ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER},
-        timer::{WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
+        timer::{INFINITE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
     config::RuntimeConfig,
     emulator::{
@@ -338,6 +342,352 @@ fn mutex_recursive_wait_fails_at_ce_max_lock_count() -> Result<()> {
     assert_eq!(kernel.wait_for_single_object(mutex, 0, 7), WAIT_FAILED);
     assert_eq!(kernel.threads.get_last_error(7), ERROR_INVALID_HANDLE);
 
+    Ok(())
+}
+
+#[test]
+fn object_transitions_queue_scheduler_wait_candidates() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+
+    let event = kernel.create_event_w(Some("wake_event".to_owned()), false, false);
+    let event_wait = kernel.register_blocked_waiter(
+        8,
+        0x108,
+        vec![event],
+        SchedulerBlockedWaitKind::Kernel,
+        10,
+        INFINITE,
+    );
+    assert!(kernel.set_event(event));
+    assert_eq!(
+        kernel.select_ready_blocked_waiter(1, 10, |blocked, kernel| {
+            blocked
+                .wait_handles
+                .iter()
+                .any(|handle| kernel.is_wait_ready(*handle, blocked.thread_id) == Some(true))
+        }),
+        Some(event_wait)
+    );
+    let stats = kernel.scheduler_stats();
+    assert_eq!(stats.object_signal_count, 1);
+    assert_eq!(stats.object_wake_candidate_count, 1);
+    assert_eq!(stats.max_pending_wakes, 1);
+    kernel.remove_blocked_waiter(event_wait).unwrap();
+
+    let semaphore = kernel
+        .create_semaphore_w(Some("wake_sem".to_owned()), 0, 2)
+        .unwrap();
+    let sem_wait = kernel.register_blocked_waiter(
+        9,
+        0x109,
+        vec![semaphore],
+        SchedulerBlockedWaitKind::Kernel,
+        20,
+        INFINITE,
+    );
+    assert_eq!(kernel.release_semaphore(semaphore, 1), Some(0));
+    assert_eq!(
+        kernel.select_ready_blocked_waiter(1, 20, |blocked, kernel| {
+            blocked
+                .wait_handles
+                .iter()
+                .any(|handle| kernel.is_wait_ready(*handle, blocked.thread_id) == Some(true))
+        }),
+        Some(sem_wait)
+    );
+    kernel.remove_blocked_waiter(sem_wait).unwrap();
+
+    let mutex = kernel.create_mutex_w(Some("wake_mutex".to_owned()), Some(7));
+    assert_eq!(kernel.wait_for_single_object(mutex, 0, 7), WAIT_OBJECT_0);
+    let mutex_wait = kernel.register_blocked_waiter(
+        10,
+        0x10a,
+        vec![mutex],
+        SchedulerBlockedWaitKind::Kernel,
+        30,
+        INFINITE,
+    );
+    assert!(kernel.release_mutex(mutex, 7));
+    assert_eq!(
+        kernel.select_ready_blocked_waiter(1, 30, |blocked, kernel| {
+            blocked
+                .wait_handles
+                .iter()
+                .any(|handle| kernel.is_wait_ready(*handle, blocked.thread_id) == Some(true))
+        }),
+        None
+    );
+    assert!(kernel.release_mutex(mutex, 7));
+    assert_eq!(
+        kernel.select_ready_blocked_waiter(1, 30, |blocked, kernel| {
+            blocked
+                .wait_handles
+                .iter()
+                .any(|handle| kernel.is_wait_ready(*handle, blocked.thread_id) == Some(true))
+        }),
+        Some(mutex_wait)
+    );
+
+    let stats = kernel.scheduler_stats();
+    assert_eq!(stats.object_signal_count, 3);
+    assert_eq!(stats.object_wake_candidate_count, 3);
+    Ok(())
+}
+
+#[test]
+fn thread_and_process_exit_queue_scheduler_wait_candidates() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+
+    let (thread_handle, _) = kernel.create_guest_thread(0x1000, 0, false);
+    let thread_wait = kernel.register_blocked_waiter(
+        11,
+        0x10b,
+        vec![thread_handle],
+        SchedulerBlockedWaitKind::Kernel,
+        40,
+        INFINITE,
+    );
+    assert!(kernel.mark_guest_thread_exited(thread_handle, 0x55));
+    assert_eq!(
+        kernel.select_ready_blocked_waiter(1, 40, |blocked, kernel| {
+            blocked
+                .wait_handles
+                .iter()
+                .any(|handle| kernel.is_wait_ready(*handle, blocked.thread_id) == Some(true))
+        }),
+        Some(thread_wait)
+    );
+    kernel.remove_blocked_waiter(thread_wait).unwrap();
+
+    let launch = kernel.queue_process_launch(Some("fixture-child.exe".to_owned()), None);
+    let process_wait = kernel.register_blocked_waiter(
+        12,
+        0x10c,
+        vec![launch.process_handle],
+        SchedulerBlockedWaitKind::Kernel,
+        50,
+        INFINITE,
+    );
+    let launch_thread_wait = kernel.register_blocked_waiter(
+        13,
+        0x10d,
+        vec![launch.thread_handle],
+        SchedulerBlockedWaitKind::Kernel,
+        50,
+        INFINITE,
+    );
+    kernel.mark_process_launch_exited(&launch, 0x66);
+    assert_eq!(
+        kernel.select_ready_blocked_waiter(1, 50, |blocked, kernel| {
+            blocked
+                .wait_handles
+                .iter()
+                .any(|handle| kernel.is_wait_ready(*handle, blocked.thread_id) == Some(true))
+        }),
+        Some(process_wait)
+    );
+    kernel.remove_blocked_waiter(process_wait).unwrap();
+    assert_eq!(
+        kernel.select_ready_blocked_waiter(1, 50, |blocked, kernel| {
+            blocked
+                .wait_handles
+                .iter()
+                .any(|handle| kernel.is_wait_ready(*handle, blocked.thread_id) == Some(true))
+        }),
+        Some(launch_thread_wait)
+    );
+    kernel.remove_blocked_waiter(launch_thread_wait).unwrap();
+
+    let launch = kernel.queue_process_launch(Some("terminated-child.exe".to_owned()), None);
+    let terminate_wait = kernel.register_blocked_waiter(
+        14,
+        0x10e,
+        vec![launch.process_handle],
+        SchedulerBlockedWaitKind::Kernel,
+        60,
+        INFINITE,
+    );
+    assert!(kernel.terminate_process(launch.process_handle, 0x77));
+    assert_eq!(
+        kernel.select_ready_blocked_waiter(1, 60, |blocked, kernel| {
+            blocked
+                .wait_handles
+                .iter()
+                .any(|handle| kernel.is_wait_ready(*handle, blocked.thread_id) == Some(true))
+        }),
+        Some(terminate_wait)
+    );
+    kernel.remove_blocked_waiter(terminate_wait).unwrap();
+
+    let current_process_wait = kernel.register_blocked_waiter(
+        15,
+        0x10f,
+        vec![CE_CURRENT_PROCESS_PSEUDO_HANDLE],
+        SchedulerBlockedWaitKind::Kernel,
+        70,
+        INFINITE,
+    );
+    assert!(kernel.terminate_process(CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0x88));
+    assert_eq!(
+        kernel.select_ready_blocked_waiter(1, 70, |blocked, kernel| {
+            blocked
+                .wait_handles
+                .iter()
+                .any(|handle| kernel.is_wait_ready(*handle, blocked.thread_id) == Some(true))
+        }),
+        Some(current_process_wait)
+    );
+
+    let stats = kernel.scheduler_stats();
+    assert_eq!(stats.object_signal_count, 5);
+    assert_eq!(stats.object_wake_candidate_count, 5);
+    Ok(())
+}
+
+#[test]
+fn message_and_timer_transitions_queue_scheduler_msg_wait_candidates() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+
+    let select_ready = |kernel: &CeKernel, active_thread_id: u32, now_ms: u32| {
+        kernel.select_ready_blocked_waiter(
+            active_thread_id,
+            now_ms,
+            |blocked, kernel| match blocked.kind {
+                SchedulerBlockedWaitKind::Kernel => true,
+                SchedulerBlockedWaitKind::SerialRead { handle } => kernel.serial_read_ready(handle),
+                SchedulerBlockedWaitKind::MsgWait {
+                    wake_mask,
+                    input_available,
+                } => {
+                    if input_available {
+                        kernel.gwe.has_queue_input(blocked.thread_id, wake_mask)
+                    } else {
+                        kernel.gwe.has_new_queue_input(blocked.thread_id, wake_mask)
+                    }
+                }
+            },
+        )
+    };
+    let register_global_ready_wait = |kernel: &mut CeKernel, sequence: u32| {
+        kernel.register_blocked_waiter(
+            20 + sequence,
+            0x200 + sequence,
+            vec![0x400 + sequence],
+            SchedulerBlockedWaitKind::Kernel,
+            0,
+            INFINITE,
+        )
+    };
+    let register_msg_wait = |kernel: &mut CeKernel, thread_id: u32, wake_mask: u32| {
+        kernel.register_blocked_waiter(
+            thread_id,
+            0x500 + thread_id,
+            Vec::new(),
+            SchedulerBlockedWaitKind::MsgWait {
+                wake_mask,
+                input_available: false,
+            },
+            0,
+            INFINITE,
+        )
+    };
+
+    let post_global = register_global_ready_wait(&mut kernel, 1);
+    let post_wait = register_msg_wait(&mut kernel, 42, QS_POSTMESSAGE);
+    assert!(kernel.post_thread_message_w(42, WM_USER + 10, 1, 2));
+    assert_eq!(select_ready(&kernel, 1, 0), Some(post_wait));
+    kernel.remove_blocked_waiter(post_wait).unwrap();
+    kernel.remove_blocked_waiter(post_global).unwrap();
+    assert_eq!(kernel.gwe.get_message(42).unwrap().msg, WM_USER + 10);
+
+    let timer_global = register_global_ready_wait(&mut kernel, 2);
+    let timer_wait = register_msg_wait(&mut kernel, 43, QS_TIMER);
+    let hwnd = kernel.gwe.create_window(43, "MsgTimerWake", "timer");
+    assert_eq!(kernel.set_timer(Some(hwnd), Some(77), 0), 77);
+    kernel.pump_timers_to_gwe(43);
+    assert_eq!(select_ready(&kernel, 1, 0), Some(timer_wait));
+    kernel.remove_blocked_waiter(timer_wait).unwrap();
+    kernel.remove_blocked_waiter(timer_global).unwrap();
+    assert_eq!(kernel.gwe.get_message(43).unwrap().msg, WM_TIMER);
+
+    let send_global = register_global_ready_wait(&mut kernel, 3);
+    let send_wait = register_msg_wait(&mut kernel, 44, QS_SENDMESSAGE);
+    let hwnd = kernel.gwe.create_window(44, "MsgSendWake", "send");
+    assert!(
+        kernel
+            .begin_cross_thread_send_message_w(7, hwnd, WM_USER + 11, 3, 4, None)
+            .is_some()
+    );
+    assert_eq!(select_ready(&kernel, 1, 0), Some(send_wait));
+    kernel.remove_blocked_waiter(send_wait).unwrap();
+    kernel.remove_blocked_waiter(send_global).unwrap();
+    assert_eq!(kernel.gwe.get_message(44).unwrap().msg, WM_USER + 11);
+
+    let quit_global = register_global_ready_wait(&mut kernel, 4);
+    let quit_wait = register_msg_wait(&mut kernel, 45, QS_POSTMESSAGE);
+    kernel.post_quit_message(45, 0x45);
+    assert_eq!(select_ready(&kernel, 1, 0), Some(quit_wait));
+    kernel.remove_blocked_waiter(quit_wait).unwrap();
+    kernel.remove_blocked_waiter(quit_global).unwrap();
+    assert_eq!(kernel.gwe.get_message(45).unwrap().msg, WM_QUIT);
+
+    let stats = kernel.scheduler_stats();
+    assert_eq!(stats.message_input_signal_count, 4);
+    assert_eq!(stats.message_input_wake_candidate_count, 4);
+    Ok(())
+}
+
+#[test]
+fn remote_serial_injection_queues_scheduler_serial_read_candidates() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let com = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
+    assert!(kernel.is_serial_device_handle(com));
+    assert!(!kernel.serial_read_ready(com));
+
+    let global_wait = kernel.register_blocked_waiter(
+        50,
+        0x350,
+        vec![0x800],
+        SchedulerBlockedWaitKind::Kernel,
+        0,
+        INFINITE,
+    );
+    let serial_wait = kernel.register_blocked_waiter(
+        51,
+        0x351,
+        Vec::new(),
+        SchedulerBlockedWaitKind::SerialRead { handle: com },
+        0,
+        INFINITE,
+    );
+
+    let response = kernel.dispatch_remote_control_message(&serde_json::json!({
+        "type": "nmea",
+        "sentences": ["$GPRMC,serial*00"]
+    }));
+    assert_eq!(response["accepted"], 1);
+    assert!(kernel.serial_read_ready(com));
+    assert_eq!(
+        kernel.select_ready_blocked_waiter(1, 0, |blocked, kernel| match blocked.kind {
+            SchedulerBlockedWaitKind::Kernel => true,
+            SchedulerBlockedWaitKind::SerialRead { handle } => kernel.serial_read_ready(handle),
+            SchedulerBlockedWaitKind::MsgWait { .. } => false,
+        }),
+        Some(serial_wait)
+    );
+    kernel.remove_blocked_waiter(serial_wait).unwrap();
+    kernel.remove_blocked_waiter(global_wait).unwrap();
+
+    let bytes = kernel.read_file(com, 64)?;
+    assert_eq!(bytes, b"$GPRMC,serial*00\r\n");
+    assert!(!kernel.serial_read_ready(com));
+    let stats = kernel.scheduler_stats();
+    assert_eq!(stats.serial_read_signal_count, 1);
+    assert_eq!(stats.serial_read_wake_candidate_count, 1);
     Ok(())
 }
 

@@ -154,9 +154,12 @@ impl UnicornDebugSnapshot {
         if self.scheduler_stats.wait_single_count != 0
             || self.scheduler_stats.wait_multiple_count != 0
             || self.scheduler_stats.msg_wait_count != 0
+            || self.scheduler_stats.object_signal_count != 0
+            || self.scheduler_stats.message_input_signal_count != 0
+            || self.scheduler_stats.serial_read_signal_count != 0
         {
             parts.push(format!(
-                "sched=wait:{}/{}/{} ok:{} timeout:{} fail:{} block:{} wake:{} reg:{}/{} maxreg:{}",
+                "sched=wait:{}/{}/{} ok:{} timeout:{} fail:{} block:{} wake:{} reg:{}/{} maxreg:{} sig:{} cand:{} msgsig:{} msgcand:{} sersig:{} sercand:{} maxpend:{}",
                 self.scheduler_stats.wait_single_count,
                 self.scheduler_stats.wait_multiple_count,
                 self.scheduler_stats.msg_wait_count,
@@ -167,7 +170,14 @@ impl UnicornDebugSnapshot {
                 self.scheduler_stats.wait_wake_count,
                 self.scheduler_stats.waiter_register_count,
                 self.scheduler_stats.waiter_remove_count,
-                self.scheduler_stats.max_registered_waits
+                self.scheduler_stats.max_registered_waits,
+                self.scheduler_stats.object_signal_count,
+                self.scheduler_stats.object_wake_candidate_count,
+                self.scheduler_stats.message_input_signal_count,
+                self.scheduler_stats.message_input_wake_candidate_count,
+                self.scheduler_stats.serial_read_signal_count,
+                self.scheduler_stats.serial_read_wake_candidate_count,
+                self.scheduler_stats.max_pending_wakes
             ));
         }
         if self.gwe_stats.send_transaction_count != 0 {
@@ -755,6 +765,12 @@ enum BlockedWaitKind {
         wake_mask: u32,
         input_available: bool,
     },
+    SerialRead {
+        handle: u32,
+        buffer: u32,
+        requested: u32,
+        transferred_ptr: u32,
+    },
 }
 
 #[cfg(feature = "unicorn")]
@@ -784,6 +800,9 @@ fn scheduler_blocked_wait_kind(
             wake_mask,
             input_available,
         },
+        BlockedWaitKind::SerialRead { handle, .. } => {
+            crate::ce::scheduler::SchedulerBlockedWaitKind::SerialRead { handle }
+        }
     }
 }
 
@@ -948,37 +967,49 @@ impl UnicornMips {
         let mut loaded_dlls = Vec::new();
         let mut next_dll_base = 0x6000_0000u32;
         let mut next_trap_base = IMPORT_TRAP_BASE;
+        let mut occupied_image_ranges = vec![(
+            image.image_base(),
+            align_up_4k(image.optional_header.size_of_image)?,
+        )];
         self.loaded_modules.clear();
 
         for dll in dlls {
-            let load_base = if ranges_overlap(
-                image.image_base(),
-                image.optional_header.size_of_image,
+            let dll_size = align_up_4k(dll.optional_header.size_of_image)?;
+            let mut load_base = choose_dll_load_base(
                 dll.image_base(),
-                dll.optional_header.size_of_image,
-            ) {
-                let load_base = next_dll_base;
-                next_dll_base = next_dll_base
-                    .checked_add(align_up_4k(dll.optional_header.size_of_image)?)
-                    .and_then(|base| base.checked_add(0x0010_0000))
-                    .ok_or_else(|| Error::InvalidArgument("DLL load base overflow".to_owned()))?;
-                load_base
-            } else {
-                dll.image_base()
-            };
-            let mut mapped = dll.mapped_image_at(load_base)?;
-            let traps = patch_pe_coredll_imports(
-                dll,
-                &mut mapped,
-                &crate::ce::coredll::CoredllExportTable::default(),
-                next_trap_base,
+                dll_size,
+                &occupied_image_ranges,
+                &mut next_dll_base,
             )?;
+            let (mapped, traps, trampoline_patch, mapped_size) = loop {
+                let mut mapped = dll.mapped_image_at(load_base)?;
+                let traps = patch_pe_coredll_imports(
+                    dll,
+                    &mut mapped,
+                    &crate::ce::coredll::CoredllExportTable::default(),
+                    next_trap_base,
+                )?;
+                #[cfg(feature = "unicorn")]
+                let trampoline_patch =
+                    Some(patch_mips_unicorn_trampolines(dll, load_base, &mut mapped)?);
+                #[cfg(not(feature = "unicorn"))]
+                let trampoline_patch: Option<MipsTrampolinePatchResult> = None;
+                let mapped_size = align_up_4k(mapped.len() as u32)?;
+                if !range_overlaps_any(load_base, mapped_size, &occupied_image_ranges) {
+                    break (mapped, traps, trampoline_patch, mapped_size);
+                }
+                load_base = allocate_relocated_dll_base(
+                    mapped_size,
+                    &occupied_image_ranges,
+                    &mut next_dll_base,
+                )?;
+            };
+            occupied_image_ranges.push((load_base, mapped_size));
             next_trap_base = advance_trap_base(next_trap_base, traps.len())?;
             self.import_traps.merge(traps);
             external.add_pe_image(module_file_name(&dll.path), dll, load_base);
             #[cfg(feature = "unicorn")]
-            {
-                let trampoline_patch = patch_mips_unicorn_trampolines(dll, load_base, &mut mapped)?;
+            if let Some(trampoline_patch) = trampoline_patch {
                 if let Some(range) = trampoline_patch.range {
                     self.trampoline_ranges.push(range);
                 }
@@ -2142,6 +2173,23 @@ impl UnicornMips {
                     return;
                 }
                 if trap.as_ref().is_some_and(|trap| {
+                    try_block_serial_read_file(
+                        unsafe { &mut *kernel_ptr },
+                        uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        active_thread_id,
+                        &blocked_wait_threads_hook,
+                        &pending_guest_thread_returns_hook,
+                        &current_thread_id_hook,
+                        &suspended_guest_thread_hook,
+                        &running_guest_thread_hook,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
                     try_exit_guest_thread_callout(
                         unsafe { &mut *kernel_ptr },
                         uc,
@@ -2692,6 +2740,45 @@ fn ranges_overlap(lhs_base: u32, lhs_size: u32, rhs_base: u32, rhs_size: u32) ->
     lhs_base < rhs_end && rhs_base < lhs_end
 }
 
+fn range_overlaps_any(base: u32, size: u32, ranges: &[(u32, u32)]) -> bool {
+    ranges
+        .iter()
+        .any(|(other_base, other_size)| ranges_overlap(base, size, *other_base, *other_size))
+}
+
+fn choose_dll_load_base(
+    preferred_base: u32,
+    image_size: u32,
+    occupied_ranges: &[(u32, u32)],
+    next_dll_base: &mut u32,
+) -> Result<u32> {
+    if !range_overlaps_any(preferred_base, image_size, occupied_ranges) {
+        return Ok(preferred_base);
+    }
+
+    allocate_relocated_dll_base(image_size, occupied_ranges, next_dll_base)
+}
+
+fn allocate_relocated_dll_base(
+    image_size: u32,
+    occupied_ranges: &[(u32, u32)],
+    next_dll_base: &mut u32,
+) -> Result<u32> {
+    let mut candidate = align_up_4k(*next_dll_base)?;
+    while range_overlaps_any(candidate, image_size, occupied_ranges) {
+        candidate = candidate
+            .checked_add(image_size)
+            .and_then(|base| base.checked_add(0x0010_0000))
+            .ok_or_else(|| Error::InvalidArgument("DLL load base overflow".to_owned()))?;
+        candidate = align_up_4k(candidate)?;
+    }
+    *next_dll_base = candidate
+        .checked_add(image_size)
+        .and_then(|base| base.checked_add(0x0010_0000))
+        .ok_or_else(|| Error::InvalidArgument("DLL load base overflow".to_owned()))?;
+    Ok(candidate)
+}
+
 fn module_file_name(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
@@ -2896,14 +2983,12 @@ fn patch_mips_unicorn_trampolines(
     })
 }
 
-#[cfg(feature = "unicorn")]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct MipsTrampolinePatchResult {
     range: Option<(u32, u32)>,
     jumps: Vec<MipsTrampolineJump>,
 }
 
-#[cfg(feature = "unicorn")]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct MipsTrampolineJump {
     origin: u32,
@@ -3411,13 +3496,13 @@ fn is_mips_jr(instruction: u32, register: u32) -> bool {
 #[cfg(feature = "unicorn")]
 fn jal_stub_words(pc: u32, target: u32, delay_slot: u32, stub_pc: u32) -> Result<Vec<u32>> {
     let link_address = pc.wrapping_add(8);
-    Ok(vec![
+    let mut words = vec![
         encode_mips_lui(31, link_address >> 16),
         encode_mips_ori(31, 31, link_address & 0xffff),
         delay_slot,
-        encode_mips_jump(stub_pc.wrapping_add(12), target)?,
-        MIPS_NOP,
-    ])
+    ];
+    append_mips_jump_sequence(&mut words, stub_pc.wrapping_add(12), target)?;
+    Ok(words)
 }
 
 #[cfg(feature = "unicorn")]
@@ -3429,8 +3514,10 @@ fn branch_likely_stub_words(
 ) -> Result<Vec<u32>> {
     branch.target = pc.wrapping_add(branch.target);
     let fallthrough = pc.wrapping_add(8);
-    let false_path_index = if branch.link { 7 } else { 5 };
-    let false_path_pc = stub_pc.wrapping_add(false_path_index * 4);
+    let prefix_len = if branch.link { 4 } else { 2 };
+    let true_jump_pc = stub_pc.wrapping_add((prefix_len + 1) * 4);
+    let true_jump_len = mips_jump_sequence_len(true_jump_pc, branch.target)?;
+    let false_path_pc = stub_pc.wrapping_add((prefix_len + 1 + true_jump_len as u32) * 4);
 
     let mut words = vec![
         encode_mips_cond_branch(
@@ -3447,14 +3534,9 @@ fn branch_likely_stub_words(
         words.push(encode_mips_lui(31, link_address >> 16));
         words.push(encode_mips_ori(31, 31, link_address & 0xffff));
     }
-    let true_jump_pc = stub_pc.wrapping_add((words.len() as u32 + 1) * 4);
-    words.extend([
-        delay_slot,
-        encode_mips_jump(true_jump_pc, branch.target)?,
-        MIPS_NOP,
-        encode_mips_jump(false_path_pc, fallthrough)?,
-        MIPS_NOP,
-    ]);
+    words.push(delay_slot);
+    append_mips_jump_sequence(&mut words, true_jump_pc, branch.target)?;
+    append_mips_jump_sequence(&mut words, false_path_pc, fallthrough)?;
     Ok(words)
 }
 
@@ -3467,9 +3549,11 @@ fn normal_branch_stub_words(
 ) -> Result<Vec<u32>> {
     branch.target = pc.wrapping_add(branch.target);
     let fallthrough = pc.wrapping_add(8);
-    let false_path_pc = stub_pc.wrapping_add(20);
+    let true_jump_pc = stub_pc.wrapping_add(12);
+    let true_jump_len = mips_jump_sequence_len(true_jump_pc, branch.target)?;
+    let false_path_pc = stub_pc.wrapping_add((3 + true_jump_len as u32) * 4);
 
-    Ok(vec![
+    let mut words = vec![
         encode_mips_cond_branch(
             branch.inverse_branch,
             branch.rs,
@@ -3479,12 +3563,11 @@ fn normal_branch_stub_words(
         )?,
         MIPS_NOP,
         delay_slot,
-        encode_mips_jump(stub_pc.wrapping_add(12), branch.target)?,
-        MIPS_NOP,
-        delay_slot,
-        encode_mips_jump(false_path_pc.wrapping_add(4), fallthrough)?,
-        MIPS_NOP,
-    ])
+    ];
+    append_mips_jump_sequence(&mut words, true_jump_pc, branch.target)?;
+    words.push(delay_slot);
+    append_mips_jump_sequence(&mut words, false_path_pc.wrapping_add(4), fallthrough)?;
+    Ok(words)
 }
 
 #[cfg(feature = "unicorn")]
@@ -3534,6 +3617,29 @@ fn encode_mips_jump(pc: u32, target: u32) -> Result<u32> {
 }
 
 #[cfg(feature = "unicorn")]
+fn mips_jump_sequence_len(pc: u32, target: u32) -> Result<usize> {
+    if pc.wrapping_add(4) & 0xf000_0000 == target & 0xf000_0000 {
+        Ok(2)
+    } else {
+        Ok(4)
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn append_mips_jump_sequence(words: &mut Vec<u32>, pc: u32, target: u32) -> Result<()> {
+    if mips_jump_sequence_len(pc, target)? == 2 {
+        words.push(encode_mips_jump(pc, target)?);
+        words.push(MIPS_NOP);
+    } else {
+        words.push(encode_mips_lui(26, target >> 16));
+        words.push(encode_mips_ori(26, 26, target & 0xffff));
+        words.push(encode_mips_jr(26));
+        words.push(MIPS_NOP);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "unicorn")]
 fn encode_mips_lui(rt: u32, imm: u32) -> u32 {
     (0x0f << 26) | (rt << 16) | (imm & 0xffff)
 }
@@ -3541,6 +3647,11 @@ fn encode_mips_lui(rt: u32, imm: u32) -> u32 {
 #[cfg(feature = "unicorn")]
 fn encode_mips_ori(rt: u32, rs: u32, imm: u32) -> u32 {
     (0x0d << 26) | (rs << 21) | (rt << 16) | (imm & 0xffff)
+}
+
+#[cfg(feature = "unicorn")]
+fn encode_mips_jr(rs: u32) -> u32 {
+    (rs << 21) | 0x08
 }
 
 #[cfg(feature = "unicorn")]
@@ -4276,7 +4387,7 @@ impl std::fmt::Display for UnicornDebugSnapshot {
         }
         write!(
             f,
-            " heap_live_count={} heap_live_bytes={} virtual_live_count={} virtual_live_bytes={} file_host_open_count={} file_host_read_count={} file_host_read_bytes={} file_memory_backed_open_count={} file_max_read_request={} sched_wait_single_count={} sched_wait_multiple_count={} sched_msg_wait_count={} sched_wait_acquired_count={} sched_wait_timeout_count={} sched_wait_failed_count={} sched_wait_block_count={} sched_wait_wake_count={} sched_waiter_register_count={} sched_waiter_remove_count={} sched_max_registered_waits={} gwe_send_transaction_count={} gwe_send_completed_count={} gwe_send_timeout_count={} gwe_send_receiver_terminated_count={} gwe_max_sent_queue_depth={}",
+            " heap_live_count={} heap_live_bytes={} virtual_live_count={} virtual_live_bytes={} file_host_open_count={} file_host_read_count={} file_host_read_bytes={} file_memory_backed_open_count={} file_max_read_request={} sched_wait_single_count={} sched_wait_multiple_count={} sched_msg_wait_count={} sched_wait_acquired_count={} sched_wait_timeout_count={} sched_wait_failed_count={} sched_wait_block_count={} sched_wait_wake_count={} sched_waiter_register_count={} sched_waiter_remove_count={} sched_object_signal_count={} sched_object_wake_candidate_count={} sched_message_input_signal_count={} sched_message_input_wake_candidate_count={} sched_serial_read_signal_count={} sched_serial_read_wake_candidate_count={} sched_max_registered_waits={} sched_max_pending_wakes={} gwe_send_transaction_count={} gwe_send_completed_count={} gwe_send_timeout_count={} gwe_send_receiver_terminated_count={} gwe_max_sent_queue_depth={}",
             self.heap_allocation_count,
             self.heap_allocation_bytes,
             self.virtual_allocation_count,
@@ -4296,7 +4407,14 @@ impl std::fmt::Display for UnicornDebugSnapshot {
             self.scheduler_stats.wait_wake_count,
             self.scheduler_stats.waiter_register_count,
             self.scheduler_stats.waiter_remove_count,
+            self.scheduler_stats.object_signal_count,
+            self.scheduler_stats.object_wake_candidate_count,
+            self.scheduler_stats.message_input_signal_count,
+            self.scheduler_stats.message_input_wake_candidate_count,
+            self.scheduler_stats.serial_read_signal_count,
+            self.scheduler_stats.serial_read_wake_candidate_count,
             self.scheduler_stats.max_registered_waits,
+            self.scheduler_stats.max_pending_wakes,
             self.gwe_stats.send_transaction_count,
             self.gwe_stats.send_transaction_completed_count,
             self.gwe_stats.send_transaction_timeout_count,
@@ -5704,6 +5822,123 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn try_block_serial_read_file<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    thread_id: u32,
+    blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_READ_FILE)
+    {
+        return false;
+    }
+
+    let handle = args.first().copied().unwrap_or(0);
+    let buffer = args.get(1).copied().unwrap_or(0);
+    let requested = args.get(2).copied().unwrap_or(0);
+    let transferred_ptr = args.get(3).copied().unwrap_or(0);
+    if requested == 0
+        || buffer == 0
+        || !kernel.is_serial_device_handle(handle)
+        || kernel.serial_read_ready(handle)
+    {
+        return false;
+    }
+
+    kernel.record_blocked_single_wait(crate::ce::timer::INFINITE);
+    let wait_started_ms = kernel.timers.tick_count();
+    let kind = BlockedWaitKind::SerialRead {
+        handle,
+        buffer,
+        requested,
+        transferred_ptr,
+    };
+    let regs = capture_mips_gprs(uc);
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+
+    if let Some(callout) = pending_returns.borrow_mut().pop() {
+        let wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            callout.thread_handle,
+            Vec::new(),
+            scheduler_blocked_wait_kind(kind),
+            wait_started_ms,
+            crate::ce::timer::INFINITE,
+        );
+        blocked_waits.borrow_mut().push(BlockedWaitThread {
+            wait_id,
+            thread_id,
+            thread_handle: callout.thread_handle,
+            wait_handles: Vec::new(),
+            kind,
+            wait_started_ms,
+            timeout_ms: crate::ce::timer::INFINITE,
+            regs,
+            return_pc,
+        });
+        *running_thread.borrow_mut() = None;
+        *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        let _ = update_user_kdata_current_ids(
+            uc,
+            callout.creator_thread_id,
+            kernel.current_process_id(),
+        );
+        restore_mips_gprs(uc, &callout.creator_regs);
+        let writes = [
+            uc.reg_write(RegisterMIPS::V0, u64::from(callout.thread_handle)),
+            uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc)),
+            uc.reg_write(RegisterMIPS::RA, u64::from(callout.return_pc)),
+        ];
+        if writes.into_iter().any(|write| write.is_err()) {
+            let _ = uc.emu_stop();
+        }
+        return true;
+    }
+
+    let running = *running_thread.borrow();
+    if let Some((_, thread_handle)) = running {
+        let wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            thread_handle,
+            Vec::new(),
+            scheduler_blocked_wait_kind(kind),
+            wait_started_ms,
+            crate::ce::timer::INFINITE,
+        );
+        blocked_waits.borrow_mut().push(BlockedWaitThread {
+            wait_id,
+            thread_id,
+            thread_handle,
+            wait_handles: Vec::new(),
+            kind,
+            wait_started_ms,
+            timeout_ms: crate::ce::timer::INFINITE,
+            regs,
+            return_pc,
+        });
+        *running_thread.borrow_mut() = None;
+        if let Some(suspended) = suspended_thread.borrow_mut().take() {
+            *current_thread_id.borrow_mut() = suspended.thread_id;
+            let _ =
+                update_user_kdata_current_ids(uc, suspended.thread_id, kernel.current_process_id());
+            restore_suspended_thread(uc, &suspended);
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(feature = "unicorn")]
 fn try_resume_blocked_wait<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
@@ -5747,7 +5982,9 @@ fn try_resume_blocked_wait<D>(
     let blocked = blocked_waits.borrow_mut().remove(index);
     let _ = kernel.remove_blocked_waiter(blocked.wait_id);
     let has_ready_handle = blocked_wait_has_ready_handle(&blocked, kernel);
-    let message_input_ready = !has_ready_handle && blocked_msg_wait_has_input(&blocked, kernel);
+    let serial_read_ready = blocked_serial_read_ready(&blocked, kernel);
+    let message_input_ready =
+        !has_ready_handle && !serial_read_ready && blocked_msg_wait_has_input(&blocked, kernel);
     let wait_result = if has_ready_handle {
         if blocked.wait_handles.len() == 1 {
             kernel.wait_for_single_object_without_scheduler_record(
@@ -5765,6 +6002,8 @@ fn try_resume_blocked_wait<D>(
     } else if message_input_ready {
         consume_blocked_msg_wait_input(&blocked, kernel);
         crate::ce::timer::WAIT_OBJECT_0 + blocked.wait_handles.len() as u32
+    } else if serial_read_ready {
+        complete_blocked_serial_read(&blocked, kernel, uc)
     } else if blocked_wait_timed_out(&blocked, kernel.timers.tick_count()) {
         crate::ce::timer::WAIT_TIMEOUT
     } else {
@@ -5776,6 +6015,11 @@ fn try_resume_blocked_wait<D>(
             kernel.record_resumed_msg_wait_input();
         }
         BlockedWaitKind::MsgWait { .. } => kernel.record_resumed_msg_wait_result(wait_result),
+        BlockedWaitKind::SerialRead { .. } => kernel.record_resumed_wait(if wait_result != 0 {
+            crate::ce::timer::WAIT_OBJECT_0
+        } else {
+            crate::ce::timer::WAIT_FAILED
+        }),
     }
 
     let mut current = SuspendedGuestThread {
@@ -5818,6 +6062,70 @@ fn blocked_wait_has_ready_handle(blocked: &BlockedWaitThread, kernel: &CeKernel)
 }
 
 #[cfg(feature = "unicorn")]
+fn blocked_serial_read_ready(blocked: &BlockedWaitThread, kernel: &CeKernel) -> bool {
+    match blocked.kind {
+        BlockedWaitKind::SerialRead { handle, .. } => kernel.serial_read_ready(handle),
+        _ => false,
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn complete_blocked_serial_read<D>(
+    blocked: &BlockedWaitThread,
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+) -> u32 {
+    let BlockedWaitKind::SerialRead {
+        handle,
+        buffer,
+        requested,
+        transferred_ptr,
+    } = blocked.kind
+    else {
+        return crate::ce::timer::WAIT_FAILED;
+    };
+
+    let mut memory = UnicornGuestMemory { uc };
+    let mut cursor = buffer;
+    let mut write_failed = false;
+    let transferred = match kernel.read_file_into(handle, requested, |bytes| {
+        if memory.write_bytes(cursor, bytes).is_err() {
+            write_failed = true;
+            return Err(Error::InvalidArgument(
+                "serial ReadFile guest buffer is not writable".to_owned(),
+            ));
+        }
+        cursor = cursor.wrapping_add(bytes.len() as u32);
+        Ok(())
+    }) {
+        Ok(transferred) => transferred,
+        Err(_) => {
+            kernel.threads.set_last_error(
+                blocked.thread_id,
+                if write_failed {
+                    crate::ce::thread::ERROR_INVALID_PARAMETER
+                } else {
+                    crate::ce::thread::ERROR_INVALID_HANDLE
+                },
+            );
+            if transferred_ptr != 0 {
+                let _ = memory.write_u32(transferred_ptr, 0);
+            }
+            return 0;
+        }
+    };
+    if transferred_ptr != 0 && memory.write_u32(transferred_ptr, transferred).is_err() {
+        kernel.threads.set_last_error(
+            blocked.thread_id,
+            crate::ce::thread::ERROR_INVALID_PARAMETER,
+        );
+        return 0;
+    }
+    kernel.threads.set_last_error(blocked.thread_id, 0);
+    1
+}
+
+#[cfg(feature = "unicorn")]
 fn scheduler_blocked_wait_has_ready_handle(
     blocked: &crate::ce::scheduler::SchedulerBlockedWait,
     kernel: &CeKernel,
@@ -5832,6 +6140,7 @@ fn scheduler_blocked_wait_has_ready_handle(
 fn blocked_msg_wait_has_input(blocked: &BlockedWaitThread, kernel: &CeKernel) -> bool {
     match blocked.kind {
         BlockedWaitKind::Kernel => false,
+        BlockedWaitKind::SerialRead { .. } => false,
         BlockedWaitKind::MsgWait {
             wake_mask,
             input_available,
@@ -5851,7 +6160,8 @@ fn scheduler_blocked_msg_wait_has_input(
     kernel: &CeKernel,
 ) -> bool {
     match blocked.kind {
-        crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel => false,
+        crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel
+        | crate::ce::scheduler::SchedulerBlockedWaitKind::SerialRead { .. } => false,
         crate::ce::scheduler::SchedulerBlockedWaitKind::MsgWait {
             wake_mask,
             input_available,
@@ -5888,6 +6198,12 @@ fn scheduler_blocked_wait_is_ready(
 ) -> bool {
     scheduler_blocked_wait_has_ready_handle(blocked, kernel)
         || scheduler_blocked_msg_wait_has_input(blocked, kernel)
+        || match blocked.kind {
+            crate::ce::scheduler::SchedulerBlockedWaitKind::SerialRead { handle } => {
+                kernel.serial_read_ready(handle)
+            }
+            _ => false,
+        }
 }
 
 #[cfg(all(test, feature = "unicorn"))]
@@ -11150,6 +11466,77 @@ mod unicorn_tests {
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap(), u64::from(target));
         assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap(), u64::from(pc + 8));
         assert_eq!(uc.reg_read(RegisterMIPS::A0).unwrap(), 0x6004_ed38);
+    }
+
+    #[test]
+    fn jal_trampoline_reaches_far_high_address_target() {
+        let pc = 0x0005_7000;
+        let stub_pc = 0x0005_a000;
+        let target = 0x1000_832c;
+        let words = super::jal_stub_words(pc, target, 0x02c0_2025, stub_pc).unwrap();
+
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x0005_a000, 0x0000_1000, Prot::ALL).unwrap();
+        uc.mem_map(0x1000_8000, 0x0000_1000, Prot::ALL).unwrap();
+        write_words(&mut uc, stub_pc, &words);
+        write_u32(&mut uc, u64::from(target), 0x2442_0001);
+        uc.reg_write(RegisterMIPS::S6, 0x1234_5678).unwrap();
+        uc.reg_write(RegisterMIPS::V0, 41).unwrap();
+
+        uc.emu_start(u64::from(stub_pc), 0, 0, 8).unwrap();
+
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, target + 4);
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap(), u64::from(pc + 8));
+        assert_eq!(uc.reg_read(RegisterMIPS::A0).unwrap(), 0x1234_5678);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap(), 42);
+    }
+
+    #[test]
+    fn jal_trampoline_builds_explorer_high_address_jump_sequence() {
+        let words =
+            super::jal_stub_words(0x0005_7000, 0xffff_832c, 0x02c0_2025, 0x0005_a000).unwrap();
+
+        assert!(words.contains(&super::encode_mips_lui(26, 0xffff)));
+        assert!(words.contains(&super::encode_mips_ori(26, 26, 0x832c)));
+        assert!(words.contains(&super::encode_mips_jr(26)));
+    }
+
+    #[test]
+    fn branch_trampoline_builds_far_high_address_jump_sequences() {
+        let pc = 0x0005_7000;
+        let stub_pc = 0x0005_a000;
+        let branch = super::MipsBranchLikely {
+            rs: 0,
+            rt: 0,
+            target: 0xffff_832c_u32.wrapping_sub(pc),
+            inverse_branch: super::MipsBranch::Bne,
+            link: false,
+        };
+
+        let words = super::normal_branch_stub_words(pc, branch, 0x2442_0001, stub_pc).unwrap();
+
+        assert!(words.contains(&super::encode_mips_lui(26, 0xffff)));
+        assert!(words.contains(&super::encode_mips_ori(26, 26, 0x832c)));
+        assert!(words.contains(&super::encode_mips_jr(26)));
+    }
+
+    #[test]
+    fn dll_load_base_allocator_relocates_only_colliding_images() {
+        let occupied = vec![(0x0001_0000, 0x0004_0000), (0x6000_0000, 0x0002_0000)];
+        let mut next_dll_base = 0x6000_0000;
+
+        assert_eq!(
+            super::choose_dll_load_base(0x6200_0000, 0x0003_0000, &occupied, &mut next_dll_base)
+                .unwrap(),
+            0x6200_0000
+        );
+
+        assert_eq!(
+            super::choose_dll_load_base(0x0002_0000, 0x0003_0000, &occupied, &mut next_dll_base)
+                .unwrap(),
+            0x6013_0000
+        );
+        assert_eq!(next_dll_base, 0x6026_0000);
     }
 
     #[test]
