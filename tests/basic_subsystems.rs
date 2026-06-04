@@ -6,8 +6,9 @@ use wince_emulation_v3::{
         com::{REGDB_E_CLASSNOTREG, S_FALSE, S_OK},
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::{
-            GWL_USERDATA, QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER, Rect, WM_ERASEBKGND, WM_QUIT,
-            WM_TIMER, WM_USER, WS_CHILD, WS_VISIBLE,
+            GWL_USERDATA, QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER, Rect, WA_ACTIVE, WM_ACTIVATE,
+            WM_ERASEBKGND, WM_KILLFOCUS, WM_QUIT, WM_SETFOCUS, WM_TIMER, WM_USER, WS_CHILD,
+            WS_VISIBLE,
         },
         kernel::{
             CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
@@ -1090,6 +1091,15 @@ fn remote_server_api_state_queues_input_serial_audio_and_status() -> Result<()> 
     assert_eq!(key["ok"], true);
 
     assert_eq!(kernel.drain_remote_input_to_gwe(99, hwnd), 3);
+    let activate = kernel.gwe.get_message(99).unwrap();
+    assert_eq!(activate.hwnd, hwnd);
+    assert_eq!(activate.msg, WM_ACTIVATE);
+    assert_eq!(activate.wparam, WA_ACTIVE);
+    let focus = kernel.gwe.get_message(99).unwrap();
+    assert_eq!(focus.hwnd, hwnd);
+    assert_eq!(focus.msg, WM_SETFOCUS);
+    assert_eq!(kernel.gwe.get_focus(), Some(hwnd));
+
     let down = kernel.gwe.get_message(99).unwrap();
     assert_eq!(down.msg, WM_LBUTTONDOWN);
     assert_eq!(down.lparam & 0xffff, 12);
@@ -1211,6 +1221,22 @@ fn get_message_hit_tests_remote_touch_to_visible_child() -> Result<()> {
     );
     kernel.gwe.set_focus(Some(parent));
     kernel.remote.enqueue_touch("tap", 400, 240).unwrap();
+
+    let kill_focus = kernel.get_message_w(42).unwrap();
+    assert_eq!(kill_focus.hwnd, parent);
+    assert_eq!(kill_focus.msg, WM_KILLFOCUS);
+    assert_eq!(kill_focus.wparam, child);
+
+    let activate = kernel.get_message_w(42).unwrap();
+    assert_eq!(activate.hwnd, child);
+    assert_eq!(activate.msg, WM_ACTIVATE);
+    assert_eq!(activate.wparam, WA_ACTIVE);
+
+    let set_focus = kernel.get_message_w(42).unwrap();
+    assert_eq!(set_focus.hwnd, child);
+    assert_eq!(set_focus.msg, WM_SETFOCUS);
+    assert_eq!(set_focus.wparam, parent);
+    assert_eq!(kernel.gwe.get_focus(), Some(child));
 
     let down = kernel.get_message_w(42).unwrap();
     assert_eq!(down.hwnd, child);

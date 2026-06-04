@@ -85,6 +85,14 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `WM_WINDOWPOSCHANGED` for hidden geometry changes, but defers direct-hidden
     `WM_MOVE`/`WM_SIZE` until a later direct show, rather than delivering size
     and move messages into an HWND that is still hidden.
+  - CE SDK `winuser.h` anchors `HWND_TOP`, `GW_HWNDFIRST`/`GW_HWNDNEXT`,
+    `WindowFromPoint`, mouse messages, `WM_ACTIVATE`, `WM_SETFOCUS`, and
+    `WM_KILLFOCUS`. Top-level windows created later should be frontmost until
+    z-order changes move them, while child/owned-window relationships remain
+    distinct. MFC `wincore.cpp` corroborates that mouse/activation paths expect
+    the hit window to own focus before normal button handling; v3 now activates
+    and focuses the hit HWND on remote `WM_LBUTTONDOWN` rather than leaving
+    focus on an older overlapping top-level.
 
 - Explorer/COREDLL startup ordinals:
   `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\MIPSII\RETAIL\coredll.def`,

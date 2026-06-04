@@ -9,6 +9,29 @@
 
 ## Confirmed
 
+- GWE top-level creation now puts newly-created top-level windows at the front
+  of the z-order instead of behind older overlapping top-levels. Child window
+  append order is unchanged. This makes `WindowFromPoint`/remote touch choose
+  the visible newer popup in the same way CE/MFC expects from top-level
+  activation order, and raw `GW_HWNDFIRST` now reports that newest top-level
+  before older siblings. Remote `WM_LBUTTONDOWN` delivery now also activates
+  and focuses the hit window before queuing the mouse message, which gives MFC
+  the normal `WM_KILLFOCUS`/`WM_ACTIVATE`/`WM_SETFOCUS` transition instead of
+  leaving focus on an older overlapped window. Focused coverage:
+  `cargo test --features unicorn,trace,win32-desktop ce::gwe::tests`,
+  `cargo test --features unicorn,trace,win32-desktop --test basic_subsystems`,
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe`,
+  `cargo check --features unicorn,trace,win32-desktop`, and full
+  `cargo test --features unicorn,trace,win32-desktop` pass. Mounted validation
+  wrote `target\touch_focus_virtual_150s_*`; it confirms the real tap at
+  `(400,240)` is delivered to HWND `0x00020008`, queues the focus/activation
+  transition, runs the guest WNDPROC through Unicorn, then returns to the known
+  post-splash hidden-strip frontier (`0x0002006c` hidden with a pending
+  `800x54` update). Memory/file-I/O remains stable
+  (`heap_live=13694/13292926B`, `virtual_live=3/196608B`,
+  `host_open=665`, `host_read=80127/4046053B`, `mem_open=3`,
+  `max_read=685080`). This is not new visible UI yet, but it closes the older
+  accidental tap-to-main-window path as an invalid explanation.
 - GDI DCs now start with CE stock/default selections instead of all-zero
   selected-object slots. `DcState` seeds a default bitmap handle, `SYSTEM_FONT`,
   `WHITE_BRUSH`, `BLACK_PEN`, and `DEFAULT_PALETTE`; `SelectObject` returns

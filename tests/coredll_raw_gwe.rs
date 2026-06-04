@@ -8637,7 +8637,7 @@ fn coredll_raw_bring_window_to_top_updates_z_order_and_activation() -> Result<()
         CoredllDispatch::Returned {
             value: CoredllValue::Handle(hwnd),
             ..
-        } if hwnd == first
+        } if hwnd == third
     ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

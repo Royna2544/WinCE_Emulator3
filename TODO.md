@@ -12,6 +12,17 @@
 
 ## Current Slice
 
+- Continue from the cleaner tap/input frontier in
+  `target\touch_focus_virtual_150s_*`. New top-level windows are now placed at
+  the front of z-order, so the full-screen popup HWND `0x00020008` receives the
+  mounted tap instead of older top-level HWND `0x00020004`; remote mouse-down
+  now also produces the normal focus/activation transition before
+  `WM_LBUTTONDOWN`. The run still parks at `COREDLL.dll@861
+  blocked_get_message`, memory/file-I/O remains stable, and the known hidden
+  child `0x0002006c` still owns the later pending `800x54` update while hidden.
+  Do not treat the old tap-to-`0x20004` path as progress. The next slice should
+  trace the generic GWE/GDI/resource path that should either show that child or
+  copy the guest-composed offscreen surface to a display HDC.
 - Continue from the new mounted iNavi first-present frontier. The latest
   virtual probes `target\update_erase_virtual_*`,
   `target\timer_cap_startup_tap_virtual_20s_*`,

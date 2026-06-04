@@ -2258,6 +2258,9 @@ impl CeKernel {
             let Some(target) = target.filter(|hwnd| self.gwe.is_window(*hwnd)) else {
                 continue;
             };
+            if event.message == WM_LBUTTONDOWN {
+                let _ = self.set_focus(Some(target));
+            }
             let client = self.gwe.screen_to_client(target, point).unwrap_or(point);
             let wparam = if event.message == WM_LBUTTONDOWN || event.message == WM_MOUSEMOVE {
                 1

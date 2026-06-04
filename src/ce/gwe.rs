@@ -614,7 +614,11 @@ impl Gwe {
                 nc_destroy_message_order: None,
             },
         );
-        self.z_order.push(hwnd);
+        if parent.is_none() {
+            self.apply_z_order(hwnd, parent, HWND_TOP);
+        } else {
+            self.z_order.push(hwnd);
+        }
         if self.is_window_visible(hwnd) {
             self.mark_queue_status_changed(thread_id, QS_PAINT);
         }
@@ -2707,6 +2711,38 @@ mod tests {
             gwe.window_from_point_for_thread(2, Point { x: 400, y: 240 }),
             None
         );
+    }
+
+    #[test]
+    fn window_from_point_prefers_newer_overlapping_sibling() {
+        let mut gwe = Gwe::default();
+        let first = gwe.create_window_ex_with_rect(
+            1,
+            "FIRST",
+            "first",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 800, 480),
+        );
+        let second = gwe.create_window_ex_with_rect(
+            1,
+            "SECOND",
+            "second",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 800, 480),
+        );
+
+        assert_eq!(
+            gwe.window_from_point_for_thread(1, Point { x: 400, y: 240 }),
+            Some(second)
+        );
+        assert_eq!(gwe.get_window(first, GW_HWNDFIRST), Some(second));
+        assert_eq!(gwe.get_window(second, GW_HWNDNEXT), Some(first));
     }
 
     #[test]

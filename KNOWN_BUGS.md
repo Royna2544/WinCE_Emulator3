@@ -150,6 +150,15 @@
     `flags=0x00000097` (`SWP_HIDEWINDOW|SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE`),
     including HWND `0x0002006c`. This still does not produce the later
     display-HDC blit; the child remains hidden with a pending 800x54 update.
+    Tap/z-order/focus follow-up:
+    `target\touch_focus_virtual_150s_*` confirms a generic input-ordering fix,
+    not a UI breakthrough. New top-level HWNDs now become frontmost for
+    hit-testing, so the tap reaches the visible full-screen popup
+    `0x00020008`; `WM_LBUTTONDOWN` also activates/focuses that hit HWND before
+    the mouse message. The guest WNDPROC runs and then deactivates/reactivates
+    windows back toward the existing main path, but the run still ends at the
+    same hidden `0x0002006c` pending-update frontier with no later display-HDC
+    blit. This closes the old tap-to-older-window path as a false lead.
     Historical evidence: the mounted virtual run with dumped runtime DLLs
     and real sibling app DLLs wrote `target\inavi_trampoline_virtual_*`. It
     preloaded `AuthLibrary.dll`, `TpSysAuth.dll`, `mMbcAuth.dll`,
