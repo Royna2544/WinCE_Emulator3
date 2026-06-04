@@ -24,7 +24,13 @@
   `target\explorer_win32_host_destroyicon_milestones.txt`; it reaches the
   emulator sentinel (`pc=0x7ffffff0`, `ra=0x7ffffff0`, `v0=1`) instead of a
   COREDLL trap. Render milestones remain `none`, so this is explorer launch
-  fidelity rather than UI progress.
+  fidelity rather than UI progress. A fresh rerun after the scheduler
+  `SendMessage` sender-parking slice wrote `target\explorer_send_wait_*` and
+  reproduced the same sentinel result with `sched=wait:0/0/0`, no render
+  milestones, and an all-zero framebuffer body. The trace shows
+  `LoadLibraryW("aygshell.dll")` returning `ERROR_FILE_NOT_FOUND`; a recursive
+  search under `D:\INAVI_Emulator\DUMPPLZ` found no `aygshell.dll`, so this is
+  missing dumped runtime content rather than a loader search regression.
 - Storage mount configuration now supports a `[root].host_root` backing root.
   If the root value is absent or not an existing directory, v3 falls back to
   `"."`. Mount entries without their own `host_root` inherit

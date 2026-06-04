@@ -20,8 +20,12 @@
 - Treat the latest `explorer.exe` host-presented probe as a launch-fidelity
   checkpoint, not UI success. It now reaches the emulator sentinel instead of
   missing COREDLL ordinals after adding `StringCchCatW`, `wcsncmp`, and
-  `DestroyIcon`; validate whether the sentinel is a clean process return or a
-  too-early control-flow exit before using explorer as a broader shell fixture.
+  `DestroyIcon`. The post-send-wait rerun still reaches the same sentinel with
+  no render milestones or framebuffer pixels; its optional
+  `LoadLibraryW("aygshell.dll")` fails because that DLL is absent from the
+  dumped runtime tree, not because the configured search path missed it.
+  Validate whether the sentinel is a clean process return or a too-early
+  control-flow exit before using explorer as a broader shell fixture.
 
 ## CE Fidelity Ledger
 
