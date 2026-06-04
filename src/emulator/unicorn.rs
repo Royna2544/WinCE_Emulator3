@@ -154,15 +154,19 @@ impl UnicornDebugSnapshot {
         if self.scheduler_stats.wait_single_count != 0
             || self.scheduler_stats.wait_multiple_count != 0
             || self.scheduler_stats.msg_wait_count != 0
+            || self.scheduler_stats.sleep_count != 0
+            || self.scheduler_stats.yield_count != 0
             || self.scheduler_stats.object_signal_count != 0
             || self.scheduler_stats.message_input_signal_count != 0
             || self.scheduler_stats.serial_read_signal_count != 0
         {
             parts.push(format!(
-                "sched=wait:{}/{}/{} ok:{} timeout:{} fail:{} block:{} wake:{} reg:{}/{} maxreg:{} sig:{} cand:{} msgsig:{} msgcand:{} sersig:{} sercand:{} maxpend:{}",
+                "sched=wait:{}/{}/{} sleep:{} yield:{} ok:{} timeout:{} fail:{} block:{} wake:{} reg:{}/{} maxreg:{} sig:{} cand:{} msgsig:{} msgcand:{} sersig:{} sercand:{} maxpend:{}",
                 self.scheduler_stats.wait_single_count,
                 self.scheduler_stats.wait_multiple_count,
                 self.scheduler_stats.msg_wait_count,
+                self.scheduler_stats.sleep_count,
+                self.scheduler_stats.yield_count,
                 self.scheduler_stats.wait_acquired_count,
                 self.scheduler_stats.wait_timeout_count,
                 self.scheduler_stats.wait_failed_count,
@@ -740,6 +744,7 @@ struct PendingGuestThreadReturn {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SuspendedGuestThread {
     thread_id: u32,
+    thread_handle: Option<u32>,
     regs: [u32; 32],
     pc: u32,
 }
@@ -2051,13 +2056,13 @@ impl UnicornMips {
                         let _ = uc.emu_stop();
                         return;
                     };
-                    *current_thread_id_hook.borrow_mut() = suspended.thread_id;
-                    let _ = update_user_kdata_current_ids(
+                    activate_suspended_thread(
                         uc,
-                        suspended.thread_id,
-                        unsafe { &*kernel_ptr }.current_process_id(),
+                        unsafe { &*kernel_ptr },
+                        &current_thread_id_hook,
+                        &running_guest_thread_hook,
+                        &suspended,
                     );
-                    restore_suspended_thread(uc, &suspended);
                     tracing::debug!(
                         target: "ce.imports",
                         thread_id = worker_thread_id,
@@ -4473,7 +4478,7 @@ impl std::fmt::Display for UnicornDebugSnapshot {
         }
         write!(
             f,
-            " heap_live_count={} heap_live_bytes={} virtual_live_count={} virtual_live_bytes={} file_host_open_count={} file_host_read_count={} file_host_read_bytes={} file_memory_backed_open_count={} file_max_read_request={} sched_wait_single_count={} sched_wait_multiple_count={} sched_msg_wait_count={} sched_sleep_count={} sched_wait_acquired_count={} sched_wait_timeout_count={} sched_wait_failed_count={} sched_wait_block_count={} sched_wait_wake_count={} sched_waiter_register_count={} sched_waiter_remove_count={} sched_object_signal_count={} sched_object_wake_candidate_count={} sched_message_input_signal_count={} sched_message_input_wake_candidate_count={} sched_serial_read_signal_count={} sched_serial_read_wake_candidate_count={} sched_max_registered_waits={} sched_max_pending_wakes={} gwe_send_transaction_count={} gwe_send_completed_count={} gwe_send_timeout_count={} gwe_send_receiver_terminated_count={} gwe_max_sent_queue_depth={}",
+            " heap_live_count={} heap_live_bytes={} virtual_live_count={} virtual_live_bytes={} file_host_open_count={} file_host_read_count={} file_host_read_bytes={} file_memory_backed_open_count={} file_max_read_request={} sched_wait_single_count={} sched_wait_multiple_count={} sched_msg_wait_count={} sched_sleep_count={} sched_yield_count={} sched_wait_acquired_count={} sched_wait_timeout_count={} sched_wait_failed_count={} sched_wait_block_count={} sched_wait_wake_count={} sched_waiter_register_count={} sched_waiter_remove_count={} sched_object_signal_count={} sched_object_wake_candidate_count={} sched_message_input_signal_count={} sched_message_input_wake_candidate_count={} sched_serial_read_signal_count={} sched_serial_read_wake_candidate_count={} sched_max_registered_waits={} sched_max_pending_wakes={} gwe_send_transaction_count={} gwe_send_completed_count={} gwe_send_timeout_count={} gwe_send_receiver_terminated_count={} gwe_max_sent_queue_depth={}",
             self.heap_allocation_count,
             self.heap_allocation_bytes,
             self.virtual_allocation_count,
@@ -4487,6 +4492,7 @@ impl std::fmt::Display for UnicornDebugSnapshot {
             self.scheduler_stats.wait_multiple_count,
             self.scheduler_stats.msg_wait_count,
             self.scheduler_stats.sleep_count,
+            self.scheduler_stats.yield_count,
             self.scheduler_stats.wait_acquired_count,
             self.scheduler_stats.wait_timeout_count,
             self.scheduler_stats.wait_failed_count,
@@ -5530,10 +5536,7 @@ fn try_block_empty_get_message<D>(
         });
         *running_thread.borrow_mut() = None;
         if let Some(suspended) = suspended_thread.borrow_mut().take() {
-            *current_thread_id.borrow_mut() = suspended.thread_id;
-            let _ =
-                update_user_kdata_current_ids(uc, suspended.thread_id, kernel.current_process_id());
-            restore_suspended_thread(uc, &suspended);
+            activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
             return true;
         }
     }
@@ -5639,10 +5642,7 @@ fn try_block_wait_for_single_object<D>(
         });
         *running_thread.borrow_mut() = None;
         if let Some(suspended) = suspended_thread.borrow_mut().take() {
-            *current_thread_id.borrow_mut() = suspended.thread_id;
-            let _ =
-                update_user_kdata_current_ids(uc, suspended.thread_id, kernel.current_process_id());
-            restore_suspended_thread(uc, &suspended);
+            activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
             return true;
         }
     }
@@ -5665,16 +5665,31 @@ fn try_block_sleep<D>(
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
-    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
-        || ordinal != Some(crate::ce::coredll_ordinals::ORD_SLEEP)
-    {
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll {
         return false;
     }
 
-    let timeout = args.first().copied().unwrap_or(0);
-    if timeout == 0 {
-        return false;
-    }
+    let timeout = match ordinal {
+        Some(crate::ce::coredll_ordinals::ORD_SLEEP) => {
+            match crate::ce::timer::ce_sleep_request(args.first().copied().unwrap_or(0)) {
+                crate::ce::timer::CeSleepRequest::Bounded(timeout) => timeout,
+                crate::ce::timer::CeSleepRequest::Yield => {
+                    return try_yield_sleep(
+                        kernel,
+                        uc,
+                        thread_id,
+                        pending_returns,
+                        current_thread_id,
+                        suspended_thread,
+                        running_thread,
+                    );
+                }
+                crate::ce::timer::CeSleepRequest::Suspend => return false,
+            }
+        }
+        Some(crate::ce::coredll_ordinals::ORD_SLEEP_TILL_TICK) => 1,
+        _ => return false,
+    };
 
     kernel.record_blocked_thread_sleep(timeout);
     let wait_started_ms = kernel.timers.tick_count();
@@ -5744,14 +5759,69 @@ fn try_block_sleep<D>(
         });
         *running_thread.borrow_mut() = None;
         if let Some(suspended) = suspended_thread.borrow_mut().take() {
-            *current_thread_id.borrow_mut() = suspended.thread_id;
-            let _ =
-                update_user_kdata_current_ids(uc, suspended.thread_id, kernel.current_process_id());
-            restore_suspended_thread(uc, &suspended);
+            activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
             return true;
         }
     }
     false
+}
+
+#[cfg(feature = "unicorn")]
+fn try_yield_sleep<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    thread_id: u32,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    let mut yielding = SuspendedGuestThread {
+        thread_id,
+        thread_handle: running_thread
+            .borrow()
+            .and_then(|(id, handle)| (id == thread_id).then_some(handle)),
+        regs: capture_mips_gprs(uc),
+        pc: read_mips_reg(uc, RegisterMIPS::RA),
+    };
+    yielding.regs[2] = 0;
+
+    if let Some(callout) = pending_returns.borrow_mut().pop() {
+        kernel.record_thread_yield();
+        yielding.thread_handle = Some(callout.thread_handle);
+        *suspended_thread.borrow_mut() = Some(yielding);
+
+        let mut creator_regs = callout.creator_regs;
+        creator_regs[2] = callout.thread_handle;
+        restore_mips_gprs(uc, &creator_regs);
+        *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        let _ = update_user_kdata_current_ids(
+            uc,
+            callout.creator_thread_id,
+            kernel.current_process_id(),
+        );
+        *running_thread.borrow_mut() = None;
+        let writes = [
+            uc.reg_write(RegisterMIPS::V0, u64::from(callout.thread_handle)),
+            uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc)),
+            uc.reg_write(RegisterMIPS::RA, u64::from(callout.return_pc)),
+        ];
+        if writes.into_iter().any(|write| write.is_err()) {
+            let _ = uc.emu_stop();
+        }
+        return true;
+    }
+
+    let Some(resume) = suspended_thread.borrow_mut().take() else {
+        return false;
+    };
+
+    kernel.record_thread_yield();
+    *suspended_thread.borrow_mut() = Some(yielding);
+    activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &resume);
+    true
 }
 
 #[cfg(feature = "unicorn")]
@@ -5875,10 +5945,7 @@ fn try_block_wait_for_multiple_objects<D>(
         });
         *running_thread.borrow_mut() = None;
         if let Some(suspended) = suspended_thread.borrow_mut().take() {
-            *current_thread_id.borrow_mut() = suspended.thread_id;
-            let _ =
-                update_user_kdata_current_ids(uc, suspended.thread_id, kernel.current_process_id());
-            restore_suspended_thread(uc, &suspended);
+            activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
             return true;
         }
     }
@@ -6029,10 +6096,7 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
         });
         *running_thread.borrow_mut() = None;
         if let Some(suspended) = suspended_thread.borrow_mut().take() {
-            *current_thread_id.borrow_mut() = suspended.thread_id;
-            let _ =
-                update_user_kdata_current_ids(uc, suspended.thread_id, kernel.current_process_id());
-            restore_suspended_thread(uc, &suspended);
+            activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
             return true;
         }
     }
@@ -6146,10 +6210,7 @@ fn try_block_serial_read_file<D>(
         });
         *running_thread.borrow_mut() = None;
         if let Some(suspended) = suspended_thread.borrow_mut().take() {
-            *current_thread_id.borrow_mut() = suspended.thread_id;
-            let _ =
-                update_user_kdata_current_ids(uc, suspended.thread_id, kernel.current_process_id());
-            restore_suspended_thread(uc, &suspended);
+            activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
             return true;
         }
     }
@@ -6247,6 +6308,9 @@ fn try_resume_blocked_wait<D>(
 
     let mut current = SuspendedGuestThread {
         thread_id: active_thread_id,
+        thread_handle: running_thread
+            .borrow()
+            .and_then(|(id, handle)| (id == active_thread_id).then_some(handle)),
         regs: capture_mips_gprs(uc),
         pc: read_mips_reg(uc, RegisterMIPS::RA),
     };
@@ -6654,9 +6718,7 @@ fn try_exit_guest_thread_callout<D>(
         let _ = uc.emu_stop();
         return true;
     };
-    *current_thread_id.borrow_mut() = suspended.thread_id;
-    let _ = update_user_kdata_current_ids(uc, suspended.thread_id, kernel.current_process_id());
-    restore_suspended_thread(uc, &suspended);
+    activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
     true
 }
 
@@ -6788,6 +6850,7 @@ fn try_enter_resumed_thread_callout<D>(
 
     let mut creator = SuspendedGuestThread {
         thread_id: creator_thread_id,
+        thread_handle: None,
         regs: capture_mips_gprs(uc),
         pc: read_mips_reg(uc, RegisterMIPS::RA),
     };
@@ -6861,6 +6924,9 @@ fn try_resume_blocked_get_message<D>(
 
     let mut current = SuspendedGuestThread {
         thread_id: active_thread_id,
+        thread_handle: running_thread
+            .borrow()
+            .and_then(|(id, handle)| (id == active_thread_id).then_some(handle)),
         regs: capture_mips_gprs(uc),
         pc: read_mips_reg(uc, RegisterMIPS::RA),
     };
@@ -6886,12 +6952,20 @@ fn try_resume_blocked_get_message<D>(
 }
 
 #[cfg(feature = "unicorn")]
-fn restore_suspended_thread<D>(
+fn activate_suspended_thread<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
+    kernel: &CeKernel,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     suspended: &SuspendedGuestThread,
 ) {
     use unicorn_engine::RegisterMIPS;
 
+    *current_thread_id.borrow_mut() = suspended.thread_id;
+    let _ = update_user_kdata_current_ids(uc, suspended.thread_id, kernel.current_process_id());
+    *running_thread.borrow_mut() = suspended
+        .thread_handle
+        .map(|handle| (suspended.thread_id, handle));
     restore_mips_gprs(uc, &suspended.regs);
     let _ = uc.reg_write(RegisterMIPS::PC, u64::from(suspended.pc));
 }

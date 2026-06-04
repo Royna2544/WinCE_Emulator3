@@ -22,6 +22,7 @@ pub struct SchedulerStats {
     pub wait_multiple_count: u64,
     pub msg_wait_count: u64,
     pub sleep_count: u64,
+    pub yield_count: u64,
     pub wait_acquired_count: u64,
     pub wait_timeout_count: u64,
     pub wait_failed_count: u64,
@@ -117,6 +118,11 @@ impl Scheduler {
 
     pub fn record_blocked_wait(&mut self) {
         self.stats.wait_block_count += 1;
+    }
+
+    pub fn record_thread_yield(&mut self) {
+        self.record_wait_attempt(SchedulerWaitKind::Sleep, 0, 0);
+        self.stats.yield_count += 1;
     }
 
     pub fn record_wait_wake(&mut self, reason: SchedulerWakeReason) {
@@ -627,5 +633,18 @@ mod tests {
             Some(sleep_wait)
         );
         scheduler.remove_blocked_wait(sleep_wait).unwrap();
+    }
+
+    #[test]
+    fn scheduler_records_thread_yield_as_sleep_attempt_without_blocking() {
+        let mut scheduler = Scheduler::default();
+
+        scheduler.record_thread_yield();
+
+        let stats = scheduler.stats();
+        assert_eq!(stats.sleep_count, 1);
+        assert_eq!(stats.yield_count, 1);
+        assert_eq!(stats.wait_block_count, 0);
+        assert_eq!(stats.wait_wake_count, 0);
     }
 }

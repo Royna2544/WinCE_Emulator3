@@ -1333,6 +1333,10 @@ impl CeKernel {
         self.scheduler.record_blocked_wait();
     }
 
+    pub fn record_thread_yield(&mut self) {
+        self.scheduler.record_thread_yield();
+    }
+
     pub fn record_resumed_single_wait(&mut self, result: u32) {
         self.scheduler
             .record_wait_wake(wait_result_to_wake_reason(result));

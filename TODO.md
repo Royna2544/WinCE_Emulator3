@@ -112,12 +112,17 @@
     candidates, and resume rechecks immutable filtered queue readiness before
     consuming the message and restoring the guest context. Bounded
     worker-thread `Sleep(ms)` calls now register timeout-only scheduler waits
-    and resume with a zero return after timeout expiry, matching the first
-    `schedule.c::NKSleep`/`ThreadSleep` shape at the Unicorn import boundary.
+    and resume with a zero return after timeout expiry, using the CE
+    `NKSleep` bounded timeout shape (`ms + 1` below `0xfffffffe`);
+    `SleepTillTick` now uses the same bridge with a one-tick timeout.
+    `Sleep(0)` now records a scheduler yield and, in the current one-slot
+    Unicorn context model, swaps to a saved peer context when one exists
+    without pumping messages or waiting for a tick.
   - Open gaps: full serial semantics beyond the first empty-read wake bridge,
     audio wake ownership, fuller timer ownership beyond message-queue posts
-    and bounded worker-thread sleeps, `Sleep(0)` yield, `Sleep(INFINITE)`,
-    `SleepTillTick`, long-sleep chunking, fuller child-process
+    and bounded worker-thread sleeps, full multi-thread run-queue ownership
+    beyond the one-slot `Sleep(0)` yield swap, `Sleep(INFINITE)` true suspend,
+    long-sleep chunking, fuller child-process
     lifecycle scheduling beyond handle signaling, blocked
     thread priority/fairness across all wait kinds beyond
     the current Unicorn bridge, moving saved `GetMessageW`/wait MIPS contexts

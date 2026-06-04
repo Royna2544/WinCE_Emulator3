@@ -176,13 +176,17 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     in `MAX_TIMEOUT` chunks, maps `Sleep(INFINITE)` to thread suspend, maps
     `Sleep(0)` to `ThreadYield`, and implements `NKSleepTillTick` as
     `ThreadSleep(1)`. v3 now has the first worker-thread Unicorn bridge for
-    bounded `Sleep(ms)`: it registers a timeout-only scheduler wait, switches
-    away from the sleeping worker when another saved context is available, and
-    resumes the worker with a zero return after timeout expiry. `Sleep(0)`,
-    `Sleep(INFINITE)`, `SleepTillTick`, long-sleep chunking, and normal
-    scheduler-owned main-thread run-queue state remain open. The first
-    serial-read bridge is
-    anchored to `SERDEV\serial.c`, CE comm `ReadFile` behavior through
+    bounded `Sleep(ms)` and `SleepTillTick`: bounded `Sleep` uses the CE
+    `ms + 1` rule below `0xfffffffe`, `SleepTillTick` uses a one-tick timeout,
+    the bridge registers a timeout-only scheduler wait, switches away from the
+    sleeping worker when another saved context is available, and resumes the
+    worker with a zero return after timeout expiry. `Sleep(0)` now follows
+    the same `NKSleep` branch by recording a scheduler yield and swapping
+    between the active guest context and the currently saved peer context when
+    the Unicorn bridge has one available; full scheduler-owned run queues,
+    `Sleep(INFINITE)`, and long-sleep chunking remain open. The first
+    serial-read bridge is anchored to `SERDEV\serial.c`, CE comm `ReadFile`
+    behavior through
     `DEVCORE\devfile.c`, and the same scheduler wait ownership rule: empty
     serial `ReadFile` calls can register a scheduler `SerialRead` wait by COM
     handle, remote serial injection queues candidate wait ids, and resumed

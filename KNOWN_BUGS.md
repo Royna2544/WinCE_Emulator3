@@ -591,10 +591,12 @@
     Unicorn `GetMessageW` calls now also register in that scheduler
     message-wait queue with their original filters and recheck filtered GWE
     message readiness before consuming the message on resume. Bounded
-    worker-thread `Sleep(ms)` calls now register timeout-only scheduler waits
-    and resume with zero after timeout expiry, but `Sleep(0)` yield,
-    `Sleep(INFINITE)`, `SleepTillTick`, long sleeps, and main-thread run-queue
-    ownership remain partial. Remote
+    worker-thread `Sleep(ms)` calls now use the CE bounded timeout shape and
+    register timeout-only scheduler waits; `SleepTillTick` uses the same
+    bridge with a one-tick timeout. `Sleep(0)` now records a scheduler yield
+    and swaps with a saved peer context when the current Unicorn bridge has one
+    available, but full CE run-queue ownership, `Sleep(INFINITE)`, long
+    sleeps, and main-thread scheduler ownership remain partial. Remote
     serial/NMEA injection now queues registered serial-read waiters by COM
     handle, and parked raw serial `ReadFile` can resume by streaming bytes into
     the original guest buffer. Full serial stack semantics, audio wake model,

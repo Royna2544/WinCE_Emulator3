@@ -418,17 +418,28 @@
   `Sleep(ms)` bridge. CE `schedule.c` implements `NKSleep` via
   `ThreadSleep`/`PutThreadToSleep`, with bounded sleeps entering the kernel
   sleep list, `Sleep(0)` yielding, `Sleep(INFINITE)` suspending the current
-  thread, and `NKSleepTillTick` sleeping one tick. v3 now registers bounded
-  raw Unicorn `Sleep(ms)` calls from guest worker-thread contexts as
-  timeout-only scheduler waits, switches back to an available saved context,
-  and resumes the sleeping worker with return value `0` after the scheduler
-  timeout expires. Run summaries now include `sched_sleep_count`. Focused
-  coverage: `scheduler_selects_timeout_only_sleep_wait_after_timeout`, plus
-  the existing blocked-wait scheduler tests. `cargo check --features
-  unicorn,trace,win32-desktop` and `basic_subsystems` pass with the existing
-  non-fatal Windows incremental-finalize warning. `Sleep(0)`, `Sleep(INFINITE)`,
-  `SleepTillTick`, long-sleep chunking, and scheduler-owned main-thread
-  run-queue state remain open.
+  thread, and `NKSleepTillTick` sleeping one tick. v3 now centralizes that CE
+  sleep request shape: bounded `Sleep(ms)` below `0xfffffffe` uses the CE
+  `ms + 1` timeout, `SleepTillTick` uses a one-tick timeout, and raw
+  host-side dispatch avoids blocking the host for `Sleep(INFINITE)`. The
+  Unicorn bridge registers bounded raw `Sleep(ms)` and `SleepTillTick` calls
+  from guest worker-thread contexts as timeout-only scheduler waits, switches
+  back to an available saved context, and resumes the sleeping worker with
+  return value `0` after the scheduler timeout expires. `Sleep(0)` now records
+  a scheduler yield and swaps to a saved peer context when the current
+  one-slot Unicorn bridge has one available; the no-peer path still returns
+  immediately through raw dispatch. Run summaries now include
+  `sched_sleep_count` and `sched_yield_count`. Focused coverage:
+  `ce_sleep_request_matches_nksleep_timeout_shape`,
+  `scheduler_selects_timeout_only_sleep_wait_after_timeout`,
+  `scheduler_records_thread_yield_as_sleep_attempt_without_blocking`, and the raw
+  `coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics`
+  `Sleep`/`SleepTillTick` path. `cargo check --features
+  unicorn,trace,win32-desktop` and focused tests pass with the existing
+  non-fatal Windows incremental-finalize warning. Full scheduler-owned run
+  queues beyond the current one-slot yield swap, `Sleep(INFINITE)` true
+  suspend, long-sleep chunking, and scheduler-owned main-thread run-queue
+  state remain open.
 - Scheduler/device wake ownership now has a first serial-read slice. The
   `Scheduler` can register blocked `SerialRead` waits by COM handle and queue
   pending wake candidates when remote serial/NMEA input arrives; serial device

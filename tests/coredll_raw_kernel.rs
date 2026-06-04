@@ -17,10 +17,10 @@ use wince_emulation_v3::{
             ORD_LOAD_LIBRARY_W, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR,
             ORD_OPEN_EVENT_W, ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY,
             ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD, ORD_SET_LAST_ERROR,
-            ORD_SET_THREAD_PRIORITY, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SLEEP, ORD_SUSPEND_THREAD,
-            ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS, ORD_TLS_GET_VALUE,
-            ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_FOR_MULTIPLE_OBJECTS,
-            ORD_WAIT_FOR_SINGLE_OBJECT,
+            ORD_SET_THREAD_PRIORITY, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SLEEP, ORD_SLEEP_TILL_TICK,
+            ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS,
+            ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION,
+            ORD_WAIT_FOR_MULTIPLE_OBJECTS, ORD_WAIT_FOR_SINGLE_OBJECT,
         },
         gwe::{Message, QS_POSTMESSAGE},
         kernel::{CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel},
@@ -428,6 +428,36 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     assert!(matches!(
         table
             .dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id, ORD_SLEEP, [0],),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    let stats = kernel.scheduler_stats();
+    assert_eq!(stats.sleep_count, 1);
+    assert_eq!(stats.yield_count, 1);
+    assert_eq!(stats.wait_block_count, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SLEEP,
+            [INFINITE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SLEEP_TILL_TICK,
+            [],
+        ),
         CoredllDispatch::Returned {
             value: CoredllValue::U32(0),
             ..

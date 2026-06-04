@@ -14,6 +14,23 @@ pub const INFINITE: u32 = 0xffff_ffff;
 pub const WAIT_OBJECT_0: u32 = 0;
 pub const WAIT_TIMEOUT: u32 = 258;
 pub const WAIT_FAILED: u32 = 0xffff_ffff;
+const CE_SLEEP_LONG_BOUND: u32 = 0xffff_fffe;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CeSleepRequest {
+    Yield,
+    Suspend,
+    Bounded(u32),
+}
+
+pub fn ce_sleep_request(ms: u32) -> CeSleepRequest {
+    match ms {
+        0 => CeSleepRequest::Yield,
+        INFINITE => CeSleepRequest::Suspend,
+        1..CE_SLEEP_LONG_BOUND => CeSleepRequest::Bounded(ms + 1),
+        CE_SLEEP_LONG_BOUND => CeSleepRequest::Bounded(CE_SLEEP_LONG_BOUND),
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct KernelTimer {
@@ -22,6 +39,26 @@ pub struct KernelTimer {
     pub message: u32,
     pub due_ms: u32,
     pub period_ms: Option<u32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CeSleepRequest, INFINITE, ce_sleep_request};
+
+    #[test]
+    fn ce_sleep_request_matches_nksleep_timeout_shape() {
+        assert_eq!(ce_sleep_request(0), CeSleepRequest::Yield);
+        assert_eq!(ce_sleep_request(1), CeSleepRequest::Bounded(2));
+        assert_eq!(
+            ce_sleep_request(0xffff_fffd),
+            CeSleepRequest::Bounded(0xffff_fffe)
+        );
+        assert_eq!(
+            ce_sleep_request(0xffff_fffe),
+            CeSleepRequest::Bounded(0xffff_fffe)
+        );
+        assert_eq!(ce_sleep_request(INFINITE), CeSleepRequest::Suspend);
+    }
 }
 
 impl Default for TimerSystem {
