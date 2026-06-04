@@ -925,7 +925,8 @@
   GWE timeout logic instead of running the receiver shortcut. The caller gets a
   zero return, the optional result pointer is left untouched, and the receiver
   queue is not left with a stale sent message. Focused coverage:
-  `coredll_raw_send_message_timeout_zero_cross_thread_expires_transaction`.
+  `coredll_raw_send_message_timeout_zero_cross_thread_expires_transaction` and
+  eVC fixture `168_sendmessage_timeout_zero_cross_thread`.
 - Unicorn raw `SendMessageW`/`SendMessageTimeoutW` now has the first real
   cross-thread receiver-context guest WNDPROC path. Same-process sends to a
   guest WNDPROC create a GWE sent-message transaction, activate it on the
