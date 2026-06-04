@@ -495,8 +495,11 @@
     stack, WNDPROC result completion, and receiver-terminated completion for
     destroyed targets; raw receiver `DispatchMessageW` stores the dispatch
     result back into that transaction. Timeout expiry now marks queued timed
-    sends result-ready and removes them from receiver retrieval. The bounded
-    `target\sync_send_transaction_*` probe stopped at `pc=0x00b4bc24` with no
+    sends result-ready and removes them from receiver retrieval; raw
+    `SendMessageTimeout(..., timeout=0)` across threads now creates and
+    immediately expires the same transaction instead of executing the receiver
+    shortcut. The bounded `target\sync_send_transaction_*` probe stopped at
+    `pc=0x00b4bc24` with no
     render milestones and an all-zero framebuffer body, and the bounded
     `target\send_timeout_expiry_*` probe stopped at `pc=0x00339c3c` with no
     render milestones and an all-zero framebuffer body. Unicorn raw

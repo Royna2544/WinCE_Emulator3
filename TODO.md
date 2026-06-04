@@ -357,7 +357,9 @@
        now exists for blocking sends, and raw receiver `DispatchMessageW`
        stores the WNDPROC result back into that transaction. Timeout expiry now
        marks queued timed sends result-ready and removes them from receiver
-       retrieval. The first Unicorn raw-send path now runs same-process
+       retrieval; raw `SendMessageTimeout(..., timeout=0)` across threads now
+       creates and expires that transaction immediately instead of running the
+       receiver shortcut. The first Unicorn raw-send path now runs same-process
        cross-thread guest WNDPROCs in the receiver context and restores the
        sender result. `GetQueueStatus` changed-bit tracking and
        `MsgWaitForMultipleObjectsEx` `MWMO_INPUTAVAILABLE` semantics now cover

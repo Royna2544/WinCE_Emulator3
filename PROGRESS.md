@@ -920,6 +920,12 @@
   `heap_live=5948/2767663B`, no render milestones, and an all-zero framebuffer
   body. Live sender parking/resume and receiver-context guest execution remain
   open.
+- Raw `SendMessageTimeout(..., timeout=0)` across threads now uses the same
+  CE-style sent-message transaction path, then immediately expires through the
+  GWE timeout logic instead of running the receiver shortcut. The caller gets a
+  zero return, the optional result pointer is left untouched, and the receiver
+  queue is not left with a stale sent message. Focused coverage:
+  `coredll_raw_send_message_timeout_zero_cross_thread_expires_transaction`.
 - Unicorn raw `SendMessageW`/`SendMessageTimeoutW` now has the first real
   cross-thread receiver-context guest WNDPROC path. Same-process sends to a
   guest WNDPROC create a GWE sent-message transaction, activate it on the

@@ -5013,6 +5013,41 @@ fn coredll_raw_get_message_expires_timed_out_cross_thread_send() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_send_message_timeout_zero_cross_thread_expires_transaction() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let sender_thread = 50;
+    let receiver_thread = 51;
+    let result_ptr = 0xb200;
+    memory.map_words(result_ptr, 1);
+    memory.write_u32(result_ptr, 0xfeed_cafe)?;
+
+    let hwnd =
+        kernel.create_window_ex_w(receiver_thread, "SYNC_SEND_TIMEOUT_RAW", "", None, 0, 0, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            sender_thread,
+            ORD_SEND_MESSAGE_TIMEOUT,
+            [hwnd, WM_USER + 58, 0x58, 0x59, 0, 0, result_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(result_ptr)?, 0xfeed_cafe);
+    assert!(kernel.gwe.sent_message(1).is_none());
+    assert_eq!(kernel.gwe.stats().send_transaction_timeout_count, 1);
+    assert!(kernel.gwe.get_message(receiver_thread).is_none());
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_send_message_records_nc_destroy_lifecycle() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;

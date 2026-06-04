@@ -519,14 +519,17 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `MessageTimeout` comment and `smfTimeout` flag now map to GWE timeout
     expiry: non-result-ready sent transactions compare the current tick against
     the message timestamp plus timeout, set `SMF_TIMEOUT|SMF_RESULT_READY`,
-    leave a zero result, and leave receiver retrieval. Unicorn raw
-    `SendMessageW`/`SendMessageTimeoutW` now uses that transaction state for
-    same-process cross-thread guest WNDPROCs: the receiver thread becomes the
-    active CE thread for the guest WNDPROC callout, the sender MIPS context is
-    restored after the WNDPROC result is captured, and the result flows back to
-    the sender and optional timeout result pointer. Full scheduler-owned sender
-    parking, reply wakeups, reentrant cross-thread scheduling, and destroyed-
-    target edge behavior remain open.
+    leave a zero result, and leave receiver retrieval. Raw
+    `SendMessageTimeout(..., timeout=0)` across threads now goes through the
+    same sent-transaction path and expires immediately instead of running the
+    receiver shortcut. Unicorn raw `SendMessageW`/`SendMessageTimeoutW` now
+    uses that transaction state for same-process cross-thread guest WNDPROCs:
+    the receiver thread becomes the active CE thread for the guest WNDPROC
+    callout, the sender MIPS context is restored after the WNDPROC result is
+    captured, and the result flows back to the sender and optional timeout
+    result pointer. Full scheduler-owned sender parking, reply wakeups,
+    reentrant cross-thread scheduling, and destroyed-target edge behavior
+    remain open.
   - CE SDK headers define `CREATESTRUCTW` as
     `lpCreateParams`, `hInstance`, `hMenu`, `hwndParent`, `cy`, `cx`, `y`, `x`,
     `style`, `lpszName`, `lpszClass`, and `dwExStyle`, and define

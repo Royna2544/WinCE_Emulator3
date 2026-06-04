@@ -12825,7 +12825,37 @@ fn send_message_timeout_raw<M: CoredllGuestMemory>(
     let msg = raw_arg(args, 1);
     let wparam = raw_arg(args, 2);
     let lparam = raw_arg(args, 3);
+    let timeout_ms = raw_arg(args, 5);
     let result_ptr = raw_arg(args, 6);
+    let Some(target_thread) = kernel
+        .gwe
+        .window(hwnd)
+        .filter(|window| !window.destroyed)
+        .map(|window| window.thread_id)
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    };
+    if target_thread != thread_id && timeout_ms == 0 {
+        let Some(send_id) =
+            kernel.begin_cross_thread_send_message_w(thread_id, hwnd, msg, wparam, lparam, Some(0))
+        else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+            return 0;
+        };
+        let expired = kernel
+            .gwe
+            .expire_timed_out_sent_messages(kernel.timers.tick_count());
+        if expired.contains(&send_id) {
+            let _ = kernel.take_completed_send_message_result(send_id);
+        }
+        kernel.threads.set_last_error(thread_id, 0);
+        return 0;
+    }
     let Some(result) = kernel.send_message_w(hwnd, msg, wparam, lparam) else {
         kernel
             .threads
