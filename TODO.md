@@ -18,8 +18,10 @@
   `target\unicorn_realtime_timer_virtual_30s_*`, and
   `target\hide_update_clear_virtual_20s_*`, with follow-up timer-scope probe
   `target\timer_scope_virtual_30s_*` and TimerProc bridge probe
-  `target\timer_callback_virtual_30s_*`, prove guest GDI now presents a real 800x480
-  memory surface to a window HDC:
+  `target\timer_callback_virtual_30s_*`, plus the latest direct-UpdateWindow
+  effective-visibility probe
+  `target\update_effective_visibility_virtual_150s_*`, prove guest GDI now
+  presents a real 800x480 memory surface to a window HDC:
   `BitBlt(dst=0x02020008, dst_memdc=false, dst_hwnd=0x00020008,
   src=0x000a0044, src_memdc=true)`. The framebuffer dump is fully populated
   (`575800` nonzero pixels in the latest run) and
@@ -51,7 +53,12 @@
   screen or fake host paint. The next presentation frontier is why later
   offscreen DIB/StretchBlt/BitBlt composition into an 800x54 memory surface is
   not copied to a display HDC, and why invalidation is landing on hidden or
-  effectively invisible child HWND `0x0002006c`.
+  effectively invisible child HWND `0x0002006c`. Direct raw/kernel
+  `UpdateWindow` now uses effective `IsWindowVisible` ancestry, so forcing
+  `WM_PAINT` into that hidden child is closed as an invalid shortcut. Continue
+  by tracing the generic path that should show or present the composed
+  offscreen 800x54 surface: `WINDOWPOS`/`ShowWindow` state, MFC idle/message
+  ordering, resource replay, or screen-HDC blit ownership.
 - Decide the safe host-write policy for mounted external dumps. The refreshed
   `target\createfile_access_virtual_150s_files.txt` proves iNavi opens
   `SDMMC Disk\iNaviData\config.bin` as `GENERIC_WRITE` + `OPEN_EXISTING`, but

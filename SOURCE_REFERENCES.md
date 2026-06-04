@@ -61,6 +61,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `target\hide_update_clear_virtual_20s_*` confirms immediately hidden
     `AfxWnd42u` children no longer carry full-screen create-time dirty
     rectangles.
+  - Direct raw/kernel `UpdateWindow` now uses effective HWND visibility through
+    the same ancestor-aware model as `IsWindowVisible`, rather than only the
+    target's direct `WS_VISIBLE` bit. This keeps CE paint forcing from sending
+    `WM_PAINT` into a child whose parent is hidden; mounted evidence
+    `target\update_effective_visibility_virtual_150s_*` confirms the current
+    iNavi `0x0002006c` child remains a hidden offscreen-composition target,
+    not a window v3 should force-paint.
 
 - Explorer/COREDLL startup ordinals:
   `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\MIPSII\RETAIL\coredll.def`,
@@ -694,6 +701,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     path reaches real `BeginPaint`/`EndPaint`; the remaining display frontier
     is generic GDI/DC presentation from memory-composed DIB surfaces to a
     screen/window HDC, not synthetic paint generation itself.
+  - Direct `UpdateWindow` uses effective ancestor visibility before sending
+    the synchronous erase/paint path. Focused raw coverage keeps a child under
+    a hidden parent dirty until the parent becomes visible again, then verifies
+    `UpdateWindow` clears the pending update through the normal paint path.
 
 - Display surface boundary:
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\gpe.h` and

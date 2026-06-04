@@ -2940,6 +2940,118 @@ fn coredll_raw_is_window_visible_observes_hidden_ancestors() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_update_window_observes_hidden_ancestors() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let rect_ptr = 0x2_1000;
+    memory.map_words(rect_ptr, 4);
+
+    let parent = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "PARENT",
+        "parent",
+        None,
+        1,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(10, 20, 300, 200),
+    );
+    let child = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "CHILD",
+        "child",
+        Some(parent),
+        2,
+        WS_VISIBLE | WS_CHILD,
+        0,
+        Rect::from_origin_size(5, 6, 70, 80),
+    );
+    assert!(kernel.gwe.validate_window(child));
+    assert!(kernel.gwe.invalidate_window(child, None, true));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHOW_WINDOW,
+            [parent, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(!kernel.gwe.is_window_visible(child));
+    assert!(kernel.gwe.update_rect(child).is_some());
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_UPDATE_WINDOW,
+            [child],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(
+        kernel.gwe.update_rect(child).is_some(),
+        "UpdateWindow must not send WM_PAINT to an effectively hidden child"
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_UPDATE_RECT,
+            [child, rect_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHOW_WINDOW,
+            [parent, 5],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(kernel.gwe.is_window_visible(child));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_UPDATE_WINDOW,
+            [child],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(kernel.gwe.update_rect(child).is_none());
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_map_dialog_rect_uses_dialog_base_units() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
@@ -3831,6 +3943,19 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
             &mut kernel,
             &mut memory,
             thread_id,
+            ORD_SHOW_WINDOW,
+            [parent, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_UPDATE_WINDOW,
             [child],
         ),
@@ -3862,6 +3987,19 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHOW_WINDOW,
+            [parent, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
             ..
         }
     ));

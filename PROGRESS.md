@@ -9,6 +9,25 @@
 
 ## Confirmed
 
+- Direct `UpdateWindow` now observes effective ancestor visibility instead of
+  only the target HWND's direct visible bit. This keeps CE/MFC paint forcing
+  generic: a child under a hidden parent keeps its pending update region for a
+  later visible state, and v3 does not manufacture a paint into an effectively
+  invisible subtree. Focused coverage:
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_update_window_observes_hidden_ancestors`, the full raw GWE test
+  binary, `cargo test --features unicorn,trace,win32-desktop ce::gwe::tests`,
+  full `cargo test --features unicorn,trace,win32-desktop`, and
+  `cargo build --features unicorn,trace,win32-desktop` pass with the known
+  non-fatal Windows incremental-finalize warning. A mounted 150 s virtual/tap
+  probe wrote `target\update_effective_visibility_virtual_150s_*`; it remains
+  memory/file-I/O stable (`heap_live=13697/13300954B`,
+  `virtual_live=3/196608B`, `host_open=665`,
+  `host_read=80198/4056903B`, `mem_open=3`, `max_read=685080`) and confirms
+  the same real frontier: child HWND `0x0002006c` is still effectively hidden,
+  app composition continues into offscreen memory DC `0x000a3f38`, and no later
+  display-HDC blit or iNavi render milestone appears. This closes forced
+  hidden-child painting as a valid path; it does not yet move post-splash UI.
 - CE/GWE timers are now scoped by owner thread/message queue plus optional
   `HWND` plus timer id instead of by id globally. This follows
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`, where

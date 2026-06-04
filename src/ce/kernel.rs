@@ -1645,10 +1645,7 @@ impl CeKernel {
             return false;
         }
         if let Some(update) = self.gwe.update_rect(hwnd) {
-            let Some(window) = self.gwe.window(hwnd) else {
-                return false;
-            };
-            if !window.visible || window.style & crate::ce::gwe::WS_VISIBLE == 0 {
+            if !self.gwe.is_window_visible(hwnd) {
                 return true;
             }
             if update.erase {

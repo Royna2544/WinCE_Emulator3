@@ -108,6 +108,18 @@
     memory-stable and the framebuffer remains populated (`1151398` nonzero RGB
     bytes), so stale hidden-child paint state is closed as a likely cause of
     the post-splash stall.
+    Direct-UpdateWindow visibility follow-up:
+    `target\update_effective_visibility_virtual_150s_*` confirms raw/kernel
+    `UpdateWindow` now honors effective ancestor visibility. The latest run
+    remains stable (`heap_live=13697/13300954B`,
+    `virtual_live=3/196608B`, `host_open=665`,
+    `host_read=80198/4056903B`, `mem_open=3`,
+    `max_read=685080`) and reaches the same frontier: HWND `0x0002006c` is a
+    hidden child (`style=0x40000000`, `upd=true`, `erase=true`), app drawing
+    composes into offscreen memory DC `0x000a3f38`, and no later display-HDC
+    blit or iNavi render milestone appears. Forcing hidden-child paint is no
+    longer a valid suspect; investigate why the app never shows or presents
+    that composed surface through normal GWE/GDI state.
     Historical evidence: the mounted virtual run with dumped runtime DLLs
     and real sibling app DLLs wrote `target\inavi_trampoline_virtual_*`. It
     preloaded `AuthLibrary.dll`, `TpSysAuth.dll`, `mMbcAuth.dll`,
