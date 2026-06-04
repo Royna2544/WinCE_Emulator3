@@ -1558,6 +1558,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_MOVE_FILE_W => Some(CoredllValue::Bool(move_file_w_raw(
             kernel, memory, thread_id, args,
         ))),
+        ORD_COPY_FILE_W => Some(CoredllValue::Bool(copy_file_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_SET_FILE_ATTRIBUTES_W => Some(CoredllValue::Bool(set_file_attributes_w_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -1716,6 +1719,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 2),
         ) as u32)),
+        ORD_STRING_CCH_CAT_W => Some(CoredllValue::U32(string_cch_cat_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ))),
         ORD_STRING_CB_CAT_W => Some(CoredllValue::U32(string_cb_cat_w_raw(
             kernel,
             memory,
@@ -3767,10 +3778,31 @@ fn string_cb_cat_w_raw<M: CoredllGuestMemory>(
     cb_dest: u32,
     src: u32,
 ) -> u32 {
-    if dest == 0 || src == 0 || cb_dest == 0 {
+    string_cat_w_raw(kernel, memory, thread_id, dest, (cb_dest / 2) as usize, src)
+}
+
+fn string_cch_cat_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest: u32,
+    cch_dest: u32,
+    src: u32,
+) -> u32 {
+    string_cat_w_raw(kernel, memory, thread_id, dest, cch_dest as usize, src)
+}
+
+fn string_cat_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest: u32,
+    cch_dest: usize,
+    src: u32,
+) -> u32 {
+    if dest == 0 || src == 0 || cch_dest == 0 {
         return STRSAFE_E_INVALID_PARAMETER;
     }
-    let cch_dest = (cb_dest / 2) as usize;
     let Some(dest_len) = guest_wide_len_bounded(kernel, memory, thread_id, dest, cch_dest) else {
         return STRSAFE_E_INVALID_PARAMETER;
     };
@@ -4580,6 +4612,38 @@ fn move_file_w_raw<M: CoredllGuestMemory>(
         return false;
     };
     match kernel.move_file_w(&existing_path, &new_path) {
+        Ok(()) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            true
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+            false
+        }
+    }
+}
+
+fn copy_file_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let Some(existing_path) = read_guest_wide_arg(memory, raw_arg(args, 0)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Some(new_path) = read_guest_wide_arg(memory, raw_arg(args, 1)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    match kernel.copy_file_w(&existing_path, &new_path, raw_arg(args, 2) != 0) {
         Ok(()) => {
             kernel.threads.set_last_error(thread_id, 0);
             true
@@ -13532,6 +13596,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "iswctype",
     "MultiByteToWideChar",
     "WideCharToMultiByte",
+    "StringCchCatW",
     "StringCbCatW",
     "CharLowerW",
     "CharLowerBuffW",
@@ -13564,6 +13629,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "RegQueryValueExW",
     "RegSetValueExW",
     "CreateFileW",
+    "CopyFileW",
     "FindFirstFileW",
     "FindClose",
     "ReadFile",

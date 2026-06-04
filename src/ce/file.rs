@@ -298,8 +298,8 @@ impl HostFileSystem {
         }
     }
 
-    pub fn from_storage(root: impl Into<PathBuf>, storage: StorageConfig) -> Self {
-        let mut fs = Self::new(root);
+    pub fn from_storage(storage: StorageConfig) -> Self {
+        let mut fs = Self::new(storage.root.host_root);
         fs.object_store = ObjectStore {
             total_bytes: storage.object_store.total_bytes(),
             free_bytes: storage.object_store.free_bytes(),
@@ -331,8 +331,10 @@ impl HostFileSystem {
         }
         let total_bytes = mount.total_bytes();
         let free_bytes = mount.free_bytes();
-        let host_root = mount.host_root;
-        let writable = mount.writable && host_root.is_some();
+        let host_root = mount
+            .host_root
+            .or_else(|| Some(default_mount_host_root(&self.root, &guest_root)));
+        let writable = mount.writable;
         if !self.mounts.contains_key(&guest_root) {
             self.mount_order.push(guest_root.clone());
         }
@@ -623,6 +625,41 @@ impl HostFileSystem {
             path: existing,
             source,
         })
+    }
+
+    pub fn copy_file_w(
+        &self,
+        existing_path: &str,
+        new_path: &str,
+        fail_if_exists: bool,
+    ) -> Result<()> {
+        if self
+            .mount_for_guest_path(new_path)
+            .is_some_and(|mount| !mount.writable)
+        {
+            return Err(Error::InvalidArgument(format!(
+                "guest mount is read-only: {new_path}"
+            )));
+        }
+        let existing = self.translate_guest_path(existing_path)?;
+        let new = self.translate_guest_path(new_path)?;
+        if fail_if_exists && new.exists() {
+            return Err(Error::InvalidArgument(format!(
+                "destination exists: {new_path}"
+            )));
+        }
+        if let Some(parent) = new.parent() {
+            fs::create_dir_all(parent).map_err(|source| Error::Io {
+                path: parent.to_path_buf(),
+                source,
+            })?;
+        }
+        fs::copy(&existing, &new)
+            .map(|_| ())
+            .map_err(|source| Error::Io {
+                path: existing,
+                source,
+            })
     }
 
     pub fn set_file_attributes_w(&self, guest_path: &str, attributes: u32) -> Result<()> {
@@ -983,6 +1020,14 @@ fn strip_host_prefix(host_path: &Path, host_root: &Path) -> Option<PathBuf> {
         .strip_prefix(canonical_root)
         .ok()
         .map(Path::to_path_buf)
+}
+
+fn default_mount_host_root(root: &Path, guest_root: &str) -> PathBuf {
+    let mut path = root.to_path_buf();
+    for part in guest_root.split('/').filter(|part| !part.is_empty()) {
+        path.push(part);
+    }
+    path
 }
 
 fn normalize_guest_path(guest_path: &str) -> String {
@@ -1507,15 +1552,21 @@ mod tests {
     }
 
     #[test]
-    fn hostless_mount_is_empty_and_read_only() {
-        let mut fs = HostFileSystem::new(".");
+    fn mount_without_host_root_inherits_default_root_backing() {
+        let root =
+            std::env::temp_dir().join(format!("wince_file_inherited_mount_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("Windows")).unwrap();
+        fs::write(root.join("Windows").join("shell.txt"), b"shell").unwrap();
+
+        let mut fs = HostFileSystem::new(&root);
         fs.mount(MountConfig {
             name: Some("windows".to_owned()),
             guest_root: "\\Windows".to_owned(),
             host_root: None,
             total_mbytes: 2048,
             free_mbytes: 1024,
-            writable: true,
+            writable: false,
             removable: false,
             system: true,
             hidden: false,
@@ -1527,11 +1578,53 @@ mod tests {
             data.attributes,
             FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_SYSTEM
         );
-        assert!(fs.find_first_file_w("\\Windows\\*").is_err());
+        let (_id, data) = fs.find_first_file_w("\\Windows\\*").unwrap();
+        assert_eq!(data.file_name, "shell.txt");
         assert!(
             fs.create_file_w("\\Windows\\x.txt", GENERIC_WRITE, CREATE_ALWAYS)
                 .is_err()
         );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn explicit_mount_host_root_overrides_default_root_backing() {
+        let root = std::env::temp_dir().join(format!(
+            "wince_file_mount_override_root_{}",
+            std::process::id()
+        ));
+        let override_root = std::env::temp_dir().join(format!(
+            "wince_file_mount_override_sd_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&override_root);
+        fs::create_dir_all(root.join("SDMMC Disk")).unwrap();
+        fs::create_dir_all(&override_root).unwrap();
+        fs::write(root.join("SDMMC Disk").join("which.txt"), b"default").unwrap();
+        fs::write(override_root.join("which.txt"), b"override").unwrap();
+
+        let mut fs = HostFileSystem::new(&root);
+        fs.mount(MountConfig {
+            name: Some("sdmmc".to_owned()),
+            guest_root: "\\SDMMC Disk".to_owned(),
+            host_root: Some(override_root.clone()),
+            total_mbytes: 8192,
+            free_mbytes: 4096,
+            writable: true,
+            removable: true,
+            system: false,
+            hidden: false,
+        });
+        let id = fs
+            .create_file_w("\\SDMMC Disk\\which.txt", GENERIC_READ, OPEN_EXISTING)
+            .unwrap();
+        assert_eq!(fs.read_file(id, 16).unwrap(), b"override");
+
+        fs.close(id).unwrap();
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(override_root).unwrap();
     }
 
     #[test]

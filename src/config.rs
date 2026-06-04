@@ -19,9 +19,15 @@ pub struct RuntimeConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct StorageConfig {
+    pub root: RootConfig,
     pub object_store: ObjectStoreConfig,
     #[serde(default)]
     pub mounts: Vec<MountConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RootConfig {
+    pub host_root: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -45,9 +51,15 @@ pub struct MountConfig {
 
 #[derive(Debug, Clone, Deserialize)]
 struct StorageToml {
+    root: Option<RootToml>,
     object_store: Option<ObjectStoreConfig>,
     #[serde(default)]
     mounts: Vec<MountToml>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RootToml {
+    host_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -105,6 +117,12 @@ impl StorageConfig {
                 .filter_map(MountConfig::from_toml)
                 .collect();
             Self {
+                root: RootConfig {
+                    host_root: parsed
+                        .root
+                        .and_then(|root| root.host_root)
+                        .unwrap_or_else(|| PathBuf::from(".")),
+                },
                 object_store: parsed.object_store.ok_or_else(|| {
                     Error::InvalidArgument(format!(
                         "{} is missing required [object_store]",
@@ -115,19 +133,20 @@ impl StorageConfig {
             }
         } else {
             Self {
+                root: RootConfig {
+                    host_root: PathBuf::from("."),
+                },
                 object_store: default_object_store(),
                 mounts: Vec::new(),
             }
         };
-        storage.finalize_mounts();
+        storage.finalize_root();
         Ok(storage)
     }
 
-    fn finalize_mounts(&mut self) {
-        for mount in &mut self.mounts {
-            if mount.host_root.is_none() {
-                mount.writable = false;
-            }
+    fn finalize_root(&mut self) {
+        if !self.root.host_root.is_dir() {
+            self.root.host_root = PathBuf::from(".");
         }
     }
 }
@@ -198,6 +217,7 @@ mod tests {
 
         assert_eq!(storage.object_store.total_mbytes, 256);
         assert_eq!(storage.object_store.free_mbytes, 128);
+        assert_eq!(storage.root.host_root, PathBuf::from("."));
         assert!(storage.mounts.is_empty());
     }
 
@@ -247,6 +267,7 @@ writable = true
         let storage = StorageConfig::load_or_default(Some(&path)).unwrap();
         assert_eq!(storage.object_store.total_mbytes, 64);
         assert_eq!(storage.object_store.free_mbytes, 32);
+        assert_eq!(storage.root.host_root, PathBuf::from("."));
         assert_eq!(storage.mounts.len(), 1);
         assert_eq!(storage.mounts[0].total_mbytes, 8192);
         assert_eq!(storage.mounts[0].free_mbytes, 4096);
@@ -254,6 +275,66 @@ writable = true
         assert!(storage.mounts[0].removable);
         assert!(!storage.mounts[0].system);
         assert!(!storage.mounts[0].hidden);
+
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn mount_toml_accepts_valid_root_host_root() {
+        let root =
+            std::env::temp_dir().join(format!("wince-mount-config-root-{}", std::process::id()));
+        let path = root.with_extension("toml");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            &path,
+            format!(
+                r#"
+[object_store]
+total_mbytes = 64
+free_mbytes = 32
+
+[root]
+host_root = "{}"
+"#,
+                root.display().to_string().replace('\\', "\\\\")
+            ),
+        )
+        .unwrap();
+
+        let storage = StorageConfig::load_or_default(Some(&path)).unwrap();
+        assert_eq!(storage.root.host_root, root);
+
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mount_toml_falls_back_for_missing_root_host_root() {
+        let missing = std::env::temp_dir().join(format!(
+            "wince-mount-config-missing-root-{}",
+            std::process::id()
+        ));
+        let path = missing.with_extension("toml");
+        let _ = fs::remove_dir_all(&missing);
+        fs::write(
+            &path,
+            format!(
+                r#"
+[object_store]
+total_mbytes = 64
+free_mbytes = 32
+
+[root]
+host_root = "{}"
+"#,
+                missing.display().to_string().replace('\\', "\\\\")
+            ),
+        )
+        .unwrap();
+
+        let storage = StorageConfig::load_or_default(Some(&path)).unwrap();
+        assert_eq!(storage.root.host_root, PathBuf::from("."));
 
         let _ = fs::remove_file(path);
     }

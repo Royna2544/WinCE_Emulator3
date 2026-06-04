@@ -4,9 +4,9 @@ use wince_emulation_v3::{
     ce::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
-            ORD_ATOI, ORD_CHAR_LOWER_W, ORD_CHAR_UPPER_W, ORD_CLOSE_HANDLE, ORD_CREATE_FILE_W,
-            ORD_DEVICE_IO_CONTROL, ORD_FCLOSE, ORD_FEOF, ORD_FGETS, ORD_FIND_CLOSE,
-            ORD_FIND_FIRST_FILE_W, ORD_FIND_NEXT_FILE_W, ORD_FLUSH_FILE_BUFFERS,
+            ORD_ATOI, ORD_CHAR_LOWER_W, ORD_CHAR_UPPER_W, ORD_CLOSE_HANDLE, ORD_COPY_FILE_W,
+            ORD_CREATE_FILE_W, ORD_DEVICE_IO_CONTROL, ORD_FCLOSE, ORD_FEOF, ORD_FGETS,
+            ORD_FIND_CLOSE, ORD_FIND_FIRST_FILE_W, ORD_FIND_NEXT_FILE_W, ORD_FLUSH_FILE_BUFFERS,
             ORD_FLUSH_INSTRUCTION_CACHE, ORD_FOPEN, ORD_FREAD, ORD_FREE, ORD_FSEEK, ORD_FTELL,
             ORD_GET_FILE_ATTRIBUTES_W, ORD_GET_FILE_SIZE, ORD_GET_MODULE_FILE_NAME_W,
             ORD_GET_PROCESS_HEAP, ORD_HEAP_ALLOC, ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE,
@@ -17,10 +17,10 @@ use wince_emulation_v3::{
             ORD_READ_FILE, ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_VALUE_W,
             ORD_REG_ENUM_VALUE_W, ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W,
             ORD_SECURITY_GEN_COOKIE2, ORD_SET_FILE_POINTER, ORD_SPRINTF, ORD_SRAND, ORD_STRCPY,
-            ORD_STRING_CB_CAT_W, ORD_STRTOK, ORD_STRTOUL, ORD_SWPRINTF, ORD_VIRTUAL_ALLOC,
-            ORD_VIRTUAL_FREE, ORD_VSWPRINTF, ORD_WCSDUP, ORD_WCSICMP, ORD_WCSNCPY, ORD_WCSNICMP,
-            ORD_WCSRCHR, ORD_WCSSTR, ORD_WFOPEN, ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE,
-            ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
+            ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W, ORD_STRTOK, ORD_STRTOUL, ORD_SWPRINTF,
+            ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSWPRINTF, ORD_WCSDUP, ORD_WCSICMP,
+            ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSRCHR, ORD_WCSSTR, ORD_WFOPEN,
+            ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         kernel::CeKernel,
@@ -651,6 +651,54 @@ fn coredll_raw_rand_uses_seeded_crt_sequence() -> Result<()> {
             ..
         }
     ));
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_string_cch_cat_w_appends_with_character_capacity() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let dest = 0x1_0000;
+    let src = 0x1_0100;
+    memory.map_halfwords(dest, 24);
+    memory.map_halfwords(src, 16);
+    memory.write_wide_z(dest, r"\Windows");
+    memory.write_wide_z(src, r"\Desktop");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_STRING_CCH_CAT_W,
+            [dest, 18, src],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(dest, 24), r"\Windows\Desktop");
+
+    memory.write_wide_z(dest, "abc");
+    memory.write_wide_z(src, "defghi");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_STRING_CCH_CAT_W,
+            [dest, 6, src],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0x8007_007a),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(dest, 16), "abcde");
     Ok(())
 }
 
@@ -2177,6 +2225,58 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         }
     ));
 
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_copy_file_w_copies_between_ce_paths() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("copy_file_w_raw");
+    fs::create_dir_all(&root).unwrap();
+    kernel.files.mount_guest_root("\\ResidentFlash", &root);
+    fs::write(root.join("source.txt"), b"copy payload").unwrap();
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let src = 0x1_0000;
+    let dest = 0x1_0100;
+    memory.map_halfwords(src, 64);
+    memory.map_halfwords(dest, 64);
+    memory.write_wide_z(src, r"\ResidentFlash\source.txt");
+    memory.write_wide_z(dest, r"\ResidentFlash\nested\dest.txt");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_COPY_FILE_W,
+            [src, dest, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        fs::read(root.join("nested").join("dest.txt")).unwrap(),
+        b"copy payload"
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_COPY_FILE_W,
+            [src, dest, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
     Ok(())
 }
 

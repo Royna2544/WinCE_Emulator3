@@ -2,6 +2,9 @@
 total_mbytes = 256
 free_mbytes = 128
 
+[root]
+host_root = "D:\\INAVI_Emulator\\EmulatorRoot"
+
 [[mounts]]
 name = "sdmmc"
 guest_root = "\\SDMMC Disk"

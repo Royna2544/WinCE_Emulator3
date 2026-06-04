@@ -150,7 +150,7 @@ impl CeKernel {
         Self {
             registry: Registry::from_dump(config.registry),
             devices: DeviceNamespace::from_config(config.devices),
-            files: HostFileSystem::from_storage(".", config.storage),
+            files: HostFileSystem::from_storage(config.storage),
             handles: HandleTable::default(),
             gwe: Gwe::default(),
             audio: AudioSystem::default(),
@@ -671,6 +671,16 @@ impl CeKernel {
 
     pub fn move_file_w(&self, existing_path: &str, new_path: &str) -> Result<()> {
         self.files.move_file_w(existing_path, new_path)
+    }
+
+    pub fn copy_file_w(
+        &self,
+        existing_path: &str,
+        new_path: &str,
+        fail_if_exists: bool,
+    ) -> Result<()> {
+        self.files
+            .copy_file_w(existing_path, new_path, fail_if_exists)
     }
 
     pub fn set_file_attributes_w(&self, path: &str, attributes: u32) -> Result<()> {
