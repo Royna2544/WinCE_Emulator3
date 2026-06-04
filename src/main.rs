@@ -20,7 +20,7 @@ use wince_emulation_v3::{
     config::RuntimeConfig,
     emulator::{
         memory::MemoryPerms,
-        unicorn::{UnicornDebugSnapshot, UnicornMips, UnicornRunLimits},
+        unicorn::{UnicornDebugSnapshot, UnicornMips, UnicornRunLimits, UnicornWindowSnapshot},
     },
     pe::PeImage,
 };
@@ -37,6 +37,7 @@ struct Args {
     desktop: DesktopMode,
     cpu_instruction_limit: usize,
     cpu_wall_clock_limit_ms: u64,
+    cpu_stop_pc: Option<u32>,
     startup_taps: Vec<(i32, i32)>,
     run_cpu: bool,
     monitor: bool,
@@ -90,6 +91,7 @@ fn main() -> Result<()> {
     );
 
     let mut cpu = UnicornMips::new()?;
+    cpu.set_dll_search_dirs(args.dll_search_dirs.clone());
     if args.image.is_none() {
         cpu.map_region(
             0x0001_0000,
@@ -107,7 +109,9 @@ fn main() -> Result<()> {
 
     let bootstrap_handles = if args.image.is_none() {
         let hwnd = kernel.gwe.create_window(1, "FakeCEBaseWindow", "");
-        let timer_id = kernel.timers.set_timer(Some(hwnd), None, 1000, WM_TIMER);
+        let timer_id = kernel
+            .timers
+            .set_timer(1, Some(hwnd), None, 1000, WM_TIMER, None);
         let wave_id = kernel.audio.open_wave_out(WaveFormat::pcm_16bit(2, 44_100));
         Some((hwnd, timer_id, wave_id))
     } else {
@@ -251,7 +255,7 @@ fn run_cpu_loop(
             UnicornRunLimits {
                 instruction_limit: args.cpu_instruction_limit,
                 wall_clock_limit_ms: args.cpu_wall_clock_limit_ms,
-                stop_pc: None,
+                stop_pc: args.cpu_stop_pc,
             },
         ) {
             if let Some(snapshot) = cpu.last_debug_snapshot() {
@@ -752,6 +756,17 @@ fn monitor_trace_text(snapshot: &UnicornDebugSnapshot, selector: &str) -> String
         "code" => push_monitor_records(&mut out, "code", &snapshot.last_code),
         "blocks" => push_monitor_records(&mut out, "blocks", &snapshot.last_blocks),
         "messages" | "msgs" => push_monitor_records(&mut out, "messages", &snapshot.last_messages),
+        "window-imports" | "winimports" => {
+            push_monitor_records(&mut out, "window imports", &snapshot.window_imports)
+        }
+        "presentation" | "present" | "presentation-imports" => push_monitor_records(
+            &mut out,
+            "presentation imports",
+            &snapshot.presentation_imports,
+        ),
+        "windows" | "wnd" => {
+            push_monitor_windows(&mut out, &snapshot.z_order, &snapshot.windows);
+        }
         "wndproc" => {
             push_monitor_records(&mut out, "wndproc returns", &snapshot.last_wndproc_returns);
             push_monitor_records(
@@ -761,6 +776,11 @@ fn monitor_trace_text(snapshot: &UnicornDebugSnapshot, selector: &str) -> String
             );
         }
         "render" => {
+            push_monitor_records(
+                &mut out,
+                "presentation imports",
+                &snapshot.presentation_imports,
+            );
             push_monitor_records(&mut out, "inavi display", &snapshot.last_inavi_display);
             push_monitor_records(
                 &mut out,
@@ -788,11 +808,60 @@ fn monitor_trace_text(snapshot: &UnicornDebugSnapshot, selector: &str) -> String
         other => {
             let _ = writeln!(
                 &mut out,
-                "  unknown trace kind `{other}`; use all/imports/milestones/counts/calls/code/blocks/messages/wndproc/render/files/files-full"
+                "  unknown trace kind `{other}`; use all/imports/milestones/counts/calls/code/blocks/messages/window-imports/presentation/windows/wndproc/render/files/files-full"
             );
         }
     }
     out
+}
+
+fn push_monitor_windows(out: &mut String, z_order: &[u32], windows: &[UnicornWindowSnapshot]) {
+    if !z_order.is_empty() {
+        let _ = write!(out, "  z-order:");
+        for hwnd in z_order {
+            let _ = write!(out, " 0x{hwnd:08x}");
+        }
+        let _ = writeln!(out);
+    }
+    if windows.is_empty() {
+        let _ = writeln!(out, "  windows: none");
+        return;
+    }
+    let _ = writeln!(out, "  windows:");
+    for window in windows {
+        let parent = window
+            .parent
+            .map(|hwnd| format!("0x{hwnd:08x}"))
+            .unwrap_or_else(|| "<none>".to_owned());
+        let _ = writeln!(
+            out,
+            "    0x{:08x} tid={} parent={} class=`{}` title=`{}` vis={} dead={} style=0x{:08x} ex=0x{:08x} upd={} erase={} rect={},{}-{},{} client={},{}-{},{} update={},{}-{},{} wndproc=0x{:08x}",
+            window.hwnd,
+            window.thread_id,
+            parent,
+            window.class_name,
+            window.title,
+            window.visible,
+            window.destroyed,
+            window.style,
+            window.ex_style,
+            window.update_pending,
+            window.erase_pending,
+            window.rect.left,
+            window.rect.top,
+            window.rect.right,
+            window.rect.bottom,
+            window.client_rect.left,
+            window.client_rect.top,
+            window.client_rect.right,
+            window.client_rect.bottom,
+            window.update_rect.left,
+            window.update_rect.top,
+            window.update_rect.right,
+            window.update_rect.bottom,
+            window.wndproc,
+        );
+    }
 }
 
 fn push_monitor_file_summary(
@@ -1143,6 +1212,7 @@ impl Args {
         let mut desktop = DesktopMode::Virtual;
         let mut cpu_instruction_limit = 0;
         let mut cpu_wall_clock_limit_ms = 0;
+        let mut cpu_stop_pc = None;
         let mut startup_taps = Vec::new();
         let mut run_cpu = false;
         let mut monitor = false;
@@ -1183,6 +1253,10 @@ impl Args {
                 "--cpu-wall-clock-limit-ms" => {
                     cpu_wall_clock_limit_ms = next_u64(&mut args, "--cpu-wall-clock-limit-ms")?;
                 }
+                "--cpu-stop-pc" => {
+                    let value = next_string(&mut args, "--cpu-stop-pc")?;
+                    cpu_stop_pc = Some(parse_monitor_u32(&value)?);
+                }
                 "--tap" => {
                     startup_taps.push(next_tap(&mut args, "--tap")?);
                 }
@@ -1218,6 +1292,7 @@ impl Args {
             desktop,
             cpu_instruction_limit,
             cpu_wall_clock_limit_ms,
+            cpu_stop_pc,
             startup_taps,
             run_cpu,
             monitor,
@@ -1288,7 +1363,7 @@ fn next_tap(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<(i32,
 
 fn print_help() {
     println!(
-        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--mount-config mounts.toml] [--image INavi.exe] [--dll-search-dir DIR]... [--desktop virtual|host] [--framebuffer-dump OUT.ppm] [--tracefile KIND OUT.txt]... [--cpu-instruction-limit N] [--cpu-wall-clock-limit-ms N] [--tap X,Y]... [--run-cpu] [--monitor] [--verbose]"
+        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--mount-config mounts.toml] [--image INavi.exe] [--dll-search-dir DIR]... [--desktop virtual|host] [--framebuffer-dump OUT.ppm] [--tracefile KIND OUT.txt]... [--cpu-instruction-limit N] [--cpu-wall-clock-limit-ms N] [--cpu-stop-pc ADDR] [--tap X,Y]... [--run-cpu] [--monitor] [--verbose]"
     );
 }
 

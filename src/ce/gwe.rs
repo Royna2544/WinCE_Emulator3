@@ -2143,16 +2143,18 @@ impl Gwe {
         if !message_id_matches(WM_PAINT, min_msg, max_msg) {
             return None;
         }
-        self.windows
-            .values()
-            .find(|window| {
-                !window.destroyed
-                    && window.thread_id == thread_id
-                    && window.visible
-                    && window.update_pending
-                    && hwnd.is_none_or(|wanted| window.hwnd == wanted)
-            })
-            .map(|window| Message::new(window.hwnd, WM_PAINT, 0, 0, 0))
+        self.z_order.iter().find_map(|candidate| {
+            let window = self.windows.get(candidate)?;
+            (!window.destroyed
+                && window.thread_id == thread_id
+                && hwnd
+                    .is_some()
+                    .then_some(window.visible && window.style & WS_VISIBLE != 0)
+                    .unwrap_or_else(|| self.is_window_visible(window.hwnd))
+                && window.update_pending
+                && hwnd.is_none_or(|wanted| window.hwnd == wanted))
+            .then(|| Message::new(window.hwnd, WM_PAINT, 0, 0, 0))
+        })
     }
 
     fn queue_status_bits(&self, thread_id: u32) -> u32 {
@@ -2176,7 +2178,7 @@ impl Gwe {
         if self.windows.values().any(|window| {
             !window.destroyed
                 && window.thread_id == thread_id
-                && window.visible
+                && self.is_window_visible(window.hwnd)
                 && window.update_pending
         }) {
             status |= QS_PAINT;

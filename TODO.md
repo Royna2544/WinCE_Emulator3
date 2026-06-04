@@ -12,6 +12,32 @@
 
 ## Current Slice
 
+- Continue from the new mounted iNavi first-present frontier. The latest
+  virtual probe `target\update_erase_virtual_*` proves guest GDI now presents a
+  real 800x480 memory surface to a window HDC:
+  `BitBlt(dst=0x02020008, dst_memdc=false, dst_hwnd=0x00020008,
+  src=0x000a0044, src_memdc=true)`. The framebuffer dump is fully populated
+  (`384000` nonzero pixels) and `target\update_erase_virtual.png` shows the
+  real iNavi SE splash/art frame. The remaining blocker is no longer first
+  pixels or memory-DC-to-screen presentation. Next steps: trace the post-splash
+  flow after the presented child window, identify why the app falls back into
+  the id-1000 7.5 s no-HWND thread `WM_TIMER`/MFC idle-update loop, and design
+  CE-backed timer/idle/scheduler behavior that sustains UI progress without
+  forcing hidden child paints or app-specific state.
+- Continue the mounted iNavi resource-ready investigation from the
+  `resource_59718`/mode-47 table frontier. Current evidence says
+  `\SDMMC Disk\INavi\res\values.dat` opens and reads correctly, but by the
+  time `resource_59718` calls the guest table loader the shared table at
+  `0x0079c440` is already populated (`buffer=0x3006d970`,
+  `tree_count=215`), so the guest one-shot loader at `0x0006bd18` returns
+  `0` and the readiness chain fails. Next steps: preserve or capture the
+  earlier mode-47 table load/subcheck history without adding app-specific
+  success forcing; trace the `resource_ready` subfunctions before
+  `resource_59718` (`59430`, `594f8`, `596b4`) and the mode-source table
+  records; then decide whether the real missing piece is a generic message/
+  timer lifecycle issue causing a repeated readiness pass, a resource state
+  reset/cleanup path not reached because of earlier CE behavior, or a data/
+  registry path selection problem.
 - Keep the storage root/mount inheritance behavior covered while continuing
   fidelity ports: `[root].host_root` is the default backing root, missing or
   non-directory root values fall back to `"."`, and per-mount `host_root`
@@ -114,7 +140,12 @@
     calls now also register in the scheduler's message-wait queue with their
     HWND/min/max filters; GWE message transitions enqueue them as pending wake
     candidates, and resume rechecks immutable filtered queue readiness before
-    consuming the message and restoring the guest context. Bounded
+    consuming the message and restoring the guest context. Raw no-HWND
+    `SetTimer` now records the current thread as timer owner, following
+    `GWE\INC\cmsgque.h` queue-owned timer entries, and expired no-HWND timers
+    post `WM_TIMER` to that owner thread instead of being dropped. CE timer
+    sleeps now advance virtual elapsed time rather than blocking host wall
+    time. Bounded
     worker-thread `Sleep(ms)` calls now register timeout-only scheduler waits
     and resume with a zero return after timeout expiry, using the CE
     `NKSleep` bounded timeout shape (`ms + 1` below `0xfffffffe`);
@@ -126,8 +157,9 @@
     guest worker contexts with a saved CPU context that `ResumeThread` can
     restore once the suspend count reaches zero.
   - Open gaps: full serial semantics beyond the first empty-read wake bridge,
-    audio wake ownership, fuller timer ownership beyond message-queue posts
-    and bounded worker-thread sleeps, full multi-thread run-queue ownership
+    audio wake ownership, fuller timer ownership beyond thread-owned
+    message-queue posts and bounded worker-thread sleeps, bounded idle
+    fast-forward policy for long periodic timer loops, full multi-thread run-queue ownership
     beyond the one-slot `Sleep(0)`/`Sleep(INFINITE)` worker-context swaps,
     pending PSL late-suspend, main-thread suspend blocking, long-sleep
     chunking, fuller child-process
@@ -148,18 +180,21 @@
     suite is enabled, then graduate pending scheduler fixtures for multiple
     waiters, `GetMessageW` blocking, `MsgWait*`, fuller serial parking,
     waveOut callback wakeups, child-process waits, and scheduler mini app.
-  - Latest iNavi evidence: active long-run frontier remains the render-map/
-    surface path around `0x0026f7e4` in prior host-mode runs. The latest
-    scheduler message-wake virtual probe wrote
-    `target\scheduler_msgwait_virtual_60s_*`, loaded dumped runtime DLLs,
-    stayed memory-stable (`heap_live=7588/23317613B`,
-    `host_read=37890/2211452B`), and still had no render milestones with only
-    the 301-pixel red tap line. This mounted path exercised seven object
-    signals and 148 message-input transitions but no registered waiters on
-    those handles/threads (`sig:7 cand:0 msgsig:148 msgcand:0 maxpend:0`), so
-    the wake slices are covered by focused tests but only lightly exercised by
-    this iNavi window. The serial-read wake slice is currently covered by
-    focused tests (`scheduler_queues_serial_read_waiters_by_handle` and
+  - Latest iNavi evidence: the old empty `GetMessageW @861`
+    `blocked_get_message` frontier is cleared by thread-owned no-HWND timers.
+    The latest mounted virtual probe wrote `target\thread_timer_virtual_*`,
+    ran to the 120 s wall-clock limit at `pc=0x70028b7c`,
+    `ra=0x6002537c`, stayed memory-stable
+    (`heap_live=13697/13300954B`, `virtual_live=3/196608B`,
+    `host_open=665`, `host_read=80132/4053923B`, `mem_open=3`,
+    `max_read=685080`), and repeatedly delivered a thread `WM_TIMER`
+    (`hwnd=0`, `wparam=1000`). It still had no useful screen presentation:
+    milestones show memory-DC DIB/blit work and the framebuffer remains only
+    the 401-pixel red tap marker. Next immediate investigation should identify
+    the timer-id 1000 loop and the missing memory-DC-to-screen present path,
+    with extra `SetTimer`/`KillTimer` and GDI destination detail if needed.
+    The serial-read wake slice is currently covered by focused tests
+    (`scheduler_queues_serial_read_waiters_by_handle` and
     `remote_serial_injection_queues_scheduler_serial_read_candidates`) rather
     than by mounted iNavi evidence. This scheduler/loader/thread work is
     foundational and should not be counted as UI success until the mounted run
@@ -212,8 +247,12 @@
   - Current v3 status: raw class/HWND geometry, basic lifecycle messages,
     queue retrieval, guest WNDPROC callouts, subclass `CallWindowProcW`,
     paint/update state, `BeginPaint`/`EndPaint`, and basic `SendMessageW`/
-    `DispatchMessageW` are present. `UpdateWindow` now forces pending
-    `WM_PAINT` synchronously instead of acting as a no-op. Raw `RedrawWindow`
+    `DispatchMessageW` are present. `UpdateWindow` now preserves CE's
+    erase-before-paint update shape: when `erase_pending` is set, raw guest
+    callouts enter the guest WNDPROC with `WM_ERASEBKGND` first, clear only
+    the erase bit on nonzero return, then continue to `WM_PAINT`; the
+    kernel/default path mirrors the same ordering for non-guest/default
+    WNDPROCs. Raw `RedrawWindow`
     now covers the first CE-backed paint slice: rectangle/region invalidation,
     invalidation unioning, `RDW_VALIDATE`, `RDW_ALLCHILDREN`, erase state, and
     `RDW_UPDATENOW` through the same synchronous paint path. Raw `GetUpdateRgn`
@@ -427,11 +466,17 @@
   - Fixture gates: prioritize existing window fixtures around paint/update,
     create/destroy order, cross-thread sends, dialogs, MFC lifecycle, menus,
     accelerators, hit testing, region clipping, and full UI stress.
-  - Latest iNavi evidence: the app reaches real windows and some sparse GDI
-    pixels but still misses useful UI. Current render evidence says `WM_SIZE`
-    reaches dimensions while the app skips its resize/surface allocation path;
-    window work should keep tracing real lifecycle/message causes rather than
-    faking pixels. The bounded destroy-lifecycle probe wrote
+  - Latest iNavi evidence: the app now reaches real first-frame UI
+    presentation through guest GDI. The fresh
+    `target\update_erase_virtual_*` virtual probe records a real
+    memory-DC-to-window-HDC transfer
+    (`BitBlt(dst=0x02020008, dst_memdc=false, dst_hwnd=0x00020008,
+    src=0x000a0044, src_memdc=true, 800x480)`) and a fully populated
+    framebuffer (`384000` nonzero pixels). `target\update_erase_virtual.png`
+    shows the iNavi SE splash/art frame. The remaining window work should now
+    trace post-splash queue/timer/idle progression and hidden/visible update
+    semantics rather than faking pixels. The bounded
+    destroy-lifecycle probe wrote
     `target\destroy_window_lifecycle_*` artifacts, reached RSImage DIB
     creation by the 10 s wall stop, but still reported no render milestones and
     an all-zero framebuffer body. The bounded `WM_NCDESTROY` lifecycle probe
@@ -579,16 +624,18 @@
   - Fixture gates: keep raw GWE/GDI tests passing, then add focused fixtures
     for additional indexed palette edge cases, region clipping, text/font
     metrics, menu/accelerator, and MFC mini-app paint.
-  - Latest iNavi evidence: mounted traces create many DIBSections and windows
-    before useful rendering. The newest 30 s probe has sparse nonzero
-    framebuffer bytes (`target\long30_probe.ppm`: 301 nonzero bytes) and
-    memory-stable file I/O (`heap_live=7297/21843020B`,
-    `host_read=25097/1921203B`) but no named render milestone, so the next
-    display work should target generic paint/blit/surface fidelity, not forced
-    presentation. The fresh `target\dib_colors_fresh_*` probe confirms the
-    app's 8 bpp RSImage DIBSections now have parsed color tables (`colors=256`
-    on the 800-wide surfaces and populated partial tables on later resources),
-    so indexed palette ingestion is no longer the leading suspect.
+  - Latest iNavi evidence: mounted traces now reach paint, many DIBSections,
+    and the first real screen/window-HDC presentation. `target\update_erase_virtual_*`
+    records `BitBlt(dst=0x02020008, dst_memdc=false, dst_hwnd=0x00020008,
+    src=0x000a0044, src_memdc=true, 800x480)`, and the framebuffer dump is
+    fully populated. The display work should therefore target post-present
+    clipping/invalid-region behavior, text/font completeness, and sustaining
+    later UI updates, not the already-cleared first memory-DC-to-screen
+    transfer and not forced presentation. Earlier
+    `target\dib_colors_fresh_*` evidence confirms the app's 8 bpp RSImage
+    DIBSections now have parsed color tables (`colors=256` on the 800-wide
+    surfaces and populated partial tables on later resources), so indexed
+    palette ingestion is no longer the leading suspect.
 
 - Continue from the latest stable host-mode UI frontier. Current
   `--desktop host --tap 400,240` evidence no longer has the multi-GB RAM spike

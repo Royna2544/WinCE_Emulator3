@@ -1,11 +1,9 @@
-use std::{
-    collections::BTreeMap,
-    time::{Duration, Instant},
-};
+use std::{collections::BTreeMap, time::Instant};
 
 #[derive(Debug, Clone)]
 pub struct TimerSystem {
     boot: Instant,
+    virtual_elapsed_ms: u64,
     next_timer: u32,
     timers: BTreeMap<u32, KernelTimer>,
 }
@@ -35,15 +33,17 @@ pub fn ce_sleep_request(ms: u32) -> CeSleepRequest {
 #[derive(Debug, Clone)]
 pub struct KernelTimer {
     pub id: u32,
+    pub thread_id: u32,
     pub hwnd: Option<u32>,
     pub message: u32,
+    pub callback: Option<u32>,
     pub due_ms: u32,
     pub period_ms: Option<u32>,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{CeSleepRequest, INFINITE, ce_sleep_request};
+    use super::{CeSleepRequest, INFINITE, TimerSystem, ce_sleep_request};
 
     #[test]
     fn ce_sleep_request_matches_nksleep_timeout_shape() {
@@ -59,12 +59,29 @@ mod tests {
         );
         assert_eq!(ce_sleep_request(INFINITE), CeSleepRequest::Suspend);
     }
+
+    #[test]
+    fn sleep_advances_virtual_timer_clock() {
+        let mut timers = TimerSystem::default();
+        timers.set_timer(1, Some(0x20004), Some(1000), 7500, 0x0113, None);
+
+        let delay = timers.next_due_delay_ms().unwrap();
+        assert!(delay <= 7500);
+        timers.sleep_ms(delay);
+
+        assert_eq!(timers.next_due_delay_ms(), Some(0));
+        let due = timers.due_timers();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].id, 1000);
+        assert_eq!(due[0].thread_id, 1);
+    }
 }
 
 impl Default for TimerSystem {
     fn default() -> Self {
         Self {
             boot: Instant::now(),
+            virtual_elapsed_ms: 0,
             next_timer: 1,
             timers: BTreeMap::new(),
         }
@@ -77,23 +94,34 @@ impl TimerSystem {
     }
 
     pub fn performance_counter(&self) -> u64 {
-        self.boot.elapsed().as_millis() as u64
+        self.elapsed_ms()
     }
 
     pub fn tick_count(&self) -> u32 {
-        self.boot.elapsed().as_millis() as u32
+        self.elapsed_ms() as u32
     }
 
-    pub fn sleep_ms(&self, ms: u32) {
-        std::thread::sleep(Duration::from_millis(u64::from(ms)));
+    pub fn sleep_ms(&mut self, ms: u32) {
+        self.virtual_elapsed_ms = self.virtual_elapsed_ms.saturating_add(u64::from(ms));
+    }
+
+    fn elapsed_ms(&self) -> u64 {
+        self.boot
+            .elapsed()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX)
+            .saturating_add(self.virtual_elapsed_ms)
     }
 
     pub fn set_timer(
         &mut self,
+        thread_id: u32,
         hwnd: Option<u32>,
         requested_id: Option<u32>,
         period_ms: u32,
         message: u32,
+        callback: Option<u32>,
     ) -> u32 {
         let id = requested_id.unwrap_or_else(|| {
             let id = self.next_timer;
@@ -105,8 +133,10 @@ impl TimerSystem {
             id,
             KernelTimer {
                 id,
+                thread_id,
                 hwnd,
                 message,
+                callback,
                 due_ms,
                 period_ms: Some(period_ms),
             },

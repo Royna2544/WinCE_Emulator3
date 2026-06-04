@@ -36,6 +36,22 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
 
 ## Windows CE Core OS
 
+- GWE paint/update and MFC paint pumping:
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\window.hpp`,
+  `C:\Program Files (x86)\Microsoft Visual Studio 8\VC\ce\atlmfc\src\mfc\thrdcore.cpp`,
+  `C:\Program Files (x86)\Microsoft Visual Studio 8\VC\ce\atlmfc\src\mfc\wincore.cpp`,
+  and `..\WinCE_Emulator_v2\src\synthetic_dll.cpp`
+  - CE GWE tracks paint requests as queue-visible update state; `BeginPaint`
+    consumes/validates the update, while erase state is separate from the paint
+    request. MFC's message pump treats `WM_PAINT` as non-idle work and uses
+    `UpdateWindow` during idle layout/update paths. v2 corroborated the
+    emulator-shaped ordering of synchronous `WM_ERASEBKGND` before `WM_PAINT`
+    in `UpdateWindow`, but v3 keeps the behavior generic: no forced app pixels
+    and no hidden-child paint. The mounted `target\update_erase_virtual_*`
+    trace confirms this ordering unlocks a real memory-DC-to-window-HDC
+    `BitBlt` and a populated iNavi framebuffer.
+
 - Explorer/COREDLL startup ordinals:
   `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\MIPSII\RETAIL\coredll.def`,
   `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\MIPSII\RETAIL\k.coredll.def`,
@@ -165,6 +181,14 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `WM_TIMER` posting transitions enqueue those wait ids as pending
     message-input candidates, then live resume rechecks the actual GWE queue
     status and wake mask before returning. The same GWE header declares
+    `TimerEntry_t` with an owning `MsgQueue *m_pmsgqOwner` plus optional
+    `HWND`, so a `SetTimer(NULL, id, ...)` expiration is a thread/message-queue
+    timer rather than a window timer that can be ignored. v3 now stores the
+    owner thread id on timers, posts due no-HWND `WM_TIMER` messages to that
+    owner queue, and keeps `HWND` timers routed through their window owner when
+    a window is known. CE virtual time is advanced inside the emulator timer
+    system for sleeps/timer pumping instead of sleeping the host thread.
+    The same GWE header declares
     blocking `GetMessageW_I` separately from
     `GetMessageWNoWait_I`, and documents paint requests as queue conditions
     observed by later `GetMessage` calls. v3 now registers parked Unicorn
@@ -311,6 +335,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     retrieval does not remove the paint request; processing paint cancels the
     request. Rust models this as synthetic paint from `update_pending`, not as
     an ordinary posted message.
+  - Generated timers are queue work, but v3 now mirrors the observed CE/MFC
+    pump requirement that existing sent/posted/quit/paint work is checked
+    before raw `GetMessageW`/`PeekMessageW` generates additional due
+    `WM_TIMER` entries. Timed-out sent-message transactions still expire
+    before retrieval so `SendMessageTimeout` behavior remains visible.
 
 - GWE window surface:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/GWE/INC/window.hpp`
@@ -612,6 +641,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     status. Remaining gaps are tracked in `TODO.md`: complex update-region
     precision, erase-on-query behavior, internal-paint-only requests, and full
     child clipping.
+  - Mounted `target\paint_priority_final_virtual_*` evidence now confirms this
+    path reaches real `BeginPaint`/`EndPaint`; the remaining display frontier
+    is generic GDI/DC presentation from memory-composed DIB surfaces to a
+    screen/window HDC, not synthetic paint generation itself.
 
 - Display surface boundary:
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\gpe.h` and

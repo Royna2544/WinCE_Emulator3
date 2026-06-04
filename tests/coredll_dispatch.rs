@@ -8,13 +8,14 @@ use wince_emulation_v3::{
             CoredllStubPolicy, CoredllSubsystem, CoredllValue, EventModifyAction,
         },
         coredll_ordinals::{
-            ORD_CLOSE_HANDLE, ORD_CREATE_APISET, ORD_CREATE_FILE_W, ORD_CREATE_WINDOW_EX_W,
-            ORD_DISPATCH_MESSAGE_W, ORD_DPMUL, ORD_DPTOFP, ORD_DPTOLI, ORD_EVENT_MODIFY, ORD_FMODF,
-            ORD_FPMUL, ORD_FPTODP, ORD_FPTOUL, ORD_GET_MESSAGE_W, ORD_INITIALIZE_CRITICAL_SECTION,
-            ORD_ISWCTYPE, ORD_LITODP, ORD_LITOFP, ORD_LL_DIV, ORD_LONGJMP, ORD_LTD, ORD_NES,
-            ORD_POST_MESSAGE_W, ORD_POW, ORD_REG_OPEN_KEY_EX_W, ORD_REGISTER_GESTURE, ORD_SETJMP,
-            ORD_SQRT, ORD_ULTODP, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE,
-            current_static_export_count,
+            ORD_ATOF, ORD_CLOSE_HANDLE, ORD_CREATE_APISET, ORD_CREATE_FILE_W,
+            ORD_CREATE_WINDOW_EX_W, ORD_D_TO_LL, ORD_D_TO_ULL, ORD_DISPATCH_MESSAGE_W, ORD_DPCMP,
+            ORD_DPMUL, ORD_DPTOFP, ORD_DPTOLI, ORD_EVENT_MODIFY, ORD_F_TO_LL, ORD_F_TO_ULL,
+            ORD_FMODF, ORD_FPCMP, ORD_FPMUL, ORD_FPTODP, ORD_FPTOUL, ORD_GED, ORD_GES,
+            ORD_GET_MESSAGE_W, ORD_INITIALIZE_CRITICAL_SECTION, ORD_ISWCTYPE, ORD_LITODP,
+            ORD_LITOFP, ORD_LL_DIV, ORD_LONGJMP, ORD_LTD, ORD_NES, ORD_POST_MESSAGE_W, ORD_POW,
+            ORD_REG_OPEN_KEY_EX_W, ORD_REGISTER_GESTURE, ORD_SETJMP, ORD_SQRT, ORD_ULTODP,
+            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE, current_static_export_count,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::WM_USER,
@@ -126,17 +127,13 @@ fn coredll_raw_dispatch_routes_mips_soft_float_compare_helpers() -> Result<()> {
     assert_eq!(table.resolve_name("__ltd").unwrap().ordinal, ORD_LTD);
     assert_eq!(table.resolve_name("__dpmul").unwrap().ordinal, ORD_DPMUL);
 
-    memory.map_words(0x1000, 1);
-    memory.map_words(0x2000, 1);
-    memory.write_word(0x1000, 3.5_f32.to_bits());
-    memory.write_word(0x2000, 3.5_f32.to_bits());
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
             &mut memory,
             thread_id,
             ORD_NES,
-            [0x1000, 0x2000],
+            [3.5_f32.to_bits(), 3.5_f32.to_bits()],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(false),
@@ -156,39 +153,99 @@ fn coredll_raw_dispatch_routes_mips_soft_float_compare_helpers() -> Result<()> {
             ..
         } if value.to_bits() == 2.5_f32.to_bits()
     ));
-    memory.write_word(0x2000, 4.0_f32.to_bits());
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
             &mut memory,
             thread_id,
             ORD_NES,
-            [0x1000, 0x2000],
+            [3.5_f32.to_bits(), 4.0_f32.to_bits()],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
             ..
         }
     ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GES,
+            [0x3d8f_5c29, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FPCMP,
+            [1.0_f32.to_bits(), 2.0_f32.to_bits()],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::Cmp(-1)),
+            ..
+        }
+    ));
 
     let lhs = 1.25_f64.to_bits();
     let rhs = 2.5_f64.to_bits();
-    memory.map_words(0x3000, 2);
-    memory.map_words(0x4000, 2);
-    memory.write_word(0x3000, lhs as u32);
-    memory.write_word(0x3004, (lhs >> 32) as u32);
-    memory.write_word(0x4000, rhs as u32);
-    memory.write_word(0x4004, (rhs >> 32) as u32);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
             &mut memory,
             thread_id,
             ORD_LTD,
-            [0x3000, 0x4000],
+            [
+                lhs as u32,
+                (lhs >> 32) as u32,
+                rhs as u32,
+                (rhs >> 32) as u32
+            ],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GED,
+            [
+                lhs as u32,
+                (lhs >> 32) as u32,
+                rhs as u32,
+                (rhs >> 32) as u32
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DPCMP,
+            [
+                lhs as u32,
+                (lhs >> 32) as u32,
+                rhs as u32,
+                (rhs >> 32) as u32
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::Cmp(-1)),
             ..
         }
     ));
@@ -316,6 +373,60 @@ fn coredll_raw_dispatch_routes_mips_soft_float_compare_helpers() -> Result<()> {
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::CeMath(CeMathValue::I32(-42)),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_F_TO_LL,
+            [(-42.75_f32).to_bits()],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::I64(-42)),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_F_TO_ULL,
+            [(65_536.75_f32).to_bits()],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::U64(65_536)),
+            ..
+        }
+    ));
+    let d_to_ll_value = (-123_456.75_f64).to_bits();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_D_TO_LL,
+            [d_to_ll_value as u32, (d_to_ll_value >> 32) as u32],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::I64(-123_456)),
+            ..
+        }
+    ));
+    let d_to_ull_value = 123_456.75_f64.to_bits();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_D_TO_ULL,
+            [d_to_ull_value as u32, (d_to_ull_value >> 32) as u32],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::U64(123_456)),
             ..
         }
     ));
@@ -598,6 +709,36 @@ fn coredll_dispatcher_routes_ordinals_to_virtual_win32_framework() -> Result<()>
         CoredllDispatch::Stubbed { export, stub }
             if export.name == "InitializeCriticalSection"
                 && stub.policy == CoredllStubPolicy::VoidNoOp
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_dispatch_routes_atof_as_double_return() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 1;
+    let text = 0x2000;
+
+    memory.map_bytes(text, 32);
+    memory.write_bytes(text, b" \t-12.5e+1px\0");
+
+    assert_eq!(table.resolve_name("atof").unwrap().ordinal, ORD_ATOF);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ATOF,
+            [text],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::F64(value)),
+            ..
+        } if value.to_bits() == (-125.0_f64).to_bits()
     ));
 
     Ok(())

@@ -31,22 +31,40 @@
     a clean guest process return or a too-early control-flow exit before
     treating explorer as a complete shell fixture.
 
-- Main process launch reaches the paint loop without useful GUI output.
+- Main process launch presents the first iNavi splash frame but does not yet
+  sustain post-splash UI progress.
   - Symptom: a bounded debug launch gets past the earlier empty-queue
     `GetMessageW` self-stop and the later SD-card validation dialog, creates
-    main/child HWNDs, but still produces no drawn framebuffer/window output.
-    A generic virtual framebuffer is attached, and raw solid-brush `FillRect`
-    can now draw into it when guest code reaches a window/screen HDC, but the
-    target launch currently stops before useful drawing/blit output. This is
-    not GUI success.
-    Newer host-mode runs do produce sparse real pixels through guest GDI
-    `Polyline` (`target\startup_flamegraph_after_heap_chunk.ppm` has 401 red
-    pixels from `(0,160)..(400,160)` in the latest profiled run), so the
-    framebuffer is no longer strictly all-zero.
-    It is still not useful GUI output: the app is currently spending bounded
-    host/tap time in RSImage/PNG resource loading and DIB creation without
-    reaching a screen blit/presentation ordinal.
-  - Latest evidence: the newest mounted virtual run with dumped runtime DLLs
+    main/child HWNDs, and now produces a real guest-presented splash/art frame
+    through GDI. This is first UI progress, but not complete GUI success: after
+    the presented child-window frame, the run still spends bounded wall time in
+    the id-1000 no-HWND thread `WM_TIMER`/MFC idle-update loop and does not yet
+    advance into sustained interactive UI.
+    The latest resource-focused virtual probes with dumped runtime DLLs confirm
+    that `\SDMMC Disk\INavi\res\values.dat` is not missing and is being read
+    successfully, but `resource_59718` fails because the guest mode-47 resource
+    table object is already populated when the one-shot table loader is called
+    again. The relevant final trace state is `table=0x0079c440`,
+    `buffer=0x3006d970`, `tree_root=0x3006e830`, `tree_count=215`,
+    `check_result=0`, and `ready=1` for path
+    `\SDMMC Disk\INavi\res\values.dat`. Disassembly confirms the guest loader
+    at `0x0006bd18` returns `0` when the table buffer is non-null, so the next
+    investigation should find why the resource-ready chain reaches this replay
+    state rather than forcing the load to succeed.
+  - Latest evidence: `target\update_erase_virtual_*` is the current frontier.
+    The 20 s virtual run uses dumped runtime DLLs from
+    `D:\INAVI_Emulator\DUMPPLZ\Windows`, stays memory-stable
+    (`heap_live=13697/13300954B`, `virtual_live=3/196608B`,
+    `host_open=665`, `host_read=80198/4060882B`, `mem_open=3`), and contains a
+    real screen-presenting blit:
+    `BitBlt(dst=0x02020008, dst_memdc=false, dst_hwnd=0x00020008,
+    src=0x000a0044, src_memdc=true, 800x480)`. The framebuffer dump has
+    `384000` nonzero pixels, and `target\update_erase_virtual.png` shows the
+    iNavi SE splash/art frame. The run still stops by wall-clock with active
+    timer id `0x3e8`/1000 due in virtual time, so this bug remains open as a
+    post-splash scheduler/timer/GWE progression problem rather than a blank
+    framebuffer problem.
+    Historical evidence: the mounted virtual run with dumped runtime DLLs
     and real sibling app DLLs wrote `target\inavi_trampoline_virtual_*`. It
     preloaded `AuthLibrary.dll`, `TpSysAuth.dll`, `mMbcAuth.dll`,
     `tpeg_if_dll.dll`, and `tw_tpeg_if_dll.dll` from the main image directory,
@@ -61,6 +79,29 @@
     `max_read=497178`) and repeated RSImage `CreateDIBSection` work. Render
     milestones are still `none`, and the framebuffer remains only the sparse
     301-byte red line, so this remains the no-useful-UI bug.
+    The later thread-owned timer probe wrote `target\thread_timer_virtual_*`
+    after v3 learned to deliver no-HWND `SetTimer` expirations to the owning
+    GWE message queue and to fast-forward CE virtual sleeps without host
+    `std::thread::sleep`. That run clears the earlier
+    `COREDLL.dll@861 blocked_get_message` stop and runs to the 120 s wall
+    limit at `pc=0x70028b7c`, `ra=0x6002537c`, repeatedly delivering
+    `WM_TIMER` with `hwnd=0`, `wparam=1000`. It remains memory-stable
+    (`heap_live=13697/13300954B`, `virtual_live=3/196608B`,
+    `host_open=665`, `host_read=80132/4053923B`, `mem_open=3`,
+    `max_read=685080`) but still has no useful UI: render milestones show
+    memory-DC work only and the framebuffer still contains only the 401-pixel
+    red tap marker. The active blocker has therefore moved from an empty
+    `GetMessageW` self-stop to a periodic thread-timer/no-present frontier.
+    The follow-up paint-priority fix wrote
+    `target\paint_priority_final_virtual_*`; it preserves send-timeout expiry
+    while making raw `GetMessageW`/`PeekMessageW` retrieve pending paint before
+    generating due timers. That run reaches real paint (`BeginPaint=6`,
+    `EndPaint=6`) and screen-HDC-derived 800x480 DIB work with stable memory
+    (`host_open=665`, `host_read=80130/4044109B`, `heap_live=13697/13300954B`).
+    It is still not useful GUI output: the final visible-looking blits remain
+    memory-DC destinations, the framebuffer is still only the sparse tap line,
+    and the run spends 20 s wall time fast-forwarding the id-1000
+    thread-queue `WM_TIMER` loop to about `32,189,373 ms` virtual time.
     Earlier flamegraph-driven startup fixes removed per-import
     COREDLL export-table rebuilding, hot linear trampoline scans, linear
     mapped-blob instruction lookup, per-import heap/virtual allocation scans,

@@ -9,6 +9,78 @@
 
 ## Confirmed
 
+- Mounted iNavi now reaches real guest-driven UI presentation in virtual
+  desktop mode. The `UpdateWindow` guest trampoline now honors the CE paint
+  update shape by entering the guest WNDPROC with `WM_ERASEBKGND` when
+  `erase_pending` is set, preserving the update region for the follow-up
+  `WM_PAINT`, and only clearing the erase bit when the erase handler returns
+  nonzero. The default/kernel `UpdateWindow` path uses the same
+  erase-before-paint ordering for non-guest/default WNDPROCs. Focused
+  coverage: `cargo test --features unicorn,trace,win32-desktop --test
+  coredll_raw_gwe`; `cargo check --features unicorn,trace,win32-desktop`
+  passes with the known non-fatal Windows incremental-finalize warning. A
+  fresh mounted virtual probe wrote `target\update_erase_virtual_*` and
+  stopped only on the 20 s wall-clock limit, memory-stable
+  (`heap_live=13697/13300954B`, `virtual_live=3/196608B`,
+  `host_open=665`, `host_read=80198/4060882B`, `mem_open=3`,
+  `max_read=685080`). Its presentation trace includes the first confirmed
+  memory-DC-to-window-HDC present:
+  `BitBlt(dst=0x02020008, dst_memdc=false, dst_hwnd=0x00020008,
+  src=0x000a0044, src_memdc=true, 800x480)`, and the framebuffer dump is no
+  longer black/sparse (`384000` nonzero pixels). The generated preview
+  `target\update_erase_virtual.png` shows the real iNavi SE splash/art frame.
+  This is real UI progress from guest GDI paths, not a fabricated host paint.
+  The process still runs into the fast id-1000 thread `WM_TIMER`/idle loop
+  after presentation, so the next frontier is sustaining post-splash UI and
+  scheduler/timer fidelity rather than first pixels.
+- Raw `GetMessageW`/`PeekMessageW` now preserves CE/MFC generated-message
+  ordering by checking sent, posted, quit, and synthetic paint work before
+  generating due timers. Timed-out cross-thread sends still expire before
+  retrieval, so the existing send-timeout behavior is preserved while pending
+  `WM_PAINT` is no longer starved by a due `WM_TIMER`. Focused coverage:
+  `coredll_raw_get_message_prioritizes_paint_over_generated_timer`, and the
+  full `coredll_raw_gwe` test binary passes. A fresh mounted virtual probe
+  wrote `target\paint_priority_final_virtual_*`; it stayed memory-stable
+  (`heap_live=13697/13300954B`, `virtual_live=3/196608B`,
+  `host_open=665`, `host_read=80130/4044109B`, `mem_open=3`,
+  `max_read=685080`) and now reaches real paint processing
+  (`BeginPaint=6`, `EndPaint=6`) plus 800x480 DIB/surface work from a
+  screen/window HDC. Useful UI still does not present: final blits remain
+  memory-DC-to-memory-DC, the framebuffer remains the sparse tap marker, and
+  virtual time still races through the 7.5 s thread timer loop
+  (`WM_TIMER`, id `1000`, due around `32189373 ms`). This moved the frontier
+  from missing paint to missing memory-DC-to-screen presentation plus timer/
+  idle scheduling fidelity.
+- Raw `StretchBlt` now uses the correct 11-argument CE ABI instead of the
+  `BitBlt` ABI in the real COREDLL syscall path. The trace decoder now reports
+  destination and source rectangles separately, and focused coverage
+  `coredll_raw_stretchblt_uses_stretch_abi_and_scales_between_memory_dcs`
+  passes. A mounted virtual run with dumped runtime DLLs reached a real
+  `StretchBlt` call with `dst_rect=20,0,760,54`,
+  `src_rect=20,0,10,54`, `rop=0x00cc0020`, and `ok=1`; useful UI still did
+  not advance.
+- CRT `feof` for CE file handles now follows the stream EOF-indicator shape
+  instead of reporting EOF merely when the cursor equals file size. Exact-size
+  reads leave `feof` clear, a subsequent failed/short read sets it, and
+  `SetFilePointer`/`fseek` clears it. Focused coverage:
+  `coredll_raw_stdio_reads_host_backed_files`; the
+  `coredll_raw_memory_file` test binary passes. A mounted virtual rerun stayed
+  memory-stable but did not move the UI frontier, so this was a correctness fix
+  rather than the active render blocker.
+- The current iNavi resource/render frontier is now narrowed to the app's
+  resource-ready chain, not bulk file I/O. Fresh virtual probes
+  `target\resource_table_diag_*`, `target\resource_watch_*`, and
+  `target\resource_watch_big_*` show `\SDMMC Disk\INavi\res\values.dat`
+  opens and reads successfully (`host_read` remains about 80k reads / 4 MB,
+  RSS-stable), but `resource_59718` fails after calling the guest
+  resource-table loader for mode `47` while the shared table object is already
+  populated (`buffer=0x3006d970`, `tree_root=0x3006e830`,
+  `tree_count=215`). Disassembly of `iNavi.exe` around `0x0006bd18` confirms
+  that this guest loader returns `0` immediately when the table buffer is
+  non-null, and `0x0001ad94` treats that return as failure. The latest
+  framebuffer remains only the red tap line (`401` nonzero pixels from
+  `(0,160)` to `(400,160)`), and a 120 s diagnostic run stopped by wall clock
+  in dumped-runtime code rather than producing UI progress.
 - Mounted iNavi startup now preloads real sibling DLLs from the main image
   directory in addition to dumped-runtime `mfcce400.dll`/`commctrl.dll`.
   This is a generic CE loader-search bridge, not a hardcoded auth shortcut:
@@ -443,6 +515,30 @@
   the same scheduler registry as `MsgWaitForMultipleObjectsEx`; full run-queue
   ownership and moving the saved MIPS context out of the Unicorn bridge remain
   open.
+- CE timer delivery now preserves thread-owned no-HWND timers and avoids host
+  sleeping on CE virtual time. `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`
+  `TimerEntry_t` stores the owning `MsgQueue` as well as optional `HWND`, so
+  v3 timers now carry an owner thread id; raw `SetTimer` registers timers for
+  the current thread when `hwnd == NULL`, and `pump_timers_to_gwe` posts
+  due `WM_TIMER` messages to that owner instead of silently dropping no-HWND
+  timers. `TimerSystem::sleep_ms` now advances an emulator virtual elapsed
+  offset instead of calling `std::thread::sleep`, so CE sleeps/timer fast
+  forwards do not consume host wall time. Focused coverage:
+  `sleep_advances_virtual_timer_clock`, the no-HWND thread-timer assertions in
+  `message_and_timer_transitions_queue_scheduler_msg_wait_candidates`, the full
+  `basic_subsystems` suite, and the full `coredll_raw_gwe` suite. Full
+  `cargo check --features unicorn,trace,win32-desktop` and release build pass.
+  A mounted virtual run using dumped runtime DLLs wrote
+  `target\thread_timer_virtual_*`; it cleared the previous
+  `COREDLL.dll@861 blocked_get_message` frontier and instead ran until the
+  120 s wall-clock limit at `pc=0x70028b7c`, `ra=0x6002537c`. The run stayed
+  memory-stable (`heap_live=13697/13300954B`,
+  `virtual_live=3/196608B`, `host_open=665`,
+  `host_read=80132/4053923B`, `mem_open=3`, `max_read=685080`) and delivered
+  repeated no-HWND `WM_TIMER` messages (`hwnd=0`, `wparam=1000`), but render
+  milestones still show memory-DC DIB/blit work only and the framebuffer still
+  contains only the red tap marker (`401` nonzero pixels). This is a startup
+  speed/scheduler correctness fix, not UI success.
 - Scheduler/timer ownership now has the first parked worker-thread
   `Sleep(ms)` bridge. CE `schedule.c` implements `NKSleep` via
   `ThreadSleep`/`PutThreadToSleep`, with bounded sleeps entering the kernel

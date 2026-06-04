@@ -740,6 +740,29 @@ pub(crate) fn atoi_raw<M: CoredllGuestMemory>(memory: &M, text_ptr: u32) -> i32 
     parse_decimal_prefix(text.trim_start())
 }
 
+pub(crate) fn atof_raw<M: CoredllGuestMemory>(memory: &M, text_ptr: u32) -> f64 {
+    let Some(text) = read_narrow_z(memory, text_ptr, 4096) else {
+        return 0.0;
+    };
+    parse_float_prefix(&text)
+}
+
+pub(crate) fn tolower_raw(ch: u32) -> u32 {
+    if (b'A' as u32..=b'Z' as u32).contains(&ch) {
+        ch + 0x20
+    } else {
+        ch
+    }
+}
+
+pub(crate) fn toupper_raw(ch: u32) -> u32 {
+    if (b'a' as u32..=b'z' as u32).contains(&ch) {
+        ch - 0x20
+    } else {
+        ch
+    }
+}
+
 pub(crate) fn strtoul_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -1106,6 +1129,50 @@ pub(crate) fn sprintf_raw<M: CoredllGuestMemory>(
     }
 }
 
+pub(crate) fn snprintf_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest: u32,
+    count: u32,
+    format: u32,
+    args: &[u32],
+) -> u32 {
+    if dest == 0 || format == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return u32::MAX;
+    }
+    let Some(format) = read_narrow_z(memory, format, 4096) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return u32::MAX;
+    };
+    let text = format_wide_printf(memory, &format, args, WideStringMode::NarrowDefault);
+    write_bounded_narrow(kernel, memory, thread_id, dest, count, &text)
+}
+
+pub(crate) fn vsnprintf_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest: u32,
+    count: u32,
+    format: u32,
+    va_list: u32,
+) -> u32 {
+    if va_list == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return u32::MAX;
+    }
+    let args = read_va_list_words(memory, va_list, 64);
+    snprintf_raw(kernel, memory, thread_id, dest, count, format, &args)
+}
+
 pub(crate) fn wsprintf_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -1175,6 +1242,31 @@ fn wsprintf_w_raw_with_mode<M: CoredllGuestMemory>(
     text.encode_utf16().count() as u32
 }
 
+pub(crate) fn snwprintf_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest: u32,
+    count: u32,
+    format: u32,
+    args: &[u32],
+) -> u32 {
+    if dest == 0 || format == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return u32::MAX;
+    }
+    let Some(format) = read_wide_z(memory, format, 4096) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return u32::MAX;
+    };
+    let text = format_wide_printf(memory, &format, args, WideStringMode::WideDefault);
+    write_bounded_wide(kernel, memory, thread_id, dest, count, &text)
+}
+
 pub(crate) fn vswprintf_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -1227,6 +1319,25 @@ pub(crate) fn wvsprintf_w_raw<M: CoredllGuestMemory>(
     )
 }
 
+pub(crate) fn vsnwprintf_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest: u32,
+    count: u32,
+    format: u32,
+    va_list: u32,
+) -> u32 {
+    if va_list == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return u32::MAX;
+    }
+    let args = read_va_list_words(memory, va_list, 64);
+    snwprintf_w_raw(kernel, memory, thread_id, dest, count, format, &args)
+}
+
 fn read_va_list_words<M: CoredllGuestMemory>(memory: &M, va_list: u32, max_words: u32) -> Vec<u32> {
     let mut args = Vec::new();
     for index in 0..max_words {
@@ -1261,6 +1372,69 @@ fn read_narrow_z<M: CoredllGuestMemory>(memory: &M, ptr: u32, max_chars: usize) 
         bytes.push(byte);
     }
     None
+}
+
+fn write_bounded_narrow<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest: u32,
+    count: u32,
+    text: &str,
+) -> u32 {
+    let bytes = text.as_bytes();
+    if count == 0 {
+        return if bytes.is_empty() { 0 } else { u32::MAX };
+    }
+    let count = count as usize;
+    if bytes.len() < count {
+        let mut out = Vec::with_capacity(bytes.len() + 1);
+        out.extend_from_slice(bytes);
+        out.push(0);
+        if write_guest_bytes(kernel, memory, thread_id, dest, &out) {
+            bytes.len() as u32
+        } else {
+            u32::MAX
+        }
+    } else {
+        let truncated = &bytes[..count];
+        if write_guest_bytes(kernel, memory, thread_id, dest, truncated) {
+            u32::MAX
+        } else {
+            u32::MAX
+        }
+    }
+}
+
+fn write_bounded_wide<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest: u32,
+    count: u32,
+    text: &str,
+) -> u32 {
+    let units: Vec<u16> = text.encode_utf16().collect();
+    if count == 0 {
+        return if units.is_empty() { 0 } else { u32::MAX };
+    }
+    let count = count as usize;
+    let write_units: Vec<u16> = if units.len() < count {
+        units.iter().copied().chain(std::iter::once(0)).collect()
+    } else {
+        units.iter().copied().take(count).collect()
+    };
+    for (index, unit) in write_units.into_iter().enumerate() {
+        let addr = dest.wrapping_add(index as u32 * 2);
+        if !write_guest_u16(kernel, memory, thread_id, addr, unit) {
+            return u32::MAX;
+        }
+    }
+    if units.len() < count {
+        units.len() as u32
+    } else {
+        u32::MAX
+    }
 }
 
 fn read_delimiter_set<M: CoredllGuestMemory>(memory: &M, ptr: u32) -> Option<Vec<u8>> {
@@ -1303,6 +1477,57 @@ fn parse_decimal_prefix(text: &str) -> i32 {
     value
         .saturating_mul(sign)
         .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
+fn parse_float_prefix(text: &str) -> f64 {
+    let bytes = text.as_bytes();
+    let mut index = 0usize;
+    while bytes.get(index).is_some_and(u8::is_ascii_whitespace) {
+        index += 1;
+    }
+    let start = index;
+    if matches!(bytes.get(index), Some(b'+' | b'-')) {
+        index += 1;
+    }
+
+    let integer_start = index;
+    while bytes.get(index).is_some_and(u8::is_ascii_digit) {
+        index += 1;
+    }
+    let integer_digits = index.saturating_sub(integer_start);
+
+    let mut fraction_digits = 0usize;
+    if bytes.get(index) == Some(&b'.') {
+        index += 1;
+        let fraction_start = index;
+        while bytes.get(index).is_some_and(u8::is_ascii_digit) {
+            index += 1;
+        }
+        fraction_digits = index.saturating_sub(fraction_start);
+    }
+
+    if integer_digits == 0 && fraction_digits == 0 {
+        return 0.0;
+    }
+
+    if matches!(bytes.get(index), Some(b'e' | b'E')) {
+        let exponent_marker = index;
+        index += 1;
+        if matches!(bytes.get(index), Some(b'+' | b'-')) {
+            index += 1;
+        }
+        let exponent_start = index;
+        while bytes.get(index).is_some_and(u8::is_ascii_digit) {
+            index += 1;
+        }
+        if index == exponent_start {
+            index = exponent_marker;
+        }
+    }
+
+    text.get(start..index)
+        .and_then(|prefix| prefix.parse::<f64>().ok())
+        .unwrap_or(0.0)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

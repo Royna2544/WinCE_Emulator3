@@ -9,10 +9,10 @@ use crate::{
             OPEN_EXISTING,
         },
         gwe::{
-            Gwe, GweStats, HWND_BROADCAST, HWND_TOP, Message, MessagePointerPayload, Point, Rect,
-            SMF_NULL, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WA_ACTIVE,
-            WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE, WM_ENABLE, WM_KILLFOCUS, WM_MOVE, WM_SETFOCUS,
-            WM_SHOWWINDOW, WM_SIZE, WM_WINDOWPOSCHANGED, WindowPos,
+            Gwe, GweStats, HWND_BROADCAST, HWND_TOP, Message, MessagePointerPayload, PeekFlags,
+            Point, Rect, SMF_NULL, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+            WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE, WM_ENABLE, WM_KILLFOCUS, WM_MOVE,
+            WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WM_WINDOWPOSCHANGED, WindowPos,
         },
         memory::{MemorySystem, PROCESS_HEAP_HANDLE},
         object::{
@@ -356,16 +356,19 @@ impl CeKernel {
     pub fn pump_timers_to_gwe(&mut self, thread_id: u32) {
         self.expire_timed_out_send_messages();
         for timer in self.timers.due_timers() {
-            if let Some(hwnd) = timer.hwnd {
-                let message = crate::ce::gwe::Message::new(
-                    hwnd,
-                    timer.message,
-                    timer.id,
-                    0,
-                    self.timers.tick_count(),
-                );
-                self.post_gwe_message(thread_id, message);
-            }
+            let target_thread_id = if timer.thread_id == 0 {
+                thread_id
+            } else {
+                timer.thread_id
+            };
+            let message = crate::ce::gwe::Message::new(
+                timer.hwnd.unwrap_or(0),
+                timer.message,
+                timer.id,
+                0,
+                self.timers.tick_count(),
+            );
+            self.post_gwe_message(target_thread_id, message);
         }
     }
 
@@ -811,9 +814,10 @@ impl CeKernel {
     }
 
     pub fn file_is_eof(&self, handle: u32) -> Result<bool> {
-        let position = self.file_position(handle)?;
-        let size = self.get_file_size(handle)?;
-        Ok(position >= size)
+        let KernelObject::File(file) = self.handles.get(handle)? else {
+            return Err(crate::error::Error::InvalidHandle(handle));
+        };
+        self.files.file_is_eof(file.file_id)
     }
 
     pub fn flush_file_buffers(&mut self, handle: u32) -> Result<bool> {
@@ -1640,7 +1644,19 @@ impl CeKernel {
         if !self.gwe.is_window(hwnd) {
             return false;
         }
-        if self.gwe.update_rect(hwnd).is_some() {
+        if let Some(update) = self.gwe.update_rect(hwnd) {
+            let Some(window) = self.gwe.window(hwnd) else {
+                return false;
+            };
+            if !window.visible || window.style & crate::ce::gwe::WS_VISIBLE == 0 {
+                return true;
+            }
+            if update.erase {
+                let hdc = 0x0200_0000 | (hwnd & 0x00ff_ffff);
+                if !self.erase_window_background(hwnd, hdc) {
+                    return false;
+                }
+            }
             let _ = self.send_message_w(hwnd, crate::ce::gwe::WM_PAINT, 0, 0);
         }
         true
@@ -1805,9 +1821,48 @@ impl CeKernel {
     }
 
     pub fn get_message_w(&mut self, thread_id: u32) -> Option<Message> {
+        self.get_message_w_filtered(thread_id, None, 0, 0)
+    }
+
+    pub fn get_message_w_filtered(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
+        self.expire_timed_out_send_messages();
+        self.drain_remote_input_to_thread_window(thread_id, hwnd);
+        if let Some(message) = self
+            .gwe
+            .get_message_filtered(thread_id, hwnd, min_msg, max_msg)
+        {
+            return Some(message);
+        }
         self.pump_timers_to_gwe(thread_id);
-        self.drain_remote_input_to_thread_window(thread_id, None);
-        self.gwe.get_message(thread_id)
+        self.gwe
+            .get_message_filtered(thread_id, hwnd, min_msg, max_msg)
+    }
+
+    pub fn peek_message_w_filtered(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+        flags: PeekFlags,
+    ) -> Option<Message> {
+        self.expire_timed_out_send_messages();
+        self.drain_remote_input_to_thread_window(thread_id, hwnd);
+        if let Some(message) = self
+            .gwe
+            .peek_message_filtered(thread_id, hwnd, min_msg, max_msg, flags)
+        {
+            return Some(message);
+        }
+        self.pump_timers_to_gwe(thread_id);
+        self.gwe
+            .peek_message_filtered(thread_id, hwnd, min_msg, max_msg, flags)
     }
 
     pub fn post_message_w(&mut self, hwnd: u32, msg: u32, wparam: u32, lparam: u32) -> bool {
@@ -2070,8 +2125,29 @@ impl CeKernel {
         requested_id: Option<u32>,
         period_ms: u32,
     ) -> u32 {
-        self.timers
-            .set_timer(hwnd, requested_id, period_ms, crate::ce::gwe::WM_TIMER)
+        let thread_id = hwnd
+            .and_then(|hwnd| self.gwe.window_thread_process_id(hwnd))
+            .map(|(thread_id, _)| thread_id)
+            .unwrap_or(0);
+        self.set_timer_for_thread(thread_id, hwnd, requested_id, period_ms, None)
+    }
+
+    pub fn set_timer_for_thread(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        requested_id: Option<u32>,
+        period_ms: u32,
+        callback: Option<u32>,
+    ) -> u32 {
+        self.timers.set_timer(
+            thread_id,
+            hwnd,
+            requested_id,
+            period_ms,
+            crate::ce::gwe::WM_TIMER,
+            callback,
+        )
     }
 
     pub fn kill_timer(&mut self, id: u32) -> bool {

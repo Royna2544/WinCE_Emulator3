@@ -70,6 +70,7 @@ pub struct OpenFile {
     file_len: usize,
     writable: bool,
     dirty: bool,
+    eof: bool,
 }
 
 impl OpenFile {
@@ -79,6 +80,10 @@ impl OpenFile {
 
     pub fn file_len(&self) -> usize {
         self.file_len
+    }
+
+    pub fn is_eof(&self) -> bool {
+        self.eof
     }
 
     pub fn is_memory_backed(&self) -> bool {
@@ -104,12 +109,16 @@ impl OpenFile {
             FileBacking::Memory(bytes) => {
                 if self.cursor >= self.file_len {
                     write(&[])?;
+                    if requested != 0 {
+                        self.eof = true;
+                    }
                     return Ok((0, false));
                 }
                 let start = self.cursor;
                 let end = self.cursor.saturating_add(requested).min(self.file_len);
                 write(&bytes[start..end])?;
                 self.cursor = end;
+                self.eof = end - start < requested;
                 Ok(((end - start) as u32, false))
             }
             FileBacking::HostFile(file) => {
@@ -123,6 +132,7 @@ impl OpenFile {
                     write,
                 )?;
                 self.cursor = self.cursor.saturating_add(transferred as usize);
+                self.eof = transferred as usize != requested;
                 Ok((transferred, true))
             }
         }
@@ -161,6 +171,7 @@ impl OpenFile {
         let offset = self.cursor;
         self.write_at(offset, bytes)?;
         self.cursor = offset.saturating_add(bytes.len());
+        self.eof = false;
         Ok(())
     }
 
@@ -190,6 +201,7 @@ impl OpenFile {
             }
         }
         self.dirty = true;
+        self.eof = false;
         Ok(())
     }
 
@@ -482,6 +494,7 @@ impl HostFileSystem {
                     creation_disposition,
                     CREATE_NEW | CREATE_ALWAYS | TRUNCATE_EXISTING
                 ),
+                eof: false,
             },
         );
         if is_host_file_backed {
@@ -720,7 +733,12 @@ impl HostFileSystem {
     pub fn set_file_pointer(&mut self, id: u32, position: usize) -> Result<usize> {
         let file = self.open_file_mut(id)?;
         file.cursor = position;
+        file.eof = false;
         Ok(file.cursor)
+    }
+
+    pub fn file_is_eof(&self, id: u32) -> Result<bool> {
+        Ok(self.open_file(id)?.is_eof())
     }
 
     pub fn file_size(&self, id: u32) -> Result<usize> {

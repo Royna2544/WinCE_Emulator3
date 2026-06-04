@@ -784,6 +784,26 @@ impl ResourceSystem {
         self.pens.get(&handle)
     }
 
+    pub fn gdi_object_kind(&self, handle: u32) -> &'static str {
+        if self.bitmaps.contains_key(&handle) {
+            "bitmap"
+        } else if self.fonts.contains_key(&handle) || is_stock_font(handle) {
+            "font"
+        } else if self.brushes.contains_key(&handle) || is_stock_brush(handle) {
+            "brush"
+        } else if self.pens.contains_key(&handle) || is_stock_pen(handle) {
+            "pen"
+        } else if self.palettes.contains_key(&handle) {
+            "palette"
+        } else if self.regions.contains_key(&handle) {
+            "region"
+        } else if self.memory_dcs.contains(&handle) {
+            "memory_dc"
+        } else {
+            "unknown"
+        }
+    }
+
     pub fn create_palette(&mut self, entries: Vec<[u8; 4]>) -> u32 {
         let handle = self.next_gdi_handle;
         self.next_gdi_handle += 4;

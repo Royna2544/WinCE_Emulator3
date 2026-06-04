@@ -57,7 +57,9 @@ fn boots_and_smokes_basic_ce_subsystems() -> Result<()> {
 
     let hwnd = kernel.gwe.create_window(42, "SmokeWindow", "smoke");
     assert!(kernel.gwe.get_message(42).is_none());
-    let timer_id = kernel.timers.set_timer(Some(hwnd), Some(77), 0, WM_TIMER);
+    let timer_id = kernel
+        .timers
+        .set_timer(42, Some(hwnd), Some(77), 0, WM_TIMER, None);
     assert_eq!(timer_id, 77);
     kernel.pump_timers_to_gwe(42);
     let timer_msg = kernel.gwe.get_message(42).unwrap();
@@ -624,6 +626,18 @@ fn message_and_timer_transitions_queue_scheduler_msg_wait_candidates() -> Result
     kernel.remove_blocked_waiter(timer_global).unwrap();
     assert_eq!(kernel.gwe.get_message(43).unwrap().msg, WM_TIMER);
 
+    let thread_timer_global = register_global_ready_wait(&mut kernel, 4);
+    let thread_timer_wait = register_msg_wait(&mut kernel, 45, QS_TIMER);
+    assert_eq!(kernel.set_timer_for_thread(45, None, Some(88), 0, None), 88);
+    kernel.pump_timers_to_gwe(1);
+    assert_eq!(select_ready(&kernel, 1, 0), Some(thread_timer_wait));
+    kernel.remove_blocked_waiter(thread_timer_wait).unwrap();
+    kernel.remove_blocked_waiter(thread_timer_global).unwrap();
+    let thread_timer_msg = kernel.gwe.get_message(45).unwrap();
+    assert_eq!(thread_timer_msg.hwnd, 0);
+    assert_eq!(thread_timer_msg.msg, WM_TIMER);
+    assert_eq!(thread_timer_msg.wparam, 88);
+
     let send_global = register_global_ready_wait(&mut kernel, 3);
     let send_wait = register_msg_wait(&mut kernel, 44, QS_SENDMESSAGE);
     let hwnd = kernel.gwe.create_window(44, "MsgSendWake", "send");
@@ -646,8 +660,8 @@ fn message_and_timer_transitions_queue_scheduler_msg_wait_candidates() -> Result
     assert_eq!(kernel.gwe.get_message(45).unwrap().msg, WM_QUIT);
 
     let stats = kernel.scheduler_stats();
-    assert_eq!(stats.message_input_signal_count, 4);
-    assert_eq!(stats.message_input_wake_candidate_count, 4);
+    assert_eq!(stats.message_input_signal_count, 6);
+    assert_eq!(stats.message_input_wake_candidate_count, 5);
     Ok(())
 }
 
