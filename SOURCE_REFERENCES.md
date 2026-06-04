@@ -865,6 +865,22 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     itself represented the CE namespace and should enumerate mount-point
     prefixes such as `SDMMC Disk` rather than the host filesystem root.
 
+- CE file write syscall and error surface:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winerror.h`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsdmgr.h`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\fileapi.cpp`, and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\fscall.c`
+  - `winbase.h` declares `WriteFile(HANDLE, LPCVOID, DWORD, LPDWORD,
+    LPOVERLAPPED)`, so the raw COREDLL path must return a `BOOL` and write
+    `lpNumberOfBytesWritten` when supplied.
+  - `winerror.h` defines `ERROR_ACCESS_DENIED` as `5L`.
+  - `fsdmgr.h` and FSDMGR `fileapi.cpp` route `WriteFile` through the
+    filesystem handle implementation, and NK `fscall.c` bridges `FSWriteFile`
+    through the file-handle call path. Rust keeps existing host-backed file
+    handles open, writes through writable handles, reports bytes written, and
+    uses `ERROR_ACCESS_DENIED` for valid non-writable handles.
+
 - CE process entry / module-name precedent:
   `../WinCE_Emulator_v2/src/main.cpp` and
   `../WinCE_Emulator_v2/src/coredll_named_dispatch.cpp`

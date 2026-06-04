@@ -28,7 +28,9 @@ use wince_emulation_v3::{
         kernel::CeKernel,
         memory::{HEAP_NO_SERIALIZE, HEAP_ZERO_MEMORY, LMEM_ZEROINIT, MEM_COMMIT, MEM_RELEASE},
         registry::{ERROR_SUCCESS, HKEY_CURRENT_USER, REG_DWORD},
-        thread::{ERROR_INVALID_PARAMETER, ERROR_NO_MORE_FILES, ERROR_NOT_SUPPORTED},
+        thread::{
+            ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, ERROR_NO_MORE_FILES, ERROR_NOT_SUPPORTED,
+        },
     },
     config::RuntimeConfig,
 };
@@ -2912,6 +2914,163 @@ fn coredll_raw_read_file_streams_large_host_file_into_guest_memory() -> Result<(
     assert_eq!(stats.host_file_read_count, 1);
     assert_eq!(stats.host_file_read_bytes, payload.len() as u64);
     assert_eq!(stats.max_read_request, payload.len() as u32);
+    fs::remove_dir_all(root).unwrap();
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_write_file_writes_through_host_backing_and_reports_count() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("write_file_host_backing");
+    fs::create_dir_all(&root).unwrap();
+    let sdmmc_root = root.join("sdmmc");
+    fs::create_dir_all(&sdmmc_root).unwrap();
+    fs::write(sdmmc_root.join("config.bin"), b"0123456789").unwrap();
+    kernel.set_file_root(&root);
+    kernel.mount_guest_root("\\SDMMC Disk", &sdmmc_root);
+
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let path_ptr = 0x1_0000;
+    let write_buffer = 0x1_0200;
+    let count_ptr = 0x1_0300;
+    memory.write_wide_z(path_ptr, "\\SDMMC Disk\\config.bin");
+    memory.write_bytes(write_buffer, b"EOF");
+    memory.map_words(count_ptr, 1);
+
+    let file = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_W,
+        [
+            path_ptr,
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            0,
+            OPEN_EXISTING,
+            0,
+            0,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateFileW did not return a file handle: {other:?}"),
+    };
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_FILE_POINTER,
+            [file, 4, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(4),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WRITE_FILE,
+            [file, write_buffer, 3, count_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(memory.read_u32(count_ptr)?, 3);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CLOSE_HANDLE,
+        [file],
+    );
+    assert_eq!(
+        fs::read(sdmmc_root.join("config.bin")).unwrap(),
+        b"0123EOF789"
+    );
+    fs::remove_dir_all(root).unwrap();
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_write_file_on_readonly_handle_reports_access_denied() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("write_file_readonly_handle");
+    fs::create_dir_all(&root).unwrap();
+    let sdmmc_root = root.join("sdmmc");
+    fs::create_dir_all(&sdmmc_root).unwrap();
+    fs::write(sdmmc_root.join("config.bin"), b"unchanged").unwrap();
+    kernel.set_file_root(&root);
+    kernel.mount_guest_root("\\SDMMC Disk", &sdmmc_root);
+
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let path_ptr = 0x1_0000;
+    let write_buffer = 0x1_0200;
+    let count_ptr = 0x1_0300;
+    memory.write_wide_z(path_ptr, "\\SDMMC Disk\\config.bin");
+    memory.write_bytes(write_buffer, b"nope");
+    memory.map_words(count_ptr, 1);
+
+    let file = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_W,
+        [path_ptr, GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateFileW did not return a file handle: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WRITE_FILE,
+            [file, write_buffer, 4, count_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+
+    assert_eq!(memory.read_u32(count_ptr)?, 0);
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_ACCESS_DENIED
+    );
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CLOSE_HANDLE,
+        [file],
+    );
+    assert_eq!(
+        fs::read(sdmmc_root.join("config.bin")).unwrap(),
+        b"unchanged"
+    );
     fs::remove_dir_all(root).unwrap();
     Ok(())
 }

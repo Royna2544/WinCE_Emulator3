@@ -45,7 +45,19 @@
   mode-47 table replay evidence, and decide whether the next fidelity slice is
   another GWE message ordering/detail gap, resource/module state behavior, or
   broader scheduler thread-state ownership. Do not force hidden child paints
-  or app-specific state.
+  or app-specific state. The newer 150 s virtual/tap probe
+  `target\writefile_lasterror_virtual_150s_*` confirms this as real UI
+  progress: the framebuffer contains the iNavi SE splash art, not a black
+  screen or fake host paint. The next presentation frontier is why later
+  offscreen DIB/StretchBlt/BitBlt composition into an 800x54 memory surface is
+  not copied to a display HDC, and why invalidation is landing on hidden or
+  effectively invisible child HWND `0x0002006c`.
+- Improve file-open trace summaries to include raw `CreateFileW` desired access
+  and creation disposition when needed. The current iNavi `config.bin`
+  `WriteFile` still reports zero bytes in the mounted trace, but the dump hash
+  remains unchanged and the new raw fixtures prove writable host-backed handles
+  write through; the remaining question is whether that specific guest open was
+  read-only or host-permission downgraded.
 - Timer identity no longer has the known global-id collapse: v3 now keys
   timers by owner thread/message queue, optional `HWND`, and id, and raw
   `KillTimer(hwnd,id)` only removes the matching scoped timer. Destroyed HWND

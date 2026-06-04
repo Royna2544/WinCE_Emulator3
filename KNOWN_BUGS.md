@@ -721,6 +721,34 @@
     remaining ad hoc blocked-wait vectors, subsystem wake paths, and
     Unicorn-local saved-context storage.
 
+- Post-splash iNavi rendering is still not advancing past the first real
+  display present.
+  - Symptom: virtual mounted iNavi now shows the real 800x480 iNavi SE splash
+    frame, but later GDI work remains offscreen and no named render milestone
+    appears by 150 s.
+  - Evidence: `target\writefile_lasterror_virtual_150s_render.txt` records the
+    splash path as guest memory-DC composition followed by
+    `BitBlt(dst=0x02020008,dst_hwnd=0x00020008,dst_memdc=false,src=0x000a0044)`.
+    Later trace entries show additional DIBSection creation and memory-DC
+    `StretchBlt`/`BitBlt` work into an 800x54 surface, but no later
+    display-surface blit. The milestones trace also shows
+    `InvalidateRect(hwnd=0x0002006c, rect=NULL, erase=true)` where that child
+    is hidden/effectively invisible.
+  - Status: active UI frontier. Investigate generic GWE visibility,
+    invalidation propagation, paint/update ordering, and timer/message
+    progression; do not force hidden child paints or app-specific pixels.
+
+- Raw `WriteFile` failure on valid non-writable handles previously left
+  `LastError` stale.
+  - Symptom: a failed `WriteFile` could return `FALSE` and zero bytes written
+    without replacing the calling thread's last-error.
+  - Evidence: raw COREDLL `write_file_raw` returned `result.success` directly
+    after writing the optional byte count. It now sets last-error to
+    `ERROR_ACCESS_DENIED` for valid non-writable handles and clears it on
+    success; focused raw tests cover host write-through and read-only-handle
+    failure.
+  - Status: fixed in the current working tree; commit after final validation.
+
 - Host desktop windows may be inaccessible from the current automation session.
   - Symptom: `--desktop host` initializes the Win32 presenter and reports
     `desktop: win32 host presenter`, but an automated user32 `FindWindow`

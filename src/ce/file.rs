@@ -1444,7 +1444,15 @@ mod tests {
 
         fs.set_file_pointer(id, 1024 * 1024).unwrap();
         assert_eq!(fs.read_file(id, 9).unwrap(), b"rw-window");
+        fs.write_file(id, b"-written").unwrap();
         fs.close(id).unwrap();
+        let mut verify = fs::File::open(&path).unwrap();
+        verify
+            .seek(SeekFrom::Start(1024 * 1024 + b"rw-window".len() as u64))
+            .unwrap();
+        let mut written = [0u8; 8];
+        verify.read_exact(&mut written).unwrap();
+        assert_eq!(&written, b"-written");
         fs::remove_dir_all(root).unwrap();
     }
 

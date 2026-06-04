@@ -25,10 +25,11 @@ use crate::{
             AcceleratorEntry, MenuItem, PopupMenuTracking, ResourceId, stock_object_handle,
         },
         thread::{
-            ERROR_ALREADY_EXISTS, ERROR_CLASS_DOES_NOT_EXIST, ERROR_FILE_NOT_FOUND,
-            ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE,
-            ERROR_NO_MORE_FILES, ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_OWNER, ERROR_NOT_SUPPORTED,
-            ERROR_RESOURCE_NAME_NOT_FOUND, ERROR_SIGNAL_REFUSED,
+            ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_CLASS_DOES_NOT_EXIST,
+            ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER,
+            ERROR_INVALID_WINDOW_HANDLE, ERROR_NO_MORE_FILES, ERROR_NOT_ENOUGH_MEMORY,
+            ERROR_NOT_OWNER, ERROR_NOT_SUPPORTED, ERROR_RESOURCE_NAME_NOT_FOUND,
+            ERROR_SIGNAL_REFUSED,
         },
     },
     error::{Error, Result},
@@ -5958,6 +5959,13 @@ fn write_file_raw<M: CoredllGuestMemory>(
             return false;
         }
     };
+    if !result.success {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+    } else {
+        kernel.threads.set_last_error(thread_id, 0);
+    }
     write_optional_count(
         kernel,
         memory,

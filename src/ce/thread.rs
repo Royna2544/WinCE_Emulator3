@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const ERROR_SUCCESS: u32 = 0;
 pub const ERROR_FILE_NOT_FOUND: u32 = 2;
+pub const ERROR_ACCESS_DENIED: u32 = 5;
 pub const ERROR_INVALID_HANDLE: u32 = 6;
 pub const ERROR_NOT_ENOUGH_MEMORY: u32 = 8;
 pub const ERROR_NO_MORE_FILES: u32 = 18;

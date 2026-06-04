@@ -2508,6 +2508,29 @@
   named render milestone or useful UI output. The reduced 30/60 s pixel extent
   versus the previous null-`lParam` run is recorded as a fidelity-cost
   observation, not UI progress.
+- Added raw `WriteFile` result/last-error fidelity for host-backed file
+  handles. `WriteFile` now clears thread last-error on success and reports
+  `ERROR_ACCESS_DENIED` when the handle is valid but not writable, while
+  existing invalid-handle errors are preserved. File-system coverage now proves
+  an existing `GENERIC_READ | GENERIC_WRITE` host-backed file stays streamed
+  and writes through at the current cursor without preloading the file, and raw
+  COREDLL coverage verifies the guest `BOOL`, bytes-written pointer, last-error,
+  and host contents for both writable and read-only handles. Validation:
+  `cargo fmt`, focused raw/file tests, non-incremental
+  `cargo check --features unicorn,trace,win32-desktop`, and full
+  `cargo test --features unicorn,trace,win32-desktop` pass. Mounted validation
+  wrote `target\writefile_lasterror_virtual_150s_*`; it stayed memory-stable
+  (`heap_live=13697/13300954B`, `virtual_live=3/196608B`,
+  `host_open=665`, `host_read=80198/4056903B`, `mem_open=3`,
+  `max_read=685080`) and preserved the source `config.bin` SHA-256
+  `1F04AE1349063D3A79F74733B233D8872F9A0D808309C33158DCF2EF9A86188A`.
+- The 150 s virtual iNavi probe is now confirmed real UI progress rather than
+  a black or fake frame: framebuffer `target\writefile_lasterror_virtual_150s.ppm`
+  contains the iNavi SE splash art, produced by guest GDI memory-DC composition
+  followed by a real screen `BitBlt` to HWND `0x00020008`. Later trace evidence
+  shows additional offscreen DIB/StretchBlt/BitBlt work into an 800x54 memory
+  surface and invalidation of hidden/effectively invisible child HWND
+  `0x0002006c`, but no later display-surface blit or named render milestone.
 
 ## False Leads
 
