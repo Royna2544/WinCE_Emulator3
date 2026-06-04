@@ -11,11 +11,32 @@ Runtime DLL note: mounted iNavi execution should load DLL images from
 `D:\INAVI_Emulator\DUMPPLZ\Windows`. SDK import libraries and CE/MFC source
 trees remain behavior/reference evidence, not the primary runtime DLL source.
 
+## Runtime PE/DLL Loading
+
+- Dumped runtime DLL bytes:
+  `D:\INAVI_Emulator\DUMPPLZ\Windows\commctrl.dll`
+  - The real target `commctrl.dll` has a base-relocation data directory at RVA
+    `0x00076000` with size `0x7e7c`, while `SizeOfImage` is `0x0007f000` and
+    no section owns that RVA. Mapped PE semantics still zero-fill all image
+    memory below `SizeOfImage`, so parser reads through directory terminators
+    and strings must treat unbacked mapped bytes as zero instead of rejecting
+    the image.
+  - Startup loader validation now maps dumped `mfcce400.dll` and dumped
+    `commctrl.dll` from `--dll-search-dir`; COREDLL remains emulator-provided,
+    while WINSOCK/OLE stay shimmed until subsystem-backed behavior is required
+    by fixtures or trace evidence. Import patching resolves loaded external
+    DLL exports before shim classification, and `commctrl.dll`/`commctrlce.dll`
+    are not classified as emulator common-controls shims; they must come from
+    the configured runtime DLL search paths.
+
 ## Windows CE Core OS
 
 - Scheduler and wait ownership:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\syncobj.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\thread.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\kcalls.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\schedule.h`,
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`, and
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pkfuncs.h`
   - CE waits are kernel scheduler decisions over signaled kernel objects, not
@@ -27,9 +48,35 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `MsgWaitForMultipleObjectsEx`, and Unicorn blocked-wait resume diagnostics.
     Parked Unicorn `WaitForSingleObject` waits now preserve start tick/timeout
     metadata and use CE-style `WAIT_TIMEOUT` resume for bounded waits, with
-    object-signaled acquisition taking precedence. `NKWaitForMultipleObjects`
-    rejects `fWaitAll` before dispatching to the lower wait helper, so v3 keeps
-    that raw API behavior even though v2 had corroborating wait-all machinery.
+    object-signaled acquisition taking precedence. `DoWaitForObjects` records
+    each proxy with the waiting thread's current priority and `WAIT_OBJECT_0 +
+    index`; CE priority comparisons treat lower numeric values as higher
+    priority, so v3 blocked-wait selection now uses lower numeric priority
+    first and FIFO ordering within equal priority. `LockWaitableObject`
+    accepts process/thread handles (including current pseudo-handle mapping),
+    event, mutex, and semaphore, and rejects other handle types as invalid
+    waits; v3 now mirrors that for normal file/device/window/wave/mapping/
+    find-file/critical-section handles. `NKWaitForMultipleObjects` rejects
+    `fWaitAll` before dispatching to the lower wait helper, so v3 keeps that
+    raw API behavior even though v2 had corroborating wait-all machinery.
+    `NKWaitForMultipleObjects` also rejects zero handles and counts above
+    `MAXIMUM_WAIT_OBJECTS` (`64` from `winnt.h`) before `DoWaitForObjects`;
+    handle locking happens for every input handle before any object is waited,
+    so a later invalid handle fails the call without consuming an earlier
+    signaled auto-reset object. `thread.c` defines `W32PrioMap` as CE
+    priorities `248..255`, maps Win32 `SetThreadPriority` values `0..7`
+    through that table, maps `GetThreadPriority` back to `0..7` while
+    clamping real-time absolute priorities to `THREAD_PRIORITY_TIME_CRITICAL`,
+    and exposes `CeGet/CeSetThreadPriority` as absolute `0..255` priority APIs.
+    `schedule.h` defines `MAX_SUSPEND_COUNT` as `127`; `kcalls.c`
+    `ThreadSuspend` returns the previous count, increments only below that cap,
+    and returns `0xffffffff` for refused overflow, which `thread.c`
+    `THRDSuspend` maps to `ERROR_SIGNAL_REFUSED`. `ThreadResume` returns the
+    previous suspend or pending-suspend count and decrements only when nonzero.
+    The first Unicorn multiple-wait parking bridge mirrors the same
+    `DoWaitForObjects` proxy shape at the emulator boundary: one parked record
+    owns all input handles, readiness scans every handle, and resume returns
+    `WAIT_OBJECT_0 + idx` for the first ready handle.
     Full waiter queues and context-switch ownership remain the next scheduler
     port step.
 

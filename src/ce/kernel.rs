@@ -15,7 +15,11 @@ use crate::{
             WM_SHOWWINDOW, WM_SIZE, WM_WINDOWPOSCHANGED, WindowPos,
         },
         memory::{MemorySystem, PROCESS_HEAP_HANDLE},
-        object::{FileObject, FindFileObject, HandleTable, KernelObject, WaitResult},
+        object::{
+            CE_THREAD_PRIORITY_NORMAL, FileObject, FindFileObject, HandleTable, KernelObject,
+            ThreadResumeResult, ThreadSuspendResult, WaitMultipleResult, WaitResult,
+            ce_thread_priority_to_win32, win32_thread_priority_to_ce,
+        },
         registry::Registry,
         remote::{CeRemote, RemoteStatus, WM_LBUTTONDOWN, WM_MOUSEMOVE, make_lparam},
         resource::ResourceSystem,
@@ -125,6 +129,8 @@ fn wait_result_to_wake_reason(result: u32) -> SchedulerWakeReason {
         SchedulerWakeReason::ObjectSignaled
     }
 }
+
+const MAXIMUM_WAIT_OBJECTS: usize = 64;
 
 impl CeKernel {
     pub fn boot(config: RuntimeConfig) -> Self {
@@ -892,11 +898,11 @@ impl CeKernel {
         self.handles.mark_process_exited(handle, exit_code)
     }
 
-    pub fn suspend_thread(&mut self, handle: u32) -> Option<u32> {
+    pub fn suspend_thread(&mut self, handle: u32) -> ThreadSuspendResult {
         self.handles.suspend_thread(handle)
     }
 
-    pub fn resume_thread(&mut self, handle: u32) -> Option<u32> {
+    pub fn resume_thread(&mut self, handle: u32) -> ThreadResumeResult {
         self.handles.resume_thread(handle)
     }
 
@@ -904,11 +910,26 @@ impl CeKernel {
         self.handles.thread_priority(handle)
     }
 
-    pub fn thread_priority_by_id(&self, thread_id: u32) -> i32 {
-        self.handles.thread_priority_by_id(thread_id).unwrap_or(0)
+    pub fn thread_win32_priority(&self, handle: u32) -> Option<u32> {
+        self.handles
+            .thread_priority(handle)
+            .and_then(ce_thread_priority_to_win32)
     }
 
-    pub fn set_thread_priority(&mut self, handle: u32, priority: i32) -> bool {
+    pub fn thread_priority_by_id(&self, thread_id: u32) -> i32 {
+        self.handles
+            .thread_priority_by_id(thread_id)
+            .unwrap_or(CE_THREAD_PRIORITY_NORMAL)
+    }
+
+    pub fn set_thread_ce_priority(&mut self, handle: u32, priority: i32) -> bool {
+        self.handles.set_thread_priority(handle, priority)
+    }
+
+    pub fn set_thread_win32_priority(&mut self, handle: u32, priority: u32) -> bool {
+        let Some(priority) = win32_thread_priority_to_ce(priority) else {
+            return false;
+        };
         self.handles.set_thread_priority(handle, priority)
     }
 
@@ -970,6 +991,10 @@ impl CeKernel {
             WaitResult::Timeout => WAIT_TIMEOUT,
             WaitResult::Failed => WAIT_FAILED,
         };
+        if result == WAIT_FAILED {
+            self.threads
+                .set_last_error(thread_id, crate::ce::thread::ERROR_INVALID_HANDLE);
+        }
         self.scheduler
             .record_wait_result(wait_result_to_wake_reason(result));
         result
@@ -981,7 +1006,24 @@ impl CeKernel {
         self.scheduler.record_blocked_wait();
     }
 
+    pub fn record_blocked_multiple_wait(&mut self, handle_count: u32, timeout_ms: u32) {
+        self.scheduler
+            .record_wait_attempt(SchedulerWaitKind::Multiple, handle_count, timeout_ms);
+        self.scheduler.record_blocked_wait();
+    }
+
+    pub fn record_blocked_msg_wait(&mut self, handle_count: u32, timeout_ms: u32) {
+        self.scheduler
+            .record_wait_attempt(SchedulerWaitKind::MsgWait, handle_count, timeout_ms);
+        self.scheduler.record_blocked_wait();
+    }
+
     pub fn record_resumed_single_wait(&mut self, result: u32) {
+        self.scheduler
+            .record_wait_wake(wait_result_to_wake_reason(result));
+    }
+
+    pub fn record_resumed_wait(&mut self, result: u32) {
         self.scheduler
             .record_wait_wake(wait_result_to_wake_reason(result));
     }
@@ -998,6 +1040,16 @@ impl CeKernel {
             .record_wait_attempt(SchedulerWaitKind::MsgWait, handle_count, timeout_ms);
         self.scheduler
             .record_wait_result(SchedulerWakeReason::MessageInput);
+    }
+
+    pub fn record_resumed_msg_wait_input(&mut self) {
+        self.scheduler
+            .record_wait_wake(SchedulerWakeReason::MessageInput);
+    }
+
+    pub fn record_resumed_msg_wait_result(&mut self, result: u32) {
+        self.scheduler
+            .record_wait_wake(wait_result_to_wake_reason(result));
     }
 
     pub fn record_multiple_wait_attempt(
@@ -1024,7 +1076,11 @@ impl CeKernel {
         {
             WaitResult::Object0 => WAIT_OBJECT_0,
             WaitResult::Timeout => WAIT_TIMEOUT,
-            WaitResult::Failed => WAIT_FAILED,
+            WaitResult::Failed => {
+                self.threads
+                    .set_last_error(thread_id, crate::ce::thread::ERROR_INVALID_HANDLE);
+                WAIT_FAILED
+            }
         }
     }
 
@@ -1039,25 +1095,45 @@ impl CeKernel {
         timeout_ms: u32,
         thread_id: u32,
     ) -> u32 {
-        let result = if handles.is_empty() || wait_all {
-            WAIT_FAILED
-        } else if let Some((index, handle)) = handles
-            .iter()
-            .enumerate()
-            .find(|(_, handle)| self.handles.is_wait_ready(**handle, thread_id) == Some(true))
-        {
-            let _ = self.handles.wait_for_single_object(*handle, 0, thread_id);
-            WAIT_OBJECT_0 + index as u32
-        } else if handles
-            .iter()
-            .any(|handle| self.handles.is_wait_ready(*handle, thread_id).is_none())
-        {
+        let result = if handles.is_empty() || wait_all || handles.len() > MAXIMUM_WAIT_OBJECTS {
+            self.threads
+                .set_last_error(thread_id, crate::ce::thread::ERROR_INVALID_PARAMETER);
             WAIT_FAILED
         } else {
-            WAIT_TIMEOUT
+            match self.handles.wait_for_any_object(handles, thread_id) {
+                WaitMultipleResult::Object(index) => WAIT_OBJECT_0 + index,
+                WaitMultipleResult::Timeout => WAIT_TIMEOUT,
+                WaitMultipleResult::Failed => {
+                    self.threads
+                        .set_last_error(thread_id, crate::ce::thread::ERROR_INVALID_HANDLE);
+                    WAIT_FAILED
+                }
+            }
         };
         self.record_multiple_wait_attempt(handles.len() as u32, timeout_ms, result);
         result
+    }
+
+    pub fn wait_for_multiple_objects_without_scheduler_record(
+        &mut self,
+        handles: &[u32],
+        wait_all: bool,
+        thread_id: u32,
+    ) -> u32 {
+        if handles.is_empty() || wait_all || handles.len() > MAXIMUM_WAIT_OBJECTS {
+            self.threads
+                .set_last_error(thread_id, crate::ce::thread::ERROR_INVALID_PARAMETER);
+            return WAIT_FAILED;
+        }
+        match self.handles.wait_for_any_object(handles, thread_id) {
+            WaitMultipleResult::Object(index) => WAIT_OBJECT_0 + index,
+            WaitMultipleResult::Timeout => WAIT_TIMEOUT,
+            WaitMultipleResult::Failed => {
+                self.threads
+                    .set_last_error(thread_id, crate::ce::thread::ERROR_INVALID_HANDLE);
+                WAIT_FAILED
+            }
+        }
     }
 
     pub fn create_window_ex_w(

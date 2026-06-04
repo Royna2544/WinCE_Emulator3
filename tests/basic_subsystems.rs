@@ -7,10 +7,13 @@ use wince_emulation_v3::{
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::{GWL_USERDATA, Rect, WM_QUIT, WM_TIMER, WM_USER, WS_CHILD, WS_VISIBLE},
         kernel::{CeKernel, MessagePumpResult},
-        object::{EventObject, KernelObject},
+        object::{
+            EventObject, KernelObject, MAX_SUSPEND_COUNT, ThreadResumeResult, ThreadSuspendResult,
+        },
         registry::{ERROR_SUCCESS, HKEY_LOCAL_MACHINE, REG_SZ},
         remote::{WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP},
-        timer::{WAIT_OBJECT_0, WAIT_TIMEOUT},
+        thread::{ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER},
+        timer::{WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
     config::RuntimeConfig,
     emulator::{
@@ -130,6 +133,79 @@ fn memory_map_rejects_overlaps() -> Result<()> {
 }
 
 #[test]
+fn wait_for_multiple_validates_all_handles_before_acquiring() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let thread_id = 7;
+
+    let auto_event = kernel.create_event_w(Some("auto-ready".to_owned()), false, true);
+    let invalid_handle = 0xdead_beef;
+
+    assert_eq!(
+        kernel.wait_for_multiple_objects(&[auto_event, invalid_handle], false, 0, thread_id),
+        WAIT_FAILED
+    );
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+    assert_eq!(
+        kernel.wait_for_single_object(auto_event, 0, thread_id),
+        WAIT_OBJECT_0
+    );
+
+    let handles = vec![auto_event; 65];
+    assert_eq!(
+        kernel.wait_for_multiple_objects(&handles, false, 0, thread_id),
+        WAIT_FAILED
+    );
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    Ok(())
+}
+
+#[test]
+fn suspend_resume_thread_counts_follow_ce_cap() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let (thread, _thread_id) = kernel.create_guest_thread(0x1000, 0x2000, false);
+
+    assert!(kernel.guest_thread_start(thread).is_some());
+    for expected in 0..MAX_SUSPEND_COUNT {
+        assert_eq!(
+            kernel.suspend_thread(thread),
+            ThreadSuspendResult::Previous(expected)
+        );
+        assert!(kernel.guest_thread_start(thread).is_none());
+    }
+    assert_eq!(
+        kernel.suspend_thread(thread),
+        ThreadSuspendResult::SignalRefused
+    );
+    assert_eq!(
+        kernel.resume_thread(thread),
+        ThreadResumeResult::Previous(MAX_SUSPEND_COUNT)
+    );
+    assert!(kernel.guest_thread_start(thread).is_none());
+    for expected in (1..MAX_SUSPEND_COUNT).rev() {
+        assert_eq!(
+            kernel.resume_thread(thread),
+            ThreadResumeResult::Previous(expected)
+        );
+    }
+    assert!(kernel.guest_thread_start(thread).is_some());
+    assert_eq!(
+        kernel.resume_thread(thread),
+        ThreadResumeResult::Previous(0)
+    );
+
+    Ok(())
+}
+
+#[test]
 fn virtual_win32_api_smoke_covers_file_device_sync_gwe_and_audio() -> Result<()> {
     let root = unique_test_root("virtual_win32_api_smoke");
     fs::create_dir_all(&root).unwrap();
@@ -146,6 +222,7 @@ fn virtual_win32_api_smoke_covers_file_device_sync_gwe_and_audio() -> Result<()>
     let written = kernel.write_file(file, b"abc")?;
     assert!(written.success);
     assert_eq!(written.bytes_transferred, 3);
+    assert_eq!(kernel.wait_for_single_object(file, 0, 7), WAIT_FAILED);
     assert!(kernel.close_handle(file)?);
     assert_eq!(
         fs::read(root.join("ResidentFlash/test.bin")).unwrap(),
@@ -190,11 +267,11 @@ fn virtual_win32_api_smoke_covers_file_device_sync_gwe_and_audio() -> Result<()>
         WAIT_OBJECT_0 + 1
     );
     let scheduler_stats = kernel.scheduler_stats();
-    assert_eq!(scheduler_stats.wait_single_count, 4);
+    assert_eq!(scheduler_stats.wait_single_count, 5);
     assert_eq!(scheduler_stats.wait_multiple_count, 1);
     assert_eq!(scheduler_stats.wait_acquired_count, 4);
     assert_eq!(scheduler_stats.wait_timeout_count, 1);
-    assert_eq!(scheduler_stats.wait_failed_count, 0);
+    assert_eq!(scheduler_stats.wait_failed_count, 1);
     assert_eq!(scheduler_stats.max_wait_handles, 2);
     assert_eq!(scheduler_stats.max_timeout_ms, 123);
 

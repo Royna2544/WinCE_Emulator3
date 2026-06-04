@@ -15,8 +15,9 @@
 - Scheduler/waits/thread contexts:
   - Source refs:
     `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c`,
-    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\syncobj.c`, CE SDK/OAK wait
-    headers, and `SOURCE_REFERENCES.md`.
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\syncobj.c`,
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\thread.c`, CE SDK/OAK wait
+    and thread headers, and `SOURCE_REFERENCES.md`.
   - v2 corroboration: v2 proved cross-thread wait/send/audio/serial parking was
     a viable emulator path, but v3 should keep CE source as the behavior
     authority.
@@ -26,25 +27,70 @@
     summaries. Parked Unicorn `WaitForSingleObject` calls now carry their
     start tick and timeout and can resume with `WAIT_TIMEOUT` when the bounded
     wait expires; object-signaled resumes still acquire/consume the waited
-    object first. Existing CE6 `WaitForMultipleObjects(TRUE)` rejection is
-    preserved from `NKWaitForMultipleObjects`.
+    object first. When multiple parked waits are ready, resume selection now
+    follows CE priority ordering from `DoWaitForObjects`: lower numeric thread
+    priority wins, with FIFO order for equal priority and no immediate
+    self-resume of the active thread. Existing CE6
+    `WaitForMultipleObjects(TRUE)` rejection is preserved from
+    `NKWaitForMultipleObjects`. Wait validation now follows CE
+    `LockWaitableObject` more closely: thread, process, event, mutex, and
+    semaphore handles are waitable; file, find-file, device, HWND, waveOut,
+    file-mapping, and critical-section handles fail waits instead of being
+    treated as signaled. `WaitForMultipleObjects(FALSE)` now validates all
+    handles and the `MAXIMUM_WAIT_OBJECTS == 64` limit before acquiring any
+    ready object, so invalid later handles do not consume earlier auto-reset
+    events. Thread priorities are stored internally as CE absolute priorities
+    (`0..255`); Win32 `Get/SetThreadPriority` maps the `0..7` band to/from
+    absolute `248..255`, while `CeGet/CeSetThreadPriority` use absolute
+    values.
+    Suspend/resume count handling now follows CE `MAX_SUSPEND_COUNT == 127`:
+    `SuspendThread` returns the previous count, refuses overflow with
+    `ERROR_SIGNAL_REFUSED`, and `ResumeThread` decrements only nonzero counts
+    while valid zero-count resumes return `0`.
+    Unicorn parked waits now also cover the first
+    `WaitForMultipleObjects(FALSE)` bridge: the blocked record owns the full
+    handle list, wakes when any handle becomes ready, and returns
+    `WAIT_OBJECT_0 + index` through the raw import boundary.
   - Open gaps: real scheduler-owned waiter queues, unified timer/serial/audio/
     process wake ownership, blocked thread priority/fairness across all wait
-    kinds, multiple-object parking, message-wait parking, and fuller Unicorn
-    thread context switching still need the next scheduler port slices.
+    kinds beyond the current Unicorn bridge, message-wait parking, waiter queue
+    insertion/removal on object state transitions, wake reasons beyond the
+    current single/multiple wait bridge, priority inheritance/boosting around
+    mutex/critical-section ownership, pending self-suspend/PSL late-suspend
+    state, resume-to-run-queue wake ownership, and fuller Unicorn thread
+    context switching still need the next scheduler port slices.
   - Fixture gates: keep existing wait/thread fixtures passing, then graduate
     pending scheduler fixtures for multiple waiters, `MsgWait*`, serial
     parking, waveOut callback wakeups, child-process waits, and scheduler mini
     app.
   - Latest iNavi evidence: active long-run frontier remains the render-map/
-    surface path around `0x0026f7e4`. The bounded timeout-slice host/tap probe
-    wrote `target\scheduler_timeout_*` artifacts and stopped at the familiar
-    10 s resource-loading frontier with no render milestones. This scheduler
-    slice is foundational and should not be counted as UI success until the
-    mounted host/tap run advances. The bounded `SendNotifyMessageW` slice probe
-    wrote `target\send_notify_*` artifacts and reached later file/window
-    activity (`mapinfo.bin`, `UID1:`, child HWND, `GetDC`), but still had no
-    render milestones and no useful framebuffer output.
+    surface path around `0x0026f7e4` in prior host-mode runs. The latest
+    scheduler/thread virtual probe wrote
+    `target\multiple_wait_virtual_60s_*`, loaded dumped runtime
+    DLLs, stayed memory-stable (`heap_live=6921/21255717B`,
+    `host_read=4304/1732170B`), but still had no render milestones and only
+    the 101-pixel tap marker. This scheduler/loader/thread slice is
+    foundational and should not be counted as UI success until the mounted run
+    advances through guest GDI/render paths.
+
+- Runtime DLL loading / shimmed libraries:
+  - Source refs: `D:\INAVI_Emulator\DUMPPLZ\Windows` for target runtime DLL
+    bytes; CE/MFC/SDK trees only as behavior evidence.
+  - Current v3 status: COREDLL remains emulator-provided. WINSOCK/OLE remain
+    shimmed launch-surface libraries. `commctrl.dll` is no longer treated as
+    emulator-provided; startup preloads it from the DLL search paths and
+    registered mapped-module exports are available to module APIs. Import
+    patching resolves loaded external exports before shim classification, so
+    search-path `commctrl.dll` import slots now patch directly to mapped DLL
+    exports rather than a common-controls trap. The PE parser now tolerates
+    real CE mapped-image zero fill below `SizeOfImage`, so the dumped
+    `commctrl.dll` can be inspected and mapped.
+  - Open gaps: runtime `LoadLibraryW` is not yet a general on-demand DLL
+    mapper for arbitrary non-preloaded DLLs; WINSOCK/OLE behavior still needs
+    subsystem-backed implementation only where fixtures or traces demand it.
+  - Fixture gates: keep PE zero-fill tests and module-loader tests passing;
+    add focused runtime `LoadLibraryW`/`GetProcAddress` fixtures before
+    expanding on-demand DLL mapping.
 
 - Window/GWE subsystem:
   - Source refs:
@@ -533,9 +579,10 @@
   that to `WM_CLOSE`. Disassemble the branch path through `0x0004390c` and
   determine which preceding CE/MFC resource, window, or service result is
   causing the app to shut down before useful drawing.
-- Replace launch-stub behavior for commctrl, WINSOCK, and OLE imports with
-  real subsystem-backed implementations as import traces demand. Keep MFC on
-  the loaded SDK DLL path only; do not add emulator MFC stubs.
+- Replace launch-stub behavior for WINSOCK and OLE imports with real
+  subsystem-backed implementations as import traces demand. Keep MFC and
+  `commctrl.dll` on the loaded DLL path only; do not add emulator MFC or
+  common-controls stubs.
 - Continue burning down COREDLL ordinals subsystem by subsystem, replacing
   stubbed ordinal plan entries with CE/MFC/SDK-referenced semantics. Next
   likely tranche: `BitBlt`, `PatBlt`, `StretchDIBits`, `SetDIBitsToDevice`,

@@ -9,6 +9,131 @@
 
 ## Confirmed
 
+- Dumped-runtime `commctrl.dll` now loads from the configured DLL search path
+  instead of failing PE inspection. The loader already preloads
+  `commctrl.dll` from `--dll-search-dir`; the missing piece was PE mapped-RVA
+  parsing for real CE DLLs whose directory terminators/relocation directory
+  point into zero-filled image memory rather than raw file bytes. `PeImage`
+  typed/string RVA readers now use mapped-image semantics: raw bytes when
+  present, zeroes for any RVA below `SizeOfImage` that is not backed by file
+  data, and an error only outside the mapped image. Focused coverage:
+  `mapped_rva_reads_zero_filled_section_tail` and
+  `mapped_rva_reads_zero_filled_image_gaps`. Verbose mounted loader validation
+  using `D:\INAVI_Emulator\DUMPPLZ\Windows` now reports both
+  `mfcce400.dll` and `commctrl.dll` loaded (`loader: 2 DLL(s), 1001 import
+  trap(s)`). A bounded virtual iNavi probe wrote
+  `target\commctrl_virtual_60s_summary.txt`,
+  `target\commctrl_virtual_60s_render.txt`,
+  `target\commctrl_virtual_60s_milestones.txt`,
+  `target\commctrl_virtual_60s_files.txt`, and
+  `target\commctrl_virtual_60s.ppm`; it stopped at the 60 s wall limit
+  (`pc=0x00135bd4`, `ra=0x00135bc8`) with stable memory
+  (`heap_live=6981/21280227B`, `virtual_live=3/196608B`,
+  `host_open=112`, `host_read=7840/1760751B`, `mem_open=2`,
+  `max_read=497178`). Render milestones are still `none`; the framebuffer is
+  effectively black except the 101-pixel red tap marker, so this is runtime
+  DLL/loader fidelity rather than UI success. The import patcher now resolves
+  loaded external DLL exports before considering emulator shim traps and no
+  longer classifies `commctrl.dll`/`commctrlce.dll` as a common-controls shim,
+  so search-path `commctrl` calls patch directly to the mapped DLL export
+  addresses. Focused coverage:
+  `patches_loaded_commctrl_exports_from_external_table_without_stub_trap`,
+  `patches_winsock_and_ole_imports_as_supported_traps_without_mfc_or_commctrl_stub`,
+  and `coredll_raw_module_apis_resolve_preloaded_search_dll_exports`.
+- Scheduler/wait fidelity now has a source-backed priority and waitable-handle
+  slice. Parked Unicorn `WaitForSingleObject` resumes now choose the ready
+  blocked waiter by CE priority ordering, where lower numeric priorities win,
+  and preserve FIFO order within the same priority while skipping the active
+  thread. Kernel waits now reject nonwaitable handles such as file, device,
+  window, waveOut, file-mapping, find-file, and critical-section handles with
+  `WAIT_FAILED`/`ERROR_INVALID_HANDLE` instead of treating them as immediately
+  signaled. `WaitForMultipleObjects` sets `ERROR_INVALID_PARAMETER` for empty
+  or CE6-unsupported wait-all calls and `ERROR_INVALID_HANDLE` when any handle
+  is not waitable. Source anchors are
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c`
+  `LockWaitableObject`/`DoWaitForObjects` and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\syncobj.c` waiter wake paths.
+  Focused coverage: `wait_scheduler_tests`,
+  `virtual_win32_api_smoke_covers_file_device_sync_gwe_and_audio`, and
+  `coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics`.
+- Scheduler/thread fidelity now also matches two CE wait/thread contracts from
+  `schedule.c` and `thread.c`. `WaitForMultipleObjects(FALSE)` validates every
+  handle before acquiring any ready object, so a later invalid handle returns
+  `WAIT_FAILED`/`ERROR_INVALID_HANDLE` without consuming an earlier auto-reset
+  event; the kernel also enforces CE's `MAXIMUM_WAIT_OBJECTS == 64` limit.
+  Raw COREDLL coverage exercises the same path through
+  `ORD_WAIT_FOR_MULTIPLE_OBJECTS`. Thread objects now store CE absolute
+  priorities (`0..255`) with default Win32-normal priority `251`;
+  `SetThreadPriority`/`GetThreadPriority` map the CE Win32 priority band
+  `0..7` to/from absolute `248..255`, while `CeSetThreadPriority` and
+  `CeGetThreadPriority` use the absolute value. Focused coverage:
+  `wait_for_multiple_validates_all_handles_before_acquiring`,
+  `coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics`, and
+  `wait_scheduler_tests`. A fresh mounted virtual probe wrote
+  `target\scheduler_priority_wait_virtual_60s_summary.txt`,
+  `target\scheduler_priority_wait_virtual_60s_render.txt`,
+  `target\scheduler_priority_wait_virtual_60s_milestones.txt`,
+  `target\scheduler_priority_wait_virtual_60s_files.txt`, and
+  `target\scheduler_priority_wait_virtual_60s.ppm`; it stopped at the 60 s
+  wall limit (`pc=0x00a4a1f4`, `ra=0x002017e0`) with stable counters
+  (`heap_live=6930/21296145B`, `virtual_live=2/131072B`,
+  `host_open=92`, `host_read=4305/1765319B`, `mem_open=2`,
+  `max_read=497178`, and
+  `sched=wait:1/0/0 ok:1 timeout:0 fail:0 block:0 wake:0`). Render
+  milestones are still `none`; framebuffer output remains
+  black except the 101-pixel red tap marker, so this is scheduler/thread
+  fidelity rather than UI success.
+- Scheduler/thread suspend-count handling now follows the CE KCall count
+  contract from `schedule.h`, `kcalls.c`, and `thread.c`. Thread suspend
+  counts are capped at `MAX_SUSPEND_COUNT == 127`; `SuspendThread` returns the
+  previous count, leaves the count unchanged at the cap, and reports
+  `ERROR_SIGNAL_REFUSED` with return `0xffffffff` on overflow. `ResumeThread`
+  returns the previous count, decrements only when nonzero, and valid
+  zero-count resumes return `0` without treating the handle as failed. Focused
+  coverage: `suspend_resume_thread_counts_follow_ce_cap` and the raw
+  `coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics`
+  `SuspendThread`/`ResumeThread` path. Full
+  `cargo check --features unicorn,trace,win32-desktop` and
+  `cargo test --features unicorn,trace,win32-desktop` pass, with the existing
+  non-fatal Windows incremental-finalize warning. A fresh mounted virtual
+  probe wrote `target\suspend_count_virtual_60s_summary.txt`,
+  `target\suspend_count_virtual_60s_render.txt`,
+  `target\suspend_count_virtual_60s_milestones.txt`,
+  `target\suspend_count_virtual_60s_files.txt`, and
+  `target\suspend_count_virtual_60s.ppm`; it stopped at the 60 s wall limit
+  (`pc=0x6000cee4`, `ra=0x6000d06c`) with stable counters
+  (`heap_live=6921/21255717B`, `host_open=91`,
+  `host_read=4304/1728191B`, `mem_open=2`, `max_read=497178`, and
+  `sched=wait:1/0/0 ok:1 timeout:0 fail:0 block:0 wake:0`). Render
+  milestones are still `none`; framebuffer output remains black except the
+  101-pixel red tap marker, so this does not count as UI progress.
+- Scheduler wait parking now covers the first `WaitForMultipleObjects(FALSE)`
+  Unicorn bridge instead of only `WaitForSingleObject`. A blocked
+  `WaitForMultipleObjects` import with a nonzero timeout now records the full
+  handle list, parks only after all handles validate and none are ready, wakes
+  by CE priority/FIFO selection when any handle becomes ready, returns
+  `WAIT_OBJECT_0 + index` through the raw import boundary, and preserves
+  object-signaled acquisition precedence over timeout expiry. The existing
+  `WaitForSingleObject` bridge is now the one-handle case of the same parked
+  wait record. Source anchor: `schedule.c::DoWaitForObjects`, whose proxies
+  carry `WAIT_OBJECT_0 + idx` and current thread priority. Focused coverage:
+  `wait_scheduler_tests`, including
+  `ready_blocked_wait_selection_checks_all_multiple_wait_handles`. Full
+  `cargo check --features unicorn,trace,win32-desktop` and
+  `cargo test --features unicorn,trace,win32-desktop` pass, with the existing
+  non-fatal Windows incremental-finalize warning. A fresh mounted virtual
+  probe wrote `target\multiple_wait_virtual_60s_summary.txt`,
+  `target\multiple_wait_virtual_60s_render.txt`,
+  `target\multiple_wait_virtual_60s_milestones.txt`,
+  `target\multiple_wait_virtual_60s_files.txt`, and
+  `target\multiple_wait_virtual_60s.ppm`; it stopped at the 60 s wall limit
+  (`pc=0x6000cfd4`, `ra=0x6000d044`) with stable counters
+  (`heap_live=6921/21255717B`, `host_open=91`,
+  `host_read=4304/1732170B`, `mem_open=2`, `max_read=497178`, and
+  `sched=wait:1/0/0 ok:1 timeout:0 fail:0 block:0 wake:0`). This iNavi path
+  did not exercise a multiple wait block in 60 s. Render milestones are still
+  `none`; framebuffer output remains black except the 101-pixel red tap
+  marker, so this is scheduler fidelity rather than UI progress.
 - Raw `SetAssociatedMenu @299` and `GetAssociatedMenu @300` now reach the same
   CE HWND-associated menu state as `SetMenu`/`GetMenu`. The raw dispatcher
   validates live HWNDs through the GWE window table and keeps the CE
@@ -831,8 +956,10 @@
   - `--dll-search-dir` can load SDK DLL images such as `mfcce400.dll`; the main
     relocation-stripped EXE remains at its preferred base while relocatable DLLs
     are moved when their preferred base overlaps
-  - COREDLL, commctrl, winsock, and OLE import slots are patched to shim trap
-    addresses when no loaded DLL export resolves them
+  - COREDLL, winsock, and OLE import slots are patched to shim trap addresses
+    when no loaded DLL export resolves them; `commctrl.dll` is expected to come
+    from `--dll-search-dir` and patch to the mapped DLL exports instead of an
+    emulator common-controls trap
   - MFC imports are not emulated by external stubs; they must resolve to loaded
     SDK DLL exports such as `mfcce400.dll`
   - external imports can resolve to loaded DLL exports before falling back to
@@ -842,8 +969,8 @@
     a0-a3/t9 plus memory-fault details on run failure
   - guest heap pages are mapped as a CE heap arena for APIs that allocate and
     populate memory during the same import call
-  - non-COREDLL supported DLLs other than MFC currently use module-owned launch
-    stubs with debug logs, not final API semantics
+  - non-COREDLL supported DLLs other than MFC/loaded `commctrl.dll` currently
+    use module-owned launch stubs with debug logs, not final API semantics
 - SDK CE 4.2 Mipsii COREDLL ordinal evidence from `coredll.lib` is now captured
   for the launch-demanded CRT ordinals: `_wcsdup`, `wcsrchr`, `_wcsnicmp`,
   `malloc`, `memcpy`, `memset`, operator `new`, `swprintf`, `printf`, `free`,

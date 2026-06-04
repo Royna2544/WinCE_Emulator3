@@ -5,6 +5,14 @@ use crate::{
     error::{Error, Result},
 };
 
+pub const MAX_CE_PRIORITY_LEVELS: i32 = 256;
+pub const MAX_WIN32_PRIORITY_LEVELS: u32 = 8;
+pub const THREAD_PRIORITY_TIME_CRITICAL: u32 = 0;
+pub const THREAD_PRIORITY_NORMAL: u32 = 3;
+pub const CE_THREAD_PRIORITY_NORMAL: i32 =
+    MAX_CE_PRIORITY_LEVELS - MAX_WIN32_PRIORITY_LEVELS as i32 + THREAD_PRIORITY_NORMAL as i32;
+pub const MAX_SUSPEND_COUNT: u32 = 127;
+
 #[derive(Debug, Clone)]
 pub enum KernelObject {
     Event(EventObject),
@@ -93,6 +101,26 @@ pub enum WaitResult {
     Object0,
     Timeout,
     Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitMultipleResult {
+    Object(u32),
+    Timeout,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadSuspendResult {
+    Previous(u32),
+    InvalidHandle,
+    SignalRefused,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadResumeResult {
+    Previous(u32),
+    InvalidHandle,
 }
 
 #[derive(Debug, Clone)]
@@ -241,7 +269,7 @@ impl HandleTable {
             start_address,
             parameter,
             exit_code: 259,
-            priority: 0,
+            priority: CE_THREAD_PRIORITY_NORMAL,
             signaled: false,
             suspend_count: u32::from(suspended),
         }))
@@ -361,22 +389,27 @@ impl HandleTable {
         Some(thread.exit_code)
     }
 
-    pub fn suspend_thread(&mut self, handle: u32) -> Option<u32> {
+    pub fn suspend_thread(&mut self, handle: u32) -> ThreadSuspendResult {
         let Ok(KernelObject::Thread(thread)) = self.get_mut(handle) else {
-            return None;
+            return ThreadSuspendResult::InvalidHandle;
         };
         let previous = thread.suspend_count;
-        thread.suspend_count = thread.suspend_count.saturating_add(1);
-        Some(previous)
+        if previous == MAX_SUSPEND_COUNT {
+            return ThreadSuspendResult::SignalRefused;
+        }
+        thread.suspend_count += 1;
+        ThreadSuspendResult::Previous(previous)
     }
 
-    pub fn resume_thread(&mut self, handle: u32) -> Option<u32> {
+    pub fn resume_thread(&mut self, handle: u32) -> ThreadResumeResult {
         let Ok(KernelObject::Thread(thread)) = self.get_mut(handle) else {
-            return None;
+            return ThreadResumeResult::InvalidHandle;
         };
         let previous = thread.suspend_count;
-        thread.suspend_count = thread.suspend_count.saturating_sub(1);
-        Some(previous)
+        if previous > 0 {
+            thread.suspend_count -= 1;
+        }
+        ThreadResumeResult::Previous(previous)
     }
 
     pub fn thread_priority(&self, handle: u32) -> Option<i32> {
@@ -394,6 +427,9 @@ impl HandleTable {
     }
 
     pub fn set_thread_priority(&mut self, handle: u32, priority: i32) -> bool {
+        if !(0..MAX_CE_PRIORITY_LEVELS).contains(&priority) {
+            return false;
+        }
         let Ok(KernelObject::Thread(thread)) = self.get_mut(handle) else {
             return false;
         };
@@ -496,11 +532,34 @@ impl HandleTable {
             | KernelObject::Window(_)
             | KernelObject::WaveOut(_)
             | KernelObject::FileMapping(_)
-            | KernelObject::CriticalSection(_) => WaitResult::Object0,
+            | KernelObject::CriticalSection(_) => WaitResult::Failed,
             KernelObject::Thread(thread) if thread.signaled => WaitResult::Object0,
             KernelObject::Process(process) if process.signaled => WaitResult::Object0,
             _ if timeout_ms == 0 => WaitResult::Timeout,
             _ => WaitResult::Timeout,
+        }
+    }
+
+    pub fn wait_for_any_object(&mut self, handles: &[u32], thread_id: u32) -> WaitMultipleResult {
+        if handles
+            .iter()
+            .any(|handle| self.is_wait_ready(*handle, thread_id).is_none())
+        {
+            return WaitMultipleResult::Failed;
+        }
+
+        let Some((index, handle)) = handles
+            .iter()
+            .enumerate()
+            .find(|(_, handle)| self.is_wait_ready(**handle, thread_id) == Some(true))
+        else {
+            return WaitMultipleResult::Timeout;
+        };
+
+        match self.wait_for_single_object(*handle, 0, thread_id) {
+            WaitResult::Object0 => WaitMultipleResult::Object(index as u32),
+            WaitResult::Timeout => WaitMultipleResult::Timeout,
+            WaitResult::Failed => WaitMultipleResult::Failed,
         }
     }
 
@@ -520,7 +579,24 @@ impl HandleTable {
             | KernelObject::Window(_)
             | KernelObject::WaveOut(_)
             | KernelObject::FileMapping(_)
-            | KernelObject::CriticalSection(_) => true,
+            | KernelObject::CriticalSection(_) => return None,
         })
     }
+}
+
+pub fn win32_thread_priority_to_ce(priority: u32) -> Option<i32> {
+    (priority < MAX_WIN32_PRIORITY_LEVELS)
+        .then_some(MAX_CE_PRIORITY_LEVELS - MAX_WIN32_PRIORITY_LEVELS as i32 + priority as i32)
+}
+
+pub fn ce_thread_priority_to_win32(priority: i32) -> Option<u32> {
+    if !(0..MAX_CE_PRIORITY_LEVELS).contains(&priority) {
+        return None;
+    }
+    let base = MAX_CE_PRIORITY_LEVELS - MAX_WIN32_PRIORITY_LEVELS as i32;
+    Some(if priority < base {
+        THREAD_PRIORITY_TIME_CRITICAL
+    } else {
+        (priority - base) as u32
+    })
 }

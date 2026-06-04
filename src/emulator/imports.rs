@@ -28,7 +28,6 @@ pub struct ImportTrap {
 pub enum ImportModuleKind {
     Coredll,
     Mfc,
-    CommonControls,
     Winsock,
     Ole,
 }
@@ -169,9 +168,7 @@ impl ImportTrapTable {
                     ),
                 )?
             }
-            ImportModuleKind::CommonControls
-            | ImportModuleKind::Winsock
-            | ImportModuleKind::Ole => {
+            ImportModuleKind::Winsock | ImportModuleKind::Ole => {
                 ImportTrapReturn::v0(dispatch_external_stub_to_u32(&trap, memory, &args))
             }
             ImportModuleKind::Mfc => return None,
@@ -290,15 +287,16 @@ pub fn patch_supported_imports_with_external(
     let mut next_address = trap_base;
 
     for descriptor in imports {
-        let Some(module_kind) = classify_import_module(&descriptor.module_name) else {
-            continue;
-        };
         for thunk in &descriptor.imports {
+            if let Some(address) = external.resolve(&descriptor.module_name, &thunk.import) {
+                write_mapped_u32(mapped, thunk.iat_rva, address)?;
+                continue;
+            }
+
+            let Some(module_kind) = classify_import_module(&descriptor.module_name) else {
+                continue;
+            };
             if module_kind != ImportModuleKind::Coredll {
-                if let Some(address) = external.resolve(&descriptor.module_name, &thunk.import) {
-                    write_mapped_u32(mapped, thunk.iat_rva, address)?;
-                    continue;
-                }
                 if module_kind == ImportModuleKind::Mfc {
                     continue;
                 }
@@ -407,7 +405,6 @@ fn dispatch_external_stub_to_u32<M: CoredllGuestMemory>(
         "external DLL import stub"
     );
     match trap.module_kind {
-        ImportModuleKind::CommonControls => common_controls_stub_return(name),
         ImportModuleKind::Winsock => winsock_stub_return(trap, memory, args),
         ImportModuleKind::Ole => ole_stub_return(name),
         ImportModuleKind::Coredll => 0,
@@ -419,14 +416,6 @@ fn dispatch_external_stub_to_u32<M: CoredllGuestMemory>(
 
 fn raw_import_arg(args: &[u32], index: usize) -> u32 {
     args.get(index).copied().unwrap_or(0)
-}
-
-fn common_controls_stub_return(name: &str) -> u32 {
-    match normalize_symbol(name).as_str() {
-        "initcommoncontrols" => 0,
-        "initcommoncontrolsex" => 1,
-        _ => 0,
-    }
 }
 
 fn winsock_stub_return<M: CoredllGuestMemory>(
@@ -596,8 +585,6 @@ fn classify_import_module(module_name: &str) -> Option<ImportModuleKind> {
         Some(ImportModuleKind::Coredll)
     } else if normalized.starts_with("mfc") {
         Some(ImportModuleKind::Mfc)
-    } else if normalized == "commctrl" || normalized == "commctrlce" {
-        Some(ImportModuleKind::CommonControls)
     } else if normalized == "winsock" || normalized == "ws2" || normalized == "ws2_32" {
         Some(ImportModuleKind::Winsock)
     } else if normalized == "ole32" || normalized == "oleaut32" || normalized == "olece" {
@@ -908,7 +895,67 @@ mod tests {
     }
 
     #[test]
-    fn patches_commctrl_winsock_and_ole_imports_as_supported_traps_without_mfc_stub() {
+    fn patches_loaded_commctrl_exports_from_external_table_without_stub_trap() {
+        let imports = vec![ImportDescriptor {
+            module_name: "commctrl.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![
+                ImportThunk {
+                    thunk_rva: 0x2000,
+                    iat_rva: 0x3000,
+                    import: ImportBy::Name {
+                        hint: 0,
+                        name: "InitCommonControlsEx".to_owned(),
+                    },
+                },
+                ImportThunk {
+                    thunk_rva: 0x2004,
+                    iat_rva: 0x3004,
+                    import: ImportBy::Ordinal(17),
+                },
+            ],
+        }];
+        let mut module = ExternalImportModule {
+            module_name: "commctrl.dll".to_owned(),
+            image_base: 0x6200_0000,
+            by_ordinal: BTreeMap::new(),
+            by_name: BTreeMap::new(),
+        };
+        module
+            .by_name
+            .insert("initcommoncontrolsex".to_owned(), 0x6200_1234);
+        module.by_ordinal.insert(17, 0x6200_5678);
+        let mut external = ExternalImportTable::default();
+        external.modules.insert("commctrl".to_owned(), module);
+
+        let mut mapped = vec![0; 0x4000];
+        let table = patch_supported_imports_with_external(
+            &mut mapped,
+            0x0040_0000,
+            &imports,
+            &CoredllExportTable::default(),
+            IMPORT_TRAP_BASE,
+            &external,
+        )
+        .unwrap();
+
+        assert!(table.is_empty());
+        assert_eq!(
+            u32::from_le_bytes(mapped[0x3000..0x3004].try_into().unwrap()),
+            0x6200_1234
+        );
+        assert_eq!(
+            u32::from_le_bytes(mapped[0x3004..0x3008].try_into().unwrap()),
+            0x6200_5678
+        );
+    }
+
+    #[test]
+    fn patches_winsock_and_ole_imports_as_supported_traps_without_mfc_or_commctrl_stub() {
         let imports = vec![
             ImportDescriptor {
                 module_name: "MFC400.DLL".to_owned(),
@@ -977,6 +1024,7 @@ mod tests {
         ];
         let mut mapped = vec![0; 0x4000];
         mapped[0x3000..0x3004].copy_from_slice(&0xfeed_faceu32.to_le_bytes());
+        mapped[0x3010..0x3014].copy_from_slice(&0xc001_cafeu32.to_le_bytes());
         let table = patch_supported_imports(
             &mut mapped,
             0x0040_0000,
@@ -986,25 +1034,22 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(table.len(), 3);
+        assert_eq!(table.len(), 2);
         assert_eq!(
             u32::from_le_bytes(mapped[0x3000..0x3004].try_into().unwrap()),
             0xfeed_face
         );
         assert_eq!(
-            table.trap_at(IMPORT_TRAP_BASE).unwrap().module_kind,
-            ImportModuleKind::CommonControls
+            u32::from_le_bytes(mapped[0x3010..0x3014].try_into().unwrap()),
+            0xc001_cafe
         );
         assert_eq!(
-            table
-                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE)
-                .unwrap()
-                .module_kind,
+            table.trap_at(IMPORT_TRAP_BASE).unwrap().module_kind,
             ImportModuleKind::Winsock
         );
         assert_eq!(
             table
-                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 2)
+                .trap_at(IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE)
                 .unwrap()
                 .module_kind,
             ImportModuleKind::Ole

@@ -19,7 +19,7 @@ use crate::{
         },
         kernel::{CeKernel, MessagePumpResult},
         memory::{HEAP_ZERO_MEMORY, PROCESS_HEAP_HANDLE},
-        object::{CriticalSectionObject, KernelObject},
+        object::{CriticalSectionObject, KernelObject, ThreadResumeResult, ThreadSuspendResult},
         registry::{HKey, RegOpenResult, RegQueryValueResult},
         resource::{
             AcceleratorEntry, MenuItem, PopupMenuTracking, ResourceId, stock_object_handle,
@@ -28,7 +28,7 @@ use crate::{
             ERROR_ALREADY_EXISTS, ERROR_CLASS_DOES_NOT_EXIST, ERROR_FILE_NOT_FOUND,
             ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE,
             ERROR_NO_MORE_FILES, ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_SUPPORTED,
-            ERROR_RESOURCE_NAME_NOT_FOUND,
+            ERROR_RESOURCE_NAME_NOT_FOUND, ERROR_SIGNAL_REFUSED,
         },
     },
     error::{Error, Result},
@@ -1215,12 +1215,32 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_CREATE_THREAD => Some(CoredllValue::Handle(create_thread_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_SET_THREAD_PRIORITY | ORD_CE_SET_THREAD_PRIORITY => Some(CoredllValue::Bool(
-            set_thread_priority_raw(kernel, thread_id, raw_arg(args, 0), raw_arg(args, 1)),
-        )),
-        ORD_GET_THREAD_PRIORITY | ORD_CE_GET_THREAD_PRIORITY => Some(CoredllValue::U32(
-            get_thread_priority_raw(kernel, thread_id, raw_arg(args, 0)),
-        )),
+        ORD_SET_THREAD_PRIORITY => Some(CoredllValue::Bool(set_thread_priority_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            false,
+        ))),
+        ORD_CE_SET_THREAD_PRIORITY => Some(CoredllValue::Bool(set_thread_priority_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            true,
+        ))),
+        ORD_GET_THREAD_PRIORITY => Some(CoredllValue::U32(get_thread_priority_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            false,
+        ))),
+        ORD_CE_GET_THREAD_PRIORITY => Some(CoredllValue::U32(get_thread_priority_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            true,
+        ))),
         ORD_GLOBAL_MEMORY_STATUS => {
             write_global_memory_status(kernel, memory, thread_id, raw_arg(args, 0));
             Some(CoredllValue::U32(0))
@@ -6699,14 +6719,20 @@ fn create_thread_raw<M: CoredllGuestMemory>(
 
 fn suspend_thread_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {
     match kernel.suspend_thread(handle) {
-        Some(previous) => {
+        ThreadSuspendResult::Previous(previous) => {
             kernel.threads.set_last_error(thread_id, 0);
             previous
         }
-        None => {
+        ThreadSuspendResult::InvalidHandle => {
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            u32::MAX
+        }
+        ThreadSuspendResult::SignalRefused => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_SIGNAL_REFUSED);
             u32::MAX
         }
     }
@@ -6714,11 +6740,11 @@ fn suspend_thread_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32
 
 fn resume_thread_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {
     match kernel.resume_thread(handle) {
-        Some(previous) => {
+        ThreadResumeResult::Previous(previous) => {
             kernel.threads.set_last_error(thread_id, 0);
             previous
         }
-        None => {
+        ThreadResumeResult::InvalidHandle => {
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -6869,13 +6895,26 @@ fn terminate_process_raw(
     }
 }
 
-fn get_thread_priority_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {
+fn get_thread_priority_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    handle: u32,
+    ce_priority: bool,
+) -> u32 {
     const THREAD_PRIORITY_ERROR_RETURN: u32 = 0x7fff_ffff;
 
-    match kernel.thread_priority(handle) {
+    let priority = if ce_priority {
+        kernel
+            .thread_priority(handle)
+            .map(|priority| priority as u32)
+    } else {
+        kernel.thread_win32_priority(handle)
+    };
+
+    match priority {
         Some(priority) => {
             kernel.threads.set_last_error(thread_id, 0);
-            priority as u32
+            priority
         }
         None => {
             kernel
@@ -6891,8 +6930,27 @@ fn set_thread_priority_raw(
     thread_id: u32,
     handle: u32,
     priority: u32,
+    ce_priority: bool,
 ) -> bool {
-    if kernel.set_thread_priority(handle, priority as i32) {
+    let priority_is_valid = if ce_priority {
+        priority < crate::ce::object::MAX_CE_PRIORITY_LEVELS as u32
+    } else {
+        crate::ce::object::win32_thread_priority_to_ce(priority).is_some()
+    };
+    if !priority_is_valid {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+
+    let success = if ce_priority {
+        kernel.set_thread_ce_priority(handle, priority as i32)
+    } else {
+        kernel.set_thread_win32_priority(handle, priority)
+    };
+
+    if success {
         kernel.threads.set_last_error(thread_id, 0);
         true
     } else {

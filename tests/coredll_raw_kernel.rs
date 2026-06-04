@@ -3,13 +3,14 @@ use wince_emulation_v3::{
     ce::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
-            ORD_CLOSE_HANDLE, ORD_CREATE_EVENT_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD,
-            ORD_EVENT_MODIFY, ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY,
-            ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR,
-            ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W, ORD_GET_PROC_ADDRESS_A,
-            ORD_GET_PROC_ADDRESS_W, ORD_GET_PROCESS_ID, ORD_GET_PROCESS_VERSION,
-            ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_TIME, ORD_GET_SYSTEM_TIME_AS_FILE_TIME,
-            ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY, ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT,
+            ORD_CE_GET_THREAD_PRIORITY, ORD_CE_SET_THREAD_PRIORITY, ORD_CLOSE_HANDLE,
+            ORD_CREATE_EVENT_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD, ORD_EVENT_MODIFY,
+            ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY, ORD_GET_EXIT_CODE_PROCESS,
+            ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
+            ORD_GET_MODULE_HANDLE_W, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
+            ORD_GET_PROCESS_ID, ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION,
+            ORD_GET_SYSTEM_TIME, ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_GET_THREAD_ID,
+            ORD_GET_THREAD_PRIORITY, ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT,
             ORD_GET_TIME_ZONE_INFORMATION, ORD_GET_VERSION_EX_W, ORD_INITIALIZE_CRITICAL_SECTION,
             ORD_INPUT_DEBUG_CHAR_W, ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_KERNEL_IO_CONTROL, ORD_LEAVE_CRITICAL_SECTION,
@@ -18,13 +19,14 @@ use wince_emulation_v3::{
             ORD_RESUME_THREAD, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY, ORD_SLEEP,
             ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS,
             ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION,
-            ORD_WAIT_FOR_SINGLE_OBJECT,
+            ORD_WAIT_FOR_MULTIPLE_OBJECTS, ORD_WAIT_FOR_SINGLE_OBJECT,
         },
         gwe::{Message, QS_POSTMESSAGE},
         kernel::CeKernel,
+        object::MAX_SUSPEND_COUNT,
         registry::ERROR_SUCCESS,
-        thread::{ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER},
-        timer::{WAIT_OBJECT_0, WAIT_TIMEOUT},
+        thread::{ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_SIGNAL_REFUSED},
+        timer::{WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
     config::RuntimeConfig,
 };
@@ -608,11 +610,38 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
             &mut kernel,
             &mut memory,
             thread_id,
-            ORD_GET_THREAD_PRIORITY,
+            ORD_RESUME_THREAD,
             [worker_thread]
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_THREAD_PRIORITY,
+            [worker_thread]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(3),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_THREAD_PRIORITY,
+            [worker_thread]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(251),
             ..
         }
     ));
@@ -642,6 +671,122 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
             ..
         }
     ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_THREAD_PRIORITY,
+            [worker_thread]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(249),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_SET_THREAD_PRIORITY,
+            [worker_thread, 42]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_THREAD_PRIORITY,
+            [worker_thread]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(42),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_THREAD_PRIORITY,
+            [worker_thread]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_THREAD_PRIORITY,
+            [worker_thread, 8]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    for expected in 0..MAX_SUSPEND_COUNT {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SUSPEND_THREAD,
+                [worker_thread]
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(value),
+                ..
+            } if value == expected
+        ));
+    }
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SUSPEND_THREAD,
+            [worker_thread]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(u32::MAX),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_SIGNAL_REFUSED
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_RESUME_THREAD,
+            [worker_thread]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(MAX_SUSPEND_COUNT),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -789,8 +934,52 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     };
     assert_ne!(event, 0);
     let handles_ptr = 0x6000;
-    memory.map_words(handles_ptr, 1);
+    memory.map_words(handles_ptr, 2);
     memory.write_word(handles_ptr, event);
+    memory.write_word(handles_ptr + 4, 0xdead_beef);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EVENT_MODIFY,
+            [event, 3]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_MULTIPLE_OBJECTS,
+            [2, handles_ptr, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_FAILED),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [event, 0]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_OBJECT_0),
+            ..
+        }
+    ));
     kernel.gwe.post_message(
         thread_id,
         Message::new(0, 0x400 + 42, 77, 0, kernel.timers.tick_count()),

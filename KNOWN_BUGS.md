@@ -52,6 +52,32 @@
     `host_file_read_bytes=3787819`, `memory_backed_open_count=2`, and
     `max_read_request=685080`, so the active blocker is no longer bulk file
     preload or per-read reopen. The latest GWE fidelity regression probe for
+    dumped-runtime commctrl loading wrote `target\commctrl_virtual_60s_*`:
+    verbose loader validation now maps
+    `D:\INAVI_Emulator\DUMPPLZ\Windows\commctrl.dll` alongside
+    `mfcce400.dll`, after the PE parser learned mapped-image zero-fill below
+    `SizeOfImage`. The 60 s virtual probe stopped at `pc=0x00135bd4`,
+    `ra=0x00135bc8`, stayed memory-stable (`heap_live=6981/21280227B`,
+    `host_open=112`, `host_read=7840/1760751B`, `mem_open=2`), but render
+    milestones were still `none` and the framebuffer contained only the
+    101-pixel red tap marker. The follow-up scheduler/thread priority and
+    multi-wait slice wrote `target\scheduler_priority_wait_virtual_60s_*`,
+    stopped at `pc=0x00a4a1f4`, `ra=0x002017e0`, stayed memory-stable
+    (`heap_live=6930/21296145B`, `host_open=92`,
+    `host_read=4305/1765319B`, `mem_open=2`), and likewise had render
+    milestones `none` with only the same 101-pixel tap marker. The
+    suspend-count follow-up wrote `target\suspend_count_virtual_60s_*`, stopped
+    at `pc=0x6000cee4`, `ra=0x6000d06c`, stayed memory-stable
+    (`heap_live=6921/21255717B`, `host_open=91`,
+    `host_read=4304/1728191B`, `mem_open=2`), and still reported render
+    milestones `none` with only the 101-pixel tap marker. The multiple-wait
+    parking follow-up wrote `target\multiple_wait_virtual_60s_*`, stopped at
+    `pc=0x6000cfd4`, `ra=0x6000d044`, stayed memory-stable
+    (`heap_live=6921/21255717B`, `host_open=91`,
+    `host_read=4304/1732170B`, `mem_open=2`), and likewise had render
+    milestones `none` with only the 101-pixel tap marker; this iNavi path did
+    not exercise a multiple-wait block (`sched=wait:1/0/0`). This keeps the
+    no-useful-UI bug open. The latest GWE fidelity regression probe for
     `GetQueueStatus`/`MsgWaitForMultipleObjectsEx` wrote
     `target\queue_status_msgwait_*` artifacts and stayed memory-stable
     (`host_read=4221/495853B`, `heap_live=5948/2767663B`), but still had no
@@ -459,14 +485,17 @@
   - Status: active ordinal-by-ordinal implementation work.
 
 - External DLL import traps are launch stubs, not final DLL implementations.
-  - Symptom: commctrl, WINSOCK, and OLE imports can be patched to trap
-    addresses so execution can proceed, but most non-SDK-DLL functions return
-    only conservative placeholder values.
+  - Symptom: WINSOCK and OLE imports can be patched to trap addresses so
+    execution can proceed, but most non-SDK-DLL functions return only
+    conservative placeholder values. `commctrl.dll` is no longer in this stub
+    bucket; when present in the DLL search paths, its imports patch to mapped
+    DLL export addresses.
   - Evidence: `src/emulator/imports.rs` resolves loaded SDK DLL exports when
-    available. MFC imports are deliberately not stubbed anymore; unresolved MFC
-    slots are left for the loaded SDK DLL path instead of being patched to an
-    emulator `Afx*` return shim.
-  - Status: active launch-enabling diagnostic layer for non-MFC external DLLs.
+    available and does so before shim classification. MFC and `commctrl`
+    imports are deliberately not stubbed anymore; unresolved slots are left for
+    the loaded DLL path instead of being patched to emulator return shims.
+  - Status: active launch-enabling diagnostic layer for WINSOCK/OLE external
+    DLLs.
 
 - PE resources are only partially loaded into `ResourceSystem`.
   - Symptom: resource API behavior works for registered virtual resources and

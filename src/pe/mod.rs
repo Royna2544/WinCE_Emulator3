@@ -744,24 +744,49 @@ impl PeImage {
     }
 
     fn read_u16_rva(&self, rva: u32) -> Result<u16> {
-        let offset = self
-            .rva_to_file_offset(rva)
-            .ok_or_else(|| pe_error(&self.path, format!("RVA 0x{rva:08x} has no file data")))?;
-        PeReader::new(&self.path, &self.bytes).read_u16(offset)
+        let bytes = self.read_mapped_bytes_rva::<2>(rva)?;
+        Ok(u16::from_le_bytes(bytes))
     }
 
     fn read_u32_rva(&self, rva: u32) -> Result<u32> {
-        let offset = self
-            .rva_to_file_offset(rva)
-            .ok_or_else(|| pe_error(&self.path, format!("RVA 0x{rva:08x} has no file data")))?;
-        PeReader::new(&self.path, &self.bytes).read_u32(offset)
+        let bytes = self.read_mapped_bytes_rva::<4>(rva)?;
+        Ok(u32::from_le_bytes(bytes))
     }
 
     fn read_c_string_rva(&self, rva: u32) -> Result<String> {
-        let offset = self
-            .rva_to_file_offset(rva)
-            .ok_or_else(|| pe_error(&self.path, format!("RVA 0x{rva:08x} has no file data")))?;
-        PeReader::new(&self.path, &self.bytes).read_c_string(offset)
+        let mut cursor = rva;
+        let mut bytes = Vec::new();
+        loop {
+            let byte = self.read_mapped_u8_rva(cursor)?;
+            if byte == 0 {
+                return Ok(String::from_utf8_lossy(&bytes).into_owned());
+            }
+            bytes.push(byte);
+            cursor = rva_add(cursor, 1, &self.path)?;
+        }
+    }
+
+    fn read_mapped_bytes_rva<const N: usize>(&self, rva: u32) -> Result<[u8; N]> {
+        let mut out = [0; N];
+        for (index, byte) in out.iter_mut().enumerate() {
+            let delta = u32::try_from(index)
+                .map_err(|_| pe_error(&self.path, "mapped RVA read length overflow"))?;
+            *byte = self.read_mapped_u8_rva(rva_add(rva, delta, &self.path)?)?;
+        }
+        Ok(out)
+    }
+
+    fn read_mapped_u8_rva(&self, rva: u32) -> Result<u8> {
+        if let Some(offset) = self.rva_to_file_offset(rva) {
+            return PeReader::new(&self.path, &self.bytes).read_u8(offset);
+        }
+        if rva < self.optional_header.size_of_image {
+            return Ok(0);
+        }
+        Err(pe_error(
+            &self.path,
+            format!("RVA 0x{rva:08x} is outside mapped image"),
+        ))
     }
 
     fn read_resource_name_rva(&self, rva: u32) -> Result<String> {
@@ -1068,17 +1093,6 @@ impl<'a> PeReader<'a> {
         ))
     }
 
-    fn read_c_string(&self, offset: usize) -> Result<String> {
-        let tail = self.bytes.get(offset..).ok_or_else(|| {
-            pe_error(self.path, format!("string starts past EOF at 0x{offset:x}"))
-        })?;
-        let end = tail
-            .iter()
-            .position(|byte| *byte == 0)
-            .ok_or_else(|| pe_error(self.path, format!("unterminated string at 0x{offset:x}")))?;
-        Ok(String::from_utf8_lossy(&tail[..end]).into_owned())
-    }
-
     fn slice(&self, offset: usize, len: usize) -> Result<&'a [u8]> {
         let end = checked_add(offset, len, self.path, "slice end")?;
         self.bytes.get(offset..end).ok_or_else(|| {
@@ -1197,6 +1211,33 @@ mod tests {
     fn rejects_non_pe_images() {
         let err = PeImage::parse_bytes("not-pe.bin", b"nope").unwrap_err();
         assert!(err.to_string().contains("missing MZ"));
+    }
+
+    #[test]
+    fn mapped_rva_reads_zero_filled_section_tail() -> Result<()> {
+        let mut bytes = synthetic_pe32();
+        let idata_section = 0x178 + SECTION_HEADER_SIZE;
+        put_u32(&mut bytes, idata_section + 8, 0x300);
+
+        let image = PeImage::parse_bytes("zero-fill-tail.exe", &bytes)?;
+
+        assert_eq!(image.rva_to_file_offset(0x2200), None);
+        assert_eq!(image.read_u32_rva(0x2200)?, 0);
+        assert_eq!(image.read_c_string_rva(0x2200)?, "");
+
+        Ok(())
+    }
+
+    #[test]
+    fn mapped_rva_reads_zero_filled_image_gaps() -> Result<()> {
+        let image = PeImage::parse_bytes("zero-fill-gap.exe", &synthetic_pe32())?;
+
+        assert_eq!(image.section_for_rva(0x4f00), None);
+        assert_eq!(image.rva_to_file_offset(0x4f00), None);
+        assert_eq!(image.read_u32_rva(0x4f00)?, 0);
+        assert_eq!(image.read_c_string_rva(0x4f00)?, "");
+
+        Ok(())
     }
 
     fn synthetic_pe32() -> Vec<u8> {
