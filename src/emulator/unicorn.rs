@@ -68,6 +68,7 @@ pub struct UnicornDebugSnapshot {
     pub last_imports: Vec<UnicornLastImport>,
     pub import_milestones: Vec<UnicornLastImport>,
     pub file_io_stats: crate::ce::file::FileIoStats,
+    pub scheduler_stats: crate::ce::scheduler::SchedulerStats,
     pub recent_file_open_ops: Vec<crate::ce::kernel::FileTraceRecord>,
     pub recent_file_ops: Vec<crate::ce::kernel::FileTraceRecord>,
     pub last_messages: Vec<UnicornLastMessage>,
@@ -138,6 +139,22 @@ impl UnicornDebugSnapshot {
                 self.file_io_stats.host_file_read_bytes,
                 self.file_io_stats.memory_backed_open_count,
                 self.file_io_stats.max_read_request
+            ));
+        }
+        if self.scheduler_stats.wait_single_count != 0
+            || self.scheduler_stats.wait_multiple_count != 0
+            || self.scheduler_stats.msg_wait_count != 0
+        {
+            parts.push(format!(
+                "sched=wait:{}/{}/{} ok:{} timeout:{} fail:{} block:{} wake:{}",
+                self.scheduler_stats.wait_single_count,
+                self.scheduler_stats.wait_multiple_count,
+                self.scheduler_stats.msg_wait_count,
+                self.scheduler_stats.wait_acquired_count,
+                self.scheduler_stats.wait_timeout_count,
+                self.scheduler_stats.wait_failed_count,
+                self.scheduler_stats.wait_block_count,
+                self.scheduler_stats.wait_wake_count
             ));
         }
         if let Some(indirect) = &self.indirect_call_probe {
@@ -2364,6 +2381,7 @@ impl UnicornMips {
             last_imports.borrow().clone(),
             import_milestones.borrow().clone(),
             kernel.file_io_stats(),
+            kernel.scheduler_stats(),
             kernel.recent_file_open_ops().to_vec(),
             kernel.recent_file_ops().to_vec(),
             last_messages.borrow().clone(),
@@ -4017,7 +4035,7 @@ impl std::fmt::Display for UnicornDebugSnapshot {
         }
         write!(
             f,
-            " heap_live_count={} heap_live_bytes={} virtual_live_count={} virtual_live_bytes={} file_host_open_count={} file_host_read_count={} file_host_read_bytes={} file_memory_backed_open_count={} file_max_read_request={}",
+            " heap_live_count={} heap_live_bytes={} virtual_live_count={} virtual_live_bytes={} file_host_open_count={} file_host_read_count={} file_host_read_bytes={} file_memory_backed_open_count={} file_max_read_request={} sched_wait_single_count={} sched_wait_multiple_count={} sched_msg_wait_count={} sched_wait_acquired_count={} sched_wait_timeout_count={} sched_wait_failed_count={} sched_wait_block_count={} sched_wait_wake_count={}",
             self.heap_allocation_count,
             self.heap_allocation_bytes,
             self.virtual_allocation_count,
@@ -4026,7 +4044,15 @@ impl std::fmt::Display for UnicornDebugSnapshot {
             self.file_io_stats.host_file_read_count,
             self.file_io_stats.host_file_read_bytes,
             self.file_io_stats.memory_backed_open_count,
-            self.file_io_stats.max_read_request
+            self.file_io_stats.max_read_request,
+            self.scheduler_stats.wait_single_count,
+            self.scheduler_stats.wait_multiple_count,
+            self.scheduler_stats.msg_wait_count,
+            self.scheduler_stats.wait_acquired_count,
+            self.scheduler_stats.wait_timeout_count,
+            self.scheduler_stats.wait_failed_count,
+            self.scheduler_stats.wait_block_count,
+            self.scheduler_stats.wait_wake_count
         )?;
         if let Some(probe) = self.interrupt_probe.as_ref() {
             write!(
@@ -5055,6 +5081,7 @@ fn try_block_wait_for_single_object<D>(
     if timeout == 0 || kernel.is_wait_ready(wait_handle, thread_id) != Some(false) {
         return false;
     }
+    kernel.record_blocked_single_wait(timeout);
 
     let regs = capture_mips_gprs(uc);
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
@@ -5136,7 +5163,12 @@ fn try_resume_blocked_wait<D>(
         return false;
     };
     let blocked = blocked_waits.borrow_mut().remove(index);
-    let wait_result = kernel.wait_for_single_object(blocked.wait_handle, 0, blocked.thread_id);
+    let wait_result = kernel.wait_for_single_object_without_scheduler_record(
+        blocked.wait_handle,
+        0,
+        blocked.thread_id,
+    );
+    kernel.record_resumed_single_wait(wait_result);
 
     let mut current = SuspendedGuestThread {
         thread_id: active_thread_id,
@@ -8247,6 +8279,7 @@ fn capture_debug_snapshot<D>(
     last_imports: Vec<UnicornLastImport>,
     import_milestones: Vec<UnicornLastImport>,
     file_io_stats: crate::ce::file::FileIoStats,
+    scheduler_stats: crate::ce::scheduler::SchedulerStats,
     recent_file_open_ops: Vec<crate::ce::kernel::FileTraceRecord>,
     recent_file_ops: Vec<crate::ce::kernel::FileTraceRecord>,
     last_messages: Vec<UnicornLastMessage>,
@@ -8302,6 +8335,7 @@ fn capture_debug_snapshot<D>(
         last_imports,
         import_milestones,
         file_io_stats,
+        scheduler_stats,
         recent_file_open_ops,
         recent_file_ops,
         last_messages,

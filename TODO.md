@@ -1,5 +1,31 @@
 # TODO
 
+## CE Fidelity Ledger
+
+- Scheduler/waits/thread contexts:
+  - Source refs:
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c`,
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\syncobj.c`, CE SDK/OAK wait
+    headers, and `SOURCE_REFERENCES.md`.
+  - v2 corroboration: v2 proved cross-thread wait/send/audio/serial parking was
+    a viable emulator path, but v3 should keep CE source as the behavior
+    authority.
+  - Current v3 status: scheduler ownership has begun with a `Scheduler`
+    subsystem that records single/multiple/msg wait attempts, wait outcomes,
+    blocked waits, resumed waits, max handle count, and max timeout in monitor
+    summaries. Existing guest-visible wait return behavior is preserved.
+  - Open gaps: real waiter queues, unified timer/serial/audio/process wake
+    ownership, wait timeout expiry, blocked thread priority/fairness, and
+    fuller Unicorn thread context switching still need the next scheduler port
+    slice.
+  - Fixture gates: keep existing wait/thread fixtures passing, then graduate
+    pending scheduler fixtures for multiple waiters, `MsgWait*`, serial
+    parking, waveOut callback wakeups, child-process waits, and scheduler mini
+    app.
+  - Latest iNavi evidence: active frontier remains the render-map/surface path
+    around `0x0026f7e4`; this scheduler slice is foundational and should not be
+    counted as UI success until the mounted host/tap run advances.
+
 ## Immediate
 
 - Continue from the latest stable host-mode UI frontier. Current

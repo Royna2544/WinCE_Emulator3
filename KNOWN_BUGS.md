@@ -282,6 +282,17 @@
     debug sinks, but no socket writer consumes them yet.
   - Status: expected until host transport work lands.
 
+- Scheduler/wait ownership is only partially ported to CE fidelity.
+  - Symptom: wait calls now flow through scheduler accounting, and Unicorn
+    blocked/resumed `WaitForSingleObject` paths report scheduler counters, but
+    real CE waiter queues, timeout expiry, unified timer/serial/audio/process
+    wake ownership, and full blocked-thread context scheduling are still open.
+  - Evidence: `SOURCE_REFERENCES.md` records the CE scheduler/sync source
+    anchors, and `TODO.md` has the first CE fidelity ledger entry. Existing
+    guest-visible wait return behavior is preserved in this slice.
+  - Status: active first CE-fidelity port; next scheduler work should replace
+    the remaining ad hoc blocked-wait vectors and subsystem wake paths.
+
 - Host desktop windows may be inaccessible from the current automation session.
   - Symptom: `--desktop host` initializes the Win32 presenter and reports
     `desktop: win32 host presenter`, but an automated user32 `FindWindow`

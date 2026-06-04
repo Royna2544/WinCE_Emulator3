@@ -5869,6 +5869,7 @@ fn msg_wait_for_multiple_objects_ex_raw<M: CoredllGuestMemory>(
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        kernel.record_msg_wait_result(count, timeout_ms, crate::ce::timer::WAIT_FAILED);
         return crate::ce::timer::WAIT_FAILED;
     }
 
@@ -5896,6 +5897,7 @@ fn msg_wait_for_multiple_objects_ex_raw<M: CoredllGuestMemory>(
             } else {
                 kernel.threads.set_last_error(thread_id, 0);
             }
+            kernel.record_msg_wait_result(count, timeout_ms, result);
             return result;
         }
     }
@@ -5903,6 +5905,7 @@ fn msg_wait_for_multiple_objects_ex_raw<M: CoredllGuestMemory>(
     kernel.pump_timers_to_gwe(thread_id);
     if kernel.gwe.has_queue_input(thread_id, wake_mask) {
         kernel.threads.set_last_error(thread_id, 0);
+        kernel.record_msg_wait_input(count, timeout_ms);
         return crate::ce::timer::WAIT_OBJECT_0 + count;
     }
 
@@ -5912,6 +5915,7 @@ fn msg_wait_for_multiple_objects_ex_raw<M: CoredllGuestMemory>(
         crate::ce::timer::WAIT_TIMEOUT
     };
     kernel.threads.set_last_error(thread_id, 0);
+    kernel.record_msg_wait_result(count, timeout_ms, result);
     result
 }
 

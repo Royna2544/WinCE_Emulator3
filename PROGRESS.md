@@ -2,6 +2,23 @@
 
 ## Confirmed
 
+- CE fidelity catch-up has started with a dedicated scheduler/wait owner rather
+  than another local stub layer. `src/ce/scheduler.rs` now records
+  `WaitForSingleObject`, `WaitForMultipleObjects`, and
+  `MsgWaitForMultipleObjectsEx` attempts/outcomes, blocked Unicorn waits,
+  resumed waits, max wait handle count, and max timeout. `CeKernel` exposes the
+  scheduler stats, Unicorn debug snapshots include compact `sched=...`
+  summaries, and `SOURCE_REFERENCES.md`/`TODO.md` now carry the first CE
+  scheduler ledger entry. This is foundational observability/ownership only:
+  guest-visible wait return behavior is intended to remain unchanged, and full
+  waiter queues/context switching remain open. A short mounted host/tap probe
+  wrote `target\scheduler_fidelity_summary.txt`,
+  `target\scheduler_fidelity_files.txt`,
+  `target\scheduler_fidelity_render.txt`,
+  `target\scheduler_fidelity_milestones.txt`, and
+  `target\scheduler_fidelity_probe.ppm`; it stopped at the normal early
+  resource-loading wall-clock frontier before scheduler-visible waits appeared,
+  so it is a regression check rather than UI progress.
 - Repository started with `RULES.md`, `regs.json`, and `serial_devices.json`.
 - `regs.json` contains the registry snapshot used to seed the CE registry model.
 - `serial_devices.json` contains enabled guest devices including `COM7:`, `COM3:`,

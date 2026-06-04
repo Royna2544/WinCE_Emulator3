@@ -183,6 +183,20 @@ fn virtual_win32_api_smoke_covers_file_device_sync_gwe_and_audio() -> Result<()>
     let mutex = kernel.create_mutex_w(Some("mx".to_owned()), None);
     assert_eq!(kernel.wait_for_single_object(mutex, 0, 7), WAIT_OBJECT_0);
     assert!(kernel.release_mutex(mutex, 7));
+    let ready_event = kernel.create_event_w(Some("ready".to_owned()), true, true);
+    let pending_event = kernel.create_event_w(Some("pending".to_owned()), true, false);
+    assert_eq!(
+        kernel.wait_for_multiple_objects(&[pending_event, ready_event], false, 123, 7),
+        WAIT_OBJECT_0 + 1
+    );
+    let scheduler_stats = kernel.scheduler_stats();
+    assert_eq!(scheduler_stats.wait_single_count, 4);
+    assert_eq!(scheduler_stats.wait_multiple_count, 1);
+    assert_eq!(scheduler_stats.wait_acquired_count, 4);
+    assert_eq!(scheduler_stats.wait_timeout_count, 1);
+    assert_eq!(scheduler_stats.wait_failed_count, 0);
+    assert_eq!(scheduler_stats.max_wait_handles, 2);
+    assert_eq!(scheduler_stats.max_timeout_ms, 123);
 
     let hwnd = kernel.create_window_ex_w(7, "STATIC", "old", None, 100, 0x4000_0000, 0);
     assert_eq!(kernel.message_pump_step(7), MessagePumpResult::Idle);

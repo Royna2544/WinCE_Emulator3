@@ -5,6 +5,21 @@ anchors, not app-specific shortcuts.
 
 ## Windows CE Core OS
 
+- Scheduler and wait ownership:
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\syncobj.c`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pkfuncs.h`
+  - CE waits are kernel scheduler decisions over signaled kernel objects, not
+    local ad hoc return stubs at each API boundary.
+  - Event, mutex, semaphore, thread, process, timer, message, device, and audio
+    wait paths should converge through one scheduler-owned wait/wake model.
+  - The Rust `Scheduler` subsystem now owns compact wait accounting for
+    `WaitForSingleObject`, `WaitForMultipleObjects`,
+    `MsgWaitForMultipleObjectsEx`, and Unicorn blocked-wait resume diagnostics.
+    Full waiter queues and context-switch ownership remain the next scheduler
+    port step.
+
 - Registry API boundary:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/KERNEL/fscall.c`
   - `NKRegQueryValueExW` forwards to `FILESYS #25 - RegQueryValueExW`.

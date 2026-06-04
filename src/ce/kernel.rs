@@ -17,6 +17,7 @@ use crate::{
         registry::Registry,
         remote::{CeRemote, RemoteStatus, WM_LBUTTONDOWN, WM_MOUSEMOVE, make_lparam},
         resource::ResourceSystem,
+        scheduler::{Scheduler, SchedulerStats, SchedulerWaitKind, SchedulerWakeReason},
         thread::ThreadSystem,
         timer::{TimerSystem, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
@@ -45,6 +46,7 @@ pub struct CeKernel {
     pub timers: TimerSystem,
     pub remote: CeRemote,
     pub threads: ThreadSystem,
+    pub scheduler: Scheduler,
     pub resources: ResourceSystem,
     pub com: ComSystem,
     pub memory: MemorySystem,
@@ -87,6 +89,16 @@ pub struct FileTraceRecord {
 const FILE_TRACE_LIMIT: usize = 512;
 const FILE_TRACE_PREVIEW_LIMIT: usize = 64;
 
+fn wait_result_to_wake_reason(result: u32) -> SchedulerWakeReason {
+    if result == WAIT_FAILED {
+        SchedulerWakeReason::Failed
+    } else if result == WAIT_TIMEOUT {
+        SchedulerWakeReason::Timeout
+    } else {
+        SchedulerWakeReason::ObjectSignaled
+    }
+}
+
 impl CeKernel {
     pub fn boot(config: RuntimeConfig) -> Self {
         Self {
@@ -100,6 +112,7 @@ impl CeKernel {
             timers: TimerSystem::default(),
             remote: CeRemote::default(),
             threads: ThreadSystem::default(),
+            scheduler: Scheduler::default(),
             resources: ResourceSystem::default(),
             com: ComSystem::default(),
             memory: MemorySystem::default(),
@@ -256,6 +269,10 @@ impl CeKernel {
 
     pub fn file_io_stats(&self) -> FileIoStats {
         self.files.io_stats()
+    }
+
+    pub fn scheduler_stats(&self) -> SchedulerStats {
+        self.scheduler.stats()
     }
 
     pub fn record_file_trace(&mut self, record: FileTraceRecord) {
@@ -851,6 +868,64 @@ impl CeKernel {
     }
 
     pub fn wait_for_single_object(&mut self, handle: u32, timeout_ms: u32, thread_id: u32) -> u32 {
+        self.scheduler
+            .record_wait_attempt(SchedulerWaitKind::Single, 1, timeout_ms);
+        let result = match self
+            .handles
+            .wait_for_single_object(handle, timeout_ms, thread_id)
+        {
+            WaitResult::Object0 => WAIT_OBJECT_0,
+            WaitResult::Timeout => WAIT_TIMEOUT,
+            WaitResult::Failed => WAIT_FAILED,
+        };
+        self.scheduler
+            .record_wait_result(wait_result_to_wake_reason(result));
+        result
+    }
+
+    pub fn record_blocked_single_wait(&mut self, timeout_ms: u32) {
+        self.scheduler
+            .record_wait_attempt(SchedulerWaitKind::Single, 1, timeout_ms);
+        self.scheduler.record_blocked_wait();
+    }
+
+    pub fn record_resumed_single_wait(&mut self, result: u32) {
+        self.scheduler
+            .record_wait_wake(wait_result_to_wake_reason(result));
+    }
+
+    pub fn record_msg_wait_result(&mut self, handle_count: u32, timeout_ms: u32, result: u32) {
+        self.scheduler
+            .record_wait_attempt(SchedulerWaitKind::MsgWait, handle_count, timeout_ms);
+        self.scheduler
+            .record_wait_result(wait_result_to_wake_reason(result));
+    }
+
+    pub fn record_msg_wait_input(&mut self, handle_count: u32, timeout_ms: u32) {
+        self.scheduler
+            .record_wait_attempt(SchedulerWaitKind::MsgWait, handle_count, timeout_ms);
+        self.scheduler
+            .record_wait_result(SchedulerWakeReason::MessageInput);
+    }
+
+    pub fn record_multiple_wait_attempt(
+        &mut self,
+        handle_count: u32,
+        timeout_ms: u32,
+        result: u32,
+    ) {
+        self.scheduler
+            .record_wait_attempt(SchedulerWaitKind::Multiple, handle_count, timeout_ms);
+        self.scheduler
+            .record_wait_result(wait_result_to_wake_reason(result));
+    }
+
+    pub fn wait_for_single_object_without_scheduler_record(
+        &mut self,
+        handle: u32,
+        timeout_ms: u32,
+        thread_id: u32,
+    ) -> u32 {
         match self
             .handles
             .wait_for_single_object(handle, timeout_ms, thread_id)
@@ -869,26 +944,28 @@ impl CeKernel {
         &mut self,
         handles: &[u32],
         wait_all: bool,
-        _timeout_ms: u32,
+        timeout_ms: u32,
         thread_id: u32,
     ) -> u32 {
-        if handles.is_empty() || wait_all {
-            return WAIT_FAILED;
-        }
-        for (index, handle) in handles.iter().enumerate() {
-            if self.handles.is_wait_ready(*handle, thread_id) == Some(true) {
-                let _ = self.handles.wait_for_single_object(*handle, 0, thread_id);
-                return WAIT_OBJECT_0 + index as u32;
-            }
-        }
-        if handles
+        let result = if handles.is_empty() || wait_all {
+            WAIT_FAILED
+        } else if let Some((index, handle)) = handles
+            .iter()
+            .enumerate()
+            .find(|(_, handle)| self.handles.is_wait_ready(**handle, thread_id) == Some(true))
+        {
+            let _ = self.handles.wait_for_single_object(*handle, 0, thread_id);
+            WAIT_OBJECT_0 + index as u32
+        } else if handles
             .iter()
             .any(|handle| self.handles.is_wait_ready(*handle, thread_id).is_none())
         {
             WAIT_FAILED
         } else {
             WAIT_TIMEOUT
-        }
+        };
+        self.record_multiple_wait_attempt(handles.len() as u32, timeout_ms, result);
+        result
     }
 
     pub fn create_window_ex_w(
