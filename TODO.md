@@ -14,7 +14,7 @@
 
 - Continue from the new mounted iNavi first-present frontier. The latest
   virtual probes `target\update_erase_virtual_*`,
-  `target\timer_cap_virtual_*`, and
+  `target\timer_cap_startup_tap_virtual_20s_*`, and
   `target\hide_update_clear_virtual_20s_*` prove guest GDI now presents a real 800x480
   memory surface to a window HDC:
   `BitBlt(dst=0x02020008, dst_memdc=false, dst_hwnd=0x00020008,
@@ -22,22 +22,25 @@
   (`575800` nonzero pixels in the latest run) and
   `target\update_erase_virtual.png` shows the real iNavi SE splash/art frame.
   The raw `GetMessageW` bridge now lets short <=100 ms GUI timers fire, and
-  the initial guest thread now registers/resumes scheduler-owned
-  `GetMessageW` waits from long timer expiry instead of stopping with
-  `reg=0`; the latest `target\main_getmessage_timer_resume_virtual_*` run
-  shows `reg=4214/4214`, `wake=4214`, and `msgcand=4214`. The latest GWE
+  the initial guest thread now registers scheduler-owned `GetMessageW` waits
+  instead of a diagnostic-only stop. Long future timers are no longer
+  fast-forwarded in a tight loop: the latest startup-tap probe parks with
+  `sched=wait:3/0/1`, `reg:1/0`, and the 7.5 s no-HWND timer still pending
+  (`id=0x3e8`, `due=22086`, `period=7500`) after delivering the real tap and
+  first UI frame. The latest GWE
   cleanup also clears stale create-time update state when MFC immediately
   hides visible zero-size `AfxWnd42u` children; hidden controls in
   `target\hide_update_clear_virtual_20s_windows.txt` now mostly report
   `upd=false` rather than stale full-screen dirty rectangles. The remaining
   blocker is no longer first pixels, memory-DC-to-screen presentation,
   diagnostic-only timer wait ownership, or hidden-child stale paint state. It
-  is the real post-splash id-1000 `WM_TIMER`/MFC idle-update/resource loop:
-  the long mounted run still reaches the wall-clock limit while repeatedly
-  dispatching no-HWND `WM_TIMER` 1000 and `WM_IDLEUPDATECMDUI` fan-out. Next
-  steps: trace why that CE/MFC idle cycle never exits into sustained
-  UI/resource-ready progress, without forcing hidden child paints or
-  app-specific state.
+  is the real post-splash timer/message lifecycle: v3 can present the frame
+  and can park the long id-1000 no-HWND timer, but it does not yet have a
+  sustained real-time/run-queue wake model for that long timer in virtual mode.
+  Next steps: use host/monitor input plus timer tracing to decide whether the
+  next slice is wall-clock timer wake/resume ownership, MFC idle/resource
+  progression after the first timer, or another GWE message ordering gap,
+  without forcing hidden child paints or app-specific state.
 - Continue the mounted iNavi resource-ready investigation from the
   `resource_59718`/mode-47 table frontier. Current evidence says
   `\SDMMC Disk\INavi\res\values.dat` opens and reads correctly, but by the

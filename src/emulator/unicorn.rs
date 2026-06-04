@@ -17,6 +17,8 @@ use crate::{
 };
 use std::collections::{HashMap, HashSet};
 
+const MAX_EMPTY_QUEUE_TIMER_FAST_FORWARD_MS: u32 = 100;
+
 #[derive(Debug, Clone)]
 pub struct UnicornMips {
     memory: MemoryMap,
@@ -5728,7 +5730,6 @@ fn try_block_empty_get_message<D>(
     last_messages: &std::rc::Rc<std::cell::RefCell<Vec<UnicornLastMessage>>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
-    const MAX_EMPTY_QUEUE_TIMER_FAST_FORWARD_MS: u32 = 100;
 
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
         || ordinal != Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W)
@@ -5753,7 +5754,7 @@ fn try_block_empty_get_message<D>(
     }
 
     if let Some(delay_ms) = kernel.timers.next_due_delay_ms() {
-        if delay_ms <= MAX_EMPTY_QUEUE_TIMER_FAST_FORWARD_MS {
+        if should_fast_forward_empty_queue_timer(delay_ms) {
             if delay_ms != 0 {
                 kernel.timers.sleep_ms(delay_ms);
             }
@@ -5979,6 +5980,11 @@ fn unicorn_blocked_get_message_snapshot(
 }
 
 #[cfg(feature = "unicorn")]
+fn should_fast_forward_empty_queue_timer(delay_ms: u32) -> bool {
+    delay_ms <= MAX_EMPTY_QUEUE_TIMER_FAST_FORWARD_MS
+}
+
+#[cfg(feature = "unicorn")]
 fn try_complete_current_get_message_timer_wait<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
@@ -5995,6 +6001,9 @@ fn try_complete_current_get_message_timer_wait<D>(
     let Some(delay_ms) = kernel.timers.next_due_delay_ms() else {
         return false;
     };
+    if !should_fast_forward_empty_queue_timer(delay_ms) {
+        return false;
+    }
     if delay_ms != 0 {
         kernel.timers.sleep_ms(delay_ms);
     }
@@ -13557,6 +13566,18 @@ mod unicorn_tests {
             .unwrap();
         assert_eq!(u32::from_le_bytes(result_bytes), 0x2468_ace0);
         assert!(kernel.take_completed_send_message_result(send_id).is_none());
+    }
+
+    #[test]
+    fn empty_queue_getmessage_only_fast_forwards_near_due_timers() {
+        assert!(super::should_fast_forward_empty_queue_timer(0));
+        assert!(super::should_fast_forward_empty_queue_timer(
+            super::MAX_EMPTY_QUEUE_TIMER_FAST_FORWARD_MS
+        ));
+        assert!(!super::should_fast_forward_empty_queue_timer(
+            super::MAX_EMPTY_QUEUE_TIMER_FAST_FORWARD_MS + 1
+        ));
+        assert!(!super::should_fast_forward_empty_queue_timer(7500));
     }
 
     #[test]

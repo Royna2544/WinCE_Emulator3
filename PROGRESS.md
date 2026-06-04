@@ -9,6 +9,27 @@
 
 ## Confirmed
 
+- Raw Unicorn `GetMessageW` empty-queue handling no longer fast-forwards long
+  future timers in the current blocked-wait completion path. Both the
+  pre-block and just-registered blocked-wait paths now share the same
+  <=100 ms fast-forward guard: near-due GUI settling timers can still fire,
+  while a 7.5 s CE timer parks as a real blocked message wait instead of
+  spinning thousands of synthetic `WM_TIMER` deliveries. Focused coverage:
+  `cargo test --features unicorn,trace,win32-desktop
+  empty_queue_getmessage_only_fast_forwards_near_due_timers`,
+  `cargo test --features unicorn,trace,win32-desktop ce::gwe::tests`, and
+  `cargo check --features unicorn,trace,win32-desktop` pass. A mounted virtual
+  tap probe wrote `target\timer_cap_startup_tap_virtual_20s_*`: it still
+  reaches the real iNavi SE splash/art UI through guest GDI, then stops at
+  `COREDLL.dll@861 blocked_get_message` with one registered wait
+  (`sched=wait:3/0/1`, `reg:1/0`) and the long no-HWND timer preserved as
+  pending (`id=0x3e8`, `hwnd=0`, `msg=0x113`, `due=22086`,
+  `period=7500`). The previous startup-tap run without this cap consumed the
+  full 60 s wall budget while delivering about 22,924 timer wakes; the same
+  path is now bounded (`PeekMessageW=194`, `GetMessageW=190`) and remains
+  memory/file-I/O stable (`heap_live=13697/13300954B`,
+  `virtual_live=3/196608B`, `host_open=665`,
+  `host_read=80198/4056903B`, `mem_open=3`, `max_read=685080`).
 - GWE now keeps hidden-window paint/update state coherent during MFC child
   control creation. `ShowWindow(SW_HIDE)` and `SWP_HIDEWINDOW` clear the
   window's own pending update/erase state, while `SetWindowPos` clips any
@@ -34,11 +55,11 @@
 - Main-thread `GetMessageW` waits can now resume from scheduler-owned timer
   expiry instead of stopping as diagnostic-only waits. The Unicorn bridge
   gives the initial guest thread a CE current-thread pseudo-handle wait
-  identity, records blocked `GetMessageW` as a scheduler message wait, advances
-  virtual time to the next due timer only when there is no alternate guest
-  context to run, pumps due timers into the owning GWE queue, selects the ready
+  identity, records blocked `GetMessageW` as a scheduler message wait, pumps
+  already-due or near-due timers into the owning GWE queue, selects the ready
   waiter, writes the `MSG`, removes the waiter, and returns through the saved
-  MIPS syscall return site. Focused coverage:
+  MIPS syscall return site. Long future timers now remain parked rather than
+  being advanced immediately. Focused coverage:
   `cargo check --features unicorn,trace,win32-desktop`,
   `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
   coredll_raw_get_message_prioritizes_paint_over_generated_timer`, and
@@ -54,26 +75,6 @@
   `host_open=665`, `host_read=80198/4060882B`, `mem_open=3`,
   `max_read=685080`) and the same populated framebuffer (`575800` nonzero
   pixels). This is scheduler fidelity progress, not new post-splash UI.
-- Raw Unicorn `GetMessageW` empty-queue handling no longer fast-forwards every
-  future timer unconditionally. The bridge now only advances short, imminent
-  timers up to 100 ms so GUI-settling timers can fire without host sleeping;
-  longer timers park as blocked scheduler/message waits with their due time in
-  the monitor summary. This preserves the real mounted iNavi first-present
-  frame while removing the pathological id-1000 idle loop burn. Focused
-  coverage: `cargo check --features unicorn,trace,win32-desktop` and
-  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
-  coredll_raw_get_message_prioritizes_paint_over_generated_timer` pass with
-  the known non-fatal Windows incremental-finalize warning. A fresh mounted
-  virtual probe wrote `target\timer_cap_virtual_*`, stopped quickly at
-  `COREDLL.dll@861 blocked_get_message` instead of the 20 s wall-clock limit,
-  stayed memory-stable (`heap_live=13697/13300954B`,
-  `virtual_live=3/196608B`, `host_open=665`,
-  `host_read=80198/4056903B`, `mem_open=3`, `max_read=685080`), and parked on
-  the long no-HWND timer (`id=0x3e8`, `due=21876`, `period=7500`). The hot
-  idle/message churn is now bounded (`PeekMessageW=194`, `GetMessageW=190`,
-  `DispatchMessageW=189`, versus the previous thousands), and the framebuffer
-  remains populated (`575800` nonzero pixels) with the same real 800x480
-  memory-DC-to-window-HDC present.
 - Mounted iNavi now reaches real guest-driven UI presentation in virtual
   desktop mode. The `UpdateWindow` guest trampoline now honors the CE paint
   update shape by entering the guest WNDPROC with `WM_ERASEBKGND` when
