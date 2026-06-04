@@ -1857,6 +1857,29 @@ impl Gwe {
         self.peek_message_filtered(thread_id, None, 0, 0, flags)
     }
 
+    pub fn has_message_filtered(
+        &self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> bool {
+        self.sent_queues.get(&thread_id).is_some_and(|queue| {
+            queue.iter().any(|id| {
+                self.sent_messages
+                    .get(id)
+                    .is_some_and(|sent| message_matches(&sent.message, hwnd, min_msg, max_msg))
+            })
+        }) || self.queues.get(&thread_id).is_some_and(|queue| {
+            queue
+                .iter()
+                .any(|message| message_matches(message, hwnd, min_msg, max_msg))
+        }) || self.quit_message(thread_id).is_some()
+            || self
+                .synthetic_paint_message(thread_id, hwnd, min_msg, max_msg)
+                .is_some()
+    }
+
     pub fn post_quit_message(&mut self, thread_id: u32, exit_code: u32, time_ms: u32) {
         self.quit_by_thread
             .insert(thread_id, QuitState { exit_code, time_ms });

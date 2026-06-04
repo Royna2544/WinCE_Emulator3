@@ -557,7 +557,15 @@ fn message_and_timer_transitions_queue_scheduler_msg_wait_candidates() -> Result
             now_ms,
             |blocked, kernel| match blocked.kind {
                 SchedulerBlockedWaitKind::Kernel => true,
+                SchedulerBlockedWaitKind::Sleep => false,
                 SchedulerBlockedWaitKind::SerialRead { handle } => kernel.serial_read_ready(handle),
+                SchedulerBlockedWaitKind::GetMessage {
+                    hwnd,
+                    min_msg,
+                    max_msg,
+                } => kernel
+                    .gwe
+                    .has_message_filtered(blocked.thread_id, hwnd, min_msg, max_msg),
                 SchedulerBlockedWaitKind::MsgWait {
                     wake_mask,
                     input_available,
@@ -641,6 +649,72 @@ fn message_and_timer_transitions_queue_scheduler_msg_wait_candidates() -> Result
 }
 
 #[test]
+fn get_message_waiter_uses_filtered_scheduler_message_readiness() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let thread_id = 46;
+    let hwnd = kernel
+        .gwe
+        .create_window(thread_id, "GetMessageWake", "wake");
+    let waiter = kernel.register_blocked_waiter(
+        thread_id,
+        0x546,
+        Vec::new(),
+        SchedulerBlockedWaitKind::GetMessage {
+            hwnd: Some(hwnd),
+            min_msg: WM_USER + 10,
+            max_msg: WM_USER + 20,
+        },
+        0,
+        INFINITE,
+    );
+
+    assert!(kernel.post_message_w(hwnd, WM_USER + 1, 1, 2));
+    assert_eq!(
+        kernel.select_ready_blocked_waiter(1, 0, |blocked, kernel| match blocked.kind {
+            SchedulerBlockedWaitKind::GetMessage {
+                hwnd,
+                min_msg,
+                max_msg,
+            } => kernel
+                .gwe
+                .has_message_filtered(blocked.thread_id, hwnd, min_msg, max_msg),
+            _ => false,
+        }),
+        None
+    );
+
+    assert!(kernel.post_message_w(hwnd, WM_USER + 12, 3, 4));
+    assert_eq!(
+        kernel.select_ready_blocked_waiter(1, 0, |blocked, kernel| match blocked.kind {
+            SchedulerBlockedWaitKind::GetMessage {
+                hwnd,
+                min_msg,
+                max_msg,
+            } => kernel
+                .gwe
+                .has_message_filtered(blocked.thread_id, hwnd, min_msg, max_msg),
+            _ => false,
+        }),
+        Some(waiter)
+    );
+    kernel.remove_blocked_waiter(waiter).unwrap();
+    assert_eq!(
+        kernel
+            .gwe
+            .get_message_filtered(thread_id, Some(hwnd), WM_USER + 10, WM_USER + 20)
+            .unwrap()
+            .msg,
+        WM_USER + 12
+    );
+
+    let stats = kernel.scheduler_stats();
+    assert_eq!(stats.message_input_signal_count, 2);
+    assert_eq!(stats.message_input_wake_candidate_count, 1);
+    Ok(())
+}
+
+#[test]
 fn remote_serial_injection_queues_scheduler_serial_read_candidates() -> Result<()> {
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
     let mut kernel = CeKernel::boot(config);
@@ -674,7 +748,9 @@ fn remote_serial_injection_queues_scheduler_serial_read_candidates() -> Result<(
     assert_eq!(
         kernel.select_ready_blocked_waiter(1, 0, |blocked, kernel| match blocked.kind {
             SchedulerBlockedWaitKind::Kernel => true,
+            SchedulerBlockedWaitKind::Sleep => false,
             SchedulerBlockedWaitKind::SerialRead { handle } => kernel.serial_read_ready(handle),
+            SchedulerBlockedWaitKind::GetMessage { .. } => false,
             SchedulerBlockedWaitKind::MsgWait { .. } => false,
         }),
         Some(serial_wait)

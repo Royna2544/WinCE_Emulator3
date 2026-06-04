@@ -164,7 +164,24 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     message-wait queue; message, quit, sent-message, remote-input, and
     `WM_TIMER` posting transitions enqueue those wait ids as pending
     message-input candidates, then live resume rechecks the actual GWE queue
-    status and wake mask before returning. The first serial-read bridge is
+    status and wake mask before returning. The same GWE header declares
+    blocking `GetMessageW_I` separately from
+    `GetMessageWNoWait_I`, and documents paint requests as queue conditions
+    observed by later `GetMessage` calls. v3 now registers parked Unicorn
+    `GetMessageW` calls in the scheduler message-wait queue with the original
+    HWND/min/max filters; message-input transitions enqueue them as candidates,
+    and resume rechecks the actual filtered GWE message state before restoring
+    the guest CPU context. `schedule.c` `NKSleep` calls `ThreadSleep`, adds one
+    millisecond for bounded sleeps below `0xfffffffe`, handles very long waits
+    in `MAX_TIMEOUT` chunks, maps `Sleep(INFINITE)` to thread suspend, maps
+    `Sleep(0)` to `ThreadYield`, and implements `NKSleepTillTick` as
+    `ThreadSleep(1)`. v3 now has the first worker-thread Unicorn bridge for
+    bounded `Sleep(ms)`: it registers a timeout-only scheduler wait, switches
+    away from the sleeping worker when another saved context is available, and
+    resumes the worker with a zero return after timeout expiry. `Sleep(0)`,
+    `Sleep(INFINITE)`, `SleepTillTick`, long-sleep chunking, and normal
+    scheduler-owned main-thread run-queue state remain open. The first
+    serial-read bridge is
     anchored to `SERDEV\serial.c`, CE comm `ReadFile` behavior through
     `DEVCORE\devfile.c`, and the same scheduler wait ownership rule: empty
     serial `ReadFile` calls can register a scheduler `SerialRead` wait by COM

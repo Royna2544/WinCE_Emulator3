@@ -106,26 +106,34 @@
     read into the original guest buffer through `kernel.read_file_into`.
     Matching remote serial bytes are drained into the target COM session just
     before `ReadFile`/`ReadFileInto`, so the device-file path remains the data
-    owner rather than a special app branch.
-  - Open gaps: full scheduler-owned `GetMessageW` blocking rather than raw
-    no-message false returns, full serial semantics beyond the first
-    empty-read wake bridge, audio wake ownership, fuller timer ownership beyond
-    message-queue posts, fuller child-process
+    owner rather than a special app branch. Parked Unicorn `GetMessageW`
+    calls now also register in the scheduler's message-wait queue with their
+    HWND/min/max filters; GWE message transitions enqueue them as pending wake
+    candidates, and resume rechecks immutable filtered queue readiness before
+    consuming the message and restoring the guest context. Bounded
+    worker-thread `Sleep(ms)` calls now register timeout-only scheduler waits
+    and resume with a zero return after timeout expiry, matching the first
+    `schedule.c::NKSleep`/`ThreadSleep` shape at the Unicorn import boundary.
+  - Open gaps: full serial semantics beyond the first empty-read wake bridge,
+    audio wake ownership, fuller timer ownership beyond message-queue posts
+    and bounded worker-thread sleeps, `Sleep(0)` yield, `Sleep(INFINITE)`,
+    `SleepTillTick`, long-sleep chunking, fuller child-process
     lifecycle scheduling beyond handle signaling, blocked
     thread priority/fairness across all wait kinds beyond
-    the current Unicorn bridge, full scheduler-owned message wait lifetime
-    rather than the first import-boundary bridge, richer wake reasons
-    across serial/audio/process/GWE waits, priority inheritance/boosting around
-    mutex/critical-section ownership, pending self-suspend/PSL late-suspend
-    state, resume-to-run-queue wake ownership, and fuller Unicorn thread
-    context switching still need the next scheduler port slices.
+    the current Unicorn bridge, moving saved `GetMessageW`/wait MIPS contexts
+    out of the Unicorn bridge into scheduler-owned thread state, richer wake
+    reasons across serial/audio/process/GWE waits, priority
+    inheritance/boosting around mutex/critical-section ownership, pending
+    self-suspend/PSL late-suspend state, resume-to-run-queue wake ownership,
+    and fuller Unicorn thread context switching still need the next scheduler
+    port slices.
   - Fixture gates: keep existing wait/thread fixtures passing, including
     `tests/test_progs/163_mutex_recursive_ownership` and
     `tests/test_progs/164_object_transition_wake` and
     `tests/test_progs/165_thread_exit_wait_wake` when the eVC4 MIPSII fixture
     suite is enabled, then graduate pending scheduler fixtures for multiple
-    waiters, `MsgWait*`, fuller serial parking, waveOut callback wakeups,
-    child-process waits, and scheduler mini app.
+    waiters, `GetMessageW` blocking, `MsgWait*`, fuller serial parking,
+    waveOut callback wakeups, child-process waits, and scheduler mini app.
   - Latest iNavi evidence: active long-run frontier remains the render-map/
     surface path around `0x0026f7e4` in prior host-mode runs. The latest
     scheduler message-wake virtual probe wrote

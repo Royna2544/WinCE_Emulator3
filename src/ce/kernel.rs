@@ -1327,6 +1327,12 @@ impl CeKernel {
         self.scheduler.record_blocked_wait();
     }
 
+    pub fn record_blocked_thread_sleep(&mut self, timeout_ms: u32) {
+        self.scheduler
+            .record_wait_attempt(SchedulerWaitKind::Sleep, 0, timeout_ms);
+        self.scheduler.record_blocked_wait();
+    }
+
     pub fn record_resumed_single_wait(&mut self, result: u32) {
         self.scheduler
             .record_wait_wake(wait_result_to_wake_reason(result));
@@ -1359,6 +1365,11 @@ impl CeKernel {
     pub fn record_resumed_msg_wait_result(&mut self, result: u32) {
         self.scheduler
             .record_wait_wake(wait_result_to_wake_reason(result));
+    }
+
+    pub fn record_resumed_thread_sleep(&mut self) {
+        self.scheduler
+            .record_wait_wake(SchedulerWakeReason::Timeout);
     }
 
     pub fn register_blocked_waiter(

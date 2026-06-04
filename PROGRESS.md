@@ -397,6 +397,38 @@
   (`msgcand:0`), still produced no render milestones, and the framebuffer
   remains only the 301-pixel red tap line. `Access is denied` and actual
   failed `SearchDB` opens both remained at zero.
+- Scheduler/GWE ownership now covers the first parked `GetMessageW` bridge.
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h` declares blocking
+  `GetMessageW_I` separately from `GetMessageWNoWait_I` and documents paint
+  requests as queue state observed by later `GetMessage` calls. v3 now
+  registers Unicorn-blocked `GetMessageW` calls in the scheduler
+  message-wait queue with the original HWND/min/max filters, lets normal GWE
+  post/quit/sent/timer/input transitions enqueue those waits as pending
+  candidates, and rechecks immutable filtered GWE readiness before restoring
+  the saved guest CPU context and consuming the message. Focused coverage:
+  `scheduler_queues_get_message_waiters_by_thread`,
+  `get_message_waiter_uses_filtered_scheduler_message_readiness`, and the full
+  `basic_subsystems` suite. `cargo check --features
+  unicorn,trace,win32-desktop` passes with the existing non-fatal Windows
+  incremental-finalize warning. This moves plain `GetMessageW` blocking onto
+  the same scheduler registry as `MsgWaitForMultipleObjectsEx`; full run-queue
+  ownership and moving the saved MIPS context out of the Unicorn bridge remain
+  open.
+- Scheduler/timer ownership now has the first parked worker-thread
+  `Sleep(ms)` bridge. CE `schedule.c` implements `NKSleep` via
+  `ThreadSleep`/`PutThreadToSleep`, with bounded sleeps entering the kernel
+  sleep list, `Sleep(0)` yielding, `Sleep(INFINITE)` suspending the current
+  thread, and `NKSleepTillTick` sleeping one tick. v3 now registers bounded
+  raw Unicorn `Sleep(ms)` calls from guest worker-thread contexts as
+  timeout-only scheduler waits, switches back to an available saved context,
+  and resumes the sleeping worker with return value `0` after the scheduler
+  timeout expires. Run summaries now include `sched_sleep_count`. Focused
+  coverage: `scheduler_selects_timeout_only_sleep_wait_after_timeout`, plus
+  the existing blocked-wait scheduler tests. `cargo check --features
+  unicorn,trace,win32-desktop` and `basic_subsystems` pass with the existing
+  non-fatal Windows incremental-finalize warning. `Sleep(0)`, `Sleep(INFINITE)`,
+  `SleepTillTick`, long-sleep chunking, and scheduler-owned main-thread
+  run-queue state remain open.
 - Scheduler/device wake ownership now has a first serial-read slice. The
   `Scheduler` can register blocked `SerialRead` waits by COM handle and queue
   pending wake candidates when remote serial/NMEA input arrives; serial device

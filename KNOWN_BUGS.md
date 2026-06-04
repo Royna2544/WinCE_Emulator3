@@ -571,8 +571,8 @@
   - Status: expected until host transport work lands.
 
 - Scheduler/wait ownership is only partially ported to CE fidelity.
-  - Symptom: wait calls now flow through scheduler accounting, and Unicorn
-    blocked/resumed `WaitForSingleObject` paths report scheduler counters, but
+  - Symptom: wait calls now flow through scheduler accounting and the first
+    Unicorn blocked/resumed wait bridges report scheduler counters, but
     complete CE waiter queues, timeout expiry, unified timer/serial/audio wake
     ownership, fuller child-process lifecycle scheduling, and full
     blocked-thread context scheduling are still open.
@@ -587,21 +587,28 @@
     child-launch completion, raw process-handle `TerminateProcess`, and the CE
     current-process pseudo handle. Posted/thread/broadcast/quit/sent messages,
     remote input, and queued `WM_TIMER` posts now enqueue registered
-    per-thread message waiters as pending wake candidates too. Remote
+    per-thread message waiters as pending wake candidates too. Parked
+    Unicorn `GetMessageW` calls now also register in that scheduler
+    message-wait queue with their original filters and recheck filtered GWE
+    message readiness before consuming the message on resume. Bounded
+    worker-thread `Sleep(ms)` calls now register timeout-only scheduler waits
+    and resume with zero after timeout expiry, but `Sleep(0)` yield,
+    `Sleep(INFINITE)`, `SleepTillTick`, long sleeps, and main-thread run-queue
+    ownership remain partial. Remote
     serial/NMEA injection now queues registered serial-read waiters by COM
     handle, and parked raw serial `ReadFile` can resume by streaming bytes into
-    the original guest buffer. The broader `GetMessageW` blocking model, full
-    serial stack semantics, audio wake model, fuller timer ownership, and full
-    scheduler-owned CPU-context/
-    run-queue ownership remain partial. The mounted
+    the original guest buffer. Full serial stack semantics, audio wake model,
+    fuller timer ownership, and full scheduler-owned CPU-context/run-queue
+    ownership remain partial. The mounted
     `target\scheduler_msgwait_virtual_60s_*` probe stayed memory-stable,
     exercised seven object signals and 148 message-input transitions without
     registered waiters on those handles/threads
     (`sig:7 cand:0 msgsig:148 msgcand:0 maxpend:0`), and still had no render
     milestones. Existing
     guest-visible wait return behavior is preserved in this slice.
-  - Status: active first CE-fidelity port; next scheduler work should replace
-    the remaining ad hoc blocked-wait vectors and subsystem wake paths.
+  - Status: active CE-fidelity port; next scheduler work should replace the
+    remaining ad hoc blocked-wait vectors, subsystem wake paths, and
+    Unicorn-local saved-context storage.
 
 - Host desktop windows may be inaccessible from the current automation session.
   - Symptom: `--desktop host` initializes the Win32 presenter and reports

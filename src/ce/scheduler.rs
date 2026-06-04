@@ -5,6 +5,7 @@ pub enum SchedulerWaitKind {
     Single,
     Multiple,
     MsgWait,
+    Sleep,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,6 +21,7 @@ pub struct SchedulerStats {
     pub wait_single_count: u64,
     pub wait_multiple_count: u64,
     pub msg_wait_count: u64,
+    pub sleep_count: u64,
     pub wait_acquired_count: u64,
     pub wait_timeout_count: u64,
     pub wait_failed_count: u64,
@@ -42,6 +44,12 @@ pub struct SchedulerStats {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SchedulerBlockedWaitKind {
     Kernel,
+    GetMessage {
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    },
+    Sleep,
     MsgWait {
         wake_mask: u32,
         input_available: bool,
@@ -91,6 +99,7 @@ impl Scheduler {
             SchedulerWaitKind::Single => self.stats.wait_single_count += 1,
             SchedulerWaitKind::Multiple => self.stats.wait_multiple_count += 1,
             SchedulerWaitKind::MsgWait => self.stats.msg_wait_count += 1,
+            SchedulerWaitKind::Sleep => self.stats.sleep_count += 1,
         }
         self.stats.max_wait_handles = self.stats.max_wait_handles.max(handle_count);
         self.stats.max_timeout_ms = self.stats.max_timeout_ms.max(timeout_ms);
@@ -140,7 +149,10 @@ impl Scheduler {
         for handle in &wait.wait_handles {
             self.wait_queues.entry(*handle).or_default().push_back(id);
         }
-        if matches!(wait.kind, SchedulerBlockedWaitKind::MsgWait { .. }) {
+        if matches!(
+            wait.kind,
+            SchedulerBlockedWaitKind::GetMessage { .. } | SchedulerBlockedWaitKind::MsgWait { .. }
+        ) {
             self.message_wait_queues
                 .entry(wait.thread_id)
                 .or_default()
@@ -554,5 +566,66 @@ mod tests {
                 .is_empty()
         );
         scheduler.remove_blocked_wait(global_ready).unwrap();
+    }
+
+    #[test]
+    fn scheduler_queues_get_message_waiters_by_thread() {
+        let mut scheduler = Scheduler::default();
+        let get_message_waiter = scheduler.register_blocked_wait(
+            7,
+            0x107,
+            Vec::new(),
+            SchedulerBlockedWaitKind::GetMessage {
+                hwnd: Some(0x20000),
+                min_msg: 0,
+                max_msg: 0,
+            },
+            0,
+            crate::ce::timer::INFINITE,
+        );
+
+        assert_eq!(
+            scheduler.message_waiter_ids_for_thread(7),
+            vec![get_message_waiter]
+        );
+        assert_eq!(scheduler.queue_message_wake_candidates(7), 1);
+        let stats = scheduler.stats();
+        assert_eq!(stats.message_input_signal_count, 1);
+        assert_eq!(stats.message_input_wake_candidate_count, 1);
+        assert_eq!(
+            scheduler.select_ready_blocked_wait_id(
+                1,
+                0,
+                |wait| wait.id == get_message_waiter,
+                |_| 20,
+            ),
+            Some(get_message_waiter)
+        );
+
+        scheduler.remove_blocked_wait(get_message_waiter).unwrap();
+        assert!(scheduler.message_waiter_ids_for_thread(7).is_empty());
+    }
+
+    #[test]
+    fn scheduler_selects_timeout_only_sleep_wait_after_timeout() {
+        let mut scheduler = Scheduler::default();
+        let sleep_wait = scheduler.register_blocked_wait(
+            8,
+            0x108,
+            Vec::new(),
+            SchedulerBlockedWaitKind::Sleep,
+            100,
+            25,
+        );
+
+        assert_eq!(
+            scheduler.select_ready_blocked_wait_id(1, 124, |_| false, |_| 20),
+            None
+        );
+        assert_eq!(
+            scheduler.select_ready_blocked_wait_id(1, 125, |_| false, |_| 20),
+            Some(sleep_wait)
+        );
+        scheduler.remove_blocked_wait(sleep_wait).unwrap();
     }
 }
