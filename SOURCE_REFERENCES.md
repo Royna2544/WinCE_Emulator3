@@ -691,6 +691,18 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/INC/crt_ordinals.h`
   - Define common CRT math exports such as `sqrt @1060`, `pow @1051`, and MIPS
     helpers such as `__ll_div @2005`.
+  - The same checked-in ordinal evidence includes narrow CRT helpers used by
+    real companion DLLs, including `strcat @1063` and `strcpy @1066`.
+
+- Mounted iNavi companion DLL bytes:
+  `D:\INAVI_Emulator\INAVI\INavi\AuthLibrary.dll`,
+  `D:\INAVI_Emulator\INAVI\INavi\TpSysAuth.dll`,
+  `D:\INAVI_Emulator\INAVI\INavi\mMbcAuth.dll`,
+  `D:\INAVI_Emulator\INAVI\INavi\tpeg_if_dll.dll`, and
+  `D:\INAVI_Emulator\INAVI\INavi\tw_tpeg_if_dll.dll`
+  - These are runtime inputs beside the main executable, not emulator shims.
+    v3 now preloads sibling DLLs from the executable directory as a generic
+    launch bridge while on-demand `LoadLibraryW` module mapping remains open.
 
 ## MFC CE Reference Source
 

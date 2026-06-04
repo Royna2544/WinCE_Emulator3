@@ -46,7 +46,22 @@
     It is still not useful GUI output: the app is currently spending bounded
     host/tap time in RSImage/PNG resource loading and DIB creation without
     reaching a screen blit/presentation ordinal.
-  - Latest evidence: flamegraph-driven startup fixes removed per-import
+  - Latest evidence: the newest mounted virtual run with dumped runtime DLLs
+    and real sibling app DLLs wrote `target\inavi_trampoline_virtual_*`. It
+    preloaded `AuthLibrary.dll`, `TpSysAuth.dll`, `mMbcAuth.dll`,
+    `tpeg_if_dll.dll`, and `tw_tpeg_if_dll.dll` from the main image directory,
+    reached real `AuthLibrary` CRT `strcat @1063`, and no longer reproduces the
+    old null `GetProcAddressW(TpSysCheckSerial)` crash. The following
+    `WRITE_PROT addr=0x50000000` collision between CE virtual allocations and
+    Unicorn external trampolines is also gone after moving the external
+    trampoline pool to `0x70000000`. The run now stops only on the 30 s wall
+    clock at `pc=0x0030f978`, `ra=0x002fd4cc`, with stable counters
+    (`heap_live=7340/21892552B`, `virtual_live=3/196608B`,
+    `host_open=161`, `host_read=26159/1947356B`, `mem_open=2`,
+    `max_read=497178`) and repeated RSImage `CreateDIBSection` work. Render
+    milestones are still `none`, and the framebuffer remains only the sparse
+    301-byte red line, so this remains the no-useful-UI bug.
+    Earlier flamegraph-driven startup fixes removed per-import
     COREDLL export-table rebuilding, hot linear trampoline scans, linear
     mapped-blob instruction lookup, per-import heap/virtual allocation scans,
     and per-page heap spillover mapping from the hottest paths. A current

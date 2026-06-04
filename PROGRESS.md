@@ -9,6 +9,29 @@
 
 ## Confirmed
 
+- Mounted iNavi startup now preloads real sibling DLLs from the main image
+  directory in addition to dumped-runtime `mfcce400.dll`/`commctrl.dll`.
+  This is a generic CE loader-search bridge, not a hardcoded auth shortcut:
+  COREDLL remains emulator-provided, emulator-provided modules are skipped, and
+  sibling DLLs are inspected from the executable directory. A focused test
+  covers case-insensitive sibling `.dll` discovery. The first mounted virtual
+  probe after this change loaded `AuthLibrary.dll`, `TpSysAuth.dll`,
+  `mMbcAuth.dll`, `tpeg_if_dll.dll`, and `tw_tpeg_if_dll.dll`, then reached
+  real `AuthLibrary` code and exposed COREDLL `strcat @1063` instead of the old
+  null `GetProcAddressW(TpSysCheckSerial)` call. `strcat @1063` is now in the
+  checked-in CRT ordinal tranche with focused raw-dispatch coverage. Moving the
+  external Unicorn trampoline pool from `0x50000000` to `0x70000000` also
+  removed a generic collision with CE virtual allocations starting at
+  `0x50000000`; the same mounted virtual run no longer stops with
+  `WRITE_PROT` at the first mapped-view page. Latest evidence:
+  `target\inavi_trampoline_virtual_*` loaded 7 DLLs, stopped only at the
+  30 s wall-clock limit (`pc=0x0030f978`, `ra=0x002fd4cc`), stayed
+  memory-stable (`heap_live=7340/21892552B`,
+  `virtual_live=3/196608B`, `host_open=161`,
+  `host_read=26159/1947356B`, `mem_open=2`, `max_read=497178`), and reached
+  repeated RSImage `CreateDIBSection` work. Render milestones remain `none`;
+  the framebuffer still contains only the 301-byte red line, so this is loader,
+  CRT, and trampoline-memory progress rather than useful UI output.
 - Dumped-runtime `explorer.exe` now gets past the earlier host-presenter
   trampoline and missing-ordinal startup blockers when run with
   `D:\INAVI_Emulator\DUMPPLZ\Windows` as the DLL search path. The old

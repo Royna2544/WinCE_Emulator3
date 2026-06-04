@@ -11638,6 +11638,7 @@ pub const ORD_MEMCPY: u32 = 1044;
 pub const ORD_MEMMOVE: u32 = 1046;
 pub const ORD_MEMSET: u32 = 1047;
 pub const ORD_ATOI: u32 = 993;
+pub const ORD_STRCAT: u32 = 1063;
 pub const ORD_STRCPY: u32 = 1066;
 pub const ORD_STRTOK: u32 = 1073;
 pub const ORD_STRTOUL: u32 = 1405;
@@ -13392,7 +13393,7 @@ pub const ORD_GED: u32 = 2051;
 pub const ORD_GTD: u32 = 2052;
 pub const ORD_NED: u32 = 2053;
 
-pub const SDK_ORDINALS: &[CoredllOrdinalDef; 26] = &[
+pub const SDK_ORDINALS: &[CoredllOrdinalDef; 27] = &[
     CoredllOrdinalDef {
         name: "wcsrchr",
         ordinal: ORD_WCSRCHR,
@@ -13436,6 +13437,10 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef; 26] = &[
     CoredllOrdinalDef {
         name: "atoi",
         ordinal: ORD_ATOI,
+    },
+    CoredllOrdinalDef {
+        name: "strcat",
+        ordinal: ORD_STRCAT,
     },
     CoredllOrdinalDef {
         name: "strcpy",

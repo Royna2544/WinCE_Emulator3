@@ -1309,8 +1309,54 @@ fn load_import_dlls(image: &PeImage, search_dirs: &[PathBuf]) -> Result<Vec<PeIm
         loaded.push(PeImage::inspect(path)?);
     }
     preload_search_dll_if_present("commctrl.dll", search_dirs, &mut seen, &mut loaded)?;
+    preload_image_directory_dlls(image, &mut seen, &mut loaded)?;
 
     Ok(loaded)
+}
+
+fn preload_image_directory_dlls(
+    image: &PeImage,
+    seen: &mut BTreeSet<String>,
+    loaded: &mut Vec<PeImage>,
+) -> Result<()> {
+    for path in image_directory_dll_paths(Path::new(&image.path))? {
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let normalized = normalize_module_name(file_name);
+        if emulator_provided_import_module(&normalized) || !seen.insert(normalized) {
+            continue;
+        }
+        loaded.push(PeImage::inspect(path)?);
+    }
+    Ok(())
+}
+
+fn image_directory_dll_paths(image_path: &Path) -> Result<Vec<PathBuf>> {
+    let Some(parent) = image_path.parent() else {
+        return Ok(Vec::new());
+    };
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(parent)
+        .map_err(|err| wince_emulation_v3::Error::Backend(format!("read image dir: {err}")))?
+    {
+        let entry = entry.map_err(|err| {
+            wince_emulation_v3::Error::Backend(format!("read image dir entry: {err}"))
+        })?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let is_dll = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("dll"));
+        if is_dll {
+            paths.push(path);
+        }
+    }
+    paths.sort_by_key(|path| path.file_name().map(|name| name.to_os_string()));
+    Ok(paths)
 }
 
 fn preload_search_dll_if_present(
@@ -1423,6 +1469,27 @@ mod tests {
         let path = ce_module_path_for_image(&kernel, r"D:\INAVI_Emulator\INAVI\INavi\INavi.exe");
 
         assert_eq!(path, r"\SDMMC Disk\INavi\INavi.exe");
+    }
+
+    #[test]
+    fn image_directory_dll_paths_lists_sibling_dlls_case_insensitively() {
+        let root =
+            std::env::temp_dir().join(format!("wince-image-dir-dlls-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("app.exe"), b"").unwrap();
+        fs::write(root.join("AuthLibrary.dll"), b"").unwrap();
+        fs::write(root.join("TpSysAuth.DLL"), b"").unwrap();
+        fs::write(root.join("notes.txt"), b"").unwrap();
+
+        let paths = image_directory_dll_paths(&root.join("app.exe")).unwrap();
+        let names = paths
+            .iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["AuthLibrary.dll", "TpSysAuth.DLL"]);
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

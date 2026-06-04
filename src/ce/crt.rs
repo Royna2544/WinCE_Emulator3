@@ -525,6 +525,74 @@ pub(crate) fn strcpy_raw<M: CoredllGuestMemory>(
     }
 }
 
+pub(crate) fn strcat_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest: u32,
+    src: u32,
+) -> u32 {
+    if dest == 0 || src == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+
+    let mut dest_len = None;
+    for index in 0..0x8000u32 {
+        let Ok(byte) = memory.read_u8(dest.wrapping_add(index)) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        if byte == 0 {
+            dest_len = Some(index);
+            break;
+        }
+    }
+    let Some(dest_len) = dest_len else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+
+    let mut bytes = Vec::new();
+    for index in 0..0x8000u32 {
+        let Ok(byte) = memory.read_u8(src.wrapping_add(index)) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        bytes.push(byte);
+        if byte == 0 {
+            break;
+        }
+    }
+    if !bytes.ends_with(&[0]) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+
+    if write_guest_bytes(
+        kernel,
+        memory,
+        thread_id,
+        dest.wrapping_add(dest_len),
+        &bytes,
+    ) {
+        kernel.threads.set_last_error(thread_id, 0);
+        dest
+    } else {
+        0
+    }
+}
+
 pub(crate) fn strtok_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,

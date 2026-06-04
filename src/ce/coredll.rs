@@ -1858,6 +1858,13 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
+        ORD_STRCAT => Some(CoredllValue::Handle(crt::strcat_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
         ORD_STRTOK => Some(CoredllValue::Handle(crt::strtok_raw(
             kernel,
             memory,

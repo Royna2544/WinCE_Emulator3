@@ -16,12 +16,12 @@ use wince_emulation_v3::{
             ORD_OPERATOR_DELETE_ARRAY, ORD_OPERATOR_NEW, ORD_OPERATOR_NEW_ARRAY, ORD_RAND,
             ORD_READ_FILE, ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_VALUE_W,
             ORD_REG_ENUM_VALUE_W, ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W,
-            ORD_SECURITY_GEN_COOKIE2, ORD_SET_FILE_POINTER, ORD_SPRINTF, ORD_SRAND, ORD_STRCPY,
-            ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W, ORD_STRING_CCH_LENGTH_W, ORD_STRTOK,
-            ORD_STRTOUL, ORD_SWPRINTF, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSWPRINTF,
-            ORD_WCSCHR, ORD_WCSCPY, ORD_WCSDUP, ORD_WCSICMP, ORD_WCSNCMP, ORD_WCSNCPY,
-            ORD_WCSNICMP, ORD_WCSRCHR, ORD_WCSSTR, ORD_WFOPEN, ORD_WIDE_CHAR_TO_MULTI_BYTE,
-            ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
+            ORD_SECURITY_GEN_COOKIE2, ORD_SET_FILE_POINTER, ORD_SPRINTF, ORD_SRAND, ORD_STRCAT,
+            ORD_STRCPY, ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W, ORD_STRING_CCH_LENGTH_W,
+            ORD_STRTOK, ORD_STRTOUL, ORD_SWPRINTF, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE,
+            ORD_VSWPRINTF, ORD_WCSCHR, ORD_WCSCPY, ORD_WCSDUP, ORD_WCSICMP, ORD_WCSNCMP,
+            ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSRCHR, ORD_WCSSTR, ORD_WFOPEN,
+            ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         kernel::CeKernel,
@@ -112,6 +112,38 @@ fn coredll_raw_string_conversion_ordinals_round_trip_ascii() -> Result<()> {
     ));
     assert_eq!(memory.read_wide_z(lower, 8), "ABC");
     assert_eq!(memory.read_wide_z(upper, 8), "xyz");
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_strcat_appends_narrow_string_and_returns_dest() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let dest = 0x1_1000;
+    let src = 0x1_1100;
+
+    memory.map_bytes(dest, 32);
+    memory.write_bytes(dest, b"Auth");
+    memory.write_bytes(dest + 4, &[0]);
+    memory.write_bytes(src, b"Library.dll\0");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_STRCAT,
+            [dest, src],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } if ptr == dest
+    ));
+    assert_eq!(&memory.read_bytes(dest, 16), b"AuthLibrary.dll\0");
     Ok(())
 }
 

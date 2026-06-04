@@ -167,6 +167,7 @@
 
 - Runtime DLL loading / shimmed libraries:
   - Source refs: `D:\INAVI_Emulator\DUMPPLZ\Windows` for target runtime DLL
+    bytes, and the mounted executable directory for real app companion DLL
     bytes; CE/MFC/SDK trees only as behavior evidence.
   - Current v3 status: COREDLL remains emulator-provided. WINSOCK/OLE remain
     shimmed launch-surface libraries. `commctrl.dll` is no longer treated as
@@ -174,18 +175,29 @@
     registered mapped-module exports are available to module APIs. Import
     patching resolves loaded external exports before shim classification, so
     search-path `commctrl.dll` import slots now patch directly to mapped DLL
-    exports rather than a common-controls trap. The PE parser now tolerates
-    real CE mapped-image zero fill below `SizeOfImage`, so the dumped
-    `commctrl.dll` can be inspected and mapped.
+    exports rather than a common-controls trap. Startup now also preloads real
+    sibling DLLs from the main executable directory, skipping emulator-provided
+    modules and duplicate normalized module names. This currently covers the
+    mounted app's real `AuthLibrary.dll`, `TpSysAuth.dll`, `mMbcAuth.dll`,
+    `tpeg_if_dll.dll`, and `tw_tpeg_if_dll.dll` bytes without adding
+    file-name-specific behavior. The PE parser now tolerates real CE
+    mapped-image zero fill below `SizeOfImage`, so the dumped `commctrl.dll`
+    can be inspected and mapped.
   - Open gaps: runtime `LoadLibraryW` is not yet a general on-demand DLL
-    mapper for arbitrary non-preloaded DLLs; WINSOCK/OLE behavior still needs
-    subsystem-backed implementation only where fixtures or traces demand it.
+    mapper for arbitrary non-preloaded DLLs; sibling preload is a launch bridge
+    and should graduate to CE-like on-demand module mapping. WINSOCK/OLE
+    behavior still needs subsystem-backed implementation only where fixtures or
+    traces demand it.
   - Fixture gates: keep PE zero-fill tests and module-loader tests passing;
     add focused runtime `LoadLibraryW`/`GetProcAddress` fixtures before
     expanding on-demand DLL mapping.
-  - Latest iNavi evidence: `target\commctrl_searchpath_virtual_60s_*` confirms
-    the loaded-`commctrl` path remains memory-stable, but it still does not
-    produce render milestones or useful framebuffer output.
+  - Latest iNavi evidence: `target\inavi_trampoline_virtual_*` confirms the
+    sibling DLL path loads the real companion DLLs, reaches `strcat @1063`
+    through `AuthLibrary`, clears the old null auth-proc call, and runs to a
+    30 s wall-clock stop after the external trampoline pool was moved away from
+    CE virtual allocations. It remains memory-stable and reaches repeated
+    RSImage `CreateDIBSection` work, but still does not produce render
+    milestones or useful framebuffer output.
 
 - Window/GWE subsystem:
   - Source refs:
@@ -603,10 +615,12 @@
   milestones and only red tap pixels. Next work should debug the null/invalid
   render-map object path around
   `0x0026f7c0..0x0026f7e4` using real guest state and existing probes. Also
-  fix the loader/trampoline reachability gap exposed by the host-presented
-  dumped `explorer.exe` probe, where the current low trampoline cannot
-  direct-jump to high target `0xffff832c`. Do not fake-present DIBSections
-  just because their bits are populated.
+  keep the new trampoline/virtual-allocation layout covered: the external
+  Unicorn trampoline pool now starts at `0x70000000` instead of colliding with
+  the CE virtual-allocation base `0x50000000`, and
+  `target\inavi_trampoline_virtual_*` verifies the previous
+  `WRITE_PROT addr=0x50000000` stop no longer reproduces. Do not fake-present
+  DIBSections just because their bits are populated.
 - Keep the new direct-DIB framebuffer path honest. `StretchDIBits` and
   `SetDIBitsToDevice` now draw `SRCCOPY` `DIB_RGB_COLORS` BITMAPINFO data in
   focused tests, but real iNavi traces have not reached those ordinals yet.

@@ -632,6 +632,8 @@ const GUEST_HEAP_ARENA_BASE: u32 = 0x3000_0000;
 const GUEST_HEAP_ARENA_SIZE: u32 = 0x0100_0000;
 const GUEST_HEAP_SPILLOVER_GRANULARITY: u32 = 0x0010_0000;
 #[cfg(feature = "unicorn")]
+const EXTERNAL_TRAMPOLINE_BASE: u32 = 0x7000_0000;
+#[cfg(feature = "unicorn")]
 const UNICORN_TRACE_LIMIT: usize = 256;
 #[cfg(feature = "unicorn")]
 const UNICORN_TB_CACHE_FLUSH_INTERVAL: u32 = 0x0004_0000;
@@ -988,7 +990,7 @@ impl UnicornMips {
         let mut trampoline_blobs: Vec<(String, u32, Vec<u8>)> = Vec::new();
         let mut next_dll_base = 0x6000_0000u32;
         #[cfg(feature = "unicorn")]
-        let mut next_trampoline_base = 0x5000_0000u32;
+        let mut next_trampoline_base = EXTERNAL_TRAMPOLINE_BASE;
         let mut next_trap_base = IMPORT_TRAP_BASE;
         let mut occupied_image_ranges = vec![(
             image.image_base(),
