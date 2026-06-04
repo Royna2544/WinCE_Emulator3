@@ -67,6 +67,7 @@ pub struct UnicornDebugSnapshot {
     pub last_calls: Vec<UnicornLastCall>,
     pub last_imports: Vec<UnicornLastImport>,
     pub import_milestones: Vec<UnicornLastImport>,
+    pub file_io_stats: crate::ce::file::FileIoStats,
     pub recent_file_open_ops: Vec<crate::ce::kernel::FileTraceRecord>,
     pub recent_file_ops: Vec<crate::ce::kernel::FileTraceRecord>,
     pub last_messages: Vec<UnicornLastMessage>,
@@ -124,6 +125,19 @@ impl UnicornDebugSnapshot {
             parts.push(format!(
                 "virtual_live={}/{}B",
                 self.virtual_allocation_count, self.virtual_allocation_bytes
+            ));
+        }
+        if self.file_io_stats.host_file_open_count != 0
+            || self.file_io_stats.host_file_read_count != 0
+            || self.file_io_stats.memory_backed_open_count != 0
+        {
+            parts.push(format!(
+                "file_io=host_open:{} host_read:{}/{}B mem_open:{} max_read:{}",
+                self.file_io_stats.host_file_open_count,
+                self.file_io_stats.host_file_read_count,
+                self.file_io_stats.host_file_read_bytes,
+                self.file_io_stats.memory_backed_open_count,
+                self.file_io_stats.max_read_request
             ));
         }
         if let Some(indirect) = &self.indirect_call_probe {
@@ -2264,6 +2278,26 @@ impl UnicornMips {
 
         let memory_fault = Rc::new(RefCell::new(None));
         let memory_fault_hook = Rc::clone(&memory_fault);
+        #[cfg(feature = "trace")]
+        if full_trace_enabled {
+            let render_map_global_watch = Rc::clone(&inavi_render_milestones);
+            uc.add_mem_hook(
+                HookType::MEM_WRITE,
+                0x0081_5550,
+                0x0081_55c0,
+                move |uc, _access, address, size, value| {
+                    record_render_map_global_write(
+                        &render_map_global_watch,
+                        uc,
+                        address as u32,
+                        size,
+                        value,
+                    );
+                    true
+                },
+            )
+            .map_err(|err| Error::Backend(format!("install render-map watch hook: {err:?}")))?;
+        }
         uc.add_mem_hook(
             HookType::MEM_UNMAPPED | HookType::MEM_PROT,
             1,
@@ -2329,6 +2363,7 @@ impl UnicornMips {
             last_calls.borrow().clone(),
             last_imports.borrow().clone(),
             import_milestones.borrow().clone(),
+            kernel.file_io_stats(),
             kernel.recent_file_open_ops().to_vec(),
             kernel.recent_file_ops().to_vec(),
             last_messages.borrow().clone(),
@@ -3982,11 +4017,16 @@ impl std::fmt::Display for UnicornDebugSnapshot {
         }
         write!(
             f,
-            " heap_live_count={} heap_live_bytes={} virtual_live_count={} virtual_live_bytes={}",
+            " heap_live_count={} heap_live_bytes={} virtual_live_count={} virtual_live_bytes={} file_host_open_count={} file_host_read_count={} file_host_read_bytes={} file_memory_backed_open_count={} file_max_read_request={}",
             self.heap_allocation_count,
             self.heap_allocation_bytes,
             self.virtual_allocation_count,
-            self.virtual_allocation_bytes
+            self.virtual_allocation_bytes,
+            self.file_io_stats.host_file_open_count,
+            self.file_io_stats.host_file_read_count,
+            self.file_io_stats.host_file_read_bytes,
+            self.file_io_stats.memory_backed_open_count,
+            self.file_io_stats.max_read_request
         )?;
         if let Some(probe) = self.interrupt_probe.as_ref() {
             write!(
@@ -6567,6 +6607,34 @@ fn record_inavi_controller_trace<D>(
                 read_mips_reg(uc, RegisterMIPS::RA)
             ))
         }
+        "render_map_static_init_entry"
+        | "render_map_vector_reset_entry"
+        | "render_map_lazy_entry"
+        | "render_map_lazy_flag_store"
+        | "render_map_lazy_init_call"
+        | "render_map_lazy_return"
+        | "render_map_vector_ctor_entry"
+        | "render_map_vector_ctor_after_insert"
+        | "render_map_vector_ctor_return"
+        | "render_map_vector_destroy_entry"
+        | "render_map_vector_destroy_return"
+        | "render_map_vector_insert_entry"
+        | "render_map_vector_insert_return"
+        | "render_map_vector_alloc_call"
+        | "render_map_vector_after_alloc"
+        | "render_map_vector_store_begin"
+        | "render_map_vector_store_return" => {
+            let flag = read_unicorn_u8(uc, 0x0081_5550).unwrap_or_default();
+            let vector = read_unicorn_u32(uc, 0x0081_555c).unwrap_or_default();
+            let vector_end = read_unicorn_u32(uc, 0x0081_5560).unwrap_or_default();
+            let vector_cap = read_unicorn_u32(uc, 0x0081_5564).unwrap_or_default();
+            let vector_len = vector_end.wrapping_sub(vector) / 8;
+            let vector_capacity = vector_cap.wrapping_sub(vector) / 8;
+            Some(format!(
+                "flag=0x{flag:02x}/vec=0x{vector:08x}/end=0x{vector_end:08x}/cap=0x{vector_cap:08x}/len={vector_len}/capacity={vector_capacity}/a0=0x{a0:08x}/a1=0x{a1:08x}/a2=0x{a2:08x}/a3=0x{a3:08x}/v0=0x{v0:08x}/fp=0x{fp:08x}/ra=0x{:08x}",
+                read_mips_reg(uc, RegisterMIPS::RA)
+            ))
+        }
         "main_init_entry" => Some(format!(
             "app=0x{a0:08x}/caller_ra=0x{:08x}",
             read_mips_reg(uc, RegisterMIPS::RA)
@@ -6764,6 +6832,109 @@ fn record_inavi_controller_trace<D>(
         traces.remove(0);
     }
     traces.push(trace);
+}
+
+#[cfg(all(feature = "unicorn", feature = "trace"))]
+fn record_render_map_global_write<D>(
+    milestones: &std::rc::Rc<std::cell::RefCell<Vec<UnicornInaviControllerTrace>>>,
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    address: u32,
+    size: usize,
+    value: i64,
+) {
+    use unicorn_engine::RegisterMIPS;
+
+    let pc = read_mips_reg(uc, RegisterMIPS::PC);
+    let sp = read_mips_reg(uc, RegisterMIPS::SP);
+    let trace = UnicornInaviControllerTrace {
+        pc,
+        label: "render_map_global_write",
+        instruction: read_unicorn_u32(uc, pc),
+        ra: read_mips_reg(uc, RegisterMIPS::RA),
+        sp,
+        v0: read_mips_reg(uc, RegisterMIPS::V0),
+        a0: read_mips_reg(uc, RegisterMIPS::A0),
+        a1: read_mips_reg(uc, RegisterMIPS::A1),
+        a2: read_mips_reg(uc, RegisterMIPS::A2),
+        a3: read_mips_reg(uc, RegisterMIPS::A3),
+        s0: read_mips_reg(uc, RegisterMIPS::S0),
+        s2: read_mips_reg(uc, RegisterMIPS::S2),
+        s3: read_mips_reg(uc, RegisterMIPS::S3),
+        s4: read_mips_reg(uc, RegisterMIPS::S4),
+        s5: read_mips_reg(uc, RegisterMIPS::S5),
+        s6: read_mips_reg(uc, RegisterMIPS::S6),
+        s7: read_mips_reg(uc, RegisterMIPS::S7),
+        fp: read_mips_reg(uc, RegisterMIPS::FP),
+        sp10: sp
+            .checked_add(0x10)
+            .and_then(|addr| read_unicorn_u32(uc, addr)),
+        sp48: sp
+            .checked_add(0x48)
+            .and_then(|addr| read_unicorn_u32(uc, addr)),
+        controller: None,
+        hwnd: None,
+        msg: None,
+        wparam: None,
+        lparam: None,
+        classifier: None,
+        selected_obj: None,
+        selected_vtable: None,
+        selected_target: None,
+        paint_base: None,
+        paint_gate: None,
+        paint_render_obj: None,
+        paint_render_target: None,
+        render_surface: None,
+        render_enabled: None,
+        render_size_target: None,
+        render_resize_target: None,
+        render_flush_obj: None,
+        render_flush_target: None,
+        render_poll_result: None,
+        render_dim_ptr: None,
+        render_dim_w: None,
+        render_dim_h: None,
+        aux_base: None,
+        aux_slot_10ec_value: None,
+        aux_slot_10f0: None,
+        aux_slot_10f0_vtable: None,
+        aux_inline_10f8: None,
+        aux_inline_10f8_vtable: None,
+        aux_link_ee4: None,
+        aux_init_flag_edc: None,
+        aux_vtable_source: None,
+        aux_vtable_source_value: None,
+        aux_store_addr: Some(address),
+        aux_store_value: Some(value as u32),
+        query_thunk_slot: None,
+        query_thunk_target: None,
+        resource_text: None,
+        resource_format_text: None,
+        resource_aux_text: None,
+        resource_arg_text: Some(format!(
+            "addr=0x{address:08x}/size={size}/value=0x{:08x}/flag=0x{:02x}/bytes=0x{:02x}{:02x}{:02x}{:02x}{:02x}/vec=0x{:08x}/end=0x{:08x}/cap=0x{:08x}/slots={:08x},{:08x},{:08x},{:08x},{:08x}",
+            value as u32,
+            read_unicorn_u8(uc, 0x0081_5550).unwrap_or_default(),
+            read_unicorn_u8(uc, 0x0081_5554).unwrap_or_default(),
+            read_unicorn_u8(uc, 0x0081_5555).unwrap_or_default(),
+            read_unicorn_u8(uc, 0x0081_5556).unwrap_or_default(),
+            read_unicorn_u8(uc, 0x0081_5557).unwrap_or_default(),
+            read_unicorn_u8(uc, 0x0081_5558).unwrap_or_default(),
+            read_unicorn_u32(uc, 0x0081_555c).unwrap_or_default(),
+            read_unicorn_u32(uc, 0x0081_5560).unwrap_or_default(),
+            read_unicorn_u32(uc, 0x0081_5564).unwrap_or_default(),
+            read_unicorn_u32(uc, 0x0081_5588).unwrap_or_default(),
+            read_unicorn_u32(uc, 0x0081_558c).unwrap_or_default(),
+            read_unicorn_u32(uc, 0x0081_5590).unwrap_or_default(),
+            read_unicorn_u32(uc, 0x0081_5594).unwrap_or_default(),
+            read_unicorn_u32(uc, 0x0081_5598).unwrap_or_default(),
+        )),
+    };
+    let mut milestones = milestones.borrow_mut();
+    if milestones.len() == UNICORN_INAVI_RENDER_MILESTONE_LIMIT {
+        milestones.remove(0);
+    }
+    milestones.push(trace);
 }
 
 #[cfg(all(feature = "unicorn", feature = "trace"))]
@@ -7050,11 +7221,28 @@ fn inavi_controller_probe_label(pc: u32) -> Option<&'static str> {
         0x0030_8edc => Some("render_context_db_lookup_alloc"),
         0x0030_8f20 => Some("render_context_db_lookup_verify"),
         0x0030_8fac => Some("render_context_db_lookup_success"),
+        0x0026_f664 => Some("render_map_static_init_entry"),
+        0x0026_f688 => Some("render_map_vector_reset_entry"),
+        0x0026_f6cc => Some("render_map_lazy_entry"),
+        0x0026_f6f4 => Some("render_map_lazy_flag_store"),
+        0x0026_f6fc => Some("render_map_lazy_init_call"),
+        0x0026_f704 => Some("render_map_lazy_return"),
         0x0026_f7c0 => Some("render_map_entry"),
         0x0026_f7d0 => Some("render_map_offset_load"),
         0x0026_f7d8 => Some("render_map_arg_load"),
         0x0026_f7dc => Some("render_map_pointer_compute"),
         0x0026_f7e4 => Some("render_map_pointer_deref"),
+        0x0026_f894 => Some("render_map_vector_ctor_entry"),
+        0x0026_f8c0 => Some("render_map_vector_ctor_after_insert"),
+        0x0026_f8c8 => Some("render_map_vector_ctor_return"),
+        0x0026_f988 => Some("render_map_vector_destroy_entry"),
+        0x0026_f9b8 => Some("render_map_vector_destroy_return"),
+        0x0026_f9c8 => Some("render_map_vector_insert_entry"),
+        0x0026_f9f0 => Some("render_map_vector_insert_return"),
+        0x0026_fa78 => Some("render_map_vector_alloc_call"),
+        0x0026_fa98 => Some("render_map_vector_after_alloc"),
+        0x0026_fb70 => Some("render_map_vector_store_begin"),
+        0x0026_fb7c => Some("render_map_vector_store_return"),
         0x0020_17a4 => Some("auth_proc_call"),
         0x0020_17c8 => Some("auth_proc_loop_call"),
         0x0020_17d0 => Some("auth_proc_loop_return"),
@@ -8058,6 +8246,7 @@ fn capture_debug_snapshot<D>(
     mut last_calls: Vec<UnicornLastCall>,
     last_imports: Vec<UnicornLastImport>,
     import_milestones: Vec<UnicornLastImport>,
+    file_io_stats: crate::ce::file::FileIoStats,
     recent_file_open_ops: Vec<crate::ce::kernel::FileTraceRecord>,
     recent_file_ops: Vec<crate::ce::kernel::FileTraceRecord>,
     last_messages: Vec<UnicornLastMessage>,
@@ -8112,6 +8301,7 @@ fn capture_debug_snapshot<D>(
         last_calls,
         last_imports,
         import_milestones,
+        file_io_stats,
         recent_file_open_ops,
         recent_file_ops,
         last_messages,

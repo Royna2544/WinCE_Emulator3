@@ -2191,3 +2191,64 @@ fn coredll_raw_read_file_null_buffer_does_not_advance_file_pointer() -> Result<(
     assert_eq!(memory.read_bytes(read_buffer, 2), b"bc");
     Ok(())
 }
+
+#[test]
+fn coredll_raw_read_file_streams_large_host_file_into_guest_memory() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("read_file_large_stream");
+    fs::create_dir_all(&root).unwrap();
+    let sdmmc_root = root.join("sdmmc");
+    fs::create_dir_all(&sdmmc_root).unwrap();
+    let payload: Vec<u8> = (0..=255).cycle().take(150 * 1024).collect();
+    fs::write(sdmmc_root.join("large.bin"), &payload).unwrap();
+    kernel.set_file_root(&root);
+    kernel.mount_guest_root("\\SDMMC Disk", &sdmmc_root);
+
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let path_ptr = 0x1_0000;
+    let read_buffer = 0x2_0000;
+    let count_ptr = 0x5_0000;
+    memory.write_wide_z(path_ptr, "\\SDMMC Disk\\large.bin");
+    memory.map_bytes(read_buffer, payload.len() as u32);
+    memory.map_words(count_ptr, 1);
+
+    let file = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_W,
+        [path_ptr, GENERIC_READ, 0, 0, OPEN_EXISTING, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateFileW did not return a file handle: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_READ_FILE,
+            [file, read_buffer, payload.len() as u32, count_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(memory.read_u32(count_ptr)?, payload.len() as u32);
+    assert_eq!(memory.read_bytes(read_buffer, payload.len()), payload);
+    let stats = kernel.file_io_stats();
+    assert_eq!(stats.host_file_open_count, 1);
+    assert_eq!(stats.host_file_read_count, 1);
+    assert_eq!(stats.host_file_read_bytes, payload.len() as u64);
+    assert_eq!(stats.max_read_request, payload.len() as u32);
+    fs::remove_dir_all(root).unwrap();
+    Ok(())
+}

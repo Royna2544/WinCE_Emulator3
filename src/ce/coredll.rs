@@ -5481,7 +5481,11 @@ fn read_file_raw<M: CoredllGuestMemory>(
             return false;
         }
     };
-    write_optional_count(kernel, memory, thread_id, transferred_ptr, transferred)
+    if !write_optional_count(kernel, memory, thread_id, transferred_ptr, transferred) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn write_file_raw<M: CoredllGuestMemory>(

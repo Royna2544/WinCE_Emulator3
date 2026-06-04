@@ -5,7 +5,8 @@ use crate::{
         com::ComSystem,
         devices::{DeviceIoControlResult, DeviceNamespace},
         file::{
-            FileIoResult, FindData, GENERIC_READ, GENERIC_WRITE, HostFileSystem, OPEN_EXISTING,
+            FileIoResult, FileIoStats, FindData, GENERIC_READ, GENERIC_WRITE, HostFileSystem,
+            OPEN_EXISTING,
         },
         gwe::{
             Gwe, HWND_BROADCAST, Message, Point, Rect, WM_MOVE, WM_SHOWWINDOW, WM_SIZE,
@@ -253,6 +254,10 @@ impl CeKernel {
         &self.recent_file_open_ops
     }
 
+    pub fn file_io_stats(&self) -> FileIoStats {
+        self.files.io_stats()
+    }
+
     pub fn record_file_trace(&mut self, record: FileTraceRecord) {
         self.push_file_trace(record);
     }
@@ -442,7 +447,12 @@ impl CeKernel {
         result
     }
 
-    pub fn read_file_at(&self, file_id: u32, offset: usize, requested: usize) -> Result<Vec<u8>> {
+    pub fn read_file_at(
+        &mut self,
+        file_id: u32,
+        offset: usize,
+        requested: usize,
+    ) -> Result<Vec<u8>> {
         self.files.read_at(file_id, offset, requested)
     }
 

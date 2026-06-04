@@ -775,6 +775,7 @@ fn monitor_trace_text(snapshot: &UnicornDebugSnapshot, selector: &str) -> String
         "files" | "file-summary" => {
             push_monitor_file_summary(
                 &mut out,
+                snapshot.file_io_stats,
                 &snapshot.recent_file_open_ops,
                 &snapshot.recent_file_ops,
             );
@@ -795,9 +796,19 @@ fn monitor_trace_text(snapshot: &UnicornDebugSnapshot, selector: &str) -> String
 
 fn push_monitor_file_summary(
     out: &mut String,
+    stats: wince_emulation_v3::ce::file::FileIoStats,
     open_records: &[wince_emulation_v3::ce::kernel::FileTraceRecord],
     records: &[wince_emulation_v3::ce::kernel::FileTraceRecord],
 ) {
+    let _ = writeln!(
+        out,
+        "  file counters: host_file_open_count={} host_file_read_count={} host_file_read_bytes={} memory_backed_open_count={} max_read_request={}",
+        stats.host_file_open_count,
+        stats.host_file_read_count,
+        stats.host_file_read_bytes,
+        stats.memory_backed_open_count,
+        stats.max_read_request
+    );
     if open_records.is_empty() && records.is_empty() {
         let _ = writeln!(out, "  file summary: none");
         return;

@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
-    fs,
-    io::{Read, Seek, SeekFrom},
+    fmt, fs,
+    io::{Read, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},
 };
 
@@ -36,6 +36,7 @@ pub struct HostFileSystem {
     next_id: u32,
     open_files: BTreeMap<u32, OpenFile>,
     open_finds: BTreeMap<u32, OpenFind>,
+    io_stats: FileIoStats,
 }
 
 #[derive(Debug, Clone)]
@@ -63,8 +64,9 @@ pub struct OpenFile {
     pub guest_path: String,
     pub host_path: PathBuf,
     cursor: usize,
-    data: Vec<u8>,
-    streamed_readonly: bool,
+    backing: FileBacking,
+    read_cache: Vec<u8>,
+    read_cache_start: usize,
     file_len: usize,
     writable: bool,
     dirty: bool,
@@ -74,6 +76,187 @@ impl OpenFile {
     pub fn cursor(&self) -> usize {
         self.cursor
     }
+
+    pub fn file_len(&self) -> usize {
+        self.file_len
+    }
+
+    pub fn is_memory_backed(&self) -> bool {
+        matches!(self.backing, FileBacking::Memory(_))
+    }
+
+    pub fn is_host_file_backed(&self) -> bool {
+        matches!(self.backing, FileBacking::HostFile(_))
+    }
+
+    pub fn memory_len(&self) -> usize {
+        match &self.backing {
+            FileBacking::Memory(bytes) => bytes.len(),
+            FileBacking::HostFile(_) => 0,
+        }
+    }
+
+    fn read_into<F>(&mut self, requested: usize, write: &mut F) -> Result<(u32, bool)>
+    where
+        F: FnMut(&[u8]) -> Result<()>,
+    {
+        match &mut self.backing {
+            FileBacking::Memory(bytes) => {
+                if self.cursor >= self.file_len {
+                    write(&[])?;
+                    return Ok((0, false));
+                }
+                let start = self.cursor;
+                let end = self.cursor.saturating_add(requested).min(self.file_len);
+                write(&bytes[start..end])?;
+                self.cursor = end;
+                Ok(((end - start) as u32, false))
+            }
+            FileBacking::HostFile(file) => {
+                let transferred = read_cached_host_file_into(
+                    &self.host_path,
+                    file,
+                    &mut self.read_cache,
+                    &mut self.read_cache_start,
+                    self.cursor,
+                    requested,
+                    write,
+                )?;
+                self.cursor = self.cursor.saturating_add(transferred as usize);
+                Ok((transferred, true))
+            }
+        }
+    }
+
+    fn read_at(&mut self, offset: usize, requested: usize) -> Result<(Vec<u8>, bool)> {
+        match &mut self.backing {
+            FileBacking::Memory(bytes) => {
+                if offset >= self.file_len {
+                    return Ok((Vec::new(), false));
+                }
+                let end = offset.saturating_add(requested).min(self.file_len);
+                Ok((bytes[offset..end].to_vec(), false))
+            }
+            FileBacking::HostFile(file) => {
+                let mut bytes = Vec::with_capacity(requested);
+                let mut append = |chunk: &[u8]| -> Result<()> {
+                    bytes.extend_from_slice(chunk);
+                    Ok(())
+                };
+                read_cached_host_file_into(
+                    &self.host_path,
+                    file,
+                    &mut self.read_cache,
+                    &mut self.read_cache_start,
+                    offset,
+                    requested,
+                    &mut append,
+                )?;
+                Ok((bytes, true))
+            }
+        }
+    }
+
+    fn write_current(&mut self, bytes: &[u8]) -> Result<()> {
+        let offset = self.cursor;
+        self.write_at(offset, bytes)?;
+        self.cursor = offset.saturating_add(bytes.len());
+        Ok(())
+    }
+
+    fn write_at(&mut self, offset: usize, bytes: &[u8]) -> Result<()> {
+        match &mut self.backing {
+            FileBacking::Memory(data) => {
+                let end = offset.saturating_add(bytes.len());
+                if end > data.len() {
+                    data.resize(end, 0);
+                }
+                data[offset..end].copy_from_slice(bytes);
+                self.file_len = data.len();
+            }
+            FileBacking::HostFile(file) => {
+                file.seek(SeekFrom::Start(offset as u64))
+                    .map_err(|source| Error::Io {
+                        path: self.host_path.clone(),
+                        source,
+                    })?;
+                file.write_all(bytes).map_err(|source| Error::Io {
+                    path: self.host_path.clone(),
+                    source,
+                })?;
+                self.file_len = self.file_len.max(offset.saturating_add(bytes.len()));
+                self.read_cache.clear();
+                self.read_cache_start = 0;
+            }
+        }
+        self.dirty = true;
+        Ok(())
+    }
+
+    fn flush(&mut self) -> Result<()> {
+        match &mut self.backing {
+            FileBacking::Memory(data) => {
+                if let Some(parent) = self.host_path.parent() {
+                    fs::create_dir_all(parent).map_err(|source| Error::Io {
+                        path: parent.to_path_buf(),
+                        source,
+                    })?;
+                }
+                fs::write(&self.host_path, &*data).map_err(|source| Error::Io {
+                    path: self.host_path.clone(),
+                    source,
+                })?;
+                self.file_len = data.len();
+            }
+            FileBacking::HostFile(file) => {
+                if self.writable {
+                    file.sync_all().map_err(|source| Error::Io {
+                        path: self.host_path.clone(),
+                        source,
+                    })?;
+                }
+            }
+        }
+        self.dirty = false;
+        Ok(())
+    }
+}
+
+enum FileBacking {
+    Memory(Vec<u8>),
+    HostFile(fs::File),
+}
+
+impl Clone for FileBacking {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Memory(bytes) => Self::Memory(bytes.clone()),
+            Self::HostFile(file) => {
+                Self::HostFile(file.try_clone().expect("clone open host file handle"))
+            }
+        }
+    }
+}
+
+impl fmt::Debug for FileBacking {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Memory(bytes) => f
+                .debug_tuple("Memory")
+                .field(&format_args!("{} bytes", bytes.len()))
+                .finish(),
+            Self::HostFile(_) => f.write_str("HostFile(<open>)"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FileIoStats {
+    pub host_file_open_count: u64,
+    pub host_file_read_count: u64,
+    pub host_file_read_bytes: u64,
+    pub memory_backed_open_count: u64,
+    pub max_read_request: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -111,6 +294,7 @@ impl HostFileSystem {
             next_id: 1,
             open_files: BTreeMap::new(),
             open_finds: BTreeMap::new(),
+            io_stats: FileIoStats::default(),
         }
     }
 
@@ -172,6 +356,10 @@ impl HostFileSystem {
         self.object_store
     }
 
+    pub fn io_stats(&self) -> FileIoStats {
+        self.io_stats
+    }
+
     pub fn set_root_relative_guest_path(&mut self, guest_path: &str) {
         let normalized = normalize_guest_path(guest_path);
         self.root_relative_mount = self
@@ -217,9 +405,9 @@ impl HostFileSystem {
         let is_directory = host_path.is_dir();
         let writable = desired_access & GENERIC_WRITE != 0 && !is_directory;
 
-        let (data, streamed_readonly, file_len) = if is_directory {
+        let (backing, file_len) = if is_directory {
             match creation_disposition {
-                OPEN_EXISTING | OPEN_ALWAYS => (Vec::new(), false, 0),
+                OPEN_EXISTING | OPEN_ALWAYS => (FileBacking::Memory(Vec::new()), 0),
                 _ => {
                     return Err(Error::InvalidArgument(format!(
                         "cannot create or truncate directory: {guest_path}"
@@ -233,26 +421,30 @@ impl HostFileSystem {
                         "file already exists: {guest_path}"
                     )));
                 }
-                CREATE_NEW | CREATE_ALWAYS => (Vec::new(), false, 0),
+                CREATE_NEW | CREATE_ALWAYS => (FileBacking::Memory(Vec::new()), 0),
                 OPEN_EXISTING if !exists => {
                     return Err(Error::InvalidArgument(format!(
                         "file does not exist: {guest_path}"
                     )));
                 }
-                OPEN_EXISTING | OPEN_ALWAYS if writable => {
-                    let data = fs::read(&host_path).unwrap_or_default();
-                    let file_len = data.len();
-                    (data, false, file_len)
-                }
-                OPEN_EXISTING | OPEN_ALWAYS => {
+                OPEN_EXISTING | OPEN_ALWAYS if exists => {
                     let file_len = fs::metadata(&host_path)
                         .map(|metadata| metadata.len())
                         .unwrap_or_default()
                         .try_into()
                         .unwrap_or(usize::MAX);
-                    (Vec::new(), true, file_len)
+                    let file = fs::OpenOptions::new()
+                        .read(true)
+                        .write(writable)
+                        .open(&host_path)
+                        .map_err(|source| Error::Io {
+                            path: host_path.clone(),
+                            source,
+                        })?;
+                    (FileBacking::HostFile(file), file_len)
                 }
-                TRUNCATE_EXISTING if exists && writable => (Vec::new(), false, 0),
+                OPEN_ALWAYS => (FileBacking::Memory(Vec::new()), 0),
+                TRUNCATE_EXISTING if exists && writable => (FileBacking::Memory(Vec::new()), 0),
                 TRUNCATE_EXISTING if !exists => {
                     return Err(Error::InvalidArgument(format!(
                         "file does not exist: {guest_path}"
@@ -270,6 +462,8 @@ impl HostFileSystem {
                 }
             }
         };
+        let is_memory_backed = matches!(backing, FileBacking::Memory(_));
+        let is_host_file_backed = matches!(backing, FileBacking::HostFile(_));
 
         let id = self.next_id;
         self.next_id += 1;
@@ -280,8 +474,9 @@ impl HostFileSystem {
                 guest_path: guest_path.to_owned(),
                 host_path,
                 cursor: 0,
-                data,
-                streamed_readonly,
+                backing,
+                read_cache: Vec::new(),
+                read_cache_start: 0,
                 file_len,
                 writable,
                 dirty: matches!(
@@ -290,28 +485,21 @@ impl HostFileSystem {
                 ),
             },
         );
+        if is_host_file_backed {
+            self.io_stats.host_file_open_count += 1;
+        }
+        if is_memory_backed {
+            self.io_stats.memory_backed_open_count += 1;
+        }
         Ok(id)
     }
 
     pub fn read_file(&mut self, id: u32, requested: u32) -> Result<Vec<u8>> {
-        let file = self.open_file_mut(id)?;
-        let requested = requested as usize;
-        if file.streamed_readonly {
-            if file.cursor >= file.file_len {
-                return Ok(Vec::new());
-            }
-            let start = file.cursor;
-            let end = start.saturating_add(requested).min(file.file_len);
-            let bytes = read_host_file_range(&file.host_path, start, end - start)?;
-            file.cursor = start + bytes.len();
-            return Ok(bytes);
-        }
-        if file.cursor >= file.file_len {
-            return Ok(Vec::new());
-        }
-        let end = file.cursor.saturating_add(requested).min(file.file_len);
-        let bytes = file.data[file.cursor..end].to_vec();
-        file.cursor = end;
+        let mut bytes = Vec::with_capacity(requested as usize);
+        self.read_file_into(id, requested, |chunk| {
+            bytes.extend_from_slice(chunk);
+            Ok(())
+        })?;
         Ok(bytes)
     }
 
@@ -319,45 +507,29 @@ impl HostFileSystem {
     where
         F: FnMut(&[u8]) -> Result<()>,
     {
-        let file = self.open_file_mut(id)?;
-        let requested = requested as usize;
-        if file.streamed_readonly {
-            if file.cursor >= file.file_len {
-                write(&[])?;
-                return Ok(0);
-            }
-            let start = file.cursor;
-            let end = start.saturating_add(requested).min(file.file_len);
-            let transferred =
-                read_host_file_range_into(&file.host_path, start, end - start, &mut write)?;
-            file.cursor = start + transferred as usize;
-            return Ok(transferred);
+        let (transferred, host_read) = {
+            let file = self.open_file_mut(id)?;
+            file.read_into(requested as usize, &mut write)?
+        };
+        self.io_stats.max_read_request = self.io_stats.max_read_request.max(requested);
+        if host_read {
+            self.io_stats.host_file_read_count += 1;
+            self.io_stats.host_file_read_bytes += u64::from(transferred);
         }
-        if file.cursor >= file.file_len {
-            write(&[])?;
-            return Ok(0);
-        }
-        let start = file.cursor;
-        let end = file.cursor.saturating_add(requested).min(file.file_len);
-        write(&file.data[start..end])?;
-        file.cursor = end;
-        Ok((end - start) as u32)
+        Ok(transferred)
     }
 
-    pub fn read_at(&self, id: u32, offset: usize, requested: usize) -> Result<Vec<u8>> {
-        let file = self.open_file(id)?;
-        if file.streamed_readonly {
-            if offset >= file.file_len {
-                return Ok(Vec::new());
-            }
-            let end = offset.saturating_add(requested).min(file.file_len);
-            return read_host_file_range(&file.host_path, offset, end - offset);
+    pub fn read_at(&mut self, id: u32, offset: usize, requested: usize) -> Result<Vec<u8>> {
+        let (bytes, host_read) = {
+            let file = self.open_file_mut(id)?;
+            file.read_at(offset, requested)?
+        };
+        self.io_stats.max_read_request = self.io_stats.max_read_request.max(requested as u32);
+        if host_read {
+            self.io_stats.host_file_read_count += 1;
+            self.io_stats.host_file_read_bytes += bytes.len() as u64;
         }
-        if offset >= file.file_len {
-            return Ok(Vec::new());
-        }
-        let end = offset.saturating_add(requested).min(file.file_len);
-        Ok(file.data[offset..end].to_vec())
+        Ok(bytes)
     }
 
     pub fn read_guest_file(&self, guest_path: &str) -> Result<Vec<u8>> {
@@ -488,14 +660,7 @@ impl HostFileSystem {
             });
         }
 
-        let end = file.cursor + bytes.len();
-        if end > file.data.len() {
-            file.data.resize(end, 0);
-        }
-        file.data[file.cursor..end].copy_from_slice(bytes);
-        file.cursor = end;
-        file.file_len = file.data.len();
-        file.dirty = true;
+        file.write_current(bytes)?;
         Ok(FileIoResult {
             success: true,
             bytes_transferred: bytes.len() as u32,
@@ -511,13 +676,7 @@ impl HostFileSystem {
             });
         }
 
-        let end = offset.saturating_add(bytes.len());
-        if end > file.data.len() {
-            file.data.resize(end, 0);
-        }
-        file.data[offset..end].copy_from_slice(bytes);
-        file.file_len = file.data.len();
-        file.dirty = true;
+        file.write_at(offset, bytes)?;
         Ok(FileIoResult {
             success: true,
             bytes_transferred: bytes.len() as u32,
@@ -537,18 +696,7 @@ impl HostFileSystem {
     pub fn flush(&mut self, id: u32) -> Result<()> {
         let file = self.open_file_mut(id)?;
         if file.dirty {
-            if let Some(parent) = file.host_path.parent() {
-                fs::create_dir_all(parent).map_err(|source| Error::Io {
-                    path: parent.to_path_buf(),
-                    source,
-                })?;
-            }
-            fs::write(&file.host_path, &file.data).map_err(|source| Error::Io {
-                path: file.host_path.clone(),
-                source,
-            })?;
-            file.dirty = false;
-            file.file_len = file.data.len();
+            file.flush()?;
         }
         Ok(())
     }
@@ -960,25 +1108,75 @@ fn wildcard_match(pattern: &str, name: &str) -> bool {
     matches[pattern.len()][name.len()]
 }
 
-fn read_host_file_range(path: &Path, offset: usize, len: usize) -> Result<Vec<u8>> {
-    let mut bytes = Vec::with_capacity(len);
-    read_host_file_range_into(path, offset, len, |chunk| {
-        bytes.extend_from_slice(chunk);
-        Ok(())
-    })?;
-    Ok(bytes)
-}
+const HOST_READ_CACHE_CHUNK: usize = 64 * 1024;
 
-fn read_host_file_range_into<F>(path: &Path, offset: usize, len: usize, mut write: F) -> Result<u32>
+fn read_cached_host_file_into<F>(
+    path: &Path,
+    file: &mut fs::File,
+    cache: &mut Vec<u8>,
+    cache_start: &mut usize,
+    offset: usize,
+    len: usize,
+    mut write: F,
+) -> Result<u32>
 where
     F: FnMut(&[u8]) -> Result<()>,
 {
-    const STREAM_CHUNK: usize = 64 * 1024;
+    if len > HOST_READ_CACHE_CHUNK {
+        cache.clear();
+        *cache_start = 0;
+        return read_open_host_file_into(path, file, offset, len, write);
+    }
 
-    let mut file = fs::File::open(path).map_err(|source| Error::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
+    let mut position = offset;
+    let mut remaining = len;
+    let mut transferred = 0usize;
+    while remaining != 0 {
+        let cache_end = cache_start.saturating_add(cache.len());
+        if position < *cache_start || position >= cache_end {
+            cache.clear();
+            *cache_start = position;
+            file.seek(SeekFrom::Start(position as u64))
+                .map_err(|source| Error::Io {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
+            cache.resize(HOST_READ_CACHE_CHUNK, 0);
+            let read = file.read(cache).map_err(|source| Error::Io {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            cache.truncate(read);
+            if read == 0 {
+                break;
+            }
+        }
+
+        let cache_offset = position.saturating_sub(*cache_start);
+        let available = cache.len().saturating_sub(cache_offset);
+        if available == 0 {
+            break;
+        }
+        let chunk_len = remaining.min(available);
+        write(&cache[cache_offset..cache_offset + chunk_len])?;
+        position = position.saturating_add(chunk_len);
+        remaining -= chunk_len;
+        transferred += chunk_len;
+    }
+
+    Ok(transferred as u32)
+}
+
+fn read_open_host_file_into<F>(
+    path: &Path,
+    file: &mut fs::File,
+    offset: usize,
+    len: usize,
+    mut write: F,
+) -> Result<u32>
+where
+    F: FnMut(&[u8]) -> Result<()>,
+{
     file.seek(SeekFrom::Start(offset as u64))
         .map_err(|source| Error::Io {
             path: path.to_path_buf(),
@@ -987,7 +1185,7 @@ where
 
     let mut remaining = len;
     let mut transferred = 0usize;
-    let mut buffer = vec![0u8; STREAM_CHUNK.min(len.max(1))];
+    let mut buffer = vec![0u8; HOST_READ_CACHE_CHUNK.min(len.max(1))];
     while remaining != 0 {
         let chunk_len = remaining.min(buffer.len());
         let read = file
@@ -1109,9 +1307,9 @@ mod tests {
             .create_file_w("\\large.bin", GENERIC_READ, OPEN_EXISTING)
             .unwrap();
         let open = fs.open_file(id).unwrap();
-        assert!(open.streamed_readonly);
-        assert!(open.data.is_empty());
-        assert_eq!(open.file_len, bytes.len());
+        assert!(open.is_host_file_backed());
+        assert_eq!(open.memory_len(), 0);
+        assert_eq!(open.file_len(), bytes.len());
 
         let first = fs.read_file(id, 17).unwrap();
         assert_eq!(first, bytes[..17]);
@@ -1125,6 +1323,122 @@ mod tests {
         assert_eq!(copied as usize, 70 * 1024);
         assert_eq!(streamed, bytes[17..17 + 70 * 1024]);
         assert_eq!(fs.open_file(id).unwrap().cursor(), 17 + 70 * 1024);
+
+        fs.close(id).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn readwrite_existing_host_files_do_not_preload_contents() {
+        let root = std::env::temp_dir().join(format!(
+            "wince_file_readwrite_stream_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("large-rw.bin");
+        let mut file = fs::File::create(&path).unwrap();
+        file.set_len(2 * 1024 * 1024).unwrap();
+        file.seek(SeekFrom::Start(1024 * 1024)).unwrap();
+        file.write_all(b"rw-window").unwrap();
+        drop(file);
+
+        let mut fs = HostFileSystem::new(&root);
+        let id = fs
+            .create_file_w(
+                "\\large-rw.bin",
+                GENERIC_READ | GENERIC_WRITE,
+                OPEN_EXISTING,
+            )
+            .unwrap();
+        let open = fs.open_file(id).unwrap();
+        assert!(open.is_host_file_backed());
+        assert_eq!(open.memory_len(), 0);
+        assert_eq!(open.file_len(), 2 * 1024 * 1024);
+
+        fs.set_file_pointer(id, 1024 * 1024).unwrap();
+        assert_eq!(fs.read_file(id, 9).unwrap(), b"rw-window");
+        fs.close(id).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn separate_host_file_handles_have_independent_cursors() {
+        let root = std::env::temp_dir().join(format!(
+            "wince_file_independent_cursors_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("cursor.bin"), b"abcdef").unwrap();
+
+        let mut fs = HostFileSystem::new(&root);
+        let first = fs
+            .create_file_w("\\cursor.bin", GENERIC_READ, OPEN_EXISTING)
+            .unwrap();
+        let second = fs
+            .create_file_w("\\cursor.bin", GENERIC_READ, OPEN_EXISTING)
+            .unwrap();
+
+        assert_eq!(fs.read_file(first, 2).unwrap(), b"ab");
+        assert_eq!(fs.read_file(second, 3).unwrap(), b"abc");
+        assert_eq!(fs.read_file(first, 2).unwrap(), b"cd");
+        assert_eq!(fs.open_file(first).unwrap().cursor(), 4);
+        assert_eq!(fs.open_file(second).unwrap().cursor(), 3);
+
+        fs.close(first).unwrap();
+        fs.close(second).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn host_file_read_file_into_chunks_large_requests() {
+        let root = std::env::temp_dir().join(format!("wince_file_chunked_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let bytes: Vec<u8> = (0..=255).cycle().take(150 * 1024).collect();
+        fs::write(root.join("chunked.bin"), &bytes).unwrap();
+
+        let mut fs = HostFileSystem::new(&root);
+        let id = fs
+            .create_file_w("\\chunked.bin", GENERIC_READ, OPEN_EXISTING)
+            .unwrap();
+        let mut chunks = Vec::new();
+        let mut streamed = Vec::new();
+        let transferred = fs
+            .read_file_into(id, bytes.len() as u32, |chunk| {
+                chunks.push(chunk.len());
+                streamed.extend_from_slice(chunk);
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(transferred as usize, bytes.len());
+        assert_eq!(streamed, bytes);
+        assert_eq!(chunks, vec![64 * 1024, 64 * 1024, 22 * 1024]);
+        let stats = fs.io_stats();
+        assert_eq!(stats.host_file_read_count, 1);
+        assert_eq!(stats.host_file_read_bytes, bytes.len() as u64);
+        assert_eq!(stats.max_read_request, bytes.len() as u32);
+
+        fs.close(id).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn set_file_pointer_then_read_file_works_on_host_file_backing() {
+        let root = std::env::temp_dir().join(format!("wince_file_seek_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("seek.bin"), b"0123456789").unwrap();
+
+        let mut fs = HostFileSystem::new(&root);
+        let id = fs
+            .create_file_w("\\seek.bin", GENERIC_READ, OPEN_EXISTING)
+            .unwrap();
+        fs.set_file_pointer(id, 4).unwrap();
+        assert_eq!(fs.read_file(id, 3).unwrap(), b"456");
+        assert_eq!(fs.open_file(id).unwrap().cursor(), 7);
 
         fs.close(id).unwrap();
         fs::remove_dir_all(root).unwrap();

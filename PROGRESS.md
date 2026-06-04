@@ -935,6 +935,21 @@
   (`render_map_pointer_deref`), `addr=0x0000005c`, with
   `ReadFile=61825`, `CreateDIBSection=317`, and 401 red pixels spanning
   `(0,160)..(400,160)`.
+- The CE file hot path no longer preloads existing host files into `Vec<u8>` just
+  because the guest requested write access, and streamed reads no longer reopen
+  the host file for every `ReadFile`. `OpenFile` now uses memory or live
+  host-file backing, small host-backed reads use a bounded 64 KiB per-handle
+  cache, larger `read_file_into` requests stream in 64 KiB chunks, and raw
+  COREDLL `ReadFile` continues writing directly into guest memory. Full
+  `cargo test --features unicorn,trace,win32-desktop` passes. A release
+  host/tap monitor run to the current render-map fault wrote
+  `target\file_io_hotpath_cached_boot_summary.txt` and
+  `target\file_io_hotpath_cached_boot_files.txt`; the stop is still
+  `pc=0x0026f7e4`, but the new file counters show
+  `host_file_open_count=633`, `host_file_read_count=64995`,
+  `host_file_read_bytes=3787819`, `memory_backed_open_count=2`, and
+  `max_read_request=685080`, confirming the remaining startup delay is no
+  longer caused by multi-hundred-MB file preloading.
 
 ## False Leads
 

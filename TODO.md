@@ -15,7 +15,12 @@
   and `CreateDIBSection=190`; the admin flamegraph runs farther and hits the
   next real guest/UI fault at `pc=0x0026f7e4` (`render_map_pointer_deref`),
   `addr=0x0000005c`, with `ReadFile=61825` and `CreateDIBSection=317`. Next
-  work should debug the null/invalid render-map object path around
+  File I/O is no longer the bulk-RAM bottleneck: existing host files stay
+  host-backed even when opened writable, `ReadFile` streams from the stored
+  handle with bounded small-read caching, and the latest release host/tap run
+  reports only 3,787,819 host-file bytes read before this fault. Next work
+  should debug the null/invalid
+  render-map object path around
   `0x0026f7c0..0x0026f7e4` using real guest state and existing probes. Do not
   fake-present DIBSections just because their bits are populated.
 - Keep the new direct-DIB framebuffer path honest. `StretchDIBits` and

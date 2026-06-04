@@ -31,7 +31,17 @@
     (`render_map_pointer_deref`), `addr=0x0000005c`, after
     `ReadFile=61825` and `CreateDIBSection=317`. The latest dump is sparse
     rather than blank: `target\startup_flamegraph_after_heap_chunk.ppm` has
-    401 red pixels from `(0,160)` through `(400,160)`.
+    401 red pixels from `(0,160)` through `(400,160)`. The file-I/O hot path
+    has since been fixed so existing host files remain host-backed instead of
+    being preloaded into memory, including read-write opens, and raw COREDLL
+    `ReadFile` streams into guest memory. Small host-backed reads use a bounded
+    64 KiB per-handle cache. A release host/tap probe to the same `0x0026f7e4`
+    stop wrote `target\file_io_hotpath_cached_boot_summary.txt` and
+    `target\file_io_hotpath_cached_boot_files.txt`; counters show
+    `host_file_open_count=633`, `host_file_read_count=64995`,
+    `host_file_read_bytes=3787819`, `memory_backed_open_count=2`, and
+    `max_read_request=685080`, so the active blocker is no longer bulk file
+    preload or per-read reopen.
   - Evidence: latest bounded run with `--features unicorn`,
     `--dll-search-dir C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii`,
     and `--mount-config mounts.toml` previously timed out after 30
