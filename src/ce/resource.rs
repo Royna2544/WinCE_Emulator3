@@ -83,6 +83,7 @@ pub struct BitmapObject {
     pub planes: u16,
     pub bits_pixel: u16,
     pub rgb_masks: Option<[u32; 3]>,
+    pub color_table: Vec<[u8; 4]>,
     pub bits_ptr: u32,
     pub bits_owned: bool,
 }
@@ -373,6 +374,7 @@ impl ResourceSystem {
                 planes,
                 bits_pixel,
                 rgb_masks,
+                color_table: Vec::new(),
                 bits_ptr,
                 bits_owned,
             },
@@ -382,6 +384,10 @@ impl ResourceSystem {
 
     pub fn bitmap(&self, handle: u32) -> Option<&BitmapObject> {
         self.bitmaps.get(&handle)
+    }
+
+    pub fn bitmap_mut(&mut self, handle: u32) -> Option<&mut BitmapObject> {
+        self.bitmaps.get_mut(&handle)
     }
 
     pub fn delete_bitmap(&mut self, handle: u32) -> bool {

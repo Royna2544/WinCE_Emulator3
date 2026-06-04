@@ -41,7 +41,64 @@
     `host_file_open_count=633`, `host_file_read_count=64995`,
     `host_file_read_bytes=3787819`, `memory_backed_open_count=2`, and
     `max_read_request=685080`, so the active blocker is no longer bulk file
-    preload or per-read reopen.
+    preload or per-read reopen. The latest GWE fidelity regression probe for
+    `GetQueueStatus`/`MsgWaitForMultipleObjectsEx` wrote
+    `target\queue_status_msgwait_*` artifacts and stayed memory-stable
+    (`host_read=4221/495853B`, `heap_live=5948/2767663B`), but still had no
+    render milestones and an all-zero framebuffer body. The follow-up
+    `PostQuitMessage` queue-state probe wrote
+    `target\post_quit_queue_state_*` artifacts and likewise stayed at the
+    resource/DIB frontier (`host_read=4221/495853B`,
+    `heap_live=5948/2767663B`) with no render milestones and an all-zero
+    framebuffer body. The `GetMessageWNoWait` raw-ordinal probe wrote
+    `target\get_message_nowait_*` artifacts and stayed in the same frontier
+    (`host_read=4221/499832B`, `heap_live=5948/2767663B`) with no render
+    milestones and an all-zero framebuffer body. The latest message-metadata
+    probe for `GetMessagePos`/`GetMessageQueueReadyTimeStamp` wrote
+    `target\message_metadata_*` artifacts, stopped later at `pc=0x00895bfc`,
+    reached `mapinfo.bin`/`iNaviData` file activity, and stayed memory-stable
+    (`host_read=4225/486559B`, `heap_live=5621/2459146B`), but still had no
+    render milestones and only one nonzero framebuffer byte. This remains a
+    no-useful-UI bug. The dialog integer item slice wrote
+    `target\dialog_int_*` artifacts and likewise stayed memory-stable
+    (`host_read=4221/495853B`, `heap_live=5948/2767663B`) while reaching
+    RSImage/DIB resource work, but it still had no render milestones and an
+    all-zero framebuffer body. The raw HWND hit-test slice wrote
+    `target\window_from_point_*` artifacts and stayed memory-stable
+    (`host_read=4225/486559B`, `heap_live=5624/2461398B`) while reaching later
+    map/device file activity, but it still had no render milestones and only
+    one nonzero framebuffer byte. The later dialog-unit/dialog-navigation and
+    indexed-DIB color-table slices pass focused raw tests and keep the mounted
+    run memory-stable. The latest 30 s host/tap probe after those slices wrote
+    `target\long30_*` artifacts and stopped at `pc=0x003446ec` with
+    `heap_live=7297/21843020B`, `host_read=25097/1921203B`, and
+    `target\long30_probe.ppm` containing 301 nonzero framebuffer bytes, but the
+    render trace still reports no named render milestones and no useful UI. The
+    embedded-BITMAPINFO indexed-DIB follow-up wrote
+    `target\bitmapinfo_palette_*` artifacts and held the same sparse red line
+    from `(0,160)` through `(300,160)` with stable memory
+    (`heap_live=7192/21798813B`, `host_read=25079/1926075B`); it did not
+    unlock a screen blit/presentation milestone. The fresh
+    `CreateDIBSection` diagnostic probe (`target\dib_colors_fresh_*`) confirms
+    that mounted RSImage indexed DIBSections now carry parsed color tables
+    (`colors=256` for the 800-wide 8 bpp surfaces and populated partial tables
+    such as `colors=199`, `colors=156`, `colors=223`, `colors=236`, and
+    `colors=249` for later resources), but the framebuffer remains the same
+    301-pixel red line with no named render milestone. The focus/activation
+    lifecycle slice wrote `target\focus_activation_*` and stayed in the same
+    band (`heap_live=7295/21831892B`, `host_read=24819/1924419B`,
+    framebuffer 301 red pixels from `(0,160)` through `(300,160)`), with no
+    named render milestone. The `EnableWindow` lifecycle slice wrote
+    `target\enable_window_*` and likewise stayed memory-stable
+    (`heap_live=7294/21830764B`, `host_read=24620/1918582B`) with the same
+    301-pixel red line and no named render milestone. The `BringWindowToTop`
+    z-order/activation slice wrote `target\bring_window_top_*` and stayed in
+    the same band (`heap_live=7293/21820764B`,
+    `host_read=24620/1922561B`), again with the same 301-pixel red line and
+    no named render milestone. A virtual-desktop rerun wrote
+    `target\virtual_after_bring_window_top_*`, stopped at `pc=0x00343750`,
+    and again had 301 red pixels with no render milestone, but avoided showing
+    the black host presenter window.
   - Evidence: latest bounded run with `--features unicorn`,
     `--dll-search-dir C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii`,
     and `--mount-config mounts.toml` previously timed out after 30

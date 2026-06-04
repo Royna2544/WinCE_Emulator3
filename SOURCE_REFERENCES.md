@@ -154,6 +154,12 @@ anchors, not app-specific shortcuts.
     client area in screen coordinates; it declares `SetWindowPos_I`,
     `MoveWindow_I`, `GetWindowRect_I`, `GetClientRect_I`,
     `ClientToScreen_I`, and `ScreenToClient_I`.
+  - `window.hpp` and `gweapiset1.hpp` expose `BringWindowToTop_I`, and CE SDK
+    `winuser.h` exposes `BringWindowToTop(HWND)` beside `GetWindow` and the
+    `HWND_TOP`/`HWND_BOTTOM`/`HWND_TOPMOST` constants. Rust raw ordinal 275 now
+    routes through the kernel window lifecycle boundary, reuses the virtual
+    `SetWindowPos(HWND_TOP, SWP_NOMOVE|SWP_NOSIZE)` z-order path, and activates
+    the top-level target.
   - Declares `GetWindowThreadProcessId_I`; Rust raw ordinal 292 now reports
     the HWND owner thread and optional process ID from the virtual GWE window
     table instead of returning a generic stub value.
@@ -164,6 +170,13 @@ anchors, not app-specific shortcuts.
     `IsWindow_I`, `GetClassNameW_I`, and `EnableWindow_I`, which back the
     virtual HWND state, class/title text copying, visibility/enabled checks,
     parent lookup, and focus bookkeeping.
+  - CE SDK `winuser.h` exposes `EnableWindow`/`IsWindowEnabled` and defines
+    `WM_ENABLE`; the same header defines `WM_CANCELMODE`. Rust raw
+    `EnableWindow` now preserves the CE previous-enabled return shape, routes
+    through `CeKernel::enable_window`, and queues `WM_CANCELMODE` before a
+    disable transition plus `WM_ENABLE` when the enabled state actually
+    changes. Full synchronous message-send timing remains part of the broader
+    GWE send/scheduler port.
   - Declares `GetWindow_I(HWND hwndThis, UINT32 relation)`, the GWE API set
     exposes `m_pGetWindow`, and the CE Mipsii SDK defines `GW_HWNDFIRST`,
     `GW_HWNDLAST`, `GW_HWNDNEXT`, `GW_HWNDPREV`, `GW_OWNER`, and `GW_CHILD`
@@ -180,6 +193,31 @@ anchors, not app-specific shortcuts.
   - GWE queue declarations keep `GetMessageW` as the blocking message API;
     an empty queue is not modeled as a `FALSE` return because MFC treats that
     as `WM_QUIT`/thread exit.
+  - `gweapiset1.hpp` and `cmsgque.h` also expose `GetMessageWNoWait` with the
+    same `MSG*, HWND, min, max` argument shape as `GetMessageW`, but without a
+    blocking wait path. Raw ordinal 863 now uses the GWE filtered retrieval
+    path for nonblocking posted messages and queue-owned quit state.
+  - `cmsgque.h` stores `PostedMsgQueueEntry_t::time`,
+    `PostedMsgQueueEntry_t::MousePosAtPost`, and queue
+    `m_ReadyTimeStamp`; it also declares `GetMessagePos_I`. CE SDK
+    `winuser.h` exposes `GetMessagePos()` and
+    `GetMessageQueueReadyTimeStamp(HWND hWnd)`. Rust now preserves screen
+    mouse position metadata for mouse messages, records the last retrieved
+    message position per receiving thread, and reports queue ready timestamps
+    from posted, sent, and quit-state work rather than using the current timer
+    tick as a stand-in.
+  - `cmsgque.h` stores quit delivery as queue state (`msgqfGotWMQuitMessage`,
+    `m_nExitCode`, and `mgefQuitMsg`) rather than as a normal posted-message
+    entry. Rust `PostQuitMessage` now records per-thread quit state, and raw
+    `GetMessageW`/`PeekMessageW` synthesize `WM_QUIT` from that state even when
+    the caller supplies a nonmatching HWND or message filter.
+  - CE SDK queue-status constants and `MsgWaitForMultipleObjectsEx` flags
+    define the split between current queue input and changed queue input.
+    Rust `GetQueueStatus` now reports current bits in the high word and
+    changed-since-last-query bits in the low word, clearing only the requested
+    changed bits after observation. Raw `MsgWaitForMultipleObjectsEx` consumes
+    newly changed queue input by default and treats already-queued input as
+    wakeable only when `MWMO_INPUTAVAILABLE` is set.
   - `cmsgque.h` defines `smfSenderNoWait`,
     `smfSenderNoWaitIfDifferentThread`, and `smfNotifyMessage` for no-wait
     notification sends. Rust raw `SendNotifyMessageW` now preserves that CE
@@ -217,6 +255,42 @@ anchors, not app-specific shortcuts.
     now queues those lifecycle messages from raw show/move/resize calls so MFC
     frame/layout code can observe the same window-state transitions as the
     launch path advances.
+  - The CE SDK `winuser.h` and GWE API set expose `SetFocus`,
+    `SetActiveWindow`, `SetForegroundWindow`, `ShowWindow`, `SetWindowPos`,
+    `WM_ACTIVATE`, `WM_SETFOCUS`, `WM_KILLFOCUS`, `WA_ACTIVE`,
+    `WA_INACTIVE`, and `SWP_NOACTIVATE`. Rust now stores active-window state
+    separately from focus and queues the focus/activation messages through the
+    kernel lifecycle boundary. MFC `wincore.cpp`/`winfrm.cpp` consume these
+    messages in frame/view activation and focus routing, so this remains guest
+    WNDPROC-visible behavior rather than host-side shortcutting.
+  - `winuser.h`, `gweapiset1.hpp`, and `window.hpp` expose
+    `WindowFromPoint` and `ChildWindowFromPoint` with by-value `POINT`
+    arguments. Rust raw ordinals 252 and 253 now route through the virtual GWE
+    visible/enabled HWND hit-test path; `ChildWindowFromPoint` treats the input
+    point as parent-client coordinates and uses the existing
+    client-to-screen transform before searching child windows.
+
+- GWE dialog/control surface:
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\dlgmgr.h`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\gweapiset1.hpp`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`
+  - CE exposes dialog manager entry points including
+    `CreateDialogIndirectParamW_I`, `EndDialog_I`, `GetDlgItem_I`,
+    `GetDlgCtrlID_I`, `SetDlgItemTextW_I`, `GetDlgItemTextW_I`,
+    `SetDlgItemInt_I`, `GetDlgItemInt_I`, `CheckRadioButton_I`,
+    `SendDlgItemMessageW_I`, `IsDialogMessageW_I`, `GetDialogBaseUnits_I`,
+    `MapDialogRect_I`, `GetNextDlgTabItem_I`, and
+    `GetNextDlgGroupItem_I`.
+  - Rust now routes raw `SetDlgItemInt` and `GetDlgItemInt` through the
+    existing dialog child lookup/window text state: integer setters write
+    signed or unsigned decimal text to the child control, and integer getters
+    parse that text and update the optional success flag. This is dialog
+    manager behavior, not app-specific resource shaping.
+  - Rust now routes raw `GetDialogBaseUnits`/`MapDialogRect` through CE-style
+    dialog-unit conversion and raw `GetNextDlgTabItem`/
+    `GetNextDlgGroupItem` through the real child HWND tree. `winuser.h`
+    supplies the public `WS_TABSTOP`, `WS_GROUP`, and `WS_DISABLED` styles used
+    by the traversal.
 
 - GWE paint/update surface:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\gweapiset1.hpp`,
@@ -251,6 +325,20 @@ anchors, not app-specific shortcuts.
   - The Rust `Presenter` and `Desktop` traits are host architecture boundaries
     layered around that generic byte-surface model. They deliberately do not
     define CE/MFC message, class, HWND, HDC, or GDI semantics.
+
+- GDI DIB/color-table surface:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h`
+  - CE exposes `CreateDIBSection`, `GetDIBColorTable`, `SetDIBColorTable`,
+    `RGBQUAD`, `BITMAPINFOHEADER`, `BITMAPINFO`, `DIB_RGB_COLORS`, and indexed
+    DIB color-table conventions through the public GDI header.
+  - Rust now stores RGBQUAD color-table entries on bitmap objects selected into
+    memory DCs, routes raw `SetDIBColorTable`/`GetDIBColorTable` through guest
+    memory, and uses the selected bitmap table when 8 bpp blits write RGB565
+    framebuffer pixels. Rust direct-DIB sources now also parse BITMAPINFO-
+    supplied RGBQUAD/RGBTRIPLE tables for 1/4/8 bpp `DIB_RGB_COLORS`, so
+    indexed `StretchDIBits`/`SetDIBitsToDevice` sources use their embedded
+    palette. Remaining indexed-DIB work is broader palette/device-color
+    behavior as trace evidence reaches it.
 
 - MFC window layout behavior:
   `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/wincore.cpp`
@@ -391,3 +479,10 @@ anchors, not app-specific shortcuts.
     `A2=guestCommandLine`, and `A3=1`.
   - v2 `GetModuleFileNameW` resolves the main module path when the requested
     module handle is the process module base.
+
+- CE enabled-window precedent:
+  `../WinCE_Emulator_v2/src/coredll_window.cpp`
+  - v2 returned the previous enabled state from `EnableWindow` and treated the
+    enabled bit as part of the virtual HWND state. Rust keeps CE source as the
+    behavior authority, but this corroborates the previous-state return and
+    enabled-state ownership path.

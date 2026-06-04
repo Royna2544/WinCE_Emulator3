@@ -8982,9 +8982,14 @@ fn import_detail_after_return<D>(
             let height = read_unicorn_u32(uc, info.wrapping_add(8)).unwrap_or(0) as i32;
             let planes_bits = read_unicorn_u32(uc, info.wrapping_add(12)).unwrap_or(0);
             let compression = read_unicorn_u32(uc, info.wrapping_add(16)).unwrap_or(0);
+            let color_entries = kernel
+                .resources
+                .bitmap(result)
+                .map(|bitmap| bitmap.color_table.len())
+                .unwrap_or(0);
             let last_error = kernel.threads.get_last_error(thread_id);
             Some(format!(
-                "hdc=0x{hdc:08x}/info=0x{info:08x}/header={header_size}/width={width}/height={height}/planes={}/bpp={}/compression={compression}/bits_out=0x{bits_out:08x}/bits=0x{bits:08x}/section=0x{section:08x}/offset={offset}/bitmap=0x{result:08x}/last_error={last_error}",
+                "hdc=0x{hdc:08x}/info=0x{info:08x}/header={header_size}/width={width}/height={height}/planes={}/bpp={}/compression={compression}/colors={color_entries}/bits_out=0x{bits_out:08x}/bits=0x{bits:08x}/section=0x{section:08x}/offset={offset}/bitmap=0x{result:08x}/last_error={last_error}",
                 planes_bits & 0xffff,
                 (planes_bits >> 16) & 0xffff
             ))

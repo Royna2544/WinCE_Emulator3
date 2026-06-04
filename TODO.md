@@ -71,7 +71,25 @@
     same-process different-thread guest WNDPROC in the receiver context by
     saving the sender MIPS registers/running-thread metadata, activating the
     GWE sent transaction on the receiver, and restoring the sender with the
-    WNDPROC result after the callout returns.
+    WNDPROC result after the callout returns. `GetQueueStatus` now tracks
+    CE-style current and changed queue bits, and raw
+    `MsgWaitForMultipleObjectsEx` now wakes on newly changed queue input unless
+    `MWMO_INPUTAVAILABLE` requests wake-on-current queued input.
+    `PostQuitMessage` now records queue-owned quit state instead of an ordinary
+    posted `WM_QUIT`, so `GetMessageW`/`PeekMessageW` observe quit even through
+    nonmatching HWND/message filters. Raw `GetMessageWNoWait` now reaches the
+    same GWE queue retrieval path instead of default ordinal handling. Raw
+    `GetMessagePos` and `GetMessageQueueReadyTimeStamp` now use per-queue and
+    per-message metadata from the GWE model: mouse-message screen positions are
+    preserved separately from client `lParam`, and ready timestamps update when
+    posts, sends, or queue-owned quit state make a thread queue ready. Raw
+    `SetDlgItemInt`/`GetDlgItemInt` now reach the dialog child-window text
+    model instead of generic ordinal fallback. Raw `WindowFromPoint` and
+    `ChildWindowFromPoint` now route through GWE visible/enabled HWND hit
+    testing instead of generic ordinal fallback. Raw `GetDialogBaseUnits` and
+    `MapDialogRect` now cover CE dialog-unit mapping, and raw
+    `GetNextDlgTabItem`/`GetNextDlgGroupItem` now walk real dialog children
+    using visible/enabled state plus `WS_TABSTOP`/`WS_GROUP` boundaries.
     Raw/kernel `DestroyWindow` now records and sends `WM_DESTROY` before final
     GWE cleanup, and the default `WM_CLOSE` shortcut records the same destroy
     observation before deleting HWND state. `WM_NCDESTROY` is now tracked when
@@ -81,6 +99,17 @@
     sends `WM_DESTROY` to descendants before the parent and before final GWE
     cleanup. Unicorn direct guest-WNDPROC `DestroyWindow` now chains guest
     descendant `WM_DESTROY` callbacks child-first before final root cleanup.
+    GWE now stores explicit active-window state separately from focus, and raw
+    `SetFocus`, `SetActiveWindow`, `SetForegroundWindow`, activating
+    `ShowWindow` commands, and `SetWindowPos` without `SWP_NOACTIVATE` queue
+    CE/MFC-visible `WM_ACTIVATE`, `WM_SETFOCUS`, and `WM_KILLFOCUS`
+    lifecycle messages. Raw `EnableWindow` now routes through the same kernel
+    lifecycle boundary, keeps the previous-enabled return contract, queues
+    `WM_CANCELMODE` before disabling and `WM_ENABLE` for real enabled-state
+    transitions, and leaves unchanged-state calls message-free. Raw
+    `BringWindowToTop` now reaches the virtual z-order model through the
+    kernel lifecycle boundary, moves the target to `HWND_TOP`, and activates
+    the top-level target.
   - Open gaps: update regions are still represented as one bounding rectangle,
     so partial `ValidateRect`/`RedrawWindow(RDW_VALIDATE)` subtracts the
     representable remainder but keeps a conservative bounding rectangle for
@@ -99,9 +128,18 @@
        cleanup, delivered `WM_NCDESTROY` is now recorded, and raw/kernel
        parent destroy sends descendant `WM_DESTROY` before parent cleanup.
        Unicorn guest-WNDPROC destroy callouts now follow the same child-first
-       chain before final root cleanup. Remaining lifecycle work includes exact
-       create/activate/focus/z-order side effects and destroyed-target behavior
-       under synchronous sends.
+       chain before final root cleanup. The first focus/activation slice now
+       covers explicit active-window state plus
+       `WM_ACTIVATE`/`WM_SETFOCUS`/`WM_KILLFOCUS` queueing, and the first
+       enable slice now covers `WM_CANCELMODE`/`WM_ENABLE` queueing plus CE
+       previous-state returns. Raw `BringWindowToTop` now covers the first
+       dedicated top-of-z-order activation path. Remaining lifecycle work
+       includes exact create/z-order side effects such as
+       `WM_WINDOWPOSCHANGING`/`WINDOWPOS` marshalling and owner/topmost rules,
+       deeper activate/focus/enable edge cases such as top-level owner
+       activation, disabled-focus transfer, child implicit disabled state,
+       no-activate show variants, and destroyed-target behavior under
+       synchronous sends.
     3. Message queues and synchronous sends: replace same-thread-only shortcuts
        with scheduler-owned sent queues, sender blocking, receiver-context
        execution, `InSendMessage`, timeout, destroyed-target, and reentrant
@@ -114,17 +152,35 @@
        marks queued timed sends result-ready and removes them from receiver
        retrieval. The first Unicorn raw-send path now runs same-process
        cross-thread guest WNDPROCs in the receiver context and restores the
-       sender result. Full scheduler-owned sender parking/resume across longer
-       waits, reentrant cross-thread scheduling, `ReplyMessage` wake semantics
-       if a real export is confirmed, and complete destroyed-target behavior
-       remain open.
+       sender result. `GetQueueStatus` changed-bit tracking and
+       `MsgWaitForMultipleObjectsEx` `MWMO_INPUTAVAILABLE` semantics now cover
+       the first CE queue-status slice. `PostQuitMessage` now uses
+       `msgqfGotWMQuitMessage`-style queue state and ignores caller filters
+       when delivering `WM_QUIT`. Raw `GetMessageWNoWait` now covers the
+       nonblocking get-message API path. Raw `GetMessagePos` and
+       `GetMessageQueueReadyTimeStamp` now cover the first CE
+       `PostedMsgQueueEntry_t.time`/`MousePosAtPost` and queue
+       `m_ReadyTimeStamp` metadata slice. Full scheduler-owned sender
+       parking/resume across longer waits, reentrant cross-thread scheduling,
+       nested modal loop unwinding, `ReplyMessage` wake semantics if a real
+       export is confirmed, richer queue-source/filter precision, and complete
+       destroyed-target behavior remain open.
     4. Window data/class/dialog/control surface: class atoms/extra bytes,
        `SetWindowLong`/`GetWindowLong`, owner thread/process queries, dialog
        procs/results, child/descendant relationship queries, child lookup,
        command routing, accelerator/menu state, and MFC attach/subclass paths.
+       `SetDlgItemInt`/`GetDlgItemInt` now cover the first CE dialog integer
+       item text path; `GetDialogBaseUnits`/`MapDialogRect` and
+       `GetNextDlgTabItem`/`GetNextDlgGroupItem` cover the first CE-backed
+       dialog layout/navigation slice. Fuller dialog default-proc,
+       modal-loop, command-routing, default button, and keyboard traversal
+       behavior remain open.
     5. Input/focus/capture/hit testing: keyboard char translation, mouse
        capture, coordinate mapping, modal blockers, active/foreground window
-       semantics, and queue-status/source bits.
+       semantics, and queue-status/source bits. `WindowFromPoint` and
+       `ChildWindowFromPoint` now cover the first CE raw HWND hit-test entry
+       points; richer disabled-window, transparent/static-control, capture,
+       modal, and z-order edge cases remain open.
     6. GDI/DC integration: tie HWND update regions to HDC clipping, memory DCs,
        DIB/palette/text/region drawing, and framebuffer presentation without
        host-window shortcuts.
@@ -164,9 +220,84 @@
     `target\receiver_context_send_*` artifacts, stopped at `pc=0x00b4bc24`
     with `host_read=4221/495853B` and `heap_live=5948/2767663B`, reached
     real resource/DIB work, but still had no render milestones and an all-zero
-    framebuffer body.
+    framebuffer body. The bounded queue-status/MsgWait probe wrote
+    `target\queue_status_msgwait_*` artifacts, stopped at `pc=0x00339d84`
+    with `host_read=4221/495853B` and `heap_live=5948/2767663B`, and likewise
+    had no render milestones or framebuffer pixels. The bounded
+    post-quit-queue-state probe wrote `target\post_quit_queue_state_*`
+    artifacts, stopped at `pc=0x00339da0` with `host_read=4221/495853B` and
+    `heap_live=5948/2767663B`, and still had no render milestones or
+    framebuffer pixels. The bounded GetMessageWNoWait probe wrote
+    `target\get_message_nowait_*` artifacts, stopped at `pc=0x00339d88` with
+    `host_read=4221/499832B` and `heap_live=5948/2767663B`, and again had no
+    render milestones or framebuffer pixels. The bounded message-metadata
+    probe wrote `target\message_metadata_*` artifacts, stopped at
+    `pc=0x00895bfc` with `host_read=4225/486559B` and
+    `heap_live=5621/2459146B`, reached `mapinfo.bin`/`iNaviData` file
+    activity, but still had no render milestones and only one nonzero
+    framebuffer byte, so it is not UI progress. The bounded dialog-int probe
+    wrote `target\dialog_int_*` artifacts, stopped at `pc=0x00b4bc44` with
+    `host_read=4221/495853B` and `heap_live=5948/2767663B`, reached
+    RSImage/DIB resource work, and still had no render milestones or
+    framebuffer pixels. The bounded hit-test probe wrote
+    `target\window_from_point_*` artifacts, stopped at `pc=0x6002278c` with
+    `host_read=4225/486559B` and `heap_live=5624/2461398B`, reached later
+    map/device file activity, but still had no render milestones and only one
+    nonzero framebuffer byte. The bounded focus/activation probe wrote
+    `target\focus_activation_*`, stopped at `pc=0x0030f7e0` with
+    `heap_live=7295/21831892B` and `host_read=24819/1924419B`, and preserved
+    the same sparse 301-pixel red framebuffer line with no named render
+    milestone. The bounded enable-window probe wrote `target\enable_window_*`,
+    stopped at `pc=0x00339d9c` with `heap_live=7294/21830764B` and
+    `host_read=24620/1918582B`, and again preserved the 301-pixel red
+    framebuffer line with no named render milestone. The bounded
+    bring-window-top probe wrote `target\bring_window_top_*`, stopped at
+    `pc=0x0030f7c8` with `heap_live=7293/21820764B` and
+    `host_read=24620/1922561B`, and likewise preserved the 301-pixel red
+    framebuffer line with no named render milestone. A virtual-desktop rerun
+    wrote `target\virtual_after_bring_window_top_*`, stopped at
+    `pc=0x00343750` with `heap_live=7200/21843325B` and
+    `host_read=26122/1952147B`, preserved the same 301-pixel red line, and did
+    not show a host presenter window. Prefer `--desktop virtual` for future
+    bounded mounted probes unless host presentation/input behavior is the
+    thing being tested.
 
 ## Immediate
+
+- GDI/resources/display ledger:
+  - Source refs:
+    `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h`, CE GDI/GPE headers,
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\window.hpp`, and MFC
+    `wingdi.cpp`/dialog/resource source references in `SOURCE_REFERENCES.md`.
+  - v2 corroboration: v2's framebuffer and resource paths prove that generic
+    guest GDI output can feed host presentation, but v3 keeps the framebuffer
+    as a CE display surface and does not synthesize app-specific pixels.
+  - Current v3 status: raw `CreateDIBSection`, compatible DCs, object
+    selection, simple blits, DIB source blits, regions, paint DCs, resources,
+    and menu/dialog scaffolding are present. The latest slice adds bitmap
+    RGBQUAD color-table state plus raw `SetDIBColorTable`/`GetDIBColorTable`;
+    8 bpp blits now resolve palette indices before writing RGB565 pixels.
+    Direct `BITMAPINFO` sources now parse embedded color tables for 1/4/8 bpp
+    `DIB_RGB_COLORS`, covering indexed `StretchDIBits`/`SetDIBitsToDevice`
+    source pixels.
+  - Open gaps: complete palette/brush/pen/text/font/menu/dialog/icon/cursor
+    behavior as trace evidence demands, broaden indexed DIB coverage beyond
+    the currently reached RGBQUAD/RGBTRIPLE table shapes, and connect later
+    blit/update transitions to real paint invalidation without app-specific
+    shortcuts.
+  - Fixture gates: keep raw GWE/GDI tests passing, then add focused fixtures
+    for additional indexed palette edge cases, region clipping, text/font
+    metrics, menu/accelerator, and MFC mini-app paint.
+  - Latest iNavi evidence: mounted traces create many DIBSections and windows
+    before useful rendering. The newest 30 s probe has sparse nonzero
+    framebuffer bytes (`target\long30_probe.ppm`: 301 nonzero bytes) and
+    memory-stable file I/O (`heap_live=7297/21843020B`,
+    `host_read=25097/1921203B`) but no named render milestone, so the next
+    display work should target generic paint/blit/surface fidelity, not forced
+    presentation. The fresh `target\dib_colors_fresh_*` probe confirms the
+    app's 8 bpp RSImage DIBSections now have parsed color tables (`colors=256`
+    on the 800-wide surfaces and populated partial tables on later resources),
+    so indexed palette ingestion is no longer the leading suspect.
 
 - Continue from the latest stable host-mode UI frontier. Current
   `--desktop host --tap 400,240` evidence no longer has the multi-GB RAM spike

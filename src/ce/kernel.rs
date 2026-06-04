@@ -9,8 +9,10 @@ use crate::{
             OPEN_EXISTING,
         },
         gwe::{
-            Gwe, GweStats, HWND_BROADCAST, Message, Point, Rect, SMF_NULL, WM_MOVE, WM_SHOWWINDOW,
-            WM_SIZE, WM_WINDOWPOSCHANGED,
+            Gwe, GweStats, HWND_BROADCAST, HWND_TOP, Message, Point, Rect, SMF_NULL,
+            SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, WA_ACTIVE, WA_INACTIVE,
+            WM_ACTIVATE, WM_CANCELMODE, WM_ENABLE, WM_KILLFOCUS, WM_MOVE, WM_SETFOCUS,
+            WM_SHOWWINDOW, WM_SIZE, WM_WINDOWPOSCHANGED,
         },
         memory::MemorySystem,
         object::{FileObject, FindFileObject, HandleTable, KernelObject, WaitResult},
@@ -1028,6 +1030,15 @@ impl CeKernel {
     }
 
     pub fn show_window(&mut self, hwnd: u32, visible: bool) -> bool {
+        self.show_window_with_activation(hwnd, visible, visible)
+    }
+
+    pub fn show_window_with_activation(
+        &mut self,
+        hwnd: u32,
+        visible: bool,
+        activate: bool,
+    ) -> bool {
         if !self.gwe.is_window(hwnd) {
             return false;
         }
@@ -1035,6 +1046,12 @@ impl CeKernel {
         let previous = self.gwe.show_window(hwnd, visible);
         if was_visible != visible {
             self.post_window_message(hwnd, WM_SHOWWINDOW, u32::from(visible), 0);
+        }
+        if visible && activate {
+            let target = self.top_level_window(hwnd);
+            let _ = self.activate_window(Some(target));
+        } else if !visible && self.gwe.get_active_window() == Some(hwnd) {
+            let _ = self.activate_window(None);
         }
         previous
     }
@@ -1069,6 +1086,35 @@ impl CeKernel {
             let is_visible = self.gwe.is_window_visible(hwnd);
             self.post_window_visibility_message(hwnd, was_visible, is_visible);
             self.post_window_rect_messages(hwnd, before, after);
+            if flags & (SWP_NOACTIVATE | SWP_HIDEWINDOW) == 0 {
+                let target = self.top_level_window(hwnd);
+                let _ = self.activate_window(Some(target));
+            }
+        }
+        moved
+    }
+
+    pub fn enable_window(&mut self, hwnd: u32, enabled: bool) -> Option<bool> {
+        if !self.gwe.is_window(hwnd) {
+            return None;
+        }
+        let was_enabled = self.gwe.enable_window(hwnd, enabled);
+        if was_enabled != enabled {
+            if !enabled {
+                self.post_window_message(hwnd, WM_CANCELMODE, 0, 0);
+            }
+            self.post_window_message(hwnd, WM_ENABLE, u32::from(enabled), 0);
+        }
+        Some(was_enabled)
+    }
+
+    pub fn bring_window_to_top(&mut self, hwnd: u32) -> bool {
+        let moved =
+            self.gwe
+                .set_window_pos(hwnd, Some(HWND_TOP), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+        if moved {
+            let target = self.top_level_window(hwnd);
+            let _ = self.activate_window(Some(target));
         }
         moved
     }
@@ -1088,6 +1134,52 @@ impl CeKernel {
             self.post_window_rect_messages(hwnd, before, self.gwe.get_window_rect(hwnd));
         }
         moved
+    }
+
+    pub fn set_focus(&mut self, hwnd: Option<u32>) -> Option<u32> {
+        if hwnd.is_some_and(|hwnd| !self.gwe.is_window(hwnd)) {
+            return None;
+        }
+        let previous = self.gwe.set_focus(hwnd);
+        if previous != hwnd {
+            if let Some(previous_hwnd) = previous {
+                self.post_window_message(previous_hwnd, WM_KILLFOCUS, hwnd.unwrap_or(0), 0);
+            }
+            if let Some(hwnd) = hwnd {
+                let _ = self.activate_window(Some(hwnd));
+                self.post_window_message(hwnd, WM_SETFOCUS, previous.unwrap_or(0), 0);
+            }
+        }
+        previous
+    }
+
+    pub fn activate_window(&mut self, hwnd: Option<u32>) -> Option<u32> {
+        if hwnd.is_some_and(|hwnd| !self.gwe.is_window(hwnd)) {
+            return None;
+        }
+        let previous = self.gwe.set_active_window(hwnd);
+        if previous != hwnd {
+            if let Some(previous_hwnd) = previous {
+                self.post_window_message(
+                    previous_hwnd,
+                    WM_ACTIVATE,
+                    WA_INACTIVE,
+                    hwnd.unwrap_or(0),
+                );
+            }
+            if let Some(hwnd) = hwnd {
+                self.post_window_message(hwnd, WM_ACTIVATE, WA_ACTIVE, previous.unwrap_or(0));
+            }
+        }
+        previous
+    }
+
+    fn top_level_window(&self, hwnd: u32) -> u32 {
+        let mut current = hwnd;
+        while let Some(parent) = self.gwe.get_parent(current) {
+            current = parent;
+        }
+        current
     }
 
     pub fn get_message_w(&mut self, thread_id: u32) -> Option<Message> {
@@ -1352,7 +1444,8 @@ impl CeKernel {
                     wparam,
                     make_lparam(client.x, client.y),
                     time_ms,
-                ),
+                )
+                .with_mouse_pos(make_lparam(point.x, point.y)),
             );
             posted += 1;
         }

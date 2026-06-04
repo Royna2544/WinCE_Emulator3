@@ -2140,9 +2140,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel, memory, thread_id, args,
         ))),
         ORD_DESTROY_WINDOW => Some(CoredllValue::Bool(kernel.destroy_window(raw_arg(args, 0)))),
-        ORD_SHOW_WINDOW => Some(CoredllValue::Bool(
-            kernel.show_window(raw_arg(args, 0), raw_arg(args, 1) != 0),
-        )),
+        ORD_SHOW_WINDOW => Some(CoredllValue::Bool(show_window_raw(kernel, args))),
         ORD_UPDATE_WINDOW => Some(CoredllValue::Bool(kernel.update_window(raw_arg(args, 0)))),
         ORD_INVALIDATE_RECT => Some(CoredllValue::Bool(invalidate_rect_raw(
             kernel, memory, thread_id, args,
@@ -2363,10 +2361,21 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             args,
         ))),
-        ORD_SET_DIBCOLOR_TABLE => Some(CoredllValue::U32(set_dib_color_table_raw(
+        ORD_GET_DIBCOLOR_TABLE => Some(CoredllValue::U32(get_dib_color_table_raw(
             kernel,
+            memory,
             thread_id,
             raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+            raw_arg(args, 3),
+        ))),
+        ORD_SET_DIBCOLOR_TABLE => Some(CoredllValue::U32(set_dib_color_table_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
             raw_arg(args, 2),
             raw_arg(args, 3),
         ))),
@@ -2504,8 +2513,8 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_ENABLE_WINDOW => Some(CoredllValue::Bool(
             kernel
-                .gwe
-                .enable_window(raw_arg(args, 0), raw_arg(args, 1) != 0),
+                .enable_window(raw_arg(args, 0), raw_arg(args, 1) != 0)
+                .unwrap_or(false),
         )),
         ORD_IS_WINDOW => Some(CoredllValue::Bool(kernel.gwe.is_window(raw_arg(args, 0)))),
         ORD_IS_WINDOW_ENABLED => Some(CoredllValue::Bool(
@@ -2532,6 +2541,16 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_DLG_CTRL_ID => Some(CoredllValue::U32(
             kernel.gwe.get_dlg_ctrl_id(raw_arg(args, 0)).unwrap_or(0),
         )),
+        ORD_GET_NEXT_DLG_TAB_ITEM => Some(CoredllValue::Handle(get_next_dlg_tab_item_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_GET_NEXT_DLG_GROUP_ITEM => Some(CoredllValue::Handle(get_next_dlg_group_item_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_GET_DIALOG_BASE_UNITS => Some(CoredllValue::U32(get_dialog_base_units_raw())),
+        ORD_MAP_DIALOG_RECT => Some(CoredllValue::Bool(map_dialog_rect_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_CREATE_DIALOG_INDIRECT_PARAM_W | ORD_DIALOG_BOX_INDIRECT_PARAM_W => {
             Some(CoredllValue::Handle(create_dialog_indirect_param_w_raw(
                 kernel, memory, thread_id, args,
@@ -2548,6 +2567,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel, memory, thread_id, args,
         ))),
         ORD_GET_DLG_ITEM_TEXT_W => Some(CoredllValue::U32(get_dlg_item_text_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_SET_DLG_ITEM_INT => Some(CoredllValue::Bool(set_dlg_item_int_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_GET_DLG_ITEM_INT => Some(CoredllValue::U32(get_dlg_item_int_raw(
             kernel, memory, thread_id, args,
         ))),
         ORD_SEND_DLG_ITEM_MESSAGE_W => Some(CoredllValue::U32(send_dlg_item_message_w_raw(
@@ -2619,10 +2644,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             )))
         }
         ORD_SET_FOCUS => Some(CoredllValue::Handle(
-            kernel
-                .gwe
-                .set_focus((raw_arg(args, 0) != 0).then_some(raw_arg(args, 0)))
-                .unwrap_or(0),
+            set_focus_raw(kernel, thread_id, raw_arg(args, 0)).unwrap_or(0),
         )),
         ORD_GET_FOCUS => Some(CoredllValue::Handle(kernel.gwe.get_focus().unwrap_or(0))),
         ORD_SET_CAPTURE => Some(CoredllValue::Handle(
@@ -2647,6 +2669,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_SET_WINDOW_LONG_W => Some(CoredllValue::U32(set_window_long_w_raw(kernel, args))),
         ORD_GET_WINDOW_LONG_W => Some(CoredllValue::U32(get_window_long_w_raw(kernel, args))),
+        ORD_BRING_WINDOW_TO_TOP => Some(CoredllValue::Bool(
+            kernel.bring_window_to_top(raw_arg(args, 0)),
+        )),
         ORD_SET_WINDOW_POS => Some(CoredllValue::Bool(kernel.set_window_pos(
             raw_arg(args, 0),
             Some(raw_arg(args, 1)),
@@ -2705,9 +2730,26 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 2),
             raw_arg(args, 3),
         ))),
+        ORD_WINDOW_FROM_POINT => Some(CoredllValue::Handle(window_from_point_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_CHILD_WINDOW_FROM_POINT => Some(CoredllValue::Handle(child_window_from_point_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ))),
         ORD_GET_MESSAGE_W => Some(CoredllValue::Bool(get_message_w_raw(
             kernel, memory, thread_id, args,
         ))),
+        ORD_GET_MESSAGE_WNO_WAIT => Some(CoredllValue::Bool(get_message_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_GET_MESSAGE_POS => Some(CoredllValue::U32(kernel.gwe.get_message_pos(thread_id))),
         ORD_PEEK_MESSAGE_W => Some(CoredllValue::Bool(peek_message_w_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -2765,9 +2807,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_QUEUE_STATUS => Some(CoredllValue::U32(
             kernel.gwe.get_queue_status(thread_id, raw_arg(args, 0)),
         )),
-        ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP => {
-            Some(CoredllValue::U32(kernel.timers.tick_count()))
-        }
+        ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP => Some(CoredllValue::U32(
+            kernel
+                .gwe
+                .get_message_queue_ready_time_stamp(thread_id, raw_arg(args, 0)),
+        )),
         ORD_DISPATCH_MESSAGE_W => Some(CoredllValue::U32(dispatch_message_w_raw(
             kernel,
             memory,
@@ -7251,6 +7295,106 @@ fn get_dlg_item_text_w_raw<M: CoredllGuestMemory>(
     write_wide_result(kernel, memory, thread_id, buffer, capacity, &text)
 }
 
+fn set_dlg_item_int_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let hwnd = raw_arg(args, 0);
+    let id = raw_arg(args, 1);
+    let value = raw_arg(args, 2);
+    let signed = raw_arg(args, 3) != 0;
+    let text = if signed {
+        (value as i32).to_string()
+    } else {
+        value.to_string()
+    };
+    let Some(child) = kernel.gwe.get_dlg_item(hwnd, id) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    };
+    if !kernel.gwe.set_window_text(child, &text) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn get_dlg_item_int_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let hwnd = raw_arg(args, 0);
+    let id = raw_arg(args, 1);
+    let ok_ptr = raw_arg(args, 2);
+    let signed = raw_arg(args, 3) != 0;
+    let Some(child) = kernel.gwe.get_dlg_item(hwnd, id) else {
+        let _ = write_optional_u32(kernel, memory, thread_id, ok_ptr, 0);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    };
+    let Some(text) = kernel.gwe.get_window_text(child, 64) else {
+        let _ = write_optional_u32(kernel, memory, thread_id, ok_ptr, 0);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    };
+    let Some(value) = parse_dlg_item_int(&text, signed) else {
+        let _ = write_optional_u32(kernel, memory, thread_id, ok_ptr, 0);
+        kernel.threads.set_last_error(thread_id, 0);
+        return 0;
+    };
+    if !write_optional_u32(kernel, memory, thread_id, ok_ptr, 1) {
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    value
+}
+
+fn parse_dlg_item_int(text: &str, signed: bool) -> Option<u32> {
+    let trimmed = text.trim_start();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if signed {
+        let (negative, digits) = if let Some(rest) = trimmed.strip_prefix('-') {
+            (true, rest)
+        } else if let Some(rest) = trimmed.strip_prefix('+') {
+            (false, rest)
+        } else {
+            (false, trimmed)
+        };
+        let digit_count = digits
+            .as_bytes()
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+        if digit_count == 0 {
+            return None;
+        }
+        let number = digits[..digit_count].parse::<i64>().ok()?;
+        let signed_value = if negative { -number } else { number };
+        i32::try_from(signed_value).ok().map(|value| value as u32)
+    } else {
+        let digits = trimmed.strip_prefix('+').unwrap_or(trimmed);
+        let digit_count = digits
+            .as_bytes()
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+        if digit_count == 0 {
+            return None;
+        }
+        digits[..digit_count].parse::<u32>().ok()
+    }
+}
+
 fn check_radio_button_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
     if !kernel.gwe.check_radio_button(
         raw_arg(args, 0),
@@ -8525,6 +8669,66 @@ fn dib_rgb_masks<M: CoredllGuestMemory>(
     }
 }
 
+fn read_dib_color_table<M: CoredllGuestMemory>(
+    memory: &M,
+    info_ptr: u32,
+    header_size: u32,
+    compression: u32,
+    bits_pixel: u16,
+) -> Vec<[u8; 4]> {
+    if !matches!(bits_pixel, 1 | 4 | 8) {
+        return Vec::new();
+    }
+    let max_entries = 1usize << bits_pixel;
+    let used_entries = if header_size >= 40 {
+        memory
+            .read_u32(info_ptr.wrapping_add(32))
+            .ok()
+            .and_then(|count| (count != 0).then_some(count as usize))
+            .unwrap_or(max_entries)
+            .min(max_entries)
+    } else {
+        max_entries
+    };
+    if used_entries == 0 {
+        return Vec::new();
+    }
+    let table_ptr = if header_size == 12 {
+        info_ptr.wrapping_add(12)
+    } else if compression == BI_BITFIELDS && header_size == 40 {
+        info_ptr.wrapping_add(52)
+    } else {
+        info_ptr.wrapping_add(header_size)
+    };
+    let bytes_per_entry = if header_size == 12 { 3 } else { 4 };
+    let mut table = Vec::with_capacity(used_entries);
+    for index in 0..used_entries {
+        let entry_ptr = table_ptr.wrapping_add((index * bytes_per_entry) as u32);
+        let blue = match memory.read_u8(entry_ptr) {
+            Ok(value) => value,
+            Err(_) => return Vec::new(),
+        };
+        let green = match memory.read_u8(entry_ptr.wrapping_add(1)) {
+            Ok(value) => value,
+            Err(_) => return Vec::new(),
+        };
+        let red = match memory.read_u8(entry_ptr.wrapping_add(2)) {
+            Ok(value) => value,
+            Err(_) => return Vec::new(),
+        };
+        let reserved = if bytes_per_entry == 4 {
+            match memory.read_u8(entry_ptr.wrapping_add(3)) {
+                Ok(value) => value,
+                Err(_) => return Vec::new(),
+            }
+        } else {
+            0
+        };
+        table.push([blue, green, red, reserved]);
+    }
+    table
+}
+
 fn get_object_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -8684,6 +8888,18 @@ fn get_window_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32, cmd: u32) ->
     kernel.gwe.get_window(hwnd, cmd).unwrap_or(0)
 }
 
+fn show_window_raw(kernel: &mut CeKernel, args: &[u32]) -> bool {
+    const SW_HIDE: u32 = 0;
+    const SW_SHOWNOACTIVATE: u32 = 4;
+    const SW_SHOWMINNOACTIVE: u32 = 7;
+    const SW_SHOWNA: u32 = 8;
+    let hwnd = raw_arg(args, 0);
+    let cmd = raw_arg(args, 1);
+    let visible = cmd != SW_HIDE;
+    let activate = visible && !matches!(cmd, SW_SHOWNOACTIVATE | SW_SHOWMINNOACTIVE | SW_SHOWNA);
+    kernel.show_window_with_activation(hwnd, visible, activate)
+}
+
 fn set_foreground_window_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> bool {
     if hwnd == 0 || !kernel.gwe.is_window(hwnd) {
         kernel
@@ -8691,7 +8907,8 @@ fn set_foreground_window_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -
             .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
         return false;
     }
-    kernel.gwe.set_focus(Some(hwnd));
+    let _ = kernel.activate_window(Some(hwnd));
+    let _ = kernel.set_focus(Some(hwnd));
     kernel.threads.set_last_error(thread_id, 0);
     true
 }
@@ -8704,7 +8921,19 @@ fn set_active_window_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> u3
         return 0;
     }
     let previous = kernel.gwe.get_active_window().unwrap_or(0);
-    kernel.gwe.set_focus((hwnd != 0).then_some(hwnd));
+    let _ = kernel.activate_window((hwnd != 0).then_some(hwnd));
+    kernel.threads.set_last_error(thread_id, 0);
+    previous
+}
+
+fn set_focus_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> Option<u32> {
+    if hwnd != 0 && !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return None;
+    }
+    let previous = kernel.set_focus((hwnd != 0).then_some(hwnd));
     kernel.threads.set_last_error(thread_id, 0);
     previous
 }
@@ -8731,6 +8960,121 @@ fn map_single_point<M: CoredllGuestMemory>(
         return false;
     };
     write_guest_point(kernel, memory, thread_id, point_ptr, mapped)
+}
+
+fn window_from_point_raw(kernel: &mut CeKernel, thread_id: u32, x: u32, y: u32) -> u32 {
+    let point = Point {
+        x: x as i32,
+        y: y as i32,
+    };
+    let hwnd = kernel
+        .gwe
+        .window_from_point_for_thread(thread_id, point)
+        .unwrap_or(0);
+    kernel.threads.set_last_error(thread_id, 0);
+    hwnd
+}
+
+fn child_window_from_point_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    parent: u32,
+    x: u32,
+    y: u32,
+) -> u32 {
+    let point = Point {
+        x: x as i32,
+        y: y as i32,
+    };
+    let hwnd = kernel
+        .gwe
+        .child_window_from_point_for_thread(thread_id, parent, point)
+        .unwrap_or(0);
+    if hwnd == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+    } else {
+        kernel.threads.set_last_error(thread_id, 0);
+    }
+    hwnd
+}
+
+const DIALOG_BASE_UNIT_X: i32 = 8;
+const DIALOG_BASE_UNIT_Y: i32 = 16;
+
+fn get_dialog_base_units_raw() -> u32 {
+    (DIALOG_BASE_UNIT_X as u32 & 0xffff) | ((DIALOG_BASE_UNIT_Y as u32 & 0xffff) << 16)
+}
+
+fn map_dialog_rect_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let hwnd = raw_arg(args, 0);
+    let rect_ptr = raw_arg(args, 1);
+    if hwnd == 0 || !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    }
+    let Some(rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
+        return false;
+    };
+    let mapped = Rect {
+        left: mul_div_i32(rect.left, DIALOG_BASE_UNIT_X, 4),
+        top: mul_div_i32(rect.top, DIALOG_BASE_UNIT_Y, 8),
+        right: mul_div_i32(rect.right, DIALOG_BASE_UNIT_X, 4),
+        bottom: mul_div_i32(rect.bottom, DIALOG_BASE_UNIT_Y, 8),
+    };
+    if !write_guest_rect(kernel, memory, thread_id, rect_ptr, mapped) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn mul_div_i32(value: i32, numerator: i32, denominator: i32) -> i32 {
+    (((value as i64) * (numerator as i64)) / (denominator as i64)) as i32
+}
+
+fn get_next_dlg_tab_item_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
+    let dialog = raw_arg(args, 0);
+    let control = raw_arg(args, 1);
+    let previous = raw_arg(args, 2) != 0;
+    let hwnd = kernel
+        .gwe
+        .get_next_dlg_tab_item(dialog, control, previous)
+        .unwrap_or(0);
+    if hwnd == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+    } else {
+        kernel.threads.set_last_error(thread_id, 0);
+    }
+    hwnd
+}
+
+fn get_next_dlg_group_item_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
+    let dialog = raw_arg(args, 0);
+    let control = raw_arg(args, 1);
+    let previous = raw_arg(args, 2) != 0;
+    let hwnd = kernel
+        .gwe
+        .get_next_dlg_group_item(dialog, control, previous)
+        .unwrap_or(0);
+    if hwnd == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+    } else {
+        kernel.threads.set_last_error(thread_id, 0);
+    }
+    hwnd
 }
 
 fn map_window_points<M: CoredllGuestMemory>(
@@ -9185,6 +9529,13 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
             return 0;
         }
     };
+    let color_table = read_dib_color_table(
+        memory,
+        info_ptr,
+        header_size,
+        compression,
+        header.bits_pixel,
+    );
     if header.width == 0 || header.height == 0 || header.planes != 1 || header.bits_pixel == 0 {
         kernel
             .threads
@@ -9212,14 +9563,20 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
         return 0;
     }
     kernel.threads.set_last_error(thread_id, 0);
-    kernel.resources.create_owned_bitmap_with_masks(
+    let bitmap = kernel.resources.create_owned_bitmap_with_masks(
         header.width,
         header.height,
         header.planes,
         header.bits_pixel,
         bits_ptr,
         rgb_masks,
-    )
+    );
+    if !color_table.is_empty() {
+        if let Some(object) = kernel.resources.bitmap_mut(bitmap) {
+            object.color_table = color_table;
+        }
+    }
+    bitmap
 }
 
 fn create_font_indirect_w_raw(kernel: &mut CeKernel, thread_id: u32, logfont_ptr: u32) -> u32 {
@@ -9975,6 +10332,13 @@ fn read_dib_source<M: CoredllGuestMemory>(
         compression,
         header.bits_pixel,
     )?;
+    let color_table = read_dib_color_table(
+        memory,
+        info_ptr,
+        header_size,
+        compression,
+        header.bits_pixel,
+    );
     let height = header.height.checked_abs()?;
     let byte_count = bitmap_byte_count(header.width, header.height, header.bits_pixel)?;
     let width_bytes = (byte_count / height as u32) as i32;
@@ -9989,6 +10353,7 @@ fn read_dib_source<M: CoredllGuestMemory>(
             planes: header.planes,
             bits_pixel: header.bits_pixel,
             rgb_masks,
+            color_table,
             bits_ptr,
             bits_owned: false,
         },
@@ -10195,11 +10560,7 @@ fn write_bitmap_pixel_rgb<M: CoredllGuestMemory>(
             };
             memory.write_u16(addr, raw as u16)
         }
-        8 => {
-            let gray =
-                ((u16::from(red) * 30 + u16::from(green) * 59 + u16::from(blue) * 11) / 100) as u8;
-            memory.write_u8(addr, gray)
-        }
+        8 => memory.write_u8(addr, nearest_color_table_index(bitmap, [red, green, blue])),
         _ => Ok(()),
     }
 }
@@ -10262,9 +10623,36 @@ fn bitmap_pixel_rgb(
         8 => bytes
             .get(row_start + x)
             .copied()
-            .map(|gray| [gray, gray, gray]),
+            .map(|index| rgb_from_color_table(bitmap, index)),
         _ => None,
     }
+}
+
+fn rgb_from_color_table(bitmap: &crate::ce::resource::BitmapObject, index: u8) -> [u8; 3] {
+    bitmap
+        .color_table
+        .get(index as usize)
+        .map(|entry| [entry[2], entry[1], entry[0]])
+        .unwrap_or([index, index, index])
+}
+
+fn nearest_color_table_index(bitmap: &crate::ce::resource::BitmapObject, rgb: [u8; 3]) -> u8 {
+    if bitmap.color_table.is_empty() {
+        return ((u16::from(rgb[0]) * 30 + u16::from(rgb[1]) * 59 + u16::from(rgb[2]) * 11) / 100)
+            as u8;
+    }
+    bitmap
+        .color_table
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, entry)| {
+            let red = i32::from(entry[2]) - i32::from(rgb[0]);
+            let green = i32::from(entry[1]) - i32::from(rgb[1]);
+            let blue = i32::from(entry[0]) - i32::from(rgb[2]);
+            red * red + green * green + blue * blue
+        })
+        .map(|(index, _)| index.min(u8::MAX as usize) as u8)
+        .unwrap_or(0)
 }
 
 fn component_from_mask(raw: u32, mask: u32) -> Option<u8> {
@@ -10523,21 +10911,112 @@ fn set_dibits_to_device_raw<M: CoredllGuestMemory>(
     lines
 }
 
-fn set_dib_color_table_raw(
+fn get_dib_color_table_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
+    memory: &mut M,
     thread_id: u32,
     hdc: u32,
+    start: u32,
     entries: u32,
     colors_ptr: u32,
 ) -> u32 {
-    if hdc == 0 || entries == 0 || colors_ptr == 0 {
+    if hdc == 0 || colors_ptr == 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
+    let Some(bitmap_handle) = kernel.resources.selected_bitmap(hdc) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    let Some(bitmap) = kernel.resources.bitmap(bitmap_handle) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    let Ok(start_index) = usize::try_from(start) else {
+        kernel.threads.set_last_error(thread_id, 0);
+        return 0;
+    };
+    if entries == 0 || start_index >= bitmap.color_table.len() {
+        kernel.threads.set_last_error(thread_id, 0);
+        return 0;
+    }
+    let copy_count = usize::try_from(entries)
+        .ok()
+        .unwrap_or(usize::MAX)
+        .min(bitmap.color_table.len() - start_index);
+    let bytes: Vec<u8> = bitmap.color_table[start_index..start_index + copy_count]
+        .iter()
+        .flat_map(|entry| entry.iter().copied())
+        .collect();
+    if !write_guest_bytes(kernel, memory, thread_id, colors_ptr, &bytes) {
+        return 0;
+    }
     kernel.threads.set_last_error(thread_id, 0);
-    entries
+    copy_count as u32
+}
+
+fn set_dib_color_table_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    hdc: u32,
+    start: u32,
+    entries: u32,
+    colors_ptr: u32,
+) -> u32 {
+    if hdc == 0 || colors_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(bitmap_handle) = kernel.resources.selected_bitmap(hdc) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    if entries == 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return 0;
+    }
+    let Some(byte_count) = entries.checked_mul(4) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, colors_ptr, byte_count) else {
+        return 0;
+    };
+    let Ok(start_index) = usize::try_from(start) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let copy_count = bytes.len() / 4;
+    let Some(bitmap) = kernel.resources.bitmap_mut(bitmap_handle) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    let required_len = start_index.saturating_add(copy_count);
+    if bitmap.color_table.len() < required_len {
+        bitmap.color_table.resize(required_len, [0, 0, 0, 0]);
+    }
+    for (index, entry) in bytes.chunks_exact(4).enumerate() {
+        bitmap.color_table[start_index + index] = [entry[0], entry[1], entry[2], entry[3]];
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    copy_count as u32
 }
 
 fn set_bitmap_bits_raw<M: CoredllGuestMemory>(
@@ -11796,6 +12275,7 @@ fn read_guest_message<M: CoredllGuestMemory>(
         lparam: read_guest_u32(kernel, memory, thread_id, addr.wrapping_add(12))?,
         time_ms: read_guest_u32(kernel, memory, thread_id, addr.wrapping_add(16))?,
         source: crate::ce::gwe::MSGSRC_UNKNOWN,
+        mouse_pos_at_post: None,
     })
 }
 

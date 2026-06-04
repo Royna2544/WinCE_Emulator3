@@ -18,7 +18,12 @@ pub const WM_CLOSE: u32 = 0x0010;
 pub const WM_QUIT: u32 = 0x0012;
 pub const WM_ERASEBKGND: u32 = 0x0014;
 pub const WM_SHOWWINDOW: u32 = 0x0018;
+pub const WM_CANCELMODE: u32 = 0x001f;
 pub const WM_WINDOWPOSCHANGED: u32 = 0x0047;
+pub const WM_ACTIVATE: u32 = 0x0006;
+pub const WM_SETFOCUS: u32 = 0x0007;
+pub const WM_KILLFOCUS: u32 = 0x0008;
+pub const WM_ENABLE: u32 = 0x000a;
 pub const WM_NCDESTROY: u32 = 0x0082;
 pub const WM_SETTEXT: u32 = 0x000c;
 pub const WM_GETTEXT: u32 = 0x000d;
@@ -27,6 +32,9 @@ pub const WM_KEYDOWN: u32 = 0x0100;
 pub const WM_CHAR: u32 = 0x0102;
 pub const WM_COMMAND: u32 = 0x0111;
 pub const WM_TIMER: u32 = 0x0113;
+pub const WM_MOUSEMOVE: u32 = 0x0200;
+pub const WM_LBUTTONDOWN: u32 = 0x0201;
+pub const WM_LBUTTONUP: u32 = 0x0202;
 pub const WM_USER: u32 = 0x0400;
 pub const MSGSRC_UNKNOWN: u32 = 0;
 pub const MSGSRC_SOFTWARE_POST: u32 = 1;
@@ -83,6 +91,11 @@ pub const HWND_TOPMOST: u32 = u32::MAX;
 pub const HWND_NOTOPMOST: u32 = u32::MAX - 1;
 pub const WS_CHILD: u32 = 0x4000_0000;
 pub const WS_VISIBLE: u32 = 0x1000_0000;
+pub const WS_DISABLED: u32 = 0x0800_0000;
+pub const WS_GROUP: u32 = 0x0002_0000;
+pub const WS_TABSTOP: u32 = 0x0001_0000;
+pub const WA_INACTIVE: u32 = 0;
+pub const WA_ACTIVE: u32 = 1;
 
 pub const SM_CXSCREEN: u32 = 0;
 pub const SM_CYSCREEN: u32 = 1;
@@ -127,6 +140,7 @@ pub struct Message {
     pub lparam: u32,
     pub time_ms: u32,
     pub source: u32,
+    pub mouse_pos_at_post: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,6 +152,12 @@ pub struct SentMessage {
     pub flags: u32,
     pub timeout_ms: Option<u32>,
     pub result: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct QuitState {
+    exit_code: u32,
+    time_ms: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -346,6 +366,7 @@ pub struct Gwe {
     sent_messages: BTreeMap<u64, SentMessage>,
     active_sent_stack_by_thread: BTreeMap<u32, Vec<u64>>,
     next_sent_message_id: u64,
+    active_window: Option<u32>,
     focus: Option<u32>,
     capture: Option<u32>,
     cursor: Option<u32>,
@@ -358,7 +379,10 @@ pub struct Gwe {
     window_regions: BTreeMap<u32, Rect>,
     send_depth_by_thread: BTreeMap<u32, u32>,
     last_message_source_by_thread: BTreeMap<u32, u32>,
+    last_message_pos_by_thread: BTreeMap<u32, u32>,
+    ready_timestamp_by_thread: BTreeMap<u32, u32>,
     changed_queue_status_by_thread: BTreeMap<u32, u32>,
+    quit_by_thread: BTreeMap<u32, QuitState>,
     replied_send_depth_by_thread: BTreeMap<u32, u32>,
     next_lifecycle_message_order: u64,
     stats: GweStats,
@@ -408,6 +432,7 @@ impl Default for Gwe {
             sent_messages: BTreeMap::new(),
             active_sent_stack_by_thread: BTreeMap::new(),
             next_sent_message_id: 1,
+            active_window: None,
             focus: None,
             capture: None,
             cursor: None,
@@ -420,7 +445,10 @@ impl Default for Gwe {
             window_regions: BTreeMap::new(),
             send_depth_by_thread: BTreeMap::new(),
             last_message_source_by_thread: BTreeMap::new(),
+            last_message_pos_by_thread: BTreeMap::new(),
+            ready_timestamp_by_thread: BTreeMap::new(),
             changed_queue_status_by_thread: BTreeMap::new(),
+            quit_by_thread: BTreeMap::new(),
             replied_send_depth_by_thread: BTreeMap::new(),
             next_lifecycle_message_order: 1,
             stats: GweStats::default(),
@@ -668,6 +696,9 @@ impl Gwe {
         if targets.contains(&self.focus.unwrap_or(0)) {
             self.focus = None;
         }
+        if targets.contains(&self.active_window.unwrap_or(0)) {
+            self.active_window = None;
+        }
         for queue in self.queues.values_mut() {
             queue.retain(|message| message.hwnd == 0 || !targets.contains(&message.hwnd));
         }
@@ -815,6 +846,9 @@ impl Gwe {
         let Some(window) = self.windows.get_mut(&hwnd) else {
             return false;
         };
+        if window.destroyed {
+            return false;
+        }
         let previous = window.enabled;
         window.enabled = enabled;
         previous
@@ -956,6 +990,42 @@ impl Gwe {
         }
     }
 
+    pub fn get_next_dlg_tab_item(&self, dialog: u32, control: u32, previous: bool) -> Option<u32> {
+        let candidates = self.dialog_child_candidates(dialog, WS_TABSTOP);
+        self.next_dialog_candidate(&candidates, control, previous)
+    }
+
+    pub fn get_next_dlg_group_item(
+        &self,
+        dialog: u32,
+        control: u32,
+        previous: bool,
+    ) -> Option<u32> {
+        let children = self.dialog_child_candidates(dialog, 0);
+        if children.is_empty() {
+            return None;
+        }
+        let current_index = children
+            .iter()
+            .position(|hwnd| *hwnd == control)
+            .unwrap_or(if previous { children.len() - 1 } else { 0 });
+        let mut group_start = 0;
+        for index in (0..=current_index).rev() {
+            if self.window_has_style(children[index], WS_GROUP) {
+                group_start = index;
+                break;
+            }
+        }
+        let mut group_end = children.len();
+        for (index, hwnd) in children.iter().enumerate().skip(current_index + 1) {
+            if self.window_has_style(*hwnd, WS_GROUP) {
+                group_end = index;
+                break;
+            }
+        }
+        self.next_dialog_candidate(&children[group_start..group_end], control, previous)
+    }
+
     pub fn get_desktop_window(&self) -> u32 {
         DESKTOP_HWND
     }
@@ -971,6 +1041,15 @@ impl Gwe {
 
     pub fn get_focus(&self) -> Option<u32> {
         self.focus
+    }
+
+    pub fn set_active_window(&mut self, hwnd: Option<u32>) -> Option<u32> {
+        if hwnd.is_some_and(|hwnd| !self.is_window(hwnd)) {
+            return None;
+        }
+        let previous = self.active_window;
+        self.active_window = hwnd;
+        previous
     }
 
     pub fn set_capture(&mut self, hwnd: u32) -> Option<u32> {
@@ -1002,6 +1081,9 @@ impl Gwe {
     }
 
     pub fn get_active_window(&self) -> Option<u32> {
+        if let Some(hwnd) = self.active_window.filter(|hwnd| self.is_window(*hwnd)) {
+            return Some(hwnd);
+        }
         if let Some(hwnd) = self.focus.filter(|hwnd| self.is_window(*hwnd)) {
             return Some(hwnd);
         }
@@ -1183,8 +1265,13 @@ impl Gwe {
         if message.source == MSGSRC_UNKNOWN {
             message.source = MSGSRC_SOFTWARE_POST;
         }
+        if message.mouse_pos_at_post.is_none() && is_mouse_message(message.msg) {
+            message.mouse_pos_at_post = Some(message.lparam);
+        }
         let status_bit = queue_status_bit_for_message(message.msg);
+        let ready_time = message.time_ms;
         self.queues.entry(thread_id).or_default().push_back(message);
+        self.ready_timestamp_by_thread.insert(thread_id, ready_time);
         self.mark_queue_status_changed(thread_id, status_bit);
     }
 
@@ -1221,6 +1308,7 @@ impl Gwe {
         if message.source == MSGSRC_UNKNOWN {
             message.source = MSGSRC_SOFTWARE_SEND;
         }
+        let ready_time = message.time_ms;
         let id = self.next_sent_message_id;
         self.next_sent_message_id = self.next_sent_message_id.saturating_add(1).max(1);
         self.sent_messages.insert(
@@ -1239,6 +1327,8 @@ impl Gwe {
         let queue = self.sent_queues.entry(receiver_thread_id).or_default();
         queue.push_back(id);
         let queue_depth = queue.len();
+        self.ready_timestamp_by_thread
+            .insert(receiver_thread_id, ready_time);
         self.mark_queue_status_changed(receiver_thread_id, QS_SENDMESSAGE);
         self.stats.send_transaction_count = self.stats.send_transaction_count.saturating_add(1);
         self.stats.max_sent_queue_depth = self.stats.max_sent_queue_depth.max(queue_depth);
@@ -1484,6 +1574,28 @@ impl Gwe {
             .unwrap_or(MSGSRC_UNKNOWN)
     }
 
+    pub fn get_message_pos(&self, thread_id: u32) -> u32 {
+        self.last_message_pos_by_thread
+            .get(&thread_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub fn get_message_queue_ready_time_stamp(&self, thread_id: u32, hwnd: u32) -> u32 {
+        let queue_thread = if hwnd != 0 {
+            self.window(hwnd)
+                .filter(|window| !window.destroyed)
+                .map(|window| window.thread_id)
+                .unwrap_or(thread_id)
+        } else {
+            thread_id
+        };
+        self.ready_timestamp_by_thread
+            .get(&queue_thread)
+            .copied()
+            .unwrap_or(0)
+    }
+
     pub fn get_queue_status(&mut self, thread_id: u32, flags: u32) -> u32 {
         let current = self.queue_status_bits(thread_id) & flags;
         let changed_for_flags = self
@@ -1547,6 +1659,17 @@ impl Gwe {
         self.window_from_point_in_parent(thread_id, None, point)
     }
 
+    pub fn child_window_from_point_for_thread(
+        &self,
+        thread_id: u32,
+        parent: u32,
+        point: Point,
+    ) -> Option<u32> {
+        let screen_point = self.client_to_screen(parent, point)?;
+        self.window_from_point_in_parent(thread_id, Some(parent), screen_point)
+            .or(Some(parent))
+    }
+
     pub fn has_queue_input(&self, thread_id: u32, flags: u32) -> bool {
         self.queue_status_bits(thread_id) & flags != 0
     }
@@ -1579,7 +1702,10 @@ impl Gwe {
     }
 
     pub fn post_quit_message(&mut self, thread_id: u32, exit_code: u32, time_ms: u32) {
-        self.post_message(thread_id, Message::new(0, WM_QUIT, exit_code, 0, time_ms));
+        self.quit_by_thread
+            .insert(thread_id, QuitState { exit_code, time_ms });
+        self.ready_timestamp_by_thread.insert(thread_id, time_ms);
+        self.mark_queue_status_changed(thread_id, QS_POSTMESSAGE);
     }
 
     pub fn get_message_filtered(
@@ -1595,9 +1721,13 @@ impl Gwe {
         if let Some(message) = self.take_matching_message(thread_id, hwnd, min_msg, max_msg) {
             return Some(message);
         }
+        if let Some(message) = self.take_quit_message(thread_id) {
+            return Some(message);
+        }
         let message = self.synthetic_paint_message(thread_id, hwnd, min_msg, max_msg)?;
         self.last_message_source_by_thread
             .insert(thread_id, message.source);
+        self.record_last_message_pos(thread_id, &message);
         Some(message)
     }
 
@@ -1622,14 +1752,22 @@ impl Gwe {
                 return if flags.contains(PeekFlags::REMOVE) {
                     let message = queue.remove(index);
                     if let Some(message) = message.as_ref() {
-                        self.last_message_source_by_thread
-                            .insert(thread_id, message.source);
+                        let source = message.source;
+                        self.last_message_source_by_thread.insert(thread_id, source);
+                        self.record_last_message_pos(thread_id, message);
                     }
                     message
                 } else {
                     queue.get(index).cloned()
                 };
             }
+        }
+        if flags.contains(PeekFlags::REMOVE) {
+            if let Some(message) = self.take_quit_message(thread_id) {
+                return Some(message);
+            }
+        } else if let Some(message) = self.quit_message(thread_id) {
+            return Some(message);
         }
         self.synthetic_paint_message(thread_id, hwnd, min_msg, max_msg)
     }
@@ -1734,6 +1872,7 @@ impl Gwe {
         let message = queue.remove(index)?;
         self.last_message_source_by_thread
             .insert(thread_id, message.source);
+        self.record_last_message_pos(thread_id, &message);
         Some(message)
     }
 
@@ -1754,6 +1893,7 @@ impl Gwe {
         let message = self.sent_messages.get(&id)?.message.clone();
         self.last_message_source_by_thread
             .insert(thread_id, message.source);
+        self.record_last_message_pos(thread_id, &message);
         self.active_sent_stack_by_thread
             .entry(thread_id)
             .or_default()
@@ -1781,6 +1921,7 @@ impl Gwe {
             let message = self.sent_messages.get(&id)?.message.clone();
             self.last_message_source_by_thread
                 .insert(thread_id, message.source);
+            self.record_last_message_pos(thread_id, &message);
             self.active_sent_stack_by_thread
                 .entry(thread_id)
                 .or_default()
@@ -1832,6 +1973,9 @@ impl Gwe {
                 status |= queue_status_bit_for_message(message.msg);
             }
         }
+        if self.quit_by_thread.contains_key(&thread_id) {
+            status |= QS_POSTMESSAGE;
+        }
         if self.windows.values().any(|window| {
             !window.destroyed
                 && window.thread_id == thread_id
@@ -1841,6 +1985,30 @@ impl Gwe {
             status |= QS_PAINT;
         }
         status
+    }
+
+    fn take_quit_message(&mut self, thread_id: u32) -> Option<Message> {
+        let message = self.quit_message(thread_id)?;
+        self.quit_by_thread.remove(&thread_id);
+        self.last_message_source_by_thread
+            .insert(thread_id, message.source);
+        self.record_last_message_pos(thread_id, &message);
+        Some(message)
+    }
+
+    fn quit_message(&self, thread_id: u32) -> Option<Message> {
+        let state = self.quit_by_thread.get(&thread_id)?;
+        Some(
+            Message::new(0, WM_QUIT, state.exit_code, 0, state.time_ms)
+                .with_source(MSGSRC_SOFTWARE_POST),
+        )
+    }
+
+    fn record_last_message_pos(&mut self, thread_id: u32, message: &Message) {
+        let pos = message
+            .mouse_pos_at_post
+            .unwrap_or_else(|| point_to_lparam(self.cursor_pos));
+        self.last_message_pos_by_thread.insert(thread_id, pos);
     }
 
     fn mark_queue_status_changed(&mut self, thread_id: u32, bits: u32) {
@@ -1919,6 +2087,57 @@ impl Gwe {
             Some(hwnd)
         };
         self.sibling_windows(parent).first().copied()
+    }
+
+    fn dialog_child_candidates(&self, dialog: u32, required_style: u32) -> Vec<u32> {
+        if !self.is_window(dialog) {
+            return Vec::new();
+        }
+        self.sibling_windows(Some(dialog))
+            .into_iter()
+            .filter(|hwnd| {
+                self.windows.get(hwnd).is_some_and(|window| {
+                    window.visible
+                        && window.enabled
+                        && window.style & WS_DISABLED == 0
+                        && (required_style == 0 || window.style & required_style != 0)
+                })
+            })
+            .collect()
+    }
+
+    fn next_dialog_candidate(
+        &self,
+        candidates: &[u32],
+        control: u32,
+        previous: bool,
+    ) -> Option<u32> {
+        if candidates.is_empty() {
+            return None;
+        }
+        if control == 0 {
+            return if previous {
+                candidates.last().copied()
+            } else {
+                candidates.first().copied()
+            };
+        }
+        let index = candidates
+            .iter()
+            .position(|candidate| *candidate == control)
+            .unwrap_or(if previous { 0 } else { candidates.len() - 1 });
+        let next_index = if previous {
+            index.checked_sub(1).unwrap_or(candidates.len() - 1)
+        } else {
+            (index + 1) % candidates.len()
+        };
+        candidates.get(next_index).copied()
+    }
+
+    fn window_has_style(&self, hwnd: u32, style: u32) -> bool {
+        self.windows
+            .get(&hwnd)
+            .is_some_and(|window| !window.destroyed && window.style & style != 0)
     }
 
     fn sibling_windows(&self, parent: Option<u32>) -> Vec<u32> {
@@ -2015,11 +2234,17 @@ impl Message {
             lparam,
             time_ms,
             source: MSGSRC_UNKNOWN,
+            mouse_pos_at_post: None,
         }
     }
 
     pub fn with_source(mut self, source: u32) -> Self {
         self.source = source;
+        self
+    }
+
+    pub fn with_mouse_pos(mut self, mouse_pos: u32) -> Self {
+        self.mouse_pos_at_post = Some(mouse_pos);
         self
     }
 }
@@ -2038,10 +2263,18 @@ fn queue_status_bit_for_message(msg: u32) -> u32 {
         WM_TIMER => QS_TIMER,
         WM_PAINT => QS_PAINT,
         WM_KEYDOWN | WM_CHAR => QS_KEY,
-        0x0201 | 0x0202 => QS_MOUSEBUTTON,
-        0x0200 => QS_MOUSEMOVE,
+        WM_LBUTTONDOWN | WM_LBUTTONUP => QS_MOUSEBUTTON,
+        WM_MOUSEMOVE => QS_MOUSEMOVE,
         _ => QS_POSTMESSAGE,
     }
+}
+
+fn is_mouse_message(msg: u32) -> bool {
+    matches!(msg, WM_MOUSEMOVE | WM_LBUTTONDOWN | WM_LBUTTONUP)
+}
+
+fn point_to_lparam(point: Point) -> u32 {
+    ((point.y as u16 as u32) << 16) | (point.x as u16 as u32)
 }
 
 fn message_matches(message: &Message, hwnd: Option<u32>, min_msg: u32, max_msg: u32) -> bool {
@@ -2363,6 +2596,39 @@ mod tests {
             gwe.get_queue_status(thread_id, QS_POSTMESSAGE),
             (QS_POSTMESSAGE << 16) | QS_POSTMESSAGE
         );
+    }
+
+    #[test]
+    fn post_quit_state_ignores_window_and_message_filters() {
+        let mut gwe = Gwe::default();
+        let thread_id = 42;
+        let hwnd = gwe.create_window(thread_id, "target", "");
+
+        gwe.post_quit_message(thread_id, 0x4d, 123);
+        assert_eq!(
+            gwe.get_queue_status(thread_id, QS_POSTMESSAGE),
+            (QS_POSTMESSAGE << 16) | QS_POSTMESSAGE
+        );
+
+        let peeked = gwe
+            .peek_message_filtered(
+                thread_id,
+                Some(hwnd),
+                WM_USER + 1,
+                WM_USER + 1,
+                PeekFlags::NO_REMOVE,
+            )
+            .expect("peeked quit");
+        assert_eq!(peeked.msg, WM_QUIT);
+        assert_eq!(peeked.wparam, 0x4d);
+
+        let quit = gwe
+            .get_message_filtered(thread_id, Some(hwnd), WM_USER + 2, WM_USER + 2)
+            .expect("got quit");
+        assert_eq!(quit.msg, WM_QUIT);
+        assert_eq!(quit.wparam, 0x4d);
+        assert_eq!(gwe.get_message(thread_id), None);
+        assert_eq!(gwe.get_queue_status(thread_id, QS_POSTMESSAGE), 0);
     }
 
     #[test]

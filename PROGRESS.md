@@ -219,6 +219,124 @@
   activity including `CreateDIBSection` for 800x160 and 800x320 resources, but
   the render trace still reports no iNavi render milestones and the framebuffer
   body has zero nonzero bytes, so this is not visible UI success.
+- GWE queue-status tracking now distinguishes current input from newly changed
+  input. `GetQueueStatus` reports CE-style high-word current bits and low-word
+  changed bits, clearing only the requested changed bits after observation.
+  Window creation/show/invalidation, posts, timers, key/mouse messages, and
+  sent-message queueing now mark the appropriate `QS_*` changed bits. Raw
+  `MsgWaitForMultipleObjectsEx` now uses those changed bits by default and only
+  treats already-queued messages as immediately wakeable when
+  `MWMO_INPUTAVAILABLE` is supplied. Focused coverage:
+  `ce::gwe::tests::queue_status_low_word_tracks_changed_bits_until_observed`,
+  `coredll_raw_msgwait_requires_new_input_unless_inputavailable`, the full raw
+  GWE/raw-kernel suites, and full
+  `cargo test --features unicorn,trace,win32-desktop`. A bounded mounted
+  host/tap probe wrote `target\queue_status_msgwait_summary.txt`,
+  `target\queue_status_msgwait_files.txt`,
+  `target\queue_status_msgwait_render.txt`,
+  `target\queue_status_msgwait_milestones.txt`, and
+  `target\queue_status_msgwait_probe.ppm`; it stopped at `pc=0x00339d84`
+  after 10 s with small file/RSS counters (`host_open=7`,
+  `host_read=4221/495853B`, `heap_live=5948/2767663B`), no render milestones,
+  and an all-zero framebuffer body. This is scheduler/GWE fidelity, not visible
+  UI progress.
+- `PostQuitMessage` now uses queue-owned quit state instead of posting
+  `WM_QUIT` as an ordinary queued message. This follows CE `cmsgque.h`
+  evidence (`msgqfGotWMQuitMessage`, `m_nExitCode`, and `mgefQuitMsg`):
+  `GetMessageW`/`PeekMessageW` synthesize `WM_QUIT` from the thread queue state
+  even when the caller supplies a nonmatching HWND or message filter, and the
+  quit state still participates in `QS_POSTMESSAGE` current/changed status.
+  Focused coverage:
+  `ce::gwe::tests::post_quit_state_ignores_window_and_message_filters`,
+  `coredll_raw_post_quit_uses_queue_state_not_filtered_post`, the full raw GWE
+  suite, and full `cargo test --features unicorn,trace,win32-desktop`. A
+  bounded mounted host/tap probe wrote
+  `target\post_quit_queue_state_summary.txt`,
+  `target\post_quit_queue_state_files.txt`,
+  `target\post_quit_queue_state_render.txt`,
+  `target\post_quit_queue_state_milestones.txt`, and
+  `target\post_quit_queue_state_probe.ppm`; it stopped at `pc=0x00339da0`
+  after 10 s with stable file/RSS counters (`host_open=7`,
+  `host_read=4221/495853B`, `heap_live=5948/2767663B`), no render milestones,
+  and an all-zero framebuffer body. This is modal-loop/message-queue fidelity,
+  not visible UI progress.
+- Raw `GetMessageWNoWait` (ordinal 863) is now wired to the GWE queue instead
+  of falling through generic ordinal handling. The CE GWE API set exposes it
+  beside `GetMessageW` with the same `MSG*, HWND, min, max` signature but no
+  blocking wait, so v3 now uses the same nonblocking filtered retrieval,
+  including posted-message removal and queue-owned `WM_QUIT` synthesis. Focused
+  coverage: `coredll_raw_get_message_no_wait_uses_gwe_queue_without_blocking`,
+  the full raw GWE suite, and full
+  `cargo test --features unicorn,trace,win32-desktop`. A bounded mounted
+  host/tap probe wrote `target\get_message_nowait_summary.txt`,
+  `target\get_message_nowait_files.txt`,
+  `target\get_message_nowait_render.txt`,
+  `target\get_message_nowait_milestones.txt`, and
+  `target\get_message_nowait_probe.ppm`; it stopped at `pc=0x00339d88` after
+  10 s with stable file/RSS counters (`host_open=7`,
+  `host_read=4221/499832B`, `heap_live=5948/2767663B`), no render milestones,
+  and an all-zero framebuffer body. This is another message-pump fidelity
+  slice, not visible UI progress.
+- Raw `GetMessagePos` and `GetMessageQueueReadyTimeStamp` are now backed by
+  GWE message metadata instead of timer-only or zero-ish syscall stubs. This
+  follows CE `cmsgque.h` fields on `PostedMsgQueueEntry_t` (`time` and
+  `MousePosAtPost`) plus the queue `m_ReadyTimeStamp`: posted mouse messages
+  preserve their screen mouse position separately from client-coordinate
+  `lParam`, remote tap injection supplies that screen position, message
+  retrieval records the last message position for the receiving thread, and
+  ready timestamps update when posted, sent, or quit-state work makes a queue
+  ready. Focused coverage:
+  `coredll_raw_message_pos_and_ready_timestamp_follow_pulled_queue_entry`, the
+  full raw GWE suite, and full
+  `cargo test --features unicorn,trace,win32-desktop`. A bounded mounted
+  host/tap probe wrote `target\message_metadata_summary.txt`,
+  `target\message_metadata_files.txt`,
+  `target\message_metadata_render.txt`,
+  `target\message_metadata_milestones.txt`, and
+  `target\message_metadata_probe.ppm`; it stopped at `pc=0x00895bfc` after
+  10 s with stable counters (`host_open=9`,
+  `host_read=4225/486559B`, `heap_live=5621/2459146B`) and reached
+  `mapinfo.bin`/`iNaviData` file activity. Render milestones were still none
+  and the framebuffer body had only one nonzero byte, so this is queue
+  metadata fidelity, not visible UI progress.
+- Raw `SetDlgItemInt` and `GetDlgItemInt` are now routed through the dialog
+  child-window text model instead of generic ordinal fallback. This follows the
+  CE dialog API surface in `GWE\INC\dlgmgr.h` and `gweapiset1.hpp`: dialog item
+  lookup resolves the child by control ID, `SetDlgItemInt` stores signed or
+  unsigned decimal text on that child, and `GetDlgItemInt` parses the child
+  text with the caller's signed/unsigned mode and writes the optional success
+  flag. Focused coverage:
+  `coredll_raw_dialog_item_int_uses_child_window_text_and_ok_flag`, the full
+  raw GWE suite, and full
+  `cargo test --features unicorn,trace,win32-desktop`. A bounded mounted
+  host/tap probe wrote `target\dialog_int_summary.txt`,
+  `target\dialog_int_files.txt`, `target\dialog_int_render.txt`,
+  `target\dialog_int_milestones.txt`, and `target\dialog_int_probe.ppm`; it
+  stopped at `pc=0x00b4bc44` after 10 s with stable counters
+  (`host_open=7`, `host_read=4221/495853B`,
+  `heap_live=5948/2767663B`), reached RSImage/DIB resource work, but had no
+  render milestones and an all-zero framebuffer body. This is dialog/control
+  surface fidelity, not visible UI progress.
+- Raw `WindowFromPoint` and `ChildWindowFromPoint` now reach the GWE hit-test
+  model instead of generic ordinal fallback. This follows the CE window-manager
+  API surface in `winuser.h`, `gweapiset1.hpp`, and `window.hpp`: by-value
+  `POINT` arguments are decoded at the raw syscall boundary, top-level
+  hit-testing walks visible/enabled windows for the caller's thread, and
+  `ChildWindowFromPoint` converts parent-client coordinates through the
+  existing client/screen mapping before returning the deepest visible child or
+  the parent when no child contains the point. Focused coverage:
+  `coredll_raw_window_from_point_hits_visible_thread_windows`, the full raw
+  GWE suite, and full
+  `cargo test --features unicorn,trace,win32-desktop`. A bounded mounted
+  host/tap probe wrote `target\window_from_point_summary.txt`,
+  `target\window_from_point_files.txt`,
+  `target\window_from_point_render.txt`,
+  `target\window_from_point_milestones.txt`, and
+  `target\window_from_point_probe.ppm`; it stopped at `pc=0x6002278c` after
+  10 s with stable counters (`host_open=9`,
+  `host_read=4225/486559B`, `heap_live=5624/2461398B`), reached later
+  map/device file activity, but had no render milestones and only one nonzero
+  framebuffer byte. This is input/hit-test fidelity, not visible UI progress.
 - Raw/kernel `DestroyWindow` now routes through the kernel window lifecycle
   instead of deleting GWE HWND state directly. Virtual windows carry a CE
   `CWindow::fSentWmDestroy`-style bit, raw/kernel destroy sends `WM_DESTROY`
@@ -1239,6 +1357,94 @@
   `host_file_read_bytes=3787819`, `memory_backed_open_count=2`, and
   `max_read_request=685080`, confirming the remaining startup delay is no
   longer caused by multi-hundred-MB file preloading.
+- Added the next CE-backed GWE/dialog slices from the CE6 dialog manager and
+  SDK headers. Raw `GetDialogBaseUnits` now returns the project-wide dialog
+  unit base and raw `MapDialogRect` maps guest `RECT`s through the CE DLU
+  formulas; raw `GetNextDlgTabItem` and `GetNextDlgGroupItem` now walk real
+  dialog children, visibility/enabled state, `WS_TABSTOP`, and `WS_GROUP`
+  group boundaries instead of falling through the generic ordinal path. The
+  focused raw GWE tests cover dialog-unit conversion plus tab/group order,
+  disabled controls, and previous/next cycling.
+- Added an indexed-DIB fidelity slice for CE GDI color tables. `BitmapObject`
+  now stores RGBQUAD color tables, raw `SetDIBColorTable`/`GetDIBColorTable`
+  read and write the selected bitmap table through guest memory, and the 8 bpp
+  blit path resolves palette indices before writing RGB565 framebuffer pixels.
+  The focused test creates an 8 bpp top-down DIBSection, installs red/green
+  RGBQUAD entries, round-trips the table, and verifies the resulting `BitBlt`
+  pixels. The follow-up direct-DIB slice now parses `BITMAPINFO` color tables
+  for 1/4/8 bpp `DIB_RGB_COLORS` sources, so `StretchDIBits` and
+  `SetDIBitsToDevice` can render indexed source pixels without requiring an
+  explicit selected-bitmap `SetDIBColorTable` call. The raw GWE suite now has
+  41 passing tests.
+- Latest mounted iNavi host/tap validation after the dialog and DIB color-table
+  slices wrote `target\long30_*` artifacts. The 30 s run stopped at
+  `pc=0x003446ec` with memory still stable (`heap_live=7297/21843020B`),
+  file I/O bounded (`host_open=156`, `host_read=25097/1921203B`,
+  `memory_backed_open_count=2`, `max_read=497178`), and a sparse nonzero
+  framebuffer body (`target\long30_probe.ppm`: 301 nonzero bytes). The render
+  trace still reports no named render milestones, so this is real framebuffer
+  movement from the guest path but not useful UI completion.
+- Mounted validation after the embedded-BITMAPINFO indexed-DIB slice wrote
+  `target\bitmapinfo_palette_*` artifacts. The 30 s host/tap run stopped at
+  `pc=0x00b5019c`, stayed memory-stable (`heap_live=7192/21798813B`,
+  `host_open=156`, `host_read=25079/1926075B`, `mem_open=2`,
+  `max_read=497178`), and produced the same sparse guest-GDI red line:
+  301 nonzero pixels from `(0,160)` through `(300,160)` in
+  `target\bitmapinfo_palette_probe.ppm`. The render trace still says
+  `inavi render milestones: none`, so the next blocker is later lifecycle/
+  blit/surface progress, not bulk file I/O or the indexed color-table path.
+- Rebuilt the debug executable with `CreateDIBSection` milestone details that
+  include parsed DIB color-table entry counts, then reran the mounted 30 s
+  host/tap probe (`target\dib_colors_fresh_*`). The app's real RSImage
+  DIBSections now show indexed palette ingestion on the mounted path:
+  800-wide 8 bpp DIBs report `colors=256`, and later 100x100/100x135 8 bpp
+  resources report populated tables such as `colors=199`, `colors=156`,
+  `colors=223`, `colors=236`, and `colors=249`. The framebuffer remains the
+  same 301-pixel red line and the render trace still has no named render
+  milestone, so the color-table port is active but not the remaining UI gate.
+- Added the first CE-backed focus/activation window lifecycle slice. GWE now
+  tracks an explicit active window separately from keyboard focus, clears it on
+  destroy, and raw `SetFocus`, `SetActiveWindow`, `SetForegroundWindow`,
+  activating `ShowWindow` commands, and `SetWindowPos` without
+  `SWP_NOACTIVATE` route through kernel lifecycle helpers that queue
+  `WM_ACTIVATE`, `WM_SETFOCUS`, and `WM_KILLFOCUS` for guest/MFC dispatch.
+  `ShowWindow(SW_SHOWNOACTIVATE)`, `SW_SHOWMINNOACTIVE`, and `SW_SHOWNA`
+  preserve no-activate behavior at the raw ordinal boundary. Focused coverage
+  `coredll_raw_focus_and_activation_queue_ce_messages` passes, and the raw GWE
+  suite now has 42 passing tests. Mounted validation wrote
+  `target\focus_activation_*`: the 30 s host/tap run stayed memory-stable
+  (`heap_live=7295/21831892B`, `host_read=24819/1924419B`) and kept the same
+  301-pixel sparse red framebuffer line with no named render milestone. This
+  is real window-subsystem fidelity, not complete UI output.
+- Added the CE-backed `EnableWindow` lifecycle slice. Raw `EnableWindow` now
+  routes through `CeKernel::enable_window`, keeps the CE previous-enabled
+  return contract, mutates only live HWND state, posts `WM_CANCELMODE` before
+  disabling, and posts `WM_ENABLE` on real enabled-state transitions while
+  avoiding duplicate messages when the state is unchanged. Focused coverage
+  `coredll_raw_enable_window_queues_ce_enable_messages` passes, the raw GWE
+  suite now has 43 passing tests, and full
+  `cargo test --features unicorn,trace,win32-desktop` passes. Mounted
+  validation wrote `target\enable_window_*`: the 30 s host/tap run stayed
+  memory-stable (`heap_live=7294/21830764B`,
+  `host_read=24620/1918582B`) and preserved the same 301-pixel sparse red
+  framebuffer line with no named render milestone. This is another generic
+  window-lifecycle fidelity slice, not useful UI output yet.
+- Added the raw `BringWindowToTop` z-order/activation slice from CE SDK/GWE API
+  evidence. Raw ordinal 275 now routes through `CeKernel::bring_window_to_top`,
+  reuses the existing HWND z-order engine as a `HWND_TOP`/no-move/no-size
+  transition, activates the top-level target through the kernel lifecycle
+  helper, and rejects invalid HWNDs. Focused coverage
+  `coredll_raw_bring_window_to_top_updates_z_order_and_activation` passes, the
+  raw GWE suite now has 44 passing tests, and full
+  `cargo test --features unicorn,trace,win32-desktop` passes. Mounted
+  validation wrote `target\bring_window_top_*`: the 30 s host/tap run stayed
+  memory-stable (`heap_live=7293/21820764B`,
+  `host_read=24620/1922561B`) and preserved the same 301-pixel sparse red
+  framebuffer line with no named render milestone. A follow-up mounted run in
+  virtual desktop mode wrote `target\virtual_after_bring_window_top_*` without
+  showing the host presenter window; it stopped at `pc=0x00343750` with
+  `heap_live=7200/21843325B`, `host_read=26122/1952147B`, the same 301-pixel
+  red line, and still no named render milestone.
 
 ## False Leads
 
