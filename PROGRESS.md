@@ -934,18 +934,23 @@
   transitions enqueue those waiters when a sent message completes normally,
   times out, or is receiver-terminated by target HWND destruction. Focused
   coverage: `scheduler_queues_send_reply_waiters_by_send_id` and
-  `send_message_transitions_queue_scheduler_reply_wait_candidates`. The saved
-  sender MIPS context still lives in the Unicorn send bridge; moving that
-  payload into scheduler-owned blocked thread state remains open.
+  `send_message_transitions_queue_scheduler_reply_wait_candidates`. Unicorn
+  same-process cross-thread sends now also park the saved sender MIPS context
+  in the shared `BlockedWaitThread` list with `BlockedWaitKind::SendMessage`;
+  WNDPROC returns and generic scheduler wake/resume both restore the sender
+  from that blocked record and remove the scheduler waiter. Focused coverage:
+  `emulator::unicorn::unicorn_tests::send_message_callout_enters_cross_thread_receiver_context`.
+  Reentrant cross-thread scheduling and longer parked-send edge cases remain
+  open.
 - Unicorn raw `SendMessageW`/`SendMessageTimeoutW` now has the first real
   cross-thread receiver-context guest WNDPROC path. Same-process sends to a
   guest WNDPROC create a GWE sent-message transaction, activate it on the
-  receiver thread, save the sender MIPS registers/running-thread metadata, run
-  the target WNDPROC with the receiver thread as the active CE thread, complete
-  the sent transaction with the WNDPROC result on return, write the
-  `SendMessageTimeoutW` result pointer when supplied, and restore the sender
-  context/result instead of falling back to host-side default behavior. Focused
-  coverage:
+  receiver thread, park the sender MIPS registers/running-thread metadata as a
+  scheduler-backed blocked wait, run the target WNDPROC with the receiver
+  thread as the active CE thread, complete the sent transaction with the
+  WNDPROC result on return, write the `SendMessageTimeoutW` result pointer when
+  supplied, and restore the sender context/result from the blocked wait instead
+  of falling back to host-side default behavior. Focused coverage:
   `emulator::unicorn::unicorn_tests::send_message_callout_enters_cross_thread_receiver_context`,
   `emulator::unicorn::unicorn_tests::send_message_receiver_context_requires_same_process_guest_wndproc`,
   the full raw GWE suite, and full

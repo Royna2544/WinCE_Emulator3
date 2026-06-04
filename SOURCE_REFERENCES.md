@@ -529,11 +529,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     state is ready. Unicorn raw `SendMessageW`/`SendMessageTimeoutW` now uses
     that transaction state for same-process cross-thread guest WNDPROCs: the
     receiver thread becomes the active CE thread for the guest WNDPROC callout,
-    the sender MIPS context is restored after the WNDPROC result is captured,
-    and the result flows back to the sender and optional timeout result
-    pointer. Moving the saved sender context itself into scheduler-owned
-    blocked thread state, reply wakeups, reentrant cross-thread scheduling,
-    and richer destroyed-target edge behavior remain open.
+    the sender MIPS context is parked in a scheduler-backed `SendMessage`
+    blocked wait, WNDPROC return and generic scheduler wake/resume restore that
+    blocked record after the result is captured, and the result flows back to
+    the sender and optional timeout result pointer. Reentrant cross-thread
+    scheduling, `ReplyMessage` early release, and richer destroyed-target edge
+    behavior remain open.
   - CE SDK headers define `CREATESTRUCTW` as
     `lpCreateParams`, `hInstance`, `hMenu`, `hwndParent`, `cy`, `cx`, `y`, `x`,
     `style`, `lpszName`, `lpszClass`, and `dwExStyle`, and define

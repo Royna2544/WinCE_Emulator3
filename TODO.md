@@ -216,10 +216,11 @@
     timeout expiry, and receiver-terminated completion when a target is
     destroyed. Unicorn raw `SendMessageW`/`SendMessageTimeoutW` now enters a
     same-process different-thread guest WNDPROC in the receiver context by
-    saving the sender MIPS registers/running-thread metadata, activating the
-    GWE sent transaction on the receiver, and restoring the sender with the
-    WNDPROC result after the callout returns. `GetQueueStatus` now tracks
-    CE-style current and changed queue bits, and raw
+    parking the sender MIPS registers/running-thread metadata in a scheduler
+    `SendMessage` blocked wait, activating the GWE sent transaction on the
+    receiver, and restoring the sender with the WNDPROC result after the
+    callout returns or the scheduler observes a ready send reply.
+    `GetQueueStatus` now tracks CE-style current and changed queue bits, and raw
     `MsgWaitForMultipleObjectsEx` now wakes on newly changed queue input unless
     `MWMO_INPUTAVAILABLE` requests wake-on-current queued input.
     `PostQuitMessage` now records queue-owned quit state instead of an ordinary
@@ -372,12 +373,11 @@
        nonblocking get-message API path. Raw `GetMessagePos` and
        `GetMessageQueueReadyTimeStamp` now cover the first CE
        `PostedMsgQueueEntry_t.time`/`MousePosAtPost` and queue
-       `m_ReadyTimeStamp` metadata slice. Full scheduler-owned storage of the
-       saved sender CPU context, parking/resume across longer waits, reentrant
-       cross-thread scheduling, nested modal loop unwinding, `ReplyMessage`
-       wake semantics if a real export is confirmed, richer
-       queue-source/filter precision, and complete destroyed-target behavior
-       remain open.
+       `m_ReadyTimeStamp` metadata slice. Remaining work: parking/resume
+       across longer waits, reentrant cross-thread scheduling, nested modal
+       loop unwinding, `ReplyMessage` wake semantics if a real export is
+       confirmed, richer queue-source/filter precision, and complete
+       destroyed-target behavior remain open.
     4. Window data/class/dialog/control surface: class atoms/extra bytes,
        `SetWindowLong`/`GetWindowLong`, owner thread/process queries, dialog
        procs/results, child/descendant relationship queries, child lookup,

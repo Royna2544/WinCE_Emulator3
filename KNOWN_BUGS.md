@@ -504,22 +504,22 @@
     `target\send_timeout_expiry_*` probe stopped at `pc=0x00339c3c` with no
     render milestones and an all-zero framebuffer body. Unicorn raw
     `SendMessageW`/`SendMessageTimeoutW` now has a same-process cross-thread
-    receiver-context guest WNDPROC callout that saves/restores the sender MIPS
-    context and completes the GWE sent transaction with the WNDPROC result; the
-    bounded `target\receiver_context_send_*` probe stopped at `pc=0x00b4bc24`,
-    reached real resource/DIB activity, but still had no render milestones and
-    an all-zero framebuffer body. Scheduler send-reply waiters are now keyed
-    by sent-message id and wake when the transaction completes, times out, or
-    is receiver-terminated by target HWND destruction, with compact summaries
-    exposing send-reply signal/candidate counters; saved sender CPU context is
-    still not fully scheduler-owned. The earlier short mounted `SendNotifyMessageW`
-    probe reached later
+    receiver-context guest WNDPROC callout that parks/restores the sender MIPS
+    context through a scheduler-backed `SendMessage` blocked wait and completes
+    the GWE sent transaction with the WNDPROC result; the bounded
+    `target\receiver_context_send_*` probe stopped at `pc=0x00b4bc24`, reached
+    real resource/DIB activity, but still had no render milestones and an
+    all-zero framebuffer body. Scheduler send-reply waiters are now keyed by
+    sent-message id and wake when the transaction completes, times out, or is
+    receiver-terminated by target HWND destruction, with compact summaries
+    exposing send-reply signal/candidate counters. The earlier short mounted
+    `SendNotifyMessageW` probe reached later
     `mapinfo.bin`/`UID1:` file activity, another child HWND, and `GetDC`, but
     still produced no render milestones and only one nonzero framebuffer byte.
-    The broader window/GWE subsystem still needs scheduler-owned sender
-    parking/resume across longer waits, reentrant cross-thread scheduling,
-    destroyed-target behavior, input/focus/modal fidelity, and GDI/DC
-    integration before this bug can be closed.
+    The broader window/GWE subsystem still needs sender parking/resume across
+    longer waits, reentrant cross-thread scheduling, destroyed-target behavior,
+    input/focus/modal fidelity, and GDI/DC integration before this bug can be
+    closed.
 
 - Most COREDLL ordinals are still subsystem stubs.
   - Symptom: every static COREDLL ordinal has subsystem ownership and raw dispatch
