@@ -501,6 +501,13 @@ fn ole_stub_return<M: CoredllGuestMemory>(
             raw_import_arg(args, 0),
             raw_import_arg(args, 1),
         ),
+        "clsidfromstring" => ole::clsid_from_string_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_import_arg(args, 0),
+            raw_import_arg(args, 1),
+        ),
         "cotaskmemfree" => {
             ole::co_task_mem_free_raw(kernel, raw_import_arg(args, 0));
             0

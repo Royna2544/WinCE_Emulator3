@@ -19,9 +19,9 @@ use wince_emulation_v3::{
             ORD_SECURITY_GEN_COOKIE2, ORD_SET_FILE_POINTER, ORD_SPRINTF, ORD_SRAND, ORD_STRCPY,
             ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W, ORD_STRING_CCH_LENGTH_W, ORD_STRTOK,
             ORD_STRTOUL, ORD_SWPRINTF, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSWPRINTF,
-            ORD_WCSDUP, ORD_WCSICMP, ORD_WCSNCMP, ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSRCHR,
-            ORD_WCSSTR, ORD_WFOPEN, ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W,
-            ORD_WTOL, ORD_WVSPRINTF_W,
+            ORD_WCSCHR, ORD_WCSCPY, ORD_WCSDUP, ORD_WCSICMP, ORD_WCSNCMP, ORD_WCSNCPY,
+            ORD_WCSNICMP, ORD_WCSRCHR, ORD_WCSSTR, ORD_WFOPEN, ORD_WIDE_CHAR_TO_MULTI_BYTE,
+            ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         kernel::CeKernel,
@@ -743,6 +743,76 @@ fn coredll_raw_string_cch_length_w_counts_bounded_wide_chars() -> Result<()> {
             value: CoredllValue::U32(0x8007_0057),
             ..
         }
+    ));
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_wcscpy_copies_wide_string_and_returns_dest() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let dest = 0x1_0000;
+    let src = 0x1_0100;
+    memory.map_halfwords(dest, 32);
+    memory.map_halfwords(src, 32);
+    memory.write_wide_z(src, r"\Windows\Desktop");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WCSCPY,
+            [dest, src],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } if ptr == dest
+    ));
+    assert_eq!(memory.read_wide_z(dest, 32), r"\Windows\Desktop");
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_wcschr_finds_wide_character() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let text = 0x1_0000;
+    memory.map_halfwords(text, 32);
+    memory.write_wide_z(text, r"\Windows\Desktop");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WCSCHR,
+            [text.wrapping_add(2), b'\\' as u32],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } if ptr == text.wrapping_add(16)
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WCSCHR,
+            [text, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } if ptr == text.wrapping_add(32)
     ));
     Ok(())
 }

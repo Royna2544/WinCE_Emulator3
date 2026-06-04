@@ -1695,6 +1695,13 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
+        ORD_WCSCHR => Some(CoredllValue::Handle(crt::wcschr_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
         ORD_ISWCTYPE => Some(CoredllValue::U32(iswctype_raw(
             raw_arg(args, 0),
             raw_arg(args, 1),
@@ -1748,6 +1755,13 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
             raw_arg(args, 2),
+        ))),
+        ORD_WCSCPY => Some(CoredllValue::Handle(crt::wcscpy_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
         ))),
         ORD_WCSNCPY => Some(CoredllValue::Handle(crt::wcsncpy_raw(
             kernel,

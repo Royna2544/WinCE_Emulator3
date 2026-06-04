@@ -8,6 +8,7 @@ use crate::ce::{
 pub const S_OK: u32 = 0;
 pub const E_INVALIDARG: u32 = 0x8007_0057;
 pub const E_OUTOFMEMORY: u32 = 0x8007_000e;
+pub const CO_E_CLASSSTRING: u32 = 0x8004_01f3;
 
 pub fn string_from_clsid_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
@@ -64,6 +65,41 @@ pub fn co_task_mem_free_raw(kernel: &mut CeKernel, ptr: u32) {
     }
 }
 
+pub fn clsid_from_string_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    string_ptr: u32,
+    clsid_out: u32,
+) -> u32 {
+    if string_ptr == 0 || clsid_out == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return E_INVALIDARG;
+    }
+    let Some(text) = read_wide_z(memory, string_ptr, 64) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return E_INVALIDARG;
+    };
+    let Some(clsid) = parse_guid_string(&text) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return CO_E_CLASSSTRING;
+    };
+    if memory.write_bytes(clsid_out, &clsid).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return E_INVALIDARG;
+    }
+    kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+    S_OK
+}
+
 fn format_guid(clsid: &[u8; 16]) -> String {
     let data1 = u32::from_le_bytes(clsid[0..4].try_into().unwrap());
     let data2 = u16::from_le_bytes(clsid[4..6].try_into().unwrap());
@@ -72,6 +108,43 @@ fn format_guid(clsid: &[u8; 16]) -> String {
         "{{{data1:08x}-{data2:04x}-{data3:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}}}",
         clsid[8], clsid[9], clsid[10], clsid[11], clsid[12], clsid[13], clsid[14], clsid[15]
     )
+}
+
+fn parse_guid_string(text: &str) -> Option<[u8; 16]> {
+    let trimmed = text.trim();
+    let body = trimmed.strip_prefix('{')?.strip_suffix('}')?;
+    let mut parts = body.split('-');
+    let data1 = u32::from_str_radix(parts.next()?, 16).ok()?;
+    let data2 = u16::from_str_radix(parts.next()?, 16).ok()?;
+    let data3 = u16::from_str_radix(parts.next()?, 16).ok()?;
+    let data4a = parts.next()?;
+    let data4b = parts.next()?;
+    if parts.next().is_some() || body.len() != 36 || data4a.len() != 4 || data4b.len() != 12 {
+        return None;
+    }
+    let mut out = [0; 16];
+    out[0..4].copy_from_slice(&data1.to_le_bytes());
+    out[4..6].copy_from_slice(&data2.to_le_bytes());
+    out[6..8].copy_from_slice(&data3.to_le_bytes());
+    for index in 0..2 {
+        out[8 + index] = u8::from_str_radix(&data4a[index * 2..index * 2 + 2], 16).ok()?;
+    }
+    for index in 0..6 {
+        out[10 + index] = u8::from_str_radix(&data4b[index * 2..index * 2 + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
+fn read_wide_z<M: CoredllGuestMemory>(memory: &M, ptr: u32, max_chars: u32) -> Option<String> {
+    let mut units = Vec::new();
+    for index in 0..max_chars {
+        let unit = memory.read_u16(ptr.wrapping_add(index * 2)).ok()?;
+        if unit == 0 {
+            return String::from_utf16(&units).ok();
+        }
+        units.push(unit);
+    }
+    None
 }
 
 fn wide_nul_bytes(value: &str) -> Vec<u8> {
@@ -196,5 +269,29 @@ mod tests {
             E_INVALIDARG
         );
         assert_eq!(kernel.threads.get_last_error(1), ERROR_INVALID_PARAMETER);
+    }
+
+    #[test]
+    fn clsid_from_string_parses_wide_guid_into_ce_layout() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut memory = TestMemory::default();
+        let text = "{01234567-89ab-cdef-0123-456789abcdef}";
+        let bytes = wide_nul_bytes(text);
+        memory.write_seed(0x1000, &bytes);
+
+        assert_eq!(
+            clsid_from_string_raw(&mut kernel, &mut memory, 1, 0x1000, 0x2000),
+            S_OK
+        );
+        let mut parsed = [0; 16];
+        memory.read_bytes(0x2000, &mut parsed).unwrap();
+        assert_eq!(
+            parsed,
+            [
+                0x67, 0x45, 0x23, 0x01, 0xab, 0x89, 0xef, 0xcd, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
+                0xcd, 0xef,
+            ]
+        );
     }
 }

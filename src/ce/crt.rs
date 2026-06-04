@@ -70,6 +70,43 @@ pub(crate) fn wcsstr_raw<M: CoredllGuestMemory>(memory: &M, haystack: u32, needl
     0
 }
 
+pub(crate) fn wcschr_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    string: u32,
+    needle: u32,
+) -> u32 {
+    if string == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let needle = needle as u16;
+    for index in 0..0x8000u32 {
+        let addr = string.wrapping_add(index * 2);
+        let Ok(unit) = memory.read_u16(addr) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        if unit == needle {
+            kernel.threads.set_last_error(thread_id, 0);
+            return addr;
+        }
+        if unit == 0 {
+            kernel.threads.set_last_error(thread_id, 0);
+            return 0;
+        }
+    }
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+    0
+}
+
 pub(crate) fn wcsdup_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -282,6 +319,53 @@ pub(crate) fn wcsncpy_raw<M: CoredllGuestMemory>(
             return 0;
         }
     }
+    dest
+}
+
+pub(crate) fn wcscpy_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest: u32,
+    src: u32,
+) -> u32 {
+    if dest == 0 || src == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let mut units = Vec::new();
+    for index in 0..0x8000u32 {
+        let Ok(unit) = memory.read_u16(src.wrapping_add(index * 2)) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        units.push(unit);
+        if unit == 0 {
+            break;
+        }
+    }
+    if !units.ends_with(&[0]) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    for (index, unit) in units.into_iter().enumerate() {
+        if !write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            dest.wrapping_add((index as u32) * 2),
+            unit,
+        ) {
+            return 0;
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
     dest
 }
 
