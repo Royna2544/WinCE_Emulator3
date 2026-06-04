@@ -11,8 +11,9 @@ use crate::{
         gwe::{
             Gwe, GweStats, HWND_BROADCAST, HWND_TOP, Message, MessagePointerPayload, PeekFlags,
             Point, Rect, SMF_NULL, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-            WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE, WM_ENABLE, WM_KILLFOCUS, WM_MOVE,
-            WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WM_WINDOWPOSCHANGED, WindowPos,
+            SWP_NOZORDER, SWP_SHOWWINDOW, WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE,
+            WM_ENABLE, WM_KILLFOCUS, WM_MOVE, WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE,
+            WM_WINDOWPOSCHANGED, WindowPos,
         },
         memory::{MemorySystem, PROCESS_HEAP_HANDLE},
         object::{
@@ -1609,6 +1610,7 @@ impl CeKernel {
             self.gwe.get_window_rect(hwnd),
             HWND_TOP,
             0,
+            false,
         );
         hwnd
     }
@@ -1698,6 +1700,7 @@ impl CeKernel {
                 after,
                 insert_after.unwrap_or(HWND_TOP),
                 flags,
+                flags & (SWP_SHOWWINDOW | SWP_HIDEWINDOW) != 0 || flags & SWP_NOZORDER == 0,
             );
             if flags & (SWP_NOACTIVATE | SWP_HIDEWINDOW) == 0 {
                 let target = self.top_level_window(hwnd);
@@ -1757,7 +1760,14 @@ impl CeKernel {
         let before = self.gwe.get_window_rect(hwnd);
         let moved = self.gwe.move_window(hwnd, x, y, width, height, repaint);
         if moved {
-            self.post_window_rect_messages(hwnd, before, self.gwe.get_window_rect(hwnd), 0, 0);
+            self.post_window_rect_messages(
+                hwnd,
+                before,
+                self.gwe.get_window_rect(hwnd),
+                0,
+                0,
+                true,
+            );
         }
         moved
     }
@@ -2294,19 +2304,19 @@ impl CeKernel {
         after: Option<Rect>,
         insert_after: u32,
         flags: u32,
+        force_window_pos_changed: bool,
     ) {
         let (Some(before), Some(after)) = (before, after) else {
             return;
         };
-        if before == after {
-            return;
+        if before != after || force_window_pos_changed {
+            let lparam = self
+                .gwe
+                .window_pos_for_rect(hwnd, after, insert_after, flags)
+                .map(|payload| self.queue_window_pos_payload(payload))
+                .unwrap_or(0);
+            self.post_window_message(hwnd, WM_WINDOWPOSCHANGED, 0, lparam);
         }
-        let lparam = self
-            .gwe
-            .window_pos_for_rect(hwnd, after, insert_after, flags)
-            .map(|payload| self.queue_window_pos_payload(payload))
-            .unwrap_or(0);
-        self.post_window_message(hwnd, WM_WINDOWPOSCHANGED, 0, lparam);
         if before.left != after.left || before.top != after.top {
             self.post_window_message(hwnd, WM_MOVE, 0, make_lparam_i16(after.left, after.top));
         }

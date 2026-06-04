@@ -9,6 +9,25 @@
 
 ## Confirmed
 
+- Raw/kernel `SetWindowPos` now queues `WM_WINDOWPOSCHANGED` with a
+  `WINDOWPOS` payload for CE-visible metadata changes even when the rectangle
+  is unchanged. Show-only, hide-only, and z-order-only calls no longer vanish
+  just because `x/y/cx/cy` stayed the same; `WM_MOVE`/`WM_SIZE` are still only
+  queued for real geometry deltas. Focused coverage:
+  `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe
+  coredll_raw_set_window_pos_show_hide_queues_windowpos_without_rect_change`,
+  the full raw GWE binary, `cargo check --features unicorn,trace,win32-desktop`,
+  `cargo build --features unicorn,trace,win32-desktop`, and full
+  `cargo test --features unicorn,trace,win32-desktop` pass with the known
+  non-fatal Windows incremental-finalize warning. A mounted 150 s virtual/tap
+  probe wrote `target\setwindowpos_showhide_virtual_150s_*`; it now shows the
+  extra `WM_WINDOWPOSCHANGED` traffic in the window/message frontier, but the
+  app still stops at `COREDLL.dll@861 blocked_get_message`, remains
+  memory/file-I/O stable (`heap_live=13697/13300954B`,
+  `virtual_live=3/196608B`, `host_open=665`,
+  `host_read=80198/4056903B`, `mem_open=3`, `max_read=685080`), leaves HWND
+  `0x0002006c` hidden with a pending 800x54 update, and reports no iNavi render
+  milestones or later display-HDC blit.
 - Direct `UpdateWindow` now observes effective ancestor visibility instead of
   only the target HWND's direct visible bit. This keeps CE/MFC paint forcing
   generic: a child under a hidden parent keeps its pending update region for a

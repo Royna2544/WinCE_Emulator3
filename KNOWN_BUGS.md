@@ -120,6 +120,15 @@
     blit or iNavi render milestone appears. Forcing hidden-child paint is no
     longer a valid suspect; investigate why the app never shows or presents
     that composed surface through normal GWE/GDI state.
+    `SetWindowPos` metadata follow-up:
+    `target\setwindowpos_showhide_virtual_150s_*` confirms show/hide-only and
+    z-order-only `SetWindowPos` calls now queue `WM_WINDOWPOSCHANGED` with a
+    `WINDOWPOS` payload even when the rectangle is unchanged. The run has more
+    window-position message traffic, but it still stops at
+    `COREDLL.dll@861 blocked_get_message` with the same stable I/O counters,
+    the same hidden `0x0002006c` 800x54 pending update, and no later display
+    present. Continue with remaining GWE window-position ordering gaps such as
+    MFC show/idle sequencing or the missing screen-HDC blit path.
     Historical evidence: the mounted virtual run with dumped runtime DLLs
     and real sibling app DLLs wrote `target\inavi_trampoline_virtual_*`. It
     preloaded `AuthLibrary.dll`, `TpSysAuth.dll`, `mMbcAuth.dll`,

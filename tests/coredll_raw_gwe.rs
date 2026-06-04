@@ -51,11 +51,12 @@ use wince_emulation_v3::{
             GW_CHILD, GW_HWNDFIRST, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER, GWL_USERDATA,
             HWND_BROADCAST, MSGSRC_SOFTWARE_POST, MSGSRC_SOFTWARE_SEND, Message, Point, QS_PAINT,
             QS_POSTMESSAGE, QS_SENDMESSAGE, Rect, SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN,
-            SWP_HIDEWINDOW, WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE, WM_CLOSE,
-            WM_DESTROY, WM_ENABLE, WM_ERASEBKGND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KILLFOCUS,
-            WM_LBUTTONDOWN, WM_MOVE, WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETFOCUS, WM_SETTEXT,
-            WM_SHOWWINDOW, WM_SIZE, WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_CHILD, WS_DISABLED,
-            WS_GROUP, WS_TABSTOP, WS_VISIBLE,
+            SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+            WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE, WM_CLOSE, WM_DESTROY, WM_ENABLE,
+            WM_ERASEBKGND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_MOVE,
+            WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETFOCUS, WM_SETTEXT, WM_SHOWWINDOW, WM_SIZE,
+            WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_CHILD, WS_DISABLED, WS_GROUP, WS_TABSTOP,
+            WS_VISIBLE,
         },
         kernel::CeKernel,
         memory::PROCESS_HEAP_HANDLE,
@@ -4966,6 +4967,123 @@ fn coredll_raw_windowposchanged_carries_guest_windowpos_payload() -> Result<()> 
 }
 
 #[test]
+fn coredll_raw_set_window_pos_show_hide_queues_windowpos_without_rect_change() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 3;
+    let msg_ptr = 0x7200;
+    memory.map_words(msg_ptr, 7);
+
+    let hwnd = kernel.create_window_ex_w(thread_id, "SHOWPOS", "", None, 0, 0, 0);
+    let show_flags = SWP_SHOWWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_WINDOW_POS,
+            [hwnd, 0, 0, 0, 0, 0, show_flags],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        hwnd,
+        WM_SHOWWINDOW,
+        1,
+        0,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_MESSAGE_W,
+            [msg_ptr, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(msg_ptr)?, hwnd);
+    assert_eq!(memory.read_u32(msg_ptr + 4)?, WM_WINDOWPOSCHANGED);
+    let show_pos_ptr = memory.read_u32(msg_ptr + 12)?;
+    assert_ne!(show_pos_ptr, 0);
+    assert_eq!(memory.read_u32(show_pos_ptr)?, hwnd);
+    assert_eq!(memory.read_u32(show_pos_ptr + 24)?, show_flags);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DISPATCH_MESSAGE_W,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+
+    let hide_flags = SWP_HIDEWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_WINDOW_POS,
+            [hwnd, 0, 0, 0, 0, 0, hide_flags],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        hwnd,
+        WM_SHOWWINDOW,
+        0,
+        0,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_MESSAGE_W,
+            [msg_ptr, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(msg_ptr)?, hwnd);
+    assert_eq!(memory.read_u32(msg_ptr + 4)?, WM_WINDOWPOSCHANGED);
+    let hide_pos_ptr = memory.read_u32(msg_ptr + 12)?;
+    assert_ne!(hide_pos_ptr, 0);
+    assert_eq!(memory.read_u32(hide_pos_ptr)?, hwnd);
+    assert_eq!(memory.read_u32(hide_pos_ptr + 24)?, hide_flags);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_focus_and_activation_queue_ce_messages() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
@@ -7498,6 +7616,17 @@ fn coredll_raw_disable_or_hide_clears_focus_and_activation() -> Result<()> {
         msg_ptr,
         child2,
         WM_SHOWWINDOW,
+        0,
+        0,
+    );
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        child2,
+        WM_WINDOWPOSCHANGED,
         0,
         0,
     );

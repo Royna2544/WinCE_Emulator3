@@ -450,6 +450,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     registered payload when `DispatchMessageW`/guest WNDPROC return consumes
     it. CE MFC compiles out `WM_WINDOWPOSCHANGING` under `_WIN32_WCE`, so this
     slice intentionally covers the changed notification only.
+  - CE `WINDOWPOS` carries show/hide and z-order metadata in `flags` even when
+    the rectangle is unchanged. Rust raw/kernel `SetWindowPos` now keeps
+    `WM_WINDOWPOSCHANGED` plus the pointer payload for show-only, hide-only,
+    and z-order-only changes, while still queuing `WM_MOVE`/`WM_SIZE` only for
+    actual geometry deltas. Mounted evidence
+    `target\setwindowpos_showhide_virtual_150s_*` confirms the additional
+    message traffic without adding app-specific painting or state forcing.
   - `window.hpp` and `gweapiset1.hpp` expose `BringWindowToTop_I`, and CE SDK
     `winuser.h` exposes `BringWindowToTop(HWND)` beside `GetWindow` and the
     `HWND_TOP`/`HWND_BOTTOM`/`HWND_TOPMOST` constants. Rust raw ordinal 275 now
