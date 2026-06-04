@@ -13069,6 +13069,8 @@ pub const ORD_SET_MENU_ITEM_INFO_W: u32 = 853;
 pub const ORD_GET_MENU_ITEM_INFO_W: u32 = 854;
 pub const ORD_GET_SUB_MENU: u32 = 855;
 pub const ORD_DRAW_MENU_BAR: u32 = 856;
+pub const ORD_SET_MENU: u32 = 2725;
+pub const ORD_GET_MENU: u32 = 2726;
 pub const ORD_MESSAGE_BEEP: u32 = 857;
 pub const ORD_MESSAGE_BOX_W: u32 = 858;
 pub const ORD_DISPATCH_MESSAGE_W: u32 = 859;
@@ -13489,7 +13491,7 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef; 26] = &[
     },
 ];
 
-pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 4] = &[
+pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 6] = &[
     CoredllOrdinalDef {
         name: "GetSystemTimeAsFileTime",
         ordinal: ORD_GET_SYSTEM_TIME_AS_FILE_TIME,
@@ -13505,6 +13507,14 @@ pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 4] = &[
     CoredllOrdinalDef {
         name: "RegisterGesture",
         ordinal: ORD_REGISTER_GESTURE,
+    },
+    CoredllOrdinalDef {
+        name: "SetMenu",
+        ordinal: ORD_SET_MENU,
+    },
+    CoredllOrdinalDef {
+        name: "GetMenu",
+        ordinal: ORD_GET_MENU,
     },
 ];
 

@@ -323,6 +323,7 @@ pub struct Window {
     pub parent: Option<u32>,
     pub owner: Option<u32>,
     pub id: u32,
+    pub menu: Option<u32>,
     pub style: u32,
     pub ex_style: u32,
     pub wndproc: u32,
@@ -423,6 +424,7 @@ impl Default for Gwe {
                 parent: None,
                 owner: None,
                 id: 0,
+                menu: None,
                 style: 0,
                 ex_style: 0,
                 wndproc: 0,
@@ -588,6 +590,7 @@ impl Gwe {
                 parent,
                 owner,
                 id,
+                menu: None,
                 style,
                 ex_style,
                 wndproc,
@@ -972,6 +975,26 @@ impl Gwe {
     pub fn get_dlg_ctrl_id(&self, hwnd: u32) -> Option<u32> {
         let window = self.windows.get(&hwnd)?;
         (!window.destroyed).then_some(window.id)
+    }
+
+    pub fn get_menu(&self, hwnd: u32) -> Option<u32> {
+        let window = self.windows.get(&hwnd)?;
+        (!window.destroyed).then_some(window.menu.unwrap_or(0))
+    }
+
+    pub fn set_menu(&mut self, hwnd: u32, menu: u32) -> bool {
+        let Some(window) = self.windows.get_mut(&hwnd) else {
+            return false;
+        };
+        if window.destroyed {
+            return false;
+        }
+        window.menu = (menu != 0).then_some(menu);
+        true
+    }
+
+    pub fn draw_menu_bar(&self, hwnd: u32) -> bool {
+        self.is_window(hwnd)
     }
 
     pub fn end_dialog(&mut self, hwnd: u32, result: u32) -> bool {

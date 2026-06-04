@@ -9,6 +9,33 @@
 
 ## Confirmed
 
+- Raw HWND menu association now covers the first CE/MFC menu-state slice.
+  Virtual GWE windows store an optional `HMENU`; raw `CreateWindowExW` treats
+  the `hMenu` argument as a top-level window menu when `WS_CHILD` is absent and
+  as the child/control id when `WS_CHILD` is present. Raw `SetMenu`,
+  `GetMenu`, and `DrawMenuBar` now dispatch through COREDLL to that HWND state
+  with invalid-HWND last-error handling; `DrawMenuBar` validates only for now
+  and does not fake menu painting. Source anchors are CE SDK `winuser.h`
+  `CREATESTRUCTW.hMenu`/`CreateWindowExW`/`DrawMenuBar` and CE MFC
+  `wincore.cpp::PreCreateWindowEx`/`PostCreateWindowEx`, which strips
+  standalone menus during create and reattaches them with `SetMenu`. Focused
+  coverage: `coredll_raw_window_menu_state_preserves_child_control_ids`; the
+  raw GWE suite passes (`53 passed`), `cargo check --features
+  unicorn,trace,win32-desktop` passes, and
+  `cargo test --features unicorn,trace,win32-desktop` passes (`94` unit tests
+  plus integration suites). A mounted virtual-desktop iNavi probe using
+  `D:\INAVI_Emulator\DUMPPLZ\Windows` wrote
+  `target\menu_attach_virtual_60s_summary.txt`,
+  `target\menu_attach_virtual_60s_render.txt`,
+  `target\menu_attach_virtual_60s_milestones.txt`,
+  `target\menu_attach_virtual_60s_files.txt`, and
+  `target\menu_attach_virtual_60s.ppm`; it stopped at the 60 s wall limit
+  (`pc=0x004d8ba8`, `ra=0x0006b8b0`) with stable counters
+  (`heap_live=6917/21255371B`, `host_open=91`,
+  `host_read=4302/1718377B`, `mem_open=2`, `max_read=497178`) and no render
+  milestones. The framebuffer still contains only 101 red pixels from
+  `(0,160)` through `(100,160)`, color `255,0,0`, so this is menu/GWE fidelity
+  progress rather than useful UI output.
 - The Unicorn `CreateWindowExW` guest-WNDPROC callout now preserves the CE/MFC
   `WM_CREATE` failure contract: a guest `WM_CREATE` return of `-1` makes the
   raw API return `NULL` and destroys the just-created virtual HWND, while a

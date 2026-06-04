@@ -166,6 +166,12 @@
     memory/file stable (`heap_live=6926/21256719B`, `host_open=91`,
     `host_read=4304/1732170B`, `mem_open=2`, `max_read=497178`), still had no
     render milestones, and still had only the same 101 red pixels from
+    `(0,160)` through `(100,160)`. The HWND menu-attachment slice wrote
+    `target\menu_attach_virtual_60s_*` using
+    `D:\INAVI_Emulator\DUMPPLZ\Windows`, stopped at `pc=0x004d8ba8`, stayed
+    memory/file stable (`heap_live=6917/21255371B`, `host_open=91`,
+    `host_read=4302/1718377B`, `mem_open=2`, `max_read=497178`), still had no
+    render milestones, and still had only the same 101 red pixels from
     `(0,160)` through `(100,160)`. This remains no-useful-UI.
   - Evidence: latest bounded run with `--features unicorn`,
     `--dll-search-dir C:\Program Files (x86)\Windows CE Tools\wce420\STANDARDSDK_420\Mfc\Lib\Mipsii`,

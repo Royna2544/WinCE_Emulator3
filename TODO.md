@@ -151,7 +151,10 @@
     `GetParent`. Raw `GetUpdateRect`/`GetUpdateRgn` now honor `bErase=TRUE` by
     sending `WM_ERASEBKGND` with the HWND paint HDC through the same window send
     path and clearing only the pending erase bit, leaving the dirty update
-    bounds for paint.
+    bounds for paint. Raw top-level `CreateWindowExW` now attaches the `hMenu`
+    argument as HWND menu state while preserving the same argument as the child
+    control id under `WS_CHILD`, and raw `SetMenu`/`GetMenu`/`DrawMenuBar` now
+    reach that virtual window menu state without menu painting shortcuts.
   - Open gaps: update regions are still represented as one bounding rectangle,
     so partial `ValidateRect`/`RedrawWindow(RDW_VALIDATE)` subtracts the
     representable remainder but keeps a conservative bounding rectangle for
@@ -186,6 +189,9 @@
        `AfxGetParentOwner` usage. Unicorn create callouts now abort
        creation on guest `WM_CREATE == -1`; unconditional `WM_NCCREATE`
        injection is a rejected false lead for this target/runtime path.
+       Top-level `hMenu` creation state and raw `SetMenu`/`GetMenu`/
+       `DrawMenuBar` now cover the first CE/MFC frame-menu attachment path
+       while child-window `hMenu` still behaves as the control id.
        Remaining lifecycle work includes exact create/z-order side effects
        such as owner/topmost rules, deeper activate/focus/enable edge cases
        such as top-level owner activation, disabled-focus transfer,
@@ -224,6 +230,9 @@
        `GetDlgItemTextW` now cover the first CE dialog item text paths, and
        `SendDlgItemMessageW` now forwards `WM_SETTEXT`, `WM_GETTEXT`, and
        `WM_GETTEXTLENGTH` through the same child-control message boundary.
+       HWND menu attachment now covers top-level `CreateWindowExW` menus plus
+       `SetMenu`/`GetMenu`/`DrawMenuBar`; deeper menu item info, popup
+       tracking, command routing, and menu painting remain open.
        `GetDialogBaseUnits`/`MapDialogRect` and
        `GetNextDlgTabItem`/`GetNextDlgGroupItem` cover the first CE-backed
        dialog layout/navigation slice. Fuller dialog default-proc,
@@ -358,7 +367,12 @@
     `WM_NCCREATE` injection probe wrote `target\nc_create_virtual_60s_*` and
     regressed to an immediate empty-queue stop (`pc=0x7fff0b60`,
     `heap_live=24/12914B`, `host_read=0/0B`), so do not count that path as
-    progress.
+    progress. The HWND menu-attachment probe wrote
+    `target\menu_attach_virtual_60s_*` using
+    `D:\INAVI_Emulator\DUMPPLZ\Windows`; it stopped at `pc=0x004d8ba8` with
+    `heap_live=6917/21255371B`, `host_open=91`,
+    `host_read=4302/1718377B`, `mem_open=2`, `max_read=497178`, no render
+    milestones, and the same 101-pixel red line.
     Treat this as fidelity evidence and a possible performance/lifecycle
     frontier, not useful UI progress.
 

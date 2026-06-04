@@ -2545,6 +2545,22 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_DLG_CTRL_ID => Some(CoredllValue::U32(
             kernel.gwe.get_dlg_ctrl_id(raw_arg(args, 0)).unwrap_or(0),
         )),
+        ORD_SET_MENU => Some(CoredllValue::Bool(set_menu_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_GET_MENU => Some(CoredllValue::Handle(get_menu_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_DRAW_MENU_BAR => Some(CoredllValue::Bool(draw_menu_bar_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_GET_NEXT_DLG_TAB_ITEM => Some(CoredllValue::Handle(get_next_dlg_tab_item_raw(
             kernel, thread_id, args,
         ))),
@@ -6990,6 +7006,16 @@ fn create_window_ex_w_raw<M: CoredllGuestMemory>(
     let style = raw_arg(args, 3);
     let parent = parent_or_owner.filter(|_| style & WS_CHILD != 0);
     let owner = parent_or_owner.filter(|_| style & WS_CHILD == 0);
+    let id = if style & WS_CHILD != 0 {
+        raw_arg(args, 9)
+    } else {
+        0
+    };
+    let menu = if style & WS_CHILD == 0 {
+        raw_arg(args, 9)
+    } else {
+        0
+    };
     tracing::debug!(
         target: "ce.gwe",
         class_name = class_name.as_str(),
@@ -7006,17 +7032,21 @@ fn create_window_ex_w_raw<M: CoredllGuestMemory>(
         create_params = format_args!("0x{:08x}", raw_arg(args, 11)),
         "CreateWindowExW"
     );
-    kernel.create_window_ex_w_with_parent_owner_and_rect(
+    let hwnd = kernel.create_window_ex_w_with_parent_owner_and_rect(
         thread_id,
         &class_name,
         &title,
         parent,
         owner,
-        raw_arg(args, 9),
+        id,
         style,
         raw_arg(args, 0),
         rect,
-    )
+    );
+    if hwnd != 0 && menu != 0 {
+        let _ = kernel.gwe.set_menu(hwnd, menu);
+    }
+    hwnd
 }
 
 fn read_guest_wide_arg<M: CoredllGuestMemory>(memory: &M, ptr: u32) -> Option<String> {
@@ -8267,6 +8297,39 @@ fn load_menu_w_raw(kernel: &mut CeKernel, thread_id: u32, module: u32, name: u32
     kernel
         .resources
         .create_menu(module, name, Some(resource_handle))
+}
+
+fn set_menu_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32, menu: u32) -> bool {
+    if !kernel.gwe.set_menu(hwnd, menu) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn get_menu_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> u32 {
+    let Some(menu) = kernel.gwe.get_menu(hwnd) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    menu
+}
+
+fn draw_menu_bar_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> bool {
+    if !kernel.gwe.draw_menu_bar(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn check_menu_item_raw(

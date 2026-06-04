@@ -221,6 +221,17 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `hWndParent` becomes the parent only for `WS_CHILD` creates, otherwise it
     becomes the owner while geometry remains screen-relative and
     `GW_OWNER` reports the owner HWND.
+  - CE SDK `winuser.h` defines `CREATESTRUCTW.hMenu`,
+    `CreateWindowExW(..., HWND hWndParent, HMENU hMenu, ...)`, and
+    `DrawMenuBar(HWND)`. CE MFC `_WIN32_WCE`
+    `wincore.cpp::PreCreateWindowEx` strips standalone menu handles from
+    `CreateWindowExW` before creation because CE does not support that path
+    directly there, then `PostCreateWindowEx` reattaches high-word menu
+    handles with `SetMenu(hWnd, nIDorHMenu)`. Rust now stores optional HWND
+    menu state, treats non-child `CreateWindowExW.hMenu` as attached menu
+    state while preserving child `hMenu` as the control id, and exposes
+    `SetMenu`/`GetMenu`/`DrawMenuBar` through raw COREDLL without drawing fake
+    menu pixels.
   - `window.hpp` declares `IsWindowVisible_I`, and `CWindow::IsVisibleEnabled_I`
     checks `WS_VISIBLE`/`WS_DISABLED` style state. Rust now keeps direct
     visible state synchronized with `WS_VISIBLE` for `ShowWindow`,
