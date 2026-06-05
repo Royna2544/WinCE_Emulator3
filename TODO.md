@@ -394,7 +394,8 @@
   - Source refs:
     `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`,
     `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\window.hpp`,
-    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\gweapiset1.hpp`, CE SDK
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\gweapiset1.hpp`,
+    `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\dlgmgr.h`, CE SDK
     `winuser.h`, and MFC `wincore.cpp`/`thrdcore.cpp`/`wingdi.cpp`.
   - v2 corroboration: v2 had owner-thread queues, pending message transfers,
     `PendingUpdateWindow`, paint bounds, and host presenter refresh paths. Use
@@ -454,7 +455,20 @@
     fallback. Raw `GetDialogBaseUnits` and `MapDialogRect` now cover CE
     dialog-unit mapping, and raw
     `GetNextDlgTabItem`/`GetNextDlgGroupItem` now walk real dialog children
-    using visible/enabled state plus `WS_TABSTOP`/`WS_GROUP` boundaries.
+    using visible/enabled state plus `WS_TABSTOP`/`WS_GROUP` boundaries. Raw
+    `IsDialogMessageW` now rejects unrelated HWNDs, dispatches dialog-owned
+    messages, consults `WM_GETDLGCODE`, moves TAB focus through the same
+    tab-order helper, routes Escape as `IDCANCEL`, and routes Return through a
+    focused pushbutton or the dialog's default pushbutton with `IDOK` fallback.
+    GWE now reports button `DLGC_DEFPUSHBUTTON`/`DLGC_UNDEFPUSHBUTTON` state
+    and answers `DM_GETDEFID`/`DM_SETDEFID` over child pushbutton styles. The
+    broader CE dialog manager remains incomplete: full `DLGC_WANT*` edge
+    cases, Shift+TAB, nested modal loops, default-button repaint/state details,
+    and full receiver-context guest dialog proc execution still need expansion
+    as fixtures/traces demand. Current fixture coverage includes passing
+    `052_modeless_dialog_isdialogmessage` and
+    `076_dialog_tab_enter_escape` runs through the ignored eVC MIPSII
+    `fixture_exes` harness.
     Raw/kernel `DestroyWindow` now records and sends `WM_DESTROY` before final
     GWE cleanup, and the default `WM_CLOSE` shortcut records the same destroy
     observation before deleting HWND state. `WM_NCDESTROY` is now tracked when

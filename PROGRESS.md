@@ -2641,6 +2641,25 @@
   group boundaries instead of falling through the generic ordinal path. The
   focused raw GWE tests cover dialog-unit conversion plus tab/group order,
   disabled controls, and previous/next cycling.
+- Raw `IsDialogMessageW` now performs the first CE-backed dialog-message
+  handling instead of only validating the `MSG` pointer and returning success.
+  It consumes messages only when the target HWND is the dialog or a descendant,
+  dispatches ordinary dialog-owned messages through the normal dispatch path,
+  sends `WM_GETDLGCODE` for key handling, moves focus on TAB via the existing
+  dialog tab-order helper, routes Escape as `IDCANCEL`, and routes Return to
+  the focused pushbutton or the dialog's default pushbutton with `IDOK`
+  fallback. GWE now answers `WM_GETDLGCODE` for button/static/edit controls and
+  implements `DM_GETDEFID`/`DM_SETDEFID` over child pushbutton style state, so
+  Enter from an edit control can reach the default button through generic
+  dialog-manager behavior. Focused raw GWE coverage now proves dialog-owned
+  dispatch, unrelated-HWND rejection, TAB focus traversal, default-button
+  dialog codes, and `DM_GETDEFID`/`DM_SETDEFID` transitions. The eVC MIPSII
+  fixtures
+  `052_modeless_dialog_isdialogmessage` and the strengthened
+  `076_dialog_tab_enter_escape` also pass through the ignored `fixture_exes`
+  harness with `WINCE_FIXTURE_FILTER`, proving the imported app-style path
+  reaches guest dialog procedures for modeless `WM_COMMAND` and Return-key
+  default-button command generation.
 - Added an indexed-DIB fidelity slice for CE GDI color tables. `BitmapObject`
   now stores RGBQUAD color tables, raw `SetDIBColorTable`/`GetDIBColorTable`
   read and write the selected bitmap table through guest memory, and the 8 bpp

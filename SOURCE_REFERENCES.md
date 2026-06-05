@@ -776,6 +776,19 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     supplies the public `WS_TABSTOP`, `WS_GROUP`, and `WS_DISABLED` styles used
     by the traversal, and disabled ancestor checks now keep controls beneath a
     disabled dialog out of traversal without mutating the child HWND state.
+  - `winuser.h` declares `IsDialogMessageW`, `WM_GETDLGCODE`, `VK_TAB`,
+    `VK_RETURN`, `VK_ESCAPE`, `IDOK`, `IDCANCEL`, `DM_GETDEFID`,
+    `DM_SETDEFID`, `DC_HASDEFID`, button styles such as `BS_PUSHBUTTON` and
+    `BS_DEFPUSHBUTTON`, and the `DLGC_*` dialog-code flags; `dlgmgr.h` exposes
+    `IsDialogMessageW_I`, `CheckDefPushButton`, `IsDefPushButton`, and
+    `IsUndefPushButton` paths that consult `WM_GETDLGCODE`. Rust raw
+    `IsDialogMessageW` now consumes only messages for the dialog or its
+    descendants, dispatches ordinary dialog-owned messages, moves focus on TAB
+    through the existing dialog tab traversal, and routes Enter/Escape as
+    dialog commands without special-casing iNavi. Return uses a focused
+    pushbutton or the dialog's default pushbutton with `IDOK` fallback, and GWE
+    now reports `DLGC_DEFPUSHBUTTON`/`DLGC_UNDEFPUSHBUTTON` plus
+    `DM_GETDEFID`/`DM_SETDEFID` over child button style state.
 
 - GWE paint/update surface:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\gweapiset1.hpp`,

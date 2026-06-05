@@ -27,11 +27,11 @@ use wince_emulation_v3::{
             ORD_GET_WINDOW_RGN, ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W,
             ORD_GET_WINDOW_THREAD_PROCESS_ID, ORD_GLOBAL_MEMORY_STATUS, ORD_IN_SEND_MESSAGE,
             ORD_INFLATE_RECT, ORD_INSERT_MENU_W, ORD_INTERSECT_RECT, ORD_INVALIDATE_RECT,
-            ORD_IS_CHILD, ORD_IS_RECT_EMPTY, ORD_IS_WINDOW, ORD_IS_WINDOW_ENABLED,
-            ORD_IS_WINDOW_VISIBLE, ORD_KILL_TIMER, ORD_LOAD_ICON_W, ORD_LOAD_RESOURCE,
-            ORD_LOAD_STRING_W, ORD_MAP_DIALOG_RECT, ORD_MAP_WINDOW_POINTS, ORD_MESSAGE_BOX_W,
-            ORD_MOVE_WINDOW, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_OFFSET_RECT,
-            ORD_PEEK_MESSAGE_W, ORD_POLYGON, ORD_POLYLINE, ORD_POST_MESSAGE_W,
+            ORD_IS_CHILD, ORD_IS_DIALOG_MESSAGE_W, ORD_IS_RECT_EMPTY, ORD_IS_WINDOW,
+            ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE, ORD_KILL_TIMER, ORD_LOAD_ICON_W,
+            ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_MAP_DIALOG_RECT, ORD_MAP_WINDOW_POINTS,
+            ORD_MESSAGE_BOX_W, ORD_MOVE_WINDOW, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX,
+            ORD_OFFSET_RECT, ORD_PEEK_MESSAGE_W, ORD_POLYGON, ORD_POLYLINE, ORD_POST_MESSAGE_W,
             ORD_POST_QUIT_MESSAGE, ORD_POST_THREAD_MESSAGE_W, ORD_PT_IN_RECT, ORD_PT_IN_REGION,
             ORD_REALIZE_PALETTE, ORD_RECT_IN_REGION, ORD_REDRAW_WINDOW, ORD_REGISTER_CLASS_W,
             ORD_REGISTER_GESTURE, ORD_RELEASE_CAPTURE, ORD_RELEASE_DC, ORD_RELEASE_MUTEX,
@@ -50,15 +50,17 @@ use wince_emulation_v3::{
         },
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat, VirtualFramebuffer},
         gwe::{
-            GW_CHILD, GW_HWNDFIRST, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER, GWL_USERDATA,
-            HWND_BROADCAST, MSGSRC_SOFTWARE_POST, MSGSRC_SOFTWARE_SEND, Message, Point, QS_PAINT,
-            QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER, Rect, SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN,
-            SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
-            WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE, WM_CLOSE, WM_DESTROY, WM_ENABLE,
-            WM_ERASEBKGND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_MOVE,
-            WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETFOCUS, WM_SETTEXT, WM_SHOWWINDOW, WM_SIZE,
-            WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_CHILD, WS_DISABLED, WS_GROUP, WS_TABSTOP,
-            WS_VISIBLE,
+            BS_DEFPUSHBUTTON, BS_PUSHBUTTON, DC_HASDEFID, DLGC_BUTTON, DLGC_DEFPUSHBUTTON,
+            DLGC_UNDEFPUSHBUTTON, DM_GETDEFID, DM_SETDEFID, GW_CHILD, GW_HWNDFIRST, GW_HWNDNEXT,
+            GW_HWNDPREV, GW_OWNER, GWL_USERDATA, HWND_BROADCAST, MSGSRC_SOFTWARE_POST,
+            MSGSRC_SOFTWARE_SEND, Message, Point, QS_PAINT, QS_POSTMESSAGE, QS_SENDMESSAGE,
+            QS_TIMER, Rect, SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN, SWP_HIDEWINDOW, SWP_NOACTIVATE,
+            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, WA_ACTIVE, WA_INACTIVE,
+            WM_ACTIVATE, WM_CANCELMODE, WM_CLOSE, WM_DESTROY, WM_ENABLE, WM_ERASEBKGND,
+            WM_GETDLGCODE, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDOWN,
+            WM_MOVE, WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETFOCUS, WM_SETTEXT, WM_SHOWWINDOW,
+            WM_SIZE, WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_CHILD, WS_DISABLED, WS_GROUP,
+            WS_TABSTOP, WS_VISIBLE,
         },
         kernel::CeKernel,
         memory::PROCESS_HEAP_HANDLE,
@@ -3533,6 +3535,146 @@ fn coredll_raw_get_next_dialog_items_follow_tab_and_group_order() -> Result<()> 
             ..
         } if hwnd == fourth
     ));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_is_dialog_message_dispatches_dialog_owned_messages() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let msg_ptr = 0x3520;
+    memory.map_words(msg_ptr, 7);
+
+    let dialog = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "DIALOG",
+        "dialog",
+        None,
+        1,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(0, 0, 200, 120),
+    );
+    write_raw_message(&mut memory, msg_ptr, dialog, WM_CLOSE, 0, 0)?;
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IS_DIALOG_MESSAGE_W,
+            [dialog, msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(!kernel.gwe.is_window(dialog));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_is_dialog_message_ignores_unrelated_windows() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let msg_ptr = 0x3540;
+    memory.map_words(msg_ptr, 7);
+
+    let dialog = kernel.create_window_ex_w(thread_id, "DIALOG", "dialog", None, 1, WS_VISIBLE, 0);
+    let other = kernel.create_window_ex_w(thread_id, "OTHER", "other", None, 2, WS_VISIBLE, 0);
+    write_raw_message(&mut memory, msg_ptr, other, WM_CLOSE, 0, 0)?;
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IS_DIALOG_MESSAGE_W,
+            [dialog, msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(kernel.gwe.is_window(dialog));
+    assert!(kernel.gwe.is_window(other));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_is_dialog_message_tabs_to_next_dialog_item() -> Result<()> {
+    const VK_TAB: u32 = 0x09;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let msg_ptr = 0x3560;
+    memory.map_words(msg_ptr, 7);
+
+    let dialog = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "DIALOG",
+        "dialog",
+        None,
+        1,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(0, 0, 200, 120),
+    );
+    let first = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "BUTTON",
+        "first",
+        Some(dialog),
+        10,
+        WS_VISIBLE | WS_CHILD | WS_TABSTOP,
+        0,
+        Rect::from_origin_size(0, 0, 20, 20),
+    );
+    let second = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "BUTTON",
+        "second",
+        Some(dialog),
+        11,
+        WS_VISIBLE | WS_CHILD | WS_TABSTOP,
+        0,
+        Rect::from_origin_size(20, 0, 20, 20),
+    );
+    let _ = kernel.set_focus(Some(first));
+    write_raw_message(&mut memory, msg_ptr, first, WM_KEYDOWN, VK_TAB, 0)?;
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IS_DIALOG_MESSAGE_W,
+            [dialog, msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.gwe.get_focus(), Some(second));
+    assert!(kernel.gwe.is_window(dialog));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
     Ok(())
 }
@@ -9048,6 +9190,141 @@ fn coredll_raw_get_message_no_wait_uses_gwe_queue_without_blocking() -> Result<(
 }
 
 #[test]
+fn coredll_raw_dialog_buttons_report_default_codes_and_ids() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+
+    let dialog = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "DIALOG",
+        "dialog",
+        None,
+        1,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(0, 0, 200, 120),
+    );
+    let plain = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "BUTTON",
+        "plain",
+        Some(dialog),
+        10,
+        WS_VISIBLE | WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
+        0,
+        Rect::from_origin_size(0, 0, 40, 20),
+    );
+    let default = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "BUTTON",
+        "default",
+        Some(dialog),
+        11,
+        WS_VISIBLE | WS_CHILD | WS_TABSTOP | BS_DEFPUSHBUTTON,
+        0,
+        Rect::from_origin_size(50, 0, 40, 20),
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SEND_MESSAGE_W,
+            [plain, WM_GETDLGCODE, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(code),
+            ..
+        } if code == (DLGC_BUTTON | DLGC_UNDEFPUSHBUTTON)
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SEND_MESSAGE_W,
+            [default, WM_GETDLGCODE, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(code),
+            ..
+        } if code == (DLGC_BUTTON | DLGC_DEFPUSHBUTTON)
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SEND_MESSAGE_W,
+            [dialog, DM_GETDEFID, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(result),
+            ..
+        } if result == ((DC_HASDEFID << 16) | 11)
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SEND_MESSAGE_W,
+            [dialog, DM_SETDEFID, 10, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SEND_MESSAGE_W,
+            [plain, WM_GETDLGCODE, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(code),
+            ..
+        } if code == (DLGC_BUTTON | DLGC_DEFPUSHBUTTON)
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SEND_MESSAGE_W,
+            [default, WM_GETDLGCODE, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(code),
+            ..
+        } if code == (DLGC_BUTTON | DLGC_UNDEFPUSHBUTTON)
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SEND_MESSAGE_W,
+            [dialog, DM_GETDEFID, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(result),
+            ..
+        } if result == ((DC_HASDEFID << 16) | 10)
+    ));
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_msgwait_ignores_desktop_waitall_flag_bit_on_ce() -> Result<()> {
     const DESKTOP_MWMO_WAITALL: u32 = 0x0001;
 
@@ -10506,6 +10783,24 @@ fn assert_next_message(
     } else {
         assert_eq!(actual_lparam, lparam);
     }
+}
+
+fn write_raw_message(
+    memory: &mut TestGuestMemory,
+    msg_ptr: u32,
+    hwnd: u32,
+    msg: u32,
+    wparam: u32,
+    lparam: u32,
+) -> Result<()> {
+    memory.write_u32(msg_ptr, hwnd)?;
+    memory.write_u32(msg_ptr + 4, msg)?;
+    memory.write_u32(msg_ptr + 8, wparam)?;
+    memory.write_u32(msg_ptr + 12, lparam)?;
+    memory.write_u32(msg_ptr + 16, 0)?;
+    memory.write_u32(msg_ptr + 20, 0)?;
+    memory.write_u32(msg_ptr + 24, 0)?;
+    Ok(())
 }
 
 fn make_test_lparam(x: i32, y: i32) -> u32 {

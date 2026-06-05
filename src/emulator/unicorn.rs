@@ -10766,16 +10766,30 @@ fn try_enter_is_dialog_message_callout<D>(
     let Some(msg) = read_unicorn_u32(uc, msg_ptr.wrapping_add(4)) else {
         return false;
     };
-    if msg != crate::ce::gwe::WM_COMMAND {
-        return false;
-    }
     let Some(wparam) = read_unicorn_u32(uc, msg_ptr.wrapping_add(8)) else {
         return false;
     };
     let Some(lparam) = read_unicorn_u32(uc, msg_ptr.wrapping_add(12)) else {
         return false;
     };
-    let target = if msg_hwnd != 0 { msg_hwnd } else { hwnd };
+    let (target, call_msg, call_wparam, call_lparam) = match msg {
+        crate::ce::gwe::WM_COMMAND => {
+            let target = if msg_hwnd != 0 { msg_hwnd } else { hwnd };
+            (target, msg, wparam, lparam)
+        }
+        crate::ce::gwe::WM_KEYDOWN if wparam == 0x0d || wparam == 0x1b => {
+            if msg_hwnd == 0 || (msg_hwnd != hwnd && !kernel.gwe.is_child(hwnd, msg_hwnd)) {
+                return false;
+            }
+            let (command, command_hwnd) = if wparam == 0x0d {
+                kernel.gwe.dialog_return_command(hwnd, msg_hwnd, 1)
+            } else {
+                (2, 0)
+            };
+            (hwnd, crate::ce::gwe::WM_COMMAND, command, command_hwnd)
+        }
+        _ => return false,
+    };
     let Some(window) = kernel.gwe.window(target) else {
         return false;
     };
@@ -10788,9 +10802,9 @@ fn try_enter_is_dialog_message_callout<D>(
     tracing::debug!(
         target: "ce.gwe",
         hwnd = format_args!("0x{target:08x}"),
-        msg = format_args!("0x{msg:08x}"),
-        wparam = format_args!("0x{wparam:08x}"),
-        lparam = format_args!("0x{lparam:08x}"),
+        msg = format_args!("0x{call_msg:08x}"),
+        wparam = format_args!("0x{call_wparam:08x}"),
+        lparam = format_args!("0x{call_lparam:08x}"),
         class = window.class_name.as_str(),
         wndproc = format_args!("0x{wndproc:08x}"),
         ra = format_args!("0x{return_pc:08x}"),
@@ -10800,9 +10814,9 @@ fn try_enter_is_dialog_message_callout<D>(
     pending_returns.borrow_mut().push(PendingWndProcReturn {
         source: "IsDialogMessageW",
         hwnd: target,
-        msg,
-        wparam,
-        lparam,
+        msg: call_msg,
+        wparam: call_wparam,
+        lparam: call_lparam,
         wndproc,
         return_pc,
         class_name: Some(window.class_name.clone()),
@@ -10818,9 +10832,9 @@ fn try_enter_is_dialog_message_callout<D>(
     });
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(target)),
-        uc.reg_write(RegisterMIPS::A1, u64::from(msg)),
-        uc.reg_write(RegisterMIPS::A2, u64::from(wparam)),
-        uc.reg_write(RegisterMIPS::A3, u64::from(lparam)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(call_msg)),
+        uc.reg_write(RegisterMIPS::A2, u64::from(call_wparam)),
+        uc.reg_write(RegisterMIPS::A3, u64::from(call_lparam)),
         uc.reg_write(RegisterMIPS::RA, u64::from(WNDPROC_RETURN_STUB_ADDR)),
         uc.reg_write(RegisterMIPS::T9, u64::from(wndproc)),
         uc.reg_write(RegisterMIPS::PC, u64::from(wndproc)),

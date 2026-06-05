@@ -8078,11 +8078,81 @@ fn is_dialog_message_w_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    if read_guest_message(kernel, memory, thread_id, msg_ptr).is_none() {
+    let Some(message) = read_guest_message(kernel, memory, thread_id, msg_ptr) else {
+        return false;
+    };
+    if !message_belongs_to_dialog(kernel, hwnd, message.hwnd) {
+        kernel.threads.set_last_error(thread_id, 0);
         return false;
     }
+    if handle_dialog_key_message(kernel, hwnd, msg_ptr, &message) {
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+    kernel.dispatch_message_w_for_thread(thread_id, message);
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn message_belongs_to_dialog(kernel: &CeKernel, dialog: u32, hwnd: u32) -> bool {
+    hwnd != 0 && (hwnd == dialog || kernel.gwe.is_child(dialog, hwnd))
+}
+
+fn handle_dialog_key_message(
+    kernel: &mut CeKernel,
+    dialog: u32,
+    msg_ptr: u32,
+    message: &Message,
+) -> bool {
+    const VK_TAB: u32 = 0x09;
+    const VK_RETURN: u32 = 0x0d;
+    const VK_ESCAPE: u32 = 0x1b;
+    const IDOK: u32 = 1;
+    const IDCANCEL: u32 = 2;
+
+    if message.msg != crate::ce::gwe::WM_KEYDOWN {
+        return false;
+    }
+    let dlg_code = kernel
+        .send_message_w(
+            message.hwnd,
+            crate::ce::gwe::WM_GETDLGCODE,
+            message.wparam,
+            msg_ptr,
+        )
+        .unwrap_or(0);
+    if dlg_code & crate::ce::gwe::DLGC_WANTALLKEYS != 0 {
+        return false;
+    }
+    match message.wparam {
+        VK_TAB if dlg_code & crate::ce::gwe::DLGC_WANTTAB == 0 => {
+            let current = kernel.gwe.get_focus().unwrap_or(message.hwnd);
+            if let Some(next) = kernel
+                .gwe
+                .get_next_dlg_tab_item(dialog, current, false)
+                .or_else(|| {
+                    kernel
+                        .gwe
+                        .get_next_dlg_tab_item(dialog, message.hwnd, false)
+                })
+            {
+                let _ = kernel.set_focus(Some(next));
+            }
+            true
+        }
+        VK_RETURN => {
+            let (command_id, command_hwnd) =
+                kernel.gwe.dialog_return_command(dialog, message.hwnd, IDOK);
+            let _ =
+                kernel.send_message_w(dialog, crate::ce::gwe::WM_COMMAND, command_id, command_hwnd);
+            true
+        }
+        VK_ESCAPE => {
+            let _ = kernel.send_message_w(dialog, crate::ce::gwe::WM_COMMAND, IDCANCEL, 0);
+            true
+        }
+        _ => false,
+    }
 }
 
 #[derive(Debug, Clone)]

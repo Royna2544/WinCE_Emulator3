@@ -43,11 +43,11 @@ int WINAPI WinMain(HINSTANCE h, HINSTANCE, LPWSTR, int) {
 
     MSG enterMsg;
     ZeroMemory(&enterMsg, sizeof(enterMsg));
-    enterMsg.hwnd = GetDlgItem(dlg, IDC_BUTTON_OK);
+    enterMsg.hwnd = GetDlgItem(dlg, IDC_EDIT_B);
     enterMsg.message = WM_KEYDOWN;
     enterMsg.wParam = VK_RETURN;
 
-    SendMessageW(dlg, WM_COMMAND, IDC_BUTTON_OK, (LPARAM)GetDlgItem(dlg, IDC_BUTTON_OK));
+    IsDialogMessageW(dlg, &enterMsg);
 
     MSG msg;
     DWORD spins = 0;

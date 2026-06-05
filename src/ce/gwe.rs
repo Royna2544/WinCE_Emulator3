@@ -26,6 +26,7 @@ pub const WM_KILLFOCUS: u32 = 0x0008;
 pub const WM_ENABLE: u32 = 0x000a;
 pub const WM_NCCREATE: u32 = 0x0081;
 pub const WM_NCDESTROY: u32 = 0x0082;
+pub const WM_GETDLGCODE: u32 = 0x0087;
 pub const WM_SETTEXT: u32 = 0x000c;
 pub const WM_GETTEXT: u32 = 0x000d;
 pub const WM_GETTEXTLENGTH: u32 = 0x000e;
@@ -37,6 +38,24 @@ pub const WM_MOUSEMOVE: u32 = 0x0200;
 pub const WM_LBUTTONDOWN: u32 = 0x0201;
 pub const WM_LBUTTONUP: u32 = 0x0202;
 pub const WM_USER: u32 = 0x0400;
+pub const DM_GETDEFID: u32 = WM_USER;
+pub const DM_SETDEFID: u32 = WM_USER + 1;
+pub const DC_HASDEFID: u32 = 0x534b;
+pub const BS_PUSHBUTTON: u32 = 0x0000;
+pub const BS_DEFPUSHBUTTON: u32 = 0x0001;
+pub const BS_CHECKBOX: u32 = 0x0002;
+pub const BS_RADIOBUTTON: u32 = 0x0004;
+pub const BS_AUTORADIOBUTTON: u32 = 0x0009;
+pub const BS_TYPEMASK: u32 = 0x000f;
+pub const DLGC_WANTTAB: u32 = 0x0002;
+pub const DLGC_WANTALLKEYS: u32 = 0x0004;
+pub const DLGC_HASSETSEL: u32 = 0x0008;
+pub const DLGC_DEFPUSHBUTTON: u32 = 0x0010;
+pub const DLGC_UNDEFPUSHBUTTON: u32 = 0x0020;
+pub const DLGC_RADIOBUTTON: u32 = 0x0040;
+pub const DLGC_WANTCHARS: u32 = 0x0080;
+pub const DLGC_STATIC: u32 = 0x0100;
+pub const DLGC_BUTTON: u32 = 0x2000;
 pub const MSGSRC_UNKNOWN: u32 = 0;
 pub const MSGSRC_SOFTWARE_POST: u32 = 1;
 pub const MSGSRC_HARDWARE_KEYBOARD: u32 = 2;
@@ -1643,9 +1662,112 @@ impl Gwe {
             WM_PAINT => {
                 self.validate_window(hwnd);
             }
+            WM_GETDLGCODE => return Some(self.window_dialog_code(hwnd)),
+            DM_GETDEFID => return Some(self.dialog_default_id_result(hwnd)),
+            DM_SETDEFID => {
+                self.set_dialog_default_id(hwnd, wparam);
+                return Some(1);
+            }
             _ => {}
         }
         Some(default_send_message_result(msg, wparam, lparam))
+    }
+
+    pub fn dialog_return_command(&self, dialog: u32, source: u32, fallback: u32) -> (u32, u32) {
+        if self.is_push_button(source) {
+            let id = self
+                .get_dlg_ctrl_id(source)
+                .filter(|id| *id != 0)
+                .unwrap_or(fallback);
+            return (id, source);
+        }
+        if let Some(default_hwnd) = self.default_push_button(dialog) {
+            let id = self
+                .get_dlg_ctrl_id(default_hwnd)
+                .filter(|id| *id != 0)
+                .unwrap_or(fallback);
+            return (id, default_hwnd);
+        }
+        (fallback, 0)
+    }
+
+    pub fn default_push_button(&self, dialog: u32) -> Option<u32> {
+        self.windows
+            .values()
+            .find(|window| {
+                !window.destroyed
+                    && window.parent == Some(dialog)
+                    && self.window_is_push_button(window)
+                    && window.style & BS_TYPEMASK == BS_DEFPUSHBUTTON
+            })
+            .map(|window| window.hwnd)
+    }
+
+    pub fn is_push_button(&self, hwnd: u32) -> bool {
+        self.windows
+            .get(&hwnd)
+            .is_some_and(|window| self.window_is_push_button(window))
+    }
+
+    fn window_dialog_code(&self, hwnd: u32) -> u32 {
+        let Some(window) = self.windows.get(&hwnd).filter(|window| !window.destroyed) else {
+            return 0;
+        };
+        if window.class_name.eq_ignore_ascii_case("button") {
+            let mut code = DLGC_BUTTON;
+            match window.style & BS_TYPEMASK {
+                BS_DEFPUSHBUTTON => code |= DLGC_DEFPUSHBUTTON,
+                BS_PUSHBUTTON => code |= DLGC_UNDEFPUSHBUTTON,
+                BS_RADIOBUTTON | BS_AUTORADIOBUTTON => code |= DLGC_RADIOBUTTON,
+                _ => {}
+            }
+            return code;
+        }
+        if window.class_name.eq_ignore_ascii_case("static") {
+            return DLGC_STATIC;
+        }
+        if window.class_name.eq_ignore_ascii_case("edit") {
+            return DLGC_HASSETSEL | DLGC_WANTCHARS;
+        }
+        default_send_message_result(WM_GETDLGCODE, 0, 0)
+    }
+
+    fn dialog_default_id_result(&self, dialog: u32) -> u32 {
+        self.default_push_button(dialog)
+            .and_then(|hwnd| self.get_dlg_ctrl_id(hwnd))
+            .filter(|id| *id != 0)
+            .map(|id| id | (DC_HASDEFID << 16))
+            .unwrap_or(0)
+    }
+
+    fn set_dialog_default_id(&mut self, dialog: u32, id: u32) {
+        let children: Vec<u32> = self
+            .windows
+            .values()
+            .filter(|window| {
+                !window.destroyed
+                    && window.parent == Some(dialog)
+                    && self.window_is_push_button(window)
+            })
+            .map(|window| window.hwnd)
+            .collect();
+        for hwnd in children {
+            if let Some(window) = self.windows.get_mut(&hwnd) {
+                let button_type = if window.id == id {
+                    BS_DEFPUSHBUTTON
+                } else if window.style & BS_TYPEMASK == BS_DEFPUSHBUTTON {
+                    BS_PUSHBUTTON
+                } else {
+                    window.style & BS_TYPEMASK
+                };
+                window.style = (window.style & !BS_TYPEMASK) | button_type;
+            }
+        }
+    }
+
+    fn window_is_push_button(&self, window: &Window) -> bool {
+        window.class_name.eq_ignore_ascii_case("button")
+            && matches!(window.style & BS_TYPEMASK, BS_PUSHBUTTON | BS_DEFPUSHBUTTON)
     }
 
     pub fn record_destroy_lifecycle_message(&mut self, hwnd: u32, msg: u32) -> bool {
