@@ -691,7 +691,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     notification sends. Rust raw `SendNotifyMessageW` now preserves that CE
     split at the syscall boundary: same-thread targets use synchronous send,
     while different-thread targets enter the receiver-side sent-message queue
-    without sender blocking.
+    without sender blocking and carry `SMF_SENDER_NO_WAIT | SMF_NOTIFY_MESSAGE`
+    in the queued transaction state.
   - GWE now keeps a receiver-side sent-message queue distinct from posted
     messages and paint requests. Retrieval prefers sent messages, marks
     `InSendMessage`, exposes `QS_SENDMESSAGE`, and records a send source.

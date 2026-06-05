@@ -588,8 +588,9 @@
        execution, `InSendMessage`, timeout, destroyed-target, and reentrant
        send behavior. `SendNotifyMessageW` has the first CE-backed no-wait
        split, and receiver-side sent-message retrieval/source/depth state now
-       exists; cross-thread `SendNotifyMessageW` now uses that queue and clears
-       receiver send depth after dispatch. Sender-side transaction bookkeeping
+       exists; cross-thread `SendNotifyMessageW` now uses that queue with
+       `SMF_SENDER_NO_WAIT | SMF_NOTIFY_MESSAGE` metadata and clears receiver
+       send depth after dispatch. Sender-side transaction bookkeeping
        now exists for blocking sends, and raw receiver `DispatchMessageW`
        stores the WNDPROC result back into that transaction. Timeout expiry now
        marks queued timed sends result-ready and removes them from receiver

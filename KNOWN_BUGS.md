@@ -702,9 +702,10 @@
     `InSendMessage`/`QS_SENDMESSAGE`/send source state; the bounded
     `target\sent_queue_*` probe stopped at `pc=0x00b4bc1c` with no render
     milestones or framebuffer pixels. Cross-thread `SendNotifyMessageW` now
-    uses that sent queue instead of a normal post and clears receiver send depth
-    after dispatch; the bounded `target\send_notify_sent_queue_*` probe stopped
-    at `pc=0x00339d8c` with no render milestones or framebuffer pixels.
+    uses that sent queue instead of a normal post, carries the CE
+    `SMF_SENDER_NO_WAIT | SMF_NOTIFY_MESSAGE` flags, and clears receiver send
+    depth after dispatch; the bounded `target\send_notify_sent_queue_*` probe
+    stopped at `pc=0x00339d8c` with no render milestones or framebuffer pixels.
     Sender-side sent-message transaction bookkeeping now records CE-style
     sender/receiver thread ids, flags, timeout metadata, active receiver send
     stack, WNDPROC result completion, and receiver-terminated completion for

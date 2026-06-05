@@ -2711,6 +2711,13 @@
   and immediately expires the same transaction. Focused raw GWE coverage proves
   nonzero timeout queueing, `SMF_TIMEOUT` metadata, receiver retrieval, and
   dispatch completion, and the raw GWE suite now has 79 passing tests.
+- Tightened the CE-backed `SendNotifyMessageW` transaction metadata. Different-
+  thread notifications already used the receiver-side sent-message queue; they
+  now also carry `SMF_SENDER_NO_WAIT | SMF_NOTIFY_MESSAGE`, matching the
+  `cmsgque.h` `smfSenderNoWait`/`smfNotifyMessage` shape instead of being only
+  a generic asynchronous send. Focused raw GWE coverage now asserts the queued
+  notify transaction has no sender waiter and preserves both CE flags while
+  same-thread notifications remain synchronous.
 - Added an indexed-DIB fidelity slice for CE GDI color tables. `BitmapObject`
   now stores RGBQUAD color tables, raw `SetDIBColorTable`/`GetDIBColorTable`
   read and write the selected bitmap table through guest memory, and the 8 bpp

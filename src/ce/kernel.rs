@@ -2270,10 +2270,16 @@ impl CeKernel {
         if target_thread == caller_thread_id {
             return self.send_message_w(hwnd, msg, wparam, lparam).is_some();
         }
-        let queued = self.gwe.queue_sent_message_for_window(
-            hwnd,
-            Message::new(hwnd, msg, wparam, lparam, self.timers.tick_count()),
-        );
+        let queued = self
+            .gwe
+            .queue_send_message_for_window(
+                None,
+                hwnd,
+                Message::new(hwnd, msg, wparam, lparam, self.timers.tick_count()),
+                crate::ce::gwe::SMF_SENDER_NO_WAIT | crate::ce::gwe::SMF_NOTIFY_MESSAGE,
+                None,
+            )
+            .is_some();
         if queued {
             self.queue_message_wake_candidates(target_thread);
         }
