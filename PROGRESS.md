@@ -9,6 +9,27 @@
 
 ## Confirmed
 
+- Window-HDC drawing now uses CE-style visible client regions instead of only
+  a raw client rectangle. GWE computes multi-rect visible client areas from
+  the window's own visibility, parent visibility, window region, and front
+  siblings in z-order; framebuffer HDC drawing intersects those rects before
+  `FillRect`, `BitBlt`, `StretchBlt`, `TransparentImage`, and line/polygon
+  primitives can touch the host surface. This matches CE GWE's
+  `m_hrgnVisible`/`m_hrgnClientVisible` shape from
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\window.hpp` and DC clipping
+  ownership from `...\GWE\MGDI\INC\dc.hpp`. Focused coverage includes
+  `coredll_raw_bitblt_skips_effectively_hidden_window_hdc` and
+  `coredll_raw_bitblt_clips_window_hdc_behind_visible_sibling`; the full
+  `cargo test --features unicorn,trace,win32-desktop` suite passes. Host
+  validation after commit `8fa8c9f` confirmed the pre-rendered hidden button
+  layer leak is fixed in the live Win32 presenter.
+- Old direct CE MIPS process-terminate calls are no longer treated only as a
+  diagnostic `pc=0` snapshot. When Unicorn decodes the legacy process API
+  method 2 terminate target (`api2.2`, e.g. `target=0xfffff3fa`) it now applies
+  `kernel.terminate_process(process, exit_code)` before returning `Ok(())`.
+  This keeps waitable current-process state and exit code consistent with the
+  raw `TerminateProcess` path. Host output now reports this as a CE process
+  exit rather than only a generic Unicorn stop.
 - Complex GDI clip regions now paint through their full CE region rect list
   instead of the old bounding-box shortcut. `FillRect`, memory/display
   `Polygon`, `Polyline`, `BitBlt`, `StretchBlt`, and `TransparentImage` now

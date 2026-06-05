@@ -3236,6 +3236,13 @@ impl UnicornMips {
                 .as_ref()
                 .and_then(|snapshot| self.decode_encoded_kernel_exit(snapshot));
             if let Some(exit) = decoded_exit {
+                if !kernel.terminate_process(exit.process, exit.exit_code) {
+                    let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
+                    return Err(Error::Backend(format!(
+                        "decoded CE process terminate for invalid handle 0x{:08x}; exit_code=0x{:08x}",
+                        exit.process, exit.exit_code
+                    )));
+                }
                 if let Some(snapshot) = self.last_debug.as_mut() {
                     snapshot.encoded_kernel_exit = Some(exit);
                 }

@@ -275,7 +275,7 @@ fn run_cpu_loop(
         if let Some(snapshot) = cpu.last_debug_snapshot() {
             if args.desktop == DesktopMode::Host && snapshot.blocked_get_message.is_some() {
                 if !reported_blocked_message_wait {
-                    println!("  Unicorn stopped: {}", snapshot.summary());
+                    print_unicorn_stop(snapshot);
                     if let Some(path) = args.framebuffer_dump.as_ref() {
                         desktop.framebuffer().write_ppm(path)?;
                         println!("  framebuffer dump: {}", path.display());
@@ -285,11 +285,24 @@ fn run_cpu_loop(
                 std::thread::sleep(Duration::from_millis(16));
                 continue;
             }
-            println!("  Unicorn stopped: {}", snapshot.summary());
+            print_unicorn_stop(snapshot);
         }
         break;
     }
     Ok(())
+}
+
+fn print_unicorn_stop(snapshot: &wince_emulation_v3::emulator::unicorn::UnicornDebugSnapshot) {
+    if let Some(exit) = snapshot.encoded_kernel_exit.as_ref() {
+        println!(
+            "  CE process exited: process=0x{:08x} code=0x{:08x}; {}",
+            exit.process,
+            exit.exit_code,
+            snapshot.summary()
+        );
+    } else {
+        println!("  Unicorn stopped: {}", snapshot.summary());
+    }
 }
 
 fn enqueue_desktop_input_for_current_wait(

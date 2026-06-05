@@ -12,6 +12,16 @@
 
 ## Current Slice
 
+- Current host/manual slice: the hidden/pre-rendered UI layer leak is fixed by
+  committed CE visible-client-region clipping (`8fa8c9f`). The live host
+  presenter now shows the corrected z-order/hide-show behavior. Continue
+  investigating any remaining "ANR" report as post-map input/scheduler
+  responsiveness, not as a rendering leak: prove whether host clicks are
+  dropped before `GetMessageW`, delivered to the wrong HWND, or processed by
+  guest code that then exits/blocks. Do not add app-specific hit targets.
+  Fresh traces from `target\tap_probe_*` show a synthetic `400,240` tap reaches
+  enough guest logic to enter the app's own current-process terminate path, so
+  the input path is not obviously dead.
 - Current GDI map-fidelity slice: continue from `target\gdi_exttext_virtual.*`.
   The huge black base-layer gap is now fixed generically by honoring
   `ExtTextOutW(ETO_OPAQUE)` as a CE GDI background-rectangle fill with the

@@ -12,6 +12,24 @@
 
 ## Open
 
+- Host/manual post-map responsiveness still needs a focused input/scheduler
+  trace if clicks feel like ANR after the corrected map screen.
+  - Symptom: after the CE visible-region clipping fix, the live Win32
+    presenter no longer leaks hidden/pre-rendered button layers, but manual
+    host use may still feel unresponsive after the map is displayed.
+  - Evidence: host and virtual probes reach the same post-map
+    scheduler-owned `GetMessageW` frontier with bounded memory/file I/O. A
+    synthetic host/tap probe at `400,240` (`target\tap_probe_*`) reached the
+    app's own legacy CE current-process terminate path
+    (`api2.2`, process `0x42`, exit code `0`), so input is not obviously stuck
+    in the host queue. Recent-message trace is currently not durable across
+    that final teardown snapshot, so a better focused probe should preserve
+    posted/returned mouse messages before process exit.
+  - Status: open. Next step is to add or use a narrow host-input/GWE message
+    trace that records target HWND, message, client/screen coordinates, and
+    GetMessage/DispatchMessage delivery across the click that appears to ANR.
+    Keep this generic; do not hardcode iNavi controls.
+
 - Rendered iNavi map still needs road/building styling fidelity, but the
   black base-layer failure is fixed.
   - Symptom: before the `ExtTextOutW(ETO_OPAQUE)` fix,
@@ -151,8 +169,10 @@
   - Status: superseded by `target\wcspbrk_long_virtual_*`. The later
     guest-composed memory DC now reaches display HDC `0x02020004` via normal
     `GetDC`/`BitBlt`/`ReleaseDC`, and the framebuffer contains a rendered map.
-    Keep this entry only as historical evidence for the earlier presentation
-    gap.
+    The follow-up hidden/pre-rendered layer leak is fixed by CE visible-client
+    clipping in commit `8fa8c9f`, with focused hidden-HWND and z-order sibling
+    BitBlt tests. Keep this entry only as historical evidence for the earlier
+    presentation gap.
 
 - Worker thread stack slots previously underflowed the mapped process stack
   reserve once the app reached later worker threads.
