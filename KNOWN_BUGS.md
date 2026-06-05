@@ -20,13 +20,17 @@
   - Evidence: host and virtual probes reach the same post-map
     scheduler-owned `GetMessageW` frontier with bounded memory/file I/O. The
     durable `messages` monitor selector now preserves generic GWE message ops
-    across teardown. A Win32-host probe at `400,240`
+    across teardown, including public post, notify-send, and queued
+    cross-thread-send entrypoints. A Win32-host probe at `400,240`
     (`target\host_message_trace_*`) hit-tested to HWND `0x00020080`, posted and
     delivered `WM_LBUTTONDOWN`/`WM_LBUTTONUP` through `GetMessageW`, then the
     guest ran its own legacy CE current-process terminate path (`api2.2`,
     process `0x42`, exit code `0`). That tap is therefore not blocked in the
     host queue, GWE hit-test, scheduler message wake, or raw `GetMessageW`
-    return path.
+    return path. A virtual probe
+    `target\public_message_trace_*` shows the same trace also captures real
+    public posts, broadcasts, worker-thread queued sends to the main thread,
+    and timer `4565`.
   - Status: open but narrowed. Use the new message trace on the exact
     unresponsive host interaction. If it records delivered mouse/key messages,
     chase the guest handler continuation, timer/device waits, or missing

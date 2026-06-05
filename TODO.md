@@ -18,7 +18,9 @@
   investigating any remaining "ANR" report as post-map scheduler/device/app
   responsiveness, not as a rendering leak or a basic input-drop bug. The new
   `messages` trace selector now preserves kernel-level GWE post/target/delivery
-  records. Fresh Win32-host evidence from
+  records, including public `PostMessageW`/thread/broadcast posts,
+  keyboard-post helpers, `SendNotifyMessageW`, and queued cross-thread sends.
+  Fresh Win32-host evidence from
   `target\host_message_trace_{summary,messages,counts}.txt` shows a synthetic
   `400,240` tap hit-tests to HWND `0x00020080`, delivers
   `WM_LBUTTONDOWN`/`WM_LBUTTONUP` through `GetMessageW`, and then reaches the
@@ -26,7 +28,12 @@
   `0`). Next manual-host debugging should use the same trace on the exact
   control/area that feels unresponsive; if messages are delivered, continue
   into guest handler/device/timer behavior instead of adding app-specific hit
-  targets.
+  targets. Fresh virtual evidence
+  `target\public_message_trace_{summary,messages,counts}.txt` also shows queued
+  worker-thread sends to the main HWND and timer `4565`, so the next scheduler
+  slice should use those send/timer records to decide whether the main thread
+  is failing to reply, waiting on a device/event, or simply entering valid CE
+  idle.
 - Current GDI map-fidelity slice: continue from `target\gdi_exttext_virtual.*`.
   The huge black base-layer gap is now fixed generically by honoring
   `ExtTextOutW(ETO_OPAQUE)` as a CE GDI background-rectangle fill with the

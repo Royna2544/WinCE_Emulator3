@@ -7,9 +7,10 @@ use wince_emulation_v3::{
         devices::{CommDcb, CommTimeouts, PURGE_RXCLEAR, PURGE_TXCLEAR},
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::{
-            GWL_USERDATA, QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER, Rect, SMF_TIMEOUT, WA_ACTIVE,
-            WM_ACTIVATE, WM_ERASEBKGND, WM_KILLFOCUS, WM_QUIT, WM_SETFOCUS, WM_TIMER, WM_USER,
-            WS_CHILD, WS_POPUP, WS_VISIBLE,
+            GWL_USERDATA, MSGSRC_HARDWARE_KEYBOARD, MSGSRC_SOFTWARE_SEND, QS_POSTMESSAGE,
+            QS_SENDMESSAGE, QS_TIMER, Rect, SMF_TIMEOUT, WA_ACTIVE, WM_ACTIVATE, WM_CHAR,
+            WM_ERASEBKGND, WM_KILLFOCUS, WM_QUIT, WM_SETFOCUS, WM_TIMER, WM_USER, WS_CHILD,
+            WS_POPUP, WS_VISIBLE,
         },
         kernel::{
             CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
@@ -1582,6 +1583,81 @@ fn blocked_get_message_wait_wakes_when_remote_input_is_drained() -> Result<()> {
             && record.hwnd == Some(hwnd)
             && record.msg == Some(WM_LBUTTONDOWN)
             && record.lparam == Some((34 << 16) | 12)
+    }));
+
+    Ok(())
+}
+
+#[test]
+fn public_message_entrypoints_record_durable_gwe_trace() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let window_thread = 51;
+    let sender_thread = 52;
+    let hwnd = kernel.create_window_ex_w(window_thread, "TRACEPOST", "trace", None, 1, 0, 0);
+
+    assert!(kernel.post_message_w_for_thread(sender_thread, hwnd, WM_USER + 0x51, 0x51, 0x52,));
+    assert!(kernel.recent_message_ops().iter().any(|record| {
+        record.op == "post_message"
+            && record.thread_id == window_thread
+            && record.hwnd == Some(hwnd)
+            && record.msg == Some(WM_USER + 0x51)
+            && record.detail.as_deref() == Some("window")
+    }));
+
+    assert!(kernel.post_thread_message_w(sender_thread, WM_USER + 0x52, 0x53, 0x54));
+    assert!(kernel.recent_message_ops().iter().any(|record| {
+        record.op == "post_message"
+            && record.thread_id == sender_thread
+            && record.hwnd == Some(0)
+            && record.msg == Some(WM_USER + 0x52)
+            && record.detail.as_deref() == Some("thread")
+    }));
+
+    assert!(kernel.post_keybd_message_for_thread(
+        window_thread,
+        Some(hwnd),
+        b'A' as u32,
+        true,
+        1,
+        &[b'A' as u32],
+    ));
+    assert!(kernel.recent_message_ops().iter().any(|record| {
+        record.op == "post_message"
+            && record.thread_id == window_thread
+            && record.hwnd == Some(hwnd)
+            && record.msg == Some(WM_CHAR)
+            && record.wparam == Some(b'A' as u32)
+            && record.source == Some(MSGSRC_HARDWARE_KEYBOARD)
+    }));
+
+    assert!(kernel.send_notify_message_w(sender_thread, hwnd, WM_USER + 0x53, 0x55, 0x56,));
+    assert!(kernel.recent_message_ops().iter().any(|record| {
+        record.op == "send_notify_message"
+            && record.thread_id == window_thread
+            && record.hwnd == Some(hwnd)
+            && record.msg == Some(WM_USER + 0x53)
+            && record.source == Some(MSGSRC_SOFTWARE_SEND)
+    }));
+
+    assert!(
+        kernel
+            .begin_cross_thread_send_message_w(
+                sender_thread,
+                hwnd,
+                WM_USER + 0x54,
+                0x57,
+                0x58,
+                None,
+            )
+            .is_some()
+    );
+    assert!(kernel.recent_message_ops().iter().any(|record| {
+        record.op == "queue_send_message"
+            && record.thread_id == window_thread
+            && record.hwnd == Some(hwnd)
+            && record.msg == Some(WM_USER + 0x54)
+            && record.source == Some(MSGSRC_SOFTWARE_SEND)
     }));
 
     Ok(())

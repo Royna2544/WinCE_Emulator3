@@ -23,6 +23,16 @@
   through `GetMessageW`, and the guest then ran its own legacy current-process
   terminate path (`api2.2`, process `0x42`, code `0`). This proves that tap is
   not being dropped before the CE queue.
+- The same durable GWE/message trace now covers public message entrypoints,
+  not only internal `post_gwe_message` calls: `PostMessageW` window/thread/
+  broadcast posts, keyboard-post helpers, `SendNotifyMessageW`, and queued
+  cross-thread sends all record the target thread/HWND, message id, params,
+  message source, and sender detail before waking scheduler waiters. Focused
+  coverage `public_message_entrypoints_record_durable_gwe_trace` passes, the
+  full feature test suite passes, and mounted virtual validation
+  `target\public_message_trace_{summary,messages,counts}.txt` shows real iNavi
+  public posts, broadcasts, queued sends from worker thread `9`, delivered
+  `WM_LBUTTONDOWN`/`WM_LBUTTONUP`, and timer `4565` in one trace.
 - Window-HDC drawing now uses CE-style visible client regions instead of only
   a raw client rectangle. GWE computes multi-rect visible client areas from
   the window's own visibility, parent visibility, window region, and front

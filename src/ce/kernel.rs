@@ -2417,10 +2417,31 @@ impl CeKernel {
                     .filter(|window| !window.destroyed && window.parent.is_none())
                     .map(|window| window.thread_id)
                     .collect();
+                let target_messages: Vec<(u32, Message)> = self
+                    .gwe
+                    .windows_snapshot()
+                    .into_iter()
+                    .filter(|window| !window.destroyed && window.parent.is_none())
+                    .map(|window| {
+                        (
+                            window.thread_id,
+                            Message::new(window.hwnd, msg, wparam, lparam, time_ms),
+                        )
+                    })
+                    .collect();
                 let posted = self
                     .gwe
                     .post_broadcast_message(msg, wparam, lparam, time_ms);
                 if posted {
+                    for (target_thread, message) in &target_messages {
+                        self.record_message_op(
+                            "post_message",
+                            *target_thread,
+                            message,
+                            Some(1),
+                            Some("broadcast".to_owned()),
+                        );
+                    }
                     for target_thread in target_threads {
                         self.queue_message_wake_candidates(target_thread);
                     }
@@ -2428,19 +2449,31 @@ impl CeKernel {
                 posted
             }
             0 => {
-                self.gwe
-                    .post_thread_message(thread_id, msg, wparam, lparam, time_ms);
+                let message = Message::new(0, msg, wparam, lparam, time_ms);
+                self.gwe.post_message(thread_id, message.clone());
+                self.record_message_op(
+                    "post_message",
+                    thread_id,
+                    &message,
+                    Some(1),
+                    Some("thread".to_owned()),
+                );
                 self.queue_message_wake_candidates(thread_id);
                 true
             }
             hwnd => {
                 let target_thread = self.gwe.window(hwnd).map(|window| window.thread_id);
-                let posted = self.gwe.post_message_for_window(
-                    hwnd,
-                    Message::new(hwnd, msg, wparam, lparam, time_ms),
-                );
+                let message = Message::new(hwnd, msg, wparam, lparam, time_ms);
+                let posted = self.gwe.post_message_for_window(hwnd, message.clone());
                 if posted {
                     if let Some(target_thread) = target_thread {
+                        self.record_message_op(
+                            "post_message",
+                            target_thread,
+                            &message,
+                            Some(1),
+                            Some("window".to_owned()),
+                        );
                         self.queue_message_wake_candidates(target_thread);
                     }
                 }
@@ -2476,17 +2509,22 @@ impl CeKernel {
         } else {
             crate::ce::gwe::WM_KEYUP
         };
-        self.gwe.post_message(
+        let key_message = Message {
+            hwnd: hwnd_value,
+            msg: key_msg,
+            wparam: virtual_key,
+            lparam,
+            time_ms,
+            source: crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD,
+            mouse_pos_at_post: None,
+        };
+        self.gwe.post_message(target_thread, key_message.clone());
+        self.record_message_op(
+            "post_message",
             target_thread,
-            Message {
-                hwnd: hwnd_value,
-                msg: key_msg,
-                wparam: virtual_key,
-                lparam,
-                time_ms,
-                source: crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD,
-                mouse_pos_at_post: None,
-            },
+            &key_message,
+            Some(1),
+            Some("keyboard".to_owned()),
         );
         if key_down {
             for character in characters
@@ -2494,17 +2532,22 @@ impl CeKernel {
                 .copied()
                 .filter(|character| *character != 0)
             {
-                self.gwe.post_message(
+                let char_message = Message {
+                    hwnd: hwnd_value,
+                    msg: crate::ce::gwe::WM_CHAR,
+                    wparam: character,
+                    lparam,
+                    time_ms,
+                    source: crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD,
+                    mouse_pos_at_post: None,
+                };
+                self.gwe.post_message(target_thread, char_message.clone());
+                self.record_message_op(
+                    "post_message",
                     target_thread,
-                    Message {
-                        hwnd: hwnd_value,
-                        msg: crate::ce::gwe::WM_CHAR,
-                        wparam: character,
-                        lparam,
-                        time_ms,
-                        source: crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD,
-                        mouse_pos_at_post: None,
-                    },
+                    &char_message,
+                    Some(1),
+                    Some("keyboard".to_owned()),
                 );
             }
         }
@@ -2523,12 +2566,14 @@ impl CeKernel {
         wparam: u32,
         lparam: u32,
     ) -> bool {
-        self.gwe.post_thread_message(
+        let message = Message::new(0, msg, wparam, lparam, self.timers.tick_count());
+        self.gwe.post_message(target_thread_id, message.clone());
+        self.record_message_op(
+            "post_message",
             target_thread_id,
-            msg,
-            wparam,
-            lparam,
-            self.timers.tick_count(),
+            &message,
+            Some(1),
+            Some("thread".to_owned()),
         );
         self.queue_message_wake_candidates(target_thread_id);
         true
@@ -2572,6 +2617,18 @@ impl CeKernel {
             timeout_ms,
         );
         if send_id.is_some() {
+            self.record_message_trace(MessageTraceRecord {
+                op: "queue_send_message",
+                thread_id: target_thread,
+                hwnd: Some(hwnd),
+                msg: Some(msg),
+                wparam: Some(wparam),
+                lparam: Some(lparam),
+                screen_pos: None,
+                source: Some(crate::ce::gwe::MSGSRC_SOFTWARE_SEND),
+                result: Some(1),
+                detail: Some(format!("sender_thread={caller_thread_id}")),
+            });
             self.queue_message_wake_candidates(target_thread);
         }
         send_id
@@ -2634,18 +2691,30 @@ impl CeKernel {
         lparam: u32,
     ) -> bool {
         if hwnd == HWND_BROADCAST {
-            let target_threads: Vec<u32> = self
+            let targets: Vec<(u32, u32)> = self
                 .gwe
                 .windows_snapshot()
                 .into_iter()
                 .filter(|window| !window.destroyed && window.parent.is_none())
-                .map(|window| window.thread_id)
+                .map(|window| (window.hwnd, window.thread_id))
                 .collect();
             let posted =
                 self.gwe
                     .post_broadcast_message(msg, wparam, lparam, self.timers.tick_count());
             if posted {
-                for target_thread in target_threads {
+                for (target_hwnd, target_thread) in targets {
+                    self.record_message_trace(MessageTraceRecord {
+                        op: "send_notify_message",
+                        thread_id: target_thread,
+                        hwnd: Some(target_hwnd),
+                        msg: Some(msg),
+                        wparam: Some(wparam),
+                        lparam: Some(lparam),
+                        screen_pos: None,
+                        source: Some(crate::ce::gwe::MSGSRC_SOFTWARE_POST),
+                        result: Some(1),
+                        detail: Some(format!("sender_thread={caller_thread_id}/broadcast")),
+                    });
                     self.queue_message_wake_candidates(target_thread);
                 }
             }
@@ -2673,6 +2742,18 @@ impl CeKernel {
             )
             .is_some();
         if queued {
+            self.record_message_trace(MessageTraceRecord {
+                op: "send_notify_message",
+                thread_id: target_thread,
+                hwnd: Some(hwnd),
+                msg: Some(msg),
+                wparam: Some(wparam),
+                lparam: Some(lparam),
+                screen_pos: None,
+                source: Some(crate::ce::gwe::MSGSRC_SOFTWARE_SEND),
+                result: Some(1),
+                detail: Some(format!("sender_thread={caller_thread_id}")),
+            });
             self.queue_message_wake_candidates(target_thread);
         }
         queued
