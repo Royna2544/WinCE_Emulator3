@@ -52,16 +52,23 @@
     summary still shows signaled waiters left parked. The time-slice now has a
     narrower ready-waiter preemption path: when the suspended slot is free, it
     can park the active context at the code-hook PC and resume a ready blocked
-    waiter without waiting for the active guest to hit another import.
+    waiter without waiting for the active guest to hit another import. Fresh
+    host evidence `target\host_ready_preempt_*` then ran into a normal
+    `WaitForSingleObject` trap (`COREDLL.dll@497`) and the app's own legacy
+    terminate path, while revealing multiple simultaneous thread-1
+    `GetMessageW` scheduler waiters. The bridge now removes the stale
+    per-`GetMessageW` blocked-thread waiter for a thread before registering a
+    new empty-queue `GetMessageW` wait.
   - Status: open but moved again. The active ANR frontier is now incomplete CE
     run-queue/ready-waiter ownership after a real map UI, not a lost input,
     duplicate-wait freeze, hidden-layer leak, or reproduced `pc=0` return. The
-    next host run should show whether single-slot ready-waiter preemption is
-    enough; if signaled waiters still remain parked, implement a real runnable
-    context queue instead of relying on one suspended peer. Use the new message
-    trace on the exact unresponsive host interaction. If it records delivered
-    mouse/key messages, chase the guest handler continuation, pending send,
-    timer/device waits, or missing subsystem event that follows; if it records
+    next host run should confirm duplicate thread-1 `get_message` waiters are
+    gone, then show whether single-slot ready-waiter preemption is enough. If
+    signaled waiters still remain parked, implement a real runnable context
+    queue instead of relying on one suspended peer. Use the new message trace on
+    the exact unresponsive host interaction. If it records delivered mouse/key
+    messages, chase the guest handler continuation, pending send, timer/device
+    waits, or missing subsystem event that follows; if it records
     `remote_*_drop`, fix generic GWE hit-test/focus/capture semantics. Do not
     hardcode iNavi controls.
 

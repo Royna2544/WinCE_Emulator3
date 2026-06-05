@@ -49,7 +49,15 @@
   and resume a ready blocked waiter when no existing suspended peer would be
   overwritten; focused regression
   `timeslice_preempts_active_thread_to_ready_blocked_waiter` covers preserving
-  the active PC and completing the ready wait.
+  the active PC and completing the ready wait. Fresh visible host validation
+  `target\host_ready_preempt_*` moved into a normal CE wait at
+  `COREDLL.dll@497` and then the app's own legacy terminate path near the wall
+  budget, but exposed multiple simultaneous thread-1 `GetMessageW` scheduler
+  waiters. The empty-queue `GetMessageW` bridge now clears the separate
+  `blocked_guest_thread` waiter for that thread before registering a new one;
+  focused coverage
+  `get_message_block_registration_clears_stale_get_message_wait` prevents that
+  duplicate scheduler state.
 - Host/manual post-map input now has a durable kernel-level GWE/message trace
   under the existing `messages` monitor selector. The trace records generic
   message posts, host/remote touch target/drop decisions, keyboard target/drop

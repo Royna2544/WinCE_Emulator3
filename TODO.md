@@ -31,7 +31,12 @@
   existing suspended peer. Next ANR work should validate this in a fresh host
   run, then grow the full CE run queue/ready-waiter model if signaled waiters
   remain parked with more than one saved runnable context. Also inspect the
-  remaining in-flight send and any exact host click that still feels dead. The new
+  remaining in-flight send and any exact host click that still feels dead.
+  Fresh `target\host_ready_preempt_*` evidence exposed multiple simultaneous
+  thread-1 `GetMessageW` waiters after the ready-preemption slice; the
+  per-`GetMessageW` stale waiter is now cleared before a new empty-queue
+  registration. Next host validation should confirm thread 1 no longer has
+  duplicate `get_message` blocked waits. The new
   `messages` trace selector now preserves kernel-level GWE post/target/delivery
   records, including public `PostMessageW`/thread/broadcast posts,
   keyboard-post helpers, `SendNotifyMessageW`, and queued cross-thread sends.

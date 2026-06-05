@@ -95,7 +95,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     same thread before registering the new one. When the UI thread parks on an
     empty `GetMessageW`, the bridge must still let other blocked guest threads
     whose finite timeouts mature inside the host run budget resume, instead of
-    treating UI idle as a whole-process stop.
+    treating UI idle as a whole-process stop. v3 has two saved-context stores
+    for this bridge while the run-queue port is incomplete, so stale cleanup
+    must clear both vector-backed blocked waits and the separate blocked
+    `GetMessageW` thread slot before registering the next empty-queue wait.
   - CE scheduling is preemptive across runnable threads, not cooperative only
     at imports and wait calls. Until v3 grows full saved-context run queues, the
     Unicorn bridge now has a conservative time-slice that swaps the active
