@@ -101,9 +101,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     Unicorn bridge now has a conservative time-slice that swaps the active
     running guest context with the already-suspended peer context at bounded
     code-hook intervals, while avoiding import traps, trampoline pages, and
-    pending WNDPROC returns. This is still a bridge, not the final CE run queue:
-    mounted host evidence can still leave signaled waiters parked after the
-    slice, so full ready-queue ownership remains open.
+    pending WNDPROC returns. The same time-slice can now preempt the active
+    running context into the suspended slot and resume a ready blocked waiter
+    when no existing suspended peer would be overwritten. This is still a
+    bridge, not the final CE run queue: contexts beyond the active/suspended
+    pair still need full ready-queue ownership.
 
 - GWE paint/update and MFC paint pumping:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`,

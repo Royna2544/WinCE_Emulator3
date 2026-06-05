@@ -2141,6 +2141,7 @@ impl UnicornMips {
         let current_thread_id_timeslice_hook = Rc::clone(&current_thread_id);
         let suspended_guest_thread_timeslice_hook = Rc::clone(&suspended_guest_thread);
         let running_guest_thread_timeslice_hook = Rc::clone(&running_guest_thread);
+        let blocked_wait_threads_timeslice_hook = Rc::clone(&blocked_wait_threads);
         let pending_wndproc_returns_timeslice_hook = Rc::clone(&pending_wndproc_returns);
         let trampoline_ranges_timeslice_hook = trampoline_ranges.clone();
         uc.add_code_hook(1, 0, move |uc, address, _size| {
@@ -2157,6 +2158,18 @@ impl UnicornMips {
                 return;
             }
             let active_thread_id = *current_thread_id_timeslice_hook.borrow();
+            if try_resume_blocked_wait_with_active_pc(
+                unsafe { &mut *kernel_ptr },
+                uc,
+                active_thread_id,
+                &current_thread_id_timeslice_hook,
+                &blocked_wait_threads_timeslice_hook,
+                &suspended_guest_thread_timeslice_hook,
+                &running_guest_thread_timeslice_hook,
+                Some(pc),
+            ) {
+                return;
+            }
             let _ = try_timeslice_to_suspended_thread(
                 unsafe { &*kernel_ptr },
                 uc,
@@ -8049,9 +8062,35 @@ fn try_resume_blocked_wait<D>(
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
 ) -> bool {
+    try_resume_blocked_wait_with_active_pc(
+        kernel,
+        uc,
+        active_thread_id,
+        current_thread_id,
+        blocked_waits,
+        suspended_thread,
+        running_thread,
+        None,
+    )
+}
+
+#[cfg(feature = "unicorn")]
+#[allow(clippy::too_many_arguments)]
+fn try_resume_blocked_wait_with_active_pc<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    active_thread_id: u32,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
+    suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+    active_pc: Option<u32>,
+) -> bool {
     use unicorn_engine::RegisterMIPS;
 
-    if running_thread.borrow().is_some() {
+    if running_thread.borrow().is_some()
+        && (active_pc.is_none() || suspended_thread.borrow().is_some())
+    {
         return false;
     }
 
@@ -8168,7 +8207,7 @@ fn try_resume_blocked_wait<D>(
             .borrow()
             .and_then(|(id, handle)| (id == active_thread_id).then_some(handle)),
         regs: capture_mips_gprs(uc),
-        pc: read_mips_reg(uc, RegisterMIPS::RA),
+        pc: active_pc.unwrap_or_else(|| read_mips_reg(uc, RegisterMIPS::RA)),
     };
     current.regs[2] = read_mips_reg(uc, RegisterMIPS::V0);
     *suspended_thread.borrow_mut() = Some(current);
@@ -8967,6 +9006,84 @@ mod wait_scheduler_tests {
             blocked_waits.borrow()[0].kind,
             BlockedWaitKind::Sleep
         ));
+    }
+
+    #[test]
+    fn timeslice_preempts_active_thread_to_ready_blocked_waiter() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let active_thread_id = super::MAIN_GUEST_THREAD_ID;
+        let active_thread_handle = 0x101;
+        let ready_thread_id = 6;
+        let ready_thread_handle = 0x106;
+        let ready_event = kernel.create_event_w(None, true, true);
+        let active_pc = 0x3333_0000_u32;
+        let active_ra = 0x4444_0000_u32;
+        let ready_return_pc = 0x5555_0000_u32;
+        let wait_id = kernel.register_blocked_waiter(
+            ready_thread_id,
+            ready_thread_handle,
+            vec![ready_event],
+            crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel,
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            wait_id,
+            thread_id: ready_thread_id,
+            thread_handle: ready_thread_handle,
+            wait_handles: vec![ready_event],
+            kind: BlockedWaitKind::Kernel,
+            wait_started_ms: kernel.timers.tick_count(),
+            timeout_ms: crate::ce::timer::INFINITE,
+            regs: [0; 32],
+            return_pc: ready_return_pc,
+        }]));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(active_thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread = std::rc::Rc::new(std::cell::RefCell::new(Some((
+            active_thread_id,
+            active_thread_handle,
+        ))));
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, u64::from(active_ra))
+            .unwrap();
+
+        assert!(super::try_resume_blocked_wait_with_active_pc(
+            &mut kernel,
+            &mut uc,
+            active_thread_id,
+            &current_thread_id,
+            &blocked_waits,
+            &suspended_thread,
+            &running_thread,
+            Some(active_pc),
+        ));
+
+        assert_eq!(*current_thread_id.borrow(), ready_thread_id);
+        assert_eq!(
+            *running_thread.borrow(),
+            Some((ready_thread_id, ready_thread_handle))
+        );
+        let suspended = suspended_thread.borrow();
+        let suspended = suspended.as_ref().unwrap();
+        assert_eq!(suspended.thread_id, active_thread_id);
+        assert_eq!(suspended.thread_handle, Some(active_thread_handle));
+        assert_eq!(suspended.pc, active_pc);
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
+            WAIT_OBJECT_0
+        );
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::PC).unwrap() as u32,
+            ready_return_pc
+        );
+        assert!(blocked_waits.borrow().is_empty());
+        assert!(kernel.blocked_waiter(wait_id).is_none());
     }
 
     #[test]

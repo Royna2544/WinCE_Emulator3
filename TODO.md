@@ -26,10 +26,12 @@
   `target\host_anr_pc0_*` did not reproduce the earlier `pc=0` return, and the
   conservative Unicorn suspended-peer time-slice in `target\host_timeslice_*`
   moved visible host execution to more real GDI/map work without fixing the
-  ANR completely. That run still left signaled scheduler waiters parked, so
-  next ANR work should grow the full CE run queue/ready-waiter model and also
-  inspect the remaining in-flight send and any exact host click that still
-  feels dead. The new
+  ANR completely. The time-slice can now also preempt the active context into
+  the suspended slot for a ready blocked waiter when that does not overwrite an
+  existing suspended peer. Next ANR work should validate this in a fresh host
+  run, then grow the full CE run queue/ready-waiter model if signaled waiters
+  remain parked with more than one saved runnable context. Also inspect the
+  remaining in-flight send and any exact host click that still feels dead. The new
   `messages` trace selector now preserves kernel-level GWE post/target/delivery
   records, including public `PostMessageW`/thread/broadcast posts,
   keyboard-post helpers, `SendNotifyMessageW`, and queued cross-thread sends.

@@ -49,15 +49,21 @@
     `target\host_timeslice_*` moved visible host execution further into real
     GDI/map work (`BitBlt=177`, `CreateDIBSection=412`) with bounded file I/O
     (`host_open=898`, `host_read=81537/5294249B`) and active timers, but the
-    summary still shows signaled waiters left parked.
+    summary still shows signaled waiters left parked. The time-slice now has a
+    narrower ready-waiter preemption path: when the suspended slot is free, it
+    can park the active context at the code-hook PC and resume a ready blocked
+    waiter without waiting for the active guest to hit another import.
   - Status: open but moved again. The active ANR frontier is now incomplete CE
     run-queue/ready-waiter ownership after a real map UI, not a lost input,
-    duplicate-wait freeze, hidden-layer leak, or reproduced `pc=0` return. Use
-    the new message trace on the exact unresponsive host interaction. If it
-    records delivered mouse/key messages, chase the guest handler continuation,
-    pending send, timer/device waits, or missing subsystem event that follows;
-    if it records `remote_*_drop`, fix generic GWE hit-test/focus/capture
-    semantics. Do not hardcode iNavi controls.
+    duplicate-wait freeze, hidden-layer leak, or reproduced `pc=0` return. The
+    next host run should show whether single-slot ready-waiter preemption is
+    enough; if signaled waiters still remain parked, implement a real runnable
+    context queue instead of relying on one suspended peer. Use the new message
+    trace on the exact unresponsive host interaction. If it records delivered
+    mouse/key messages, chase the guest handler continuation, pending send,
+    timer/device waits, or missing subsystem event that follows; if it records
+    `remote_*_drop`, fix generic GWE hit-test/focus/capture semantics. Do not
+    hardcode iNavi controls.
 
 - Rendered iNavi map still needs road/building styling fidelity, but the
   black base-layer failure is fixed.

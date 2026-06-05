@@ -44,7 +44,12 @@
   file/RSS counters (`host_open=898`, `host_read=81537/5294249B`), and showed
   more real GDI/map work (`BitBlt=177`, `CreateDIBSection=412`) with active
   timers. Remaining evidence still shows signaled waiters parked, so this is
-  a scheduler movement, not the final CE run-queue fix.
+  a scheduler movement, not the final CE run-queue fix. The next generic slice
+  lets the time-slice preempt the active running context into the suspended slot
+  and resume a ready blocked waiter when no existing suspended peer would be
+  overwritten; focused regression
+  `timeslice_preempts_active_thread_to_ready_blocked_waiter` covers preserving
+  the active PC and completing the ready wait.
 - Host/manual post-map input now has a durable kernel-level GWE/message trace
   under the existing `messages` monitor selector. The trace records generic
   message posts, host/remote touch target/drop decisions, keyboard target/drop
