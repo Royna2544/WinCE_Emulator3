@@ -13339,18 +13339,25 @@ fn send_message_timeout_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
         return 0;
     };
-    if target_thread != thread_id && timeout_ms == 0 {
-        let Some(send_id) =
-            kernel.begin_cross_thread_send_message_w(thread_id, hwnd, msg, wparam, lparam, Some(0))
-        else {
+    if target_thread != thread_id {
+        let Some(send_id) = kernel.begin_cross_thread_send_message_w(
+            thread_id,
+            hwnd,
+            msg,
+            wparam,
+            lparam,
+            Some(timeout_ms),
+        ) else {
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
             return 0;
         };
-        let expired = kernel.expire_timed_out_send_messages();
-        if expired.contains(&send_id) {
-            let _ = kernel.take_completed_send_message_result(send_id);
+        if timeout_ms == 0 {
+            let expired = kernel.expire_timed_out_send_messages();
+            if expired.contains(&send_id) {
+                let _ = kernel.take_completed_send_message_result(send_id);
+            }
         }
         kernel.threads.set_last_error(thread_id, 0);
         return 0;

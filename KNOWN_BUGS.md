@@ -713,7 +713,10 @@
     sends result-ready and removes them from receiver retrieval; raw
     `SendMessageTimeout(..., timeout=0)` across threads now creates and
     immediately expires the same transaction instead of executing the receiver
-    shortcut. The bounded `target\sync_send_transaction_*` probe stopped at
+    shortcut, and nonzero raw cross-thread timeouts now queue
+    timeout-flagged receiver-side sent transactions instead of fabricating
+    caller-thread completion. The bounded `target\sync_send_transaction_*`
+    probe stopped at
     `pc=0x00b4bc24` with no
     render milestones and an all-zero framebuffer body, and the bounded
     `target\send_timeout_expiry_*` probe stopped at `pc=0x00339c3c` with no

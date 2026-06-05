@@ -59,13 +59,13 @@ use wince_emulation_v3::{
             KEY_STATE_DOWN_FLAG, KEY_STATE_GET_ASYNC_DOWN_FLAG, KEY_STATE_PREV_DOWN_FLAG,
             MSGSRC_HARDWARE_KEYBOARD, MSGSRC_SOFTWARE_POST, MSGSRC_SOFTWARE_SEND, Message,
             PeekFlags, Point, QS_PAINT, QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER, Rect,
-            SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
-            SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, VK_LSHIFT, VK_SHIFT, WA_ACTIVE, WA_INACTIVE,
-            WM_ACTIVATE, WM_CANCELMODE, WM_CHAR, WM_CLOSE, WM_DESTROY, WM_ENABLE, WM_ERASEBKGND,
-            WM_GETDLGCODE, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
-            WM_LBUTTONDOWN, WM_MOVE, WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETFOCUS, WM_SETTEXT,
-            WM_SHOWWINDOW, WM_SIZE, WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_CHILD, WS_DISABLED,
-            WS_GROUP, WS_TABSTOP, WS_VISIBLE,
+            SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN, SMF_TIMEOUT, SWP_HIDEWINDOW, SWP_NOACTIVATE,
+            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, VK_LSHIFT, VK_SHIFT, WA_ACTIVE,
+            WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE, WM_CHAR, WM_CLOSE, WM_DESTROY, WM_ENABLE,
+            WM_ERASEBKGND, WM_GETDLGCODE, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_KEYUP,
+            WM_KILLFOCUS, WM_LBUTTONDOWN, WM_MOVE, WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETFOCUS,
+            WM_SETTEXT, WM_SHOWWINDOW, WM_SIZE, WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_CHILD,
+            WS_DISABLED, WS_GROUP, WS_TABSTOP, WS_VISIBLE,
         },
         kernel::CeKernel,
         memory::PROCESS_HEAP_HANDLE,
@@ -7074,6 +7074,79 @@ fn coredll_raw_send_message_timeout_zero_cross_thread_expires_transaction() -> R
     assert!(kernel.gwe.sent_message(1).is_none());
     assert_eq!(kernel.gwe.stats().send_transaction_timeout_count, 1);
     assert!(kernel.gwe.get_message(receiver_thread).is_none());
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_send_message_timeout_nonzero_cross_thread_queues_transaction() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let sender_thread = 52;
+    let receiver_thread = 53;
+    let result_ptr = 0xb240;
+    let msg_ptr = 0xb280;
+    memory.map_words(result_ptr, 1);
+    memory.map_words(msg_ptr, 7);
+    memory.write_u32(result_ptr, 0xfeed_cafe)?;
+
+    let hwnd = kernel.create_window_ex_w(
+        receiver_thread,
+        "SYNC_SEND_TIMEOUT_RAW_WAIT",
+        "",
+        None,
+        0,
+        0,
+        0,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            sender_thread,
+            ORD_SEND_MESSAGE_TIMEOUT,
+            [hwnd, WM_ERASEBKGND, 0x5a, 0x5b, 0, 250, result_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(result_ptr)?, 0xfeed_cafe);
+    let sent = kernel.gwe.sent_message(1).expect("queued timeout send");
+    assert_eq!(sent.sender_thread_id, Some(sender_thread));
+    assert_eq!(sent.receiver_thread_id, receiver_thread);
+    assert_ne!(sent.flags & SMF_TIMEOUT, 0);
+    assert_eq!(sent.timeout_ms, Some(250));
+
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        receiver_thread,
+        msg_ptr,
+        hwnd,
+        WM_ERASEBKGND,
+        0x5a,
+        0x5b,
+    );
+    assert!(kernel.gwe.in_send_message(receiver_thread));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            receiver_thread,
+            ORD_DISPATCH_MESSAGE_W,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.take_completed_send_message_result(1), Some(1));
 
     Ok(())
 }

@@ -2171,11 +2171,12 @@ impl CeKernel {
         if target_thread == caller_thread_id {
             return None;
         }
+        let flags = timeout_ms.map_or(SMF_NULL, |_| crate::ce::gwe::SMF_TIMEOUT);
         let send_id = self.gwe.queue_send_message_for_window(
             Some(caller_thread_id),
             hwnd,
             Message::new(hwnd, msg, wparam, lparam, self.timers.tick_count()),
-            SMF_NULL,
+            flags,
             timeout_ms,
         );
         if send_id.is_some() {

@@ -2701,6 +2701,16 @@
   dispatch returns. The smoke test's throwaway `WM_USER + 1` message was moved
   away from CE's `DM_SETDEFID` value so it no longer conflicts with real dialog
   message semantics.
+- Added the CE-backed `SendMessageTimeout` transaction flag slice. Cross-thread
+  sends created with a timeout now carry `SMF_TIMEOUT` in the GWE sent-message
+  state, matching the CE `cmsgque.h` `smfTimeout`/`MessageTimeout` shape.
+  Raw `SendMessageTimeout(..., timeout>0)` no longer executes an immediate
+  virtual send in the caller thread; it queues the receiver-side sent message
+  transaction and leaves the result pointer untouched until receiver dispatch
+  or a Unicorn sender wait completes. Raw `timeout=0` behavior still creates
+  and immediately expires the same transaction. Focused raw GWE coverage proves
+  nonzero timeout queueing, `SMF_TIMEOUT` metadata, receiver retrieval, and
+  dispatch completion, and the raw GWE suite now has 79 passing tests.
 - Added an indexed-DIB fidelity slice for CE GDI color tables. `BitmapObject`
   now stores RGBQUAD color tables, raw `SetDIBColorTable`/`GetDIBColorTable`
   read and write the selected bitmap table through guest memory, and the 8 bpp

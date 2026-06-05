@@ -595,7 +595,9 @@
        marks queued timed sends result-ready and removes them from receiver
        retrieval; raw `SendMessageTimeout(..., timeout=0)` across threads now
        creates and expires that transaction immediately instead of running the
-       receiver shortcut. Scheduler send-reply waiters are now keyed by
+       receiver shortcut, while nonzero cross-thread timeout sends now queue a
+       timeout-flagged receiver-side transaction instead of fabricating caller
+       thread completion. Scheduler send-reply waiters are now keyed by
        sent-message id and wake when the sent transaction completes, times out,
        is receiver-terminated by target HWND destruction, or the receiver calls
        the internal `ReplyMessage` path before dispatch unwinds. The first Unicorn

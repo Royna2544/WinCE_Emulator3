@@ -6,9 +6,9 @@ use wince_emulation_v3::{
         com::{REGDB_E_CLASSNOTREG, S_FALSE, S_OK},
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::{
-            GWL_USERDATA, QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER, Rect, WA_ACTIVE, WM_ACTIVATE,
-            WM_ERASEBKGND, WM_KILLFOCUS, WM_QUIT, WM_SETFOCUS, WM_TIMER, WM_USER, WS_CHILD,
-            WS_VISIBLE,
+            GWL_USERDATA, QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER, Rect, SMF_TIMEOUT, WA_ACTIVE,
+            WM_ACTIVATE, WM_ERASEBKGND, WM_KILLFOCUS, WM_QUIT, WM_SETFOCUS, WM_TIMER, WM_USER,
+            WS_CHILD, WS_VISIBLE,
         },
         kernel::{
             CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
@@ -752,6 +752,15 @@ fn send_message_transitions_queue_scheduler_reply_wait_candidates() -> Result<()
             Some(500),
         )
         .expect("queued completing send");
+    assert_ne!(
+        kernel
+            .gwe
+            .sent_message(completion_send)
+            .expect("completion send state")
+            .flags
+            & SMF_TIMEOUT,
+        0
+    );
     let completion_wait = register_send_wait(&mut kernel, completion_sender, completion_send);
     let message = kernel.gwe.get_message(completion_receiver).unwrap();
     assert_eq!(
@@ -780,6 +789,15 @@ fn send_message_transitions_queue_scheduler_reply_wait_candidates() -> Result<()
             Some(0),
         )
         .expect("queued timeout send");
+    assert_ne!(
+        kernel
+            .gwe
+            .sent_message(timeout_send)
+            .expect("timeout send state")
+            .flags
+            & SMF_TIMEOUT,
+        0
+    );
     let timeout_wait = register_send_wait(&mut kernel, timeout_sender, timeout_send);
     assert_eq!(kernel.expire_timed_out_send_messages(), vec![timeout_send]);
     assert_eq!(select_send_wait(&kernel, 1, 0), Some(timeout_wait));
