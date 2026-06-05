@@ -41,6 +41,7 @@ These are intentionally tiny. Each fixture should test one layer or invariant be
 | `166_msgwait_message_timer_wake` | Posted messages and timers wake `MsgWaitForMultipleObjectsEx`. |
 | `167_sleep_infinite_resume` | Worker `Sleep(INFINITE)` self-suspends until `ResumeThread` makes it runnable again. |
 | `168_sendmessage_timeout_zero_cross_thread` | `SendMessageTimeout(..., timeout=0)` to another thread expires without stale receiver delivery. |
+| `169_post_keybd_message` | `PostKeybdMessage` posts hardware-sourced keydown/char/keyup messages and updates key state. |
 | `asm/` | Optional assembly/reference snippets for executable-section branch/delay tests. |
 | `tools/make_raw_mips_blobs.py` | Generates raw MIPS little-endian blobs for CPU-only unit tests. |
 

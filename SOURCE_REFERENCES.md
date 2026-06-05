@@ -794,6 +794,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `DM_GETDEFID`/`DM_SETDEFID` over child button style state. The same queued
     key state now backs the first raw `GetAsyncKeyState` and
     `GetAsyncShiftFlags` implementation.
+  - `winuser.h` and `gweapiset1.hpp` declare the public/internal
+    `PostKeybdMessage` shapes, `keybd_event`, `GetMessageSource`, and
+    `MSGSRC_HARDWARE_KEYBOARD`; `keybd.h` defines `KeyStateDownFlag` and
+    `KeyStatePrevDownFlag`. Rust raw ordinal 832 now queues hardware-sourced
+    `WM_KEYDOWN`/`WM_KEYUP` plus optional character-buffer `WM_CHAR` messages
+    through the normal GWE thread queue, and raw `keybd_event` targets the
+    focused/active keyboard window with CE-style lParam transition bits.
 
 - GWE paint/update surface:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\gweapiset1.hpp`,

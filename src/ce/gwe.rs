@@ -69,6 +69,7 @@ pub const VK_LMENU: u32 = 0xa4;
 pub const VK_RMENU: u32 = 0xa5;
 pub const KEY_STATE_TOGGLED_FLAG: u32 = 0x0001;
 pub const KEY_STATE_GET_ASYNC_DOWN_FLAG: u32 = 0x0002;
+pub const KEY_STATE_PREV_DOWN_FLAG: u32 = 0x0040;
 pub const KEY_STATE_DOWN_FLAG: u32 = 0x0080;
 pub const KEY_SHIFT_ANY_CTRL_FLAG: u32 = 0x4000_0000;
 pub const KEY_SHIFT_ANY_SHIFT_FLAG: u32 = 0x2000_0000;

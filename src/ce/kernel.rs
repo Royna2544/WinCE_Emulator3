@@ -2058,6 +2058,68 @@ impl CeKernel {
         }
     }
 
+    pub fn post_keybd_message_for_thread(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        virtual_key: u32,
+        key_down: bool,
+        lparam: u32,
+        characters: &[u32],
+    ) -> bool {
+        let time_ms = self.timers.tick_count();
+        let target_hwnd = hwnd
+            .or_else(|| self.gwe.get_focus())
+            .or_else(|| self.gwe.get_active_window());
+        let target_thread = match target_hwnd {
+            Some(hwnd) => match self.gwe.window(hwnd).filter(|window| !window.destroyed) {
+                Some(window) => window.thread_id,
+                None => return false,
+            },
+            None => thread_id,
+        };
+        let hwnd_value = target_hwnd.unwrap_or(0);
+        let key_msg = if key_down {
+            crate::ce::gwe::WM_KEYDOWN
+        } else {
+            crate::ce::gwe::WM_KEYUP
+        };
+        self.gwe.post_message(
+            target_thread,
+            Message {
+                hwnd: hwnd_value,
+                msg: key_msg,
+                wparam: virtual_key,
+                lparam,
+                time_ms,
+                source: crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD,
+                mouse_pos_at_post: None,
+            },
+        );
+        if key_down {
+            for character in characters
+                .iter()
+                .copied()
+                .filter(|character| *character != 0)
+            {
+                self.gwe.post_message(
+                    target_thread,
+                    Message {
+                        hwnd: hwnd_value,
+                        msg: crate::ce::gwe::WM_CHAR,
+                        wparam: character,
+                        lparam,
+                        time_ms,
+                        source: crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD,
+                        mouse_pos_at_post: None,
+                    },
+                );
+            }
+        }
+        self.queue_message_wake_candidates(target_thread);
+        true
+    }
+
     pub fn post_thread_message_w(
         &mut self,
         target_thread_id: u32,

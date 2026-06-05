@@ -72,6 +72,11 @@ const RDW_NOCHILDREN: u32 = 0x0040;
 const RDW_ALLCHILDREN: u32 = 0x0080;
 const RDW_UPDATENOW: u32 = 0x0100;
 const RDW_ERASENOW: u32 = 0x0200;
+const KEYEVENTF_EXTENDEDKEY: u32 = 0x0001;
+const KEYEVENTF_KEYUP: u32 = 0x0002;
+const KF_EXTENDED_LPARAM: u32 = 0x0100_0000;
+const KF_REPEAT_LPARAM: u32 = 0x4000_0000;
+const KF_UP_LPARAM: u32 = 0x8000_0000;
 const TPM_RETURNCMD: u32 = 0x0100;
 const TPMPARAMS_SIZE: u32 = 20;
 const STRSAFE_E_INSUFFICIENT_BUFFER: u32 = 0x8007_007a;
@@ -2941,6 +2946,13 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_ASYNC_SHIFT_FLAGS => Some(CoredllValue::U32(
             kernel.gwe.get_async_shift_flags(raw_arg(args, 0)),
         )),
+        ORD_POST_KEYBD_MESSAGE => Some(CoredllValue::Bool(post_keybd_message_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_KEYBD_EVENT => {
+            keybd_event_raw(kernel, thread_id, args);
+            Some(CoredllValue::U32(0))
+        }
         ORD_PEEK_MESSAGE_W => Some(CoredllValue::Bool(peek_message_w_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -13366,6 +13378,123 @@ fn translate_virtual_key_to_char(vkey: u32) -> u32 {
         0x20 => 0x20,
         _ => 0,
     }
+}
+
+fn post_keybd_message_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let hwnd = raw_arg(args, 0);
+    if hwnd != 0 && !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    }
+    let virtual_key = raw_arg(args, 1);
+    let key_state_flags = raw_arg(args, 2);
+    let requested_characters = raw_arg(args, 3);
+    let (character_ptr, character_capacity) = if args.len() >= 8 {
+        (raw_arg(args, 6), raw_arg(args, 7))
+    } else {
+        (raw_arg(args, 5), requested_characters)
+    };
+    let character_count = requested_characters.min(character_capacity) as usize;
+    let characters = match read_keyboard_character_buffer(
+        kernel,
+        memory,
+        thread_id,
+        character_ptr,
+        character_count,
+    ) {
+        Some(characters) => characters,
+        None => return false,
+    };
+    let key_down = key_state_flags & crate::ce::gwe::KEY_STATE_DOWN_FLAG != 0;
+    let lparam = keyboard_message_lparam(
+        0,
+        key_state_flags & crate::ce::gwe::KEY_STATE_PREV_DOWN_FLAG != 0,
+        !key_down,
+        false,
+    );
+    let posted = kernel.post_keybd_message_for_thread(
+        thread_id,
+        (hwnd != 0).then_some(hwnd),
+        virtual_key,
+        key_down,
+        lparam,
+        &characters,
+    );
+    kernel.threads.set_last_error(
+        thread_id,
+        if posted {
+            0
+        } else {
+            ERROR_INVALID_WINDOW_HANDLE
+        },
+    );
+    posted
+}
+
+fn keybd_event_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) {
+    let virtual_key = raw_arg(args, 0) & 0xff;
+    let scan_code = raw_arg(args, 1) & 0xff;
+    let flags = raw_arg(args, 2);
+    let key_up = flags & KEYEVENTF_KEYUP != 0;
+    let lparam = keyboard_message_lparam(
+        scan_code,
+        key_up,
+        key_up,
+        flags & KEYEVENTF_EXTENDEDKEY != 0,
+    );
+    let _ =
+        kernel.post_keybd_message_for_thread(thread_id, None, virtual_key, !key_up, lparam, &[]);
+    kernel.threads.set_last_error(thread_id, 0);
+}
+
+fn read_keyboard_character_buffer<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    character_ptr: u32,
+    character_count: usize,
+) -> Option<Vec<u32>> {
+    if character_count == 0 {
+        return Some(Vec::new());
+    }
+    if character_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
+    let mut characters = Vec::with_capacity(character_count);
+    for index in 0..character_count {
+        let addr = character_ptr.wrapping_add((index as u32) * 4);
+        characters.push(read_guest_u32(kernel, memory, thread_id, addr)?);
+    }
+    Some(characters)
+}
+
+fn keyboard_message_lparam(
+    scan_code: u32,
+    previous_down: bool,
+    key_up: bool,
+    extended: bool,
+) -> u32 {
+    let mut lparam = 1 | ((scan_code & 0xff) << 16);
+    if extended {
+        lparam |= KF_EXTENDED_LPARAM;
+    }
+    if previous_down {
+        lparam |= KF_REPEAT_LPARAM;
+    }
+    if key_up {
+        lparam |= KF_UP_LPARAM;
+    }
+    lparam
 }
 
 const CS_LOCK_COUNT: u32 = 0;

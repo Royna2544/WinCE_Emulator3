@@ -463,14 +463,18 @@
     pushbutton or the dialog's default pushbutton with `IDOK` fallback. GWE now
     reports button `DLGC_DEFPUSHBUTTON`/`DLGC_UNDEFPUSHBUTTON` state, answers
     `DM_GETDEFID`/`DM_SETDEFID` over child pushbutton styles, and has a first
-    queued-key `GetKeyState`/`GetAsyncKeyState`/`GetAsyncShiftFlags` model. The
-    broader CE dialog manager remains incomplete: full `DLGC_WANT*` edge cases,
-    nested modal loops, default-button repaint/state details, richer
-    keyboard-state/toggle-key and `PostKeybdMessage` behavior, and full
-    receiver-context guest dialog proc execution still need expansion as
+    queued-key `GetKeyState`/`GetAsyncKeyState`/`GetAsyncShiftFlags` model.
+    Raw `PostKeybdMessage` now posts hardware-sourced `WM_KEYDOWN`/`WM_KEYUP`
+    and optional character-buffer `WM_CHAR` messages through the same queue,
+    while raw `keybd_event` targets the focused/active keyboard window. The
+    broader CE dialog/input manager remains incomplete: full `DLGC_WANT*` edge
+    cases, nested modal loops, default-button repaint/state details, richer
+    keyboard-layout/`KeybdVKeyToUnicode` behavior, toggle-key edge cases, and
+    full receiver-context guest dialog proc execution still need expansion as
     fixtures/traces demand. Current fixture coverage includes passing
     `052_modeless_dialog_isdialogmessage` and
-    `076_dialog_tab_enter_escape` runs through the ignored eVC MIPSII
+    `076_dialog_tab_enter_escape` plus `169_post_keybd_message` runs through
+    the ignored eVC MIPSII
     `fixture_exes` harness.
     Raw/kernel `DestroyWindow` now records and sends `WM_DESTROY` before final
     GWE cleanup, and the default `WM_CLOSE` shortcut records the same destroy

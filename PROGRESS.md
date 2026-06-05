@@ -2665,6 +2665,19 @@
   harness with `WINCE_FIXTURE_FILTER`, proving the imported app-style path
   reaches guest dialog procedures for modeless `WM_COMMAND` and Return-key
   default-button command generation.
+- Added the first CE-backed keyboard injection slice. Raw `PostKeybdMessage`
+  now accepts the SDK six-argument shape and the wider internal GWE API-set
+  shape, derives `WM_KEYDOWN`/`WM_KEYUP` from `KeyStateDownFlag`, preserves
+  previous-down/key-up lParam transition bits, optionally queues character
+  buffer entries as hardware-sourced `WM_CHAR`, and wakes the target thread
+  through the normal GWE message queue. Raw `keybd_event` now targets the
+  focused/active keyboard window and posts hardware-sourced key messages with
+  scan-code/extended/up lParam bits. Focused raw GWE coverage proves
+  `PostKeybdMessage` key/char/key-state behavior and `keybd_event` focus
+  targeting; the new eVC MIPSII fixture `169_post_keybd_message` passes
+  through the ignored `fixture_exes` harness, covering the imported
+  `PostKeybdMessage` keydown/up path plus app-pump `TranslateMessage`
+  character generation.
 - Added an indexed-DIB fidelity slice for CE GDI color tables. `BitmapObject`
   now stores RGBQUAD color tables, raw `SetDIBColorTable`/`GetDIBColorTable`
   read and write the selected bitmap table through guest memory, and the 8 bpp
