@@ -12,6 +12,14 @@
 
 ## Current Slice
 
+- Host input while parked on raw `GetMessageW` is no longer a blind spot:
+  the host run loop now drains newly polled input into the blocked CE
+  thread/window and relies on the scheduler message-wake path to resume the
+  syscall. Keep using this for manual `--desktop host` interaction checks, but
+  do not treat it as the post-splash progression fix. The mounted release
+  virtual probe still parks at `COREDLL.dll@861 blocked_get_message`; the next
+  real UI slice remains scheduler/GWE/resource progression after that valid
+  idle point.
 - Host Win32 presenter is now a usable output boundary for mounted probes:
   live guest framebuffer writes present during long Unicorn runs, `WM_PAINT`
   redraws the last frame, the visible client area is 800x480, and the title
@@ -1047,6 +1055,13 @@
   paint, child-window, or custom-message drawing behavior. The next useful
   evidence is the exact WNDPROC/superclass path and any GDI/DC/resource imports
   following the delivered mouse down/up.
+- Continue the scheduler/GWE wake path from the release/no-trace mounted
+  frontier. `target\release_virtual_150s.ppm` and the stop summary show preload
+  reaches a normal `GetMessageW` block
+  (`blocked_get_message=thread:1 hwnd=any`) rather than a file-I/O or PNG
+  loader stall. Next fixes should make timers, posted input, host touch/key
+  events, serial/audio/process wakes, and message waits resume through the same
+  CE scheduler model without forcing paints or app state.
 - Add an HTTP/WebSocket transport over the Rust `CeRemote` API state when the
   host runtime is ready for remote UI/audio streaming; audio transport should
   honor the sink's per-client cursors and flush-marked chunks immediately.

@@ -246,7 +246,7 @@ fn run_cpu_loop(
     enqueue_startup_taps(kernel, &args.startup_taps)?;
     let mut reported_blocked_message_wait = false;
     loop {
-        if enqueue_desktop_input(desktop, kernel)? != 0 {
+        if enqueue_desktop_input_for_current_wait(cpu, desktop, kernel, args.desktop)? != 0 {
             reported_blocked_message_wait = false;
         }
         if let Err(err) = desktop.run_cpu_until(
@@ -268,7 +268,7 @@ fn run_cpu_loop(
             }
             return Err(err);
         }
-        if enqueue_desktop_input(desktop, kernel)? != 0 {
+        if enqueue_desktop_input_for_current_wait(cpu, desktop, kernel, args.desktop)? != 0 {
             reported_blocked_message_wait = false;
         }
         desktop.present()?;
@@ -290,6 +290,27 @@ fn run_cpu_loop(
         break;
     }
     Ok(())
+}
+
+fn enqueue_desktop_input_for_current_wait(
+    cpu: &UnicornMips,
+    desktop: &mut DesktopRuntime,
+    kernel: &mut CeKernel,
+    desktop_mode: DesktopMode,
+) -> Result<usize> {
+    let blocked_get_message = if desktop_mode == DesktopMode::Host {
+        cpu.last_debug_snapshot()
+            .and_then(|snapshot| snapshot.blocked_get_message.clone())
+    } else {
+        None
+    };
+    let queued = enqueue_desktop_input(desktop, kernel)?;
+    if queued != 0 {
+        if let Some(blocked) = blocked_get_message {
+            kernel.drain_remote_input_to_thread_window(blocked.thread_id, blocked.hwnd);
+        }
+    }
+    Ok(queued)
 }
 
 fn write_requested_tracefiles(cpu: &UnicornMips, tracefiles: &[(String, PathBuf)]) -> Result<()> {

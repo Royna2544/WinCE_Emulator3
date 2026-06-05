@@ -64,6 +64,17 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     crash exposed this as a generic stack-slot layout bug; the follow-up
     4 MiB reserve keeps later worker slots inside mapped guest stack memory.
 
+- Scheduler-backed message input waits:
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\GWEAPI\msgqueue.cpp`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`
+  - Host/presenter input must enter the same CE message queue and scheduler
+    waiter path as guest/remote input. v3 now drains newly polled host input
+    into the blocked raw `GetMessageW` thread/window when the host run loop is
+    parked, which queues a scheduler message-wake candidate instead of
+    returning from the syscall directly in host code.
+
 - GWE paint/update and MFC paint pumping:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\window.hpp`,
@@ -1071,3 +1082,15 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     enabled bit as part of the virtual HWND state. Rust keeps CE source as the
     behavior authority, but this corroborates the previous-state return and
     enabled-state ownership path.
+
+- CE message wait / scheduler wake authority:
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\syncobj.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\GWE\GWEAPI\msgqueue.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`
+  - The current release/no-trace iNavi frontier is `GetMessageW` blocked on
+    thread 1 with no synthetic app state. Continue the port by routing timer,
+    posted input, serial/audio/process, and synchronous-send wakeups through
+    scheduler-owned wait state and GWE message queues as CE does, rather than
+    resuming blocked message calls from ad hoc subsystem paths.

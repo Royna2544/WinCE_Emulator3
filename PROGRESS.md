@@ -9,6 +9,26 @@
 
 ## Confirmed
 
+- Host-mode parked `GetMessageW` now has an input wake bridge instead of only
+  polling host input outside the blocked CE wait. When the Win32 presenter
+  run loop observes that Unicorn is stopped on a blocked raw
+  `COREDLL!GetMessageW`, newly polled host input is enqueued through the
+  existing remote-input path and immediately drained into the blocked
+  thread/window's GWE queue, which queues the normal scheduler message-wake
+  candidate. The raw syscall still resumes through Unicorn/COREDLL rather
+  than `main.rs` faking a return. Focused coverage
+  `blocked_get_message_wait_wakes_when_remote_input_is_drained` proves a
+  registered `GetMessage` waiter becomes selectable after remote touch input
+  is drained. `cargo check --features unicorn,trace,win32-desktop` and the
+  full `cargo test --features unicorn,trace,win32-desktop --test
+  basic_subsystems` pass with only the known Windows incremental-finalize
+  warning. Mounted release validation
+  `target\blocked_input_bridge_virtual_45s.ppm` still reaches the same stable
+  `COREDLL.dll@861 blocked_get_message` frontier quickly, with bounded
+  counters (`heap_live=13705/30071199B`, `virtual_live=2/131072B`,
+  `host_open=665`, `host_read=80129/4055867B`, `mem_open=3`,
+  `max_read=685080`), so this is a host interactivity/wake fix rather than
+  the post-splash UI breakthrough.
 - Win32 host presentation now updates while Unicorn is still running and uses
   an 800x480 client area instead of treating 800x480 as the outer window
   rectangle. The host desktop runtime wraps the framebuffer only for
@@ -2939,6 +2959,21 @@
   `ReleaseDC`, with no named render milestone. This narrows basic text metrics
   as a missing API class, but the active UI gate remains generic
   resource/GDI/presentation lifecycle after loaded surfaces.
+- Added generic PC/RA region labels to Unicorn debug snapshots. Stop summaries
+  now annotate `pc` and `ra` with mapped image/DLL/trap/heap/virtual regions,
+  making bounded mounted runs immediately distinguish guest app loops from DLL,
+  trampoline, and heap/virtual execution. A 30 s virtual trace run wrote
+  `target\pc_region_virtual_30s_*` and showed the apparent mystery stop is
+  still inside the iNavi image (`pc=0x00339c60(image:iNavi.exe+0x329c60)`),
+  in an RGB-to-16bpp conversion loop. A no-trace release virtual run then
+  reached the post-preload idle frontier quickly and stopped at
+  `GetMessageW` (`pc=0x7fff0b60(ce-import-traps+0xb60)`,
+  `ra=0x60024834(dll:mfcce400.dll+0x24834)`,
+  `blocked_get_message=thread:1 hwnd=any`) with memory still bounded
+  (`heap_live=13705/30071199B`, `host_open=665`,
+  `host_read=80129/4059846B`). Current evidence says debug+trace startup is
+  dominated by guest image conversion instrumentation, while release/no-trace
+  reaches the scheduler/GWE message-wake frontier.
 
 ## False Leads
 

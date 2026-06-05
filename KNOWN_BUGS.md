@@ -12,6 +12,28 @@
 
 ## Open
 
+- Release/no-trace mounted iNavi reaches a stable scheduler idle frontier
+  rather than continuing post-splash UI progression.
+  - Symptom: optimized mounted runs reach
+    `COREDLL.dll@861 blocked_get_message` quickly with PC/RA now labeled as
+    emulator trap/MFC code instead of unknown addresses. In host mode the
+    window remains responsive, and host input can now be drained into the
+    blocked CE thread's GWE queue, but the app still needs the next real
+    scheduler/GWE/resource event to advance beyond the splash/art frame.
+  - Evidence: `target\blocked_input_bridge_virtual_45s.ppm` ended at
+    `pc=0x7fff0b60(ce-import-traps+0xb60)`,
+    `ra=0x60024834(dll:mfcce400.dll+0x24834)`,
+    `trap=COREDLL.dll@861`, `blocked_get_message=thread:1 hwnd=any`, with
+    bounded memory/file counters (`heap_live=13705/30071199B`,
+    `virtual_live=2/131072B`, `host_open=665`,
+    `host_read=80129/4055867B`, `mem_open=3`, `max_read=685080`).
+    Focused test coverage now confirms that remote/host input drained while a
+    `GetMessage` waiter is registered queues a scheduler message wake
+    candidate.
+  - Status: open. Host idle interactivity is improved, but the next UI
+    breakthrough must come from the real CE scheduler/GWE/resource path after
+    the valid idle wait, not from forcing pixels or app state.
+
 - Post-region mounted iNavi now runs deeper, but later map/UI composition is
   still not presented to the display surface.
   - Symptom: `target\thread_stack_region_virtual_150s_*` runs the full 150 s

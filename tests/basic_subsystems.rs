@@ -144,6 +144,19 @@ fn memory_map_rejects_overlaps() -> Result<()> {
 }
 
 #[test]
+fn memory_map_finds_containing_region() -> Result<()> {
+    let mut map = MemoryMap::default();
+    map.map(0x2000_0000, 0x0001_0000, MemoryPerms::READ, "first")?;
+
+    let region = map.region_containing(0x2000_1234).unwrap();
+    assert_eq!(region.name, "first");
+    assert_eq!(region.base, 0x2000_0000);
+    assert!(map.region_containing(0x2001_0000).is_none());
+
+    Ok(())
+}
+
+#[test]
 fn wait_for_multiple_validates_all_handles_before_acquiring() -> Result<()> {
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
     let mut kernel = CeKernel::boot(config);
@@ -1242,6 +1255,59 @@ fn remote_server_api_state_queues_input_serial_audio_and_status() -> Result<()> 
     assert_eq!(late_chunks[0].duration_ms, 30);
     assert_eq!(late_chunks[0].payload, vec![12, 13, 14, 15, 16, 17]);
     assert!(late_chunks[0].flush);
+
+    Ok(())
+}
+
+#[test]
+fn blocked_get_message_wait_wakes_when_remote_input_is_drained() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    kernel.remote.set_framebuffer_size(800, 480);
+
+    let thread_id = 99;
+    let hwnd = kernel.create_window_ex_w(thread_id, "REMOTE", "remote", None, 1, 0, 0);
+    let wait_id = kernel.register_blocked_waiter(
+        thread_id,
+        CE_CURRENT_THREAD_PSEUDO_HANDLE,
+        Vec::new(),
+        SchedulerBlockedWaitKind::GetMessage {
+            hwnd: Some(hwnd),
+            min_msg: 0,
+            max_msg: 0,
+        },
+        kernel.timers.tick_count(),
+        INFINITE,
+    );
+
+    assert_eq!(
+        kernel.select_ready_blocked_waiter(1, 0, |blocked, kernel| {
+            matches!(blocked.kind, SchedulerBlockedWaitKind::GetMessage { .. })
+                && kernel.gwe.has_queue_input(blocked.thread_id, u32::MAX)
+        }),
+        None
+    );
+
+    kernel.remote.enqueue_touch("down", 12, 34).unwrap();
+    assert_eq!(
+        kernel.drain_remote_input_to_thread_window(thread_id, Some(hwnd)),
+        1
+    );
+
+    assert_eq!(
+        kernel.select_ready_blocked_waiter(1, 0, |blocked, kernel| {
+            matches!(blocked.kind, SchedulerBlockedWaitKind::GetMessage { .. })
+                && kernel.gwe.has_queue_input(blocked.thread_id, u32::MAX)
+        }),
+        Some(wait_id)
+    );
+    let down = (0..4)
+        .filter_map(|_| kernel.gwe.get_message(thread_id))
+        .find(|message| message.msg == WM_LBUTTONDOWN)
+        .unwrap();
+    assert_eq!(down.hwnd, hwnd);
+    assert_eq!(down.lparam & 0xffff, 12);
+    assert_eq!((down.lparam >> 16) & 0xffff, 34);
 
     Ok(())
 }
