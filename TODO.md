@@ -593,7 +593,9 @@
        send depth after dispatch. Raw cross-thread `SendMessageW` now also
        queues a sender/receiver sent transaction instead of executing the
        receiver shortcut in the caller thread, while `DefWindowProcW` remains
-       direct default processing. Sender-side transaction bookkeeping
+       direct default processing. Raw `SendDlgItemMessageW` now follows the CE
+       SDK wrapper shape by using the same queueing send path for normal
+       messages after `GetDlgItem`. Sender-side transaction bookkeeping
        now exists for blocking sends, and raw receiver `DispatchMessageW`
        stores the WNDPROC result back into that transaction. Timeout expiry now
        marks queued timed sends result-ready and removes them from receiver

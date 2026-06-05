@@ -8126,7 +8126,7 @@ fn send_dlg_item_message_w_raw<M: CoredllGuestMemory>(
                 memory,
                 thread_id,
                 &[child, msg, wparam, lparam],
-                false,
+                true,
             );
         }
     };

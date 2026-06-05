@@ -700,7 +700,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     context after dispatch returns. Raw cross-thread `SendMessageW` now creates
     this sent-message transaction instead of running the receiver/default path
     immediately in the caller thread; raw `DefWindowProcW` remains direct
-    default processing. `cmsgque.h`'s `SendMsgEntry_t` fields
+    default processing. CE SDK `winuser.h` documents `SendDlgItemMessage` as a
+    wrapper implemented in terms of `GetDlgItem` and `SendMessage`, so raw
+    `SendDlgItemMessageW` now reuses the same queueing helper for normal
+    messages after resolving the child HWND. `cmsgque.h`'s `SendMsgEntry_t`
+    fields
     (`pReceivedNext`, `pSentNext`, `pmsgqReply`, `smFlags`, HWND/message
     parameters, and `WndProcResult`) now map to explicit Rust sent-message
     transaction state with sender/receiver thread ids, flags, timeout metadata,

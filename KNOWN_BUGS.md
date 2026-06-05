@@ -709,6 +709,9 @@
     Raw cross-thread `SendMessageW` now joins the same sent-message queue
     instead of running receiver window processing immediately in the caller
     thread, while `DefWindowProcW` remains direct default processing.
+    `SendDlgItemMessageW` now follows the CE `GetDlgItem` plus `SendMessage`
+    wrapper shape for normal messages, so cross-thread dialog-item sends also
+    queue instead of bypassing scheduler-visible sent-message state.
     Sender-side sent-message transaction bookkeeping now records CE-style
     sender/receiver thread ids, flags, timeout metadata, active receiver send
     stack, WNDPROC result completion, and receiver-terminated completion for

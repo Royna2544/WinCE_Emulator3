@@ -2727,6 +2727,14 @@
   `InSendMessage` only after retrieval, completes through raw `DispatchMessageW`,
   and leaves `DefWindowProcW` immediate. The raw GWE suite now has 80 passing
   tests.
+- Aligned raw `SendDlgItemMessageW` with the CE SDK wrapper shape documented in
+  `winuser.h`: normal dialog-item messages now route through the same
+  `SendMessageW` queueing helper after `GetDlgItem`, so a control/window owned
+  by another thread receives a sent-message transaction instead of a caller-
+  thread shortcut. Focused raw GWE coverage proves the child HWND, sender/
+  receiver thread ids, `QS_SENDMESSAGE`, receiver `InSendMessage`, and dispatch
+  result completion; button-check helper shortcuts remain covered. The raw GWE
+  suite now has 81 passing tests.
 - Added an indexed-DIB fidelity slice for CE GDI color tables. `BitmapObject`
   now stores RGBQUAD color tables, raw `SetDIBColorTable`/`GetDIBColorTable`
   read and write the selected bitmap table through guest memory, and the 8 bpp

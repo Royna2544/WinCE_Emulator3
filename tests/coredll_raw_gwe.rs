@@ -7106,6 +7106,77 @@ fn coredll_raw_send_message_cross_thread_queues_transaction() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_send_dlg_item_message_uses_sendmessage_queue() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let sender_thread = 56;
+    let receiver_thread = 57;
+    let msg_ptr = 0xb380;
+    memory.map_words(msg_ptr, 7);
+
+    let dialog = kernel.create_window_ex_w(sender_thread, "DLG_SEND_PARENT", "", None, 0, 0, 0);
+    let child = kernel.create_window_ex_w_with_rect(
+        receiver_thread,
+        "DLG_SEND_CHILD",
+        "",
+        Some(dialog),
+        202,
+        WS_CHILD | WS_VISIBLE,
+        0,
+        Rect::from_origin_size(0, 0, 20, 20),
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            sender_thread,
+            ORD_SEND_DLG_ITEM_MESSAGE_W,
+            [dialog, 202, WM_ERASEBKGND, 0x56, 0x57],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    let sent = kernel.gwe.sent_message(1).expect("queued dlg item send");
+    assert_eq!(sent.sender_thread_id, Some(sender_thread));
+    assert_eq!(sent.receiver_thread_id, receiver_thread);
+    assert_eq!(sent.message.hwnd, child);
+    assert_eq!(sent.message.msg, WM_ERASEBKGND);
+
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        receiver_thread,
+        msg_ptr,
+        child,
+        WM_ERASEBKGND,
+        0x56,
+        0x57,
+    );
+    assert!(kernel.gwe.in_send_message(receiver_thread));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            receiver_thread,
+            ORD_DISPATCH_MESSAGE_W,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.take_completed_send_message_result(1), Some(1));
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_get_message_expires_timed_out_cross_thread_send() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
