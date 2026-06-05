@@ -31,11 +31,25 @@
     `target\public_message_trace_*` shows the same trace also captures real
     public posts, broadcasts, worker-thread queued sends to the main thread,
     and timer `4565`.
-  - Status: open but narrowed. Use the new message trace on the exact
+  - New evidence/fix: `target\anr_wait_cleanup_host_*` closes the duplicate
+    main-thread wait seen in `target\public_message_trace_*`; thread `1` no
+    longer remains registered as both finite `Sleep` and infinite
+    `GetMessageW`. The following no-tap probe exposed a stronger scheduler
+    gap: when UI `GetMessageW` parked, worker sleeps and serial read timeouts
+    were still pending but the bridge stopped instead of letting them mature.
+    The Unicorn bridge now waits to the next finite blocked-worker timeout
+    when it fits the host run budget and resumes that worker. Mounted
+    validation `target\anr_worker_resume_virtual_*` now runs the full 60 s wall
+    budget in iNavi image code with `block:1307/wake:441` and
+    `gwe=send:168 done:167`, rather than freezing at the empty UI wait.
+  - Status: open but moved. The active ANR frontier is now a full-budget
+    guest-code run with one in-flight thread-9 send at wall stop, not a lost
+    input or duplicate-wait freeze. Use the new message trace on the exact
     unresponsive host interaction. If it records delivered mouse/key messages,
-    chase the guest handler continuation, timer/device waits, or missing
-    subsystem event that follows; if it records `remote_*_drop`, fix generic
-    GWE hit-test/focus/capture semantics. Do not hardcode iNavi controls.
+    chase the guest handler continuation, pending send, timer/device waits, or
+    missing subsystem event that follows; if it records `remote_*_drop`, fix
+    generic GWE hit-test/focus/capture semantics. Do not hardcode iNavi
+    controls.
 
 - Rendered iNavi map still needs road/building styling fidelity, but the
   black base-layer failure is fixed.

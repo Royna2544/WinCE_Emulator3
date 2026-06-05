@@ -16,7 +16,15 @@
   committed CE visible-client-region clipping (`8fa8c9f`). The live host
   presenter now shows the corrected z-order/hide-show behavior. Continue
   investigating any remaining "ANR" report as post-map scheduler/device/app
-  responsiveness, not as a rendering leak or a basic input-drop bug. The new
+  responsiveness, not as a rendering leak or a basic input-drop bug. The
+  immediate duplicate-wait/worker-freeze shape is fixed: fresh
+  `target\anr_wait_cleanup_host_*` no longer lists main thread `1` as both
+  `sleep` and `get_message`, and `target\anr_worker_resume_virtual_*` proves
+  an empty UI `GetMessageW` now lets finite worker waits mature/resume instead
+  of stopping the whole run. That probe reaches the full 60 s wall budget in
+  guest image code with `send:168 done:167`; next ANR work should inspect the
+  remaining in-flight thread-9 `SendMessage` and the guest code around
+  `iNavi.exe+0x974c64`, plus any exact host click that still feels dead. The new
   `messages` trace selector now preserves kernel-level GWE post/target/delivery
   records, including public `PostMessageW`/thread/broadcast posts,
   keyboard-post helpers, `SendNotifyMessageW`, and queued cross-thread sends.
@@ -29,11 +37,10 @@
   control/area that feels unresponsive; if messages are delivered, continue
   into guest handler/device/timer behavior instead of adding app-specific hit
   targets. Fresh virtual evidence
-  `target\public_message_trace_{summary,messages,counts}.txt` also shows queued
-  worker-thread sends to the main HWND and timer `4565`, so the next scheduler
-  slice should use those send/timer records to decide whether the main thread
-  is failing to reply, waiting on a device/event, or simply entering valid CE
-  idle.
+  `target\public_message_trace_{summary,messages,counts}.txt` also showed
+  queued worker-thread sends to the main HWND and timer `4565`; the newer
+  worker-resume probe proves those sends can now churn for the full wall budget,
+  so continue from the one pending send instead of the earlier idle stop.
 - Current GDI map-fidelity slice: continue from `target\gdi_exttext_virtual.*`.
   The huge black base-layer gap is now fixed generically by honoring
   `ExtTextOutW(ETO_OPAQUE)` as a CE GDI background-rectangle fill with the

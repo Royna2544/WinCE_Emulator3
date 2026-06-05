@@ -9,6 +9,30 @@
 
 ## Confirmed
 
+- The post-map ANR-shaped scheduler stop was narrowed and moved forward by a
+  generic Unicorn wait-bridge fix. Fresh host evidence
+  `target\anr_wait_cleanup_host_*` first confirmed the stale duplicate
+  main-thread wait from `target\public_message_trace_*` is gone: thread `1`
+  no longer appears as both `sleep` and `get_message`. A follow-up no-tap
+  control initially showed the remaining ANR shape: main thread parked in
+  `GetMessageW` while worker threads still had short finite waits
+  (`201/301/334/501 ms`) and a serial read timeout pending. The bridge now
+  removes stale saved waits before registering new `GetMessageW`,
+  `MsgWaitForMultipleObjectsEx`, and blocking object waits, and an empty
+  main-thread `GetMessageW` block waits to the next finite blocked-worker
+  timeout when it fits the host budget, then resumes that worker through the
+  normal scheduler path. Focused Unicorn regressions
+  `get_message_block_registration_clears_stale_sleep_wait` and
+  `get_message_block_yields_to_timed_out_worker_sleep` pass, and the full
+  `cargo test --features unicorn,trace,win32-desktop` suite passes. Mounted
+  validation `target\anr_worker_resume_virtual_*` now runs the full 60 s wall
+  budget inside guest iNavi image code
+  (`pc=0x00984c64(image:iNavi.exe+0x974c64)`) instead of stopping at idle
+  `GetMessageW`; scheduler activity rises to `block:1307/wake:441`, timers
+  advance to due `140613`, and GWE records `send:168 done:167`. Current
+  frontier is the final in-flight thread-9 send or subsequent map/image code,
+  not lost host input, duplicate main-thread waits, or UI idle freezing all
+  worker timeouts.
 - Host/manual post-map input now has a durable kernel-level GWE/message trace
   under the existing `messages` monitor selector. The trace records generic
   message posts, host/remote touch target/drop decisions, keyboard target/drop

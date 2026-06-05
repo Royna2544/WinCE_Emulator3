@@ -89,6 +89,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     bridge uses the same result shape for current-thread timer wakes and
     timeout waits that fit the active host run budget, while over-budget waits
     remain scheduler-owned.
+  - A CE thread has a single scheduler-owned blocked state. When the Unicorn
+    bridge parks a guest thread on `GetMessageW`, `MsgWaitForMultipleObjectsEx`,
+    or a blocking object wait, it must remove any stale saved wait for that
+    same thread before registering the new one. When the UI thread parks on an
+    empty `GetMessageW`, the bridge must still let other blocked guest threads
+    whose finite timeouts mature inside the host run budget resume, instead of
+    treating UI idle as a whole-process stop.
 
 - GWE paint/update and MFC paint pumping:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`,
