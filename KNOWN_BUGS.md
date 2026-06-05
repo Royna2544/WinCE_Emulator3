@@ -740,9 +740,11 @@
     `GetAsyncShiftFlags`, `WM_GETDLGCODE` button codes plus
     `DM_GETDEFID`/`DM_SETDEFID`. Raw `PostKeybdMessage` and `keybd_event`
     now feed hardware-sourced key messages through the same GWE queue and wake
-    path, with raw coverage plus the `169_post_keybd_message` eVC fixture.
-    This improves modeless/modal-loop/input fidelity but does not yet cover
-    the full CE dialog manager, full `DLGC_WANT*` edge cases, richer keyboard
+    path, and raw keyboard target ordinals now route targetless keyboard input
+    through per-thread queue target state before focus/active fallback, with
+    raw coverage plus the `169_post_keybd_message` eVC fixture. This improves
+    modeless/modal-loop/input fidelity but does not yet cover the full CE
+    dialog manager, full `DLGC_WANT*` edge cases, richer keyboard
     layout/`KeybdVKeyToUnicode` behavior, toggle-key edge cases, or nested
     modal scheduling.
     The broader window/GWE subsystem still needs sender parking/resume across

@@ -801,6 +801,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `WM_KEYDOWN`/`WM_KEYUP` plus optional character-buffer `WM_CHAR` messages
     through the normal GWE thread queue, and raw `keybd_event` targets the
     focused/active keyboard window with CE-style lParam transition bits.
+  - `gweapiset1.hpp` declares `SetKeyboardTarget`/`GetKeyboardTarget`, and
+    `cmsgque.h` stores `m_hwndKeyboardTarget` beside `m_hwndFocus` and
+    `m_hwndActiveWindow` on the message queue. Rust now stores keyboard
+    targets per thread/message queue, exposes raw ordinals 710/711/1225, and
+    routes `keybd_event`/targetless `PostKeybdMessage` through the explicit
+    keyboard target before focus/active fallback.
 
 - GWE paint/update surface:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\gweapiset1.hpp`,

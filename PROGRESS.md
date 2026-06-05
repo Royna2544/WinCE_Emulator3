@@ -2678,6 +2678,17 @@
   through the ignored `fixture_exes` harness, covering the imported
   `PostKeybdMessage` keydown/up path plus app-pump `TranslateMessage`
   character generation.
+- Added the CE keyboard-target routing slice. GWE now tracks
+  `m_hwndKeyboardTarget`-style keyboard targets per thread/message queue,
+  clears targets when HWND subtrees are destroyed, hidden, or disabled through
+  the existing focus/activation cleanup path, and targetless keyboard input
+  now routes through that explicit target before focus/active fallback. Raw
+  `SetKeyboardTarget`, `GetKeyboardTarget`, and
+  `GetForegroundKeyboardTarget` now return real HWND state instead of generic
+  stub results. Focused raw GWE coverage proves explicit target set/get,
+  foreground target reporting, `keybd_event` routing to the keyboard target,
+  fallback to focus after clearing, and invalid-HWND last-error behavior; the
+  full raw GWE suite now has 78 passing tests.
 - Added an indexed-DIB fidelity slice for CE GDI color tables. `BitmapObject`
   now stores RGBQUAD color tables, raw `SetDIBColorTable`/`GetDIBColorTable`
   read and write the selected bitmap table through guest memory, and the 8 bpp

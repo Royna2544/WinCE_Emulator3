@@ -466,7 +466,10 @@
     queued-key `GetKeyState`/`GetAsyncKeyState`/`GetAsyncShiftFlags` model.
     Raw `PostKeybdMessage` now posts hardware-sourced `WM_KEYDOWN`/`WM_KEYUP`
     and optional character-buffer `WM_CHAR` messages through the same queue,
-    while raw `keybd_event` targets the focused/active keyboard window. The
+    while raw `keybd_event` targets the explicit per-thread keyboard target
+    before falling back to the focused/active keyboard window. Raw
+    `SetKeyboardTarget`/`GetKeyboardTarget`/`GetForegroundKeyboardTarget` now
+    expose that queue target state. The
     broader CE dialog/input manager remains incomplete: full `DLGC_WANT*` edge
     cases, nested modal loops, default-button repaint/state details, richer
     keyboard-layout/`KeybdVKeyToUnicode` behavior, toggle-key edge cases, and

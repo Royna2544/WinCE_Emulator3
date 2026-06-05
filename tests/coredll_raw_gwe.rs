@@ -17,12 +17,13 @@ use wince_emulation_v3::{
             ORD_GET_CLIENT_RECT, ORD_GET_CURSOR_POS, ORD_GET_DC, ORD_GET_DEVICE_CAPS,
             ORD_GET_DIALOG_BASE_UNITS, ORD_GET_DIBCOLOR_TABLE, ORD_GET_DLG_CTRL_ID,
             ORD_GET_DLG_ITEM, ORD_GET_DLG_ITEM_INT, ORD_GET_DLG_ITEM_TEXT_W, ORD_GET_FOCUS,
-            ORD_GET_FOREGROUND_WINDOW, ORD_GET_KEY_STATE, ORD_GET_MENU, ORD_GET_MENU_ITEM_INFO_W,
-            ORD_GET_MESSAGE_POS, ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP, ORD_GET_MESSAGE_SOURCE,
-            ORD_GET_MESSAGE_W, ORD_GET_MESSAGE_WNO_WAIT, ORD_GET_NEAREST_PALETTE_INDEX,
-            ORD_GET_NEXT_DLG_GROUP_ITEM, ORD_GET_NEXT_DLG_TAB_ITEM, ORD_GET_PALETTE_ENTRIES,
-            ORD_GET_PARENT, ORD_GET_QUEUE_STATUS, ORD_GET_RGN_BOX, ORD_GET_STOCK_OBJECT,
-            ORD_GET_SUB_MENU, ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH, ORD_GET_SYSTEM_INFO,
+            ORD_GET_FOREGROUND_KEYBOARD_TARGET, ORD_GET_FOREGROUND_WINDOW, ORD_GET_KEY_STATE,
+            ORD_GET_KEYBOARD_TARGET, ORD_GET_MENU, ORD_GET_MENU_ITEM_INFO_W, ORD_GET_MESSAGE_POS,
+            ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP, ORD_GET_MESSAGE_SOURCE, ORD_GET_MESSAGE_W,
+            ORD_GET_MESSAGE_WNO_WAIT, ORD_GET_NEAREST_PALETTE_INDEX, ORD_GET_NEXT_DLG_GROUP_ITEM,
+            ORD_GET_NEXT_DLG_TAB_ITEM, ORD_GET_PALETTE_ENTRIES, ORD_GET_PARENT,
+            ORD_GET_QUEUE_STATUS, ORD_GET_RGN_BOX, ORD_GET_STOCK_OBJECT, ORD_GET_SUB_MENU,
+            ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH, ORD_GET_SYSTEM_INFO,
             ORD_GET_SYSTEM_METRICS, ORD_GET_SYSTEM_PALETTE_ENTRIES, ORD_GET_UPDATE_RECT,
             ORD_GET_UPDATE_RGN, ORD_GET_WINDOW, ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_RECT,
             ORD_GET_WINDOW_RGN, ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W,
@@ -42,11 +43,11 @@ use wince_emulation_v3::{
             ORD_SEND_NOTIFY_MESSAGE_W, ORD_SET_ACTIVE_WINDOW, ORD_SET_ASSOCIATED_MENU,
             ORD_SET_BK_COLOR, ORD_SET_CAPTURE, ORD_SET_DIBCOLOR_TABLE, ORD_SET_DIBITS_TO_DEVICE,
             ORD_SET_DLG_ITEM_INT, ORD_SET_DLG_ITEM_TEXT_W, ORD_SET_FOCUS,
-            ORD_SET_FOREGROUND_WINDOW, ORD_SET_MENU, ORD_SET_MENU_ITEM_INFO_W,
-            ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_RECT, ORD_SET_RECT_EMPTY,
-            ORD_SET_TIMER, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_RGN,
-            ORD_SET_WINDOW_TEXT_W, ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_SLEEP,
-            ORD_STRETCH_BLT, ORD_STRETCH_DIBITS, ORD_SYSTEM_PARAMETERS_INFO_W,
+            ORD_SET_FOREGROUND_WINDOW, ORD_SET_KEYBOARD_TARGET, ORD_SET_MENU,
+            ORD_SET_MENU_ITEM_INFO_W, ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_RECT,
+            ORD_SET_RECT_EMPTY, ORD_SET_TIMER, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS,
+            ORD_SET_WINDOW_RGN, ORD_SET_WINDOW_TEXT_W, ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE,
+            ORD_SLEEP, ORD_STRETCH_BLT, ORD_STRETCH_DIBITS, ORD_SYSTEM_PARAMETERS_INFO_W,
             ORD_TRACK_POPUP_MENU_EX, ORD_TRANSPARENT_IMAGE, ORD_UNION_RECT, ORD_UPDATE_WINDOW,
             ORD_VALIDATE_RECT, ORD_WINDOW_FROM_POINT,
         },
@@ -3967,6 +3968,159 @@ fn coredll_raw_keybd_event_targets_focus_window() -> Result<()> {
         WM_KEYUP,
         0x25,
         0xc14b_0001,
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_keyboard_target_routes_hardware_keyboard_input() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let msg_ptr = 0x3680;
+    memory.map_words(msg_ptr, 7);
+
+    let focus_hwnd = kernel.create_window_ex_w(thread_id, "KEYFOCUS", "", None, 0, 0, 0);
+    let target_hwnd = kernel.create_window_ex_w(thread_id, "KEYTARGET", "", None, 0, 0, 0);
+    let _ = kernel.set_focus(Some(focus_hwnd));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_KEYBOARD_TARGET,
+            [target_hwnd],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_KEYBOARD_TARGET,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } if hwnd == target_hwnd
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_FOREGROUND_KEYBOARD_TARGET,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } if hwnd == target_hwnd
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KEYBD_EVENT,
+            [u32::from('K'), 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_next_filtered_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        target_hwnd,
+        WM_KEYDOWN,
+        u32::from('K'),
+        1,
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_KEYBOARD_TARGET,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } if hwnd == target_hwnd
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_KEYBOARD_TARGET,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KEYBD_EVENT,
+            [u32::from('F'), 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_next_filtered_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        msg_ptr,
+        focus_hwnd,
+        WM_KEYDOWN,
+        u32::from('F'),
+        1,
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_KEYBOARD_TARGET,
+            [0x7fff_0000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_WINDOW_HANDLE
     );
 
     Ok(())

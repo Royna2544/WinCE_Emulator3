@@ -1949,6 +1949,9 @@ impl CeKernel {
         if self.gwe.active_window_is_within(hwnd) {
             let _ = self.activate_window(None);
         }
+        if self.gwe.keyboard_target_is_within(hwnd) {
+            self.gwe.clear_keyboard_targets_within(hwnd);
+        }
     }
 
     fn top_level_window(&self, hwnd: u32) -> u32 {
@@ -2069,6 +2072,7 @@ impl CeKernel {
     ) -> bool {
         let time_ms = self.timers.tick_count();
         let target_hwnd = hwnd
+            .or_else(|| self.gwe.get_keyboard_target(thread_id))
             .or_else(|| self.gwe.get_focus())
             .or_else(|| self.gwe.get_active_window());
         let target_thread = match target_hwnd {
@@ -2118,6 +2122,10 @@ impl CeKernel {
         }
         self.queue_message_wake_candidates(target_thread);
         true
+    }
+
+    pub fn set_keyboard_target(&mut self, thread_id: u32, hwnd: Option<u32>) -> Option<u32> {
+        self.gwe.set_keyboard_target(thread_id, hwnd)
     }
 
     pub fn post_thread_message_w(

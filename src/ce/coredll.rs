@@ -2834,6 +2834,17 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             set_focus_raw(kernel, thread_id, raw_arg(args, 0)).unwrap_or(0),
         )),
         ORD_GET_FOCUS => Some(CoredllValue::Handle(kernel.gwe.get_focus().unwrap_or(0))),
+        ORD_SET_KEYBOARD_TARGET => Some(CoredllValue::Handle(set_keyboard_target_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_GET_KEYBOARD_TARGET => Some(CoredllValue::Handle(
+            kernel.gwe.get_keyboard_target(thread_id).unwrap_or(0),
+        )),
+        ORD_GET_FOREGROUND_KEYBOARD_TARGET => Some(CoredllValue::Handle(
+            kernel.gwe.get_foreground_keyboard_target().unwrap_or(0),
+        )),
         ORD_SET_CAPTURE => Some(CoredllValue::Handle(
             kernel.gwe.set_capture(raw_arg(args, 0)).unwrap_or(0),
         )),
@@ -10198,6 +10209,20 @@ fn set_focus_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> Option<u32
         return None;
     }
     let previous = kernel.set_focus((hwnd != 0).then_some(hwnd));
+    kernel.threads.set_last_error(thread_id, 0);
+    previous
+}
+
+fn set_keyboard_target_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> u32 {
+    if hwnd != 0 && !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    }
+    let previous = kernel
+        .set_keyboard_target(thread_id, (hwnd != 0).then_some(hwnd))
+        .unwrap_or(0);
     kernel.threads.set_last_error(thread_id, 0);
     previous
 }

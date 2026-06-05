@@ -455,6 +455,7 @@ pub struct Gwe {
     next_sent_message_id: u64,
     active_window: Option<u32>,
     focus: Option<u32>,
+    keyboard_target_by_thread: BTreeMap<u32, u32>,
     capture: Option<u32>,
     cursor: Option<u32>,
     cursor_pos: Point,
@@ -528,6 +529,7 @@ impl Default for Gwe {
             next_sent_message_id: 1,
             active_window: None,
             focus: None,
+            keyboard_target_by_thread: BTreeMap::new(),
             capture: None,
             cursor: None,
             cursor_pos: Point::default(),
@@ -823,6 +825,8 @@ impl Gwe {
         if targets.contains(&self.active_window.unwrap_or(0)) {
             self.active_window = None;
         }
+        self.keyboard_target_by_thread
+            .retain(|_, hwnd| !targets.contains(hwnd));
         for queue in self.queues.values_mut() {
             queue.retain(|message| message.hwnd == 0 || !targets.contains(&message.hwnd));
         }
@@ -1300,6 +1304,56 @@ impl Gwe {
     pub fn focus_is_within(&self, hwnd: u32) -> bool {
         self.focus
             .is_some_and(|focus| focus == hwnd || self.is_child(hwnd, focus))
+    }
+
+    pub fn set_keyboard_target(&mut self, thread_id: u32, hwnd: Option<u32>) -> Option<u32> {
+        if hwnd.is_some_and(|hwnd| !self.is_window(hwnd)) {
+            return None;
+        }
+        let previous = self.get_keyboard_target(thread_id);
+        match hwnd {
+            Some(hwnd) => {
+                self.keyboard_target_by_thread.insert(thread_id, hwnd);
+            }
+            None => {
+                self.keyboard_target_by_thread.remove(&thread_id);
+            }
+        }
+        previous
+    }
+
+    pub fn get_keyboard_target(&self, thread_id: u32) -> Option<u32> {
+        self.keyboard_target_by_thread
+            .get(&thread_id)
+            .copied()
+            .filter(|hwnd| self.is_window(*hwnd))
+    }
+
+    pub fn get_foreground_keyboard_target(&self) -> Option<u32> {
+        self.get_active_window()
+            .and_then(|active| self.windows.get(&active).map(|window| window.thread_id))
+            .and_then(|thread_id| self.get_keyboard_target(thread_id))
+            .or_else(|| self.get_focus())
+            .or_else(|| self.get_active_window())
+    }
+
+    pub fn keyboard_target_is_within(&self, hwnd: u32) -> bool {
+        self.keyboard_target_by_thread
+            .values()
+            .copied()
+            .any(|target| target == hwnd || self.is_child(hwnd, target))
+    }
+
+    pub fn clear_keyboard_targets_within(&mut self, hwnd: u32) {
+        let targets: Vec<u32> = self
+            .keyboard_target_by_thread
+            .iter()
+            .filter(|(_, target)| **target == hwnd || self.is_child(hwnd, **target))
+            .map(|(thread_id, _)| *thread_id)
+            .collect();
+        for thread_id in targets {
+            self.keyboard_target_by_thread.remove(&thread_id);
+        }
     }
 
     pub fn set_active_window(&mut self, hwnd: Option<u32>) -> Option<u32> {
