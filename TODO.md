@@ -12,6 +12,25 @@
 
 ## Current Slice
 
+- Current host/manual ANR slice: continue from
+  `target\host_getmsg_sendwake_300s_*`. The pending synchronous-send deadlock
+  from `target\host_handoff_300s_*` is closed: the blocked-current
+  `GetMessageW` resume helper now wakes a parked UI thread when
+  `current_thread_id` still names that thread but `running_thread` is empty,
+  and fresh host evidence reaches the full 300 s wall budget with
+  `gwe=send:17 done:17`. The frame is the real populated map UI, and memory/
+  file I/O remain bounded. The remaining ANR frontier is now
+  `pc=mfcce400.dll+0x4fda8`, `blocked_get_message=thread:1`,
+  `threads=current:1/running:1:0x00000041/suspended:6:0x00000f0c:pc=0x0022fa90`,
+  finite worker sleeps (`301/334/15001 ms`), active timer `0x11d5`, COM7 empty
+  reads, Deneb sensor reads with missing `MS2_CalData`, and `SMB1:`/`MFS1:`
+  opens. Next work should determine why the saved worker/runnable waits and
+  timer/device/message work do not produce continued host responsiveness:
+  inspect timeslice fairness around the suspended worker at
+  `image:iNavi.exe+0x21fa90`, timer 4565 delivery cadence, COM7/Deneb/SMB1/
+  MFS1 semantics, and exact delivered host-touch continuation. Do not revisit
+  the closed hidden-layer leak, file-I/O/RSS growth, or pending-send deadlock
+  unless fresh evidence regresses them.
 - Current host/manual post-map slice: continue from
   `target\host_sleep_getmsg_180s_*`. The fixed-interval timeslice now retries
   a pending scheduler slice after unsafe MIPS branch/trampoline/import samples,

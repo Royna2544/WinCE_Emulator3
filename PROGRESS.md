@@ -9,6 +9,32 @@
 
 ## Confirmed
 
+- The post-map Win32-host pending-send deadlock is fixed. A 300 s host probe
+  before this slice (`target\host_handoff_300s_*`) ended with thread 9 blocked
+  in a synchronous send while thread 1 was parked in `GetMessageW`
+  (`gwe=send:19 done:18`, `blocked_waits` containing
+  `thr=9/kind=send_message` plus `blocked_get_message=thread:1`) because the
+  Unicorn bridge refused to resume the blocked current UI thread when
+  `current_thread_id == blocked_get_message.thread_id` even though no guest
+  thread was actually running. The `GetMessageW` resume helper now
+  distinguishes that parked-current state from a truly running active context
+  and does not save a stale active snapshot during blocking handoff. Focused
+  coverage includes
+  `blocked_current_get_message_resumes_pending_send_when_no_thread_running`,
+  `current_sleep_yields_to_ready_blocked_get_message`, the full
+  `wait_scheduler` suite, and full
+  `cargo test --features unicorn,trace,win32-desktop --lib` with 177 passing
+  tests. Fresh visible host validation
+  `target\host_getmsg_sendwake_300s_*` used dumped runtime DLLs from
+  `D:\INAVI_Emulator\DUMPPLZ\Windows`, stayed memory/file-I/O bounded
+  (`host_open=910`, `host_read=82824/6410280B`, `mem_open=4`), rendered the
+  real map UI, and no longer has a pending synchronous send at the wall stop
+  (`gwe=send:17 done:17`). The remaining ANR shape moved to main-thread MFC
+  message-pump execution with `blocked_get_message=thread:1`, finite worker
+  sleeps, active timer `0x11d5`, Deneb/COM7/SMB1/MFS1 device activity, and one
+  saved worker context (`suspended:6:0x00000f0c:pc=0x0022fa90`), so the next
+  slice should focus on runnable-context fairness and device/timer/message
+  progression, not the now-closed pending-send deadlock.
 - The post-map Win32-host scheduler bridge now avoids two more generic
   starvation traps. The Unicorn code-hook scheduler timeslice no longer drops
   a due slice just because the fixed sample lands on an import trap,

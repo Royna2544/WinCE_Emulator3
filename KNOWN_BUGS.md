@@ -127,6 +127,23 @@
     post-map scheduler/device/message progression, not as hidden-layer leakage,
     black framebuffer, fixed-sample timeslice starvation, stale blocked-current
     ownership, or file-I/O/RSS growth.
+  - Latest evidence/fix: `target\host_handoff_300s_*` exposed and the current
+    slice closes a more specific pending-send deadlock: thread 9 was blocked
+    waiting for a synchronous `SendMessageW` reply while thread 1 was parked in
+    `GetMessageW`, but the bridge refused to resume the UI waiter because
+    `current_thread_id` still equaled thread 1 even though no guest thread was
+    running. The helper now treats that as a parked-current state and resumes
+    the UI `GetMessageW` without saving a stale active context. Focused
+    regression
+    `blocked_current_get_message_resumes_pending_send_when_no_thread_running`
+    covers the exact shape. Fresh visible host validation
+    `target\host_getmsg_sendwake_300s_*` reaches the wall budget with a real
+    map UI, bounded I/O/RSS, and all sync sends completed
+    (`gwe=send:17 done:17`). Status remains open for the broader ANR, but the
+    pending-send theory is closed; the current evidence is main-thread MFC
+    pump execution with `blocked_get_message=thread:1`, a saved worker context
+    at `image:iNavi.exe+0x21fa90`, finite worker sleeps, timer 4565, and
+    Deneb/COM7/SMB1/MFS1 device activity.
 
 - Rendered iNavi map still needs road/building styling fidelity, but the
   black base-layer failure is fixed.
