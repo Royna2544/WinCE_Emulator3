@@ -57,7 +57,9 @@ pub struct UnicornRunLimits {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UnicornDebugSnapshot {
     pub pc: u32,
+    pub pc_region: Option<String>,
     pub ra: u32,
+    pub ra_region: Option<String>,
     pub sp: u32,
     pub v0: u32,
     pub v1: u32,
@@ -113,8 +115,8 @@ pub struct UnicornDebugSnapshot {
 impl UnicornDebugSnapshot {
     pub fn summary(&self) -> String {
         let mut parts = vec![
-            format!("pc=0x{:08x}", self.pc),
-            format!("ra=0x{:08x}", self.ra),
+            format_address_with_region("pc", self.pc, self.pc_region.as_deref()),
+            format_address_with_region("ra", self.ra, self.ra_region.as_deref()),
             format!("sp=0x{:08x}", self.sp),
             format!("v0=0x{:08x}", self.v0),
             format!("a0=0x{:08x}", self.a0),
@@ -1081,6 +1083,47 @@ impl UnicornMips {
             let end = offset.checked_add(len)?;
             if end <= blob.bytes.len() {
                 return Some(blob.bytes[offset..end].to_vec());
+            }
+        }
+        None
+    }
+
+    fn address_region_label(&self, address: u32, kernel: &CeKernel) -> Option<String> {
+        for blob in &self.mapped_blobs {
+            if let Some(offset) = address.checked_sub(blob.base)
+                && offset < blob.bytes.len() as u32
+            {
+                return Some(format!(
+                    "{}+0x{offset:x}",
+                    compact_mapped_blob_name(&blob.name)
+                ));
+            }
+        }
+        if let Some(region) = self.memory.region_containing(address) {
+            return Some(format!(
+                "{}+0x{:x}",
+                region.name,
+                address.saturating_sub(region.base)
+            ));
+        }
+        for allocation in kernel.memory.allocations() {
+            let end = allocation.ptr.saturating_add(allocation.actual_size);
+            if address >= allocation.ptr && address < end {
+                return Some(format!(
+                    "heap:0x{:08x}+0x{:x}",
+                    allocation.ptr,
+                    address.saturating_sub(allocation.ptr)
+                ));
+            }
+        }
+        for allocation in kernel.memory.virtual_allocations() {
+            let end = allocation.base.saturating_add(allocation.size);
+            if address >= allocation.base && address < end {
+                return Some(format!(
+                    "virtual:0x{:08x}+0x{:x}",
+                    allocation.base,
+                    address.saturating_sub(allocation.base)
+                ));
             }
         }
         None
@@ -2932,8 +2975,14 @@ impl UnicornMips {
             .entry
             .ok_or_else(|| Error::Backend("no PE entry point has been loaded".to_owned()))?;
         let result = uc.emu_start(u64::from(entry), 0, 0, limits.instruction_limit);
+        let snapshot_pc = read_mips_reg(&uc, RegisterMIPS::PC);
+        let snapshot_ra = read_mips_reg(&uc, RegisterMIPS::RA);
+        let pc_region = self.address_region_label(snapshot_pc, kernel);
+        let ra_region = self.address_region_label(snapshot_ra, kernel);
         self.last_debug = Some(capture_debug_snapshot(
             &uc,
+            pc_region,
+            ra_region,
             &self.import_traps,
             &self.trampoline_jumps,
             memory_fault.borrow().clone(),
@@ -4870,9 +4919,9 @@ impl std::fmt::Display for UnicornDebugSnapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "pc=0x{:08x} ra=0x{:08x} sp=0x{:08x} v0=0x{:08x} v1=0x{:08x} a0=0x{:08x} a1=0x{:08x} a2=0x{:08x} a3=0x{:08x} t9=0x{:08x}",
-            self.pc,
-            self.ra,
+            "{} {} sp=0x{:08x} v0=0x{:08x} v1=0x{:08x} a0=0x{:08x} a1=0x{:08x} a2=0x{:08x} a3=0x{:08x} t9=0x{:08x}",
+            format_address_with_region("pc", self.pc, self.pc_region.as_deref()),
+            format_address_with_region("ra", self.ra, self.ra_region.as_deref()),
             self.sp,
             self.v0,
             self.v1,
@@ -5519,6 +5568,27 @@ impl std::fmt::Display for UnicornDebugSnapshot {
         }
         Ok(())
     }
+}
+
+fn format_address_with_region(label: &str, address: u32, region: Option<&str>) -> String {
+    match region {
+        Some(region) => format!("{label}=0x{address:08x}({region})"),
+        None => format!("{label}=0x{address:08x}(unknown)"),
+    }
+}
+
+fn compact_mapped_blob_name(name: &str) -> String {
+    let Some((kind, path)) = name.split_once(':') else {
+        return name.to_owned();
+    };
+    if matches!(kind, "image" | "dll" | "trampoline") {
+        let file_name = std::path::Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(path);
+        return format!("{kind}:{file_name}");
+    }
+    name.to_owned()
 }
 
 fn write_call_target_import(
@@ -11336,6 +11406,8 @@ fn push_unicorn_last_call<D>(
 #[cfg(feature = "unicorn")]
 fn capture_debug_snapshot<D>(
     uc: &unicorn_engine::Unicorn<'_, D>,
+    pc_region: Option<String>,
+    ra_region: Option<String>,
     traps: &ImportTrapTable,
     trampoline_jumps: &[MipsTrampolineJump],
     memory_fault: Option<UnicornMemoryFault>,
@@ -11387,7 +11459,9 @@ fn capture_debug_snapshot<D>(
     annotate_wndproc_call_trace_trampolines(&mut last_wndproc_call_traces, trampoline_jumps);
     UnicornDebugSnapshot {
         pc,
+        pc_region,
         ra: read_mips_reg(uc, RegisterMIPS::RA),
+        ra_region,
         sp: read_mips_reg(uc, RegisterMIPS::SP),
         v0: read_mips_reg(uc, RegisterMIPS::V0),
         v1: read_mips_reg(uc, RegisterMIPS::V1),

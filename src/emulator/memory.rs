@@ -62,6 +62,13 @@ impl MemoryMap {
         self.regions.values()
     }
 
+    pub fn region_containing(&self, address: u32) -> Option<&MemoryRegion> {
+        self.regions.values().find(|region| {
+            let end = region.base.saturating_add(region.size);
+            address >= region.base && address < end
+        })
+    }
+
     pub fn contains_range(&self, base: u32, size: u32) -> bool {
         let Some(end) = base.checked_add(size) else {
             return false;
