@@ -9,6 +9,63 @@
 
 ## Confirmed
 
+- Startup profiling now has a fresh `cargo flamegraph` baseline and two
+  concrete loader/runtime hot-path fixes. The elevated 60 s profile
+  `target\startup_debug_flame_60s.svg` showed a pre-CPU hotspot in
+  `patch_mips_unicorn_trampolines`: `mips_patch_rva_overlaps_data_ranges`
+  was linearly checking every candidate instruction against every detected
+  jump-table data range. Trampoline scanning now normalizes/sorts/merges those
+  ranges once per executable section and uses a binary lookup for each patch
+  candidate. Focused `trampoline_scan_*` coverage plus a full library test run
+  pass. The same full-selector 10 s mounted virtual probe dropped from about
+  `15.8 s` wall time to `11.9 s` after rebuilding
+  (`target\startup_debug_after_trampoline_index_rebuilt_10s_*`), while the
+  follow-up flamegraph
+  `target\startup_debug_flame_after_trampoline_index_60s.svg` confirms
+  trampoline patching fell from roughly `45k` samples to `16k` samples and the
+  old linear overlap helper is no longer a top frame. Two safe CRT slices also
+  landed: `memcpy`/`memmove` small-copy buffers now stay on the stack instead
+  of allocating a fresh 64 KiB `Vec` per guest copy, and `fgets` now reads up
+  to the requested line length once, then rewinds any bytes after the newline,
+  instead of issuing one guest `ReadFile` per byte. Focused overlap, >8 KiB
+  copy, and stdio host-backed file coverage pass, and the full
+  `cargo test --features unicorn,trace,win32-desktop` suite passes. The
+  buffered-`fgets` 60 s probe
+  `target\startup_debug_after_buffered_fgets_60s_*` reduced host file read
+  operations to `22940` from the earlier profiled `37987` range while
+  preserving the same real resource-parse startup path. The final elevated
+  profiler pass before switching back to progress-search-only mode identified
+  runtime code-hook lookup cost rather than another file/RSS bottleneck, so
+  mapped-code hook reads now use a sorted page index instead of a hot
+  `HashMap` lookup and trampoline-target checks use merged page ranges instead
+  of a `HashSet` probe. Focused trampoline/code-index tests, focused stdio
+  host-backed file coverage, `cargo check --features
+  unicorn,trace,win32-desktop`, and the full
+  `cargo test --features unicorn,trace,win32-desktop` suite pass. The 10 s
+  mounted virtual probe after this code-index slice stayed around `11.9 s`,
+  so the active startup cost is now guest resource parsing / Unicorn execution
+  and post-splash progress, not host heap allocation, per-byte host-file
+  reads, multi-GB file preloading, or the old linear trampoline scans.
+- Progress-search-only validation after the profiling pass wrote
+  `target\progress_search_virtual_300s_fg_*` and
+  `target\progress_search_tap_300s_*`, followed by the WNDPROC/window selector
+  run `target\progress_search_wndproc_300s_*`. These 300 s virtual runs use
+  the dumped runtime DLL source, stay memory/file-I/O bounded (`heap_live`
+  about `7.3k/21.5-21.6MB`, `host_read` about `6.4k/2.1MB`), launch and exit
+  `DeviceParser.exe`, `happyway_win.exe`, and `iSearch.exe`, and keep the real
+  iNavi splash/art framebuffer present rather than black. The tap at
+  `(400,240)` did not materially change the final frontier for this probe:
+  both runs still report no named iNavi render milestones, keep the main
+  full-screen windows pending update, and end in the same post-splash class of
+  GWE/render progression rather than a file-I/O or host-presenter failure. The
+  WNDPROC trace confirms the visible splash popup `0x00020008` receives real
+  `WM_CREATE`, `WM_ERASEBKGND`, and repeated `WM_PAINT`/`BeginPaint`/`EndPaint`
+  traffic and that the later `AfxWnd42u` child controls receive `WM_CREATE`
+  before the app immediately hides them via `ShowWindow(SW_HIDE)`. No queued
+  `GetMessageW`/`PeekMessageW` records appear in the final snapshot, so the
+  next search should identify whether startup is still in resource loading or
+  whether hidden child lifecycle messages are parked in queue state that is not
+  being drained through the CE/MFC message loop.
 - Win32 host presentation now updates while Unicorn is still running and uses
   an 800x480 client area instead of treating 800x480 as the outer window
   rectangle. The host desktop runtime wraps the framebuffer only for

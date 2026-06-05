@@ -12,6 +12,35 @@
 
 ## Open
 
+- Startup is still slower than expected after the loader/runtime hot-path
+  fixes.
+  - Symptom: a full-selector mounted virtual 10 s run now starts in about
+    `11.9 s` wall time after the trampoline data-range index fix, down from
+    about `15.8 s`, but the run is still not instant and remains visibly slow
+    in host mode before sustained UI progress.
+  - Evidence: elevated `cargo flamegraph` wrote
+    `target\startup_debug_flame_60s.svg`; the top pre-CPU issue was linear
+    `mips_patch_rva_overlaps_data_ranges` under
+    `patch_mips_unicorn_trampolines`. After normalizing/merging ranges and
+    using binary lookup, `target\startup_debug_flame_after_trampoline_index_60s.svg`
+    shows trampoline patch samples reduced from roughly `45k` to `16k`, and
+    the old overlap helper is gone from the top frames. Buffered CRT `fgets`
+    removed the one-byte stdio read loop and brought the 60 s host file-read
+    count down to `22940` from the earlier profiled `37987` range. A final
+    profiler pass then moved the next fix into runtime hook lookup:
+    `MappedCodeIndex` now uses sorted page lookup and trampoline-target checks
+    use merged page ranges. The follow-up 10 s mounted probe still stayed near
+    the same `11.9 s` band, and the latest 300 s progress-search runs remained
+    memory/file stable while reaching the real splash/art frame. The selector
+    run `target\progress_search_wndproc_300s_*` shows the visible splash popup
+    getting real paint WNDPROC traffic, while later `AfxWnd42u` children are
+    created and hidden without any final `GetMessageW`/`PeekMessageW` message
+    records in the snapshot.
+  - Status: partially fixed. The active bug is no longer bulk file preloading,
+    per-byte file reads, or the old trampoline scan. Continue progress-search
+    through the GWE/message/render frontier; do not replace guest resource
+    parsing with app-specific cached results.
+
 - Post-region mounted iNavi now runs deeper, but later map/UI composition is
   still not presented to the display surface.
   - Symptom: `target\thread_stack_region_virtual_150s_*` runs the full 150 s

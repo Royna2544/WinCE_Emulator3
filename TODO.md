@@ -12,6 +12,29 @@
 
 ## Current Slice
 
+- Continue progress-search-only debugging from the post-profiling startup
+  state; do not schedule another flamegraph unless the user explicitly asks.
+  The old pre-run loader hotspot is reduced: `patch_mips_unicorn_trampolines`
+  now normalizes jump-table data ranges once and uses binary overlap lookup,
+  cutting the full-selector 10 s probe from about `15.8 s` to `11.9 s` wall
+  time. CRT small-copy allocation and per-byte `fgets` reads have also been
+  removed, reducing the 60 s host file-read count from the earlier `37987`
+  band to roughly `22k-23k`, and the hot Unicorn code-hook page lookups now
+  use sorted page/range indexes. The latest no-flame 300 s probes
+  `target\progress_search_virtual_300s_fg_*` and
+  `target\progress_search_tap_300s_*` both remain memory/file-I/O stable,
+  reach the real splash/art framebuffer, and launch/exit all three companion
+  processes, but the tap run does not advance beyond the no-tap frontier. The
+  focused selector probe `target\progress_search_wndproc_300s_*` adds that the
+  visible splash popup receives real `WM_CREATE`/`WM_ERASEBKGND`/`WM_PAINT`
+  WNDPROC traffic, then the app creates many `AfxWnd42u` children and hides
+  them with `ShowWindow(SW_HIDE)` while final `GetMessageW`/`PeekMessageW`
+  message trace remains empty. Next work should trace the generic
+  GWE/message/input/render path that should move the app past the full-screen
+  splash/update state, including whether those child lifecycle messages are
+  queued but not drained or whether startup is still legitimately resource-load
+  bound. Avoid broad file-content preloading, app-specific resource shortcuts,
+  forced hidden paints, or fake presentation.
 - Host Win32 presenter is now a usable output boundary for mounted probes:
   live guest framebuffer writes present during long Unicorn runs, `WM_PAINT`
   redraws the last frame, the visible client area is 800x480, and the title

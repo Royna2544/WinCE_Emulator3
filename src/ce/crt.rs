@@ -452,13 +452,31 @@ fn copy_guest_bytes_chunked<M: CoredllGuestMemory>(
     src: u32,
     len: u32,
 ) -> std::result::Result<(), ()> {
-    const CHUNK: u32 = 64 * 1024;
-    let mut buffer = vec![0; CHUNK as usize];
+    const STACK_CHUNK: usize = 8 * 1024;
+    const HEAP_CHUNK: usize = 64 * 1024;
+
+    if (len as usize) <= STACK_CHUNK {
+        let mut buffer = [0; STACK_CHUNK];
+        return copy_guest_bytes_with_buffer(memory, dest, src, len, &mut buffer[..len as usize]);
+    }
+
+    let mut buffer = vec![0; (len as usize).min(HEAP_CHUNK)];
+    copy_guest_bytes_with_buffer(memory, dest, src, len, &mut buffer)
+}
+
+fn copy_guest_bytes_with_buffer<M: CoredllGuestMemory>(
+    memory: &mut M,
+    dest: u32,
+    src: u32,
+    len: u32,
+    buffer: &mut [u8],
+) -> std::result::Result<(), ()> {
+    let chunk = buffer.len() as u32;
     let overlaps_backward = dest > src && dest < src.wrapping_add(len);
     if overlaps_backward {
         let mut remaining = len;
         while remaining != 0 {
-            let count = remaining.min(CHUNK);
+            let count = remaining.min(chunk);
             remaining = remaining.wrapping_sub(count);
             let count_usize = count as usize;
             memory
@@ -471,7 +489,7 @@ fn copy_guest_bytes_chunked<M: CoredllGuestMemory>(
     } else {
         let mut offset = 0u32;
         while offset < len {
-            let count = (len - offset).min(CHUNK);
+            let count = (len - offset).min(chunk);
             let count_usize = count as usize;
             memory
                 .read_bytes(src.wrapping_add(offset), &mut buffer[..count_usize])
@@ -919,28 +937,34 @@ pub(crate) fn fgets_raw<M: CoredllGuestMemory>(
             0
         };
     }
-    let mut bytes = Vec::new();
-    while bytes.len() < count.saturating_sub(1) as usize {
-        match kernel.read_file(stream, 1) {
-            Ok(chunk) if chunk.is_empty() => break,
-            Ok(chunk) => {
-                let byte = chunk[0];
-                bytes.push(byte);
-                if byte == b'\n' {
-                    break;
-                }
-            }
-            Err(_) => {
-                kernel
-                    .threads
-                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
-                return 0;
-            }
+    let read_limit = count.saturating_sub(1);
+    let mut bytes = match kernel.read_file(stream, read_limit) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return 0;
         }
-    }
+    };
     if bytes.is_empty() {
         kernel.threads.set_last_error(thread_id, 0);
         return 0;
+    }
+    if let Some(newline) = bytes.iter().position(|byte| *byte == b'\n') {
+        let consumed = newline + 1;
+        let unread = bytes.len().saturating_sub(consumed);
+        bytes.truncate(consumed);
+        if unread != 0
+            && kernel
+                .set_file_pointer(stream, -(unread as i64), 1)
+                .is_err()
+        {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return 0;
+        }
     }
     bytes.push(0);
     if write_guest_bytes(kernel, memory, thread_id, dest, &bytes) {
@@ -1805,6 +1829,74 @@ fn push_padded(output: &mut String, text: String, width: usize, zero_pad: bool, 
 #[cfg(test)]
 mod tests {
     use super::ce_wcsncpy_units;
+    use crate::{Error, Result, ce::coredll::CoredllGuestMemory};
+
+    struct BufferMemory {
+        bytes: Vec<u8>,
+    }
+
+    impl CoredllGuestMemory for BufferMemory {
+        fn read_u8(&self, addr: u32) -> Result<u8> {
+            self.bytes
+                .get(addr as usize)
+                .copied()
+                .ok_or_else(|| Error::InvalidArgument("read_u8 outside buffer".to_owned()))
+        }
+
+        fn write_u8(&mut self, addr: u32, value: u8) -> Result<()> {
+            let byte = self
+                .bytes
+                .get_mut(addr as usize)
+                .ok_or_else(|| Error::InvalidArgument("write_u8 outside buffer".to_owned()))?;
+            *byte = value;
+            Ok(())
+        }
+
+        fn read_u32(&self, addr: u32) -> Result<u32> {
+            let mut bytes = [0; 4];
+            self.read_bytes(addr, &mut bytes)?;
+            Ok(u32::from_le_bytes(bytes))
+        }
+
+        fn write_u32(&mut self, addr: u32, value: u32) -> Result<()> {
+            self.write_bytes(addr, &value.to_le_bytes())
+        }
+
+        fn read_u16(&self, addr: u32) -> Result<u16> {
+            let mut bytes = [0; 2];
+            self.read_bytes(addr, &mut bytes)?;
+            Ok(u16::from_le_bytes(bytes))
+        }
+
+        fn write_u16(&mut self, addr: u32, value: u16) -> Result<()> {
+            self.write_bytes(addr, &value.to_le_bytes())
+        }
+
+        fn read_bytes(&self, addr: u32, out: &mut [u8]) -> Result<()> {
+            let start = addr as usize;
+            let end = start
+                .checked_add(out.len())
+                .ok_or_else(|| Error::InvalidArgument("read_bytes overflow".to_owned()))?;
+            out.copy_from_slice(
+                self.bytes.get(start..end).ok_or_else(|| {
+                    Error::InvalidArgument("read_bytes outside buffer".to_owned())
+                })?,
+            );
+            Ok(())
+        }
+
+        fn write_bytes(&mut self, addr: u32, bytes: &[u8]) -> Result<()> {
+            let start = addr as usize;
+            let end = start
+                .checked_add(bytes.len())
+                .ok_or_else(|| Error::InvalidArgument("write_bytes overflow".to_owned()))?;
+            self.bytes
+                .get_mut(start..end)
+                .ok_or_else(|| Error::InvalidArgument("write_bytes outside buffer".to_owned()))?
+                .copy_from_slice(bytes);
+            Ok(())
+        }
+    }
 
     #[test]
     fn wcsncpy_uses_ce_byte_counts() {
@@ -1812,5 +1904,32 @@ mod tests {
         assert_eq!(ce_wcsncpy_units(2), 1);
         assert_eq!(ce_wcsncpy_units(34), 17);
         assert_eq!(ce_wcsncpy_units(260), 130);
+    }
+
+    #[test]
+    fn copy_guest_bytes_preserves_backward_overlap() {
+        let original = (0..64).collect::<Vec<u8>>();
+        let mut memory = BufferMemory {
+            bytes: original.clone(),
+        };
+
+        super::copy_guest_bytes_chunked(&mut memory, 4, 0, 32).unwrap();
+
+        assert_eq!(&memory.bytes[4..36], &original[0..32]);
+    }
+
+    #[test]
+    fn copy_guest_bytes_handles_larger_than_stack_buffer() {
+        let mut bytes = vec![0; 20_000];
+        for (index, byte) in bytes[0..9_500].iter_mut().enumerate() {
+            *byte = (index & 0xff) as u8;
+        }
+        let mut memory = BufferMemory { bytes };
+
+        super::copy_guest_bytes_chunked(&mut memory, 10_000, 0, 9_500).unwrap();
+
+        for index in 0..9_500 {
+            assert_eq!(memory.bytes[10_000 + index], (index & 0xff) as u8);
+        }
     }
 }

@@ -957,7 +957,7 @@ struct MappedBlob {
 #[derive(Debug, Clone)]
 struct MappedCodeIndex {
     blobs: Vec<MappedBlob>,
-    page_to_blob: HashMap<u32, usize>,
+    page_to_blob: Vec<(u32, usize)>,
 }
 
 #[cfg(feature = "unicorn")]
@@ -977,6 +977,8 @@ impl MappedCodeIndex {
                 page_to_blob.entry(page).or_insert(index);
             }
         }
+        let mut page_to_blob = page_to_blob.into_iter().collect::<Vec<_>>();
+        page_to_blob.sort_unstable_by_key(|(page, _)| *page);
         Self {
             blobs,
             page_to_blob,
@@ -984,7 +986,12 @@ impl MappedCodeIndex {
     }
 
     fn read_u32(&self, address: u32) -> Option<u32> {
-        let blob = self.blobs.get(*self.page_to_blob.get(&(address >> 12))?)?;
+        let page = address >> 12;
+        let index = self
+            .page_to_blob
+            .binary_search_by_key(&page, |(mapped_page, _)| *mapped_page)
+            .ok()?;
+        let blob = self.blobs.get(self.page_to_blob[index].1)?;
         let offset = address.checked_sub(blob.base)? as usize;
         let end = offset.checked_add(4)?;
         if end <= blob.bytes.len() {
@@ -3212,6 +3219,7 @@ fn patch_mips_unicorn_trampolines(
             end,
             &image.path,
         )?);
+        let jump_table_data_ranges = normalize_mips_patch_data_ranges(jump_table_data_ranges);
         let mut rva = start;
         while rva.checked_add(8).is_some_and(|next| next <= end) {
             if mips_patch_rva_overlaps_data_ranges(rva, &jump_table_data_ranges) {
@@ -3525,24 +3533,50 @@ fn target_in_ranges(target: u32, ranges: &[(u32, u32)]) -> bool {
 }
 
 #[cfg(feature = "unicorn")]
-fn trampoline_pages_for_ranges(ranges: &[(u32, u32)]) -> HashSet<u32> {
-    let mut pages = HashSet::new();
+fn trampoline_pages_for_ranges(ranges: &[(u32, u32)]) -> Vec<(u32, u32)> {
+    let mut page_ranges = Vec::<(u32, u32)>::new();
     for (base, size) in ranges {
         if *size == 0 {
             continue;
         }
         let first_page = base >> 12;
         let last_page = base.saturating_add(size.saturating_sub(1)) >> 12;
-        for page in first_page..=last_page {
-            pages.insert(page);
-        }
+        let end_page = last_page.saturating_add(1);
+        page_ranges.push((first_page, end_page));
     }
-    pages
+    page_ranges.sort_unstable_by_key(|(start, _)| *start);
+
+    let mut merged = Vec::<(u32, u32)>::with_capacity(page_ranges.len());
+    for (start, end) in page_ranges {
+        if end <= start {
+            continue;
+        }
+        if let Some((_, last_end)) = merged.last_mut() {
+            if start <= *last_end {
+                *last_end = (*last_end).max(end);
+                continue;
+            }
+        }
+        merged.push((start, end));
+    }
+    merged
 }
 
 #[cfg(feature = "unicorn")]
-fn target_in_trampoline_pages(target: u32, pages: &HashSet<u32>) -> bool {
-    pages.contains(&(target >> 12))
+fn target_in_trampoline_pages(target: u32, pages: &[(u32, u32)]) -> bool {
+    let page = target >> 12;
+    let mut low = 0;
+    let mut high = pages.len();
+    while low < high {
+        let mid = low + (high - low) / 2;
+        if pages[mid].0 <= page {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    low.checked_sub(1)
+        .is_some_and(|index| page < pages[index].1)
 }
 
 #[cfg(feature = "unicorn")]
@@ -3784,10 +3818,46 @@ fn find_mips_jump_table_entry_count(
 }
 
 #[cfg(feature = "unicorn")]
+fn normalize_mips_patch_data_ranges(mut ranges: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
+    ranges.retain(|(_, len)| *len != 0);
+    ranges.sort_unstable_by_key(|(start, _)| *start);
+
+    let mut merged: Vec<(u32, u32)> = Vec::with_capacity(ranges.len());
+    for (start, len) in ranges {
+        let end = start.saturating_add(len);
+        if end <= start {
+            continue;
+        }
+        if let Some((last_start, last_len)) = merged.last_mut() {
+            let last_end = last_start.saturating_add(*last_len);
+            if start <= last_end {
+                let merged_end = last_end.max(end);
+                *last_len = merged_end.saturating_sub(*last_start);
+                continue;
+            }
+        }
+        merged.push((start, end.saturating_sub(start)));
+    }
+    merged
+}
+
+#[cfg(feature = "unicorn")]
 fn mips_patch_rva_overlaps_data_ranges(rva: u32, ranges: &[(u32, u32)]) -> bool {
-    ranges.iter().any(|(start, len)| {
-        let end = start.saturating_add(*len);
-        rva < end && rva.saturating_add(8) > *start
+    let patch_end = rva.saturating_add(8);
+    let mut low = 0;
+    let mut high = ranges.len();
+    while low < high {
+        let mid = low + (high - low) / 2;
+        if ranges[mid].0 < patch_end {
+            low = mid + 1;
+        } else {
+            high = mid;
+        }
+    }
+    low.checked_sub(1).is_some_and(|index| {
+        let (start, len) = ranges[index];
+        let end = start.saturating_add(len);
+        rva < end && patch_end > start
     })
 }
 
@@ -14143,6 +14213,61 @@ mod unicorn_tests {
         assert!(super::mips_patch_rva_overlaps_data_ranges(0x3c, &ranges));
         assert!(super::mips_patch_rva_overlaps_data_ranges(0x40, &ranges));
         assert!(!super::mips_patch_rva_overlaps_data_ranges(0x44, &ranges));
+    }
+
+    #[test]
+    fn trampoline_scan_normalizes_data_ranges_for_binary_lookup() {
+        let ranges = super::normalize_mips_patch_data_ranges(vec![
+            (0x60, 0x10),
+            (0x20, 0x10),
+            (0x28, 0x10),
+            (0x00, 0),
+            (0x70, 0x04),
+        ]);
+
+        assert_eq!(ranges, vec![(0x20, 0x18), (0x60, 0x14)]);
+        assert!(!super::mips_patch_rva_overlaps_data_ranges(0x18, &ranges));
+        assert!(super::mips_patch_rva_overlaps_data_ranges(0x1c, &ranges));
+        assert!(super::mips_patch_rva_overlaps_data_ranges(0x34, &ranges));
+        assert!(!super::mips_patch_rva_overlaps_data_ranges(0x38, &ranges));
+        assert!(super::mips_patch_rva_overlaps_data_ranges(0x6c, &ranges));
+        assert!(!super::mips_patch_rva_overlaps_data_ranges(0x74, &ranges));
+    }
+
+    #[test]
+    fn mapped_code_index_uses_sorted_page_lookup() {
+        let index = super::MappedCodeIndex::new(vec![
+            super::MappedBlob {
+                name: "late".to_owned(),
+                base: 0x3000,
+                bytes: vec![0x33, 0x22, 0x11, 0x00],
+            },
+            super::MappedBlob {
+                name: "early".to_owned(),
+                base: 0x1000,
+                bytes: vec![0x78, 0x56, 0x34, 0x12, 0xff],
+            },
+        ]);
+
+        assert_eq!(index.read_u32(0x1000), Some(0x1234_5678));
+        assert_eq!(index.read_u32(0x3000), Some(0x0011_2233));
+        assert_eq!(index.read_u32(0x1002), None);
+        assert_eq!(index.read_u32(0x2000), None);
+    }
+
+    #[test]
+    fn trampoline_pages_merge_for_binary_lookup() {
+        let pages = super::trampoline_pages_for_ranges(&[
+            (0x3000, 0x1000),
+            (0x1000, 0x0800),
+            (0x1800, 0x2000),
+            (0x9000, 0),
+        ]);
+
+        assert_eq!(pages, vec![(1, 4)]);
+        assert!(super::target_in_trampoline_pages(0x1000, &pages));
+        assert!(super::target_in_trampoline_pages(0x3fff, &pages));
+        assert!(!super::target_in_trampoline_pages(0x4000, &pages));
     }
 
     fn write_u32(uc: &mut Unicorn<'_, ()>, address: u64, value: u32) {
