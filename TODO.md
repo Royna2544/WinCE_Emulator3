@@ -12,6 +12,17 @@
 
 ## Current Slice
 
+- Current host/manual post-map slice: continue from
+  `target\host_fullctx_180s_*`. The saved-context dedupe plus full MIPS
+  GPR/HI/LO preservation fixes the previous post-map
+  `READ_UNMAPPED addr=0x14400018` tree-pointer fault; the Win32-host run now
+  reaches the full 180 s wall budget with bounded memory/file I/O and a real
+  map frame. The visible frontier is the app's GPS initialization warning modal
+  (`Error Code: -14`) and continued device/message behavior behind it. Next
+  work should trace the OK-click/modal path and the GPS/Deneb/COM7/SMB1/MFS1
+  device inputs that lead to the warning, using host mode for manual feedback
+  and message/device traces for evidence. Do not bypass the warning, fake GPS
+  state, fabricate Deneb calibration files, or patch iNavi-specific pixels.
 - Current host/manual slice: the hidden/pre-rendered UI layer leak is fixed by
   committed CE visible-client-region clipping (`8fa8c9f`). The live host
   presenter now shows the corrected z-order/hide-show behavior, and the Win32

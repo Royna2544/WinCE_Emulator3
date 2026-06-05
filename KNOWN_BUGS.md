@@ -83,6 +83,17 @@
     send, timer/device waits, or missing subsystem event that follows; if it records
     `remote_*_drop`, fix generic GWE hit-test/focus/capture semantics. Do not
     hardcode iNavi controls.
+  - Latest evidence: `target\host_fullctx_180s_*` supersedes the
+    `target\host_savedctx_dedupe_180s_*` crash shape. Preserving full MIPS
+    saved context, including HI/LO, and removing stale duplicate saved
+    snapshots let the Win32-host run reach the full 180 s wall budget without
+    the previous `READ_UNMAPPED addr=0x14400018` tree-pointer fault. The final
+    framebuffer shows the real map with the app's GPS initialization warning
+    modal (`Error Code: -14`), and the summary remains bounded
+    (`heap_live=14649/31405978B`, `host_read=83673/6450243B`). The remaining
+    responsiveness issue should be investigated as modal/message continuation
+    plus GPS/serial/Deneb/system-state fidelity, not as the old saved-context
+    crash.
 
 - Rendered iNavi map still needs road/building styling fidelity, but the
   black base-layer failure is fixed.

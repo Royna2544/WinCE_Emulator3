@@ -9,6 +9,26 @@
 
 ## Confirmed
 
+- The post-map Win32-host scheduler fault moved past the bad tree-pointer
+  crash after the Unicorn saved-context fix. Guest thread contexts now preserve
+  MIPS HI/LO along with the 32 GPRs across blocked-wait, `GetMessageW`,
+  send-message, sleep/yield, and ready-waiter scheduler resumes; stale saved
+  snapshots for a thread are also removed from the primary suspended slot and
+  FIFO overflow queue before that same thread is resumed. Focused coverage
+  extends the ready-waiter preemption test to prove active HI/LO is saved and
+  the resumed waiter HI/LO is restored, and the stale `GetMessageW` resume
+  regression still passes. Full `cargo test --features unicorn,trace,win32-desktop --lib`
+  passes. Fresh Win32-host mounted validation
+  `target\host_fullctx_180s_*` used dumped runtime DLLs from
+  `D:\INAVI_Emulator\DUMPPLZ\Windows`, ran the full 180 s wall budget without
+  the previous `READ_UNMAPPED addr=0x14400018` fault, stayed bounded
+  (`heap_live=14649/31405978B`, `virtual_live=2/131072B`,
+  `host_open=924`, `host_read=83673/6450243B`, `mem_open=4`,
+  `max_read=685080`), and ended the wall-stop in guest image code
+  (`pc=0x0014e7dc(image:iNavi.exe+0x13e7dc)`). The final frame is the real map
+  plus the app's GPS initialization warning modal (`Error Code: -14`), so the
+  active frontier is now GPS/serial/Deneb/system-state fidelity and modal/UI
+  continuation, not the prior scheduler context-corruption fault.
 - Host ANR diagnostics now preserve the actual wall-clock stop snapshot even
   when later cleanup reaches the app's legacy terminate path. Commit `7866f07`
   adds `preferred_trace_snapshot()` plus opt-in

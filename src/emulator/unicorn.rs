@@ -987,12 +987,36 @@ struct DestroyWndProcCallout {
 
 #[cfg(feature = "unicorn")]
 #[derive(Debug, Clone, PartialEq, Eq)]
+struct MipsGuestContext {
+    regs: [u32; 32],
+    hi: u32,
+    lo: u32,
+}
+
+#[cfg(feature = "unicorn")]
+impl MipsGuestContext {
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn zero() -> Self {
+        Self {
+            regs: [0; 32],
+            hi: 0,
+            lo: 0,
+        }
+    }
+
+    fn set_v0(&mut self, value: u32) {
+        self.regs[2] = value;
+    }
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct PendingGuestThreadReturn {
     creator_thread_id: u32,
     worker_thread_id: u32,
     thread_handle: u32,
     return_pc: u32,
-    creator_regs: [u32; 32],
+    creator_regs: MipsGuestContext,
 }
 
 #[cfg(feature = "unicorn")]
@@ -1016,7 +1040,7 @@ fn pop_pending_guest_thread_return_for_thread(
 struct SuspendedGuestThread {
     thread_id: u32,
     thread_handle: Option<u32>,
-    regs: [u32; 32],
+    regs: MipsGuestContext,
     pc: u32,
 }
 
@@ -1026,7 +1050,7 @@ struct BlockedGuestThread {
     wait_id: u64,
     thread_id: u32,
     thread_handle: u32,
-    regs: [u32; 32],
+    regs: MipsGuestContext,
     return_pc: u32,
     msg_ptr: u32,
     hwnd: Option<u32>,
@@ -1071,7 +1095,7 @@ struct BlockedWaitThread {
     kind: BlockedWaitKind,
     wait_started_ms: u32,
     timeout_ms: u32,
-    regs: [u32; 32],
+    regs: MipsGuestContext,
     return_pc: u32,
 }
 
@@ -7408,7 +7432,7 @@ fn try_suspend_sleep<D>(
             regs: capture_mips_gprs(uc),
             pc: read_mips_reg(uc, RegisterMIPS::RA),
         };
-        suspended.regs[2] = 0;
+        suspended.regs.set_v0(0);
         self_suspended_threads
             .borrow_mut()
             .insert(thread_handle, suspended);
@@ -7424,7 +7448,7 @@ fn try_suspend_sleep<D>(
         capture(callout.thread_handle);
 
         let mut creator_regs = callout.creator_regs;
-        creator_regs[2] = callout.thread_handle;
+        creator_regs.set_v0(callout.thread_handle);
         restore_mips_gprs(uc, &creator_regs);
         *current_thread_id.borrow_mut() = callout.creator_thread_id;
         let _ = update_user_kdata_current_ids(
@@ -7483,7 +7507,7 @@ fn try_yield_sleep<D>(
         regs: capture_mips_gprs(uc),
         pc: read_mips_reg(uc, RegisterMIPS::RA),
     };
-    yielding.regs[2] = 0;
+    yielding.regs.set_v0(0);
 
     if let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id) {
         kernel.record_thread_yield();
@@ -7491,7 +7515,7 @@ fn try_yield_sleep<D>(
         *suspended_thread.borrow_mut() = Some(yielding);
 
         let mut creator_regs = callout.creator_regs;
-        creator_regs[2] = callout.thread_handle;
+        creator_regs.set_v0(callout.thread_handle);
         restore_mips_gprs(uc, &creator_regs);
         *current_thread_id.borrow_mut() = callout.creator_thread_id;
         let _ = update_user_kdata_current_ids(
@@ -8591,13 +8615,14 @@ fn try_resume_blocked_wait_with_active_pc<D>(
         regs: capture_mips_gprs(uc),
         pc: active_pc.unwrap_or_else(|| read_mips_reg(uc, RegisterMIPS::RA)),
     };
-    current.regs[2] = read_mips_reg(uc, RegisterMIPS::V0);
+    current.regs.set_v0(read_mips_reg(uc, RegisterMIPS::V0));
     if !push_suspended_guest_thread(suspended_thread, suspended_queue, current) {
         return false;
     }
+    remove_suspended_guest_threads_for_thread(suspended_thread, suspended_queue, blocked.thread_id);
 
     let mut regs = blocked.regs;
-    regs[2] = wait_result;
+    regs.set_v0(wait_result);
     restore_mips_gprs(uc, &regs);
     let writes = [
         uc.reg_write(RegisterMIPS::PC, u64::from(blocked.return_pc)),
@@ -9082,7 +9107,7 @@ mod wait_scheduler_tests {
             kind: BlockedWaitKind::Kernel,
             wait_started_ms: start,
             timeout_ms: timeout,
-            regs: [0; 32],
+            regs: super::MipsGuestContext::zero(),
             return_pc: 0,
         }
     }
@@ -9096,7 +9121,7 @@ mod wait_scheduler_tests {
             kind: BlockedWaitKind::Kernel,
             wait_started_ms: 0,
             timeout_ms: crate::ce::timer::INFINITE,
-            regs: [0; 32],
+            regs: super::MipsGuestContext::zero(),
             return_pc: 0,
         }
     }
@@ -9110,7 +9135,7 @@ mod wait_scheduler_tests {
             kind: BlockedWaitKind::SerialCommEvent { handle, event_ptr },
             wait_started_ms: 0,
             timeout_ms: crate::ce::timer::INFINITE,
-            regs: [0; 32],
+            regs: super::MipsGuestContext::zero(),
             return_pc: 0,
         }
     }
@@ -9502,7 +9527,7 @@ mod wait_scheduler_tests {
             kind: BlockedWaitKind::Kernel,
             wait_started_ms: kernel.timers.tick_count(),
             timeout_ms: crate::ce::timer::INFINITE,
-            regs: [0; 32],
+            regs: super::MipsGuestContext::zero(),
             return_pc: ready_return_pc,
         }]));
         let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
@@ -9594,7 +9619,7 @@ mod wait_scheduler_tests {
             kind: BlockedWaitKind::Kernel,
             wait_started_ms: kernel.timers.tick_count(),
             timeout_ms: crate::ce::timer::INFINITE,
-            regs: [0; 32],
+            regs: super::MipsGuestContext::zero(),
             return_pc: ready_return_pc,
         }]));
         let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(active_thread_id));
@@ -9657,6 +9682,10 @@ mod wait_scheduler_tests {
         let ready_event = kernel.create_event_w(None, true, true);
         let active_pc = 0x3333_0000_u32;
         let ready_return_pc = 0x5555_0000_u32;
+        let active_hi = 0x1111_2222_u32;
+        let active_lo = 0x3333_4444_u32;
+        let ready_hi = 0xaaaa_5555_u32;
+        let ready_lo = 0xbbbb_6666_u32;
         let wait_id = kernel.register_blocked_waiter(
             ready_thread_id,
             ready_thread_handle,
@@ -9665,6 +9694,9 @@ mod wait_scheduler_tests {
             kernel.timers.tick_count(),
             crate::ce::timer::INFINITE,
         );
+        let mut ready_regs = super::MipsGuestContext::zero();
+        ready_regs.hi = ready_hi;
+        ready_regs.lo = ready_lo;
         let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
             wait_id,
             thread_id: ready_thread_id,
@@ -9673,7 +9705,7 @@ mod wait_scheduler_tests {
             kind: BlockedWaitKind::Kernel,
             wait_started_ms: kernel.timers.tick_count(),
             timeout_ms: crate::ce::timer::INFINITE,
-            regs: [0; 32],
+            regs: ready_regs,
             return_pc: ready_return_pc,
         }]));
         let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(active_thread_id));
@@ -9681,15 +9713,27 @@ mod wait_scheduler_tests {
             std::rc::Rc::new(std::cell::RefCell::new(Some(super::SuspendedGuestThread {
                 thread_id: old_suspended_thread_id,
                 thread_handle: Some(0x104),
-                regs: [0; 32],
+                regs: super::MipsGuestContext::zero(),
                 pc: 0x4444_0000,
             })));
         let suspended_queue =
             std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::new()));
+        suspended_queue
+            .borrow_mut()
+            .push_back(super::SuspendedGuestThread {
+                thread_id: ready_thread_id,
+                thread_handle: Some(ready_thread_handle),
+                regs: super::MipsGuestContext::zero(),
+                pc: 0x6666_0000,
+            });
         let running_thread = std::rc::Rc::new(std::cell::RefCell::new(Some((
             active_thread_id,
             active_thread_handle,
         ))));
+        uc.reg_write(unicorn_engine::RegisterMIPS::HI, u64::from(active_hi))
+            .unwrap();
+        uc.reg_write(unicorn_engine::RegisterMIPS::LO, u64::from(active_lo))
+            .unwrap();
 
         assert!(super::try_resume_blocked_wait_with_active_pc(
             &mut kernel,
@@ -9717,6 +9761,16 @@ mod wait_scheduler_tests {
         assert_eq!(queue[0].thread_id, active_thread_id);
         assert_eq!(queue[0].thread_handle, Some(active_thread_handle));
         assert_eq!(queue[0].pc, active_pc);
+        assert_eq!(queue[0].regs.hi, active_hi);
+        assert_eq!(queue[0].regs.lo, active_lo);
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::HI).unwrap() as u32,
+            ready_hi
+        );
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::LO).unwrap() as u32,
+            ready_lo
+        );
         assert!(blocked_waits.borrow().is_empty());
         assert!(kernel.blocked_waiter(wait_id).is_none());
     }
@@ -9740,7 +9794,7 @@ mod wait_scheduler_tests {
             std::rc::Rc::new(std::cell::RefCell::new(Some(super::SuspendedGuestThread {
                 thread_id: worker_thread_id,
                 thread_handle: Some(worker_thread_handle),
-                regs: [0; 32],
+                regs: super::MipsGuestContext::zero(),
                 pc: worker_pc,
             })));
         let suspended_queue =
@@ -9806,7 +9860,7 @@ mod wait_scheduler_tests {
                 worker_thread_id: 6,
                 thread_handle: 0x106,
                 return_pc: 0x1111_0000,
-                creator_regs: [0; 32],
+                creator_regs: super::MipsGuestContext::zero(),
             },
         ]));
 
@@ -9851,7 +9905,7 @@ mod wait_scheduler_tests {
                 kind: BlockedWaitKind::Kernel,
                 wait_started_ms: 0,
                 timeout_ms: crate::ce::timer::INFINITE,
-                regs: [0; 32],
+                regs: super::MipsGuestContext::zero(),
                 return_pc: 0,
             },
             BlockedWaitThread {
@@ -9862,7 +9916,7 @@ mod wait_scheduler_tests {
                 kind: BlockedWaitKind::Kernel,
                 wait_started_ms: 0,
                 timeout_ms: crate::ce::timer::INFINITE,
-                regs: [0; 32],
+                regs: super::MipsGuestContext::zero(),
                 return_pc: 0,
             },
         ]));
@@ -10171,7 +10225,7 @@ fn try_enter_resumed_thread_callout<D>(
             regs: capture_mips_gprs(uc),
             pc: read_mips_reg(uc, RegisterMIPS::RA),
         };
-        creator.regs[2] = result;
+        creator.regs.set_v0(result);
         *suspended_thread.borrow_mut() = Some(creator);
         activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &resumed);
         return true;
@@ -10188,7 +10242,7 @@ fn try_enter_resumed_thread_callout<D>(
         regs: capture_mips_gprs(uc),
         pc: read_mips_reg(uc, RegisterMIPS::RA),
     };
-    creator.regs[2] = result;
+    creator.regs.set_v0(result);
     *suspended_thread.borrow_mut() = Some(creator);
     *current_thread_id.borrow_mut() = worker_thread_id;
     let _ = update_user_kdata_current_ids(uc, worker_thread_id, kernel.current_process_id());
@@ -10349,13 +10403,14 @@ fn try_resume_blocked_get_message_with_active_pc<D>(
         regs: capture_mips_gprs(uc),
         pc: active_pc.unwrap_or_else(|| read_mips_reg(uc, RegisterMIPS::RA)),
     };
-    current.regs[2] = read_mips_reg(uc, RegisterMIPS::V0);
+    current.regs.set_v0(read_mips_reg(uc, RegisterMIPS::V0));
     if !push_suspended_guest_thread(suspended_thread, suspended_queue, current) {
         return false;
     }
+    remove_suspended_guest_threads_for_thread(suspended_thread, suspended_queue, blocked.thread_id);
 
     let mut regs = blocked.regs;
-    regs[2] = u32::from(message.msg != crate::ce::gwe::WM_QUIT);
+    regs.set_v0(u32::from(message.msg != crate::ce::gwe::WM_QUIT));
     restore_mips_gprs(uc, &regs);
     let writes = [
         uc.reg_write(RegisterMIPS::PC, u64::from(blocked.return_pc)),
@@ -10421,6 +10476,7 @@ fn push_suspended_guest_thread(
     queue: Option<&SuspendedGuestThreadQueue>,
     thread: SuspendedGuestThread,
 ) -> bool {
+    remove_suspended_guest_threads_for_thread(slot, queue, thread.thread_id);
     let mut slot_ref = slot.borrow_mut();
     if slot_ref.is_none() {
         *slot_ref = Some(thread);
@@ -10440,9 +10496,34 @@ fn pop_suspended_guest_thread(
     slot: &SuspendedGuestThreadSlot,
     queue: Option<&SuspendedGuestThreadQueue>,
 ) -> Option<SuspendedGuestThread> {
-    slot.borrow_mut()
+    let popped = slot
+        .borrow_mut()
         .take()
-        .or_else(|| queue.and_then(|queue| queue.borrow_mut().pop_front()))
+        .or_else(|| queue.and_then(|queue| queue.borrow_mut().pop_front()));
+    if let Some(thread) = popped.as_ref() {
+        remove_suspended_guest_threads_for_thread(slot, queue, thread.thread_id);
+    }
+    popped
+}
+
+#[cfg(feature = "unicorn")]
+fn remove_suspended_guest_threads_for_thread(
+    slot: &SuspendedGuestThreadSlot,
+    queue: Option<&SuspendedGuestThreadQueue>,
+    thread_id: u32,
+) {
+    if slot
+        .borrow()
+        .as_ref()
+        .is_some_and(|thread| thread.thread_id == thread_id)
+    {
+        *slot.borrow_mut() = None;
+    }
+    if let Some(queue) = queue {
+        queue
+            .borrow_mut()
+            .retain(|thread| thread.thread_id != thread_id);
+    }
 }
 
 #[cfg(feature = "unicorn")]
@@ -10536,19 +10617,25 @@ mod guest_thread_stack_tests {
 }
 
 #[cfg(feature = "unicorn")]
-fn capture_mips_gprs<D>(uc: &unicorn_engine::Unicorn<'_, D>) -> [u32; 32] {
+fn capture_mips_gprs<D>(uc: &unicorn_engine::Unicorn<'_, D>) -> MipsGuestContext {
     let mut regs = [0; 32];
     for register in 1..32 {
         regs[register as usize] = read_mips_gpr(uc, register).unwrap_or(0);
     }
-    regs
+    MipsGuestContext {
+        regs,
+        hi: uc.reg_read(RegisterMIPS::HI).unwrap_or(0) as u32,
+        lo: uc.reg_read(RegisterMIPS::LO).unwrap_or(0) as u32,
+    }
 }
 
 #[cfg(feature = "unicorn")]
-fn restore_mips_gprs<D>(uc: &mut unicorn_engine::Unicorn<'_, D>, regs: &[u32; 32]) {
+fn restore_mips_gprs<D>(uc: &mut unicorn_engine::Unicorn<'_, D>, context: &MipsGuestContext) {
     for register in 1..32 {
-        let _ = write_mips_gpr(uc, register, regs[register as usize]);
+        let _ = write_mips_gpr(uc, register, context.regs[register as usize]);
     }
+    let _ = uc.reg_write(RegisterMIPS::HI, u64::from(context.hi));
+    let _ = uc.reg_write(RegisterMIPS::LO, u64::from(context.lo));
 }
 
 #[cfg(feature = "unicorn")]
@@ -17678,7 +17765,7 @@ mod unicorn_tests {
         assert_eq!(blocked_waits[0].wait_id, restore.wait_id);
         assert_eq!(blocked_waits[0].thread_id, sender_thread);
         assert_eq!(blocked_waits[0].thread_handle, 0x120);
-        assert_eq!(blocked_waits[0].regs[16], 0x7777_0001);
+        assert_eq!(blocked_waits[0].regs.regs[16], 0x7777_0001);
         let super::BlockedWaitKind::SendMessage {
             send_id,
             receiver_thread_id: blocked_receiver,
@@ -17934,8 +18021,8 @@ mod unicorn_tests {
             )
             .expect("queued send");
         let wait_started_ms = kernel.timers.tick_count();
-        let mut sender_regs = [0u32; 32];
-        sender_regs[16] = 0x7777_0011;
+        let mut sender_regs = super::MipsGuestContext::zero();
+        sender_regs.regs[16] = 0x7777_0011;
         let kind = super::BlockedWaitKind::SendMessage {
             send_id,
             receiver_thread_id: receiver_thread,
@@ -18026,7 +18113,7 @@ mod unicorn_tests {
             kind: super::BlockedWaitKind::Sleep,
             wait_started_ms,
             timeout_ms: 101,
-            regs: [0; 32],
+            regs: super::MipsGuestContext::zero(),
             return_pc: 0x0040_1000,
         }]));
         let blocked_get_message = Rc::new(RefCell::new(None));
@@ -18097,7 +18184,7 @@ mod unicorn_tests {
             wait_id: stale_wait_id,
             thread_id,
             thread_handle,
-            regs: [0; 32],
+            regs: super::MipsGuestContext::zero(),
             return_pc: 0x0040_1000,
             msg_ptr: 0x3000_0100,
             hwnd: None,
@@ -18166,8 +18253,8 @@ mod unicorn_tests {
             wait_started_ms,
             1,
         );
-        let mut worker_regs = [0; 32];
-        worker_regs[16] = 0x5555_0001;
+        let mut worker_regs = super::MipsGuestContext::zero();
+        worker_regs.regs[16] = 0x5555_0001;
         let blocked_waits = Rc::new(RefCell::new(vec![super::BlockedWaitThread {
             wait_id: worker_wait_id,
             thread_id: worker_thread_id,
@@ -18272,7 +18359,7 @@ mod unicorn_tests {
             wait_id: getmsg_wait_id,
             thread_id: main_thread_id,
             thread_handle: main_thread_handle,
-            regs: [0; 32],
+            regs: super::MipsGuestContext::zero(),
             return_pc: 0x0040_1000,
             msg_ptr: 0x3000_0100,
             hwnd: None,
@@ -18282,6 +18369,14 @@ mod unicorn_tests {
         let current_thread_id = Rc::new(RefCell::new(active_thread_id));
         let suspended_thread = Rc::new(RefCell::new(None));
         let suspended_queue = Rc::new(RefCell::new(std::collections::VecDeque::new()));
+        suspended_queue
+            .borrow_mut()
+            .push_back(super::SuspendedGuestThread {
+                thread_id: main_thread_id,
+                thread_handle: Some(main_thread_handle),
+                regs: super::MipsGuestContext::zero(),
+                pc: 0x0040_0000,
+            });
         let running_thread = Rc::new(RefCell::new(Some((active_thread_id, active_thread_handle))));
         let active_pc = 0x000e_929c;
         uc.reg_write(RegisterMIPS::RA, 0xdead_beef).unwrap();
@@ -18357,7 +18452,7 @@ mod unicorn_tests {
             wait_id,
             thread_id: main_thread_id,
             thread_handle: main_thread_handle,
-            regs: [0; 32],
+            regs: super::MipsGuestContext::zero(),
             return_pc: 0x0040_1000,
             msg_ptr: 0x3000_0100,
             hwnd: None,
