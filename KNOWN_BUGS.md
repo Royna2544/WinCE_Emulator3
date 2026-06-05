@@ -167,6 +167,13 @@
     current open frontier is the GPS initialization warning/modal plus
     GPS/serial/Deneb continuation that reaches the app-owned encoded terminate
     path, not a timer storm or host input drop.
+  - Follow-up modal evidence: `target\host_modal_clickburst_300s_*` sent a
+    short burst of real host clicks through the Win32 presenter during the
+    GPS-warning transition. Two touch messages hit top modal HWND `0x00020084`;
+    the final window snapshot marks that HWND `dead=true`, and the final frame
+    is the earlier safety notice with the bottom OK button. This means the GPS
+    warning is not stuck; the next unresolved manual step is the safety notice
+    and whatever guest/device path follows it.
 
 - Rendered iNavi map still needs road/building styling fidelity, but the
   black base-layer failure is fixed.

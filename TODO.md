@@ -28,6 +28,14 @@
   state that leads to the warning and encoded terminate path. Do not treat this
   as a presenter, framebuffer, timer-flood, hidden-layer, or file-I/O problem
   unless fresh evidence regresses those closed paths.
+- Immediate host/manual follow-up: `target\host_modal_clickburst_300s_*`
+  proves the GPS warning can be dismissed when clicks straddle the top-modal
+  creation. The final frame is back on the safety notice with the bottom OK
+  button, not the GPS warning. Run host again and click the GPS warning OK once
+  it appears, then click the safety notice OK; trace whether it advances to the
+  map/normal UI or reaches the encoded terminate path. If the clicks deliver
+  but do not advance, chase guest MFC handler/device state; if they drop, fix
+  generic GWE hit-test/focus/capture.
 - Current host/manual ANR slice: continue from
   `target\host_getmsg_sendwake_300s_*`. The pending synchronous-send deadlock
   from `target\host_handoff_300s_*` is closed: the blocked-current

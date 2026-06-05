@@ -32,6 +32,17 @@
   `0x00020080`; the remaining ANR/frontier is therefore GPS/modal/device
   continuation, not timer flooding, host input loss, hidden-layer leakage, or
   file-I/O/RSS growth.
+- Follow-up visible host validation `target\host_modal_clickburst_300s_*`
+  clicked the OK area repeatedly across the GPS-warning transition. Two
+  delivered `WM_LBUTTONDOWN/UP` events hit the top warning modal HWND
+  `0x00020084`; that modal is `dead=true` in the final window snapshot and the
+  final framebuffer returns to the earlier safety notice with the bottom OK
+  button. This confirms the GPS warning is dismissible through real host input
+  and GWE hit-testing. The run stayed host-window responsive and bounded, ran
+  almost to the 300 s wall budget, and then reached the same app-owned encoded
+  terminate path while waiting at the safety notice, so the next manual-host
+  probe should click the safety notice OK after the GPS warning is dismissed
+  before treating the state as a new scheduler ANR.
 - The post-map Win32-host pending-send deadlock is fixed. A 300 s host probe
   before this slice (`target\host_handoff_300s_*`) ended with thread 9 blocked
   in a synchronous send while thread 1 was parked in `GetMessageW`
