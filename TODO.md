@@ -12,6 +12,22 @@
 
 ## Current Slice
 
+- Continue from the latest mounted destroy/slot crash evidence in
+  `target\destroy_lifecycle_current_*`. CE/MFC destroy handling now has the correct
+  fake `WM_NCDESTROY` value (`0x7fff`), records MFC-delivered NC destroy, and
+  keeps windows valid while a `DestroyWindow` subtree is in the CE
+  `fBeingDestroyed` phase. The remaining startup crash happens after the
+  `DestroyWindow/WM_DESTROY` guest callout has returned: iNavi reaches
+  `pc=0x0002c264(image:iNavi.exe+0x1c264)` and dereferences a null slot loaded
+  from the global object at `+0x10ec`. Stop-PC probes prove that slot is
+  initially created/stored as `0x3005bda0`, is still non-null at
+  `0x0002bf30`, then is null at `0x0002c260/0x0002c264` while the guest state
+  checks have `state[0x8a] == 5` and `state[0x120] == 0`. The final window
+  dump now prints `destroying=false dead=true` for the destroyed subtree, so
+  chase the guest continuation/slot lifetime rather than in-flight HWND
+  validity. Next step: add a narrow diagnostic for writes to that slot and for
+  setters of state index `0x120`, or statically find the guest setters around
+  `jal 0x22904` with index `0x120`. Do not patch the slot or force the state.
 - Continue from the scheduler-clean mounted probe
   `target\unicorn_wait_cleanup_virtual_60s_*`. The previous WNDPROC return
   `user-kdata` execute fault and the immediate `Sleep @496`/wait-storm
@@ -515,11 +531,14 @@
     GWE cleanup, and the default `WM_CLOSE` shortcut records the same destroy
     observation before deleting HWND state. `WM_NCDESTROY` is now tracked when
     actually delivered through raw `SendMessageW` or a Unicorn guest-WNDPROC
-    return, matching CE MFC's source-backed fake-NC-destroy path instead of
-    adding an OS-side synthetic send. Raw/kernel parent `DestroyWindow` now
-    sends `WM_DESTROY` to descendants before the parent and before final GWE
-    cleanup. Unicorn direct guest-WNDPROC `DestroyWindow` now chains guest
-    descendant `WM_DESTROY` callbacks child-first before final root cleanup.
+    return, matching CE MFC's source-backed fake-NC-destroy path and CE fake
+    value `WM_APP - 1` instead of adding an OS-side synthetic send.
+    Raw/kernel parent `DestroyWindow` now sends `WM_DESTROY` to descendants
+    before the parent and before final GWE cleanup. Unicorn direct guest-WNDPROC
+    `DestroyWindow` now chains guest descendant `WM_DESTROY` callbacks
+    child-first before final root cleanup and keeps the subtree valid while it
+    is in the CE `fBeingDestroyed` phase so reentrant destroy calls do not
+    double-finalize HWND state.
     Unicorn `CreateWindowExW` guest-WNDPROC callouts now honor `WM_CREATE`
     failure returns by returning `NULL` and destroying the just-created virtual
     HWND when guest code returns `-1`. A mounted probe showed that

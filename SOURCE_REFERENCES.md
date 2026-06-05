@@ -546,6 +546,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     the last guest `WM_DESTROY` callback returns. A virtual lifecycle order
     counter exists only to verify this child-first sequence in focused
     fixtures.
+  - CE `window.hpp` exposes `fBeingDestroyed` alongside the sent-destroy
+    lifecycle bits; Rust virtual windows now keep the HWND valid while a
+    `DestroyWindow` subtree is inside guest `WM_DESTROY` callouts and only mark
+    it final-dead after the callout chain completes. This lets reentrant
+    `DestroyWindow` calls observe the in-flight lifecycle without deleting the
+    same subtree twice.
   - Declares `UpdateWindow_I`; CE/MFC uses this as a synchronous paint forcing
     boundary. Rust raw `UpdateWindow` now validates pending update state by
     sending `WM_PAINT` through the window send path when an update region exists.
@@ -1053,7 +1059,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `WM_NCDESTROY` when raw `SendMessageW` or a Unicorn guest-WNDPROC return
     actually delivers it. Rust does not add an OS-side automatic
     `WM_NCDESTROY` send because this CE MFC source path explicitly fakes the
-    message above GWE. Guest child destroy-message ordering is now chained
+    message above GWE. CE MFC `atlosapice.h` defines that fake message as
+    `WM_APP - 1`, so v3 uses `0x7fff` rather than the desktop
+    `WM_NCDESTROY` value. Guest child destroy-message ordering is now chained
     through Unicorn WNDPROC callouts before final root cleanup; remaining
     lifecycle work is focused on synchronous-send ownership and destroyed-target
     behavior.

@@ -7557,6 +7557,7 @@ fn coredll_raw_send_message_records_nc_destroy_lifecycle() -> Result<()> {
     let mut memory = TestGuestMemory::default();
     let thread_id = 46;
 
+    assert_eq!(WM_NCDESTROY, 0x7fff);
     let hwnd = kernel.create_window_ex_w(thread_id, "NC_DESTROY", "", None, 0, 0, 0);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

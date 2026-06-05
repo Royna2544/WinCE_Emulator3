@@ -1737,6 +1737,30 @@
   milestones, and an all-zero framebuffer body. Automatic synthesis is not
   added at the GWE boundary because the CE MFC source explicitly fakes the
   message in MFC; full child destroy ordering remains open.
+- CE/MFC destroy lifecycle now uses the CE fake `WM_NCDESTROY` value
+  `WM_APP - 1` (`0x7fff`) instead of the desktop value `0x0082`, matching
+  `atlosapice.h`, and virtual windows carry a CE `fBeingDestroyed`-style
+  transient bit during `DestroyWindow` guest-WNDPROC callouts. A reentrant
+  `DestroyWindow(hwnd)` seen while the subtree is already in this state now
+  returns through the import bridge without finalizing the HWND twice, and the
+  empty-callout path restores `PC`/`RA` as well as `v0`. Window trace snapshots
+  include the `destroying` state so mounted probes can distinguish in-flight
+  destroy from final dead HWNDs. Focused coverage:
+  `being_destroyed_window_remains_valid_until_final_destroy` and the raw
+  `coredll_raw_send_message_records_nc_destroy_lifecycle` fixture, now also
+  asserting `WM_NCDESTROY == 0x7fff`. Mounted validation
+  `target\destroy_lifecycle_current_*` still crashes after `DestroyWindow`
+  returns:
+  the app reaches `pc=0x0002c264(image:iNavi.exe+0x1c264)` with `a0=0` and
+  faults on `lw $10,0($4)`. Stop-PC probes show the global slot at
+  `+0x10ec` is initialized to `0x3005bda0` and remains valid at
+  `0x0002bf30`, then becomes null before the unguarded path at `0x0002c264`
+  while state getter `0x22998` returns `state[0x8a] == 5` and
+  `state[0x120] == 0`. The fresh final window dump shows the relevant
+  destroyed subtree as `destroying=false dead=true`, so finalization completed
+  before the guest continuation dereference. This is not fixed by the
+  destroy-lifecycle slice; the next work is to trace the generic state/slot
+  clear path, not to force guest state.
 - Raw/kernel parent `DestroyWindow` now delivers `WM_DESTROY` to live
   descendants before the parent and before final GWE cleanup, with a lightweight
   lifecycle order counter on virtual windows to prove the child-first sequence

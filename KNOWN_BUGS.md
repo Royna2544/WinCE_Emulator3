@@ -12,6 +12,30 @@
 
 ## Open
 
+- Mounted iNavi now reaches a post-destroy guest null dereference during
+  startup.
+  - Symptom: `target\destroy_return_notap_*` exits with
+    `READ_UNMAPPED addr=0` at
+    `pc=0x0002c264(image:iNavi.exe+0x1c264)` after a
+    `DestroyWindow/WM_DESTROY` guest-WNDPROC callout has returned. The window
+    lifecycle trace shows MFC sends fake `WM_NCDESTROY` (`0x7fff`) and updates
+    the WNDPROC to its post-destroy null proc before final HWND cleanup, so the
+    crash is in the guest continuation path after destroy, not a direct
+    unhandled `WM_NCDESTROY` constant mismatch. The fresh
+    `target\destroy_lifecycle_current_*` validation reproduces the same crash
+    and the final window dump shows `destroying=false dead=true` for the
+    destroyed subtree.
+  - Evidence: stop-PC probes show the global slot at object offset `+0x10ec`
+    is allocated by the constructor path (`0x152728` returns `0x3005bda0`),
+    is stored at `0x00069c64`, and remains valid at `0x0002bf30`. It becomes
+    null by `0x0002c260/0x0002c264`, where the guest state checks route into
+    the unguarded dereference because `state[0x8a] == 5` and
+    `state[0x120] == 0`.
+  - Status: open. The generic CE destroy-lifecycle fixes are retained and
+    covered, but the next investigation must identify the real slot clear or
+    missing state transition path. Do not force the slot/state or special-case
+    iNavi.
+
 - Release/no-trace mounted iNavi reaches a stable scheduler idle frontier
   rather than continuing post-splash UI progression.
   - Symptom: optimized mounted runs reach

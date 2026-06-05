@@ -860,13 +860,14 @@ fn push_monitor_windows(out: &mut String, z_order: &[u32], windows: &[UnicornWin
             .unwrap_or_else(|| "<none>".to_owned());
         let _ = writeln!(
             out,
-            "    0x{:08x} tid={} parent={} class=`{}` title=`{}` vis={} dead={} style=0x{:08x} ex=0x{:08x} upd={} erase={} rect={},{}-{},{} client={},{}-{},{} update={},{}-{},{} wndproc=0x{:08x}",
+            "    0x{:08x} tid={} parent={} class=`{}` title=`{}` vis={} destroying={} dead={} style=0x{:08x} ex=0x{:08x} upd={} erase={} rect={},{}-{},{} client={},{}-{},{} update={},{}-{},{} wndproc=0x{:08x}",
             window.hwnd,
             window.thread_id,
             parent,
             window.class_name,
             window.title,
             window.visible,
+            window.being_destroyed,
             window.destroyed,
             window.style,
             window.ex_style,

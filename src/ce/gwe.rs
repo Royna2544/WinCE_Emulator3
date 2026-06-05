@@ -25,7 +25,6 @@ pub const WM_SETFOCUS: u32 = 0x0007;
 pub const WM_KILLFOCUS: u32 = 0x0008;
 pub const WM_ENABLE: u32 = 0x000a;
 pub const WM_NCCREATE: u32 = 0x0081;
-pub const WM_NCDESTROY: u32 = 0x0082;
 pub const WM_GETDLGCODE: u32 = 0x0087;
 pub const WM_SETTEXT: u32 = 0x000c;
 pub const WM_GETTEXT: u32 = 0x000d;
@@ -39,6 +38,8 @@ pub const WM_MOUSEMOVE: u32 = 0x0200;
 pub const WM_LBUTTONDOWN: u32 = 0x0201;
 pub const WM_LBUTTONUP: u32 = 0x0202;
 pub const WM_USER: u32 = 0x0400;
+pub const WM_APP: u32 = 0x8000;
+pub const WM_NCDESTROY: u32 = WM_APP - 1;
 pub const DM_GETDEFID: u32 = WM_USER;
 pub const DM_SETDEFID: u32 = WM_USER + 1;
 pub const DC_HASDEFID: u32 = 0x534b;
@@ -396,6 +397,7 @@ pub struct Window {
     pub update_rect: Rect,
     pub pending_move: bool,
     pub pending_size: bool,
+    pub being_destroyed: bool,
     pub destroyed: bool,
     pub destroy_message_sent: bool,
     pub nc_destroy_message_sent: bool,
@@ -508,6 +510,7 @@ impl Default for Gwe {
                 update_rect: Rect::default(),
                 pending_move: false,
                 pending_size: false,
+                being_destroyed: false,
                 destroyed: false,
                 destroy_message_sent: false,
                 nc_destroy_message_sent: false,
@@ -679,6 +682,7 @@ impl Gwe {
                 update_rect,
                 pending_move: false,
                 pending_size: false,
+                being_destroyed: false,
                 destroyed: false,
                 destroy_message_sent: false,
                 nc_destroy_message_sent: false,
@@ -811,6 +815,7 @@ impl Gwe {
         }
         for target in targets.iter().rev().copied() {
             if let Some(window) = self.windows.get_mut(&target) {
+                window.being_destroyed = false;
                 window.destroyed = true;
             }
             self.window_regions.remove(&target);
@@ -850,6 +855,24 @@ impl Gwe {
             queue.retain(|id| !doomed_sent.contains(id));
         }
         true
+    }
+
+    pub fn mark_window_subtree_being_destroyed(&mut self, hwnd: u32) -> bool {
+        let Some(targets) = self.window_and_descendants(hwnd) else {
+            return false;
+        };
+        for target in targets {
+            if let Some(window) = self.windows.get_mut(&target) {
+                window.being_destroyed = true;
+            }
+        }
+        true
+    }
+
+    pub fn is_window_being_destroyed(&self, hwnd: u32) -> bool {
+        self.windows
+            .get(&hwnd)
+            .is_some_and(|window| !window.destroyed && window.being_destroyed)
     }
 
     pub fn show_window(&mut self, hwnd: u32, visible: bool) -> bool {
@@ -3430,6 +3453,25 @@ mod tests {
             gwe.take_completed_sent_message_result(outer_id),
             Some(0x1111)
         );
+    }
+
+    #[test]
+    fn being_destroyed_window_remains_valid_until_final_destroy() {
+        let mut gwe = Gwe::default();
+        let hwnd = gwe.create_window(1, "destroying", "");
+        let child = gwe.create_window_ex(1, "child", "", Some(hwnd), 10, 0, 0);
+
+        assert!(gwe.mark_window_subtree_being_destroyed(hwnd));
+        assert!(gwe.is_window(hwnd));
+        assert!(gwe.is_window(child));
+        assert!(gwe.is_window_being_destroyed(hwnd));
+        assert!(gwe.is_window_being_destroyed(child));
+        assert_eq!(gwe.send_message(child, WM_USER + 0x32, 1, 2), Some(0));
+
+        assert!(gwe.destroy_window(hwnd, 0));
+        assert!(!gwe.is_window(hwnd));
+        assert!(!gwe.is_window(child));
+        assert!(!gwe.is_window_being_destroyed(hwnd));
     }
 
     #[test]

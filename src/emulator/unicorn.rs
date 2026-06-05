@@ -707,6 +707,7 @@ pub struct UnicornWindowSnapshot {
     pub class_name: String,
     pub title: String,
     pub visible: bool,
+    pub being_destroyed: bool,
     pub destroyed: bool,
     pub parent: Option<u32>,
     pub style: u32,
@@ -730,6 +731,7 @@ fn unicorn_window_snapshot(window: crate::ce::gwe::Window) -> UnicornWindowSnaps
         class_name: window.class_name,
         title: window.title,
         visible: window.visible,
+        being_destroyed: window.being_destroyed,
         destroyed: window.destroyed,
         parent: window.parent,
         style: window.style,
@@ -11608,6 +11610,19 @@ fn enter_destroy_window_wm_destroy_callout<D>(
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+    if kernel.gwe.is_window_being_destroyed(hwnd) {
+        let writes = [
+            uc.reg_write(RegisterMIPS::V0, u64::from(api_result)),
+            uc.reg_write(RegisterMIPS::PC, u64::from(return_pc)),
+            uc.reg_write(RegisterMIPS::RA, u64::from(return_pc)),
+        ];
+        if writes.into_iter().any(|write| write.is_err()) {
+            let _ = uc.emu_stop();
+        }
+        return true;
+    }
+
     let Some(mut callouts) = collect_destroy_wndproc_callouts(kernel, hwnd) else {
         return false;
     };
@@ -11619,12 +11634,18 @@ fn enter_destroy_window_wm_destroy_callout<D>(
         } else {
             u32::from(destroyed)
         };
-        let _ = uc.reg_write(RegisterMIPS::V0, u64::from(result));
+        let writes = [
+            uc.reg_write(RegisterMIPS::V0, u64::from(result)),
+            uc.reg_write(RegisterMIPS::PC, u64::from(return_pc)),
+            uc.reg_write(RegisterMIPS::RA, u64::from(return_pc)),
+        ];
+        if writes.into_iter().any(|write| write.is_err()) {
+            let _ = uc.emu_stop();
+        }
         return true;
     }
 
     let first = callouts.remove(0);
-    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
     tracing::debug!(
         target: "ce.gwe",
         hwnd = format_args!("0x{:08x}", first.hwnd),
@@ -11677,6 +11698,7 @@ fn collect_destroy_wndproc_callouts(
     hwnd: u32,
 ) -> Option<Vec<DestroyWndProcCallout>> {
     let targets = kernel.gwe.window_and_descendants(hwnd)?;
+    let _ = kernel.gwe.mark_window_subtree_being_destroyed(hwnd);
     let mut callouts = Vec::new();
     for target in targets.into_iter().rev() {
         let Some(window) = kernel.gwe.window(target) else {
