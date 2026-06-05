@@ -1120,18 +1120,24 @@
 
 - Host Win32 iNavi still ANRs after real map UI is visible.
   - Symptom: with `--desktop host --tap 650,440`, the app reaches a populated
-    800x480 map framebuffer but stops making visible progress during the
-    bounded run.
+    800x480 map framebuffer and continues timer-driven UI work, but later
+    faults through a zero return address.
   - Evidence: `target\host_serial_timeout_fix_summary.txt` ran to the 180 s
     wall stop at `pc=0x0019ac04(image:iNavi.exe+0x18ac04)` with
     `blocked_get_message=thread:1`, one active timer `0x11d5`, and finite
     worker sleeps. The earlier stale
     `id=58/thr=6/kind=serial_read/timeout=1000` waiter from
     `target\host_ra0_code_*` is no longer present after the self-block serial
-    timeout fix.
-  - Status: active post-map scheduler/GWE frontier, not a serial-read timeout
-    leak. Next evidence should identify the active thread and why finite
-    sleeps/timer/message waits are not producing the next useful guest dispatch.
+    timeout fix. After the long-`GetMessageW` timer fix,
+    `target\host_getmsg_timer_fix_summary.txt` shows repeated `WM_TIMER`
+    delivery for timer `4565` and later stops at
+    `pc=0x000e9d0c(image:iNavi.exe+0xd8d0c)`, `ra=0`; disassembly shows
+    `0x000e9a40` saves `$ra` in its prologue and only normal static callers at
+    `0x000e8ce4`/`0x000e8f7c` use `jal`, so the zero `$ra` likely comes from
+    a bad callback/WNDPROC entry or restored context rather than a normal app
+    call.
+  - Status: active post-map callback/context frontier. Add targeted
+    WNDPROC/callback-entry diagnostics; do not mask the zero return address.
 
 - Raw `WriteFile` failure on valid non-writable handles previously left
   `LastError` stale.

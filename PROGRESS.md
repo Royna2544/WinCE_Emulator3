@@ -3362,6 +3362,20 @@
   (`blocked_get_message=thread:1`, finite worker sleeps, and one active timer)
   rather than the serial-read timeout leak.
 
+- Fixed current-thread `GetMessageW` long-timer completion. The long wait path
+  previously slept host time but did not advance the CE tick count, then called
+  the short-timer helper which refused delays above the fast-forward threshold.
+  It now advances `kernel.timers`, pumps GWE timers, and completes the parked
+  current-thread `GetMessageW` from the resulting message queue. Focused
+  coverage `current_get_message_long_timer_wait_returns_timer_message` and the
+  existing `current_msg_wait_long_timer_writes_message_wait_result` pass, and
+  the release host Win32/tap run `target\host_getmsg_timer_fix_*` confirms real
+  progression: timer `4565` is delivered repeatedly at CE ticks `156239`,
+  `186129`, `216014`, `245911`, `275799`, `305482`, and `335378`, GDI presents
+  continue, and scheduler activity increases to `block:131/wake:64`. The new
+  frontier is no longer a timer ANR; it is a guest control-flow fault at
+  `pc=0x000e9d0c(image:iNavi.exe+0xd8d0c)` returning through `ra=0`.
+
 ## False Leads
 
 - A process-directory fallback for rooted `CreateFileW` paths was tested and

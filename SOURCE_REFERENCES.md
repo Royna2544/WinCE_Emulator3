@@ -1170,6 +1170,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     posted input, serial/audio/process, and synchronous-send wakeups through
     scheduler-owned wait state and GWE message queues as CE does, rather than
     resuming blocked message calls from ad hoc subsystem paths.
+  - Current-thread `GetMessageW` waits must still advance CE timer state and
+    pump GWE timers before returning a queued `WM_TIMER` message. Rust now uses
+    the same scheduler/GWE queue readiness check after long timer delays that
+    it already used for short timer fast-forward.
 
 - CE serial timeout authority:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`,

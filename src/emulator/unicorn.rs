@@ -6629,7 +6629,11 @@ fn try_wait_and_complete_current_get_message_timer_wait<D>(
         return false;
     }
     std::thread::sleep(std::time::Duration::from_millis(u64::from(delay_ms)));
-    try_complete_current_get_message_timer_wait(
+    if delay_ms != 0 {
+        kernel.timers.sleep_ms(delay_ms);
+    }
+    kernel.pump_timers_to_gwe(thread_id);
+    try_complete_current_get_message_wait(
         kernel, uc, thread_id, wait_id, msg_ptr, hwnd, min_msg, max_msg, return_pc,
     )
 }
@@ -6646,8 +6650,6 @@ fn try_complete_current_get_message_timer_wait<D>(
     max_msg: u32,
     return_pc: u32,
 ) -> bool {
-    use unicorn_engine::RegisterMIPS;
-
     let Some(delay_ms) = kernel.timers.next_due_delay_ms() else {
         return false;
     };
@@ -6658,6 +6660,26 @@ fn try_complete_current_get_message_timer_wait<D>(
         kernel.timers.sleep_ms(delay_ms);
     }
     kernel.pump_timers_to_gwe(thread_id);
+    try_complete_current_get_message_wait(
+        kernel, uc, thread_id, wait_id, msg_ptr, hwnd, min_msg, max_msg, return_pc,
+    )
+}
+
+#[cfg(feature = "unicorn")]
+#[allow(clippy::too_many_arguments)]
+fn try_complete_current_get_message_wait<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    thread_id: u32,
+    wait_id: u64,
+    msg_ptr: u32,
+    hwnd: Option<u32>,
+    min_msg: u32,
+    max_msg: u32,
+    return_pc: u32,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
     let now_ms = kernel.timers.tick_count();
     let Some(ready_wait_id) = kernel.select_ready_blocked_waiter(0, now_ms, |blocked, kernel| {
         scheduler_blocked_msg_wait_has_input(blocked, kernel)
@@ -17582,6 +17604,84 @@ mod unicorn_tests {
             started,
             Some(std::time::Duration::from_millis(1))
         ));
+    }
+
+    #[test]
+    fn current_get_message_long_timer_wait_returns_timer_message() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        uc.mem_map(0x3000_0000, 0x1000, unicorn_engine::Prot::ALL)
+            .unwrap();
+
+        let thread_id = super::MAIN_GUEST_THREAD_ID;
+        let thread_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
+        let hwnd = kernel.create_window_ex_w(thread_id, "GETMSG_LONG", "", None, 0, 0, 0);
+        let period_ms = super::MAX_EMPTY_QUEUE_TIMER_FAST_FORWARD_MS + 1;
+        assert_eq!(
+            kernel.set_timer_for_thread(thread_id, Some(hwnd), Some(4565), period_ms, None),
+            4565
+        );
+        let wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            thread_handle,
+            Vec::new(),
+            crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            },
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        let msg_ptr = 0x3000_0100;
+        let return_pc = 0x1020_3040;
+
+        assert!(super::try_wait_and_complete_current_get_message_timer_wait(
+            &mut kernel,
+            &mut uc,
+            thread_id,
+            wait_id,
+            msg_ptr,
+            None,
+            0,
+            0,
+            return_pc,
+            std::time::Instant::now(),
+            Some(std::time::Duration::from_secs(1)),
+        ));
+
+        assert!(kernel.blocked_waiter(wait_id).is_none());
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
+            1
+        );
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::PC).unwrap() as u32,
+            return_pc
+        );
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::RA).unwrap() as u32,
+            return_pc
+        );
+        let mut msg_bytes = [0; 20];
+        uc.mem_read(u64::from(msg_ptr), &mut msg_bytes).unwrap();
+        assert_eq!(
+            u32::from_le_bytes(msg_bytes[0..4].try_into().unwrap()),
+            hwnd
+        );
+        assert_eq!(
+            u32::from_le_bytes(msg_bytes[4..8].try_into().unwrap()),
+            crate::ce::gwe::WM_TIMER
+        );
+        assert_eq!(
+            u32::from_le_bytes(msg_bytes[8..12].try_into().unwrap()),
+            4565
+        );
     }
 
     #[test]

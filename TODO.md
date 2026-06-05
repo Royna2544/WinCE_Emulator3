@@ -1204,14 +1204,15 @@
   slice removed the thread-6 infinite serial read wait and advanced iNavi into
   heavy real GDI/resource work. The follow-up host Win32/tap validation after
   the self-block timeout fix removed the stale finite `serial_read` waiter too:
-  use `target\host_serial_timeout_fix_*` as the current compact evidence. The
-  remaining post-map ANR frontier is now main-thread `GetMessageW`, finite
-  worker sleeps (`thr=6` around 101 ms, `thr=9` around 334 ms,
-  `thr=8` around 15001 ms), and timer/message wake ownership. Next, trace why
-  those finite sleeps/message waits do not hand control back to useful guest
-  work under host Win32, including the active thread id at stop, pending wake
-  candidates, and the latest `WM_TIMER`/custom-message delivery around timer
-  `0x11d5`.
+  use `target\host_serial_timeout_fix_*` as the compact evidence for that
+  fix. The current host Win32 frontier is `target\host_getmsg_timer_fix_*`:
+  long `GetMessageW` timer waits now deliver timer `4565` repeatedly and keep
+  the map UI moving, but the run eventually reaches `pc=0x000e9d0c` with
+  `ra=0`. Next, add targeted WNDPROC/callback-entry diagnostics around the
+  guest block `0x000e8c80..0x000e9d20`, especially calls into `0x000e9a40`
+  from `0x000e8ce4`/`0x000e8f7c`, and determine whether an emulator callback
+  entry restored `$ra` incorrectly or whether guest state set a window/callback
+  pointer to a non-entry helper.
 - Add an HTTP/WebSocket transport over the Rust `CeRemote` API state when the
   host runtime is ready for remote UI/audio streaming; audio transport should
   honor the sink's per-client cursors and flush-marked chunks immediately.
