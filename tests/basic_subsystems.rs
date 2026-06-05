@@ -820,6 +820,64 @@ fn send_message_transitions_queue_scheduler_reply_wait_candidates() -> Result<()
 }
 
 #[test]
+fn reply_message_wakes_sender_waiter_before_receiver_dispatch_returns() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+
+    let sender_thread = 66;
+    let receiver_thread = 67;
+    let hwnd = kernel
+        .gwe
+        .create_window(receiver_thread, "ReplyWake", "send");
+    let send_id = kernel
+        .begin_cross_thread_send_message_w(
+            sender_thread,
+            hwnd,
+            WM_ERASEBKGND,
+            0x66,
+            0x67,
+            Some(500),
+        )
+        .expect("queued send");
+    let send_wait = kernel.register_blocked_waiter(
+        sender_thread,
+        0x700 + sender_thread,
+        Vec::new(),
+        SchedulerBlockedWaitKind::SendMessage { send_id },
+        0,
+        INFINITE,
+    );
+    let message = kernel.gwe.get_message(receiver_thread).unwrap();
+    assert!(kernel.gwe.in_send_message(receiver_thread));
+
+    assert!(kernel.reply_message(receiver_thread, 0xfeed));
+    assert!(!kernel.gwe.in_send_message(receiver_thread));
+    assert_eq!(
+        kernel.select_ready_blocked_waiter(1, 0, |blocked, kernel| match blocked.kind {
+            SchedulerBlockedWaitKind::SendMessage { send_id } => {
+                kernel.sent_message_result_ready(send_id)
+            }
+            _ => false,
+        }),
+        Some(send_wait)
+    );
+    kernel.remove_blocked_waiter(send_wait).unwrap();
+
+    assert_eq!(
+        kernel.dispatch_message_w_for_thread(receiver_thread, message),
+        1
+    );
+    assert_eq!(
+        kernel.take_completed_send_message_result(send_id),
+        Some(0xfeed)
+    );
+    let stats = kernel.scheduler_stats();
+    assert_eq!(stats.send_reply_signal_count, 1);
+    assert_eq!(stats.send_reply_wake_candidate_count, 1);
+    Ok(())
+}
+
+#[test]
 fn get_message_waiter_uses_filtered_scheduler_message_readiness() -> Result<()> {
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
     let mut kernel = CeKernel::boot(config);
@@ -1023,7 +1081,7 @@ fn virtual_win32_api_smoke_covers_file_device_sync_gwe_and_audio() -> Result<()>
         Some(0)
     );
     assert_eq!(kernel.gwe.get_window_long(hwnd, GWL_USERDATA), Some(0xbeef));
-    assert!(kernel.post_message_w(hwnd, WM_USER + 1, 11, 22));
+    assert!(kernel.post_message_w(hwnd, WM_USER + 0x40, 11, 22));
     assert_eq!(
         kernel.message_pump_step(7),
         MessagePumpResult::Dispatched(0)

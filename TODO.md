@@ -597,7 +597,8 @@
        creates and expires that transaction immediately instead of running the
        receiver shortcut. Scheduler send-reply waiters are now keyed by
        sent-message id and wake when the sent transaction completes, times out,
-       or is receiver-terminated by target HWND destruction. The first Unicorn
+       is receiver-terminated by target HWND destruction, or the receiver calls
+       the internal `ReplyMessage` path before dispatch unwinds. The first Unicorn
        raw-send path now runs same-process cross-thread guest WNDPROCs in the
        receiver context and restores the sender result. `GetQueueStatus`
        changed-bit tracking and
@@ -612,9 +613,9 @@
        `PostedMsgQueueEntry_t.time`/`MousePosAtPost` and queue
        `m_ReadyTimeStamp` metadata slice. Remaining work: parking/resume
        across longer waits, reentrant cross-thread scheduling, nested modal
-       loop unwinding, `ReplyMessage` wake semantics if a real export is
-       confirmed, richer queue-source/filter precision, and complete
-       destroyed-target behavior remain open.
+       loop unwinding, a public raw `ReplyMessage` boundary if a real target
+       import/export path exposes it, richer queue-source/filter precision, and
+       complete destroyed-target behavior remain open.
     4. Window data/class/dialog/control surface: class atoms/extra bytes,
        `SetWindowLong`/`GetWindowLong`, owner thread/process queries, dialog
        procs/results, child/descendant relationship queries, child lookup,

@@ -2689,6 +2689,18 @@
   foreground target reporting, `keybd_event` routing to the keyboard target,
   fallback to focus after clearing, and invalid-HWND last-error behavior; the
   full raw GWE suite now has 78 passing tests.
+- Added the next CE-backed sent-message reply slice. GWE `ReplyMessage` state
+  now marks the active cross-thread sent transaction as `SMF_RESULT_READY`,
+  records the early WNDPROC result, makes `InSendMessage` false for that send
+  depth, preserves the early result when the receiver later returns from
+  dispatch, and keeps nested send depths independent. The kernel wrapper routes
+  the early reply through the same scheduler send-reply wake-candidate path as
+  normal WNDPROC completion, timeout, and receiver destruction. Focused GWE
+  tests cover early reply and nested-depth behavior, and
+  `basic_subsystems` covers a sender waiter waking before the receiver
+  dispatch returns. The smoke test's throwaway `WM_USER + 1` message was moved
+  away from CE's `DM_SETDEFID` value so it no longer conflicts with real dialog
+  message semantics.
 - Added an indexed-DIB fidelity slice for CE GDI color tables. `BitmapObject`
   now stores RGBQUAD color tables, raw `SetDIBColorTable`/`GetDIBColorTable`
   read and write the selected bitmap table through guest memory, and the 8 bpp

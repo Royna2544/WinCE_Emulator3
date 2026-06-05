@@ -2189,9 +2189,23 @@ impl CeKernel {
     }
 
     pub fn complete_active_sent_message(&mut self, thread_id: u32, result: u32) -> Option<u64> {
+        let was_ready = self
+            .gwe
+            .active_sent_message_id(thread_id)
+            .is_some_and(|send_id| self.gwe.sent_message_result_ready(send_id));
         let send_id = self.gwe.complete_active_sent_message(thread_id, result)?;
-        self.queue_send_reply_wake_candidates(send_id);
+        if !was_ready {
+            self.queue_send_reply_wake_candidates(send_id);
+        }
         Some(send_id)
+    }
+
+    pub fn reply_message(&mut self, thread_id: u32, result: u32) -> bool {
+        let Some(send_id) = self.gwe.reply_message(thread_id, result) else {
+            return false;
+        };
+        self.queue_send_reply_wake_candidates(send_id);
+        true
     }
 
     pub fn destroy_window(&mut self, hwnd: u32) -> bool {
@@ -2283,11 +2297,14 @@ impl CeKernel {
             self.gwe
                 .window(message.hwnd)
                 .map(|window| window.thread_id)
-                .filter(|thread_id| self.gwe.in_send_message(*thread_id))
+                .filter(|thread_id| self.gwe.active_sent_message_id(*thread_id).is_some())
         } else {
             None
         }
-        .or_else(|| (thread_id != 0 && self.gwe.in_send_message(thread_id)).then_some(thread_id));
+        .or_else(|| {
+            (thread_id != 0 && self.gwe.active_sent_message_id(thread_id).is_some())
+                .then_some(thread_id)
+        });
         let result = if sent_context_thread.is_some() {
             self.gwe
                 .send_message(message.hwnd, message.msg, message.wparam, message.lparam)

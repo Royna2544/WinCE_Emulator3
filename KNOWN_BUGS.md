@@ -725,9 +725,10 @@
     `target\receiver_context_send_*` probe stopped at `pc=0x00b4bc24`, reached
     real resource/DIB activity, but still had no render milestones and an
     all-zero framebuffer body. Scheduler send-reply waiters are now keyed by
-    sent-message id and wake when the transaction completes, times out, or is
-    receiver-terminated by target HWND destruction, with compact summaries
-    exposing send-reply signal/candidate counters. The earlier short mounted
+    sent-message id and wake when the transaction completes, times out, is
+    receiver-terminated by target HWND destruction, or is early-replied through
+    the internal `ReplyMessage` path, with compact summaries exposing
+    send-reply signal/candidate counters. The earlier short mounted
     `SendNotifyMessageW` probe reached later
     `mapinfo.bin`/`UID1:` file activity, another child HWND, and `GetDC`, but
     still produced no render milestones and only one nonzero framebuffer byte.

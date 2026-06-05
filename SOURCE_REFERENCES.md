@@ -710,17 +710,20 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     same sent-transaction path and expires immediately instead of running the
     receiver shortcut. The scheduler now has a send-reply blocked-wait kind
     keyed by sent-message id, mirroring the sender-side `pSentNext`/reply wait
-    relationship: normal WNDPROC completion, timeout expiry, and receiver
-    destruction enqueue send-reply wake candidates once the `WndProcResult`
-    state is ready. Unicorn raw `SendMessageW`/`SendMessageTimeoutW` now uses
+    relationship: normal WNDPROC completion, timeout expiry, receiver
+    destruction, and early `ReplyMessage`-style receiver release enqueue
+    send-reply wake candidates once the `WndProcResult` state is ready.
+    `cmsgque.h` documents `smfResultReady` as the reply event for a sent
+    message, and v3 now preserves that result if the receiver later unwinds
+    from dispatch. Unicorn raw `SendMessageW`/`SendMessageTimeoutW` now uses
     that transaction state for same-process cross-thread guest WNDPROCs: the
     receiver thread becomes the active CE thread for the guest WNDPROC callout,
     the sender MIPS context is parked in a scheduler-backed `SendMessage`
     blocked wait, WNDPROC return and generic scheduler wake/resume restore that
     blocked record after the result is captured, and the result flows back to
     the sender and optional timeout result pointer. Reentrant cross-thread
-    scheduling, `ReplyMessage` early release, and richer destroyed-target edge
-    behavior remain open.
+    scheduling, a public raw `ReplyMessage` export if the target import table
+    exposes one, and richer destroyed-target edge behavior remain open.
   - CE SDK headers define `CREATESTRUCTW` as
     `lpCreateParams`, `hInstance`, `hMenu`, `hwndParent`, `cy`, `cx`, `y`, `x`,
     `style`, `lpszName`, `lpszClass`, and `dwExStyle`, and define

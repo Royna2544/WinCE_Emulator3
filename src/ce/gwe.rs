@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -474,7 +474,7 @@ pub struct Gwe {
     key_state: [u16; 256],
     async_key_down: [bool; 256],
     message_pointer_payloads: BTreeMap<u32, MessagePointerPayload>,
-    replied_send_depth_by_thread: BTreeMap<u32, u32>,
+    replied_send_depth_by_thread: BTreeMap<u32, BTreeSet<u32>>,
     next_lifecycle_message_order: u64,
     stats: GweStats,
 }
@@ -2103,31 +2103,55 @@ impl Gwe {
             return;
         };
         *depth = depth.saturating_sub(1);
+        if let Some(replied_depths) = self.replied_send_depth_by_thread.get_mut(&thread_id) {
+            replied_depths.remove(&depth.saturating_add(1));
+            if replied_depths.is_empty() {
+                self.replied_send_depth_by_thread.remove(&thread_id);
+            }
+        }
         if *depth == 0 {
             self.send_depth_by_thread.remove(&thread_id);
-            self.replied_send_depth_by_thread.remove(&thread_id);
         }
     }
 
     pub fn in_send_message(&self, thread_id: u32) -> bool {
-        self.send_depth_by_thread
+        let depth = self
+            .send_depth_by_thread
             .get(&thread_id)
             .copied()
-            .unwrap_or(0)
-            > 0
+            .unwrap_or(0);
+        depth > 0
+            && !self
+                .replied_send_depth_by_thread
+                .get(&thread_id)
+                .is_some_and(|replied_depths| replied_depths.contains(&depth))
     }
 
-    pub fn reply_message(&mut self, thread_id: u32, _result: u32) -> bool {
+    pub fn reply_message(&mut self, thread_id: u32, result: u32) -> Option<u64> {
         let depth = self
             .send_depth_by_thread
             .get(&thread_id)
             .copied()
             .unwrap_or(0);
         if depth == 0 {
-            return false;
+            return None;
         }
-        self.replied_send_depth_by_thread.insert(thread_id, depth);
-        true
+        let id = self.active_sent_message_id(thread_id)?;
+        let sent = self.sent_messages.get_mut(&id)?;
+        if sent.sender_thread_id.is_none() || sent.flags & SMF_RESULT_READY != 0 {
+            return None;
+        }
+        sent.flags |= SMF_RESULT_READY;
+        sent.result = Some(result);
+        self.replied_send_depth_by_thread
+            .entry(thread_id)
+            .or_default()
+            .insert(depth);
+        self.stats.send_transaction_completed_count = self
+            .stats
+            .send_transaction_completed_count
+            .saturating_add(1);
+        Some(id)
     }
 
     pub fn active_sent_message_id(&self, thread_id: u32) -> Option<u64> {
@@ -2140,12 +2164,14 @@ impl Gwe {
     pub fn complete_active_sent_message(&mut self, thread_id: u32, result: u32) -> Option<u64> {
         let id = self.active_sent_message_id(thread_id)?;
         if let Some(sent) = self.sent_messages.get_mut(&id) {
-            sent.flags |= SMF_RESULT_READY;
-            sent.result = Some(result);
-            self.stats.send_transaction_completed_count = self
-                .stats
-                .send_transaction_completed_count
-                .saturating_add(1);
+            if sent.flags & SMF_RESULT_READY == 0 {
+                sent.flags |= SMF_RESULT_READY;
+                sent.result = Some(result);
+                self.stats.send_transaction_completed_count = self
+                    .stats
+                    .send_transaction_completed_count
+                    .saturating_add(1);
+            }
         }
         self.end_send_message(thread_id);
         Some(id)
@@ -3313,6 +3339,97 @@ mod tests {
         assert_eq!(gwe.get_message(receiver_thread), None);
         assert_eq!(gwe.take_completed_sent_message_result(send_id), Some(0));
         assert_eq!(gwe.stats().send_transaction_timeout_count, 1);
+    }
+
+    #[test]
+    fn reply_message_marks_result_ready_without_leaving_send_state() {
+        let mut gwe = Gwe::default();
+        let sender_thread = 33;
+        let receiver_thread = 34;
+        let hwnd = gwe.create_window(receiver_thread, "reply", "");
+
+        let send_id = gwe
+            .queue_send_message_for_window(
+                Some(sender_thread),
+                hwnd,
+                Message::new(hwnd, WM_USER + 70, 1, 2, 0),
+                SMF_NULL,
+                None,
+            )
+            .expect("queued sync send");
+        let message = gwe.get_message(receiver_thread).expect("receiver message");
+        assert_eq!(message.msg, WM_USER + 70);
+        assert!(gwe.in_send_message(receiver_thread));
+
+        assert_eq!(gwe.reply_message(receiver_thread, 0xbeef), Some(send_id));
+        assert!(!gwe.in_send_message(receiver_thread));
+        assert_eq!(gwe.reply_message(receiver_thread, 0xcafe), None);
+        assert_eq!(
+            gwe.complete_active_sent_message(receiver_thread, 0x1234),
+            Some(send_id)
+        );
+        assert_eq!(
+            gwe.take_completed_sent_message_result(send_id),
+            Some(0xbeef)
+        );
+        assert_eq!(gwe.stats().send_transaction_completed_count, 1);
+    }
+
+    #[test]
+    fn nested_reply_message_only_clears_the_replied_send_depth() {
+        let mut gwe = Gwe::default();
+        let receiver_thread = 36;
+        let hwnd = gwe.create_window(receiver_thread, "nested-reply", "");
+        let outer_id = gwe
+            .queue_send_message_for_window(
+                Some(35),
+                hwnd,
+                Message::new(hwnd, WM_USER + 71, 1, 2, 0),
+                SMF_NULL,
+                None,
+            )
+            .expect("outer send");
+        let inner_id = gwe
+            .queue_send_message_for_window(
+                Some(37),
+                hwnd,
+                Message::new(hwnd, WM_USER + 72, 3, 4, 0),
+                SMF_NULL,
+                None,
+            )
+            .expect("inner send");
+
+        assert_eq!(
+            gwe.get_message(receiver_thread).map(|message| message.msg),
+            Some(WM_USER + 71)
+        );
+        assert!(gwe.in_send_message(receiver_thread));
+        assert_eq!(
+            gwe.get_message(receiver_thread).map(|message| message.msg),
+            Some(WM_USER + 72)
+        );
+        assert!(gwe.in_send_message(receiver_thread));
+
+        assert_eq!(gwe.reply_message(receiver_thread, 0x2222), Some(inner_id));
+        assert!(!gwe.in_send_message(receiver_thread));
+        assert_eq!(
+            gwe.complete_active_sent_message(receiver_thread, 0x3333),
+            Some(inner_id)
+        );
+        assert!(gwe.in_send_message(receiver_thread));
+        assert_eq!(
+            gwe.complete_active_sent_message(receiver_thread, 0x1111),
+            Some(outer_id)
+        );
+        assert!(!gwe.in_send_message(receiver_thread));
+        assert_eq!(
+            gwe.take_completed_sent_message_result(inner_id),
+            Some(0x2222)
+        );
+        assert_eq!(
+            gwe.take_completed_sent_message_result(outer_id),
+            Some(0x1111)
+        );
     }
 
     #[test]
