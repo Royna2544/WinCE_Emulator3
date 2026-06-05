@@ -38,6 +38,8 @@ LLVM Tools for target=MIPS: `D:\GitHub\llvm-proj\build-mips-objdump\bin`
 
 eVC4 toolchain for testsuite: `C:\Program Files (x86)\Microsoft eMbedded C++ 4.0\EVC\wce420\bin`
 
+ImageMagick for framebuffer/image conversion: `C:\Program Files\ImageMagick-7.1.2-Q16-HDRI\magick.exe`
+
 ---
 
 ## Hard User Rule
