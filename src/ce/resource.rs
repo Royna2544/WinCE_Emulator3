@@ -206,6 +206,15 @@ pub struct AcceleratorObject {
 pub struct FontObject {
     pub handle: u32,
     pub logfont_ptr: u32,
+    pub height: i32,
+    pub width: i32,
+    pub weight: i32,
+    pub italic: bool,
+    pub underline: bool,
+    pub strikeout: bool,
+    pub charset: u8,
+    pub pitch_and_family: u8,
+    pub face_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -766,7 +775,19 @@ impl ResourceSystem {
         self.accelerators.remove(&handle).is_some()
     }
 
-    pub fn create_font(&mut self, logfont_ptr: u32) -> u32 {
+    pub fn create_font(
+        &mut self,
+        logfont_ptr: u32,
+        height: i32,
+        width: i32,
+        weight: i32,
+        italic: bool,
+        underline: bool,
+        strikeout: bool,
+        charset: u8,
+        pitch_and_family: u8,
+        face_name: String,
+    ) -> u32 {
         let handle = self.next_gdi_handle;
         self.next_gdi_handle += 4;
         self.fonts.insert(
@@ -774,9 +795,22 @@ impl ResourceSystem {
             FontObject {
                 handle,
                 logfont_ptr,
+                height,
+                width,
+                weight,
+                italic,
+                underline,
+                strikeout,
+                charset,
+                pitch_and_family,
+                face_name,
             },
         );
         handle
+    }
+
+    pub fn font(&self, handle: u32) -> Option<&FontObject> {
+        self.fonts.get(&handle)
     }
 
     pub fn create_brush(&mut self, color: u32) -> u32 {
@@ -933,6 +967,14 @@ impl ResourceSystem {
 
     pub fn current_pos(&self, hdc: u32) -> Option<crate::ce::gwe::Point> {
         self.dc_states.get(&hdc).map(|state| state.current_pos)
+    }
+
+    pub fn dc_state(&self, hdc: u32) -> Option<DcState> {
+        if hdc == 0 {
+            None
+        } else {
+            Some(self.dc_states.get(&hdc).cloned().unwrap_or_default())
+        }
     }
 
     pub fn move_to(

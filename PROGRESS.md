@@ -2917,6 +2917,28 @@
   evidence that the active mounted run is getting a non-writable host handle,
   likely from current host/sandbox permissions around the external SD-card
   dump, not from a guest read-only open.
+- Added the first CE-backed GDI text/font query slice. Raw
+  `CreateFontIndirectW` now copies the CE `LOGFONTW` fields needed by layout
+  callers instead of storing only the guest pointer, DC text getters report
+  `GetTextAlign`/`GetTextColor`, and raw `GetTextMetricsW`,
+  `GetTextExtentExPointW`, and `GetTextFaceW` fill guest buffers with
+  deterministic CE-shaped metrics/extent/face data for the selected font or
+  stock `SYSTEM_FONT`. Focused coverage
+  `coredll_raw_text_metrics_use_selected_logfont` and
+  `coredll_raw_get_text_extent_ex_point_fills_fit_dx_and_size` pass, and the
+  raw GWE/GDI suite now has 83 passing tests. This is query/layout fidelity;
+  actual glyph rasterization and richer font enumeration/fallback remain open.
+- Mounted validation after the text/font query slice wrote
+  `target\text_metrics_virtual_60s_*`. The 60 s virtual/tap run stayed
+  memory/file-I/O bounded (`heap_live=7445/22372164B`, `virtual_live=2/131072B`,
+  `host_open=206`, `host_read=33843/2075303B`, `mem_open=2`,
+  `max_read=497178`) and preserved the same populated framebuffer
+  (`1151398` nonzero RGB bytes). It stopped at `pc=0x00b27b20` with
+  `sendsig=0/sendcand=0`; the trace tail remains repeated `RSImage`
+  `LoadPNG/Create`, `GetDC(hwnd=0x00020004)`, `CreateDIBSection`, and
+  `ReleaseDC`, with no named render milestone. This narrows basic text metrics
+  as a missing API class, but the active UI gate remains generic
+  resource/GDI/presentation lifecycle after loaded surfaces.
 
 ## False Leads
 

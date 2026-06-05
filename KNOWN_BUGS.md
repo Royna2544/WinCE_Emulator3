@@ -900,6 +900,14 @@
     remains open: later work still composes the 800x54 strip into a memory DC,
     invalidates hidden HWND `0x0002006c`, and parks in `GetMessageW` with no
     later display-HDC present.
+    The first text/font query gap is also narrowed: raw `GetTextMetricsW`,
+    `GetTextExtentExPointW`, `GetTextFaceW`, `GetTextAlign`, and
+    `GetTextColor` now have CE-shaped selected-font behavior and focused raw
+    coverage, so remaining text/font suspects should be actual glyph drawing,
+    richer character-width/font-enumeration semantics, or trace-proven font
+    fallback behavior rather than missing basic metrics. Mounted validation
+    `target\text_metrics_virtual_60s_*` preserved the same populated
+    framebuffer and RSImage/DIB tail with no named render milestone.
   - Status: active UI frontier. Investigate generic GWE visibility,
     invalidation propagation, paint/update ordering, and timer/message
     progression; do not force hidden child paints or app-specific pixels.

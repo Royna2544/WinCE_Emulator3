@@ -810,15 +810,20 @@
     `wingdi.h` (`SYSTEM_FONT`, `WHITE_BRUSH`, `BLACK_PEN`,
     `DEFAULT_PALETTE`, plus a restorable default bitmap), so the normal
     `old = SelectObject(...); SelectObject(..., old)` path no longer gets a
-    zero previous object on newly created compatible DCs.
+    zero previous object on newly created compatible DCs. Raw text/font query
+    coverage now stores selected LOGFONTW fields, reports deterministic
+    CE-shaped `TEXTMETRICW`, `GetTextExtentExPointW` fit/dx/SIZE data,
+    `GetTextFaceW`, `GetTextAlign`, and `GetTextColor` without host-font
+    dependencies.
   - Open gaps: complete palette/brush/pen/text/font/menu/dialog/icon/cursor
-    behavior as trace evidence demands, broaden indexed DIB coverage beyond
-    the currently reached RGBQUAD/RGBTRIPLE table shapes, and connect later
-    blit/update transitions to real paint invalidation without app-specific
-    shortcuts.
+    behavior as trace evidence demands, including actual text/glyph drawing,
+    richer font enumeration/fallback and character-width behavior; broaden
+    indexed DIB coverage beyond the currently reached RGBQUAD/RGBTRIPLE table
+    shapes; and connect later blit/update transitions to real paint
+    invalidation without app-specific shortcuts.
   - Fixture gates: keep raw GWE/GDI tests passing, then add focused fixtures
     for additional indexed palette edge cases, selected-object lifetime edge
-    cases, region clipping, text/font metrics, menu/accelerator, and MFC
+    cases, region clipping, glyph/text drawing, menu/accelerator, and MFC
     mini-app paint.
   - Latest iNavi evidence: mounted traces now reach paint, many DIBSections,
     and the first real screen/window-HDC presentation. `target\update_erase_virtual_*`
@@ -831,7 +836,11 @@
     `target\dib_colors_fresh_*` evidence confirms the app's 8 bpp RSImage
     DIBSections now have parsed color tables (`colors=256` on the 800-wide
     surfaces and populated partial tables on later resources), so indexed
-    palette ingestion is no longer the leading suspect.
+    palette ingestion is no longer the leading suspect. The follow-up
+    `target\text_metrics_virtual_60s_*` probe after the CE text/font query
+    slice preserved the same populated framebuffer and RSImage/DIB loop with
+    no named render milestone, so basic text metrics are also no longer the
+    leading suspect.
 
 - Continue from the latest stable host-mode UI frontier. Current
   `--desktop host --tap 400,240` evidence no longer has the multi-GB RAM spike

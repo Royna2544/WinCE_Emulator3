@@ -886,6 +886,17 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     palette. Remaining indexed-DIB work is broader palette/device-color
     behavior as trace evidence reaches it.
 
+- GDI text/font query surface:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h`
+  - Defines CE `LOGFONTW`, `TEXTMETRICW`, `ExtTextOutW`,
+    `GetTextExtentExPointW`, `GetTextMetricsW`, `SetTextAlign`,
+    `GetTextAlign`, and `GetTextColor`; `GetTextExtentPointW` is a macro over
+    `GetTextExtentExPointW`.
+  - Rust now copies selected `LOGFONTW` fields into font objects and returns
+    deterministic selected-font metrics, extent/fitting arrays, face names,
+    text color, and text alignment at the raw COREDLL boundary. This is layout
+    query fidelity only; glyph rasterization remains a later GDI text step.
+
 - MFC window layout behavior:
   `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/wincore.cpp`
   `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/winfrm.cpp`,

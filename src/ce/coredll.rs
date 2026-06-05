@@ -25,7 +25,7 @@ use crate::{
         },
         registry::{HKey, RegOpenResult, RegQueryValueResult},
         resource::{
-            AcceleratorEntry, MenuItem, PopupMenuTracking, RegionObject, ResourceId,
+            AcceleratorEntry, FontObject, MenuItem, PopupMenuTracking, RegionObject, ResourceId,
             stock_object_handle,
         },
         thread::{
@@ -2377,6 +2377,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_CREATE_FONT_INDIRECT_W => Some(CoredllValue::Handle(create_font_indirect_w_raw(
             kernel,
+            memory,
             thread_id,
             raw_arg(args, 0),
         ))),
@@ -2481,6 +2482,16 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
+        ))),
+        ORD_GET_TEXT_ALIGN => Some(CoredllValue::U32(get_text_align_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_GET_TEXT_COLOR => Some(CoredllValue::U32(get_text_color_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
         ))),
         ORD_FILL_RECT => Some(CoredllValue::U32(fill_rect_raw(
             kernel,
@@ -2593,6 +2604,24 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_EXT_TEXT_OUT_W => Some(CoredllValue::Bool(ext_text_out_w_raw(
             kernel, memory, thread_id, args,
+        ))),
+        ORD_GET_TEXT_EXTENT_EX_POINT_W => Some(CoredllValue::Bool(get_text_extent_ex_point_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_GET_TEXT_METRICS_W => Some(CoredllValue::Bool(get_text_metrics_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_GET_TEXT_FACE_W => Some(CoredllValue::U32(get_text_face_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_i32_arg(args, 1),
+            raw_arg(args, 2),
         ))),
         ORD_CREATE_RECT_RGN => Some(CoredllValue::Handle(create_rect_rgn_raw(
             kernel,
@@ -10927,15 +10956,60 @@ fn create_dib_section_raw<M: CoredllGuestMemory>(
     bitmap
 }
 
-fn create_font_indirect_w_raw(kernel: &mut CeKernel, thread_id: u32, logfont_ptr: u32) -> u32 {
+fn create_font_indirect_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    logfont_ptr: u32,
+) -> u32 {
+    const LOGFONTW_SIZE: u32 = 92;
+    const LF_FACESIZE: usize = 32;
     if logfont_ptr == 0 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
+    let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, logfont_ptr, LOGFONTW_SIZE)
+    else {
+        return 0;
+    };
+    let Some(height) = read_le_i32(&bytes, 0) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let Some(width) = read_le_i32(&bytes, 4) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let Some(weight) = read_le_i32(&bytes, 16) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let face_units = (0..LF_FACESIZE)
+        .filter_map(|index| read_le_u16(&bytes, 28 + index * 2))
+        .take_while(|unit| *unit != 0)
+        .collect::<Vec<_>>();
+    let face_name = String::from_utf16_lossy(&face_units);
     kernel.threads.set_last_error(thread_id, 0);
-    kernel.resources.create_font(logfont_ptr)
+    kernel.resources.create_font(
+        logfont_ptr,
+        height,
+        width,
+        weight,
+        bytes.get(20).copied().unwrap_or(0) != 0,
+        bytes.get(21).copied().unwrap_or(0) != 0,
+        bytes.get(22).copied().unwrap_or(0) != 0,
+        bytes.get(23).copied().unwrap_or(1),
+        bytes.get(27).copied().unwrap_or(0),
+        face_name,
+    )
 }
 
 fn create_solid_brush_raw(kernel: &mut CeKernel, color: u32) -> u32 {
@@ -11294,6 +11368,28 @@ fn set_text_align_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, align: u3
     };
     kernel.threads.set_last_error(thread_id, 0);
     previous
+}
+
+fn get_text_align_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32) -> u32 {
+    let Some(state) = kernel.resources.dc_state(hdc) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0xffff_ffff;
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    state.text_align
+}
+
+fn get_text_color_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32) -> u32 {
+    let Some(state) = kernel.resources.dc_state(hdc) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0xffff_ffff;
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    state.text_color
 }
 
 fn fill_rect_raw<M: CoredllGuestMemory>(
@@ -12789,6 +12885,145 @@ fn line_to_raw(
     true
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TextMetricsModel {
+    height: i32,
+    ascent: i32,
+    descent: i32,
+    ave_width: i32,
+    max_width: i32,
+    weight: i32,
+    italic: bool,
+    underline: bool,
+    strikeout: bool,
+    pitch_and_family: u8,
+    charset: u8,
+    face_name: String,
+}
+
+impl TextMetricsModel {
+    fn from_font(font: Option<&FontObject>) -> Self {
+        let raw_height = font.map(|font| font.height).unwrap_or(0);
+        let height = if raw_height == 0 {
+            16
+        } else {
+            raw_height.saturating_abs().max(1)
+        };
+        let ave_width = font
+            .and_then(|font| (font.width > 0).then_some(font.width))
+            .unwrap_or_else(|| ((height + 1) / 2).max(1));
+        let descent = (height / 4).max(1).min(height);
+        let ascent = height.saturating_sub(descent).max(1);
+        let face_name = font
+            .map(|font| font.face_name.as_str())
+            .filter(|name| !name.is_empty())
+            .unwrap_or("Tahoma")
+            .to_string();
+
+        Self {
+            height,
+            ascent,
+            descent,
+            ave_width,
+            max_width: ave_width.saturating_mul(2).max(ave_width),
+            weight: font.map(|font| font.weight).unwrap_or(400),
+            italic: font.map(|font| font.italic).unwrap_or(false),
+            underline: font.map(|font| font.underline).unwrap_or(false),
+            strikeout: font.map(|font| font.strikeout).unwrap_or(false),
+            pitch_and_family: font.map(|font| font.pitch_and_family).unwrap_or(0),
+            charset: font.map(|font| font.charset).unwrap_or(1),
+            face_name,
+        }
+    }
+}
+
+fn selected_text_metrics(kernel: &CeKernel, hdc: u32) -> Option<TextMetricsModel> {
+    let state = kernel.resources.dc_state(hdc)?;
+    Some(TextMetricsModel::from_font(
+        kernel.resources.font(state.selected_font),
+    ))
+}
+
+fn read_text_extent_units<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    text_ptr: u32,
+    count: i32,
+) -> Option<usize> {
+    if count < 0 {
+        return read_guest_wide_arg(memory, text_ptr).map(|text| text.encode_utf16().count());
+    }
+    if count == 0 {
+        return Some(0);
+    }
+    if text_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
+    for index in 0..count as u32 {
+        if memory
+            .read_u16(text_ptr.wrapping_add(index.saturating_mul(2)))
+            .is_err()
+        {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return None;
+        }
+    }
+    Some(count as usize)
+}
+
+fn write_size<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    size_ptr: u32,
+    cx: i32,
+    cy: i32,
+) -> bool {
+    write_guest_i32(kernel, memory, thread_id, size_ptr, cx)
+        && write_guest_i32(kernel, memory, thread_id, size_ptr.wrapping_add(4), cy)
+}
+
+fn write_textmetric_w<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    out_ptr: u32,
+    metrics: &TextMetricsModel,
+) -> bool {
+    const TEXTMETRICW_SIZE: usize = 60;
+    let mut bytes = [0u8; TEXTMETRICW_SIZE];
+    let mut write_i32 = |offset: usize, value: i32| {
+        bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    };
+    write_i32(0, metrics.height);
+    write_i32(4, metrics.ascent);
+    write_i32(8, metrics.descent);
+    write_i32(12, 0);
+    write_i32(16, 0);
+    write_i32(20, metrics.ave_width);
+    write_i32(24, metrics.max_width);
+    write_i32(28, metrics.weight);
+    write_i32(32, 0);
+    write_i32(36, 96);
+    write_i32(40, 96);
+    bytes[44..46].copy_from_slice(&(0x20u16).to_le_bytes());
+    bytes[46..48].copy_from_slice(&(0xffffu16).to_le_bytes());
+    bytes[48..50].copy_from_slice(&('?' as u16).to_le_bytes());
+    bytes[50..52].copy_from_slice(&(' ' as u16).to_le_bytes());
+    bytes[52] = u8::from(metrics.italic);
+    bytes[53] = u8::from(metrics.underline);
+    bytes[54] = u8::from(metrics.strikeout);
+    bytes[55] = metrics.pitch_and_family;
+    bytes[56] = metrics.charset;
+    write_guest_bytes(kernel, memory, thread_id, out_ptr, &bytes)
+}
+
 fn draw_text_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
@@ -12820,6 +13055,133 @@ fn draw_text_w_raw<M: CoredllGuestMemory>(
     };
     kernel.threads.set_last_error(thread_id, 0);
     text_len.max(1).min(i32::MAX as usize) as u32
+}
+
+fn get_text_extent_ex_point_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let hdc = raw_arg(args, 0);
+    let text_ptr = raw_arg(args, 1);
+    let count = raw_i32_arg(args, 2);
+    let max_extent = raw_i32_arg(args, 3);
+    let fit_ptr = raw_arg(args, 4);
+    let dx_ptr = raw_arg(args, 5);
+    let size_ptr = raw_arg(args, 6);
+    if size_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(metrics) = selected_text_metrics(kernel, hdc) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    let Some(count) = read_text_extent_units(kernel, memory, thread_id, text_ptr, count) else {
+        return false;
+    };
+    let char_width = metrics.ave_width.max(1);
+    let total_width = char_width.saturating_mul(count.min(i32::MAX as usize) as i32);
+    if fit_ptr != 0 {
+        let fit = if max_extent > 0 {
+            (max_extent / char_width).clamp(0, count.min(i32::MAX as usize) as i32) as u32
+        } else {
+            count.min(u32::MAX as usize) as u32
+        };
+        if !write_guest_u32(kernel, memory, thread_id, fit_ptr, fit) {
+            return false;
+        }
+    }
+    if dx_ptr != 0 {
+        for index in 0..count.min(i32::MAX as usize) {
+            let advance = char_width.saturating_mul(index as i32 + 1);
+            if !write_guest_i32(
+                kernel,
+                memory,
+                thread_id,
+                dx_ptr.wrapping_add((index as u32).saturating_mul(4)),
+                advance,
+            ) {
+                return false;
+            }
+        }
+    }
+    if !write_size(
+        kernel,
+        memory,
+        thread_id,
+        size_ptr,
+        total_width,
+        metrics.height,
+    ) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn get_text_metrics_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    hdc: u32,
+    out_ptr: u32,
+) -> bool {
+    if out_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(metrics) = selected_text_metrics(kernel, hdc) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    if !write_textmetric_w(kernel, memory, thread_id, out_ptr, &metrics) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn get_text_face_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    hdc: u32,
+    capacity_chars: i32,
+    out_ptr: u32,
+) -> u32 {
+    let Some(metrics) = selected_text_metrics(kernel, hdc) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    let face_len = metrics.face_name.encode_utf16().count() as u32;
+    if out_ptr != 0 && capacity_chars > 0 {
+        if !write_guest_wide_fixed(
+            kernel,
+            memory,
+            thread_id,
+            out_ptr,
+            &metrics.face_name,
+            capacity_chars as usize,
+        ) {
+            return 0;
+        }
+        kernel.threads.set_last_error(thread_id, 0);
+        return face_len.min(capacity_chars.saturating_sub(1) as u32);
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    face_len
 }
 
 fn ext_text_out_w_raw<M: CoredllGuestMemory>(
