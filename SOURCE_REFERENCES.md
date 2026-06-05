@@ -1187,3 +1187,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     it through raw COREDLL `GetCommTimeouts`/`SetCommTimeouts`, and uses finite
     read-total timeouts to complete empty serial `ReadFile` waits with zero
     bytes instead of treating every empty serial read as an infinite wait.
+  - The Unicorn serial `ReadFile` bridge also handles the CE timeout case when
+    the current thread has no suspended peer to run: finite empty reads complete
+    on the original thread with zero bytes transferred, while the wait
+    registration is removed from both the local blocked-wait list and the
+    kernel scheduler queue.

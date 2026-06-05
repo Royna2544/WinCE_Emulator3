@@ -3346,6 +3346,22 @@
   remain bounded (`heap_live=6499/20643900B`, `host_open=906`,
   `host_read=82486/6043980B`, `mem_open=7`, `max_read=685080`).
 
+- Fixed the Unicorn serial `ReadFile` self-block timeout case. When the active
+  guest thread parks on an empty serial read with a finite CE
+  `COMMTIMEOUTS` read-total timeout and no suspended peer context is available,
+  the bridge now completes the timeout on that same thread, writes zero bytes
+  transferred, restores the saved callee registers, and resumes at the original
+  return PC instead of leaving a stale `serial_read` waiter that can never be
+  selected while it is still the active thread. Focused coverage
+  `finite_serial_read_timeout_without_peer_completes_current_thread`, the full
+  Unicorn wait scheduler suite, remote-serial tests, `cargo check`, and release
+  build pass. Host Win32/tap validation wrote
+  `target\host_serial_timeout_fix_*`: the final framebuffer is real map UI,
+  the previous `id=58/thr=6/kind=serial_read/timeout=1000` leak is gone, and
+  the remaining 180 s frontier is normal scheduler state
+  (`blocked_get_message=thread:1`, finite worker sleeps, and one active timer)
+  rather than the serial-read timeout leak.
+
 ## False Leads
 
 - A process-directory fallback for rooted `CreateFileW` paths was tested and
