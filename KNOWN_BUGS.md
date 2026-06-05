@@ -823,9 +823,12 @@
     blocking, long sleeps, and main-thread scheduler ownership remain partial. Remote
     serial/NMEA injection now queues registered serial-read waiters by COM
     handle, and parked raw serial `ReadFile` can resume by streaming bytes into
-    the original guest buffer. Full serial stack semantics, audio wake model,
-    fuller timer ownership, and full scheduler-owned CPU-context/run-queue
-    ownership remain partial. The mounted
+    the original guest buffer. Raw and Unicorn
+    `MsgWaitForMultipleObjectsEx` now follow the CE SDK flag set by honoring
+    `MWMO_INPUTAVAILABLE` while ignoring desktop-only bit `0x0001` instead of
+    converting message waits into unsupported wait-all kernel calls. Full
+    serial stack semantics, audio wake model, fuller timer ownership, and full
+    scheduler-owned CPU-context/run-queue ownership remain partial. The mounted
     `target\scheduler_msgwait_virtual_60s_*` probe stayed memory-stable,
     exercised seven object signals and 148 message-input transitions without
     registered waiters on those handles/threads

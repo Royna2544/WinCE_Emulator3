@@ -6321,7 +6321,6 @@ fn msg_wait_for_multiple_objects_ex_raw<M: CoredllGuestMemory>(
     let timeout_ms = raw_arg(args, 2);
     let wake_mask = raw_arg(args, 3);
     let flags = raw_arg(args, 4);
-    const MWMO_WAITALL: u32 = 0x0001;
     const MWMO_INPUTAVAILABLE: u32 = 0x0004;
     const MAXIMUM_WAIT_OBJECTS: u32 = 64;
 
@@ -6347,8 +6346,7 @@ fn msg_wait_for_multiple_objects_ex_raw<M: CoredllGuestMemory>(
     }
 
     if !handles.is_empty() {
-        let result =
-            kernel.wait_for_multiple_objects(&handles, flags & MWMO_WAITALL != 0, 0, thread_id);
+        let result = kernel.wait_for_multiple_objects(&handles, false, 0, thread_id);
         if result != crate::ce::timer::WAIT_TIMEOUT {
             if result == crate::ce::timer::WAIT_FAILED {
                 kernel

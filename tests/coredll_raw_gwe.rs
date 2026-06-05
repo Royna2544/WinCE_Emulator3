@@ -30,20 +30,21 @@ use wince_emulation_v3::{
             ORD_IS_CHILD, ORD_IS_RECT_EMPTY, ORD_IS_WINDOW, ORD_IS_WINDOW_ENABLED,
             ORD_IS_WINDOW_VISIBLE, ORD_KILL_TIMER, ORD_LOAD_ICON_W, ORD_LOAD_RESOURCE,
             ORD_LOAD_STRING_W, ORD_MAP_DIALOG_RECT, ORD_MAP_WINDOW_POINTS, ORD_MESSAGE_BOX_W,
-            ORD_MOVE_WINDOW, ORD_OFFSET_RECT, ORD_PEEK_MESSAGE_W, ORD_POLYGON, ORD_POLYLINE,
-            ORD_POST_MESSAGE_W, ORD_POST_QUIT_MESSAGE, ORD_POST_THREAD_MESSAGE_W, ORD_PT_IN_RECT,
-            ORD_PT_IN_REGION, ORD_REALIZE_PALETTE, ORD_RECT_IN_REGION, ORD_REDRAW_WINDOW,
-            ORD_REGISTER_CLASS_W, ORD_REGISTER_GESTURE, ORD_RELEASE_CAPTURE, ORD_RELEASE_DC,
-            ORD_RELEASE_MUTEX, ORD_REMOVE_MENU, ORD_ROUND_RECT, ORD_SCREEN_TO_CLIENT,
-            ORD_SELECT_OBJECT, ORD_SELECT_PALETTE, ORD_SEND_DLG_ITEM_MESSAGE_W,
-            ORD_SEND_MESSAGE_TIMEOUT, ORD_SEND_MESSAGE_W, ORD_SEND_NOTIFY_MESSAGE_W,
-            ORD_SET_ACTIVE_WINDOW, ORD_SET_ASSOCIATED_MENU, ORD_SET_BK_COLOR, ORD_SET_CAPTURE,
-            ORD_SET_DIBCOLOR_TABLE, ORD_SET_DIBITS_TO_DEVICE, ORD_SET_DLG_ITEM_INT,
-            ORD_SET_DLG_ITEM_TEXT_W, ORD_SET_FOCUS, ORD_SET_FOREGROUND_WINDOW, ORD_SET_MENU,
-            ORD_SET_MENU_ITEM_INFO_W, ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_RECT,
-            ORD_SET_RECT_EMPTY, ORD_SET_TIMER, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS,
-            ORD_SET_WINDOW_RGN, ORD_SET_WINDOW_TEXT_W, ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE,
-            ORD_SLEEP, ORD_STRETCH_BLT, ORD_STRETCH_DIBITS, ORD_SYSTEM_PARAMETERS_INFO_W,
+            ORD_MOVE_WINDOW, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_OFFSET_RECT,
+            ORD_PEEK_MESSAGE_W, ORD_POLYGON, ORD_POLYLINE, ORD_POST_MESSAGE_W,
+            ORD_POST_QUIT_MESSAGE, ORD_POST_THREAD_MESSAGE_W, ORD_PT_IN_RECT, ORD_PT_IN_REGION,
+            ORD_REALIZE_PALETTE, ORD_RECT_IN_REGION, ORD_REDRAW_WINDOW, ORD_REGISTER_CLASS_W,
+            ORD_REGISTER_GESTURE, ORD_RELEASE_CAPTURE, ORD_RELEASE_DC, ORD_RELEASE_MUTEX,
+            ORD_REMOVE_MENU, ORD_ROUND_RECT, ORD_SCREEN_TO_CLIENT, ORD_SELECT_OBJECT,
+            ORD_SELECT_PALETTE, ORD_SEND_DLG_ITEM_MESSAGE_W, ORD_SEND_MESSAGE_TIMEOUT,
+            ORD_SEND_MESSAGE_W, ORD_SEND_NOTIFY_MESSAGE_W, ORD_SET_ACTIVE_WINDOW,
+            ORD_SET_ASSOCIATED_MENU, ORD_SET_BK_COLOR, ORD_SET_CAPTURE, ORD_SET_DIBCOLOR_TABLE,
+            ORD_SET_DIBITS_TO_DEVICE, ORD_SET_DLG_ITEM_INT, ORD_SET_DLG_ITEM_TEXT_W, ORD_SET_FOCUS,
+            ORD_SET_FOREGROUND_WINDOW, ORD_SET_MENU, ORD_SET_MENU_ITEM_INFO_W,
+            ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_RECT, ORD_SET_RECT_EMPTY,
+            ORD_SET_TIMER, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_RGN,
+            ORD_SET_WINDOW_TEXT_W, ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_SLEEP,
+            ORD_STRETCH_BLT, ORD_STRETCH_DIBITS, ORD_SYSTEM_PARAMETERS_INFO_W,
             ORD_TRACK_POPUP_MENU_EX, ORD_TRANSPARENT_IMAGE, ORD_UNION_RECT, ORD_UPDATE_WINDOW,
             ORD_VALIDATE_RECT, ORD_WINDOW_FROM_POINT,
         },
@@ -51,7 +52,7 @@ use wince_emulation_v3::{
         gwe::{
             GW_CHILD, GW_HWNDFIRST, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER, GWL_USERDATA,
             HWND_BROADCAST, MSGSRC_SOFTWARE_POST, MSGSRC_SOFTWARE_SEND, Message, Point, QS_PAINT,
-            QS_POSTMESSAGE, QS_SENDMESSAGE, Rect, SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN,
+            QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER, Rect, SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN,
             SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
             WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE, WM_CLOSE, WM_DESTROY, WM_ENABLE,
             WM_ERASEBKGND, WM_GETTEXT, WM_GETTEXTLENGTH, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_MOVE,
@@ -9042,6 +9043,57 @@ fn coredll_raw_get_message_no_wait_uses_gwe_queue_without_blocking() -> Result<(
     assert_eq!(memory.read_u32(msg_ptr)?, 0);
     assert_eq!(memory.read_u32(msg_ptr + 4)?, WM_QUIT);
     assert_eq!(memory.read_u32(msg_ptr + 8)?, 0x78);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_msgwait_ignores_desktop_waitall_flag_bit_on_ce() -> Result<()> {
+    const DESKTOP_MWMO_WAITALL: u32 = 0x0001;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 80;
+    let handles_ptr = 0xa100;
+    memory.map_words(handles_ptr, 1);
+
+    let event = kernel.create_event_w(None, false, true);
+    memory.write_u32(handles_ptr, event)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX,
+            [1, handles_ptr, 0, 0, DESKTOP_MWMO_WAITALL],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+
+    let hwnd = kernel.create_window_ex_w(thread_id, "MSGWAIT_CE_FLAGS", "", None, 0, 0, 0);
+    assert_eq!(
+        kernel.set_timer_for_thread(thread_id, Some(hwnd), Some(80), 0, None),
+        80
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX,
+            [0, 0, 0, QS_TIMER, DESKTOP_MWMO_WAITALL],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.gwe.get_message(thread_id).unwrap().msg, WM_TIMER);
 
     Ok(())
 }

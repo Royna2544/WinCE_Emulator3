@@ -578,7 +578,9 @@
        receiver context and restores the sender result. `GetQueueStatus`
        changed-bit tracking and
        `MsgWaitForMultipleObjectsEx` `MWMO_INPUTAVAILABLE` semantics now cover
-       the first CE queue-status slice. `PostQuitMessage` now uses
+       the first CE queue-status slice, and the raw/Unicorn bridges now ignore
+       desktop-only flag bit `0x0001` instead of treating CE msg-waits as
+       unsupported wait-all requests. `PostQuitMessage` now uses
        `msgqfGotWMQuitMessage`-style queue state and ignores caller filters
        when delivering `WM_QUIT`. Raw `GetMessageWNoWait` now covers the
        nonblocking get-message API path. Raw `GetMessagePos` and

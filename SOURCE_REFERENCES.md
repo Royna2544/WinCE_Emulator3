@@ -680,7 +680,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     changed-since-last-query bits in the low word, clearing only the requested
     changed bits after observation. Raw `MsgWaitForMultipleObjectsEx` consumes
     newly changed queue input by default and treats already-queued input as
-    wakeable only when `MWMO_INPUTAVAILABLE` is set.
+    wakeable only when `MWMO_INPUTAVAILABLE` is set. CE `winuser.h` exposes
+    `MWMO_INPUTAVAILABLE` as the only `MsgWaitForMultipleObjectsEx` flag in
+    this target SDK, while MFC's CE `mtex.cpp` wait-all path loops around
+    normal wait-any calls itself. v3 therefore treats desktop bit `0x0001` as
+    unsupported/ignored message-wait metadata rather than converting raw
+    `MsgWaitForMultipleObjectsEx` into kernel wait-all failure.
   - `cmsgque.h` defines `smfSenderNoWait`,
     `smfSenderNoWaitIfDifferentThread`, and `smfNotifyMessage` for no-wait
     notification sends. Rust raw `SendNotifyMessageW` now preserves that CE

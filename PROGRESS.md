@@ -1495,9 +1495,14 @@
   sent-message queueing now mark the appropriate `QS_*` changed bits. Raw
   `MsgWaitForMultipleObjectsEx` now uses those changed bits by default and only
   treats already-queued messages as immediately wakeable when
-  `MWMO_INPUTAVAILABLE` is supplied. Focused coverage:
+  `MWMO_INPUTAVAILABLE` is supplied. The raw and Unicorn
+  `MsgWaitForMultipleObjectsEx` paths also no longer interpret desktop flag
+  bit `0x0001` as `MWMO_WAITALL`: CE `winuser.h` only defines
+  `MWMO_INPUTAVAILABLE`, and CE MFC emulates wait-all outside the OS call.
+  Focused coverage:
   `ce::gwe::tests::queue_status_low_word_tracks_changed_bits_until_observed`,
-  `coredll_raw_msgwait_requires_new_input_unless_inputavailable`, the full raw
+  `coredll_raw_msgwait_requires_new_input_unless_inputavailable`,
+  `coredll_raw_msgwait_ignores_desktop_waitall_flag_bit_on_ce`, the full raw
   GWE/raw-kernel suites, and full
   `cargo test --features unicorn,trace,win32-desktop`. A bounded mounted
   host/tap probe wrote `target\queue_status_msgwait_summary.txt`,

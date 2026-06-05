@@ -6739,7 +6739,6 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
-    const MWMO_WAITALL: u32 = 0x0001;
     const MWMO_INPUTAVAILABLE: u32 = 0x0004;
     const MAXIMUM_WAIT_OBJECTS: u32 = 64;
 
@@ -6755,11 +6754,7 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
     let wake_mask = args.get(3).copied().unwrap_or(0);
     let flags = args.get(4).copied().unwrap_or(0);
     let input_available = flags & MWMO_INPUTAVAILABLE != 0;
-    if count > MAXIMUM_WAIT_OBJECTS
-        || (count != 0 && handles_ptr == 0)
-        || flags & MWMO_WAITALL != 0
-        || timeout == 0
-    {
+    if count > MAXIMUM_WAIT_OBJECTS || (count != 0 && handles_ptr == 0) || timeout == 0 {
         return false;
     }
 
