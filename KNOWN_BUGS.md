@@ -18,17 +18,20 @@
     presenter no longer leaks hidden/pre-rendered button layers, but manual
     host use may still feel unresponsive after the map is displayed.
   - Evidence: host and virtual probes reach the same post-map
-    scheduler-owned `GetMessageW` frontier with bounded memory/file I/O. A
-    synthetic host/tap probe at `400,240` (`target\tap_probe_*`) reached the
-    app's own legacy CE current-process terminate path
-    (`api2.2`, process `0x42`, exit code `0`), so input is not obviously stuck
-    in the host queue. Recent-message trace is currently not durable across
-    that final teardown snapshot, so a better focused probe should preserve
-    posted/returned mouse messages before process exit.
-  - Status: open. Next step is to add or use a narrow host-input/GWE message
-    trace that records target HWND, message, client/screen coordinates, and
-    GetMessage/DispatchMessage delivery across the click that appears to ANR.
-    Keep this generic; do not hardcode iNavi controls.
+    scheduler-owned `GetMessageW` frontier with bounded memory/file I/O. The
+    durable `messages` monitor selector now preserves generic GWE message ops
+    across teardown. A Win32-host probe at `400,240`
+    (`target\host_message_trace_*`) hit-tested to HWND `0x00020080`, posted and
+    delivered `WM_LBUTTONDOWN`/`WM_LBUTTONUP` through `GetMessageW`, then the
+    guest ran its own legacy CE current-process terminate path (`api2.2`,
+    process `0x42`, exit code `0`). That tap is therefore not blocked in the
+    host queue, GWE hit-test, scheduler message wake, or raw `GetMessageW`
+    return path.
+  - Status: open but narrowed. Use the new message trace on the exact
+    unresponsive host interaction. If it records delivered mouse/key messages,
+    chase the guest handler continuation, timer/device waits, or missing
+    subsystem event that follows; if it records `remote_*_drop`, fix generic
+    GWE hit-test/focus/capture semantics. Do not hardcode iNavi controls.
 
 - Rendered iNavi map still needs road/building styling fidelity, but the
   black base-layer failure is fixed.

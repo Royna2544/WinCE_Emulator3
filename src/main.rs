@@ -787,7 +787,10 @@ fn monitor_trace_text(snapshot: &UnicornDebugSnapshot, selector: &str) -> String
         "calls" => push_monitor_records(&mut out, "calls", &snapshot.last_calls),
         "code" => push_monitor_records(&mut out, "code", &snapshot.last_code),
         "blocks" => push_monitor_records(&mut out, "blocks", &snapshot.last_blocks),
-        "messages" | "msgs" => push_monitor_records(&mut out, "messages", &snapshot.last_messages),
+        "messages" | "msgs" => {
+            push_monitor_records(&mut out, "message ops", &snapshot.recent_message_ops);
+            push_monitor_records(&mut out, "messages", &snapshot.last_messages);
+        }
         "window-imports" | "winimports" => {
             push_monitor_records(&mut out, "window imports", &snapshot.window_imports)
         }

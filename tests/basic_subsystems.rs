@@ -1554,6 +1554,13 @@ fn blocked_get_message_wait_wakes_when_remote_input_is_drained() -> Result<()> {
         kernel.drain_remote_input_to_thread_window(thread_id, Some(hwnd)),
         1
     );
+    assert!(kernel.recent_message_ops().iter().any(|record| {
+        record.op == "remote_touch_target"
+            && record.thread_id == thread_id
+            && record.hwnd == Some(hwnd)
+            && record.msg == Some(WM_LBUTTONDOWN)
+            && record.lparam == Some((34 << 16) | 12)
+    }));
 
     assert_eq!(
         kernel.select_ready_blocked_waiter(1, 0, |blocked, kernel| {
@@ -1563,12 +1570,19 @@ fn blocked_get_message_wait_wakes_when_remote_input_is_drained() -> Result<()> {
         Some(wait_id)
     );
     let down = (0..4)
-        .filter_map(|_| kernel.gwe.get_message(thread_id))
+        .filter_map(|_| kernel.get_message_w(thread_id))
         .find(|message| message.msg == WM_LBUTTONDOWN)
         .unwrap();
     assert_eq!(down.hwnd, hwnd);
     assert_eq!(down.lparam & 0xffff, 12);
     assert_eq!((down.lparam >> 16) & 0xffff, 34);
+    assert!(kernel.recent_message_ops().iter().any(|record| {
+        record.op == "get_message"
+            && record.thread_id == thread_id
+            && record.hwnd == Some(hwnd)
+            && record.msg == Some(WM_LBUTTONDOWN)
+            && record.lparam == Some((34 << 16) | 12)
+    }));
 
     Ok(())
 }
@@ -1646,6 +1660,13 @@ fn get_message_hit_tests_remote_touch_to_visible_child() -> Result<()> {
     assert_eq!(down.msg, WM_LBUTTONDOWN);
     assert_eq!(down.lparam & 0xffff, 400);
     assert_eq!((down.lparam >> 16) & 0xffff, 240);
+    assert!(kernel.recent_message_ops().iter().any(|record| {
+        record.op == "remote_touch_target"
+            && record.thread_id == 42
+            && record.hwnd == Some(child)
+            && record.msg == Some(WM_LBUTTONDOWN)
+            && record.lparam == Some((240 << 16) | 400)
+    }));
 
     let up = kernel.get_message_w(42).unwrap();
     assert_eq!(up.hwnd, child);

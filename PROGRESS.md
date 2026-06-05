@@ -9,6 +9,20 @@
 
 ## Confirmed
 
+- Host/manual post-map input now has a durable kernel-level GWE/message trace
+  under the existing `messages` monitor selector. The trace records generic
+  message posts, host/remote touch target/drop decisions, keyboard target/drop
+  decisions, and `GetMessageW`/`PeekMessageW` delivery with thread id, HWND,
+  message id, params, source, and screen coordinates. Focused coverage extends
+  the remote touch and blocked-`GetMessage` fixtures, and the full
+  `cargo test --features unicorn,trace,win32-desktop` suite passes. A bounded
+  Win32-host mounted probe
+  `target\host_message_trace_{summary,messages,counts}.txt` used dumped DLLs
+  from `D:\INAVI_Emulator\DUMPPLZ\Windows`; the synthetic `400,240` tap was
+  hit-tested to HWND `0x00020080`, delivered as `WM_LBUTTONDOWN`/`WM_LBUTTONUP`
+  through `GetMessageW`, and the guest then ran its own legacy current-process
+  terminate path (`api2.2`, process `0x42`, code `0`). This proves that tap is
+  not being dropped before the CE queue.
 - Window-HDC drawing now uses CE-style visible client regions instead of only
   a raw client rectangle. GWE computes multi-rect visible client areas from
   the window's own visibility, parent visibility, window region, and front

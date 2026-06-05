@@ -81,6 +81,7 @@ pub struct CeKernel {
     recent_file_open_ops: Vec<FileTraceRecord>,
     recent_process_ops: Vec<ProcessTraceRecord>,
     recent_event_ops: Vec<EventTraceRecord>,
+    recent_message_ops: Vec<MessageTraceRecord>,
     pulsed_wait_handles: BTreeMap<u64, u32>,
     comm_event_mask_changed_waits: BTreeSet<u64>,
 }
@@ -141,10 +142,25 @@ pub struct EventTraceRecord {
     pub detail: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageTraceRecord {
+    pub op: &'static str,
+    pub thread_id: u32,
+    pub hwnd: Option<u32>,
+    pub msg: Option<u32>,
+    pub wparam: Option<u32>,
+    pub lparam: Option<u32>,
+    pub screen_pos: Option<u32>,
+    pub source: Option<u32>,
+    pub result: Option<u32>,
+    pub detail: Option<String>,
+}
+
 const FILE_TRACE_LIMIT: usize = 512;
 const FILE_TRACE_PREVIEW_LIMIT: usize = 64;
 const PROCESS_TRACE_LIMIT: usize = 128;
 const EVENT_TRACE_LIMIT: usize = 256;
+const MESSAGE_TRACE_LIMIT: usize = 512;
 
 pub fn normalize_module_name(name: &str) -> String {
     name.trim()
@@ -215,6 +231,7 @@ impl CeKernel {
             recent_file_open_ops: Vec::new(),
             recent_process_ops: Vec::new(),
             recent_event_ops: Vec::new(),
+            recent_message_ops: Vec::new(),
             pulsed_wait_handles: BTreeMap::new(),
             comm_event_mask_changed_waits: BTreeSet::new(),
         }
@@ -498,6 +515,10 @@ impl CeKernel {
         &self.recent_event_ops
     }
 
+    pub fn recent_message_ops(&self) -> &[MessageTraceRecord] {
+        &self.recent_message_ops
+    }
+
     pub fn file_io_stats(&self) -> FileIoStats {
         self.files.io_stats()
     }
@@ -526,6 +547,49 @@ impl CeKernel {
             self.recent_event_ops.remove(0);
         }
         self.recent_event_ops.push(record);
+    }
+
+    fn record_message_trace(&mut self, record: MessageTraceRecord) {
+        if self.recent_message_ops.len() == MESSAGE_TRACE_LIMIT {
+            self.recent_message_ops.remove(0);
+        }
+        self.recent_message_ops.push(record);
+    }
+
+    fn record_message_op(
+        &mut self,
+        op: &'static str,
+        thread_id: u32,
+        message: &Message,
+        result: Option<u32>,
+        detail: Option<String>,
+    ) {
+        let source = if message.source == crate::ce::gwe::MSGSRC_UNKNOWN {
+            crate::ce::gwe::MSGSRC_SOFTWARE_POST
+        } else {
+            message.source
+        };
+        let screen_pos = message.mouse_pos_at_post.or_else(|| {
+            matches!(
+                message.msg,
+                crate::ce::gwe::WM_MOUSEMOVE
+                    | crate::ce::gwe::WM_LBUTTONDOWN
+                    | crate::ce::gwe::WM_LBUTTONUP
+            )
+            .then_some(message.lparam)
+        });
+        self.record_message_trace(MessageTraceRecord {
+            op,
+            thread_id,
+            hwnd: Some(message.hwnd),
+            msg: Some(message.msg),
+            wparam: Some(message.wparam),
+            lparam: Some(message.lparam),
+            screen_pos,
+            source: Some(source),
+            result,
+            detail,
+        });
     }
 
     fn push_file_trace(&mut self, record: FileTraceRecord) {
@@ -2257,11 +2321,29 @@ impl CeKernel {
             .gwe
             .get_message_filtered(thread_id, hwnd, min_msg, max_msg)
         {
+            self.record_message_op(
+                "get_message",
+                thread_id,
+                &message,
+                Some(1),
+                Some(format_filter_detail(hwnd, min_msg, max_msg)),
+            );
             return Some(message);
         }
         self.pump_timers_to_gwe(thread_id);
-        self.gwe
-            .get_message_filtered(thread_id, hwnd, min_msg, max_msg)
+        let message = self
+            .gwe
+            .get_message_filtered(thread_id, hwnd, min_msg, max_msg);
+        if let Some(message) = message.as_ref() {
+            self.record_message_op(
+                "get_message",
+                thread_id,
+                message,
+                Some(1),
+                Some(format_filter_detail(hwnd, min_msg, max_msg)),
+            );
+        }
+        message
     }
 
     pub fn peek_message_w_filtered(
@@ -2278,11 +2360,39 @@ impl CeKernel {
             .gwe
             .peek_message_filtered(thread_id, hwnd, min_msg, max_msg, flags)
         {
+            let op = if flags.contains(PeekFlags::REMOVE) {
+                "peek_message_remove"
+            } else {
+                "peek_message"
+            };
+            self.record_message_op(
+                op,
+                thread_id,
+                &message,
+                Some(1),
+                Some(format_filter_detail(hwnd, min_msg, max_msg)),
+            );
             return Some(message);
         }
         self.pump_timers_to_gwe(thread_id);
-        self.gwe
-            .peek_message_filtered(thread_id, hwnd, min_msg, max_msg, flags)
+        let message = self
+            .gwe
+            .peek_message_filtered(thread_id, hwnd, min_msg, max_msg, flags);
+        if let Some(message) = message.as_ref() {
+            let op = if flags.contains(PeekFlags::REMOVE) {
+                "peek_message_remove"
+            } else {
+                "peek_message"
+            };
+            self.record_message_op(
+                op,
+                thread_id,
+                message,
+                Some(1),
+                Some(format_filter_detail(hwnd, min_msg, max_msg)),
+            );
+        }
+        message
     }
 
     pub fn post_message_w(&mut self, hwnd: u32, msg: u32, wparam: u32, lparam: u32) -> bool {
@@ -2631,7 +2741,9 @@ impl CeKernel {
     }
 
     fn post_gwe_message(&mut self, thread_id: u32, message: Message) {
+        let trace_message = message.clone();
         self.gwe.post_message(thread_id, message);
+        self.record_message_op("post_message", thread_id, &trace_message, Some(1), None);
         self.queue_message_wake_candidates(thread_id);
     }
 
@@ -2740,6 +2852,22 @@ impl CeKernel {
                 hwnd
             };
             let Some(target) = target.filter(|hwnd| self.gwe.is_window(*hwnd)) else {
+                self.record_message_trace(MessageTraceRecord {
+                    op: "remote_touch_drop",
+                    thread_id,
+                    hwnd,
+                    msg: Some(event.message),
+                    wparam: None,
+                    lparam: None,
+                    screen_pos: Some(make_lparam(point.x, point.y)),
+                    source: None,
+                    result: Some(0),
+                    detail: Some(if hit_test_touches {
+                        "no hit-test target".to_owned()
+                    } else {
+                        "no target window".to_owned()
+                    }),
+                });
                 continue;
             };
             if event.message == WM_LBUTTONDOWN {
@@ -2762,6 +2890,22 @@ impl CeKernel {
                 )
                 .with_mouse_pos(make_lparam(point.x, point.y)),
             );
+            self.record_message_trace(MessageTraceRecord {
+                op: "remote_touch_target",
+                thread_id,
+                hwnd: Some(target),
+                msg: Some(event.message),
+                wparam: Some(wparam),
+                lparam: Some(make_lparam(client.x, client.y)),
+                screen_pos: Some(make_lparam(point.x, point.y)),
+                source: Some(crate::ce::gwe::MSGSRC_SOFTWARE_POST),
+                result: Some(1),
+                detail: Some(if hit_test_touches {
+                    "hit-test".to_owned()
+                } else {
+                    "explicit-target".to_owned()
+                }),
+            });
             posted += 1;
         }
 
@@ -2770,6 +2914,18 @@ impl CeKernel {
             .or_else(|| self.gwe.get_active_window());
         for event in key_events {
             let Some(key_target) = key_target.filter(|hwnd| self.gwe.is_window(*hwnd)) else {
+                self.record_message_trace(MessageTraceRecord {
+                    op: "remote_key_drop",
+                    thread_id,
+                    hwnd: key_target,
+                    msg: Some(event.message),
+                    wparam: Some(event.vk),
+                    lparam: Some(1),
+                    screen_pos: None,
+                    source: Some(crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD),
+                    result: Some(0),
+                    detail: Some("no target window".to_owned()),
+                });
                 continue;
             };
             self.post_gwe_message(
@@ -2777,6 +2933,18 @@ impl CeKernel {
                 Message::new(key_target, event.message, event.vk, 1, time_ms)
                     .with_source(crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD),
             );
+            self.record_message_trace(MessageTraceRecord {
+                op: "remote_key_target",
+                thread_id,
+                hwnd: Some(key_target),
+                msg: Some(event.message),
+                wparam: Some(event.vk),
+                lparam: Some(1),
+                screen_pos: None,
+                source: Some(crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD),
+                result: Some(1),
+                detail: None,
+            });
             posted += 1;
         }
 
@@ -2889,6 +3057,13 @@ impl CeKernel {
         let message = Message::new(hwnd, msg, wparam, lparam, self.timers.tick_count());
         self.post_gwe_message(window.thread_id, message);
     }
+}
+
+fn format_filter_detail(hwnd: Option<u32>, min_msg: u32, max_msg: u32) -> String {
+    format!(
+        "filter_hwnd={} min=0x{min_msg:08x} max=0x{max_msg:08x}",
+        hwnd.map_or_else(|| "any".to_owned(), |hwnd| format!("0x{hwnd:08x}"))
+    )
 }
 
 fn file_trace_preview(bytes: &[u8]) -> Option<String> {

@@ -15,13 +15,18 @@
 - Current host/manual slice: the hidden/pre-rendered UI layer leak is fixed by
   committed CE visible-client-region clipping (`8fa8c9f`). The live host
   presenter now shows the corrected z-order/hide-show behavior. Continue
-  investigating any remaining "ANR" report as post-map input/scheduler
-  responsiveness, not as a rendering leak: prove whether host clicks are
-  dropped before `GetMessageW`, delivered to the wrong HWND, or processed by
-  guest code that then exits/blocks. Do not add app-specific hit targets.
-  Fresh traces from `target\tap_probe_*` show a synthetic `400,240` tap reaches
-  enough guest logic to enter the app's own current-process terminate path, so
-  the input path is not obviously dead.
+  investigating any remaining "ANR" report as post-map scheduler/device/app
+  responsiveness, not as a rendering leak or a basic input-drop bug. The new
+  `messages` trace selector now preserves kernel-level GWE post/target/delivery
+  records. Fresh Win32-host evidence from
+  `target\host_message_trace_{summary,messages,counts}.txt` shows a synthetic
+  `400,240` tap hit-tests to HWND `0x00020080`, delivers
+  `WM_LBUTTONDOWN`/`WM_LBUTTONUP` through `GetMessageW`, and then reaches the
+  app's own current-process terminate path (`api2.2`, process `0x42`, code
+  `0`). Next manual-host debugging should use the same trace on the exact
+  control/area that feels unresponsive; if messages are delivered, continue
+  into guest handler/device/timer behavior instead of adding app-specific hit
+  targets.
 - Current GDI map-fidelity slice: continue from `target\gdi_exttext_virtual.*`.
   The huge black base-layer gap is now fixed generically by honoring
   `ExtTextOutW(ETO_OPAQUE)` as a CE GDI background-rectangle fill with the

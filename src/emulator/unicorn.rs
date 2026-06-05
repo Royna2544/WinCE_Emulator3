@@ -94,6 +94,7 @@ pub struct UnicornDebugSnapshot {
     pub recent_file_ops: Vec<crate::ce::kernel::FileTraceRecord>,
     pub recent_process_ops: Vec<crate::ce::kernel::ProcessTraceRecord>,
     pub recent_event_ops: Vec<crate::ce::kernel::EventTraceRecord>,
+    pub recent_message_ops: Vec<crate::ce::kernel::MessageTraceRecord>,
     pub last_messages: Vec<UnicornLastMessage>,
     pub last_wndproc_returns: Vec<UnicornWndProcReturn>,
     pub last_wndproc_call_traces: Vec<UnicornWndProcCallTrace>,
@@ -3192,6 +3193,7 @@ impl UnicornMips {
             kernel.recent_file_ops().to_vec(),
             kernel.recent_process_ops().to_vec(),
             kernel.recent_event_ops().to_vec(),
+            kernel.recent_message_ops().to_vec(),
             last_messages.borrow().clone(),
             last_wndproc_returns.borrow().clone(),
             last_wndproc_call_traces.borrow().clone(),
@@ -5291,6 +5293,9 @@ impl std::fmt::Display for UnicornDebugSnapshot {
         }
         if !self.recent_event_ops.is_empty() {
             write!(f, " recent_event_ops={:?}", self.recent_event_ops)?;
+        }
+        if !self.recent_message_ops.is_empty() {
+            write!(f, " recent_message_ops={:?}", self.recent_message_ops)?;
         }
         if !self.last_calls.is_empty() {
             write!(f, " last_calls=[")?;
@@ -13353,6 +13358,7 @@ fn capture_debug_snapshot<D>(
     recent_file_ops: Vec<crate::ce::kernel::FileTraceRecord>,
     recent_process_ops: Vec<crate::ce::kernel::ProcessTraceRecord>,
     recent_event_ops: Vec<crate::ce::kernel::EventTraceRecord>,
+    recent_message_ops: Vec<crate::ce::kernel::MessageTraceRecord>,
     last_messages: Vec<UnicornLastMessage>,
     mut last_wndproc_returns: Vec<UnicornWndProcReturn>,
     mut last_wndproc_call_traces: Vec<UnicornWndProcCallTrace>,
@@ -13421,6 +13427,7 @@ fn capture_debug_snapshot<D>(
         recent_file_ops,
         recent_process_ops,
         recent_event_ops,
+        recent_message_ops,
         last_messages,
         last_wndproc_returns,
         last_wndproc_call_traces,
