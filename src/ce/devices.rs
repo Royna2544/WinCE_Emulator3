@@ -73,7 +73,9 @@ pub struct DeviceSession {
     pub kind: DeviceKind,
     pub backend: DeviceBackend,
     pub host: Option<String>,
+    dcb: CommDcb,
     comm_timeouts: CommTimeouts,
+    comm_mask: u32,
     rx: Vec<u8>,
     tx: Vec<u8>,
 }
@@ -93,6 +95,52 @@ pub struct CommTimeouts {
     pub write_total_timeout_multiplier: u32,
     pub write_total_timeout_constant: u32,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommDcb {
+    bytes: [u8; Self::SIZE],
+}
+
+impl Default for CommDcb {
+    fn default() -> Self {
+        let mut dcb = Self {
+            bytes: [0; Self::SIZE],
+        };
+        dcb.set_u32(0, Self::SIZE as u32);
+        dcb.set_u32(4, 9600);
+        dcb.set_u32(8, 1);
+        dcb.bytes[18] = 8;
+        dcb.bytes[19] = 0;
+        dcb.bytes[20] = 0;
+        dcb
+    }
+}
+
+impl CommDcb {
+    pub const SIZE: usize = 28;
+
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < Self::SIZE {
+            return None;
+        }
+        let mut dcb = Self {
+            bytes: [0; Self::SIZE],
+        };
+        dcb.bytes.copy_from_slice(&bytes[..Self::SIZE]);
+        Some(dcb)
+    }
+
+    pub fn bytes(&self) -> &[u8; Self::SIZE] {
+        &self.bytes
+    }
+
+    fn set_u32(&mut self, offset: usize, value: u32) {
+        self.bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+}
+
+pub const PURGE_TXCLEAR: u32 = 0x0004;
+pub const PURGE_RXCLEAR: u32 = 0x0008;
 
 impl DeviceNamespace {
     pub fn from_config(config: DeviceConfigFile) -> Self {
@@ -121,7 +169,9 @@ impl DeviceNamespace {
             kind: config.kind.clone(),
             backend: config.backend.clone(),
             host: config.host.clone(),
+            dcb: CommDcb::default(),
             comm_timeouts: CommTimeouts::default(),
+            comm_mask: 0,
             rx: Vec::new(),
             tx: Vec::new(),
         })
@@ -183,6 +233,14 @@ impl DeviceSession {
         self.rx.drain(..count).collect()
     }
 
+    pub fn dcb(&self) -> CommDcb {
+        self.dcb
+    }
+
+    pub fn set_dcb(&mut self, dcb: CommDcb) {
+        self.dcb = dcb;
+    }
+
     pub fn comm_timeouts(&self) -> CommTimeouts {
         self.comm_timeouts
     }
@@ -211,9 +269,30 @@ impl DeviceSession {
         None
     }
 
+    pub fn comm_mask(&self) -> u32 {
+        self.comm_mask
+    }
+
+    pub fn set_comm_mask(&mut self, mask: u32) {
+        self.comm_mask = mask;
+    }
+
     pub fn write_file(&mut self, bytes: &[u8]) -> u32 {
         self.tx.extend_from_slice(bytes);
         bytes.len() as u32
+    }
+
+    pub fn purge_comm(&mut self, flags: u32) {
+        if flags & PURGE_RXCLEAR != 0 {
+            self.rx.clear();
+        }
+        if flags & PURGE_TXCLEAR != 0 {
+            self.tx.clear();
+        }
+    }
+
+    pub fn queue_lengths(&self) -> (u32, u32) {
+        (self.rx.len() as u32, self.tx.len() as u32)
     }
 
     pub fn device_io_control(

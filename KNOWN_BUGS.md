@@ -12,7 +12,32 @@
 
 ## Open
 
-- Mounted iNavi now reaches a post-destroy guest null dereference during
+- Mounted iNavi reaches a rendered map UI, then idles on the post-map
+  scheduler/device/message frontier.
+  - Symptom: `target\wcspbrk_long_virtual_*` runs past the earlier
+    `COREDLL.dll@68` and 90 s map/search DB frontier, renders a real iNavi map
+    screen, then parks at scheduler-owned `GetMessageW`
+    (`pc=0x7fff0b60(ce-import-traps+0xb60)`,
+    `ra=0x60024834(dll:mfcce400.dll+0x24834)`,
+    `blocked_get_message=thread:1 hwnd=any`). It is responsive emulator idle,
+    not a blank framebuffer, missing CRT export, or large-file RSS regression.
+  - Evidence: render trace shows guest GDI `BitBlt` to display HDC
+    `0x02020004` for HWND `0x00020004`, first full-frame `800x480` from memory
+    DC `0x000a7be8`, then a `64x62` overlay at `732,114`. The converted
+    framebuffer dump is a populated road-map UI with labels and controls.
+    File trace shows `around.db` reads complete around `51-52 MB`, COM7 opens
+    and writes `$PUBX,40,GSV,0,1,0,0,0,0*58`, `\ResidentFlash\DenebSensor\Device`
+    reads 124 bytes, and `\ResidentFlash\DenebSensor\MS2_CalData` remains
+    missing.
+  - Status: open current UI frontier. Investigate timer 4565, COM7
+    read/timeout wake behavior, `SMB1:`/`MFS1:` device semantics, Deneb sensor
+    calibration file handling, and GWE message wakes from the rendered-map
+    idle state. DCB/mask/purge/COMSTAT queue reporting are now stateful and
+    covered by focused tests; remaining serial gaps are scheduler-backed
+    `WaitCommEvent` and a real `win32_com` RX backend. Do not fabricate missing
+    files, force guest state, or fake pixels.
+
+- Mounted iNavi previously reached a post-destroy guest null dereference during
   startup.
   - Symptom: `target\destroy_return_notap_*` exits with
     `READ_UNMAPPED addr=0` at
@@ -31,10 +56,10 @@
     null by `0x0002c260/0x0002c264`, where the guest state checks route into
     the unguarded dereference because `state[0x8a] == 5` and
     `state[0x120] == 0`.
-  - Status: open. The generic CE destroy-lifecycle fixes are retained and
-    covered, but the next investigation must identify the real slot clear or
-    missing state transition path. Do not force the slot/state or special-case
-    iNavi.
+  - Status: not reproduced in `target\dialog_init_no_replay_virtual_*` after
+    removing the hardcoded late `WM_INITDIALOG` replay hook. Keep watching for a
+    generic destroy-lifecycle recurrence, but do not reintroduce the app-PC
+    hook or force the slot/state.
 
 - Release/no-trace mounted iNavi reaches a stable scheduler idle frontier
   rather than continuing post-splash UI progression.
@@ -54,7 +79,9 @@
     Focused test coverage now confirms that remote/host input drained while a
     `GetMessage` waiter is registered queues a scheduler message wake
     candidate.
-  - Status: open. Host idle interactivity is improved, but the next UI
+  - Status: superseded by `target\wcspbrk_long_virtual_*` for presentation:
+    iNavi now renders and presents a real map UI before parking at
+    `GetMessageW`. Host idle interactivity is improved, but the next UI
     breakthrough must come from the real CE scheduler/GWE/resource path after
     the valid idle wait, not from forcing pixels or app state. Raw
     `MsgWaitForMultipleObjectsEx` now handles timers due within a bounded wait
@@ -67,10 +94,9 @@
     loop. `target\unicorn_wait_cleanup_virtual_60s_*` now runs to the wall
     limit inside guest image code with bounded scheduler counters, no duplicate
     saved main-thread waits, a populated framebuffer, and visible/front
-    `TGNaviDlg` HWND `0x00020080`; however the render trace still has no iNavi
-    display/controller/milestone entries. This remains an open post-startup
-    GWE/GDI/resource progression bug rather than a file-I/O or raw wait
-    hot-path bottleneck.
+    `TGNaviDlg` HWND `0x00020080`. The remaining live issue is the newer
+    post-map timer/device/message idle frontier, not blank framebuffer
+    startup or missing display presentation.
 
 - Post-region mounted iNavi now runs deeper, but later map/UI composition is
   still not presented to the display surface.
@@ -91,9 +117,11 @@
     bug is therefore a generic presentation/message/visibility/scheduler gap
     after offscreen map/UI composition, not blank framebuffer startup,
     complex-region flattening, worker-thread stack layout, or large-file RSS.
-  - Status: open current UI frontier. Trace how the later guest-composed
-    memory-DC surfaces should reach a display HDC through normal CE GWE/GDI
-    paint/update or visibility transitions.
+  - Status: superseded by `target\wcspbrk_long_virtual_*`. The later
+    guest-composed memory DC now reaches display HDC `0x02020004` via normal
+    `GetDC`/`BitBlt`/`ReleaseDC`, and the framebuffer contains a rendered map.
+    Keep this entry only as historical evidence for the earlier presentation
+    gap.
 
 - Worker thread stack slots previously underflowed the mapped process stack
   reserve once the app reached later worker threads.

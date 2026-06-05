@@ -12,8 +12,30 @@
 
 ## Current Slice
 
-- Continue from the latest mounted destroy/slot crash evidence in
-  `target\destroy_lifecycle_current_*`. CE/MFC destroy handling now has the correct
+- Continue from `target\wcspbrk_long_virtual_*`. The hardcoded late dialog
+  replay and aux alias mutation hooks are gone, and raw `wcspbrk`/COREDLL
+  ordinal 68 is now implemented. The longer mounted run proves the previous
+  90 s `pc=0x00a7c9e8`/`around.db` frontier was not a permanent stall: DB
+  loading completes, guest GDI presents an actual 800x480 map UI to display HDC
+  `0x02020004`, and the app parks at scheduler-owned `GetMessageW` with
+  periodic `WM_TIMER` id `4565`, custom messages `0x52e8`/`0x5284`, COM7 GPS
+  polling, and Deneb sensor reads in the evidence trail. Next step: debug
+  post-map idle progression from real CE events and devices. Inspect whether
+  timer 4565, COM7 empty reads/timeouts, `SMB1:`/`MFS1:` device behavior,
+  missing `MS2_CalData`, or a message-wake gap is what keeps the rendered map
+  idle. Do not restore the late-init hook, patch guest state, fabricate files,
+  or fake pixels.
+- Serial control state is now generic and stateful enough for DCB/mask/purge
+  callers, but the rendered-map frontier may still need deeper device fidelity.
+  Next serial slice, if traces point there: implement scheduler-backed
+  `WaitCommEvent`, real `win32_com` host RX for `COM7:`/host `COM21`, and
+  serial event-mask wakeups from remote/host RX without busy polling. Use
+  `C:\WINCE600\PRIVATE\WINCEOS\DRIVERS\SERDEV\serial.c` as the source
+  reference; keep behavior generic and test with CE fixture programs.
+- Watch the older mounted destroy/slot crash evidence in
+  `target\destroy_lifecycle_current_*`, but do not treat it as the active
+  blocker unless a fresh post-dialog run reproduces it. CE/MFC destroy handling
+  now has the correct
   fake `WM_NCDESTROY` value (`0x7fff`), records MFC-delivered NC destroy, and
   keeps windows valid while a `DestroyWindow` subtree is in the CE
   `fBeingDestroyed` phase. The remaining startup crash happens after the
@@ -25,9 +47,12 @@
   checks have `state[0x8a] == 5` and `state[0x120] == 0`. The final window
   dump now prints `destroying=false dead=true` for the destroyed subtree, so
   chase the guest continuation/slot lifetime rather than in-flight HWND
-  validity. Next step: add a narrow diagnostic for writes to that slot and for
-  setters of state index `0x120`, or statically find the guest setters around
-  `jal 0x22904` with index `0x120`. Do not patch the slot or force the state.
+  validity. After removing the hardcoded late `WM_INITDIALOG` replay hook,
+  `target\dialog_init_no_replay_virtual_*` and `target\wcspbrk_long_virtual_*`
+  no longer reproduce this crash. If it returns, add a narrow diagnostic for
+  writes to that slot and for setters of state index `0x120`, or statically
+  find the guest setters around `jal 0x22904` with index `0x120`. Do not patch
+  the slot or force the state.
 - Continue from the scheduler-clean mounted probe
   `target\unicorn_wait_cleanup_virtual_60s_*`. The previous WNDPROC return
   `user-kdata` execute fault and the immediate `Sleep @496`/wait-storm

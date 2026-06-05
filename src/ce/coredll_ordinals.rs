@@ -11632,6 +11632,7 @@ pub const ORD_WCSNCMP: u32 = 65;
 pub const ORD_WCSCHR: u32 = 59;
 pub const ORD_WCSCPY: u32 = 61;
 pub const ORD_WCSNCPY: u32 = 66;
+pub const ORD_WCSPBRK: u32 = 68;
 pub const ORD_MALLOC: u32 = 1041;
 pub const ORD_MEMCMP: u32 = 1043;
 pub const ORD_MEMCPY: u32 = 1044;

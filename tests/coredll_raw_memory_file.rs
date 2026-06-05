@@ -22,9 +22,9 @@ use wince_emulation_v3::{
             ORD_STRING_CCH_CAT_W, ORD_STRING_CCH_LENGTH_W, ORD_STRTOK, ORD_STRTOUL, ORD_SWPRINTF,
             ORD_TOLOWER, ORD_TOUPPER, ORD_UNMAP_VIEW_OF_FILE, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE,
             ORD_VSNPRINTF, ORD_VSNWPRINTF, ORD_VSWPRINTF, ORD_WCSCHR, ORD_WCSCPY, ORD_WCSDUP,
-            ORD_WCSICMP, ORD_WCSNCMP, ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSRCHR, ORD_WCSSTR,
-            ORD_WFOPEN, ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL,
-            ORD_WVSPRINTF_W,
+            ORD_WCSICMP, ORD_WCSNCMP, ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSPBRK, ORD_WCSRCHR,
+            ORD_WCSSTR, ORD_WFOPEN, ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W,
+            ORD_WTOL, ORD_WVSPRINTF_W,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         kernel::CeKernel,
@@ -1366,6 +1366,67 @@ fn coredll_raw_wcsstr_finds_wide_substrings() -> Result<()> {
             thread_id,
             ORD_WCSSTR,
             [haystack, absent],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_wcspbrk_finds_first_accepted_wide_char() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let string = 0x1_0000;
+    let accept = 0x1_0100;
+    let absent = 0x1_0200;
+    memory.map_halfwords(string, 32);
+    memory.map_halfwords(accept, 8);
+    memory.map_halfwords(absent, 8);
+    memory.write_wide_z(string, r"\SDMMC Disk\INavi\res");
+    memory.write_wide_z(accept, ":/\\");
+    memory.write_wide_z(absent, "XYZ");
+
+    let found = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_WCSPBRK,
+        [string, accept],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("wcspbrk did not return a pointer: {other:?}"),
+    };
+    assert_eq!(found, string);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WCSPBRK,
+            [string.wrapping_add(2), accept],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } if ptr == string.wrapping_add(22)
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WCSPBRK,
+            [string, absent],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Handle(0),

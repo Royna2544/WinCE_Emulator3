@@ -3,7 +3,7 @@ use crate::{
         audio::{AudioSystem, MmResult, WaveBuffer, WaveFormat},
         cemath::CeMath,
         com::ComSystem,
-        devices::{DeviceIoControlResult, DeviceNamespace},
+        devices::{DeviceIoControlResult, DeviceNamespace, PURGE_RXCLEAR},
         file::{
             FileIoResult, FileIoStats, FindData, GENERIC_READ, GENERIC_WRITE, HostFileSystem,
             OPEN_EXISTING,
@@ -577,6 +577,23 @@ impl CeKernel {
         }
     }
 
+    pub fn get_comm_dcb(&self, handle: u32) -> Result<crate::ce::devices::CommDcb> {
+        match self.handles.get(handle)? {
+            KernelObject::Device(device) if device.is_serial() => Ok(device.dcb()),
+            _ => Err(Error::InvalidHandle(handle)),
+        }
+    }
+
+    pub fn set_comm_dcb(&mut self, handle: u32, dcb: crate::ce::devices::CommDcb) -> Result<()> {
+        match self.handles.get_mut(handle)? {
+            KernelObject::Device(device) if device.is_serial() => {
+                device.set_dcb(dcb);
+                Ok(())
+            }
+            _ => Err(Error::InvalidHandle(handle)),
+        }
+    }
+
     pub fn set_comm_timeouts(
         &mut self,
         handle: u32,
@@ -586,6 +603,57 @@ impl CeKernel {
             KernelObject::Device(device) if device.is_serial() => {
                 device.set_comm_timeouts(timeouts);
                 Ok(())
+            }
+            _ => Err(Error::InvalidHandle(handle)),
+        }
+    }
+
+    pub fn get_comm_mask(&self, handle: u32) -> Result<u32> {
+        match self.handles.get(handle)? {
+            KernelObject::Device(device) if device.is_serial() => Ok(device.comm_mask()),
+            _ => Err(Error::InvalidHandle(handle)),
+        }
+    }
+
+    pub fn set_comm_mask(&mut self, handle: u32, mask: u32) -> Result<()> {
+        match self.handles.get_mut(handle)? {
+            KernelObject::Device(device) if device.is_serial() => {
+                device.set_comm_mask(mask);
+                Ok(())
+            }
+            _ => Err(Error::InvalidHandle(handle)),
+        }
+    }
+
+    pub fn purge_comm(&mut self, handle: u32, flags: u32) -> Result<()> {
+        let target = self.remote_gps_target();
+        let clear_remote_rx = flags & PURGE_RXCLEAR != 0
+            && matches!(
+                self.handles.get(handle),
+                Ok(KernelObject::Device(device))
+                    if device.is_serial() && device.accepts_remote_serial_target(&target)
+            );
+        match self.handles.get_mut(handle)? {
+            KernelObject::Device(device) if device.is_serial() => {
+                device.purge_comm(flags);
+                if clear_remote_rx {
+                    let _ = self.remote.read_serial_bytes(usize::MAX);
+                }
+                Ok(())
+            }
+            _ => Err(Error::InvalidHandle(handle)),
+        }
+    }
+
+    pub fn comm_queue_lengths(&self, handle: u32) -> Result<(u32, u32)> {
+        let target = self.remote_gps_target();
+        match self.handles.get(handle)? {
+            KernelObject::Device(device) if device.is_serial() => {
+                let (mut rx_len, tx_len) = device.queue_lengths();
+                if device.accepts_remote_serial_target(&target) {
+                    rx_len = rx_len.saturating_add(self.remote.serial_byte_count() as u32);
+                }
+                Ok((rx_len, tx_len))
             }
             _ => Err(Error::InvalidHandle(handle)),
         }
@@ -714,10 +782,11 @@ impl CeKernel {
             op: "ReadFile",
             handle: Some(handle),
             path,
-            preview: match (start_position, end_position) {
-                (Some(start), Some(end)) => Some(format!("pos={start}..{end}")),
-                _ => None,
-            },
+            preview: file_read_trace_preview(
+                start_position,
+                end_position,
+                result.as_deref().unwrap_or(&[]),
+            ),
             requested: Some(requested),
             transferred: result.as_ref().ok().map(|bytes| bytes.len() as u32),
             position: start_position,
@@ -741,14 +810,22 @@ impl CeKernel {
                 .map(|file| file.cursor() as u64),
             _ => None,
         };
+        let mut preview_bytes = Vec::new();
         let result = match self.handles.get_mut(handle) {
             Ok(object) => match object {
                 KernelObject::File(file) => {
-                    self.files
-                        .read_file_into(file.file_id, requested, |bytes| write(bytes))
+                    self.files.read_file_into(file.file_id, requested, |bytes| {
+                        if preview_bytes.len() < FILE_TRACE_PREVIEW_LIMIT {
+                            let remaining = FILE_TRACE_PREVIEW_LIMIT - preview_bytes.len();
+                            preview_bytes.extend_from_slice(&bytes[..bytes.len().min(remaining)]);
+                        }
+                        write(bytes)
+                    })
                 }
                 KernelObject::Device(device) => {
                     let bytes = device.read_file(requested);
+                    preview_bytes
+                        .extend_from_slice(&bytes[..bytes.len().min(FILE_TRACE_PREVIEW_LIMIT)]);
                     let transferred = bytes.len() as u32;
                     write(&bytes).map(|_| transferred)
                 }
@@ -768,10 +845,7 @@ impl CeKernel {
             op: "ReadFile",
             handle: Some(handle),
             path,
-            preview: match (start_position, end_position) {
-                (Some(start), Some(end)) => Some(format!("pos={start}..{end}")),
-                _ => None,
-            },
+            preview: file_read_trace_preview(start_position, end_position, &preview_bytes),
             requested: Some(requested),
             transferred: result.as_ref().ok().copied(),
             position: start_position,
@@ -1873,14 +1947,6 @@ impl CeKernel {
                 rect,
             );
         self.handles.insert(KernelObject::Window(hwnd));
-        self.post_window_rect_messages(
-            hwnd,
-            Some(Rect::default()),
-            self.gwe.get_window_rect(hwnd),
-            HWND_TOP,
-            0,
-            false,
-        );
         hwnd
     }
 
@@ -2007,11 +2073,8 @@ impl CeKernel {
     }
 
     pub fn enable_window(&mut self, hwnd: u32, enabled: bool) -> Option<bool> {
-        if !self.gwe.is_window(hwnd) {
-            return None;
-        }
-        let was_enabled = self.gwe.enable_window(hwnd, enabled);
-        if was_enabled != enabled {
+        let (was_enabled, changed) = self.set_window_enabled_state(hwnd, enabled)?;
+        if changed {
             if !enabled {
                 self.post_window_message(hwnd, WM_CANCELMODE, 0, 0);
             }
@@ -2021,6 +2084,15 @@ impl CeKernel {
             }
         }
         Some(was_enabled)
+    }
+
+    pub fn set_window_enabled_state(&mut self, hwnd: u32, enabled: bool) -> Option<(bool, bool)> {
+        if !self.gwe.is_window(hwnd) {
+            return None;
+        }
+        let was_enabled = self.gwe.enable_window(hwnd, enabled);
+        let changed = was_enabled != enabled;
+        Some((was_enabled, changed))
     }
 
     pub fn set_parent(&mut self, hwnd: u32, parent: Option<u32>) -> Option<Option<u32>> {
@@ -2067,7 +2139,7 @@ impl CeKernel {
     }
 
     pub fn set_focus(&mut self, hwnd: Option<u32>) -> Option<u32> {
-        if hwnd.is_some_and(|hwnd| !self.gwe.is_window(hwnd)) {
+        if hwnd.is_some_and(|hwnd| !self.gwe.is_window(hwnd) || !self.gwe.is_window_enabled(hwnd)) {
             return None;
         }
         let previous = self.gwe.set_focus(hwnd);
@@ -2084,7 +2156,7 @@ impl CeKernel {
     }
 
     pub fn activate_window(&mut self, hwnd: Option<u32>) -> Option<u32> {
-        if hwnd.is_some_and(|hwnd| !self.gwe.is_window(hwnd)) {
+        if hwnd.is_some_and(|hwnd| !self.gwe.is_window(hwnd) || !self.gwe.is_window_enabled(hwnd)) {
             return None;
         }
         let previous = self.gwe.set_active_window(hwnd);
@@ -2104,7 +2176,7 @@ impl CeKernel {
         previous
     }
 
-    fn clear_focus_and_activation_within(&mut self, hwnd: u32) {
+    pub(crate) fn clear_focus_and_activation_within(&mut self, hwnd: u32) {
         if self.gwe.focus_is_within(hwnd) {
             let _ = self.set_focus(None);
         }
@@ -2309,7 +2381,11 @@ impl CeKernel {
     }
 
     pub fn send_message_w(&mut self, hwnd: u32, msg: u32, wparam: u32, lparam: u32) -> Option<u32> {
-        let target_thread = self.gwe.window(hwnd).map(|window| window.thread_id)?;
+        let target_thread = self
+            .gwe
+            .window(hwnd)
+            .filter(|window| !window.destroyed)
+            .map(|window| window.thread_id)?;
         self.gwe.begin_send_message(target_thread);
         let result = self.gwe.send_message(hwnd, msg, wparam, lparam);
         self.gwe.end_send_message(target_thread);
@@ -2788,6 +2864,21 @@ fn file_trace_preview(bytes: &[u8]) -> Option<String> {
         preview.push_str("...");
     }
     Some(preview)
+}
+
+fn file_read_trace_preview(
+    start_position: Option<u64>,
+    end_position: Option<u64>,
+    bytes: &[u8],
+) -> Option<String> {
+    let mut parts = Vec::new();
+    if let (Some(start), Some(end)) = (start_position, end_position) {
+        parts.push(format!("pos={start}..{end}"));
+    }
+    if let Some(preview) = file_trace_preview(bytes) {
+        parts.push(format!("bytes={preview}"));
+    }
+    (!parts.is_empty()).then(|| parts.join("/"))
 }
 
 fn is_file_open_trace(op: &str) -> bool {

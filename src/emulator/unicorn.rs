@@ -710,6 +710,7 @@ pub struct UnicornWindowSnapshot {
     pub being_destroyed: bool,
     pub destroyed: bool,
     pub parent: Option<u32>,
+    pub owner: Option<u32>,
     pub style: u32,
     pub ex_style: u32,
     pub update_pending: bool,
@@ -734,6 +735,7 @@ fn unicorn_window_snapshot(window: crate::ce::gwe::Window) -> UnicornWindowSnaps
         being_destroyed: window.being_destroyed,
         destroyed: window.destroyed,
         parent: window.parent,
+        owner: window.owner,
         style: window.style,
         ex_style: window.ex_style,
         update_pending: window.update_pending,
@@ -791,6 +793,8 @@ const UNICORN_IMPORT_MILESTONE_LIMIT: usize = 8192;
 #[cfg(feature = "unicorn")]
 const UNICORN_WNDPROC_TRACE_LIMIT: usize = 32;
 #[cfg(feature = "unicorn")]
+const UNICORN_EXTENDED_WNDPROC_TRACE_LIMIT: usize = 512;
+#[cfg(feature = "unicorn")]
 const UNICORN_WNDPROC_TRACE_CALL_LIMIT: usize = 96;
 #[cfg(feature = "unicorn")]
 const UNICORN_WNDPROC_TRACE_IMPORT_LIMIT: usize = 64;
@@ -806,6 +810,8 @@ const UNICORN_INAVI_DISPLAY_TRACE_LIMIT: usize = 96;
 const UNICORN_INAVI_CONTROLLER_TRACE_LIMIT: usize = 128;
 #[cfg(all(feature = "unicorn", feature = "trace"))]
 const UNICORN_INAVI_RENDER_MILESTONE_LIMIT: usize = 16384;
+#[cfg(all(feature = "unicorn", feature = "trace"))]
+const UNICORN_EXTENDED_INAVI_RENDER_MILESTONE_LIMIT: usize = 65536;
 #[cfg(feature = "unicorn")]
 const UNICORN_CODE_TRACE_SAMPLE_INTERVAL: u32 = 64;
 #[cfg(feature = "unicorn")]
@@ -879,6 +885,7 @@ struct PendingWndProcReturn {
     send_timeout_result_ptr: Option<u32>,
     send_restore: Option<SendMessageRestoreContext>,
     continuation: Option<WndProcContinuation>,
+    clear_focus_after_return: Option<u32>,
 }
 
 #[cfg(feature = "unicorn")]
@@ -888,6 +895,7 @@ struct WndProcContinuation {
     msg: u32,
     wparam: u32,
     lparam: u32,
+    clear_focus_after_return: Option<u32>,
 }
 
 #[cfg(feature = "unicorn")]
@@ -1649,6 +1657,17 @@ impl UnicornMips {
         let progress_last_ms = Rc::new(RefCell::new(None::<u64>));
         let progress_last_ms_hook = Rc::clone(&progress_last_ms);
         let full_trace_enabled = std::env::var_os("WINCE_EMU_FULL_TRACE").is_some();
+        #[cfg(feature = "trace")]
+        let resource_trace_enabled = std::env::var_os("WINCE_EMU_RESOURCE_TRACE").is_some();
+        #[cfg(feature = "trace")]
+        let resource_only_trace_enabled =
+            std::env::var_os("WINCE_EMU_RESOURCE_ONLY_TRACE").is_some();
+        #[cfg(feature = "trace")]
+        let inavi_slot_trace_enabled = std::env::var_os("WINCE_EMU_SLOT_TRACE").is_some();
+        #[cfg(feature = "trace")]
+        let inavi_slot_static_watch_addr = std::env::var("WINCE_EMU_SLOT_TRACE_ADDR")
+            .ok()
+            .and_then(|value| parse_optional_u32(&value));
         let fast_start_enabled = std::env::var_os("WINCE_EMU_FAST_START").is_some();
         let stop_pc = limits.stop_pc;
         let pc_stop = Rc::new(RefCell::new(None));
@@ -1669,14 +1688,20 @@ impl UnicornMips {
             Rc::new(RefCell::new(Vec::<UnicornInaviControllerTrace>::new()));
         #[cfg(feature = "trace")]
         let inavi_render_milestones_hook = Rc::clone(&inavi_render_milestones);
+        #[cfg(feature = "trace")]
+        let inavi_slot_watch_addr = Rc::new(Cell::new(None::<u32>));
+        #[cfg(feature = "trace")]
+        if let Some(addr) = inavi_slot_static_watch_addr {
+            inavi_slot_watch_addr.set(Some(addr));
+        }
+        #[cfg(feature = "trace")]
+        let inavi_slot_watch_addr_code_hook = Rc::clone(&inavi_slot_watch_addr);
         let presentation_imports = Rc::new(RefCell::new(Vec::<UnicornLastImport>::new()));
         #[cfg(feature = "trace")]
         let presentation_imports_hook = Rc::clone(&presentation_imports);
         let window_imports = Rc::new(RefCell::new(Vec::<UnicornLastImport>::new()));
         #[cfg(feature = "trace")]
         let window_imports_hook = Rc::clone(&window_imports);
-        let late_inavi_init_dialog_posted = Rc::new(Cell::new(false));
-        let late_inavi_init_dialog_posted_hook = Rc::clone(&late_inavi_init_dialog_posted);
         let mapped_code = MappedCodeIndex::new(self.mapped_blobs.clone());
         let trampoline_ranges = self.trampoline_ranges.clone();
         let trampoline_jumps = self.trampoline_jumps.clone();
@@ -1819,26 +1844,27 @@ impl UnicornMips {
             }
             #[cfg(feature = "trace")]
             {
+                if inavi_slot_trace_enabled {
+                    if let Some(slot_addr) =
+                        record_inavi_slot_lifecycle_trace(&inavi_render_milestones_hook, uc, pc)
+                    {
+                        inavi_slot_watch_addr_code_hook.set(Some(slot_addr));
+                    }
+                }
                 if full_trace_enabled {
                     record_mfc_dispatch_trace(&last_mfc_dispatch_hook, uc, pc);
                     record_inavi_display_trace(&last_inavi_display_hook, uc, pc);
                 }
             }
-            maybe_post_late_inavi_init_dialog(
-                unsafe { &mut *kernel_ptr },
-                uc,
-                pc,
-                &late_inavi_init_dialog_posted_hook,
-            );
-            repair_inavi_aux_touch_alias(uc, pc);
             #[cfg(feature = "trace")]
             {
-                if full_trace_enabled {
+                if full_trace_enabled || resource_trace_enabled {
                     record_inavi_controller_trace(
                         &last_inavi_controller_hook,
                         &inavi_render_milestones_hook,
                         uc,
                         pc,
+                        resource_only_trace_enabled,
                     );
                 }
             }
@@ -2035,6 +2061,10 @@ impl UnicornMips {
         let import_milestones = Rc::new(RefCell::new(Vec::<UnicornLastImport>::new()));
         #[cfg(feature = "trace")]
         let import_milestones_hook = Rc::clone(&import_milestones);
+        #[cfg(feature = "trace")]
+        let inavi_render_milestones_import_hook = Rc::clone(&inavi_render_milestones);
+        #[cfg(feature = "trace")]
+        let inavi_slot_watch_addr_import_hook = Rc::clone(&inavi_slot_watch_addr);
         let import_counts = Rc::new(RefCell::new(BTreeMap::<
             UnicornImportCountKey,
             UnicornImportStats,
@@ -2189,6 +2219,9 @@ impl UnicornMips {
                             return;
                         }
                     }
+                    if let Some(hwnd) = callout.clear_focus_after_return {
+                        unsafe { &mut *kernel_ptr }.clear_focus_and_activation_within(hwnd);
+                    }
                     if callout.finalize_destroy && !callout.remaining_destroy_callouts.is_empty() {
                         let mut remaining = callout.remaining_destroy_callouts;
                         let next = remaining.remove(0);
@@ -2215,6 +2248,7 @@ impl UnicornMips {
                                 send_timeout_result_ptr: None,
                                 send_restore: None,
                                 continuation: None,
+                                clear_focus_after_return: None,
                             });
                         if write_wndproc_call_registers(
                             uc,
@@ -2233,10 +2267,7 @@ impl UnicornMips {
                     }
                     if callout.finalize_destroy {
                         let destroy_root = callout.destroy_root_hwnd.unwrap_or(callout.hwnd);
-                        let time_ms = unsafe { &*kernel_ptr }.timers.tick_count();
-                        unsafe { &mut *kernel_ptr }
-                            .gwe
-                            .destroy_window(destroy_root, time_ms);
+                        let _ = unsafe { &mut *kernel_ptr }.destroy_window(destroy_root);
                     }
                     let api_result = callout.api_result.or_else(|| {
                         callout
@@ -2449,6 +2480,20 @@ impl UnicornMips {
                     );
                 }
                 let args = read_mips_import_args(uc);
+                #[cfg(feature = "trace")]
+                if inavi_slot_trace_enabled
+                    && let (Some(trap), Some(watched_slot)) =
+                        (trap.as_ref(), inavi_slot_watch_addr_import_hook.get())
+                {
+                    record_inavi_slot_import_overlap_trace(
+                        &inavi_render_milestones_import_hook,
+                        uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        watched_slot,
+                    );
+                }
                 let active_thread_id = *current_thread_id_hook.borrow();
                 if trap.as_ref().is_some_and(|trap| {
                     try_block_empty_get_message(
@@ -2656,6 +2701,18 @@ impl UnicornMips {
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_def_dlg_proc_callout(
                         unsafe { &*kernel_ptr },
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        &pending_wndproc_returns_hook,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_enter_enable_window_callout(
+                        unsafe { &mut *kernel_ptr },
                         memory.uc,
                         trap.module_kind,
                         trap.ordinal,
@@ -2938,6 +2995,27 @@ impl UnicornMips {
 
         let memory_fault = Rc::new(RefCell::new(None));
         let memory_fault_hook = Rc::clone(&memory_fault);
+        #[cfg(feature = "trace")]
+        if inavi_slot_trace_enabled && let Some(addr) = inavi_slot_static_watch_addr {
+            let slot_watch = Rc::clone(&inavi_render_milestones);
+            uc.add_mem_hook(
+                HookType::MEM_WRITE,
+                u64::from(addr),
+                u64::from(addr.wrapping_add(3)),
+                move |uc, _access, address, size, value| {
+                    record_inavi_slot_memory_write(
+                        &slot_watch,
+                        uc,
+                        address as u32,
+                        size,
+                        value,
+                        addr,
+                    );
+                    true
+                },
+            )
+            .map_err(|err| Error::Backend(format!("install iNavi exact slot hook: {err:?}")))?;
+        }
         #[cfg(feature = "trace")]
         if full_trace_enabled {
             let render_map_global_watch = Rc::clone(&inavi_render_milestones);
@@ -5235,6 +5313,9 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                         "/msg_hwnd=0x{:08x}/msg=0x{:08x}/w=0x{:08x}/l=0x{:08x}/time={}",
                         record.hwnd, record.msg, record.wparam, record.lparam, record.time_ms
                     )?;
+                    if let Some(detail) = record.detail.as_deref() {
+                        write!(f, "/detail={}", format_trace_string(detail))?;
+                    }
                 }
             }
             write!(f, "]")?;
@@ -5594,10 +5675,12 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                     }
                     write!(
                         f,
-                        "0x{:08x}/tid={}/pid={}/class={}/title={}/vis={}/dead={}/upd={}/erase={}/pend_mv={}/pend_sz={}/rect={},{}-{},{}",
+                        "0x{:08x}/tid={}/pid={}/parent={}/owner={}/class={}/title={}/vis={}/dead={}/upd={}/erase={}/pend_mv={}/pend_sz={}/rect={},{}-{},{}",
                         window.hwnd,
                         window.thread_id,
                         window.process_id,
+                        format_optional_hwnd(window.parent),
+                        format_optional_hwnd(window.owner),
                         format_trace_string(&window.class_name),
                         format_trace_string(&window.title),
                         window.visible,
@@ -5634,6 +5717,9 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                             "0x{:08x}:0x{:08x}/w=0x{:08x}/l=0x{:08x}",
                             message.hwnd, message.msg, message.wparam, message.lparam
                         )?;
+                        if let Some(detail) = message.detail.as_deref() {
+                            write!(f, "/detail={}", format_trace_string(detail))?;
+                        }
                     }
                     write!(f, "]")?;
                 }
@@ -6260,7 +6346,7 @@ fn unicorn_blocked_get_message_snapshot(
                         wparam: message.wparam,
                         lparam: message.lparam,
                         time_ms: message.time_ms,
-                        detail: None,
+                        detail: decode_message_record_detail(&message),
                     })
                     .collect(),
             })
@@ -9052,10 +9138,29 @@ fn record_wndproc_call_trace(
     trace: UnicornWndProcCallTrace,
 ) {
     let mut traces = last_wndproc_call_traces.borrow_mut();
-    if traces.len() == UNICORN_WNDPROC_TRACE_LIMIT {
+    let limit = wndproc_trace_limit();
+    if traces.len() == limit {
         traces.remove(0);
     }
     traces.push(trace);
+}
+
+#[cfg(feature = "unicorn")]
+fn wndproc_trace_limit() -> usize {
+    if std::env::var_os("WINCE_EMU_EXTENDED_WNDPROC_TRACE").is_some() {
+        UNICORN_EXTENDED_WNDPROC_TRACE_LIMIT
+    } else {
+        UNICORN_WNDPROC_TRACE_LIMIT
+    }
+}
+
+#[cfg(all(feature = "unicorn", feature = "trace"))]
+fn inavi_render_milestone_limit() -> usize {
+    if std::env::var_os("WINCE_EMU_EXTENDED_RESOURCE_TRACE").is_some() {
+        UNICORN_EXTENDED_INAVI_RENDER_MILESTONE_LIMIT
+    } else {
+        UNICORN_INAVI_RENDER_MILESTONE_LIMIT
+    }
 }
 
 #[cfg(all(feature = "unicorn", feature = "trace"))]
@@ -9275,68 +9380,22 @@ fn inavi_display_probe_label(pc: u32) -> Option<&'static str> {
     }
 }
 
-#[cfg(feature = "unicorn")]
-fn repair_inavi_aux_touch_alias<D>(uc: &mut unicorn_engine::Unicorn<'_, D>, pc: u32) {
-    use unicorn_engine::RegisterMIPS;
-
-    if pc != 0x0006_39ec {
-        return;
-    }
-    let aux_base = read_mips_reg(uc, RegisterMIPS::A2);
-    let Some(alias_addr) = aux_base.checked_add(0x10f0) else {
-        return;
-    };
-    if read_unicorn_u32(uc, alias_addr).unwrap_or(0) != 0 {
-        return;
-    }
-    let Some(inline_addr) = aux_base.checked_add(0x10f8) else {
-        return;
-    };
-    if read_unicorn_u32(uc, inline_addr).unwrap_or(0) == 0 {
-        return;
-    }
-    let _ = uc.mem_write(u64::from(alias_addr), &inline_addr.to_le_bytes());
-}
-
-#[cfg(feature = "unicorn")]
-fn maybe_post_late_inavi_init_dialog<D>(
-    kernel: &mut CeKernel,
-    uc: &unicorn_engine::Unicorn<'_, D>,
-    pc: u32,
-    posted: &std::cell::Cell<bool>,
-) {
-    use unicorn_engine::RegisterMIPS;
-
-    if posted.get() || pc != 0x0001_29b8 {
-        return;
-    }
-    let this_ptr = read_mips_reg(uc, RegisterMIPS::FP);
-    let Some(hwnd) = this_ptr
-        .checked_add(0x20)
-        .and_then(|addr| read_unicorn_u32(uc, addr))
-        .filter(|hwnd| *hwnd != 0)
-    else {
-        return;
-    };
-    let time_ms = kernel.timers.tick_count();
-    let message = crate::ce::gwe::Message::new(hwnd, WM_INITDIALOG, 0, 0, time_ms);
-    if kernel.gwe.post_message_for_window(hwnd, message) {
-        posted.set(true);
-    }
-}
-
 #[cfg(all(feature = "unicorn", feature = "trace"))]
 fn record_inavi_controller_trace<D>(
     traces: &std::rc::Rc<std::cell::RefCell<Vec<UnicornInaviControllerTrace>>>,
     milestones: &std::rc::Rc<std::cell::RefCell<Vec<UnicornInaviControllerTrace>>>,
     uc: &unicorn_engine::Unicorn<'_, D>,
     pc: u32,
+    resource_only: bool,
 ) {
     use unicorn_engine::RegisterMIPS;
 
     let Some(label) = inavi_controller_probe_label(pc) else {
         return;
     };
+    if resource_only && !is_inavi_resource_probe_label(label) {
+        return;
+    }
     let sp = read_mips_reg(uc, RegisterMIPS::SP);
     let v0 = read_mips_reg(uc, RegisterMIPS::V0);
     let v1 = read_mips_reg(uc, RegisterMIPS::V1);
@@ -9726,14 +9785,18 @@ fn record_inavi_controller_trace<D>(
             resource_pointer_preview(uc, s7, 260)
         )),
         "resource_lookup_after_check" => Some(format!(
-            "check_result=0x{v0:08x}/ready={}/path={}",
+            "check_result=0x{v0:08x}/ready={}/candidate_key={}/path={}/{}",
             read_unicorn_u8(uc, fp.wrapping_add(0x20c)).unwrap_or_default(),
-            resource_pointer_preview(uc, s7, 260)
+            s0,
+            resource_pointer_preview(uc, s7, 260),
+            resource_lookup_table_snapshot(uc, fp)
         )),
         "resource_lookup_success" | "resource_lookup_fail" => Some(format!(
-            "ready={}/path={}",
+            "ready={}/candidate_key={}/path={}/{}",
             read_unicorn_u8(uc, fp.wrapping_add(0x20c)).unwrap_or_default(),
-            resource_pointer_preview(uc, s7, 260)
+            s0,
+            resource_pointer_preview(uc, s7, 260),
+            resource_lookup_table_snapshot(uc, fp)
         )),
         "resource_table_open_entry" | "resource_table_already_loaded" => Some(format!(
             "table=0x{a0:08x}/mode={}/buffer=0x{:08x}/tree_root=0x{:08x}/tree_count={}/path={}",
@@ -10401,7 +10464,7 @@ fn record_inavi_controller_trace<D>(
         || is_inavi_controller_focus_trace(&trace)
     {
         let mut milestones = milestones.borrow_mut();
-        if milestones.len() == UNICORN_INAVI_RENDER_MILESTONE_LIMIT {
+        if milestones.len() == inavi_render_milestone_limit() {
             milestones.remove(0);
         }
         milestones.push(trace.clone());
@@ -10510,7 +10573,7 @@ fn record_render_map_global_write<D>(
         )),
     };
     let mut milestones = milestones.borrow_mut();
-    if milestones.len() == UNICORN_INAVI_RENDER_MILESTONE_LIMIT {
+    if milestones.len() == inavi_render_milestone_limit() {
         milestones.remove(0);
     }
     milestones.push(trace);
@@ -10607,10 +10670,386 @@ fn record_resource_global_write<D>(
         )),
     };
     let mut milestones = milestones.borrow_mut();
-    if milestones.len() == UNICORN_INAVI_RENDER_MILESTONE_LIMIT {
+    if milestones.len() == inavi_render_milestone_limit() {
         milestones.remove(0);
     }
     milestones.push(trace);
+}
+
+#[cfg(all(feature = "unicorn", feature = "trace"))]
+fn record_inavi_slot_lifecycle_trace<D>(
+    milestones: &std::rc::Rc<std::cell::RefCell<Vec<UnicornInaviControllerTrace>>>,
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    pc: u32,
+) -> Option<u32> {
+    use unicorn_engine::RegisterMIPS;
+
+    let a0 = read_mips_reg(uc, RegisterMIPS::A0);
+    let a2 = read_mips_reg(uc, RegisterMIPS::A2);
+    let fp = read_mips_reg(uc, RegisterMIPS::FP);
+    let s7 = read_mips_reg(uc, RegisterMIPS::S7);
+    let owner_from_frame = read_unicorn_u32(uc, fp.wrapping_add(0x8)).unwrap_or_default();
+    let (label, state_base, slot_base, desired) = match pc {
+        0x0006_9c64 => (
+            "slot_initial_store",
+            fp,
+            fp,
+            Some(read_mips_reg(uc, RegisterMIPS::V0)),
+        ),
+        0x0001_2a18 => (
+            "slot_destructor_callsite",
+            s7.wrapping_add(0x8),
+            s7.wrapping_add(0x8),
+            Some(s7),
+        ),
+        0x0001_a154 => (
+            "slot_destructor_entry",
+            a0.wrapping_add(0x8),
+            a0.wrapping_add(0x8),
+            Some(a0),
+        ),
+        0x0001_a188 => (
+            "slot_destructor_before_virtual",
+            fp.wrapping_add(0x8),
+            fp.wrapping_add(0x8),
+            read_unicorn_u32(uc, fp.wrapping_add(0x10f4)),
+        ),
+        0x0001_a1a4 => (
+            "slot_destructor_clear",
+            fp.wrapping_add(0x8),
+            fp.wrapping_add(0x8),
+            Some(0),
+        ),
+        0x0002_bf30 => (
+            "slot_guarded_load",
+            owner_from_frame,
+            owner_from_frame,
+            None,
+        ),
+        0x0002_c204 => (
+            "state_8a_after_getter",
+            owner_from_frame,
+            owner_from_frame,
+            Some(read_mips_reg(uc, RegisterMIPS::V0)),
+        ),
+        0x0002_c220 => (
+            "state_120_after_getter",
+            owner_from_frame,
+            owner_from_frame,
+            Some(read_mips_reg(uc, RegisterMIPS::V0)),
+        ),
+        0x0002_c25c => (
+            "slot_fault_path_base_load",
+            owner_from_frame,
+            owner_from_frame,
+            None,
+        ),
+        0x0002_c260 => (
+            "slot_fault_path_slot_load",
+            owner_from_frame,
+            owner_from_frame,
+            None,
+        ),
+        0x0002_c264 => (
+            "slot_fault_path_null_deref",
+            owner_from_frame,
+            owner_from_frame,
+            Some(a0),
+        ),
+        0x0002_c1cc => ("state_120_clear_call", a0, owner_from_frame, Some(a2)),
+        0x0002_c1d4 => (
+            "state_120_after_clear",
+            owner_from_frame,
+            owner_from_frame,
+            read_unicorn_u32(uc, owner_from_frame.wrapping_add(0x0d80)),
+        ),
+        0x000d_0a2c => ("state_120_set_d0a2c", a0, a0, Some(a2)),
+        0x000d_0c00 => ("state_120_set_d0c00", a0, a0, Some(a2)),
+        0x000d_0d0c => ("state_120_set_d0d0c", a0, a0, Some(a2)),
+        0x000d_0d74 => ("state_120_set_d0d74", a0, a0, Some(a2)),
+        0x000d_0e44 => ("state_120_set_d0e44", a0, a0, Some(a2)),
+        0x000d_0ea8 => ("state_120_set_d0ea8", a0, a0, Some(a2)),
+        0x000d_0ee0 => ("state_120_set_d0ee0", a0, a0, Some(a2)),
+        0x000e_d4f4 => ("state_120_set_ed4f4", a0, a0, Some(a2)),
+        0x000e_d6bc => ("state_120_set_ed6bc", a0, a0, Some(a2)),
+        0x000e_d8c0 => ("state_120_set_ed8c0", a0, a0, Some(a2)),
+        0x000e_d920 => ("state_120_set_ed920", a0, a0, Some(a2)),
+        0x000e_db58 => ("state_120_set_edb58", a0, a0, Some(a2)),
+        0x000e_e938 => ("state_120_set_ee938", a0, a0, Some(a2)),
+        _ => return None,
+    };
+    let slot_addr = slot_base.wrapping_add(0x10ec);
+    let slot_value = read_unicorn_u32(uc, slot_addr).unwrap_or_default();
+    let state_8a = read_unicorn_i16(uc, state_base.wrapping_add(0x0b28)).unwrap_or_default();
+    let state_120 = read_unicorn_i16(uc, state_base.wrapping_add(0x0d80)).unwrap_or_default();
+    let detail = format!(
+        "state_base=0x{state_base:08x}/slot_base=0x{slot_base:08x}/slot=0x{slot_addr:08x}/slot_value=0x{slot_value:08x}/state8a={state_8a}/state120={state_120}/desired={}/fp=0x{fp:08x}/frame_owner=0x{owner_from_frame:08x}/s7=0x{s7:08x}",
+        desired
+            .map(|value| format!("0x{value:08x}"))
+            .unwrap_or_else(|| "<none>".to_owned())
+    );
+    push_inavi_slot_trace(
+        milestones,
+        uc,
+        label,
+        Some(state_base),
+        Some(slot_addr),
+        Some(slot_value),
+        desired,
+        detail,
+    );
+    matches!(
+        pc,
+        0x0006_9c64 | 0x0001_a154 | 0x0001_a1a4 | 0x0002_bf30 | 0x0002_c260
+    )
+    .then_some(slot_addr)
+}
+
+#[cfg(all(feature = "unicorn", feature = "trace"))]
+fn record_inavi_slot_import_overlap_trace<D>(
+    milestones: &std::rc::Rc<std::cell::RefCell<Vec<UnicornInaviControllerTrace>>>,
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    watched_slot: u32,
+) {
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll {
+        return;
+    }
+    let Some(ordinal) = ordinal else {
+        return;
+    };
+    let candidate = match ordinal {
+        crate::ce::coredll_ordinals::ORD_MEMSET => {
+            match (
+                args.first().copied(),
+                args.get(1).copied(),
+                args.get(2).copied(),
+            ) {
+                (Some(dest), Some(value), Some(size)) => {
+                    Some(("slot_import_memset", dest, size, value))
+                }
+                _ => None,
+            }
+        }
+        crate::ce::coredll_ordinals::ORD_MEMCPY => match (
+            args.first().copied(),
+            args.get(1).copied(),
+            args.get(2).copied(),
+        ) {
+            (Some(dest), Some(src), Some(size)) => {
+                Some(("slot_import_memcpy_dst", dest, size, src))
+            }
+            _ => None,
+        },
+        crate::ce::coredll_ordinals::ORD_MEMMOVE => match (
+            args.first().copied(),
+            args.get(1).copied(),
+            args.get(2).copied(),
+        ) {
+            (Some(dest), Some(src), Some(size)) => {
+                Some(("slot_import_memmove_dst", dest, size, src))
+            }
+            _ => None,
+        },
+        crate::ce::coredll_ordinals::ORD_HEAP_FREE => match args.get(2).copied() {
+            Some(ptr) => Some(("slot_import_heap_free", ptr, 4, 0)),
+            None => None,
+        },
+        crate::ce::coredll_ordinals::ORD_FREE => match args.first().copied() {
+            Some(ptr) => Some(("slot_import_free", ptr, 4, 0)),
+            None => None,
+        },
+        _ => None,
+    };
+    let Some((label, address, size, value)) = candidate else {
+        return;
+    };
+    if !memory_ranges_overlap(address, size, watched_slot, 4) {
+        if ordinal == crate::ce::coredll_ordinals::ORD_MEMCPY
+            || ordinal == crate::ce::coredll_ordinals::ORD_MEMMOVE
+        {
+            let Some(src) = args.get(1).copied() else {
+                return;
+            };
+            if memory_ranges_overlap(src, size, watched_slot, 4) {
+                push_inavi_slot_trace(
+                    milestones,
+                    uc,
+                    if ordinal == crate::ce::coredll_ordinals::ORD_MEMCPY {
+                        "slot_import_memcpy_src"
+                    } else {
+                        "slot_import_memmove_src"
+                    },
+                    Some(watched_slot.wrapping_sub(0x10ec)),
+                    Some(watched_slot),
+                    read_unicorn_u32(uc, watched_slot),
+                    Some(address),
+                    format!(
+                        "src=0x{src:08x}/dest=0x{address:08x}/size=0x{size:08x}/watched_slot=0x{watched_slot:08x}/slot_before=0x{:08x}",
+                        read_unicorn_u32(uc, watched_slot).unwrap_or_default()
+                    ),
+                );
+            }
+        }
+        return;
+    }
+    let detail = format!(
+        "op_addr=0x{address:08x}/size=0x{size:08x}/arg_value=0x{value:08x}/watched_slot=0x{watched_slot:08x}/slot_before=0x{:08x}",
+        read_unicorn_u32(uc, watched_slot).unwrap_or_default()
+    );
+    push_inavi_slot_trace(
+        milestones,
+        uc,
+        label,
+        Some(watched_slot.wrapping_sub(0x10ec)),
+        Some(watched_slot),
+        read_unicorn_u32(uc, watched_slot),
+        Some(value),
+        detail,
+    );
+}
+
+#[cfg(all(feature = "unicorn", feature = "trace"))]
+fn record_inavi_slot_memory_write<D>(
+    milestones: &std::rc::Rc<std::cell::RefCell<Vec<UnicornInaviControllerTrace>>>,
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    address: u32,
+    size: usize,
+    value: i64,
+    watched_slot: u32,
+) {
+    let slot_value = read_unicorn_u32(uc, watched_slot);
+    let detail = format!(
+        "write_addr=0x{address:08x}/size={size}/value=0x{:08x}/watched_slot=0x{watched_slot:08x}/slot_current=0x{:08x}",
+        value as u32,
+        slot_value.unwrap_or_default()
+    );
+    push_inavi_slot_trace(
+        milestones,
+        uc,
+        "slot_memory_write",
+        Some(watched_slot.wrapping_sub(0x10ec)),
+        Some(watched_slot),
+        slot_value,
+        Some(value as u32),
+        detail,
+    );
+}
+
+#[cfg(all(feature = "unicorn", feature = "trace"))]
+fn push_inavi_slot_trace<D>(
+    milestones: &std::rc::Rc<std::cell::RefCell<Vec<UnicornInaviControllerTrace>>>,
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    label: &'static str,
+    base: Option<u32>,
+    slot_addr: Option<u32>,
+    slot_value: Option<u32>,
+    store_value: Option<u32>,
+    detail: String,
+) {
+    use unicorn_engine::RegisterMIPS;
+
+    let pc = read_mips_reg(uc, RegisterMIPS::PC);
+    let sp = read_mips_reg(uc, RegisterMIPS::SP);
+    let trace = UnicornInaviControllerTrace {
+        pc,
+        label,
+        instruction: read_unicorn_u32(uc, pc),
+        ra: read_mips_reg(uc, RegisterMIPS::RA),
+        sp,
+        v0: read_mips_reg(uc, RegisterMIPS::V0),
+        a0: read_mips_reg(uc, RegisterMIPS::A0),
+        a1: read_mips_reg(uc, RegisterMIPS::A1),
+        a2: read_mips_reg(uc, RegisterMIPS::A2),
+        a3: read_mips_reg(uc, RegisterMIPS::A3),
+        s0: read_mips_reg(uc, RegisterMIPS::S0),
+        s2: read_mips_reg(uc, RegisterMIPS::S2),
+        s3: read_mips_reg(uc, RegisterMIPS::S3),
+        s4: read_mips_reg(uc, RegisterMIPS::S4),
+        s5: read_mips_reg(uc, RegisterMIPS::S5),
+        s6: read_mips_reg(uc, RegisterMIPS::S6),
+        s7: read_mips_reg(uc, RegisterMIPS::S7),
+        fp: read_mips_reg(uc, RegisterMIPS::FP),
+        sp10: sp
+            .checked_add(0x10)
+            .and_then(|addr| read_unicorn_u32(uc, addr)),
+        sp48: sp
+            .checked_add(0x48)
+            .and_then(|addr| read_unicorn_u32(uc, addr)),
+        controller: base,
+        hwnd: None,
+        msg: None,
+        wparam: None,
+        lparam: None,
+        classifier: None,
+        selected_obj: None,
+        selected_vtable: None,
+        selected_target: None,
+        paint_base: None,
+        paint_gate: None,
+        paint_render_obj: None,
+        paint_render_target: None,
+        render_surface: None,
+        render_enabled: None,
+        render_size_target: None,
+        render_resize_target: None,
+        render_flush_obj: None,
+        render_flush_target: None,
+        render_poll_result: None,
+        render_dim_ptr: None,
+        render_dim_w: None,
+        render_dim_h: None,
+        aux_base: base,
+        aux_slot_10ec_value: slot_value,
+        aux_slot_10f0: None,
+        aux_slot_10f0_vtable: None,
+        aux_inline_10f8: None,
+        aux_inline_10f8_vtable: None,
+        aux_link_ee4: None,
+        aux_init_flag_edc: None,
+        aux_vtable_source: None,
+        aux_vtable_source_value: None,
+        aux_store_addr: slot_addr,
+        aux_store_value: store_value,
+        query_thunk_slot: None,
+        query_thunk_target: None,
+        resource_text: None,
+        resource_format_text: None,
+        resource_aux_text: None,
+        resource_arg_text: Some(detail),
+    };
+    let mut milestones = milestones.borrow_mut();
+    if milestones.len() == inavi_render_milestone_limit() {
+        milestones.remove(0);
+    }
+    milestones.push(trace);
+}
+
+#[cfg(feature = "unicorn")]
+fn memory_ranges_overlap(left_addr: u32, left_len: u32, right_addr: u32, right_len: u32) -> bool {
+    let left_end = left_addr.saturating_add(left_len);
+    let right_end = right_addr.saturating_add(right_len);
+    left_addr < right_end && right_addr < left_end
+}
+
+#[cfg(all(feature = "unicorn", feature = "trace"))]
+fn parse_optional_u32(value: &str) -> Option<u32> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(hex) = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        return u32::from_str_radix(hex, 16).ok();
+    }
+    trimmed
+        .parse::<u32>()
+        .ok()
+        .or_else(|| u32::from_str_radix(trimmed, 16).ok())
 }
 
 #[cfg(all(feature = "unicorn", feature = "trace"))]
@@ -10663,6 +11102,25 @@ fn is_inavi_render_milestone_label(label: &str) -> bool {
                 | "resource_tree_insert_return"
                 | "resource_table_success"
                 | "resource_table_fail"
+        )
+}
+
+#[cfg(all(feature = "unicorn", feature = "trace"))]
+fn is_inavi_resource_probe_label(label: &str) -> bool {
+    label.starts_with("resource_")
+        || label.starts_with("query_5237_")
+        || label.starts_with("state_120_")
+        || label.starts_with("state_8a_")
+        || label.starts_with("slot_")
+        || matches!(
+            label,
+            "init_dialog_resource_check"
+                | "app_query_thunk_entry"
+                | "app_query_thunk_target"
+                | "resource_mode_search_entry"
+                | "resource_mode_search_count"
+                | "resource_mode_record_read"
+                | "resource_mode_search_return"
         )
 }
 
@@ -11140,6 +11598,7 @@ fn try_enter_dispatch_message_callout<D>(
             send_timeout_result_ptr: None,
             send_restore: None,
             continuation: None,
+            clear_focus_after_return: None,
         });
         if write_wndproc_call_registers(
             uc,
@@ -11155,7 +11614,7 @@ fn try_enter_dispatch_message_callout<D>(
         let _ = pending_returns.borrow_mut().pop();
         return false;
     }
-    let Some(window) = kernel.gwe.window(hwnd) else {
+    let Some(window) = kernel.gwe.window(hwnd).filter(|window| !window.destroyed) else {
         return false;
     };
     let wndproc = window.wndproc;
@@ -11199,6 +11658,7 @@ fn try_enter_dispatch_message_callout<D>(
         send_timeout_result_ptr: None,
         send_restore: None,
         continuation: None,
+        clear_focus_after_return: None,
     });
     if write_wndproc_call_registers(
         uc,
@@ -11394,6 +11854,7 @@ fn try_enter_send_message_callout<D>(
         send_timeout_result_ptr: result_ptr,
         send_restore,
         continuation: None,
+        clear_focus_after_return: None,
     });
     if write_wndproc_call_registers(
         uc,
@@ -11556,6 +12017,7 @@ fn try_enter_def_dlg_proc_callout<D>(
         send_timeout_result_ptr: None,
         send_restore: None,
         continuation: None,
+        clear_focus_after_return: None,
     });
     if write_wndproc_call_registers(
         uc,
@@ -11564,6 +12026,120 @@ fn try_enter_def_dlg_proc_callout<D>(
         wparam,
         lparam,
         dlgproc,
+        WNDPROC_RETURN_STUB_ADDR,
+    ) {
+        true
+    } else {
+        let _ = pending_returns.borrow_mut().pop();
+        false
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_enable_window_callout<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_ENABLE_WINDOW)
+    {
+        return false;
+    }
+
+    let hwnd = args.first().copied().unwrap_or(0);
+    let enabled = args.get(1).copied().unwrap_or(0) != 0;
+    let Some((was_enabled, changed)) = kernel.set_window_enabled_state(hwnd, enabled) else {
+        let _ = uc.reg_write(RegisterMIPS::V0, 0);
+        return true;
+    };
+    if !changed {
+        let _ = uc.reg_write(RegisterMIPS::V0, u64::from(u32::from(was_enabled)));
+        return true;
+    }
+
+    let Some(window) = kernel.gwe.window(hwnd) else {
+        let _ = uc.reg_write(RegisterMIPS::V0, u64::from(u32::from(was_enabled)));
+        return true;
+    };
+    let wndproc = window.wndproc;
+    if !is_guest_wndproc(wndproc) {
+        if !enabled {
+            kernel.clear_focus_and_activation_within(hwnd);
+        }
+        let _ = uc.reg_write(RegisterMIPS::V0, u64::from(u32::from(was_enabled)));
+        return true;
+    }
+
+    let (source, msg, wparam, lparam, continuation) = if enabled {
+        (
+            "EnableWindow/WM_ENABLE",
+            crate::ce::gwe::WM_ENABLE,
+            1,
+            0,
+            None,
+        )
+    } else {
+        (
+            "EnableWindow/WM_CANCELMODE",
+            crate::ce::gwe::WM_CANCELMODE,
+            0,
+            0,
+            Some(WndProcContinuation {
+                source: "EnableWindow/WM_ENABLE",
+                msg: crate::ce::gwe::WM_ENABLE,
+                wparam: 0,
+                lparam: 0,
+                clear_focus_after_return: Some(hwnd),
+            }),
+        )
+    };
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+    tracing::debug!(
+        target: "ce.gwe",
+        hwnd = format_args!("0x{hwnd:08x}"),
+        enabled,
+        previous = was_enabled,
+        msg = format_args!("0x{msg:08x}"),
+        class = window.class_name.as_str(),
+        wndproc = format_args!("0x{wndproc:08x}"),
+        ra = format_args!("0x{return_pc:08x}"),
+        "EnableWindow guest wndproc callout"
+    );
+
+    pending_returns.borrow_mut().push(PendingWndProcReturn {
+        source,
+        hwnd,
+        msg,
+        wparam,
+        lparam,
+        wndproc,
+        return_pc,
+        return_sp: wndproc_return_sp(uc),
+        class_name: Some(window.class_name.clone()),
+        api_result: Some(u32::from(was_enabled)),
+        dialog_result_hwnd: None,
+        finalize_destroy: false,
+        destroy_root_hwnd: None,
+        remaining_destroy_callouts: Vec::new(),
+        send_thread_id: None,
+        send_timeout_result_ptr: None,
+        send_restore: None,
+        continuation,
+        clear_focus_after_return: None,
+    });
+    if write_wndproc_call_registers(
+        uc,
+        hwnd,
+        msg,
+        wparam,
+        lparam,
+        wndproc,
         WNDPROC_RETURN_STUB_ADDR,
     ) {
         true
@@ -11627,8 +12203,7 @@ fn enter_destroy_window_wm_destroy_callout<D>(
         return false;
     };
     if callouts.is_empty() {
-        let time_ms = kernel.timers.tick_count();
-        let destroyed = kernel.gwe.destroy_window(hwnd, time_ms);
+        let destroyed = kernel.destroy_window(hwnd);
         let result = if api_result == 0 {
             0
         } else {
@@ -11675,6 +12250,7 @@ fn enter_destroy_window_wm_destroy_callout<D>(
         send_timeout_result_ptr: None,
         send_restore: None,
         continuation: None,
+        clear_focus_after_return: None,
     });
     if write_wndproc_call_registers(
         uc,
@@ -11769,14 +12345,16 @@ fn enter_wndproc_continuation<D>(
     if previous.msg == crate::ce::gwe::WM_ERASEBKGND && previous_result != 0 {
         let _ = kernel.gwe.clear_update_erase(previous.hwnd);
     }
-    if kernel.gwe.update_rect(previous.hwnd).is_none() {
-        return false;
-    }
     let Some(window) = kernel.gwe.window(previous.hwnd) else {
         return false;
     };
-    if !window.visible || window.style & crate::ce::gwe::WS_VISIBLE == 0 {
-        return false;
+    if continuation.msg == crate::ce::gwe::WM_PAINT {
+        if kernel.gwe.update_rect(previous.hwnd).is_none() {
+            return false;
+        }
+        if !window.visible || window.style & crate::ce::gwe::WS_VISIBLE == 0 {
+            return false;
+        }
     }
     let wndproc = window.wndproc;
     if !is_guest_wndproc(wndproc) {
@@ -11816,6 +12394,7 @@ fn enter_wndproc_continuation<D>(
         send_timeout_result_ptr: None,
         send_restore: None,
         continuation: None,
+        clear_focus_after_return: continuation.clear_focus_after_return,
     });
     if write_wndproc_call_registers(
         uc,
@@ -11922,6 +12501,7 @@ fn try_enter_is_dialog_message_callout<D>(
         send_timeout_result_ptr: None,
         send_restore: None,
         continuation: None,
+        clear_focus_after_return: None,
     });
     if write_wndproc_call_registers(
         uc,
@@ -11981,6 +12561,7 @@ fn try_enter_update_window_callout<D>(
                 msg: crate::ce::gwe::WM_PAINT,
                 wparam: 0,
                 lparam: 0,
+                clear_focus_after_return: None,
             }),
         )
     } else {
@@ -12025,6 +12606,7 @@ fn try_enter_update_window_callout<D>(
         send_timeout_result_ptr: None,
         send_restore: None,
         continuation,
+        clear_focus_after_return: None,
     });
     if write_wndproc_call_registers(
         uc,
@@ -12117,6 +12699,7 @@ fn try_enter_dialog_init_callout<D>(
         send_timeout_result_ptr: None,
         send_restore: None,
         continuation: None,
+        clear_focus_after_return: None,
     });
     if write_wndproc_call_registers(
         uc,
@@ -12257,9 +12840,7 @@ fn handle_create_window_return_stub<D>(
     );
 
     if result == u32::MAX {
-        let _ = kernel
-            .gwe
-            .destroy_window(callout.hwnd, kernel.timers.tick_count());
+        let _ = kernel.destroy_window(callout.hwnd);
         return_create_window_result(uc, callout.return_pc, 0)
     } else {
         return_create_window_result(uc, callout.return_pc, callout.hwnd)
@@ -12377,6 +12958,7 @@ fn try_enter_call_window_proc_callout<D>(
         send_timeout_result_ptr: None,
         send_restore: None,
         continuation: None,
+        clear_focus_after_return: None,
     });
     if write_wndproc_call_registers(
         uc,
@@ -12854,15 +13436,29 @@ fn import_detail_after_return<D>(
             let height = args.get(7).copied().unwrap_or(0) as i32;
             let parent = args.get(8).copied().unwrap_or(0);
             let id = args.get(9).copied().unwrap_or(0);
+            let window = kernel.gwe.window(result);
             let mut parts = vec![
+                format!("hwnd=0x{result:08x}"),
                 format!("ex_style=0x{:08x}", args.first().copied().unwrap_or(0)),
                 format!("class_ptr=0x{class_ptr:08x}"),
                 format!("title_ptr=0x{title_ptr:08x}"),
                 format!("style=0x{style:08x}"),
                 format!("rect={x},{y},{width},{height}"),
-                format!("parent=0x{parent:08x}"),
+                format!("parent_or_owner=0x{parent:08x}"),
                 format!("id=0x{id:08x}"),
             ];
+            if let Some(window) = window {
+                parts.push(format!(
+                    "stored_parent={}",
+                    format_optional_hwnd(window.parent)
+                ));
+                parts.push(format!(
+                    "stored_owner={}",
+                    format_optional_hwnd(window.owner)
+                ));
+                parts.push(format!("wndproc=0x{:08x}", window.wndproc));
+                parts.push(format!("visible={}", window.visible));
+            }
             if let Some(class_name) = import_pointer_or_wide_arg(uc, class_ptr) {
                 parts.push(format!("class={class_name:?}"));
             }
@@ -12886,6 +13482,47 @@ fn import_detail_after_return<D>(
                 "hwnd=0x{hwnd:08x}/cmd={cmd}/previous_visible={}/visible={visible}/effective_visible={effective_visible}/style=0x{style:08x}/last_error={last_error}",
                 result != 0,
             ))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_ENABLE_WINDOW)
+        | Some(crate::ce::coredll_ordinals::ORD_IS_WINDOW_ENABLED)
+        | Some(crate::ce::coredll_ordinals::ORD_GET_ACTIVE_WINDOW)
+        | Some(crate::ce::coredll_ordinals::ORD_SET_ACTIVE_WINDOW) => {
+            let hwnd = if ordinal == Some(crate::ce::coredll_ordinals::ORD_GET_ACTIVE_WINDOW) {
+                result
+            } else {
+                args.first().copied().unwrap_or(0)
+            };
+            let requested = args.get(1).copied().unwrap_or(0);
+            let window = kernel.gwe.window(hwnd);
+            let direct_enabled = window.is_some_and(|window| {
+                !window.destroyed
+                    && window.enabled
+                    && window.style & crate::ce::gwe::WS_DISABLED == 0
+            });
+            let effective_enabled = kernel.gwe.is_window_enabled(hwnd);
+            let active = kernel.gwe.get_active_window().unwrap_or(0);
+            let focus = kernel.gwe.get_focus().unwrap_or(0);
+            let last_error = kernel.threads.get_last_error(thread_id);
+            let mut parts = vec![
+                format!("hwnd=0x{hwnd:08x}"),
+                format!("requested=0x{requested:08x}"),
+                format!("result=0x{result:08x}"),
+                format!("direct_enabled={direct_enabled}"),
+                format!("effective_enabled={effective_enabled}"),
+                format!("active=0x{active:08x}"),
+                format!("focus=0x{focus:08x}"),
+                format!("last_error={last_error}"),
+            ];
+            if let Some(window) = window {
+                parts.push(format!("parent={}", format_optional_hwnd(window.parent)));
+                parts.push(format!("owner={}", format_optional_hwnd(window.owner)));
+                parts.push(format!("style=0x{:08x}", window.style));
+                parts.push(format!("visible={}", window.visible));
+                parts.push(format!("destroyed={}", window.destroyed));
+                parts.push(format!("class={:?}", window.class_name));
+                parts.push(format!("title={:?}", window.title));
+            }
+            Some(parts.join("/"))
         }
         Some(crate::ce::coredll_ordinals::ORD_SET_WINDOW_POS) => {
             let hwnd = args.first().copied().unwrap_or(0);
@@ -13057,6 +13694,98 @@ fn import_detail_after_return<D>(
                     "result_ptr=0x{:08x}",
                     args.get(6).copied().unwrap_or_default()
                 ));
+            }
+            Some(parts.join("/"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W)
+        | Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_WNO_WAIT)
+        | Some(crate::ce::coredll_ordinals::ORD_PEEK_MESSAGE_W) => {
+            let msg_ptr = args.first().copied().unwrap_or(0);
+            let filter_hwnd = args.get(1).copied().unwrap_or(0);
+            let min_msg = args.get(2).copied().unwrap_or(0);
+            let max_msg = args.get(3).copied().unwrap_or(0);
+            let mut parts = vec![
+                format!("msg_ptr=0x{msg_ptr:08x}"),
+                format!("filter_hwnd=0x{filter_hwnd:08x}"),
+                format!("range=0x{min_msg:04x}..0x{max_msg:04x}"),
+                format!("result=0x{result:08x}"),
+            ];
+            if ordinal == Some(crate::ce::coredll_ordinals::ORD_PEEK_MESSAGE_W) {
+                parts.push(format!(
+                    "flags=0x{:08x}",
+                    args.get(4).copied().unwrap_or_default()
+                ));
+            }
+            if result != 0
+                && let Some(message) = read_unicorn_message(uc, msg_ptr)
+            {
+                append_unicorn_message_detail(&mut parts, "message", &message);
+            }
+            Some(parts.join("/"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_POST_MESSAGE_W) => {
+            let hwnd = args.first().copied().unwrap_or(0);
+            let msg = args.get(1).copied().unwrap_or(0);
+            let wparam = args.get(2).copied().unwrap_or(0);
+            let lparam = args.get(3).copied().unwrap_or(0);
+            let last_error = kernel.threads.get_last_error(thread_id);
+            let window = kernel.gwe.window(hwnd);
+            let mut parts = vec![
+                format!("hwnd=0x{hwnd:08x}"),
+                format!("msg=0x{msg:04x}"),
+                format!("wparam=0x{wparam:08x}"),
+                format!("lparam=0x{lparam:08x}"),
+                format!("result=0x{result:08x}"),
+                format!("last_error={last_error}"),
+                format!("exists={}", window.is_some()),
+                format!("is_window={}", hwnd == 0 || kernel.gwe.is_window(hwnd)),
+            ];
+            if let Some(window) = window {
+                parts.push(format!("destroyed={}", window.destroyed));
+                parts.push(format!("thread={}", window.thread_id));
+                parts.push(format!("process={}", window.process_id));
+                parts.push(format!("wndproc=0x{:08x}", window.wndproc));
+                parts.push(format!("class={:?}", window.class_name));
+            }
+            if let Some(detail) = decode_unicorn_message_detail(uc, msg, lparam) {
+                parts.push(format!("message_detail={detail}"));
+            }
+            Some(parts.join("/"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_POST_THREAD_MESSAGE_W) => {
+            let target_thread = args.first().copied().unwrap_or(0);
+            let msg = args.get(1).copied().unwrap_or(0);
+            let wparam = args.get(2).copied().unwrap_or(0);
+            let lparam = args.get(3).copied().unwrap_or(0);
+            let last_error = kernel.threads.get_last_error(thread_id);
+            let mut parts = vec![
+                format!("target_thread={target_thread}"),
+                format!("msg=0x{msg:04x}"),
+                format!("wparam=0x{wparam:08x}"),
+                format!("lparam=0x{lparam:08x}"),
+                format!("result=0x{result:08x}"),
+                format!("last_error={last_error}"),
+            ];
+            if let Some(detail) = decode_unicorn_message_detail(uc, msg, lparam) {
+                parts.push(format!("message_detail={detail}"));
+            }
+            Some(parts.join("/"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_DISPATCH_MESSAGE_W) => {
+            let msg_ptr = args.first().copied().unwrap_or(0);
+            let mut parts = vec![
+                format!("msg_ptr=0x{msg_ptr:08x}"),
+                format!("result=0x{result:08x}"),
+            ];
+            if let Some(message) = read_unicorn_message(uc, msg_ptr) {
+                append_unicorn_message_detail(&mut parts, "message", &message);
+                if let Some(window) = kernel.gwe.window(message.hwnd) {
+                    parts.push(format!("destroyed={}", window.destroyed));
+                    parts.push(format!("thread={}", window.thread_id));
+                    parts.push(format!("process={}", window.process_id));
+                    parts.push(format!("wndproc=0x{:08x}", window.wndproc));
+                    parts.push(format!("class={:?}", window.class_name));
+                }
             }
             Some(parts.join("/"))
         }
@@ -13344,6 +14073,7 @@ fn import_detail_after_return<D>(
         }
         Some(crate::ce::coredll_ordinals::ORD_READ_FILE) => {
             let handle = args.first().copied().unwrap_or(0);
+            let buffer = args.get(1).copied().unwrap_or(0);
             let requested = args.get(2).copied().unwrap_or(0);
             let transferred = args
                 .get(3)
@@ -13352,10 +14082,29 @@ fn import_detail_after_return<D>(
                 .and_then(|ptr| read_unicorn_u32(uc, ptr));
             let mut parts = vec![
                 format!("handle=0x{handle:08x}"),
+                format!("buffer=0x{buffer:08x}"),
                 format!("requested={requested}"),
+                format!("ok={result}"),
+                format!("last_error={}", kernel.threads.get_last_error(thread_id)),
             ];
             if let Some(transferred) = transferred {
                 parts.push(format!("transferred={transferred}"));
+                if result != 0 && transferred != 0 {
+                    let preview_len = transferred.min(32) as usize;
+                    if let Some(preview) = read_unicorn_bytes_preview(uc, buffer, preview_len) {
+                        parts.push(format!("bytes={preview}"));
+                    }
+                    if let Some(wide) =
+                        read_unicorn_wide_z(uc, buffer, transferred.min(32) as usize)
+                    {
+                        parts.push(format!("wide={wide:?}"));
+                    }
+                    if let Some(narrow) =
+                        read_unicorn_narrow_z(uc, buffer, transferred.min(64) as usize)
+                    {
+                        parts.push(format!("narrow={narrow:?}"));
+                    }
+                }
             }
             if let Some(path) = kernel.path_for_handle(handle) {
                 parts.push(format!("path={path:?}"));
@@ -13587,10 +14336,42 @@ fn is_window_import(
             | Some(crate::ce::coredll_ordinals::ORD_GET_CLIENT_RECT)
             | Some(crate::ce::coredll_ordinals::ORD_INVALIDATE_RECT)
             | Some(crate::ce::coredll_ordinals::ORD_VALIDATE_RECT)
+            | Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W)
+            | Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_WNO_WAIT)
+            | Some(crate::ce::coredll_ordinals::ORD_PEEK_MESSAGE_W)
+            | Some(crate::ce::coredll_ordinals::ORD_POST_MESSAGE_W)
+            | Some(crate::ce::coredll_ordinals::ORD_POST_THREAD_MESSAGE_W)
+            | Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_W)
+            | Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT)
+            | Some(crate::ce::coredll_ordinals::ORD_DISPATCH_MESSAGE_W)
             | Some(crate::ce::coredll_ordinals::ORD_BEGIN_PAINT)
             | Some(crate::ce::coredll_ordinals::ORD_END_PAINT)
             | Some(crate::ce::coredll_ordinals::ORD_UPDATE_WINDOW)
     )
+}
+
+#[cfg(feature = "unicorn")]
+fn append_unicorn_message_detail(
+    parts: &mut Vec<String>,
+    prefix: &str,
+    message: &UnicornMessageRecord,
+) {
+    parts.push(format!("{prefix}_hwnd=0x{:08x}", message.hwnd));
+    parts.push(format!("{prefix}_msg=0x{:04x}", message.msg));
+    parts.push(format!("{prefix}_wparam=0x{:08x}", message.wparam));
+    parts.push(format!("{prefix}_lparam=0x{:08x}", message.lparam));
+    parts.push(format!("{prefix}_time={}", message.time_ms));
+    if let Some(detail) = message.detail.as_deref() {
+        parts.push(format!("{prefix}_detail={detail}"));
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn decode_message_record_detail(message: &crate::ce::gwe::Message) -> Option<String> {
+    if message.msg != crate::ce::gwe::WM_WINDOWPOSCHANGED {
+        return None;
+    }
+    Some(format!("WINDOWPOS_PAYLOAD lparam=0x{:08x}", message.lparam))
 }
 
 #[cfg(feature = "unicorn")]
@@ -13715,6 +14496,30 @@ fn read_unicorn_narrow_z<D>(
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+#[cfg(feature = "unicorn")]
+fn read_unicorn_bytes_preview<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    ptr: u32,
+    max_bytes: usize,
+) -> Option<String> {
+    if ptr == 0 || max_bytes == 0 {
+        return None;
+    }
+    let mut bytes = vec![0u8; max_bytes];
+    uc.mem_read(u64::from(ptr), &mut bytes).ok()?;
+    let mut preview = String::new();
+    for byte in bytes {
+        match byte {
+            b'\r' => preview.push_str("\\r"),
+            b'\n' => preview.push_str("\\n"),
+            b'\t' => preview.push_str("\\t"),
+            0x20..=0x7e => preview.push(byte as char),
+            _ => preview.push_str(&format!("\\x{byte:02x}")),
+        }
+    }
+    Some(preview)
+}
+
 #[cfg(all(feature = "unicorn", feature = "trace"))]
 fn resource_pointer_preview<D>(
     uc: &unicorn_engine::Unicorn<'_, D>,
@@ -13738,6 +14543,110 @@ fn resource_pointer_preview<D>(
         }
     }
     parts.join("/")
+}
+
+#[cfg(all(feature = "unicorn", feature = "trace"))]
+fn resource_lookup_table_snapshot<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    state_ptr: u32,
+) -> String {
+    const TABLE_PTR: u32 = 0x0079_c440;
+
+    let buffer = read_unicorn_u32(uc, TABLE_PTR).unwrap_or_default();
+    let tree_root = read_unicorn_u32(uc, TABLE_PTR.wrapping_add(0x0c)).unwrap_or_default();
+    let tree_count = read_unicorn_u32(uc, TABLE_PTR.wrapping_add(0x18)).unwrap_or_default();
+    let mut parts = vec![
+        format!("state=0x{state_ptr:08x}"),
+        format!(
+            "state_mode={}",
+            read_unicorn_i16(uc, state_ptr).unwrap_or_default()
+        ),
+        format!(
+            "state_submode={}",
+            read_unicorn_i16(uc, state_ptr.wrapping_add(2)).unwrap_or_default()
+        ),
+        format!(
+            "state_ready={}",
+            read_unicorn_u8(uc, state_ptr.wrapping_add(0x20c)).unwrap_or_default()
+        ),
+        format!(
+            "state_path={}",
+            resource_pointer_preview(uc, state_ptr.wrapping_add(4), 260)
+        ),
+        format!("table=0x{TABLE_PTR:08x}"),
+        format!("buffer=0x{buffer:08x}"),
+        format!("tree_root=0x{tree_root:08x}"),
+        format!("tree_count={tree_count}"),
+        format!("table_words={}", resource_words_preview(uc, TABLE_PTR, 8)),
+    ];
+
+    if buffer != 0 {
+        parts.push(format!(
+            "buffer_header={}",
+            resource_words_preview(uc, buffer, 4)
+        ));
+        parts.push(format!(
+            "buffer_bytes={}",
+            read_unicorn_bytes_preview(uc, buffer, 32).unwrap_or_else(|| "<unreadable>".to_owned())
+        ));
+    }
+    if tree_root != 0 {
+        parts.push(format!(
+            "root_words={}",
+            resource_words_preview(uc, tree_root, 8)
+        ));
+        parts.push(format!(
+            "root_halfwords={}",
+            resource_halfwords_preview(uc, tree_root, 16)
+        ));
+        for offset in [0x00, 0x04, 0x08, 0x0c, 0x10, 0x14, 0x18, 0x1c] {
+            if let Some(ptr) = read_unicorn_u32(uc, tree_root.wrapping_add(offset))
+                && ptr != 0
+                && ptr != tree_root
+            {
+                parts.push(format!(
+                    "root+0x{offset:02x}=0x{ptr:08x}:{}",
+                    resource_halfwords_preview(uc, ptr, 8)
+                ));
+            }
+        }
+    }
+
+    parts.join("/")
+}
+
+#[cfg(all(feature = "unicorn", feature = "trace"))]
+fn resource_words_preview<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    ptr: u32,
+    count: usize,
+) -> String {
+    (0..count)
+        .map(|index| {
+            let addr = ptr.wrapping_add((index * 4) as u32);
+            read_unicorn_u32(uc, addr)
+                .map(|value| format!("0x{value:08x}"))
+                .unwrap_or_else(|| "<?>".to_owned())
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+#[cfg(all(feature = "unicorn", feature = "trace"))]
+fn resource_halfwords_preview<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    ptr: u32,
+    count: usize,
+) -> String {
+    (0..count)
+        .map(|index| {
+            let addr = ptr.wrapping_add((index * 2) as u32);
+            read_unicorn_i16(uc, addr)
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "<?>".to_owned())
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 #[cfg(all(feature = "unicorn", feature = "trace"))]
@@ -13773,6 +14682,12 @@ fn cstring_wide_preview<D>(
 
 fn format_trace_string(value: &str) -> String {
     format!("{value:?}")
+}
+
+#[cfg(feature = "unicorn")]
+fn format_optional_hwnd(hwnd: Option<u32>) -> String {
+    hwnd.map(|hwnd| format!("0x{hwnd:08x}"))
+        .unwrap_or_else(|| "<none>".to_owned())
 }
 
 fn write_unicorn_import_records(
@@ -15077,6 +15992,110 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn enable_window_callout_sends_cancelmode_then_enable_synchronously() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let wndproc = 0x0001_3570;
+        let return_pc: u32 = 0x0040_1000;
+        let hwnd = kernel.create_window_ex_w(1, "ENABLE_SYNC", "", None, 0, 0, 0);
+        kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, wndproc);
+        uc.reg_write(RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+
+        let pending = Rc::new(RefCell::new(Vec::new()));
+        assert!(super::try_enter_enable_window_callout(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_ENABLE_WINDOW),
+            &[hwnd, 0],
+            &pending,
+        ));
+
+        assert!(!kernel.gwe.is_window_enabled(hwnd));
+        assert_eq!(uc.reg_read(RegisterMIPS::A0).unwrap() as u32, hwnd);
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::A1).unwrap() as u32,
+            crate::ce::gwe::WM_CANCELMODE
+        );
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, wndproc);
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::RA).unwrap() as u32,
+            super::WNDPROC_RETURN_STUB_ADDR
+        );
+        let pending = pending.borrow();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].api_result, Some(1));
+        let continuation = pending[0]
+            .continuation
+            .as_ref()
+            .expect("disable should continue with WM_ENABLE");
+        assert_eq!(continuation.msg, crate::ce::gwe::WM_ENABLE);
+        assert_eq!(continuation.wparam, 0);
+    }
+
+    #[test]
+    fn wndproc_continuation_allows_non_paint_without_update_rect() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let wndproc = 0x0001_3570;
+        let return_pc: u32 = 0x0040_1000;
+        let hwnd = kernel.create_window_ex_w(1, "ENABLE_CONT", "", None, 0, 0, 0);
+        kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, wndproc);
+        uc.reg_write(RegisterMIPS::SP, 0x7ffd_fee8).unwrap();
+
+        let previous = super::PendingWndProcReturn {
+            source: "EnableWindow/WM_CANCELMODE",
+            hwnd,
+            msg: crate::ce::gwe::WM_CANCELMODE,
+            wparam: 0,
+            lparam: 0,
+            wndproc,
+            return_pc,
+            return_sp: 0x7ffd_fee8,
+            class_name: Some("ENABLE_CONT".to_owned()),
+            api_result: Some(1),
+            dialog_result_hwnd: None,
+            finalize_destroy: false,
+            destroy_root_hwnd: None,
+            remaining_destroy_callouts: Vec::new(),
+            send_thread_id: None,
+            send_timeout_result_ptr: None,
+            send_restore: None,
+            continuation: None,
+            clear_focus_after_return: None,
+        };
+        let pending = Rc::new(RefCell::new(Vec::new()));
+        assert!(super::enter_wndproc_continuation(
+            &mut kernel,
+            &mut uc,
+            &previous,
+            super::WndProcContinuation {
+                source: "EnableWindow/WM_ENABLE",
+                msg: crate::ce::gwe::WM_ENABLE,
+                wparam: 0,
+                lparam: 0,
+                clear_focus_after_return: None,
+            },
+            0,
+            &pending,
+        ));
+
+        assert_eq!(uc.reg_read(RegisterMIPS::A0).unwrap() as u32, hwnd);
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::A1).unwrap() as u32,
+            crate::ce::gwe::WM_ENABLE
+        );
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, wndproc);
+        let pending = pending.borrow();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].source, "EnableWindow/WM_ENABLE");
+        assert_eq!(pending[0].api_result, Some(1));
+    }
+
+    #[test]
     fn dispatch_message_callout_enters_timerproc_callback() {
         let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
         let mut kernel = CeKernel::boot(config);
@@ -15133,6 +16152,46 @@ mod unicorn_tests {
         assert_eq!(pending[0].api_result, Some(0));
         assert_eq!(pending[0].wndproc, timerproc);
         assert_eq!(pending[0].return_pc, return_pc);
+    }
+
+    #[test]
+    fn dispatch_message_callout_skips_destroyed_hwnd() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let msg_ptr = 0x3000_0100;
+        let return_pc = 0x0040_1000u32;
+        let wndproc = 0x0001_3570u32;
+        uc.mem_map(0x3000_0000, 0x1000, Prot::ALL).unwrap();
+        let hwnd = kernel.create_window_ex_w(1, "DESTROYED", "", None, 0, 0, 0);
+        kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, wndproc);
+        assert!(kernel.gwe.destroy_window(hwnd, 0));
+        for (offset, value) in [
+            (0, hwnd),
+            (4, crate::ce::gwe::WM_SIZE),
+            (8, 0),
+            (12, 0x01e0_0320),
+        ] {
+            uc.mem_write(u64::from(msg_ptr + offset), &value.to_le_bytes())
+                .unwrap();
+        }
+        uc.reg_write(RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        uc.reg_write(RegisterMIPS::PC, 0x7fff_0b00).unwrap();
+
+        let pending = Rc::new(RefCell::new(Vec::new()));
+        assert!(!super::try_enter_dispatch_message_callout(
+            &kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_DISPATCH_MESSAGE_W),
+            &[msg_ptr],
+            1,
+            &pending,
+        ));
+
+        assert!(pending.borrow().is_empty());
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, 0x7fff_0b00);
     }
 
     #[test]

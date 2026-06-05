@@ -9,6 +9,60 @@
 
 ## Confirmed
 
+- Removed the remaining hardcoded mounted-iNavi startup code-hook behavior that
+  posted a late `WM_INITDIALOG` and wrote the aux touch alias from fixed app PCs.
+  Raw dialog creation now has regression coverage proving it does not leave a
+  queued `WM_INITDIALOG`; synchronous dialog init through the normal Unicorn/MFC
+  path remains the guest-visible behavior. The mounted
+  `target\dialog_init_no_replay_virtual_*` probe no longer reproduces the
+  old `0x0002c264` null-slot crash: the resource-ready check returns success,
+  `resource_59718_lookup_return` returns `v0=1`, and real paints reach
+  `TGNaviDlg`, the main child, and visible bottom child `0x00020070`.
+- COREDLL ordinal 68 / `wcspbrk` is now implemented in the raw CRT dispatch and
+  covered by `coredll_raw_wcspbrk_finds_first_accepted_wide_char`. This removed
+  the immediate `COREDLL.dll@68` stop from the post-dialog mounted run. Release
+  validation `target\wcspbrk_virtual_*` ran to the 90 s wall limit without an
+  unmapped crash, with bounded memory/file I/O
+  (`heap_live=15101/32492068B`, `virtual_live=2/131072B`,
+  `host_open=908`, `host_read=83967/6465215B`, `mem_open=4`,
+  `max_read=685080`). The app progressed into later resource messages,
+  visible child `0x00020070` paint, repeated `WM_TIMER`, and real map/search DB
+  activity, including `around.db` reads at ~51-52 MB.
+- Longer release validation `target\wcspbrk_long_virtual_*` supersedes the
+  short `wcspbrk_virtual` wall-stop suspicion. With lighter trace output, the
+  map/search DB phase completes naturally and the run parks at scheduler-owned
+  `GetMessageW` (`pc=0x7fff0b60(ce-import-traps+0xb60)`,
+  `ra=0x60024834(dll:mfcce400.dll+0x24834)`,
+  `blocked_get_message=thread:1 hwnd=any`) rather than crashing or spinning in
+  the DB loop. Memory remains bounded (`heap_live=14628/31597954B`,
+  `virtual_live=2/131072B`, `host_open=912`,
+  `host_read=83971/6465339B`, `mem_open=4`, `max_read=685080`). The final
+  framebuffer dump is a real iNavi map UI, and the render trace shows guest GDI
+  presenting `BitBlt` to display HDC `0x02020004` for HWND `0x00020004`
+  (`800x480`) from composed memory DC `0x000a7be8`, plus a later
+  `64x62` overlay blit at `732,114`. Current frontier is now post-map idle:
+  periodic `WM_TIMER` id `4565`, custom messages such as `0x52e8`/`0x5284`,
+  COM7 GPS polling, and scheduler/device/message wakes. The render milestone
+  detector still reports `inavi display/controller: none`, so that detector is
+  stale for this real GDI present path.
+- Added stateful CE serial control data beneath device handles, using
+  `C:\WINCE600\PRIVATE\WINCEOS\DRIVERS\SERDEV\serial.c` and the CE 4.2 Mipsii
+  `winbase.h` DCB/COMSTAT layout as source evidence. `GetCommState` and
+  `SetCommState` now round-trip the 28-byte DCB, `SetCommMask` and
+  `GetCommMask` preserve the event mask, `ClearCommError` reports modeled RX
+  and TX queue depths, and `PurgeComm(PURGE_RXCLEAR|PURGE_TXCLEAR)` clears both
+  device-session and remote-injected serial bytes. `WaitCommEvent` now reports
+  `EV_RXCHAR` immediately when the mask includes it and RX is already ready;
+  scheduler-backed blocking `WaitCommEvent` remains open. Focused coverage:
+  `serial_comm_state_mask_and_purge_are_handle_state` and
+  `coredll_raw_comm_state_mask_wait_and_purge_are_stateful`.
+- Mounted validation after the serial-control state slice wrote
+  `target\comm_state_virtual_*`. The run still reaches the real rendered map
+  screen and parks at scheduler-owned `GetMessageW` with bounded memory/file
+  counters (`heap_live=14628/31597954B`, `virtual_live=2/131072B`,
+  `host_open=912`, `host_read=83971/6465339B`, `mem_open=4`,
+  `max_read=685080`). This confirms the comm-state change does not regress UI
+  progress; current frontier remains the rendered-map idle path.
 - Unicorn startup scheduling now avoids two recent mounted blockers without
   changing guest-visible API results. Guest WNDPROC callouts reserve/restore a
   small stack frame and defer blocked-wait/get-message resumes until the

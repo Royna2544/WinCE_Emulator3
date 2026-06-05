@@ -135,6 +135,7 @@ pub const HWND_TOP: u32 = 0;
 pub const HWND_BOTTOM: u32 = 1;
 pub const HWND_TOPMOST: u32 = u32::MAX;
 pub const HWND_NOTOPMOST: u32 = u32::MAX - 1;
+pub const WS_POPUP: u32 = 0x8000_0000;
 pub const WS_CHILD: u32 = 0x4000_0000;
 pub const WS_VISIBLE: u32 = 0x1000_0000;
 pub const WS_DISABLED: u32 = 0x0800_0000;
@@ -798,21 +799,9 @@ impl Gwe {
     }
 
     pub fn destroy_window(&mut self, hwnd: u32, _time_ms: u32) -> bool {
-        if !self.is_window(hwnd) {
+        let Some(targets) = self.window_and_descendants(hwnd) else {
             return false;
-        }
-        let mut targets = vec![hwnd];
-        let mut index = 0;
-        while let Some(parent) = targets.get(index).copied() {
-            index += 1;
-            let children: Vec<u32> = self
-                .windows
-                .values()
-                .filter(|window| !window.destroyed && window.parent == Some(parent))
-                .map(|window| window.hwnd)
-                .collect();
-            targets.extend(children);
-        }
+        };
         for target in targets.iter().rev().copied() {
             if let Some(window) = self.windows.get_mut(&target) {
                 window.being_destroyed = false;
@@ -1108,7 +1097,17 @@ impl Gwe {
     }
 
     pub fn get_parent(&self, hwnd: u32) -> Option<u32> {
-        self.windows.get(&hwnd).and_then(|window| window.parent)
+        let window = self.windows.get(&hwnd)?;
+        if window.destroyed {
+            return None;
+        }
+        if let Some(parent) = window.parent.filter(|parent| self.is_window(*parent)) {
+            return Some(parent);
+        }
+        if window.style & WS_POPUP != 0 {
+            return window.owner.filter(|owner| self.is_window(*owner));
+        }
+        None
     }
 
     pub fn is_child(&self, parent: u32, child: u32) -> bool {
@@ -1417,16 +1416,25 @@ impl Gwe {
     }
 
     pub fn get_active_window(&self) -> Option<u32> {
-        if let Some(hwnd) = self.active_window.filter(|hwnd| self.is_window(*hwnd)) {
+        if let Some(hwnd) = self
+            .active_window
+            .filter(|hwnd| self.is_window(*hwnd) && self.is_window_enabled(*hwnd))
+        {
             return Some(hwnd);
         }
-        if let Some(hwnd) = self.focus.filter(|hwnd| self.is_window(*hwnd)) {
+        if let Some(hwnd) = self
+            .focus
+            .filter(|hwnd| self.is_window(*hwnd) && self.is_window_enabled(*hwnd))
+        {
             return Some(hwnd);
         }
         self.windows
             .values()
             .find(|window| {
-                !window.destroyed && window.parent.is_none() && window.hwnd != DESKTOP_HWND
+                !window.destroyed
+                    && window.parent.is_none()
+                    && window.hwnd != DESKTOP_HWND
+                    && self.is_window_enabled(window.hwnd)
             })
             .map(|window| window.hwnd)
     }
@@ -2591,15 +2599,19 @@ impl Gwe {
         }
         let mut targets = vec![hwnd];
         let mut index = 0;
-        while let Some(parent) = targets.get(index).copied() {
+        while let Some(ancestor) = targets.get(index).copied() {
             index += 1;
-            let children: Vec<u32> = self
+            let descendants: Vec<u32> = self
                 .windows
                 .values()
-                .filter(|window| !window.destroyed && window.parent == Some(parent))
+                .filter(|window| {
+                    !window.destroyed
+                        && (window.parent == Some(ancestor) || window.owner == Some(ancestor))
+                        && !targets.contains(&window.hwnd)
+                })
                 .map(|window| window.hwnd)
                 .collect();
-            targets.extend(children);
+            targets.extend(descendants);
         }
         Some(targets)
     }
@@ -3472,6 +3484,50 @@ mod tests {
         assert!(!gwe.is_window(hwnd));
         assert!(!gwe.is_window(child));
         assert!(!gwe.is_window_being_destroyed(hwnd));
+    }
+
+    #[test]
+    fn owned_popup_is_part_of_owner_destroy_subtree() {
+        let mut gwe = Gwe::default();
+        let owner = gwe.create_window_ex_with_process_parent_owner_and_rect(
+            1,
+            1,
+            "owner",
+            "",
+            None,
+            None,
+            0,
+            0,
+            0,
+            Rect::from_origin_size(0, 0, 100, 100),
+        );
+        let owned = gwe.create_window_ex_with_process_parent_owner_and_rect(
+            1,
+            1,
+            "owned",
+            "",
+            None,
+            Some(owner),
+            WS_POPUP,
+            0,
+            0,
+            Rect::from_origin_size(0, 0, 100, 100),
+        );
+        let child = gwe.create_window_ex(1, "child", "", Some(owned), 10, 0, 0);
+
+        assert_eq!(
+            gwe.window_and_descendants(owner).unwrap(),
+            vec![owner, owned, child]
+        );
+        assert!(gwe.mark_window_subtree_being_destroyed(owner));
+        assert!(gwe.is_window_being_destroyed(owner));
+        assert!(gwe.is_window_being_destroyed(owned));
+        assert!(gwe.is_window_being_destroyed(child));
+
+        assert!(gwe.destroy_window(owner, 0));
+        assert!(!gwe.is_window(owner));
+        assert!(!gwe.is_window(owned));
+        assert!(!gwe.is_window(child));
     }
 
     #[test]

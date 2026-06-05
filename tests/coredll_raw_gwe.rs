@@ -6,25 +6,25 @@ use wince_emulation_v3::{
             ORD_ADJUST_WINDOW_RECT_EX, ORD_APPEND_MENU_W, ORD_BEGIN_PAINT, ORD_BIT_BLT,
             ORD_BRING_WINDOW_TO_TOP, ORD_CHECK_MENU_ITEM, ORD_CHECK_MENU_RADIO_ITEM,
             ORD_CHILD_WINDOW_FROM_POINT, ORD_CLIENT_TO_SCREEN, ORD_COMBINE_RGN, ORD_COPY_RECT,
-            ORD_CREATE_COMPATIBLE_BITMAP, ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIBSECTION,
-            ORD_CREATE_FONT_INDIRECT_W, ORD_CREATE_MENU, ORD_CREATE_MUTEX_W, ORD_CREATE_PALETTE,
-            ORD_CREATE_PEN_INDIRECT, ORD_CREATE_POPUP_MENU, ORD_CREATE_RECT_RGN,
-            ORD_CREATE_SOLID_BRUSH, ORD_CREATE_WINDOW_EX_W, ORD_DEF_WINDOW_PROC_W,
-            ORD_DELETE_OBJECT, ORD_DESTROY_ICON, ORD_DESTROY_WINDOW, ORD_DISPATCH_MESSAGE_W,
-            ORD_DRAW_MENU_BAR, ORD_ENABLE_MENU_ITEM, ORD_ENABLE_WINDOW, ORD_END_PAINT,
-            ORD_EQUAL_RECT, ORD_FILL_RECT, ORD_FIND_RESOURCE_W, ORD_FIND_WINDOW_W,
-            ORD_GET_ACTIVE_WINDOW, ORD_GET_ASSOCIATED_MENU, ORD_GET_ASYNC_KEY_STATE,
-            ORD_GET_ASYNC_SHIFT_FLAGS, ORD_GET_CAPTURE, ORD_GET_CLASS_INFO_W, ORD_GET_CLASS_NAME_W,
-            ORD_GET_CLIENT_RECT, ORD_GET_CURSOR_POS, ORD_GET_DC, ORD_GET_DEVICE_CAPS,
-            ORD_GET_DIALOG_BASE_UNITS, ORD_GET_DIBCOLOR_TABLE, ORD_GET_DLG_CTRL_ID,
-            ORD_GET_DLG_ITEM, ORD_GET_DLG_ITEM_INT, ORD_GET_DLG_ITEM_TEXT_W, ORD_GET_FOCUS,
-            ORD_GET_FOREGROUND_KEYBOARD_TARGET, ORD_GET_FOREGROUND_WINDOW, ORD_GET_KEY_STATE,
-            ORD_GET_KEYBOARD_TARGET, ORD_GET_MENU, ORD_GET_MENU_ITEM_INFO_W, ORD_GET_MESSAGE_POS,
-            ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP, ORD_GET_MESSAGE_SOURCE, ORD_GET_MESSAGE_W,
-            ORD_GET_MESSAGE_WNO_WAIT, ORD_GET_NEAREST_PALETTE_INDEX, ORD_GET_NEXT_DLG_GROUP_ITEM,
-            ORD_GET_NEXT_DLG_TAB_ITEM, ORD_GET_PALETTE_ENTRIES, ORD_GET_PARENT,
-            ORD_GET_QUEUE_STATUS, ORD_GET_RGN_BOX, ORD_GET_STOCK_OBJECT, ORD_GET_SUB_MENU,
-            ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH, ORD_GET_SYSTEM_INFO,
+            ORD_CREATE_COMPATIBLE_BITMAP, ORD_CREATE_COMPATIBLE_DC,
+            ORD_CREATE_DIALOG_INDIRECT_PARAM_W, ORD_CREATE_DIBSECTION, ORD_CREATE_FONT_INDIRECT_W,
+            ORD_CREATE_MENU, ORD_CREATE_MUTEX_W, ORD_CREATE_PALETTE, ORD_CREATE_PEN_INDIRECT,
+            ORD_CREATE_POPUP_MENU, ORD_CREATE_RECT_RGN, ORD_CREATE_SOLID_BRUSH,
+            ORD_CREATE_WINDOW_EX_W, ORD_DEF_WINDOW_PROC_W, ORD_DELETE_OBJECT, ORD_DESTROY_ICON,
+            ORD_DESTROY_WINDOW, ORD_DISPATCH_MESSAGE_W, ORD_DRAW_MENU_BAR, ORD_ENABLE_MENU_ITEM,
+            ORD_ENABLE_WINDOW, ORD_END_PAINT, ORD_EQUAL_RECT, ORD_FILL_RECT, ORD_FIND_RESOURCE_W,
+            ORD_FIND_WINDOW_W, ORD_GET_ACTIVE_WINDOW, ORD_GET_ASSOCIATED_MENU,
+            ORD_GET_ASYNC_KEY_STATE, ORD_GET_ASYNC_SHIFT_FLAGS, ORD_GET_CAPTURE,
+            ORD_GET_CLASS_INFO_W, ORD_GET_CLASS_NAME_W, ORD_GET_CLIENT_RECT, ORD_GET_CURSOR_POS,
+            ORD_GET_DC, ORD_GET_DEVICE_CAPS, ORD_GET_DIALOG_BASE_UNITS, ORD_GET_DIBCOLOR_TABLE,
+            ORD_GET_DLG_CTRL_ID, ORD_GET_DLG_ITEM, ORD_GET_DLG_ITEM_INT, ORD_GET_DLG_ITEM_TEXT_W,
+            ORD_GET_FOCUS, ORD_GET_FOREGROUND_KEYBOARD_TARGET, ORD_GET_FOREGROUND_WINDOW,
+            ORD_GET_KEY_STATE, ORD_GET_KEYBOARD_TARGET, ORD_GET_MENU, ORD_GET_MENU_ITEM_INFO_W,
+            ORD_GET_MESSAGE_POS, ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP, ORD_GET_MESSAGE_SOURCE,
+            ORD_GET_MESSAGE_W, ORD_GET_MESSAGE_WNO_WAIT, ORD_GET_NEAREST_PALETTE_INDEX,
+            ORD_GET_NEXT_DLG_GROUP_ITEM, ORD_GET_NEXT_DLG_TAB_ITEM, ORD_GET_PALETTE_ENTRIES,
+            ORD_GET_PARENT, ORD_GET_QUEUE_STATUS, ORD_GET_RGN_BOX, ORD_GET_STOCK_OBJECT,
+            ORD_GET_SUB_MENU, ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH, ORD_GET_SYSTEM_INFO,
             ORD_GET_SYSTEM_METRICS, ORD_GET_SYSTEM_PALETTE_ENTRIES, ORD_GET_TEXT_ALIGN,
             ORD_GET_TEXT_COLOR, ORD_GET_TEXT_EXTENT_EX_POINT_W, ORD_GET_TEXT_FACE_W,
             ORD_GET_TEXT_METRICS_W, ORD_GET_UPDATE_RECT, ORD_GET_UPDATE_RGN, ORD_GET_WINDOW,
@@ -68,7 +68,7 @@ use wince_emulation_v3::{
             WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
             WM_MOVE, WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETFOCUS, WM_SETTEXT, WM_SHOWWINDOW,
             WM_SIZE, WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_CHILD, WS_DISABLED, WS_GROUP,
-            WS_TABSTOP, WS_VISIBLE,
+            WS_POPUP, WS_TABSTOP, WS_VISIBLE,
         },
         kernel::CeKernel,
         memory::PROCESS_HEAP_HANDLE,
@@ -3816,6 +3816,67 @@ fn coredll_raw_is_dialog_message_dispatches_dialog_owned_messages() -> Result<()
 }
 
 #[test]
+fn coredll_raw_create_dialog_does_not_post_init_dialog() -> Result<()> {
+    const WM_INITDIALOG_RAW: u32 = 0x0110;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let template = 0x3600;
+    let dlgproc = 0x1234_5678;
+
+    memory.write_word(template, WS_POPUP | WS_VISIBLE);
+    memory.write_word(template + 4, 0);
+    memory.write_halfword(template + 8, 0);
+    memory.write_halfword(template + 10, 4);
+    memory.write_halfword(template + 12, 8);
+    memory.write_halfword(template + 14, 120);
+    memory.write_halfword(template + 16, 64);
+    memory.write_halfword(template + 18, 0);
+    memory.write_halfword(template + 20, 0);
+    memory.write_halfword(template + 22, 0);
+
+    let dialog = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_DIALOG_INDIRECT_PARAM_W,
+        [0, template, 0, dlgproc, 0xfeed_beef],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } => hwnd,
+        other => panic!("CreateDialogIndirectParamW did not return an HWND: {other:?}"),
+    };
+    assert_ne!(dialog, 0);
+    assert_eq!(
+        kernel
+            .gwe
+            .get_window_long(dialog, wince_emulation_v3::ce::gwe::GWL_WNDPROC),
+        Some(dlgproc)
+    );
+
+    assert!(
+        kernel
+            .gwe
+            .peek_message_filtered(
+                thread_id,
+                Some(dialog),
+                WM_INITDIALOG_RAW,
+                WM_INITDIALOG_RAW,
+                PeekFlags::NO_REMOVE,
+            )
+            .is_none(),
+        "WM_INITDIALOG must be delivered synchronously by dialog creation, not left queued"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_is_dialog_message_ignores_unrelated_windows() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
@@ -6545,28 +6606,6 @@ fn coredll_raw_visible_create_uses_default_rect_and_exposes_paint() -> Result<()
         thread_id,
         msg_ptr,
         hwnd,
-        WM_WINDOWPOSCHANGED,
-        0,
-        0,
-    );
-    assert_next_message(
-        &table,
-        &mut kernel,
-        &mut memory,
-        thread_id,
-        msg_ptr,
-        hwnd,
-        WM_SIZE,
-        0,
-        0x01e0_0320,
-    );
-    assert_next_message(
-        &table,
-        &mut kernel,
-        &mut memory,
-        thread_id,
-        msg_ptr,
-        hwnd,
         WM_PAINT,
         0,
         0,
@@ -7825,7 +7864,7 @@ fn coredll_raw_create_window_distinguishes_owner_from_child_parent() -> Result<(
             0,
             owned_class_ptr,
             title_ptr,
-            0,
+            WS_POPUP,
             5,
             6,
             70,
@@ -7864,9 +7903,9 @@ fn coredll_raw_create_window_distinguishes_owner_from_child_parent() -> Result<(
             [owned],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Handle(0),
+            value: CoredllValue::Handle(hwnd),
             ..
-        }
+        } if hwnd == owner
     ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -8935,6 +8974,50 @@ fn coredll_raw_disable_or_hide_clears_focus_and_activation() -> Result<()> {
     );
     assert_eq!(kernel.gwe.get_focus(), None);
     assert!(!kernel.gwe.active_window_is_within(parent));
+    assert_eq!(kernel.gwe.get_active_window(), None);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_FOCUS,
+            [child],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.gwe.get_focus(), None);
+    assert_eq!(kernel.gwe.get_active_window(), None);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_ACTIVE_WINDOW,
+            [parent],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.gwe.get_active_window(), None);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PEEK_MESSAGE_W,
+            [msg_ptr, 0, 0, 0, PeekFlags::REMOVE.bits()],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -9894,28 +9977,6 @@ fn coredll_raw_queue_status_tracks_thread_posts_and_paint() -> Result<()> {
             ..
         } if v == ((QS_PAINT << 16) | QS_PAINT)
     ));
-    assert_next_message(
-        &table,
-        &mut kernel,
-        &mut memory,
-        thread_id,
-        msg_ptr,
-        hwnd,
-        WM_WINDOWPOSCHANGED,
-        0,
-        0,
-    );
-    assert_next_message(
-        &table,
-        &mut kernel,
-        &mut memory,
-        thread_id,
-        msg_ptr,
-        hwnd,
-        WM_SIZE,
-        0,
-        0x01e0_0320,
-    );
     assert_next_message(
         &table,
         &mut kernel,

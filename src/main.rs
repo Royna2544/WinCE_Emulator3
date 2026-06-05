@@ -812,6 +812,14 @@ fn monitor_trace_text(snapshot: &UnicornDebugSnapshot, selector: &str) -> String
                 &snapshot.inavi_render_milestones,
             );
         }
+        "resource" | "resources" => {
+            let resource_records: Vec<_> = snapshot
+                .inavi_render_milestones
+                .iter()
+                .filter(|trace| is_resource_trace_label(trace.label))
+                .collect();
+            push_monitor_records(&mut out, "resource milestones", &resource_records);
+        }
         "files" | "file-summary" => {
             push_monitor_file_summary(
                 &mut out,
@@ -833,11 +841,20 @@ fn monitor_trace_text(snapshot: &UnicornDebugSnapshot, selector: &str) -> String
         other => {
             let _ = writeln!(
                 &mut out,
-                "  unknown trace kind `{other}`; use all/imports/milestones/counts/calls/code/blocks/messages/window-imports/presentation/windows/wndproc/render/files/files-full/processes/events"
+                "  unknown trace kind `{other}`; use all/imports/milestones/counts/calls/code/blocks/messages/window-imports/presentation/windows/wndproc/render/resource/files/files-full/processes/events"
             );
         }
     }
     out
+}
+
+fn is_resource_trace_label(label: &str) -> bool {
+    label.starts_with("resource_")
+        || label.starts_with("query_5237_")
+        || matches!(
+            label,
+            "init_dialog_resource_check" | "app_query_thunk_entry" | "app_query_thunk_target"
+        )
 }
 
 fn push_monitor_windows(out: &mut String, z_order: &[u32], windows: &[UnicornWindowSnapshot]) {
@@ -858,12 +875,17 @@ fn push_monitor_windows(out: &mut String, z_order: &[u32], windows: &[UnicornWin
             .parent
             .map(|hwnd| format!("0x{hwnd:08x}"))
             .unwrap_or_else(|| "<none>".to_owned());
+        let owner = window
+            .owner
+            .map(|hwnd| format!("0x{hwnd:08x}"))
+            .unwrap_or_else(|| "<none>".to_owned());
         let _ = writeln!(
             out,
-            "    0x{:08x} tid={} parent={} class=`{}` title=`{}` vis={} destroying={} dead={} style=0x{:08x} ex=0x{:08x} upd={} erase={} rect={},{}-{},{} client={},{}-{},{} update={},{}-{},{} wndproc=0x{:08x}",
+            "    0x{:08x} tid={} parent={} owner={} class=`{}` title=`{}` vis={} destroying={} dead={} style=0x{:08x} ex=0x{:08x} upd={} erase={} rect={},{}-{},{} client={},{}-{},{} update={},{}-{},{} wndproc=0x{:08x}",
             window.hwnd,
             window.thread_id,
             parent,
+            owner,
             window.class_name,
             window.title,
             window.visible,

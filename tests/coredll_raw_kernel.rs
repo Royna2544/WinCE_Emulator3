@@ -3,26 +3,29 @@ use wince_emulation_v3::{
     ce::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
-            ORD_CE_GET_THREAD_PRIORITY, ORD_CE_SET_THREAD_PRIORITY, ORD_CLOSE_HANDLE,
-            ORD_CREATE_EVENT_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD, ORD_EVENT_MODIFY,
-            ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY, ORD_GET_COMM_TIMEOUTS,
-            ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR,
-            ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W, ORD_GET_PROC_ADDRESS_A,
-            ORD_GET_PROC_ADDRESS_W, ORD_GET_PROCESS_ID, ORD_GET_PROCESS_VERSION,
-            ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_TIME, ORD_GET_SYSTEM_TIME_AS_FILE_TIME,
-            ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY, ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT,
+            ORD_CE_GET_THREAD_PRIORITY, ORD_CE_SET_THREAD_PRIORITY, ORD_CLEAR_COMM_ERROR,
+            ORD_CLOSE_HANDLE, ORD_CREATE_EVENT_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD,
+            ORD_EVENT_MODIFY, ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY, ORD_GET_COMM_MASK,
+            ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_EXIT_CODE_PROCESS,
+            ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
+            ORD_GET_MODULE_HANDLE_W, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
+            ORD_GET_PROCESS_ID, ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION,
+            ORD_GET_SYSTEM_TIME, ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_GET_THREAD_ID,
+            ORD_GET_THREAD_PRIORITY, ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT,
             ORD_GET_TIME_ZONE_INFORMATION, ORD_GET_VERSION_EX_W, ORD_INITIALIZE_CRITICAL_SECTION,
             ORD_INPUT_DEBUG_CHAR_W, ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_KERNEL_IO_CONTROL, ORD_LEAVE_CRITICAL_SECTION,
             ORD_LOAD_LIBRARY_W, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR,
-            ORD_OPEN_EVENT_W, ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY,
-            ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD, ORD_SET_COMM_TIMEOUTS,
+            ORD_OPEN_EVENT_W, ORD_PURGE_COMM, ORD_QUERY_PERFORMANCE_COUNTER,
+            ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE,
+            ORD_RESUME_THREAD, ORD_SET_COMM_MASK, ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS,
             ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SLEEP,
             ORD_SLEEP_TILL_TICK, ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME,
             ORD_TERMINATE_PROCESS, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
-            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_FOR_MULTIPLE_OBJECTS,
+            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_MULTIPLE_OBJECTS,
             ORD_WAIT_FOR_SINGLE_OBJECT,
         },
+        devices::CommDcb,
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::{Message, QS_POSTMESSAGE, QS_TIMER, WM_TIMER},
         kernel::{CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel},
@@ -2108,6 +2111,149 @@ fn coredll_raw_comm_timeouts_round_trip_on_serial_handle() -> Result<()> {
     assert_eq!(memory.read_u32(timeouts_ptr + 12)?, 3);
     assert_eq!(memory.read_u32(timeouts_ptr + 16)?, 11);
     assert_eq!(kernel.serial_empty_read_timeout_ms(com, 4), Some(18));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_comm_state_mask_wait_and_purge_are_stateful() -> Result<()> {
+    const EV_RXCHAR: u32 = 0x0001;
+    const EV_ERR: u32 = 0x0080;
+    const PURGE_TXCLEAR: u32 = 0x0004;
+    const PURGE_RXCLEAR: u32 = 0x0008;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let com = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
+    let dcb_ptr = 0x3100_1000;
+    memory.map_bytes(dcb_ptr, CommDcb::SIZE as u32);
+    let mut dcb = [0u8; CommDcb::SIZE];
+    dcb[0..4].copy_from_slice(&(CommDcb::SIZE as u32).to_le_bytes());
+    dcb[4..8].copy_from_slice(&57600u32.to_le_bytes());
+    dcb[8..12].copy_from_slice(&1u32.to_le_bytes());
+    dcb[18] = 7;
+    dcb[19] = 1;
+    dcb[20] = 2;
+    memory.write_bytes(dcb_ptr, &dcb);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_COMM_STATE,
+            [com, dcb_ptr]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    memory.write_bytes(dcb_ptr, &[0; CommDcb::SIZE]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_COMM_STATE,
+            [com, dcb_ptr]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_bytes(dcb_ptr, CommDcb::SIZE), dcb);
+
+    let mask_ptr = 0x3100_2000;
+    memory.map_words(mask_ptr, 1);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_COMM_MASK,
+            [com, EV_RXCHAR | EV_ERR]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_COMM_MASK,
+            [com, mask_ptr]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(mask_ptr)?, EV_RXCHAR | EV_ERR);
+
+    kernel.dispatch_remote_control_message(&serde_json::json!({
+        "type": "nmea",
+        "sentences": ["$GPRMC,raw*00"]
+    }));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_COMM_EVENT,
+            [com, mask_ptr]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(mask_ptr)?, EV_RXCHAR);
+
+    assert_eq!(kernel.read_file(com, 4)?.len(), 4);
+    assert_eq!(kernel.write_file(com, b"$PUBX")?.bytes_transferred, 5);
+    let stat_ptr = 0x3100_3000;
+    let errors_ptr = 0x3100_4000;
+    memory.map_words(stat_ptr, 3);
+    memory.map_words(errors_ptr, 1);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CLEAR_COMM_ERROR,
+            [com, errors_ptr, stat_ptr]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(errors_ptr)?, 0);
+    assert!(memory.read_u32(stat_ptr + 4)? > 0);
+    assert_eq!(memory.read_u32(stat_ptr + 8)?, 5);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PURGE_COMM,
+            [com, PURGE_RXCLEAR | PURGE_TXCLEAR]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.comm_queue_lengths(com)?, (0, 0));
 
     Ok(())
 }

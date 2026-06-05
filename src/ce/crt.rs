@@ -70,6 +70,35 @@ pub(crate) fn wcsstr_raw<M: CoredllGuestMemory>(memory: &M, haystack: u32, needl
     0
 }
 
+pub(crate) fn wcspbrk_raw<M: CoredllGuestMemory>(memory: &M, string: u32, accept: u32) -> u32 {
+    if string == 0 || accept == 0 {
+        return 0;
+    }
+
+    for string_index in 0..0x8000u32 {
+        let candidate = string.wrapping_add(string_index * 2);
+        let Ok(candidate_unit) = memory.read_u16(candidate) else {
+            return 0;
+        };
+        if candidate_unit == 0 {
+            return 0;
+        }
+
+        for accept_index in 0..0x8000u32 {
+            let Ok(accept_unit) = memory.read_u16(accept.wrapping_add(accept_index * 2)) else {
+                return 0;
+            };
+            if accept_unit == 0 {
+                break;
+            }
+            if accept_unit == candidate_unit {
+                return candidate;
+            }
+        }
+    }
+    0
+}
+
 pub(crate) fn wcschr_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,

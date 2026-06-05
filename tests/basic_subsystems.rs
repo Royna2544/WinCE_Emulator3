@@ -4,12 +4,12 @@ use wince_emulation_v3::{
     ce::{
         audio::{MMSYSERR_NOERROR, WaveBuffer, WaveFormat, WaveOutState},
         com::{REGDB_E_CLASSNOTREG, S_FALSE, S_OK},
-        devices::CommTimeouts,
+        devices::{CommDcb, CommTimeouts, PURGE_RXCLEAR, PURGE_TXCLEAR},
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::{
             GWL_USERDATA, QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER, Rect, SMF_TIMEOUT, WA_ACTIVE,
             WM_ACTIVATE, WM_ERASEBKGND, WM_KILLFOCUS, WM_QUIT, WM_SETFOCUS, WM_TIMER, WM_USER,
-            WS_CHILD, WS_VISIBLE,
+            WS_CHILD, WS_POPUP, WS_VISIBLE,
         },
         kernel::{
             CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
@@ -760,6 +760,52 @@ fn destroy_window_removes_hwnd_timers_but_keeps_thread_timers() -> Result<()> {
 }
 
 #[test]
+fn destroy_owner_removes_owned_popup_timers() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+
+    let owner = kernel
+        .gwe
+        .create_window_ex_with_process_parent_owner_and_rect(
+            1,
+            64,
+            "TimerOwner",
+            "owner",
+            None,
+            None,
+            WS_VISIBLE,
+            0,
+            0,
+            Rect::from_origin_size(0, 0, 100, 100),
+        );
+    let owned = kernel
+        .gwe
+        .create_window_ex_with_process_parent_owner_and_rect(
+            1,
+            64,
+            "TimerOwned",
+            "owned",
+            None,
+            Some(owner),
+            WS_POPUP | WS_VISIBLE,
+            0,
+            0,
+            Rect::from_origin_size(0, 0, 100, 100),
+        );
+    assert_eq!(kernel.set_timer(Some(owned), Some(0x19fe), 0), 0x19fe);
+    assert_eq!(kernel.timers.timer_count(), 1);
+
+    assert!(kernel.destroy_window(owner));
+    assert!(!kernel.gwe.is_window(owner));
+    assert!(!kernel.gwe.is_window(owned));
+    assert_eq!(kernel.timers.timer_count(), 0);
+    kernel.pump_timers_to_gwe(64);
+    assert!(kernel.gwe.get_message(64).is_none());
+
+    Ok(())
+}
+
+#[test]
 fn send_message_transitions_queue_scheduler_reply_wait_candidates() -> Result<()> {
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
     let mut kernel = CeKernel::boot(config);
@@ -1094,6 +1140,48 @@ fn serial_comm_timeouts_control_empty_read_parking() -> Result<()> {
         },
     )?;
     assert_eq!(kernel.serial_empty_read_timeout_ms(com, 64), Some(0));
+
+    Ok(())
+}
+
+#[test]
+fn serial_comm_state_mask_and_purge_are_handle_state() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let com = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
+
+    let mut dcb_bytes = [0u8; CommDcb::SIZE];
+    dcb_bytes[0..4].copy_from_slice(&(CommDcb::SIZE as u32).to_le_bytes());
+    dcb_bytes[4..8].copy_from_slice(&38400u32.to_le_bytes());
+    dcb_bytes[8..12].copy_from_slice(&1u32.to_le_bytes());
+    dcb_bytes[18] = 7;
+    dcb_bytes[19] = 2;
+    dcb_bytes[20] = 1;
+    let dcb = CommDcb::from_bytes(&dcb_bytes).unwrap();
+    kernel.set_comm_dcb(com, dcb)?;
+    assert_eq!(kernel.get_comm_dcb(com)?.bytes(), &dcb_bytes);
+
+    kernel.set_comm_mask(com, 0x0001 | 0x0004)?;
+    assert_eq!(kernel.get_comm_mask(com)?, 0x0005);
+
+    assert_eq!(kernel.write_file(com, b"$PUBX")?.bytes_transferred, 5);
+    kernel.dispatch_remote_control_message(&serde_json::json!({
+        "type": "nmea",
+        "sentences": ["$GPRMC,state*00"]
+    }));
+    assert!(kernel.serial_read_ready(com));
+    let (rx_len, tx_len) = kernel.comm_queue_lengths(com)?;
+    assert!(rx_len > 0);
+    assert_eq!(tx_len, 5);
+
+    kernel.read_file(com, 4)?;
+    let (rx_len, tx_len) = kernel.comm_queue_lengths(com)?;
+    assert!(rx_len > 0);
+    assert_eq!(tx_len, 5);
+
+    kernel.purge_comm(com, PURGE_RXCLEAR | PURGE_TXCLEAR)?;
+    assert_eq!(kernel.comm_queue_lengths(com)?, (0, 0));
+    assert!(!kernel.serial_read_ready(com));
 
     Ok(())
 }

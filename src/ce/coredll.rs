@@ -9,7 +9,7 @@ use crate::{
         cemath::{CeMathBinaryF32, CeMathBinaryF64, CeMathCall, CeMathUnaryF64, CeMathValue},
         coredll_ordinals::{self, *},
         crt,
-        devices::{CommTimeouts, DeviceIoControlResult},
+        devices::{CommDcb, CommTimeouts, DeviceIoControlResult},
         file::FileIoResult,
         file::FindData,
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat},
@@ -1504,7 +1504,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
-        ORD_SET_COMM_STATE => Some(CoredllValue::Bool(comm_handle_and_ptr_raw(
+        ORD_SET_COMM_STATE => Some(CoredllValue::Bool(set_comm_state_raw(
             kernel,
             memory,
             thread_id,
@@ -1525,28 +1525,49 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
-        ORD_SETUP_COMM
-        | ORD_PURGE_COMM
-        | ORD_CLEAR_COMM_BREAK
-        | ORD_SET_COMM_BREAK
-        | ORD_ESCAPE_COMM_FUNCTION
-        | ORD_SET_COMM_MASK => Some(CoredllValue::Bool(comm_handle_raw(
+        ORD_SETUP_COMM | ORD_CLEAR_COMM_BREAK | ORD_SET_COMM_BREAK | ORD_ESCAPE_COMM_FUNCTION => {
+            Some(CoredllValue::Bool(comm_handle_raw(
+                kernel,
+                thread_id,
+                raw_arg(args, 0),
+            )))
+        }
+        ORD_PURGE_COMM => Some(CoredllValue::Bool(purge_comm_raw(
             kernel,
             thread_id,
             raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_SET_COMM_MASK => Some(CoredllValue::Bool(set_comm_mask_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
         ))),
         ORD_CLEAR_COMM_ERROR => Some(CoredllValue::Bool(clear_comm_error_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_GET_COMM_MASK | ORD_GET_COMM_MODEM_STATUS | ORD_WAIT_COMM_EVENT => {
-            Some(CoredllValue::Bool(comm_out_u32_zero_raw(
-                kernel,
-                memory,
-                thread_id,
-                raw_arg(args, 0),
-                raw_arg(args, 1),
-            )))
-        }
+        ORD_GET_COMM_MASK => Some(CoredllValue::Bool(get_comm_mask_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_WAIT_COMM_EVENT => Some(CoredllValue::Bool(wait_comm_event_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_GET_COMM_MODEM_STATUS => Some(CoredllValue::Bool(comm_out_u32_zero_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
         ORD_FIND_FIRST_FILE_W => Some(CoredllValue::Handle(find_first_file_w_raw(
             kernel,
             memory,
@@ -1718,6 +1739,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
         ))),
         ORD_WCSSTR => Some(CoredllValue::Handle(crt::wcsstr_raw(
+            memory,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_WCSPBRK => Some(CoredllValue::Handle(crt::wcspbrk_raw(
             memory,
             raw_arg(args, 0),
             raw_arg(args, 1),
@@ -4481,23 +4507,6 @@ fn comm_handle_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {
     true
 }
 
-fn comm_handle_and_ptr_raw<M: CoredllGuestMemory>(
-    kernel: &mut CeKernel,
-    memory: &M,
-    thread_id: u32,
-    handle: u32,
-    ptr: u32,
-) -> bool {
-    if ptr == 0 || !is_comm_handle(kernel, handle) || memory.read_u8(ptr).is_err() {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-        return false;
-    }
-    kernel.threads.set_last_error(thread_id, 0);
-    true
-}
-
 fn get_comm_state_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -4511,16 +4520,50 @@ fn get_comm_state_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    let length = read_guest_u32(kernel, memory, thread_id, dcb_ptr).unwrap_or(0);
-    let ok = write_guest_u32(kernel, memory, thread_id, dcb_ptr, length.max(24))
-        && write_guest_u32(kernel, memory, thread_id, dcb_ptr.wrapping_add(4), 9600)
-        && write_guest_u8(kernel, memory, thread_id, dcb_ptr.wrapping_add(18), 8)
-        && write_guest_u8(kernel, memory, thread_id, dcb_ptr.wrapping_add(19), 0)
-        && write_guest_u8(kernel, memory, thread_id, dcb_ptr.wrapping_add(20), 0);
-    if ok {
-        kernel.threads.set_last_error(thread_id, 0);
+    let Ok(dcb) = kernel.get_comm_dcb(handle) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if !write_guest_bytes(kernel, memory, thread_id, dcb_ptr, dcb.bytes()) {
+        return false;
     }
-    ok
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn set_comm_state_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    handle: u32,
+    dcb_ptr: u32,
+) -> bool {
+    if dcb_ptr == 0 || !is_comm_handle(kernel, handle) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, dcb_ptr, CommDcb::SIZE as u32)
+    else {
+        return false;
+    };
+    let Some(dcb) = CommDcb::from_bytes(&bytes) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if kernel.set_comm_dcb(handle, dcb).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn get_comm_timeouts_raw<M: CoredllGuestMemory>(
@@ -4653,10 +4696,101 @@ fn clear_comm_error_raw<M: CoredllGuestMemory>(
     }
     let stat_ptr = raw_arg(args, 2);
     if stat_ptr != 0 {
-        let zeros = [0u8; 12];
-        if !write_guest_bytes(kernel, memory, thread_id, stat_ptr, &zeros) {
+        let (rx_len, tx_len) = kernel.comm_queue_lengths(handle).unwrap_or((0, 0));
+        if !write_guest_u32(kernel, memory, thread_id, stat_ptr, 0)
+            || !write_guest_u32(kernel, memory, thread_id, stat_ptr.wrapping_add(4), rx_len)
+            || !write_guest_u32(kernel, memory, thread_id, stat_ptr.wrapping_add(8), tx_len)
+        {
             return false;
         }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn purge_comm_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32, flags: u32) -> bool {
+    if !is_comm_handle(kernel, handle) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if kernel.purge_comm(handle, flags).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn set_comm_mask_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32, mask: u32) -> bool {
+    if !is_comm_handle(kernel, handle) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if kernel.set_comm_mask(handle, mask).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn get_comm_mask_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    handle: u32,
+    out_ptr: u32,
+) -> bool {
+    if out_ptr == 0 || !is_comm_handle(kernel, handle) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Ok(mask) = kernel.get_comm_mask(handle) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if !write_guest_u32(kernel, memory, thread_id, out_ptr, mask) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn wait_comm_event_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    handle: u32,
+    out_ptr: u32,
+) -> bool {
+    const EV_RXCHAR: u32 = 0x0001;
+
+    if out_ptr == 0 || !is_comm_handle(kernel, handle) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let mask = kernel.get_comm_mask(handle).unwrap_or(0);
+    let event = if mask & EV_RXCHAR != 0 && kernel.serial_read_ready(handle) {
+        EV_RXCHAR
+    } else {
+        0
+    };
+    if !write_guest_u32(kernel, memory, thread_id, out_ptr, event) {
+        return false;
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
