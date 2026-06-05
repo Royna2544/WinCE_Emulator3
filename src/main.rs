@@ -827,10 +827,13 @@ fn monitor_trace_text(snapshot: &UnicornDebugSnapshot, selector: &str) -> String
         "processes" | "process" | "proc" => {
             push_monitor_records(&mut out, "process ops", &snapshot.recent_process_ops);
         }
+        "events" | "event" => {
+            push_monitor_records(&mut out, "event ops", &snapshot.recent_event_ops);
+        }
         other => {
             let _ = writeln!(
                 &mut out,
-                "  unknown trace kind `{other}`; use all/imports/milestones/counts/calls/code/blocks/messages/window-imports/presentation/windows/wndproc/render/files/files-full/processes"
+                "  unknown trace kind `{other}`; use all/imports/milestones/counts/calls/code/blocks/messages/window-imports/presentation/windows/wndproc/render/files/files-full/processes/events"
             );
         }
     }

@@ -9,22 +9,56 @@
 
 ## Confirmed
 
+- Unicorn startup scheduling now avoids two recent mounted blockers without
+  changing guest-visible API results. Guest WNDPROC callouts reserve/restore a
+  small stack frame and defer blocked-wait/get-message resumes until the
+  WNDPROC return stub completes, fixing the release/no-trace `FETCH_PROT` at
+  `0x000052e8(user-kdata+0x2e8)`. `PulseEvent` now releases only waiters that
+  were registered at pulse time and records a pulse token so the resumed waiter
+  still gets `WAIT_OBJECT_0` after the event has been reset. `Sleep` now uses
+  the same scheduler handoff as `WaitForSingleObject` when another blocked
+  waiter is ready, and accelerated finite current-thread waits have a tiny
+  host throttle so guest timeout polling no longer burns millions of import
+  traps per minute. The Unicorn bridge also removes stale saved waits for a
+  thread before that same thread registers a new `Sleep`/`WaitForSingleObject`
+  wait, matching CE's one-active-wait-per-running-thread shape and preventing
+  duplicate saved main-thread contexts. Focused coverage includes
+  `pulse_event_releases_registered_waiter_after_reset` and
+  `current_sleep_yields_to_ready_blocked_waiter` plus
+  `stale_blocked_wait_cleanup_removes_prior_context_for_thread`; the full
+  Unicorn scheduler test module passes. Mounted validation with dumped runtime
+  DLLs wrote `target\unicorn_wait_cleanup_virtual_60s.*`: it ran to the 60 s
+  wall limit inside guest image code
+  (`pc=0x00953bec(image:iNavi.exe+0x943bec)`), stayed memory/file-I/O bounded
+  (`heap_live=14677/32567956B`, `virtual_live=2/131072B`,
+  `host_open=906`, `host_read=82796/6057032B`), and active blocked waits are
+  now only the COM serial read plus one main-thread `Sleep(101)`. Scheduler
+  counters are throttled (`block:43895`, `wake:21947`) instead of the prior
+  multi-million wait/sleep storm, and the framebuffer dump is populated. The
+  visible window set now includes front top-level `TGNaviDlg` (`0x00020080`)
+  with updates clear, but the render trace still has no iNavi
+  display/controller/milestone entries, so the active UI frontier remains
+  generic GWE/GDI/resource presentation after startup scheduling is sane.
 - Unicorn raw-import blocking for `MsgWaitForMultipleObjectsEx` now has a
-  current-thread timer fast path matching the conservative `GetMessageW`
-  bridge shape. After validating handles and finding no immediate queue input,
-  a running guest thread can complete the syscall immediately when the next CE
-  timer is already due or due within the short timer fast-forward cap and
-  within the requested timeout (or `INFINITE`). The helper advances the virtual
-  timer clock, pumps GWE, clears changed queue input when
-  `MWMO_INPUTAVAILABLE` is not set, writes `WAIT_OBJECT_0 + nCount` back to
-  `v0`, and resumes at the import return PC without registering a blocked
-  waiter. Longer timers still become scheduler-owned blocked waits. Focused
-  coverage `msg_wait_timer_completion_respects_timeout_and_short_timer_cap`
-  verifies the timeout/cap predicate, and the raw timer-wake regression still
-  passes after the Unicorn bridge change. Mounted release sanity probe
-  `target\unicorn_msgwait_timer_virtual_45s.ppm` remains at the same stable
-  `COREDLL.dll@861 blocked_get_message` frontier with bounded counters, so the
-  change is a fidelity slice and not a visible UI breakthrough by itself.
+  current-thread timer/timeout bridge matching the conservative `GetMessageW`
+  wait shape. After validating handles and finding no immediate queue input, a
+  running guest thread can complete the syscall immediately when the next CE
+  timer is already due or due within the short timer fast-forward cap, can
+  sleep to a longer timer if it fits the requested timeout and host wall-clock
+  budget, and can return `WAIT_TIMEOUT` for bounded waits that expire before
+  any timer. The helper advances the virtual timer clock, pumps GWE, clears
+  changed queue input when `MWMO_INPUTAVAILABLE` is not set, writes either
+  `WAIT_OBJECT_0 + nCount` or `WAIT_TIMEOUT` back to `v0`, and resumes at the
+  import return PC without registering a blocked waiter. Waits that cannot fit
+  the host run budget still become scheduler-owned blocked waits. Focused
+  coverage now includes `current_msg_wait_long_timer_writes_message_wait_result`
+  and `current_msg_wait_timeout_writes_wait_timeout_result`, which assert the
+  MIPS `v0`/`pc`/`ra` return registers against a real Unicorn instance. The
+  raw timer-wake regression still passes after the Unicorn bridge change.
+  Mounted release sanity probe `target\unicorn_msgwait_timer_virtual_45s.ppm`
+  remains at the same stable `COREDLL.dll@861 blocked_get_message` frontier
+  with bounded counters, so the change is a fidelity slice and not a visible
+  UI breakthrough by itself.
 - Raw `MsgWaitForMultipleObjectsEx` now wakes for CE timers that become due
   inside the requested timeout instead of immediately returning
   `WAIT_TIMEOUT` whenever no handle/input is ready at call entry. The raw

@@ -248,6 +248,10 @@ impl Scheduler {
         self.blocked_waits.get(&wait_id)
     }
 
+    pub fn blocked_waits(&self) -> impl Iterator<Item = &SchedulerBlockedWait> {
+        self.blocked_waits.values()
+    }
+
     pub fn waiter_count(&self) -> usize {
         self.blocked_waits.len()
     }

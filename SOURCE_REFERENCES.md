@@ -79,8 +79,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `WAIT_OBJECT_0 + nCount` when input wakes the call. v3 now applies that
     shape to raw timer waits by advancing only to timers due within the
     requested timeout and leaving later timers pending. The Unicorn import
-    bridge uses the same result shape for current-thread short timer wakes,
-    while longer waits remain scheduler-owned.
+    bridge uses the same result shape for current-thread timer wakes and
+    timeout waits that fit the active host run budget, while over-budget waits
+    remain scheduler-owned.
 
 - GWE paint/update and MFC paint pumping:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`,
@@ -201,6 +202,20 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   `C:\WINCE600\PUBLIC\COMMON\OAK\INC\pkfuncs.h`
   - CE waits are kernel scheduler decisions over signaled kernel objects, not
     local ad hoc return stubs at each API boundary.
+  - `PulseEvent` semantics are a wait-time release over waiters that are
+    currently registered on the event; v3 now records pulse-selected waiter
+    ids so a resumed waiter can still receive the correct `WAIT_OBJECT_0`
+    result after the event has been reset.
+  - Bounded `Sleep` and finite waits are blocking scheduler states in CE, not
+    unthrottled host busy loops. v3 still accelerates guest virtual time for
+    current-thread bounded waits when no peer can run, but the host side now
+    parks briefly so repeated guest timeout polling does not dominate startup
+    wall time.
+  - A running CE thread is not simultaneously parked in an older wait. The
+    Unicorn bridge therefore removes stale saved wait contexts for a thread
+    before registering that same thread's next `Sleep` or
+    `WaitForSingleObject` wait; this cleans emulator bookkeeping without
+    changing the kernel object's signaled state.
   - Event, mutex, semaphore, thread, process, timer, message, device, and audio
     wait paths should converge through one scheduler-owned wait/wake model.
   - The Rust `Scheduler` subsystem now owns compact wait accounting for
@@ -371,6 +386,19 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     reads complete by streaming device bytes into the original guest buffer.
     Full COMMTIMEOUTS, `WaitCommEvent`, masks, purge/error state, host
     `win32_com`, and complete run-queue ownership remain open.
+
+- Guest WNDPROC callout and MIPS kdata boundaries:
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\mipskpg.h`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\MIPS\vmmips.c`, and
+  `C:\Program Files (x86)\Microsoft Visual Studio 8\VC\ce\atlmfc\src\mfc\wincore.cpp`
+  - CE user-kdata is data, not executable guest code. A return into
+    `0x000052e8(user-kdata+0x2e8)` after a guest WNDPROC callout is therefore
+    an emulator callout/return-context bug, not a valid guest target.
+  - MFC expects WNDPROC dispatch to run in guest context and return through the
+    normal caller stack. v3 now reserves a small WNDPROC call frame, restores
+    the stack pointer on the WNDPROC return stub, and defers scheduler
+    blocked-wait/get-message resumes until the WNDPROC return is complete so
+    callee state is not interleaved with a different runnable thread.
 
 - Registry API boundary:
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/NK/KERNEL/fscall.c`

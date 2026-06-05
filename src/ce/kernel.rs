@@ -77,6 +77,8 @@ pub struct CeKernel {
     recent_file_ops: Vec<FileTraceRecord>,
     recent_file_open_ops: Vec<FileTraceRecord>,
     recent_process_ops: Vec<ProcessTraceRecord>,
+    recent_event_ops: Vec<EventTraceRecord>,
+    pulsed_wait_handles: BTreeMap<u64, u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,9 +126,21 @@ pub struct ProcessTraceRecord {
     pub error: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventTraceRecord {
+    pub op: &'static str,
+    pub handle: Option<u32>,
+    pub name: Option<String>,
+    pub manual_reset: Option<bool>,
+    pub signaled: Option<bool>,
+    pub result: Option<bool>,
+    pub detail: Option<String>,
+}
+
 const FILE_TRACE_LIMIT: usize = 512;
 const FILE_TRACE_PREVIEW_LIMIT: usize = 64;
 const PROCESS_TRACE_LIMIT: usize = 128;
+const EVENT_TRACE_LIMIT: usize = 256;
 
 pub fn normalize_module_name(name: &str) -> String {
     name.trim()
@@ -196,6 +210,8 @@ impl CeKernel {
             recent_file_ops: Vec::new(),
             recent_file_open_ops: Vec::new(),
             recent_process_ops: Vec::new(),
+            recent_event_ops: Vec::new(),
+            pulsed_wait_handles: BTreeMap::new(),
         }
     }
 
@@ -473,6 +489,10 @@ impl CeKernel {
         &self.recent_process_ops
     }
 
+    pub fn recent_event_ops(&self) -> &[EventTraceRecord] {
+        &self.recent_event_ops
+    }
+
     pub fn file_io_stats(&self) -> FileIoStats {
         self.files.io_stats()
     }
@@ -494,6 +514,13 @@ impl CeKernel {
             self.recent_process_ops.remove(0);
         }
         self.recent_process_ops.push(record);
+    }
+
+    fn record_event_trace(&mut self, record: EventTraceRecord) {
+        if self.recent_event_ops.len() == EVENT_TRACE_LIMIT {
+            self.recent_event_ops.remove(0);
+        }
+        self.recent_event_ops.push(record);
     }
 
     fn push_file_trace(&mut self, record: FileTraceRecord) {
@@ -1033,11 +1060,33 @@ impl CeKernel {
         manual_reset: bool,
         initial_state: bool,
     ) -> u32 {
-        self.handles.create_event(name, manual_reset, initial_state)
+        let handle = self
+            .handles
+            .create_event(name.clone(), manual_reset, initial_state);
+        self.record_event_trace(EventTraceRecord {
+            op: "CreateEventW",
+            handle: Some(handle),
+            name,
+            manual_reset: Some(manual_reset),
+            signaled: Some(initial_state),
+            result: Some(handle != 0),
+            detail: Some(self.describe_handle(handle)),
+        });
+        handle
     }
 
-    pub fn open_event_w(&self, name: &str) -> Option<u32> {
-        self.handles.open_event(name)
+    pub fn open_event_w(&mut self, name: &str) -> Option<u32> {
+        let handle = self.handles.open_event(name);
+        self.record_event_trace(EventTraceRecord {
+            op: "OpenEventW",
+            handle,
+            name: Some(name.to_owned()),
+            manual_reset: None,
+            signaled: None,
+            result: Some(handle.is_some()),
+            detail: handle.map(|handle| self.describe_handle(handle)),
+        });
+        handle
     }
 
     pub fn create_guest_thread(
@@ -1279,11 +1328,74 @@ impl CeKernel {
         if success {
             self.queue_object_wake_candidates(handle);
         }
+        self.record_event_trace(EventTraceRecord {
+            op: "SetEvent",
+            handle: Some(handle),
+            name: None,
+            manual_reset: None,
+            signaled: None,
+            result: Some(success),
+            detail: Some(self.describe_handle(handle)),
+        });
         success
     }
 
     pub fn reset_event(&mut self, handle: u32) -> bool {
-        self.handles.reset_event(handle)
+        let success = self.handles.reset_event(handle);
+        self.record_event_trace(EventTraceRecord {
+            op: "ResetEvent",
+            handle: Some(handle),
+            name: None,
+            manual_reset: None,
+            signaled: None,
+            result: Some(success),
+            detail: Some(self.describe_handle(handle)),
+        });
+        success
+    }
+
+    pub fn pulse_event(&mut self, handle: u32) -> bool {
+        let (manual_reset, wait_ids) = match self.handles.get(handle) {
+            Ok(KernelObject::Event(event)) => {
+                let mut wait_ids = self.scheduler.waiter_ids_for_handle(handle);
+                if !event.manual_reset {
+                    wait_ids.truncate(1);
+                }
+                (event.manual_reset, wait_ids)
+            }
+            _ => {
+                self.record_event_trace(EventTraceRecord {
+                    op: "PulseEvent",
+                    handle: Some(handle),
+                    name: None,
+                    manual_reset: None,
+                    signaled: None,
+                    result: Some(false),
+                    detail: Some(self.describe_handle(handle)),
+                });
+                return false;
+            }
+        };
+
+        let success = self.handles.set_event(handle);
+        if success {
+            self.scheduler
+                .queue_pending_wake_ids(wait_ids.iter().copied());
+            for wait_id in wait_ids {
+                self.pulsed_wait_handles.insert(wait_id, handle);
+            }
+            let _ = self.handles.reset_event(handle);
+        }
+        self.record_event_trace(EventTraceRecord {
+            op: "PulseEvent",
+            handle: Some(handle),
+            name: None,
+            manual_reset: Some(manual_reset),
+            signaled: Some(false),
+            result: Some(success),
+            detail: Some(self.describe_handle(handle)),
+        });
+        success
     }
 
     pub fn create_mutex_w(
@@ -1513,11 +1625,33 @@ impl CeKernel {
     }
 
     pub fn remove_blocked_waiter(&mut self, wait_id: u64) -> Option<SchedulerBlockedWait> {
+        self.pulsed_wait_handles.remove(&wait_id);
         self.scheduler.remove_blocked_wait(wait_id)
     }
 
     pub fn blocked_waiter(&self, wait_id: u64) -> Option<&SchedulerBlockedWait> {
         self.scheduler.blocked_wait(wait_id)
+    }
+
+    pub fn blocked_waiters(&self) -> impl Iterator<Item = &SchedulerBlockedWait> {
+        self.scheduler.blocked_waits()
+    }
+
+    pub fn describe_handle(&self, handle: u32) -> String {
+        if Self::is_current_thread_pseudo_handle(handle) {
+            "current_thread_pseudo".to_owned()
+        } else if Self::is_current_process_pseudo_handle(handle) {
+            format!(
+                "current_process_pseudo(signaled={},exit=0x{:08x})",
+                self.current_process_signaled, self.current_process_exit_code
+            )
+        } else {
+            self.handles.describe_handle(handle)
+        }
+    }
+
+    pub fn pulsed_wait_handle(&self, wait_id: u64) -> Option<u32> {
+        self.pulsed_wait_handles.get(&wait_id).copied()
     }
 
     fn queue_object_wake_candidates(&mut self, handle: u32) {

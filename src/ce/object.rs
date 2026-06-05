@@ -179,6 +179,59 @@ impl HandleTable {
         self.objects.is_empty()
     }
 
+    pub fn describe_handle(&self, handle: u32) -> String {
+        match self.get(handle) {
+            Ok(KernelObject::Event(event)) => format!(
+                "event(name={},manual={},signaled={})",
+                event.name.as_deref().unwrap_or("<unnamed>"),
+                event.manual_reset,
+                event.signaled
+            ),
+            Ok(KernelObject::Mutex(mutex)) => format!(
+                "mutex(name={},owner={},locks={})",
+                mutex.name.as_deref().unwrap_or("<unnamed>"),
+                mutex
+                    .owner_thread
+                    .map(|thread| thread.to_string())
+                    .unwrap_or_else(|| "none".to_owned()),
+                mutex.lock_count
+            ),
+            Ok(KernelObject::Semaphore(semaphore)) => format!(
+                "semaphore(name={},count={},max={})",
+                semaphore.name.as_deref().unwrap_or("<unnamed>"),
+                semaphore.count,
+                semaphore.maximum
+            ),
+            Ok(KernelObject::File(file)) => {
+                format!("file(id={},path={})", file.file_id, file.guest_path)
+            }
+            Ok(KernelObject::FindFile(find)) => {
+                format!("find(id={},pattern={})", find.find_id, find.guest_pattern)
+            }
+            Ok(KernelObject::Device(_)) => "device".to_owned(),
+            Ok(KernelObject::Window(hwnd)) => format!("window(hwnd=0x{hwnd:08x})"),
+            Ok(KernelObject::WaveOut(id)) => format!("waveout(id={id})"),
+            Ok(KernelObject::FileMapping(mapping)) => format!(
+                "mapping(name={},size={},views={})",
+                mapping.name.as_deref().unwrap_or("<unnamed>"),
+                mapping.size,
+                mapping.views.len()
+            ),
+            Ok(KernelObject::CriticalSection(cs)) => {
+                format!("critical_section(ptr=0x{:08x})", cs.guest_ptr)
+            }
+            Ok(KernelObject::Thread(thread)) => format!(
+                "thread(id={},signaled={},suspend={},exit=0x{:08x})",
+                thread.thread_id, thread.signaled, thread.suspend_count, thread.exit_code
+            ),
+            Ok(KernelObject::Process(process)) => format!(
+                "process(id={},signaled={},exit=0x{:08x})",
+                process.process_id, process.signaled, process.exit_code
+            ),
+            Err(_) => "invalid".to_owned(),
+        }
+    }
+
     pub fn create_event(
         &mut self,
         name: Option<String>,

@@ -35,8 +35,18 @@
     the valid idle wait, not from forcing pixels or app state. Raw
     `MsgWaitForMultipleObjectsEx` now handles timers due within a bounded wait
     interval, and Unicorn `MsgWaitForMultipleObjectsEx` now has a
-    current-thread short-timer fast path, but full blocked-wait ownership for
-    long timers and all scheduler wake reasons is still incomplete.
+    current-thread timer/timeout bridge for waits that fit the host run
+    budget, but full blocked-wait ownership for over-budget waits and all
+    scheduler wake reasons is still incomplete. Newer mounted startup
+    scheduler work fixes the WNDPROC return `user-kdata` execute fault,
+    `Sleep @496` no-handoff stop, and multi-million finite wait/sleep hot
+    loop. `target\unicorn_wait_cleanup_virtual_60s_*` now runs to the wall
+    limit inside guest image code with bounded scheduler counters, no duplicate
+    saved main-thread waits, a populated framebuffer, and visible/front
+    `TGNaviDlg` HWND `0x00020080`; however the render trace still has no iNavi
+    display/controller/milestone entries. This remains an open post-startup
+    GWE/GDI/resource progression bug rather than a file-I/O or raw wait
+    hot-path bottleneck.
 
 - Post-region mounted iNavi now runs deeper, but later map/UI composition is
   still not presented to the display surface.

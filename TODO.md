@@ -12,14 +12,30 @@
 
 ## Current Slice
 
+- Continue from the scheduler-clean mounted probe
+  `target\unicorn_wait_cleanup_virtual_60s_*`. The previous WNDPROC return
+  `user-kdata` execute fault and the immediate `Sleep @496`/wait-storm
+  startup blockers are closed by generic Unicorn scheduler/callout fixes:
+  WNDPROC stack restoration, deferred resumes while in WNDPROC, pulse-token
+  wait release, Sleep-to-ready-waiter handoff, and a tiny host throttle for
+  accelerated finite current-thread waits. Stale saved waits for a thread are
+  now purged before that thread registers a new Sleep/Wait context; the 60 s
+  run has only the COM serial read plus one main-thread sleep active instead
+  of duplicate main wait records. It reaches guest image code for the full
+  wall budget with a populated framebuffer and front visible `TGNaviDlg`
+  HWND `0x00020080`, but still has no iNavi display/controller/render
+  milestones. Next work should trace the post-startup GWE/GDI/resource path
+  after `TGNaviDlg` creation and visible-window settling, not file I/O or raw
+  wait hot loops.
 - Continue extending scheduler-backed waits beyond the raw timer-wake slice.
   `MsgWaitForMultipleObjectsEx` raw dispatch now waits through a due CE timer
   inside the requested timeout, and the Unicorn raw-import bridge can complete
-  current-thread short timer wakes without registering a blocked waiter. The
-  broader scheduler/thread/window goal still needs the full Unicorn
-  blocked-wait path to own long timeout, timer, object, send-message,
-  serial/audio/process, and message-input resumes consistently. Keep using
-  `C:\WINCE600` scheduler/GWE sources as authority.
+  current-thread timer wakes/timeouts that fit the host run budget without
+  registering a blocked waiter. The broader scheduler/thread/window goal still
+  needs the full Unicorn blocked-wait path to own waits that cannot complete
+  inside the active run budget, plus object, send-message, serial/audio/
+  process, and message-input resumes consistently. Keep using `C:\WINCE600`
+  scheduler/GWE sources as authority.
 - Host input while parked on raw `GetMessageW` is no longer a blind spot:
   the host run loop now drains newly polled input into the blocked CE
   thread/window and relies on the scheduler message-wake path to resume the

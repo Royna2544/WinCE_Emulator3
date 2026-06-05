@@ -945,7 +945,7 @@ fn dispatch_resolved(
             let ok = match action {
                 EventModifyAction::Set => kernel.set_event(handle),
                 EventModifyAction::Reset => kernel.reset_event(handle),
-                EventModifyAction::Pulse => kernel.set_event(handle) && kernel.reset_event(handle),
+                EventModifyAction::Pulse => kernel.pulse_event(handle),
             };
             CoredllValue::Bool(ok)
         }
@@ -1386,9 +1386,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_EVENT_MODIFY => {
             let ok = match raw_arg(args, 1) {
-                EVENT_PULSE => {
-                    kernel.set_event(raw_arg(args, 0)) && kernel.reset_event(raw_arg(args, 0))
-                }
+                EVENT_PULSE => kernel.pulse_event(raw_arg(args, 0)),
                 EVENT_RESET => kernel.reset_event(raw_arg(args, 0)),
                 EVENT_SET => kernel.set_event(raw_arg(args, 0)),
                 _ => {

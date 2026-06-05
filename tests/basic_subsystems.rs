@@ -452,6 +452,41 @@ fn object_transitions_queue_scheduler_wait_candidates() -> Result<()> {
 }
 
 #[test]
+fn pulse_event_releases_registered_waiter_after_reset() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+
+    let event = kernel.create_event_w(Some("pulse_event".to_owned()), false, false);
+    let wait_id = kernel.register_blocked_waiter(
+        8,
+        0x108,
+        vec![event],
+        SchedulerBlockedWaitKind::Kernel,
+        10,
+        INFINITE,
+    );
+
+    assert!(kernel.pulse_event(event));
+    assert_eq!(kernel.is_wait_ready(event, 8), Some(false));
+    assert_eq!(kernel.pulsed_wait_handle(wait_id), Some(event));
+    assert_eq!(
+        kernel.select_ready_blocked_waiter(1, 10, |blocked, kernel| {
+            kernel.pulsed_wait_handle(blocked.id).is_some()
+                || blocked
+                    .wait_handles
+                    .iter()
+                    .any(|handle| kernel.is_wait_ready(*handle, blocked.thread_id) == Some(true))
+        }),
+        Some(wait_id)
+    );
+
+    kernel.remove_blocked_waiter(wait_id).unwrap();
+    assert_eq!(kernel.pulsed_wait_handle(wait_id), None);
+
+    Ok(())
+}
+
+#[test]
 fn thread_and_process_exit_queue_scheduler_wait_candidates() -> Result<()> {
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
     let mut kernel = CeKernel::boot(config);
