@@ -2310,6 +2310,18 @@ impl CeKernel {
         }
     }
 
+    pub(crate) fn clear_destroyed_window_focus_and_activation(&mut self, hwnd: u32) {
+        if self.gwe.focus_is_within(hwnd) {
+            let _ = self.set_focus(None);
+        }
+        if self.gwe.active_window_is_within(hwnd) {
+            let _ = self.gwe.set_active_window(None);
+        }
+        if self.gwe.keyboard_target_is_within(hwnd) {
+            self.gwe.clear_keyboard_targets_within(hwnd);
+        }
+    }
+
     fn top_level_window(&self, hwnd: u32) -> u32 {
         let mut current = hwnd;
         while let Some(parent) = self.gwe.get_parent(current) {
@@ -2676,6 +2688,7 @@ impl CeKernel {
         let Some(targets) = self.gwe.window_and_descendants(hwnd) else {
             return false;
         };
+        self.clear_destroyed_window_focus_and_activation(hwnd);
         let doomed_send_ids = self.gwe.sent_message_ids_for_windows(&targets);
         for target in targets.iter().rev().copied() {
             if self
@@ -3202,4 +3215,39 @@ fn is_file_open_trace(op: &str) -> bool {
 
 fn make_lparam_i16(low: i32, high: i32) -> u32 {
     ((high as u32) & 0xffff) << 16 | ((low as u32) & 0xffff)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        ce::gwe::{WM_ACTIVATE, WM_KILLFOCUS, WM_SETFOCUS, WS_CHILD},
+        config::RuntimeConfig,
+    };
+
+    #[test]
+    fn destroy_cleanup_clears_dead_active_without_posting_inactive_app_window() -> Result<()> {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let mut kernel = CeKernel::boot(config);
+        let thread_id = 1;
+        let parent = kernel.create_window_ex_w(thread_id, "TOP", "", None, 0, 0, 0);
+        let child = kernel.create_window_ex_w(thread_id, "CHILD", "", Some(parent), 0, WS_CHILD, 0);
+
+        assert_eq!(kernel.set_focus(Some(child)), None);
+        assert_eq!(kernel.gwe.get_message(thread_id).unwrap().msg, WM_ACTIVATE);
+        assert_eq!(kernel.gwe.get_message(thread_id).unwrap().msg, WM_SETFOCUS);
+        assert_eq!(kernel.gwe.set_active_window(Some(child)), Some(child));
+
+        kernel.clear_destroyed_window_focus_and_activation(child);
+
+        let kill_focus = kernel.gwe.get_message(thread_id).unwrap();
+        assert_eq!(kill_focus.hwnd, child);
+        assert_eq!(kill_focus.msg, WM_KILLFOCUS);
+        assert_eq!(kill_focus.wparam, 0);
+        assert!(!kernel.gwe.active_window_is_within(child));
+        assert_eq!(kernel.gwe.get_active_window(), Some(parent));
+        assert!(kernel.gwe.get_message(thread_id).is_none());
+
+        Ok(())
+    }
 }

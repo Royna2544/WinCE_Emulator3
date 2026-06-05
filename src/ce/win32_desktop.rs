@@ -18,10 +18,11 @@ use windows::{
         UI::WindowsAndMessaging::{
             AdjustWindowRectEx, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW,
             DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW, HICON, HMENU, ICON_BIG,
-            ICON_SMALL, MSG, PM_REMOVE, PeekMessageW, PostMessageW, PrivateExtractIconsW,
-            RegisterClassW, SW_SHOW, SendMessageW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE,
-            WM_CLOSE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
-            WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETICON, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+            ICON_SMALL, MSG, PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage,
+            PrivateExtractIconsW, RegisterClassW, SW_SHOW, SendMessageW, ShowWindow,
+            TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_DESTROY, WM_ERASEBKGND,
+            WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETICON,
+            WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
         },
     },
     core::{PCWSTR, w},
@@ -36,6 +37,7 @@ use crate::{
 };
 
 const CLASS_NAME: PCWSTR = w!("WinceEmulationV3VirtualDesktop");
+const WM_INTERNAL_QUIT: u32 = WM_APP + 0x3e9;
 
 static INPUT_EVENTS: OnceLock<Mutex<VecDeque<VirtualInputEvent>>> = OnceLock::new();
 static TOUCH_DOWN: OnceLock<Mutex<bool>> = OnceLock::new();
@@ -180,7 +182,7 @@ impl Drop for Win32Presenter {
                 frames.remove(&hwnd_key(self.hwnd));
             }
             unsafe {
-                let _ = PostMessageW(self.hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
+                let _ = PostMessageW(self.hwnd, WM_INTERNAL_QUIT, WPARAM(0), LPARAM(0));
             }
         }
     }
@@ -507,6 +509,12 @@ unsafe extern "system" fn wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
+        WM_INTERNAL_QUIT => {
+            unsafe {
+                PostQuitMessage(0);
+            }
+            LRESULT(0)
+        }
         WM_CLOSE | WM_DESTROY => {
             std::process::exit(0);
         }

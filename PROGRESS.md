@@ -3415,6 +3415,25 @@
   frontier is no longer a timer ANR; it is a guest control-flow fault at
   `pc=0x000e9d0c(image:iNavi.exe+0xd8d0c)` returning through `ra=0`.
 
+- Fixed a real post-map scheduler corruption source by making the Unicorn
+  scheduler timeslice hook skip MIPS branch/jump/call delay-slot PCs. The
+  previous host Win32/tap frontier could suspend a guest worker at
+  `0x0014e128`, the delay slot immediately before a later
+  `READ_UNMAPPED addr=0x00000008` at `0x0014e12c`. Resuming a delay slot as a
+  standalone PC loses the branch semantics, so scheduler switches now avoid
+  any instruction whose previous instruction is a MIPS control transfer
+  (`j`, `jal`, `jr`, `jalr`, normal/likely branches, and COP branch forms).
+  Focused `timeslice` tests pass, release build passes, and the visible
+  host Win32 validation `target\host_delayfix_180s_*` ran to the 180 s wall
+  stop without the old `READ_UNMAPPED`/`ra=0` ANR. The final framebuffer is a
+  real populated map UI with an app modal warning about GPS initialization
+  abnormal behavior and reset recommendation (`Error Code: -14`). Memory and
+  I/O stay bounded (`heap_live=14964/31470818B`, `host_read=83673/6454222B`,
+  `mem_open=4`), and GWE cross-thread sends complete
+  (`send:476 done:476 timeout:0 dead:0`). The current frontier is app/device
+  fidelity around GPS/serial/system-state reporting, not map rendering or
+  scheduler delay-slot corruption.
+
 ## False Leads
 
 - A process-directory fallback for rooted `CreateFileW` paths was tested and

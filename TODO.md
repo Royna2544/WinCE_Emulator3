@@ -1208,19 +1208,15 @@
   loader stall. Next fixes should make timers, posted input, host touch/key
   events, serial/audio/process wakes, and message waits resume through the same
   CE scheduler model without forcing paints or app state.
-- Continue from the new post-serial-timeout mounted frontier. The COM timeout
-  slice removed the thread-6 infinite serial read wait and advanced iNavi into
-  heavy real GDI/resource work. The follow-up host Win32/tap validation after
-  the self-block timeout fix removed the stale finite `serial_read` waiter too:
-  use `target\host_serial_timeout_fix_*` as the compact evidence for that
-  fix. The current host Win32 frontier is `target\host_getmsg_timer_fix_*`:
-  long `GetMessageW` timer waits now deliver timer `4565` repeatedly and keep
-  the map UI moving, but the run eventually reaches `pc=0x000e9d0c` with
-  `ra=0`. Next, add targeted WNDPROC/callback-entry diagnostics around the
-  guest block `0x000e8c80..0x000e9d20`, especially calls into `0x000e9a40`
-  from `0x000e8ce4`/`0x000e8f7c`, and determine whether an emulator callback
-  entry restored `$ra` incorrectly or whether guest state set a window/callback
-  pointer to a non-entry helper.
+- Continue from the post-delay-slot-fix host Win32 frontier. The scheduler now
+  skips MIPS delay-slot PCs during timeslice switching, and
+  `target\host_delayfix_180s_*` no longer reproduces the post-map
+  `READ_UNMAPPED`/`ra=0` ANR. The visible final frame is populated map UI with
+  an app modal warning that GPS initialization detected abnormal behavior and
+  recommends restart (`Error Code: -14`). Next work should trace real
+  GPS/serial/system-state inputs and the app's reset-warning path through CE
+  device/registry semantics, while continuing to validate that map rendering
+  and GWE sends stay live under host Win32.
 - Add an HTTP/WebSocket transport over the Rust `CeRemote` API state when the
   host runtime is ready for remote UI/audio streaming; audio transport should
   honor the sink's per-client cursors and flush-marked chunks immediately.
