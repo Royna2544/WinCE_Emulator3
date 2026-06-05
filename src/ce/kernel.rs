@@ -33,6 +33,7 @@ use crate::{
     },
     config::RuntimeConfig,
     error::{Error, Result},
+    remote_server::RemoteServer,
 };
 
 use std::{
@@ -63,6 +64,7 @@ pub struct CeKernel {
     pub resources: ResourceSystem,
     pub com: ComSystem,
     pub memory: MemorySystem,
+    pub remote_server: Option<RemoteServer>,
     process_module_base: u32,
     process_module_path: String,
     process_module_host_path: Option<PathBuf>,
@@ -213,6 +215,7 @@ impl CeKernel {
             resources: ResourceSystem::default(),
             com: ComSystem::default(),
             memory: MemorySystem::default(),
+            remote_server: None,
             process_module_base: 0,
             process_module_path: "\\FakeCE\\process.exe".to_owned(),
             process_module_host_path: None,
@@ -2920,6 +2923,35 @@ impl CeKernel {
 
     pub fn remote_status_json(&self) -> serde_json::Value {
         self.remote.status_json(self.remote_gps_target())
+    }
+
+    pub fn set_remote_server(&mut self, server: RemoteServer) {
+        self.remote_server = Some(server);
+        self.publish_remote_server_status();
+    }
+
+    pub fn publish_remote_server_status(&self) {
+        if let Some(server) = self.remote_server.as_ref() {
+            server.publish_status(&self.remote_status());
+        }
+    }
+
+    pub fn drain_remote_server_control_messages(&mut self) -> usize {
+        let Some(server) = self.remote_server.clone() else {
+            return 0;
+        };
+        let messages = server.drain_control_messages();
+        if messages.is_empty() {
+            return 0;
+        }
+        let mut applied = 0;
+        for message in messages {
+            self.dispatch_remote_control_message(&message);
+            applied += 1;
+        }
+        self.drain_remote_input_to_active_window();
+        self.publish_remote_server_status();
+        applied
     }
 
     pub fn dispatch_remote_control_message(

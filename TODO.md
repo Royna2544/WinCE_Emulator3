@@ -1300,9 +1300,11 @@
   GPS/serial/system-state inputs and the app's reset-warning path through CE
   device/registry semantics, while continuing to validate that map rendering
   and GWE sends stay live under host Win32.
-- Add an HTTP/WebSocket transport over the Rust `CeRemote` API state when the
-  host runtime is ready for remote UI/audio streaming; audio transport should
-  honor the sink's per-client cursors and flush-marked chunks immediately.
+- Extend the new Rust remote server beyond the v2-compatible REST surface:
+  implement real WebSocket audio/control upgrade handling, stream PCM from the
+  existing per-client cursor model, expose recent log lines from `CeRemote`,
+  and add mounted iNavi validation that remote touch/GPS input advances through
+  the same scheduler/GWE paths as host input.
 - Add ordinal/decorated-name evidence from the Windows CE 4.2 Mipsii SDK import
   libraries, alongside the source references already recorded.
 - Persist host-backed registry writes separately from the source dump.

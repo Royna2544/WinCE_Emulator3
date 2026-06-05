@@ -1108,14 +1108,21 @@
     `FindResourceW(hModule=0x00010000, name=0x0e01, type=6)` and receives 0.
   - Status: next PE/resource integration step beyond strings.
 
-- Remote API has no Rust socket transport yet.
-  - Symptom: remote touch/key/GPS/audio/status behavior exists as emulator API
-    state, but there is no HTTP/WebSocket listener serving `/api/v1/...`.
-  - Evidence: `src/ce/remote.rs` implements state and control dispatch only;
-    websocket audio sink state already tracks per-client host-time cursors and
-    flush-marked chunks, and `AudioSinkRegistry` can fan out to host/websocket/
-    debug sinks, but no socket writer consumes them yet.
-  - Status: expected until host transport work lands.
+- Remote API WebSocket/audio/log streaming is still incomplete.
+  - Symptom: v3 now has a Rust HTTP listener serving the v2-compatible REST
+    surface under `/api/v1/...`, including status, JPEG/PNG/MJPEG framebuffer
+    snapshots, touch/key input, GPS/NMEA/IMU injection, and pause/resume. The
+    v2 WebSocket upgrade paths `/api/v1/audio/ws` and `/api/v1/control/ws`
+    still return `501`, and `/api/v1/logs/recent` currently returns an empty
+    line list.
+  - Evidence: `src/remote_server.rs` queues REST control JSON into
+    `CeKernel::dispatch_remote_control_message`, publishes real framebuffer
+    pixels from the normal present/live-blit boundary, and has focused tests
+    for v2 touch and status shape. `src/ce/remote.rs` already tracks websocket
+    audio client cursors and flush-marked chunks, but no socket writer consumes
+    them yet.
+  - Status: REST transport fixed; WebSocket audio/control and live log
+    transport remain open.
 
 - Scheduler/wait ownership is only partially ported to CE fidelity.
   - Symptom: wait calls now flow through scheduler accounting and the first

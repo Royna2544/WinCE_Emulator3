@@ -3,6 +3,7 @@ use std::{
     fmt::Write as FmtWrite,
     fs,
     io::{self, Write},
+    net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -23,6 +24,7 @@ use wince_emulation_v3::{
         unicorn::{UnicornDebugSnapshot, UnicornMips, UnicornRunLimits, UnicornWindowSnapshot},
     },
     pe::PeImage,
+    remote_server::{RemoteServer, RemoteServerConfig},
 };
 
 #[derive(Debug, Clone)]
@@ -39,6 +41,7 @@ struct Args {
     cpu_wall_clock_limit_ms: u64,
     cpu_stop_pc: Option<u32>,
     startup_taps: Vec<(i32, i32)>,
+    remote_server: Option<RemoteServerConfig>,
     run_cpu: bool,
     monitor: bool,
     verbose: bool,
@@ -89,6 +92,15 @@ fn main() -> Result<()> {
         desktop.framebuffer().width(),
         desktop.framebuffer().height(),
     );
+    if let Some(config) = args.remote_server.clone() {
+        let server = RemoteServer::start(config)?;
+        kernel.set_remote_server(server);
+        publish_remote_endpoint(
+            kernel.remote_server.as_ref(),
+            &kernel,
+            desktop.framebuffer(),
+        );
+    }
 
     let mut cpu = UnicornMips::new()?;
     cpu.set_dll_search_dirs(args.dll_search_dirs.clone());
@@ -246,6 +258,7 @@ fn run_cpu_loop(
     enqueue_startup_taps(kernel, &args.startup_taps)?;
     let mut reported_blocked_message_wait = false;
     loop {
+        service_remote_endpoint(kernel, desktop);
         if enqueue_desktop_input_for_current_wait(cpu, desktop, kernel, args.desktop)? != 0 {
             reported_blocked_message_wait = false;
         }
@@ -272,6 +285,7 @@ fn run_cpu_loop(
             reported_blocked_message_wait = false;
         }
         desktop.present()?;
+        service_remote_endpoint(kernel, desktop);
         if let Some(snapshot) = cpu.last_debug_snapshot() {
             if args.desktop == DesktopMode::Host && snapshot.blocked_get_message.is_some() {
                 if !reported_blocked_message_wait {
@@ -290,6 +304,22 @@ fn run_cpu_loop(
         break;
     }
     Ok(())
+}
+
+fn service_remote_endpoint(kernel: &mut CeKernel, desktop: &DesktopRuntime) {
+    kernel.drain_remote_server_control_messages();
+    publish_remote_endpoint(kernel.remote_server.as_ref(), kernel, desktop.framebuffer());
+}
+
+fn publish_remote_endpoint(
+    server: Option<&RemoteServer>,
+    kernel: &CeKernel,
+    framebuffer: &VirtualFramebuffer,
+) {
+    if let Some(server) = server {
+        server.publish_status(&kernel.remote_status());
+        server.publish_framebuffer(framebuffer);
+    }
 }
 
 fn print_unicorn_stop(snapshot: &wince_emulation_v3::emulator::unicorn::UnicornDebugSnapshot) {
@@ -1121,7 +1151,8 @@ impl DesktopRuntime {
             #[cfg(all(windows, feature = "win32-desktop"))]
             Self::Host(desktop) => {
                 let (framebuffer, presenter) = desktop.framebuffer_and_presenter_mut();
-                let mut live_framebuffer = HostLiveFramebuffer::new(framebuffer, presenter);
+                let mut live_framebuffer =
+                    HostLiveFramebuffer::new(framebuffer, presenter, kernel.remote_server.clone());
                 cpu.run_until_import_trap_with_framebuffer_limits(
                     kernel,
                     &mut live_framebuffer,
@@ -1152,6 +1183,7 @@ impl DesktopRuntime {
 struct HostLiveFramebuffer<'a> {
     framebuffer: &'a mut VirtualFramebuffer,
     presenter: &'a mut wince_emulation_v3::ce::win32_desktop::Win32Presenter,
+    remote_server: Option<RemoteServer>,
     last_blit: Instant,
     blit_interval: Duration,
     pending_guest_dirty: bool,
@@ -1163,10 +1195,12 @@ impl<'a> HostLiveFramebuffer<'a> {
     fn new(
         framebuffer: &'a mut VirtualFramebuffer,
         presenter: &'a mut wince_emulation_v3::ce::win32_desktop::Win32Presenter,
+        remote_server: Option<RemoteServer>,
     ) -> Self {
         Self {
             framebuffer,
             presenter,
+            remote_server,
             last_blit: Instant::now()
                 .checked_sub(Duration::from_millis(16))
                 .unwrap_or_else(Instant::now),
@@ -1186,6 +1220,9 @@ impl<'a> HostLiveFramebuffer<'a> {
             return Ok(());
         }
         self.presenter.blit(self.framebuffer)?;
+        if let Some(server) = self.remote_server.as_ref() {
+            server.publish_framebuffer(self.framebuffer);
+        }
         self.last_blit = now;
         self.pending_guest_dirty = false;
         Ok(())
@@ -1404,11 +1441,12 @@ impl Args {
         let mut cpu_wall_clock_limit_ms = 0;
         let mut cpu_stop_pc = None;
         let mut startup_taps = Vec::new();
+        let mut remote_server = None::<RemoteServerConfig>;
         let mut run_cpu = false;
         let mut monitor = false;
         let mut verbose = false;
 
-        let mut args = std::env::args().skip(1);
+        let mut args = std::env::args().skip(1).peekable();
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--registry" => {
@@ -1450,6 +1488,69 @@ impl Args {
                 "--tap" => {
                     startup_taps.push(next_tap(&mut args, "--tap")?);
                 }
+                "--remote-server" => {
+                    let config = remote_server.get_or_insert_with(RemoteServerConfig::default);
+                    if let Some(value) = args.next_if(|value| !value.starts_with("--")) {
+                        config.addr = parse_socket_addr(&value, "--remote-server")?;
+                    }
+                }
+                "--remote-bind" => {
+                    let ip = next_string(&mut args, "--remote-bind")?
+                        .parse::<IpAddr>()
+                        .map_err(|err| {
+                            wince_emulation_v3::Error::InvalidArgument(format!(
+                                "--remote-bind: {err}"
+                            ))
+                        })?;
+                    let config = remote_server.get_or_insert_with(RemoteServerConfig::default);
+                    config.addr = SocketAddr::new(ip, config.addr.port());
+                }
+                "--remote-port" => {
+                    let port = next_u16(&mut args, "--remote-port")?;
+                    let config = remote_server.get_or_insert_with(RemoteServerConfig::default);
+                    config.addr = SocketAddr::new(config.addr.ip(), port);
+                }
+                "--remote-token" => {
+                    let token = next_string(&mut args, "--remote-token")?;
+                    remote_server
+                        .get_or_insert_with(RemoteServerConfig::default)
+                        .token = Some(token);
+                }
+                "--remote-video-fps" => {
+                    let fps = next_u32(&mut args, "--remote-video-fps")?;
+                    remote_server
+                        .get_or_insert_with(RemoteServerConfig::default)
+                        .video_fps = fps.clamp(1, 60);
+                }
+                "--remote-jpeg-quality" => {
+                    let quality = next_u8(&mut args, "--remote-jpeg-quality")?;
+                    remote_server
+                        .get_or_insert_with(RemoteServerConfig::default)
+                        .jpeg_quality = quality.clamp(1, 100);
+                }
+                "--remote-audio" => {
+                    remote_server
+                        .get_or_insert_with(RemoteServerConfig::default)
+                        .audio_enabled = true;
+                }
+                "--remote-audio-sample-rate" => {
+                    let sample_rate = next_u32(&mut args, "--remote-audio-sample-rate")?;
+                    remote_server
+                        .get_or_insert_with(RemoteServerConfig::default)
+                        .audio_sample_rate = sample_rate;
+                }
+                "--remote-audio-channels" => {
+                    let channels = next_u16(&mut args, "--remote-audio-channels")?;
+                    remote_server
+                        .get_or_insert_with(RemoteServerConfig::default)
+                        .audio_channels = channels;
+                }
+                "--remote-audio-format" => {
+                    let format = next_string(&mut args, "--remote-audio-format")?;
+                    remote_server
+                        .get_or_insert_with(RemoteServerConfig::default)
+                        .audio_format = format;
+                }
                 "--run-cpu" => {
                     run_cpu = true;
                 }
@@ -1484,6 +1585,7 @@ impl Args {
             cpu_wall_clock_limit_ms,
             cpu_stop_pc,
             startup_taps,
+            remote_server,
             run_cpu,
             monitor,
             verbose,
@@ -1515,6 +1617,39 @@ fn next_u64(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<u64> 
     let value = args.next().ok_or_else(|| {
         wince_emulation_v3::Error::InvalidArgument(format!("{flag} needs a value"))
     })?;
+    value
+        .parse()
+        .map_err(|err| wince_emulation_v3::Error::InvalidArgument(format!("{flag}: {err}")))
+}
+
+fn next_u32(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<u32> {
+    let value = args.next().ok_or_else(|| {
+        wince_emulation_v3::Error::InvalidArgument(format!("{flag} needs a value"))
+    })?;
+    value
+        .parse()
+        .map_err(|err| wince_emulation_v3::Error::InvalidArgument(format!("{flag}: {err}")))
+}
+
+fn next_u16(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<u16> {
+    let value = args.next().ok_or_else(|| {
+        wince_emulation_v3::Error::InvalidArgument(format!("{flag} needs a value"))
+    })?;
+    value
+        .parse()
+        .map_err(|err| wince_emulation_v3::Error::InvalidArgument(format!("{flag}: {err}")))
+}
+
+fn next_u8(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<u8> {
+    let value = args.next().ok_or_else(|| {
+        wince_emulation_v3::Error::InvalidArgument(format!("{flag} needs a value"))
+    })?;
+    value
+        .parse()
+        .map_err(|err| wince_emulation_v3::Error::InvalidArgument(format!("{flag}: {err}")))
+}
+
+fn parse_socket_addr(value: &str, flag: &str) -> Result<SocketAddr> {
     value
         .parse()
         .map_err(|err| wince_emulation_v3::Error::InvalidArgument(format!("{flag}: {err}")))
@@ -1553,7 +1688,7 @@ fn next_tap(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<(i32,
 
 fn print_help() {
     println!(
-        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--mount-config mounts.toml] [--image INavi.exe] [--dll-search-dir DIR]... [--desktop virtual|host] [--framebuffer-dump OUT.ppm] [--tracefile KIND OUT.txt]... [--cpu-instruction-limit N] [--cpu-wall-clock-limit-ms N] [--cpu-stop-pc ADDR] [--tap X,Y]... [--run-cpu] [--monitor] [--verbose]"
+        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--mount-config mounts.toml] [--image INavi.exe] [--dll-search-dir DIR]... [--desktop virtual|host] [--remote-server [IP:PORT]] [--remote-bind IP] [--remote-port PORT] [--remote-token TOKEN] [--remote-video-fps N] [--remote-jpeg-quality N] [--remote-audio] [--remote-audio-sample-rate N] [--remote-audio-channels N] [--remote-audio-format s16le] [--framebuffer-dump OUT.ppm] [--tracefile KIND OUT.txt]... [--cpu-instruction-limit N] [--cpu-wall-clock-limit-ms N] [--cpu-stop-pc ADDR] [--tap X,Y]... [--run-cpu] [--monitor] [--verbose]"
     );
 }
 

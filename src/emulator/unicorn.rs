@@ -1896,6 +1896,7 @@ impl UnicornMips {
                 let mut counter = host_wall_clock_counter_hook.borrow_mut();
                 *counter = counter.wrapping_add(1);
                 if *counter & 0x0fff == 0 {
+                    unsafe { (&mut *kernel_ptr).drain_remote_server_control_messages() };
                     if let Err(err) =
                         drain_win32_host_input_to_active_window(unsafe { &mut *kernel_ptr })
                     {

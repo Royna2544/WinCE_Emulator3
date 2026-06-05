@@ -40,8 +40,9 @@ shortcuts:
   DLL slots to trap stubs, dispatching COREDLL traps through the raw ordinal
   dispatcher, and reporting PC/RA/SP/v0/v1/a0-a3/t9 debug snapshots on failure
   or bounded self-stop states
-- remote-control API state for touch/key input, GPS/NMEA serial injection, IMU
-  state, pause/resume, status JSON, logs, and audio chunks
+- remote-control API state and a v2-shaped Rust HTTP transport for touch/key
+  input, GPS/NMEA serial injection, IMU state, pause/resume, status JSON, JPEG/
+  PNG/MJPEG framebuffer snapshots, logs, and audio-control metadata
 - audio sink registry for host, websocket, and debug logging adapters; `main`
   registers the Windows `winmm` host-sink boundary when running on a Windows
   host, while websocket PCM keeps per-client host-time cursors, partial
@@ -79,6 +80,20 @@ CPU execution is behind the `unicorn` feature:
 ```bash
 cargo run --features unicorn -- --mount-config mounts.toml --image D:\INAVI_Emulator\INAVI\INavi\iNavi.exe --dll-search-dir "D:\INAVI_Emulator\DUMPPLZ\Windows" --desktop virtual --framebuffer-dump target\last-framebuffer.ppm --run-cpu
 ```
+
+Expose the v2-compatible remote API while the emulator runs:
+
+```bash
+cargo run --features unicorn,win32-desktop -- --mount-config mounts.toml --image D:\INAVI_Emulator\INAVI\INavi\iNavi.exe --dll-search-dir "D:\INAVI_Emulator\DUMPPLZ\Windows" --desktop host --remote-server 0.0.0.0:8765 --run-cpu
+```
+
+The Rust listener serves `GET /api/v1/status`, `GET /api/v1/frame.jpg`,
+`GET /api/v1/debug/screenshot.png`, `GET /api/v1/video.mjpg`, and the v2 REST
+control routes under `/api/v1/input`, `/api/v1/sensors`, and `/api/v1/control`.
+The `--remote-bind`, `--remote-port`, `--remote-token`,
+`--remote-video-fps`, `--remote-jpeg-quality`, and `--remote-audio*` flags are
+accepted for v2 CLI compatibility; WebSocket audio/control upgrade paths are
+reserved but not implemented yet.
 
 Use `--cpu-instruction-limit N` or `--cpu-wall-clock-limit-ms N` with
 `--run-cpu` to make Unicorn return a bounded diagnostic snapshot instead of

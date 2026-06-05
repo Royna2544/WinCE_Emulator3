@@ -9,6 +9,29 @@
 
 ## Confirmed
 
+- The Rust remote server transport now exists and is aligned with the
+  `..\wince_emulator_v2` REST API shape while staying wired through v3's generic
+  `CeRemote` state. CLI supports the requested compact
+  `--remote-server IP:PORT` form plus v2-compatible `--remote-server`,
+  `--remote-bind`, `--remote-port`, `--remote-token`, video, JPEG-quality, and
+  audio metadata flags. The server exposes `/api/v1/status`,
+  `/api/v1/frame.jpg`, `/api/v1/debug/screenshot.png`,
+  `/api/v1/video.mjpg`, `/api/v1/input/touch`, `/api/v1/input/key`,
+  `/api/v1/sensors/location`, `/api/v1/sensors/nmea`,
+  `/api/v1/sensors/imu`, `/api/v1/logs/recent`,
+  `/api/v1/control/pause`, and `/api/v1/control/resume`; status uses the v2
+  camelCase JSON names and frame endpoints encode the real guest framebuffer as
+  JPEG/PNG/MJPEG. Posted REST controls are drained through
+  `CeKernel::dispatch_remote_control_message` and live Unicorn ticks call the
+  same drain path so remote touch/key/GPS input can wake CE scheduler/GWE paths
+  during long guest execution. Focused coverage
+  `remote_server_accepts_v2_touch_route`,
+  `remote_server_serves_v2_status_shape`, and the existing
+  `remote_server_api_state_queues_input_serial_audio_and_status` pass; `cargo
+  check --features unicorn,trace,win32-desktop` also passes with only the known
+  Windows incremental finalization warning. WebSocket audio/control upgrade
+  endpoints are intentionally left as `501` placeholders until the audio
+  streaming transport is implemented.
 - CE-style pending timer-message coalescing is now implemented for scheduler
   generated `WM_TIMER`. `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`
   models timer entries with separate message-queue and timer-queue linkage plus
@@ -3120,8 +3143,9 @@
   system-info/memory status, and first resource/string raw ordinals have real
   CE-referenced semantics; remaining ordinals still need to be burned down
   subsystem by subsystem.
-- Remote server socket/WebSocket binding is not implemented in Rust yet; the
-  emulator-facing remote API state and dispatch behavior are present.
+- Rust remote server REST binding is implemented for the v2-compatible
+  `/api/v1` status/frame/control routes; WebSocket audio/control upgrades and
+  live log streaming remain open.
 - The mounted iNavi trace now gets beyond the earlier `values.dat` and map
   resource checks into RSImage/PNG resource loading. A trace-enabled monitor run
   with `tap 400 240` opened `\SDMMC Disk\INavi\res\FontResHigh.utf`,
