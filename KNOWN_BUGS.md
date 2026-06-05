@@ -1060,7 +1060,11 @@
     the original guest buffer. Raw and Unicorn
     `MsgWaitForMultipleObjectsEx` now follow the CE SDK flag set by honoring
     `MWMO_INPUTAVAILABLE` while ignoring desktop-only bit `0x0001` instead of
-    converting message waits into unsupported wait-all kernel calls. Full
+    converting message waits into unsupported wait-all kernel calls. Unicorn
+    `WaitForMultipleObjects` also now completes valid finite current-thread
+    wait-any timeouts on the active context when no handle is ready and the
+    timeout fits the host run budget, returning `WAIT_TIMEOUT` without leaving
+    an unselectable blocked waiter behind. Full
     serial stack semantics, audio wake model, fuller timer ownership, and full
     scheduler-owned CPU-context/run-queue ownership remain partial. The mounted
     `target\scheduler_msgwait_virtual_60s_*` probe stayed memory-stable,

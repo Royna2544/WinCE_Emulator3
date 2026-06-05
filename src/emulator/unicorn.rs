@@ -7579,6 +7579,21 @@ fn try_block_wait_for_multiple_objects<D>(
     let wait_started_ms = kernel.timers.tick_count();
     let regs = capture_mips_gprs(uc);
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+    if running_thread.borrow().is_some()
+        && suspended_thread.borrow().is_none()
+        && try_complete_current_multiple_wait_timeout(
+            kernel,
+            uc,
+            thread_id,
+            count,
+            timeout,
+            return_pc,
+            host_wall_clock_started,
+            host_wall_clock_limit,
+        )
+    {
+        return true;
+    }
     if let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id) {
         let kind = BlockedWaitKind::Kernel;
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
@@ -7667,6 +7682,47 @@ fn try_block_wait_for_multiple_objects<D>(
         return true;
     }
     false
+}
+
+#[cfg(feature = "unicorn")]
+fn try_complete_current_multiple_wait_timeout<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    thread_id: u32,
+    handle_count: u32,
+    timeout: u32,
+    return_pc: u32,
+    host_wall_clock_started: std::time::Instant,
+    host_wall_clock_limit: Option<std::time::Duration>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if timeout == 0 || timeout == crate::ce::timer::INFINITE {
+        return false;
+    }
+    if !timer_delay_fits_host_wall_budget(timeout, host_wall_clock_started, host_wall_clock_limit) {
+        return false;
+    }
+    std::thread::sleep(std::time::Duration::from_millis(u64::from(timeout)));
+    kernel.timers.sleep_ms(timeout);
+    kernel.threads.set_last_error(thread_id, 0);
+    kernel.record_resumed_wait(crate::ce::timer::WAIT_TIMEOUT);
+    let writes = [
+        uc.reg_write(RegisterMIPS::V0, u64::from(crate::ce::timer::WAIT_TIMEOUT)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(return_pc)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(return_pc)),
+    ];
+    if writes.into_iter().any(|write| write.is_err()) {
+        let _ = uc.emu_stop();
+    }
+    tracing::debug!(
+        target: "ce.scheduler",
+        handle_count,
+        timeout_ms = timeout,
+        return_pc = format_args!("0x{return_pc:08x}"),
+        "WaitForMultipleObjects current thread timed out"
+    );
+    true
 }
 
 #[cfg(feature = "unicorn")]
@@ -9260,6 +9316,43 @@ mod wait_scheduler_tests {
             uc.reg_read(unicorn_engine::RegisterMIPS::RA).unwrap() as u32,
             return_pc
         );
+    }
+
+    #[test]
+    fn current_multiple_wait_timeout_writes_wait_timeout_result() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let thread_id = 7;
+        let return_pc = 0x2468_ace0;
+
+        assert!(super::try_complete_current_multiple_wait_timeout(
+            &mut kernel,
+            &mut uc,
+            thread_id,
+            2,
+            1,
+            return_pc,
+            std::time::Instant::now(),
+            Some(std::time::Duration::from_secs(1)),
+        ));
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
+            WAIT_TIMEOUT
+        );
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::PC).unwrap() as u32,
+            return_pc
+        );
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::RA).unwrap() as u32,
+            return_pc
+        );
+        assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     }
 
     #[test]

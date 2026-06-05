@@ -268,7 +268,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `MAXIMUM_WAIT_OBJECTS` (`64` from `winnt.h`) before `DoWaitForObjects`;
     handle locking happens for every input handle before any object is waited,
     so a later invalid handle fails the call without consuming an earlier
-    signaled auto-reset object. `thread.c` defines `W32PrioMap` as CE
+    signaled auto-reset object. The Unicorn import bridge now preserves that
+    ordering for finite current-thread waits: only after every handle is
+    readable, waitable, and not signaled does it complete a valid wait-any
+    `WaitForMultipleObjects` timeout on the active context with
+    `WAIT_TIMEOUT`; `wait_all`, polling waits, invalid handles, and ready
+    objects still fall through to the raw kernel path. `thread.c` defines
+    `W32PrioMap` as CE
     priorities `248..255`, maps Win32 `SetThreadPriority` values `0..7`
     through that table, maps `GetThreadPriority` back to `0..7` while
     clamping real-time absolute priorities to `THREAD_PRIORITY_TIME_CRITICAL`,

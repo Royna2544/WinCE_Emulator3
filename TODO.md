@@ -44,8 +44,11 @@
   `0x11d5`, and the app-owned legacy terminate path after the bounded host run.
   The scheduler bridge now has a FIFO saved-context overflow queue for
   time-slice/ready-waiter preemption when the primary suspended slot is already
-  occupied. Next scheduler work should route more guest-thread handoff paths
-  through that queue, then validate whether the worker sleeps/kernel waits at
+  occupied. Valid finite current-thread `WaitForMultipleObjects` waits with no
+  ready handles now complete as CE `WAIT_TIMEOUT` when the timeout fits the
+  host run budget, so the next scheduler work should route the remaining
+  over-budget waits and guest-thread handoff paths through the queued
+  runnable-context model, then validate whether worker sleeps/kernel waits at
   the clean frontier are still stranded.
   The new
   `messages` trace selector now preserves kernel-level GWE post/target/delivery

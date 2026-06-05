@@ -3434,6 +3434,19 @@
   fidelity around GPS/serial/system-state reporting, not map rendering or
   scheduler delay-slot corruption.
 
+- Fixed the matching current-thread `WaitForMultipleObjects` finite-timeout
+  bridge for the Unicorn syscall path. The bridge now lets a valid
+  wait-any-only multiple wait whose handles are all waitable but not currently
+  signaled complete on the active guest context when the finite timeout fits
+  the remaining host wall budget: it sleeps host time, advances the CE tick
+  count, returns `WAIT_TIMEOUT`, clears last error, and resumes at the saved
+  return PC instead of registering an unselectable blocked waiter and stopping
+  the emulator. The guard still leaves invalid handles, `wait_all`,
+  zero-timeout polling, and immediately signaled objects on the existing raw
+  kernel path. Focused coverage
+  `current_multiple_wait_timeout_writes_wait_timeout_result` and the full
+  Unicorn wait scheduler suite pass.
+
 ## False Leads
 
 - A process-directory fallback for rooted `CreateFileW` paths was tested and
