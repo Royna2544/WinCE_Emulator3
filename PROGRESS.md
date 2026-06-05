@@ -9,6 +9,29 @@
 
 ## Confirmed
 
+- The post-map Win32-host scheduler bridge now avoids two more generic
+  starvation traps. The Unicorn code-hook scheduler timeslice no longer drops
+  a due slice just because the fixed sample lands on an import trap,
+  trampoline page, pending WNDPROC return, MIPS control-transfer target, or
+  delay-slot PC; it keeps the slice pending and consumes it at the next safe
+  instruction. Current-thread `Sleep` inline completion also now sees ready
+  blocked `GetMessageW` waiters, so a worker sleep cannot keep running itself
+  while the UI thread has queued posted/sent traffic. Focused coverage includes
+  `timeslice_pending_survives_unsafe_sample_until_safe_pc` and
+  `current_sleep_yields_to_ready_blocked_get_message`; full
+  `cargo test --features unicorn,trace,win32-desktop --lib` now passes 176
+  tests, with `cargo check` passing except the known Windows incremental
+  finalization warning. Fresh Win32-host validations
+  `target\host_timeslice_pending_180s_*` and
+  `target\host_sleep_getmsg_180s_*` used dumped runtime DLLs from
+  `D:\INAVI_Emulator\DUMPPLZ\Windows`, stayed memory/file-I/O bounded
+  (`host_open=910`, `host_read=82822/6400466B`, `mem_open=4`), and ran the full
+  180 s wall budget without backend faults. The frontier moved from valid
+  running thread 5 in image code to worker sleep handoff states; latest wall
+  evidence ends at `COREDLL.dll@496` from thread 8's long sleep
+  (`ra=image:iNavi.exe+0xd69c0`) with main `GetMessageW`, short worker sleeps,
+  COM7 empty reads, Deneb device reads, and `around.db` map/search reads still
+  in the evidence trail.
 - The post-map Win32-host scheduler frontier moved forward again with generic
   CE thread ownership and bounded timeout handoff fixes. Cross-thread
   `SendMessageW` receiver-context WNDPROC callouts now keep real receiver

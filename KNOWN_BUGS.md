@@ -113,6 +113,20 @@
     guest responsiveness, but the stale current-thread sleep waiter theory is
     closed. Continue from valid running thread 5 plus main `GetMessageW`,
     serial read, timer/custom-post traffic, and worker waits.
+  - Latest evidence: `target\host_timeslice_pending_180s_*` and
+    `target\host_sleep_getmsg_180s_*` move the frontier again with generic
+    scheduler fairness fixes. The timeslice hook now keeps a due slice pending
+    across unsafe MIPS import/trampoline/control-transfer/delay-slot samples,
+    and active `Sleep` checks ready blocked `GetMessageW` waiters before
+    completing inline. Focused tests cover both. The latest Win32-host wall
+    stop is still bounded and memory-stable, but now lands at
+    `COREDLL.dll@496` from thread 8's long sleep
+    (`ra=image:iNavi.exe+0xd69c0`) with one main `GetMessageW`, shorter worker
+    sleeps, empty COM7 reads, `MS2_CalData` missing, Deneb sensor `Device`
+    reads, and `around.db` map/search reads. This keeps the bug open as
+    post-map scheduler/device/message progression, not as hidden-layer leakage,
+    black framebuffer, fixed-sample timeslice starvation, stale blocked-current
+    ownership, or file-I/O/RSS growth.
 
 - Rendered iNavi map still needs road/building styling fidelity, but the
   black base-layer failure is fixed.

@@ -13,18 +13,22 @@
 ## Current Slice
 
 - Current host/manual post-map slice: continue from
-  `target\host_blockctx_180s_*`. The stale blocked-current ownership shape is
-  closed: the wall snapshot now reports thread 5 as both current and running
-  (`running:5:0x00000f00`) instead of current with no running owner while
-  still listed as a sleep waiter. The remaining ANR frontier is valid guest
-  execution in thread 5 around `image:iNavi.exe+0x13e5c4`, with main thread
-  parked in `GetMessageW`, thread 6 in serial-read timeout, thread 9 in short
-  sleep, thread 8 in a long sleep, and worker kernel waits. Next slice should
-  trace why running thread 5 and the posted/timer traffic do not produce manual
-  UI responsiveness: inspect thread-5 call path, main-message consumption
-  after timer/custom posts, and serial/device wake inputs. Do not revisit the
-  now-fixed hidden-layer or stale blocked-current theories unless fresh
-  evidence regresses them.
+  `target\host_sleep_getmsg_180s_*`. The fixed-interval timeslice now retries
+  a pending scheduler slice after unsafe MIPS branch/trampoline/import samples,
+  and current `Sleep` now yields to a ready blocked `GetMessageW` waiter when
+  main has queued posted/sent traffic. The previous `target\host_blockctx_180s_*`
+  thread-5 image-code frontier moved into worker sleep handoff states. The
+  latest wall snapshot is still a bounded-run ANR shape, not a crash:
+  `pc=COREDLL.dll@496`, `ra=image:iNavi.exe+0xd69c0`, current thread 8 has a
+  long `Sleep(15001)`, main thread 1 is parked in `GetMessageW`, threads 5/6/9
+  have shorter sleeps, COM7 reads are empty, and Deneb/device plus map/search
+  DB reads are visible. Next slice should trace why the long-sleep/device
+  frontier does not produce manual UI responsiveness: check current thread 8's
+  caller path, shorter sleep maturation when the host wall budget remains,
+  queued send/timer delivery after the last `GetMessageW`, and GPS/Deneb/SMB1/
+  MFS1 device semantics. Do not revisit the now-fixed hidden-layer,
+  fixed-sample timeslice, stale blocked-current, or file-I/O/RSS theories
+  unless fresh evidence regresses them.
 - Current host/manual post-map slice: continue from
   `target\host_fullctx_180s_*`. The saved-context dedupe plus full MIPS
   GPR/HI/LO preservation fixes the previous post-map

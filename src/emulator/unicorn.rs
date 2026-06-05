@@ -2261,6 +2261,8 @@ impl UnicornMips {
         let guest_thread_stack_slots_hook = Rc::clone(&guest_thread_stack_slots);
         let scheduler_timeslice_counter = Rc::new(Cell::new(0u32));
         let scheduler_timeslice_counter_hook = Rc::clone(&scheduler_timeslice_counter);
+        let scheduler_timeslice_pending = Rc::new(Cell::new(false));
+        let scheduler_timeslice_pending_hook = Rc::clone(&scheduler_timeslice_pending);
         let scheduler_timeslice_last_pc = Rc::new(Cell::new(None::<u32>));
         let scheduler_timeslice_last_pc_hook = Rc::clone(&scheduler_timeslice_last_pc);
         let current_thread_id_timeslice_hook = Rc::clone(&current_thread_id);
@@ -2274,18 +2276,23 @@ impl UnicornMips {
         uc.add_code_hook(1, 0, move |uc, address, _size| {
             let counter = scheduler_timeslice_counter_hook.get().wrapping_add(1);
             scheduler_timeslice_counter_hook.set(counter);
-            if counter % UNICORN_SCHEDULER_TIMESLICE_INTERVAL != 0 {
-                scheduler_timeslice_last_pc_hook.set(Some(address as u32));
-                return;
+            if counter % UNICORN_SCHEDULER_TIMESLICE_INTERVAL == 0 {
+                scheduler_timeslice_pending_hook.set(true);
             }
             let pc = address as u32;
             let previous_pc = scheduler_timeslice_last_pc_hook.replace(Some(pc));
-            if pc >= IMPORT_TRAP_BASE
+            if !scheduler_timeslice_pending_hook.get() {
+                return;
+            }
+            let safe_to_attempt = !(pc >= IMPORT_TRAP_BASE
                 || target_in_ranges(pc, &trampoline_ranges_timeslice_hook)
                 || !pending_wndproc_returns_timeslice_hook.borrow().is_empty()
                 || is_control_transfer_target(previous_pc, pc)
-                || is_mips_delay_slot_pc(uc, previous_pc, pc)
-            {
+                || is_mips_delay_slot_pc(uc, previous_pc, pc));
+            if !scheduler_timeslice_consume_if_safe(
+                &scheduler_timeslice_pending_hook,
+                safe_to_attempt,
+            ) {
                 return;
             }
             let active_thread_id = *current_thread_id_timeslice_hook.borrow();
@@ -8818,13 +8825,28 @@ fn has_ready_blocked_waiter(kernel: &CeKernel, active_thread_id: u32) -> bool {
 }
 
 #[cfg(feature = "unicorn")]
+fn has_ready_blocked_get_message_waiter(kernel: &CeKernel, active_thread_id: u32) -> bool {
+    let now_ms = kernel.timers.tick_count();
+    kernel
+        .select_ready_blocked_waiter(active_thread_id, now_ms, |blocked, kernel| {
+            matches!(
+                blocked.kind,
+                crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage { .. }
+            ) && scheduler_blocked_wait_is_ready(blocked, kernel)
+        })
+        .is_some()
+}
+
+#[cfg(feature = "unicorn")]
 fn can_complete_current_sleep_inline(
     kernel: &CeKernel,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     active_thread_id: u32,
     timeout: u32,
 ) -> bool {
-    if has_ready_blocked_waiter(kernel, active_thread_id) {
+    if has_ready_blocked_waiter(kernel, active_thread_id)
+        || has_ready_blocked_get_message_waiter(kernel, active_thread_id)
+    {
         return false;
     }
     let Some(delay_ms) = next_blocked_wait_timeout_delay_ms(
@@ -8843,6 +8865,21 @@ fn is_control_transfer_target(previous_pc: Option<u32>, pc: u32) -> bool {
         Some(previous_pc) => previous_pc.wrapping_add(4) != pc,
         None => false,
     }
+}
+
+#[cfg(feature = "unicorn")]
+fn scheduler_timeslice_consume_if_safe(
+    pending: &std::cell::Cell<bool>,
+    safe_to_attempt: bool,
+) -> bool {
+    if !pending.get() {
+        return false;
+    }
+    if !safe_to_attempt {
+        return false;
+    }
+    pending.set(false);
+    true
 }
 
 #[cfg(feature = "unicorn")]
@@ -9687,6 +9724,111 @@ mod wait_scheduler_tests {
     }
 
     #[test]
+    fn current_sleep_yields_to_ready_blocked_get_message() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        uc.mem_map(0x3000_0000, 0x1000, unicorn_engine::Prot::ALL)
+            .unwrap();
+
+        let main_thread_id = super::MAIN_GUEST_THREAD_ID;
+        let main_thread_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
+        let active_thread_id = 9;
+        let active_thread_handle = 0x109;
+        let main_return_pc = 0x2222_2000_u32;
+        let active_return_pc = 0x1111_2000_u32;
+        let getmsg_wait_id = kernel.register_blocked_waiter(
+            main_thread_id,
+            main_thread_handle,
+            Vec::new(),
+            crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            },
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(active_thread_id));
+        let blocked_get_message =
+            std::rc::Rc::new(std::cell::RefCell::new(Some(super::BlockedGuestThread {
+                wait_id: getmsg_wait_id,
+                thread_id: main_thread_id,
+                thread_handle: main_thread_handle,
+                regs: super::MipsGuestContext::zero(),
+                return_pc: main_return_pc,
+                msg_ptr: 0x3000_0100,
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            })));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let self_suspended_threads =
+            std::rc::Rc::new(std::cell::RefCell::new(std::collections::BTreeMap::new()));
+        let running_thread = std::rc::Rc::new(std::cell::RefCell::new(Some((
+            active_thread_id,
+            active_thread_handle,
+        ))));
+        uc.reg_write(
+            unicorn_engine::RegisterMIPS::RA,
+            u64::from(active_return_pc),
+        )
+        .unwrap();
+        assert!(kernel.post_thread_message_w(
+            main_thread_id,
+            crate::ce::gwe::WM_USER + 0x24,
+            0x25,
+            0x26
+        ));
+
+        assert!(super::try_block_sleep(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SLEEP),
+            &[334],
+            active_thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &blocked_get_message,
+            &suspended_thread,
+            &self_suspended_threads,
+            &running_thread,
+            std::time::Instant::now(),
+            Some(std::time::Duration::from_secs(1)),
+        ));
+
+        assert_eq!(*current_thread_id.borrow(), main_thread_id);
+        assert_eq!(
+            *running_thread.borrow(),
+            Some((main_thread_id, main_thread_handle))
+        );
+        assert!(blocked_get_message.borrow().is_none());
+        assert!(kernel.blocked_waiter(getmsg_wait_id).is_none());
+        assert_eq!(blocked_waits.borrow().len(), 1);
+        assert_eq!(blocked_waits.borrow()[0].thread_id, active_thread_id);
+        assert!(matches!(
+            blocked_waits.borrow()[0].kind,
+            BlockedWaitKind::Sleep
+        ));
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
+            1
+        );
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::PC).unwrap() as u32,
+            main_return_pc
+        );
+    }
+
+    #[test]
     fn current_sleep_waits_to_next_blocked_sleep_timeout() {
         let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
@@ -10036,6 +10178,16 @@ mod wait_scheduler_tests {
         assert!(!super::is_control_transfer_target(Some(0x1000), 0x1004));
         assert!(super::is_control_transfer_target(Some(0x1004), 0x2000));
         assert!(super::is_control_transfer_target(Some(0x2000), 0x1008));
+    }
+
+    #[test]
+    fn timeslice_pending_survives_unsafe_sample_until_safe_pc() {
+        let pending = std::cell::Cell::new(true);
+        assert!(!super::scheduler_timeslice_consume_if_safe(&pending, false));
+        assert!(pending.get());
+        assert!(super::scheduler_timeslice_consume_if_safe(&pending, true));
+        assert!(!pending.get());
+        assert!(!super::scheduler_timeslice_consume_if_safe(&pending, true));
     }
 
     #[test]
