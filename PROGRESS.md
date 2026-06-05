@@ -9,6 +9,16 @@
 
 ## Confirmed
 
+- The Unicorn serial wait bridges now yield to already-ready scheduler waiters
+  after parking the current serial operation. Empty serial `ReadFile` and
+  `WaitCommEvent` previously registered the active thread's serial wait, then
+  either completed the serial timeout itself or stopped when no suspended peer
+  context existed, even if another blocked waiter was already signaled. Both
+  paths now try the common ready-waiter resume helper before self-timeout/stop,
+  preserving CE scheduler ownership and avoiding serial/device waits pinning
+  ready worker progress behind the current thread. Focused coverage
+  `serial_read_yields_to_ready_blocked_waiter_before_timeout` and
+  `wait_comm_event_yields_to_ready_blocked_waiter` passes.
 - The Unicorn `WaitForMultipleObjects` and `MsgWaitForMultipleObjectsEx`
   block bridges now hand off to already-ready scheduler waiters after parking
   the current thread, even when there is no saved suspended peer context.

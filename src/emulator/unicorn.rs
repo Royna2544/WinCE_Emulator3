@@ -8419,6 +8419,17 @@ fn block_serial_read_file<D>(
             activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
             return true;
         }
+        if try_resume_blocked_wait(
+            kernel,
+            uc,
+            thread_id,
+            current_thread_id,
+            blocked_waits,
+            suspended_thread,
+            running_thread,
+        ) {
+            return true;
+        }
         if timeout_ms != crate::ce::timer::INFINITE {
             if timeout_ms != 0 {
                 std::thread::sleep(std::time::Duration::from_millis(u64::from(timeout_ms)));
@@ -8583,6 +8594,17 @@ fn block_wait_comm_event<D>(
         *running_thread.borrow_mut() = None;
         if let Some(suspended) = suspended_thread.borrow_mut().take() {
             activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
+            return true;
+        }
+        if try_resume_blocked_wait(
+            kernel,
+            uc,
+            thread_id,
+            current_thread_id,
+            blocked_waits,
+            suspended_thread,
+            running_thread,
+        ) {
             return true;
         }
         let _ = uc.emu_stop();
@@ -9533,6 +9555,110 @@ mod wait_scheduler_tests {
     }
 
     #[test]
+    fn wait_comm_event_yields_to_ready_blocked_waiter() {
+        const EV_RXCHAR: u32 = 0x0001;
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let com = kernel
+            .create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)
+            .unwrap();
+        kernel.set_comm_mask(com, EV_RXCHAR).unwrap();
+        assert!(!kernel.serial_comm_event_ready(com));
+
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let event_ptr = 0x3000_2000;
+        uc.mem_map(event_ptr.into(), 0x1000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        let active_thread_id = 8;
+        let active_thread_handle = 0x808;
+        let active_return_pc = 0x0040_8000u32;
+        uc.reg_write(
+            unicorn_engine::RegisterMIPS::RA,
+            u64::from(active_return_pc),
+        )
+        .unwrap();
+
+        let worker_thread_id = 9;
+        let worker_thread_handle = 0x909;
+        let worker_return_pc = 0x0040_9000;
+        let worker_event = kernel.create_event_w(None, true, true);
+        let wait_started_ms = kernel.timers.tick_count();
+        let worker_wait_id = kernel.register_blocked_waiter(
+            worker_thread_id,
+            worker_thread_handle,
+            vec![worker_event],
+            crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel,
+            wait_started_ms,
+            INFINITE,
+        );
+        let mut worker_regs = super::MipsGuestContext::zero();
+        worker_regs.regs[16] = 0x9090_0001;
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            wait_id: worker_wait_id,
+            thread_id: worker_thread_id,
+            thread_handle: worker_thread_handle,
+            wait_handles: vec![worker_event],
+            kind: BlockedWaitKind::Kernel,
+            wait_started_ms,
+            timeout_ms: INFINITE,
+            regs: worker_regs,
+            return_pc: worker_return_pc,
+        }]));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(active_thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread = std::rc::Rc::new(std::cell::RefCell::new(Some((
+            active_thread_id,
+            active_thread_handle,
+        ))));
+
+        assert!(super::try_block_wait_comm_event(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_WAIT_COMM_EVENT),
+            &[com, event_ptr],
+            active_thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+        ));
+
+        assert!(kernel.blocked_waiter(worker_wait_id).is_none());
+        assert_eq!(*current_thread_id.borrow(), worker_thread_id);
+        assert_eq!(
+            *running_thread.borrow(),
+            Some((worker_thread_id, worker_thread_handle))
+        );
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::S0).unwrap() as u32,
+            0x9090_0001
+        );
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
+            WAIT_OBJECT_0
+        );
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::PC).unwrap() as u32,
+            worker_return_pc
+        );
+        let remaining = blocked_waits.borrow();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].thread_id, active_thread_id);
+        assert!(matches!(
+            remaining[0].kind,
+            BlockedWaitKind::SerialCommEvent { handle, .. } if handle == com
+        ));
+        assert_eq!(remaining[0].return_pc, active_return_pc);
+    }
+
+    #[test]
     fn finite_serial_read_timeout_without_peer_completes_current_thread() {
         use unicorn_engine::RegisterMIPS;
 
@@ -9595,6 +9721,109 @@ mod wait_scheduler_tests {
         uc.mem_read(u64::from(transferred_ptr), &mut transferred)
             .unwrap();
         assert_eq!(u32::from_le_bytes(transferred), 0);
+    }
+
+    #[test]
+    fn serial_read_yields_to_ready_blocked_waiter_before_timeout() {
+        use unicorn_engine::RegisterMIPS;
+
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        uc.mem_map(0x3000_0000, 0x1000, unicorn_engine::Prot::ALL)
+            .unwrap();
+
+        let active_thread_id = 6;
+        let active_thread_handle = 0x606;
+        let active_return_pc = 0x0040_6000u32;
+        let buffer = 0x3000_0100;
+        let transferred_ptr = 0x3000_0200;
+        let serial_handle = kernel
+            .create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)
+            .unwrap();
+        uc.reg_write(RegisterMIPS::RA, u64::from(active_return_pc))
+            .unwrap();
+        uc.mem_write(u64::from(transferred_ptr), &0xffff_ffff_u32.to_le_bytes())
+            .unwrap();
+
+        let worker_thread_id = 7;
+        let worker_thread_handle = 0x707;
+        let worker_return_pc = 0x0040_7000u32;
+        let worker_event = kernel.create_event_w(None, true, true);
+        let wait_started_ms = kernel.timers.tick_count();
+        let worker_wait_id = kernel.register_blocked_waiter(
+            worker_thread_id,
+            worker_thread_handle,
+            vec![worker_event],
+            crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel,
+            wait_started_ms,
+            INFINITE,
+        );
+        let mut worker_regs = super::MipsGuestContext::zero();
+        worker_regs.regs[16] = 0x7070_0001;
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(vec![BlockedWaitThread {
+            wait_id: worker_wait_id,
+            thread_id: worker_thread_id,
+            thread_handle: worker_thread_handle,
+            wait_handles: vec![worker_event],
+            kind: BlockedWaitKind::Kernel,
+            wait_started_ms,
+            timeout_ms: INFINITE,
+            regs: worker_regs,
+            return_pc: worker_return_pc,
+        }]));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(active_thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread = std::rc::Rc::new(std::cell::RefCell::new(Some((
+            active_thread_id,
+            active_thread_handle,
+        ))));
+
+        assert!(block_serial_read_file(
+            &mut kernel,
+            &mut uc,
+            &[],
+            active_thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+            serial_handle,
+            buffer,
+            16,
+            transferred_ptr,
+            1000,
+        ));
+
+        assert!(kernel.blocked_waiter(worker_wait_id).is_none());
+        assert_eq!(*current_thread_id.borrow(), worker_thread_id);
+        assert_eq!(
+            *running_thread.borrow(),
+            Some((worker_thread_id, worker_thread_handle))
+        );
+        assert_eq!(uc.reg_read(RegisterMIPS::S0).unwrap() as u32, 0x7070_0001);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, WAIT_OBJECT_0);
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::PC).unwrap() as u32,
+            worker_return_pc
+        );
+        let remaining = blocked_waits.borrow();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].thread_id, active_thread_id);
+        assert!(matches!(
+            remaining[0].kind,
+            BlockedWaitKind::SerialRead { handle, .. } if handle == serial_handle
+        ));
+        let mut transferred = [0; 4];
+        uc.mem_read(u64::from(transferred_ptr), &mut transferred)
+            .unwrap();
+        assert_eq!(u32::from_le_bytes(transferred), 0xffff_ffff);
     }
 
     #[test]

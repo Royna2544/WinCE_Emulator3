@@ -90,8 +90,10 @@
     `WaitForMultipleObjects` and `MsgWaitForMultipleObjectsEx`: after the active
     thread parks in those calls, already-ready blocked waiters are resumed
     through the same scheduler helper instead of being stranded when the
-    suspended slot is empty. Use the message trace on the exact unresponsive
-    host interaction. If it records
+    suspended slot is empty. Empty serial `ReadFile` and `WaitCommEvent` now
+    close the same immediate-ready starvation shape before serial self-timeout
+    or no-peer stop. Use the message trace on the exact unresponsive host
+    interaction. If it records
     delivered mouse/key messages, chase the guest handler continuation, pending
     send, timer/device waits, or missing subsystem event that follows; if it records
     `remote_*_drop`, fix generic GWE hit-test/focus/capture semantics. Do not

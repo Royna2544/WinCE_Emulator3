@@ -22,9 +22,11 @@
   when no runnable peer exists. `WaitForMultipleObjects` and
   `MsgWaitForMultipleObjectsEx` also now hand off to already-ready blocked
   waiters after parking the current thread, instead of stopping behind an empty
-  suspended slot. Continue converging the remaining wait/send/timer/device
-  handoff paths onto the saved-context FIFO run-queue model so signaled
-  waiters are not stranded behind a single suspended slot.
+  suspended slot. Empty serial `ReadFile` and `WaitCommEvent` now use that same
+  ready-waiter handoff before self-timeout/stop. Continue converging the
+  remaining wait/send/timer/device handoff paths onto the saved-context FIFO
+  run-queue model so signaled waiters are not stranded behind a single
+  suspended slot.
 - Current host/manual ANR slice after timer coalescing: continue from
   `target\host_timer_pending_300s_*`,
   `target\host_windows_220s_*`, and
