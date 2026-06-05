@@ -77,8 +77,12 @@
     custom/timer message traffic, and app-owned legacy terminate after the
     bounded host run. If signaled waiters still remain parked in later
     evidence, route more guest-thread handoff paths through the queued
-    runnable-context model instead of relying on one suspended peer. Use the
-    message trace on the exact unresponsive host interaction. If it records
+    runnable-context model instead of relying on one suspended peer. The
+    `MsgWaitForMultipleObjectsEx` no-peer parking inconsistency is closed:
+    current-thread message waits now stop Unicorn and keep their registered
+    scheduler-owned `MsgWait` state instead of falling through raw dispatch
+    after clearing `running_thread`. Use the message trace on the exact
+    unresponsive host interaction. If it records
     delivered mouse/key messages, chase the guest handler continuation, pending
     send, timer/device waits, or missing subsystem event that follows; if it records
     `remote_*_drop`, fix generic GWE hit-test/focus/capture semantics. Do not

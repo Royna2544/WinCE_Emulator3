@@ -7987,6 +7987,8 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
             activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
             return true;
         }
+        let _ = uc.emu_stop();
+        return true;
     }
     false
 }
@@ -9255,7 +9257,7 @@ mod wait_scheduler_tests {
         ce::{
             file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
             gwe::{QS_POSTMESSAGE, QS_TIMER, WM_TIMER},
-            timer::{WAIT_OBJECT_0, WAIT_TIMEOUT},
+            timer::{INFINITE, WAIT_OBJECT_0, WAIT_TIMEOUT},
         },
         config::RuntimeConfig,
     };
@@ -9502,6 +9504,74 @@ mod wait_scheduler_tests {
         assert_eq!(
             uc.reg_read(unicorn_engine::RegisterMIPS::RA).unwrap() as u32,
             return_pc
+        );
+    }
+
+    #[test]
+    fn current_msg_wait_without_peer_parks_and_stops_instead_of_falling_through() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let handles_ptr = 0x3000_0000;
+        uc.mem_map(handles_ptr.into(), 0x1000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        let event = kernel.create_event_w(None, true, false);
+        uc.mem_write(handles_ptr.into(), &event.to_le_bytes())
+            .unwrap();
+        let thread_id = 7;
+        let thread_handle = 0x707;
+        let return_pc = 0x0040_7000u32;
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        uc.reg_write(unicorn_engine::RegisterMIPS::S0, 0x1357_2468)
+            .unwrap();
+
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(super::try_block_msg_wait_for_multiple_objects_ex(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX),
+            &[1, handles_ptr, INFINITE, QS_POSTMESSAGE, 0],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+            std::time::Instant::now(),
+            Some(std::time::Duration::from_millis(1)),
+        ));
+
+        assert_eq!(*running_thread.borrow(), None);
+        assert_eq!(*current_thread_id.borrow(), thread_id);
+        let blocked_waits = blocked_waits.borrow();
+        assert_eq!(blocked_waits.len(), 1);
+        let blocked = &blocked_waits[0];
+        assert_eq!(blocked.thread_id, thread_id);
+        assert_eq!(blocked.thread_handle, thread_handle);
+        assert_eq!(blocked.wait_handles, vec![event]);
+        assert!(matches!(
+            blocked.kind,
+            BlockedWaitKind::MsgWait {
+                wake_mask: QS_POSTMESSAGE,
+                input_available: false
+            }
+        ));
+        assert!(kernel.blocked_waiter(blocked.wait_id).is_some());
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::S0).unwrap() as u32,
+            0x1357_2468
         );
     }
 

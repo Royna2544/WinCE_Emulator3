@@ -43,6 +43,19 @@
   reports `{"error":"no framebuffer"}`, and successful REST input/control
   responses use the compact v2 `{"ok":true}` shape while still queueing through
   generic `CeRemote`/`CeKernel` dispatch.
+- The Unicorn `MsgWaitForMultipleObjectsEx` parking bridge now preserves
+  scheduler-owned blocked state when the current guest thread has no runnable
+  suspended peer. Previously the raw ordinal bridge could register the current
+  thread as `BlockedWaitKind::MsgWait`, clear `running_thread`, and then return
+  `false`, allowing raw dispatch fallthrough with inconsistent scheduler
+  ownership. It now stops Unicorn and returns handled after registering the
+  waiter. This follows the CE scheduler/message-queue reference already
+  recorded from `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c` and
+  `GWE\INC\cmsgque.h`: over-budget message waits remain owned by the
+  queue/scheduler until a message, object, or timeout wake. Focused coverage
+  `current_msg_wait_without_peer_parks_and_stops_instead_of_falling_through`
+  passes, and `cargo check --features unicorn,trace,win32-desktop` passes with
+  only the known Windows incremental finalization warning.
 - CE-style pending timer-message coalescing is now implemented for scheduler
   generated `WM_TIMER`. `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`
   models timer entries with separate message-queue and timer-queue linkage plus
