@@ -7610,7 +7610,16 @@ fn try_yield_sleep<D>(
     }
 
     let Some(resume) = suspended_thread.borrow_mut().take() else {
-        return false;
+        kernel.record_thread_yield();
+        let writes = [
+            uc.reg_write(RegisterMIPS::V0, 0),
+            uc.reg_write(RegisterMIPS::PC, u64::from(yielding.pc)),
+            uc.reg_write(RegisterMIPS::RA, u64::from(yielding.pc)),
+        ];
+        if writes.into_iter().any(|write| write.is_err()) {
+            let _ = uc.emu_stop();
+        }
+        return true;
     };
 
     kernel.record_thread_yield();
@@ -9910,6 +9919,74 @@ mod wait_scheduler_tests {
             blocked_waits.borrow()[0].kind,
             BlockedWaitKind::Sleep
         ));
+    }
+
+    #[test]
+    fn current_yield_sleep_without_peer_returns_to_same_thread() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let thread_id = 11;
+        let thread_handle = 0x10b;
+        let return_pc = 0x0040_b000u32;
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        uc.reg_write(unicorn_engine::RegisterMIPS::S0, 0x55aa_1234)
+            .unwrap();
+
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let self_suspended_threads =
+            std::rc::Rc::new(std::cell::RefCell::new(std::collections::BTreeMap::new()));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(super::try_block_sleep(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SLEEP),
+            &[0],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &blocked_get_message,
+            &suspended_thread,
+            &self_suspended_threads,
+            &running_thread,
+            std::time::Instant::now(),
+            Some(std::time::Duration::from_secs(1)),
+        ));
+
+        assert_eq!(*current_thread_id.borrow(), thread_id);
+        assert_eq!(*running_thread.borrow(), Some((thread_id, thread_handle)));
+        assert!(blocked_waits.borrow().is_empty());
+        assert!(blocked_get_message.borrow().is_none());
+        assert!(suspended_thread.borrow().is_none());
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
+            0
+        );
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::PC).unwrap() as u32,
+            return_pc
+        );
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::RA).unwrap() as u32,
+            return_pc
+        );
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::S0).unwrap() as u32,
+            0x55aa_1234
+        );
     }
 
     #[test]

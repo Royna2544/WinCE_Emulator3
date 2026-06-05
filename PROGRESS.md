@@ -69,6 +69,17 @@
   guest registers; `cargo test wait_scheduler --features
   unicorn,trace,win32-desktop` passes all 31 filtered tests and `cargo check
   --features unicorn,trace,win32-desktop` passes.
+- The Unicorn `Sleep(0)` bridge now follows CE `NKSleep` yield semantics from
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c`: `cMilliseconds ==
+  0` calls `ThreadYield`, and if no runnable peer exists the current guest
+  thread returns immediately with `V0=0` rather than falling through raw
+  dispatch. Focused coverage
+  `current_yield_sleep_without_peer_returns_to_same_thread` proves the no-peer
+  yield records the scheduler yield, preserves the current running thread, and
+  returns to the guest RA. `cargo test wait_scheduler --features
+  unicorn,trace,win32-desktop` now passes all 32 filtered tests, and `cargo
+  check --features unicorn,trace,win32-desktop` passes with only the known
+  incremental finalization warning.
 - CE-style pending timer-message coalescing is now implemented for scheduler
   generated `WM_TIMER`. `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`
   models timer entries with separate message-queue and timer-queue linkage plus

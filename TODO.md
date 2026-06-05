@@ -18,9 +18,10 @@
   dispatch when there is no suspended peer to activate. `WaitCommEvent` now
   follows the same no-peer parking rule, and serial read/comm-event blocking
   purge stale vector-backed waits before registering replacement waits.
-  Continue converging the remaining wait/send/timer/device handoff paths onto
-  the saved-context FIFO run-queue model so signaled waiters are not stranded
-  behind a single suspended slot.
+  `Sleep(0)` now records a CE-style yield and returns to the same guest thread
+  when no runnable peer exists. Continue converging the remaining wait/send/
+  timer/device handoff paths onto the saved-context FIFO run-queue model so
+  signaled waiters are not stranded behind a single suspended slot.
 - Current host/manual ANR slice after timer coalescing: continue from
   `target\host_timer_pending_300s_*`,
   `target\host_windows_220s_*`, and
