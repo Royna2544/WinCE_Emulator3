@@ -1086,6 +1086,16 @@
   loader stall. Next fixes should make timers, posted input, host touch/key
   events, serial/audio/process wakes, and message waits resume through the same
   CE scheduler model without forcing paints or app state.
+- Continue from the new post-serial-timeout mounted frontier. The COM timeout
+  slice removed the thread-6 infinite serial read wait and advanced iNavi into
+  heavy real GDI/resource work before a guest null dereference at
+  `pc=0x0002c264(image:iNavi.exe+0x1c264)`. Use
+  `target\comm_timeout_*` traces as the current compact evidence. The next
+  debugging slice should disassemble the `0x0002c240..0x0002c270` guest block,
+  inspect the final `WM_`/`SendMessageW` sequence around
+  `SendMessageW(hwnd=0x00020004,msg=0x5832,wparam=0x7ffdf580,lparam=1)`, and
+  determine whether the null comes from destroyed-window lifecycle, MFC
+  superclass/WNDPROC state, or a missing generic GWE/GDI return value.
 - Add an HTTP/WebSocket transport over the Rust `CeRemote` API state when the
   host runtime is ready for remote UI/audio streaming; audio transport should
   honor the sink's per-client cursors and flush-marked chunks immediately.

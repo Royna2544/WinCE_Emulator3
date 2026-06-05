@@ -16,6 +16,8 @@ use crate::{
     pe::PeImage,
 };
 use std::collections::{HashMap, HashSet};
+#[cfg(feature = "unicorn")]
+use unicorn_engine::RegisterMIPS;
 
 const MAX_EMPTY_QUEUE_TIMER_FAST_FORWARD_MS: u32 = 100;
 
@@ -5989,8 +5991,6 @@ fn try_block_empty_get_message<D>(
     host_wall_clock_started: std::time::Instant,
     host_wall_clock_limit: Option<std::time::Duration>,
 ) -> bool {
-    use unicorn_engine::RegisterMIPS;
-
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
         || ordinal != Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W)
     {
@@ -6447,8 +6447,6 @@ fn try_block_wait_for_single_object<D>(
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
 ) -> bool {
-    use unicorn_engine::RegisterMIPS;
-
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
         || ordinal != Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_SINGLE_OBJECT)
     {
@@ -7026,8 +7024,6 @@ fn try_block_wait_for_multiple_objects<D>(
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
 ) -> bool {
-    use unicorn_engine::RegisterMIPS;
-
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
         || ordinal != Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_MULTIPLE_OBJECTS)
     {
@@ -7519,8 +7515,6 @@ fn try_block_serial_read_file<D>(
     suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
 ) -> bool {
-    use unicorn_engine::RegisterMIPS;
-
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
         || ordinal != Some(crate::ce::coredll_ordinals::ORD_READ_FILE)
     {
@@ -7538,8 +7532,67 @@ fn try_block_serial_read_file<D>(
     {
         return false;
     }
+    let Some(timeout_ms) = kernel.serial_empty_read_timeout_ms(handle, requested) else {
+        let timeout_ms = crate::ce::timer::INFINITE;
+        return block_serial_read_file(
+            kernel,
+            uc,
+            args,
+            thread_id,
+            blocked_waits,
+            pending_returns,
+            current_thread_id,
+            suspended_thread,
+            running_thread,
+            handle,
+            buffer,
+            requested,
+            transferred_ptr,
+            timeout_ms,
+        );
+    };
+    if timeout_ms == 0 {
+        return false;
+    }
 
-    kernel.record_blocked_single_wait(crate::ce::timer::INFINITE);
+    block_serial_read_file(
+        kernel,
+        uc,
+        args,
+        thread_id,
+        blocked_waits,
+        pending_returns,
+        current_thread_id,
+        suspended_thread,
+        running_thread,
+        handle,
+        buffer,
+        requested,
+        transferred_ptr,
+        timeout_ms,
+    )
+}
+
+#[cfg(feature = "unicorn")]
+fn block_serial_read_file<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    _args: &[u32],
+    thread_id: u32,
+    blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+    handle: u32,
+    buffer: u32,
+    requested: u32,
+    transferred_ptr: u32,
+    timeout_ms: u32,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    kernel.record_blocked_single_wait(timeout_ms);
     let wait_started_ms = kernel.timers.tick_count();
     let kind = BlockedWaitKind::SerialRead {
         handle,
@@ -7557,7 +7610,7 @@ fn try_block_serial_read_file<D>(
             Vec::new(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
-            crate::ce::timer::INFINITE,
+            timeout_ms,
         );
         blocked_waits.borrow_mut().push(BlockedWaitThread {
             wait_id,
@@ -7566,7 +7619,7 @@ fn try_block_serial_read_file<D>(
             wait_handles: Vec::new(),
             kind,
             wait_started_ms,
-            timeout_ms: crate::ce::timer::INFINITE,
+            timeout_ms,
             regs,
             return_pc,
         });
@@ -7597,7 +7650,7 @@ fn try_block_serial_read_file<D>(
             Vec::new(),
             scheduler_blocked_wait_kind(kind),
             wait_started_ms,
-            crate::ce::timer::INFINITE,
+            timeout_ms,
         );
         blocked_waits.borrow_mut().push(BlockedWaitThread {
             wait_id,
@@ -7606,7 +7659,7 @@ fn try_block_serial_read_file<D>(
             wait_handles: Vec::new(),
             kind,
             wait_started_ms,
-            timeout_ms: crate::ce::timer::INFINITE,
+            timeout_ms,
             regs,
             return_pc,
         });
@@ -7667,6 +7720,8 @@ fn try_resume_blocked_wait<D>(
     let has_ready_handle =
         pulsed_handle.is_some() || blocked_wait_has_ready_handle(&blocked, kernel);
     let serial_read_ready = blocked_serial_read_ready(&blocked, kernel);
+    let serial_read_timed_out = matches!(blocked.kind, BlockedWaitKind::SerialRead { .. })
+        && blocked_wait_timed_out(&blocked, kernel.timers.tick_count());
     let send_message_ready = blocked_send_message_ready(&blocked, kernel);
     let message_input_ready =
         !has_ready_handle && !serial_read_ready && blocked_msg_wait_has_input(&blocked, kernel);
@@ -7699,6 +7754,8 @@ fn try_resume_blocked_wait<D>(
         consume_blocked_msg_wait_input(&blocked, kernel);
         crate::ce::timer::WAIT_OBJECT_0 + blocked.wait_handles.len() as u32
     } else if serial_read_ready {
+        complete_blocked_serial_read(&blocked, kernel, uc)
+    } else if serial_read_timed_out {
         complete_blocked_serial_read(&blocked, kernel, uc)
     } else if send_message_ready {
         complete_blocked_send_message(&blocked, kernel, uc)

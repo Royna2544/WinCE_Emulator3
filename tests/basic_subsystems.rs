@@ -4,6 +4,7 @@ use wince_emulation_v3::{
     ce::{
         audio::{MMSYSERR_NOERROR, WaveBuffer, WaveFormat, WaveOutState},
         com::{REGDB_E_CLASSNOTREG, S_FALSE, S_OK},
+        devices::CommTimeouts,
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::{
             GWL_USERDATA, QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER, Rect, SMF_TIMEOUT, WA_ACTIVE,
@@ -1062,6 +1063,38 @@ fn remote_serial_injection_queues_scheduler_serial_read_candidates() -> Result<(
     let stats = kernel.scheduler_stats();
     assert_eq!(stats.serial_read_signal_count, 1);
     assert_eq!(stats.serial_read_wake_candidate_count, 1);
+    Ok(())
+}
+
+#[test]
+fn serial_comm_timeouts_control_empty_read_parking() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let com = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
+
+    assert_eq!(kernel.serial_empty_read_timeout_ms(com, 64), None);
+
+    kernel.set_comm_timeouts(
+        com,
+        CommTimeouts {
+            read_interval_timeout: 50,
+            read_total_timeout_multiplier: 2,
+            read_total_timeout_constant: 10,
+            write_total_timeout_multiplier: 0,
+            write_total_timeout_constant: 0,
+        },
+    )?;
+    assert_eq!(kernel.serial_empty_read_timeout_ms(com, 64), Some(138));
+
+    kernel.set_comm_timeouts(
+        com,
+        CommTimeouts {
+            read_interval_timeout: u32::MAX,
+            ..CommTimeouts::default()
+        },
+    )?;
+    assert_eq!(kernel.serial_empty_read_timeout_ms(com, 64), Some(0));
+
     Ok(())
 }
 

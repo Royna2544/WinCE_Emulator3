@@ -948,6 +948,23 @@
     invalidation propagation, paint/update ordering, and timer/message
     progression; do not force hidden child paints or app-specific pixels.
 
+- iNavi now reaches a guest null dereference after COM timeout progress.
+  - Symptom: after serial worker reads stop parking forever, mounted iNavi
+    advances through many worker-thread exits and heavy GDI/resource work, then
+    stops with `READ_UNMAPPED addr=0x00000000 size=4` at
+    `pc=0x0002c264(image:iNavi.exe+0x1c264)`.
+  - Evidence: `target\comm_timeout_summary.txt` reports compact scheduler state
+    (`wait:68/19/0`, `sleep:46`, `block:88`, `wake:44`) and only one active
+    sleep waiter. `target\comm_timeout_processes.txt` shows thread handles 5
+    through 15 are signaled/exited instead of thread 6 remaining parked in a
+    serial read. `target\comm_timeout_render.txt` records real 800x480
+    memory-DC/framebuffer composition with `CreateDIBSection` and `BitBlt`.
+    The last import ring is around MFC/GWE lifecycle calls including
+    `CallWindowProcW`, `DefWindowProcW`, `SetWindowLongW`, and
+    `SendMessageW(hwnd=0x00020004,msg=0x5832,wparam=0x7ffdf580,lparam=1)`.
+  - Status: active new frontier. Disassemble the stop block and trace the
+    destroyed-window/superclass path before changing GWE behavior.
+
 - Raw `WriteFile` failure on valid non-writable handles previously left
   `LastError` stale.
   - Symptom: a failed `WriteFile` could return `FALSE` and zero bytes written

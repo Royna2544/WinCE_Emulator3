@@ -1129,3 +1129,20 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     posted input, serial/audio/process, and synchronous-send wakeups through
     scheduler-owned wait state and GWE message queues as CE does, rather than
     resuming blocked message calls from ad hoc subsystem paths.
+
+- CE serial timeout authority:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`,
+  `C:\WINCE600\PRIVATE\WINCEOS\DRIVERS\SERDEV\serial.c`, and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\DEVICE\DEVCORE\devfile.c`
+  - `winbase.h` defines `COMMTIMEOUTS` as five DWORD fields:
+    `ReadIntervalTimeout`, `ReadTotalTimeoutMultiplier`,
+    `ReadTotalTimeoutConstant`, `WriteTotalTimeoutMultiplier`, and
+    `WriteTotalTimeoutConstant`.
+  - CE `serial.c` exposes `GetCommTimeouts` and `SetCommTimeouts` as comm API
+    wrappers over the device/file-handle boundary, and `devfile.c` routes
+    device `ReadFile` through the device manager rather than normal filesystem
+    file data.
+  - Rust stores timeout state on each opened serial `DeviceSession`, round-trips
+    it through raw COREDLL `GetCommTimeouts`/`SetCommTimeouts`, and uses finite
+    read-total timeouts to complete empty serial `ReadFile` waits with zero
+    bytes instead of treating every empty serial read as an infinite wait.

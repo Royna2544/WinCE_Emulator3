@@ -32,7 +32,7 @@ use crate::{
         timer::{TimerSystem, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
     config::RuntimeConfig,
-    error::Result,
+    error::{Error, Result},
 };
 
 use std::{collections::BTreeMap, path::PathBuf};
@@ -561,6 +561,34 @@ impl CeKernel {
         device.rx_len() != 0
             || (device.accepts_remote_serial_target(&self.remote_gps_target())
                 && self.remote.serial_byte_count() != 0)
+    }
+
+    pub fn serial_empty_read_timeout_ms(&self, handle: u32, requested: u32) -> Option<u32> {
+        match self.handles.get(handle) {
+            Ok(KernelObject::Device(device)) => device.empty_read_timeout_ms(requested),
+            _ => Some(0),
+        }
+    }
+
+    pub fn get_comm_timeouts(&self, handle: u32) -> Result<crate::ce::devices::CommTimeouts> {
+        match self.handles.get(handle)? {
+            KernelObject::Device(device) if device.is_serial() => Ok(device.comm_timeouts()),
+            _ => Err(Error::InvalidHandle(handle)),
+        }
+    }
+
+    pub fn set_comm_timeouts(
+        &mut self,
+        handle: u32,
+        timeouts: crate::ce::devices::CommTimeouts,
+    ) -> Result<()> {
+        match self.handles.get_mut(handle)? {
+            KernelObject::Device(device) if device.is_serial() => {
+                device.set_comm_timeouts(timeouts);
+                Ok(())
+            }
+            _ => Err(Error::InvalidHandle(handle)),
+        }
     }
 
     fn drain_remote_serial_to_handle(&mut self, handle: u32, max_bytes: usize) -> usize {

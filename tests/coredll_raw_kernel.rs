@@ -5,23 +5,25 @@ use wince_emulation_v3::{
         coredll_ordinals::{
             ORD_CE_GET_THREAD_PRIORITY, ORD_CE_SET_THREAD_PRIORITY, ORD_CLOSE_HANDLE,
             ORD_CREATE_EVENT_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD, ORD_EVENT_MODIFY,
-            ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY, ORD_GET_EXIT_CODE_PROCESS,
-            ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
-            ORD_GET_MODULE_HANDLE_W, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
-            ORD_GET_PROCESS_ID, ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION,
-            ORD_GET_SYSTEM_TIME, ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_GET_THREAD_ID,
-            ORD_GET_THREAD_PRIORITY, ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT,
+            ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY, ORD_GET_COMM_TIMEOUTS,
+            ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR,
+            ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W, ORD_GET_PROC_ADDRESS_A,
+            ORD_GET_PROC_ADDRESS_W, ORD_GET_PROCESS_ID, ORD_GET_PROCESS_VERSION,
+            ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_TIME, ORD_GET_SYSTEM_TIME_AS_FILE_TIME,
+            ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY, ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT,
             ORD_GET_TIME_ZONE_INFORMATION, ORD_GET_VERSION_EX_W, ORD_INITIALIZE_CRITICAL_SECTION,
             ORD_INPUT_DEBUG_CHAR_W, ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_KERNEL_IO_CONTROL, ORD_LEAVE_CRITICAL_SECTION,
             ORD_LOAD_LIBRARY_W, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR,
             ORD_OPEN_EVENT_W, ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY,
-            ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD, ORD_SET_LAST_ERROR,
-            ORD_SET_THREAD_PRIORITY, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SLEEP, ORD_SLEEP_TILL_TICK,
-            ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS,
-            ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION,
-            ORD_WAIT_FOR_MULTIPLE_OBJECTS, ORD_WAIT_FOR_SINGLE_OBJECT,
+            ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD, ORD_SET_COMM_TIMEOUTS,
+            ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SLEEP,
+            ORD_SLEEP_TILL_TICK, ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME,
+            ORD_TERMINATE_PROCESS, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
+            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_FOR_MULTIPLE_OBJECTS,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
         },
+        file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::{Message, QS_POSTMESSAGE, QS_TIMER, WM_TIMER},
         kernel::{CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel},
         object::MAX_SUSPEND_COUNT,
@@ -2049,6 +2051,63 @@ fn coredll_raw_adb_account_setter_is_not_exported_by_current_map() -> Result<()>
         CoredllDispatch::UnresolvedOrdinal(1943)
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_comm_timeouts_round_trip_on_serial_handle() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let com = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
+    let timeouts_ptr = 0x3100_0000;
+    memory.map_words(timeouts_ptr, 5);
+    memory.write_word(timeouts_ptr, 50);
+    memory.write_word(timeouts_ptr + 4, 2);
+    memory.write_word(timeouts_ptr + 8, 10);
+    memory.write_word(timeouts_ptr + 12, 3);
+    memory.write_word(timeouts_ptr + 16, 11);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_COMM_TIMEOUTS,
+            [com, timeouts_ptr]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    for offset in [0, 4, 8, 12, 16] {
+        memory.write_word(timeouts_ptr + offset, 0);
+    }
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_COMM_TIMEOUTS,
+            [com, timeouts_ptr]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(timeouts_ptr)?, 50);
+    assert_eq!(memory.read_u32(timeouts_ptr + 4)?, 2);
+    assert_eq!(memory.read_u32(timeouts_ptr + 8)?, 10);
+    assert_eq!(memory.read_u32(timeouts_ptr + 12)?, 3);
+    assert_eq!(memory.read_u32(timeouts_ptr + 16)?, 11);
+    assert_eq!(kernel.serial_empty_read_timeout_ms(com, 4), Some(18));
 
     Ok(())
 }

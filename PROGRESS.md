@@ -3044,6 +3044,30 @@
   `host_read=80129/4059846B`). Current evidence says debug+trace startup is
   dominated by guest image conversion instrumentation, while release/no-trace
   reaches the scheduler/GWE message-wake frontier.
+- Added CE-shaped `COMMTIMEOUTS` state to serial device handles. Raw
+  `SetCommTimeouts` now reads and stores the five SDK DWORD fields on the
+  opened `DeviceSession`, raw `GetCommTimeouts` round-trips them, and the
+  Unicorn serial `ReadFile` bridge uses the configured total read timeout to
+  park empty serial reads as finite scheduler waits. Default all-zero timeouts
+  preserve the old blocking behavior, while `ReadIntervalTimeout=MAXDWORD` with
+  zero total timeout becomes a nonblocking empty read. Focused coverage
+  `serial_comm_timeouts_control_empty_read_parking` and
+  `coredll_raw_comm_timeouts_round_trip_on_serial_handle` pass, along with the
+  Unicorn wait scheduler suite.
+- Mounted validation after the COM timeout slice wrote
+  `target\comm_timeout_virtual_probe.*`. The previous 60 s startup frontier
+  was a main-thread polling loop waiting on thread 6 while that worker was
+  parked in an infinite serial read. With stored COM timeouts, the worker
+  handles now exit (`WaitForSingleObjectThread` reports exit 0 for threads 5
+  through 15), scheduler counters stay compact (`wait:68/19/0`, `sleep:46`,
+  `block:88`, `wake:44`), and the run advances into real GDI/resource work:
+  thousands of `CreateDIBSection`, `BitBlt`, `SelectObject`, and region calls
+  compose into the 800x480 framebuffer. The new frontier is a guest null read
+  at `pc=0x0002c264(image:iNavi.exe+0x1c264)`,
+  `ra=0x0002c25c(image:iNavi.exe+0x1c25c)`, with only the main thread sleeping
+  (`blocked_waits=[id=47/thr=1/kind=sleep/timeout=101]`). Memory and file I/O
+  remain bounded (`heap_live=6499/20643900B`, `host_open=906`,
+  `host_read=82486/6043980B`, `mem_open=7`, `max_read=685080`).
 
 ## False Leads
 

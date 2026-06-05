@@ -9,7 +9,7 @@ use crate::{
         cemath::{CeMathBinaryF32, CeMathBinaryF64, CeMathCall, CeMathUnaryF64, CeMathValue},
         coredll_ordinals::{self, *},
         crt,
-        devices::DeviceIoControlResult,
+        devices::{CommTimeouts, DeviceIoControlResult},
         file::FileIoResult,
         file::FindData,
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat},
@@ -1504,15 +1504,20 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
-        ORD_SET_COMM_STATE | ORD_SET_COMM_TIMEOUTS => {
-            Some(CoredllValue::Bool(comm_handle_and_ptr_raw(
-                kernel,
-                memory,
-                thread_id,
-                raw_arg(args, 0),
-                raw_arg(args, 1),
-            )))
-        }
+        ORD_SET_COMM_STATE => Some(CoredllValue::Bool(comm_handle_and_ptr_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_SET_COMM_TIMEOUTS => Some(CoredllValue::Bool(set_comm_timeouts_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
         ORD_GET_COMM_TIMEOUTS => Some(CoredllValue::Bool(get_comm_timeouts_raw(
             kernel,
             memory,
@@ -4531,8 +4536,98 @@ fn get_comm_timeouts_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    let zeros = [0u8; 20];
-    if !write_guest_bytes(kernel, memory, thread_id, timeouts_ptr, &zeros) {
+    let Ok(timeouts) = kernel.get_comm_timeouts(handle) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let ok = write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        timeouts_ptr,
+        timeouts.read_interval_timeout,
+    ) && write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        timeouts_ptr.wrapping_add(4),
+        timeouts.read_total_timeout_multiplier,
+    ) && write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        timeouts_ptr.wrapping_add(8),
+        timeouts.read_total_timeout_constant,
+    ) && write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        timeouts_ptr.wrapping_add(12),
+        timeouts.write_total_timeout_multiplier,
+    ) && write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        timeouts_ptr.wrapping_add(16),
+        timeouts.write_total_timeout_constant,
+    );
+    if !ok {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn set_comm_timeouts_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    handle: u32,
+    timeouts_ptr: u32,
+) -> bool {
+    if timeouts_ptr == 0 || !is_comm_handle(kernel, handle) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(read_interval_timeout) = read_guest_u32(kernel, memory, thread_id, timeouts_ptr)
+    else {
+        return false;
+    };
+    let Some(read_total_timeout_multiplier) =
+        read_guest_u32(kernel, memory, thread_id, timeouts_ptr.wrapping_add(4))
+    else {
+        return false;
+    };
+    let Some(read_total_timeout_constant) =
+        read_guest_u32(kernel, memory, thread_id, timeouts_ptr.wrapping_add(8))
+    else {
+        return false;
+    };
+    let Some(write_total_timeout_multiplier) =
+        read_guest_u32(kernel, memory, thread_id, timeouts_ptr.wrapping_add(12))
+    else {
+        return false;
+    };
+    let Some(write_total_timeout_constant) =
+        read_guest_u32(kernel, memory, thread_id, timeouts_ptr.wrapping_add(16))
+    else {
+        return false;
+    };
+    let timeouts = CommTimeouts {
+        read_interval_timeout,
+        read_total_timeout_multiplier,
+        read_total_timeout_constant,
+        write_total_timeout_multiplier,
+        write_total_timeout_constant,
+    };
+    if kernel.set_comm_timeouts(handle, timeouts).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
     kernel.threads.set_last_error(thread_id, 0);

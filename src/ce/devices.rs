@@ -73,6 +73,7 @@ pub struct DeviceSession {
     pub kind: DeviceKind,
     pub backend: DeviceBackend,
     pub host: Option<String>,
+    comm_timeouts: CommTimeouts,
     rx: Vec<u8>,
     tx: Vec<u8>,
 }
@@ -82,6 +83,15 @@ pub struct DeviceIoControlResult {
     pub success: bool,
     pub bytes_returned: u32,
     pub output: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CommTimeouts {
+    pub read_interval_timeout: u32,
+    pub read_total_timeout_multiplier: u32,
+    pub read_total_timeout_constant: u32,
+    pub write_total_timeout_multiplier: u32,
+    pub write_total_timeout_constant: u32,
 }
 
 impl DeviceNamespace {
@@ -111,6 +121,7 @@ impl DeviceNamespace {
             kind: config.kind.clone(),
             backend: config.backend.clone(),
             host: config.host.clone(),
+            comm_timeouts: CommTimeouts::default(),
             rx: Vec::new(),
             tx: Vec::new(),
         })
@@ -170,6 +181,34 @@ impl DeviceSession {
     pub fn read_file(&mut self, requested: u32) -> Vec<u8> {
         let count = (requested as usize).min(self.rx.len());
         self.rx.drain(..count).collect()
+    }
+
+    pub fn comm_timeouts(&self) -> CommTimeouts {
+        self.comm_timeouts
+    }
+
+    pub fn set_comm_timeouts(&mut self, timeouts: CommTimeouts) {
+        self.comm_timeouts = timeouts;
+    }
+
+    pub fn empty_read_timeout_ms(&self, requested: u32) -> Option<u32> {
+        if !self.is_serial() {
+            return Some(0);
+        }
+        let timeouts = self.comm_timeouts;
+        if timeouts.read_interval_timeout == u32::MAX
+            && timeouts.read_total_timeout_multiplier == 0
+            && timeouts.read_total_timeout_constant == 0
+        {
+            return Some(0);
+        }
+        let total = u64::from(timeouts.read_total_timeout_constant).saturating_add(
+            u64::from(timeouts.read_total_timeout_multiplier).saturating_mul(u64::from(requested)),
+        );
+        if total != 0 {
+            return Some(total.min(u64::from(u32::MAX - 1)) as u32);
+        }
+        None
     }
 
     pub fn write_file(&mut self, bytes: &[u8]) -> u32 {
