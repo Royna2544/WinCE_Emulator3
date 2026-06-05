@@ -9,6 +9,31 @@
 
 ## Confirmed
 
+- The post-map Win32-host scheduler frontier moved forward again with generic
+  CE thread ownership and bounded timeout handoff fixes. Cross-thread
+  `SendMessageW` receiver-context WNDPROC callouts now keep real receiver
+  thread ownership when the target window belongs to a created guest thread,
+  and send completion recovers the sender's running-thread tuple from the
+  blocked waiter/thread handle if older metadata is missing. Current-thread
+  `Sleep` no longer fast-forwards itself ahead of an already-blocked waiter
+  whose finite timeout matures first; the same bounded wait-to-next-ready path
+  is also available after object-wait blocking. Focused coverage includes
+  `send_message_callout_enters_cross_thread_receiver_context`,
+  `send_message_blocked_wait_resume_recovers_missing_running_metadata`, and
+  `current_sleep_waits_to_next_blocked_sleep_timeout`; full
+  `cargo test --features unicorn,trace,win32-desktop --lib` now passes 174
+  tests. Fresh Win32-host validation `target\host_sleepctx_180s_*` used dumped
+  runtime DLLs from `D:\INAVI_Emulator\DUMPPLZ\Windows`, stayed bounded
+  (`heap_live=14652/31406594B`,
+  `file_io=host_open:924 host_read:83673/6454222B mem_open:4`), and moved the
+  wall-stop from `image:iNavi.exe+0x48684c` in `target\host_sendctx_180s_*` to
+  `image:iNavi.exe+0xa5d7e0` with more scheduler/message activity
+  (`wake:1167`, `timeout:951`, `gwe=send:506 done:506`). The remaining ANR
+  shape is still open: the 180 s wall snapshot can end with
+  `threads=current:5/running:none` while thread 5 is also a finite sleep
+  waiter, so the next slice should continue with run-queue ownership for
+  blocked current contexts instead of treating this as a rendering or host
+  presenter failure.
 - The post-map Win32-host scheduler fault moved past the bad tree-pointer
   crash after the Unicorn saved-context fix. Guest thread contexts now preserve
   MIPS HI/LO along with the 32 GPRs across blocked-wait, `GetMessageW`,

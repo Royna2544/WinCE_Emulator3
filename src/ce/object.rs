@@ -471,6 +471,15 @@ impl HandleTable {
         Some(thread.thread_id)
     }
 
+    pub fn thread_handle_by_id(&self, thread_id: u32) -> Option<u32> {
+        self.objects
+            .iter()
+            .find_map(|(handle, object)| match object {
+                KernelObject::Thread(thread) if thread.thread_id == thread_id => Some(*handle),
+                _ => None,
+            })
+    }
+
     pub fn thread_exit_code(&self, handle: u32) -> Option<u32> {
         let Ok(KernelObject::Thread(thread)) = self.get(handle) else {
             return None;

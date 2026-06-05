@@ -94,6 +94,16 @@
     responsiveness issue should be investigated as modal/message continuation
     plus GPS/serial/Deneb/system-state fidelity, not as the old saved-context
     crash.
+  - Newer evidence: `target\host_sleepctx_180s_*` adds generic
+    scheduler-ownership fixes for cross-thread send receiver context, missing
+    sender running metadata on send completion, and current `Sleep` yielding to
+    a shorter already-blocked finite timeout. It moves the wall-stop deeper to
+    `pc=0x00a6d7e0(image:iNavi.exe+0xa5d7e0)` with more GWE sends
+    (`send:506 done:506`) and bounded file/RSS counters, but it does not close
+    the ANR. The active unresolved symptom is now the wall snapshot still
+    reporting `threads=current:5/running:none` while thread 5 is present as a
+    finite sleep waiter. Next work should focus on blocked-current/run-queue
+    ownership at that exact handoff point.
 
 - Rendered iNavi map still needs road/building styling fidelity, but the
   black base-layer failure is fixed.

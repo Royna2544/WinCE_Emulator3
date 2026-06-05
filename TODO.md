@@ -13,6 +13,20 @@
 ## Current Slice
 
 - Current host/manual post-map slice: continue from
+  `target\host_sleepctx_180s_*`. The latest generic scheduler slice keeps
+  cross-thread `SendMessageW` receiver callouts associated with real guest
+  thread handles, recovers missing sender running metadata from blocked
+  waiters, and prevents current `Sleep` from fast-forwarding ahead of a
+  shorter already-blocked finite timeout. Full lib tests pass with 174 tests
+  and the Win32-host mounted run moved deeper (`pc=image:iNavi.exe+0xa5d7e0`,
+  `gwe=send:506 done:506`) while preserving bounded RSS/file I/O. The
+  remaining ANR frontier is still a scheduler ownership gap:
+  `threads=current:5/running:none` can appear while thread 5 is also a finite
+  sleep waiter. Next slice should inspect the exact block path that leaves the
+  just-blocked current context with no runnable peer at the wall stop, then
+  route that through the CE run queue/blocked-current ownership model. Do not
+  switch back to visual fixes unless new evidence shows a GDI regression.
+- Current host/manual post-map slice: continue from
   `target\host_fullctx_180s_*`. The saved-context dedupe plus full MIPS
   GPR/HI/LO preservation fixes the previous post-map
   `READ_UNMAPPED addr=0x14400018` tree-pointer fault; the Win32-host run now

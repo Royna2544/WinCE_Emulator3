@@ -1321,6 +1321,10 @@ impl CeKernel {
         self.handles.thread_id(handle)
     }
 
+    pub fn guest_thread_handle_by_id(&self, thread_id: u32) -> Option<u32> {
+        self.handles.thread_handle_by_id(thread_id)
+    }
+
     pub fn guest_thread_id_for_handle(&self, handle: u32, current_thread_id: u32) -> Option<u32> {
         if Self::is_current_thread_pseudo_handle(handle) {
             return Some(current_thread_id);
