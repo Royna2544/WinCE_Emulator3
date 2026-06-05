@@ -9,6 +9,22 @@
 
 ## Confirmed
 
+- Unicorn raw-import blocking for `MsgWaitForMultipleObjectsEx` now has a
+  current-thread timer fast path matching the conservative `GetMessageW`
+  bridge shape. After validating handles and finding no immediate queue input,
+  a running guest thread can complete the syscall immediately when the next CE
+  timer is already due or due within the short timer fast-forward cap and
+  within the requested timeout (or `INFINITE`). The helper advances the virtual
+  timer clock, pumps GWE, clears changed queue input when
+  `MWMO_INPUTAVAILABLE` is not set, writes `WAIT_OBJECT_0 + nCount` back to
+  `v0`, and resumes at the import return PC without registering a blocked
+  waiter. Longer timers still become scheduler-owned blocked waits. Focused
+  coverage `msg_wait_timer_completion_respects_timeout_and_short_timer_cap`
+  verifies the timeout/cap predicate, and the raw timer-wake regression still
+  passes after the Unicorn bridge change. Mounted release sanity probe
+  `target\unicorn_msgwait_timer_virtual_45s.ppm` remains at the same stable
+  `COREDLL.dll@861 blocked_get_message` frontier with bounded counters, so the
+  change is a fidelity slice and not a visible UI breakthrough by itself.
 - Raw `MsgWaitForMultipleObjectsEx` now wakes for CE timers that become due
   inside the requested timeout instead of immediately returning
   `WAIT_TIMEOUT` whenever no handle/input is ready at call entry. The raw

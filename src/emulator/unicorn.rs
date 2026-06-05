@@ -6862,14 +6862,30 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
         return false;
     }
 
-    kernel.record_blocked_msg_wait(count, timeout);
-    let wait_started_ms = kernel.timers.tick_count();
     let regs = capture_mips_gprs(uc);
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
     let kind = BlockedWaitKind::MsgWait {
         wake_mask,
         input_available,
     };
+    if running_thread.borrow().is_some()
+        && suspended_thread.borrow().is_none()
+        && try_complete_current_msg_wait_timer_wait(
+            kernel,
+            uc,
+            thread_id,
+            count,
+            timeout,
+            wake_mask,
+            input_available,
+            return_pc,
+        )
+    {
+        return true;
+    }
+
+    kernel.record_blocked_msg_wait(count, timeout);
+    let wait_started_ms = kernel.timers.tick_count();
     if let Some(callout) = pending_returns.borrow_mut().pop() {
         let wait_id = kernel.register_blocked_waiter(
             thread_id,
@@ -6937,6 +6953,64 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
         }
     }
     false
+}
+
+#[cfg(feature = "unicorn")]
+#[allow(clippy::too_many_arguments)]
+fn try_complete_current_msg_wait_timer_wait<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    thread_id: u32,
+    count: u32,
+    timeout: u32,
+    wake_mask: u32,
+    input_available: bool,
+    return_pc: u32,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    let Some(delay_ms) = kernel.timers.next_due_delay_ms() else {
+        return false;
+    };
+    if !msg_wait_timer_delay_can_complete(timeout, delay_ms) {
+        return false;
+    }
+    if delay_ms != 0 {
+        kernel.timers.sleep_ms(delay_ms);
+    }
+    kernel.pump_timers_to_gwe(thread_id);
+    let has_input = if input_available {
+        kernel.gwe.has_queue_input(thread_id, wake_mask)
+    } else {
+        kernel.gwe.has_new_queue_input(thread_id, wake_mask)
+    };
+    if !has_input {
+        return false;
+    }
+    if !input_available {
+        kernel.gwe.clear_new_queue_input(thread_id, wake_mask);
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    kernel.record_msg_wait_input(count, timeout);
+    let writes = [
+        uc.reg_write(
+            RegisterMIPS::V0,
+            u64::from(crate::ce::timer::WAIT_OBJECT_0 + count),
+        ),
+        uc.reg_write(RegisterMIPS::PC, u64::from(return_pc)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(return_pc)),
+    ];
+    if writes.into_iter().any(|write| write.is_err()) {
+        let _ = uc.emu_stop();
+    }
+    true
+}
+
+#[cfg(feature = "unicorn")]
+fn msg_wait_timer_delay_can_complete(timeout: u32, delay_ms: u32) -> bool {
+    timeout != 0
+        && should_fast_forward_empty_queue_timer(delay_ms)
+        && (timeout == crate::ce::timer::INFINITE || delay_ms <= timeout)
 }
 
 #[cfg(feature = "unicorn")]
@@ -7412,7 +7486,7 @@ fn select_ready_blocked_wait_index(
 mod wait_scheduler_tests {
     use super::{
         BlockedWaitKind, BlockedWaitThread, blocked_msg_wait_has_input, blocked_wait_timed_out,
-        select_ready_blocked_wait_index,
+        msg_wait_timer_delay_can_complete, select_ready_blocked_wait_index,
     };
     use crate::{ce::gwe::QS_POSTMESSAGE, config::RuntimeConfig};
 
@@ -7455,6 +7529,22 @@ mod wait_scheduler_tests {
     fn blocked_wait_timeout_respects_infinite_timeout() {
         let wait = blocked_wait(10, crate::ce::timer::INFINITE);
         assert!(!blocked_wait_timed_out(&wait, 10_000));
+    }
+
+    #[test]
+    fn msg_wait_timer_completion_respects_timeout_and_short_timer_cap() {
+        assert!(!msg_wait_timer_delay_can_complete(0, 0));
+        assert!(msg_wait_timer_delay_can_complete(10, 0));
+        assert!(msg_wait_timer_delay_can_complete(10, 10));
+        assert!(!msg_wait_timer_delay_can_complete(10, 11));
+        assert!(msg_wait_timer_delay_can_complete(
+            crate::ce::timer::INFINITE,
+            super::MAX_EMPTY_QUEUE_TIMER_FAST_FORWARD_MS
+        ));
+        assert!(!msg_wait_timer_delay_can_complete(
+            crate::ce::timer::INFINITE,
+            super::MAX_EMPTY_QUEUE_TIMER_FAST_FORWARD_MS + 1
+        ));
     }
 
     #[test]

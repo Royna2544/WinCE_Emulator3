@@ -78,7 +78,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     masks such as `QS_TIMER`; the message wait result is
     `WAIT_OBJECT_0 + nCount` when input wakes the call. v3 now applies that
     shape to raw timer waits by advancing only to timers due within the
-    requested timeout and leaving later timers pending.
+    requested timeout and leaving later timers pending. The Unicorn import
+    bridge uses the same result shape for current-thread short timer wakes,
+    while longer waits remain scheduler-owned.
 
 - GWE paint/update and MFC paint pumping:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`,

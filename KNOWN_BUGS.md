@@ -34,8 +34,9 @@
     breakthrough must come from the real CE scheduler/GWE/resource path after
     the valid idle wait, not from forcing pixels or app state. Raw
     `MsgWaitForMultipleObjectsEx` now handles timers due within a bounded wait
-    interval, but full Unicorn blocked-wait ownership for all scheduler wake
-    reasons is still incomplete.
+    interval, and Unicorn `MsgWaitForMultipleObjectsEx` now has a
+    current-thread short-timer fast path, but full blocked-wait ownership for
+    long timers and all scheduler wake reasons is still incomplete.
 
 - Post-region mounted iNavi now runs deeper, but later map/UI composition is
   still not presented to the display surface.
