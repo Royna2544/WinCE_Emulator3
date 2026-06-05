@@ -12,6 +12,12 @@
 
 ## Current Slice
 
+- Continue extending scheduler-backed waits beyond the raw timer-wake slice.
+  `MsgWaitForMultipleObjectsEx` raw dispatch now waits through a due CE timer
+  inside the requested timeout, but the broader scheduler/thread/window goal
+  still needs the Unicorn blocked-wait path to own all timeout, timer, object,
+  send-message, serial/audio/process, and message-input resumes consistently.
+  Keep using `C:\WINCE600` scheduler/GWE sources as authority.
 - Host input while parked on raw `GetMessageW` is no longer a blind spot:
   the host run loop now drains newly polled input into the blocked CE
   thread/window and relies on the scheduler message-wake path to resume the

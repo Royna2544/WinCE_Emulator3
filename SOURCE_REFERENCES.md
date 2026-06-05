@@ -74,6 +74,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     into the blocked raw `GetMessageW` thread/window when the host run loop is
     parked, which queues a scheduler message-wake candidate instead of
     returning from the syscall directly in host code.
+  - `MsgWaitForMultipleObjectsEx` exposes `MWMO_INPUTAVAILABLE` and CE queue
+    masks such as `QS_TIMER`; the message wait result is
+    `WAIT_OBJECT_0 + nCount` when input wakes the call. v3 now applies that
+    shape to raw timer waits by advancing only to timers due within the
+    requested timeout and leaving later timers pending.
 
 - GWE paint/update and MFC paint pumping:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`,

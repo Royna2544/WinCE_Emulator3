@@ -9,6 +9,26 @@
 
 ## Confirmed
 
+- Raw `MsgWaitForMultipleObjectsEx` now wakes for CE timers that become due
+  inside the requested timeout instead of immediately returning
+  `WAIT_TIMEOUT` whenever no handle/input is ready at call entry. The raw
+  COREDLL path checks immediate input, pumps already-due timers, and then, for
+  nonzero waits, advances the virtual timer clock to the next timer only when
+  that due time fits within the requested timeout (or `INFINITE`) before
+  pumping GWE and returning the message wait slot. Timers beyond the timeout
+  remain pending and the wait returns `WAIT_TIMEOUT`. Focused coverage
+  `coredll_raw_msgwait_wakes_for_timer_due_inside_timeout` covers both the
+  inside-timeout wake and beyond-timeout guard. Reference constants/result
+  shape were checked against `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`
+  (`MsgWaitForMultipleObjectsEx`, `MWMO_INPUTAVAILABLE`, `QS_TIMER`) and
+  `winbase.h` (`WAIT_OBJECT_0`, `INFINITE`). Verified with
+  `cargo test --features unicorn,trace,win32-desktop --test
+  coredll_raw_kernel`, the CE flag regression in `coredll_raw_gwe`, and
+  `cargo check --features unicorn,trace,win32-desktop`; the full feature test
+  suite also passes. Mounted release validation
+  `target\msgwait_timer_virtual_45s.ppm` stays at the same stable
+  `COREDLL.dll@861 blocked_get_message` frontier with bounded counters, so
+  this is scheduler wait fidelity, not the post-splash UI breakthrough.
 - Host-mode parked `GetMessageW` now has an input wake bridge instead of only
   polling host input outside the blocked CE wait. When the Win32 presenter
   run loop observes that Unicorn is stopped on a blocked raw

@@ -22,7 +22,7 @@ use wince_emulation_v3::{
             ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION,
             ORD_WAIT_FOR_MULTIPLE_OBJECTS, ORD_WAIT_FOR_SINGLE_OBJECT,
         },
-        gwe::{Message, QS_POSTMESSAGE},
+        gwe::{Message, QS_POSTMESSAGE, QS_TIMER, WM_TIMER},
         kernel::{CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel},
         object::MAX_SUSPEND_COUNT,
         registry::{ERROR_SUCCESS, RegistryValue},
@@ -1970,6 +1970,62 @@ fn coredll_raw_msgwait_requires_new_input_unless_inputavailable() -> Result<()> 
             ..
         }
     ));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_msgwait_wakes_for_timer_due_inside_timeout() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 78;
+    let hwnd = kernel.create_window_ex_w(thread_id, "MSGWAIT_TIMER", "", None, 0, 0, 0);
+
+    assert_eq!(
+        kernel.set_timer_for_thread(thread_id, Some(hwnd), Some(78), 5, None),
+        78
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX,
+            [0, 0, 1000, QS_TIMER, 0x0004],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_OBJECT_0),
+            ..
+        }
+    ));
+
+    let timer = kernel.gwe.get_message(thread_id).unwrap();
+    assert_eq!(timer.hwnd, hwnd);
+    assert_eq!(timer.msg, WM_TIMER);
+    assert_eq!(timer.wparam, 78);
+
+    let mut kernel = CeKernel::boot(RuntimeConfig::load("regs.json", "serial_devices.json")?);
+    let hwnd = kernel.create_window_ex_w(thread_id, "MSGWAIT_TIMER_LATE", "", None, 0, 0, 0);
+    assert_eq!(
+        kernel.set_timer_for_thread(thread_id, Some(hwnd), Some(79), 1000, None),
+        79
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX,
+            [0, 0, 5, QS_TIMER, 0x0004],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_TIMEOUT),
+            ..
+        }
+    ));
+    assert!(kernel.gwe.get_message(thread_id).is_none());
 
     Ok(())
 }

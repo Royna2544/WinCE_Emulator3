@@ -6424,13 +6424,10 @@ fn msg_wait_for_multiple_objects_ex_raw<M: CoredllGuestMemory>(
         }
     }
 
-    let has_input = if flags & MWMO_INPUTAVAILABLE != 0 {
-        kernel.gwe.has_queue_input(thread_id, wake_mask)
-    } else {
-        kernel.gwe.has_new_queue_input(thread_id, wake_mask)
-    };
+    let input_available = flags & MWMO_INPUTAVAILABLE != 0;
+    let has_input = msg_wait_has_input(kernel, thread_id, wake_mask, input_available);
     if has_input {
-        if flags & MWMO_INPUTAVAILABLE == 0 {
+        if !input_available {
             kernel.gwe.clear_new_queue_input(thread_id, wake_mask);
         }
         kernel.threads.set_last_error(thread_id, 0);
@@ -6438,18 +6435,32 @@ fn msg_wait_for_multiple_objects_ex_raw<M: CoredllGuestMemory>(
         return crate::ce::timer::WAIT_OBJECT_0 + count;
     }
     kernel.pump_timers_to_gwe(thread_id);
-    let has_input = if flags & MWMO_INPUTAVAILABLE != 0 {
-        kernel.gwe.has_queue_input(thread_id, wake_mask)
-    } else {
-        kernel.gwe.has_new_queue_input(thread_id, wake_mask)
-    };
+    let has_input = msg_wait_has_input(kernel, thread_id, wake_mask, input_available);
     if has_input {
-        if flags & MWMO_INPUTAVAILABLE == 0 {
+        if !input_available {
             kernel.gwe.clear_new_queue_input(thread_id, wake_mask);
         }
         kernel.threads.set_last_error(thread_id, 0);
         kernel.record_msg_wait_input(count, timeout_ms);
         return crate::ce::timer::WAIT_OBJECT_0 + count;
+    }
+    if timeout_ms != 0 {
+        if let Some(delay_ms) = kernel.timers.next_due_delay_ms() {
+            if timeout_ms == crate::ce::timer::INFINITE || delay_ms <= timeout_ms {
+                if delay_ms != 0 {
+                    kernel.timers.sleep_ms(delay_ms);
+                }
+                kernel.pump_timers_to_gwe(thread_id);
+                if msg_wait_has_input(kernel, thread_id, wake_mask, input_available) {
+                    if !input_available {
+                        kernel.gwe.clear_new_queue_input(thread_id, wake_mask);
+                    }
+                    kernel.threads.set_last_error(thread_id, 0);
+                    kernel.record_msg_wait_input(count, timeout_ms);
+                    return crate::ce::timer::WAIT_OBJECT_0 + count;
+                }
+            }
+        }
     }
 
     let result = if timeout_ms == 0 {
@@ -6460,6 +6471,19 @@ fn msg_wait_for_multiple_objects_ex_raw<M: CoredllGuestMemory>(
     kernel.threads.set_last_error(thread_id, 0);
     kernel.record_msg_wait_result(count, timeout_ms, result);
     result
+}
+
+fn msg_wait_has_input(
+    kernel: &CeKernel,
+    thread_id: u32,
+    wake_mask: u32,
+    input_available: bool,
+) -> bool {
+    if input_available {
+        kernel.gwe.has_queue_input(thread_id, wake_mask)
+    } else {
+        kernel.gwe.has_new_queue_input(thread_id, wake_mask)
+    }
 }
 
 fn local_alloc_raw(kernel: &mut CeKernel, thread_id: u32, flags: u32, bytes: u32) -> u32 {
