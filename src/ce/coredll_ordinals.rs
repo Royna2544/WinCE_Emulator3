@@ -4,7 +4,7 @@ pub struct CoredllOrdinalDef {
     pub ordinal: u32,
 }
 
-pub const COREDLL_EXPORTS: &[CoredllOrdinalDef; 1521] = &[
+pub const COREDLL_EXPORTS: &[CoredllOrdinalDef; 1522] = &[
     CoredllOrdinalDef {
         name: "??2@YAPAXI@Z",
         ordinal: 1095,
@@ -1968,6 +1968,10 @@ pub const COREDLL_EXPORTS: &[CoredllOrdinalDef; 1521] = &[
     CoredllOrdinalDef {
         name: "GetRgnBox",
         ordinal: 974,
+    },
+    CoredllOrdinalDef {
+        name: "GetROP2",
+        ordinal: 1990,
     },
     CoredllOrdinalDef {
         name: "GetRomFileBytes",

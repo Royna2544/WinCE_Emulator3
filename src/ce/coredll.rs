@@ -2512,6 +2512,17 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
+        ORD_SET_ROP2 => Some(CoredllValue::U32(set_rop2_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_i32_arg(args, 1),
+        ))),
+        ORD_GET_ROP2 => Some(CoredllValue::U32(get_rop2_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_GET_TEXT_ALIGN => Some(CoredllValue::U32(get_text_align_raw(
             kernel,
             thread_id,
@@ -2654,7 +2665,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 3),
         ))),
         ORD_EXT_TEXT_OUT_W => Some(CoredllValue::Bool(ext_text_out_w_raw(
-            kernel, memory, thread_id, args,
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            args,
         ))),
         ORD_GET_TEXT_EXTENT_EX_POINT_W => Some(CoredllValue::Bool(get_text_extent_ex_point_w_raw(
             kernel, memory, thread_id, args,
@@ -11671,6 +11686,34 @@ fn get_text_color_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32) -> u32 {
     state.text_color
 }
 
+fn set_rop2_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, rop2: i32) -> u32 {
+    if !(R2_BLACK..=R2_WHITE).contains(&rop2) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(previous) = kernel.resources.set_dc_rop2(hdc, rop2) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    previous as u32
+}
+
+fn get_rop2_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32) -> u32 {
+    let Some(state) = kernel.resources.dc_state(hdc) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    state.rop2 as u32
+}
+
 fn fill_rect_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -11836,6 +11879,60 @@ fn pixel_bytes_for_rgb(format: PixelFormat, rgb: [u8; 3]) -> [u8; 4] {
     }
 }
 
+fn framebuffer_pixel_rgb(format: PixelFormat, pixel: &[u8]) -> [u8; 3] {
+    match format {
+        PixelFormat::Rgb565 => {
+            if pixel.len() < 2 {
+                return [0, 0, 0];
+            }
+            let raw = u32::from(u16::from_le_bytes([pixel[0], pixel[1]]));
+            [
+                component_from_mask(raw, 0x0000_f800).unwrap_or(0),
+                component_from_mask(raw, 0x0000_07e0).unwrap_or(0),
+                component_from_mask(raw, 0x0000_001f).unwrap_or(0),
+            ]
+        }
+        PixelFormat::Bgra8888 => pixel
+            .get(0..3)
+            .map(|px| [px[2], px[1], px[0]])
+            .unwrap_or([0, 0, 0]),
+        PixelFormat::Rgba8888 => pixel
+            .get(0..3)
+            .map(|px| [px[0], px[1], px[2]])
+            .unwrap_or([0, 0, 0]),
+        PixelFormat::Gray8 => [pixel.first().copied().unwrap_or(0); 3],
+    }
+}
+
+fn apply_rop2_rgb(rop2: i32, pen: [u8; 3], dst: [u8; 3]) -> [u8; 3] {
+    fn op(rop2: i32, p: u8, d: u8) -> u8 {
+        match rop2 {
+            R2_BLACK => 0,
+            R2_NOTMERGEPEN => !(p | d),
+            R2_MASKNOTPEN => (!p) & d,
+            R2_NOTCOPYPEN => !p,
+            R2_MASKPENNOT => p & !d,
+            R2_NOT => !d,
+            R2_XORPEN => p ^ d,
+            R2_NOTMASKPEN => !(p & d),
+            R2_MASKPEN => p & d,
+            R2_NOTXORPEN => !(p ^ d),
+            R2_NOP => d,
+            R2_MERGENOTPEN => (!p) | d,
+            R2_COPYPEN => p,
+            R2_MERGEPENNOT => p | !d,
+            R2_MERGEPEN => p | d,
+            R2_WHITE => 0xff,
+            _ => p,
+        }
+    }
+    [
+        op(rop2, pen[0], dst[0]),
+        op(rop2, pen[1], dst[1]),
+        op(rop2, pen[2], dst[2]),
+    ]
+}
+
 fn colorref_to_rgb565(red: u8, green: u8, blue: u8) -> u16 {
     ((u16::from(red) & 0xf8) << 8) | ((u16::from(green) & 0xfc) << 3) | (u16::from(blue) >> 3)
 }
@@ -11907,7 +12004,7 @@ fn pen_colorref(kernel: &CeKernel, pen: u32) -> Option<u32> {
         .and_then(|pen| (pen.style != 5).then_some(pen.color))
 }
 
-fn selected_pen_model(kernel: &CeKernel, hdc: u32) -> Option<(u32, i32)> {
+fn selected_pen_model(kernel: &CeKernel, hdc: u32) -> Option<(u32, i32, i32)> {
     let pen = kernel.resources.selected_pen(hdc)?;
     let color = pen_colorref(kernel, pen)?;
     let width = kernel
@@ -11915,7 +12012,12 @@ fn selected_pen_model(kernel: &CeKernel, hdc: u32) -> Option<(u32, i32)> {
         .pen(pen)
         .map(|pen| pen.width.max(1))
         .unwrap_or(1);
-    Some((color, width))
+    let rop2 = kernel
+        .resources
+        .dc_state(hdc)
+        .map(|state| state.rop2)
+        .unwrap_or(R2_COPYPEN);
+    Some((color, width, rop2))
 }
 
 fn selected_bitmap_object(
@@ -12593,6 +12695,81 @@ fn bitmap_pixel_rgb(
     }
 }
 
+fn bitmap_pixel_rgb_from_memory<M: CoredllGuestMemory>(
+    memory: &M,
+    bitmap: &crate::ce::resource::BitmapObject,
+    x: i32,
+    y: i32,
+) -> Option<[u8; 3]> {
+    if bitmap.bits_ptr == 0 || bitmap.width <= 0 || bitmap.height <= 0 || bitmap.width_bytes <= 0 {
+        return None;
+    }
+    if x < 0 || y < 0 || x >= bitmap.width || y >= bitmap.height {
+        return None;
+    }
+    let row = if bitmap.top_down {
+        y
+    } else {
+        bitmap.height - 1 - y
+    } as u32;
+    let x = x as u32;
+    let row_start = row.checked_mul(bitmap.width_bytes as u32)?;
+    match bitmap.bits_pixel {
+        1 => {
+            let addr = bitmap.bits_ptr.wrapping_add(row_start).wrapping_add(x / 8);
+            let byte = memory.read_u8(addr).ok()?;
+            let bit = (byte >> (7 - (x % 8))) & 1;
+            Some(rgb_from_color_table(bitmap, bit))
+        }
+        8 => {
+            let addr = bitmap.bits_ptr.wrapping_add(row_start).wrapping_add(x);
+            memory
+                .read_u8(addr)
+                .ok()
+                .map(|index| rgb_from_color_table(bitmap, index))
+        }
+        16 => {
+            let addr = bitmap.bits_ptr.wrapping_add(row_start).wrapping_add(x * 2);
+            let raw = u32::from(memory.read_u16(addr).ok()?);
+            if let Some([red_mask, green_mask, blue_mask]) = bitmap.rgb_masks {
+                Some([
+                    component_from_mask(raw, red_mask)?,
+                    component_from_mask(raw, green_mask)?,
+                    component_from_mask(raw, blue_mask)?,
+                ])
+            } else {
+                Some([
+                    component_from_mask(raw, 0x0000_f800)?,
+                    component_from_mask(raw, 0x0000_07e0)?,
+                    component_from_mask(raw, 0x0000_001f)?,
+                ])
+            }
+        }
+        24 => {
+            let addr = bitmap.bits_ptr.wrapping_add(row_start).wrapping_add(x * 3);
+            let blue = memory.read_u8(addr).ok()?;
+            let green = memory.read_u8(addr.wrapping_add(1)).ok()?;
+            let red = memory.read_u8(addr.wrapping_add(2)).ok()?;
+            Some([red, green, blue])
+        }
+        32 => {
+            let addr = bitmap.bits_ptr.wrapping_add(row_start).wrapping_add(x * 4);
+            let raw = memory.read_u32(addr).ok()?;
+            if let Some([red_mask, green_mask, blue_mask]) = bitmap.rgb_masks {
+                Some([
+                    component_from_mask(raw, red_mask)?,
+                    component_from_mask(raw, green_mask)?,
+                    component_from_mask(raw, blue_mask)?,
+                ])
+            } else {
+                let bytes = raw.to_le_bytes();
+                Some([bytes[2], bytes[1], bytes[0]])
+            }
+        }
+        _ => None,
+    }
+}
+
 fn bitmap_pattern_bytes<M: CoredllGuestMemory>(
     memory: &M,
     bitmap: &crate::ce::resource::BitmapObject,
@@ -13148,11 +13325,11 @@ fn polyline_raw<M: CoredllGuestMemory>(
         };
         points.push(point);
     }
-    if let Some((color, width)) = selected_pen_model(kernel, hdc) {
-        if !draw_polyline_to_bitmap_for_hdc(kernel, memory, hdc, &points, color, width)
+    if let Some((color, width, rop2)) = selected_pen_model(kernel, hdc) {
+        if !draw_polyline_to_bitmap_for_hdc(kernel, memory, hdc, &points, color, width, rop2)
             && let Some(framebuffer) = framebuffer
         {
-            draw_polyline_for_hdc(kernel, framebuffer, hdc, &points, color, width);
+            draw_polyline_for_hdc(kernel, framebuffer, hdc, &points, color, width, rop2);
         }
     }
     if let Some(last) = points.last().copied() {
@@ -13169,6 +13346,7 @@ fn draw_polyline_to_bitmap_for_hdc<M: CoredllGuestMemory>(
     points: &[Point],
     colorref: u32,
     width: i32,
+    rop2: i32,
 ) -> bool {
     if !kernel.resources.is_memory_dc(hdc) {
         return false;
@@ -13192,7 +13370,7 @@ fn draw_polyline_to_bitmap_for_hdc<M: CoredllGuestMemory>(
     };
     for segment in points.windows(2) {
         draw_bitmap_line(
-            memory, &bitmap, segment[0], segment[1], clip, colorref, width,
+            memory, &bitmap, segment[0], segment[1], clip, colorref, width, rop2,
         );
     }
     true
@@ -13248,8 +13426,10 @@ fn polygon_raw<M: CoredllGuestMemory>(
                             .unwrap_or(Point { x: 0, y: 0 });
                         fill_bitmap_polygon(memory, &bitmap, &points, clip, paint, origin);
                     }
-                    if let Some((color, width)) = selected_pen_model(kernel, hdc) {
-                        draw_closed_bitmap_polyline(memory, &bitmap, &points, clip, color, width);
+                    if let Some((color, width, rop2)) = selected_pen_model(kernel, hdc) {
+                        draw_closed_bitmap_polyline(
+                            memory, &bitmap, &points, clip, color, width, rop2,
+                        );
                     }
                 }
             }
@@ -13257,12 +13437,12 @@ fn polygon_raw<M: CoredllGuestMemory>(
             if let Some(BrushPaint::Solid(color)) = selected_brush_paint(kernel, hdc) {
                 fill_framebuffer_polygon_for_hdc(kernel, framebuffer, hdc, &points, color);
             }
-            if let Some((color, width)) = selected_pen_model(kernel, hdc) {
+            if let Some((color, width, rop2)) = selected_pen_model(kernel, hdc) {
                 let mut closed = points.clone();
                 if let Some(first) = points.first().copied() {
                     closed.push(first);
                 }
-                draw_polyline_for_hdc(kernel, framebuffer, hdc, &closed, color, width);
+                draw_polyline_for_hdc(kernel, framebuffer, hdc, &closed, color, width, rop2);
             }
         }
     }
@@ -13297,7 +13477,7 @@ fn rectangle_raw<M: CoredllGuestMemory>(
     {
         fill_framebuffer_rect_for_hdc(kernel, framebuffer, hdc, rect, color);
     }
-    if let Some((color, width)) = selected_pen_model(kernel, hdc) {
+    if let Some((color, width, rop2)) = selected_pen_model(kernel, hdc) {
         let rect = normalize_rect(rect);
         let points = [
             Point {
@@ -13321,10 +13501,10 @@ fn rectangle_raw<M: CoredllGuestMemory>(
                 y: rect.top,
             },
         ];
-        if !draw_polyline_to_bitmap_for_hdc(kernel, memory, hdc, &points, color, width)
+        if !draw_polyline_to_bitmap_for_hdc(kernel, memory, hdc, &points, color, width, rop2)
             && let Some(framebuffer) = framebuffer.as_deref_mut()
         {
-            draw_polyline_for_hdc(kernel, framebuffer, hdc, &points, color, width);
+            draw_polyline_for_hdc(kernel, framebuffer, hdc, &points, color, width, rop2);
         }
     }
     kernel.threads.set_last_error(thread_id, 0);
@@ -13338,6 +13518,7 @@ fn draw_polyline_for_hdc(
     points: &[Point],
     colorref: u32,
     width: i32,
+    rop2: i32,
 ) {
     let Some(hwnd) = hdc_to_hwnd(hdc) else {
         return;
@@ -13363,7 +13544,15 @@ fn draw_polyline_for_hdc(
         })
         .collect();
     for segment in screen_points.windows(2) {
-        draw_framebuffer_line(framebuffer, segment[0], segment[1], clip, colorref, width);
+        draw_framebuffer_line(
+            framebuffer,
+            segment[0],
+            segment[1],
+            clip,
+            colorref,
+            width,
+            rop2,
+        );
     }
 }
 
@@ -13374,9 +13563,10 @@ fn draw_framebuffer_line(
     clip: Rect,
     colorref: u32,
     width: i32,
+    rop2: i32,
 ) {
     let info = framebuffer.info();
-    let pixel = pixel_bytes_for_colorref(info.format, colorref);
+    let pen_rgb = colorref_rgb(colorref);
     let bytes_per_pixel = info.format.bytes_per_pixel();
     let width = width.max(1);
     let low = (width - 1) / 2;
@@ -13405,6 +13595,12 @@ fn draw_framebuffer_line(
                     && py < info.height as i32
                 {
                     let offset = py as usize * info.stride + px as usize * bytes_per_pixel;
+                    let dst_rgb = framebuffer_pixel_rgb(
+                        info.format,
+                        &framebuffer.pixels()[offset..offset + bytes_per_pixel],
+                    );
+                    let rgb = apply_rop2_rgb(rop2, pen_rgb, dst_rgb);
+                    let pixel = pixel_bytes_for_rgb(info.format, rgb);
                     framebuffer.pixels_mut()[offset..offset + bytes_per_pixel]
                         .copy_from_slice(&pixel[..bytes_per_pixel]);
                     let pixel_rect = Rect {
@@ -13453,6 +13649,7 @@ fn draw_bitmap_line<M: CoredllGuestMemory>(
     clip: Rect,
     colorref: u32,
     width: i32,
+    rop2: i32,
 ) {
     let rgb = colorref_rgb(colorref);
     let width = width.max(1);
@@ -13472,7 +13669,15 @@ fn draw_bitmap_line<M: CoredllGuestMemory>(
         for py in y0 - low..=y0 + high {
             for px in x0 - low..=x0 + high {
                 if px >= clip.left && px < clip.right && py >= clip.top && py < clip.bottom {
-                    let _ = write_bitmap_pixel_rgb(memory, bitmap, px, py, rgb);
+                    let dst =
+                        bitmap_pixel_rgb_from_memory(memory, bitmap, px, py).unwrap_or([0, 0, 0]);
+                    let _ = write_bitmap_pixel_rgb(
+                        memory,
+                        bitmap,
+                        px,
+                        py,
+                        apply_rop2_rgb(rop2, rgb, dst),
+                    );
                 }
             }
         }
@@ -13498,14 +13703,15 @@ fn draw_closed_bitmap_polyline<M: CoredllGuestMemory>(
     clip: Rect,
     colorref: u32,
     width: i32,
+    rop2: i32,
 ) {
     for segment in points.windows(2) {
         draw_bitmap_line(
-            memory, bitmap, segment[0], segment[1], clip, colorref, width,
+            memory, bitmap, segment[0], segment[1], clip, colorref, width, rop2,
         );
     }
     if let (Some(first), Some(last)) = (points.first().copied(), points.last().copied()) {
-        draw_bitmap_line(memory, bitmap, last, first, clip, colorref, width);
+        draw_bitmap_line(memory, bitmap, last, first, clip, colorref, width, rop2);
     }
 }
 
@@ -13741,9 +13947,9 @@ fn line_to_raw(
         return false;
     };
     if let Some(framebuffer) = framebuffer
-        && let Some((color, width)) = selected_pen_model(kernel, hdc)
+        && let Some((color, width, rop2)) = selected_pen_model(kernel, hdc)
     {
-        draw_polyline_for_hdc(kernel, framebuffer, hdc, &[start, end], color, width);
+        draw_polyline_for_hdc(kernel, framebuffer, hdc, &[start, end], color, width, rop2);
     }
     let _ = kernel.resources.move_to(hdc, end);
     kernel.threads.set_last_error(thread_id, 0);
@@ -14051,11 +14257,13 @@ fn get_text_face_w_raw<M: CoredllGuestMemory>(
 
 fn ext_text_out_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
-    memory: &M,
+    memory: &mut M,
+    framebuffer: Option<&mut dyn Framebuffer>,
     thread_id: u32,
     args: &[u32],
 ) -> bool {
     let hdc = raw_arg(args, 0);
+    let options = raw_arg(args, 3);
     let rect_ptr = raw_arg(args, 4);
     let text_ptr = raw_arg(args, 5);
     let count = raw_arg(args, 6);
@@ -14065,8 +14273,27 @@ fn ext_text_out_w_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    if rect_ptr != 0 && read_guest_rect(kernel, memory, thread_id, rect_ptr).is_none() {
-        return false;
+    let rect = if rect_ptr != 0 {
+        let Some(rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
+            return false;
+        };
+        Some(rect)
+    } else {
+        None
+    };
+    if options & ETO_OPAQUE != 0
+        && let Some(rect) = rect
+    {
+        let color = kernel
+            .resources
+            .dc_state(hdc)
+            .map(|state| state.bk_color)
+            .unwrap_or(rgb(0xff, 0xff, 0xff));
+        if !fill_bitmap_rect_for_hdc(kernel, memory, hdc, rect, BrushPaint::Solid(color))
+            && let Some(framebuffer) = framebuffer
+        {
+            fill_framebuffer_rect_for_hdc(kernel, framebuffer, hdc, rect, color);
+        }
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
@@ -15496,6 +15723,23 @@ const BLACKNESS: u32 = 0x0000_0042;
 const WHITENESS: u32 = 0x00ff_0062;
 const SRCCOPY: u32 = 0x00cc_0020;
 const PATCOPY: u32 = 0x00f0_0021;
+const R2_BLACK: i32 = 1;
+const R2_NOTMERGEPEN: i32 = 2;
+const R2_MASKNOTPEN: i32 = 3;
+const R2_NOTCOPYPEN: i32 = 4;
+const R2_MASKPENNOT: i32 = 5;
+const R2_NOT: i32 = 6;
+const R2_XORPEN: i32 = 7;
+const R2_NOTMASKPEN: i32 = 8;
+const R2_MASKPEN: i32 = 9;
+const R2_NOTXORPEN: i32 = 10;
+const R2_NOP: i32 = 11;
+const R2_MERGENOTPEN: i32 = 12;
+const R2_COPYPEN: i32 = 13;
+const R2_MERGEPENNOT: i32 = 14;
+const R2_MERGEPEN: i32 = 15;
+const R2_WHITE: i32 = 16;
+const ETO_OPAQUE: u32 = 0x0002;
 const PALETTE_ENTRY_SIZE: usize = 4;
 const PALETTE_ENTRY_SIZE_U32: u32 = 4;
 const MAX_LOG_PALETTE_ENTRIES: u32 = 4096;
@@ -15796,6 +16040,10 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "SetBkMode",
     "SetTextColor",
     "SetTextAlign",
+    "SetROP2",
+    "GetROP2",
+    "GetTextAlign",
+    "GetTextColor",
     "FillRect",
     "BitBlt",
     "StretchBlt",

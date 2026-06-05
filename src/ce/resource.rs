@@ -252,6 +252,7 @@ pub struct DcState {
     pub bk_mode: i32,
     pub text_color: u32,
     pub text_align: u32,
+    pub rop2: i32,
 }
 
 impl Default for DcState {
@@ -269,6 +270,7 @@ impl Default for DcState {
             bk_mode: 2,
             text_color: 0,
             text_align: 0,
+            rop2: 13,
         }
     }
 }
@@ -1066,6 +1068,16 @@ impl ResourceSystem {
         let state = self.dc_states.entry(hdc).or_default();
         let previous = state.text_align;
         state.text_align = align;
+        Some(previous)
+    }
+
+    pub fn set_dc_rop2(&mut self, hdc: u32, rop2: i32) -> Option<i32> {
+        if hdc == 0 {
+            return None;
+        }
+        let state = self.dc_states.entry(hdc).or_default();
+        let previous = state.rop2;
+        state.rop2 = rop2;
         Some(previous)
     }
 

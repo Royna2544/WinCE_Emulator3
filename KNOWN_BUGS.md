@@ -12,22 +12,25 @@
 
 ## Open
 
-- Rendered iNavi map still has a dark/black base-layer fidelity gap.
-  - Symptom: after the generic pattern-brush and CE-style winding polygon
-    fixes, `target\gdi_winding_virtual.png` is a populated real map UI, but
-    the central map crop remains roughly 47% pure black. Roads, building
-    extrusions, labels, POI icons, and controls render, but the land/base
-    layer and some road styling still look too sparse/dark.
-  - Evidence: the mounted run reaches the stable post-map
-    `COREDLL.dll@861 blocked_get_message` frontier with bounded file/RSS
-    counters, so this is not startup, presentation, or large-file preloading.
-    Render counts still show heavy guest GDI activity (`Polygon=7161`,
-    `Polyline=2873`, `BitBlt=957`, `CreateDIBSection=845`,
-    `CreatePatternBrush=84`), and files trace evidence shows landuse/bgdata
-    `.mdc` map layers opening successfully.
-  - Status: open. Continue with generic CE GDI/map-layer fidelity and trace
-    which guest operation should color the black base. Do not hardcode an
-    app-specific background fill.
+- Rendered iNavi map still needs road/building styling fidelity, but the
+  black base-layer failure is fixed.
+  - Symptom: before the `ExtTextOutW(ETO_OPAQUE)` fix,
+    `target\gdi_rop2_virtual.png` had a populated real map UI whose map crop
+    was still `47.2826%` pure black and whose center crop was `51.6434%` pure
+    black. Roads, building extrusions, labels, POI icons, and controls rendered
+    around the missing land/background layer.
+  - Evidence: CE `wingdi.h` defines `ETO_OPAQUE`, and the mounted run calls
+    `ExtTextOutW` with option `0x0002`. v3 previously returned success without
+    filling the supplied rectangle. After implementing generic opaque-rectangle
+    fill from the DC `bk_color`, mounted `target\gdi_exttext_virtual.png`
+    drops map-crop pure black to `0.0131%` and center black to `0.0000%` with
+    bounded memory/file counters. The framebuffer now shows a real light
+    land/background layer. ROP2 pen support is also implemented, but the
+    mounted iNavi path did not call `SetROP2`.
+  - Status: base-layer black gap fixed. Keep this open for remaining visual
+    fidelity only: road surfaces/edges and building styling still need
+    generic CE GDI investigation. Do not hardcode colors or iNavi-specific
+    pixels.
 
 - Mounted iNavi reaches a rendered map UI, then idles on the post-map
   scheduler/device/message frontier.

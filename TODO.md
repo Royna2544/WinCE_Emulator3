@@ -12,18 +12,19 @@
 
 ## Current Slice
 
-- Current GDI map-fidelity slice: continue from `target\gdi_winding_virtual.*`.
-  Pattern brushes, `SetBrushOrgEx`, memory-DC `PatBlt`, and CE GPE-style
-  winding polygon fills are implemented and covered by raw GWE tests. The real
-  mounted run still parks cleanly at post-map `GetMessageW` with bounded
-  memory/file counters, and the framebuffer is populated, but the map crop is
-  still about 47% pure black while roads/buildings/labels render around it.
-  File evidence shows `SDMMC Disk\mapdata\landuse\...` and
-  `SDMMC Disk\mapdata\bgdata\...` files opening successfully, so the next
-  work should trace generic map-layer drawing/color application paths:
-  unimplemented GDI bitmap/color/ROP/region APIs, guest map layer parsing
-  results, and any missing CE display/GDI semantics. Do not fill the
-  background with a guessed color or special-case iNavi map pixels.
+- Current GDI map-fidelity slice: continue from `target\gdi_exttext_virtual.*`.
+  The huge black base-layer gap is now fixed generically by honoring
+  `ExtTextOutW(ETO_OPAQUE)` as a CE GDI background-rectangle fill with the
+  selected DC `bk_color`. The mounted framebuffer now has a real light
+  land/background layer (`map_crop` pure black down from `47.2826%` to
+  `0.0131%`, center black down to `0.0000%`) while preserving bounded
+  memory/file I/O. ROP2 pen drawing is also modeled and tested, but the mounted
+  iNavi path did not call `SetROP2`, so that was a fidelity closure rather than
+  the visible base-layer fix. Next work should continue road/building styling
+  and post-map progression from real CE GDI/scheduler evidence: inspect whether
+  road surfaces need additional polygon/line, brush, text, or bitmap/ROP
+  semantics, and keep tracing generic GDI paths rather than guessing colors or
+  special-casing iNavi pixels.
 - Continue from `target\wcspbrk_long_virtual_*`. The hardcoded late dialog
   replay and aux alias mutation hooks are gone, and raw `wcspbrk`/COREDLL
   ordinal 68 is now implemented. The longer mounted run proves the previous

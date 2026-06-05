@@ -9,6 +9,39 @@
 
 ## Confirmed
 
+- The black iNavi map base-layer gap was traced to a generic CE GDI omission:
+  `ExtTextOutW` with `ETO_OPAQUE` validated arguments but did not fill the
+  supplied opaque rectangle with the DC background color. CE defines
+  `ETO_OPAQUE` in
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h`, and old GDI/MFC code uses it
+  as a rectangle fill primitive. Raw `ExtTextOutW` now fills selected memory
+  DIBs or display HDCs through the existing CE GDI fill path before returning
+  success. Focused coverage
+  `coredll_raw_ext_text_out_opaque_fills_selected_memory_dib_with_bk_color`
+  passes with the full raw GWE test binary. Mounted validation
+  `target\gdi_exttext_virtual.*` uses dumped runtime DLLs from
+  `D:\INAVI_Emulator\DUMPPLZ\Windows` and replaces the black map void with a
+  real light land/background layer: pure-black pixels in the map crop dropped
+  from `47.2826%` in `target\gdi_rop2_virtual.png` to `0.0131%`, and center
+  crop black dropped from `51.6434%` to `0.0000%`. Memory/file counters remain
+  bounded (`heap_live=14630/31597994B`, `virtual_live=2/131072B`,
+  `host_open=910`, `host_read=83967/6451484B`, `mem_open=4`,
+  `max_read=685080`). The run used the full 150 s wall budget inside
+  `iNavi.exe+0x13e164` while continuing real map GDI work, so the remaining
+  visible fidelity work is road/building styling and longer post-map
+  scheduler/device progression, not a black framebuffer/base-layer failure.
+- GDI pen ROP2 state is now modeled for the raw COREDLL boundary. `SetROP2`
+  and `GetROP2` preserve DC state with CE `R2_*` values from
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h`, `GetROP2` is present in the
+  COREDLL export table, and framebuffer/memory-DIB line drawing applies the
+  selected ROP2 operation to destination pixels. CE GPE corroboration came
+  from `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\DISPLAY\GPE\ddi_if.cpp`,
+  `swline.cpp`, and `blthelpers.cpp`. Focused coverage includes
+  `coredll_raw_set_get_rop2_round_trips_dc_state` and
+  `coredll_raw_polyline_applies_rop2_xorpen_on_selected_memory_dib`. Mounted
+  `target\gdi_rop2_virtual.*` was pixel-identical to the prior winding run
+  because this iNavi map path did not call `SetROP2`, but the primitive is now
+  CE-correct for callers that do.
 - Offscreen GDI map drawing now covers the next generic fidelity slice used by
   the mounted iNavi map UI. Pattern brushes created with `CreatePatternBrush`
   tile into selected memory DIBs through `PatBlt`/`Polygon`, `SetBrushOrgEx`
