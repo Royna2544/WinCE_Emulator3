@@ -35,8 +35,11 @@
   Fresh `target\host_ready_preempt_*` evidence exposed multiple simultaneous
   thread-1 `GetMessageW` waiters after the ready-preemption slice; the
   per-`GetMessageW` stale waiter is now cleared before a new empty-queue
-  registration. Next host validation should confirm thread 1 no longer has
-  duplicate `get_message` blocked waits. The new
+  registration, and `target\host_getmsg_cleanup_*` confirms thread 1 no longer
+  has duplicate `get_message` blocked waits. Continue from the remaining clean
+  frontier: one main `GetMessageW`, worker sleeps/kernel waits, active timer
+  `0x11d5`, and the app-owned legacy terminate path after the bounded host run.
+  The new
   `messages` trace selector now preserves kernel-level GWE post/target/delivery
   records, including public `PostMessageW`/thread/broadcast posts,
   keyboard-post helpers, `SendNotifyMessageW`, and queued cross-thread sends.

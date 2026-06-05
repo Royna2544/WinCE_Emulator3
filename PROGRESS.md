@@ -57,7 +57,13 @@
   `blocked_guest_thread` waiter for that thread before registering a new one;
   focused coverage
   `get_message_block_registration_clears_stale_get_message_wait` prevents that
-  duplicate scheduler state.
+  duplicate scheduler state. Follow-up visible host validation
+  `target\host_getmsg_cleanup_*` confirms the duplicate is gone: only
+  `id=46/thr=1/kind=get_message` remains for the UI thread at the stop, with
+  bounded counters (`host_open=902`, `host_read=81850/5311346B`) and the known
+  app-owned legacy terminate path afterward. The remaining scheduler frontier
+  is now a clean single UI `GetMessageW` plus worker sleeps/kernel waits, not
+  duplicate main-thread message wait bookkeeping.
 - Host/manual post-map input now has a durable kernel-level GWE/message trace
   under the existing `messages` monitor selector. The trace records generic
   message posts, host/remote touch target/drop decisions, keyboard target/drop

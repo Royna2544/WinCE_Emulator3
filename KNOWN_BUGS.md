@@ -58,17 +58,21 @@
     terminate path, while revealing multiple simultaneous thread-1
     `GetMessageW` scheduler waiters. The bridge now removes the stale
     per-`GetMessageW` blocked-thread waiter for a thread before registering a
-    new empty-queue `GetMessageW` wait.
+    new empty-queue `GetMessageW` wait. Follow-up host validation
+    `target\host_getmsg_cleanup_*` confirms only one thread-1
+    `kind=get_message` waiter remains.
   - Status: open but moved again. The active ANR frontier is now incomplete CE
     run-queue/ready-waiter ownership after a real map UI, not a lost input,
     duplicate-wait freeze, hidden-layer leak, or reproduced `pc=0` return. The
-    next host run should confirm duplicate thread-1 `get_message` waiters are
-    gone, then show whether single-slot ready-waiter preemption is enough. If
-    signaled waiters still remain parked, implement a real runnable context
-    queue instead of relying on one suspended peer. Use the new message trace on
-    the exact unresponsive host interaction. If it records delivered mouse/key
-    messages, chase the guest handler continuation, pending send, timer/device
-    waits, or missing subsystem event that follows; if it records
+    duplicate thread-1 `GetMessageW` waiter bug is closed. Continue from the
+    cleaner frontier: one main `GetMessageW`, worker sleeps/kernel waits,
+    active timer `0x11d5`, and app-owned legacy terminate after the bounded host
+    run. If signaled waiters still remain parked in later evidence, implement a
+    real runnable context queue instead of relying on one suspended peer. Use
+    the new message trace on the exact unresponsive host interaction. If it
+    records delivered mouse/key messages, chase the guest handler continuation,
+    pending send, timer/device waits, or missing subsystem event that follows;
+    if it records
     `remote_*_drop`, fix generic GWE hit-test/focus/capture semantics. Do not
     hardcode iNavi controls.
 
