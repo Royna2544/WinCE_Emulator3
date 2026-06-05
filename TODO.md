@@ -463,12 +463,12 @@
     pushbutton or the dialog's default pushbutton with `IDOK` fallback. GWE now
     reports button `DLGC_DEFPUSHBUTTON`/`DLGC_UNDEFPUSHBUTTON` state, answers
     `DM_GETDEFID`/`DM_SETDEFID` over child pushbutton styles, and has a first
-    queued-key `GetKeyState` model. The broader CE dialog manager remains
-    incomplete: full `DLGC_WANT*` edge cases, nested modal loops,
-    default-button repaint/state details, richer keyboard-state/toggle-key
-    behavior, and full receiver-context guest dialog proc execution still need
-    expansion as fixtures/traces demand. Current fixture coverage includes
-    passing
+    queued-key `GetKeyState`/`GetAsyncKeyState`/`GetAsyncShiftFlags` model. The
+    broader CE dialog manager remains incomplete: full `DLGC_WANT*` edge cases,
+    nested modal loops, default-button repaint/state details, richer
+    keyboard-state/toggle-key and `PostKeybdMessage` behavior, and full
+    receiver-context guest dialog proc execution still need expansion as
+    fixtures/traces demand. Current fixture coverage includes passing
     `052_modeless_dialog_isdialogmessage` and
     `076_dialog_tab_enter_escape` runs through the ignored eVC MIPSII
     `fixture_exes` harness.

@@ -58,6 +58,28 @@ pub const DLGC_WANTCHARS: u32 = 0x0080;
 pub const DLGC_STATIC: u32 = 0x0100;
 pub const DLGC_BUTTON: u32 = 0x2000;
 pub const VK_SHIFT: u32 = 0x10;
+pub const VK_CONTROL: u32 = 0x11;
+pub const VK_MENU: u32 = 0x12;
+pub const VK_CAPITAL: u32 = 0x14;
+pub const VK_LSHIFT: u32 = 0xa0;
+pub const VK_RSHIFT: u32 = 0xa1;
+pub const VK_LCONTROL: u32 = 0xa2;
+pub const VK_RCONTROL: u32 = 0xa3;
+pub const VK_LMENU: u32 = 0xa4;
+pub const VK_RMENU: u32 = 0xa5;
+pub const KEY_STATE_TOGGLED_FLAG: u32 = 0x0001;
+pub const KEY_STATE_GET_ASYNC_DOWN_FLAG: u32 = 0x0002;
+pub const KEY_STATE_DOWN_FLAG: u32 = 0x0080;
+pub const KEY_SHIFT_ANY_CTRL_FLAG: u32 = 0x4000_0000;
+pub const KEY_SHIFT_ANY_SHIFT_FLAG: u32 = 0x2000_0000;
+pub const KEY_SHIFT_ANY_ALT_FLAG: u32 = 0x1000_0000;
+pub const KEY_SHIFT_CAPITAL_FLAG: u32 = 0x0800_0000;
+pub const KEY_SHIFT_LEFT_CTRL_FLAG: u32 = 0x0400_0000;
+pub const KEY_SHIFT_LEFT_SHIFT_FLAG: u32 = 0x0200_0000;
+pub const KEY_SHIFT_LEFT_ALT_FLAG: u32 = 0x0100_0000;
+pub const KEY_SHIFT_RIGHT_CTRL_FLAG: u32 = 0x0040_0000;
+pub const KEY_SHIFT_RIGHT_SHIFT_FLAG: u32 = 0x0020_0000;
+pub const KEY_SHIFT_RIGHT_ALT_FLAG: u32 = 0x0010_0000;
 pub const MSGSRC_UNKNOWN: u32 = 0;
 pub const MSGSRC_SOFTWARE_POST: u32 = 1;
 pub const MSGSRC_HARDWARE_KEYBOARD: u32 = 2;
@@ -448,6 +470,7 @@ pub struct Gwe {
     changed_queue_status_by_thread: BTreeMap<u32, u32>,
     quit_by_thread: BTreeMap<u32, QuitState>,
     key_state: [u16; 256],
+    async_key_down: [bool; 256],
     message_pointer_payloads: BTreeMap<u32, MessagePointerPayload>,
     replied_send_depth_by_thread: BTreeMap<u32, u32>,
     next_lifecycle_message_order: u64,
@@ -520,6 +543,7 @@ impl Default for Gwe {
             changed_queue_status_by_thread: BTreeMap::new(),
             quit_by_thread: BTreeMap::new(),
             key_state: [0; 256],
+            async_key_down: [false; 256],
             message_pointer_payloads: BTreeMap::new(),
             replied_send_depth_by_thread: BTreeMap::new(),
             next_lifecycle_message_order: 1,
@@ -1715,12 +1739,30 @@ impl Gwe {
     }
 
     pub fn get_key_state(&self, virtual_key: u32) -> u32 {
-        let state = self
-            .key_state
-            .get(virtual_key as usize)
-            .copied()
-            .unwrap_or(0);
+        let state = self.effective_key_state(virtual_key);
         (state as i16 as i32) as u32
+    }
+
+    pub fn get_async_key_state(&mut self, virtual_key: u32) -> u32 {
+        let state = self.effective_key_state(virtual_key);
+        let async_down = self.consume_async_key_down(virtual_key);
+        let result = (state & 0x8000) | u16::from(async_down);
+        (result as i16 as i32) as u32
+    }
+
+    pub fn get_async_shift_flags(&mut self, virtual_key: u32) -> u32 {
+        let state = self.effective_key_state(virtual_key);
+        let mut flags = 0;
+        if state & 0x0001 != 0 {
+            flags |= KEY_STATE_TOGGLED_FLAG;
+        }
+        if self.consume_async_key_down(virtual_key) {
+            flags |= KEY_STATE_GET_ASYNC_DOWN_FLAG;
+        }
+        if state & 0x8000 != 0 {
+            flags |= KEY_STATE_DOWN_FLAG;
+        }
+        flags | self.current_shift_flags()
     }
 
     fn window_dialog_code(&self, hwnd: u32) -> u32 {
@@ -1785,14 +1827,166 @@ impl Gwe {
     }
 
     fn update_key_state_for_message(&mut self, msg: u32, virtual_key: u32) {
+        match msg {
+            WM_KEYDOWN => self.set_key_down(virtual_key),
+            WM_KEYUP => self.set_key_up(virtual_key),
+            _ => {}
+        }
+    }
+
+    fn set_key_down(&mut self, virtual_key: u32) {
         let Some(state) = self.key_state.get_mut(virtual_key as usize) else {
             return;
         };
-        match msg {
-            WM_KEYDOWN => *state |= 0x8000,
-            WM_KEYUP => *state &= !0x8000,
+        let was_down = *state & 0x8000 != 0;
+        if virtual_key == VK_CAPITAL && !was_down {
+            *state ^= 0x0001;
+        }
+        *state |= 0x8000;
+        if let Some(async_down) = self.async_key_down.get_mut(virtual_key as usize) {
+            *async_down = true;
+        }
+        if let Some(alias) = modifier_alias_for(virtual_key) {
+            if let Some(state) = self.key_state.get_mut(alias as usize) {
+                *state |= 0x8000;
+            }
+            if let Some(async_down) = self.async_key_down.get_mut(alias as usize) {
+                *async_down = true;
+            }
+        }
+    }
+
+    fn set_key_up(&mut self, virtual_key: u32) {
+        let Some(state) = self.key_state.get_mut(virtual_key as usize) else {
+            return;
+        };
+        *state &= !0x8000;
+        if let Some(alias) = modifier_alias_for(virtual_key) {
+            let still_down = match alias {
+                VK_SHIFT => {
+                    self.effective_key_state(VK_LSHIFT) & 0x8000 != 0
+                        || self.effective_key_state(VK_RSHIFT) & 0x8000 != 0
+                }
+                VK_CONTROL => {
+                    self.effective_key_state(VK_LCONTROL) & 0x8000 != 0
+                        || self.effective_key_state(VK_RCONTROL) & 0x8000 != 0
+                }
+                VK_MENU => {
+                    self.effective_key_state(VK_LMENU) & 0x8000 != 0
+                        || self.effective_key_state(VK_RMENU) & 0x8000 != 0
+                }
+                _ => false,
+            };
+            if !still_down {
+                if let Some(state) = self.key_state.get_mut(alias as usize) {
+                    *state &= !0x8000;
+                }
+            }
+        }
+    }
+
+    fn effective_key_state(&self, virtual_key: u32) -> u16 {
+        let mut state = self
+            .key_state
+            .get(virtual_key as usize)
+            .copied()
+            .unwrap_or(0);
+        match virtual_key {
+            VK_SHIFT => {
+                state |= self.key_state.get(VK_LSHIFT as usize).copied().unwrap_or(0) & 0x8000;
+                state |= self.key_state.get(VK_RSHIFT as usize).copied().unwrap_or(0) & 0x8000;
+            }
+            VK_CONTROL => {
+                state |= self
+                    .key_state
+                    .get(VK_LCONTROL as usize)
+                    .copied()
+                    .unwrap_or(0)
+                    & 0x8000;
+                state |= self
+                    .key_state
+                    .get(VK_RCONTROL as usize)
+                    .copied()
+                    .unwrap_or(0)
+                    & 0x8000;
+            }
+            VK_MENU => {
+                state |= self.key_state.get(VK_LMENU as usize).copied().unwrap_or(0) & 0x8000;
+                state |= self.key_state.get(VK_RMENU as usize).copied().unwrap_or(0) & 0x8000;
+            }
             _ => {}
         }
+        state
+    }
+
+    fn consume_async_key_down(&mut self, virtual_key: u32) -> bool {
+        let mut async_down = self
+            .async_key_down
+            .get_mut(virtual_key as usize)
+            .map(|down| {
+                let was_down = *down;
+                *down = false;
+                was_down
+            })
+            .unwrap_or(false);
+        let aliases: &[u32] = match virtual_key {
+            VK_SHIFT => &[VK_LSHIFT, VK_RSHIFT],
+            VK_CONTROL => &[VK_LCONTROL, VK_RCONTROL],
+            VK_MENU => &[VK_LMENU, VK_RMENU],
+            _ => &[],
+        };
+        for alias in aliases {
+            if let Some(down) = self.async_key_down.get_mut(*alias as usize) {
+                async_down |= *down;
+                *down = false;
+            }
+        }
+        async_down
+    }
+
+    fn current_shift_flags(&self) -> u32 {
+        let left_shift = self.effective_key_state(VK_LSHIFT) & 0x8000 != 0;
+        let right_shift = self.effective_key_state(VK_RSHIFT) & 0x8000 != 0;
+        let any_shift = self.effective_key_state(VK_SHIFT) & 0x8000 != 0;
+        let left_ctrl = self.effective_key_state(VK_LCONTROL) & 0x8000 != 0;
+        let right_ctrl = self.effective_key_state(VK_RCONTROL) & 0x8000 != 0;
+        let any_ctrl = self.effective_key_state(VK_CONTROL) & 0x8000 != 0;
+        let left_alt = self.effective_key_state(VK_LMENU) & 0x8000 != 0;
+        let right_alt = self.effective_key_state(VK_RMENU) & 0x8000 != 0;
+        let any_alt = self.effective_key_state(VK_MENU) & 0x8000 != 0;
+        let capital = self.effective_key_state(VK_CAPITAL) & 0x0001 != 0;
+        let mut flags = 0;
+        if any_shift {
+            flags |= KEY_SHIFT_ANY_SHIFT_FLAG;
+        }
+        if left_shift {
+            flags |= KEY_SHIFT_LEFT_SHIFT_FLAG;
+        }
+        if right_shift {
+            flags |= KEY_SHIFT_RIGHT_SHIFT_FLAG;
+        }
+        if any_ctrl {
+            flags |= KEY_SHIFT_ANY_CTRL_FLAG;
+        }
+        if left_ctrl {
+            flags |= KEY_SHIFT_LEFT_CTRL_FLAG;
+        }
+        if right_ctrl {
+            flags |= KEY_SHIFT_RIGHT_CTRL_FLAG;
+        }
+        if any_alt {
+            flags |= KEY_SHIFT_ANY_ALT_FLAG;
+        }
+        if left_alt {
+            flags |= KEY_SHIFT_LEFT_ALT_FLAG;
+        }
+        if right_alt {
+            flags |= KEY_SHIFT_RIGHT_ALT_FLAG;
+        }
+        if capital {
+            flags |= KEY_SHIFT_CAPITAL_FLAG;
+        }
+        flags
     }
 
     pub fn record_destroy_lifecycle_message(&mut self, hwnd: u32, msg: u32) -> bool {
@@ -2715,6 +2909,15 @@ fn queue_status_bit_for_message(msg: u32) -> u32 {
         WM_LBUTTONDOWN | WM_LBUTTONUP => QS_MOUSEBUTTON,
         WM_MOUSEMOVE => QS_MOUSEMOVE,
         _ => QS_POSTMESSAGE,
+    }
+}
+
+fn modifier_alias_for(virtual_key: u32) -> Option<u32> {
+    match virtual_key {
+        VK_LSHIFT | VK_RSHIFT => Some(VK_SHIFT),
+        VK_LCONTROL | VK_RCONTROL => Some(VK_CONTROL),
+        VK_LMENU | VK_RMENU => Some(VK_MENU),
+        _ => None,
     }
 }
 

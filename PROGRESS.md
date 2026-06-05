@@ -2649,13 +2649,15 @@
   dialog tab-order helper, honors `VK_SHIFT`/`GetKeyState` for Shift+TAB
   reverse traversal, routes Escape as `IDCANCEL`, and routes Return to the
   focused pushbutton or the dialog's default pushbutton with `IDOK` fallback.
-  GWE now answers `GetKeyState` from queued keydown/up state, answers
-  `WM_GETDLGCODE` for button/static/edit controls, and implements
-  `DM_GETDEFID`/`DM_SETDEFID` over child pushbutton style state, so Enter from
-  an edit control can reach the default button through generic dialog-manager
-  behavior. Focused raw GWE coverage now proves dialog-owned dispatch,
-  unrelated-HWND rejection, TAB and Shift+TAB focus traversal, `GetKeyState`
-  high-bit state, default-button dialog codes, and `DM_GETDEFID`/`DM_SETDEFID`
+  GWE now answers `GetKeyState` from queued keydown/up state, exposes
+  `GetAsyncKeyState`/`GetAsyncShiftFlags` with the first CE `KeyState*` and
+  `KeyShift*` bit model, answers `WM_GETDLGCODE` for button/static/edit
+  controls, and implements `DM_GETDEFID`/`DM_SETDEFID` over child pushbutton
+  style state, so Enter from an edit control can reach the default button
+  through generic dialog-manager behavior. Focused raw GWE coverage now proves
+  dialog-owned dispatch, unrelated-HWND rejection, TAB and Shift+TAB focus
+  traversal, `GetKeyState` high-bit state, async-key latch consumption, async
+  shift flags, default-button dialog codes, and `DM_GETDEFID`/`DM_SETDEFID`
   transitions. The eVC MIPSII
   fixtures
   `052_modeless_dialog_isdialogmessage` and the strengthened

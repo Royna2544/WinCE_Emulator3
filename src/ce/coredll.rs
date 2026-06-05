@@ -2935,6 +2935,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_KEY_STATE => Some(CoredllValue::U32(
             kernel.gwe.get_key_state(raw_arg(args, 0)),
         )),
+        ORD_GET_ASYNC_KEY_STATE => Some(CoredllValue::U32(
+            kernel.gwe.get_async_key_state(raw_arg(args, 0)),
+        )),
+        ORD_GET_ASYNC_SHIFT_FLAGS => Some(CoredllValue::U32(
+            kernel.gwe.get_async_shift_flags(raw_arg(args, 0)),
+        )),
         ORD_PEEK_MESSAGE_W => Some(CoredllValue::Bool(peek_message_w_raw(
             kernel, memory, thread_id, args,
         ))),

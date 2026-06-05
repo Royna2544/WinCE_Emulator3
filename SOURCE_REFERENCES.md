@@ -776,10 +776,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     supplies the public `WS_TABSTOP`, `WS_GROUP`, and `WS_DISABLED` styles used
     by the traversal, and disabled ancestor checks now keep controls beneath a
     disabled dialog out of traversal without mutating the child HWND state.
-  - `winuser.h` declares `IsDialogMessageW`, `GetKeyState`, `WM_GETDLGCODE`,
-    `VK_TAB`, `VK_SHIFT`, `VK_RETURN`, `VK_ESCAPE`, `IDOK`, `IDCANCEL`,
-    `DM_GETDEFID`, `DM_SETDEFID`, `DC_HASDEFID`, button styles such as
-    `BS_PUSHBUTTON` and `BS_DEFPUSHBUTTON`, and the `DLGC_*` dialog-code flags;
+  - `winuser.h` declares `IsDialogMessageW`, `GetKeyState`,
+    `GetAsyncKeyState`, `WM_GETDLGCODE`, `VK_TAB`, `VK_SHIFT`, `VK_RETURN`,
+    `VK_ESCAPE`, `IDOK`, `IDCANCEL`, `DM_GETDEFID`, `DM_SETDEFID`,
+    `DC_HASDEFID`, button styles such as `BS_PUSHBUTTON` and
+    `BS_DEFPUSHBUTTON`, and the `DLGC_*` dialog-code flags; `keybd.h` declares
+    the CE `KeyState*` and `KeyShift*` flags returned by async keyboard state;
     `dlgmgr.h` exposes `IsDialogMessageW_I`, `CheckDefPushButton`,
     `IsDefPushButton`, and `IsUndefPushButton` paths that consult
     `WM_GETDLGCODE`. Rust raw `IsDialogMessageW` now consumes only messages for
@@ -789,7 +791,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     commands without special-casing iNavi. Return uses a focused pushbutton or
     the dialog's default pushbutton with `IDOK` fallback, and GWE now reports
     `DLGC_DEFPUSHBUTTON`/`DLGC_UNDEFPUSHBUTTON` plus
-    `DM_GETDEFID`/`DM_SETDEFID` over child button style state.
+    `DM_GETDEFID`/`DM_SETDEFID` over child button style state. The same queued
+    key state now backs the first raw `GetAsyncKeyState` and
+    `GetAsyncShiftFlags` implementation.
 
 - GWE paint/update surface:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\gweapiset1.hpp`,
