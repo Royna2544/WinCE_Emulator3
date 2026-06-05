@@ -1895,6 +1895,15 @@ impl UnicornMips {
             if let Some(limit) = host_wall_clock_limit {
                 let mut counter = host_wall_clock_counter_hook.borrow_mut();
                 *counter = counter.wrapping_add(1);
+                if *counter & 0x0fff == 0 {
+                    if let Err(err) =
+                        drain_win32_host_input_to_active_window(unsafe { &mut *kernel_ptr })
+                    {
+                        *framebuffer_tick_error_code_hook.borrow_mut() = Some(err);
+                        let _ = uc.emu_stop();
+                        return;
+                    }
+                }
                 if *counter & 0x0fff == 0 && host_wall_clock_started.elapsed() >= limit {
                     *host_wall_clock_stop_hook.borrow_mut() = Some(UnicornHostWallClockStop {
                         pc,
@@ -11140,6 +11149,61 @@ fn try_timeslice_to_suspended_thread<D>(
     }
     activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &resume);
     true
+}
+
+#[cfg(all(windows, feature = "win32-desktop"))]
+fn drain_win32_host_input_to_active_window(kernel: &mut CeKernel) -> Result<usize> {
+    let events = crate::ce::win32_desktop::poll_global_input_events()?;
+    if events.is_empty() {
+        return Ok(0);
+    }
+    let mut queued = 0;
+    for event in events {
+        match event {
+            crate::ce::desktop::VirtualInputEvent::Key {
+                virtual_key,
+                pressed,
+            } => {
+                let phase = if pressed { "down" } else { "up" };
+                kernel
+                    .remote
+                    .enqueue_key(phase, virtual_key)
+                    .map_err(|err| Error::Backend(format!("live host key input: {err}")))?;
+                queued += 1;
+            }
+            crate::ce::desktop::VirtualInputEvent::TouchDown { x, y } => {
+                kernel
+                    .remote
+                    .enqueue_touch("down", x, y)
+                    .map_err(|err| Error::Backend(format!("live host touch down: {err}")))?;
+                queued += 1;
+            }
+            crate::ce::desktop::VirtualInputEvent::TouchMove { x, y } => {
+                kernel
+                    .remote
+                    .enqueue_touch("move", x, y)
+                    .map_err(|err| Error::Backend(format!("live host touch move: {err}")))?;
+                queued += 1;
+            }
+            crate::ce::desktop::VirtualInputEvent::TouchUp { x, y } => {
+                kernel
+                    .remote
+                    .enqueue_touch("up", x, y)
+                    .map_err(|err| Error::Backend(format!("live host touch up: {err}")))?;
+                queued += 1;
+            }
+        }
+    }
+    if queued == 0 {
+        Ok(0)
+    } else {
+        Ok(kernel.drain_remote_input_to_active_window())
+    }
+}
+
+#[cfg(not(all(windows, feature = "win32-desktop")))]
+fn drain_win32_host_input_to_active_window(_kernel: &mut CeKernel) -> Result<usize> {
+    Ok(0)
 }
 
 #[cfg(feature = "unicorn")]

@@ -35,6 +35,22 @@
   saved worker context (`suspended:6:0x00000f0c:pc=0x0022fa90`), so the next
   slice should focus on runnable-context fairness and device/timer/message
   progression, not the now-closed pending-send deadlock.
+- Win32 host input is no longer limited to outer run-loop stop points. The host
+  presenter already pumped and blitted frames during long Unicorn execution,
+  but host mouse/key events were only polled before/after `run_until` or when a
+  previous run had stopped at a blocked `GetMessageW`. The Unicorn live tick
+  now drains the existing Win32 input queue, enqueues those events through the
+  normal `CeRemote` touch/key path, and lets GWE route them to the active or
+  captured CE window with ordinary hit-testing and message-wake behavior.
+  Focused coverage `remote_input_active_window_drain_posts_mouse_messages`
+  proves queued touch input becomes normal `WM_LBUTTONDOWN/WM_LBUTTONUP`
+  messages for the active HWND, and the full
+  `cargo test --features unicorn,trace,win32-desktop --lib` suite now passes
+  178 tests. Fresh visible host validation `target\host_live_input_300s_*`
+  stayed bounded and reached the same real map UI with all sync sends completed
+  (`gwe=send:24 done:24`); no manual `remote_touch`/`remote_key` was recorded
+  in that run's trace, so the deeper post-map ANR remains open, but a real
+  host-input latency blind spot is closed.
 - The post-map Win32-host scheduler bridge now avoids two more generic
   starvation traps. The Unicorn code-hook scheduler timeslice no longer drops
   a due slice just because the fixed sample lands on an import trap,

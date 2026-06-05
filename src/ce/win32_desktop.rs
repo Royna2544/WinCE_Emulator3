@@ -88,12 +88,7 @@ impl fmt::Debug for Win32Input {
 
 impl Input for Win32Input {
     fn poll_events(&mut self) -> Result<Vec<VirtualInputEvent>> {
-        pump_messages();
-        let mut events = input_events()
-            .lock()
-            .map_err(|_| Error::Backend("win32 input queue lock is poisoned".to_owned()))?;
-        let drained: Vec<_> = events.drain(..).collect();
-        drop(events);
+        let drained = poll_global_input_events()?;
         if let Some(callback) = self.callback.as_mut() {
             for event in &drained {
                 callback(event);
@@ -101,6 +96,14 @@ impl Input for Win32Input {
         }
         Ok(drained)
     }
+}
+
+pub fn poll_global_input_events() -> Result<Vec<VirtualInputEvent>> {
+    pump_messages();
+    let mut events = input_events()
+        .lock()
+        .map_err(|_| Error::Backend("win32 input queue lock is poisoned".to_owned()))?;
+    Ok(events.drain(..).collect())
 }
 
 #[derive(Debug)]

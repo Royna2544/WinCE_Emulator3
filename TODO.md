@@ -31,6 +31,15 @@
   MFS1 semantics, and exact delivered host-touch continuation. Do not revisit
   the closed hidden-layer leak, file-I/O/RSS growth, or pending-send deadlock
   unless fresh evidence regresses them.
+- Host live-input follow-up: after the live Win32 input bridge, use
+  `target\host_live_input_300s_*` or a fresh host run to click the exact
+  unresponsive UI region while `--tracefile messages` is enabled. Input should
+  now be polled during Unicorn execution, not only after an outer run stop. If
+  the trace records `remote_touch_target` and matching `get_message`, continue
+  into the guest handler/timer/device continuation; if it records
+  `remote_touch_drop`, fix generic GWE active/capture/hit-test routing. The
+  validation run did not record manual touch/key events, so it proves the code
+  path builds and stays bounded, not that the particular UI action succeeds.
 - Current host/manual post-map slice: continue from
   `target\host_sleep_getmsg_180s_*`. The fixed-interval timeslice now retries
   a pending scheduler slice after unsafe MIPS branch/trampoline/import samples,

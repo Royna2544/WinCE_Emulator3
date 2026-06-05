@@ -144,6 +144,17 @@
     pump execution with `blocked_get_message=thread:1`, a saved worker context
     at `image:iNavi.exe+0x21fa90`, finite worker sleeps, timer 4565, and
     Deneb/COM7/SMB1/MFS1 device activity.
+  - Latest host-boundary fix: Win32 input is now polled from the Unicorn live
+    tick and routed through `CeRemote` plus GWE active/captured-window
+    hit-testing while guest code is still executing. This closes the blind spot
+    where the host window could remain responsive and repainting while new
+    clicks waited in the host input queue until the next outer `run_until`
+    stop. Focused coverage
+    `remote_input_active_window_drain_posts_mouse_messages` passes, and
+    `target\host_live_input_300s_*` proves the new path does not regress the
+    visible map run or bounded I/O/RSS. That run did not record manual
+    `remote_touch`/`remote_key` events, so the broader ANR remains open and
+    still needs a manual trace on the exact unresponsive control.
 
 - Rendered iNavi map still needs road/building styling fidelity, but the
   black base-layer failure is fixed.

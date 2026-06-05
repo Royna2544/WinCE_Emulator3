@@ -3075,6 +3075,21 @@ impl CeKernel {
         self.drain_remote_input_to_target(thread_id, hwnd, true)
     }
 
+    pub fn drain_remote_input_to_active_window(&mut self) -> usize {
+        let hwnd = self
+            .gwe
+            .get_capture()
+            .or_else(|| self.gwe.get_active_window())
+            .filter(|hwnd| self.gwe.is_window(*hwnd));
+        let Some(hwnd) = hwnd else {
+            return 0;
+        };
+        let Some((thread_id, _process_id)) = self.gwe.window_thread_process_id(hwnd) else {
+            return 0;
+        };
+        self.drain_remote_input_to_target(thread_id, Some(hwnd), true)
+    }
+
     pub fn wave_out_open(&mut self, format: WaveFormat) -> std::result::Result<u32, MmResult> {
         self.audio.wave_out_open(format)
     }
@@ -3225,7 +3240,7 @@ fn make_lparam_i16(low: i32, high: i32) -> u32 {
 mod tests {
     use super::*;
     use crate::{
-        ce::gwe::{WM_ACTIVATE, WM_KILLFOCUS, WM_SETFOCUS, WS_CHILD},
+        ce::gwe::{WM_ACTIVATE, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_SETFOCUS, WS_CHILD},
         config::RuntimeConfig,
     };
 
@@ -3252,6 +3267,27 @@ mod tests {
         assert_eq!(kernel.gwe.get_active_window(), Some(parent));
         assert!(kernel.gwe.get_message(thread_id).is_none());
 
+        Ok(())
+    }
+
+    #[test]
+    fn remote_input_active_window_drain_posts_mouse_messages() -> Result<()> {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let mut kernel = CeKernel::boot(config);
+        let thread_id = 1;
+        let hwnd = kernel.create_window_ex_w(thread_id, "ACTIVE", "", None, 0, 0, 0);
+        assert_eq!(kernel.gwe.set_active_window(Some(hwnd)), None);
+        kernel.remote.set_framebuffer_size(800, 480);
+        kernel.remote.enqueue_touch("tap", 10, 20).unwrap();
+
+        assert_eq!(kernel.drain_remote_input_to_active_window(), 2);
+
+        let mut messages = Vec::new();
+        while let Some(message) = kernel.gwe.get_message(thread_id) {
+            messages.push((message.hwnd, message.msg));
+        }
+        assert!(messages.contains(&(hwnd, WM_LBUTTONDOWN)));
+        assert!(messages.contains(&(hwnd, WM_LBUTTONUP)));
         Ok(())
     }
 }
