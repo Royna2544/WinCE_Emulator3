@@ -32,7 +32,19 @@
   advance to due `140613`, and GWE records `send:168 done:167`. Current
   frontier is the final in-flight thread-9 send or subsequent map/image code,
   not lost host input, duplicate main-thread waits, or UI idle freezing all
-  worker timeouts.
+  worker timeouts. Follow-up host evidence added invalid-indirect stack-word
+  diagnostics and narrowed the next ANR shape further: `target\host_anr_pc0_*`
+  did not reproduce the earlier `pc=0` return, but spent the full 90 s in
+  guest image code with several signaled blocked waits still parked. A
+  conservative Unicorn time-slice now swaps the active guest context with the
+  already-suspended peer context at bounded code-hook intervals, skipping
+  import traps, trampoline pages, and pending WNDPROC returns. Visible host
+  validation `target\host_timeslice_*` ran for 120 s with no `pc=0`, reached
+  MFC trampoline code instead of the earlier image-code wall stop, kept bounded
+  file/RSS counters (`host_open=898`, `host_read=81537/5294249B`), and showed
+  more real GDI/map work (`BitBlt=177`, `CreateDIBSection=412`) with active
+  timers. Remaining evidence still shows signaled waiters parked, so this is
+  a scheduler movement, not the final CE run-queue fix.
 - Host/manual post-map input now has a durable kernel-level GWE/message trace
   under the existing `messages` monitor selector. The trace records generic
   message posts, host/remote touch target/drop decisions, keyboard target/drop

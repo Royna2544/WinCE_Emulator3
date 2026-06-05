@@ -808,6 +808,8 @@ const UNICORN_PRESENTATION_TRACE_LIMIT: usize = 4096;
 const UNICORN_WINDOW_TRACE_LIMIT: usize = 4096;
 #[cfg(feature = "unicorn")]
 const UNICORN_TB_CACHE_FLUSH_INTERVAL: u32 = 0x0004_0000;
+#[cfg(feature = "unicorn")]
+const UNICORN_SCHEDULER_TIMESLICE_INTERVAL: u32 = 0x0008_0000;
 #[cfg(all(feature = "unicorn", feature = "trace"))]
 const UNICORN_IMPORT_MILESTONE_LIMIT: usize = 8192;
 #[cfg(feature = "unicorn")]
@@ -1741,6 +1743,7 @@ impl UnicornMips {
         let framebuffer_tick_error_hook = Rc::clone(&framebuffer_tick_error);
         let framebuffer_tick_error_code_hook = Rc::clone(&framebuffer_tick_error);
         let process_dll_search_dirs = self.dll_search_dirs.clone();
+        let trampoline_ranges_code_hook = trampoline_ranges.clone();
         if !fast_start_enabled {
             uc.add_code_hook(1, 0, move |uc, address, _size| {
             let pc = address as u32;
@@ -1829,7 +1832,7 @@ impl UnicornMips {
                 .and_then(|target| trampoline_origin_by_stub.get(&target).copied());
             let current_trampoline_origin = ((full_trace_enabled || progress_file.is_some())
                 && sampled_code_trace
-                && target_in_ranges(pc, &trampoline_ranges))
+                && target_in_ranges(pc, &trampoline_ranges_code_hook))
             .then(|| {
                 trampoline_jumps.iter().find_map(|trampoline| {
                     trampoline
@@ -1947,7 +1950,7 @@ impl UnicornMips {
                     instruction,
                     next_instruction,
                     target,
-                    &trampoline_ranges,
+                    &trampoline_ranges_code_hook,
                 ) {
                     let _ = uc.reg_write(RegisterMIPS::PC, u64::from(target));
                     return;
@@ -2133,6 +2136,38 @@ impl UnicornMips {
         let running_guest_thread_hook = Rc::clone(&running_guest_thread);
         let guest_thread_stack_slots = Rc::new(RefCell::new(std::collections::BTreeMap::new()));
         let guest_thread_stack_slots_hook = Rc::clone(&guest_thread_stack_slots);
+        let scheduler_timeslice_counter = Rc::new(Cell::new(0u32));
+        let scheduler_timeslice_counter_hook = Rc::clone(&scheduler_timeslice_counter);
+        let current_thread_id_timeslice_hook = Rc::clone(&current_thread_id);
+        let suspended_guest_thread_timeslice_hook = Rc::clone(&suspended_guest_thread);
+        let running_guest_thread_timeslice_hook = Rc::clone(&running_guest_thread);
+        let pending_wndproc_returns_timeslice_hook = Rc::clone(&pending_wndproc_returns);
+        let trampoline_ranges_timeslice_hook = trampoline_ranges.clone();
+        uc.add_code_hook(1, 0, move |uc, address, _size| {
+            let counter = scheduler_timeslice_counter_hook.get().wrapping_add(1);
+            scheduler_timeslice_counter_hook.set(counter);
+            if counter % UNICORN_SCHEDULER_TIMESLICE_INTERVAL != 0 {
+                return;
+            }
+            let pc = address as u32;
+            if pc >= IMPORT_TRAP_BASE
+                || target_in_ranges(pc, &trampoline_ranges_timeslice_hook)
+                || !pending_wndproc_returns_timeslice_hook.borrow().is_empty()
+            {
+                return;
+            }
+            let active_thread_id = *current_thread_id_timeslice_hook.borrow();
+            let _ = try_timeslice_to_suspended_thread(
+                unsafe { &*kernel_ptr },
+                uc,
+                active_thread_id,
+                pc,
+                &current_thread_id_timeslice_hook,
+                &suspended_guest_thread_timeslice_hook,
+                &running_guest_thread_timeslice_hook,
+            );
+        })
+        .map_err(|err| Error::Backend(format!("install scheduler timeslice hook: {err:?}")))?;
         let traps = self.import_traps.clone();
         let stack_top = self.stack_top.unwrap_or(0);
         let mapped_kernel_memory = Rc::new(RefCell::new(KernelMemoryMappings::new()));
@@ -9414,6 +9449,35 @@ fn activate_suspended_thread<D>(
         .map(|handle| (suspended.thread_id, handle));
     restore_mips_gprs(uc, &suspended.regs);
     let _ = uc.reg_write(RegisterMIPS::PC, u64::from(suspended.pc));
+}
+
+#[cfg(feature = "unicorn")]
+fn try_timeslice_to_suspended_thread<D>(
+    kernel: &CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    active_thread_id: u32,
+    active_pc: u32,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+) -> bool {
+    let Some(resume) = suspended_thread.borrow().as_ref().cloned() else {
+        return false;
+    };
+    if resume.thread_id == active_thread_id || running_thread.borrow().is_none() {
+        return false;
+    }
+    let active = SuspendedGuestThread {
+        thread_id: active_thread_id,
+        thread_handle: running_thread
+            .borrow()
+            .and_then(|(id, handle)| (id == active_thread_id).then_some(handle)),
+        regs: capture_mips_gprs(uc),
+        pc: active_pc,
+    };
+    *suspended_thread.borrow_mut() = Some(active);
+    activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &resume);
+    true
 }
 
 #[cfg(feature = "unicorn")]

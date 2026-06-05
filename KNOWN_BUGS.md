@@ -42,14 +42,22 @@
     validation `target\anr_worker_resume_virtual_*` now runs the full 60 s wall
     budget in iNavi image code with `block:1307/wake:441` and
     `gwe=send:168 done:167`, rather than freezing at the empty UI wait.
-  - Status: open but moved. The active ANR frontier is now a full-budget
-    guest-code run with one in-flight thread-9 send at wall stop, not a lost
-    input or duplicate-wait freeze. Use the new message trace on the exact
-    unresponsive host interaction. If it records delivered mouse/key messages,
-    chase the guest handler continuation, pending send, timer/device waits, or
-    missing subsystem event that follows; if it records `remote_*_drop`, fix
-    generic GWE hit-test/focus/capture semantics. Do not hardcode iNavi
-    controls.
+    Follow-up host evidence `target\host_anr_pc0_*` did not reproduce the
+    earlier invalid `pc=0` return; invalid-indirect snapshots now include a
+    small stack-word window so a future bad `jr $ra` can show the saved return
+    slot state. The conservative suspended-peer time-slice validated by
+    `target\host_timeslice_*` moved visible host execution further into real
+    GDI/map work (`BitBlt=177`, `CreateDIBSection=412`) with bounded file I/O
+    (`host_open=898`, `host_read=81537/5294249B`) and active timers, but the
+    summary still shows signaled waiters left parked.
+  - Status: open but moved again. The active ANR frontier is now incomplete CE
+    run-queue/ready-waiter ownership after a real map UI, not a lost input,
+    duplicate-wait freeze, hidden-layer leak, or reproduced `pc=0` return. Use
+    the new message trace on the exact unresponsive host interaction. If it
+    records delivered mouse/key messages, chase the guest handler continuation,
+    pending send, timer/device waits, or missing subsystem event that follows;
+    if it records `remote_*_drop`, fix generic GWE hit-test/focus/capture
+    semantics. Do not hardcode iNavi controls.
 
 - Rendered iNavi map still needs road/building styling fidelity, but the
   black base-layer failure is fixed.

@@ -22,9 +22,14 @@
   `sleep` and `get_message`, and `target\anr_worker_resume_virtual_*` proves
   an empty UI `GetMessageW` now lets finite worker waits mature/resume instead
   of stopping the whole run. That probe reaches the full 60 s wall budget in
-  guest image code with `send:168 done:167`; next ANR work should inspect the
-  remaining in-flight thread-9 `SendMessage` and the guest code around
-  `iNavi.exe+0x974c64`, plus any exact host click that still feels dead. The new
+  guest image code with `send:168 done:167`. Follow-up host evidence
+  `target\host_anr_pc0_*` did not reproduce the earlier `pc=0` return, and the
+  conservative Unicorn suspended-peer time-slice in `target\host_timeslice_*`
+  moved visible host execution to more real GDI/map work without fixing the
+  ANR completely. That run still left signaled scheduler waiters parked, so
+  next ANR work should grow the full CE run queue/ready-waiter model and also
+  inspect the remaining in-flight send and any exact host click that still
+  feels dead. The new
   `messages` trace selector now preserves kernel-level GWE post/target/delivery
   records, including public `PostMessageW`/thread/broadcast posts,
   keyboard-post helpers, `SendNotifyMessageW`, and queued cross-thread sends.

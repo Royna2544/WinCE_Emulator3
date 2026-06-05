@@ -96,6 +96,14 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     empty `GetMessageW`, the bridge must still let other blocked guest threads
     whose finite timeouts mature inside the host run budget resume, instead of
     treating UI idle as a whole-process stop.
+  - CE scheduling is preemptive across runnable threads, not cooperative only
+    at imports and wait calls. Until v3 grows full saved-context run queues, the
+    Unicorn bridge now has a conservative time-slice that swaps the active
+    running guest context with the already-suspended peer context at bounded
+    code-hook intervals, while avoiding import traps, trampoline pages, and
+    pending WNDPROC returns. This is still a bridge, not the final CE run queue:
+    mounted host evidence can still leave signaled waiters parked after the
+    slice, so full ready-queue ownership remains open.
 
 - GWE paint/update and MFC paint pumping:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`,
@@ -399,7 +407,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     handle, remote serial injection queues candidate wait ids, and resumed
     reads complete by streaming device bytes into the original guest buffer.
     Full COMMTIMEOUTS, `WaitCommEvent`, masks, purge/error state, host
-    `win32_com`, and complete run-queue ownership remain open.
+    `win32_com`, and complete run-queue ownership remain open. The current
+    Unicorn time-slice only alternates the active guest context with the single
+    suspended peer context, so it is a temporary scheduler bridge toward that
+    source-backed CE run-queue model rather than a replacement for it.
 
 - Guest WNDPROC callout and MIPS kdata boundaries:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\mipskpg.h`,
