@@ -9,6 +9,21 @@
 
 ## Confirmed
 
+- Remote-server touch input during a host `GetMessageW` idle wait now targets
+  the parked message thread/window instead of draining only through stale
+  active-window fallback. The host run loop passes the last blocked
+  `GetMessageW` snapshot into remote-server control draining, and
+  `CeKernel::drain_remote_server_control_messages_to_thread_window` dispatches
+  REST controls then drains touch/key events through the same blocked
+  thread/window path used for host mouse input. Focused coverage
+  `remote_input_blocked_thread_target_overrides_stale_active_window` passes.
+  A short optimized trace repro `target\safety_remote_trace_*` confirms a
+  remote tap at the safety-notice OK button posts and delivers
+  `WM_LBUTTONDOWN/WM_LBUTTONUP` to HWND `0x00020080` through `GetMessageW`.
+  The app then leaves the safety screen and reaches its existing encoded
+  current-process terminate path (`api2.2`, process `0x42`, code `0`), so the
+  remaining "ded after OK" symptom is now guest continuation/device/state
+  fidelity, not remote HTTP input loss.
 - The Unicorn serial wait bridges now yield to already-ready scheduler waiters
   after parking the current serial operation. Empty serial `ReadFile` and
   `WaitCommEvent` previously registered the active thread's serial wait, then

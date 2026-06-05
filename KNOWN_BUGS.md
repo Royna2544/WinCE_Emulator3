@@ -12,6 +12,24 @@
 
 ## Open
 
+- Remote OK/safety-screen input no longer appears lost, but the guest still can
+  terminate after that transition.
+  - Symptom: with the v2-compatible REST endpoint in host mode, a remote tap at
+    the safety-notice OK button leaves the safety screen and then the process
+    reaches the encoded current-process terminate path instead of continuing
+    into sustained UI interaction.
+  - Evidence: optimized trace artifacts `target\safety_remote_trace_*` record
+    `WM_LBUTTONDOWN`/`WM_LBUTTONUP` delivered through `GetMessageW` to HWND
+    `0x00020080` after a REST tap at the OK coordinates. The stop is
+    `encoded_exit=api2.2 process=0x00000042 code=0`, so the just-fixed layer is
+    remote input targeting during a parked host `GetMessageW`, not app
+    continuation.
+  - Status: open as guest continuation/device/state fidelity after delivered
+    input. Keep using `--remote-server 192.168.0.39:8765` on mounted launches,
+    and use messages/files/devices/process trace selectors to identify what
+    app-side condition requests termination after the OK path. Do not bypass
+    the safety screen or hardcode iNavi state.
+
 - Host/manual post-map responsiveness still needs a focused input/scheduler
   trace if clicks feel like ANR after the corrected map screen.
   - Symptom: after the CE visible-region clipping fix, the live Win32

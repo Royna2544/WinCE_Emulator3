@@ -258,7 +258,10 @@ fn run_cpu_loop(
     enqueue_startup_taps(kernel, &args.startup_taps)?;
     let mut reported_blocked_message_wait = false;
     loop {
-        service_remote_endpoint(kernel, desktop);
+        let blocked_remote_target = blocked_remote_input_target(cpu, args.desktop);
+        if service_remote_endpoint(kernel, desktop, blocked_remote_target.as_ref()) != 0 {
+            reported_blocked_message_wait = false;
+        }
         if enqueue_desktop_input_for_current_wait(cpu, desktop, kernel, args.desktop)? != 0 {
             reported_blocked_message_wait = false;
         }
@@ -285,7 +288,10 @@ fn run_cpu_loop(
             reported_blocked_message_wait = false;
         }
         desktop.present()?;
-        service_remote_endpoint(kernel, desktop);
+        let blocked_remote_target = blocked_remote_input_target(cpu, args.desktop);
+        if service_remote_endpoint(kernel, desktop, blocked_remote_target.as_ref()) != 0 {
+            reported_blocked_message_wait = false;
+        }
         if let Some(snapshot) = cpu.last_debug_snapshot() {
             if args.desktop == DesktopMode::Host && snapshot.blocked_get_message.is_some() {
                 if !reported_blocked_message_wait {
@@ -306,9 +312,30 @@ fn run_cpu_loop(
     Ok(())
 }
 
-fn service_remote_endpoint(kernel: &mut CeKernel, desktop: &DesktopRuntime) {
-    kernel.drain_remote_server_control_messages();
+fn blocked_remote_input_target(
+    cpu: &UnicornMips,
+    desktop_mode: DesktopMode,
+) -> Option<wince_emulation_v3::emulator::unicorn::UnicornBlockedGetMessage> {
+    if desktop_mode != DesktopMode::Host {
+        return None;
+    }
+    cpu.last_debug_snapshot()
+        .and_then(|snapshot| snapshot.blocked_get_message.clone())
+}
+
+fn service_remote_endpoint(
+    kernel: &mut CeKernel,
+    desktop: &DesktopRuntime,
+    blocked_get_message: Option<&wince_emulation_v3::emulator::unicorn::UnicornBlockedGetMessage>,
+) -> usize {
+    let drained = if let Some(blocked) = blocked_get_message {
+        kernel
+            .drain_remote_server_control_messages_to_thread_window(blocked.thread_id, blocked.hwnd)
+    } else {
+        kernel.drain_remote_server_control_messages()
+    };
     publish_remote_endpoint(kernel.remote_server.as_ref(), kernel, desktop.framebuffer());
+    drained
 }
 
 fn publish_remote_endpoint(

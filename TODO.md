@@ -12,6 +12,14 @@
 
 ## Current Slice
 
+- Immediate remote-server follow-up: host-mode REST touch now uses the parked
+  `GetMessageW` thread/window target when the guest is idle in the message
+  pump, matching the existing host mouse path instead of relying on stale
+  active-window fallback. `target\safety_remote_trace_*` proves a safety-screen
+  OK tap delivered `WM_LBUTTONDOWN/WM_LBUTTONUP` to HWND `0x00020080`; the app
+  then reached the existing encoded current-process terminate path. Continue
+  from that guest continuation/device/state failure, not from remote HTTP
+  routing, host presenter blackness, or startup file I/O.
 - Scheduler bridge follow-up after the MsgWait no-peer fix: over-budget
   `MsgWaitForMultipleObjectsEx` now parks the current thread as a
   scheduler-owned blocked wait and stops Unicorn instead of falling through raw

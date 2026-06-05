@@ -2954,6 +2954,28 @@ impl CeKernel {
         applied
     }
 
+    pub fn drain_remote_server_control_messages_to_thread_window(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+    ) -> usize {
+        let Some(server) = self.remote_server.clone() else {
+            return 0;
+        };
+        let messages = server.drain_control_messages();
+        if messages.is_empty() {
+            return 0;
+        }
+        let mut applied = 0;
+        for message in messages {
+            self.dispatch_remote_control_message(&message);
+            applied += 1;
+        }
+        applied += self.drain_remote_input_to_thread_window(thread_id, hwnd);
+        self.publish_remote_server_status();
+        applied
+    }
+
     pub fn dispatch_remote_control_message(
         &mut self,
         message: &serde_json::Value,
@@ -3338,6 +3360,41 @@ mod tests {
         }
         assert!(messages.contains(&(hwnd, WM_LBUTTONDOWN)));
         assert!(messages.contains(&(hwnd, WM_LBUTTONUP)));
+        Ok(())
+    }
+
+    #[test]
+    fn remote_input_blocked_thread_target_overrides_stale_active_window() -> Result<()> {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let mut kernel = CeKernel::boot(config);
+        let active_thread_id = 1;
+        let blocked_thread_id = 2;
+        let active = kernel.create_window_ex_w(active_thread_id, "ACTIVE", "", None, 0, 0, 0);
+        let blocked = kernel.create_window_ex_w(blocked_thread_id, "BLOCKED", "", None, 0, 0, 0);
+        assert_eq!(kernel.gwe.set_active_window(Some(active)), None);
+        while kernel.gwe.get_message(active_thread_id).is_some() {}
+        while kernel.gwe.get_message(blocked_thread_id).is_some() {}
+
+        kernel.remote.set_framebuffer_size(800, 480);
+        kernel.remote.enqueue_touch("tap", 640, 440).unwrap();
+
+        assert_eq!(
+            kernel.drain_remote_input_to_thread_window(blocked_thread_id, Some(blocked)),
+            2
+        );
+
+        let mut active_messages = Vec::new();
+        while let Some(message) = kernel.gwe.get_message(active_thread_id) {
+            active_messages.push(message.msg);
+        }
+        assert!(!active_messages.contains(&WM_LBUTTONDOWN));
+        assert!(!active_messages.contains(&WM_LBUTTONUP));
+        let mut blocked_messages = Vec::new();
+        while let Some(message) = kernel.gwe.get_message(blocked_thread_id) {
+            blocked_messages.push((message.hwnd, message.msg));
+        }
+        assert!(blocked_messages.contains(&(blocked, WM_LBUTTONDOWN)));
+        assert!(blocked_messages.contains(&(blocked, WM_LBUTTONUP)));
         Ok(())
     }
 }
