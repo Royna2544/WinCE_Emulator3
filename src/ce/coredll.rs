@@ -6960,6 +6960,12 @@ fn is_bad_ptr_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return true;
     }
+    if let Some(valid) = kernel.memory.heap_range_status(ptr, bytes) {
+        kernel
+            .threads
+            .set_last_error(thread_id, if valid { 0 } else { ERROR_INVALID_PARAMETER });
+        return !valid;
+    }
     if kernel.memory.contains_allocated_range(ptr, bytes) {
         kernel.threads.set_last_error(thread_id, 0);
         return false;

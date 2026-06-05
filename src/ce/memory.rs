@@ -417,6 +417,20 @@ impl MemorySystem {
         })
     }
 
+    pub fn heap_range_status(&self, ptr: u32, size: u32) -> Option<bool> {
+        let end = ptr.checked_add(size)?;
+        self.allocations.values().find_map(|allocation| {
+            let actual_end = allocation.ptr.checked_add(allocation.actual_size)?;
+            if ptr < allocation.ptr || ptr >= actual_end {
+                return None;
+            }
+            let requested_end = allocation
+                .ptr
+                .checked_add(allocation.requested_size.max(1))?;
+            Some(end <= requested_end)
+        })
+    }
+
     fn is_live_heap(&self, heap: u32) -> bool {
         self.heaps.get(&heap).is_some_and(|item| !item.destroyed)
     }
