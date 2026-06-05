@@ -39,6 +39,11 @@
   has duplicate `get_message` blocked waits. Continue from the remaining clean
   frontier: one main `GetMessageW`, worker sleeps/kernel waits, active timer
   `0x11d5`, and the app-owned legacy terminate path after the bounded host run.
+  The scheduler bridge now has a FIFO saved-context overflow queue for
+  time-slice/ready-waiter preemption when the primary suspended slot is already
+  occupied. Next scheduler work should route more guest-thread handoff paths
+  through that queue, then validate whether the worker sleeps/kernel waits at
+  the clean frontier are still stranded.
   The new
   `messages` trace selector now preserves kernel-level GWE post/target/delivery
   records, including public `PostMessageW`/thread/broadcast posts,

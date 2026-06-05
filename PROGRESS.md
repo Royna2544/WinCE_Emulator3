@@ -63,7 +63,15 @@
   bounded counters (`host_open=902`, `host_read=81850/5311346B`) and the known
   app-owned legacy terminate path afterward. The remaining scheduler frontier
   is now a clean single UI `GetMessageW` plus worker sleeps/kernel waits, not
-  duplicate main-thread message wait bookkeeping.
+  duplicate main-thread message wait bookkeeping. The Unicorn bridge now has
+  the next ready-run slice: a FIFO saved-context overflow queue behind the
+  primary suspended slot for scheduler time-slice/ready-waiter preemption. This
+  lets the bridge preserve an active running context even when another runnable
+  context is already suspended. Focused coverage
+  `timeslice_ready_waiter_queues_active_when_suspended_slot_is_occupied` passes
+  alongside `timeslice_preempts_active_thread_to_ready_blocked_waiter`, and the
+  full `cargo test --features unicorn,trace,win32-desktop` suite passes with
+  160 lib tests.
 - Host/manual post-map input now has a durable kernel-level GWE/message trace
   under the existing `messages` monitor selector. The trace records generic
   message posts, host/remote touch target/drop decisions, keyboard target/drop

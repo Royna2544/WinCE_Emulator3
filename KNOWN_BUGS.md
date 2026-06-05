@@ -64,15 +64,19 @@
   - Status: open but moved again. The active ANR frontier is now incomplete CE
     run-queue/ready-waiter ownership after a real map UI, not a lost input,
     duplicate-wait freeze, hidden-layer leak, or reproduced `pc=0` return. The
-    duplicate thread-1 `GetMessageW` waiter bug is closed. Continue from the
-    cleaner frontier: one main `GetMessageW`, worker sleeps/kernel waits,
-    active timer `0x11d5`, and app-owned legacy terminate after the bounded host
-    run. If signaled waiters still remain parked in later evidence, implement a
-    real runnable context queue instead of relying on one suspended peer. Use
-    the new message trace on the exact unresponsive host interaction. If it
-    records delivered mouse/key messages, chase the guest handler continuation,
-    pending send, timer/device waits, or missing subsystem event that follows;
-    if it records
+    duplicate thread-1 `GetMessageW` waiter bug is closed. The first follow-up
+    run-queue slice is also in place: time-slice/ready-waiter preemption now
+    has a FIFO saved-context overflow queue behind the primary suspended slot,
+    so the active running context is preserved even if another runnable context
+    is already suspended. Continue from the cleaner frontier: one main
+    `GetMessageW`, worker sleeps/kernel waits, active timer `0x11d5`, and
+    app-owned legacy terminate after the bounded host run. If signaled waiters
+    still remain parked in later evidence, route more guest-thread handoff paths
+    through the queued runnable-context model instead of relying on one
+    suspended peer. Use the new message trace on the exact unresponsive host
+    interaction. If it records delivered mouse/key messages, chase the guest
+    handler continuation, pending send, timer/device waits, or missing
+    subsystem event that follows; if it records
     `remote_*_drop`, fix generic GWE hit-test/focus/capture semantics. Do not
     hardcode iNavi controls.
 

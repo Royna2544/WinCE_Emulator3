@@ -107,8 +107,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     pending WNDPROC returns. The same time-slice can now preempt the active
     running context into the suspended slot and resume a ready blocked waiter
     when no existing suspended peer would be overwritten. This is still a
-    bridge, not the final CE run queue: contexts beyond the active/suspended
-    pair still need full ready-queue ownership.
+    bridge, not the final CE run queue: v3 now adds a FIFO overflow queue behind
+    the primary suspended slot for time-slice/ready-waiter preemption, so an
+    active context can be preserved even when another runnable context is
+    already suspended. Other guest-thread handoff paths still need to converge
+    onto this queue before the bridge becomes a full CE ready-run model.
 
 - GWE paint/update and MFC paint pumping:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`,
