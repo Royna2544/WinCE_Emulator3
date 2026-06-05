@@ -305,6 +305,22 @@ impl Rect {
     }
 }
 
+fn normalize_region_rects(rects: Vec<Rect>) -> Vec<Rect> {
+    rects
+        .into_iter()
+        .map(Rect::normalized)
+        .filter(|rect| !rect.is_empty())
+        .collect()
+}
+
+fn bounding_region_rect(rects: &[Rect]) -> Rect {
+    rects
+        .iter()
+        .copied()
+        .reduce(Rect::union)
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Point {
     pub x: i32,
@@ -365,6 +381,12 @@ pub struct PaintUpdate {
     pub erase: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WindowRegion {
+    pub rect: Rect,
+    pub rects: Vec<Rect>,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GweStats {
     pub send_transaction_count: u64,
@@ -397,7 +419,7 @@ pub struct Gwe {
     gesture_registrations: BTreeMap<u32, GestureRegistration>,
     dialog_results: BTreeMap<u32, u32>,
     dialog_checks: BTreeMap<(u32, u32), u32>,
-    window_regions: BTreeMap<u32, Rect>,
+    window_regions: BTreeMap<u32, WindowRegion>,
     send_depth_by_thread: BTreeMap<u32, u32>,
     last_message_source_by_thread: BTreeMap<u32, u32>,
     last_message_pos_by_thread: BTreeMap<u32, u32>,
@@ -1097,11 +1119,18 @@ impl Gwe {
     }
 
     pub fn set_window_region(&mut self, hwnd: u32, rect: Option<Rect>) -> bool {
+        self.set_window_region_rects(hwnd, rect.map(|rect| vec![rect]))
+    }
+
+    pub fn set_window_region_rects(&mut self, hwnd: u32, rects: Option<Vec<Rect>>) -> bool {
         if !self.is_window(hwnd) {
             return false;
         }
-        if let Some(rect) = rect {
-            self.window_regions.insert(hwnd, rect);
+        if let Some(rects) = rects {
+            let rects = normalize_region_rects(rects);
+            let rect = bounding_region_rect(&rects);
+            self.window_regions
+                .insert(hwnd, WindowRegion { rect, rects });
         } else {
             self.window_regions.remove(&hwnd);
         }
@@ -1110,7 +1139,17 @@ impl Gwe {
 
     pub fn window_region(&self, hwnd: u32) -> Option<Rect> {
         self.is_window(hwnd)
-            .then(|| self.window_regions.get(&hwnd).copied())
+            .then(|| self.window_regions.get(&hwnd).map(|region| region.rect))
+            .flatten()
+    }
+
+    pub fn window_region_rects(&self, hwnd: u32) -> Option<&[Rect]> {
+        self.is_window(hwnd)
+            .then(|| {
+                self.window_regions
+                    .get(&hwnd)
+                    .map(|region| region.rects.as_slice())
+            })
             .flatten()
     }
 

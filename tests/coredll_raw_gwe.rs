@@ -5,7 +5,7 @@ use wince_emulation_v3::{
         coredll_ordinals::{
             ORD_ADJUST_WINDOW_RECT_EX, ORD_APPEND_MENU_W, ORD_BEGIN_PAINT, ORD_BIT_BLT,
             ORD_BRING_WINDOW_TO_TOP, ORD_CHECK_MENU_ITEM, ORD_CHECK_MENU_RADIO_ITEM,
-            ORD_CHILD_WINDOW_FROM_POINT, ORD_CLIENT_TO_SCREEN, ORD_COPY_RECT,
+            ORD_CHILD_WINDOW_FROM_POINT, ORD_CLIENT_TO_SCREEN, ORD_COMBINE_RGN, ORD_COPY_RECT,
             ORD_CREATE_COMPATIBLE_BITMAP, ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIBSECTION,
             ORD_CREATE_MENU, ORD_CREATE_MUTEX_W, ORD_CREATE_PALETTE, ORD_CREATE_PEN_INDIRECT,
             ORD_CREATE_POPUP_MENU, ORD_CREATE_RECT_RGN, ORD_CREATE_SOLID_BRUSH,
@@ -20,31 +20,32 @@ use wince_emulation_v3::{
             ORD_GET_MESSAGE_POS, ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP, ORD_GET_MESSAGE_SOURCE,
             ORD_GET_MESSAGE_W, ORD_GET_MESSAGE_WNO_WAIT, ORD_GET_NEAREST_PALETTE_INDEX,
             ORD_GET_NEXT_DLG_GROUP_ITEM, ORD_GET_NEXT_DLG_TAB_ITEM, ORD_GET_PALETTE_ENTRIES,
-            ORD_GET_PARENT, ORD_GET_QUEUE_STATUS, ORD_GET_STOCK_OBJECT, ORD_GET_SUB_MENU,
-            ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH, ORD_GET_SYSTEM_INFO,
+            ORD_GET_PARENT, ORD_GET_QUEUE_STATUS, ORD_GET_RGN_BOX, ORD_GET_STOCK_OBJECT,
+            ORD_GET_SUB_MENU, ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH, ORD_GET_SYSTEM_INFO,
             ORD_GET_SYSTEM_METRICS, ORD_GET_SYSTEM_PALETTE_ENTRIES, ORD_GET_UPDATE_RECT,
             ORD_GET_UPDATE_RGN, ORD_GET_WINDOW, ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_RECT,
-            ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W, ORD_GET_WINDOW_THREAD_PROCESS_ID,
-            ORD_GLOBAL_MEMORY_STATUS, ORD_IN_SEND_MESSAGE, ORD_INFLATE_RECT, ORD_INSERT_MENU_W,
-            ORD_INTERSECT_RECT, ORD_INVALIDATE_RECT, ORD_IS_CHILD, ORD_IS_RECT_EMPTY,
-            ORD_IS_WINDOW, ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE, ORD_KILL_TIMER,
-            ORD_LOAD_ICON_W, ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_MAP_DIALOG_RECT,
-            ORD_MAP_WINDOW_POINTS, ORD_MESSAGE_BOX_W, ORD_MOVE_WINDOW, ORD_OFFSET_RECT,
-            ORD_PEEK_MESSAGE_W, ORD_POLYGON, ORD_POLYLINE, ORD_POST_MESSAGE_W,
-            ORD_POST_QUIT_MESSAGE, ORD_POST_THREAD_MESSAGE_W, ORD_PT_IN_RECT, ORD_REALIZE_PALETTE,
-            ORD_REDRAW_WINDOW, ORD_REGISTER_CLASS_W, ORD_REGISTER_GESTURE, ORD_RELEASE_CAPTURE,
-            ORD_RELEASE_DC, ORD_RELEASE_MUTEX, ORD_REMOVE_MENU, ORD_ROUND_RECT,
-            ORD_SCREEN_TO_CLIENT, ORD_SELECT_OBJECT, ORD_SELECT_PALETTE,
-            ORD_SEND_DLG_ITEM_MESSAGE_W, ORD_SEND_MESSAGE_TIMEOUT, ORD_SEND_MESSAGE_W,
-            ORD_SEND_NOTIFY_MESSAGE_W, ORD_SET_ACTIVE_WINDOW, ORD_SET_ASSOCIATED_MENU,
-            ORD_SET_BK_COLOR, ORD_SET_CAPTURE, ORD_SET_DIBCOLOR_TABLE, ORD_SET_DIBITS_TO_DEVICE,
-            ORD_SET_DLG_ITEM_INT, ORD_SET_DLG_ITEM_TEXT_W, ORD_SET_FOCUS,
-            ORD_SET_FOREGROUND_WINDOW, ORD_SET_MENU, ORD_SET_MENU_ITEM_INFO_W,
-            ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_RECT, ORD_SET_RECT_EMPTY,
-            ORD_SET_TIMER, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_TEXT_W,
-            ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_SLEEP, ORD_STRETCH_BLT, ORD_STRETCH_DIBITS,
-            ORD_SYSTEM_PARAMETERS_INFO_W, ORD_TRACK_POPUP_MENU_EX, ORD_TRANSPARENT_IMAGE,
-            ORD_UNION_RECT, ORD_UPDATE_WINDOW, ORD_VALIDATE_RECT, ORD_WINDOW_FROM_POINT,
+            ORD_GET_WINDOW_RGN, ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W,
+            ORD_GET_WINDOW_THREAD_PROCESS_ID, ORD_GLOBAL_MEMORY_STATUS, ORD_IN_SEND_MESSAGE,
+            ORD_INFLATE_RECT, ORD_INSERT_MENU_W, ORD_INTERSECT_RECT, ORD_INVALIDATE_RECT,
+            ORD_IS_CHILD, ORD_IS_RECT_EMPTY, ORD_IS_WINDOW, ORD_IS_WINDOW_ENABLED,
+            ORD_IS_WINDOW_VISIBLE, ORD_KILL_TIMER, ORD_LOAD_ICON_W, ORD_LOAD_RESOURCE,
+            ORD_LOAD_STRING_W, ORD_MAP_DIALOG_RECT, ORD_MAP_WINDOW_POINTS, ORD_MESSAGE_BOX_W,
+            ORD_MOVE_WINDOW, ORD_OFFSET_RECT, ORD_PEEK_MESSAGE_W, ORD_POLYGON, ORD_POLYLINE,
+            ORD_POST_MESSAGE_W, ORD_POST_QUIT_MESSAGE, ORD_POST_THREAD_MESSAGE_W, ORD_PT_IN_RECT,
+            ORD_PT_IN_REGION, ORD_REALIZE_PALETTE, ORD_RECT_IN_REGION, ORD_REDRAW_WINDOW,
+            ORD_REGISTER_CLASS_W, ORD_REGISTER_GESTURE, ORD_RELEASE_CAPTURE, ORD_RELEASE_DC,
+            ORD_RELEASE_MUTEX, ORD_REMOVE_MENU, ORD_ROUND_RECT, ORD_SCREEN_TO_CLIENT,
+            ORD_SELECT_OBJECT, ORD_SELECT_PALETTE, ORD_SEND_DLG_ITEM_MESSAGE_W,
+            ORD_SEND_MESSAGE_TIMEOUT, ORD_SEND_MESSAGE_W, ORD_SEND_NOTIFY_MESSAGE_W,
+            ORD_SET_ACTIVE_WINDOW, ORD_SET_ASSOCIATED_MENU, ORD_SET_BK_COLOR, ORD_SET_CAPTURE,
+            ORD_SET_DIBCOLOR_TABLE, ORD_SET_DIBITS_TO_DEVICE, ORD_SET_DLG_ITEM_INT,
+            ORD_SET_DLG_ITEM_TEXT_W, ORD_SET_FOCUS, ORD_SET_FOREGROUND_WINDOW, ORD_SET_MENU,
+            ORD_SET_MENU_ITEM_INFO_W, ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_RECT,
+            ORD_SET_RECT_EMPTY, ORD_SET_TIMER, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS,
+            ORD_SET_WINDOW_RGN, ORD_SET_WINDOW_TEXT_W, ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE,
+            ORD_SLEEP, ORD_STRETCH_BLT, ORD_STRETCH_DIBITS, ORD_SYSTEM_PARAMETERS_INFO_W,
+            ORD_TRACK_POPUP_MENU_EX, ORD_TRANSPARENT_IMAGE, ORD_UNION_RECT, ORD_UPDATE_WINDOW,
+            ORD_VALIDATE_RECT, ORD_WINDOW_FROM_POINT,
         },
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat, VirtualFramebuffer},
         gwe::{
@@ -9372,6 +9373,285 @@ fn coredll_raw_get_update_rgn_copies_pending_paint_bounds() -> Result<()> {
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_set_window_rgn_honors_redraw_flag() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 14;
+    let hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "WINDOW_RGN",
+        "",
+        None,
+        0,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(0, 0, 100, 80),
+    );
+    assert!(kernel.gwe.validate_window(hwnd));
+
+    let region = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [5, 6, 70, 60],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn did not return a region: {other:?}"),
+    };
+    assert_ne!(region, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_WINDOW_RGN,
+            [hwnd, region, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.gwe.window_region(hwnd),
+        Some(Rect {
+            left: 5,
+            top: 6,
+            right: 70,
+            bottom: 60,
+        })
+    );
+    assert!(kernel.gwe.update_rect(hwnd).is_none());
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_WINDOW_RGN,
+            [hwnd, 0, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.gwe.window_region(hwnd), None);
+    assert_eq!(
+        kernel.gwe.update_rect(hwnd).map(|update| update.rect),
+        Some(Rect::from_origin_size(0, 0, 100, 80))
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_combine_rgn_diff_preserves_holes() -> Result<()> {
+    const COMPLEXREGION: u32 = 3;
+    const RGN_DIFF: u32 = 4;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 14;
+    let rect_ptr = 0xc000;
+    memory.map_words(rect_ptr, 4);
+
+    let outer = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [0, 0, 100, 100],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(outer) did not return a region: {other:?}"),
+    };
+    let inner = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [25, 25, 75, 75],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(inner) did not return a region: {other:?}"),
+    };
+    let dest = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [0, 0, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(dest) did not return a region: {other:?}"),
+    };
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_COMBINE_RGN,
+            [dest, outer, inner, RGN_DIFF],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(COMPLEXREGION),
+            ..
+        }
+    ));
+    assert_eq!(kernel.resources.region(dest).unwrap().rects.len(), 4);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PT_IN_REGION,
+            [dest, 10, 10],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PT_IN_REGION,
+            [dest, 50, 50],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+
+    memory.write_word(rect_ptr, 40);
+    memory.write_word(rect_ptr + 4, 40);
+    memory.write_word(rect_ptr + 8, 45);
+    memory.write_word(rect_ptr + 12, 45);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_RECT_IN_REGION,
+            [dest, rect_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_RGN_BOX,
+            [dest, rect_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(COMPLEXREGION),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_i32(rect_ptr)?, 0);
+    assert_eq!(memory.read_i32(rect_ptr + 4)?, 0);
+    assert_eq!(memory.read_i32(rect_ptr + 8)?, 100);
+    assert_eq!(memory.read_i32(rect_ptr + 12)?, 100);
+
+    let hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "COMPLEX_WINDOW_RGN",
+        "",
+        None,
+        0,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(0, 0, 100, 100),
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_WINDOW_RGN,
+            [hwnd, dest, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+
+    let roundtrip = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [0, 0, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(roundtrip) did not return a region: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_WINDOW_RGN,
+            [hwnd, roundtrip],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(COMPLEXREGION),
+            ..
+        }
+    ));
+    assert_eq!(kernel.resources.region(roundtrip).unwrap().rects.len(), 4);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PT_IN_REGION,
+            [roundtrip, 50, 50],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
             ..
         }
     ));

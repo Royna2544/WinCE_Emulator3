@@ -225,6 +225,10 @@ impl<I, P> VirtualDesktop<I, P> {
     pub fn presenter_mut(&mut self) -> &mut P {
         &mut self.presenter
     }
+
+    pub fn framebuffer_and_presenter_mut(&mut self) -> (&mut VirtualFramebuffer, &mut P) {
+        (&mut self.framebuffer, &mut self.presenter)
+    }
 }
 
 impl<I: Input, P> VirtualDesktop<I, P> {

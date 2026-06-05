@@ -76,6 +76,9 @@ pub trait Framebuffer {
     fn mark_dirty(&mut self, rect: FramebufferRect);
     fn dirty_rects(&self) -> &[FramebufferRect];
     fn take_dirty_rects(&mut self) -> Vec<FramebufferRect>;
+    fn emulator_tick(&mut self) -> Result<()> {
+        Ok(())
+    }
 
     fn width(&self) -> u32 {
         self.info().width

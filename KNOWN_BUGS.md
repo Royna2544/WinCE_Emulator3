@@ -12,6 +12,44 @@
 
 ## Open
 
+- Post-region mounted iNavi now runs deeper, but later map/UI composition is
+  still not presented to the display surface.
+  - Symptom: `target\thread_stack_region_virtual_150s_*` runs the full 150 s
+    virtual/tap budget without the old blocked-message stall or the temporary
+    worker-stack crash. It still ends with the visible framebuffer on the real
+    iNavi SE splash/art frame, while later render trace entries show guest
+    map/UI drawing into memory DCs.
+  - Evidence: the same run stays memory/file-I/O bounded
+    (`heap_live=14200/31768040B`, `virtual_live=2/131072B`,
+    `host_open=883`, `host_read=79768/5231945B`, `mem_open=4`,
+    `max_read=685080`) and reaches much more real subsystem activity:
+    `CreateThread=10`, `ResumeThread=10`, `WaitForMultipleObjects=10`,
+    `BitBlt=103`, `Polygon=1023`, `Polyline=415`,
+    `CreateDIBSection=385`, plus first audio, Winsock, and serial/COM import
+    activity. The files trace confirms many
+    `SDMMC Disk\mapdata\point\...` map/icon records are read. The remaining
+    bug is therefore a generic presentation/message/visibility/scheduler gap
+    after offscreen map/UI composition, not blank framebuffer startup,
+    complex-region flattening, worker-thread stack layout, or large-file RSS.
+  - Status: open current UI frontier. Trace how the later guest-composed
+    memory-DC surfaces should reach a display HDC through normal CE GWE/GDI
+    paint/update or visibility transitions.
+
+- Worker thread stack slots previously underflowed the mapped process stack
+  reserve once the app reached later worker threads.
+  - Symptom: after complex window regions moved iNavi past the prior idle
+    frontier, `target\window_region_complex_virtual_150s_*` crashed with
+    `WRITE_UNMAPPED` at `pc=0x000e6cd4`, `sp=0x7fedff90`, fault address
+    `0x7fedfffc` during a normal MIPS prologue store.
+  - Evidence: the eighth 128 KiB guest worker slot landed at the bottom of the
+    old 1 MiB process stack reserve, leaving no downward prologue headroom.
+    The stack reserve is now 4 MiB and focused
+    `guest_thread_stack_tests::eighth_guest_thread_slot_keeps_stack_headroom`
+    covers the slot geometry.
+  - Status: fixed by the stack-reserve slice; keep watching for true CE
+    per-thread stack allocation/protection gaps when the scheduler grows real
+    run-queue ownership.
+
 - Dumped `explorer.exe` host-presented launch now exits through the emulator
   sentinel before useful UI.
   - Symptom: running

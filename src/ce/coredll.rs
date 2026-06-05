@@ -25,7 +25,8 @@ use crate::{
         },
         registry::{HKey, RegOpenResult, RegQueryValueResult},
         resource::{
-            AcceleratorEntry, MenuItem, PopupMenuTracking, ResourceId, stock_object_handle,
+            AcceleratorEntry, MenuItem, PopupMenuTracking, RegionObject, ResourceId,
+            stock_object_handle,
         },
         thread::{
             ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_CLASS_DOES_NOT_EXIST,
@@ -2656,6 +2657,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
+            raw_arg(args, 2) != 0,
         ))),
         ORD_GET_WINDOW_RGN => Some(CoredllValue::U32(get_window_rgn_raw(
             kernel,
@@ -12746,16 +12748,24 @@ fn combine_rgn_raw(
     src2: u32,
     mode: u32,
 ) -> u32 {
-    let Some(lhs) = kernel.resources.region(src1).map(|region| region.rect) else {
+    let Some(lhs) = kernel
+        .resources
+        .region(src1)
+        .map(|region| region.rects.clone())
+    else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     };
     let rhs = if mode == RGN_COPY {
-        Rect::default()
+        Vec::new()
     } else {
-        let Some(rhs) = kernel.resources.region(src2).map(|region| region.rect) else {
+        let Some(rhs) = kernel
+            .resources
+            .region(src2)
+            .map(|region| region.rects.clone())
+        else {
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -12764,9 +12774,10 @@ fn combine_rgn_raw(
         rhs
     };
     let combined = match mode {
-        RGN_AND => intersect_rect_value(lhs, rhs).unwrap_or_default(),
-        RGN_OR | RGN_XOR => union_rect_value(lhs, rhs),
-        RGN_DIFF => lhs,
+        RGN_AND => intersect_region_rects(&lhs, &rhs),
+        RGN_OR => union_region_rects(&lhs, &rhs),
+        RGN_XOR => xor_region_rects(&lhs, &rhs),
+        RGN_DIFF => diff_region_rects(&lhs, &rhs),
         RGN_COPY => lhs,
         _ => {
             kernel
@@ -12775,14 +12786,18 @@ fn combine_rgn_raw(
             return ERROR_REGION;
         }
     };
-    if !kernel.resources.set_region(dest, combined) {
+    if !kernel.resources.set_region_rects(dest, combined) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     }
     kernel.threads.set_last_error(thread_id, 0);
-    region_status(combined)
+    kernel
+        .resources
+        .region(dest)
+        .map(region_status_object)
+        .unwrap_or(ERROR_REGION)
 }
 
 fn get_rgn_box_raw<M: CoredllGuestMemory>(
@@ -12802,7 +12817,11 @@ fn get_rgn_box_raw<M: CoredllGuestMemory>(
         return ERROR_REGION;
     }
     kernel.threads.set_last_error(thread_id, 0);
-    region_status(rect)
+    kernel
+        .resources
+        .region(region)
+        .map(region_status_object)
+        .unwrap_or(ERROR_REGION)
 }
 
 fn select_clip_rgn_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, region: u32) -> u32 {
@@ -12819,7 +12838,7 @@ fn select_clip_rgn_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, region: 
     if region == 0 {
         SIMPLEREGION
     } else {
-        region_status(kernel.resources.region(region).unwrap().rect)
+        region_status_object(kernel.resources.region(region).unwrap())
     }
 }
 
@@ -12851,7 +12870,7 @@ fn pt_in_region_raw(kernel: &CeKernel, region: u32, x: i32, y: i32) -> bool {
     kernel
         .resources
         .region(region)
-        .is_some_and(|region| point_in_rect(region.rect, x, y))
+        .is_some_and(|region| region.rects.iter().any(|rect| point_in_rect(*rect, x, y)))
 }
 
 fn rect_in_region_raw<M: CoredllGuestMemory>(
@@ -12864,14 +12883,22 @@ fn rect_in_region_raw<M: CoredllGuestMemory>(
     let Some(rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
         return false;
     };
-    kernel
-        .resources
-        .region(region)
-        .is_some_and(|region| rects_intersect(region.rect, rect))
+    kernel.resources.region(region).is_some_and(|region| {
+        region
+            .rects
+            .iter()
+            .any(|region_rect| rects_intersect(*region_rect, rect))
+    })
 }
 
-fn set_window_rgn_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32, region: u32) -> u32 {
-    let rect = if region == 0 {
+fn set_window_rgn_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    hwnd: u32,
+    region: u32,
+    redraw: bool,
+) -> u32 {
+    let rects = if region == 0 {
         None
     } else {
         let Some(region) = kernel.resources.region(region) else {
@@ -12880,9 +12907,15 @@ fn set_window_rgn_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32, region: 
                 .set_last_error(thread_id, ERROR_INVALID_HANDLE);
             return 0;
         };
-        Some(region.rect)
+        Some(region.rects.clone())
     };
-    if !kernel.gwe.set_window_region(hwnd, rect) {
+    if !kernel.gwe.set_window_region_rects(hwnd, rects) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    }
+    if redraw && !kernel.gwe.invalidate_window(hwnd, None, true) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
@@ -12899,7 +12932,11 @@ fn get_window_rgn_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32, region: 
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return ERROR_REGION;
     }
-    let Some(rect) = kernel.gwe.window_region(hwnd) else {
+    let Some(rects) = kernel
+        .gwe
+        .window_region_rects(hwnd)
+        .map(|rects| rects.to_vec())
+    else {
         if kernel.gwe.is_window(hwnd) {
             kernel.threads.set_last_error(thread_id, 0);
             return NULLREGION;
@@ -12909,14 +12946,18 @@ fn get_window_rgn_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32, region: 
             .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
         return ERROR_REGION;
     };
-    if !kernel.resources.set_region(region, rect) {
+    if !kernel.resources.set_region_rects(region, rects) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return ERROR_REGION;
     }
     kernel.threads.set_last_error(thread_id, 0);
-    region_status(rect)
+    kernel
+        .resources
+        .region(region)
+        .map(region_status_object)
+        .unwrap_or(ERROR_REGION)
 }
 
 fn paint_hdc_for_hwnd(hwnd: u32) -> u32 {
@@ -12960,11 +13001,100 @@ fn intersect_rect_value(lhs: Rect, rhs: Rect) -> Option<Rect> {
     (!is_rect_empty_value(rect)).then_some(rect)
 }
 
+fn intersect_region_rects(lhs: &[Rect], rhs: &[Rect]) -> Vec<Rect> {
+    let mut rects = Vec::new();
+    for lhs_rect in lhs {
+        for rhs_rect in rhs {
+            if let Some(rect) = intersect_rect_value(*lhs_rect, *rhs_rect) {
+                rects.push(rect);
+            }
+        }
+    }
+    rects
+}
+
+fn union_region_rects(lhs: &[Rect], rhs: &[Rect]) -> Vec<Rect> {
+    lhs.iter()
+        .chain(rhs.iter())
+        .copied()
+        .filter(|rect| !is_rect_empty_value(*rect))
+        .collect()
+}
+
+fn diff_region_rects(lhs: &[Rect], rhs: &[Rect]) -> Vec<Rect> {
+    let mut remaining: Vec<Rect> = lhs
+        .iter()
+        .copied()
+        .filter(|rect| !is_rect_empty_value(*rect))
+        .collect();
+    for rhs_rect in rhs {
+        let mut next = Vec::new();
+        for rect in remaining {
+            next.extend(subtract_rect(rect, *rhs_rect));
+        }
+        remaining = next;
+        if remaining.is_empty() {
+            break;
+        }
+    }
+    remaining
+}
+
+fn xor_region_rects(lhs: &[Rect], rhs: &[Rect]) -> Vec<Rect> {
+    let mut rects = diff_region_rects(lhs, rhs);
+    rects.extend(diff_region_rects(rhs, lhs));
+    rects
+}
+
+fn subtract_rect(rect: Rect, cut: Rect) -> Vec<Rect> {
+    let Some(overlap) = intersect_rect_value(rect, cut) else {
+        return vec![rect];
+    };
+    let candidates = [
+        Rect {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: overlap.top,
+        },
+        Rect {
+            left: rect.left,
+            top: overlap.bottom,
+            right: rect.right,
+            bottom: rect.bottom,
+        },
+        Rect {
+            left: rect.left,
+            top: overlap.top,
+            right: overlap.left,
+            bottom: overlap.bottom,
+        },
+        Rect {
+            left: overlap.right,
+            top: overlap.top,
+            right: rect.right,
+            bottom: overlap.bottom,
+        },
+    ];
+    candidates
+        .into_iter()
+        .filter(|rect| !is_rect_empty_value(*rect))
+        .collect()
+}
+
 fn region_status(rect: Rect) -> u32 {
     if is_rect_empty_value(rect) {
         NULLREGION
     } else {
         SIMPLEREGION
+    }
+}
+
+fn region_status_object(region: &RegionObject) -> u32 {
+    match region.rects.len() {
+        0 => NULLREGION,
+        1 => SIMPLEREGION,
+        _ => COMPLEXREGION,
     }
 }
 
@@ -13877,6 +14007,7 @@ const OSVERSIONINFO_CSD_WCHARS: u32 = 128;
 const ERROR_REGION: u32 = 0;
 const NULLREGION: u32 = 1;
 const SIMPLEREGION: u32 = 2;
+const COMPLEXREGION: u32 = 3;
 const RGN_AND: u32 = 1;
 const RGN_OR: u32 = 2;
 const RGN_XOR: u32 = 3;

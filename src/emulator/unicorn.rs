@@ -708,7 +708,9 @@ const USER_KDATA_SYSHANDLE_OFFSET: u32 = 0x0000_0004;
 const SYS_HANDLE_CURRENT_THREAD: usize = 1;
 const SYS_HANDLE_CURRENT_PROCESS: usize = 2;
 const MAIN_GUEST_THREAD_ID: u32 = 1;
-const GUEST_STACK_MIN_RESERVE: u32 = 0x0010_0000;
+const GUEST_STACK_MIN_RESERVE: u32 = 0x0040_0000;
+#[cfg(feature = "unicorn")]
+const GUEST_THREAD_STACK_SLOT_SIZE: u32 = 0x0002_0000;
 const GUEST_HEAP_ARENA_BASE: u32 = 0x3000_0000;
 const GUEST_HEAP_ARENA_SIZE: u32 = 0x0100_0000;
 const GUEST_HEAP_SPILLOVER_GRANULARITY: u32 = 0x0010_0000;
@@ -1574,6 +1576,9 @@ impl UnicornMips {
         let trampoline_stub_by_origin = trampoline_stub_by_origin(&trampoline_jumps);
         let trampoline_origin_by_stub = trampoline_origin_by_stub(&trampoline_jumps);
         let kernel_ptr = kernel as *mut CeKernel;
+        let framebuffer_ptr = framebuffer as *mut dyn Framebuffer;
+        let framebuffer_tick_error = Rc::new(RefCell::new(None::<Error>));
+        let framebuffer_tick_error_hook = Rc::clone(&framebuffer_tick_error);
         let process_dll_search_dirs = self.dll_search_dirs.clone();
         if !fast_start_enabled {
             uc.add_code_hook(1, 0, move |uc, address, _size| {
@@ -1582,6 +1587,13 @@ impl UnicornMips {
             code_trace_counter_hook.set(code_trace_index);
             if code_trace_index % UNICORN_TB_CACHE_FLUSH_INTERVAL == 0 {
                 let _ = uc.ctl_remove_cache(0, u64::MAX);
+            }
+            if code_trace_index & 0x0fff == 0 {
+                if let Err(err) = unsafe { (&mut *framebuffer_ptr).emulator_tick() } {
+                    *framebuffer_tick_error_hook.borrow_mut() = Some(err);
+                    let _ = uc.emu_stop();
+                    return;
+                }
             }
             let sampled_code_trace = code_trace_index % UNICORN_CODE_TRACE_SAMPLE_INTERVAL == 0;
             let instruction = read_unicorn_code_u32(uc, &mapped_code, pc);
@@ -1955,7 +1967,6 @@ impl UnicornMips {
         let guest_thread_stack_slots = Rc::new(RefCell::new(std::collections::BTreeMap::new()));
         let guest_thread_stack_slots_hook = Rc::clone(&guest_thread_stack_slots);
         let traps = self.import_traps.clone();
-        let framebuffer_ptr = framebuffer as *mut dyn Framebuffer;
         let stack_top = self.stack_top.unwrap_or(0);
         let mapped_kernel_memory = Rc::new(RefCell::new(KernelMemoryMappings::new()));
         let mapped_kernel_memory_hook = Rc::clone(&mapped_kernel_memory);
@@ -2980,6 +2991,10 @@ impl UnicornMips {
             blocked_get_message.borrow().clone(),
             *thread_exit_reached.borrow(),
         ));
+        if let Some(err) = framebuffer_tick_error.borrow_mut().take() {
+            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
+            return Err(err);
+        }
         if let Err(err) = result {
             let decoded_exit = self
                 .last_debug
@@ -7814,7 +7829,7 @@ fn write_unicorn_message<D>(
 
 #[cfg(feature = "unicorn")]
 fn guest_thread_stack_top(process_stack_top: u32, thread_id: u32) -> u32 {
-    let offset = 0x0002_0000u32.saturating_mul(thread_id.max(1));
+    let offset = GUEST_THREAD_STACK_SLOT_SIZE.saturating_mul(thread_id.max(1));
     process_stack_top.wrapping_sub(offset) & !0x7
 }
 
@@ -7836,6 +7851,20 @@ fn assign_guest_thread_stack_slot(stack_slots: &GuestThreadStackSlots, thread_id
 #[cfg(feature = "unicorn")]
 fn release_guest_thread_stack_slot(stack_slots: &GuestThreadStackSlots, thread_id: u32) {
     stack_slots.borrow_mut().remove(&thread_id);
+}
+
+#[cfg(all(test, feature = "unicorn"))]
+mod guest_thread_stack_tests {
+    use super::*;
+
+    #[test]
+    fn eighth_guest_thread_slot_keeps_stack_headroom() {
+        let process_stack_top = 0x7fff_0000;
+        let process_stack_base = process_stack_top - GUEST_STACK_MIN_RESERVE;
+        let eighth_stack = guest_thread_stack_top(process_stack_top, 8);
+
+        assert!(eighth_stack >= process_stack_base + GUEST_THREAD_STACK_SLOT_SIZE);
+    }
 }
 
 #[cfg(feature = "unicorn")]

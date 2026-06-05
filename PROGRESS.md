@@ -9,6 +9,54 @@
 
 ## Confirmed
 
+- Win32 host presentation now updates while Unicorn is still running and uses
+  an 800x480 client area instead of treating 800x480 as the outer window
+  rectangle. The host desktop runtime wraps the framebuffer only for
+  `--desktop host`: guest `mark_dirty` calls schedule throttled live blits,
+  the Unicorn code hook pumps host window messages during long CPU runs, and
+  `WM_PAINT` redraws the last presented BGRA frame instead of letting Windows
+  erase the client area back to black. The Win32 presenter now sizes the outer
+  HWND with `AdjustWindowRectEx`, paints with `StretchDIBits` into the actual
+  client rectangle, sets the window title to the actual host image path, and
+  best-effort extracts big/small taskbar icons from the launched host PE path
+  with `PrivateExtractIconsW`. Mounted validation wrote
+  `target\host_title_icon_client_30s_*`; it stayed in the normal 30 s startup
+  band (`host_open=157`, `host_read=25196/1936212B`) and still reached the
+  real guest display present
+  `BitBlt(dst=0x02020008,dst_hwnd=0x00020008,dst_memdc=false,800x480)`.
+  A follow-up `target\host_interactive_close_300s_*` launch stayed responsive
+  long enough for manual touch/close testing, and closing the host window now
+  terminates the emulator process immediately via the Win32 window proc.
+- Preserving complex GDI/window regions moved the mounted iNavi path past the
+  previous post-splash idle frontier, and widening guest worker-stack reserve
+  removed the follow-up thread prologue crash. `CombineRgn(RGN_DIFF)` now
+  keeps multi-rect region holes instead of collapsing to a bounding box;
+  `PtInRegion`, `RectInRegion`, `GetRgnBox`, `SelectClipRgn`,
+  `SetWindowRgn`, and `GetWindowRgn` consume the rect-list-backed region
+  state. `SetWindowRgn(hwnd, hrgn, redraw)` also honors the redraw flag by
+  invalidating the target only when requested. Focused coverage
+  `coredll_raw_set_window_rgn_honors_redraw_flag` and
+  `coredll_raw_combine_rgn_diff_preserves_holes` passes in the raw GWE suite.
+  Mounted validation with dumped runtime DLLs wrote
+  `target\window_region_complex_virtual_150s_*`; it no longer stopped at the
+  old `GetMessageW` idle frontier and instead exposed a worker stack
+  `WRITE_UNMAPPED` at `pc=0x000e6cd4`. The follow-up stack fix grows the
+  guest stack reserve to 4 MiB, keeps 128 KiB per worker-thread slot, and adds
+  focused `guest_thread_stack_tests` coverage for the eighth worker slot. The
+  mounted `target\thread_stack_region_virtual_150s_*` probe now runs the full
+  150 s wall-clock budget without crashing, stays memory/file-I/O bounded
+  (`heap_live=14200/31768040B`, `virtual_live=2/131072B`,
+  `host_open=883`, `host_read=79768/5231945B`, `mem_open=4`,
+  `max_read=685080`), and reaches substantially more real guest work:
+  `CreateThread=10`, `ResumeThread=10`, `WaitForMultipleObjects=10`,
+  `BitBlt=103`, `Polygon=1023`, `Polyline=415`, `CreateDIBSection=385`,
+  plus first audio, Winsock, and serial/COM import activity. The framebuffer
+  still shows the real iNavi SE splash/art frame, while the render trace tail
+  shows later map/UI composition into memory DCs and map point/icon files
+  being read from `SDMMC Disk\mapdata\point\...`. The active frontier is now
+  why that later offscreen map/UI composition is not presented to a display
+  HDC, not the old hidden-child stale-paint path, region flattening, worker
+  stack fault, or file/RSS bottleneck.
 - Child process launch fidelity advanced on the mounted iNavi path. Rooted CE
   `CreateProcessW` application names now resolve through the mount table before
   falling back to parent-relative lookup, so

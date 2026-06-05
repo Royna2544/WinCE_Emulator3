@@ -35,6 +35,22 @@ fn is_stock_font(handle: u32) -> bool {
     matches!(stock_object_index(handle), Some(SYSTEM_FONT))
 }
 
+fn normalize_region_rects(rects: Vec<Rect>) -> Vec<Rect> {
+    rects
+        .into_iter()
+        .map(Rect::normalized)
+        .filter(|rect| !rect.is_empty())
+        .collect()
+}
+
+fn bounding_region_rect(rects: &[Rect]) -> Rect {
+    rects
+        .iter()
+        .copied()
+        .reduce(Rect::union)
+        .unwrap_or_default()
+}
+
 fn is_stock_brush(handle: u32) -> bool {
     matches!(
         stock_object_index(handle),
@@ -100,6 +116,7 @@ pub struct BitmapObject {
 pub struct RegionObject {
     pub handle: u32,
     pub rect: Rect,
+    pub rects: Vec<Rect>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -464,7 +481,20 @@ impl ResourceSystem {
     pub fn create_region(&mut self, rect: Rect) -> u32 {
         let handle = self.next_gdi_handle;
         self.next_gdi_handle += 4;
-        self.regions.insert(handle, RegionObject { handle, rect });
+        let rect = rect.normalized();
+        let rects = if rect.is_empty() {
+            Vec::new()
+        } else {
+            vec![rect]
+        };
+        self.regions.insert(
+            handle,
+            RegionObject {
+                handle,
+                rect,
+                rects,
+            },
+        );
         handle
     }
 
@@ -473,10 +503,21 @@ impl ResourceSystem {
     }
 
     pub fn set_region(&mut self, handle: u32, rect: Rect) -> bool {
+        let rects = if rect.is_empty() {
+            Vec::new()
+        } else {
+            vec![rect]
+        };
+        self.set_region_rects(handle, rects)
+    }
+
+    pub fn set_region_rects(&mut self, handle: u32, rects: Vec<Rect>) -> bool {
         let Some(region) = self.regions.get_mut(&handle) else {
             return false;
         };
-        region.rect = rect;
+        let rects = normalize_region_rects(rects);
+        region.rect = bounding_region_rect(&rects);
+        region.rects = rects;
         true
     }
 

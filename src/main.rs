@@ -4,7 +4,7 @@ use std::{
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use wince_emulation_v3::{
@@ -12,7 +12,7 @@ use wince_emulation_v3::{
     ce::{
         audio::{HostAudioSink, WaveFormat},
         desktop::{VirtualDesktop, VirtualInputEvent},
-        framebuffer::{Framebuffer, VirtualFramebuffer},
+        framebuffer::{Framebuffer, FramebufferInfo, FramebufferRect, VirtualFramebuffer},
         gwe::WM_TIMER,
         kernel::CeKernel,
         registry::{ERROR_SUCCESS, HKEY_LOCAL_MACHINE},
@@ -84,7 +84,7 @@ fn main() -> Result<()> {
     )?;
     let mut kernel = CeKernel::boot(config);
     let host_audio_status = attach_audio_for_desktop(&mut kernel, args.desktop);
-    let mut desktop = create_desktop(args.desktop)?;
+    let mut desktop = create_desktop(args.desktop, args.image.as_deref())?;
     kernel.remote.set_framebuffer_size(
         desktop.framebuffer().width(),
         desktop.framebuffer().height(),
@@ -249,9 +249,9 @@ fn run_cpu_loop(
         if enqueue_desktop_input(desktop, kernel)? != 0 {
             reported_blocked_message_wait = false;
         }
-        if let Err(err) = cpu.run_until_import_trap_with_framebuffer_limits(
+        if let Err(err) = desktop.run_cpu_until(
+            cpu,
             kernel,
-            desktop.framebuffer_mut(),
             UnicornRunLimits {
                 instruction_limit: args.cpu_instruction_limit,
                 wall_clock_limit_ms: args.cpu_wall_clock_limit_ms,
@@ -610,9 +610,7 @@ fn monitor_run_once(
     if input_before != 0 {
         println!("  drained {input_before} host input event(s)");
     }
-    if let Err(err) =
-        cpu.run_until_import_trap_with_framebuffer_limits(kernel, desktop.framebuffer_mut(), limits)
-    {
+    if let Err(err) = desktop.run_cpu_until(cpu, kernel, limits) {
         if let Some(snapshot) = cpu.last_debug_snapshot() {
             eprintln!("  Unicorn debug: {}", snapshot.summary());
         }
@@ -1045,6 +1043,31 @@ impl DesktopRuntime {
         Ok(())
     }
 
+    fn run_cpu_until(
+        &mut self,
+        cpu: &mut UnicornMips,
+        kernel: &mut CeKernel,
+        limits: UnicornRunLimits,
+    ) -> Result<()> {
+        match self {
+            Self::Virtual(desktop) => cpu.run_until_import_trap_with_framebuffer_limits(
+                kernel,
+                desktop.framebuffer_mut(),
+                limits,
+            ),
+            #[cfg(all(windows, feature = "win32-desktop"))]
+            Self::Host(desktop) => {
+                let (framebuffer, presenter) = desktop.framebuffer_and_presenter_mut();
+                let mut live_framebuffer = HostLiveFramebuffer::new(framebuffer, presenter);
+                cpu.run_until_import_trap_with_framebuffer_limits(
+                    kernel,
+                    &mut live_framebuffer,
+                    limits,
+                )
+            }
+        }
+    }
+
     fn poll_input(&mut self) -> Result<Vec<VirtualInputEvent>> {
         match self {
             Self::Virtual(desktop) => desktop.poll_input(),
@@ -1062,20 +1085,106 @@ impl DesktopRuntime {
     }
 }
 
-fn create_desktop(mode: DesktopMode) -> Result<DesktopRuntime> {
-    match mode {
-        DesktopMode::Virtual => Ok(DesktopRuntime::Virtual(VirtualDesktop::default_primary()?)),
-        DesktopMode::Host => create_host_desktop(),
+#[cfg(all(windows, feature = "win32-desktop"))]
+struct HostLiveFramebuffer<'a> {
+    framebuffer: &'a mut VirtualFramebuffer,
+    presenter: &'a mut wince_emulation_v3::ce::win32_desktop::Win32Presenter,
+    last_blit: Instant,
+    blit_interval: Duration,
+    pending_guest_dirty: bool,
+    pending_error: Option<wince_emulation_v3::Error>,
+}
+
+#[cfg(all(windows, feature = "win32-desktop"))]
+impl<'a> HostLiveFramebuffer<'a> {
+    fn new(
+        framebuffer: &'a mut VirtualFramebuffer,
+        presenter: &'a mut wince_emulation_v3::ce::win32_desktop::Win32Presenter,
+    ) -> Self {
+        Self {
+            framebuffer,
+            presenter,
+            last_blit: Instant::now()
+                .checked_sub(Duration::from_millis(16))
+                .unwrap_or_else(Instant::now),
+            blit_interval: Duration::from_millis(16),
+            pending_guest_dirty: false,
+            pending_error: None,
+        }
+    }
+
+    fn blit_if_due(&mut self, force: bool) -> Result<()> {
+        self.presenter.pump_messages();
+        if !self.pending_guest_dirty {
+            return Ok(());
+        }
+        let now = Instant::now();
+        if !force && now.duration_since(self.last_blit) < self.blit_interval {
+            return Ok(());
+        }
+        self.presenter.blit(self.framebuffer)?;
+        self.last_blit = now;
+        self.pending_guest_dirty = false;
+        Ok(())
     }
 }
 
 #[cfg(all(windows, feature = "win32-desktop"))]
-fn create_host_desktop() -> Result<DesktopRuntime> {
+impl Framebuffer for HostLiveFramebuffer<'_> {
+    fn info(&self) -> FramebufferInfo {
+        self.framebuffer.info()
+    }
+
+    fn pixels(&self) -> &[u8] {
+        self.framebuffer.pixels()
+    }
+
+    fn pixels_mut(&mut self) -> &mut [u8] {
+        self.framebuffer.pixels_mut()
+    }
+
+    fn mark_dirty(&mut self, rect: FramebufferRect) {
+        self.framebuffer.mark_dirty(rect);
+        self.pending_guest_dirty = true;
+        if let Err(err) = self.blit_if_due(false) {
+            self.pending_error = Some(err);
+        }
+    }
+
+    fn dirty_rects(&self) -> &[FramebufferRect] {
+        self.framebuffer.dirty_rects()
+    }
+
+    fn take_dirty_rects(&mut self) -> Vec<FramebufferRect> {
+        self.framebuffer.take_dirty_rects()
+    }
+
+    fn emulator_tick(&mut self) -> Result<()> {
+        if let Some(err) = self.pending_error.take() {
+            return Err(err);
+        }
+        self.blit_if_due(false)
+    }
+}
+
+fn create_desktop(mode: DesktopMode, image_path: Option<&Path>) -> Result<DesktopRuntime> {
+    match mode {
+        DesktopMode::Virtual => Ok(DesktopRuntime::Virtual(VirtualDesktop::default_primary()?)),
+        DesktopMode::Host => create_host_desktop(image_path),
+    }
+}
+
+#[cfg(all(windows, feature = "win32-desktop"))]
+fn create_host_desktop(image_path: Option<&Path>) -> Result<DesktopRuntime> {
     let framebuffer = VirtualFramebuffer::default_primary()?;
+    let title = image_path
+        .map(|path| format!("WinCE virtual desktop - {}", path.display()))
+        .unwrap_or_else(|| "WinCE virtual desktop".to_owned());
     let presenter = wince_emulation_v3::ce::win32_desktop::Win32Presenter::new(
         framebuffer.width(),
         framebuffer.height(),
-        "WinCE virtual desktop",
+        title,
+        image_path,
     )?;
     Ok(DesktopRuntime::Host(VirtualDesktop::with_parts(
         framebuffer,
@@ -1085,7 +1194,7 @@ fn create_host_desktop() -> Result<DesktopRuntime> {
 }
 
 #[cfg(not(all(windows, feature = "win32-desktop")))]
-fn create_host_desktop() -> Result<DesktopRuntime> {
+fn create_host_desktop(_image_path: Option<&Path>) -> Result<DesktopRuntime> {
     Err(wince_emulation_v3::Error::InvalidArgument(
         "--desktop host requires Windows and the `win32-desktop` feature".to_owned(),
     ))

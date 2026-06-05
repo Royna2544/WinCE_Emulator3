@@ -36,6 +36,34 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
 
 ## Windows CE Core OS
 
+- GWE/GDI region and window-region behavior:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\window.hpp`, and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\gweapiset1.hpp`
+  - CE exposes region status as `NULLREGION`, `SIMPLEREGION`, and
+    `COMPLEXREGION`; difference/intersection/union operations must therefore
+    preserve multi-rectangle region shape where a single bounding box would
+    make holes clickable/paintable. v3 keeps a bounding rect for old callers,
+    but the authoritative region state is now a normalized rect list used by
+    `CombineRgn`, point/rect tests, clipping status, `SetWindowRgn`, and
+    `GetWindowRgn`.
+  - `SetWindowRgn(HWND, HRGN, BOOL)` consumes the region shape owned by GWE and
+    only requests redraw when the third argument is nonzero. v3 now mirrors
+    that boundary generically instead of invalidating every region change.
+
+- Kernel thread/scheduler stack evidence:
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\thread.c`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`
+  - CE thread creation/resume/wait behavior is scheduler owned. v3 still uses
+    an emulator-managed guest stack reservation for mapped Unicorn worker
+    contexts, but each resumed worker must have enough downward stack headroom
+    for normal MIPS prologue stores before full CE stack guard/commit fidelity
+    is implemented. The mounted `target\window_region_complex_virtual_150s_*`
+    crash exposed this as a generic stack-slot layout bug; the follow-up
+    4 MiB reserve keeps later worker slots inside mapped guest stack memory.
+
 - GWE paint/update and MFC paint pumping:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\window.hpp`,

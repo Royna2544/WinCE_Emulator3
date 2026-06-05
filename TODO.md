@@ -12,6 +12,35 @@
 
 ## Current Slice
 
+- Host Win32 presenter is now a usable output boundary for mounted probes:
+  live guest framebuffer writes present during long Unicorn runs, `WM_PAINT`
+  redraws the last frame, the visible client area is 800x480, and the title
+  includes the launched host image path. Closing the host window intentionally
+  terminates the emulator process immediately, so close-driven manual runs do
+  not guarantee final tracefile/framebuffer artifact writes. Continue using
+  `--desktop host` for visual checks when human feedback is useful, and
+  `--desktop virtual` for deterministic artifact probes. If NVIDIA Image
+  Scaling is added, do it as a real host-presenter scaler mode backed by the
+  NIS SDK/shader or a clearly sourced compatible implementation; do not label
+  ordinary bilinear/stretch presentation as NIS.
+- Continue from the latest region/worker-stack mounted frontier in
+  `target\thread_stack_region_virtual_150s_*`. Complex GDI regions now remain
+  rect-list backed through `CombineRgn(RGN_DIFF)`, point/rect queries,
+  clipping, `SetWindowRgn`, and `GetWindowRgn`; `SetWindowRgn` also respects
+  the redraw flag. The first follow-up run moved past the old post-splash
+  idle point and exposed a worker-thread stack write below the mapped stack.
+  The stack reserve is now 4 MiB with 128 KiB worker slots, and the full
+  150 s virtual/tap probe no longer crashes. This is current real progress:
+  the app creates/resumes 10 threads, opens 883 host files, performs 79,768
+  bounded host reads for only about 5.2 MiB, reaches `BitBlt=103`,
+  `Polygon=1023`, `Polyline=415`, `CreateDIBSection=385`, first audio,
+  Winsock, and serial/COM imports, and reads many
+  `SDMMC Disk\mapdata\point\...` files. The framebuffer is still the real
+  iNavi SE splash/art frame, but render traces now show later map/UI drawing
+  into memory DCs. The next UI slice should trace the generic presentation
+  path from those memory-DC map/UI surfaces to a display HDC or a visibility/
+  paint state that should trigger that copy. Do not force pixels, resurrect
+  hidden children, or special-case iNavi state.
 - Continue from the process-clean mounted frontier in
   `target\process_lifetime_virtual_150s_*`. The current generic child-launch
   path now resolves all three iNavi companion process launches through the CE
