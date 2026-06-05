@@ -26,7 +26,12 @@
   ready-waiter handoff before self-timeout/stop. Continue converging the
   remaining wait/send/timer/device handoff paths onto the saved-context FIFO
   run-queue model so signaled waiters are not stranded behind a single
-  suspended slot.
+  suspended slot. Fresh short validation
+  `target\sched_serial_handoff_virtual_60s_*` reaches a real populated map
+  framebuffer with bounded memory/file I/O but stops in guest image code before
+  registered scheduler waiters appear, so the next proof run should be a
+  longer host/manual or trace-selector probe aimed at the later post-map ANR
+  frontier.
 - Current host/manual ANR slice after timer coalescing: continue from
   `target\host_timer_pending_300s_*`,
   `target\host_windows_220s_*`, and

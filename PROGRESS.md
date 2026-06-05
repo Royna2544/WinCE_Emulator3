@@ -18,7 +18,16 @@
   preserving CE scheduler ownership and avoiding serial/device waits pinning
   ready worker progress behind the current thread. Focused coverage
   `serial_read_yields_to_ready_blocked_waiter_before_timeout` and
-  `wait_comm_event_yields_to_ready_blocked_waiter` passes.
+  `wait_comm_event_yields_to_ready_blocked_waiter` passes. Mounted validation
+  `target\sched_serial_handoff_virtual_60s_*` used dumped runtime DLLs from
+  `D:\INAVI_Emulator\DUMPPLZ\Windows`, ran the full 60 s wall budget, stayed
+  bounded (`heap_live=7591/23053925B`, `virtual_live=2/131072B`,
+  `host_open=228`, `host_read=37983/2184009B`, `mem_open=2`,
+  `max_read=497178`), and produced a real populated 800x480 map framebuffer.
+  The short probe stopped in guest image code
+  `pc=0x0034285c(image:iNavi.exe+0x33285c)` with no registered waiters
+  (`reg:0/0`), so it validates no regression and real UI output rather than
+  proving the later post-map ANR frontier has moved.
 - The Unicorn `WaitForMultipleObjects` and `MsgWaitForMultipleObjectsEx`
   block bridges now hand off to already-ready scheduler waiters after parking
   the current thread, even when there is no saved suspended peer context.
