@@ -281,6 +281,21 @@ impl UnicornDebugSnapshot {
                 "indirect={} pc=0x{:08x} target=0x{:08x}",
                 indirect.register_name, indirect.pc, indirect.target
             ));
+            if !indirect.stack_words.is_empty() {
+                let mut stack_summary = String::new();
+                for (index, (offset, value)) in indirect.stack_words.iter().enumerate() {
+                    if index != 0 {
+                        stack_summary.push(',');
+                    }
+                    match value {
+                        Some(value) => {
+                            stack_summary.push_str(&format!("+0x{offset:x}=0x{value:08x}"));
+                        }
+                        None => stack_summary.push_str(&format!("+0x{offset:x}=<unreadable>")),
+                    }
+                }
+                parts.push(format!("indirect_stack=[{stack_summary}]"));
+            }
         }
         if let Some(blocked) = &self.blocked_get_message {
             parts.push(format!(
@@ -343,6 +358,7 @@ pub struct UnicornIndirectCallProbe {
     pub register: u32,
     pub register_name: &'static str,
     pub target: u32,
+    pub stack_words: Vec<(u32, Option<u32>)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1957,6 +1973,7 @@ impl UnicornMips {
                 register,
                 register_name: mips_gpr_name(register),
                 target,
+                stack_words: read_unicorn_stack_words(uc, read_mips_reg(uc, RegisterMIPS::SP), 0x50),
             });
             })
             .map_err(|err| Error::Backend(format!("install indirect-call probe: {err:?}")))?;
@@ -5160,6 +5177,19 @@ impl std::fmt::Display for UnicornDebugSnapshot {
                 probe.register_name,
                 probe.target
             )?;
+            if !probe.stack_words.is_empty() {
+                write!(f, " indirect_stack=[")?;
+                for (index, (offset, value)) in probe.stack_words.iter().enumerate() {
+                    if index != 0 {
+                        write!(f, ",")?;
+                    }
+                    match value {
+                        Some(value) => write!(f, "+0x{offset:x}=0x{value:08x}")?,
+                        None => write!(f, "+0x{offset:x}=<unreadable>")?,
+                    }
+                }
+                write!(f, "]")?;
+            }
         }
         if let Some(stop) = self.host_wall_clock_stop.as_ref() {
             write!(
@@ -15537,6 +15567,25 @@ fn read_mips_gpr<D>(uc: &unicorn_engine::Unicorn<'_, D>, register: u32) -> Optio
         31 => Some(read_mips_reg(uc, RegisterMIPS::RA)),
         _ => None,
     }
+}
+
+#[cfg(feature = "unicorn")]
+fn read_unicorn_stack_words<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    sp: u32,
+    byte_len: u32,
+) -> Vec<(u32, Option<u32>)> {
+    let mut words = Vec::new();
+    let mut offset = 0;
+    while offset < byte_len {
+        words.push((
+            offset,
+            sp.checked_add(offset)
+                .and_then(|addr| read_unicorn_u32(uc, addr)),
+        ));
+        offset = offset.saturating_add(4);
+    }
+    words
 }
 
 #[cfg(feature = "unicorn")]
