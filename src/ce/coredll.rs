@@ -2984,8 +2984,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.post_quit_message(thread_id, raw_arg(args, 0));
             Some(CoredllValue::U32(0))
         }
-        ORD_SEND_MESSAGE_W | ORD_DEF_WINDOW_PROC_W => Some(CoredllValue::U32(send_message_w_raw(
-            kernel, memory, thread_id, args,
+        ORD_SEND_MESSAGE_W => Some(CoredllValue::U32(send_message_w_raw(
+            kernel, memory, thread_id, args, true,
+        ))),
+        ORD_DEF_WINDOW_PROC_W => Some(CoredllValue::U32(send_message_w_raw(
+            kernel, memory, thread_id, args, false,
         ))),
         ORD_SEND_NOTIFY_MESSAGE_W => {
             let ok = kernel.send_notify_message_w(
@@ -8006,11 +8009,38 @@ fn send_message_w_raw<M: CoredllGuestMemory>(
     memory: &mut M,
     thread_id: u32,
     args: &[u32],
+    queue_cross_thread: bool,
 ) -> u32 {
     let hwnd = raw_arg(args, 0);
     let msg = raw_arg(args, 1);
     let wparam = raw_arg(args, 2);
     let lparam = raw_arg(args, 3);
+    if queue_cross_thread {
+        let Some(target_thread) = kernel
+            .gwe
+            .window(hwnd)
+            .filter(|window| !window.destroyed)
+            .map(|window| window.thread_id)
+        else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+            return 0;
+        };
+        if target_thread != thread_id {
+            if kernel
+                .begin_cross_thread_send_message_w(thread_id, hwnd, msg, wparam, lparam, None)
+                .is_none()
+            {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+                return 0;
+            }
+            kernel.threads.set_last_error(thread_id, 0);
+            return 0;
+        }
+    }
     match msg {
         crate::ce::gwe::WM_SETTEXT => {
             let Some(text) = read_guest_wide_arg(memory, lparam) else {
@@ -8090,7 +8120,15 @@ fn send_dlg_item_message_w_raw<M: CoredllGuestMemory>(
             }
             0
         }
-        _ => return send_message_w_raw(kernel, memory, thread_id, &[child, msg, wparam, lparam]),
+        _ => {
+            return send_message_w_raw(
+                kernel,
+                memory,
+                thread_id,
+                &[child, msg, wparam, lparam],
+                false,
+            );
+        }
     };
     kernel.threads.set_last_error(thread_id, 0);
     result

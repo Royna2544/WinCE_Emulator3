@@ -2718,6 +2718,15 @@
   a generic asynchronous send. Focused raw GWE coverage now asserts the queued
   notify transaction has no sender waiter and preserves both CE flags while
   same-thread notifications remain synchronous.
+- Tightened raw `SendMessageW` at the syscall boundary. Different-thread raw
+  sends now create the same sender/receiver sent-message transaction used by
+  the Unicorn callout path instead of immediately executing the receiver
+  window through the caller thread. `DefWindowProcW` was split away from that
+  queueing path and remains direct default processing. Focused raw GWE coverage
+  proves the queued `SendMessageW` exposes `QS_SENDMESSAGE`, marks receiver
+  `InSendMessage` only after retrieval, completes through raw `DispatchMessageW`,
+  and leaves `DefWindowProcW` immediate. The raw GWE suite now has 80 passing
+  tests.
 - Added an indexed-DIB fidelity slice for CE GDI color tables. `BitmapObject`
   now stores RGBQUAD color tables, raw `SetDIBColorTable`/`GetDIBColorTable`
   read and write the selected bitmap table through guest memory, and the 8 bpp

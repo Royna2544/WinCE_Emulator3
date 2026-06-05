@@ -9,21 +9,21 @@ use wince_emulation_v3::{
             ORD_CREATE_COMPATIBLE_BITMAP, ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIBSECTION,
             ORD_CREATE_MENU, ORD_CREATE_MUTEX_W, ORD_CREATE_PALETTE, ORD_CREATE_PEN_INDIRECT,
             ORD_CREATE_POPUP_MENU, ORD_CREATE_RECT_RGN, ORD_CREATE_SOLID_BRUSH,
-            ORD_CREATE_WINDOW_EX_W, ORD_DELETE_OBJECT, ORD_DESTROY_ICON, ORD_DESTROY_WINDOW,
-            ORD_DISPATCH_MESSAGE_W, ORD_DRAW_MENU_BAR, ORD_ENABLE_MENU_ITEM, ORD_ENABLE_WINDOW,
-            ORD_END_PAINT, ORD_EQUAL_RECT, ORD_FILL_RECT, ORD_FIND_RESOURCE_W, ORD_FIND_WINDOW_W,
-            ORD_GET_ACTIVE_WINDOW, ORD_GET_ASSOCIATED_MENU, ORD_GET_ASYNC_KEY_STATE,
-            ORD_GET_ASYNC_SHIFT_FLAGS, ORD_GET_CAPTURE, ORD_GET_CLASS_INFO_W, ORD_GET_CLASS_NAME_W,
-            ORD_GET_CLIENT_RECT, ORD_GET_CURSOR_POS, ORD_GET_DC, ORD_GET_DEVICE_CAPS,
-            ORD_GET_DIALOG_BASE_UNITS, ORD_GET_DIBCOLOR_TABLE, ORD_GET_DLG_CTRL_ID,
-            ORD_GET_DLG_ITEM, ORD_GET_DLG_ITEM_INT, ORD_GET_DLG_ITEM_TEXT_W, ORD_GET_FOCUS,
-            ORD_GET_FOREGROUND_KEYBOARD_TARGET, ORD_GET_FOREGROUND_WINDOW, ORD_GET_KEY_STATE,
-            ORD_GET_KEYBOARD_TARGET, ORD_GET_MENU, ORD_GET_MENU_ITEM_INFO_W, ORD_GET_MESSAGE_POS,
-            ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP, ORD_GET_MESSAGE_SOURCE, ORD_GET_MESSAGE_W,
-            ORD_GET_MESSAGE_WNO_WAIT, ORD_GET_NEAREST_PALETTE_INDEX, ORD_GET_NEXT_DLG_GROUP_ITEM,
-            ORD_GET_NEXT_DLG_TAB_ITEM, ORD_GET_PALETTE_ENTRIES, ORD_GET_PARENT,
-            ORD_GET_QUEUE_STATUS, ORD_GET_RGN_BOX, ORD_GET_STOCK_OBJECT, ORD_GET_SUB_MENU,
-            ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH, ORD_GET_SYSTEM_INFO,
+            ORD_CREATE_WINDOW_EX_W, ORD_DEF_WINDOW_PROC_W, ORD_DELETE_OBJECT, ORD_DESTROY_ICON,
+            ORD_DESTROY_WINDOW, ORD_DISPATCH_MESSAGE_W, ORD_DRAW_MENU_BAR, ORD_ENABLE_MENU_ITEM,
+            ORD_ENABLE_WINDOW, ORD_END_PAINT, ORD_EQUAL_RECT, ORD_FILL_RECT, ORD_FIND_RESOURCE_W,
+            ORD_FIND_WINDOW_W, ORD_GET_ACTIVE_WINDOW, ORD_GET_ASSOCIATED_MENU,
+            ORD_GET_ASYNC_KEY_STATE, ORD_GET_ASYNC_SHIFT_FLAGS, ORD_GET_CAPTURE,
+            ORD_GET_CLASS_INFO_W, ORD_GET_CLASS_NAME_W, ORD_GET_CLIENT_RECT, ORD_GET_CURSOR_POS,
+            ORD_GET_DC, ORD_GET_DEVICE_CAPS, ORD_GET_DIALOG_BASE_UNITS, ORD_GET_DIBCOLOR_TABLE,
+            ORD_GET_DLG_CTRL_ID, ORD_GET_DLG_ITEM, ORD_GET_DLG_ITEM_INT, ORD_GET_DLG_ITEM_TEXT_W,
+            ORD_GET_FOCUS, ORD_GET_FOREGROUND_KEYBOARD_TARGET, ORD_GET_FOREGROUND_WINDOW,
+            ORD_GET_KEY_STATE, ORD_GET_KEYBOARD_TARGET, ORD_GET_MENU, ORD_GET_MENU_ITEM_INFO_W,
+            ORD_GET_MESSAGE_POS, ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP, ORD_GET_MESSAGE_SOURCE,
+            ORD_GET_MESSAGE_W, ORD_GET_MESSAGE_WNO_WAIT, ORD_GET_NEAREST_PALETTE_INDEX,
+            ORD_GET_NEXT_DLG_GROUP_ITEM, ORD_GET_NEXT_DLG_TAB_ITEM, ORD_GET_PALETTE_ENTRIES,
+            ORD_GET_PARENT, ORD_GET_QUEUE_STATUS, ORD_GET_RGN_BOX, ORD_GET_STOCK_OBJECT,
+            ORD_GET_SUB_MENU, ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH, ORD_GET_SYSTEM_INFO,
             ORD_GET_SYSTEM_METRICS, ORD_GET_SYSTEM_PALETTE_ENTRIES, ORD_GET_UPDATE_RECT,
             ORD_GET_UPDATE_RGN, ORD_GET_WINDOW, ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_RECT,
             ORD_GET_WINDOW_RGN, ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W,
@@ -7008,6 +7008,99 @@ fn coredll_raw_dispatch_completes_queued_cross_thread_send() -> Result<()> {
     ));
     assert!(!kernel.gwe.in_send_message(receiver_thread));
     assert_eq!(kernel.take_completed_send_message_result(send_id), Some(1));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_send_message_cross_thread_queues_transaction() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let sender_thread = 54;
+    let receiver_thread = 55;
+    let msg_ptr = 0xb300;
+    memory.map_words(msg_ptr, 7);
+
+    let hwnd = kernel.create_window_ex_w(receiver_thread, "RAW_SYNC_SEND", "", None, 0, 0, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            sender_thread,
+            ORD_SEND_MESSAGE_W,
+            [hwnd, WM_ERASEBKGND, 0x54, 0x55],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    let sent = kernel.gwe.sent_message(1).expect("queued raw send");
+    assert_eq!(sent.sender_thread_id, Some(sender_thread));
+    assert_eq!(sent.receiver_thread_id, receiver_thread);
+    assert_eq!(sent.flags, 0);
+    assert!(!kernel.gwe.in_send_message(sender_thread));
+    assert!(!kernel.gwe.in_send_message(receiver_thread));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            receiver_thread,
+            ORD_GET_QUEUE_STATUS,
+            [QS_SENDMESSAGE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(v),
+            ..
+        } if v == ((QS_SENDMESSAGE << 16) | QS_SENDMESSAGE)
+    ));
+
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        receiver_thread,
+        msg_ptr,
+        hwnd,
+        WM_ERASEBKGND,
+        0x54,
+        0x55,
+    );
+    assert!(kernel.gwe.in_send_message(receiver_thread));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            receiver_thread,
+            ORD_DISPATCH_MESSAGE_W,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert!(!kernel.gwe.in_send_message(receiver_thread));
+    assert_eq!(kernel.take_completed_send_message_result(1), Some(1));
+
+    let direct_hwnd =
+        kernel.create_window_ex_w(receiver_thread, "RAW_DEF_WINDOW_PROC", "", None, 0, 0, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            sender_thread,
+            ORD_DEF_WINDOW_PROC_W,
+            [direct_hwnd, WM_ERASEBKGND, 0x56, 0x57],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert!(kernel.gwe.sent_message(2).is_none());
 
     Ok(())
 }
