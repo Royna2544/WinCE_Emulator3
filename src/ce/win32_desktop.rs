@@ -3,8 +3,9 @@ use std::{
     ffi::c_void,
     fmt,
     os::windows::ffi::OsStrExt,
-    path::Path,
-    sync::{Mutex, OnceLock},
+    path::{Path, PathBuf},
+    sync::{Mutex, OnceLock, mpsc},
+    thread,
 };
 
 use windows::{
@@ -16,8 +17,8 @@ use windows::{
         },
         UI::WindowsAndMessaging::{
             AdjustWindowRectEx, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW,
-            DefWindowProcW, DestroyIcon, DestroyWindow, DispatchMessageW, GetClientRect, HICON,
-            HMENU, ICON_BIG, ICON_SMALL, MSG, PM_REMOVE, PeekMessageW, PrivateExtractIconsW,
+            DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW, HICON, HMENU, ICON_BIG,
+            ICON_SMALL, MSG, PM_REMOVE, PeekMessageW, PostMessageW, PrivateExtractIconsW,
             RegisterClassW, SW_SHOW, SendMessageW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE,
             WM_CLOSE, WM_DESTROY, WM_ERASEBKGND, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
             WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETICON, WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
@@ -107,7 +108,6 @@ pub struct Win32Presenter {
     last_presentation: Option<Presentation>,
     presentation_count: u64,
     scratch_bgra: Vec<u8>,
-    icons: Vec<HICON>,
 }
 
 impl Win32Presenter {
@@ -118,52 +118,14 @@ impl Win32Presenter {
         icon_path: Option<&Path>,
     ) -> Result<Self> {
         let title = title.into();
-        register_window_class();
-        let title_wide = wide_null(&title);
-        let ex_style = WINDOW_EX_STYLE::default();
-        let style = WS_OVERLAPPEDWINDOW | WS_VISIBLE;
-        let mut window_rect = RECT {
-            left: 0,
-            top: 0,
-            right: width as i32,
-            bottom: height as i32,
-        };
-        unsafe {
-            AdjustWindowRectEx(&mut window_rect, style, false, ex_style).map_err(|err| {
-                Error::Backend(format!("adjust Win32 desktop window rect: {err}"))
-            })?;
-        }
-        let window_width = window_rect.right - window_rect.left;
-        let window_height = window_rect.bottom - window_rect.top;
-        let hwnd = unsafe {
-            CreateWindowExW(
-                ex_style,
-                CLASS_NAME,
-                PCWSTR(title_wide.as_ptr()),
-                style,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
-                window_width,
-                window_height,
-                HWND::default(),
-                HMENU::default(),
-                HINSTANCE::default(),
-                None,
-            )
-        }
-        .map_err(|err| Error::Backend(format!("create Win32 desktop window: {err}")))?;
-        let icons = install_window_icons(hwnd, icon_path);
-        unsafe {
-            let _ = ShowWindow(hwnd, SW_SHOW);
-            let _ = UpdateWindow(hwnd);
-        }
+        let hwnd =
+            spawn_window_thread(width, height, title.clone(), icon_path.map(Path::to_owned))?;
         Ok(Self {
             hwnd,
             title,
             last_presentation: None,
             presentation_count: 0,
             scratch_bgra: Vec::new(),
-            icons,
         })
     }
 
@@ -217,15 +179,104 @@ impl Drop for Win32Presenter {
             if let Ok(mut frames) = presented_frames().lock() {
                 frames.remove(&hwnd_key(self.hwnd));
             }
-            for icon in self.icons.drain(..) {
-                unsafe {
-                    let _ = DestroyIcon(icon);
-                }
-            }
             unsafe {
-                let _ = DestroyWindow(self.hwnd);
+                let _ = PostMessageW(self.hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
             }
         }
+    }
+}
+
+fn spawn_window_thread(
+    width: u32,
+    height: u32,
+    title: String,
+    icon_path: Option<PathBuf>,
+) -> Result<HWND> {
+    let (tx, rx) = mpsc::channel::<std::result::Result<isize, String>>();
+    thread::Builder::new()
+        .name("wince-win32-presenter".to_owned())
+        .spawn(move || {
+            let result =
+                create_window_on_current_thread(width, height, &title, icon_path.as_deref())
+                    .map(|hwnd| hwnd.0 as isize)
+                    .map_err(|err| err.to_string());
+            let hwnd = match result {
+                Ok(hwnd) => {
+                    let _ = tx.send(Ok(hwnd));
+                    HWND(hwnd as *mut c_void)
+                }
+                Err(err) => {
+                    let _ = tx.send(Err(err));
+                    return;
+                }
+            };
+            run_window_message_loop(hwnd);
+        })
+        .map_err(|err| Error::Backend(format!("spawn Win32 desktop thread: {err}")))?;
+    let hwnd = rx
+        .recv()
+        .map_err(|err| Error::Backend(format!("receive Win32 desktop window handle: {err}")))?
+        .map_err(|err| Error::Backend(format!("create Win32 desktop window: {err}")))?;
+    Ok(HWND(hwnd as *mut c_void))
+}
+
+fn create_window_on_current_thread(
+    width: u32,
+    height: u32,
+    title: &str,
+    icon_path: Option<&Path>,
+) -> Result<HWND> {
+    register_window_class();
+    let title_wide = wide_null(&title);
+    let ex_style = WINDOW_EX_STYLE::default();
+    let style = WS_OVERLAPPEDWINDOW | WS_VISIBLE;
+    let mut window_rect = RECT {
+        left: 0,
+        top: 0,
+        right: width as i32,
+        bottom: height as i32,
+    };
+    unsafe {
+        AdjustWindowRectEx(&mut window_rect, style, false, ex_style)
+            .map_err(|err| Error::Backend(format!("adjust Win32 desktop window rect: {err}")))?;
+    }
+    let window_width = window_rect.right - window_rect.left;
+    let window_height = window_rect.bottom - window_rect.top;
+    let hwnd = unsafe {
+        CreateWindowExW(
+            ex_style,
+            CLASS_NAME,
+            PCWSTR(title_wide.as_ptr()),
+            style,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            window_width,
+            window_height,
+            HWND::default(),
+            HMENU::default(),
+            HINSTANCE::default(),
+            None,
+        )
+    }
+    .map_err(|err| Error::Backend(format!("create Win32 desktop window: {err}")))?;
+    let _icons = install_window_icons(hwnd, icon_path);
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_SHOW);
+        let _ = UpdateWindow(hwnd);
+    }
+    Ok(hwnd)
+}
+
+fn run_window_message_loop(hwnd: HWND) {
+    let mut message = MSG::default();
+    unsafe {
+        while GetMessageW(&mut message, HWND::default(), 0, 0).as_bool() {
+            let _ = TranslateMessage(&message);
+            let _ = DispatchMessageW(&message);
+        }
+    }
+    if let Ok(mut frames) = presented_frames().lock() {
+        frames.remove(&hwnd_key(hwnd));
     }
 }
 

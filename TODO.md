@@ -14,9 +14,12 @@
 
 - Current host/manual slice: the hidden/pre-rendered UI layer leak is fixed by
   committed CE visible-client-region clipping (`8fa8c9f`). The live host
-  presenter now shows the corrected z-order/hide-show behavior. Continue
-  investigating any remaining "ANR" report as post-map scheduler/device/app
-  responsiveness, not as a rendering leak or a basic input-drop bug. The
+  presenter now shows the corrected z-order/hide-show behavior, and the Win32
+  host window itself stays responsive during the long post-map MFC loop because
+  window ownership/pumping moved to a dedicated GUI thread. Continue
+  investigating any remaining "ANR" report as guest post-map
+  scheduler/device/app responsiveness, not as a rendering leak, host window
+  pump freeze, or a basic input-drop bug. The
   immediate duplicate-wait/worker-freeze shape is fixed: fresh
   `target\anr_wait_cleanup_host_*` no longer lists main thread `1` as both
   `sleep` and `get_message`, and `target\anr_worker_resume_virtual_*` proves
@@ -86,11 +89,12 @@
   `0x02020004`, and the app parks at scheduler-owned `GetMessageW` with
   periodic `WM_TIMER` id `4565`, custom messages `0x52e8`/`0x5284`, COM7 GPS
   polling, and Deneb sensor reads in the evidence trail. Next step: debug
-  post-map idle progression from real CE events and devices. Inspect whether
-  timer 4565, COM7 empty reads/timeouts, `SMB1:`/`MFS1:` device behavior,
-  missing `MS2_CalData`, or a message-wake gap is what keeps the rendered map
-  idle. Do not restore the late-init hook, patch guest state, fabricate files,
-  or fake pixels.
+  post-map progression and the later app-owned encoded terminate path from real
+  CE events and devices. Inspect whether timer 4565, repeated custom
+  `0x52e8` sends, COM7 empty reads/timeouts, `SMB1:`/`MFS1:` device behavior,
+  missing `MS2_CalData`, or a message-wake gap is what drives the rendered map
+  to that path. Do not restore the late-init hook, patch guest state, fabricate
+  files, or fake pixels.
 - Serial control state is now generic and stateful enough for DCB/mask/purge
   callers, and synchronous Unicorn `WaitCommEvent` now parks through the
   scheduler until either `EV_RXCHAR` is ready under the current mask or

@@ -37,6 +37,17 @@
   maps guest `COM7:` to host `COM21`, so the mounted ANR frontier still needs a
   verified host GPS/serial source instead of treating empty COM21 reads as app
   evidence.
+- The Win32 host-presenter ANR symptom is fixed at the host boundary. The host
+  window is now created and pumped on a dedicated GUI thread, while the emulator
+  thread continues to blit real guest framebuffer pixels and poll the shared
+  input queue. This does not change CE GWE/message semantics. Before the change,
+  `target\host_anr_current_*` reached
+  `pc=0x60024834(dll:mfcce400.dll+0x24834)` around 168 s with
+  `Responding=False`; after the change, `target\host_gui_thread_*` reached the
+  same PC around 180 s with `Responding=True`, similar RSS
+  (`~224 MB`), and then followed the same app-owned encoded terminate path at
+  `image:iNavi.exe+0x47fa94`. The remaining post-map issue is therefore guest
+  message/scheduler/device behavior, not a frozen host Win32 window.
 - The post-map ANR-shaped scheduler stop was narrowed and moved forward by a
   generic Unicorn wait-bridge fix. Fresh host evidence
   `target\anr_wait_cleanup_host_*` first confirmed the stale duplicate
