@@ -2351,6 +2351,7 @@ impl CeKernel {
             .gwe
             .get_message_filtered(thread_id, hwnd, min_msg, max_msg)
         {
+            self.clear_timer_message_pending(thread_id, &message);
             self.record_message_op(
                 "get_message",
                 thread_id,
@@ -2365,6 +2366,7 @@ impl CeKernel {
             .gwe
             .get_message_filtered(thread_id, hwnd, min_msg, max_msg);
         if let Some(message) = message.as_ref() {
+            self.clear_timer_message_pending(thread_id, message);
             self.record_message_op(
                 "get_message",
                 thread_id,
@@ -2390,6 +2392,9 @@ impl CeKernel {
             .gwe
             .peek_message_filtered(thread_id, hwnd, min_msg, max_msg, flags)
         {
+            if flags.contains(PeekFlags::REMOVE) {
+                self.clear_timer_message_pending(thread_id, &message);
+            }
             let op = if flags.contains(PeekFlags::REMOVE) {
                 "peek_message_remove"
             } else {
@@ -2409,6 +2414,9 @@ impl CeKernel {
             .gwe
             .peek_message_filtered(thread_id, hwnd, min_msg, max_msg, flags);
         if let Some(message) = message.as_ref() {
+            if flags.contains(PeekFlags::REMOVE) {
+                self.clear_timer_message_pending(thread_id, message);
+            }
             let op = if flags.contains(PeekFlags::REMOVE) {
                 "peek_message_remove"
             } else {
@@ -3183,6 +3191,16 @@ impl CeKernel {
         };
         let message = Message::new(hwnd, msg, wparam, lparam, self.timers.tick_count());
         self.post_gwe_message(window.thread_id, message);
+    }
+
+    fn clear_timer_message_pending(&mut self, thread_id: u32, message: &Message) {
+        if message.msg != crate::ce::gwe::WM_TIMER {
+            return;
+        }
+        let hwnd = (message.hwnd != 0).then_some(message.hwnd);
+        let _ = self
+            .timers
+            .clear_pending_message(thread_id, hwnd, message.wparam);
     }
 }
 

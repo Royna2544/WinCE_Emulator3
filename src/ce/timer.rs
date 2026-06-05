@@ -39,6 +39,7 @@ pub struct KernelTimer {
     pub callback: Option<u32>,
     pub due_ms: u32,
     pub period_ms: Option<u32>,
+    pub pending_message: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -194,6 +195,7 @@ impl TimerSystem {
                 callback,
                 due_ms,
                 period_ms: Some(period_ms),
+                pending_message: false,
             },
         );
         id
@@ -239,6 +241,7 @@ impl TimerSystem {
         let now = self.tick_count();
         self.timers
             .values()
+            .filter(|timer| !timer.pending_message)
             .map(|timer| timer.due_ms.saturating_sub(now))
             .min()
     }
@@ -248,7 +251,9 @@ impl TimerSystem {
         let due_keys: Vec<TimerKey> = self
             .timers
             .iter()
-            .filter_map(|(key, timer)| (timer.due_ms <= now).then_some(*key))
+            .filter_map(|(key, timer)| {
+                (!timer.pending_message && timer.due_ms <= now).then_some(*key)
+            })
             .collect();
 
         let mut due = Vec::new();
@@ -256,11 +261,25 @@ impl TimerSystem {
             if let Some(mut timer) = self.timers.remove(&key) {
                 if let Some(period) = timer.period_ms {
                     timer.due_ms = now.wrapping_add(period);
+                    timer.pending_message = true;
                     self.timers.insert(key, timer.clone());
                 }
                 due.push(timer);
             }
         }
         due
+    }
+
+    pub fn clear_pending_message(&mut self, thread_id: u32, hwnd: Option<u32>, id: u32) -> bool {
+        let Some(timer) = self.timers.get_mut(&TimerKey {
+            thread_id,
+            hwnd,
+            id,
+        }) else {
+            return false;
+        };
+        let was_pending = timer.pending_message;
+        timer.pending_message = false;
+        was_pending
     }
 }

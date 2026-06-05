@@ -155,6 +155,18 @@
     visible map run or bounded I/O/RSS. That run did not record manual
     `remote_touch`/`remote_key` events, so the broader ANR remains open and
     still needs a manual trace on the exact unresponsive control.
+  - Latest timer/modal evidence: CE-style pending timer-message coalescing is
+    now implemented from the `C:\WINCE600` GWE timer-entry model. Fresh host
+    traces `target\host_timer_pending_300s_*` and follow-ups show timer `4565`
+    no longer floods the queue: it appears as one pending `WM_TIMER` post
+    instead of a repeated streak. `target\host_modal_click_260s_*` and
+    `target\host_modal_lateclick_300s_*` prove injected host mouse events are
+    drained and delivered to GWE as `WM_LBUTTONDOWN/UP`, but the tested clicks
+    hit the underlying `TGNaviDlg` `0x00020080` before the top warning modal
+    `0x00020084` existed, so they did not exercise the modal OK handler. The
+    current open frontier is the GPS initialization warning/modal plus
+    GPS/serial/Deneb continuation that reaches the app-owned encoded terminate
+    path, not a timer storm or host input drop.
 
 - Rendered iNavi map still needs road/building styling fidelity, but the
   black base-layer failure is fixed.

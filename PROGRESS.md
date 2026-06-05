@@ -9,6 +9,29 @@
 
 ## Confirmed
 
+- CE-style pending timer-message coalescing is now implemented for scheduler
+  generated `WM_TIMER`. `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`
+  models timer entries with separate message-queue and timer-queue linkage plus
+  a fired state, so v3 now marks a periodic timer as having a pending message
+  when `pump_timers_to_gwe` posts it and only clears that state when
+  `GetMessageW`/removing `PeekMessageW` actually consumes the timer message.
+  Focused coverage `kernel_timer_messages_coalesce_while_pending` proves
+  repeated timer pumps do not queue duplicate messages and that consuming the
+  message permits the next period to post. Full
+  `cargo test --features unicorn,trace,win32-desktop`, `cargo check`, and
+  release build pass. Fresh visible host validations
+  `target\host_timer_pending_300s_*`, `target\host_modal_click_260s_*`,
+  `target\host_windows_220s_*`, and `target\host_modal_lateclick_300s_*` used
+  dumped runtime DLLs from `D:\INAVI_Emulator\DUMPPLZ\Windows`, stayed
+  host-window responsive and memory/file-I/O bounded, and reduced timer `4565`
+  from the previous repeated post streak to one pending post in the message
+  trace. The final frame is the real GPS initialization warning modal
+  (`Error Code: -14`). Host input injection reaches GWE and delivers
+  `WM_LBUTTONDOWN/UP`, but the tested clicks landed before the top modal HWND
+  `0x00020084` was created and hit the underlying full-screen `TGNaviDlg`
+  `0x00020080`; the remaining ANR/frontier is therefore GPS/modal/device
+  continuation, not timer flooding, host input loss, hidden-layer leakage, or
+  file-I/O/RSS growth.
 - The post-map Win32-host pending-send deadlock is fixed. A 300 s host probe
   before this slice (`target\host_handoff_300s_*`) ended with thread 9 blocked
   in a synchronous send while thread 1 was parked in `GetMessageW`

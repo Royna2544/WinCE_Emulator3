@@ -679,7 +679,7 @@ fn message_and_timer_transitions_queue_scheduler_msg_wait_candidates() -> Result
     assert_eq!(select_ready(&kernel, 1, 0), Some(timer_wait));
     kernel.remove_blocked_waiter(timer_wait).unwrap();
     kernel.remove_blocked_waiter(timer_global).unwrap();
-    assert_eq!(kernel.gwe.get_message(43).unwrap().msg, WM_TIMER);
+    assert_eq!(kernel.get_message_w(43).unwrap().msg, WM_TIMER);
 
     let thread_timer_global = register_global_ready_wait(&mut kernel, 4);
     let thread_timer_wait = register_msg_wait(&mut kernel, 45, QS_TIMER);
@@ -688,7 +688,7 @@ fn message_and_timer_transitions_queue_scheduler_msg_wait_candidates() -> Result
     assert_eq!(select_ready(&kernel, 1, 0), Some(thread_timer_wait));
     kernel.remove_blocked_waiter(thread_timer_wait).unwrap();
     kernel.remove_blocked_waiter(thread_timer_global).unwrap();
-    let thread_timer_msg = kernel.gwe.get_message(45).unwrap();
+    let thread_timer_msg = kernel.get_message_w(45).unwrap();
     assert_eq!(thread_timer_msg.hwnd, 0);
     assert_eq!(thread_timer_msg.msg, WM_TIMER);
     assert_eq!(thread_timer_msg.wparam, 88);
@@ -740,6 +740,42 @@ fn window_timers_with_same_id_keep_independent_owners() -> Result<()> {
     assert_eq!(timer_msg.hwnd, hwnd_b);
     assert_eq!(timer_msg.msg, WM_TIMER);
     assert_eq!(timer_msg.wparam, 5);
+
+    Ok(())
+}
+
+#[test]
+fn kernel_timer_messages_coalesce_while_pending() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+
+    let hwnd = kernel.gwe.create_window(61, "TimerCoalesce", "timer");
+    assert_eq!(kernel.set_timer(Some(hwnd), Some(77), 0), 77);
+
+    kernel.pump_timers_to_gwe(61);
+    kernel.pump_timers_to_gwe(61);
+
+    let queued_timers = kernel
+        .gwe
+        .queue_snapshot()
+        .into_iter()
+        .find(|(thread_id, _)| *thread_id == 61)
+        .map(|(_, messages)| {
+            messages
+                .into_iter()
+                .filter(|message| message.msg == WM_TIMER && message.wparam == 77)
+                .count()
+        })
+        .unwrap_or(0);
+    assert_eq!(queued_timers, 1);
+
+    let timer_msg = kernel.get_message_w(61).unwrap();
+    assert_eq!(timer_msg.hwnd, hwnd);
+    assert_eq!(timer_msg.msg, WM_TIMER);
+    assert_eq!(timer_msg.wparam, 77);
+
+    kernel.pump_timers_to_gwe(61);
+    assert_eq!(kernel.get_message_w(61).unwrap().msg, WM_TIMER);
 
     Ok(())
 }

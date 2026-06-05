@@ -12,6 +12,22 @@
 
 ## Current Slice
 
+- Current host/manual ANR slice after timer coalescing: continue from
+  `target\host_timer_pending_300s_*`,
+  `target\host_windows_220s_*`, and
+  `target\host_modal_lateclick_300s_*`. The CE timer pending-message fix closes
+  the repeated timer `4565` post streak: fresh traces show one pending
+  `WM_TIMER` `4565`, all synchronous sends completed, responsive host Win32,
+  and bounded file/RSS counters. The visible stop is the GPS initialization
+  warning modal (`Error Code: -14`) with two top-level `TGNaviDlg` windows:
+  underlying full-screen `0x00020080` and top modal `0x00020084`
+  (`182,99-618,381`). Injected host clicks at `(400,350)` were delivered
+  through GWE as `WM_LBUTTONDOWN/UP`, but landed before `0x00020084` existed
+  and hit `0x00020080`; no `WM_COMMAND` followed. Next work should trace the
+  exact modal creation/OK-click window timing, then chase the GPS/serial/Deneb
+  state that leads to the warning and encoded terminate path. Do not treat this
+  as a presenter, framebuffer, timer-flood, hidden-layer, or file-I/O problem
+  unless fresh evidence regresses those closed paths.
 - Current host/manual ANR slice: continue from
   `target\host_getmsg_sendwake_300s_*`. The pending synchronous-send deadlock
   from `target\host_handoff_300s_*` is closed: the blocked-current
