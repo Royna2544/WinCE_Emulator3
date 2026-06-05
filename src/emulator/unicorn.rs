@@ -12574,6 +12574,18 @@ fn snapshot_recent_unicorn_code(
 }
 
 #[cfg(feature = "unicorn")]
+fn window_long_index_name_for_trace(index: i32) -> &'static str {
+    match index {
+        crate::ce::gwe::GWL_WNDPROC => "GWL_WNDPROC",
+        crate::ce::gwe::GWL_ID => "GWL_ID",
+        crate::ce::gwe::GWL_STYLE => "GWL_STYLE",
+        crate::ce::gwe::GWL_EXSTYLE => "GWL_EXSTYLE",
+        crate::ce::gwe::GWL_USERDATA => "GWL_USERDATA",
+        _ => "extra",
+    }
+}
+
+#[cfg(feature = "unicorn")]
 fn import_detail_after_return<D>(
     kernel: &CeKernel,
     uc: &unicorn_engine::Unicorn<'_, D>,
@@ -12977,6 +12989,86 @@ fn import_detail_after_return<D>(
             }
             if let Some(title) = import_pointer_or_wide_arg(uc, title_ptr) {
                 parts.push(format!("title={title:?}"));
+            }
+            Some(parts.join("/"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_W)
+        | Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT) => {
+            let hwnd = args.first().copied().unwrap_or(0);
+            let msg = args.get(1).copied().unwrap_or(0);
+            let wparam = args.get(2).copied().unwrap_or(0);
+            let lparam = args.get(3).copied().unwrap_or(0);
+            let last_error = kernel.threads.get_last_error(thread_id);
+            let window = kernel.gwe.window(hwnd);
+            let mut parts = vec![
+                format!("hwnd=0x{hwnd:08x}"),
+                format!("msg=0x{msg:04x}"),
+                format!("wparam=0x{wparam:08x}"),
+                format!("lparam=0x{lparam:08x}"),
+                format!("result=0x{result:08x}"),
+                format!("last_error={last_error}"),
+                format!("exists={}", window.is_some()),
+                format!("is_window={}", kernel.gwe.is_window(hwnd)),
+            ];
+            if let Some(window) = window {
+                parts.push(format!("destroyed={}", window.destroyed));
+                parts.push(format!("destroy_sent={}", window.destroy_message_sent));
+                parts.push(format!(
+                    "nc_destroy_sent={}",
+                    window.nc_destroy_message_sent
+                ));
+                parts.push(format!("thread={}", window.thread_id));
+                parts.push(format!("process={}", window.process_id));
+                parts.push(format!("wndproc=0x{:08x}", window.wndproc));
+                parts.push(format!("class={:?}", window.class_name));
+            }
+            if ordinal == Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT) {
+                parts.push(format!(
+                    "flags=0x{:08x}",
+                    args.get(4).copied().unwrap_or_default()
+                ));
+                parts.push(format!(
+                    "timeout={}",
+                    args.get(5).copied().unwrap_or_default()
+                ));
+                parts.push(format!(
+                    "result_ptr=0x{:08x}",
+                    args.get(6).copied().unwrap_or_default()
+                ));
+            }
+            Some(parts.join("/"))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_GET_WINDOW_LONG_W)
+        | Some(crate::ce::coredll_ordinals::ORD_SET_WINDOW_LONG_W) => {
+            let hwnd = args.first().copied().unwrap_or(0);
+            let index = args.get(1).copied().unwrap_or(0) as i32;
+            let last_error = kernel.threads.get_last_error(thread_id);
+            let window = kernel.gwe.window(hwnd);
+            let mut parts = vec![
+                format!("hwnd=0x{hwnd:08x}"),
+                format!("index={index}"),
+                format!("index_name={}", window_long_index_name_for_trace(index)),
+                format!("result=0x{result:08x}"),
+                format!("last_error={last_error}"),
+                format!("exists={}", window.is_some()),
+                format!("is_window={}", kernel.gwe.is_window(hwnd)),
+            ];
+            if ordinal == Some(crate::ce::coredll_ordinals::ORD_SET_WINDOW_LONG_W) {
+                parts.push(format!(
+                    "value=0x{:08x}",
+                    args.get(2).copied().unwrap_or_default()
+                ));
+            }
+            if let Some(window) = window {
+                parts.push(format!("destroyed={}", window.destroyed));
+                parts.push(format!("destroy_sent={}", window.destroy_message_sent));
+                parts.push(format!(
+                    "nc_destroy_sent={}",
+                    window.nc_destroy_message_sent
+                ));
+                parts.push(format!("wndproc=0x{:08x}", window.wndproc));
+                parts.push(format!("style=0x{:08x}", window.style));
+                parts.push(format!("class={:?}", window.class_name));
             }
             Some(parts.join("/"))
         }
