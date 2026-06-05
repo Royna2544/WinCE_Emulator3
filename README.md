@@ -90,6 +90,9 @@ cargo run --features unicorn,win32-desktop -- --mount-config mounts.toml --image
 The Rust listener serves `GET /api/v1/status`, `GET /api/v1/frame.jpg`,
 `GET /api/v1/debug/screenshot.png`, `GET /api/v1/video.mjpg`, and the v2 REST
 control routes under `/api/v1/input`, `/api/v1/sensors`, and `/api/v1/control`.
+The REST handlers follow v2's validation and response shape for touch/key
+input, NMEA/location injection, per-request frame `quality`, and MJPEG
+`fps`/`quality`.
 The `--remote-bind`, `--remote-port`, `--remote-token`,
 `--remote-video-fps`, `--remote-jpeg-quality`, and `--remote-audio*` flags are
 accepted for v2 CLI compatibility; WebSocket audio/control upgrade paths are

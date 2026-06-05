@@ -26,12 +26,23 @@
   same drain path so remote touch/key/GPS input can wake CE scheduler/GWE paths
   during long guest execution. Focused coverage
   `remote_server_accepts_v2_touch_route`,
+  `remote_server_accepts_v2_single_touch_alias`,
+  `remote_server_rejects_invalid_v2_input_bodies`,
+  `remote_server_serves_frame_with_v2_quality_query_and_error`,
   `remote_server_serves_v2_status_shape`, and the existing
   `remote_server_api_state_queues_input_serial_audio_and_status` pass; `cargo
   check --features unicorn,trace,win32-desktop` also passes with only the known
   Windows incremental finalization warning. WebSocket audio/control upgrade
   endpoints are intentionally left as `501` placeholders until the audio
   streaming transport is implemented.
+- Follow-up v2 remote API alignment tightened the REST handler contract against
+  `..\wince_emulator_v2\src\remote_server.cpp`: touch/key/location/NMEA bodies
+  now return the same invalid-body errors, touch aliases include `tap`, `click`,
+  `single`, and `single-touch`, key phases are limited to `down`/`up`, frame and
+  MJPEG endpoints honor per-request `quality`/`fps`, missing framebuffer now
+  reports `{"error":"no framebuffer"}`, and successful REST input/control
+  responses use the compact v2 `{"ok":true}` shape while still queueing through
+  generic `CeRemote`/`CeKernel` dispatch.
 - CE-style pending timer-message coalescing is now implemented for scheduler
   generated `WM_TIMER`. `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`
   models timer entries with separate message-queue and timer-queue linkage plus

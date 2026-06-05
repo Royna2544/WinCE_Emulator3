@@ -209,7 +209,7 @@ impl RemoteServer {
             RemoteHttpResponse::One(response) => {
                 let _ = stream.write_all(&response.to_bytes());
             }
-            RemoteHttpResponse::Mjpeg => self.write_mjpeg_stream(stream),
+            RemoteHttpResponse::Mjpeg { request } => self.write_mjpeg_stream(stream, request),
         }
     }
 
@@ -231,9 +231,9 @@ impl RemoteServer {
                     .clone();
                 HttpResponse::json(200, status).into()
             }
-            ("GET", "/api/v1/frame.jpg") => self.latest_jpeg_response().into(),
+            ("GET", "/api/v1/frame.jpg") => self.latest_jpeg_response(&request).into(),
             ("GET", "/api/v1/debug/screenshot.png") => self.latest_png_response().into(),
-            ("GET", "/api/v1/video.mjpg") => RemoteHttpResponse::Mjpeg,
+            ("GET", "/api/v1/video.mjpg") => RemoteHttpResponse::Mjpeg { request },
             ("GET", "/framebuffer.ppm") => self.latest_ppm_response().into(),
             ("POST", "/api/v1/input/touch") => self.post_touch(request).into(),
             ("POST", "/api/v1/input/key") => self.post_key(request).into(),
@@ -241,7 +241,7 @@ impl RemoteServer {
             ("POST", "/api/v1/sensors/nmea") => self.post_nmea(request).into(),
             ("POST", "/api/v1/sensors/imu") => self.post_imu(request).into(),
             ("GET", "/api/v1/logs/recent") => {
-                let _lines = request.query_u64("lines").unwrap_or(200).clamp(1, 4096);
+                let _lines = request.query_u64("lines", 200, 1, 4096);
                 HttpResponse::json(200, json!({"ok": true, "lines": Vec::<String>::new()})).into()
             }
             ("POST", "/api/v1/control/pause") => {
@@ -296,88 +296,105 @@ impl RemoteServer {
     }
 
     fn post_touch(&self, request: HttpRequest) -> HttpResponse {
-        let body = match parse_json_body(&request) {
+        let body = match parse_json_body(&request, "invalid touch body") {
             Ok(body) => body,
             Err(response) => return response,
         };
+        let Some(kind) = body.get("type").and_then(Value::as_str) else {
+            return HttpResponse::json(400, json!({"ok": false, "error": "invalid touch body"}));
+        };
         let Some(x) = body.get("x").and_then(Value::as_i64) else {
-            return HttpResponse::json(400, json!({"ok": false, "error": "missing x"}));
+            return HttpResponse::json(400, json!({"ok": false, "error": "invalid touch body"}));
         };
         let Some(y) = body.get("y").and_then(Value::as_i64) else {
-            return HttpResponse::json(400, json!({"ok": false, "error": "missing y"}));
+            return HttpResponse::json(400, json!({"ok": false, "error": "invalid touch body"}));
         };
-        let kind = body.get("type").and_then(Value::as_str).unwrap_or("touch");
         let phase = if kind == "touch" {
             body.get("phase").and_then(Value::as_str).unwrap_or("tap")
         } else {
             kind
         };
-        let pending = self.queue_control(json!({
+        if !is_supported_touch_phase(phase) {
+            return HttpResponse::json(
+                400,
+                json!({"ok": false, "error": "unsupported touch type"}),
+            );
+        }
+        self.queue_control(json!({
             "type": "touch",
             "phase": phase,
             "x": x,
             "y": y
         }));
-        HttpResponse::json(200, json!({"ok": true, "queued": true, "pending": pending}))
+        HttpResponse::json(200, json!({"ok": true}))
     }
 
     fn post_key(&self, request: HttpRequest) -> HttpResponse {
-        let body = match parse_json_body(&request) {
+        let body = match parse_json_body(&request, "invalid key body") {
             Ok(body) => body,
             Err(response) => return response,
         };
         let Some(kind) = body.get("type").and_then(Value::as_str) else {
-            return HttpResponse::json(400, json!({"ok": false, "error": "missing type"}));
+            return HttpResponse::json(400, json!({"ok": false, "error": "invalid key body"}));
         };
         let Some(vk) = body.get("vk").and_then(Value::as_u64) else {
-            return HttpResponse::json(400, json!({"ok": false, "error": "missing vk"}));
+            return HttpResponse::json(400, json!({"ok": false, "error": "invalid key body"}));
         };
-        let pending = self.queue_control(json!({
+        if kind != "down" && kind != "up" {
+            return HttpResponse::json(400, json!({"ok": false, "error": "unsupported key type"}));
+        }
+        if !(1..=0xff).contains(&vk) {
+            return HttpResponse::json(
+                400,
+                json!({"ok": false, "error": "vk must be between 1 and 255"}),
+            );
+        }
+        self.queue_control(json!({
             "type": "key",
             "phase": kind,
             "vk": vk
         }));
-        HttpResponse::json(200, json!({"ok": true, "queued": true, "pending": pending}))
+        HttpResponse::json(200, json!({"ok": true}))
     }
 
     fn post_location(&self, request: HttpRequest) -> HttpResponse {
-        let mut body = match parse_json_body(&request) {
+        let mut body = match parse_json_body(&request, "invalid location body") {
             Ok(body) => body,
             Err(response) => return response,
         };
+        if body.get("lat").and_then(Value::as_f64).is_none()
+            || body.get("lon").and_then(Value::as_f64).is_none()
+        {
+            return HttpResponse::json(400, json!({"ok": false, "error": "invalid location body"}));
+        }
         body["type"] = Value::String("location".to_owned());
-        let pending = self.queue_control(body);
-        HttpResponse::json(
-            200,
-            json!({"ok": true, "queued": true, "pending": pending, "sentencesGenerated": 3}),
-        )
+        self.queue_control(body);
+        HttpResponse::json(200, json!({"ok": true, "sentencesGenerated": 3}))
     }
 
     fn post_nmea(&self, request: HttpRequest) -> HttpResponse {
-        let mut body = match parse_json_body(&request) {
+        let mut body = match parse_json_body(&request, "invalid nmea body") {
             Ok(body) => body,
             Err(response) => return response,
         };
-        let accepted = body
-            .get("sentences")
-            .and_then(Value::as_array)
-            .map_or(0, Vec::len);
+        let Some(sentences) = body.get("sentences").and_then(Value::as_array) else {
+            return HttpResponse::json(400, json!({"ok": false, "error": "invalid nmea body"}));
+        };
+        let accepted = sentences
+            .iter()
+            .filter(|sentence| sentence.is_string())
+            .count();
         body["type"] = Value::String("nmea".to_owned());
-        let pending = self.queue_control(body);
-        HttpResponse::json(
-            200,
-            json!({"ok": true, "queued": true, "pending": pending, "accepted": accepted}),
-        )
+        self.queue_control(body);
+        HttpResponse::json(200, json!({"ok": true, "accepted": accepted}))
     }
 
     fn post_imu(&self, request: HttpRequest) -> HttpResponse {
-        let mut body = match parse_json_body(&request) {
-            Ok(body) => body,
-            Err(response) => return response,
-        };
-        body["type"] = Value::String("imu".to_owned());
-        let pending = self.queue_control(body);
-        HttpResponse::json(200, json!({"ok": true, "queued": true, "pending": pending}))
+        if let Ok(mut body) = serde_json::from_slice::<Value>(&request.body) {
+            body["type"] = Value::String("imu".to_owned());
+            self.queue_control(body);
+        }
+        HttpResponse::json(200, json!({"ok": true}))
     }
 
     fn post_legacy_control(&self, request: HttpRequest) -> HttpResponse {
@@ -393,9 +410,11 @@ impl RemoteServer {
         }
     }
 
-    fn latest_jpeg_response(&self) -> HttpResponse {
+    fn latest_jpeg_response(&self, request: &HttpRequest) -> HttpResponse {
+        let quality =
+            request.query_u64("quality", self.state.config.jpeg_quality as u64, 1, 100) as u8;
         match self.latest_framebuffer_image() {
-            Some(image) => match encode_jpeg(&image, self.state.config.jpeg_quality) {
+            Some(image) => match encode_jpeg(&image, quality) {
                 Ok(bytes) => HttpResponse::bytes(200, "image/jpeg", bytes),
                 Err(err) => HttpResponse::json(503, json!({"ok": false, "error": err})),
             },
@@ -432,8 +451,10 @@ impl RemoteServer {
         queue_control_message(&self.state, message)
     }
 
-    fn write_mjpeg_stream(&self, mut stream: TcpStream) {
-        let fps = self.state.config.video_fps.clamp(1, 60);
+    fn write_mjpeg_stream(&self, mut stream: TcpStream, request: HttpRequest) {
+        let fps = request.query_u64("fps", self.state.config.video_fps as u64, 1, 60) as u32;
+        let quality =
+            request.query_u64("quality", self.state.config.jpeg_quality as u64, 1, 100) as u8;
         let frame_delay = Duration::from_millis((1000 / fps).max(1) as u64);
         let header = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=frame\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n"
@@ -446,7 +467,7 @@ impl RemoteServer {
                 thread::sleep(frame_delay);
                 continue;
             };
-            let Ok(jpeg) = encode_jpeg(&image, self.state.config.jpeg_quality) else {
+            let Ok(jpeg) = encode_jpeg(&image, quality) else {
                 thread::sleep(frame_delay);
                 continue;
             };
@@ -498,19 +519,22 @@ fn queue_control_message(state: &RemoteServerState, message: Value) -> usize {
     pending.len()
 }
 
-fn parse_json_body(request: &HttpRequest) -> std::result::Result<Value, HttpResponse> {
-    serde_json::from_slice(&request.body).map_err(|err| {
-        HttpResponse::json(
-            400,
-            json!({"ok": false, "error": format!("invalid JSON: {err}")}),
-        )
-    })
+fn parse_json_body(
+    request: &HttpRequest,
+    invalid_body_error: &'static str,
+) -> std::result::Result<Value, HttpResponse> {
+    serde_json::from_slice(&request.body)
+        .map_err(|_| HttpResponse::json(400, json!({"ok": false, "error": invalid_body_error})))
 }
 
 fn framebuffer_unavailable() -> HttpResponse {
-    HttpResponse::json(
-        503,
-        json!({"ok": false, "error": "framebuffer not available yet"}),
+    HttpResponse::json(503, json!({"ok": false, "error": "no framebuffer"}))
+}
+
+fn is_supported_touch_phase(phase: &str) -> bool {
+    matches!(
+        phase,
+        "down" | "move" | "up" | "cancel" | "" | "tap" | "click" | "single" | "single-touch"
     )
 }
 
@@ -531,22 +555,22 @@ impl HttpRequest {
             .map(|(_, value)| value.as_str())
     }
 
-    fn query_u64(&self, name: &str) -> Option<u64> {
+    fn query_u64(&self, name: &str, default: u64, min: u64, max: u64) -> u64 {
         for part in self.query.split('&') {
             let (key, value) = part.split_once('=').unwrap_or((part, ""));
             if key == name
-                && let Ok(parsed) = value.parse()
+                && let Ok(parsed) = value.parse::<u64>()
             {
-                return Some(parsed);
+                return parsed.clamp(min, max);
             }
         }
-        None
+        default.clamp(min, max)
     }
 }
 
 enum RemoteHttpResponse {
     One(HttpResponse),
-    Mjpeg,
+    Mjpeg { request: HttpRequest },
 }
 
 impl From<HttpResponse> for RemoteHttpResponse {
@@ -780,6 +804,7 @@ fn pixel_to_rgb(format: PixelFormat, bytes: &[u8]) -> [u8; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ce::framebuffer::{PixelFormat, VirtualFramebuffer};
     use std::io::{Read, Write};
 
     #[test]
@@ -807,6 +832,91 @@ mod tests {
         assert_eq!(queued[0]["phase"], "tap");
         assert_eq!(queued[0]["x"], 12);
         assert_eq!(queued[0]["y"], 34);
+    }
+
+    #[test]
+    fn remote_server_rejects_invalid_v2_input_bodies() {
+        let server = RemoteServer::start(RemoteServerConfig {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            ..RemoteServerConfig::default()
+        })
+        .unwrap();
+
+        let missing_touch_type = r#"{"x":12,"y":34}"#;
+        let response = http_request(
+            server.local_addr(),
+            &format!(
+                "POST /api/v1/input/touch HTTP/1.1\r\nHost: local\r\nContent-Length: {}\r\n\r\n{}",
+                missing_touch_type.len(),
+                missing_touch_type
+            ),
+        );
+        assert!(response.contains("400 Bad Request"));
+        assert!(response.contains(r#""error":"invalid touch body""#));
+
+        let unsupported_key = r#"{"type":"tap","vk":38}"#;
+        let response = http_request(
+            server.local_addr(),
+            &format!(
+                "POST /api/v1/input/key HTTP/1.1\r\nHost: local\r\nContent-Length: {}\r\n\r\n{}",
+                unsupported_key.len(),
+                unsupported_key
+            ),
+        );
+        assert!(response.contains("400 Bad Request"));
+        assert!(response.contains(r#""error":"unsupported key type""#));
+        assert!(server.drain_control_messages().is_empty());
+    }
+
+    #[test]
+    fn remote_server_accepts_v2_single_touch_alias() {
+        let server = RemoteServer::start(RemoteServerConfig {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            ..RemoteServerConfig::default()
+        })
+        .unwrap();
+
+        let body = r#"{"type":"single-touch","x":40,"y":50}"#;
+        let response = http_request(
+            server.local_addr(),
+            &format!(
+                "POST /api/v1/input/touch HTTP/1.1\r\nHost: local\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            ),
+        );
+        assert!(response.contains("200 OK"));
+        assert!(response.contains(r#""ok":true"#));
+        let queued = server.drain_control_messages();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0]["phase"], "single-touch");
+    }
+
+    #[test]
+    fn remote_server_serves_frame_with_v2_quality_query_and_error() {
+        let server = RemoteServer::start(RemoteServerConfig {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            ..RemoteServerConfig::default()
+        })
+        .unwrap();
+
+        let response = http_request(
+            server.local_addr(),
+            "GET /api/v1/frame.jpg HTTP/1.1\r\nHost: local\r\n\r\n",
+        );
+        assert!(response.contains("503 Service Unavailable"));
+        assert!(response.contains(r#""error":"no framebuffer""#));
+
+        let mut framebuffer = VirtualFramebuffer::new(2, 2, PixelFormat::Rgb565).unwrap();
+        framebuffer.clear(0xff);
+        server.publish_framebuffer(&framebuffer);
+        let response = http_request_bytes(
+            server.local_addr(),
+            "GET /api/v1/frame.jpg?quality=1 HTTP/1.1\r\nHost: local\r\n\r\n",
+        );
+        let header = String::from_utf8_lossy(&response[..response.len().min(256)]);
+        assert!(header.contains("200 OK"));
+        assert!(header.contains("Content-Type: image/jpeg"));
     }
 
     #[test]
@@ -852,6 +962,14 @@ mod tests {
         stream.write_all(request.as_bytes()).unwrap();
         let mut response = String::new();
         stream.read_to_string(&mut response).unwrap();
+        response
+    }
+
+    fn http_request_bytes(addr: SocketAddr, request: &str) -> Vec<u8> {
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream.write_all(request.as_bytes()).unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).unwrap();
         response
     }
 }

@@ -1118,9 +1118,11 @@
   - Evidence: `src/remote_server.rs` queues REST control JSON into
     `CeKernel::dispatch_remote_control_message`, publishes real framebuffer
     pixels from the normal present/live-blit boundary, and has focused tests
-    for v2 touch and status shape. `src/ce/remote.rs` already tracks websocket
-    audio client cursors and flush-marked chunks, but no socket writer consumes
-    them yet.
+    for v2 touch aliases, invalid input response bodies, frame `quality`, the
+    missing-framebuffer error, and status shape. REST handlers now mirror v2's
+    compact `{"ok":true}` success bodies and validation strings. `src/ce/remote.rs`
+    already tracks websocket audio client cursors and flush-marked chunks, but
+    no socket writer consumes them yet.
   - Status: REST transport fixed; WebSocket audio/control and live log
     transport remain open.
 
