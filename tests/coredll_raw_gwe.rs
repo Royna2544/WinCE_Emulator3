@@ -8,23 +8,24 @@ use wince_emulation_v3::{
             ORD_CHILD_WINDOW_FROM_POINT, ORD_CLIENT_TO_SCREEN, ORD_COMBINE_RGN, ORD_COPY_RECT,
             ORD_CREATE_COMPATIBLE_BITMAP, ORD_CREATE_COMPATIBLE_DC,
             ORD_CREATE_DIALOG_INDIRECT_PARAM_W, ORD_CREATE_DIBSECTION, ORD_CREATE_FONT_INDIRECT_W,
-            ORD_CREATE_MENU, ORD_CREATE_MUTEX_W, ORD_CREATE_PALETTE, ORD_CREATE_PEN_INDIRECT,
-            ORD_CREATE_POPUP_MENU, ORD_CREATE_RECT_RGN, ORD_CREATE_SOLID_BRUSH,
-            ORD_CREATE_WINDOW_EX_W, ORD_DEF_WINDOW_PROC_W, ORD_DELETE_OBJECT, ORD_DESTROY_ICON,
-            ORD_DESTROY_WINDOW, ORD_DISPATCH_MESSAGE_W, ORD_DRAW_MENU_BAR, ORD_ENABLE_MENU_ITEM,
-            ORD_ENABLE_WINDOW, ORD_END_PAINT, ORD_EQUAL_RECT, ORD_FILL_RECT, ORD_FIND_RESOURCE_W,
-            ORD_FIND_WINDOW_W, ORD_GET_ACTIVE_WINDOW, ORD_GET_ASSOCIATED_MENU,
-            ORD_GET_ASYNC_KEY_STATE, ORD_GET_ASYNC_SHIFT_FLAGS, ORD_GET_CAPTURE,
-            ORD_GET_CLASS_INFO_W, ORD_GET_CLASS_NAME_W, ORD_GET_CLIENT_RECT, ORD_GET_CURSOR_POS,
-            ORD_GET_DC, ORD_GET_DEVICE_CAPS, ORD_GET_DIALOG_BASE_UNITS, ORD_GET_DIBCOLOR_TABLE,
-            ORD_GET_DLG_CTRL_ID, ORD_GET_DLG_ITEM, ORD_GET_DLG_ITEM_INT, ORD_GET_DLG_ITEM_TEXT_W,
-            ORD_GET_FOCUS, ORD_GET_FOREGROUND_KEYBOARD_TARGET, ORD_GET_FOREGROUND_WINDOW,
-            ORD_GET_KEY_STATE, ORD_GET_KEYBOARD_TARGET, ORD_GET_MENU, ORD_GET_MENU_ITEM_INFO_W,
-            ORD_GET_MESSAGE_POS, ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP, ORD_GET_MESSAGE_SOURCE,
-            ORD_GET_MESSAGE_W, ORD_GET_MESSAGE_WNO_WAIT, ORD_GET_NEAREST_PALETTE_INDEX,
-            ORD_GET_NEXT_DLG_GROUP_ITEM, ORD_GET_NEXT_DLG_TAB_ITEM, ORD_GET_PALETTE_ENTRIES,
-            ORD_GET_PARENT, ORD_GET_QUEUE_STATUS, ORD_GET_RGN_BOX, ORD_GET_STOCK_OBJECT,
-            ORD_GET_SUB_MENU, ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH, ORD_GET_SYSTEM_INFO,
+            ORD_CREATE_MENU, ORD_CREATE_MUTEX_W, ORD_CREATE_PALETTE, ORD_CREATE_PATTERN_BRUSH,
+            ORD_CREATE_PEN_INDIRECT, ORD_CREATE_POPUP_MENU, ORD_CREATE_RECT_RGN,
+            ORD_CREATE_SOLID_BRUSH, ORD_CREATE_WINDOW_EX_W, ORD_DEF_WINDOW_PROC_W,
+            ORD_DELETE_OBJECT, ORD_DESTROY_ICON, ORD_DESTROY_WINDOW, ORD_DISPATCH_MESSAGE_W,
+            ORD_DRAW_MENU_BAR, ORD_ENABLE_MENU_ITEM, ORD_ENABLE_WINDOW, ORD_END_PAINT,
+            ORD_EQUAL_RECT, ORD_FILL_RECT, ORD_FIND_RESOURCE_W, ORD_FIND_WINDOW_W,
+            ORD_GET_ACTIVE_WINDOW, ORD_GET_ASSOCIATED_MENU, ORD_GET_ASYNC_KEY_STATE,
+            ORD_GET_ASYNC_SHIFT_FLAGS, ORD_GET_CAPTURE, ORD_GET_CLASS_INFO_W, ORD_GET_CLASS_NAME_W,
+            ORD_GET_CLIENT_RECT, ORD_GET_CURSOR_POS, ORD_GET_DC, ORD_GET_DEVICE_CAPS,
+            ORD_GET_DIALOG_BASE_UNITS, ORD_GET_DIBCOLOR_TABLE, ORD_GET_DLG_CTRL_ID,
+            ORD_GET_DLG_ITEM, ORD_GET_DLG_ITEM_INT, ORD_GET_DLG_ITEM_TEXT_W, ORD_GET_FOCUS,
+            ORD_GET_FOREGROUND_KEYBOARD_TARGET, ORD_GET_FOREGROUND_WINDOW, ORD_GET_KEY_STATE,
+            ORD_GET_KEYBOARD_TARGET, ORD_GET_MENU, ORD_GET_MENU_ITEM_INFO_W, ORD_GET_MESSAGE_POS,
+            ORD_GET_MESSAGE_QUEUE_READY_TIME_STAMP, ORD_GET_MESSAGE_SOURCE, ORD_GET_MESSAGE_W,
+            ORD_GET_MESSAGE_WNO_WAIT, ORD_GET_NEAREST_PALETTE_INDEX, ORD_GET_NEXT_DLG_GROUP_ITEM,
+            ORD_GET_NEXT_DLG_TAB_ITEM, ORD_GET_PALETTE_ENTRIES, ORD_GET_PARENT,
+            ORD_GET_QUEUE_STATUS, ORD_GET_RGN_BOX, ORD_GET_STOCK_OBJECT, ORD_GET_SUB_MENU,
+            ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH, ORD_GET_SYSTEM_INFO,
             ORD_GET_SYSTEM_METRICS, ORD_GET_SYSTEM_PALETTE_ENTRIES, ORD_GET_TEXT_ALIGN,
             ORD_GET_TEXT_COLOR, ORD_GET_TEXT_EXTENT_EX_POINT_W, ORD_GET_TEXT_FACE_W,
             ORD_GET_TEXT_METRICS_W, ORD_GET_UPDATE_RECT, ORD_GET_UPDATE_RGN, ORD_GET_WINDOW,
@@ -35,21 +36,22 @@ use wince_emulation_v3::{
             ORD_IS_RECT_EMPTY, ORD_IS_WINDOW, ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE,
             ORD_KEYBD_EVENT, ORD_KILL_TIMER, ORD_LOAD_ICON_W, ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W,
             ORD_MAP_DIALOG_RECT, ORD_MAP_WINDOW_POINTS, ORD_MESSAGE_BOX_W, ORD_MOVE_WINDOW,
-            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_OFFSET_RECT, ORD_PEEK_MESSAGE_W, ORD_POLYGON,
-            ORD_POLYLINE, ORD_POST_KEYBD_MESSAGE, ORD_POST_MESSAGE_W, ORD_POST_QUIT_MESSAGE,
-            ORD_POST_THREAD_MESSAGE_W, ORD_PT_IN_RECT, ORD_PT_IN_REGION, ORD_REALIZE_PALETTE,
-            ORD_RECT_IN_REGION, ORD_REDRAW_WINDOW, ORD_REGISTER_CLASS_W, ORD_REGISTER_GESTURE,
-            ORD_RELEASE_CAPTURE, ORD_RELEASE_DC, ORD_RELEASE_MUTEX, ORD_REMOVE_MENU,
-            ORD_ROUND_RECT, ORD_SCREEN_TO_CLIENT, ORD_SELECT_OBJECT, ORD_SELECT_PALETTE,
-            ORD_SEND_DLG_ITEM_MESSAGE_W, ORD_SEND_MESSAGE_TIMEOUT, ORD_SEND_MESSAGE_W,
-            ORD_SEND_NOTIFY_MESSAGE_W, ORD_SET_ACTIVE_WINDOW, ORD_SET_ASSOCIATED_MENU,
-            ORD_SET_BK_COLOR, ORD_SET_CAPTURE, ORD_SET_DIBCOLOR_TABLE, ORD_SET_DIBITS_TO_DEVICE,
-            ORD_SET_DLG_ITEM_INT, ORD_SET_DLG_ITEM_TEXT_W, ORD_SET_FOCUS,
-            ORD_SET_FOREGROUND_WINDOW, ORD_SET_KEYBOARD_TARGET, ORD_SET_MENU,
-            ORD_SET_MENU_ITEM_INFO_W, ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_RECT,
-            ORD_SET_RECT_EMPTY, ORD_SET_TEXT_ALIGN, ORD_SET_TEXT_COLOR, ORD_SET_TIMER,
-            ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_RGN, ORD_SET_WINDOW_TEXT_W,
-            ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_SLEEP, ORD_STRETCH_BLT, ORD_STRETCH_DIBITS,
+            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_OFFSET_RECT, ORD_PAT_BLT, ORD_PEEK_MESSAGE_W,
+            ORD_POLYGON, ORD_POLYLINE, ORD_POST_KEYBD_MESSAGE, ORD_POST_MESSAGE_W,
+            ORD_POST_QUIT_MESSAGE, ORD_POST_THREAD_MESSAGE_W, ORD_PT_IN_RECT, ORD_PT_IN_REGION,
+            ORD_REALIZE_PALETTE, ORD_RECT_IN_REGION, ORD_REDRAW_WINDOW, ORD_REGISTER_CLASS_W,
+            ORD_REGISTER_GESTURE, ORD_RELEASE_CAPTURE, ORD_RELEASE_DC, ORD_RELEASE_MUTEX,
+            ORD_REMOVE_MENU, ORD_ROUND_RECT, ORD_SCREEN_TO_CLIENT, ORD_SELECT_OBJECT,
+            ORD_SELECT_PALETTE, ORD_SEND_DLG_ITEM_MESSAGE_W, ORD_SEND_MESSAGE_TIMEOUT,
+            ORD_SEND_MESSAGE_W, ORD_SEND_NOTIFY_MESSAGE_W, ORD_SET_ACTIVE_WINDOW,
+            ORD_SET_ASSOCIATED_MENU, ORD_SET_BK_COLOR, ORD_SET_BRUSH_ORG_EX, ORD_SET_CAPTURE,
+            ORD_SET_DIBCOLOR_TABLE, ORD_SET_DIBITS_TO_DEVICE, ORD_SET_DLG_ITEM_INT,
+            ORD_SET_DLG_ITEM_TEXT_W, ORD_SET_FOCUS, ORD_SET_FOREGROUND_WINDOW,
+            ORD_SET_KEYBOARD_TARGET, ORD_SET_MENU, ORD_SET_MENU_ITEM_INFO_W,
+            ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_RECT, ORD_SET_RECT_EMPTY,
+            ORD_SET_TEXT_ALIGN, ORD_SET_TEXT_COLOR, ORD_SET_TIMER, ORD_SET_WINDOW_LONG_W,
+            ORD_SET_WINDOW_POS, ORD_SET_WINDOW_RGN, ORD_SET_WINDOW_TEXT_W, ORD_SHOW_WINDOW,
+            ORD_SIZEOF_RESOURCE, ORD_SLEEP, ORD_STRETCH_BLT, ORD_STRETCH_DIBITS,
             ORD_SYSTEM_PARAMETERS_INFO_W, ORD_TRACK_POPUP_MENU_EX, ORD_TRANSPARENT_IMAGE,
             ORD_UNION_RECT, ORD_UPDATE_WINDOW, ORD_VALIDATE_RECT, ORD_WINDOW_FROM_POINT,
         },
@@ -749,6 +751,532 @@ fn coredll_raw_polyline_with_null_pen_does_not_touch_framebuffer() -> Result<()>
 
     assert!(framebuffer.pixels().iter().all(|byte| *byte == 0));
     assert!(framebuffer.dirty_rects().is_empty());
+
+    Ok(())
+}
+
+fn create_selected_rgb565_dib(
+    table: &CoredllExportTable,
+    kernel: &mut CeKernel,
+    memory: &mut TestGuestMemory,
+    thread_id: u32,
+    width: i32,
+    height: i32,
+) -> (u32, u32, u32) {
+    let (mem_dc, _bitmap, bits_ptr, stride) =
+        create_selected_rgb565_dib_with_bitmap(table, kernel, memory, thread_id, width, height);
+    (mem_dc, bits_ptr, stride)
+}
+
+fn create_selected_rgb565_dib_with_bitmap(
+    table: &CoredllExportTable,
+    kernel: &mut CeKernel,
+    memory: &mut TestGuestMemory,
+    thread_id: u32,
+    width: i32,
+    height: i32,
+) -> (u32, u32, u32, u32) {
+    let mem_dc = match table.dispatch_raw_ordinal_with_memory(
+        kernel,
+        memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateCompatibleDC(NULL) did not return a handle: {other:?}"),
+    };
+    let info = 0x1_0000;
+    let bits_out = 0x1_0100;
+    memory.map_bytes(info, 40);
+    memory.map_words(bits_out, 1);
+    let mut header = [0u8; 40];
+    header[0..4].copy_from_slice(&40u32.to_le_bytes());
+    header[4..8].copy_from_slice(&width.to_le_bytes());
+    header[8..12].copy_from_slice(&(-height).to_le_bytes());
+    header[12..14].copy_from_slice(&1u16.to_le_bytes());
+    header[14..16].copy_from_slice(&16u16.to_le_bytes());
+    memory.write_bytes(info, &header);
+    memory.write_word(info, 40);
+
+    let bitmap = match table.dispatch_raw_ordinal_with_memory(
+        kernel,
+        memory,
+        thread_id,
+        ORD_CREATE_DIBSECTION,
+        [mem_dc, info, 0, bits_out, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateDIBSection did not return a bitmap: {other:?}"),
+    };
+    assert_ne!(bitmap, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            kernel,
+            memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [mem_dc, bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle != 0
+    ));
+    let bits_ptr = memory
+        .read_u32(bits_out)
+        .expect("CreateDIBSection should write bits pointer");
+    let stride = (((width as u32 * 16) + 31) / 32) * 4;
+    (mem_dc, bitmap, bits_ptr, stride)
+}
+
+fn rgb565_at(memory: &TestGuestMemory, bits_ptr: u32, stride: u32, x: u32, y: u32) -> u16 {
+    memory
+        .read_u16(bits_ptr + y * stride + x * 2)
+        .expect("pixel should be readable")
+}
+
+fn write_rgb565(
+    memory: &mut TestGuestMemory,
+    bits_ptr: u32,
+    stride: u32,
+    x: u32,
+    y: u32,
+    raw: u16,
+) {
+    memory
+        .write_u16(bits_ptr + y * stride + x * 2, raw)
+        .expect("pixel should be writable")
+}
+
+#[test]
+fn coredll_raw_fill_rect_paints_selected_memory_dib() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 8, 6);
+    let rect_ptr = 0x1_0200;
+    memory.map_words(rect_ptr, 4);
+    memory.write_word(rect_ptr, 1);
+    memory.write_word(rect_ptr + 4, 2);
+    memory.write_word(rect_ptr + 8, 5);
+    memory.write_word(rect_ptr + 12, 5);
+    let green_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_SOLID_BRUSH,
+        [0x0000_ff00],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateSolidBrush did not return a brush: {other:?}"),
+    };
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FILL_RECT,
+            [mem_dc, rect_ptr, green_brush],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 1, 2), 0x07e0);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 4, 4), 0x07e0);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 0), 0x0000);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_pat_blt_patcopy_paints_selected_memory_dib() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 8, 6);
+    let blue_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_SOLID_BRUSH,
+        [0x00ff_0000],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateSolidBrush did not return a brush: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [mem_dc, blue_brush],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle != 0
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PAT_BLT,
+            [mem_dc, 2, 1, 3, 4, 0x00f0_0021],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 2, 1), 0x001f);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 4, 4), 0x001f);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 1, 1), 0x0000);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_pat_blt_tiles_pattern_brush_on_selected_memory_dib() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (dst_dc, dst_bits, dst_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 6, 5);
+    let (_pattern_dc, pattern_bitmap, pattern_bits, pattern_stride) =
+        create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    write_rgb565(&mut memory, pattern_bits, pattern_stride, 0, 0, 0xf800);
+    write_rgb565(&mut memory, pattern_bits, pattern_stride, 1, 0, 0x07e0);
+    write_rgb565(&mut memory, pattern_bits, pattern_stride, 0, 1, 0x001f);
+    write_rgb565(&mut memory, pattern_bits, pattern_stride, 1, 1, 0xffff);
+    let pattern_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_PATTERN_BRUSH,
+        [pattern_bitmap],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreatePatternBrush did not return a brush: {other:?}"),
+    };
+    assert_ne!(pattern_brush, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [dst_dc, pattern_brush],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle != 0
+    ));
+    let old_origin = 0x1_0400;
+    memory.map_words(old_origin, 2);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_BRUSH_ORG_EX,
+            [dst_dc, 1, 1, old_origin],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_i32(old_origin)?, 0);
+    assert_eq!(memory.read_i32(old_origin + 4)?, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PAT_BLT,
+            [dst_dc, 1, 1, 3, 3, 0x00f0_0021],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 1, 1), 0xf800);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 2, 1), 0x07e0);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 1, 2), 0x001f);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 2, 2), 0xffff);
+    assert_eq!(rgb565_at(&memory, dst_bits, dst_stride, 0, 0), 0x0000);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_polyline_uses_pen_width_on_selected_memory_dib() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 8, 6);
+    let points_ptr = 0x1_0200;
+    let logpen_ptr = 0x1_0300;
+    memory.map_bytes(points_ptr, 16);
+    memory.map_bytes(logpen_ptr, 16);
+    memory.write_point(points_ptr, 1, 3);
+    memory.write_point(points_ptr + 8, 6, 3);
+    memory.write_bytes(
+        logpen_ptr,
+        &[
+            0x00, 0x00, 0x00, 0x00, // PS_SOLID
+            0x03, 0x00, 0x00, 0x00, // width 3
+            0x00, 0x00, 0x00, 0x00, 0xff, 0x00, 0x00, 0x00, // red
+        ],
+    );
+    let pen = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_PEN_INDIRECT,
+        [logpen_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreatePenIndirect did not return a pen: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [mem_dc, pen],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle != 0
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_POLYLINE,
+            [mem_dc, points_ptr, 2],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 3, 3), 0xf800);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 3, 2), 0xf800);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 3, 4), 0xf800);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 3, 0), 0x0000);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_polygon_fills_selected_memory_dib_with_selected_brush() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 8, 6);
+    let points_ptr = 0x1_0200;
+    memory.map_bytes(points_ptr, 32);
+    for (index, (x, y)) in [(1, 1), (6, 1), (6, 5), (1, 5)].into_iter().enumerate() {
+        memory.write_point(points_ptr + index as u32 * 8, x, y);
+    }
+    let blue_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_SOLID_BRUSH,
+        [0x00ff_0000],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateSolidBrush did not return a brush: {other:?}"),
+    };
+    let null_pen = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_STOCK_OBJECT,
+        [8],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetStockObject(NULL_PEN) did not return a handle: {other:?}"),
+    };
+    for object in [blue_brush, null_pen] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SELECT_OBJECT,
+                [mem_dc, object],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(handle),
+                ..
+            } if handle != 0
+        ));
+    }
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_POLYGON,
+            [mem_dc, points_ptr, 4],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 2, 2), 0x001f);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 5, 4), 0x001f);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 0), 0x0000);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_polygon_uses_winding_fill_for_repeated_edges() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 8, 6);
+    let points_ptr = 0x1_0200;
+    let points = [
+        (1, 1),
+        (6, 1),
+        (6, 5),
+        (1, 5),
+        (1, 1),
+        (6, 1),
+        (6, 5),
+        (1, 5),
+    ];
+    memory.map_bytes(points_ptr, (points.len() * 8) as u32);
+    for (index, (x, y)) in points.into_iter().enumerate() {
+        memory.write_point(points_ptr + index as u32 * 8, x, y);
+    }
+    let blue_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_SOLID_BRUSH,
+        [0x00ff_0000],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateSolidBrush did not return a brush: {other:?}"),
+    };
+    let null_pen = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_STOCK_OBJECT,
+        [8],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetStockObject(NULL_PEN) did not return a handle: {other:?}"),
+    };
+    for object in [blue_brush, null_pen] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SELECT_OBJECT,
+                [mem_dc, object],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(handle),
+                ..
+            } if handle != 0
+        ));
+    }
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_POLYGON,
+            [mem_dc, points_ptr, points.len() as u32],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 2, 2), 0x001f);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 5, 4), 0x001f);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 0), 0x0000);
 
     Ok(())
 }

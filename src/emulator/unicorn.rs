@@ -13936,10 +13936,32 @@ fn import_detail_after_return<D>(
             let object = args.get(1).copied().unwrap_or(0);
             let last_error = kernel.threads.get_last_error(thread_id);
             Some(format!(
-                "hdc=0x{hdc:08x}/{}/object=0x{object:08x}/object_kind={}/previous=0x{result:08x}/previous_kind={}/last_error={last_error}",
+                "hdc=0x{hdc:08x}/{}/object=0x{object:08x}/object_kind={}/object_detail={}/previous=0x{result:08x}/previous_kind={}/previous_detail={}/last_error={last_error}",
                 import_dc_detail(kernel, "hdc", hdc),
                 kernel.resources.gdi_object_kind(object),
+                import_gdi_object_detail(kernel, object),
                 kernel.resources.gdi_object_kind(result),
+                import_gdi_object_detail(kernel, result),
+            ))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_POLYGON)
+        | Some(crate::ce::coredll_ordinals::ORD_POLYLINE) => {
+            let hdc = args.first().copied().unwrap_or(0);
+            let points = args.get(1).copied().unwrap_or(0);
+            let count = args.get(2).copied().unwrap_or(0);
+            let (brush, pen) = kernel
+                .resources
+                .dc_state(hdc)
+                .map(|state| (state.selected_brush, state.selected_pen))
+                .unwrap_or((0, 0));
+            let last_error = kernel.threads.get_last_error(thread_id);
+            Some(format!(
+                "hdc=0x{hdc:08x}/{}/points=0x{points:08x}/count={count}/{}/brush=0x{brush:08x}:{}\
+/pen=0x{pen:08x}:{}/ok={result}/last_error={last_error}",
+                import_dc_detail(kernel, "hdc", hdc),
+                import_guest_points_bbox(uc, points, count),
+                import_gdi_object_detail(kernel, brush),
+                import_gdi_object_detail(kernel, pen),
             ))
         }
         Some(crate::ce::coredll_ordinals::ORD_TRANSPARENT_IMAGE) => {
@@ -14284,6 +14306,8 @@ fn is_import_milestone(
             | Some(crate::ce::coredll_ordinals::ORD_BIT_BLT)
             | Some(crate::ce::coredll_ordinals::ORD_STRETCH_BLT)
             | Some(crate::ce::coredll_ordinals::ORD_STRETCH_DIBITS)
+            | Some(crate::ce::coredll_ordinals::ORD_POLYGON)
+            | Some(crate::ce::coredll_ordinals::ORD_POLYLINE)
             | Some(crate::ce::coredll_ordinals::ORD_SET_DIBITS_TO_DEVICE)
             | Some(crate::ce::coredll_ordinals::ORD_WSPRINTF_W)
             | Some(crate::ce::coredll_ordinals::ORD_SWPRINTF)
@@ -14313,6 +14337,8 @@ fn is_presentation_import(
             | Some(crate::ce::coredll_ordinals::ORD_BIT_BLT)
             | Some(crate::ce::coredll_ordinals::ORD_STRETCH_BLT)
             | Some(crate::ce::coredll_ordinals::ORD_STRETCH_DIBITS)
+            | Some(crate::ce::coredll_ordinals::ORD_POLYGON)
+            | Some(crate::ce::coredll_ordinals::ORD_POLYLINE)
             | Some(crate::ce::coredll_ordinals::ORD_SET_DIBITS_TO_DEVICE)
     )
 }
@@ -14418,6 +14444,41 @@ fn import_dc_detail(kernel: &CeKernel, prefix: &str, hdc: u32) -> String {
 }
 
 #[cfg(feature = "unicorn")]
+fn import_guest_points_bbox<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    points: u32,
+    count: u32,
+) -> String {
+    if points == 0 || count == 0 {
+        return "bbox=none".to_string();
+    }
+    let mut left = i32::MAX;
+    let mut top = i32::MAX;
+    let mut right = i32::MIN;
+    let mut bottom = i32::MIN;
+    let mut read = 0u32;
+    for index in 0..count.min(512) {
+        let ptr = points.wrapping_add(index.saturating_mul(8));
+        let Some(x) = read_unicorn_u32(uc, ptr).map(|value| value as i32) else {
+            break;
+        };
+        let Some(y) = read_unicorn_u32(uc, ptr.wrapping_add(4)).map(|value| value as i32) else {
+            break;
+        };
+        left = left.min(x);
+        top = top.min(y);
+        right = right.max(x);
+        bottom = bottom.max(y);
+        read += 1;
+    }
+    if read == 0 {
+        "bbox=unreadable".to_string()
+    } else {
+        format!("bbox={left},{top}-{right},{bottom}/points_read={read}")
+    }
+}
+
+#[cfg(feature = "unicorn")]
 fn import_bitmap_detail(kernel: &CeKernel, prefix: &str, bitmap: u32) -> String {
     let Some(bitmap) = kernel.resources.bitmap(bitmap) else {
         return format!("{prefix}_detail=none");
@@ -14436,6 +14497,53 @@ fn import_bitmap_detail(kernel: &CeKernel, prefix: &str, bitmap: u32) -> String 
         bitmap.bits_ptr,
         bitmap.bits_owned
     )
+}
+
+#[cfg(feature = "unicorn")]
+fn import_gdi_object_detail(kernel: &CeKernel, handle: u32) -> String {
+    if handle == 0 {
+        return "none".to_owned();
+    }
+    if let Some(brush) = kernel.resources.brush(handle) {
+        return match brush.pattern_bitmap {
+            Some(bitmap) => format!(
+                "brush:pattern=0x{bitmap:08x}:{}",
+                import_bitmap_detail(kernel, "pattern", bitmap)
+            ),
+            None => format!("brush:solid=0x{:06x}", brush.color & 0x00ff_ffff),
+        };
+    }
+    if let Some(pen) = kernel.resources.pen(handle) {
+        return format!(
+            "pen:style={}:width={}:color=0x{:06x}",
+            pen.style,
+            pen.width,
+            pen.color & 0x00ff_ffff
+        );
+    }
+    if kernel.resources.bitmap(handle).is_some() {
+        return format!("bitmap:{}", import_bitmap_detail(kernel, "bitmap", handle));
+    }
+    for (index, name) in [
+        (0, "WHITE_BRUSH"),
+        (1, "LTGRAY_BRUSH"),
+        (2, "GRAY_BRUSH"),
+        (3, "DKGRAY_BRUSH"),
+        (4, "BLACK_BRUSH"),
+        (5, "NULL_BRUSH"),
+        (6, "WHITE_PEN"),
+        (7, "BLACK_PEN"),
+        (8, "NULL_PEN"),
+        (13, "SYSTEM_FONT"),
+        (15, "DEFAULT_PALETTE"),
+        (18, "DC_BRUSH"),
+        (19, "DC_PEN"),
+    ] {
+        if crate::ce::resource::stock_object_handle(index) == Some(handle) {
+            return format!("stock:{name}");
+        }
+    }
+    "unknown".to_owned()
 }
 
 #[cfg(feature = "unicorn")]

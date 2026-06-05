@@ -101,6 +101,7 @@ impl CoredllGuestMemory for TestGuestMemory {
         self.bytes
             .get(&addr)
             .copied()
+            .or_else(|| is_test_heap_address(addr).then_some(0))
             .ok_or_else(|| Error::Backend(format!("unmapped test byte 0x{addr:08x}")))
     }
 
@@ -136,15 +137,28 @@ impl CoredllGuestMemory for TestGuestMemory {
     }
 
     fn read_u16(&self, addr: u32) -> Result<u16> {
-        self.halfwords
-            .get(&addr)
-            .copied()
-            .ok_or_else(|| Error::Backend(format!("unmapped test halfword 0x{addr:08x}")))
+        if let Some(halfword) = self.halfwords.get(&addr).copied() {
+            Ok(halfword)
+        } else if is_test_heap_address(addr) {
+            let lo = self.bytes.get(&addr).copied().unwrap_or(0);
+            let hi = self.bytes.get(&addr.wrapping_add(1)).copied().unwrap_or(0);
+            Ok(u16::from_le_bytes([lo, hi]))
+        } else {
+            Err(Error::Backend(format!(
+                "unmapped test halfword 0x{addr:08x}"
+            )))
+        }
     }
 
     fn write_u16(&mut self, addr: u32, value: u16) -> Result<()> {
         if let Some(halfword) = self.halfwords.get_mut(&addr) {
             *halfword = value;
+            Ok(())
+        } else if is_test_heap_address(addr) {
+            self.halfwords.insert(addr, value);
+            let [lo, hi] = value.to_le_bytes();
+            self.bytes.insert(addr, lo);
+            self.bytes.insert(addr.wrapping_add(1), hi);
             Ok(())
         } else {
             Err(Error::Backend(format!(

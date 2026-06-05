@@ -12,6 +12,23 @@
 
 ## Open
 
+- Rendered iNavi map still has a dark/black base-layer fidelity gap.
+  - Symptom: after the generic pattern-brush and CE-style winding polygon
+    fixes, `target\gdi_winding_virtual.png` is a populated real map UI, but
+    the central map crop remains roughly 47% pure black. Roads, building
+    extrusions, labels, POI icons, and controls render, but the land/base
+    layer and some road styling still look too sparse/dark.
+  - Evidence: the mounted run reaches the stable post-map
+    `COREDLL.dll@861 blocked_get_message` frontier with bounded file/RSS
+    counters, so this is not startup, presentation, or large-file preloading.
+    Render counts still show heavy guest GDI activity (`Polygon=7161`,
+    `Polyline=2873`, `BitBlt=957`, `CreateDIBSection=845`,
+    `CreatePatternBrush=84`), and files trace evidence shows landuse/bgdata
+    `.mdc` map layers opening successfully.
+  - Status: open. Continue with generic CE GDI/map-layer fidelity and trace
+    which guest operation should color the black base. Do not hardcode an
+    app-specific background fill.
+
 - Mounted iNavi reaches a rendered map UI, then idles on the post-map
   scheduler/device/message frontier.
   - Symptom: `target\wcspbrk_long_virtual_*` runs past the earlier

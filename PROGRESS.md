@@ -9,6 +9,24 @@
 
 ## Confirmed
 
+- Offscreen GDI map drawing now covers the next generic fidelity slice used by
+  the mounted iNavi map UI. Pattern brushes created with `CreatePatternBrush`
+  tile into selected memory DIBs through `PatBlt`/`Polygon`, `SetBrushOrgEx`
+  stores and returns the DC brush origin, and polygon scan conversion now uses
+  CE GPE-style winding edge accumulation as corroborated by
+  `C:\WINCE600\PUBLIC\COMMON\OAK\DRIVERS\DISPLAY\GPE\ddi_if.cpp` and
+  `swfill.cpp`. Focused coverage includes
+  `coredll_raw_pat_blt_tiles_pattern_brush_on_selected_memory_dib` and
+  `coredll_raw_polygon_uses_winding_fill_for_repeated_edges`; the full
+  `coredll_raw_gwe` test binary passes. Mounted validation
+  `target\gdi_winding_virtual.*` reaches the same stable post-map
+  `GetMessageW` idle frontier with bounded counters
+  (`heap_live=14628/31597954B`, `virtual_live=2/131072B`,
+  `host_open=910`, `host_read=83969/6465277B`, `mem_open=4`,
+  `max_read=685080`). The framebuffer is a real 800x480 iNavi map with
+  roads, labels, icons, patterned buildings, and controls; the remaining map
+  fidelity issue is not blank startup or file I/O, but the dark/black base map
+  layer and road/background styling.
 - Removed the remaining hardcoded mounted-iNavi startup code-hook behavior that
   posted a late `WM_INITDIALOG` and wrote the aux touch alias from fixed app PCs.
   Raw dialog creation now has regression coverage proving it does not leave a
