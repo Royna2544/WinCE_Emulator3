@@ -742,8 +742,13 @@
     post-send-queue probe `target\sendmsg_queue_virtual_60s_*` preserved
     bounded file/RSS behavior and a populated framebuffer, but stopped during
     repeated `\SDMMC Disk\INavi\res\resmapi_800x480.bin` resource-map I/O with
-    `sendsig=0/sendcand=0`; this is not new sustained UI progress. The earlier
-    short mounted
+    `sendsig=0/sendcand=0`; this is not new sustained UI progress. The
+    comparable `target\sendmsg_queue_virtual_150s_*` probe stopped at
+    `pc=0x00b4bc00` with the same zero send-reply counters, bounded file/RSS
+    behavior, and a populated framebuffer while the trace tail showed repeated
+    `RSImage LoadPNG/Create`, `CreateDIBSection`, and `GetDC(hwnd=0x00020004)`
+    work. The current short-run blocker is not the send queue itself; continue
+    with generic resource/GDI/presentation fidelity. The earlier short mounted
     `SendNotifyMessageW` probe reached later
     `mapinfo.bin`/`UID1:` file activity, another child HWND, and `GetDC`, but
     still produced no render milestones and only one nonzero framebuffer byte.

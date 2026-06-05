@@ -2746,6 +2746,17 @@
   `\SDMMC Disk\INavi\res\resmapi_800x480.bin`, with
   `sendsig=0/sendcand=0`, so the send-message slices remain foundational
   fidelity rather than visible post-splash success.
+- The comparable 150 s virtual/tap probe wrote
+  `target\sendmsg_queue_virtual_150s_*`. It also stayed bounded
+  (`host_open=422`, `host_read=78935/2814860B`, `mem_open=2`,
+  `max_read=497178`) and kept the framebuffer populated
+  (`1151398` nonzero RGB bytes). It stopped at `pc=0x00b4bc00` with no
+  send-reply activity (`sendsig=0/sendcand=0`) while the trace tail shows
+  repeated `RSImage LoadPNG/Create` work, many `CreateDIBSection` calls, and
+  `GetDC(hwnd=0x00020004)`/`ReleaseDC` around those image loads. The active
+  short-run bottleneck is therefore not the new send-message transaction path;
+  continue by tracing the generic resource/GDI/presentation path for those
+  loaded surfaces.
 - Added an indexed-DIB fidelity slice for CE GDI color tables. `BitmapObject`
   now stores RGBQUAD color tables, raw `SetDIBColorTable`/`GetDIBColorTable`
   read and write the selected bitmap table through guest memory, and the 8 bpp
