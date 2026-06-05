@@ -31,6 +31,7 @@ pub const WM_SETTEXT: u32 = 0x000c;
 pub const WM_GETTEXT: u32 = 0x000d;
 pub const WM_GETTEXTLENGTH: u32 = 0x000e;
 pub const WM_KEYDOWN: u32 = 0x0100;
+pub const WM_KEYUP: u32 = 0x0101;
 pub const WM_CHAR: u32 = 0x0102;
 pub const WM_COMMAND: u32 = 0x0111;
 pub const WM_TIMER: u32 = 0x0113;
@@ -56,6 +57,7 @@ pub const DLGC_RADIOBUTTON: u32 = 0x0040;
 pub const DLGC_WANTCHARS: u32 = 0x0080;
 pub const DLGC_STATIC: u32 = 0x0100;
 pub const DLGC_BUTTON: u32 = 0x2000;
+pub const VK_SHIFT: u32 = 0x10;
 pub const MSGSRC_UNKNOWN: u32 = 0;
 pub const MSGSRC_SOFTWARE_POST: u32 = 1;
 pub const MSGSRC_HARDWARE_KEYBOARD: u32 = 2;
@@ -445,6 +447,7 @@ pub struct Gwe {
     ready_timestamp_by_thread: BTreeMap<u32, u32>,
     changed_queue_status_by_thread: BTreeMap<u32, u32>,
     quit_by_thread: BTreeMap<u32, QuitState>,
+    key_state: [u16; 256],
     message_pointer_payloads: BTreeMap<u32, MessagePointerPayload>,
     replied_send_depth_by_thread: BTreeMap<u32, u32>,
     next_lifecycle_message_order: u64,
@@ -516,6 +519,7 @@ impl Default for Gwe {
             ready_timestamp_by_thread: BTreeMap::new(),
             changed_queue_status_by_thread: BTreeMap::new(),
             quit_by_thread: BTreeMap::new(),
+            key_state: [0; 256],
             message_pointer_payloads: BTreeMap::new(),
             replied_send_depth_by_thread: BTreeMap::new(),
             next_lifecycle_message_order: 1,
@@ -1527,6 +1531,7 @@ impl Gwe {
         if message.mouse_pos_at_post.is_none() && is_mouse_message(message.msg) {
             message.mouse_pos_at_post = Some(message.lparam);
         }
+        self.update_key_state_for_message(message.msg, message.wparam);
         let status_bit = queue_status_bit_for_message(message.msg);
         let ready_time = message.time_ms;
         self.queues.entry(thread_id).or_default().push_back(message);
@@ -1709,6 +1714,15 @@ impl Gwe {
             .is_some_and(|window| self.window_is_push_button(window))
     }
 
+    pub fn get_key_state(&self, virtual_key: u32) -> u32 {
+        let state = self
+            .key_state
+            .get(virtual_key as usize)
+            .copied()
+            .unwrap_or(0);
+        (state as i16 as i32) as u32
+    }
+
     fn window_dialog_code(&self, hwnd: u32) -> u32 {
         let Some(window) = self.windows.get(&hwnd).filter(|window| !window.destroyed) else {
             return 0;
@@ -1768,6 +1782,17 @@ impl Gwe {
     fn window_is_push_button(&self, window: &Window) -> bool {
         window.class_name.eq_ignore_ascii_case("button")
             && matches!(window.style & BS_TYPEMASK, BS_PUSHBUTTON | BS_DEFPUSHBUTTON)
+    }
+
+    fn update_key_state_for_message(&mut self, msg: u32, virtual_key: u32) {
+        let Some(state) = self.key_state.get_mut(virtual_key as usize) else {
+            return;
+        };
+        match msg {
+            WM_KEYDOWN => *state |= 0x8000,
+            WM_KEYUP => *state &= !0x8000,
+            _ => {}
+        }
     }
 
     pub fn record_destroy_lifecycle_message(&mut self, hwnd: u32, msg: u32) -> bool {
@@ -2686,7 +2711,7 @@ fn queue_status_bit_for_message(msg: u32) -> u32 {
     match msg {
         WM_TIMER => QS_TIMER,
         WM_PAINT => QS_PAINT,
-        WM_KEYDOWN | WM_CHAR => QS_KEY,
+        WM_KEYDOWN | WM_KEYUP | WM_CHAR => QS_KEY,
         WM_LBUTTONDOWN | WM_LBUTTONUP => QS_MOUSEBUTTON,
         WM_MOUSEMOVE => QS_MOUSEMOVE,
         _ => QS_POSTMESSAGE,

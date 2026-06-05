@@ -458,14 +458,17 @@
     using visible/enabled state plus `WS_TABSTOP`/`WS_GROUP` boundaries. Raw
     `IsDialogMessageW` now rejects unrelated HWNDs, dispatches dialog-owned
     messages, consults `WM_GETDLGCODE`, moves TAB focus through the same
-    tab-order helper, routes Escape as `IDCANCEL`, and routes Return through a
-    focused pushbutton or the dialog's default pushbutton with `IDOK` fallback.
-    GWE now reports button `DLGC_DEFPUSHBUTTON`/`DLGC_UNDEFPUSHBUTTON` state
-    and answers `DM_GETDEFID`/`DM_SETDEFID` over child pushbutton styles. The
-    broader CE dialog manager remains incomplete: full `DLGC_WANT*` edge
-    cases, Shift+TAB, nested modal loops, default-button repaint/state details,
-    and full receiver-context guest dialog proc execution still need expansion
-    as fixtures/traces demand. Current fixture coverage includes passing
+    tab-order helper, uses `GetKeyState(VK_SHIFT)` for Shift+TAB reverse
+    traversal, routes Escape as `IDCANCEL`, and routes Return through a focused
+    pushbutton or the dialog's default pushbutton with `IDOK` fallback. GWE now
+    reports button `DLGC_DEFPUSHBUTTON`/`DLGC_UNDEFPUSHBUTTON` state, answers
+    `DM_GETDEFID`/`DM_SETDEFID` over child pushbutton styles, and has a first
+    queued-key `GetKeyState` model. The broader CE dialog manager remains
+    incomplete: full `DLGC_WANT*` edge cases, nested modal loops,
+    default-button repaint/state details, richer keyboard-state/toggle-key
+    behavior, and full receiver-context guest dialog proc execution still need
+    expansion as fixtures/traces demand. Current fixture coverage includes
+    passing
     `052_modeless_dialog_isdialogmessage` and
     `076_dialog_tab_enter_escape` runs through the ignored eVC MIPSII
     `fixture_exes` harness.

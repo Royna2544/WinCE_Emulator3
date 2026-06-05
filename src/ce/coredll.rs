@@ -2932,6 +2932,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel, memory, thread_id, args,
         ))),
         ORD_GET_MESSAGE_POS => Some(CoredllValue::U32(kernel.gwe.get_message_pos(thread_id))),
+        ORD_GET_KEY_STATE => Some(CoredllValue::U32(
+            kernel.gwe.get_key_state(raw_arg(args, 0)),
+        )),
         ORD_PEEK_MESSAGE_W => Some(CoredllValue::Bool(peek_message_w_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -8126,14 +8129,15 @@ fn handle_dialog_key_message(
     }
     match message.wparam {
         VK_TAB if dlg_code & crate::ce::gwe::DLGC_WANTTAB == 0 => {
+            let previous = kernel.gwe.get_key_state(crate::ce::gwe::VK_SHIFT) & 0x8000 != 0;
             let current = kernel.gwe.get_focus().unwrap_or(message.hwnd);
             if let Some(next) = kernel
                 .gwe
-                .get_next_dlg_tab_item(dialog, current, false)
+                .get_next_dlg_tab_item(dialog, current, previous)
                 .or_else(|| {
                     kernel
                         .gwe
-                        .get_next_dlg_tab_item(dialog, message.hwnd, false)
+                        .get_next_dlg_tab_item(dialog, message.hwnd, previous)
                 })
             {
                 let _ = kernel.set_focus(Some(next));

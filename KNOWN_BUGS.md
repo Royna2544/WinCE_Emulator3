@@ -733,12 +733,13 @@
     still produced no render milestones and only one nonzero framebuffer byte.
     Raw `IsDialogMessageW` now handles the first dialog-manager slice:
     unrelated HWNDs are not consumed, dialog-owned messages dispatch through
-    the normal path, TAB uses dialog tab traversal, Escape routes as
-    `IDCANCEL`, and Return uses a focused pushbutton or the dialog default
-    pushbutton with `IDOK` fallback. GWE now covers basic
-    `WM_GETDLGCODE` button codes plus `DM_GETDEFID`/`DM_SETDEFID`, so this
-    improves modeless/modal-loop fidelity but does not yet cover the full CE
-    dialog manager, `DLGC_WANT*` edge cases, Shift+TAB, or nested modal
+    the normal path, TAB/Shift+TAB use dialog tab traversal with
+    `GetKeyState(VK_SHIFT)`, Escape routes as `IDCANCEL`, and Return uses a
+    focused pushbutton or the dialog default pushbutton with `IDOK` fallback.
+    GWE now covers basic queued-key `GetKeyState`, `WM_GETDLGCODE` button codes
+    plus `DM_GETDEFID`/`DM_SETDEFID`, so this improves modeless/modal-loop
+    fidelity but does not yet cover the full CE dialog manager, full
+    `DLGC_WANT*` edge cases, richer keyboard-state details, or nested modal
     scheduling.
     The broader window/GWE subsystem still needs sender parking/resume across
     longer waits, reentrant cross-thread scheduling, destroyed-target behavior,
