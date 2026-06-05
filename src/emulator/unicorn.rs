@@ -2299,6 +2299,7 @@ impl UnicornMips {
                 Some(&suspended_guest_thread_queue_timeslice_hook),
                 &running_guest_thread_timeslice_hook,
                 Some(pc),
+                true,
             ) {
                 return;
             }
@@ -8516,6 +8517,7 @@ fn try_resume_blocked_wait<D>(
         None,
         running_thread,
         None,
+        false,
     )
 }
 
@@ -8531,6 +8533,7 @@ fn try_resume_blocked_wait_with_active_pc<D>(
     suspended_queue: Option<&SuspendedGuestThreadQueue>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     active_pc: Option<u32>,
+    save_active_context: bool,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
@@ -8651,17 +8654,19 @@ fn try_resume_blocked_wait_with_active_pc<D>(
         }),
     }
 
-    let mut current = SuspendedGuestThread {
-        thread_id: active_thread_id,
-        thread_handle: running_thread
-            .borrow()
-            .and_then(|(id, handle)| (id == active_thread_id).then_some(handle)),
-        regs: capture_mips_gprs(uc),
-        pc: active_pc.unwrap_or_else(|| read_mips_reg(uc, RegisterMIPS::RA)),
-    };
-    current.regs.set_v0(read_mips_reg(uc, RegisterMIPS::V0));
-    if !push_suspended_guest_thread(suspended_thread, suspended_queue, current) {
-        return false;
+    if save_active_context {
+        let mut current = SuspendedGuestThread {
+            thread_id: active_thread_id,
+            thread_handle: running_thread
+                .borrow()
+                .and_then(|(id, handle)| (id == active_thread_id).then_some(handle)),
+            regs: capture_mips_gprs(uc),
+            pc: active_pc.unwrap_or_else(|| read_mips_reg(uc, RegisterMIPS::RA)),
+        };
+        current.regs.set_v0(read_mips_reg(uc, RegisterMIPS::V0));
+        if !push_suspended_guest_thread(suspended_thread, suspended_queue, current) {
+            return false;
+        }
     }
     remove_suspended_guest_threads_for_thread(suspended_thread, suspended_queue, blocked.thread_id);
 
@@ -9607,8 +9612,8 @@ mod wait_scheduler_tests {
         let ready_thread_id = 5;
         let ready_thread_handle = 0x105;
         let ready_event = kernel.create_event_w(None, true, true);
-        let ready_return_pc = 0x2222_0000;
-        let active_return_pc = 0x1111_0000;
+        let ready_return_pc = 0x2222_0000_u32;
+        let active_return_pc = 0x1111_0000_u32;
         let wait_id = kernel.register_blocked_waiter(
             ready_thread_id,
             ready_thread_handle,
@@ -9665,10 +9670,7 @@ mod wait_scheduler_tests {
             *running_thread.borrow(),
             Some((ready_thread_id, ready_thread_handle))
         );
-        let suspended = suspended_thread.borrow();
-        let suspended = suspended.as_ref().unwrap();
-        assert_eq!(suspended.thread_id, active_thread_id);
-        assert_eq!(suspended.pc, active_return_pc);
+        assert!(suspended_thread.borrow().is_none());
         assert_eq!(
             uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
             WAIT_OBJECT_0
@@ -9836,6 +9838,7 @@ mod wait_scheduler_tests {
             None,
             &running_thread,
             Some(active_pc),
+            true,
         ));
 
         assert_eq!(*current_thread_id.borrow(), ready_thread_id);
@@ -9940,6 +9943,7 @@ mod wait_scheduler_tests {
             Some(&suspended_queue),
             &running_thread,
             Some(active_pc),
+            true,
         ));
 
         assert_eq!(*current_thread_id.borrow(), ready_thread_id);
@@ -18603,7 +18607,7 @@ mod unicorn_tests {
             uc.reg_read(RegisterMIPS::PC).unwrap() as u32,
             worker_return_pc
         );
-        assert!(suspended_thread.borrow().is_some());
+        assert!(suspended_thread.borrow().is_none());
         assert!(blocked_guest_thread.borrow().is_some());
         assert!(
             kernel

@@ -13,19 +13,18 @@
 ## Current Slice
 
 - Current host/manual post-map slice: continue from
-  `target\host_sleepctx_180s_*`. The latest generic scheduler slice keeps
-  cross-thread `SendMessageW` receiver callouts associated with real guest
-  thread handles, recovers missing sender running metadata from blocked
-  waiters, and prevents current `Sleep` from fast-forwarding ahead of a
-  shorter already-blocked finite timeout. Full lib tests pass with 174 tests
-  and the Win32-host mounted run moved deeper (`pc=image:iNavi.exe+0xa5d7e0`,
-  `gwe=send:506 done:506`) while preserving bounded RSS/file I/O. The
-  remaining ANR frontier is still a scheduler ownership gap:
-  `threads=current:5/running:none` can appear while thread 5 is also a finite
-  sleep waiter. Next slice should inspect the exact block path that leaves the
-  just-blocked current context with no runnable peer at the wall stop, then
-  route that through the CE run queue/blocked-current ownership model. Do not
-  switch back to visual fixes unless new evidence shows a GDI regression.
+  `target\host_blockctx_180s_*`. The stale blocked-current ownership shape is
+  closed: the wall snapshot now reports thread 5 as both current and running
+  (`running:5:0x00000f00`) instead of current with no running owner while
+  still listed as a sleep waiter. The remaining ANR frontier is valid guest
+  execution in thread 5 around `image:iNavi.exe+0x13e5c4`, with main thread
+  parked in `GetMessageW`, thread 6 in serial-read timeout, thread 9 in short
+  sleep, thread 8 in a long sleep, and worker kernel waits. Next slice should
+  trace why running thread 5 and the posted/timer traffic do not produce manual
+  UI responsiveness: inspect thread-5 call path, main-message consumption
+  after timer/custom posts, and serial/device wake inputs. Do not revisit the
+  now-fixed hidden-layer or stale blocked-current theories unless fresh
+  evidence regresses them.
 - Current host/manual post-map slice: continue from
   `target\host_fullctx_180s_*`. The saved-context dedupe plus full MIPS
   GPR/HI/LO preservation fixes the previous post-map

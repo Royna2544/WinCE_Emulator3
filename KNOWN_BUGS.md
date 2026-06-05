@@ -104,6 +104,15 @@
     reporting `threads=current:5/running:none` while thread 5 is present as a
     finite sleep waiter. Next work should focus on blocked-current/run-queue
     ownership at that exact handoff point.
+  - Latest evidence: `target\host_blockctx_180s_*` closes that exact
+    blocked-current/run-queue ownership inconsistency. Blocking handoffs no
+    longer save the just-blocked active thread as a runnable suspended context;
+    only true timeslice/preemption paths save active context. The wall snapshot
+    now reports `threads=current:5/running:5:0x00000f00/suspended:none/queue:0`,
+    and thread 5 is not present in `blocked_waits`. Status remains open for
+    guest responsiveness, but the stale current-thread sleep waiter theory is
+    closed. Continue from valid running thread 5 plus main `GetMessageW`,
+    serial read, timer/custom-post traffic, and worker waits.
 
 - Rendered iNavi map still needs road/building styling fidelity, but the
   black base-layer failure is fixed.

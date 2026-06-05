@@ -34,6 +34,25 @@
   waiter, so the next slice should continue with run-queue ownership for
   blocked current contexts instead of treating this as a rendering or host
   presenter failure.
+- A follow-up scheduler ownership fix removes the stale runnable copy created
+  when the active thread blocks and immediately hands off to another ready
+  waiter. `try_resume_blocked_wait_with_active_pc` now distinguishes true
+  preemption, which must save the active context, from blocking handoff, where
+  the active registers already live in the blocked-wait record. Focused tests
+  updated `current_sleep_yields_to_ready_blocked_waiter` and
+  `get_message_block_yields_to_timed_out_worker_sleep` to assert no runnable
+  suspended clone remains for the just-blocked thread, while timeslice tests
+  still prove preemption saves the active context. Full
+  `cargo test --features unicorn,trace,win32-desktop --lib` passes 174 tests.
+  Fresh Win32-host validation `target\host_blockctx_180s_*` used the dumped
+  runtime DLL path and no longer reports the contradictory
+  `current:5/running:none` plus thread-5 sleep waiter shape: the wall snapshot
+  now ends with `threads=current:5/running:5:0x00000f00/suspended:none/queue:0`
+  and blocked waits only for other worker/kernel/serial/main-message waits.
+  This confirms the stale blocked-current ownership bug is closed; remaining
+  post-map ANR work should now continue from valid running thread 5 at
+  `image:iNavi.exe+0x13e5c4` with main thread parked in `GetMessageW` and
+  worker/device waits still pending.
 - The post-map Win32-host scheduler fault moved past the bad tree-pointer
   crash after the Unicorn saved-context fix. Guest thread contexts now preserve
   MIPS HI/LO along with the 32 GPRs across blocked-wait, `GetMessageW`,
