@@ -39,10 +39,14 @@
   idle. Do not restore the late-init hook, patch guest state, fabricate files,
   or fake pixels.
 - Serial control state is now generic and stateful enough for DCB/mask/purge
-  callers, but the rendered-map frontier may still need deeper device fidelity.
-  Next serial slice, if traces point there: implement scheduler-backed
-  `WaitCommEvent`, real `win32_com` host RX for `COM7:`/host `COM21`, and
-  serial event-mask wakeups from remote/host RX without busy polling. Use
+  callers, and synchronous Unicorn `WaitCommEvent` now parks through the
+  scheduler until either `EV_RXCHAR` is ready under the current mask or
+  `SetCommMask` wakes the pending wait with event `0`. The rendered-map
+  frontier may still need deeper device fidelity. Next serial slice, if
+  traces point there: add real `win32_com` host RX for `COM7:`/host `COM21`,
+  broader modem/error event masks (`EV_ERR`, line status, purge/error wake
+  details), and CE fixture coverage for an actual blocked `WaitCommEvent`
+  thread resuming from injected RX. Use
   `C:\WINCE600\PRIVATE\WINCEOS\DRIVERS\SERDEV\serial.c` as the source
   reference; keep behavior generic and test with CE fixture programs.
 - Watch the older mounted destroy/slot crash evidence in

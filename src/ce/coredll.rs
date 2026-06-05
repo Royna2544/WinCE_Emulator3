@@ -4812,20 +4812,13 @@ fn wait_comm_event_raw<M: CoredllGuestMemory>(
     handle: u32,
     out_ptr: u32,
 ) -> bool {
-    const EV_RXCHAR: u32 = 0x0001;
-
     if out_ptr == 0 || !is_comm_handle(kernel, handle) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    let mask = kernel.get_comm_mask(handle).unwrap_or(0);
-    let event = if mask & EV_RXCHAR != 0 && kernel.serial_read_ready(handle) {
-        EV_RXCHAR
-    } else {
-        0
-    };
+    let event = kernel.serial_comm_event_value(handle);
     if !write_guest_u32(kernel, memory, thread_id, out_ptr, event) {
         return false;
     }

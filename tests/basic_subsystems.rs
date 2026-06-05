@@ -611,6 +611,10 @@ fn message_and_timer_transitions_queue_scheduler_msg_wait_candidates() -> Result
                 SchedulerBlockedWaitKind::Kernel => true,
                 SchedulerBlockedWaitKind::Sleep => false,
                 SchedulerBlockedWaitKind::SerialRead { handle } => kernel.serial_read_ready(handle),
+                SchedulerBlockedWaitKind::SerialCommEvent { handle } => {
+                    kernel.comm_event_mask_changed_wait(blocked.id)
+                        || kernel.serial_comm_event_ready(handle)
+                }
                 SchedulerBlockedWaitKind::SendMessage { send_id } => {
                     kernel.sent_message_result_ready(send_id)
                 }
@@ -1092,6 +1096,9 @@ fn remote_serial_injection_queues_scheduler_serial_read_candidates() -> Result<(
             SchedulerBlockedWaitKind::Kernel => true,
             SchedulerBlockedWaitKind::Sleep => false,
             SchedulerBlockedWaitKind::SerialRead { handle } => kernel.serial_read_ready(handle),
+            SchedulerBlockedWaitKind::SerialCommEvent { handle } => {
+                kernel.serial_comm_event_ready(handle)
+            }
             SchedulerBlockedWaitKind::GetMessage { .. } => false,
             SchedulerBlockedWaitKind::MsgWait { .. } => false,
             SchedulerBlockedWaitKind::SendMessage { send_id } => {
@@ -1109,6 +1116,104 @@ fn remote_serial_injection_queues_scheduler_serial_read_candidates() -> Result<(
     let stats = kernel.scheduler_stats();
     assert_eq!(stats.serial_read_signal_count, 1);
     assert_eq!(stats.serial_read_wake_candidate_count, 1);
+    Ok(())
+}
+
+#[test]
+fn remote_serial_injection_queues_scheduler_comm_event_candidates() -> Result<()> {
+    const EV_RXCHAR: u32 = 0x0001;
+
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let com = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
+    kernel.set_comm_mask(com, EV_RXCHAR)?;
+    assert!(!kernel.serial_comm_event_ready(com));
+
+    let global_wait = kernel.register_blocked_waiter(
+        50,
+        0x350,
+        vec![0x800],
+        SchedulerBlockedWaitKind::Kernel,
+        0,
+        INFINITE,
+    );
+    let comm_wait = kernel.register_blocked_waiter(
+        51,
+        0x351,
+        Vec::new(),
+        SchedulerBlockedWaitKind::SerialCommEvent { handle: com },
+        0,
+        INFINITE,
+    );
+
+    let response = kernel.dispatch_remote_control_message(&serde_json::json!({
+        "type": "nmea",
+        "sentences": ["$GPRMC,event*00"]
+    }));
+    assert_eq!(response["accepted"], 1);
+    assert!(kernel.serial_comm_event_ready(com));
+    assert_eq!(kernel.serial_comm_event_value(com), EV_RXCHAR);
+    assert_eq!(
+        kernel.select_ready_blocked_waiter(1, 0, |blocked, kernel| match blocked.kind {
+            SchedulerBlockedWaitKind::Kernel => true,
+            SchedulerBlockedWaitKind::Sleep => false,
+            SchedulerBlockedWaitKind::SerialRead { handle } => kernel.serial_read_ready(handle),
+            SchedulerBlockedWaitKind::SerialCommEvent { handle } => {
+                kernel.comm_event_mask_changed_wait(blocked.id)
+                    || kernel.serial_comm_event_ready(handle)
+            }
+            SchedulerBlockedWaitKind::GetMessage { .. } => false,
+            SchedulerBlockedWaitKind::MsgWait { .. } => false,
+            SchedulerBlockedWaitKind::SendMessage { send_id } => {
+                kernel.sent_message_result_ready(send_id)
+            }
+        }),
+        Some(comm_wait)
+    );
+    kernel.remove_blocked_waiter(comm_wait).unwrap();
+    kernel.remove_blocked_waiter(global_wait).unwrap();
+
+    let stats = kernel.scheduler_stats();
+    assert_eq!(stats.serial_event_signal_count, 1);
+    assert_eq!(stats.serial_event_wake_candidate_count, 1);
+    Ok(())
+}
+
+#[test]
+fn set_comm_mask_wakes_pending_comm_event_with_zero_event() -> Result<()> {
+    const EV_RXCHAR: u32 = 0x0001;
+
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let com = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
+    let comm_wait = kernel.register_blocked_waiter(
+        51,
+        0x351,
+        Vec::new(),
+        SchedulerBlockedWaitKind::SerialCommEvent { handle: com },
+        0,
+        INFINITE,
+    );
+
+    kernel.set_comm_mask(com, EV_RXCHAR)?;
+    assert!(kernel.comm_event_mask_changed_wait(comm_wait));
+    assert_eq!(
+        kernel.select_ready_blocked_waiter(1, 0, |blocked, kernel| match blocked.kind {
+            SchedulerBlockedWaitKind::SerialCommEvent { handle } => {
+                kernel.comm_event_mask_changed_wait(blocked.id)
+                    || kernel.serial_comm_event_ready(handle)
+            }
+            _ => false,
+        }),
+        Some(comm_wait)
+    );
+    assert!(kernel.take_comm_event_mask_changed_wait(comm_wait));
+    assert!(!kernel.comm_event_mask_changed_wait(comm_wait));
+    kernel.remove_blocked_waiter(comm_wait).unwrap();
+
+    let stats = kernel.scheduler_stats();
+    assert_eq!(stats.serial_event_signal_count, 1);
+    assert_eq!(stats.serial_event_wake_candidate_count, 1);
     Ok(())
 }
 

@@ -103,10 +103,33 @@
   `GetCommMask` preserve the event mask, `ClearCommError` reports modeled RX
   and TX queue depths, and `PurgeComm(PURGE_RXCLEAR|PURGE_TXCLEAR)` clears both
   device-session and remote-injected serial bytes. `WaitCommEvent` now reports
-  `EV_RXCHAR` immediately when the mask includes it and RX is already ready;
-  scheduler-backed blocking `WaitCommEvent` remains open. Focused coverage:
+  `EV_RXCHAR` immediately when the mask includes it and RX is already ready.
+  Focused coverage:
   `serial_comm_state_mask_and_purge_are_handle_state` and
   `coredll_raw_comm_state_mask_wait_and_purge_are_stateful`.
+- `WaitCommEvent` now has a scheduler-owned blocking path for real Unicorn
+  imports instead of only the raw immediate `EV_RXCHAR` helper behavior. CE
+  source evidence is
+  `C:\WINCE600\PRIVATE\WINCEOS\DRIVERS\SERDEV\serial.c`, where
+  `WaitCommEvent` routes to `IOCTL_SERIAL_WAIT_ON_MASK` and the documentation
+  notes that changing the event mask wakes a pending wait with event `0`.
+  v3 now registers `SerialCommEvent` waiters separately from serial
+  `ReadFile` waiters, wakes them on remote/injected RX when the current comm mask
+  includes `EV_RXCHAR`, and marks pending waits so `SetCommMask` resumes them
+  with a zero event. Compact and trace summaries now include serial
+  comm-event counters. Focused coverage includes
+  `scheduler_queues_serial_comm_event_waiters_by_handle`,
+  `remote_serial_injection_queues_scheduler_comm_event_candidates`,
+  `set_comm_mask_wakes_pending_comm_event_with_zero_event`, and Unicorn resume
+  tests for writing both `EV_RXCHAR` and zero into guest memory. Mounted
+  no-regression probe `target\comm_event_virtual.*` used dumped runtime DLLs
+  from `D:\INAVI_Emulator\DUMPPLZ\Windows`, reached the known
+  `COREDLL.dll@861 blocked_get_message` frontier with bounded counters
+  (`heap_live=14631/31599400B`, `virtual_live=2/131072B`,
+  `host_open=906`, `host_read=82688/5859512B`, `mem_open=4`,
+  `max_read=685080`), and showed the 60 s mounted path called `SetCommMask`
+  once but did not enter a pending `WaitCommEvent` before stopping
+  (`serevsig=0`, `serevcand=0` in the new summary fields).
 - Mounted validation after the serial-control state slice wrote
   `target\comm_state_virtual_*`. The run still reaches the real rendered map
   screen and parks at scheduler-owned `GetMessageW` with bounded memory/file

@@ -36,6 +36,8 @@ pub struct SchedulerStats {
     pub message_input_wake_candidate_count: u64,
     pub serial_read_signal_count: u64,
     pub serial_read_wake_candidate_count: u64,
+    pub serial_event_signal_count: u64,
+    pub serial_event_wake_candidate_count: u64,
     pub send_reply_signal_count: u64,
     pub send_reply_wake_candidate_count: u64,
     pub max_wait_handles: u32,
@@ -58,6 +60,9 @@ pub enum SchedulerBlockedWaitKind {
         input_available: bool,
     },
     SerialRead {
+        handle: u32,
+    },
+    SerialCommEvent {
         handle: u32,
     },
     SendMessage {
@@ -86,6 +91,7 @@ pub struct Scheduler {
     wait_queues: BTreeMap<u32, VecDeque<u64>>,
     message_wait_queues: BTreeMap<u32, VecDeque<u64>>,
     serial_read_queues: BTreeMap<u32, VecDeque<u64>>,
+    serial_event_queues: BTreeMap<u32, VecDeque<u64>>,
     send_reply_queues: BTreeMap<u64, VecDeque<u64>>,
     pending_wake_ids: VecDeque<u64>,
     pending_wake_set: BTreeSet<u64>,
@@ -176,6 +182,12 @@ impl Scheduler {
                 .or_default()
                 .push_back(id);
         }
+        if let SchedulerBlockedWaitKind::SerialCommEvent { handle } = wait.kind {
+            self.serial_event_queues
+                .entry(handle)
+                .or_default()
+                .push_back(id);
+        }
         if let SchedulerBlockedWaitKind::SendMessage { send_id } = wait.kind {
             self.send_reply_queues
                 .entry(send_id)
@@ -224,6 +236,18 @@ impl Scheduler {
             };
             if remove_serial_queue {
                 self.serial_read_queues.remove(&handle);
+            }
+        }
+        if let SchedulerBlockedWaitKind::SerialCommEvent { handle } = wait.kind {
+            let remove_serial_event_queue =
+                if let Some(queue) = self.serial_event_queues.get_mut(&handle) {
+                    queue.retain(|id| *id != wait_id);
+                    queue.is_empty()
+                } else {
+                    false
+                };
+            if remove_serial_event_queue {
+                self.serial_event_queues.remove(&handle);
             }
         }
         if let SchedulerBlockedWaitKind::SendMessage { send_id } = wait.kind {
@@ -277,8 +301,22 @@ impl Scheduler {
             .unwrap_or_default()
     }
 
+    pub fn serial_event_waiter_ids_for_handle(&self, handle: u32) -> Vec<u64> {
+        self.serial_event_queues
+            .get(&handle)
+            .map(|queue| queue.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
     pub fn all_serial_read_waiter_ids(&self) -> Vec<u64> {
         self.serial_read_queues
+            .values()
+            .flat_map(|queue| queue.iter().copied())
+            .collect()
+    }
+
+    pub fn all_serial_event_waiter_ids(&self) -> Vec<u64> {
+        self.serial_event_queues
             .values()
             .flat_map(|queue| queue.iter().copied())
             .collect()
@@ -331,11 +369,27 @@ impl Scheduler {
         queued
     }
 
+    pub fn queue_serial_event_wake_candidates(&mut self, handle: u32) -> usize {
+        self.stats.serial_event_signal_count += 1;
+        let wait_ids = self.serial_event_waiter_ids_for_handle(handle);
+        let queued = self.enqueue_pending_wake_ids(wait_ids);
+        self.stats.serial_event_wake_candidate_count += queued as u64;
+        queued
+    }
+
     pub fn queue_all_serial_read_wake_candidates(&mut self) -> usize {
         self.stats.serial_read_signal_count += 1;
         let wait_ids = self.all_serial_read_waiter_ids();
         let queued = self.enqueue_pending_wake_ids(wait_ids);
         self.stats.serial_read_wake_candidate_count += queued as u64;
+        queued
+    }
+
+    pub fn queue_all_serial_event_wake_candidates(&mut self) -> usize {
+        self.stats.serial_event_signal_count += 1;
+        let wait_ids = self.all_serial_event_waiter_ids();
+        let queued = self.enqueue_pending_wake_ids(wait_ids);
+        self.stats.serial_event_wake_candidate_count += queued as u64;
         queued
     }
 
@@ -611,6 +665,53 @@ mod tests {
         assert!(
             scheduler
                 .serial_read_waiter_ids_for_handle(0x300)
+                .is_empty()
+        );
+        scheduler.remove_blocked_wait(global_ready).unwrap();
+    }
+
+    #[test]
+    fn scheduler_queues_serial_comm_event_waiters_by_handle() {
+        let mut scheduler = Scheduler::default();
+        let global_ready = scheduler.register_blocked_wait(
+            2,
+            0x102,
+            vec![0x200],
+            SchedulerBlockedWaitKind::Kernel,
+            0,
+            crate::ce::timer::INFINITE,
+        );
+        let comm_waiter = scheduler.register_blocked_wait(
+            4,
+            0x104,
+            Vec::new(),
+            SchedulerBlockedWaitKind::SerialCommEvent { handle: 0x300 },
+            0,
+            crate::ce::timer::INFINITE,
+        );
+
+        assert_eq!(
+            scheduler.serial_event_waiter_ids_for_handle(0x300),
+            vec![comm_waiter]
+        );
+        assert_eq!(scheduler.queue_serial_event_wake_candidates(0x300), 1);
+        let stats = scheduler.stats();
+        assert_eq!(stats.serial_event_signal_count, 1);
+        assert_eq!(stats.serial_event_wake_candidate_count, 1);
+        assert_eq!(
+            scheduler.select_ready_blocked_wait_id(
+                1,
+                0,
+                |wait| wait.id == global_ready || wait.id == comm_waiter,
+                |_| 20,
+            ),
+            Some(comm_waiter)
+        );
+
+        scheduler.remove_blocked_wait(comm_waiter).unwrap();
+        assert!(
+            scheduler
+                .serial_event_waiter_ids_for_handle(0x300)
                 .is_empty()
         );
         scheduler.remove_blocked_wait(global_ready).unwrap();

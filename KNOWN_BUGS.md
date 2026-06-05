@@ -52,10 +52,13 @@
   - Status: open current UI frontier. Investigate timer 4565, COM7
     read/timeout wake behavior, `SMB1:`/`MFS1:` device semantics, Deneb sensor
     calibration file handling, and GWE message wakes from the rendered-map
-    idle state. DCB/mask/purge/COMSTAT queue reporting are now stateful and
-    covered by focused tests; remaining serial gaps are scheduler-backed
-    `WaitCommEvent` and a real `win32_com` RX backend. Do not fabricate missing
-    files, force guest state, or fake pixels.
+    idle state. DCB/mask/purge/COMSTAT queue reporting are stateful, and
+    synchronous Unicorn `WaitCommEvent` now has scheduler-backed parking and
+    resume for `EV_RXCHAR` plus CE's `SetCommMask` wake-with-zero behavior.
+    Remaining serial/device gaps are real `win32_com` RX, broader event masks
+    and line/error status, and proving whether the mounted post-map path
+    actually blocks in `WaitCommEvent` after longer/device-fed runs. Do not
+    fabricate missing files, force guest state, or fake pixels.
 
 - Mounted iNavi previously reached a post-destroy guest null dereference during
   startup.

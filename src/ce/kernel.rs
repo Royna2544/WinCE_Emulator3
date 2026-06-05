@@ -35,7 +35,10 @@ use crate::{
     error::{Error, Result},
 };
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessagePumpResult {
@@ -79,6 +82,7 @@ pub struct CeKernel {
     recent_process_ops: Vec<ProcessTraceRecord>,
     recent_event_ops: Vec<EventTraceRecord>,
     pulsed_wait_handles: BTreeMap<u64, u32>,
+    comm_event_mask_changed_waits: BTreeSet<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,6 +216,7 @@ impl CeKernel {
             recent_process_ops: Vec::new(),
             recent_event_ops: Vec::new(),
             pulsed_wait_handles: BTreeMap::new(),
+            comm_event_mask_changed_waits: BTreeSet::new(),
         }
     }
 
@@ -616,12 +621,34 @@ impl CeKernel {
     }
 
     pub fn set_comm_mask(&mut self, handle: u32, mask: u32) -> Result<()> {
+        let wait_ids = self.scheduler.serial_event_waiter_ids_for_handle(handle);
         match self.handles.get_mut(handle)? {
             KernelObject::Device(device) if device.is_serial() => {
                 device.set_comm_mask(mask);
+                if !wait_ids.is_empty() {
+                    self.comm_event_mask_changed_waits
+                        .extend(wait_ids.iter().copied());
+                    self.scheduler.queue_serial_event_wake_candidates(handle);
+                }
                 Ok(())
             }
             _ => Err(Error::InvalidHandle(handle)),
+        }
+    }
+
+    pub fn serial_comm_event_ready(&self, handle: u32) -> bool {
+        const EV_RXCHAR: u32 = 0x0001;
+        self.get_comm_mask(handle)
+            .is_ok_and(|mask| mask & EV_RXCHAR != 0)
+            && self.serial_read_ready(handle)
+    }
+
+    pub fn serial_comm_event_value(&self, handle: u32) -> u32 {
+        const EV_RXCHAR: u32 = 0x0001;
+        if self.serial_comm_event_ready(handle) {
+            EV_RXCHAR
+        } else {
+            0
         }
     }
 
@@ -1728,6 +1755,7 @@ impl CeKernel {
 
     pub fn remove_blocked_waiter(&mut self, wait_id: u64) -> Option<SchedulerBlockedWait> {
         self.pulsed_wait_handles.remove(&wait_id);
+        self.comm_event_mask_changed_waits.remove(&wait_id);
         self.scheduler.remove_blocked_wait(wait_id)
     }
 
@@ -1756,6 +1784,14 @@ impl CeKernel {
         self.pulsed_wait_handles.get(&wait_id).copied()
     }
 
+    pub fn comm_event_mask_changed_wait(&self, wait_id: u64) -> bool {
+        self.comm_event_mask_changed_waits.contains(&wait_id)
+    }
+
+    pub fn take_comm_event_mask_changed_wait(&mut self, wait_id: u64) -> bool {
+        self.comm_event_mask_changed_waits.remove(&wait_id)
+    }
+
     fn queue_object_wake_candidates(&mut self, handle: u32) {
         let wait_ids = self.scheduler.waiter_ids_for_handle(handle);
         self.scheduler.queue_pending_wake_ids(wait_ids);
@@ -1765,8 +1801,16 @@ impl CeKernel {
         self.scheduler.queue_serial_read_wake_candidates(handle)
     }
 
+    pub fn queue_serial_event_wake_candidates(&mut self, handle: u32) -> usize {
+        self.scheduler.queue_serial_event_wake_candidates(handle)
+    }
+
     pub fn queue_all_serial_read_wake_candidates(&mut self) -> usize {
         self.scheduler.queue_all_serial_read_wake_candidates()
+    }
+
+    pub fn queue_all_serial_event_wake_candidates(&mut self) -> usize {
+        self.scheduler.queue_all_serial_event_wake_candidates()
     }
 
     pub fn queue_message_wake_candidates(&mut self, thread_id: u32) -> usize {
@@ -2655,6 +2699,7 @@ impl CeKernel {
         let response = self.remote.dispatch_control_message(message, gps_target);
         if self.remote.serial_byte_count() > serial_before {
             self.queue_all_serial_read_wake_candidates();
+            self.queue_all_serial_event_wake_candidates();
         }
         response
     }

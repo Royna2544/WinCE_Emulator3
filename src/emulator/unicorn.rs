@@ -182,10 +182,11 @@ impl UnicornDebugSnapshot {
             || self.scheduler_stats.object_signal_count != 0
             || self.scheduler_stats.message_input_signal_count != 0
             || self.scheduler_stats.serial_read_signal_count != 0
+            || self.scheduler_stats.serial_event_signal_count != 0
             || self.scheduler_stats.send_reply_signal_count != 0
         {
             parts.push(format!(
-                "sched=wait:{}/{}/{} sleep:{} yield:{} ok:{} timeout:{} fail:{} block:{} wake:{} reg:{}/{} maxreg:{} sig:{} cand:{} msgsig:{} msgcand:{} sersig:{} sercand:{} sendsig:{} sendcand:{} maxpend:{}",
+                "sched=wait:{}/{}/{} sleep:{} yield:{} ok:{} timeout:{} fail:{} block:{} wake:{} reg:{}/{} maxreg:{} sig:{} cand:{} msgsig:{} msgcand:{} sersig:{} sercand:{} serevsig:{} serevcand:{} sendsig:{} sendcand:{} maxpend:{}",
                 self.scheduler_stats.wait_single_count,
                 self.scheduler_stats.wait_multiple_count,
                 self.scheduler_stats.msg_wait_count,
@@ -205,6 +206,8 @@ impl UnicornDebugSnapshot {
                 self.scheduler_stats.message_input_wake_candidate_count,
                 self.scheduler_stats.serial_read_signal_count,
                 self.scheduler_stats.serial_read_wake_candidate_count,
+                self.scheduler_stats.serial_event_signal_count,
+                self.scheduler_stats.serial_event_wake_candidate_count,
                 self.scheduler_stats.send_reply_signal_count,
                 self.scheduler_stats.send_reply_wake_candidate_count,
                 self.scheduler_stats.max_pending_wakes
@@ -954,6 +957,10 @@ enum BlockedWaitKind {
         requested: u32,
         transferred_ptr: u32,
     },
+    SerialCommEvent {
+        handle: u32,
+        event_ptr: u32,
+    },
     SendMessage {
         send_id: u64,
         receiver_thread_id: u32,
@@ -992,6 +999,9 @@ fn scheduler_blocked_wait_kind(
         },
         BlockedWaitKind::SerialRead { handle, .. } => {
             crate::ce::scheduler::SchedulerBlockedWaitKind::SerialRead { handle }
+        }
+        BlockedWaitKind::SerialCommEvent { handle, .. } => {
+            crate::ce::scheduler::SchedulerBlockedWaitKind::SerialCommEvent { handle }
         }
         BlockedWaitKind::SendMessage { send_id, .. } => {
             crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { send_id }
@@ -2589,6 +2599,23 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_block_serial_read_file(
+                        unsafe { &mut *kernel_ptr },
+                        uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        active_thread_id,
+                        &blocked_wait_threads_hook,
+                        &pending_guest_thread_returns_hook,
+                        &current_thread_id_hook,
+                        &suspended_guest_thread_hook,
+                        &running_guest_thread_hook,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_block_wait_comm_event(
                         unsafe { &mut *kernel_ptr },
                         uc,
                         trap.module_kind,
@@ -5158,7 +5185,7 @@ impl std::fmt::Display for UnicornDebugSnapshot {
         }
         write!(
             f,
-            " heap_live_count={} heap_live_bytes={} virtual_live_count={} virtual_live_bytes={} file_host_open_count={} file_host_read_count={} file_host_read_bytes={} file_memory_backed_open_count={} file_max_read_request={} sched_wait_single_count={} sched_wait_multiple_count={} sched_msg_wait_count={} sched_sleep_count={} sched_yield_count={} sched_wait_acquired_count={} sched_wait_timeout_count={} sched_wait_failed_count={} sched_wait_block_count={} sched_wait_wake_count={} sched_waiter_register_count={} sched_waiter_remove_count={} sched_object_signal_count={} sched_object_wake_candidate_count={} sched_message_input_signal_count={} sched_message_input_wake_candidate_count={} sched_serial_read_signal_count={} sched_serial_read_wake_candidate_count={} sched_send_reply_signal_count={} sched_send_reply_wake_candidate_count={} sched_max_registered_waits={} sched_max_pending_wakes={} gwe_send_transaction_count={} gwe_send_completed_count={} gwe_send_timeout_count={} gwe_send_receiver_terminated_count={} gwe_max_sent_queue_depth={}",
+            " heap_live_count={} heap_live_bytes={} virtual_live_count={} virtual_live_bytes={} file_host_open_count={} file_host_read_count={} file_host_read_bytes={} file_memory_backed_open_count={} file_max_read_request={} sched_wait_single_count={} sched_wait_multiple_count={} sched_msg_wait_count={} sched_sleep_count={} sched_yield_count={} sched_wait_acquired_count={} sched_wait_timeout_count={} sched_wait_failed_count={} sched_wait_block_count={} sched_wait_wake_count={} sched_waiter_register_count={} sched_waiter_remove_count={} sched_object_signal_count={} sched_object_wake_candidate_count={} sched_message_input_signal_count={} sched_message_input_wake_candidate_count={} sched_serial_read_signal_count={} sched_serial_read_wake_candidate_count={} sched_serial_event_signal_count={} sched_serial_event_wake_candidate_count={} sched_send_reply_signal_count={} sched_send_reply_wake_candidate_count={} sched_max_registered_waits={} sched_max_pending_wakes={} gwe_send_transaction_count={} gwe_send_completed_count={} gwe_send_timeout_count={} gwe_send_receiver_terminated_count={} gwe_max_sent_queue_depth={}",
             self.heap_allocation_count,
             self.heap_allocation_bytes,
             self.virtual_allocation_count,
@@ -5186,6 +5213,8 @@ impl std::fmt::Display for UnicornDebugSnapshot {
             self.scheduler_stats.message_input_wake_candidate_count,
             self.scheduler_stats.serial_read_signal_count,
             self.scheduler_stats.serial_read_wake_candidate_count,
+            self.scheduler_stats.serial_event_signal_count,
+            self.scheduler_stats.serial_event_wake_candidate_count,
             self.scheduler_stats.send_reply_signal_count,
             self.scheduler_stats.send_reply_wake_candidate_count,
             self.scheduler_stats.max_registered_waits,
@@ -6409,6 +6438,9 @@ fn unicorn_blocked_wait_kind_name(
         crate::ce::scheduler::SchedulerBlockedWaitKind::Sleep => "sleep",
         crate::ce::scheduler::SchedulerBlockedWaitKind::MsgWait { .. } => "msg_wait",
         crate::ce::scheduler::SchedulerBlockedWaitKind::SerialRead { .. } => "serial_read",
+        crate::ce::scheduler::SchedulerBlockedWaitKind::SerialCommEvent { .. } => {
+            "serial_comm_event"
+        }
         crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { .. } => "send_message",
     }
 }
@@ -7761,6 +7793,140 @@ fn block_serial_read_file<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn try_block_wait_comm_event<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    thread_id: u32,
+    blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+) -> bool {
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_WAIT_COMM_EVENT)
+    {
+        return false;
+    }
+
+    let handle = args.first().copied().unwrap_or(0);
+    let event_ptr = args.get(1).copied().unwrap_or(0);
+    if event_ptr == 0
+        || !kernel.is_serial_device_handle(handle)
+        || kernel.serial_comm_event_ready(handle)
+    {
+        return false;
+    }
+
+    block_wait_comm_event(
+        kernel,
+        uc,
+        thread_id,
+        blocked_waits,
+        pending_returns,
+        current_thread_id,
+        suspended_thread,
+        running_thread,
+        handle,
+        event_ptr,
+    )
+}
+
+#[cfg(feature = "unicorn")]
+fn block_wait_comm_event<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    thread_id: u32,
+    blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+    handle: u32,
+    event_ptr: u32,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    let timeout_ms = crate::ce::timer::INFINITE;
+    kernel.record_blocked_single_wait(timeout_ms);
+    let wait_started_ms = kernel.timers.tick_count();
+    let kind = BlockedWaitKind::SerialCommEvent { handle, event_ptr };
+    let regs = capture_mips_gprs(uc);
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+
+    if let Some(callout) = pending_returns.borrow_mut().pop() {
+        let wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            callout.thread_handle,
+            Vec::new(),
+            scheduler_blocked_wait_kind(kind),
+            wait_started_ms,
+            timeout_ms,
+        );
+        blocked_waits.borrow_mut().push(BlockedWaitThread {
+            wait_id,
+            thread_id,
+            thread_handle: callout.thread_handle,
+            wait_handles: Vec::new(),
+            kind,
+            wait_started_ms,
+            timeout_ms,
+            regs,
+            return_pc,
+        });
+        *running_thread.borrow_mut() = None;
+        *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        let _ = update_user_kdata_current_ids(
+            uc,
+            callout.creator_thread_id,
+            kernel.current_process_id(),
+        );
+        restore_mips_gprs(uc, &callout.creator_regs);
+        let writes = [
+            uc.reg_write(RegisterMIPS::V0, u64::from(callout.thread_handle)),
+            uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc)),
+            uc.reg_write(RegisterMIPS::RA, u64::from(callout.return_pc)),
+        ];
+        if writes.into_iter().any(|write| write.is_err()) {
+            let _ = uc.emu_stop();
+        }
+        return true;
+    }
+
+    let running = *running_thread.borrow();
+    if let Some((_, thread_handle)) = running {
+        let wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            thread_handle,
+            Vec::new(),
+            scheduler_blocked_wait_kind(kind),
+            wait_started_ms,
+            timeout_ms,
+        );
+        blocked_waits.borrow_mut().push(BlockedWaitThread {
+            wait_id,
+            thread_id,
+            thread_handle,
+            wait_handles: Vec::new(),
+            kind,
+            wait_started_ms,
+            timeout_ms,
+            regs,
+            return_pc,
+        });
+        *running_thread.borrow_mut() = None;
+        if let Some(suspended) = suspended_thread.borrow_mut().take() {
+            activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(feature = "unicorn")]
 fn try_resume_blocked_wait<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
@@ -7808,11 +7974,14 @@ fn try_resume_blocked_wait<D>(
     let has_ready_handle =
         pulsed_handle.is_some() || blocked_wait_has_ready_handle(&blocked, kernel);
     let serial_read_ready = blocked_serial_read_ready(&blocked, kernel);
+    let serial_comm_event_ready = blocked_serial_comm_event_ready(&blocked, kernel);
     let serial_read_timed_out = matches!(blocked.kind, BlockedWaitKind::SerialRead { .. })
         && blocked_wait_timed_out(&blocked, kernel.timers.tick_count());
     let send_message_ready = blocked_send_message_ready(&blocked, kernel);
-    let message_input_ready =
-        !has_ready_handle && !serial_read_ready && blocked_msg_wait_has_input(&blocked, kernel);
+    let message_input_ready = !has_ready_handle
+        && !serial_read_ready
+        && !serial_comm_event_ready
+        && blocked_msg_wait_has_input(&blocked, kernel);
     let sleep_timed_out = matches!(blocked.kind, BlockedWaitKind::Sleep)
         && blocked_wait_timed_out(&blocked, kernel.timers.tick_count());
     let wait_result = if sleep_timed_out {
@@ -7845,6 +8014,8 @@ fn try_resume_blocked_wait<D>(
         complete_blocked_serial_read(&blocked, kernel, uc)
     } else if serial_read_timed_out {
         complete_blocked_serial_read(&blocked, kernel, uc)
+    } else if serial_comm_event_ready {
+        complete_blocked_serial_comm_event(&blocked, kernel, uc)
     } else if send_message_ready {
         complete_blocked_send_message(&blocked, kernel, uc)
     } else if blocked_wait_timed_out(&blocked, kernel.timers.tick_count()) {
@@ -7864,6 +8035,13 @@ fn try_resume_blocked_wait<D>(
         } else {
             crate::ce::timer::WAIT_FAILED
         }),
+        BlockedWaitKind::SerialCommEvent { .. } => {
+            kernel.record_resumed_wait(if wait_result != 0 {
+                crate::ce::timer::WAIT_OBJECT_0
+            } else {
+                crate::ce::timer::WAIT_FAILED
+            })
+        }
         BlockedWaitKind::SendMessage { .. } => kernel.record_resumed_wait(if send_message_ready {
             crate::ce::timer::WAIT_OBJECT_0
         } else {
@@ -7960,6 +8138,17 @@ fn blocked_serial_read_ready(blocked: &BlockedWaitThread, kernel: &CeKernel) -> 
 }
 
 #[cfg(feature = "unicorn")]
+fn blocked_serial_comm_event_ready(blocked: &BlockedWaitThread, kernel: &CeKernel) -> bool {
+    match blocked.kind {
+        BlockedWaitKind::SerialCommEvent { handle, .. } => {
+            kernel.comm_event_mask_changed_wait(blocked.wait_id)
+                || kernel.serial_comm_event_ready(handle)
+        }
+        _ => false,
+    }
+}
+
+#[cfg(feature = "unicorn")]
 fn blocked_send_message_ready(blocked: &BlockedWaitThread, kernel: &CeKernel) -> bool {
     match blocked.kind {
         BlockedWaitKind::SendMessage { send_id, .. } => kernel.sent_message_result_ready(send_id),
@@ -7988,6 +8177,34 @@ fn complete_blocked_send_message<D>(
         let _ = uc.mem_write(u64::from(result_ptr), &result.to_le_bytes());
     }
     result
+}
+
+#[cfg(feature = "unicorn")]
+fn complete_blocked_serial_comm_event<D>(
+    blocked: &BlockedWaitThread,
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+) -> u32 {
+    let BlockedWaitKind::SerialCommEvent { handle, event_ptr } = blocked.kind else {
+        return 0;
+    };
+    let event = if kernel.take_comm_event_mask_changed_wait(blocked.wait_id) {
+        0
+    } else {
+        kernel.serial_comm_event_value(handle)
+    };
+    if uc
+        .mem_write(u64::from(event_ptr), &event.to_le_bytes())
+        .is_err()
+    {
+        kernel.threads.set_last_error(
+            blocked.thread_id,
+            crate::ce::thread::ERROR_INVALID_PARAMETER,
+        );
+        return 0;
+    }
+    kernel.threads.set_last_error(blocked.thread_id, 0);
+    1
 }
 
 #[cfg(feature = "unicorn")]
@@ -8066,6 +8283,7 @@ fn blocked_msg_wait_has_input(blocked: &BlockedWaitThread, kernel: &CeKernel) ->
         BlockedWaitKind::Kernel => false,
         BlockedWaitKind::Sleep => false,
         BlockedWaitKind::SerialRead { .. } => false,
+        BlockedWaitKind::SerialCommEvent { .. } => false,
         BlockedWaitKind::SendMessage { .. } => false,
         BlockedWaitKind::MsgWait {
             wake_mask,
@@ -8089,6 +8307,7 @@ fn scheduler_blocked_msg_wait_has_input(
         crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel
         | crate::ce::scheduler::SchedulerBlockedWaitKind::Sleep
         | crate::ce::scheduler::SchedulerBlockedWaitKind::SerialRead { .. }
+        | crate::ce::scheduler::SchedulerBlockedWaitKind::SerialCommEvent { .. }
         | crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { .. } => false,
         crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
             hwnd,
@@ -8137,6 +8356,10 @@ fn scheduler_blocked_wait_is_ready(
             crate::ce::scheduler::SchedulerBlockedWaitKind::SerialRead { handle } => {
                 kernel.serial_read_ready(handle)
             }
+            crate::ce::scheduler::SchedulerBlockedWaitKind::SerialCommEvent { handle } => {
+                kernel.comm_event_mask_changed_wait(blocked.id)
+                    || kernel.serial_comm_event_ready(handle)
+            }
             crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { send_id } => {
                 kernel.sent_message_result_ready(send_id)
             }
@@ -8166,11 +8389,14 @@ fn select_ready_blocked_wait_index(
 #[cfg(all(test, feature = "unicorn"))]
 mod wait_scheduler_tests {
     use super::{
-        BlockedWaitKind, BlockedWaitThread, blocked_msg_wait_has_input, blocked_wait_timed_out,
-        msg_wait_timer_delay_can_complete, select_ready_blocked_wait_index,
+        BlockedWaitKind, BlockedWaitThread, blocked_msg_wait_has_input,
+        blocked_serial_comm_event_ready, blocked_wait_timed_out,
+        complete_blocked_serial_comm_event, msg_wait_timer_delay_can_complete,
+        select_ready_blocked_wait_index,
     };
     use crate::{
         ce::{
+            file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
             gwe::{QS_POSTMESSAGE, QS_TIMER, WM_TIMER},
             timer::{WAIT_OBJECT_0, WAIT_TIMEOUT},
         },
@@ -8203,6 +8429,94 @@ mod wait_scheduler_tests {
             regs: [0; 32],
             return_pc: 0,
         }
+    }
+
+    fn blocked_comm_event(wait_id: u64, handle: u32, event_ptr: u32) -> BlockedWaitThread {
+        BlockedWaitThread {
+            wait_id,
+            thread_id: 51,
+            thread_handle: 0x351,
+            wait_handles: Vec::new(),
+            kind: BlockedWaitKind::SerialCommEvent { handle, event_ptr },
+            wait_started_ms: 0,
+            timeout_ms: crate::ce::timer::INFINITE,
+            regs: [0; 32],
+            return_pc: 0,
+        }
+    }
+
+    #[test]
+    fn blocked_wait_comm_event_resume_writes_rxchar_event() {
+        const EV_RXCHAR: u32 = 0x0001;
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let com = kernel
+            .create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)
+            .unwrap();
+        kernel.set_comm_mask(com, EV_RXCHAR).unwrap();
+        kernel.dispatch_remote_control_message(&serde_json::json!({
+            "type": "nmea",
+            "sentences": ["$GPRMC,comm*00"]
+        }));
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let event_ptr = 0x3000_2000;
+        uc.mem_map(event_ptr.into(), 0x1000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        let blocked = blocked_comm_event(7, com, event_ptr);
+
+        assert!(blocked_serial_comm_event_ready(&blocked, &kernel));
+        assert_eq!(
+            complete_blocked_serial_comm_event(&blocked, &mut kernel, &mut uc),
+            1
+        );
+        let mut event = [0; 4];
+        uc.mem_read(event_ptr.into(), &mut event).unwrap();
+        assert_eq!(u32::from_le_bytes(event), EV_RXCHAR);
+    }
+
+    #[test]
+    fn blocked_wait_comm_event_resume_writes_zero_after_mask_change() {
+        const EV_RXCHAR: u32 = 0x0001;
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let com = kernel
+            .create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)
+            .unwrap();
+        let wait_id = kernel.register_blocked_waiter(
+            51,
+            0x351,
+            Vec::new(),
+            crate::ce::scheduler::SchedulerBlockedWaitKind::SerialCommEvent { handle: com },
+            0,
+            crate::ce::timer::INFINITE,
+        );
+        kernel.set_comm_mask(com, EV_RXCHAR).unwrap();
+
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let event_ptr = 0x3000_2000;
+        uc.mem_map(event_ptr.into(), 0x1000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        uc.mem_write(event_ptr.into(), &0xfeed_faceu32.to_le_bytes())
+            .unwrap();
+        let blocked = blocked_comm_event(wait_id, com, event_ptr);
+
+        assert!(blocked_serial_comm_event_ready(&blocked, &kernel));
+        assert_eq!(
+            complete_blocked_serial_comm_event(&blocked, &mut kernel, &mut uc),
+            1
+        );
+        let mut event = [0; 4];
+        uc.mem_read(event_ptr.into(), &mut event).unwrap();
+        assert_eq!(u32::from_le_bytes(event), 0);
+        assert!(!kernel.comm_event_mask_changed_wait(wait_id));
     }
 
     #[test]
