@@ -774,6 +774,18 @@ impl CeKernel {
         count
     }
 
+    pub fn poll_host_serial_to_handle(&mut self, handle: u32, max_bytes: usize) -> usize {
+        if max_bytes == 0 {
+            return 0;
+        }
+        match self.handles.get_mut(handle) {
+            Ok(KernelObject::Device(device)) if device.is_serial() => {
+                device.poll_host_serial(max_bytes)
+            }
+            _ => 0,
+        }
+    }
+
     pub fn create_file_w(
         &mut self,
         path: &str,
@@ -843,6 +855,7 @@ impl CeKernel {
     }
 
     pub fn read_file(&mut self, handle: u32, requested: u32) -> Result<Vec<u8>> {
+        self.poll_host_serial_to_handle(handle, requested as usize);
         self.drain_remote_serial_to_handle(handle, requested as usize);
         let path = self.path_for_handle(handle);
         let start_position = match self.handles.get(handle) {
@@ -891,6 +904,7 @@ impl CeKernel {
     where
         F: FnMut(&[u8]) -> Result<()>,
     {
+        self.poll_host_serial_to_handle(handle, requested as usize);
         self.drain_remote_serial_to_handle(handle, requested as usize);
         let path = self.path_for_handle(handle);
         let start_position = match self.handles.get(handle) {

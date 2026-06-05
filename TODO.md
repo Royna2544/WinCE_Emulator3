@@ -95,11 +95,15 @@
   callers, and synchronous Unicorn `WaitCommEvent` now parks through the
   scheduler until either `EV_RXCHAR` is ready under the current mask or
   `SetCommMask` wakes the pending wait with event `0`. The rendered-map
-  frontier may still need deeper device fidelity. Next serial slice, if
-  traces point there: add real `win32_com` host RX for `COM7:`/host `COM21`,
-  broader modem/error event masks (`EV_ERR`, line status, purge/error wake
-  details), and CE fixture coverage for an actual blocked `WaitCommEvent`
-  thread resuming from injected RX. Use
+  frontier may still need deeper device fidelity. `win32_com` now opens and
+  polls configured host COM ports generically, but the current machine reported
+  COM4/COM9 as OK and COM21 as not a known-good device while
+  `serial_devices.json` maps guest `COM7:` to host `COM21`. Next serial slice,
+  if traces point there: validate a working host GPS/serial source or feed
+  realistic RX through the existing remote path, then add broader modem/error
+  event masks (`EV_ERR`, line status, purge/error wake details), stronger host
+  COM failure counters, and CE fixture coverage for an actual blocked
+  `WaitCommEvent` thread resuming from injected RX. Use
   `C:\WINCE600\PRIVATE\WINCEOS\DRIVERS\SERDEV\serial.c` as the source
   reference; keep behavior generic and test with CE fixture programs.
 - Watch the older mounted destroy/slot crash evidence in

@@ -1,4 +1,11 @@
 use std::collections::BTreeMap;
+#[cfg(windows)]
+use std::{
+    fs::OpenOptions,
+    io::{Read, Write},
+    os::windows::io::AsRawHandle,
+    sync::{Arc, Mutex},
+};
 
 use serde::Deserialize;
 
@@ -78,6 +85,8 @@ pub struct DeviceSession {
     comm_mask: u32,
     rx: Vec<u8>,
     tx: Vec<u8>,
+    #[cfg(windows)]
+    host_serial: Option<Win32ComPort>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,6 +173,9 @@ impl DeviceNamespace {
             .get(&normalized)
             .ok_or_else(|| Error::MissingDevice(guest_name.to_owned()))?;
 
+        #[cfg(windows)]
+        let host_serial = open_host_serial_if_configured(config, &self.defaults);
+
         Ok(DeviceSession {
             guest_name: config.guest.clone(),
             kind: config.kind.clone(),
@@ -174,6 +186,8 @@ impl DeviceNamespace {
             comm_mask: 0,
             rx: Vec::new(),
             tx: Vec::new(),
+            #[cfg(windows)]
+            host_serial,
         })
     }
 
@@ -239,6 +253,10 @@ impl DeviceSession {
 
     pub fn set_dcb(&mut self, dcb: CommDcb) {
         self.dcb = dcb;
+        #[cfg(windows)]
+        if let Some(host) = &self.host_serial {
+            host.configure_dcb(self.dcb);
+        }
     }
 
     pub fn comm_timeouts(&self) -> CommTimeouts {
@@ -279,6 +297,10 @@ impl DeviceSession {
 
     pub fn write_file(&mut self, bytes: &[u8]) -> u32 {
         self.tx.extend_from_slice(bytes);
+        #[cfg(windows)]
+        if let Some(host) = &self.host_serial {
+            let _ = host.write(bytes);
+        }
         bytes.len() as u32
     }
 
@@ -324,8 +346,169 @@ impl DeviceSession {
         self.rx.extend_from_slice(bytes);
     }
 
+    pub fn poll_host_serial(&mut self, max_bytes: usize) -> usize {
+        #[cfg(windows)]
+        {
+            let Some(host) = &self.host_serial else {
+                return 0;
+            };
+            let bytes = host.read_available(max_bytes);
+            let count = bytes.len();
+            self.rx.extend_from_slice(&bytes);
+            count
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = max_bytes;
+            0
+        }
+    }
+
     pub fn tx_bytes(&self) -> &[u8] {
         &self.tx
+    }
+}
+
+#[cfg(windows)]
+#[derive(Clone)]
+struct Win32ComPort {
+    inner: Arc<Mutex<Win32ComPortInner>>,
+}
+
+#[cfg(windows)]
+struct Win32ComPortInner {
+    host_name: String,
+    file: std::fs::File,
+}
+
+#[cfg(windows)]
+impl std::fmt::Debug for Win32ComPort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let host_name = self
+            .inner
+            .lock()
+            .ok()
+            .map(|inner| inner.host_name.clone())
+            .unwrap_or_else(|| "<locked>".to_owned());
+        f.debug_struct("Win32ComPort")
+            .field("host_name", &host_name)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(windows)]
+fn open_host_serial_if_configured(
+    config: &DeviceConfig,
+    defaults: &DeviceDefaults,
+) -> Option<Win32ComPort> {
+    if config.kind != DeviceKind::Serial || config.backend != DeviceBackend::Win32Com {
+        return None;
+    }
+    let host = config.host.as_deref()?.trim();
+    if host.is_empty() {
+        return None;
+    }
+    Win32ComPort::open(host, defaults.baud)
+}
+
+#[cfg(windows)]
+impl Win32ComPort {
+    fn open(host_name: &str, baud: u32) -> Option<Self> {
+        let path = win32_com_path(host_name);
+        let file = OpenOptions::new().read(true).write(true).open(&path).ok()?;
+        let port = Self {
+            inner: Arc::new(Mutex::new(Win32ComPortInner {
+                host_name: host_name.to_owned(),
+                file,
+            })),
+        };
+        port.configure_timeouts();
+        port.configure_line(baud, 8, 0, 0);
+        Some(port)
+    }
+
+    fn read_available(&self, max_bytes: usize) -> Vec<u8> {
+        if max_bytes == 0 {
+            return Vec::new();
+        }
+        let mut buffer = vec![0; max_bytes.min(4096)];
+        let Ok(mut inner) = self.inner.lock() else {
+            return Vec::new();
+        };
+        match inner.file.read(&mut buffer) {
+            Ok(count) => {
+                buffer.truncate(count);
+                buffer
+            }
+            Err(_) => Vec::new(),
+        }
+    }
+
+    fn write(&self, bytes: &[u8]) -> usize {
+        let Ok(mut inner) = self.inner.lock() else {
+            return 0;
+        };
+        inner.file.write(bytes).unwrap_or_default()
+    }
+
+    fn configure_dcb(&self, dcb: CommDcb) {
+        let baud = u32::from_le_bytes(dcb.bytes()[4..8].try_into().unwrap_or([0; 4]));
+        let byte_size = dcb.bytes()[18];
+        let parity = dcb.bytes()[19];
+        let stop_bits = dcb.bytes()[20];
+        self.configure_line(baud, byte_size, parity, stop_bits);
+    }
+
+    fn configure_timeouts(&self) {
+        use windows::Win32::Devices::Communication::{COMMTIMEOUTS, SetCommTimeouts};
+        use windows::Win32::Foundation::HANDLE;
+
+        let Ok(inner) = self.inner.lock() else {
+            return;
+        };
+        let handle = HANDLE(inner.file.as_raw_handle());
+        let timeouts = COMMTIMEOUTS {
+            ReadIntervalTimeout: u32::MAX,
+            ReadTotalTimeoutMultiplier: 0,
+            ReadTotalTimeoutConstant: 0,
+            WriteTotalTimeoutMultiplier: 0,
+            WriteTotalTimeoutConstant: 100,
+        };
+        let _ = unsafe { SetCommTimeouts(handle, &timeouts) };
+    }
+
+    fn configure_line(&self, baud: u32, byte_size: u8, parity: u8, stop_bits: u8) {
+        use windows::Win32::Devices::Communication::{DCB, GetCommState, SetCommState};
+        use windows::Win32::Foundation::HANDLE;
+
+        let Ok(inner) = self.inner.lock() else {
+            return;
+        };
+        let handle = HANDLE(inner.file.as_raw_handle());
+        let mut host_dcb = DCB::default();
+        host_dcb.DCBlength = std::mem::size_of::<DCB>() as u32;
+        if unsafe { GetCommState(handle, &mut host_dcb) }.is_err() {
+            return;
+        }
+        if baud != 0 {
+            host_dcb.BaudRate = baud;
+        }
+        if byte_size != 0 {
+            host_dcb.ByteSize = byte_size;
+        }
+        host_dcb.Parity = windows::Win32::Devices::Communication::DCB_PARITY(parity);
+        host_dcb.StopBits = windows::Win32::Devices::Communication::DCB_STOP_BITS(stop_bits);
+        let _ = unsafe { SetCommState(handle, &host_dcb) };
+    }
+}
+
+#[cfg(windows)]
+fn win32_com_path(host_name: &str) -> String {
+    let trimmed = host_name.trim();
+    if trimmed.starts_with(r"\\.\") {
+        trimmed.to_owned()
+    } else {
+        format!(r"\\.\{}", trimmed.trim_end_matches(':'))
     }
 }
 
@@ -364,5 +547,34 @@ mod tests {
         });
 
         assert_eq!(namespace.open("com7").unwrap().guest_name, "COM7:");
+    }
+
+    #[test]
+    fn win32_com_without_host_still_opens_as_serial_session() {
+        let namespace = DeviceNamespace::from_config(DeviceConfigFile {
+            version: 1,
+            defaults: DeviceDefaults::default(),
+            devices: vec![DeviceConfig {
+                guest: "COM7:".to_owned(),
+                kind: DeviceKind::Serial,
+                backend: DeviceBackend::Win32Com,
+                host: None,
+                enabled: true,
+                note: None,
+            }],
+        });
+
+        let mut session = namespace.open("COM7:").unwrap();
+        assert!(session.is_serial());
+        assert_eq!(session.read_file(64), Vec::<u8>::new());
+        assert_eq!(session.write_file(b"$PUBX"), 5);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn win32_com_path_uses_device_prefix() {
+        assert_eq!(win32_com_path("COM21"), r"\\.\COM21");
+        assert_eq!(win32_com_path(r"\\.\COM21"), r"\\.\COM21");
+        assert_eq!(win32_com_path("COM7:"), r"\\.\COM7");
     }
 }

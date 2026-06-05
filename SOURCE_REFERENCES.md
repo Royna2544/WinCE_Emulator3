@@ -414,11 +414,16 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     serial `ReadFile` calls can register a scheduler `SerialRead` wait by COM
     handle, remote serial injection queues candidate wait ids, and resumed
     reads complete by streaming device bytes into the original guest buffer.
-    Full COMMTIMEOUTS, `WaitCommEvent`, masks, purge/error state, host
-    `win32_com`, and complete run-queue ownership remain open. The current
-    Unicorn time-slice only alternates the active guest context with the single
-    suspended peer context, so it is a temporary scheduler bridge toward that
-    source-backed CE run-queue model rather than a replacement for it.
+    v3 now has the first host `win32_com` bridge for configured serial devices:
+    it opens the named Windows COM port, applies nonblocking read timeouts,
+    configures the host line state from CE DCB data, polls host RX before CE
+    reads/parks, and forwards guest TX bytes to the host handle. Full
+    COMMTIMEOUTS semantics, overlapped/event-backed waits, modem/error masks,
+    richer host failure counters, and complete run-queue ownership remain open.
+    The current Unicorn time-slice only alternates the active guest context
+    with the single suspended peer context, so it is a temporary scheduler
+    bridge toward that source-backed CE run-queue model rather than a
+    replacement for it.
 
 - Guest WNDPROC callout and MIPS kdata boundaries:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\mipskpg.h`,

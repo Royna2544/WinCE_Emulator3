@@ -7880,6 +7880,7 @@ fn try_block_serial_read_file<D>(
     let buffer = args.get(1).copied().unwrap_or(0);
     let requested = args.get(2).copied().unwrap_or(0);
     let transferred_ptr = args.get(3).copied().unwrap_or(0);
+    kernel.poll_host_serial_to_handle(handle, requested as usize);
     if requested == 0
         || buffer == 0
         || !kernel.is_serial_device_handle(handle)

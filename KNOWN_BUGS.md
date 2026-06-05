@@ -131,10 +131,14 @@
     idle state. DCB/mask/purge/COMSTAT queue reporting are stateful, and
     synchronous Unicorn `WaitCommEvent` now has scheduler-backed parking and
     resume for `EV_RXCHAR` plus CE's `SetCommMask` wake-with-zero behavior.
-    Remaining serial/device gaps are real `win32_com` RX, broader event masks
-    and line/error status, and proving whether the mounted post-map path
-    actually blocks in `WaitCommEvent` after longer/device-fed runs. Do not
-    fabricate missing files, force guest state, or fake pixels.
+    `win32_com` now has a generic host-port bridge for configured serial
+    devices, but local enumeration only showed COM4/COM9 as OK while the
+    current COM7 mapping points at COM21. Remaining serial/device gaps are
+    verified host RX or remote-fed NMEA data, broader event masks and
+    line/error status, stronger host COM diagnostics, and proving whether the
+    mounted post-map path actually blocks in `WaitCommEvent` after
+    longer/device-fed runs. Do not fabricate missing files, force guest state,
+    or fake pixels.
 
 - Mounted iNavi previously reached a post-destroy guest null dereference during
   startup.

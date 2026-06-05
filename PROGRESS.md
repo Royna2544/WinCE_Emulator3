@@ -9,6 +9,34 @@
 
 ## Confirmed
 
+- Host ANR diagnostics now preserve the actual wall-clock stop snapshot even
+  when later cleanup reaches the app's legacy terminate path. Commit `7866f07`
+  adds `preferred_trace_snapshot()` plus opt-in
+  `WINCE_EMU_GUEST_ENTRY_TRACE` sampling around the guest helper
+  `0x000e8ce4..0x000e9d10`. Fresh host evidence
+  `target\host_anr_plain_*` used dumped runtime DLLs from
+  `D:\INAVI_Emulator\DUMPPLZ\Windows`, ran the full 180 s host budget after the
+  visible map, and preserved the real stop at
+  `pc=0x0022f9ec(image:iNavi.exe+0x21f9ec)`,
+  `ra=0x0022f944(image:iNavi.exe+0x21f944)`. Guest-entry samples showed
+  healthy return addresses at `entry_e9a40`/`return_e9d0c`, so the earlier
+  `ra=0` suspicion did not reproduce under the new sampler. The same run stayed
+  bounded (`heap_live=15047/32541135B`,
+  `file_io=host_open:907 host_read:83092/5905148B mem_open:4`) while render
+  traces showed real GDI display blits and file traces showed a later COM7
+  open/read-zero storm with `$PUBX,40,GSV,...` GPS setup writes.
+- `win32_com` serial devices now have a first generic host bridge. Enabled
+  serial devices configured with backend `win32_com` and a host name are opened
+  as Windows COM handles, configured for nonblocking reads and the current DCB
+  line state, polled before CE `ReadFile` drains/parks, and receive guest
+  `WriteFile` bytes. Focused coverage includes
+  `win32_com_without_host_still_opens_as_serial_session`,
+  `win32_com_path_uses_device_prefix`, the existing serial timeout fixtures,
+  and `cargo check --features unicorn,trace,win32-desktop`. The current local
+  Windows port evidence only listed COM4/COM9 as OK while `serial_devices.json`
+  maps guest `COM7:` to host `COM21`, so the mounted ANR frontier still needs a
+  verified host GPS/serial source instead of treating empty COM21 reads as app
+  evidence.
 - The post-map ANR-shaped scheduler stop was narrowed and moved forward by a
   generic Unicorn wait-bridge fix. Fresh host evidence
   `target\anr_wait_cleanup_host_*` first confirmed the stale duplicate
