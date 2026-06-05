@@ -8296,6 +8296,7 @@ fn block_serial_read_file<D>(
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
 
     if let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id) {
+        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         let wait_id = kernel.register_blocked_waiter(
             thread_id,
             callout.thread_handle,
@@ -8336,6 +8337,7 @@ fn block_serial_read_file<D>(
 
     let running = *running_thread.borrow();
     if let Some((_, thread_handle)) = running {
+        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         let wait_id = kernel.register_blocked_waiter(
             thread_id,
             thread_handle,
@@ -8460,6 +8462,7 @@ fn block_wait_comm_event<D>(
     let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
 
     if let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id) {
+        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         let wait_id = kernel.register_blocked_waiter(
             thread_id,
             callout.thread_handle,
@@ -8500,6 +8503,7 @@ fn block_wait_comm_event<D>(
 
     let running = *running_thread.borrow();
     if let Some((_, thread_handle)) = running {
+        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         let wait_id = kernel.register_blocked_waiter(
             thread_id,
             thread_handle,
@@ -8524,6 +8528,8 @@ fn block_wait_comm_event<D>(
             activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
             return true;
         }
+        let _ = uc.emu_stop();
+        return true;
     }
     false
 }
@@ -9376,6 +9382,97 @@ mod wait_scheduler_tests {
         uc.mem_read(event_ptr.into(), &mut event).unwrap();
         assert_eq!(u32::from_le_bytes(event), 0);
         assert!(!kernel.comm_event_mask_changed_wait(wait_id));
+    }
+
+    #[test]
+    fn current_wait_comm_event_without_peer_parks_and_stops_instead_of_falling_through() {
+        const EV_RXCHAR: u32 = 0x0001;
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let com = kernel
+            .create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)
+            .unwrap();
+        kernel.set_comm_mask(com, EV_RXCHAR).unwrap();
+        assert!(!kernel.serial_comm_event_ready(com));
+
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let event_ptr = 0x3000_2000;
+        uc.mem_map(event_ptr.into(), 0x1000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        let thread_id = 8;
+        let thread_handle = 0x808;
+        let return_pc = 0x0040_8000u32;
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        uc.reg_write(unicorn_engine::RegisterMIPS::S1, 0x2468_1357)
+            .unwrap();
+
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let stale_event = kernel.create_event_w(None, true, false);
+        let stale_wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            thread_handle,
+            vec![stale_event],
+            crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel,
+            0,
+            INFINITE,
+        );
+        blocked_waits.borrow_mut().push(BlockedWaitThread {
+            wait_id: stale_wait_id,
+            thread_id,
+            thread_handle,
+            wait_handles: vec![stale_event],
+            kind: BlockedWaitKind::Kernel,
+            wait_started_ms: 0,
+            timeout_ms: INFINITE,
+            regs: super::MipsGuestContext::zero(),
+            return_pc: 0,
+        });
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(super::try_block_wait_comm_event(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_WAIT_COMM_EVENT),
+            &[com, event_ptr],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+        ));
+
+        assert_eq!(*running_thread.borrow(), None);
+        assert_eq!(*current_thread_id.borrow(), thread_id);
+        assert!(kernel.blocked_waiter(stale_wait_id).is_none());
+        let blocked_waits = blocked_waits.borrow();
+        assert_eq!(blocked_waits.len(), 1);
+        let blocked = &blocked_waits[0];
+        assert_eq!(blocked.thread_id, thread_id);
+        assert_eq!(blocked.thread_handle, thread_handle);
+        assert!(blocked.wait_handles.is_empty());
+        assert!(matches!(
+            blocked.kind,
+            BlockedWaitKind::SerialCommEvent {
+                handle,
+                event_ptr: actual_event_ptr
+            } if handle == com && actual_event_ptr == event_ptr
+        ));
+        assert!(kernel.blocked_waiter(blocked.wait_id).is_some());
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::S1).unwrap() as u32,
+            0x2468_1357
+        );
     }
 
     #[test]

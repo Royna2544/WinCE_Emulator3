@@ -81,8 +81,10 @@
     `MsgWaitForMultipleObjectsEx` no-peer parking inconsistency is closed:
     current-thread message waits now stop Unicorn and keep their registered
     scheduler-owned `MsgWait` state instead of falling through raw dispatch
-    after clearing `running_thread`. Use the message trace on the exact
-    unresponsive host interaction. If it records
+    after clearing `running_thread`. The analogous `WaitCommEvent` no-peer
+    path is also closed and now purges stale vector-backed waits before
+    registering the replacement serial comm-event waiter. Use the message trace
+    on the exact unresponsive host interaction. If it records
     delivered mouse/key messages, chase the guest handler continuation, pending
     send, timer/device waits, or missing subsystem event that follows; if it records
     `remote_*_drop`, fix generic GWE hit-test/focus/capture semantics. Do not

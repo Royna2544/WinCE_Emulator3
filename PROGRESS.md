@@ -56,6 +56,19 @@
   `current_msg_wait_without_peer_parks_and_stops_instead_of_falling_through`
   passes, and `cargo check --features unicorn,trace,win32-desktop` passes with
   only the known Windows incremental finalization warning.
+- The Unicorn serial wait bridge now applies the same scheduler-owned blocking
+  rule to `WaitCommEvent`: when a running guest thread parks on an empty serial
+  comm event and no suspended peer exists, the bridge registers a
+  `SerialCommEvent` waiter, clears the running slot, stops Unicorn, and returns
+  handled instead of falling through raw dispatch. Serial read and comm-event
+  blocking also purge stale vector-backed waits for the same thread before
+  registering a new wait, matching the CE one-blocked-state invariant recorded
+  from `schedule.c`/`cmsgque.h`. Focused coverage
+  `current_wait_comm_event_without_peer_parks_and_stops_instead_of_falling_through`
+  proves the no-peer path parks, removes stale waiter metadata, and preserves
+  guest registers; `cargo test wait_scheduler --features
+  unicorn,trace,win32-desktop` passes all 31 filtered tests and `cargo check
+  --features unicorn,trace,win32-desktop` passes.
 - CE-style pending timer-message coalescing is now implemented for scheduler
   generated `WM_TIMER`. `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`
   models timer entries with separate message-queue and timer-queue linkage plus
