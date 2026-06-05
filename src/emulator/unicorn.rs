@@ -39,6 +39,7 @@ pub struct UnicornMips {
     #[cfg(feature = "unicorn")]
     trampoline_jumps: Vec<MipsTrampolineJump>,
     last_debug: Option<UnicornDebugSnapshot>,
+    last_wall_clock_debug: Option<UnicornDebugSnapshot>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -104,6 +105,7 @@ pub struct UnicornDebugSnapshot {
     pub inavi_render_milestones: Vec<UnicornInaviControllerTrace>,
     pub presentation_imports: Vec<UnicornLastImport>,
     pub window_imports: Vec<UnicornLastImport>,
+    pub guest_entry_traces: Vec<UnicornGuestEntryTrace>,
     pub last_code: Vec<UnicornLastCode>,
     pub last_blocks: Vec<UnicornLastBlock>,
     pub import_counts: Vec<UnicornImportCount>,
@@ -297,6 +299,34 @@ impl UnicornDebugSnapshot {
                 parts.push(format!("indirect_stack=[{stack_summary}]"));
             }
         }
+        if !self.guest_entry_traces.is_empty() {
+            let mut entries = String::new();
+            for (index, entry) in self.guest_entry_traces.iter().rev().take(8).enumerate() {
+                if index != 0 {
+                    entries.push(';');
+                }
+                entries.push_str(&format!(
+                    "{} pc=0x{:08x}/ra=0x{:08x}/sp=0x{:08x}/a0=0x{:08x}/a1=0x{:08x}",
+                    entry.label, entry.pc, entry.ra, entry.sp, entry.a0, entry.a1
+                ));
+                if !entry.stack_words.is_empty() {
+                    entries.push('[');
+                    for (word_index, (offset, value)) in entry.stack_words.iter().enumerate() {
+                        if word_index != 0 {
+                            entries.push(',');
+                        }
+                        match value {
+                            Some(value) => {
+                                entries.push_str(&format!("+0x{offset:x}=0x{value:08x}"));
+                            }
+                            None => entries.push_str(&format!("+0x{offset:x}=<unreadable>")),
+                        }
+                    }
+                    entries.push(']');
+                }
+            }
+            parts.push(format!("guest_entries=[{entries}]"));
+        }
         if let Some(blocked) = &self.blocked_get_message {
             parts.push(format!(
                 "blocked_get_message=thread:{} hwnd={}",
@@ -358,6 +388,20 @@ pub struct UnicornIndirectCallProbe {
     pub register: u32,
     pub register_name: &'static str,
     pub target: u32,
+    pub stack_words: Vec<(u32, Option<u32>)>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UnicornGuestEntryTrace {
+    pub label: &'static str,
+    pub pc: u32,
+    pub ra: u32,
+    pub sp: u32,
+    pub a0: u32,
+    pub a1: u32,
+    pub a2: u32,
+    pub a3: u32,
+    pub t9: u32,
     pub stack_words: Vec<(u32, Option<u32>)>,
 }
 
@@ -826,6 +870,8 @@ const UNICORN_WNDPROC_TRACE_CODE_LIMIT: usize = 256;
 const UNICORN_WNDPROC_READINESS_TRACE_LIMIT: usize = 64;
 #[cfg(all(feature = "unicorn", feature = "trace"))]
 const UNICORN_MFC_DISPATCH_TRACE_LIMIT: usize = 64;
+#[cfg(feature = "unicorn")]
+const UNICORN_GUEST_ENTRY_TRACE_LIMIT: usize = 64;
 #[cfg(all(feature = "unicorn", feature = "trace"))]
 const UNICORN_INAVI_DISPLAY_TRACE_LIMIT: usize = 96;
 #[cfg(all(feature = "unicorn", feature = "trace"))]
@@ -1132,6 +1178,7 @@ impl UnicornMips {
             #[cfg(feature = "unicorn")]
             trampoline_jumps: Vec::new(),
             last_debug: None,
+            last_wall_clock_debug: None,
         })
     }
 
@@ -1171,6 +1218,12 @@ impl UnicornMips {
 
     pub fn last_debug_snapshot(&self) -> Option<&UnicornDebugSnapshot> {
         self.last_debug.as_ref()
+    }
+
+    pub fn preferred_trace_snapshot(&self) -> Option<&UnicornDebugSnapshot> {
+        self.last_wall_clock_debug
+            .as_ref()
+            .or(self.last_debug.as_ref())
     }
 
     pub fn mapped_blob_ranges(&self) -> Vec<UnicornMappedBlobRange> {
@@ -1738,6 +1791,8 @@ impl UnicornMips {
         let window_imports = Rc::new(RefCell::new(Vec::<UnicornLastImport>::new()));
         #[cfg(feature = "trace")]
         let window_imports_hook = Rc::clone(&window_imports);
+        let guest_entry_traces = Rc::new(RefCell::new(Vec::<UnicornGuestEntryTrace>::new()));
+        let guest_entry_trace_enabled = std::env::var_os("WINCE_EMU_GUEST_ENTRY_TRACE").is_some();
         let mapped_code = MappedCodeIndex::new(self.mapped_blobs.clone());
         let trampoline_ranges = self.trampoline_ranges.clone();
         let trampoline_jumps = self.trampoline_jumps.clone();
@@ -2194,6 +2249,17 @@ impl UnicornMips {
             );
         })
         .map_err(|err| Error::Backend(format!("install scheduler timeslice hook: {err:?}")))?;
+        if guest_entry_trace_enabled {
+            let guest_entries_hook = Rc::clone(&guest_entry_traces);
+            uc.add_code_hook(0x000e_8ce4, 0x000e_9d10, move |uc, address, _size| {
+                let pc = address as u32;
+                let Some(label) = guest_entry_trace_label(pc) else {
+                    return;
+                };
+                record_guest_entry_trace(&guest_entries_hook, uc, label, pc);
+            })
+            .map_err(|err| Error::Backend(format!("install guest entry trace hook: {err:?}")))?;
+        }
         let traps = self.import_traps.clone();
         let stack_top = self.stack_top.unwrap_or(0);
         let mapped_kernel_memory = Rc::new(RefCell::new(KernelMemoryMappings::new()));
@@ -3242,7 +3308,7 @@ impl UnicornMips {
         let snapshot_ra = read_mips_reg(&uc, RegisterMIPS::RA);
         let pc_region = self.address_region_label(snapshot_pc, kernel);
         let ra_region = self.address_region_label(snapshot_ra, kernel);
-        self.last_debug = Some(capture_debug_snapshot(
+        let snapshot = capture_debug_snapshot(
             &uc,
             pc_region,
             ra_region,
@@ -3282,6 +3348,7 @@ impl UnicornMips {
             inavi_render_milestones.borrow().clone(),
             presentation_imports.borrow().clone(),
             window_imports.borrow().clone(),
+            guest_entry_traces.borrow().clone(),
             last_code.borrow().clone(),
             last_blocks.borrow().clone(),
             import_count_snapshot(&import_counts.borrow()),
@@ -3306,7 +3373,11 @@ impl UnicornMips {
                 .sum(),
             blocked_get_message.borrow().clone(),
             *thread_exit_reached.borrow(),
-        ));
+        );
+        if snapshot.host_wall_clock_stop.is_some() {
+            self.last_wall_clock_debug = Some(snapshot.clone());
+        }
+        self.last_debug = Some(snapshot);
         if let Some(err) = framebuffer_tick_error.borrow_mut().take() {
             let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
             return Err(err);
@@ -10067,6 +10138,56 @@ fn record_wndproc_call_trace(
 }
 
 #[cfg(feature = "unicorn")]
+fn guest_entry_trace_label(pc: u32) -> Option<&'static str> {
+    match pc {
+        0x000e_8ce4 => Some("caller_e8ce4"),
+        0x000e_8f7c => Some("caller_e8f7c"),
+        0x000e_9a40 => Some("entry_e9a40"),
+        0x000e_9d0c => Some("return_e9d0c"),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn record_guest_entry_trace<D>(
+    traces: &std::rc::Rc<std::cell::RefCell<Vec<UnicornGuestEntryTrace>>>,
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    label: &'static str,
+    pc: u32,
+) {
+    use unicorn_engine::RegisterMIPS;
+
+    let sp = read_mips_reg(uc, RegisterMIPS::SP);
+    let stack_words = (0..=0x40)
+        .step_by(4)
+        .map(|offset| {
+            (
+                offset,
+                sp.checked_add(offset)
+                    .and_then(|addr| read_unicorn_u32(uc, addr)),
+            )
+        })
+        .collect();
+    let trace = UnicornGuestEntryTrace {
+        label,
+        pc,
+        ra: read_mips_reg(uc, RegisterMIPS::RA),
+        sp,
+        a0: read_mips_reg(uc, RegisterMIPS::A0),
+        a1: read_mips_reg(uc, RegisterMIPS::A1),
+        a2: read_mips_reg(uc, RegisterMIPS::A2),
+        a3: read_mips_reg(uc, RegisterMIPS::A3),
+        t9: read_mips_reg(uc, RegisterMIPS::T9),
+        stack_words,
+    };
+    let mut traces = traces.borrow_mut();
+    if traces.len() == UNICORN_GUEST_ENTRY_TRACE_LIMIT {
+        traces.remove(0);
+    }
+    traces.push(trace);
+}
+
+#[cfg(feature = "unicorn")]
 fn wndproc_trace_limit() -> usize {
     if std::env::var_os("WINCE_EMU_EXTENDED_WNDPROC_TRACE").is_some() {
         UNICORN_EXTENDED_WNDPROC_TRACE_LIMIT
@@ -13964,6 +14085,7 @@ fn capture_debug_snapshot<D>(
     inavi_render_milestones: Vec<UnicornInaviControllerTrace>,
     presentation_imports: Vec<UnicornLastImport>,
     window_imports: Vec<UnicornLastImport>,
+    guest_entry_traces: Vec<UnicornGuestEntryTrace>,
     last_code: Vec<UnicornLastCode>,
     last_blocks: Vec<UnicornLastBlock>,
     import_counts: Vec<UnicornImportCount>,
@@ -14033,6 +14155,7 @@ fn capture_debug_snapshot<D>(
         inavi_render_milestones,
         presentation_imports,
         window_imports,
+        guest_entry_traces,
         last_code,
         last_blocks,
         import_counts,

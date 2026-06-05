@@ -330,7 +330,7 @@ fn write_requested_tracefiles(cpu: &UnicornMips, tracefiles: &[(String, PathBuf)
     if tracefiles.is_empty() {
         return Ok(());
     }
-    let Some(snapshot) = cpu.last_debug_snapshot() else {
+    let Some(snapshot) = cpu.preferred_trace_snapshot() else {
         return Err(wince_emulation_v3::Error::Backend(
             "tracefile requested but no Unicorn snapshot is available".to_owned(),
         ));
@@ -483,7 +483,7 @@ fn run_monitor(
             }
             "trace" | "detail" => {
                 let selector = words.next().unwrap_or("all");
-                let Some(snapshot) = cpu.last_debug_snapshot() else {
+                let Some(snapshot) = cpu.preferred_trace_snapshot() else {
                     println!("  no Unicorn snapshot yet");
                     continue;
                 };
