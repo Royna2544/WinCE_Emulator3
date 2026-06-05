@@ -9,6 +9,21 @@
 
 ## Confirmed
 
+- The Unicorn `WaitForMultipleObjects` and `MsgWaitForMultipleObjectsEx`
+  block bridges now hand off to already-ready scheduler waiters after parking
+  the current thread, even when there is no saved suspended peer context.
+  Previously the multiple-wait path could register the current thread's
+  kernel wait and then only look for a `GetMessageW` waiter before stopping,
+  while the msg-wait path stopped immediately after checking the suspended
+  slot. Both paths now use the same ready-waiter and bounded-timeout helper
+  shape as single waits and sleeps, preserving scheduler-owned state instead
+  of stranding signaled worker waits. Focused coverage
+  `current_multiple_wait_yields_to_ready_blocked_waiter` and
+  `current_msg_wait_yields_to_ready_blocked_waiter` passes; the filtered
+  `cargo test wait_scheduler --features unicorn,trace,win32-desktop` suite now
+  has 34 passing tests, and `cargo check --features
+  unicorn,trace,win32-desktop` passes with only the known Windows incremental
+  finalization warning.
 - The Rust remote server transport now exists and is aligned with the
   `..\wince_emulator_v2` REST API shape while staying wired through v3's generic
   `CeRemote` state. CLI supports the requested compact
