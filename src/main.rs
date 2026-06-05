@@ -1193,7 +1193,7 @@ impl Framebuffer for HostLiveFramebuffer<'_> {
     fn mark_dirty(&mut self, rect: FramebufferRect) {
         self.framebuffer.mark_dirty(rect);
         self.pending_guest_dirty = true;
-        if let Err(err) = self.blit_if_due(false) {
+        if let Err(err) = self.blit_if_due(is_large_dirty_rect(rect, self.framebuffer.info())) {
             self.pending_error = Some(err);
         }
     }
@@ -1212,6 +1212,13 @@ impl Framebuffer for HostLiveFramebuffer<'_> {
         }
         self.blit_if_due(false)
     }
+}
+
+#[cfg(all(windows, feature = "win32-desktop"))]
+fn is_large_dirty_rect(rect: FramebufferRect, info: FramebufferInfo) -> bool {
+    let dirty_area = u64::from(rect.width).saturating_mul(u64::from(rect.height));
+    let frame_area = u64::from(info.width).saturating_mul(u64::from(info.height));
+    frame_area != 0 && dirty_area.saturating_mul(4) >= frame_area
 }
 
 fn create_desktop(mode: DesktopMode, image_path: Option<&Path>) -> Result<DesktopRuntime> {

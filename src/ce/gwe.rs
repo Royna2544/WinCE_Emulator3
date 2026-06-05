@@ -349,6 +349,44 @@ impl Rect {
             .filter(|rect| !rect.is_empty())
             .reduce(|acc, rect| acc.union(rect))
     }
+
+    pub fn subtract(self, other: Self) -> Vec<Self> {
+        let lhs = self.normalized();
+        let Some(intersection) = lhs.intersect(other) else {
+            return vec![lhs];
+        };
+        let candidates = [
+            Self {
+                left: lhs.left,
+                top: lhs.top,
+                right: lhs.right,
+                bottom: intersection.top,
+            },
+            Self {
+                left: lhs.left,
+                top: intersection.bottom,
+                right: lhs.right,
+                bottom: lhs.bottom,
+            },
+            Self {
+                left: lhs.left,
+                top: intersection.top,
+                right: intersection.left,
+                bottom: intersection.bottom,
+            },
+            Self {
+                left: intersection.right,
+                top: intersection.top,
+                right: lhs.right,
+                bottom: intersection.bottom,
+            },
+        ];
+
+        candidates
+            .into_iter()
+            .filter(|rect| !rect.is_empty())
+            .collect()
+    }
 }
 
 fn normalize_region_rects(rects: Vec<Rect>) -> Vec<Rect> {
@@ -1225,6 +1263,17 @@ impl Gwe {
                     .map(|region| region.rects.as_slice())
             })
             .flatten()
+    }
+
+    pub fn visible_client_rects(&self, hwnd: u32) -> Vec<Rect> {
+        let Some(window) = self.windows.get(&hwnd) else {
+            return Vec::new();
+        };
+        let origin = window.client_rect;
+        self.visible_client_screen_rects(hwnd)
+            .into_iter()
+            .map(|rect| rect.offset(-origin.left, -origin.top))
+            .collect()
     }
 
     pub fn set_parent(&mut self, hwnd: u32, parent: Option<u32>) -> Option<Option<u32>> {
@@ -2896,6 +2945,47 @@ impl Gwe {
             .is_some_and(|window| !window.destroyed && window.style & style != 0)
     }
 
+    fn visible_client_screen_rects(&self, hwnd: u32) -> Vec<Rect> {
+        let Some(window) = self.windows.get(&hwnd) else {
+            return Vec::new();
+        };
+        if window.destroyed || (hwnd != DESKTOP_HWND && !self.is_window_visible(hwnd)) {
+            return Vec::new();
+        }
+
+        let mut visible = vec![window.client_rect.normalized()];
+        if hwnd == DESKTOP_HWND {
+            return visible;
+        }
+        if let Some(parent) = window.parent {
+            visible = intersect_rect_lists(&visible, &self.visible_client_screen_rects(parent));
+        }
+        if let Some(region) = self.window_regions.get(&hwnd) {
+            let region_rects: Vec<Rect> = region
+                .rects
+                .iter()
+                .map(|rect| rect.offset(window.client_rect.left, window.client_rect.top))
+                .collect();
+            visible = intersect_rect_lists(&visible, &region_rects);
+        }
+
+        let siblings = self.sibling_windows(window.parent);
+        for sibling in siblings {
+            if sibling == hwnd {
+                break;
+            }
+            if !self.is_window_visible(sibling) {
+                continue;
+            }
+            let sibling_rects = self.visible_client_screen_rects(sibling);
+            visible = subtract_rect_lists(&visible, &sibling_rects);
+            if visible.is_empty() {
+                break;
+            }
+        }
+        visible
+    }
+
     fn sibling_windows(&self, parent: Option<u32>) -> Vec<u32> {
         self.z_order
             .iter()
@@ -2966,6 +3056,32 @@ impl Gwe {
         };
         self.z_order.insert(index.min(self.z_order.len()), hwnd);
     }
+}
+
+fn intersect_rect_lists(lhs: &[Rect], rhs: &[Rect]) -> Vec<Rect> {
+    lhs.iter()
+        .flat_map(|left| rhs.iter().filter_map(|right| left.intersect(*right)))
+        .filter(|rect| !rect.is_empty())
+        .collect()
+}
+
+fn subtract_rect_lists(lhs: &[Rect], rhs: &[Rect]) -> Vec<Rect> {
+    let mut remaining: Vec<Rect> = lhs
+        .iter()
+        .copied()
+        .filter(|rect| !rect.is_empty())
+        .collect();
+    for cut in rhs {
+        remaining = remaining
+            .into_iter()
+            .flat_map(|rect| rect.subtract(*cut))
+            .filter(|rect| !rect.is_empty())
+            .collect();
+        if remaining.is_empty() {
+            break;
+        }
+    }
+    remaining
 }
 
 fn normalize_class_name(name_or_atom: &str) -> String {

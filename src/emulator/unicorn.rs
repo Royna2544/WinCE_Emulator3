@@ -1722,6 +1722,7 @@ impl UnicornMips {
         let framebuffer_ptr = framebuffer as *mut dyn Framebuffer;
         let framebuffer_tick_error = Rc::new(RefCell::new(None::<Error>));
         let framebuffer_tick_error_hook = Rc::clone(&framebuffer_tick_error);
+        let framebuffer_tick_error_code_hook = Rc::clone(&framebuffer_tick_error);
         let process_dll_search_dirs = self.dll_search_dirs.clone();
         if !fast_start_enabled {
             uc.add_code_hook(1, 0, move |uc, address, _size| {
@@ -1733,7 +1734,7 @@ impl UnicornMips {
             }
             if code_trace_index & 0x0fff == 0 {
                 if let Err(err) = unsafe { (&mut *framebuffer_ptr).emulator_tick() } {
-                    *framebuffer_tick_error_hook.borrow_mut() = Some(err);
+                    *framebuffer_tick_error_code_hook.borrow_mut() = Some(err);
                     let _ = uc.emu_stop();
                     return;
                 }
@@ -2409,6 +2410,11 @@ impl UnicornMips {
                 if trap.is_none() {
                     return;
                 }
+                if let Err(err) = unsafe { (&mut *framebuffer_ptr).emulator_tick() } {
+                    *framebuffer_tick_error_hook.borrow_mut() = Some(err);
+                    let _ = uc.emu_stop();
+                    return;
+                }
                 if let Some(trap) = trap.as_ref() {
                     let a0 = read_mips_reg(uc, RegisterMIPS::A0);
                     let a1 = read_mips_reg(uc, RegisterMIPS::A1);
@@ -2839,7 +2845,8 @@ impl UnicornMips {
                     let _ = run_pending_process_launches(
                         memory.uc,
                         unsafe { &mut *kernel_ptr },
-                        limits.instruction_limit,
+                        unsafe { &mut *framebuffer_ptr },
+                        limits,
                         &process_dll_search_dirs,
                     );
                     let _ = sync_file_mapping_views_to_unicorn(memory.uc, unsafe { &*kernel_ptr });
@@ -4543,7 +4550,8 @@ fn sync_file_mapping_views_to_unicorn<D>(
 fn run_pending_process_launches<D>(
     parent_uc: &mut unicorn_engine::Unicorn<'_, D>,
     kernel: &mut CeKernel,
-    instruction_limit: usize,
+    framebuffer: &mut dyn Framebuffer,
+    limits: UnicornRunLimits,
     dll_search_dirs: &[std::path::PathBuf],
 ) -> Result<()> {
     let launches = kernel.take_pending_process_launches();
@@ -4602,16 +4610,7 @@ fn run_pending_process_launches<D>(
             child.set_initial_thread_id(launch.thread_id);
             let dll_images = load_child_import_dlls(&image, dll_search_dirs)?;
             child.load_pe_image_with_dlls(&image, &dll_images)?;
-            let mut child_framebuffer = VirtualFramebuffer::default_primary()?;
-            child.run_until_import_trap_with_framebuffer_limits(
-                kernel,
-                &mut child_framebuffer,
-                UnicornRunLimits {
-                    instruction_limit,
-                    wall_clock_limit_ms: 0,
-                    stop_pc: None,
-                },
-            )?;
+            child.run_until_import_trap_with_framebuffer_limits(kernel, framebuffer, limits)?;
             Ok(child
                 .last_debug_snapshot()
                 .and_then(|snapshot| {
