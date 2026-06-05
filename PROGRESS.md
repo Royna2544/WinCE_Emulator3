@@ -2735,6 +2735,17 @@
   receiver thread ids, `QS_SENDMESSAGE`, receiver `InSendMessage`, and dispatch
   result completion; button-check helper shortcuts remain covered. The raw GWE
   suite now has 81 passing tests.
+- A post-send-queue mounted virtual/tap smoke probe using
+  `D:\INAVI_Emulator\DUMPPLZ\Windows` wrote
+  `target\sendmsg_queue_virtual_60s_*`. It stayed memory/file-I/O bounded
+  (`host_open=206`, `host_read=33845/2085117B`, `mem_open=2`,
+  `max_read=497178`) and produced a populated framebuffer
+  (`1151398` nonzero RGB bytes), with real display presentation still present
+  in the render trace. This 60 s run did not prove a new UI frontier: it
+  stopped at `pc=0x003443d8` during repeated read-only opens/reads of
+  `\SDMMC Disk\INavi\res\resmapi_800x480.bin`, with
+  `sendsig=0/sendcand=0`, so the send-message slices remain foundational
+  fidelity rather than visible post-splash success.
 - Added an indexed-DIB fidelity slice for CE GDI color tables. `BitmapObject`
   now stores RGBQUAD color tables, raw `SetDIBColorTable`/`GetDIBColorTable`
   read and write the selected bitmap table through guest memory, and the 8 bpp

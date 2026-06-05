@@ -739,6 +739,11 @@
     receiver-terminated by target HWND destruction, or is early-replied through
     the internal `ReplyMessage` path, with compact summaries exposing
     send-reply signal/candidate counters. The earlier short mounted
+    post-send-queue probe `target\sendmsg_queue_virtual_60s_*` preserved
+    bounded file/RSS behavior and a populated framebuffer, but stopped during
+    repeated `\SDMMC Disk\INavi\res\resmapi_800x480.bin` resource-map I/O with
+    `sendsig=0/sendcand=0`; this is not new sustained UI progress. The earlier
+    short mounted
     `SendNotifyMessageW` probe reached later
     `mapinfo.bin`/`UID1:` file activity, another child HWND, and `GetDC`, but
     still produced no render milestones and only one nonzero framebuffer byte.
