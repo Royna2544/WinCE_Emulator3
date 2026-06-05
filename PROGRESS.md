@@ -9,6 +9,23 @@
 
 ## Confirmed
 
+- Complex GDI clip regions now paint through their full CE region rect list
+  instead of the old bounding-box shortcut. `FillRect`, memory/display
+  `Polygon`, `Polyline`, `BitBlt`, `StretchBlt`, and `TransparentImage` now
+  intersect drawing with every selected `HRGN` rectangle, preserving holes from
+  `CombineRgn(RGN_DIFF)` on selected memory DIBs and framebuffer HDCs. Source
+  anchors remain CE `wingdi.h` region status/clipping semantics plus the
+  existing GWE region ownership refs in `SOURCE_REFERENCES.md`. Focused
+  coverage `coredll_raw_fill_rect_respects_complex_clip_holes_on_memory_dib`
+  passes, and the full `cargo test --features unicorn,trace,win32-desktop`
+  suite passes. Mounted validation `target\gdi_clip_regions_virtual.*` used
+  dumped runtime DLLs from `D:\INAVI_Emulator\DUMPPLZ\Windows`, reached the
+  same post-map `GetMessageW` frontier, stayed bounded
+  (`heap_live=14628/31597954B`, `virtual_live=2/131072B`,
+  `host_open=910`, `host_read=83967/6451484B`, `mem_open=4`,
+  `max_read=685080`), and wrote a populated 800x480 map PNG. This closes a
+  real generic clipping bug but does not fully solve the remaining visual
+  styling complaint: roads/building blocks still need more CE GDI evidence.
 - The black iNavi map base-layer gap was traced to a generic CE GDI omission:
   `ExtTextOutW` with `ETO_OPAQUE` validated arguments but did not fill the
   supplied opaque rectangle with the DC background color. CE defines

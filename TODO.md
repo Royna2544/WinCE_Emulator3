@@ -18,12 +18,16 @@
   selected DC `bk_color`. The mounted framebuffer now has a real light
   land/background layer (`map_crop` pure black down from `47.2826%` to
   `0.0131%`, center black down to `0.0000%`) while preserving bounded
-  memory/file I/O. ROP2 pen drawing is also modeled and tested, but the mounted
-  iNavi path did not call `SetROP2`, so that was a fidelity closure rather than
-  the visible base-layer fix. Next work should continue road/building styling
-  and post-map progression from real CE GDI/scheduler evidence: inspect whether
-  road surfaces need additional polygon/line, brush, text, or bitmap/ROP
-  semantics, and keep tracing generic GDI paths rather than guessing colors or
+  memory/file I/O. ROP2 pen drawing is also modeled and tested, and the latest
+  clip-region slice `target\gdi_clip_regions_virtual.*` now preserves
+  `CombineRgn(RGN_DIFF)` holes for memory/display `FillRect`, `Polygon`,
+  `Polyline`, `BitBlt`, `StretchBlt`, and `TransparentImage`; that closes a
+  real generic CE clipping bug but the mounted frame still shows road/building
+  styling problems. Next GDI work should inspect concrete trace evidence for
+  missing road/building primitives: line joins/caps, pen style, polygon fill
+  mode, brush/palette/DIB color-table differences, ROP3/non-SRCCOPY blits, or
+  any unimplemented CE GDI calls that appear in the mounted render/counts
+  traces. Keep tracing generic GDI paths rather than guessing colors or
   special-casing iNavi pixels.
 - Continue from `target\wcspbrk_long_virtual_*`. The hardcoded late dialog
   replay and aux alias mutation hooks are gone, and raw `wcspbrk`/COREDLL

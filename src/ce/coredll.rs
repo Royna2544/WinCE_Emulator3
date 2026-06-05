@@ -11752,7 +11752,8 @@ fn fill_bitmap_rect_for_hdc<M: CoredllGuestMemory>(
     let Some(bitmap) = selected_bitmap_object(kernel, hdc) else {
         return true;
     };
-    let Some(rect) = hdc_rect_clip(kernel, hdc, rect, bitmap.width, bitmap.height) else {
+    let clips = hdc_clip_rects(kernel, hdc, rect, bitmap.width, bitmap.height);
+    if clips.is_empty() {
         return true;
     };
     let pattern = match &paint {
@@ -11773,16 +11774,18 @@ fn fill_bitmap_rect_for_hdc<M: CoredllGuestMemory>(
         .dc_state(hdc)
         .map(|state| state.brush_origin)
         .unwrap_or(Point { x: 0, y: 0 });
-    for y in rect.top..rect.bottom {
-        for x in rect.left..rect.right {
-            let rgb = if let Some(rgb) = solid {
-                rgb
-            } else if let Some((pattern, bytes)) = pattern.as_ref() {
-                pattern_pixel_rgb(pattern, bytes, x, y, brush_origin).unwrap_or([0, 0, 0])
-            } else {
-                continue;
-            };
-            let _ = write_bitmap_pixel_rgb(memory, &bitmap, x, y, rgb);
+    for rect in clips {
+        for y in rect.top..rect.bottom {
+            for x in rect.left..rect.right {
+                let rgb = if let Some(rgb) = solid {
+                    rgb
+                } else if let Some((pattern, bytes)) = pattern.as_ref() {
+                    pattern_pixel_rgb(pattern, bytes, x, y, brush_origin).unwrap_or([0, 0, 0])
+                } else {
+                    continue;
+                };
+                let _ = write_bitmap_pixel_rgb(memory, &bitmap, x, y, rgb);
+            }
         }
     }
     true
@@ -11795,29 +11798,13 @@ fn fill_framebuffer_rect_for_hdc(
     rect: Rect,
     colorref: u32,
 ) {
-    let Some(hwnd) = hdc_to_hwnd(hdc) else {
+    let Some((client_origin, clips)) = hdc_framebuffer_client_clip_rects(kernel, hdc, rect) else {
         return;
     };
-    let Some(client_origin) = kernel.gwe.client_to_screen(hwnd, Point { x: 0, y: 0 }) else {
-        return;
-    };
-    let Some(client_rect) = kernel.gwe.get_client_rect(hwnd) else {
-        return;
-    };
-    let mut rect = intersect_rect_value(normalize_rect(rect), client_rect).unwrap_or_default();
-    if let Some(clip) = kernel
-        .resources
-        .clip_region(hdc)
-        .and_then(|region| kernel.resources.region(region))
-        .map(|region| region.rect)
-    {
-        rect = intersect_rect_value(rect, clip).unwrap_or_default();
+    for rect in clips {
+        let screen_rect = rect.offset(client_origin.x, client_origin.y);
+        fill_framebuffer_screen_rect(framebuffer, screen_rect, colorref);
     }
-    if is_rect_empty_value(rect) {
-        return;
-    }
-    let screen_rect = rect.offset(client_origin.x, client_origin.y);
-    fill_framebuffer_screen_rect(framebuffer, screen_rect, colorref);
 }
 
 fn fill_framebuffer_screen_rect(framebuffer: &mut dyn Framebuffer, rect: Rect, colorref: u32) {
@@ -12021,8 +12008,8 @@ fn selected_bitmap_object(
     kernel.resources.bitmap(handle).cloned()
 }
 
-fn hdc_rect_clip(kernel: &CeKernel, hdc: u32, rect: Rect, width: i32, height: i32) -> Option<Rect> {
-    let mut rect = intersect_rect_value(
+fn hdc_clip_rects(kernel: &CeKernel, hdc: u32, rect: Rect, width: i32, height: i32) -> Vec<Rect> {
+    let Some(rect) = intersect_rect_value(
         normalize_rect(rect),
         Rect {
             left: 0,
@@ -12030,16 +12017,52 @@ fn hdc_rect_clip(kernel: &CeKernel, hdc: u32, rect: Rect, width: i32, height: i3
             right: width.max(0),
             bottom: height.max(0),
         },
-    )?;
-    if let Some(clip) = kernel
+    ) else {
+        return Vec::new();
+    };
+    if is_rect_empty_value(rect) {
+        return Vec::new();
+    }
+    if let Some(region) = kernel
         .resources
         .clip_region(hdc)
         .and_then(|region| kernel.resources.region(region))
-        .map(|region| region.rect)
     {
-        rect = intersect_rect_value(rect, clip)?;
+        return clip_rects_to_region(rect, &region.rects);
     }
-    (!is_rect_empty_value(rect)).then_some(rect)
+    vec![rect]
+}
+
+fn hdc_framebuffer_client_clip_rects(
+    kernel: &CeKernel,
+    hdc: u32,
+    rect: Rect,
+) -> Option<(Point, Vec<Rect>)> {
+    let hwnd = hdc_to_hwnd(hdc)?;
+    let client_origin = kernel.gwe.client_to_screen(hwnd, Point { x: 0, y: 0 })?;
+    let client_rect = kernel.gwe.get_client_rect(hwnd)?;
+    let rect = intersect_rect_value(normalize_rect(rect), client_rect)?;
+    if is_rect_empty_value(rect) {
+        return None;
+    }
+    let clips = if let Some(region) = kernel
+        .resources
+        .clip_region(hdc)
+        .and_then(|region| kernel.resources.region(region))
+    {
+        clip_rects_to_region(rect, &region.rects)
+    } else {
+        vec![rect]
+    };
+    (!clips.is_empty()).then_some((client_origin, clips))
+}
+
+fn clip_rects_to_region(rect: Rect, region_rects: &[Rect]) -> Vec<Rect> {
+    region_rects
+        .iter()
+        .filter_map(|clip| intersect_rect_value(rect, *clip))
+        .filter(|rect| !is_rect_empty_value(*rect))
+        .collect()
 }
 
 fn bit_blt_raw<M: CoredllGuestMemory>(
@@ -12081,21 +12104,32 @@ fn bit_blt_raw<M: CoredllGuestMemory>(
                 && let Some(dst_bitmap_handle) = kernel.resources.selected_bitmap(dst)
                 && let Some(dst_bitmap) = kernel.resources.bitmap(dst_bitmap_handle).cloned()
             {
-                draw_bitmap_bytes_to_bitmap(
-                    memory,
-                    &dst_bitmap,
-                    dst_x,
-                    dst_y,
-                    width,
-                    height,
-                    src_x,
-                    src_y,
-                    width,
-                    height,
-                    &src_bitmap,
-                    &src_bytes,
-                    None,
-                );
+                let dst_rect = Rect {
+                    left: dst_x,
+                    top: dst_y,
+                    right: dst_x.saturating_add(width),
+                    bottom: dst_y.saturating_add(height),
+                };
+                for clip in
+                    hdc_clip_rects(kernel, dst, dst_rect, dst_bitmap.width, dst_bitmap.height)
+                {
+                    draw_bitmap_bytes_to_bitmap(
+                        memory,
+                        &dst_bitmap,
+                        dst_x,
+                        dst_y,
+                        width,
+                        height,
+                        src_x,
+                        src_y,
+                        width,
+                        height,
+                        &src_bitmap,
+                        &src_bytes,
+                        None,
+                        clip,
+                    );
+                }
             } else if let Some(framebuffer) = framebuffer {
                 blit_selected_bitmap_to_framebuffer(
                     kernel,
@@ -12165,21 +12199,32 @@ fn stretch_blt_raw<M: CoredllGuestMemory>(
                 && let Some(dst_bitmap_handle) = kernel.resources.selected_bitmap(dst)
                 && let Some(dst_bitmap) = kernel.resources.bitmap(dst_bitmap_handle).cloned()
             {
-                draw_bitmap_bytes_to_bitmap(
-                    memory,
-                    &dst_bitmap,
-                    dst_x,
-                    dst_y,
-                    dst_width,
-                    dst_height,
-                    src_x,
-                    src_y,
-                    src_width,
-                    src_height,
-                    &src_bitmap,
-                    &src_bytes,
-                    None,
-                );
+                let dst_rect = Rect {
+                    left: dst_x,
+                    top: dst_y,
+                    right: dst_x.saturating_add(dst_width),
+                    bottom: dst_y.saturating_add(dst_height),
+                };
+                for clip in
+                    hdc_clip_rects(kernel, dst, dst_rect, dst_bitmap.width, dst_bitmap.height)
+                {
+                    draw_bitmap_bytes_to_bitmap(
+                        memory,
+                        &dst_bitmap,
+                        dst_x,
+                        dst_y,
+                        dst_width,
+                        dst_height,
+                        src_x,
+                        src_y,
+                        src_width,
+                        src_height,
+                        &src_bitmap,
+                        &src_bytes,
+                        None,
+                        clip,
+                    );
+                }
             } else if let Some(framebuffer) = framebuffer {
                 draw_bitmap_bytes_to_framebuffer(
                     kernel,
@@ -12230,67 +12275,52 @@ fn blit_selected_bitmap_to_framebuffer<M: CoredllGuestMemory>(
     else {
         return;
     };
-    let Some(hwnd) = hdc_to_hwnd(hdc) else {
-        return;
-    };
-    let Some(client_origin) = kernel.gwe.client_to_screen(hwnd, Point { x: 0, y: 0 }) else {
-        return;
-    };
-    let Some(client_rect) = kernel.gwe.get_client_rect(hwnd) else {
-        return;
-    };
-    let mut dst_rect = Rect {
+    let dst_rect = Rect {
         left: dst_x,
         top: dst_y,
         right: dst_x.saturating_add(width),
         bottom: dst_y.saturating_add(height),
     };
-    dst_rect = intersect_rect_value(normalize_rect(dst_rect), client_rect).unwrap_or_default();
-    if let Some(clip) = kernel
-        .resources
-        .clip_region(hdc)
-        .and_then(|region| kernel.resources.region(region))
-        .map(|region| region.rect)
-    {
-        dst_rect = intersect_rect_value(dst_rect, clip).unwrap_or_default();
-    }
-    if is_rect_empty_value(dst_rect) {
+    let Some((client_origin, clips)) = hdc_framebuffer_client_clip_rects(kernel, hdc, dst_rect)
+    else {
         return;
-    }
+    };
 
     let info = framebuffer.info();
-    let screen_rect = dst_rect.offset(client_origin.x, client_origin.y);
-    let left = screen_rect.left.max(0).min(info.width as i32);
-    let top = screen_rect.top.max(0).min(info.height as i32);
-    let right = screen_rect.right.max(0).min(info.width as i32);
-    let bottom = screen_rect.bottom.max(0).min(info.height as i32);
-    if right <= left || bottom <= top {
-        return;
-    }
-
     let bytes_per_pixel = info.format.bytes_per_pixel();
     let dst_stride = info.stride;
-    let pixels = framebuffer.pixels_mut();
-    for screen_y in top..bottom {
-        let client_y = screen_y - client_origin.y;
-        let source_y = src_y + (client_y - dst_y);
-        for screen_x in left..right {
-            let client_x = screen_x - client_origin.x;
-            let source_x = src_x + (client_x - dst_x);
-            let Some(rgb) = bitmap_pixel_rgb(&bitmap, &bitmap_bytes, source_x, source_y) else {
-                continue;
-            };
-            let pixel = pixel_bytes_for_rgb(info.format, rgb);
-            let offset = (screen_y as usize * dst_stride) + (screen_x as usize * bytes_per_pixel);
-            pixels[offset..offset + bytes_per_pixel].copy_from_slice(&pixel[..bytes_per_pixel]);
+    for dst_rect in clips {
+        let screen_rect = dst_rect.offset(client_origin.x, client_origin.y);
+        let left = screen_rect.left.max(0).min(info.width as i32);
+        let top = screen_rect.top.max(0).min(info.height as i32);
+        let right = screen_rect.right.max(0).min(info.width as i32);
+        let bottom = screen_rect.bottom.max(0).min(info.height as i32);
+        if right <= left || bottom <= top {
+            continue;
         }
+        for screen_y in top..bottom {
+            let client_y = screen_y - client_origin.y;
+            let source_y = src_y + (client_y - dst_y);
+            for screen_x in left..right {
+                let client_x = screen_x - client_origin.x;
+                let source_x = src_x + (client_x - dst_x);
+                let Some(rgb) = bitmap_pixel_rgb(&bitmap, &bitmap_bytes, source_x, source_y) else {
+                    continue;
+                };
+                let pixel = pixel_bytes_for_rgb(info.format, rgb);
+                let offset =
+                    (screen_y as usize * dst_stride) + (screen_x as usize * bytes_per_pixel);
+                framebuffer.pixels_mut()[offset..offset + bytes_per_pixel]
+                    .copy_from_slice(&pixel[..bytes_per_pixel]);
+            }
+        }
+        framebuffer.mark_dirty(FramebufferRect::new(
+            left as u32,
+            top as u32,
+            (right - left) as u32,
+            (bottom - top) as u32,
+        ));
     }
-    framebuffer.mark_dirty(FramebufferRect::new(
-        left as u32,
-        top as u32,
-        (right - left) as u32,
-        (bottom - top) as u32,
-    ));
 }
 
 fn draw_dib_to_framebuffer<M: CoredllGuestMemory>(
@@ -12423,78 +12453,63 @@ fn draw_bitmap_bytes_to_framebuffer(
     if dst_width == 0 || dst_height == 0 || src_width == 0 || src_height == 0 {
         return;
     }
-    let Some(hwnd) = hdc_to_hwnd(hdc) else {
-        return;
-    };
-    let Some(client_origin) = kernel.gwe.client_to_screen(hwnd, Point { x: 0, y: 0 }) else {
-        return;
-    };
-    let Some(client_rect) = kernel.gwe.get_client_rect(hwnd) else {
-        return;
-    };
-    let mut dst_rect = Rect {
+    let dst_rect = Rect {
         left: dst_x,
         top: dst_y,
         right: dst_x.saturating_add(dst_width),
         bottom: dst_y.saturating_add(dst_height),
     };
-    dst_rect = intersect_rect_value(normalize_rect(dst_rect), client_rect).unwrap_or_default();
-    if let Some(clip) = kernel
-        .resources
-        .clip_region(hdc)
-        .and_then(|region| kernel.resources.region(region))
-        .map(|region| region.rect)
-    {
-        dst_rect = intersect_rect_value(dst_rect, clip).unwrap_or_default();
-    }
-    if is_rect_empty_value(dst_rect) {
+    let Some((client_origin, clips)) = hdc_framebuffer_client_clip_rects(kernel, hdc, dst_rect)
+    else {
         return;
-    }
+    };
 
     let info = framebuffer.info();
-    let screen_rect = dst_rect.offset(client_origin.x, client_origin.y);
-    let left = screen_rect.left.max(0).min(info.width as i32);
-    let top = screen_rect.top.max(0).min(info.height as i32);
-    let right = screen_rect.right.max(0).min(info.width as i32);
-    let bottom = screen_rect.bottom.max(0).min(info.height as i32);
-    if right <= left || bottom <= top {
-        return;
-    }
-
     let dst_width_abs = dst_width.abs().max(1);
     let dst_height_abs = dst_height.abs().max(1);
     let src_width_abs = src_width.abs();
     let src_height_abs = src_height.abs();
     let bytes_per_pixel = info.format.bytes_per_pixel();
     let dst_stride = info.stride;
-    let pixels = framebuffer.pixels_mut();
-    for screen_y in top..bottom {
-        let client_y = screen_y - client_origin.y;
-        let dst_rel_y = client_y - dst_y;
-        let source_y = src_y + (dst_rel_y * src_height_abs / dst_height_abs);
-        for screen_x in left..right {
-            let client_x = screen_x - client_origin.x;
-            let dst_rel_x = client_x - dst_x;
-            let source_x = src_x + (dst_rel_x * src_width_abs / dst_width_abs);
-            let Some(rgb) = bitmap_pixel_rgb(bitmap, bitmap_bytes, source_x, source_y) else {
-                continue;
-            };
-            if let Some(transparent) = transparent_rgb
-                && rgb == transparent
-            {
-                continue;
-            }
-            let pixel = pixel_bytes_for_rgb(info.format, rgb);
-            let offset = (screen_y as usize * dst_stride) + (screen_x as usize * bytes_per_pixel);
-            pixels[offset..offset + bytes_per_pixel].copy_from_slice(&pixel[..bytes_per_pixel]);
+    for dst_rect in clips {
+        let screen_rect = dst_rect.offset(client_origin.x, client_origin.y);
+        let left = screen_rect.left.max(0).min(info.width as i32);
+        let top = screen_rect.top.max(0).min(info.height as i32);
+        let right = screen_rect.right.max(0).min(info.width as i32);
+        let bottom = screen_rect.bottom.max(0).min(info.height as i32);
+        if right <= left || bottom <= top {
+            continue;
         }
+        for screen_y in top..bottom {
+            let client_y = screen_y - client_origin.y;
+            let dst_rel_y = client_y - dst_y;
+            let source_y = src_y + (dst_rel_y * src_height_abs / dst_height_abs);
+            for screen_x in left..right {
+                let client_x = screen_x - client_origin.x;
+                let dst_rel_x = client_x - dst_x;
+                let source_x = src_x + (dst_rel_x * src_width_abs / dst_width_abs);
+                let Some(rgb) = bitmap_pixel_rgb(bitmap, bitmap_bytes, source_x, source_y) else {
+                    continue;
+                };
+                if let Some(transparent) = transparent_rgb
+                    && rgb == transparent
+                {
+                    continue;
+                }
+                let pixel = pixel_bytes_for_rgb(info.format, rgb);
+                let offset =
+                    (screen_y as usize * dst_stride) + (screen_x as usize * bytes_per_pixel);
+                framebuffer.pixels_mut()[offset..offset + bytes_per_pixel]
+                    .copy_from_slice(&pixel[..bytes_per_pixel]);
+            }
+        }
+        framebuffer.mark_dirty(FramebufferRect::new(
+            left as u32,
+            top as u32,
+            (right - left) as u32,
+            (bottom - top) as u32,
+        ));
     }
-    framebuffer.mark_dirty(FramebufferRect::new(
-        left as u32,
-        top as u32,
-        (right - left) as u32,
-        (bottom - top) as u32,
-    ));
 }
 
 fn draw_bitmap_bytes_to_bitmap<M: CoredllGuestMemory>(
@@ -12511,6 +12526,7 @@ fn draw_bitmap_bytes_to_bitmap<M: CoredllGuestMemory>(
     src: &crate::ce::resource::BitmapObject,
     src_bytes: &[u8],
     transparent_rgb: Option<[u8; 3]>,
+    clip: Rect,
 ) {
     if dst.bits_ptr == 0
         || dst.width <= 0
@@ -12523,10 +12539,21 @@ fn draw_bitmap_bytes_to_bitmap<M: CoredllGuestMemory>(
     {
         return;
     }
-    let left = dst_x.max(0).min(dst.width);
-    let top = dst_y.max(0).min(dst.height);
-    let right = dst_x.saturating_add(dst_width).max(0).min(dst.width);
-    let bottom = dst_y.saturating_add(dst_height).max(0).min(dst.height);
+    let Some(dst_rect) = intersect_rect_value(
+        Rect {
+            left: dst_x,
+            top: dst_y,
+            right: dst_x.saturating_add(dst_width),
+            bottom: dst_y.saturating_add(dst_height),
+        },
+        clip,
+    ) else {
+        return;
+    };
+    let left = dst_rect.left.max(0).min(dst.width);
+    let top = dst_rect.top.max(0).min(dst.height);
+    let right = dst_rect.right.max(0).min(dst.width);
+    let bottom = dst_rect.bottom.max(0).min(dst.height);
     if right <= left || bottom <= top {
         return;
     }
@@ -12954,21 +12981,32 @@ fn transparent_image_raw<M: CoredllGuestMemory>(
                 && let Some(dst_bitmap_handle) = kernel.resources.selected_bitmap(dst)
                 && let Some(dst_bitmap) = kernel.resources.bitmap(dst_bitmap_handle).cloned()
             {
-                draw_bitmap_bytes_to_bitmap(
-                    memory,
-                    &dst_bitmap,
-                    dst_x,
-                    dst_y,
-                    dst_width,
-                    dst_height,
-                    src_x,
-                    src_y,
-                    src_width,
-                    src_height,
-                    &src_bitmap,
-                    &bitmap_bytes,
-                    Some(colorref_rgb(transparent_color)),
-                );
+                let dst_rect = Rect {
+                    left: dst_x,
+                    top: dst_y,
+                    right: dst_x.saturating_add(dst_width),
+                    bottom: dst_y.saturating_add(dst_height),
+                };
+                for clip in
+                    hdc_clip_rects(kernel, dst, dst_rect, dst_bitmap.width, dst_bitmap.height)
+                {
+                    draw_bitmap_bytes_to_bitmap(
+                        memory,
+                        &dst_bitmap,
+                        dst_x,
+                        dst_y,
+                        dst_width,
+                        dst_height,
+                        src_x,
+                        src_y,
+                        src_width,
+                        src_height,
+                        &src_bitmap,
+                        &bitmap_bytes,
+                        Some(colorref_rgb(transparent_color)),
+                        clip,
+                    );
+                }
             } else if let Some(framebuffer) = framebuffer {
                 draw_bitmap_bytes_to_framebuffer(
                     kernel,
@@ -13347,7 +13385,7 @@ fn draw_polyline_to_bitmap_for_hdc<M: CoredllGuestMemory>(
     let Some(bitmap) = selected_bitmap_object(kernel, hdc) else {
         return true;
     };
-    let Some(clip) = hdc_rect_clip(
+    let clips = hdc_clip_rects(
         kernel,
         hdc,
         Rect {
@@ -13358,13 +13396,16 @@ fn draw_polyline_to_bitmap_for_hdc<M: CoredllGuestMemory>(
         },
         bitmap.width,
         bitmap.height,
-    ) else {
+    );
+    if clips.is_empty() {
         return true;
     };
-    for segment in points.windows(2) {
-        draw_bitmap_line(
-            memory, &bitmap, segment[0], segment[1], clip, colorref, width, rop2,
-        );
+    for clip in clips {
+        for segment in points.windows(2) {
+            draw_bitmap_line(
+                memory, &bitmap, segment[0], segment[1], clip, colorref, width, rop2,
+            );
+        }
     }
     true
 }
@@ -13399,7 +13440,7 @@ fn polygon_raw<M: CoredllGuestMemory>(
     if points.len() >= 2 {
         if kernel.resources.is_memory_dc(hdc) {
             if let Some(bitmap) = selected_bitmap_object(kernel, hdc) {
-                if let Some(clip) = hdc_rect_clip(
+                let clips = hdc_clip_rects(
                     kernel,
                     hdc,
                     Rect {
@@ -13410,19 +13451,24 @@ fn polygon_raw<M: CoredllGuestMemory>(
                     },
                     bitmap.width,
                     bitmap.height,
-                ) {
-                    if let Some(paint) = selected_brush_paint(kernel, hdc) {
-                        let origin = kernel
-                            .resources
-                            .dc_state(hdc)
-                            .map(|state| state.brush_origin)
-                            .unwrap_or(Point { x: 0, y: 0 });
-                        fill_bitmap_polygon(memory, &bitmap, &points, clip, paint, origin);
-                    }
-                    if let Some((color, width, rop2)) = selected_pen_model(kernel, hdc) {
-                        draw_closed_bitmap_polyline(
-                            memory, &bitmap, &points, clip, color, width, rop2,
-                        );
+                );
+                if !clips.is_empty() {
+                    let paint = selected_brush_paint(kernel, hdc);
+                    let pen = selected_pen_model(kernel, hdc);
+                    let origin = kernel
+                        .resources
+                        .dc_state(hdc)
+                        .map(|state| state.brush_origin)
+                        .unwrap_or(Point { x: 0, y: 0 });
+                    for clip in clips {
+                        if let Some(paint) = paint.clone() {
+                            fill_bitmap_polygon(memory, &bitmap, &points, clip, paint, origin);
+                        }
+                        if let Some((color, width, rop2)) = pen {
+                            draw_closed_bitmap_polyline(
+                                memory, &bitmap, &points, clip, color, width, rop2,
+                            );
+                        }
                     }
                 }
             }
@@ -13513,22 +13559,18 @@ fn draw_polyline_for_hdc(
     width: i32,
     rop2: i32,
 ) {
-    let Some(hwnd) = hdc_to_hwnd(hdc) else {
+    let Some((client_origin, clips)) = hdc_framebuffer_client_clip_rects(
+        kernel,
+        hdc,
+        Rect {
+            left: i32::MIN / 2,
+            top: i32::MIN / 2,
+            right: i32::MAX / 2,
+            bottom: i32::MAX / 2,
+        },
+    ) else {
         return;
     };
-    let Some(client_origin) = kernel.gwe.client_to_screen(hwnd, Point { x: 0, y: 0 }) else {
-        return;
-    };
-    let Some(client_rect) = kernel.gwe.get_client_rect(hwnd) else {
-        return;
-    };
-    let clip = kernel
-        .resources
-        .clip_region(hdc)
-        .and_then(|region| kernel.resources.region(region))
-        .and_then(|region| intersect_rect_value(client_rect, region.rect))
-        .unwrap_or(client_rect)
-        .offset(client_origin.x, client_origin.y);
     let screen_points: Vec<Point> = points
         .iter()
         .map(|point| Point {
@@ -13536,16 +13578,19 @@ fn draw_polyline_for_hdc(
             y: point.y + client_origin.y,
         })
         .collect();
-    for segment in screen_points.windows(2) {
-        draw_framebuffer_line(
-            framebuffer,
-            segment[0],
-            segment[1],
-            clip,
-            colorref,
-            width,
-            rop2,
-        );
+    for clip in clips {
+        let clip = clip.offset(client_origin.x, client_origin.y);
+        for segment in screen_points.windows(2) {
+            draw_framebuffer_line(
+                framebuffer,
+                segment[0],
+                segment[1],
+                clip,
+                colorref,
+                width,
+                rop2,
+            );
+        }
     }
 }
 
@@ -13750,22 +13795,18 @@ fn fill_framebuffer_polygon_for_hdc(
     points: &[Point],
     colorref: u32,
 ) {
-    let Some(hwnd) = hdc_to_hwnd(hdc) else {
+    let Some((client_origin, clips)) = hdc_framebuffer_client_clip_rects(
+        kernel,
+        hdc,
+        Rect {
+            left: i32::MIN / 2,
+            top: i32::MIN / 2,
+            right: i32::MAX / 2,
+            bottom: i32::MAX / 2,
+        },
+    ) else {
         return;
     };
-    let Some(client_origin) = kernel.gwe.client_to_screen(hwnd, Point { x: 0, y: 0 }) else {
-        return;
-    };
-    let Some(client_rect) = kernel.gwe.get_client_rect(hwnd) else {
-        return;
-    };
-    let clip = kernel
-        .resources
-        .clip_region(hdc)
-        .and_then(|region| kernel.resources.region(region))
-        .and_then(|region| intersect_rect_value(client_rect, region.rect))
-        .unwrap_or(client_rect)
-        .offset(client_origin.x, client_origin.y);
     let screen_points: Vec<Point> = points
         .iter()
         .map(|point| Point {
@@ -13777,28 +13818,31 @@ fn fill_framebuffer_polygon_for_hdc(
     let pixel = pixel_bytes_for_colorref(info.format, colorref);
     let bytes_per_pixel = info.format.bytes_per_pixel();
     let mut dirty: Option<Rect> = None;
-    for (y, x_start, x_end) in polygon_spans(&screen_points, clip) {
-        if y < 0 || y >= info.height as i32 {
-            continue;
-        }
-        for x in x_start..x_end {
-            if x < 0 || x >= info.width as i32 {
+    for clip in clips {
+        let clip = clip.offset(client_origin.x, client_origin.y);
+        for (y, x_start, x_end) in polygon_spans(&screen_points, clip) {
+            if y < 0 || y >= info.height as i32 {
                 continue;
             }
-            let offset = y as usize * info.stride + x as usize * bytes_per_pixel;
-            framebuffer.pixels_mut()[offset..offset + bytes_per_pixel]
-                .copy_from_slice(&pixel[..bytes_per_pixel]);
-            let pixel_rect = Rect {
-                left: x,
-                top: y,
-                right: x + 1,
-                bottom: y + 1,
-            };
-            dirty = Some(
-                dirty
-                    .map(|rect| union_rect_value(rect, pixel_rect))
-                    .unwrap_or(pixel_rect),
-            );
+            for x in x_start..x_end {
+                if x < 0 || x >= info.width as i32 {
+                    continue;
+                }
+                let offset = y as usize * info.stride + x as usize * bytes_per_pixel;
+                framebuffer.pixels_mut()[offset..offset + bytes_per_pixel]
+                    .copy_from_slice(&pixel[..bytes_per_pixel]);
+                let pixel_rect = Rect {
+                    left: x,
+                    top: y,
+                    right: x + 1,
+                    bottom: y + 1,
+                };
+                dirty = Some(
+                    dirty
+                        .map(|rect| union_rect_value(rect, pixel_rect))
+                        .unwrap_or(pixel_rect),
+                );
+            }
         }
     }
     if let Some(rect) = dirty {

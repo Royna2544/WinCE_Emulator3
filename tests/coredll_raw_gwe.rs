@@ -41,19 +41,20 @@ use wince_emulation_v3::{
             ORD_POST_QUIT_MESSAGE, ORD_POST_THREAD_MESSAGE_W, ORD_PT_IN_RECT, ORD_PT_IN_REGION,
             ORD_REALIZE_PALETTE, ORD_RECT_IN_REGION, ORD_REDRAW_WINDOW, ORD_REGISTER_CLASS_W,
             ORD_REGISTER_GESTURE, ORD_RELEASE_CAPTURE, ORD_RELEASE_DC, ORD_RELEASE_MUTEX,
-            ORD_REMOVE_MENU, ORD_ROUND_RECT, ORD_SCREEN_TO_CLIENT, ORD_SELECT_OBJECT,
-            ORD_SELECT_PALETTE, ORD_SEND_DLG_ITEM_MESSAGE_W, ORD_SEND_MESSAGE_TIMEOUT,
-            ORD_SEND_MESSAGE_W, ORD_SEND_NOTIFY_MESSAGE_W, ORD_SET_ACTIVE_WINDOW,
-            ORD_SET_ASSOCIATED_MENU, ORD_SET_BK_COLOR, ORD_SET_BRUSH_ORG_EX, ORD_SET_CAPTURE,
-            ORD_SET_DIBCOLOR_TABLE, ORD_SET_DIBITS_TO_DEVICE, ORD_SET_DLG_ITEM_INT,
-            ORD_SET_DLG_ITEM_TEXT_W, ORD_SET_FOCUS, ORD_SET_FOREGROUND_WINDOW,
-            ORD_SET_KEYBOARD_TARGET, ORD_SET_MENU, ORD_SET_MENU_ITEM_INFO_W,
-            ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_RECT, ORD_SET_RECT_EMPTY,
-            ORD_SET_ROP2, ORD_SET_TEXT_ALIGN, ORD_SET_TEXT_COLOR, ORD_SET_TIMER,
-            ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_RGN, ORD_SET_WINDOW_TEXT_W,
-            ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_SLEEP, ORD_STRETCH_BLT, ORD_STRETCH_DIBITS,
-            ORD_SYSTEM_PARAMETERS_INFO_W, ORD_TRACK_POPUP_MENU_EX, ORD_TRANSPARENT_IMAGE,
-            ORD_UNION_RECT, ORD_UPDATE_WINDOW, ORD_VALIDATE_RECT, ORD_WINDOW_FROM_POINT,
+            ORD_REMOVE_MENU, ORD_ROUND_RECT, ORD_SCREEN_TO_CLIENT, ORD_SELECT_CLIP_RGN,
+            ORD_SELECT_OBJECT, ORD_SELECT_PALETTE, ORD_SEND_DLG_ITEM_MESSAGE_W,
+            ORD_SEND_MESSAGE_TIMEOUT, ORD_SEND_MESSAGE_W, ORD_SEND_NOTIFY_MESSAGE_W,
+            ORD_SET_ACTIVE_WINDOW, ORD_SET_ASSOCIATED_MENU, ORD_SET_BK_COLOR, ORD_SET_BRUSH_ORG_EX,
+            ORD_SET_CAPTURE, ORD_SET_DIBCOLOR_TABLE, ORD_SET_DIBITS_TO_DEVICE,
+            ORD_SET_DLG_ITEM_INT, ORD_SET_DLG_ITEM_TEXT_W, ORD_SET_FOCUS,
+            ORD_SET_FOREGROUND_WINDOW, ORD_SET_KEYBOARD_TARGET, ORD_SET_MENU,
+            ORD_SET_MENU_ITEM_INFO_W, ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_RECT,
+            ORD_SET_RECT_EMPTY, ORD_SET_ROP2, ORD_SET_TEXT_ALIGN, ORD_SET_TEXT_COLOR,
+            ORD_SET_TIMER, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_RGN,
+            ORD_SET_WINDOW_TEXT_W, ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_SLEEP,
+            ORD_STRETCH_BLT, ORD_STRETCH_DIBITS, ORD_SYSTEM_PARAMETERS_INFO_W,
+            ORD_TRACK_POPUP_MENU_EX, ORD_TRANSPARENT_IMAGE, ORD_UNION_RECT, ORD_UPDATE_WINDOW,
+            ORD_VALIDATE_RECT, ORD_WINDOW_FROM_POINT,
         },
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat, VirtualFramebuffer},
         gwe::{
@@ -900,6 +901,126 @@ fn coredll_raw_fill_rect_paints_selected_memory_dib() -> Result<()> {
 
     assert_eq!(rgb565_at(&memory, bits_ptr, stride, 1, 2), 0x07e0);
     assert_eq!(rgb565_at(&memory, bits_ptr, stride, 4, 4), 0x07e0);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 0), 0x0000);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_fill_rect_respects_complex_clip_holes_on_memory_dib() -> Result<()> {
+    const COMPLEXREGION: u32 = 3;
+    const RGN_DIFF: u32 = 4;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 8, 8);
+
+    let outer = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [1, 1, 7, 7],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(outer) did not return a region: {other:?}"),
+    };
+    let inner = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [3, 3, 5, 5],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(inner) did not return a region: {other:?}"),
+    };
+    let clip = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [0, 0, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(clip) did not return a region: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_COMBINE_RGN,
+            [clip, outer, inner, RGN_DIFF],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(COMPLEXREGION),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SELECT_CLIP_RGN,
+            [mem_dc, clip],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(COMPLEXREGION),
+            ..
+        }
+    ));
+
+    let rect_ptr = 0x1_0200;
+    memory.map_words(rect_ptr, 4);
+    memory.write_word(rect_ptr, 0);
+    memory.write_word(rect_ptr + 4, 0);
+    memory.write_word(rect_ptr + 8, 8);
+    memory.write_word(rect_ptr + 12, 8);
+    let green_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_SOLID_BRUSH,
+        [0x0000_ff00],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateSolidBrush did not return a brush: {other:?}"),
+    };
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FILL_RECT,
+            [mem_dc, rect_ptr, green_brush],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 2, 2), 0x07e0);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 4, 4), 0x0000);
     assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 0), 0x0000);
 
     Ok(())

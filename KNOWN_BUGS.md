@@ -27,9 +27,17 @@
     bounded memory/file counters. The framebuffer now shows a real light
     land/background layer. ROP2 pen support is also implemented, but the
     mounted iNavi path did not call `SetROP2`.
+  - Additional evidence: `target\gdi_clip_regions_virtual.*` proves selected
+    complex clip regions now preserve `RGN_DIFF` holes during memory/display
+    GDI drawing, and the fresh mounted frame remains a populated 800x480 map.
+    The frame still shows blocky/patterned buildings and road styling that is
+    too line/edge heavy, so clipping was a real correctness fix rather than
+    the final visual fix.
   - Status: base-layer black gap fixed. Keep this open for remaining visual
     fidelity only: road surfaces/edges and building styling still need
-    generic CE GDI investigation. Do not hardcode colors or iNavi-specific
+    generic CE GDI investigation. Next suspects should come from trace evidence
+    for line joins/caps, pen styles, polygon fill mode, palette/DIB handling,
+    ROP3 blits, or missing GDI calls. Do not hardcode colors or iNavi-specific
     pixels.
 
 - Mounted iNavi reaches a rendered map UI, then idles on the post-map

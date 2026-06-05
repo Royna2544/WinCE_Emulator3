@@ -48,6 +48,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     but the authoritative region state is now a normalized rect list used by
     `CombineRgn`, point/rect tests, clipping status, `SetWindowRgn`, and
     `GetWindowRgn`.
+  - Selected GDI clip regions must also draw through that rect list, not just
+    through the bounding box. `FillRect`, polygon/polyline drawing, memory and
+    display blits, stretch blits, and transparent-image composition now
+    intersect every primitive with each selected region rect so
+    `CombineRgn(RGN_DIFF)` holes remain unpainted on memory DIBs and display
+    HDCs. Focused fixture:
+    `coredll_raw_fill_rect_respects_complex_clip_holes_on_memory_dib`.
   - `SetWindowRgn(HWND, HRGN, BOOL)` consumes the region shape owned by GWE and
     only requests redraw when the third argument is nonzero. v3 now mirrors
     that boundary generically instead of invalidating every region change.
