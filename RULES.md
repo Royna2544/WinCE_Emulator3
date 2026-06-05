@@ -34,6 +34,11 @@ Device sd-card firmware (see mounts.toml): `D:\INAVI_Emulator\INAVI`
 
 Main target right now: `D:\INAVI_Emulator\INAVI\INavi\iNavi.exe`
 
+Mounted iNavi launch preference:
+
+- Include `--remote-server 192.168.0.39:8765` on emulator process launches
+  unless the user explicitly overrides the remote endpoint.
+
 LLVM Tools for target=MIPS: `D:\GitHub\llvm-proj\build-mips-objdump\bin`
 
 eVC4 toolchain for testsuite: `C:\Program Files (x86)\Microsoft eMbedded C++ 4.0\EVC\wce420\bin`
