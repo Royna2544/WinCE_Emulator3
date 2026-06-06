@@ -569,20 +569,37 @@ impl CoredllExportTable {
         M: CoredllGuestMemory,
         I: IntoIterator<Item = u32>,
     {
+        let args = args.into_iter().collect::<Vec<_>>();
+        self.dispatch_raw_ordinal_with_framebuffer_args(
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            ordinal,
+            &args,
+        )
+    }
+
+    pub fn dispatch_raw_ordinal_with_framebuffer_args<M>(
+        &self,
+        kernel: &mut CeKernel,
+        memory: &mut M,
+        framebuffer: Option<&mut dyn Framebuffer>,
+        thread_id: u32,
+        ordinal: u32,
+        args: &[u32],
+    ) -> CoredllDispatch
+    where
+        M: CoredllGuestMemory,
+    {
         match self.resolve_ordinal(ordinal).cloned() {
             Some(export) => {
-                let args = args.into_iter().collect::<Vec<_>>();
-                if let Some(value) = dispatch_real_raw_ordinal(
-                    kernel,
-                    memory,
-                    framebuffer,
-                    thread_id,
-                    &export,
-                    &args,
-                ) {
+                if let Some(value) =
+                    dispatch_real_raw_ordinal(kernel, memory, framebuffer, thread_id, &export, args)
+                {
                     CoredllDispatch::Returned { export, value }
                 } else {
-                    let stub = CoredllStubResult::for_export(&export, args);
+                    let stub = CoredllStubResult::for_export(&export, args.to_vec());
                     CoredllDispatch::Stubbed { export, stub }
                 }
             }

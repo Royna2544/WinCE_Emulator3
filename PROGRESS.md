@@ -9,6 +9,22 @@
 
 ## Confirmed
 
+- Windows-sudo `cargo flamegraph` profiling is now in use for mounted iNavi
+  startup. Fresh virtual runs
+  `target\startup_flame_virtual_sudo1.svg` and
+  `target\startup_flame_virtual_sudo3.svg` reached the same post-map
+  scheduler/file frontier at `COREDLL.dll@496` (`Sleep`) with bounded RSS/file
+  counters (`host_open=912`, `host_read=83985/~6.46 MB`, `mem_open=4`,
+  `max_read=685080`). The first profile showed repeated import bookkeeping
+  cost in `trace_import_name`, `coredll_ordinals::lookup`, string clones, and
+  `Vec` argument clones. v3 now caches COREDLL ordinal lookup with the same
+  static/SDK/supplemental precedence, borrows normal IAT `ImportTrap`s instead
+  of cloning them on every trap, and routes live import dispatch through a
+  borrowed argument slice. The final profile drops `trace_import_name`,
+  linear ordinal lookup, and the `Vec` clone frames from the filtered hot list;
+  remaining visible cost is spread across Unicorn guest execution, generic raw
+  COREDLL dispatch, `combine_rgn_raw`, streamed `read_file_into`, and guest
+  memcpy.
 - Win32 host presenter now has an explicit stopped state. When a CPU run
   segment ends or errors while the host window stays alive for monitor/debug
   use, v3 replaces the last guest frame with a black status surface reading

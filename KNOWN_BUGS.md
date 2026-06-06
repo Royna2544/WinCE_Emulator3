@@ -12,6 +12,24 @@
 
 ## Recently Closed / Watch
 
+- Startup slowness caused by multi-GB file preload/reopen or import-name
+  lookup is closed/watch for the current mounted virtual profile.
+  - Symptom: startup felt much slower than the previously fast path, with
+    earlier concern that map DB file I/O or diagnostic import bookkeeping was
+    burning the boot budget.
+  - Evidence: Windows-sudo flamegraphs
+    `target\startup_flame_virtual_sudo1.svg` and
+    `target\startup_flame_virtual_sudo3.svg` both reach the same
+    `COREDLL.dll@496` (`Sleep`) frontier with bounded host-file counters
+    around 912 opens and 84k reads totaling only ~6.46 MB, not hundreds of MB
+    or GB. The first profile showed `trace_import_name`,
+    `coredll_ordinals::lookup`, and `Vec`/string clone frames; after caching
+    ordinal lookup, borrowing normal import traps, and passing import args by
+    slice, those frames dropped out of the filtered final profile.
+  - Status: closed/watch for those causes. Remaining startup/responsiveness
+    work should focus on Unicorn guest/code-hook overhead, raw COREDLL
+    dispatch frequency, region combine, streamed reads, guest memcpy, and the
+    scheduler/device wait frontier.
 - Host Win32 window looking like a live ANR after a bounded run/guest stop is
   closed as host-presenter state ambiguity.
   - Symptom: after the emulator reached a diagnostic wall-stop or monitor

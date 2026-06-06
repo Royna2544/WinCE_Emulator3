@@ -12,6 +12,17 @@
 
 ## Current Slice
 
+- Startup profiling follow-up: Windows-sudo flamegraphs
+  `target\startup_flame_virtual_sudo1.svg` through
+  `target\startup_flame_virtual_sudo3.svg` confirm the mounted virtual startup
+  path is no longer dominated by huge file preload, host-file reopen, import
+  name lookup, or per-import trap/string/argument cloning. Continue from the
+  final frontier at `COREDLL.dll@496` (`Sleep`) with bounded file counters and
+  post-map scheduler state. Next useful speed work should measure/attack
+  remaining generic costs: Unicorn code-hook/timeslice overhead, raw COREDLL
+  dispatch frequency, `combine_rgn_raw`, streamed `read_file_into`, guest
+  memcpy, and scheduler/device waits. Do not reintroduce app-specific fast
+  paths or fake UI progress.
 - Next mounted route-search probe should use the rebuilt release binary with
   the generic GWE `SetWindowPos` redraw fix and the Win32 host stopped-screen
   presenter. Recheck the top-right `메뉴` plus bottom action-bar state from a

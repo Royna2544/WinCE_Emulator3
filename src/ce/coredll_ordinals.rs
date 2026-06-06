@@ -1,3 +1,5 @@
+use std::{collections::BTreeMap, sync::OnceLock};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CoredllOrdinalDef {
     pub name: &'static str,
@@ -13551,15 +13553,23 @@ pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 6] = &[
 ];
 
 pub fn lookup(ordinal: u32) -> Option<&'static CoredllOrdinalDef> {
-    COREDLL_EXPORTS
-        .iter()
-        .find(|export| export.ordinal == ordinal)
-        .or_else(|| SDK_ORDINALS.iter().find(|export| export.ordinal == ordinal))
-        .or_else(|| {
-            SUPPLEMENTAL_ORDINALS
-                .iter()
-                .find(|export| export.ordinal == ordinal)
+    static BY_ORDINAL: OnceLock<BTreeMap<u32, &'static CoredllOrdinalDef>> = OnceLock::new();
+    BY_ORDINAL
+        .get_or_init(|| {
+            let mut by_ordinal = BTreeMap::new();
+            for export in COREDLL_EXPORTS {
+                by_ordinal.entry(export.ordinal).or_insert(export);
+            }
+            for export in SDK_ORDINALS {
+                by_ordinal.entry(export.ordinal).or_insert(export);
+            }
+            for export in SUPPLEMENTAL_ORDINALS {
+                by_ordinal.entry(export.ordinal).or_insert(export);
+            }
+            by_ordinal
         })
+        .get(&ordinal)
+        .copied()
 }
 
 pub fn lookup_export_index(index: u32) -> Option<&'static CoredllOrdinalDef> {

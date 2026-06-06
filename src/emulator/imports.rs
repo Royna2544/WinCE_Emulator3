@@ -95,26 +95,26 @@ impl ImportTrapTable {
         self.traps.extend(other.traps);
     }
 
-    pub fn dispatch_trap<M: CoredllGuestMemory>(
+    pub fn dispatch_trap<M: CoredllGuestMemory, I: AsRef<[u32]>>(
         &self,
         kernel: &mut CeKernel,
         memory: &mut M,
         thread_id: u32,
         address: u32,
-        args: Vec<u32>,
+        args: I,
     ) -> Option<u32> {
         self.dispatch_trap_registers(kernel, memory, thread_id, address, args)
             .map(|result| result.v0)
     }
 
-    pub fn dispatch_trap_with_framebuffer<M: CoredllGuestMemory>(
+    pub fn dispatch_trap_with_framebuffer<M: CoredllGuestMemory, I: AsRef<[u32]>>(
         &self,
         kernel: &mut CeKernel,
         memory: &mut M,
         framebuffer: Option<&mut dyn crate::ce::framebuffer::Framebuffer>,
         thread_id: u32,
         address: u32,
-        args: Vec<u32>,
+        args: I,
     ) -> Option<u32> {
         self.dispatch_trap_registers_with_framebuffer(
             kernel,
@@ -127,50 +127,55 @@ impl ImportTrapTable {
         .map(|result| result.v0)
     }
 
-    pub fn dispatch_trap_registers<M: CoredllGuestMemory>(
+    pub fn dispatch_trap_registers<M: CoredllGuestMemory, I: AsRef<[u32]>>(
         &self,
         kernel: &mut CeKernel,
         memory: &mut M,
         thread_id: u32,
         address: u32,
-        args: Vec<u32>,
+        args: I,
     ) -> Option<ImportTrapReturn> {
         self.dispatch_trap_registers_with_framebuffer(
             kernel, memory, None, thread_id, address, args,
         )
     }
 
-    pub fn dispatch_trap_registers_with_framebuffer<M: CoredllGuestMemory>(
+    pub fn dispatch_trap_registers_with_framebuffer<M: CoredllGuestMemory, I: AsRef<[u32]>>(
         &self,
         kernel: &mut CeKernel,
         memory: &mut M,
         framebuffer: Option<&mut dyn crate::ce::framebuffer::Framebuffer>,
         thread_id: u32,
         address: u32,
-        args: Vec<u32>,
+        args: I,
     ) -> Option<ImportTrapReturn> {
-        let trap = self
-            .trap_at(address)
-            .cloned()
-            .or_else(|| dynamic_coredll_proc_trap(address))?;
+        let args = args.as_ref();
+        let dynamic_trap;
+        let trap = if let Some(trap) = self.trap_at(address) {
+            trap
+        } else {
+            dynamic_trap = dynamic_coredll_proc_trap(address)?;
+            &dynamic_trap
+        };
         Some(match trap.module_kind {
             ImportModuleKind::Coredll => {
                 let Some(ordinal) = trap.ordinal else {
                     return None;
                 };
                 dispatch_return_to_registers(
-                    CoredllExportTable::static_ordinals().dispatch_raw_ordinal_with_framebuffer(
-                        kernel,
-                        memory,
-                        framebuffer,
-                        thread_id,
-                        ordinal,
-                        args,
-                    ),
+                    CoredllExportTable::static_ordinals()
+                        .dispatch_raw_ordinal_with_framebuffer_args(
+                            kernel,
+                            memory,
+                            framebuffer,
+                            thread_id,
+                            ordinal,
+                            args,
+                        ),
                 )?
             }
             ImportModuleKind::Winsock | ImportModuleKind::Ole => ImportTrapReturn::v0(
-                dispatch_external_stub_to_u32(kernel, &trap, memory, thread_id, &args),
+                dispatch_external_stub_to_u32(kernel, trap, memory, thread_id, args),
             ),
             ImportModuleKind::Mfc => return None,
         })

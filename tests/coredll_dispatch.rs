@@ -12,10 +12,11 @@ use wince_emulation_v3::{
             ORD_CREATE_WINDOW_EX_W, ORD_D_TO_LL, ORD_D_TO_ULL, ORD_DISPATCH_MESSAGE_W, ORD_DPCMP,
             ORD_DPMUL, ORD_DPTOFP, ORD_DPTOLI, ORD_EVENT_MODIFY, ORD_F_TO_LL, ORD_F_TO_ULL,
             ORD_FMODF, ORD_FPCMP, ORD_FPMUL, ORD_FPTODP, ORD_FPTOUL, ORD_GED, ORD_GES,
-            ORD_GET_MESSAGE_W, ORD_HYPOT, ORD_INITIALIZE_CRITICAL_SECTION, ORD_ISWCTYPE,
-            ORD_LITODP, ORD_LITOFP, ORD_LL_DIV, ORD_LONGJMP, ORD_LTD, ORD_NES, ORD_POST_MESSAGE_W,
-            ORD_POW, ORD_REG_OPEN_KEY_EX_W, ORD_REGISTER_GESTURE, ORD_SETJMP, ORD_SQRT, ORD_ULTODP,
-            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE, current_static_export_count,
+            ORD_GET_MESSAGE_W, ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_HYPOT,
+            ORD_INITIALIZE_CRITICAL_SECTION, ORD_ISWCTYPE, ORD_LITODP, ORD_LITOFP, ORD_LL_DIV,
+            ORD_LONGJMP, ORD_LTD, ORD_NES, ORD_POST_MESSAGE_W, ORD_POW, ORD_REG_OPEN_KEY_EX_W,
+            ORD_REGISTER_GESTURE, ORD_SETJMP, ORD_SLEEP, ORD_SQRT, ORD_ULTODP,
+            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE, current_static_export_count, lookup,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::WM_USER,
@@ -74,6 +75,17 @@ fn coredll_table_reads_full_static_rust_ordinals() -> Result<()> {
     assert!(CoredllExportTable::resolve_static_ordinal(1943).is_none());
 
     Ok(())
+}
+
+#[test]
+fn coredll_ordinal_lookup_covers_static_sdk_and_supplemental_layers() {
+    assert_eq!(lookup(ORD_SLEEP).unwrap().name, "Sleep");
+    assert_eq!(lookup(ORD_LTD).unwrap().name, "__ltd");
+    assert_eq!(
+        lookup(ORD_GET_SYSTEM_TIME_AS_FILE_TIME).unwrap().name,
+        "GetSystemTimeAsFileTime"
+    );
+    assert!(lookup(1943).is_none());
 }
 
 #[test]

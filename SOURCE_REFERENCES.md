@@ -63,6 +63,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     invalidates already-visible windows after move/size/z-order changes unless
     no-redraw was requested, preserving the normal `WM_PAINT` path for child
     bands and promoted controls.
+  - CE SDK `winuser.h` defines `WS_CLIPSIBLINGS` and `WS_CLIPCHILDREN` as
+    window style bits. v3 now applies those bits at paint-clip time:
+    `WS_CLIPCHILDREN` subtracts visible child client regions from parent HDC
+    painting, and child windows only clip against higher z-order siblings when
+    they requested `WS_CLIPSIBLINGS`. Top-level windows still clip against
+    higher z-order top-levels.
 
 - Kernel thread/scheduler stack evidence:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c`,
@@ -210,7 +216,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     character-count and `StringCb*` byte-count distinction plus truncation
     HRESULTs. `winuser.h` anchors the icon/cursor signatures; v3 currently
     has lightweight synthetic stock icon handles and `DestroyIcon` validation
-  rather than a full icon resource manager.
+    rather than a full icon resource manager.
+  - The generated COREDLL ordinal table remains behavior data from these CE
+    ordinal sources. v3 now caches ordinal-to-export lookup in the same
+    precedence order as the old scan (`COREDLL_EXPORTS`, SDK-only exports, then
+    supplemental CE-compatible entries); this is a host-side lookup
+    optimization for import diagnostics/dynamic proc traps, not a behavior
+    change to guest import resolution.
 
 - File mapping and process IPC:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\MAPFILE\mapfile.c`,
