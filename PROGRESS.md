@@ -9,6 +9,57 @@
 
 ## Confirmed
 
+- Startup speed regression from Unicorn heap-spillover mapping is closed for
+  the current mounted virtual profile. Windows-sudo flame
+  `target\startup_debugsym2_flame.svg` showed
+  `map_kernel_memory_allocations` / `map_heap_spillover` consuming 33.91% of
+  samples because `map_guest_range` called `uc.mem_map` once per 4 KiB
+  spillover page. Heap spillover now maps contiguous unmapped spans while
+  virtual allocations remain page-granular for stale-page reclaim semantics.
+  Focused coverage `unmapped_guest_spans_group_contiguous_pages` passes.
+  Final release bench
+  `target\grouped_map_final_60s_summary.txt` completed the bounded mounted
+  virtual startup slice in 16.85 s wall time with bounded file I/O
+  (`host_open=691`, `host_read=79199/4284623B`, `max_read=685080`) and a real
+  header/map framebuffer in `target\grouped_map_final_60s.png`. Fresh
+  Windows-sudo flame `target\grouped_map_final_flame.svg` drops
+  `map_kernel_memory_allocations` to 1.16% and `map_heap_spillover` to 0.17%;
+  the debuginfo flame run reaches the safety screen with later scheduler state
+  and companion activation evidence (`happyway_win.exe` and `iSearch.exe`
+  parked/activated). Remaining startup work is now CE scheduling/display/app
+  flow, not multi-GB file preload, host-file reopen, or per-page Unicorn map
+  churn.
+- Fresh Windows-sudo debuginfo flame
+  `target\startup_flame_virtual_250m_20260607_sudo_debugsym.svg` gives the
+  current 250M mounted virtual baseline after the heap-spillover fix. A plain
+  release run of the same slice completes in 17.783 s and stops at
+  `image:iNavi.exe+0x329da8` with bounded file I/O (`host_open=445`,
+  `host_read=78849/3286831B`, `max_read=497178`) and ~24.6 MB live heap.
+  The remaining profile is dominated by Unicorn state churn rather than file
+  I/O: `map_persisted_ram_blob_pages` / `uc_mem_map` is ~13.5% and Unicorn
+  teardown (`uc_close` / `memory_free_mipsel`) is ~15.8%, while
+  `map_kernel_memory_allocations` is ~1.7% and code-hook execution is ~1.8%.
+  A first remote flame exposed a separate live-slice bug:
+  `target\startup_flame_remote_250m_20260607_sudo.svg` stopped after a 52 ms
+  live slice and faulted at `pc=0x0000353c` before any host-file reads.
+- Remote live-pump runs no longer depend on tiny 50 ms CPU wall slices to
+  prevent host-side wait sleeps. `UnicornRunLimits` now carries an explicit
+  `live_pump` flag, live host/remote runs refuse wait-helper `thread::sleep`
+  inside Unicorn hooks, and the remote service slice is 1000 ms. The direct
+  mounted virtual remote probe
+  `target\remote_liveslice_fix1_summary.txt` with
+  `--remote-server 192.168.0.39:8765` and a 30 s wall budget exits cleanly
+  instead of `FETCH_UNMAPPED`, reaching `image:iNavi.exe+0xb3b9b0` with real
+  file activity (`host_open=189`, `host_read=25997/2429816B`) and framebuffer
+  evidence in `target\remote_liveslice_fix1.png`.
+- After the remote live-pump fix, a bounded remote-drive attempt
+  `target\remote_route_after_liveslice1_montage.png` kept the REST endpoint
+  live (`/api/v1/status` reported `running=true`, 800x480, `gpsTarget=COM21`)
+  and accepted tap posts, but every captured frame stayed at the same partial
+  header/map composition with no right-side chrome, bottom current-location
+  strip, safety OK button, or route-search controls. That confirms this probe
+  is blocked by the known startup/chrome scheduler/process frontier, not by
+  dead remote input or the previous remote `FETCH_UNMAPPED`.
 - Current stuck-screen investigation narrowed the partial startup to the CE
   multi-process handoff, not to presenter blackness or map file I/O. Fresh
   mounted virtual traces `target\stuck_process_*` show

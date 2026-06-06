@@ -1917,6 +1917,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 raw_arg(args, 0),
             )))
         }
+        ORD_MSIZE => Some(CoredllValue::U32(crt::msize_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_REALLOC => Some(CoredllValue::Handle(crt::realloc_raw(
             kernel,
             memory,

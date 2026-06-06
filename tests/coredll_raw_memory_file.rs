@@ -13,19 +13,19 @@ use wince_emulation_v3::{
             ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_SIZE, ORD_IS_BAD_READ_PTR,
             ORD_IS_BAD_WRITE_PTR, ORD_IS_VALID_LOCALE, ORD_LOCAL_ALLOC, ORD_LOCAL_FREE,
             ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_MALLOC, ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP,
-            ORD_MEMCPY, ORD_MEMMOVE, ORD_MEMSET, ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_OPERATOR_DELETE,
-            ORD_OPERATOR_DELETE_ARRAY, ORD_OPERATOR_NEW, ORD_OPERATOR_NEW_ARRAY, ORD_RAND,
-            ORD_READ_FILE, ORD_REALLOC, ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W,
-            ORD_REG_DELETE_VALUE_W, ORD_REG_ENUM_VALUE_W, ORD_REG_QUERY_VALUE_EX_W,
-            ORD_REG_SET_VALUE_EX_W, ORD_SECURITY_GEN_COOKIE, ORD_SECURITY_GEN_COOKIE2,
-            ORD_SET_FILE_POINTER, ORD_SNPRINTF, ORD_SNWPRINTF, ORD_SPRINTF, ORD_SRAND, ORD_STRCAT,
-            ORD_STRCPY, ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W, ORD_STRING_CCH_LENGTH_W,
-            ORD_STRTOK, ORD_STRTOUL, ORD_STRUPR, ORD_SWPRINTF, ORD_TOLOWER, ORD_TOUPPER,
-            ORD_UNMAP_VIEW_OF_FILE, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSNPRINTF,
-            ORD_VSNWPRINTF, ORD_VSPRINTF, ORD_VSWPRINTF, ORD_WCSCHR, ORD_WCSCPY, ORD_WCSDUP,
-            ORD_WCSICMP, ORD_WCSLEN, ORD_WCSNCMP, ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSPBRK,
-            ORD_WCSRCHR, ORD_WCSSTR, ORD_WCSTOUL, ORD_WFOPEN, ORD_WIDE_CHAR_TO_MULTI_BYTE,
-            ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
+            ORD_MEMCPY, ORD_MEMMOVE, ORD_MEMSET, ORD_MSIZE, ORD_MULTI_BYTE_TO_WIDE_CHAR,
+            ORD_OPERATOR_DELETE, ORD_OPERATOR_DELETE_ARRAY, ORD_OPERATOR_NEW,
+            ORD_OPERATOR_NEW_ARRAY, ORD_RAND, ORD_READ_FILE, ORD_REALLOC, ORD_REG_CLOSE_KEY,
+            ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_VALUE_W, ORD_REG_ENUM_VALUE_W,
+            ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W, ORD_SECURITY_GEN_COOKIE,
+            ORD_SECURITY_GEN_COOKIE2, ORD_SET_FILE_POINTER, ORD_SNPRINTF, ORD_SNWPRINTF,
+            ORD_SPRINTF, ORD_SRAND, ORD_STRCAT, ORD_STRCPY, ORD_STRING_CB_CAT_W,
+            ORD_STRING_CCH_CAT_W, ORD_STRING_CCH_LENGTH_W, ORD_STRTOK, ORD_STRTOUL, ORD_STRUPR,
+            ORD_SWPRINTF, ORD_TOLOWER, ORD_TOUPPER, ORD_UNMAP_VIEW_OF_FILE, ORD_VIRTUAL_ALLOC,
+            ORD_VIRTUAL_FREE, ORD_VSNPRINTF, ORD_VSNWPRINTF, ORD_VSPRINTF, ORD_VSWPRINTF,
+            ORD_WCSCHR, ORD_WCSCPY, ORD_WCSDUP, ORD_WCSICMP, ORD_WCSLEN, ORD_WCSNCMP, ORD_WCSNCPY,
+            ORD_WCSNICMP, ORD_WCSPBRK, ORD_WCSRCHR, ORD_WCSSTR, ORD_WCSTOUL, ORD_WFOPEN,
+            ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         kernel::CeKernel,
@@ -243,6 +243,65 @@ fn coredll_raw_realloc_allocates_copies_and_frees_process_heap_blocks() -> Resul
         }
     ));
     assert_eq!(kernel.memory.heap_size(process_heap, 0, grown), None);
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_msize_returns_process_heap_block_size() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+
+    let ptr = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_MALLOC,
+        [37],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(ptr),
+            ..
+        } => ptr,
+        other => panic!("malloc did not return a pointer: {other:?}"),
+    };
+    assert_ne!(ptr, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MSIZE,
+            [ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(37),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MSIZE,
+            [ptr + 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
     Ok(())
 }
 

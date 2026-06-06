@@ -502,6 +502,21 @@ pub(crate) fn malloc_raw(kernel: &mut CeKernel, thread_id: u32, bytes: u32) -> u
     }
 }
 
+pub(crate) fn msize_raw(kernel: &mut CeKernel, thread_id: u32, ptr: u32) -> u32 {
+    match kernel.memory.allocation(ptr) {
+        Some(allocation) if allocation.heap == kernel.memory.get_process_heap() => {
+            kernel.threads.set_last_error(thread_id, 0);
+            allocation.actual_size
+        }
+        _ => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            0
+        }
+    }
+}
+
 pub(crate) fn realloc_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,

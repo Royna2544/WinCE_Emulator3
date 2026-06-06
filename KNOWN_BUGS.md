@@ -107,8 +107,9 @@
     mounted menu probes no longer depend on the old ordering. This did not by
     itself fix the visible menu/action transition.
   - Status: closed/watch.
-- Startup slowness caused by multi-GB file preload/reopen or import-name
-  lookup is closed/watch for the current mounted virtual profile.
+- Startup slowness caused by multi-GB file preload/reopen, import-name lookup,
+  or per-page Unicorn heap-spillover mapping is closed/watch for the current
+  mounted virtual profile.
   - Symptom: startup felt much slower than the previously fast path, with
     earlier concern that map DB file I/O or diagnostic import bookkeeping was
     burning the boot budget.
@@ -121,10 +122,39 @@
     `coredll_ordinals::lookup`, and `Vec`/string clone frames; after caching
     ordinal lookup, borrowing normal import traps, and passing import args by
     slice, those frames dropped out of the filtered final profile.
+    Later Windows-sudo flame `target\startup_debugsym2_flame.svg` identified
+    `map_kernel_memory_allocations` / `map_heap_spillover` as the next generic
+    startup bottleneck at 33.91% of samples because heap spillover called
+    Unicorn `mem_map` once per 4 KiB page. Heap spillover now maps contiguous
+    spans while virtual allocations remain page-granular for stale reclaim;
+    `target\grouped_map_final_flame.svg` drops
+    `map_kernel_memory_allocations` to 1.16% and `map_heap_spillover` to
+    0.17%, and `target\grouped_map_final_60s_summary.txt` completes the
+    mounted virtual startup slice in 16.85 s wall time with only ~4.28 MB of
+    host-file reads.
   - Status: closed/watch for those causes. Remaining startup/responsiveness
-    work should focus on Unicorn guest/code-hook overhead, raw COREDLL
-    dispatch frequency, region combine, streamed reads, guest memcpy, and the
-    scheduler/device wait frontier.
+    work should focus on CE scheduler/display/app-flow fidelity,
+    `map_persisted_ram_blob_pages`, Unicorn guest/code-hook overhead, raw
+    COREDLL dispatch frequency, region combine, streamed reads, guest memcpy,
+    and the scheduler/device wait frontier.
+- Remote live-pump 50 ms wall-slice `FETCH_UNMAPPED` is closed/watch.
+  - Symptom: mounted virtual launches with
+    `--remote-server 192.168.0.39:8765` could stop after a tiny remote wall
+    slice and then fault on resume before real startup file I/O, e.g.
+    `target\startup_flame_remote_250m_20260607_sudo.svg` / summary stopped
+    after `wall_stop=52ms` and failed at `pc=0x0000353c`, with
+    `host_open=0` and `host_read=0`.
+  - Fix: live presenter/remote behavior no longer infers wait-hook policy from
+    the remaining wall budget. `UnicornRunLimits` carries an explicit
+    `live_pump` flag, wait helpers refuse host-side `thread::sleep` when that
+    flag is set, and the remote service slice is 1000 ms instead of 50 ms.
+  - Evidence: `target\remote_liveslice_fix1_summary.txt` exits cleanly on a
+    30 s mounted virtual remote run, reaches `image:iNavi.exe+0xb3b9b0`, and
+    records real bounded file activity (`host_open=189`,
+    `host_read=25997/2429816B`) plus framebuffer evidence in
+    `target\remote_liveslice_fix1.png`.
+  - Status: closed/watch. Reopen if a remote launch again faults immediately
+    after a live-pump wall stop before host-file reads begin.
 - Host Win32 window looking like a live ANR after a bounded run/guest stop is
   closed as host-presenter state ambiguity.
   - Symptom: after the emulator reached a diagnostic wall-stop or monitor

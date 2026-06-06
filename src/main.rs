@@ -36,8 +36,9 @@ use wince_emulation_v3::{
     remote_server::{RemoteServer, RemoteServerConfig},
 };
 
-const HOST_LIVE_RUN_SLICE_MS: u64 = 120_000;
 const FAST_START_RUN_SLICE_INSTRUCTIONS: usize = 250_000;
+const HOST_LIVE_RUN_SLICE_MS: u64 = 120_000;
+const REMOTE_LIVE_RUN_SLICE_MS: u64 = 10_000;
 const COMPANION_START_DELAY_MS: u64 = 1_000;
 const COMPANION_INSTRUCTION_LIMIT: usize = 250_000_000;
 #[cfg(windows)]
@@ -314,10 +315,11 @@ fn run_cpu_loop(
         } else {
             args.cpu_instruction_limit
         };
-        let (wall_clock_limit_ms, implicit_host_live_slice) = effective_wall_clock_limit_ms(
+        let (wall_clock_limit_ms, live_pump_slice) = effective_wall_clock_limit_ms(
             args.cpu_wall_clock_limit_ms,
             run_started.elapsed(),
             args.desktop,
+            args.remote_server.is_some(),
         );
         if let Err(err) = desktop.run_cpu_until(
             cpu,
@@ -326,6 +328,7 @@ fn run_cpu_loop(
                 instruction_limit,
                 wall_clock_limit_ms,
                 stop_pc: args.cpu_stop_pc,
+                live_pump: live_pump_slice,
             },
         ) {
             if let Some(snapshot) = cpu.last_debug_snapshot() {
@@ -354,13 +357,17 @@ fn run_cpu_loop(
         let active_process_exited = cpu
             .last_debug_snapshot()
             .is_some_and(|snapshot| snapshot.encoded_kernel_exit.is_some());
+        let active_context_returned_without_continuation =
+            cpu.last_stop_is_guest_thread_return_stub();
         if total_wall_clock_expired {
             if let Some(snapshot) = cpu.last_debug_snapshot() {
                 print_unicorn_stop(snapshot);
             }
             break;
         }
-        if active_process_exited && cpu.switch_to_next_parked_child_process(kernel) {
+        if (active_process_exited || active_context_returned_without_continuation)
+            && cpu.switch_to_next_parked_child_process(kernel)
+        {
             reported_blocked_message_wait = false;
             continue;
         }
@@ -388,11 +395,11 @@ fn run_cpu_loop(
                 reported_blocked_message_wait = false;
                 continue;
             }
-            if implicit_host_live_slice && host_wall_clock_stop {
+            if live_pump_slice && host_wall_clock_stop {
                 reported_blocked_message_wait = false;
                 continue;
             }
-            if args.desktop == DesktopMode::Host && blocked_get_message && !host_wall_clock_stop {
+            if live_pump_slice && blocked_get_message && !host_wall_clock_stop {
                 if !reported_blocked_message_wait {
                     if let Some(snapshot) = cpu.last_debug_snapshot() {
                         print_unicorn_stop(snapshot);
@@ -432,6 +439,7 @@ fn effective_wall_clock_limit_ms(
     explicit_limit_ms: u64,
     elapsed: Duration,
     desktop: DesktopMode,
+    remote_server_enabled: bool,
 ) -> (u64, bool) {
     if desktop == DesktopMode::Host {
         if explicit_limit_ms == 0 {
@@ -439,6 +447,15 @@ fn effective_wall_clock_limit_ms(
         }
         return (
             remaining_wall_clock_limit_ms(explicit_limit_ms, elapsed).min(HOST_LIVE_RUN_SLICE_MS),
+            true,
+        );
+    }
+    if remote_server_enabled {
+        if explicit_limit_ms == 0 {
+            return (REMOTE_LIVE_RUN_SLICE_MS, true);
+        }
+        return (
+            remaining_wall_clock_limit_ms(explicit_limit_ms, elapsed).min(REMOTE_LIVE_RUN_SLICE_MS),
             true,
         );
     }
@@ -749,6 +766,7 @@ fn run_monitor(
                         instruction_limit,
                         wall_clock_limit_ms,
                         stop_pc: None,
+                        live_pump: false,
                     },
                     args.framebuffer_dump.as_deref(),
                 );
@@ -784,6 +802,7 @@ fn run_monitor(
                         instruction_limit,
                         wall_clock_limit_ms,
                         stop_pc: Some(stop_pc),
+                        live_pump: false,
                     },
                     args.framebuffer_dump.as_deref(),
                 );
@@ -1493,11 +1512,25 @@ impl DesktopRuntime {
         limits: UnicornRunLimits,
     ) -> Result<()> {
         match self {
-            Self::Virtual(desktop) => cpu.run_until_import_trap_with_framebuffer_limits(
-                kernel,
-                desktop.framebuffer_mut(),
-                limits,
-            ),
+            Self::Virtual(desktop) => {
+                if limits.live_pump
+                    && let Some(server) = kernel.remote_server.clone()
+                {
+                    let mut live_framebuffer =
+                        RemoteLiveFramebuffer::new(desktop.framebuffer_mut(), server);
+                    cpu.run_until_import_trap_with_framebuffer_limits(
+                        kernel,
+                        &mut live_framebuffer,
+                        limits,
+                    )
+                } else {
+                    cpu.run_until_import_trap_with_framebuffer_limits(
+                        kernel,
+                        desktop.framebuffer_mut(),
+                        limits,
+                    )
+                }
+            }
             #[cfg(all(windows, feature = "win32-desktop"))]
             Self::Host(desktop) => {
                 let (framebuffer, presenter) = desktop.framebuffer_and_presenter_mut();
@@ -1527,6 +1560,74 @@ impl DesktopRuntime {
             #[cfg(all(windows, feature = "win32-desktop"))]
             Self::Host(_) => "win32 host presenter",
         }
+    }
+}
+
+struct RemoteLiveFramebuffer<'a> {
+    framebuffer: &'a mut VirtualFramebuffer,
+    remote_server: RemoteServer,
+    last_publish: Instant,
+    publish_interval: Duration,
+    pending_guest_dirty: bool,
+}
+
+impl<'a> RemoteLiveFramebuffer<'a> {
+    fn new(framebuffer: &'a mut VirtualFramebuffer, remote_server: RemoteServer) -> Self {
+        Self {
+            framebuffer,
+            remote_server,
+            last_publish: Instant::now()
+                .checked_sub(Duration::from_millis(16))
+                .unwrap_or_else(Instant::now),
+            publish_interval: Duration::from_millis(16),
+            pending_guest_dirty: false,
+        }
+    }
+
+    fn publish_if_due(&mut self, force: bool) {
+        if !self.pending_guest_dirty {
+            return;
+        }
+        let now = Instant::now();
+        if !force && now.duration_since(self.last_publish) < self.publish_interval {
+            return;
+        }
+        self.remote_server.publish_framebuffer(self.framebuffer);
+        self.last_publish = now;
+        self.pending_guest_dirty = false;
+    }
+}
+
+impl Framebuffer for RemoteLiveFramebuffer<'_> {
+    fn info(&self) -> FramebufferInfo {
+        self.framebuffer.info()
+    }
+
+    fn pixels(&self) -> &[u8] {
+        self.framebuffer.pixels()
+    }
+
+    fn pixels_mut(&mut self) -> &mut [u8] {
+        self.framebuffer.pixels_mut()
+    }
+
+    fn mark_dirty(&mut self, rect: FramebufferRect) {
+        self.framebuffer.mark_dirty(rect);
+        self.pending_guest_dirty = true;
+        self.publish_if_due(is_large_dirty_rect(rect, self.framebuffer.info()));
+    }
+
+    fn dirty_rects(&self) -> &[FramebufferRect] {
+        self.framebuffer.dirty_rects()
+    }
+
+    fn take_dirty_rects(&mut self) -> Vec<FramebufferRect> {
+        self.framebuffer.take_dirty_rects()
+    }
+
+    fn emulator_tick(&mut self) -> Result<()> {
+        self.publish_if_due(false);
+        Ok(())
     }
 }
 
@@ -1618,7 +1719,6 @@ impl Framebuffer for HostLiveFramebuffer<'_> {
     }
 }
 
-#[cfg(all(windows, feature = "win32-desktop"))]
 fn is_large_dirty_rect(rect: FramebufferRect, info: FramebufferInfo) -> bool {
     let dirty_area = u64::from(rect.width).saturating_mul(u64::from(rect.height));
     let frame_area = u64::from(info.width).saturating_mul(u64::from(info.height));
@@ -2245,15 +2345,33 @@ mod tests {
     #[test]
     fn host_no_wall_run_uses_implicit_live_slice() {
         assert_eq!(
-            effective_wall_clock_limit_ms(0, Duration::from_secs(10), DesktopMode::Host),
+            effective_wall_clock_limit_ms(0, Duration::from_secs(10), DesktopMode::Host, false),
             (HOST_LIVE_RUN_SLICE_MS, true)
         );
         assert_eq!(
-            effective_wall_clock_limit_ms(0, Duration::from_secs(10), DesktopMode::Virtual),
+            effective_wall_clock_limit_ms(0, Duration::from_secs(10), DesktopMode::Virtual, false),
             (0, false)
         );
         assert_eq!(
-            effective_wall_clock_limit_ms(500, Duration::from_millis(125), DesktopMode::Host),
+            effective_wall_clock_limit_ms(0, Duration::from_secs(10), DesktopMode::Virtual, true),
+            (REMOTE_LIVE_RUN_SLICE_MS, true)
+        );
+        assert_eq!(
+            effective_wall_clock_limit_ms(
+                500,
+                Duration::from_millis(125),
+                DesktopMode::Host,
+                false,
+            ),
+            (375, true)
+        );
+        assert_eq!(
+            effective_wall_clock_limit_ms(
+                500,
+                Duration::from_millis(125),
+                DesktopMode::Virtual,
+                true,
+            ),
             (375, true)
         );
     }

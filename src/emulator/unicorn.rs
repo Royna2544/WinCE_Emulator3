@@ -42,7 +42,29 @@ pub struct UnicornMips {
     last_wall_clock_debug: Option<UnicornDebugSnapshot>,
     parked_child_processes: VecDeque<ParkedProcess>,
     #[cfg(feature = "unicorn")]
+    current_thread_id: u32,
+    #[cfg(feature = "unicorn")]
+    pending_guest_thread_returns: Vec<PendingGuestThreadReturn>,
+    #[cfg(feature = "unicorn")]
+    pending_qsort_returns: Vec<PendingQsortReturn>,
+    #[cfg(feature = "unicorn")]
+    pending_create_window_returns: Vec<CreateWindowReturn>,
+    #[cfg(feature = "unicorn")]
     pending_wndproc_returns: Vec<PendingWndProcReturn>,
+    #[cfg(feature = "unicorn")]
+    blocked_guest_thread: Option<BlockedGuestThread>,
+    #[cfg(feature = "unicorn")]
+    blocked_wait_threads: Vec<BlockedWaitThread>,
+    #[cfg(feature = "unicorn")]
+    suspended_guest_thread: Option<SuspendedGuestThread>,
+    #[cfg(feature = "unicorn")]
+    suspended_guest_thread_queue: VecDeque<SuspendedGuestThread>,
+    #[cfg(feature = "unicorn")]
+    self_suspended_guest_threads: std::collections::BTreeMap<u32, SuspendedGuestThread>,
+    #[cfg(feature = "unicorn")]
+    running_guest_thread: Option<(u32, u32)>,
+    #[cfg(feature = "unicorn")]
+    guest_thread_stack_slots: std::collections::BTreeMap<u32, u32>,
     #[cfg(feature = "unicorn")]
     saved_context: Option<SavedCpuContext>,
 }
@@ -59,6 +81,27 @@ struct ParkedProcess {
     module_path: String,
     module_host_path: std::path::PathBuf,
     command_line: String,
+}
+
+#[cfg(feature = "unicorn")]
+struct UnicornRunStateHandles<'a> {
+    parked_child_processes: &'a std::rc::Rc<std::cell::RefCell<VecDeque<ParkedProcess>>>,
+    current_thread_id: &'a std::rc::Rc<std::cell::RefCell<u32>>,
+    pending_guest_thread_returns:
+        &'a std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
+    pending_qsort_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<PendingQsortReturn>>>,
+    create_window_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<CreateWindowReturn>>>,
+    pending_wndproc_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
+    blocked_guest_thread: &'a std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
+    blocked_wait_threads: &'a std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
+    suspended_guest_thread: &'a std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    suspended_guest_thread_queue:
+        &'a std::rc::Rc<std::cell::RefCell<VecDeque<SuspendedGuestThread>>>,
+    self_suspended_guest_threads:
+        &'a std::rc::Rc<std::cell::RefCell<std::collections::BTreeMap<u32, SuspendedGuestThread>>>,
+    running_guest_thread: &'a std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+    guest_thread_stack_slots:
+        &'a std::rc::Rc<std::cell::RefCell<std::collections::BTreeMap<u32, u32>>>,
 }
 
 #[cfg(feature = "unicorn")]
@@ -81,6 +124,7 @@ pub struct UnicornRunLimits {
     pub instruction_limit: usize,
     pub wall_clock_limit_ms: u64,
     pub stop_pc: Option<u32>,
+    pub live_pump: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -1310,7 +1354,29 @@ impl UnicornMips {
             last_wall_clock_debug: None,
             parked_child_processes: VecDeque::new(),
             #[cfg(feature = "unicorn")]
+            current_thread_id: MAIN_GUEST_THREAD_ID,
+            #[cfg(feature = "unicorn")]
+            pending_guest_thread_returns: Vec::new(),
+            #[cfg(feature = "unicorn")]
+            pending_qsort_returns: Vec::new(),
+            #[cfg(feature = "unicorn")]
+            pending_create_window_returns: Vec::new(),
+            #[cfg(feature = "unicorn")]
             pending_wndproc_returns: Vec::new(),
+            #[cfg(feature = "unicorn")]
+            blocked_guest_thread: None,
+            #[cfg(feature = "unicorn")]
+            blocked_wait_threads: Vec::new(),
+            #[cfg(feature = "unicorn")]
+            suspended_guest_thread: None,
+            #[cfg(feature = "unicorn")]
+            suspended_guest_thread_queue: VecDeque::new(),
+            #[cfg(feature = "unicorn")]
+            self_suspended_guest_threads: std::collections::BTreeMap::new(),
+            #[cfg(feature = "unicorn")]
+            running_guest_thread: None,
+            #[cfg(feature = "unicorn")]
+            guest_thread_stack_slots: std::collections::BTreeMap::new(),
             #[cfg(feature = "unicorn")]
             saved_context: None,
         })
@@ -1340,6 +1406,10 @@ impl UnicornMips {
 
     pub fn set_initial_thread_id(&mut self, thread_id: u32) {
         self.initial_thread_id = thread_id;
+        #[cfg(feature = "unicorn")]
+        {
+            self.current_thread_id = thread_id;
+        }
     }
 
     pub fn memory(&self) -> &MemoryMap {
@@ -1375,6 +1445,12 @@ impl UnicornMips {
         !self.parked_child_processes.is_empty()
     }
 
+    pub fn last_stop_is_guest_thread_return_stub(&self) -> bool {
+        self.last_debug
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.pc == GUEST_THREAD_RETURN_STUB_ADDR)
+    }
+
     pub fn switch_to_next_parked_child_process(&mut self, kernel: &mut CeKernel) -> bool {
         self.switch_to_next_parked_process(kernel, false)
     }
@@ -1390,13 +1466,39 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
-    fn persist_run_state(
-        &mut self,
-        parked_child_processes: &std::rc::Rc<std::cell::RefCell<VecDeque<ParkedProcess>>>,
-        pending_wndproc_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
-    ) {
-        self.parked_child_processes = parked_child_processes.borrow_mut().drain(..).collect();
-        self.pending_wndproc_returns = pending_wndproc_returns.borrow_mut().drain(..).collect();
+    fn persist_run_state(&mut self, state: &UnicornRunStateHandles<'_>) {
+        self.parked_child_processes = state
+            .parked_child_processes
+            .borrow_mut()
+            .drain(..)
+            .collect();
+        self.current_thread_id = *state.current_thread_id.borrow();
+        self.pending_guest_thread_returns = state
+            .pending_guest_thread_returns
+            .borrow_mut()
+            .drain(..)
+            .collect();
+        self.pending_qsort_returns = state.pending_qsort_returns.borrow_mut().drain(..).collect();
+        self.pending_create_window_returns =
+            state.create_window_returns.borrow_mut().drain(..).collect();
+        self.pending_wndproc_returns = state
+            .pending_wndproc_returns
+            .borrow_mut()
+            .drain(..)
+            .collect();
+        self.blocked_guest_thread = state.blocked_guest_thread.borrow_mut().take();
+        self.blocked_wait_threads = state.blocked_wait_threads.borrow_mut().drain(..).collect();
+        self.suspended_guest_thread = state.suspended_guest_thread.borrow_mut().take();
+        self.suspended_guest_thread_queue = state
+            .suspended_guest_thread_queue
+            .borrow_mut()
+            .drain(..)
+            .collect();
+        self.self_suspended_guest_threads =
+            std::mem::take(&mut *state.self_suspended_guest_threads.borrow_mut());
+        self.running_guest_thread = *state.running_guest_thread.borrow();
+        self.guest_thread_stack_slots =
+            std::mem::take(&mut *state.guest_thread_stack_slots.borrow_mut());
     }
 
     pub fn rotate_to_parked_process_id(&mut self, kernel: &mut CeKernel, process_id: u32) -> bool {
@@ -1505,7 +1607,37 @@ impl UnicornMips {
                 last_wall_clock_debug: self.last_wall_clock_debug.take(),
                 parked_child_processes: VecDeque::new(),
                 #[cfg(feature = "unicorn")]
+                current_thread_id: self.current_thread_id,
+                #[cfg(feature = "unicorn")]
+                pending_guest_thread_returns: std::mem::take(
+                    &mut self.pending_guest_thread_returns,
+                ),
+                #[cfg(feature = "unicorn")]
+                pending_qsort_returns: std::mem::take(&mut self.pending_qsort_returns),
+                #[cfg(feature = "unicorn")]
+                pending_create_window_returns: std::mem::take(
+                    &mut self.pending_create_window_returns,
+                ),
+                #[cfg(feature = "unicorn")]
                 pending_wndproc_returns: std::mem::take(&mut self.pending_wndproc_returns),
+                #[cfg(feature = "unicorn")]
+                blocked_guest_thread: self.blocked_guest_thread.take(),
+                #[cfg(feature = "unicorn")]
+                blocked_wait_threads: std::mem::take(&mut self.blocked_wait_threads),
+                #[cfg(feature = "unicorn")]
+                suspended_guest_thread: self.suspended_guest_thread.take(),
+                #[cfg(feature = "unicorn")]
+                suspended_guest_thread_queue: std::mem::take(
+                    &mut self.suspended_guest_thread_queue,
+                ),
+                #[cfg(feature = "unicorn")]
+                self_suspended_guest_threads: std::mem::take(
+                    &mut self.self_suspended_guest_threads,
+                ),
+                #[cfg(feature = "unicorn")]
+                running_guest_thread: self.running_guest_thread.take(),
+                #[cfg(feature = "unicorn")]
+                guest_thread_stack_slots: std::mem::take(&mut self.guest_thread_stack_slots),
                 #[cfg(feature = "unicorn")]
                 saved_context: self.saved_context.take(),
             }),
@@ -1872,6 +2004,7 @@ impl UnicornMips {
                 instruction_limit,
                 wall_clock_limit_ms: 0,
                 stop_pc: None,
+                live_pump: false,
             },
         )
     }
@@ -2048,6 +2181,7 @@ impl UnicornMips {
         let host_wall_clock_limit = (limits.wall_clock_limit_ms != 0)
             .then(|| Duration::from_millis(limits.wall_clock_limit_ms));
         let host_wall_clock_started = Instant::now();
+        let live_pump = limits.live_pump;
         let host_wall_clock_counter = Rc::new(RefCell::new(0u32));
         let host_wall_clock_counter_hook = Rc::clone(&host_wall_clock_counter);
         let progress_file =
@@ -2633,33 +2767,55 @@ impl UnicornMips {
             &mut self.pending_wndproc_returns,
         )));
         let pending_wndproc_returns_hook = Rc::clone(&pending_wndproc_returns);
-        let create_window_returns = Rc::new(RefCell::new(Vec::<CreateWindowReturn>::new()));
+        let create_window_returns = Rc::new(RefCell::new(std::mem::take(
+            &mut self.pending_create_window_returns,
+        )));
         let create_window_returns_hook = Rc::clone(&create_window_returns);
-        let current_thread_id = Rc::new(RefCell::new(self.initial_thread_id));
+        let current_thread_id = Rc::new(RefCell::new(self.current_thread_id));
         let current_thread_id_hook = Rc::clone(&current_thread_id);
-        let pending_guest_thread_returns =
-            Rc::new(RefCell::new(Vec::<PendingGuestThreadReturn>::new()));
+        let pending_guest_thread_returns = Rc::new(RefCell::new(std::mem::take(
+            &mut self.pending_guest_thread_returns,
+        )));
         let pending_guest_thread_returns_hook = Rc::clone(&pending_guest_thread_returns);
-        let pending_qsort_returns = Rc::new(RefCell::new(Vec::<PendingQsortReturn>::new()));
+        let pending_qsort_returns = Rc::new(RefCell::new(std::mem::take(
+            &mut self.pending_qsort_returns,
+        )));
         let pending_qsort_returns_hook = Rc::clone(&pending_qsort_returns);
-        let blocked_guest_thread = Rc::new(RefCell::new(None::<BlockedGuestThread>));
+        let blocked_guest_thread = Rc::new(RefCell::new(self.blocked_guest_thread.take()));
         let blocked_guest_thread_hook = Rc::clone(&blocked_guest_thread);
-        let blocked_wait_threads = Rc::new(RefCell::new(Vec::<BlockedWaitThread>::new()));
+        let blocked_wait_threads =
+            Rc::new(RefCell::new(std::mem::take(&mut self.blocked_wait_threads)));
         let blocked_wait_threads_hook = Rc::clone(&blocked_wait_threads);
-        let suspended_guest_thread = Rc::new(RefCell::new(None::<SuspendedGuestThread>));
+        let suspended_guest_thread = Rc::new(RefCell::new(self.suspended_guest_thread.take()));
         let suspended_guest_thread_hook = Rc::clone(&suspended_guest_thread);
-        let suspended_guest_thread_queue = Rc::new(RefCell::new(std::collections::VecDeque::<
-            SuspendedGuestThread,
-        >::new()));
-        let self_suspended_guest_threads = Rc::new(RefCell::new(std::collections::BTreeMap::<
-            u32,
-            SuspendedGuestThread,
-        >::new()));
+        let suspended_guest_thread_queue = Rc::new(RefCell::new(std::mem::take(
+            &mut self.suspended_guest_thread_queue,
+        )));
+        let self_suspended_guest_threads = Rc::new(RefCell::new(std::mem::take(
+            &mut self.self_suspended_guest_threads,
+        )));
         let self_suspended_guest_threads_hook = Rc::clone(&self_suspended_guest_threads);
-        let running_guest_thread = Rc::new(RefCell::new(None::<(u32, u32)>));
+        let running_guest_thread = Rc::new(RefCell::new(self.running_guest_thread));
         let running_guest_thread_hook = Rc::clone(&running_guest_thread);
-        let guest_thread_stack_slots = Rc::new(RefCell::new(std::collections::BTreeMap::new()));
+        let guest_thread_stack_slots = Rc::new(RefCell::new(std::mem::take(
+            &mut self.guest_thread_stack_slots,
+        )));
         let guest_thread_stack_slots_hook = Rc::clone(&guest_thread_stack_slots);
+        let run_state = UnicornRunStateHandles {
+            parked_child_processes: &parked_child_processes,
+            current_thread_id: &current_thread_id,
+            pending_guest_thread_returns: &pending_guest_thread_returns,
+            pending_qsort_returns: &pending_qsort_returns,
+            create_window_returns: &create_window_returns,
+            pending_wndproc_returns: &pending_wndproc_returns,
+            blocked_guest_thread: &blocked_guest_thread,
+            blocked_wait_threads: &blocked_wait_threads,
+            suspended_guest_thread: &suspended_guest_thread,
+            suspended_guest_thread_queue: &suspended_guest_thread_queue,
+            self_suspended_guest_threads: &self_suspended_guest_threads,
+            running_guest_thread: &running_guest_thread,
+            guest_thread_stack_slots: &guest_thread_stack_slots,
+        };
         let scheduler_timeslice_counter = Rc::new(Cell::new(0u32));
         let scheduler_timeslice_counter_hook = Rc::clone(&scheduler_timeslice_counter);
         let scheduler_timeslice_pending = Rc::new(Cell::new(false));
@@ -3022,6 +3178,31 @@ impl UnicornMips {
                     let Some((worker_thread_id, thread_handle)) =
                         running_guest_thread_hook.borrow_mut().take()
                     else {
+                        if try_wait_and_resume_blocked_wait(
+                            unsafe { &mut *kernel_ptr },
+                            uc,
+                            active_thread_id,
+                            &current_thread_id_hook,
+                            &blocked_wait_threads_hook,
+                            &suspended_guest_thread_hook,
+                            &running_guest_thread_hook,
+                            host_wall_clock_started,
+                            host_wall_clock_limit,
+                            live_pump,
+                        ) || try_wait_and_resume_blocked_get_message_after_current_blocked(
+                            unsafe { &mut *kernel_ptr },
+                            uc,
+                            active_thread_id,
+                            &current_thread_id_hook,
+                            &blocked_guest_thread_hook,
+                            &suspended_guest_thread_hook,
+                            &running_guest_thread_hook,
+                            host_wall_clock_started,
+                            host_wall_clock_limit,
+                            live_pump,
+                        ) {
+                            return;
+                        }
                         let _ = uc.emu_stop();
                         return;
                     };
@@ -3031,6 +3212,31 @@ impl UnicornMips {
                         worker_thread_id,
                     );
                     let Some(suspended) = suspended_guest_thread_hook.borrow_mut().take() else {
+                        if try_wait_and_resume_blocked_wait(
+                            unsafe { &mut *kernel_ptr },
+                            uc,
+                            worker_thread_id,
+                            &current_thread_id_hook,
+                            &blocked_wait_threads_hook,
+                            &suspended_guest_thread_hook,
+                            &running_guest_thread_hook,
+                            host_wall_clock_started,
+                            host_wall_clock_limit,
+                            live_pump,
+                        ) || try_wait_and_resume_blocked_get_message_after_current_blocked(
+                            unsafe { &mut *kernel_ptr },
+                            uc,
+                            worker_thread_id,
+                            &current_thread_id_hook,
+                            &blocked_guest_thread_hook,
+                            &suspended_guest_thread_hook,
+                            &running_guest_thread_hook,
+                            host_wall_clock_started,
+                            host_wall_clock_limit,
+                            live_pump,
+                        ) {
+                            return;
+                        }
                         let _ = uc.emu_stop();
                         return;
                     };
@@ -3187,6 +3393,7 @@ impl UnicornMips {
                         &last_messages_hook,
                         host_wall_clock_started,
                         host_wall_clock_limit,
+                        live_pump,
                     )
                 }) {
                     return;
@@ -3208,6 +3415,7 @@ impl UnicornMips {
                         &running_guest_thread_hook,
                         host_wall_clock_started,
                         host_wall_clock_limit,
+                        live_pump,
                     )
                 }) {
                     return;
@@ -3228,6 +3436,7 @@ impl UnicornMips {
                         &running_guest_thread_hook,
                         host_wall_clock_started,
                         host_wall_clock_limit,
+                        live_pump,
                     )
                 }) {
                     return;
@@ -3248,6 +3457,7 @@ impl UnicornMips {
                         &running_guest_thread_hook,
                         host_wall_clock_started,
                         host_wall_clock_limit,
+                        live_pump,
                     )
                 }) {
                     return;
@@ -3267,6 +3477,7 @@ impl UnicornMips {
                         &running_guest_thread_hook,
                         host_wall_clock_started,
                         host_wall_clock_limit,
+                        live_pump,
                     )
                 }) {
                     return;
@@ -3931,13 +4142,13 @@ impl UnicornMips {
         self.saved_context = Some(snapshot_context);
         if let Err(err) = sync_mapped_blobs_from_unicorn(&uc, &mut self.mapped_blobs) {
             self.last_debug = Some(snapshot);
-            self.persist_run_state(&parked_child_processes, &pending_wndproc_returns);
+            self.persist_run_state(&run_state);
             let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
             return Err(err);
         }
         self.last_debug = Some(snapshot);
         if let Some(err) = framebuffer_tick_error.borrow_mut().take() {
-            self.persist_run_state(&parked_child_processes, &pending_wndproc_returns);
+            self.persist_run_state(&run_state);
             let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
             return Err(err);
         }
@@ -3957,7 +4168,7 @@ impl UnicornMips {
                 if let Some(snapshot) = self.last_debug.as_mut() {
                     snapshot.encoded_kernel_exit = Some(exit);
                 }
-                self.persist_run_state(&parked_child_processes, &pending_wndproc_returns);
+                self.persist_run_state(&run_state);
                 let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
                 return Ok(());
             }
@@ -3966,7 +4177,7 @@ impl UnicornMips {
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_else(|| "register snapshot unavailable".to_owned());
-            self.persist_run_state(&parked_child_processes, &pending_wndproc_returns);
+            self.persist_run_state(&run_state);
             return Err(Error::Backend(format!(
                 "Unicorn run failed: {err:?}; {snapshot}"
             )));
@@ -3981,12 +4192,12 @@ impl UnicornMips {
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_else(|| "register snapshot unavailable".to_owned());
-            self.persist_run_state(&parked_child_processes, &pending_wndproc_returns);
+            self.persist_run_state(&run_state);
             return Err(Error::Backend(format!(
                 "Unicorn run stopped on guest CPU exception; {snapshot}"
             )));
         }
-        self.persist_run_state(&parked_child_processes, &pending_wndproc_returns);
+        self.persist_run_state(&run_state);
         let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
         Ok(())
     }
@@ -5248,6 +5459,7 @@ fn map_kernel_memory_allocations<D>(
                 allocation.size,
                 virtual_allocation_perms(allocation.protect),
                 "virtual allocation",
+                false,
             )?;
             mapped.virtual_pages.extend(newly_mapped.iter().copied());
             if !newly_mapped.is_empty() && !allocation.initial_bytes.is_empty() {
@@ -5292,6 +5504,7 @@ fn map_heap_spillover<D>(
         size,
         MemoryPerms::READ | MemoryPerms::WRITE,
         "heap spillover",
+        true,
     )?;
     ensure_mapped_ram_blobs_for_pages(mapped_blobs, "heap-spillover", &new_pages)?;
     mapped.heap_spill_cursor = mapped_end
@@ -5816,6 +6029,7 @@ fn map_guest_range<D>(
     size: u32,
     perms: MemoryPerms,
     label: &str,
+    group_contiguous: bool,
 ) -> Result<Vec<u32>> {
     let first_page = base & !0xfff;
     let page_end = base
@@ -5823,7 +6037,8 @@ fn map_guest_range<D>(
         .and_then(|end| end.checked_add(0xfff))
         .map(|end| end & !0xfff)
         .ok_or_else(|| Error::InvalidArgument(format!("{label} range overflow")))?;
-    let (spans, newly_mapped) = unmapped_guest_spans(mapped, first_page, page_end, label)?;
+    let (spans, newly_mapped) =
+        unmapped_guest_spans(mapped, first_page, page_end, label, group_contiguous)?;
     for (span_base, span_size) in spans {
         uc.mem_map(
             u64::from(span_base),
@@ -5846,6 +6061,7 @@ fn unmapped_guest_spans(
     first_page: u32,
     page_end: u32,
     label: &str,
+    group_contiguous: bool,
 ) -> Result<(Vec<(u32, u32)>, Vec<u32>)> {
     let mut page_base = first_page;
     let mut spans = Vec::new();
@@ -5863,6 +6079,9 @@ fn unmapped_guest_spans(
             page_base = page_base
                 .checked_add(0x1000)
                 .ok_or_else(|| Error::InvalidArgument(format!("{label} page overflow")))?;
+            if !group_contiguous {
+                break;
+            }
         }
         let span_size = page_base
             .checked_sub(span_base)
@@ -7099,6 +7318,7 @@ fn try_block_empty_get_message<D>(
     last_messages: &std::rc::Rc<std::cell::RefCell<Vec<UnicornLastMessage>>>,
     host_wall_clock_started: std::time::Instant,
     host_wall_clock_limit: Option<std::time::Duration>,
+    live_pump: bool,
 ) -> bool {
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
         || ordinal != Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W)
@@ -7236,6 +7456,7 @@ fn try_block_empty_get_message<D>(
                 read_mips_reg(uc, RegisterMIPS::RA),
                 host_wall_clock_started,
                 host_wall_clock_limit,
+                live_pump,
             ))
         {
             *blocked.borrow_mut() = None;
@@ -7270,6 +7491,7 @@ fn try_block_empty_get_message<D>(
             running_thread,
             host_wall_clock_started,
             host_wall_clock_limit,
+            live_pump,
         ) {
             return true;
         }
@@ -7283,6 +7505,7 @@ fn try_block_empty_get_message<D>(
             running_thread,
             host_wall_clock_started,
             host_wall_clock_limit,
+            live_pump,
         ) {
             return true;
         }
@@ -7331,6 +7554,7 @@ fn try_block_empty_get_message<D>(
                 read_mips_reg(uc, RegisterMIPS::RA),
                 host_wall_clock_started,
                 host_wall_clock_limit,
+                live_pump,
             ))
         {
             *blocked.borrow_mut() = None;
@@ -7364,6 +7588,7 @@ fn try_block_empty_get_message<D>(
             running_thread,
             host_wall_clock_started,
             host_wall_clock_limit,
+            live_pump,
         ) {
             return true;
         }
@@ -7377,6 +7602,7 @@ fn try_block_empty_get_message<D>(
             running_thread,
             host_wall_clock_started,
             host_wall_clock_limit,
+            live_pump,
         ) {
             return true;
         }
@@ -7518,6 +7744,32 @@ fn timer_delay_fits_host_wall_budget(
 }
 
 #[cfg(feature = "unicorn")]
+fn host_wall_budget_is_live_pump_slice(
+    started: std::time::Instant,
+    limit: Option<std::time::Duration>,
+) -> bool {
+    let Some(limit) = limit else {
+        return false;
+    };
+    let Some(remaining) = limit.checked_sub(started.elapsed()) else {
+        return true;
+    };
+    remaining <= std::time::Duration::from_millis(100)
+}
+
+#[cfg(feature = "unicorn")]
+fn timer_delay_can_sleep_in_host_hook(
+    delay_ms: u32,
+    started: std::time::Instant,
+    limit: Option<std::time::Duration>,
+    live_pump: bool,
+) -> bool {
+    !live_pump
+        && !host_wall_budget_is_live_pump_slice(started, limit)
+        && timer_delay_fits_host_wall_budget(delay_ms, started, limit)
+}
+
+#[cfg(feature = "unicorn")]
 #[allow(clippy::too_many_arguments)]
 fn try_wait_and_complete_current_get_message_timer_wait<D>(
     kernel: &mut CeKernel,
@@ -7531,6 +7783,7 @@ fn try_wait_and_complete_current_get_message_timer_wait<D>(
     return_pc: u32,
     host_wall_clock_started: std::time::Instant,
     host_wall_clock_limit: Option<std::time::Duration>,
+    live_pump: bool,
 ) -> bool {
     let Some(delay_ms) = kernel.timers.next_due_delay_ms() else {
         return false;
@@ -7538,8 +7791,12 @@ fn try_wait_and_complete_current_get_message_timer_wait<D>(
     if should_fast_forward_empty_queue_timer(delay_ms) {
         return false;
     }
-    if !timer_delay_fits_host_wall_budget(delay_ms, host_wall_clock_started, host_wall_clock_limit)
-    {
+    if !timer_delay_can_sleep_in_host_hook(
+        delay_ms,
+        host_wall_clock_started,
+        host_wall_clock_limit,
+        live_pump,
+    ) {
         return false;
     }
     std::thread::sleep(std::time::Duration::from_millis(u64::from(delay_ms)));
@@ -7641,6 +7898,7 @@ fn try_block_wait_for_single_object<D>(
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     host_wall_clock_started: std::time::Instant,
     host_wall_clock_limit: Option<std::time::Duration>,
+    live_pump: bool,
 ) -> bool {
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
         || ordinal != Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_SINGLE_OBJECT)
@@ -7764,6 +8022,7 @@ fn try_block_wait_for_single_object<D>(
             running_thread,
             host_wall_clock_started,
             host_wall_clock_limit,
+            live_pump,
         ) {
             return true;
         }
@@ -7777,6 +8036,7 @@ fn try_block_wait_for_single_object<D>(
             running_thread,
             host_wall_clock_started,
             host_wall_clock_limit,
+            live_pump,
         ) {
             return true;
         }
@@ -7845,6 +8105,7 @@ fn try_block_wait_for_single_object<D>(
             running_thread,
             host_wall_clock_started,
             host_wall_clock_limit,
+            live_pump,
         ) {
             return true;
         }
@@ -7858,6 +8119,7 @@ fn try_block_wait_for_single_object<D>(
             running_thread,
             host_wall_clock_started,
             host_wall_clock_limit,
+            live_pump,
         ) {
             return true;
         }
@@ -7886,6 +8148,7 @@ fn try_block_sleep<D>(
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     host_wall_clock_started: std::time::Instant,
     host_wall_clock_limit: Option<std::time::Duration>,
+    live_pump: bool,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
@@ -8037,6 +8300,7 @@ fn try_block_sleep<D>(
             running_thread,
             host_wall_clock_started,
             host_wall_clock_limit,
+            live_pump,
         ) {
             return true;
         }
@@ -8050,6 +8314,7 @@ fn try_block_sleep<D>(
             running_thread,
             host_wall_clock_started,
             host_wall_clock_limit,
+            live_pump,
         ) {
             return true;
         }
@@ -8108,6 +8373,7 @@ fn try_block_sleep<D>(
             running_thread,
             host_wall_clock_started,
             host_wall_clock_limit,
+            live_pump,
         ) {
             return true;
         }
@@ -8341,6 +8607,7 @@ fn try_block_wait_for_multiple_objects<D>(
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     host_wall_clock_started: std::time::Instant,
     host_wall_clock_limit: Option<std::time::Duration>,
+    live_pump: bool,
 ) -> bool {
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
         || ordinal != Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_MULTIPLE_OBJECTS)
@@ -8394,6 +8661,7 @@ fn try_block_wait_for_multiple_objects<D>(
             return_pc,
             host_wall_clock_started,
             host_wall_clock_limit,
+            live_pump,
         )
     {
         return true;
@@ -8490,6 +8758,7 @@ fn try_block_wait_for_multiple_objects<D>(
             running_thread,
             host_wall_clock_started,
             host_wall_clock_limit,
+            live_pump,
         ) {
             return true;
         }
@@ -8503,6 +8772,7 @@ fn try_block_wait_for_multiple_objects<D>(
             running_thread,
             host_wall_clock_started,
             host_wall_clock_limit,
+            live_pump,
         ) {
             return true;
         }
@@ -8522,13 +8792,19 @@ fn try_complete_current_multiple_wait_timeout<D>(
     return_pc: u32,
     host_wall_clock_started: std::time::Instant,
     host_wall_clock_limit: Option<std::time::Duration>,
+    live_pump: bool,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
     if timeout == 0 || timeout == crate::ce::timer::INFINITE {
         return false;
     }
-    if !timer_delay_fits_host_wall_budget(timeout, host_wall_clock_started, host_wall_clock_limit) {
+    if !timer_delay_can_sleep_in_host_hook(
+        timeout,
+        host_wall_clock_started,
+        host_wall_clock_limit,
+        live_pump,
+    ) {
         return false;
     }
     std::thread::sleep(std::time::Duration::from_millis(u64::from(timeout)));
@@ -8568,6 +8844,7 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     host_wall_clock_started: std::time::Instant,
     host_wall_clock_limit: Option<std::time::Duration>,
+    live_pump: bool,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
@@ -8643,6 +8920,7 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
             return_pc,
             host_wall_clock_started,
             host_wall_clock_limit,
+            live_pump,
         )
     {
         return true;
@@ -8738,6 +9016,7 @@ fn try_block_msg_wait_for_multiple_objects_ex<D>(
             running_thread,
             host_wall_clock_started,
             host_wall_clock_limit,
+            live_pump,
         ) {
             return true;
         }
@@ -8760,6 +9039,7 @@ fn try_complete_current_msg_wait_timer_wait<D>(
     return_pc: u32,
     host_wall_clock_started: std::time::Instant,
     host_wall_clock_limit: Option<std::time::Duration>,
+    live_pump: bool,
 ) -> bool {
     let Some(delay_ms) = kernel.timers.next_due_delay_ms() else {
         return try_complete_current_msg_wait_timeout(
@@ -8771,6 +9051,7 @@ fn try_complete_current_msg_wait_timer_wait<D>(
             return_pc,
             host_wall_clock_started,
             host_wall_clock_limit,
+            live_pump,
         );
     };
     if !msg_wait_timer_delay_can_complete(timeout, delay_ms) {
@@ -8786,6 +9067,7 @@ fn try_complete_current_msg_wait_timer_wait<D>(
             delay_ms,
             host_wall_clock_started,
             host_wall_clock_limit,
+            live_pump,
         );
     }
     if delay_ms != 0 {
@@ -8833,6 +9115,7 @@ fn try_wait_and_complete_current_msg_wait_timer_wait<D>(
     delay_ms: u32,
     host_wall_clock_started: std::time::Instant,
     host_wall_clock_limit: Option<std::time::Duration>,
+    live_pump: bool,
 ) -> bool {
     if timeout == crate::ce::timer::INFINITE {
         return false;
@@ -8847,10 +9130,15 @@ fn try_wait_and_complete_current_msg_wait_timer_wait<D>(
             return_pc,
             host_wall_clock_started,
             host_wall_clock_limit,
+            live_pump,
         );
     }
-    if !timer_delay_fits_host_wall_budget(delay_ms, host_wall_clock_started, host_wall_clock_limit)
-    {
+    if !timer_delay_can_sleep_in_host_hook(
+        delay_ms,
+        host_wall_clock_started,
+        host_wall_clock_limit,
+        live_pump,
+    ) {
         return false;
     }
     std::thread::sleep(std::time::Duration::from_millis(u64::from(delay_ms)));
@@ -8921,13 +9209,19 @@ fn try_complete_current_msg_wait_timeout<D>(
     return_pc: u32,
     host_wall_clock_started: std::time::Instant,
     host_wall_clock_limit: Option<std::time::Duration>,
+    live_pump: bool,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
     if timeout == 0 || timeout == crate::ce::timer::INFINITE {
         return false;
     }
-    if !timer_delay_fits_host_wall_budget(timeout, host_wall_clock_started, host_wall_clock_limit) {
+    if !timer_delay_can_sleep_in_host_hook(
+        timeout,
+        host_wall_clock_started,
+        host_wall_clock_limit,
+        live_pump,
+    ) {
         return false;
     }
     std::thread::sleep(std::time::Duration::from_millis(u64::from(timeout)));
@@ -9552,6 +9846,7 @@ fn try_wait_and_resume_blocked_wait<D>(
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     host_wall_clock_started: std::time::Instant,
     host_wall_clock_limit: Option<std::time::Duration>,
+    live_pump: bool,
 ) -> bool {
     if try_resume_blocked_wait(
         kernel,
@@ -9572,8 +9867,12 @@ fn try_wait_and_resume_blocked_wait<D>(
     ) else {
         return false;
     };
-    if !timer_delay_fits_host_wall_budget(delay_ms, host_wall_clock_started, host_wall_clock_limit)
-    {
+    if !timer_delay_can_sleep_in_host_hook(
+        delay_ms,
+        host_wall_clock_started,
+        host_wall_clock_limit,
+        live_pump,
+    ) {
         return false;
     }
     if delay_ms != 0 {
@@ -10572,6 +10871,7 @@ mod wait_scheduler_tests {
             return_pc,
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
+            false,
         ));
         assert_eq!(
             uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
@@ -10631,6 +10931,7 @@ mod wait_scheduler_tests {
             &running_thread,
             std::time::Instant::now(),
             Some(std::time::Duration::from_millis(1)),
+            false,
         ));
 
         assert_eq!(*running_thread.borrow(), None);
@@ -10676,6 +10977,7 @@ mod wait_scheduler_tests {
             return_pc,
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
+            false,
         ));
         assert_eq!(
             uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
@@ -10723,6 +11025,7 @@ mod wait_scheduler_tests {
             delay_ms,
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
+            false,
         ));
         assert_eq!(
             uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
@@ -10872,6 +11175,7 @@ mod wait_scheduler_tests {
             &running_thread,
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
+            false,
         ));
 
         assert_eq!(*current_thread_id.borrow(), ready_thread_id);
@@ -10938,6 +11242,7 @@ mod wait_scheduler_tests {
             &running_thread,
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
+            false,
         ));
 
         assert_eq!(*current_thread_id.borrow(), thread_id);
@@ -11063,6 +11368,7 @@ mod wait_scheduler_tests {
             &running_thread,
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
+            false,
         ));
 
         assert_eq!(*current_thread_id.borrow(), main_thread_id);
@@ -11252,6 +11558,7 @@ mod wait_scheduler_tests {
             &running_thread,
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
+            false,
         ));
 
         assert_eq!(*current_thread_id.borrow(), worker_thread_id);
@@ -11357,6 +11664,7 @@ mod wait_scheduler_tests {
             &running_thread,
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
+            false,
         ));
 
         assert!(kernel.blocked_waiter(worker_wait_id).is_none());
@@ -11455,6 +11763,7 @@ mod wait_scheduler_tests {
             &running_thread,
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
+            false,
         ));
 
         assert!(kernel.blocked_waiter(worker_wait_id).is_none());
@@ -12234,6 +12543,7 @@ fn try_wait_and_resume_blocked_get_message<D>(
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     host_wall_clock_started: std::time::Instant,
     host_wall_clock_limit: Option<std::time::Duration>,
+    live_pump: bool,
 ) -> bool {
     try_wait_and_resume_blocked_get_message_with_save(
         kernel,
@@ -12245,6 +12555,7 @@ fn try_wait_and_resume_blocked_get_message<D>(
         running_thread,
         host_wall_clock_started,
         host_wall_clock_limit,
+        live_pump,
         true,
     )
 }
@@ -12261,6 +12572,7 @@ fn try_wait_and_resume_blocked_get_message_after_current_blocked<D>(
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     host_wall_clock_started: std::time::Instant,
     host_wall_clock_limit: Option<std::time::Duration>,
+    live_pump: bool,
 ) -> bool {
     try_wait_and_resume_blocked_get_message_with_save(
         kernel,
@@ -12272,6 +12584,7 @@ fn try_wait_and_resume_blocked_get_message_after_current_blocked<D>(
         running_thread,
         host_wall_clock_started,
         host_wall_clock_limit,
+        live_pump,
         false,
     )
 }
@@ -12288,6 +12601,7 @@ fn try_wait_and_resume_blocked_get_message_with_save<D>(
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     host_wall_clock_started: std::time::Instant,
     host_wall_clock_limit: Option<std::time::Duration>,
+    live_pump: bool,
     save_active_context: bool,
 ) -> bool {
     if try_resume_blocked_get_message_with_active_pc(
@@ -12313,8 +12627,17 @@ fn try_wait_and_resume_blocked_get_message_with_save<D>(
     let Some(delay_ms) = kernel.timers.next_due_delay_ms() else {
         return false;
     };
-    if !timer_delay_fits_host_wall_budget(delay_ms, host_wall_clock_started, host_wall_clock_limit)
+    if live_pump
+        || host_wall_budget_is_live_pump_slice(host_wall_clock_started, host_wall_clock_limit)
     {
+        return false;
+    }
+    if !timer_delay_can_sleep_in_host_hook(
+        delay_ms,
+        host_wall_clock_started,
+        host_wall_clock_limit,
+        live_pump,
+    ) {
         return false;
     }
     if delay_ms != 0 {
@@ -12715,7 +13038,7 @@ mod guest_thread_stack_tests {
     fn unmapped_guest_spans_group_contiguous_pages() -> Result<()> {
         let mut mapped = KernelMemoryMappings::new(&[]);
         let (spans, pages) =
-            unmapped_guest_spans(&mapped, 0x3100_0000, 0x3110_0000, "heap spillover")?;
+            unmapped_guest_spans(&mapped, 0x3100_0000, 0x3110_0000, "heap spillover", true)?;
         assert_eq!(spans, vec![(0x3100_0000, 0x0010_0000)]);
         assert_eq!(pages.len(), 0x100);
         assert_eq!(pages[0], 0x3100_0000);
@@ -12723,8 +13046,29 @@ mod guest_thread_stack_tests {
 
         mapped.ranges.push((0x3100_2000, 0x1000));
         let (spans, pages) =
-            unmapped_guest_spans(&mapped, 0x3100_0000, 0x3100_5000, "heap spillover")?;
+            unmapped_guest_spans(&mapped, 0x3100_0000, 0x3100_5000, "heap spillover", true)?;
         assert_eq!(spans, vec![(0x3100_0000, 0x2000), (0x3100_3000, 0x2000)]);
+        assert_eq!(
+            pages,
+            vec![0x3100_0000, 0x3100_1000, 0x3100_3000, 0x3100_4000]
+        );
+
+        let (spans, pages) = unmapped_guest_spans(
+            &mapped,
+            0x3100_0000,
+            0x3100_5000,
+            "virtual allocation",
+            false,
+        )?;
+        assert_eq!(
+            spans,
+            vec![
+                (0x3100_0000, 0x1000),
+                (0x3100_1000, 0x1000),
+                (0x3100_3000, 0x1000),
+                (0x3100_4000, 0x1000)
+            ]
+        );
         assert_eq!(
             pages,
             vec![0x3100_0000, 0x3100_1000, 0x3100_3000, 0x3100_4000]
@@ -21013,6 +21357,7 @@ mod unicorn_tests {
             &last_messages,
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
+            false,
         ));
 
         assert!(blocked_waits.borrow().is_empty());
@@ -21086,6 +21431,7 @@ mod unicorn_tests {
             &last_messages,
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
+            false,
         ));
 
         assert!(kernel.blocked_waiter(stale_wait_id).is_none());
@@ -21164,6 +21510,7 @@ mod unicorn_tests {
             &last_messages,
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
+            false,
         ));
 
         assert!(blocked_waits.borrow().is_empty());
@@ -21345,6 +21692,7 @@ mod unicorn_tests {
             &running_thread,
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
+            false,
         ));
 
         assert!(kernel.blocked_waiter(wait_id).is_none());
@@ -21400,6 +21748,27 @@ mod unicorn_tests {
             started,
             Some(std::time::Duration::from_millis(1))
         ));
+        assert!(super::host_wall_budget_is_live_pump_slice(
+            started,
+            Some(std::time::Duration::from_millis(50))
+        ));
+        assert!(!super::host_wall_budget_is_live_pump_slice(
+            started,
+            Some(std::time::Duration::from_secs(1))
+        ));
+        assert!(!super::host_wall_budget_is_live_pump_slice(started, None));
+        assert!(!super::timer_delay_can_sleep_in_host_hook(
+            1,
+            started,
+            Some(std::time::Duration::from_secs(1)),
+            true
+        ));
+        assert!(super::timer_delay_can_sleep_in_host_hook(
+            1,
+            started,
+            Some(std::time::Duration::from_secs(1)),
+            false
+        ));
     }
 
     #[test]
@@ -21448,7 +21817,8 @@ mod unicorn_tests {
             0,
             return_pc,
             std::time::Instant::now(),
-            Some(std::time::Duration::from_secs(1)),
+            Some(std::time::Duration::from_secs(30)),
+            false,
         ));
 
         assert!(kernel.blocked_waiter(wait_id).is_none());

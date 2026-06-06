@@ -12,6 +12,43 @@
 
 ## Current Slice
 
+- Startup profiling follow-up: the per-page Unicorn heap-spillover map churn is
+  fixed/watch. Keep `map_guest_range` span batching only on heap spillover and
+  keep virtual allocations page-granular unless `reclaim_stale_virtual_memory_pages`
+  is made span-aware. Fresh reference artifacts are
+  `target\grouped_map_final_60s_summary.txt`,
+  `target\grouped_map_final_60s.png`, and
+  `target\grouped_map_final_flame.svg`: release virtual startup completes in
+  16.85 s wall time, with `map_kernel_memory_allocations` down from 33.91% to
+  1.16% and `map_heap_spillover` down from 33.91% to 0.17%. Next useful speed
+  work should chase the remaining CE scheduler/display/app-flow frontier,
+  `map_persisted_ram_blob_pages`, hook overhead, and process handoff behavior;
+  do not reopen file preload/reopen or per-page heap mapping unless fresh
+  traces regress those counters.
+- Remote live-pump follow-up: `target\remote_liveslice_fix1_*` closes the
+  early remote `FETCH_UNMAPPED pc=0x0000353c` regression caused by using a
+  50 ms wall slice as an implicit wait-hook policy. Continue mounted launches
+  with `--remote-server 192.168.0.39:8765`; remote/host live runs now use the
+  explicit `UnicornRunLimits.live_pump` flag to avoid host sleeps in wait
+  hooks, while the remote service slice is 1000 ms. If remote responsiveness
+  still feels bad, tune the service cadence separately from wait semantics and
+  do not restore tiny arbitrary Unicorn wall stops.
+- Route-drive retry after live-pump fix:
+  `target\remote_route_after_liveslice1_montage.png` shows the remote endpoint
+  stays live and accepts taps, but the app remains on the partial header/map
+  frame for the whole drive sequence. Continue route-search work by fixing the
+  missing right/bottom chrome and parked child/process/GWE handoff; do not
+  spend the next slice on remote touch delivery unless new traces show queued
+  touches are not reaching GWE.
+- Current startup perf target from
+  `target\startup_flame_virtual_250m_20260607_sudo_debugsym.svg`: optimize
+  persisted-RAM remapping/topology churn before touching file I/O again.
+  `map_persisted_ram_blob_pages` / `uc_mem_map` is ~13.5% of the 250M mounted
+  virtual profile and Unicorn teardown is ~15.8%; actual `uc_emu_start` is
+  ~6.5%, code hook is ~1.8%, and `map_kernel_memory_allocations` is ~1.7%.
+  Investigate keeping the Unicorn instance or mapped persisted pages alive
+  across live-pump slices instead of rebuilding/remapping every slice, while
+  preserving CE memory semantics and mapped file synchronization.
 - Immediate stuck-screen next step: implement the child-process scheduler
   handoff properly instead of reviving the backed-out host-loop rotation
   experiment. Evidence in `target\stuck_process_processes.txt` shows
