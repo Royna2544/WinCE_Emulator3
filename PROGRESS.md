@@ -9,6 +9,46 @@
 
 ## Confirmed
 
+- Remote/host touch delivery now preserves event timing and mouse-button key
+  state across the CE/GWE boundary. The remote queue records enqueue time on
+  touch/key events, synthesized tap aliases give `WM_LBUTTONDOWN` and
+  `WM_LBUTTONUP` an 80 ms gap, and `drain_remote_input_to_target` maps those
+  deltas into guest `MSG.time` instead of stamping a whole drained batch with
+  one tick. GWE also updates `VK_LBUTTON` state for `WM_LBUTTONDOWN/UP`, so
+  `GetKeyState(VK_LBUTTON)` reflects mouse-button state like keyboard posts.
+  Focused coverage `remote_input_active_window_drain_posts_mouse_messages`,
+  `remote_input_blocked_thread_target_overrides_stale_active_window`,
+  `queues_touch_key_serial_and_status`, and
+  `mouse_button_messages_update_lbutton_key_state` passes. Fresh mounted
+  Win32-host probes using dumped runtime DLLs and
+  `--remote-server 192.168.0.39:8765` confirm the old same-tick failure is
+  gone: `target\menu_popup_touchtime1_*` and
+  `target\menu_popup_lbutton1_*` deliver top-right menu tap messages to HWND
+  `0x00020004` as `WM_LBUTTONDOWN`/`WM_LBUTTONUP` at `136700`/`136780` ms
+  (or equivalent separated times) with bounded RSS/file I/O. The menu/action
+  transition itself is still not fixed: after the tap, the guest does not issue
+  post-tap `ShowWindow(SW_SHOW)` for hidden child controls `0x00020060`,
+  `0x00020068`, or `0x0002006c`.
+- The bottom current-location strip is a real, later-shown child window, not a
+  host presenter delay. In `target\menu_bottom_compare1_*`, child HWND
+  `0x00020070` is created hidden, later shown with `ShowWindow(SW_SHOW)`,
+  receives `WM_WINDOWPOSCHANGING/CHANGED`, `WM_SIZE`, and its own `WM_PAINT`
+  after the parent/map window work, then responds to a remote tap at the bottom
+  strip by posting the app-private `0x5734` message to parent `0x00020004`.
+  That path creates and shows top-level/owned `WCE_TGNaviWindow` HWND
+  `0x00020084`, and the converted final framebuffer
+  `target\menu_bottom_compare1_final.png` shows the real Route Search shell.
+  Therefore the visible delay of the bottom strip is currently consistent with
+  CE/MFC child-window sequencing; the open bug is the separate top-right
+  `메뉴` path not issuing the expected transition.
+- GWE message retrieval order now follows the CE message-queue order from
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`: posted messages are
+  returned before received synchronous sends, then quit/paint. Focused coverage
+  `posted_messages_are_retrieved_before_received_sends` and existing raw
+  queued cross-thread send coverage pass. This is a CE-correct queue-order fix,
+  but mounted `target\menu_popup_orderfix1_*` evidence showed it is not by
+  itself sufficient to make the top-right menu tap reveal the expected action
+  controls.
 - Windows-sudo `cargo flamegraph` profiling is now in use for mounted iNavi
   startup. Fresh virtual runs
   `target\startup_flame_virtual_sudo1.svg` and

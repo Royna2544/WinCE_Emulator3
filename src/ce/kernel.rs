@@ -3141,12 +3141,19 @@ impl CeKernel {
         hwnd: Option<u32>,
         hit_test_touches: bool,
     ) -> usize {
-        let time_ms = self.timers.tick_count();
         let touch_events = self.remote.drain_touch_events();
         let key_events = self.remote.drain_key_events();
+        let base_time_ms = self.timers.tick_count();
+        let first_input_ms = touch_events
+            .iter()
+            .map(|event| event.enqueued_at_ms)
+            .chain(key_events.iter().map(|event| event.enqueued_at_ms))
+            .min()
+            .unwrap_or(0);
         let mut posted = 0;
 
         for event in touch_events {
+            let time_ms = remote_event_time_ms(base_time_ms, first_input_ms, event.enqueued_at_ms);
             let point = Point {
                 x: event.x,
                 y: event.y,
@@ -3221,6 +3228,7 @@ impl CeKernel {
             .or_else(|| self.gwe.get_capture())
             .or_else(|| self.gwe.get_active_window());
         for event in key_events {
+            let time_ms = remote_event_time_ms(base_time_ms, first_input_ms, event.enqueued_at_ms);
             let Some(key_target) = key_target.filter(|hwnd| self.gwe.is_window(*hwnd)) else {
                 self.record_message_trace(MessageTraceRecord {
                     op: "remote_key_drop",
@@ -3438,6 +3446,11 @@ fn is_file_open_trace(op: &str) -> bool {
     matches!(op, "CreateFileW" | "CreateFileWArg" | "FindFirstFileW")
 }
 
+fn remote_event_time_ms(base_time_ms: u32, first_input_ms: u64, event_input_ms: u64) -> u32 {
+    let delta = event_input_ms.saturating_sub(first_input_ms);
+    base_time_ms.wrapping_add(delta.min(u64::from(u32::MAX)) as u32)
+}
+
 fn make_lparam_i16(low: i32, high: i32) -> u32 {
     ((high as u32) & 0xffff) << 16 | ((low as u32) & 0xffff)
 }
@@ -3490,10 +3503,19 @@ mod tests {
 
         let mut messages = Vec::new();
         while let Some(message) = kernel.gwe.get_message(thread_id) {
-            messages.push((message.hwnd, message.msg));
+            messages.push((message.hwnd, message.msg, message.time_ms));
         }
-        assert!(messages.contains(&(hwnd, WM_LBUTTONDOWN)));
-        assert!(messages.contains(&(hwnd, WM_LBUTTONUP)));
+        let down = messages
+            .iter()
+            .find(|(message_hwnd, msg, _)| *message_hwnd == hwnd && *msg == WM_LBUTTONDOWN)
+            .copied()
+            .expect("remote tap posts mouse down");
+        let up = messages
+            .iter()
+            .find(|(message_hwnd, msg, _)| *message_hwnd == hwnd && *msg == WM_LBUTTONUP)
+            .copied()
+            .expect("remote tap posts mouse up");
+        assert!(up.2 > down.2);
         Ok(())
     }
 
@@ -3525,10 +3547,19 @@ mod tests {
         assert!(!active_messages.contains(&WM_LBUTTONUP));
         let mut blocked_messages = Vec::new();
         while let Some(message) = kernel.gwe.get_message(blocked_thread_id) {
-            blocked_messages.push((message.hwnd, message.msg));
+            blocked_messages.push((message.hwnd, message.msg, message.time_ms));
         }
-        assert!(blocked_messages.contains(&(blocked, WM_LBUTTONDOWN)));
-        assert!(blocked_messages.contains(&(blocked, WM_LBUTTONUP)));
+        let down = blocked_messages
+            .iter()
+            .find(|(message_hwnd, msg, _)| *message_hwnd == blocked && *msg == WM_LBUTTONDOWN)
+            .copied()
+            .expect("blocked target receives mouse down");
+        let up = blocked_messages
+            .iter()
+            .find(|(message_hwnd, msg, _)| *message_hwnd == blocked && *msg == WM_LBUTTONUP)
+            .copied()
+            .expect("blocked target receives mouse up");
+        assert!(up.2 > down.2);
         Ok(())
     }
 }

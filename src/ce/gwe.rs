@@ -58,6 +58,7 @@ pub const DLGC_RADIOBUTTON: u32 = 0x0040;
 pub const DLGC_WANTCHARS: u32 = 0x0080;
 pub const DLGC_STATIC: u32 = 0x0100;
 pub const DLGC_BUTTON: u32 = 0x2000;
+pub const VK_LBUTTON: u32 = 0x01;
 pub const VK_SHIFT: u32 = 0x10;
 pub const VK_CONTROL: u32 = 0x11;
 pub const VK_MENU: u32 = 0x12;
@@ -2097,6 +2098,8 @@ impl Gwe {
         match msg {
             WM_KEYDOWN => self.set_key_down(virtual_key),
             WM_KEYUP => self.set_key_up(virtual_key),
+            WM_LBUTTONDOWN => self.set_key_down(VK_LBUTTON),
+            WM_LBUTTONUP => self.set_key_up(VK_LBUTTON),
             _ => {}
         }
     }
@@ -2646,10 +2649,10 @@ impl Gwe {
         min_msg: u32,
         max_msg: u32,
     ) -> Option<Message> {
-        if let Some(message) = self.take_matching_sent_message(thread_id, hwnd, min_msg, max_msg) {
+        if let Some(message) = self.take_matching_message(thread_id, hwnd, min_msg, max_msg) {
             return Some(message);
         }
-        if let Some(message) = self.take_matching_message(thread_id, hwnd, min_msg, max_msg) {
+        if let Some(message) = self.take_matching_sent_message(thread_id, hwnd, min_msg, max_msg) {
             return Some(message);
         }
         if let Some(message) = self.take_quit_message(thread_id) {
@@ -2670,11 +2673,6 @@ impl Gwe {
         max_msg: u32,
         flags: PeekFlags,
     ) -> Option<Message> {
-        if let Some(message) =
-            self.peek_matching_sent_message(thread_id, hwnd, min_msg, max_msg, flags)
-        {
-            return Some(message);
-        }
         if let Some(queue) = self.queues.get_mut(&thread_id) {
             if let Some(index) = queue
                 .iter()
@@ -2692,6 +2690,11 @@ impl Gwe {
                     queue.get(index).cloned()
                 };
             }
+        }
+        if let Some(message) =
+            self.peek_matching_sent_message(thread_id, hwnd, min_msg, max_msg, flags)
+        {
+            return Some(message);
         }
         if flags.contains(PeekFlags::REMOVE) {
             if let Some(message) = self.take_quit_message(thread_id) {
@@ -3669,7 +3672,7 @@ mod tests {
     }
 
     #[test]
-    fn sent_messages_are_retrieved_before_posts_and_mark_receiver_send_state() {
+    fn posted_messages_are_retrieved_before_received_sends() {
         let mut gwe = Gwe::default();
         let thread_id = 7;
         let hwnd = gwe.create_window(thread_id, "target", "");
@@ -3687,6 +3690,12 @@ mod tests {
         );
         assert!(!gwe.in_send_message(thread_id));
 
+        let posted = gwe.get_message(thread_id).unwrap();
+        assert_eq!(posted.msg, WM_USER + 1);
+        assert_eq!(posted.source, MSGSRC_SOFTWARE_POST);
+        assert_eq!(gwe.get_message_source(thread_id), MSGSRC_SOFTWARE_POST);
+        assert!(!gwe.in_send_message(thread_id));
+
         let sent = gwe.get_message(thread_id).unwrap();
         assert_eq!(sent.msg, WM_USER + 2);
         assert_eq!(sent.source, MSGSRC_SOFTWARE_SEND);
@@ -3695,11 +3704,19 @@ mod tests {
 
         gwe.end_send_message(thread_id);
         assert!(!gwe.in_send_message(thread_id));
+    }
 
-        let posted = gwe.get_message(thread_id).unwrap();
-        assert_eq!(posted.msg, WM_USER + 1);
-        assert_eq!(posted.source, MSGSRC_SOFTWARE_POST);
-        assert_eq!(gwe.get_message_source(thread_id), MSGSRC_SOFTWARE_POST);
+    #[test]
+    fn mouse_button_messages_update_lbutton_key_state() {
+        let mut gwe = Gwe::default();
+        let thread_id = 7;
+        let hwnd = gwe.create_window(thread_id, "target", "");
+
+        gwe.post_message(thread_id, Message::new(hwnd, WM_LBUTTONDOWN, 1, 0, 10));
+        assert_ne!(gwe.get_key_state(VK_LBUTTON) & 0x8000_0000, 0);
+
+        gwe.post_message(thread_id, Message::new(hwnd, WM_LBUTTONUP, 0, 0, 90));
+        assert_eq!(gwe.get_key_state(VK_LBUTTON) & 0x8000_0000, 0);
     }
 
     #[test]

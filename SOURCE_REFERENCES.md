@@ -36,6 +36,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
 
 ## Windows CE Core OS
 
+- GWE message-queue order:
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`
+  - CE's queue search order is posted messages, received message queue,
+    sent-message stack, paint list, then quit. v3 mirrors this for
+    `GetMessageW` and removing `PeekMessageW`, so ordinary posted mouse/timer/
+    private messages are not starved behind received synchronous sends.
+
 - GWE/GDI region and window-region behavior:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h`,
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`,
@@ -1107,6 +1114,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     and loops through `PumpMessage`; a `FALSE` `GetMessage` return unwinds the
     pump as a quit condition, so an empty queue must block instead of returning
     false.
+  - `AfxInternalPumpMessage` calls `AfxPreTranslateMessage` before
+    `TranslateMessage`/`DispatchMessage`; menu/input traces need to distinguish
+    raw message delivery from messages consumed during MFC pretranslation.
   - Its exception path calls `ValidateRect` for `WM_PAINT`, and idle detection
     excludes `WM_PAINT`, so paint messages must be tied to real update-region
     validation.
@@ -1119,6 +1129,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
 - MFC window dispatch:
   `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/wincore.cpp`
   - `CWnd::WindowProc` calls message-map handling before `DefWindowProc`.
+  - `CWnd::WalkPreTranslateTree` walks from the target HWND toward the main
+    window through `GetParent`, and `CWnd::PreTranslateInput` forwards keyboard
+    and mouse ranges to `IsDialogMessage`. Use this as evidence when comparing
+    delivered mouse messages against later menu/action visibility changes.
   - Window creation flows through `AfxCtxCreateWindowEx`, `PreCreateWindowEx`,
     and `PostCreateWindowEx`.
   - CE `PreCreateWindowEx` registers a hybrid `WCE_` class whose WNDPROC is

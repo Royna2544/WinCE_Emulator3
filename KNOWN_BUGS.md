@@ -12,6 +12,29 @@
 
 ## Recently Closed / Watch
 
+- Remote touch taps collapsing `WM_LBUTTONDOWN`/`WM_LBUTTONUP` into the same
+  guest `MSG.time` is closed.
+  - Symptom: REST `single-touch` could make the top-right map `메뉴` button
+    look pressed or inert because down/up were drained from the remote queue
+    in one batch and stamped with the same CE tick.
+  - Fix: queued remote touch/key events now carry enqueue timestamps; tap
+    aliases synthesize an 80 ms down/up gap; the kernel maps input deltas to
+    guest message times; GWE updates `VK_LBUTTON` state for mouse button
+    messages.
+  - Evidence: focused remote/GWE tests pass, and mounted
+    `target\menu_popup_lbutton1_*` records `WM_LBUTTONDOWN`/`WM_LBUTTONUP`
+    delivered to HWND `0x00020004` at separated guest times.
+  - Status: closed/watch. Reopen only if future traces show same-tick
+    down/up or incorrect `GetKeyState(VK_LBUTTON)` during mouse handling.
+- GWE posted-message priority over received sends is closed/watch.
+  - Symptom: v3 retrieved received synchronous sends before ordinary posted
+    messages, conflicting with CE's documented queue search order.
+  - Fix: `GetMessageW`/removing `PeekMessageW` now consume matching posted
+    messages before matching received sends.
+  - Evidence: `posted_messages_are_retrieved_before_received_sends` passes and
+    mounted menu probes no longer depend on the old ordering. This did not by
+    itself fix the visible menu/action transition.
+  - Status: closed/watch.
 - Startup slowness caused by multi-GB file preload/reopen or import-name
   lookup is closed/watch for the current mounted virtual profile.
   - Symptom: startup felt much slower than the previously fast path, with
@@ -121,6 +144,28 @@
 
 ## Open
 
+- Top-right live-map `메뉴` tap still does not reveal the expected action
+  controls.
+  - Symptom: on the real map screen with bottom current-location bar visible,
+    tapping the top-right `메뉴` control leaves hidden child controls such as
+    `0x00020060`, `0x00020068`, and `0x0002006c` hidden.
+  - Evidence: `target\menu_popup_lbutton1_*` delivers
+    `WM_LBUTTONDOWN/WM_LBUTTONUP` to parent HWND `0x00020004` with separated
+    guest times and bounded memory/file I/O. The window-import trace shows no
+    post-tap `ShowWindow(SW_SHOW)` for the hidden action/menu children, so this
+    is no longer a dropped REST input, same-tick tap, or `VK_LBUTTON` state
+    bug.
+  - New evidence: `target\menu_bottom_compare1_*` shows the bottom
+    current-location strip `0x00020070` is created hidden, later shown/painted
+    through normal guest messages, and tapping it posts app-private `0x5734` to
+    parent `0x00020004`, then creates/shows `WCE_TGNaviWindow` `0x00020084`.
+    The converted framebuffer `target\menu_bottom_compare1_final.png` shows
+    the real Route Search shell. That makes the bottom strip's late appearance
+    a CE/MFC child-window sequencing fact for now, not the current bug.
+  - Status: open. Compare top-right parent WNDPROC handling with the
+    bottom-strip success path and chase focus/capture/active-window semantics,
+    style/enable bits, app-private posts, and MFC pretranslation rather than
+    forcing visibility.
 - Host/manual post-map responsiveness still needs a focused input/scheduler
   trace if clicks feel like ANR after the corrected map screen.
   - Symptom: after the CE visible-region clipping fix, the live Win32

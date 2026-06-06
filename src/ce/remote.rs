@@ -36,12 +36,14 @@ pub struct TouchEvent {
     pub message: u32,
     pub x: i32,
     pub y: i32,
+    pub enqueued_at_ms: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KeyEvent {
     pub message: u32,
     pub vk: u32,
+    pub enqueued_at_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -217,8 +219,14 @@ impl CeRemote {
             });
         }
 
-        for message in messages {
-            self.touch_events.push_back(TouchEvent { message, x, y });
+        let now_ms = system_time_ms();
+        for (index, message) in messages.into_iter().enumerate() {
+            self.touch_events.push_back(TouchEvent {
+                message,
+                x,
+                y,
+                enqueued_at_ms: now_ms.saturating_add(touch_message_offset_ms(index)),
+            });
         }
         Ok(())
     }
@@ -240,7 +248,11 @@ impl CeRemote {
         if !(1..=0xff).contains(&vk) {
             return Err(RemoteError::InvalidVirtualKey(vk));
         }
-        self.key_events.push_back(KeyEvent { message, vk });
+        self.key_events.push_back(KeyEvent {
+            message,
+            vk,
+            enqueued_at_ms: system_time_ms(),
+        });
         Ok(())
     }
 
@@ -523,6 +535,11 @@ fn touch_messages(phase: &str) -> Result<Vec<u32>, RemoteError> {
     }
 }
 
+fn touch_message_offset_ms(index: usize) -> u64 {
+    const TAP_UP_DELAY_MS: u64 = 80;
+    index as u64 * TAP_UP_DELAY_MS
+}
+
 fn parse_location_fix(message: &Value) -> Result<LocationFix, RemoteError> {
     let Some(lat) = message.get("lat").and_then(Value::as_f64) else {
         return Err(RemoteError::InvalidLocationBody);
@@ -656,7 +673,10 @@ mod tests {
         assert_eq!(remote.touch_event_count(), 2);
         assert_eq!(remote.key_event_count(), 1);
         assert_eq!(remote.serial_byte_count(), 3);
-        assert_eq!(remote.drain_touch_events()[0].message, WM_LBUTTONDOWN);
+        let touch_events = remote.drain_touch_events();
+        assert_eq!(touch_events[0].message, WM_LBUTTONDOWN);
+        assert_eq!(touch_events[1].message, WM_LBUTTONUP);
+        assert!(touch_events[1].enqueued_at_ms > touch_events[0].enqueued_at_ms);
         assert_eq!(remote.read_serial_bytes(2), b"ab");
         assert_eq!(remote.status("COM7:").gps_target, "COM7:");
     }

@@ -23,15 +23,21 @@
   dispatch frequency, `combine_rgn_raw`, streamed `read_file_into`, guest
   memcpy, and scheduler/device waits. Do not reintroduce app-specific fast
   paths or fake UI progress.
-- Next mounted route-search probe should use the rebuilt release binary with
-  the generic GWE `SetWindowPos` redraw fix and the Win32 host stopped-screen
-  presenter. Recheck the top-right `메뉴` plus bottom action-bar state from a
-  fresh visible render: if the action controls still only appear after a later
-  map/bottom-strip interaction, capture `messages` and `windows` again and
-  chase CE visibility/update/z-order dispatch rather than accepting the stale
-  visual as correct. When a wall-stop or guest stop happens in host monitor
-  mode, the window should show `Emulator process stopped` and discard input
-  until the next run segment, so do not confuse that state with a live ANR.
+- Current menu/action frontier: top-right `메뉴` taps are delivered through
+  `GetMessageW` to HWND `0x00020004`, and the remote input bridge now gives
+  down/up separated `MSG.time` plus correct `VK_LBUTTON` key state. Fresh
+  mounted probes `target\menu_popup_touchtime1_*` and
+  `target\menu_popup_lbutton1_*` still leave the bottom action controls hidden:
+  no post-tap `ShowWindow(SW_SHOW)` appears for children `0x00020060`,
+  `0x00020068`, or `0x0002006c`. `target\menu_bottom_compare1_*` proves the
+  bottom current-location strip (`0x00020070`) is a separate child shown and
+  painted later by the guest, and tapping it legitimately opens the full Route
+  Search shell (`0x00020084`). Continue by tracing the top-right parent
+  WNDPROC path after `WM_LBUTTONUP` and compare it against the bottom-strip
+  success path: inspect the missing app-private post/command/custom messages,
+  capture/focus/active/disabled/style state, `GetWindowLong`/`GetDlgCtrlID`
+  results, and MFC pretranslation. Do not fake the child visibility or force
+  iNavi menu state.
 - Current live UI frontier after `_hypot`: `target\hypot_route_host1_*`
   supersedes `target\modal_drive_host1_*`. `_hypot @1023` is implemented, and
   the mounted Win32-host run now drives through safety, closes the
