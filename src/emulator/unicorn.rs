@@ -1864,6 +1864,8 @@ impl UnicornMips {
         let framebuffer_tick_error_code_hook = Rc::clone(&framebuffer_tick_error);
         let process_dll_search_dirs = self.dll_search_dirs.clone();
         let trampoline_ranges_code_hook = trampoline_ranges.clone();
+        let blocked_get_message = Rc::new(RefCell::new(None::<UnicornBlockedGetMessage>));
+        let blocked_get_message_live_hook = Rc::clone(&blocked_get_message);
         if !fast_start_enabled {
             uc.add_code_hook(1, 0, move |uc, address, _size| {
             let pc = address as u32;
@@ -1896,7 +1898,15 @@ impl UnicornMips {
                 let mut counter = host_wall_clock_counter_hook.borrow_mut();
                 *counter = counter.wrapping_add(1);
                 if *counter & 0x0fff == 0 {
-                    unsafe { (&mut *kernel_ptr).drain_remote_server_control_messages() };
+                    if let Some(blocked) = blocked_get_message_live_hook.borrow().as_ref() {
+                        unsafe { &mut *kernel_ptr }
+                            .drain_remote_server_control_messages_to_thread_window(
+                                blocked.thread_id,
+                                blocked.hwnd,
+                            );
+                    } else {
+                        unsafe { (&mut *kernel_ptr).drain_remote_server_control_messages() };
+                    }
                     if let Err(err) =
                         drain_win32_host_input_to_active_window(unsafe { &mut *kernel_ptr })
                     {
@@ -2216,7 +2226,6 @@ impl UnicornMips {
             .map_err(|err| Error::Backend(format!("install block trace hook: {err:?}")))?;
         }
 
-        let blocked_get_message = Rc::new(RefCell::new(None));
         let blocked_get_message_hook = Rc::clone(&blocked_get_message);
         let last_imports = Rc::new(RefCell::new(Vec::<UnicornLastImport>::new()));
         let last_imports_hook = Rc::clone(&last_imports);

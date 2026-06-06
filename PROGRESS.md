@@ -15,7 +15,10 @@
   `GetMessageW` snapshot into remote-server control draining, and
   `CeKernel::drain_remote_server_control_messages_to_thread_window` dispatches
   REST controls then drains touch/key events through the same blocked
-  thread/window path used for host mouse input. Focused coverage
+  thread/window path used for host mouse input. The Unicorn live-tick drain
+  now uses that parked `GetMessageW` target too, closing the race where REST
+  controls could be consumed through active-window fallback during long host
+  runs before the outer loop saw the blocked snapshot. Focused coverage
   `remote_input_blocked_thread_target_overrides_stale_active_window` passes.
   A short optimized trace repro `target\safety_remote_trace_*` confirms a
   remote tap at the safety-notice OK button posts and delivers
@@ -24,6 +27,16 @@
   current-process terminate path (`api2.2`, process `0x42`, code `0`), so the
   remaining "ded after OK" symptom is now guest continuation/device/state
   fidelity, not remote HTTP input loss.
+- Fresh host message evidence `target\remote_ok_tap_preidle_*` confirms the
+  accepted REST tap is delivered as `WM_LBUTTONDOWN/WM_LBUTTONUP`; when sent
+  too early it legitimately hits the then-front HWND `0x00020008`. The later
+  fatal path remains the existing singleton/front-window branch:
+  `CreateMutexW(L"iNavi")` reports `ERROR_ALREADY_EXISTS`, `FindWindowW`
+  finds HWND `0x00020000` by title `iNavi`, `ReleaseMutex` fails with
+  `ERROR_NOT_OWNER`, and the app reaches the encoded current-process exit
+  thunk at `0x0048fa90`. The active blocker is therefore the old
+  singleton/window identity or lifecycle frontier, not remote transport,
+  Win32 presenter responsiveness, or file-I/O startup speed.
 - The Unicorn serial wait bridges now yield to already-ready scheduler waiters
   after parking the current serial operation. Empty serial `ReadFile` and
   `WaitCommEvent` previously registered the active thread's serial wait, then

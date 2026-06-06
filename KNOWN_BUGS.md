@@ -24,11 +24,19 @@
     `encoded_exit=api2.2 process=0x00000042 code=0`, so the just-fixed layer is
     remote input targeting during a parked host `GetMessageW`, not app
     continuation.
-  - Status: open as guest continuation/device/state fidelity after delivered
-    input. Keep using `--remote-server 192.168.0.39:8765` on mounted launches,
-    and use messages/files/devices/process trace selectors to identify what
-    app-side condition requests termination after the OK path. Do not bypass
-    the safety screen or hardcode iNavi state.
+  - New evidence: `target\remote_ok_tap_preidle_*` shows the live-tick REST
+    drain now routes through the same parked-message target. The tap was
+    delivered and later consumed by `GetMessageW`; because it was sent before
+    the safety button existed, it hit HWND `0x00020008`. The fatal path is the
+    old singleton branch: `CreateMutexW(L"iNavi")` returns handle `0x11c` with
+    `ERROR_ALREADY_EXISTS`, `FindWindowW(title=L"iNavi")` returns
+    `0x00020000`, `ReleaseMutex` fails with `ERROR_NOT_OWNER`, and the app
+    reaches the encoded current-process terminate thunk at `0x0048fa90`.
+  - Status: open as singleton/window identity or lifecycle fidelity after
+    delivered input. Keep using `--remote-server 192.168.0.39:8765` on mounted
+    launches, and trace why the app sees its own mutex/window as an existing
+    instance after startup. Do not bypass the safety screen, weaken named mutex
+    semantics, or hardcode iNavi state.
 
 - Host/manual post-map responsiveness still needs a focused input/scheduler
   trace if clicks feel like ANR after the corrected map screen.
