@@ -2,6 +2,8 @@ mod accelerometer;
 mod i2c_bus;
 mod light_sensor;
 mod magnetometer;
+mod nand_uuid;
+mod pic_controller;
 
 use std::collections::BTreeMap;
 #[cfg(windows)]
@@ -73,8 +75,8 @@ pub enum DeviceBackend {
     I2cBus,
     LightSensor,
     Magnetometer,
-    #[serde(rename = "NANDUUID_RETURN")]
-    NandUuidReturn,
+    NandUuid,
+    PicController,
 }
 
 #[derive(Debug, Clone)]
@@ -106,6 +108,8 @@ enum DeviceRuntime {
     I2cBus(i2c_bus::I2cBus),
     LightSensor(light_sensor::LightSensor),
     Magnetometer(magnetometer::Magnetometer),
+    NandUuid(nand_uuid::NandUuid),
+    PicController(pic_controller::PicController),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -253,6 +257,10 @@ impl DeviceRuntime {
             DeviceBackend::I2cBus => Self::I2cBus(i2c_bus::I2cBus::new()),
             DeviceBackend::LightSensor => Self::LightSensor(light_sensor::LightSensor::new()),
             DeviceBackend::Magnetometer => Self::Magnetometer(magnetometer::Magnetometer::new()),
+            DeviceBackend::NandUuid => Self::NandUuid(nand_uuid::NandUuid::new()),
+            DeviceBackend::PicController => {
+                Self::PicController(pic_controller::PicController::new())
+            }
             _ => Self::None,
         }
     }
@@ -370,6 +378,12 @@ impl DeviceSession {
             DeviceRuntime::Magnetometer(sensor) => {
                 return sensor.device_io_control(ioctl_code, input, output_capacity);
             }
+            DeviceRuntime::NandUuid(device) => {
+                return device.device_io_control(ioctl_code, input, output_capacity);
+            }
+            DeviceRuntime::PicController(device) => {
+                return device.device_io_control(ioctl_code, input, output_capacity);
+            }
             DeviceRuntime::None => {}
         }
 
@@ -382,21 +396,13 @@ impl DeviceSession {
             DeviceBackend::Accelerometer
             | DeviceBackend::I2cBus
             | DeviceBackend::LightSensor
-            | DeviceBackend::Magnetometer => DeviceIoControlResult {
+            | DeviceBackend::Magnetometer
+            | DeviceBackend::NandUuid
+            | DeviceBackend::PicController => DeviceIoControlResult {
                 success: false,
                 bytes_returned: 0,
                 output: Vec::new(),
             },
-            DeviceBackend::NandUuidReturn => {
-                let mut output = ioctl_code.to_le_bytes().to_vec();
-                output.extend_from_slice(self.guest_name.as_bytes());
-                output.truncate(output_capacity as usize);
-                DeviceIoControlResult {
-                    success: true,
-                    bytes_returned: output.len() as u32,
-                    output,
-                }
-            }
         }
     }
 
@@ -718,5 +724,90 @@ mod tests {
         );
         let i2c_read = i2c.device_io_control(i2c_bus::IOCTL_I2C_READ, &[0x10], 1);
         assert_eq!(i2c_read.output, vec![0x33]);
+    }
+
+    #[test]
+    fn nand_uuid_backend_handles_decoded_ioctl_contracts() {
+        let namespace = DeviceNamespace::from_config(DeviceConfigFile {
+            version: 1,
+            defaults: DeviceDefaults::default(),
+            devices: vec![DeviceConfig {
+                guest: "UID1:".to_owned(),
+                kind: DeviceKind::IoctlDevice,
+                backend: DeviceBackend::NandUuid,
+                host: None,
+                enabled: true,
+                note: None,
+            }],
+        });
+
+        let mut uid = namespace.open("UID1:").unwrap();
+        let uuid = uid.device_io_control(nand_uuid::IOCTL_NAND_UPD_READ_UUID, &[], 4);
+        assert!(uuid.success);
+        assert_eq!(uuid.bytes_returned, 4);
+
+        let uuid_again = uid.device_io_control(nand_uuid::IOCTL_NAND_UPD_READ_UUID, &[], 4);
+        assert_eq!(uuid_again.output, uuid.output);
+
+        let sector = 7u32.to_le_bytes();
+        let sector_uuid =
+            uid.device_io_control(nand_uuid::IOCTL_NAND_UPD_READ_UUID_BY_SECTORNUM, &sector, 4);
+        assert!(sector_uuid.success);
+        assert_eq!(sector_uuid.bytes_returned, 4);
+
+        let load = uid.device_io_control(
+            nand_uuid::IOCTL_NAND_CPU_LOAD_CONTROL,
+            &42u32.to_le_bytes(),
+            0,
+        );
+        assert!(load.success);
+        assert!(
+            !uid.device_io_control(nand_uuid::IOCTL_NAND_UPD_READ_UUID, &[], 2)
+                .success
+        );
+        assert!(!uid.device_io_control(0xdead_beef, &[], 4).success);
+    }
+
+    #[test]
+    fn pic_controller_backend_handles_decoded_ioctl_contracts() {
+        let namespace = DeviceNamespace::from_config(DeviceConfigFile {
+            version: 1,
+            defaults: DeviceDefaults::default(),
+            devices: vec![DeviceConfig {
+                guest: "PIC1:".to_owned(),
+                kind: DeviceKind::IoctlDevice,
+                backend: DeviceBackend::PicController,
+                host: None,
+                enabled: true,
+                note: None,
+            }],
+        });
+
+        let mut pic = namespace.open("PIC1:").unwrap();
+        assert!(
+            pic.device_io_control(pic_controller::IOCTL_DEVICE_PIC_READ_VERSION, &[], 1)
+                .success
+        );
+        assert!(
+            pic.device_io_control(pic_controller::IOCTL_NANDUUID_MICOM_RESET_STAGE, &[], 0)
+                .success
+        );
+        assert!(
+            pic.device_io_control(pic_controller::IOCTL_NANDUUID_MICOM_RESET_ACK, &[], 0)
+                .success
+        );
+
+        let read = pic.device_io_control(
+            pic_controller::IOCTL_DEVICE_PIC_I2C_SET_EEPROM_COMMAND_READ,
+            &[0x10, 0],
+            1,
+        );
+        assert!(read.success);
+        assert_eq!(read.bytes_returned, 1);
+
+        let display =
+            pic.device_io_control(pic_controller::IOCTL_DEVICE_PIC_I2C_DISPLAY_STATE, &[2], 0);
+        assert!(display.success);
+        assert!(!pic.device_io_control(0xdead_beef, &[], 0).success);
     }
 }

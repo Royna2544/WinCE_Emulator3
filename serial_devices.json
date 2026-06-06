@@ -30,16 +30,16 @@
     {
       "guest": "UID1:",
       "type": "ioctl_device",
-      "backend": "NANDUUID_RETURN",
+      "backend": "nand_uuid",
       "enabled": true,
-      "note": "Drivers\\BuiltIn\\NANDUUID, NANDUUID.dll, NAND UUID custom device"
+      "note": "Drivers\\BuiltIn\\NANDUUID, NANDUUID.dll, decoded UID_IOControl UUID/MICOM/touchpad contracts"
     },
     {
       "guest": "PIC1:",
       "type": "ioctl_device",
-      "backend": "stub",
+      "backend": "pic_controller",
       "enabled": true,
-      "note": "Drivers\\BuiltIn\\pic_drv, pic_drv.dll, secondary MCU or PIC-family candidate"
+      "note": "Drivers\\BuiltIn\\pic_drv, pic_drv.dll, decoded PIC_IOControl MCU/I2C/EEPROM contracts"
     },
     {
       "guest": "BTN1:",
