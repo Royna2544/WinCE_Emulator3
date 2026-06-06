@@ -12,9 +12,9 @@ use wince_emulation_v3::{
             ORD_CREATE_WINDOW_EX_W, ORD_D_TO_LL, ORD_D_TO_ULL, ORD_DISPATCH_MESSAGE_W, ORD_DPCMP,
             ORD_DPMUL, ORD_DPTOFP, ORD_DPTOLI, ORD_EVENT_MODIFY, ORD_F_TO_LL, ORD_F_TO_ULL,
             ORD_FMODF, ORD_FPCMP, ORD_FPMUL, ORD_FPTODP, ORD_FPTOUL, ORD_GED, ORD_GES,
-            ORD_GET_MESSAGE_W, ORD_INITIALIZE_CRITICAL_SECTION, ORD_ISWCTYPE, ORD_LITODP,
-            ORD_LITOFP, ORD_LL_DIV, ORD_LONGJMP, ORD_LTD, ORD_NES, ORD_POST_MESSAGE_W, ORD_POW,
-            ORD_REG_OPEN_KEY_EX_W, ORD_REGISTER_GESTURE, ORD_SETJMP, ORD_SQRT, ORD_ULTODP,
+            ORD_GET_MESSAGE_W, ORD_HYPOT, ORD_INITIALIZE_CRITICAL_SECTION, ORD_ISWCTYPE,
+            ORD_LITODP, ORD_LITOFP, ORD_LL_DIV, ORD_LONGJMP, ORD_LTD, ORD_NES, ORD_POST_MESSAGE_W,
+            ORD_POW, ORD_REG_OPEN_KEY_EX_W, ORD_REGISTER_GESTURE, ORD_SETJMP, ORD_SQRT, ORD_ULTODP,
             ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE, current_static_export_count,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
@@ -50,6 +50,7 @@ fn coredll_table_reads_full_static_rust_ordinals() -> Result<()> {
         ORD_DISPATCH_MESSAGE_W
     );
     assert_eq!(table.resolve_name("sqrt").unwrap().ordinal, ORD_SQRT);
+    assert_eq!(table.resolve_name("_hypot").unwrap().ordinal, ORD_HYPOT);
     assert_eq!(table.resolve_name("__ll_div").unwrap().ordinal, ORD_LL_DIV);
     assert_eq!(table.resolve_name("longjmp").unwrap().ordinal, ORD_LONGJMP);
     assert_eq!(table.resolve_name("_setjmp").unwrap().ordinal, ORD_SETJMP);
@@ -464,6 +465,26 @@ fn coredll_raw_dispatch_routes_mips_soft_float_compare_helpers() -> Result<()> {
             ..
         }
     ));
+    let hypot_lhs = 5.0_f64.to_bits();
+    let hypot_rhs = 12.0_f64.to_bits();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_HYPOT,
+            [
+                hypot_lhs as u32,
+                (hypot_lhs >> 32) as u32,
+                hypot_rhs as u32,
+                (hypot_rhs >> 32) as u32,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::F64(13.0)),
+            ..
+        }
+    ));
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -846,6 +867,22 @@ fn coredll_dispatcher_routes_cemath_ordinals() -> Result<()> {
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::CeMath(CeMathValue::F64(81.0)),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_by_ordinal(
+            &mut kernel,
+            ORD_HYPOT,
+            CoredllCall::CeMath(CeMathCall::BinaryF64 {
+                op: CeMathBinaryF64::Hypot,
+                lhs: 5.0,
+                rhs: 12.0,
+            }),
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::F64(13.0)),
             ..
         }
     ));

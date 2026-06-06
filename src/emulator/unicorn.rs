@@ -1880,6 +1880,22 @@ impl UnicornMips {
                     let _ = uc.emu_stop();
                     return;
                 }
+                if let Some(blocked) = blocked_get_message_live_hook.borrow().as_ref() {
+                    unsafe { &mut *kernel_ptr }
+                        .drain_remote_server_control_messages_to_thread_window(
+                            blocked.thread_id,
+                            blocked.hwnd,
+                        );
+                } else {
+                    unsafe { (&mut *kernel_ptr).drain_remote_server_control_messages() };
+                }
+                if let Err(err) = drain_win32_host_input_to_active_window(unsafe {
+                    &mut *kernel_ptr
+                }) {
+                    *framebuffer_tick_error_code_hook.borrow_mut() = Some(err);
+                    let _ = uc.emu_stop();
+                    return;
+                }
             }
             let sampled_code_trace = code_trace_index % UNICORN_CODE_TRACE_SAMPLE_INTERVAL == 0;
             let instruction = read_unicorn_code_u32(uc, &mapped_code, pc);
@@ -1897,24 +1913,6 @@ impl UnicornMips {
             if let Some(limit) = host_wall_clock_limit {
                 let mut counter = host_wall_clock_counter_hook.borrow_mut();
                 *counter = counter.wrapping_add(1);
-                if *counter & 0x0fff == 0 {
-                    if let Some(blocked) = blocked_get_message_live_hook.borrow().as_ref() {
-                        unsafe { &mut *kernel_ptr }
-                            .drain_remote_server_control_messages_to_thread_window(
-                                blocked.thread_id,
-                                blocked.hwnd,
-                            );
-                    } else {
-                        unsafe { (&mut *kernel_ptr).drain_remote_server_control_messages() };
-                    }
-                    if let Err(err) =
-                        drain_win32_host_input_to_active_window(unsafe { &mut *kernel_ptr })
-                    {
-                        *framebuffer_tick_error_code_hook.borrow_mut() = Some(err);
-                        let _ = uc.emu_stop();
-                        return;
-                    }
-                }
                 if *counter & 0x0fff == 0 && host_wall_clock_started.elapsed() >= limit {
                     *host_wall_clock_stop_hook.borrow_mut() = Some(UnicornHostWallClockStop {
                         pc,
@@ -2357,7 +2355,7 @@ impl UnicornMips {
         .map_err(|err| Error::Backend(format!("install scheduler timeslice hook: {err:?}")))?;
         if guest_entry_trace_enabled {
             let guest_entries_hook = Rc::clone(&guest_entry_traces);
-            uc.add_code_hook(0x000e_8ce4, 0x000e_9d10, move |uc, address, _size| {
+            uc.add_code_hook(0x0001_1900, 0x0001_1f00, move |uc, address, _size| {
                 let pc = address as u32;
                 let Some(label) = guest_entry_trace_label(pc) else {
                     return;
@@ -4879,7 +4877,7 @@ fn run_pending_process_launches<D>(
         let saved_path = kernel.process_module_path().to_owned();
         let saved_host_path = kernel.process_module_host_path().cloned();
         let saved_command_line = kernel.process_command_line().to_owned();
-        let saved_process_id = kernel.current_process_id();
+        let saved_process_state = kernel.current_process_state();
 
         kernel.set_process_module_base(image.image_base());
         let child_module_path = kernel
@@ -4889,6 +4887,7 @@ fn run_pending_process_launches<D>(
         kernel.set_process_module_host_path(path.clone());
         kernel.set_process_command_line(launch.command_line.clone().unwrap_or_default());
         kernel.set_current_process_id(launch.process_id);
+        kernel.reset_current_process_exit_state();
 
         let child_result = (|| -> Result<u32> {
             let mut child = UnicornMips::new()?;
@@ -4914,7 +4913,7 @@ fn run_pending_process_launches<D>(
             kernel.set_process_module_host_path(saved_host_path);
         }
         kernel.set_process_command_line(saved_command_line);
-        kernel.set_current_process_id(saved_process_id);
+        kernel.set_current_process_state(saved_process_state);
 
         let exit_code = match child_result {
             Ok(exit_code) => exit_code,
@@ -6913,9 +6912,7 @@ fn try_complete_current_get_message_wait<D>(
     if ready_wait_id != wait_id {
         return false;
     }
-    let Some(message) = kernel
-        .gwe
-        .get_message_filtered(thread_id, hwnd, min_msg, max_msg)
+    let Some(message) = kernel.take_ready_message_w_filtered(thread_id, hwnd, min_msg, max_msg)
     else {
         return false;
     };
@@ -11698,7 +11695,7 @@ fn try_resume_blocked_get_message_with_active_pc<D>(
     if save_active_context && suspended_thread.borrow().is_some() && suspended_queue.is_none() {
         return false;
     }
-    let Some(message) = kernel.gwe.get_message_filtered(
+    let Some(message) = kernel.take_ready_message_w_filtered(
         blocked.thread_id,
         blocked.hwnd,
         blocked.min_msg,
@@ -12142,10 +12139,18 @@ fn record_wndproc_call_trace(
 #[cfg(feature = "unicorn")]
 fn guest_entry_trace_label(pc: u32) -> Option<&'static str> {
     match pc {
-        0x000e_8ce4 => Some("caller_e8ce4"),
-        0x000e_8f7c => Some("caller_e8f7c"),
-        0x000e_9a40 => Some("entry_e9a40"),
-        0x000e_9d0c => Some("return_e9d0c"),
+        0x0001_199c => Some("singleton_entry"),
+        0x0001_19cc => Some("singleton_after_create_mutex"),
+        0x0001_19e8 => Some("singleton_after_get_last_error"),
+        0x0001_19f4 => Some("singleton_existing_window_branch"),
+        0x0001_1a28 => Some("singleton_existing_return"),
+        0x0001_1a40 => Some("singleton_new_return"),
+        0x0001_1cc8 => Some("main_init_entry"),
+        0x0001_1d20 => Some("main_init_singleton_call"),
+        0x0001_1d28 => Some("main_init_singleton_return"),
+        0x0001_1d30 => Some("main_init_abort_after_singleton"),
+        0x0001_1d88 => Some("main_init_continue_after_singleton"),
+        0x0001_1ea0 => Some("main_init_return"),
         _ => None,
     }
 }
@@ -17244,6 +17249,52 @@ fn import_detail_after_return<D>(
             let preview = read_unicorn_wide_z(uc, text, 64).unwrap_or_default();
             Some(format!("text_ptr=0x{text:08x}/text={preview:?}"))
         }
+        Some(crate::ce::coredll_ordinals::ORD_MULTI_BYTE_TO_WIDE_CHAR) => {
+            let code_page = args.first().copied().unwrap_or(0);
+            let src = args.get(2).copied().unwrap_or(0);
+            let src_len = args.get(3).copied().unwrap_or(0);
+            let dest = args.get(4).copied().unwrap_or(0);
+            let capacity = args.get(5).copied().unwrap_or(0);
+            let src_preview =
+                read_unicorn_narrow_z(uc, src, 96).unwrap_or_else(|| "<unreadable>".to_owned());
+            let dest_preview = read_unicorn_wide_z(uc, dest, 96).unwrap_or_default();
+            Some(format!(
+                "cp={code_page}/src=0x{src:08x}/src_len={src_len}/src={src_preview:?}/dest=0x{dest:08x}/cap={capacity}/out={dest_preview:?}/ret={result}"
+            ))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_WIDE_CHAR_TO_MULTI_BYTE) => {
+            let code_page = args.first().copied().unwrap_or(0);
+            let src = args.get(2).copied().unwrap_or(0);
+            let src_len = args.get(3).copied().unwrap_or(0);
+            let dest = args.get(4).copied().unwrap_or(0);
+            let capacity = args.get(5).copied().unwrap_or(0);
+            let src_preview = read_unicorn_wide_z(uc, src, 96).unwrap_or_default();
+            let dest_preview = read_unicorn_narrow_z(uc, dest, 96).unwrap_or_default();
+            Some(format!(
+                "cp={code_page}/src=0x{src:08x}/src_len={src_len}/src={src_preview:?}/dest=0x{dest:08x}/cap={capacity}/out={dest_preview:?}/ret={result}"
+            ))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_MBSTOWCS) => {
+            let dest = args.first().copied().unwrap_or(0);
+            let src = args.get(1).copied().unwrap_or(0);
+            let capacity = args.get(2).copied().unwrap_or(0);
+            let src_preview =
+                read_unicorn_narrow_z(uc, src, 96).unwrap_or_else(|| "<unreadable>".to_owned());
+            let dest_preview = read_unicorn_wide_z(uc, dest, 96).unwrap_or_default();
+            Some(format!(
+                "src=0x{src:08x}/src={src_preview:?}/dest=0x{dest:08x}/cap={capacity}/out={dest_preview:?}/ret={result}"
+            ))
+        }
+        Some(crate::ce::coredll_ordinals::ORD_WCSTOMBS) => {
+            let dest = args.first().copied().unwrap_or(0);
+            let src = args.get(1).copied().unwrap_or(0);
+            let capacity = args.get(2).copied().unwrap_or(0);
+            let src_preview = read_unicorn_wide_z(uc, src, 96).unwrap_or_default();
+            let dest_preview = read_unicorn_narrow_z(uc, dest, 96).unwrap_or_default();
+            Some(format!(
+                "src=0x{src:08x}/src={src_preview:?}/dest=0x{dest:08x}/cap={capacity}/out={dest_preview:?}/ret={result}"
+            ))
+        }
         Some(crate::ce::coredll_ordinals::ORD_ISWCTYPE) => {
             let wch = args.first().copied().unwrap_or(0);
             let ctype = args.get(1).copied().unwrap_or(0);
@@ -17367,6 +17418,10 @@ fn is_import_milestone(
             | Some(crate::ce::coredll_ordinals::ORD_SWPRINTF)
             | Some(crate::ce::coredll_ordinals::ORD_WVSPRINTF_W)
             | Some(crate::ce::coredll_ordinals::ORD_VSWPRINTF)
+            | Some(crate::ce::coredll_ordinals::ORD_MULTI_BYTE_TO_WIDE_CHAR)
+            | Some(crate::ce::coredll_ordinals::ORD_WIDE_CHAR_TO_MULTI_BYTE)
+            | Some(crate::ce::coredll_ordinals::ORD_MBSTOWCS)
+            | Some(crate::ce::coredll_ordinals::ORD_WCSTOMBS)
     )
 }
 

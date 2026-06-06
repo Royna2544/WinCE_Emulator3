@@ -128,6 +128,7 @@ pub const CW_USEDEFAULT: i32 = i32::MIN;
 pub const SWP_NOSIZE: u32 = 0x0001;
 pub const SWP_NOMOVE: u32 = 0x0002;
 pub const SWP_NOZORDER: u32 = 0x0004;
+pub const SWP_NOREDRAW: u32 = 0x0008;
 pub const SWP_NOACTIVATE: u32 = 0x0010;
 pub const SWP_SHOWWINDOW: u32 = 0x0040;
 pub const SWP_HIDEWINDOW: u32 = 0x0080;
@@ -389,12 +390,74 @@ impl Rect {
     }
 }
 
-fn normalize_region_rects(rects: Vec<Rect>) -> Vec<Rect> {
-    rects
+pub(crate) fn canonicalize_region_rects(rects: Vec<Rect>) -> Vec<Rect> {
+    let rects: Vec<Rect> = rects
         .into_iter()
         .map(Rect::normalized)
         .filter(|rect| !rect.is_empty())
-        .collect()
+        .collect();
+    if rects.len() <= 1 {
+        return rects;
+    }
+
+    let mut y_edges: Vec<i32> = rects
+        .iter()
+        .flat_map(|rect| [rect.top, rect.bottom])
+        .collect();
+    y_edges.sort_unstable();
+    y_edges.dedup();
+
+    let mut canonical: Vec<Rect> = Vec::new();
+    for band in y_edges.windows(2) {
+        let top = band[0];
+        let bottom = band[1];
+        if top >= bottom {
+            continue;
+        }
+
+        let mut spans: Vec<(i32, i32)> = rects
+            .iter()
+            .filter(|rect| rect.top <= top && rect.bottom >= bottom)
+            .map(|rect| (rect.left, rect.right))
+            .collect();
+        if spans.is_empty() {
+            continue;
+        }
+        spans.sort_unstable();
+
+        let mut merged_spans: Vec<(i32, i32)> = Vec::new();
+        for (left, right) in spans {
+            if left >= right {
+                continue;
+            }
+            if let Some((_, last_right)) = merged_spans.last_mut()
+                && left <= *last_right
+            {
+                *last_right = (*last_right).max(right);
+                continue;
+            }
+            merged_spans.push((left, right));
+        }
+
+        for (left, right) in merged_spans {
+            if let Some(previous) = canonical.last_mut()
+                && previous.left == left
+                && previous.right == right
+                && previous.bottom == top
+            {
+                previous.bottom = bottom;
+                continue;
+            }
+            canonical.push(Rect {
+                left,
+                top,
+                right,
+                bottom,
+            });
+        }
+    }
+
+    canonical
 }
 
 fn bounding_region_rect(rects: &[Rect]) -> Rect {
@@ -840,6 +903,14 @@ impl Gwe {
         let Some(targets) = self.window_and_descendants(hwnd) else {
             return false;
         };
+        let exposed_rects: Vec<Rect> = targets
+            .iter()
+            .filter_map(|target| {
+                let window = self.windows.get(target)?;
+                (!window.destroyed && self.is_window_visible(*target))
+                    .then_some(window.client_rect.normalized())
+            })
+            .collect();
         for target in targets.iter().rev().copied() {
             if let Some(window) = self.windows.get_mut(&target) {
                 window.being_destroyed = false;
@@ -881,6 +952,9 @@ impl Gwe {
         for queue in self.sent_queues.values_mut() {
             queue.retain(|id| !doomed_sent.contains(id));
         }
+        for rect in exposed_rects {
+            self.invalidate_visible_windows_in_screen_rect(rect, true, &targets);
+        }
         true
     }
 
@@ -903,6 +977,11 @@ impl Gwe {
     }
 
     pub fn show_window(&mut self, hwnd: u32, visible: bool) -> bool {
+        let Some(window) = self.windows.get(&hwnd) else {
+            return false;
+        };
+        let exposed_rect = (!visible && !window.destroyed && self.is_window_visible(hwnd))
+            .then_some(window.client_rect.normalized());
         let Some(window) = self.windows.get_mut(&hwnd) else {
             return false;
         };
@@ -924,6 +1003,9 @@ impl Gwe {
             }
         } else if !visible {
             Self::clear_window_update(window);
+            if let Some(rect) = exposed_rect {
+                self.invalidate_visible_windows_in_screen_rect(rect, true, &[hwnd]);
+            }
         }
         previous
     }
@@ -1070,6 +1152,38 @@ impl Gwe {
         window.update_pending = false;
         window.erase_pending = false;
         window.update_rect = Rect::default();
+    }
+
+    fn invalidate_visible_windows_in_screen_rect(
+        &mut self,
+        screen_rect: Rect,
+        erase: bool,
+        excluded: &[u32],
+    ) {
+        let screen_rect = screen_rect.normalized();
+        if screen_rect.is_empty() {
+            return;
+        }
+        let targets: Vec<(u32, Rect)> = self
+            .z_order
+            .iter()
+            .copied()
+            .filter(|hwnd| !excluded.contains(hwnd))
+            .filter_map(|hwnd| {
+                let window = self.windows.get(&hwnd)?;
+                if window.destroyed || !self.is_window_visible(hwnd) {
+                    return None;
+                }
+                let intersection = window.client_rect.normalized().intersect(screen_rect)?;
+                Some((
+                    hwnd,
+                    intersection.offset(-window.client_rect.left, -window.client_rect.top),
+                ))
+            })
+            .collect();
+        for (hwnd, rect) in targets {
+            self.invalidate_window(hwnd, Some(rect), erase);
+        }
     }
 
     pub fn begin_paint(&mut self, hwnd: u32) -> Option<PaintUpdate> {
@@ -1239,7 +1353,7 @@ impl Gwe {
             return false;
         }
         if let Some(rects) = rects {
-            let rects = normalize_region_rects(rects);
+            let rects = canonicalize_region_rects(rects);
             let rect = bounding_region_rect(&rects);
             self.window_regions
                 .insert(hwnd, WindowRegion { rect, rects });
@@ -1539,6 +1653,7 @@ impl Gwe {
             return false;
         };
         let old = window.rect;
+        let old_visible = self.is_window_visible(hwnd);
         let parent = window.parent;
         let mut left = old.left;
         let mut top = old.top;
@@ -1591,6 +1706,20 @@ impl Gwe {
         if let Some(thread_id) = paint_changed_thread.filter(|_| self.is_window_visible(hwnd)) {
             self.mark_queue_status_changed(thread_id, QS_PAINT);
         }
+        let moved_or_sized = flags & SWP_NOMOVE == 0 || flags & SWP_NOSIZE == 0;
+        let z_order_changed = flags & SWP_NOZORDER == 0;
+        if flags & SWP_HIDEWINDOW == 0
+            && flags & SWP_NOREDRAW == 0
+            && old_visible
+            && self.is_window_visible(hwnd)
+            && flags & SWP_SHOWWINDOW == 0
+            && (moved_or_sized || z_order_changed)
+        {
+            self.invalidate_window(hwnd, None, true);
+        }
+        if old_visible && (moved_or_sized || flags & SWP_HIDEWINDOW != 0) {
+            self.invalidate_visible_windows_in_screen_rect(old.normalized(), true, &[hwnd]);
+        }
         true
     }
 
@@ -1603,7 +1732,8 @@ impl Gwe {
         height: i32,
         _repaint: bool,
     ) -> bool {
-        let moved = self.set_window_pos(hwnd, None, x, y, width, height, 0);
+        let flags = if _repaint { 0 } else { SWP_NOREDRAW };
+        let moved = self.set_window_pos(hwnd, None, x, y, width, height, flags);
         if moved && _repaint {
             self.invalidate_window(hwnd, None, true);
         }
@@ -3059,10 +3189,12 @@ impl Gwe {
 }
 
 fn intersect_rect_lists(lhs: &[Rect], rhs: &[Rect]) -> Vec<Rect> {
-    lhs.iter()
-        .flat_map(|left| rhs.iter().filter_map(|right| left.intersect(*right)))
-        .filter(|rect| !rect.is_empty())
-        .collect()
+    canonicalize_region_rects(
+        lhs.iter()
+            .flat_map(|left| rhs.iter().filter_map(|right| left.intersect(*right)))
+            .filter(|rect| !rect.is_empty())
+            .collect(),
+    )
 }
 
 fn subtract_rect_lists(lhs: &[Rect], rhs: &[Rect]) -> Vec<Rect> {
@@ -3081,7 +3213,7 @@ fn subtract_rect_lists(lhs: &[Rect], rhs: &[Rect]) -> Vec<Rect> {
             break;
         }
     }
-    remaining
+    canonicalize_region_rects(remaining)
 }
 
 fn normalize_class_name(name_or_atom: &str) -> String {
@@ -3720,6 +3852,75 @@ mod tests {
     }
 
     #[test]
+    fn destroy_window_invalidates_newly_exposed_windows() {
+        let mut gwe = Gwe::default();
+        let background = gwe.create_window_ex_with_rect(
+            1,
+            "STATIC",
+            "background",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 800, 480),
+        );
+        let foreground = gwe.create_window_ex_with_rect(
+            1,
+            "STATIC",
+            "foreground",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(50, 60, 100, 80),
+        );
+        assert!(gwe.validate_window(background));
+        assert!(gwe.validate_window(foreground));
+
+        assert!(gwe.destroy_window(foreground, 0));
+
+        assert_eq!(
+            gwe.update_rect(background).unwrap().rect,
+            Rect::from_origin_size(50, 60, 100, 80)
+        );
+    }
+
+    #[test]
+    fn hiding_window_invalidates_newly_exposed_windows() {
+        let mut gwe = Gwe::default();
+        let background = gwe.create_window_ex_with_rect(
+            1,
+            "STATIC",
+            "background",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(10, 20, 200, 120),
+        );
+        let foreground = gwe.create_window_ex_with_rect(
+            1,
+            "STATIC",
+            "foreground",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(40, 50, 80, 60),
+        );
+        assert!(gwe.validate_window(background));
+        assert!(gwe.validate_window(foreground));
+
+        assert!(gwe.show_window(foreground, false));
+
+        assert!(gwe.update_rect(foreground).is_none());
+        assert_eq!(
+            gwe.update_rect(background).unwrap().rect,
+            Rect::from_origin_size(30, 30, 80, 60)
+        );
+    }
+
+    #[test]
     fn validate_window_rect_subtracts_representable_update_bounds() {
         let mut gwe = Gwe::default();
         let hwnd = gwe.create_window_ex_with_rect(
@@ -3787,6 +3988,87 @@ mod tests {
     }
 
     #[test]
+    fn set_window_pos_invalidates_clean_visible_window_without_no_redraw() {
+        let mut gwe = Gwe::default();
+        let hwnd = gwe.create_window_ex_with_rect(
+            1,
+            "STATIC",
+            "ready",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 100, 80),
+        );
+        assert!(gwe.validate_window(hwnd));
+        assert!(gwe.update_rect(hwnd).is_none());
+
+        assert!(gwe.set_window_pos(hwnd, None, 10, 20, 100, 80, SWP_NOZORDER));
+
+        let update = gwe
+            .update_rect(hwnd)
+            .expect("visible move schedules repaint");
+        assert_eq!(update.rect, Rect::from_origin_size(0, 0, 100, 80));
+        assert!(update.erase);
+    }
+
+    #[test]
+    fn set_window_pos_no_redraw_keeps_clean_visible_window_clean() {
+        let mut gwe = Gwe::default();
+        let hwnd = gwe.create_window_ex_with_rect(
+            1,
+            "STATIC",
+            "ready",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 100, 80),
+        );
+        assert!(gwe.validate_window(hwnd));
+        assert!(gwe.update_rect(hwnd).is_none());
+
+        assert!(gwe.set_window_pos(hwnd, None, 10, 20, 100, 80, SWP_NOZORDER | SWP_NOREDRAW));
+
+        assert!(gwe.update_rect(hwnd).is_none());
+    }
+
+    #[test]
+    fn set_window_pos_z_order_change_invalidates_promoted_visible_window() {
+        let mut gwe = Gwe::default();
+        let top = gwe.create_window_ex_with_rect(
+            1,
+            "STATIC",
+            "top",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 100, 80),
+        );
+        let bottom = gwe.create_window_ex_with_rect(
+            1,
+            "STATIC",
+            "bottom",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 100, 80),
+        );
+        assert!(gwe.validate_window(top));
+        assert!(gwe.validate_window(bottom));
+
+        assert!(gwe.set_window_pos(bottom, Some(HWND_TOP), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE));
+
+        let update = gwe
+            .update_rect(bottom)
+            .expect("z-order promotion schedules repaint");
+        assert_eq!(update.rect, Rect::from_origin_size(0, 0, 100, 80));
+        assert!(update.erase);
+    }
+
+    #[test]
     fn set_window_pos_hide_clears_pending_update() {
         let mut gwe = Gwe::default();
         let hwnd = gwe.create_window_ex_with_rect(
@@ -3805,5 +4087,48 @@ mod tests {
 
         assert!(!gwe.is_window_visible(hwnd));
         assert!(gwe.update_rect(hwnd).is_none());
+    }
+
+    #[test]
+    fn set_window_pos_hide_invalidates_newly_exposed_windows() {
+        let mut gwe = Gwe::default();
+        let background = gwe.create_window_ex_with_rect(
+            1,
+            "STATIC",
+            "background",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 320, 240),
+        );
+        let foreground = gwe.create_window_ex_with_rect(
+            1,
+            "STATIC",
+            "foreground",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(20, 30, 64, 48),
+        );
+        assert!(gwe.validate_window(background));
+        assert!(gwe.validate_window(foreground));
+
+        assert!(gwe.set_window_pos(
+            foreground,
+            None,
+            20,
+            30,
+            64,
+            48,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_HIDEWINDOW
+        ));
+
+        assert!(!gwe.is_window_visible(foreground));
+        assert_eq!(
+            gwe.update_rect(background).unwrap().rect,
+            Rect::from_origin_size(20, 30, 64, 48)
+        );
     }
 }

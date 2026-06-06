@@ -9,6 +9,92 @@
 
 ## Confirmed
 
+- Win32 host presenter now has an explicit stopped state. When a CPU run
+  segment ends or errors while the host window stays alive for monitor/debug
+  use, v3 replaces the last guest frame with a black status surface reading
+  `Emulator process stopped`, clears pending host input, and handles later
+  mouse/key messages without queuing guest input. Entering another host CPU run
+  blits the current framebuffer first, returning the presenter to live input.
+  This is host-tooling behavior only; it does not alter guest framebuffer
+  contents or CE input semantics.
+- GWE `SetWindowPos` now schedules repaint for clean, already-visible windows
+  when they are moved, resized, or z-order promoted unless the caller passed
+  `SWP_NOREDRAW`; `MoveWindow(FALSE)` now maps to the same no-redraw rule.
+  Hide/exposure invalidation remains intact. Focused coverage
+  `set_window_pos_invalidates_clean_visible_window_without_no_redraw`,
+  `set_window_pos_no_redraw_keeps_clean_visible_window_clean`, and
+  `set_window_pos_z_order_change_invalidates_promoted_visible_window` passes,
+  as does the full `ce::gwe::tests` slice. This is a generic CE/MFC window
+  update fix aimed at visible child bands that react logically but do not get a
+  paint opportunity after layout/z-order changes.
+- COREDLL CRT `_hypot @1023` is now implemented through the generic `cemath`
+  binary-f64 path. The mounted Route Search/menu probe
+  `target\modal_drive_host1_*` previously stopped at
+  `trap=COREDLL.dll@1023` (`_hypot` in
+  `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\MIPSII\RETAIL\coredll.def`) after the
+  route/current-location dialog path. v3 now exposes `ORD_HYPOT`, evaluates
+  `lhs.hypot(rhs)`, and routes both typed and raw dispatch through
+  `CeMathBinaryF64::Hypot`. Focused coverage in `tests\coredll_dispatch.rs`
+  and `src\ce\cemath.rs` passes; the full `coredll_dispatch` test target and
+  `cargo check --features unicorn,trace,win32-desktop` pass with only the known
+  Windows incremental cleanup warning. Fresh Win32-host validation
+  `target\hypot_route_host1_*` used dumped DLLs from
+  `D:\INAVI_Emulator\DUMPPLZ\Windows` and
+  `--remote-server 192.168.0.39:8765`; it drove safety OK, dismissed the
+  destination/current-location modal via the real X, opened the bottom menu,
+  selected `목적지`, selected the highlighted row, tapped the red search button,
+  and then reached the 300 s wall-stop in guest image code
+  `pc=0x00114cc4(image:iNavi.exe+0x104cc4)` instead of a missing import trap.
+  The final visible frame `target\hypot_route_host1_after_search.png` shows a
+  live shifted map/search-focus state with the host process responsive and
+  bounded around 249 MB before the wall-stop.
+- GWE now invalidates newly exposed screen areas when a visible window is
+  destroyed, hidden through `ShowWindow(FALSE)`, or hidden/moved away through
+  `SetWindowPos`. The fix stays at the generic CE window/update boundary:
+  surviving visible windows whose client rect intersects the old screen rect
+  receive clipped update rectangles and repaint through the normal `WM_PAINT`
+  path. Focused coverage
+  `destroy_window_invalidates_newly_exposed_windows`,
+  `hiding_window_invalidates_newly_exposed_windows`, and
+  `set_window_pos_hide_invalidates_newly_exposed_windows` passes, as does the
+  full `ce::gwe::tests` filter and `cargo check --features
+  unicorn,trace,win32-desktop`. Mounted Win32-host validation
+  `target\gwe_exposure_host2_after_tap.png` used dumped runtime DLLs from
+  `D:\INAVI_Emulator\DUMPPLZ\Windows` plus
+  `--remote-server 192.168.0.39:8765`; after a remote tap at `(645,443)`, the
+  old fullscreen safety pixels are gone and the real route/current-location
+  modal is shown over the map/current UI. The remaining visible blocker is the
+  app modal/continuation path, not safety-window dismissal or stale framebuffer
+  presentation.
+- No-wall Win32-host remote input now drains during long Unicorn execution,
+  not only when a CPU wall-clock limit is configured. The Unicorn live code hook
+  now services REST controls and Win32 host input on the normal framebuffer tick
+  path before the optional wall-stop check, so mounted launches using
+  `--remote-server 192.168.0.39:8765` remain touchable while guest code is
+  running. Fresh validation `target\live_host_after_drain_fix.png` shows a
+  no-wall host process (PID `25908` during the probe) accepting a remote OK tap
+  and advancing from the safety notice to the real map UI; the process stayed
+  responding at roughly 247 MB RSS. A traced bounded repro
+  `target\remote_ok_trace_*` records the tap as `WM_LBUTTONDOWN/UP` targeted to
+  HWND `0x00020080` and consumed by `GetMessageW`, then reaches the populated
+  map with all synchronous sends completed (`gwe=send:68 done:68`).
+- Host-mode `--cpu-wall-clock-limit-ms` is now treated as a total run-loop
+  budget instead of being reset for every inner Unicorn burst. This fixes a
+  misleading diagnostic shape where bounded host validations would hit a
+  healthy wall-stop, continue because a `GetMessageW` waiter existed, and then
+  later re-enter the app singleton/exit path. Focused coverage
+  `host_loop_wall_clock_budget_is_total_not_per_burst` passes; fresh
+  `target\bounded_total_45s_*` stops once at the requested total budget and no
+  longer prints a fabricated post-limit CE process exit.
+- Child process execution now saves and restores the full current-process
+  pseudo-handle state (`process_id`, pseudo exit code, and signaled flag) around
+  `run_pending_process_launches`. A child that terminates
+  `CE_CURRENT_PROCESS_PSEUDO_HANDLE` no longer leaves the parent pseudo process
+  handle signaled. Focused coverage
+  `child_current_process_exit_state_does_not_signal_parent_pseudo_handle`
+  passes. The attempted deferred child-launch ordering was reverted; children
+  are again executed immediately after successful `CreateProcessW`, preserving
+  the previously fast mounted startup path.
 - Remote-server touch input during a host `GetMessageW` idle wait now targets
   the parked message thread/window instead of draining only through stale
   active-window fallback. The host run loop passes the last blocked
@@ -94,9 +180,13 @@
   `remote_server_serves_v2_status_shape`, and the existing
   `remote_server_api_state_queues_input_serial_audio_and_status` pass; `cargo
   check --features unicorn,trace,win32-desktop` also passes with only the known
-  Windows incremental finalization warning. WebSocket audio/control upgrade
-  endpoints are intentionally left as `501` placeholders until the audio
-  streaming transport is implemented.
+  Windows incremental finalization warning. Follow-up WebSocket support now
+  upgrades `/api/v1/control/ws` and `/api/v1/audio/ws`: control text frames are
+  queued as JSON control messages with JSON acknowledgements, and audio sockets
+  receive a metadata text frame followed by binary PCM frames from the
+  server-backed audio sink when `--remote-audio` is enabled. Focused coverage
+  `remote_server_control_websocket_queues_json_frames` and
+  `remote_server_audio_websocket_streams_registered_sink_pcm` passes.
 - Follow-up v2 remote API alignment tightened the REST handler contract against
   `..\wince_emulator_v2\src\remote_server.cpp`: touch/key/location/NMEA bodies
   now return the same invalid-body errors, touch aliases include `tap`, `click`,
@@ -3254,8 +3344,9 @@
   CE-referenced semantics; remaining ordinals still need to be burned down
   subsystem by subsystem.
 - Rust remote server REST binding is implemented for the v2-compatible
-  `/api/v1` status/frame/control routes; WebSocket audio/control upgrades and
-  live log streaming remain open.
+  `/api/v1` status/frame/control routes. WebSocket control and audio upgrades
+  are now implemented for JSON control frames and binary PCM streaming; live
+  log streaming remains open.
 - The mounted iNavi trace now gets beyond the earlier `values.dat` and map
   resource checks into RSImage/PNG resource loading. A trace-enabled monitor run
   with `tap 400 240` opened `\SDMMC Disk\INavi\res\FontResHigh.utf`,

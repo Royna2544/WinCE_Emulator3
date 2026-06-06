@@ -451,6 +451,78 @@ fn coredll_raw_sprintf_uses_narrow_default_for_percent_s() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_sprintf_encodes_wide_korean_as_cp949() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let dest = 0x1_0000;
+    let format = 0x1_0200;
+    let wide_text = 0x1_0300;
+    let expected = [
+        0xbe, 0xe7, 0xc3, 0xb5, 0xb1, 0xb8, b' ', 0xb8, 0xf1, 0xb5, 0xbf,
+    ];
+    memory.map_bytes(dest, 128);
+    memory.map_bytes(format, 16);
+    memory.map_halfwords(wide_text, 32);
+    memory.write_bytes(format, b"%ls\0");
+    memory.write_wide_z(wide_text, "양천구 목동");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SPRINTF,
+            [dest, format, wide_text],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(11),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_bytes(dest, 12), [&expected[..], &[0]].concat());
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_sprintf_decodes_narrow_korean_as_cp949() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let dest = 0x1_0000;
+    let format = 0x1_0200;
+    let narrow_text = 0x1_0300;
+    memory.map_bytes(dest, 128);
+    memory.map_bytes(format, 16);
+    memory.map_bytes(narrow_text, 16);
+    memory.write_bytes(format, b"[%s]\0");
+    memory.write_bytes(narrow_text, &[0xbf, 0xee, 0xc0, 0xfc, 0]);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SPRINTF,
+            [dest, format, narrow_text],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(6),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_bytes(dest, 7),
+        &[b'[', 0xbf, 0xee, 0xc0, 0xfc, b']', 0]
+    );
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_snprintf_formats_with_count_limit() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;

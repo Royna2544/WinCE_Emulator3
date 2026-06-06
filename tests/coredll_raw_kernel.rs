@@ -15,15 +15,16 @@ use wince_emulation_v3::{
             ORD_GET_TIME_ZONE_INFORMATION, ORD_GET_VERSION_EX_W, ORD_INITIALIZE_CRITICAL_SECTION,
             ORD_INPUT_DEBUG_CHAR_W, ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_KERNEL_IO_CONTROL, ORD_LEAVE_CRITICAL_SECTION,
-            ORD_LOAD_LIBRARY_W, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR,
-            ORD_OPEN_EVENT_W, ORD_PURGE_COMM, ORD_QUERY_PERFORMANCE_COUNTER,
-            ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE,
-            ORD_RESUME_THREAD, ORD_SET_COMM_MASK, ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS,
-            ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SLEEP,
-            ORD_SLEEP_TILL_TICK, ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME,
-            ORD_TERMINATE_PROCESS, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
-            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_MULTIPLE_OBJECTS,
-            ORD_WAIT_FOR_SINGLE_OBJECT,
+            ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX,
+            ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_OPEN_EVENT_W, ORD_PURGE_COMM,
+            ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_RELEASE_MUTEX,
+            ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD, ORD_SET_COMM_MASK, ORD_SET_COMM_STATE,
+            ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
+            ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SLEEP, ORD_SLEEP_TILL_TICK, ORD_SUSPEND_THREAD,
+            ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS, ORD_TLS_GET_VALUE,
+            ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_COMM_EVENT,
+            ORD_WAIT_FOR_MULTIPLE_OBJECTS, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSTOMBS,
+            ORD_WIDE_CHAR_TO_MULTI_BYTE,
         },
         devices::CommDcb,
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
@@ -1881,6 +1882,118 @@ fn coredll_multibyte_to_wide_char_uses_korean_acp() -> Result<()> {
         }
     ));
     assert_eq!(memory.read_wide_z(output, 4), "가");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_wide_char_to_multi_byte_uses_korean_acp() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let input = 0x1000;
+    let output = 0x2000;
+    let used_default = 0x3000;
+    memory.write_wide_z(input, "운전");
+    memory.map_bytes(output, 8);
+    memory.map_words(used_default, 1);
+    memory.write_word(used_default, 0xffff_ffff);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WIDE_CHAR_TO_MULTI_BYTE,
+            [0, 0, input, u32::MAX, output, 8, 0, used_default],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(5),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_bytes(output, 5), [0xbf, 0xee, 0xc0, 0xfc, 0]);
+    assert_eq!(memory.read_u32(used_default)?, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_crt_mbstowcs_and_wcstombs_use_korean_acp() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let narrow = 0x1000;
+    let wide = 0x2000;
+    let round_trip = 0x3000;
+    memory.write_bytes(narrow, &[0xbf, 0xee, 0xc0, 0xfc, 0]);
+    memory.map_halfwords(wide, 4);
+    memory.map_bytes(round_trip, 8);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MBSTOWCS,
+            [0, narrow, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(2),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MBSTOWCS,
+            [wide, narrow, 4],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(2),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(wide, 4), "운전");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WCSTOMBS,
+            [0, wide, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(4),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WCSTOMBS,
+            [round_trip, wide, 8],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(4),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_bytes(round_trip, 5),
+        [0xbf, 0xee, 0xc0, 0xfc, 0]
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
     Ok(())
 }

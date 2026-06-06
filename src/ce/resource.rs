@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::ce::gwe::Rect;
+use crate::ce::gwe::{Rect, canonicalize_region_rects};
 
 const STOCK_OBJECT_BASE: u32 = 0x000b_5000;
 const WHITE_BRUSH: u32 = 0;
@@ -33,14 +33,6 @@ fn stock_object_index(handle: u32) -> Option<u32> {
 
 fn is_stock_font(handle: u32) -> bool {
     matches!(stock_object_index(handle), Some(SYSTEM_FONT))
-}
-
-fn normalize_region_rects(rects: Vec<Rect>) -> Vec<Rect> {
-    rects
-        .into_iter()
-        .map(Rect::normalized)
-        .filter(|rect| !rect.is_empty())
-        .collect()
 }
 
 fn bounding_region_rect(rects: &[Rect]) -> Rect {
@@ -528,7 +520,7 @@ impl ResourceSystem {
         let Some(region) = self.regions.get_mut(&handle) else {
             return false;
         };
-        let rects = normalize_region_rects(rects);
+        let rects = canonicalize_region_rects(rects);
         region.rect = bounding_region_rect(&rects);
         region.rects = rects;
         true

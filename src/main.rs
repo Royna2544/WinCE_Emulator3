@@ -86,14 +86,22 @@ fn main() -> Result<()> {
         args.mount_config.as_deref(),
     )?;
     let mut kernel = CeKernel::boot(config);
-    let host_audio_status = attach_audio_for_desktop(&mut kernel, args.desktop);
+    let mut host_audio_status = attach_audio_for_desktop(&mut kernel, args.desktop);
     let mut desktop = create_desktop(args.desktop, args.image.as_deref())?;
     kernel.remote.set_framebuffer_size(
         desktop.framebuffer().width(),
         desktop.framebuffer().height(),
     );
     if let Some(config) = args.remote_server.clone() {
+        let remote_audio_enabled = config.audio_enabled;
         let server = RemoteServer::start(config)?;
+        if remote_audio_enabled {
+            if kernel.audio.register_sink(server.audio_sink()) {
+                host_audio_status.push_str("; remote websocket audio sink registered");
+            } else {
+                host_audio_status.push_str("; remote websocket audio sink already registered");
+            }
+        }
         kernel.set_remote_server(server);
         publish_remote_endpoint(
             kernel.remote_server.as_ref(),
@@ -257,6 +265,7 @@ fn run_cpu_loop(
 ) -> Result<()> {
     enqueue_startup_taps(kernel, &args.startup_taps)?;
     let mut reported_blocked_message_wait = false;
+    let run_started = Instant::now();
     loop {
         let blocked_remote_target = blocked_remote_input_target(cpu, args.desktop);
         if service_remote_endpoint(kernel, desktop, blocked_remote_target.as_ref()) != 0 {
@@ -265,12 +274,14 @@ fn run_cpu_loop(
         if enqueue_desktop_input_for_current_wait(cpu, desktop, kernel, args.desktop)? != 0 {
             reported_blocked_message_wait = false;
         }
+        let wall_clock_limit_ms =
+            remaining_wall_clock_limit_ms(args.cpu_wall_clock_limit_ms, run_started.elapsed());
         if let Err(err) = desktop.run_cpu_until(
             cpu,
             kernel,
             UnicornRunLimits {
                 instruction_limit: args.cpu_instruction_limit,
-                wall_clock_limit_ms: args.cpu_wall_clock_limit_ms,
+                wall_clock_limit_ms,
                 stop_pc: args.cpu_stop_pc,
             },
         ) {
@@ -282,6 +293,9 @@ fn run_cpu_loop(
                 desktop.framebuffer().write_ppm(path)?;
                 eprintln!("  framebuffer dump: {}", path.display());
             }
+            if let Err(status_err) = desktop.show_stopped_message("Emulator process stopped") {
+                eprintln!("  presenter status update failed: {status_err}");
+            }
             return Err(err);
         }
         if enqueue_desktop_input_for_current_wait(cpu, desktop, kernel, args.desktop)? != 0 {
@@ -292,8 +306,17 @@ fn run_cpu_loop(
         if service_remote_endpoint(kernel, desktop, blocked_remote_target.as_ref()) != 0 {
             reported_blocked_message_wait = false;
         }
+        let total_wall_clock_expired =
+            wall_clock_limit_expired(args.cpu_wall_clock_limit_ms, run_started.elapsed());
         if let Some(snapshot) = cpu.last_debug_snapshot() {
-            if args.desktop == DesktopMode::Host && snapshot.blocked_get_message.is_some() {
+            if total_wall_clock_expired {
+                print_unicorn_stop(snapshot);
+                break;
+            }
+            if args.desktop == DesktopMode::Host
+                && snapshot.blocked_get_message.is_some()
+                && snapshot.host_wall_clock_stop.is_none()
+            {
                 if !reported_blocked_message_wait {
                     print_unicorn_stop(snapshot);
                     if let Some(path) = args.framebuffer_dump.as_ref() {
@@ -309,7 +332,20 @@ fn run_cpu_loop(
         }
         break;
     }
+    desktop.show_stopped_message("Emulator process stopped")?;
     Ok(())
+}
+
+fn remaining_wall_clock_limit_ms(limit_ms: u64, elapsed: Duration) -> u64 {
+    if limit_ms == 0 {
+        return 0;
+    }
+    let elapsed_ms = elapsed.as_millis().min(u128::from(u64::MAX)) as u64;
+    limit_ms.saturating_sub(elapsed_ms).max(1)
+}
+
+fn wall_clock_limit_expired(limit_ms: u64, elapsed: Duration) -> bool {
+    limit_ms != 0 && elapsed >= Duration::from_millis(limit_ms)
 }
 
 fn blocked_remote_input_target(
@@ -709,6 +745,9 @@ fn monitor_run_once(
             desktop.framebuffer().write_ppm(path)?;
             eprintln!("  framebuffer dump: {}", path.display());
         }
+        if let Err(status_err) = desktop.show_stopped_message("Emulator process stopped") {
+            eprintln!("  presenter status update failed: {status_err}");
+        }
         return Err(err);
     }
     let input_after = enqueue_desktop_input(desktop, kernel)?;
@@ -723,6 +762,7 @@ fn monitor_run_once(
         desktop.framebuffer().write_ppm(path)?;
         println!("  framebuffer dump: {}", path.display());
     }
+    desktop.show_stopped_message("Emulator process stopped")?;
     Ok(())
 }
 
@@ -885,6 +925,21 @@ fn monitor_trace_text(snapshot: &UnicornDebugSnapshot, selector: &str) -> String
                 &snapshot.inavi_render_milestones,
             );
         }
+        "controller" | "inavi-controller" => {
+            push_monitor_records(
+                &mut out,
+                "inavi controller",
+                &snapshot.last_inavi_controller,
+            );
+            push_monitor_records(
+                &mut out,
+                "inavi render milestones",
+                &snapshot.inavi_render_milestones,
+            );
+        }
+        "guest" | "guest-entry" | "guest-entries" => {
+            push_monitor_records(&mut out, "guest entries", &snapshot.guest_entry_traces);
+        }
         "resource" | "resources" => {
             let resource_records: Vec<_> = snapshot
                 .inavi_render_milestones
@@ -914,7 +969,7 @@ fn monitor_trace_text(snapshot: &UnicornDebugSnapshot, selector: &str) -> String
         other => {
             let _ = writeln!(
                 &mut out,
-                "  unknown trace kind `{other}`; use all/imports/milestones/counts/calls/code/blocks/messages/window-imports/presentation/windows/wndproc/render/resource/files/files-full/processes/events"
+                "  unknown trace kind `{other}`; use all/imports/milestones/counts/calls/code/blocks/messages/window-imports/presentation/windows/wndproc/render/controller/guest/resource/files/files-full/processes/events"
             );
         }
     }
@@ -1163,6 +1218,17 @@ impl DesktopRuntime {
         Ok(())
     }
 
+    fn show_stopped_message(&mut self, message: &str) -> Result<()> {
+        match self {
+            Self::Virtual(_) => {}
+            #[cfg(all(windows, feature = "win32-desktop"))]
+            Self::Host(desktop) => {
+                desktop.presenter_mut().show_stopped_message(message)?;
+            }
+        }
+        Ok(())
+    }
+
     fn run_cpu_until(
         &mut self,
         cpu: &mut UnicornMips,
@@ -1178,6 +1244,7 @@ impl DesktopRuntime {
             #[cfg(all(windows, feature = "win32-desktop"))]
             Self::Host(desktop) => {
                 let (framebuffer, presenter) = desktop.framebuffer_and_presenter_mut();
+                presenter.blit(framebuffer)?;
                 let mut live_framebuffer =
                     HostLiveFramebuffer::new(framebuffer, presenter, kernel.remote_server.clone());
                 cpu.run_until_import_trap_with_framebuffer_limits(
@@ -1896,6 +1963,21 @@ mod tests {
         let path = ce_module_path_for_image(&kernel, r"D:\INAVI_Emulator\INAVI\INavi\INavi.exe");
 
         assert_eq!(path, r"\SDMMC Disk\INavi\INavi.exe");
+    }
+
+    #[test]
+    fn host_loop_wall_clock_budget_is_total_not_per_burst() {
+        assert_eq!(remaining_wall_clock_limit_ms(0, Duration::from_secs(10)), 0);
+        assert_eq!(
+            remaining_wall_clock_limit_ms(500, Duration::from_millis(125)),
+            375
+        );
+        assert_eq!(
+            remaining_wall_clock_limit_ms(500, Duration::from_millis(500)),
+            1
+        );
+        assert!(!wall_clock_limit_expired(500, Duration::from_millis(499)));
+        assert!(wall_clock_limit_expired(500, Duration::from_millis(500)));
     }
 
     #[test]

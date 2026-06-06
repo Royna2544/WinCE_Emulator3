@@ -316,6 +316,45 @@ fn current_process_pseudo_handle_is_waitable_after_terminate() -> Result<()> {
 }
 
 #[test]
+fn child_current_process_exit_state_does_not_signal_parent_pseudo_handle() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let parent_thread_id = 1;
+    let launch = kernel.queue_process_launch(Some("child.exe".to_owned()), None);
+    let parent_state = kernel.current_process_state();
+
+    kernel.set_current_process_id(launch.process_id);
+    kernel.reset_current_process_exit_state();
+    assert!(kernel.terminate_process(CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0x55aa));
+    assert_eq!(
+        kernel.wait_for_single_object(CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0, launch.thread_id),
+        WAIT_OBJECT_0
+    );
+
+    kernel.set_current_process_state(parent_state);
+    assert_eq!(
+        kernel.wait_for_single_object(CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0, parent_thread_id),
+        WAIT_TIMEOUT
+    );
+    assert_eq!(
+        kernel.process_exit_code_for_handle(CE_CURRENT_PROCESS_PSEUDO_HANDLE),
+        Some(259)
+    );
+
+    kernel.mark_process_launch_exited(&launch, 0x55aa);
+    assert_eq!(
+        kernel.wait_for_single_object(launch.process_handle, 0, parent_thread_id),
+        WAIT_OBJECT_0
+    );
+    assert_eq!(
+        kernel.process_exit_code_for_handle(launch.process_handle),
+        Some(0x55aa)
+    );
+
+    Ok(())
+}
+
+#[test]
 fn mutex_waits_track_recursive_owner_lock_count() -> Result<()> {
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
     let mut kernel = CeKernel::boot(config);
@@ -1620,6 +1659,43 @@ fn blocked_get_message_wait_wakes_when_remote_input_is_drained() -> Result<()> {
             && record.msg == Some(WM_LBUTTONDOWN)
             && record.lparam == Some((34 << 16) | 12)
     }));
+
+    Ok(())
+}
+
+#[test]
+fn resumed_get_message_take_records_trace_and_clears_timer_pending() -> Result<()> {
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let thread_id = 74;
+    let hwnd = kernel.create_window_ex_w(thread_id, "RESUME_TIMER", "", None, 0, 0, 0);
+
+    assert_eq!(
+        kernel.set_timer_for_thread(thread_id, Some(hwnd), Some(77), 100, None),
+        77
+    );
+    kernel.timers.sleep_ms(100);
+    kernel.pump_timers_to_gwe(thread_id);
+
+    let timer = kernel
+        .take_ready_message_w_filtered(thread_id, Some(hwnd), 0, 0)
+        .expect("ready timer message");
+    assert_eq!(timer.hwnd, hwnd);
+    assert_eq!(timer.msg, WM_TIMER);
+    assert_eq!(timer.wparam, 77);
+    assert!(kernel.recent_message_ops().iter().any(|record| {
+        record.op == "get_message"
+            && record.thread_id == thread_id
+            && record.hwnd == Some(hwnd)
+            && record.msg == Some(WM_TIMER)
+    }));
+
+    kernel.timers.sleep_ms(100);
+    kernel.pump_timers_to_gwe(thread_id);
+    let next_timer = kernel.get_message_w(thread_id).expect("next timer message");
+    assert_eq!(next_timer.hwnd, hwnd);
+    assert_eq!(next_timer.msg, WM_TIMER);
+    assert_eq!(next_timer.wparam, 77);
 
     Ok(())
 }

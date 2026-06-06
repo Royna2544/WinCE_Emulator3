@@ -106,6 +106,13 @@ pub struct PendingProcessLaunch {
     pub thread_id: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CurrentProcessState {
+    pub process_id: u32,
+    pub exit_code: u32,
+    pub signaled: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileTraceRecord {
     pub op: &'static str,
@@ -361,6 +368,25 @@ impl CeKernel {
 
     pub fn current_process_id(&self) -> u32 {
         self.current_process_id
+    }
+
+    pub fn current_process_state(&self) -> CurrentProcessState {
+        CurrentProcessState {
+            process_id: self.current_process_id,
+            exit_code: self.current_process_exit_code,
+            signaled: self.current_process_signaled,
+        }
+    }
+
+    pub fn set_current_process_state(&mut self, state: CurrentProcessState) {
+        self.current_process_id = state.process_id;
+        self.current_process_exit_code = state.exit_code;
+        self.current_process_signaled = state.signaled;
+    }
+
+    pub fn reset_current_process_exit_state(&mut self) {
+        self.current_process_exit_code = STILL_ACTIVE;
+        self.current_process_signaled = false;
     }
 
     pub fn is_current_thread_pseudo_handle(handle: u32) -> bool {
@@ -1253,14 +1279,62 @@ impl CeKernel {
 
     pub fn close_handle(&mut self, handle: u32) -> Result<bool> {
         let object = self.handles.get(handle)?.clone();
+        let detail = self.describe_handle(handle);
+        let name = match &object {
+            KernelObject::Event(event) => event.name.clone(),
+            KernelObject::Mutex(mutex) => mutex.name.clone(),
+            KernelObject::Semaphore(semaphore) => semaphore.name.clone(),
+            KernelObject::FileMapping(mapping) => mapping.name.clone(),
+            _ => None,
+        };
+        let trace_close = matches!(
+            &object,
+            KernelObject::Event(_)
+                | KernelObject::Mutex(_)
+                | KernelObject::Semaphore(_)
+                | KernelObject::FileMapping(_)
+        );
         match object {
             KernelObject::File(file) => self.files.close(file.file_id)?,
             KernelObject::FindFile(find) => self.files.find_close(find.find_id)?,
-            KernelObject::Event(event) if event.name.is_some() => return Ok(true),
-            KernelObject::FileMapping(mapping) if mapping.name.is_some() => return Ok(true),
+            KernelObject::Event(event) if event.name.is_some() => {
+                self.record_event_trace(EventTraceRecord {
+                    op: "CloseHandle",
+                    handle: Some(handle),
+                    name,
+                    manual_reset: None,
+                    signaled: None,
+                    result: Some(true),
+                    detail: Some(format!("preserved {detail}")),
+                });
+                return Ok(true);
+            }
+            KernelObject::FileMapping(mapping) if mapping.name.is_some() => {
+                self.record_event_trace(EventTraceRecord {
+                    op: "CloseHandle",
+                    handle: Some(handle),
+                    name,
+                    manual_reset: None,
+                    signaled: None,
+                    result: Some(true),
+                    detail: Some(format!("preserved {detail}")),
+                });
+                return Ok(true);
+            }
             _ => {}
         }
         self.handles.close(handle)?;
+        if trace_close {
+            self.record_event_trace(EventTraceRecord {
+                op: "CloseHandle",
+                handle: Some(handle),
+                name,
+                manual_reset: None,
+                signaled: None,
+                result: Some(true),
+                detail: Some(detail),
+            });
+        }
         Ok(true)
     }
 
@@ -1617,7 +1691,8 @@ impl CeKernel {
         name: Option<String>,
         initial_owner_thread: Option<u32>,
     ) -> u32 {
-        self.handles.create_mutex(name, initial_owner_thread)
+        self.create_mutex_w_with_status(name, initial_owner_thread)
+            .0
     }
 
     pub fn create_mutex_w_with_status(
@@ -1625,8 +1700,30 @@ impl CeKernel {
         name: Option<String>,
         initial_owner_thread: Option<u32>,
     ) -> (u32, bool) {
-        self.handles
-            .create_mutex_with_status(name, initial_owner_thread)
+        let (handle, existed) = self
+            .handles
+            .create_mutex_with_status(name.clone(), initial_owner_thread);
+        self.record_event_trace(EventTraceRecord {
+            op: if existed {
+                "CreateMutexW(existing)"
+            } else {
+                "CreateMutexW(new)"
+            },
+            handle: Some(handle),
+            name,
+            manual_reset: None,
+            signaled: None,
+            result: Some(!existed),
+            detail: Some(format!(
+                "pid={}/initial_owner={}/{}",
+                self.current_process_id,
+                initial_owner_thread
+                    .map(|thread| thread.to_string())
+                    .unwrap_or_else(|| "none".to_owned()),
+                self.describe_handle(handle)
+            )),
+        });
+        (handle, existed)
     }
 
     pub fn create_semaphore_w(
@@ -1651,6 +1748,22 @@ impl CeKernel {
         if success && previous_lock_count == Some(1) {
             self.queue_object_wake_candidates(handle);
         }
+        self.record_event_trace(EventTraceRecord {
+            op: "ReleaseMutex",
+            handle: Some(handle),
+            name: None,
+            manual_reset: None,
+            signaled: None,
+            result: Some(success),
+            detail: Some(format!(
+                "pid={}/thread={thread_id}/previous_locks={}/{}",
+                self.current_process_id,
+                previous_lock_count
+                    .map(|count| count.to_string())
+                    .unwrap_or_else(|| "invalid".to_owned()),
+                self.describe_handle(handle)
+            )),
+        });
         success
     }
 
@@ -2379,6 +2492,27 @@ impl CeKernel {
             );
         }
         message
+    }
+
+    pub fn take_ready_message_w_filtered(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
+        let message = self
+            .gwe
+            .get_message_filtered(thread_id, hwnd, min_msg, max_msg)?;
+        self.clear_timer_message_pending(thread_id, &message);
+        self.record_message_op(
+            "get_message",
+            thread_id,
+            &message,
+            Some(1),
+            Some(format_filter_detail(hwnd, min_msg, max_msg)),
+        );
+        Some(message)
     }
 
     pub fn peek_message_w_filtered(

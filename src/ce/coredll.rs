@@ -1486,6 +1486,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_FLOOR => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Floor)),
         ORD_FMOD => Some(raw_binary_f64(kernel, args, CeMathBinaryF64::Fmod)),
         ORD_FMODF => Some(raw_binary_f32(kernel, args, CeMathBinaryF32::Fmod)),
+        ORD_HYPOT => Some(raw_binary_f64(kernel, args, CeMathBinaryF64::Hypot)),
         ORD_LOG => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Log)),
         ORD_LOG10 => Some(raw_unary_f64(kernel, args, CeMathUnaryF64::Log10)),
         ORD_POW => Some(raw_binary_f64(kernel, args, CeMathBinaryF64::Pow)),
@@ -1823,6 +1824,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
             raw_arg(args, 2),
+        ))),
+        ORD_MBSTOWCS => Some(CoredllValue::U32(mbstowcs_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_WCSTOMBS => Some(CoredllValue::U32(wcstombs_raw(
+            kernel, memory, thread_id, args,
         ))),
         ORD_MULTI_BYTE_TO_WIDE_CHAR => Some(CoredllValue::U32(multi_byte_to_wide_char_raw(
             kernel, memory, thread_id, args,
@@ -3770,6 +3777,53 @@ fn multi_byte_to_wide_char_raw<M: CoredllGuestMemory>(
     )
 }
 
+fn mbstowcs_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let dest_ptr = raw_arg(args, 0);
+    let src_ptr = raw_arg(args, 1);
+    let capacity = raw_arg(args, 2) as usize;
+    let Some(bytes) = read_conversion_bytes(kernel, memory, thread_id, src_ptr, -1) else {
+        return u32::MAX;
+    };
+    let Some(units) = decode_multibyte_to_wide(CE_ACP_CODE_PAGE, 0, &bytes) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return u32::MAX;
+    };
+    if dest_ptr == 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return units
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(units.len())
+            .min(u32::MAX as usize) as u32;
+    }
+    let write_count = capacity.min(units.len());
+    for (index, unit) in units.iter().copied().take(write_count).enumerate() {
+        if !write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            dest_ptr.wrapping_add((index as u32).saturating_mul(2)),
+            unit,
+        ) {
+            return u32::MAX;
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    units
+        .iter()
+        .take(write_count)
+        .position(|unit| *unit == 0)
+        .unwrap_or(write_count)
+        .min(u32::MAX as usize) as u32
+}
+
 fn active_conversion_code_page(code_page: u32) -> u32 {
     if code_page == 0 {
         CE_ACP_CODE_PAGE
@@ -3807,17 +3861,33 @@ fn wide_char_to_multi_byte_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
+    let code_page = active_conversion_code_page(raw_arg(args, 0));
+    let flags = raw_arg(args, 1);
     let input_ptr = raw_arg(args, 2);
     let input_len = raw_arg(args, 3) as i32;
     let output_ptr = raw_arg(args, 4);
     let output_capacity = raw_arg(args, 5);
+    let used_default_ptr = raw_arg(args, 7);
     let Some(units) = read_conversion_wide(kernel, memory, thread_id, input_ptr, input_len) else {
         return 0;
     };
-    let bytes: Vec<u8> = units
-        .into_iter()
-        .map(|unit| if unit <= 0x7f { unit as u8 } else { b'?' })
-        .collect();
+    let Some((bytes, used_default)) = encode_wide_to_multibyte(code_page, flags, &units) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if used_default_ptr != 0
+        && !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            used_default_ptr,
+            u32::from(used_default),
+        )
+    {
+        return 0;
+    }
     write_conversion_byte_result(
         kernel,
         memory,
@@ -3826,6 +3896,130 @@ fn wide_char_to_multi_byte_raw<M: CoredllGuestMemory>(
         output_capacity,
         &bytes,
     )
+}
+
+fn wcstombs_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let dest_ptr = raw_arg(args, 0);
+    let src_ptr = raw_arg(args, 1);
+    let capacity = raw_arg(args, 2) as usize;
+    let Some(units) = read_conversion_wide(kernel, memory, thread_id, src_ptr, -1) else {
+        return u32::MAX;
+    };
+    if dest_ptr == 0 {
+        let Some((bytes, _)) = encode_wide_to_multibyte(CE_ACP_CODE_PAGE, 0, &units) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return u32::MAX;
+        };
+        kernel.threads.set_last_error(thread_id, 0);
+        return bytes
+            .iter()
+            .position(|byte| *byte == 0)
+            .unwrap_or(bytes.len())
+            .min(u32::MAX as usize) as u32;
+    }
+
+    let mut bytes_written = 0usize;
+    let mut return_count = 0usize;
+    for unit in units {
+        let Some((bytes, _)) = encode_wide_to_multibyte(CE_ACP_CODE_PAGE, 0, &[unit]) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return u32::MAX;
+        };
+        if bytes_written.saturating_add(bytes.len()) > capacity {
+            break;
+        }
+        if !write_guest_bytes(
+            kernel,
+            memory,
+            thread_id,
+            dest_ptr.wrapping_add(bytes_written as u32),
+            &bytes,
+        ) {
+            return u32::MAX;
+        }
+        bytes_written += bytes.len();
+        if unit == 0 {
+            kernel.threads.set_last_error(thread_id, 0);
+            return return_count.min(u32::MAX as usize) as u32;
+        }
+        return_count += bytes.len();
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    return_count.min(u32::MAX as usize) as u32
+}
+
+#[cfg(windows)]
+fn encode_wide_to_multibyte(code_page: u32, flags: u32, units: &[u16]) -> Option<(Vec<u8>, bool)> {
+    use windows::{
+        Win32::{
+            Foundation::BOOL,
+            Globalization::{WC_COMPOSITECHECK, WideCharToMultiByte},
+        },
+        core::PCSTR,
+    };
+
+    let mut used_default = BOOL(0);
+    let used_default_ptr = (flags & WC_COMPOSITECHECK) == 0;
+    let needed = unsafe {
+        WideCharToMultiByte(
+            code_page,
+            flags,
+            units,
+            None,
+            PCSTR::null(),
+            used_default_ptr.then_some(&mut used_default),
+        )
+    };
+    if needed <= 0 {
+        return None;
+    }
+    let mut bytes = vec![0; needed as usize];
+    let written = unsafe {
+        WideCharToMultiByte(
+            code_page,
+            flags,
+            units,
+            Some(&mut bytes),
+            PCSTR::null(),
+            used_default_ptr.then_some(&mut used_default),
+        )
+    };
+    if written <= 0 {
+        return None;
+    }
+    bytes.truncate(written as usize);
+    Some((bytes, used_default.as_bool()))
+}
+
+#[cfg(not(windows))]
+fn encode_wide_to_multibyte(
+    _code_page: u32,
+    _flags: u32,
+    units: &[u16],
+) -> Option<(Vec<u8>, bool)> {
+    let mut used_default = false;
+    let bytes = units
+        .iter()
+        .copied()
+        .map(|unit| {
+            if unit <= 0x7f {
+                unit as u8
+            } else {
+                used_default = true;
+                b'?'
+            }
+        })
+        .collect();
+    Some((bytes, used_default))
 }
 
 fn read_conversion_bytes<M: CoredllGuestMemory>(

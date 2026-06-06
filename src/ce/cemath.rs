@@ -142,6 +142,7 @@ pub enum CeMathUnaryF64 {
 pub enum CeMathBinaryF64 {
     Atan2,
     Fmod,
+    Hypot,
     Pow,
 }
 
@@ -330,6 +331,7 @@ impl CeMathBinaryF64 {
         match self {
             Self::Atan2 => "atan2",
             Self::Fmod => "fmod",
+            Self::Hypot => "_hypot",
             Self::Pow => "pow",
         }
     }
@@ -368,6 +370,7 @@ fn eval_binary_f64(op: CeMathBinaryF64, lhs: f64, rhs: f64) -> f64 {
     match op {
         CeMathBinaryF64::Atan2 => lhs.atan2(rhs),
         CeMathBinaryF64::Fmod => lhs % rhs,
+        CeMathBinaryF64::Hypot => lhs.hypot(rhs),
         CeMathBinaryF64::Pow => lhs.powf(rhs),
     }
 }
@@ -440,6 +443,14 @@ mod tests {
                 rhs: 8.0,
             }),
             CeMathValue::F64(256.0)
+        );
+        assert_eq!(
+            math.eval(CeMathCall::BinaryF64 {
+                op: CeMathBinaryF64::Hypot,
+                lhs: 3.0,
+                rhs: 4.0,
+            }),
+            CeMathValue::F64(5.0)
         );
         assert_eq!(
             math.eval(CeMathCall::BinaryF32 {

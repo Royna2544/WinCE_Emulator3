@@ -1,5 +1,64 @@
+// Remote REST API v1
+//
+// This server intentionally tracks the v2 host tooling shape while sourcing all
+// state from v3's generic CeRemote/RemoteStatus/framebuffer paths.
+//
+// Auth:
+// - If RemoteServerConfig::token is set, every request must include
+//   `Authorization: Bearer <token>`.
+// - OPTIONS always returns 204 after auth is accepted.
+//
+// Discovery and status:
+// - GET / returns JSON with the public endpoint list.
+// - GET /api/v1/status returns v2-style camelCase JSON status:
+//   running, guestWidth, guestHeight, guestFps, videoEnabled, videoCodec,
+//   audioEnabled, audioCodec, audioSampleRate, audioChannels, audioFormat,
+//   gpsEnabled, gpsTarget, paused, queuedTouchEvents, queuedKeyEvents,
+//   queuedSerialBytes, audioClients, queuedAudioChunks.
+// - GET /status is a legacy alias for /api/v1/status.
+//
+// Frame/video:
+// - GET /api/v1/frame.jpg[?quality=1..100] returns the latest framebuffer as
+//   JPEG, or 503 {"ok":false,"error":"no framebuffer"} before the first frame.
+// - GET /api/v1/debug/screenshot.png returns the latest framebuffer as PNG.
+// - GET /api/v1/video.mjpg[?fps=1..60][&quality=1..100] streams multipart
+//   MJPEG frames until the client disconnects.
+// - GET /framebuffer.ppm is a legacy/debug PPM framebuffer endpoint.
+//
+// Input:
+// - POST /api/v1/input/touch accepts JSON
+//   {"type":"touch","phase":"down|move|up|cancel|tap|click|single|single-touch","x":N,"y":N}
+//   or the v2 shorthand {"type":"down|move|up|cancel|tap|click|single|single-touch","x":N,"y":N}.
+//   It queues {"type":"touch","phase":phase,"x":N,"y":N} and returns {"ok":true}.
+// - POST /api/v1/input/key accepts JSON {"type":"down|up","vk":1..255}.
+//   It queues {"type":"key","phase":type,"vk":vk} and returns {"ok":true}.
+//
+// Sensors:
+// - POST /api/v1/sensors/location accepts JSON containing numeric lat and lon,
+//   queues it with type "location", and returns {"ok":true,"sentencesGenerated":3}.
+// - POST /api/v1/sensors/nmea accepts JSON {"sentences":[...]} and queues it
+//   with type "nmea"; non-string entries are ignored in the accepted count.
+// - POST /api/v1/sensors/imu accepts any JSON object, queues it with type
+//   "imu" when parse succeeds, and still returns {"ok":true}.
+//
+// Logs/control:
+// - GET /api/v1/logs/recent[?lines=1..4096] currently returns an empty
+//   {"ok":true,"lines":[]} placeholder.
+// - POST /api/v1/control/pause queues {"type":"pause"} and returns paused true.
+// - POST /api/v1/control/resume queues {"type":"resume"} and returns paused false.
+// - GET /api/v1/control/ws upgrades to WebSocket. Text frames must be JSON
+//   control messages; each valid frame is queued unchanged and acknowledged
+//   with {"ok":true,"queued":true,"pending":N}. Ping/pong/close are supported.
+// - GET /api/v1/audio/ws upgrades to WebSocket. The server first sends a JSON
+//   text metadata frame, then streams guest PCM chunks as binary frames when a
+//   RemoteServer audio sink is registered with the CE audio system.
+//
+// Legacy control:
+// - POST /control and POST /remote accept arbitrary JSON, queue it unchanged,
+//   and return 202 {"ok":true,"queued":true,"pending":N}.
+
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     io::{Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     sync::{Arc, Mutex},
@@ -12,6 +71,7 @@ use serde_json::{Value, json};
 
 use crate::{
     ce::{
+        audio::{AudioChunk, AudioSink, WaveFormat},
         framebuffer::{Framebuffer, PixelFormat},
         remote::RemoteStatus,
     },
@@ -22,6 +82,7 @@ const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_PENDING_CONTROL_MESSAGES: usize = 1024;
 const DEFAULT_VIDEO_FPS: u32 = 30;
 const DEFAULT_JPEG_QUALITY: u8 = 80;
+const WEBSOCKET_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 #[derive(Debug, Clone)]
 pub struct RemoteServerConfig {
@@ -62,6 +123,7 @@ struct RemoteServerState {
     pending_control: Mutex<VecDeque<Value>>,
     latest_status: Mutex<Value>,
     latest_framebuffer: Mutex<Option<RemoteFramebufferImage>>,
+    audio: Mutex<RemoteAudioState>,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +131,25 @@ struct RemoteFramebufferImage {
     width: u32,
     height: u32,
     rgb: Vec<u8>,
+}
+
+#[derive(Debug)]
+struct RemoteAudioState {
+    chunks: VecDeque<AudioChunk>,
+    clients: BTreeMap<u64, RemoteAudioCursor>,
+    next_client_id: u64,
+    sequence: u64,
+    max_chunks: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RemoteAudioCursor {
+    next_sequence: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct RemoteAudioSink {
+    state: Arc<RemoteServerState>,
 }
 
 impl RemoteServer {
@@ -107,6 +188,13 @@ impl RemoteServer {
                     queued_audio_chunks: 0,
                 })),
                 latest_framebuffer: Mutex::new(None),
+                audio: Mutex::new(RemoteAudioState {
+                    chunks: VecDeque::new(),
+                    clients: BTreeMap::new(),
+                    next_client_id: 1,
+                    sequence: 0,
+                    max_chunks: 16,
+                }),
             }),
             local_addr,
         };
@@ -123,9 +211,16 @@ impl RemoteServer {
         self.local_addr
     }
 
+    pub fn audio_sink(&self) -> RemoteAudioSink {
+        RemoteAudioSink {
+            state: self.state.clone(),
+        }
+    }
+
     pub fn publish_status(&self, status: &RemoteStatus) {
         let mut value = v2_status_json(status);
         if let Some(object) = value.as_object_mut() {
+            let audio = self.state.audio.lock().expect("remote audio mutex");
             object.insert(
                 "audioEnabled".to_owned(),
                 Value::Bool(self.state.config.audio_enabled),
@@ -143,6 +238,8 @@ impl RemoteServer {
                 Value::String(self.state.config.audio_format.clone()),
             );
             object.insert("guestFps".to_owned(), json!(self.state.config.video_fps));
+            object.insert("audioClients".to_owned(), json!(audio.clients.len()));
+            object.insert("queuedAudioChunks".to_owned(), json!(audio.chunks.len()));
         }
         *self
             .state
@@ -210,6 +307,10 @@ impl RemoteServer {
                 let _ = stream.write_all(&response.to_bytes());
             }
             RemoteHttpResponse::Mjpeg { request } => self.write_mjpeg_stream(stream, request),
+            RemoteHttpResponse::WebSocket { request, kind } => match kind {
+                WebSocketKind::Control => self.handle_control_websocket(stream, request),
+                WebSocketKind::Audio => self.handle_audio_websocket(stream, request),
+            },
         }
     }
 
@@ -252,11 +353,14 @@ impl RemoteServer {
                 self.queue_control(json!({"type": "resume"}));
                 HttpResponse::json(200, json!({"ok": true, "paused": false})).into()
             }
-            ("GET", "/api/v1/audio/ws") | ("GET", "/api/v1/control/ws") => HttpResponse::json(
-                501,
-                json!({"ok": false, "error": "websocket transport is not implemented in Rust server yet"}),
-            )
-            .into(),
+            ("GET", "/api/v1/audio/ws") => RemoteHttpResponse::WebSocket {
+                request,
+                kind: WebSocketKind::Audio,
+            },
+            ("GET", "/api/v1/control/ws") => RemoteHttpResponse::WebSocket {
+                request,
+                kind: WebSocketKind::Control,
+            },
             ("POST", "/control") | ("POST", "/remote") => self.post_legacy_control(request).into(),
             _ => HttpResponse::json(404, json!({"ok": false, "error": "not found"})).into(),
         }
@@ -484,6 +588,189 @@ impl RemoteServer {
             thread::sleep(frame_delay);
         }
     }
+
+    fn handle_control_websocket(&self, mut stream: TcpStream, request: HttpRequest) {
+        if write_websocket_handshake(&mut stream, &request).is_err() {
+            return;
+        }
+        let _ = stream.set_read_timeout(None);
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+        loop {
+            let frame = match read_websocket_frame(&mut stream) {
+                Ok(Some(frame)) => frame,
+                Ok(None) | Err(_) => return,
+            };
+            match frame.opcode {
+                WebSocketOpcode::Text => {
+                    let response = match serde_json::from_slice::<Value>(&frame.payload) {
+                        Ok(message) => {
+                            let pending = self.queue_control(message);
+                            json!({"ok": true, "queued": true, "pending": pending})
+                        }
+                        Err(err) => json!({"ok": false, "error": format!("invalid JSON: {err}")}),
+                    };
+                    if write_websocket_text(&mut stream, &response.to_string()).is_err() {
+                        return;
+                    }
+                }
+                WebSocketOpcode::Binary => {
+                    if write_websocket_text(
+                        &mut stream,
+                        r#"{"ok":false,"error":"control websocket expects JSON text frames"}"#,
+                    )
+                    .is_err()
+                    {
+                        return;
+                    }
+                }
+                WebSocketOpcode::Ping => {
+                    if write_websocket_frame(&mut stream, WebSocketOpcode::Pong, &frame.payload)
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                WebSocketOpcode::Close => {
+                    let _ = write_websocket_frame(&mut stream, WebSocketOpcode::Close, &[]);
+                    return;
+                }
+                WebSocketOpcode::Pong => {}
+            }
+        }
+    }
+
+    fn handle_audio_websocket(&self, mut stream: TcpStream, request: HttpRequest) {
+        if write_websocket_handshake(&mut stream, &request).is_err() {
+            return;
+        }
+        let _ = stream.set_read_timeout(None);
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+        let client_id = self.register_audio_client();
+        let metadata = json!({
+            "type": "audio",
+            "codec": "pcm",
+            "sampleRate": self.state.config.audio_sample_rate,
+            "channels": self.state.config.audio_channels,
+            "format": self.state.config.audio_format,
+            "enabled": self.state.config.audio_enabled
+        });
+        if write_websocket_text(&mut stream, &metadata.to_string()).is_err() {
+            self.unregister_audio_client(client_id);
+            return;
+        }
+        let mut ticks = 0u32;
+        loop {
+            let chunks = self.take_audio_chunks_for_client(client_id, 8);
+            for chunk in chunks {
+                if write_websocket_frame(&mut stream, WebSocketOpcode::Binary, &chunk.payload)
+                    .is_err()
+                {
+                    self.unregister_audio_client(client_id);
+                    return;
+                }
+            }
+            ticks = ticks.wrapping_add(1);
+            if ticks >= 50 {
+                ticks = 0;
+                if write_websocket_frame(&mut stream, WebSocketOpcode::Ping, &[]).is_err() {
+                    self.unregister_audio_client(client_id);
+                    return;
+                }
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn register_audio_client(&self) -> u64 {
+        let mut audio = self.state.audio.lock().expect("remote audio mutex");
+        let client_id = audio.next_client_id;
+        audio.next_client_id = audio.next_client_id.saturating_add(1);
+        let next_sequence = audio
+            .chunks
+            .back()
+            .map(|chunk| chunk.sequence.saturating_add(1))
+            .unwrap_or(audio.sequence.saturating_add(1));
+        audio
+            .clients
+            .insert(client_id, RemoteAudioCursor { next_sequence });
+        client_id
+    }
+
+    fn unregister_audio_client(&self, client_id: u64) {
+        let mut audio = self.state.audio.lock().expect("remote audio mutex");
+        audio.clients.remove(&client_id);
+    }
+
+    fn take_audio_chunks_for_client(&self, client_id: u64, max_chunks: usize) -> Vec<AudioChunk> {
+        let mut audio = self.state.audio.lock().expect("remote audio mutex");
+        let Some(cursor) = audio.clients.get(&client_id).copied() else {
+            return Vec::new();
+        };
+        let mut chunks = Vec::new();
+        for chunk in audio
+            .chunks
+            .iter()
+            .filter(|chunk| chunk.sequence >= cursor.next_sequence)
+        {
+            if chunks.len() >= max_chunks {
+                break;
+            }
+            chunks.push(chunk.clone());
+        }
+        if let Some(last) = chunks.last() {
+            audio.clients.insert(
+                client_id,
+                RemoteAudioCursor {
+                    next_sequence: last.sequence.saturating_add(1),
+                },
+            );
+        }
+        chunks
+    }
+}
+
+impl AudioSink for RemoteAudioSink {
+    fn name(&self) -> &str {
+        "remote-websocket"
+    }
+
+    fn submit_pcm(
+        &mut self,
+        payload: &[u8],
+        _format: &WaveFormat,
+        pts_ms: u64,
+        duration_ms: u32,
+        flush: bool,
+    ) -> Option<u64> {
+        if !self.state.config.audio_enabled || payload.is_empty() {
+            return None;
+        }
+        let mut audio = self.state.audio.lock().expect("remote audio mutex");
+        audio.sequence = audio.sequence.saturating_add(1);
+        let sequence = audio.sequence;
+        audio.chunks.push_back(AudioChunk {
+            payload: payload.to_vec(),
+            sequence,
+            pts_ms,
+            duration_ms: duration_ms.max(1),
+            flush,
+        });
+        while audio.chunks.len() > audio.max_chunks {
+            audio.chunks.pop_front();
+        }
+        Some(sequence)
+    }
+
+    fn flush(&mut self) {}
+
+    fn queued_chunk_count(&self) -> usize {
+        self.state
+            .audio
+            .lock()
+            .expect("remote audio mutex")
+            .chunks
+            .len()
+    }
 }
 
 pub fn v2_status_json(status: &RemoteStatus) -> Value {
@@ -570,13 +857,39 @@ impl HttpRequest {
 
 enum RemoteHttpResponse {
     One(HttpResponse),
-    Mjpeg { request: HttpRequest },
+    Mjpeg {
+        request: HttpRequest,
+    },
+    WebSocket {
+        request: HttpRequest,
+        kind: WebSocketKind,
+    },
+}
+
+enum WebSocketKind {
+    Control,
+    Audio,
 }
 
 impl From<HttpResponse> for RemoteHttpResponse {
     fn from(value: HttpResponse) -> Self {
         Self::One(value)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WebSocketOpcode {
+    Text,
+    Binary,
+    Close,
+    Ping,
+    Pong,
+}
+
+#[derive(Debug)]
+struct WebSocketFrame {
+    opcode: WebSocketOpcode,
+    payload: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -628,6 +941,210 @@ impl HttpResponse {
         bytes.extend_from_slice(&self.body);
         bytes
     }
+}
+
+fn write_websocket_handshake(stream: &mut TcpStream, request: &HttpRequest) -> std::io::Result<()> {
+    let key = request.header("sec-websocket-key").ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "missing sec-websocket-key")
+    })?;
+    let accept = websocket_accept_key(key);
+    let response = format!(
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\nAccess-Control-Allow-Origin: *\r\n\r\n"
+    );
+    stream.write_all(response.as_bytes())
+}
+
+fn websocket_accept_key(key: &str) -> String {
+    let mut bytes = Vec::with_capacity(key.trim().len() + WEBSOCKET_GUID.len());
+    bytes.extend_from_slice(key.trim().as_bytes());
+    bytes.extend_from_slice(WEBSOCKET_GUID.as_bytes());
+    base64_encode(&sha1_digest(&bytes))
+}
+
+fn read_websocket_frame(stream: &mut TcpStream) -> std::io::Result<Option<WebSocketFrame>> {
+    let mut header = [0u8; 2];
+    if let Err(err) = stream.read_exact(&mut header) {
+        return if err.kind() == std::io::ErrorKind::UnexpectedEof {
+            Ok(None)
+        } else {
+            Err(err)
+        };
+    }
+    let fin = (header[0] & 0x80) != 0;
+    let opcode = match header[0] & 0x0f {
+        0x1 => WebSocketOpcode::Text,
+        0x2 => WebSocketOpcode::Binary,
+        0x8 => WebSocketOpcode::Close,
+        0x9 => WebSocketOpcode::Ping,
+        0xA => WebSocketOpcode::Pong,
+        _ => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "unsupported websocket opcode",
+            ));
+        }
+    };
+    if !fin {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "fragmented websocket frames are not supported",
+        ));
+    }
+    let masked = (header[1] & 0x80) != 0;
+    if !masked {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "client websocket frames must be masked",
+        ));
+    }
+    let mut len = u64::from(header[1] & 0x7f);
+    if len == 126 {
+        let mut extended = [0u8; 2];
+        stream.read_exact(&mut extended)?;
+        len = u64::from(u16::from_be_bytes(extended));
+    } else if len == 127 {
+        let mut extended = [0u8; 8];
+        stream.read_exact(&mut extended)?;
+        len = u64::from_be_bytes(extended);
+    }
+    if len as usize > MAX_REQUEST_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "websocket frame too large",
+        ));
+    }
+    let mut mask = [0u8; 4];
+    stream.read_exact(&mut mask)?;
+    let mut payload = vec![0; len as usize];
+    stream.read_exact(&mut payload)?;
+    for (index, byte) in payload.iter_mut().enumerate() {
+        *byte ^= mask[index % 4];
+    }
+    Ok(Some(WebSocketFrame { opcode, payload }))
+}
+
+fn write_websocket_text(stream: &mut TcpStream, text: &str) -> std::io::Result<()> {
+    write_websocket_frame(stream, WebSocketOpcode::Text, text.as_bytes())
+}
+
+fn write_websocket_frame(
+    stream: &mut TcpStream,
+    opcode: WebSocketOpcode,
+    payload: &[u8],
+) -> std::io::Result<()> {
+    let opcode_byte = match opcode {
+        WebSocketOpcode::Text => 0x1,
+        WebSocketOpcode::Binary => 0x2,
+        WebSocketOpcode::Close => 0x8,
+        WebSocketOpcode::Ping => 0x9,
+        WebSocketOpcode::Pong => 0xA,
+    };
+    let mut header = Vec::with_capacity(14);
+    header.push(0x80 | opcode_byte);
+    if payload.len() <= 125 {
+        header.push(payload.len() as u8);
+    } else if payload.len() <= u16::MAX as usize {
+        header.push(126);
+        header.extend_from_slice(&(payload.len() as u16).to_be_bytes());
+    } else {
+        header.push(127);
+        header.extend_from_slice(&(payload.len() as u64).to_be_bytes());
+    }
+    stream.write_all(&header)?;
+    stream.write_all(payload)
+}
+
+fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0];
+        let b1 = chunk.get(1).copied().unwrap_or(0);
+        let b2 = chunk.get(2).copied().unwrap_or(0);
+        out.push(TABLE[(b0 >> 2) as usize] as char);
+        out.push(TABLE[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[(b2 & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
+}
+
+fn sha1_digest(bytes: &[u8]) -> [u8; 20] {
+    let mut h0 = 0x67452301u32;
+    let mut h1 = 0xEFCDAB89u32;
+    let mut h2 = 0x98BADCFEu32;
+    let mut h3 = 0x10325476u32;
+    let mut h4 = 0xC3D2E1F0u32;
+
+    let bit_len = (bytes.len() as u64) * 8;
+    let mut message = bytes.to_vec();
+    message.push(0x80);
+    while (message.len() % 64) != 56 {
+        message.push(0);
+    }
+    message.extend_from_slice(&bit_len.to_be_bytes());
+
+    for chunk in message.chunks_exact(64) {
+        let mut w = [0u32; 80];
+        for (index, word) in w.iter_mut().take(16).enumerate() {
+            let offset = index * 4;
+            *word = u32::from_be_bytes([
+                chunk[offset],
+                chunk[offset + 1],
+                chunk[offset + 2],
+                chunk[offset + 3],
+            ]);
+        }
+        for index in 16..80 {
+            w[index] = (w[index - 3] ^ w[index - 8] ^ w[index - 14] ^ w[index - 16]).rotate_left(1);
+        }
+
+        let mut a = h0;
+        let mut b = h1;
+        let mut c = h2;
+        let mut d = h3;
+        let mut e = h4;
+        for (index, word) in w.iter().copied().enumerate() {
+            let (f, k) = match index {
+                0..=19 => ((b & c) | ((!b) & d), 0x5A827999),
+                20..=39 => (b ^ c ^ d, 0x6ED9EBA1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1BBCDC),
+                _ => (b ^ c ^ d, 0xCA62C1D6),
+            };
+            let temp = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(word);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = temp;
+        }
+        h0 = h0.wrapping_add(a);
+        h1 = h1.wrapping_add(b);
+        h2 = h2.wrapping_add(c);
+        h3 = h3.wrapping_add(d);
+        h4 = h4.wrapping_add(e);
+    }
+
+    let mut out = [0u8; 20];
+    out[..4].copy_from_slice(&h0.to_be_bytes());
+    out[4..8].copy_from_slice(&h1.to_be_bytes());
+    out[8..12].copy_from_slice(&h2.to_be_bytes());
+    out[12..16].copy_from_slice(&h3.to_be_bytes());
+    out[16..20].copy_from_slice(&h4.to_be_bytes());
+    out
 }
 
 fn reason_phrase(status: u16) -> &'static str {
@@ -957,6 +1474,53 @@ mod tests {
         assert!(response.contains(r#""guestHeight":480"#));
     }
 
+    #[test]
+    fn remote_server_control_websocket_queues_json_frames() {
+        let server = RemoteServer::start(RemoteServerConfig {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            ..RemoteServerConfig::default()
+        })
+        .unwrap();
+        let mut stream = websocket_connect(server.local_addr(), "/api/v1/control/ws");
+        stream
+            .write_all(&websocket_client_frame(
+                WebSocketOpcode::Text,
+                br#"{"type":"tap","x":12,"y":34}"#,
+            ))
+            .unwrap();
+
+        let ack = read_unmasked_server_frame(&mut stream);
+        assert_eq!(ack.opcode, WebSocketOpcode::Text);
+        assert!(String::from_utf8_lossy(&ack.payload).contains(r#""queued":true"#));
+        let queued = server.drain_control_messages();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0]["type"], "tap");
+    }
+
+    #[test]
+    fn remote_server_audio_websocket_streams_registered_sink_pcm() {
+        let server = RemoteServer::start(RemoteServerConfig {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            audio_enabled: true,
+            ..RemoteServerConfig::default()
+        })
+        .unwrap();
+        let mut stream = websocket_connect(server.local_addr(), "/api/v1/audio/ws");
+        let metadata = read_unmasked_server_frame(&mut stream);
+        assert_eq!(metadata.opcode, WebSocketOpcode::Text);
+        assert!(String::from_utf8_lossy(&metadata.payload).contains(r#""codec":"pcm""#));
+
+        let format = WaveFormat::pcm_16bit(2, 44_100);
+        let mut sink = server.audio_sink();
+        assert_eq!(
+            sink.submit_pcm(&[1, 2, 3, 4], &format, 100, 20, true),
+            Some(1)
+        );
+        let audio = read_unmasked_server_frame(&mut stream);
+        assert_eq!(audio.opcode, WebSocketOpcode::Binary);
+        assert_eq!(audio.payload, vec![1, 2, 3, 4]);
+    }
+
     fn http_request(addr: SocketAddr, request: &str) -> String {
         let mut stream = TcpStream::connect(addr).unwrap();
         stream.write_all(request.as_bytes()).unwrap();
@@ -971,5 +1535,75 @@ mod tests {
         let mut response = Vec::new();
         stream.read_to_end(&mut response).unwrap();
         response
+    }
+
+    fn websocket_connect(addr: SocketAddr, path: &str) -> TcpStream {
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream
+            .write_all(
+                format!(
+                    "GET {path} HTTP/1.1\r\nHost: local\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        let mut response = Vec::new();
+        let mut byte = [0u8; 1];
+        while !response.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).unwrap();
+            response.push(byte[0]);
+        }
+        let header = String::from_utf8_lossy(&response);
+        assert!(header.contains("101 Switching Protocols"));
+        assert!(header.contains("s3pPLMBiTxaQ9kYGzzhZRbK+xOo="));
+        stream
+    }
+
+    fn websocket_client_frame(opcode: WebSocketOpcode, payload: &[u8]) -> Vec<u8> {
+        let opcode_byte = match opcode {
+            WebSocketOpcode::Text => 0x1,
+            WebSocketOpcode::Binary => 0x2,
+            WebSocketOpcode::Close => 0x8,
+            WebSocketOpcode::Ping => 0x9,
+            WebSocketOpcode::Pong => 0xA,
+        };
+        let mask = [0x11, 0x22, 0x33, 0x44];
+        let mut frame = Vec::new();
+        frame.push(0x80 | opcode_byte);
+        assert!(payload.len() <= 125);
+        frame.push(0x80 | payload.len() as u8);
+        frame.extend_from_slice(&mask);
+        for (index, byte) in payload.iter().copied().enumerate() {
+            frame.push(byte ^ mask[index % 4]);
+        }
+        frame
+    }
+
+    fn read_unmasked_server_frame(stream: &mut TcpStream) -> WebSocketFrame {
+        let mut header = [0u8; 2];
+        stream.read_exact(&mut header).unwrap();
+        assert_eq!(header[0] & 0x80, 0x80);
+        assert_eq!(header[1] & 0x80, 0);
+        let opcode = match header[0] & 0x0f {
+            0x1 => WebSocketOpcode::Text,
+            0x2 => WebSocketOpcode::Binary,
+            0x8 => WebSocketOpcode::Close,
+            0x9 => WebSocketOpcode::Ping,
+            0xA => WebSocketOpcode::Pong,
+            other => panic!("unexpected opcode {other}"),
+        };
+        let mut len = usize::from(header[1] & 0x7f);
+        if len == 126 {
+            let mut extended = [0u8; 2];
+            stream.read_exact(&mut extended).unwrap();
+            len = usize::from(u16::from_be_bytes(extended));
+        } else if len == 127 {
+            let mut extended = [0u8; 8];
+            stream.read_exact(&mut extended).unwrap();
+            len = u64::from_be_bytes(extended) as usize;
+        }
+        let mut payload = vec![0; len];
+        stream.read_exact(&mut payload).unwrap();
+        WebSocketFrame { opcode, payload }
     }
 }

@@ -5,6 +5,8 @@ use crate::ce::{
     thread::{ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER},
 };
 
+const CRT_ACP_CODE_PAGE: u32 = 949;
+
 pub(crate) fn wcsrchr_raw<M: CoredllGuestMemory>(memory: &M, string: u32, needle: u32) -> u32 {
     if string == 0 {
         return 0;
@@ -1148,7 +1150,12 @@ pub(crate) fn sprintf_raw<M: CoredllGuestMemory>(
         return 0;
     };
     let text = format_wide_printf(memory, &format, args, WideStringMode::NarrowDefault);
-    let mut bytes = text.into_bytes();
+    let Some(mut bytes) = encode_narrow_acp(&text) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
     let len = bytes.len() as u32;
     bytes.push(0);
     if write_guest_bytes(kernel, memory, thread_id, dest, &bytes) {
@@ -1396,11 +1403,114 @@ fn read_narrow_z<M: CoredllGuestMemory>(memory: &M, ptr: u32, max_chars: usize) 
     for index in 0..max_chars {
         let byte = memory.read_u8(ptr.wrapping_add(index as u32)).ok()?;
         if byte == 0 {
-            return Some(String::from_utf8_lossy(&bytes).into_owned());
+            return decode_narrow_acp(&bytes);
         }
         bytes.push(byte);
     }
     None
+}
+
+#[cfg(windows)]
+fn decode_narrow_acp(bytes: &[u8]) -> Option<String> {
+    use windows::Win32::Globalization::{MULTI_BYTE_TO_WIDE_CHAR_FLAGS, MultiByteToWideChar};
+
+    if bytes.is_empty() {
+        return Some(String::new());
+    }
+    let needed = unsafe {
+        MultiByteToWideChar(
+            CRT_ACP_CODE_PAGE,
+            MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0),
+            bytes,
+            None,
+        )
+    };
+    if needed <= 0 {
+        return None;
+    }
+    let mut units = vec![0; needed as usize];
+    let written = unsafe {
+        MultiByteToWideChar(
+            CRT_ACP_CODE_PAGE,
+            MULTI_BYTE_TO_WIDE_CHAR_FLAGS(0),
+            bytes,
+            Some(&mut units),
+        )
+    };
+    if written <= 0 {
+        return None;
+    }
+    units.truncate(written as usize);
+    String::from_utf16(&units).ok()
+}
+
+#[cfg(not(windows))]
+fn decode_narrow_acp(bytes: &[u8]) -> Option<String> {
+    Some(
+        bytes
+            .iter()
+            .copied()
+            .map(|byte| {
+                if byte <= 0x7f {
+                    char::from(byte)
+                } else {
+                    char::REPLACEMENT_CHARACTER
+                }
+            })
+            .collect(),
+    )
+}
+
+#[cfg(windows)]
+fn encode_narrow_acp(text: &str) -> Option<Vec<u8>> {
+    use windows::{
+        Win32::{Foundation::BOOL, Globalization::WideCharToMultiByte},
+        core::PCSTR,
+    };
+
+    if text.is_empty() {
+        return Some(Vec::new());
+    }
+    let units: Vec<u16> = text.encode_utf16().collect();
+    let mut used_default = BOOL(0);
+    let needed = unsafe {
+        WideCharToMultiByte(
+            CRT_ACP_CODE_PAGE,
+            0,
+            &units,
+            None,
+            PCSTR::null(),
+            Some(&mut used_default),
+        )
+    };
+    if needed <= 0 {
+        return None;
+    }
+    let mut bytes = vec![0; needed as usize];
+    let written = unsafe {
+        WideCharToMultiByte(
+            CRT_ACP_CODE_PAGE,
+            0,
+            &units,
+            Some(&mut bytes),
+            PCSTR::null(),
+            Some(&mut used_default),
+        )
+    };
+    if written <= 0 {
+        return None;
+    }
+    bytes.truncate(written as usize);
+    Some(bytes)
+}
+
+#[cfg(not(windows))]
+fn encode_narrow_acp(text: &str) -> Option<Vec<u8>> {
+    Some(
+        text.encode_utf16()
+            .map(|unit| if unit <= 0x7f { unit as u8 } else { b'?' })
+            .collect(),
+    )
 }
 
 fn write_bounded_narrow<M: CoredllGuestMemory>(
@@ -1411,14 +1521,19 @@ fn write_bounded_narrow<M: CoredllGuestMemory>(
     count: u32,
     text: &str,
 ) -> u32 {
-    let bytes = text.as_bytes();
+    let Some(bytes) = encode_narrow_acp(text) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return u32::MAX;
+    };
     if count == 0 {
         return if bytes.is_empty() { 0 } else { u32::MAX };
     }
     let count = count as usize;
     if bytes.len() < count {
         let mut out = Vec::with_capacity(bytes.len() + 1);
-        out.extend_from_slice(bytes);
+        out.extend_from_slice(&bytes);
         out.push(0);
         if write_guest_bytes(kernel, memory, thread_id, dest, &out) {
             bytes.len() as u32

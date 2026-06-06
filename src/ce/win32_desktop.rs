@@ -10,10 +10,12 @@ use std::{
 
 use windows::{
     Win32::{
-        Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
+        Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, SIZE, WPARAM},
         Graphics::Gdi::{
-            BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, DIB_RGB_COLORS, EndPaint, GetDC, HDC,
-            PAINTSTRUCT, RGBQUAD, ReleaseDC, SRCCOPY, StretchDIBits, UpdateWindow,
+            BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLACK_BRUSH, BeginPaint, DIB_RGB_COLORS,
+            EndPaint, FillRect, GetDC, GetStockObject, GetTextExtentPoint32W, HDC, InvalidateRect,
+            PAINTSTRUCT, RGBQUAD, ReleaseDC, SRCCOPY, SetBkMode, SetTextColor, StretchDIBits,
+            TRANSPARENT, TextOutW, UpdateWindow,
         },
         UI::WindowsAndMessaging::{
             AdjustWindowRectEx, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW,
@@ -41,13 +43,18 @@ const WM_INTERNAL_QUIT: u32 = WM_APP + 0x3e9;
 
 static INPUT_EVENTS: OnceLock<Mutex<VecDeque<VirtualInputEvent>>> = OnceLock::new();
 static TOUCH_DOWN: OnceLock<Mutex<bool>> = OnceLock::new();
-static PRESENTED_FRAMES: OnceLock<Mutex<BTreeMap<usize, PresentedFrame>>> = OnceLock::new();
+static PRESENTED_FRAMES: OnceLock<Mutex<BTreeMap<usize, PresentedContent>>> = OnceLock::new();
 
 #[derive(Debug, Clone)]
-struct PresentedFrame {
-    width: u32,
-    height: u32,
-    bgra: Vec<u8>,
+enum PresentedContent {
+    Frame {
+        width: u32,
+        height: u32,
+        bgra: Vec<u8>,
+    },
+    Stopped {
+        message: String,
+    },
 }
 
 pub type InputCallback = Box<dyn FnMut(&VirtualInputEvent) + Send>;
@@ -152,6 +159,32 @@ impl Win32Presenter {
 
     pub fn pump_messages(&mut self) {
         pump_messages();
+    }
+
+    pub fn show_stopped_message(&mut self, message: impl Into<String>) -> Result<()> {
+        pump_messages();
+        if let Ok(mut events) = input_events().lock() {
+            events.clear();
+        }
+        if let Ok(mut down) = touch_down().lock() {
+            *down = false;
+        }
+        let mut frames = presented_frames()
+            .lock()
+            .map_err(|_| Error::Backend("win32 presented-frame lock is poisoned".to_owned()))?;
+        frames.insert(
+            hwnd_key(self.hwnd),
+            PresentedContent::Stopped {
+                message: message.into(),
+            },
+        );
+        drop(frames);
+        unsafe {
+            let _ = InvalidateRect(self.hwnd, None, true);
+            let _ = UpdateWindow(self.hwnd);
+        }
+        pump_messages();
+        Ok(())
     }
 
     pub fn blit(&mut self, framebuffer: &dyn Framebuffer) -> Result<()> {
@@ -363,7 +396,7 @@ fn blit_framebuffer(
     if let Ok(mut frames) = presented_frames().lock() {
         frames.insert(
             hwnd_key(hwnd),
-            PresentedFrame {
+            PresentedContent::Frame {
                 width: info.width,
                 height: info.height,
                 bgra: scratch_bgra.clone(),
@@ -430,6 +463,31 @@ fn blit_bgra_to_hwnd_hdc(hwnd: HWND, hdc: HDC, width: u32, height: u32, bgra: &[
     }
 }
 
+fn paint_stopped_message(hwnd: HWND, hdc: HDC, message: &str) {
+    let mut client = RECT::default();
+    unsafe {
+        if GetClientRect(hwnd, &mut client).is_err() {
+            return;
+        }
+        let brush = GetStockObject(BLACK_BRUSH);
+        if !brush.is_invalid() {
+            let _ = FillRect(hdc, &client, windows::Win32::Graphics::Gdi::HBRUSH(brush.0));
+        }
+        let _ = SetBkMode(hdc, TRANSPARENT);
+        let _ = SetTextColor(hdc, COLORREF(0x00ff_ffff));
+        let mut wide = wide_null(message);
+        let text_len = wide.len().saturating_sub(1);
+        let text = &mut wide[..text_len];
+        let mut size = SIZE::default();
+        let _ = GetTextExtentPoint32W(hdc, text, &mut size);
+        let client_width = client.right.saturating_sub(client.left);
+        let client_height = client.bottom.saturating_sub(client.top);
+        let x = client.left + client_width.saturating_sub(size.cx) / 2;
+        let y = client.top + client_height.saturating_sub(size.cy) / 2;
+        let _ = TextOutW(hdc, x, y, text);
+    }
+}
+
 fn copy_to_bgra_top_down(framebuffer: &dyn Framebuffer, out: &mut Vec<u8>) -> Result<()> {
     let info = framebuffer.info();
     let required_len = (info.width as usize)
@@ -479,12 +537,26 @@ fn touch_down() -> &'static Mutex<bool> {
     TOUCH_DOWN.get_or_init(|| Mutex::new(false))
 }
 
-fn presented_frames() -> &'static Mutex<BTreeMap<usize, PresentedFrame>> {
+fn presented_frames() -> &'static Mutex<BTreeMap<usize, PresentedContent>> {
     PRESENTED_FRAMES.get_or_init(|| Mutex::new(BTreeMap::new()))
 }
 
 fn hwnd_key(hwnd: HWND) -> usize {
     hwnd.0 as usize
+}
+
+fn presented_content(hwnd: HWND) -> Option<PresentedContent> {
+    presented_frames()
+        .lock()
+        .ok()
+        .and_then(|frames| frames.get(&hwnd_key(hwnd)).cloned())
+}
+
+fn is_stopped_content(hwnd: HWND) -> bool {
+    matches!(
+        presented_content(hwnd),
+        Some(PresentedContent::Stopped { .. })
+    )
 }
 
 fn push_input_event(event: VirtualInputEvent) {
@@ -525,11 +597,20 @@ unsafe extern "system" fn wnd_proc(
             let mut paint = PAINTSTRUCT::default();
             let hdc = unsafe { BeginPaint(hwnd, &mut paint) };
             if !hdc.is_invalid() {
-                if let Ok(frames) = presented_frames().lock()
-                    && let Some(frame) = frames.get(&hwnd_key(hwnd))
-                {
-                    let _ =
-                        blit_bgra_to_hwnd_hdc(hwnd, hdc, frame.width, frame.height, &frame.bgra);
+                match presented_content(hwnd) {
+                    Some(PresentedContent::Frame {
+                        width,
+                        height,
+                        bgra,
+                    }) => {
+                        let _ = blit_bgra_to_hwnd_hdc(hwnd, hdc, width, height, &bgra);
+                    }
+                    Some(PresentedContent::Stopped { message }) => {
+                        paint_stopped_message(hwnd, hdc, &message);
+                    }
+                    None => {
+                        paint_stopped_message(hwnd, hdc, "Emulator process stopped");
+                    }
                 }
             }
             unsafe {
@@ -539,6 +620,12 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_ERASEBKGND => LRESULT(1),
         WM_LBUTTONDOWN => {
+            if is_stopped_content(hwnd) {
+                if let Ok(mut down) = touch_down().lock() {
+                    *down = false;
+                }
+                return LRESULT(0);
+            }
             if let Ok(mut down) = touch_down().lock() {
                 *down = true;
             }
@@ -549,6 +636,9 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
+            if is_stopped_content(hwnd) {
+                return LRESULT(0);
+            }
             let down = touch_down().lock().map(|down| *down).unwrap_or(false);
             if down || (wparam.0 & 1) != 0 {
                 push_input_event(VirtualInputEvent::TouchMove {
@@ -559,6 +649,12 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_LBUTTONUP => {
+            if is_stopped_content(hwnd) {
+                if let Ok(mut down) = touch_down().lock() {
+                    *down = false;
+                }
+                return LRESULT(0);
+            }
             if let Ok(mut down) = touch_down().lock() {
                 *down = false;
             }
@@ -569,6 +665,9 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_KEYDOWN => {
+            if is_stopped_content(hwnd) {
+                return LRESULT(0);
+            }
             push_input_event(VirtualInputEvent::Key {
                 virtual_key: wparam.0 as u32,
                 pressed: true,
@@ -576,6 +675,9 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_KEYUP => {
+            if is_stopped_content(hwnd) {
+                return LRESULT(0);
+            }
             push_input_event(VirtualInputEvent::Key {
                 virtual_key: wparam.0 as u32,
                 pressed: false,

@@ -12346,6 +12346,99 @@ fn coredll_raw_combine_rgn_diff_preserves_holes() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_region_or_canonicalizes_duplicate_coverage() -> Result<()> {
+    const SIMPLEREGION: u32 = 2;
+    const RGN_OR: u32 = 2;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 14;
+
+    let left = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [0, 0, 100, 80],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(left) did not return a region: {other:?}"),
+    };
+    let right = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [60, 0, 160, 80],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(right) did not return a region: {other:?}"),
+    };
+    let dest = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [0, 0, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(dest) did not return a region: {other:?}"),
+    };
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_COMBINE_RGN,
+            [dest, left, right, RGN_OR],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(SIMPLEREGION),
+            ..
+        }
+    ));
+    let region = kernel.resources.region(dest).unwrap();
+    assert_eq!(
+        region.rects,
+        vec![Rect {
+            left: 0,
+            top: 0,
+            right: 160,
+            bottom: 80,
+        }]
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_COMBINE_RGN,
+            [dest, dest, left, RGN_OR],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(SIMPLEREGION),
+            ..
+        }
+    ));
+    assert_eq!(kernel.resources.region(dest).unwrap().rects.len(), 1);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_get_update_queries_consume_pending_erase_only() -> Result<()> {
     const SIMPLEREGION: u32 = 2;
 

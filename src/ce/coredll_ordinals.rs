@@ -11627,6 +11627,8 @@ pub fn current_static_export_count() -> usize {
 
 pub const ORD_SYSTEM_MEMORY_LOW: u32 = 720;
 pub const ORD_WCSDUP: u32 = 74;
+pub const ORD_WCSTOMBS: u32 = 75;
+pub const ORD_MBSTOWCS: u32 = 76;
 pub const ORD_WTOL: u32 = 78;
 pub const ORD_WCSRCHR: u32 = 69;
 pub const ORD_WCSSTR: u32 = 73;
@@ -13352,6 +13354,7 @@ pub const ORD_FLOOR: u32 = 1013;
 pub const ORD_FMOD: u32 = 1014;
 pub const ORD_FMODF: u32 = 1643;
 pub const ORD_FREXP: u32 = 1019;
+pub const ORD_HYPOT: u32 = 1023;
 pub const ORD_LABS: u32 = 1030;
 pub const ORD_LDEXP: u32 = 1031;
 pub const ORD_LDIV: u32 = 1032;

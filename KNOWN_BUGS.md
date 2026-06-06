@@ -10,14 +10,64 @@
   the true runtime DLL source. Older notes that mention SDK MFC `--dll-search-dir`
   are historical evidence labels.
 
-## Open
+## Recently Closed / Watch
 
-- Remote OK/safety-screen input no longer appears lost, but the guest still can
-  terminate after that transition.
-  - Symptom: with the v2-compatible REST endpoint in host mode, a remote tap at
-    the safety-notice OK button leaves the safety screen and then the process
-    reaches the encoded current-process terminate path instead of continuing
-    into sustained UI interaction.
+- Host Win32 window looking like a live ANR after a bounded run/guest stop is
+  closed as host-presenter state ambiguity.
+  - Symptom: after the emulator reached a diagnostic wall-stop or monitor
+    prompt, the host window kept showing the last guest frame and accepted
+    clicks into a stale queue, making a stopped guest look like an unresponsive
+    live UI.
+  - Fix: the Win32 presenter now displays a black `Emulator process stopped`
+    status surface, clears queued input, and consumes later mouse/key events
+    until a new host CPU run blits a live framebuffer again.
+  - Status: closed/watch. Reopen only if the host window still shows the last
+    live guest frame after a stopped monitor run or if stopped-window input is
+    later delivered to the guest.
+- Missing repaint after CE/MFC `SetWindowPos` layout/z-order changes is now
+  closed for the generic GWE redraw case.
+  - Symptom: visible controls could react logically while the presenter still
+    showed the wrong layer or stale child band after move/size/z-order changes.
+  - Fix: clean visible windows moved, resized, or z-order promoted through
+    `SetWindowPos` are invalidated unless `SWP_NOREDRAW` is set; hide/exposure
+    invalidation remains in place.
+  - Status: closed/watch. Reopen if a focused trace shows a visible, clean
+    moved/promoted child window should repaint but remains without `WM_PAINT`.
+- Missing COREDLL CRT `_hypot @1023` after route/current-location UI driving is
+  closed.
+  - Symptom: `target\modal_drive_host1_*` reached the real map/menu/modal path
+    but stopped at `trap=COREDLL.dll@1023` with return address
+    `image:iNavi.exe+0xc78c0`.
+  - Evidence: `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\MIPSII\RETAIL\coredll.def`
+    maps ordinal 1023 to `_hypot`. Fresh `target\hypot_route_host1_*`
+    validation no longer stops at that import; it drives through modal
+    dismissal, bottom-menu `목적지`, row selection, and the red search button,
+    then reaches a normal 300 s wall-stop in guest image code.
+  - Fix: v3 now has `ORD_HYPOT` plus `CeMathBinaryF64::Hypot` routed through
+    raw/typed COREDLL dispatch.
+  - Status: closed/watch. Reopen only if `_hypot @1023` traps again or its
+    return convention is contradicted by a fixture/trace.
+- Stale safety fullscreen pixels after OK are closed as a GWE exposure
+  invalidation bug, not as a failed safety-window click.
+  - Symptom: after a remote/host tap, the route/current-location modal could
+    appear while old safety-notice text/button pixels remained visible behind
+    it, making it look like the fullscreen safety window had not dismissed.
+  - Evidence: `target\drive_ui_host1_*` showed the accepted tap was delivered,
+    the safety HWND became `dead=true` and left final z-order, but exposed
+    underlying windows were not invalidated. `target\gwe_exposure_host2_after_tap.png`
+    now shows the safety pixels gone after the same `(645,443)` tap.
+  - Fix: `DestroyWindow`, `ShowWindow(FALSE)`, and `SetWindowPos` hide/move
+    paths now invalidate clipped client rectangles for surviving visible
+    windows intersecting the old screen rect. Focused GWE exposure tests pass.
+  - Status: closed/watch. Reopen only if a fresh run shows either a live safety
+    HWND still in z-order after OK or stale pixels after exposed-window
+    invalidation.
+- Remote OK/safety-screen input is no longer an open blocker; keep watching for
+  post-map continuation regressions.
+  - Symptom: older v2-compatible REST endpoint host runs could accept a remote
+    tap at the safety-notice OK button but either leave the frame unchanged in
+    no-wall mode or later appear to hit the encoded current-process terminate
+    path.
   - Evidence: optimized trace artifacts `target\safety_remote_trace_*` record
     `WM_LBUTTONDOWN`/`WM_LBUTTONUP` delivered through `GetMessageW` to HWND
     `0x00020080` after a REST tap at the OK coordinates. The stop is
@@ -32,11 +82,26 @@
     `ERROR_ALREADY_EXISTS`, `FindWindowW(title=L"iNavi")` returns
     `0x00020000`, `ReleaseMutex` fails with `ERROR_NOT_OWNER`, and the app
     reaches the encoded current-process terminate thunk at `0x0048fa90`.
-  - Status: open as singleton/window identity or lifecycle fidelity after
-    delivered input. Keep using `--remote-server 192.168.0.39:8765` on mounted
-    launches, and trace why the app sees its own mutex/window as an existing
-    instance after startup. Do not bypass the safety screen, weaken named mutex
-    semantics, or hardcode iNavi state.
+  - New evidence/fix: no-wall Unicorn live ticks now drain REST controls and
+    Win32 host input even when no CPU wall-clock limit is configured. Fresh
+    no-wall validation `target\live_host_after_drain_fix.png` accepts the
+    remote OK tap and advances to the real map UI while the host process stays
+    responsive and bounded (`~247 MB` RSS in the probe). Bounded validation
+    also now treats `--cpu-wall-clock-limit-ms` as a total host-loop budget, so
+    it no longer continues past the requested stop and manufactures a misleading
+    post-limit singleton exit. Traced evidence `target\remote_ok_trace_*`
+    records `WM_LBUTTONDOWN/UP` delivered to HWND `0x00020080` and consumed by
+    `GetMessageW`, then reaches the populated map with all synchronous sends
+    completed.
+  - Status: closed for safety-screen REST delivery and no-wall live input
+    draining. Keep using `--remote-server 192.168.0.39:8765` on mounted
+    launches. If a fresh no-wall run later reproduces the duplicate
+    `CreateMutexW(L"iNavi")`/`FindWindowW("iNavi")` singleton branch after real
+    map progress, reopen that as startup/window lifecycle fidelity; do not
+    bypass the safety screen, weaken named mutex semantics, or hardcode iNavi
+    state.
+
+## Open
 
 - Host/manual post-map responsiveness still needs a focused input/scheduler
   trace if clicks feel like ANR after the corrected map screen.
@@ -1149,23 +1214,26 @@
     `FindResourceW(hModule=0x00010000, name=0x0e01, type=6)` and receives 0.
   - Status: next PE/resource integration step beyond strings.
 
-- Remote API WebSocket/audio/log streaming is still incomplete.
+- Remote API live log streaming and mounted WebSocket validation are still
+  incomplete.
   - Symptom: v3 now has a Rust HTTP listener serving the v2-compatible REST
     surface under `/api/v1/...`, including status, JPEG/PNG/MJPEG framebuffer
-    snapshots, touch/key input, GPS/NMEA/IMU injection, and pause/resume. The
-    v2 WebSocket upgrade paths `/api/v1/audio/ws` and `/api/v1/control/ws`
-    still return `501`, and `/api/v1/logs/recent` currently returns an empty
-    line list.
+    snapshots, touch/key input, GPS/NMEA/IMU injection, and pause/resume.
+    `/api/v1/control/ws` and `/api/v1/audio/ws` now upgrade successfully, but
+    `/api/v1/logs/recent` currently returns an empty line list and the new WS
+    endpoints still need mounted iNavi validation against real remote tooling.
   - Evidence: `src/remote_server.rs` queues REST control JSON into
     `CeKernel::dispatch_remote_control_message`, publishes real framebuffer
     pixels from the normal present/live-blit boundary, and has focused tests
     for v2 touch aliases, invalid input response bodies, frame `quality`, the
     missing-framebuffer error, and status shape. REST handlers now mirror v2's
-    compact `{"ok":true}` success bodies and validation strings. `src/ce/remote.rs`
-    already tracks websocket audio client cursors and flush-marked chunks, but
-    no socket writer consumes them yet.
-  - Status: REST transport fixed; WebSocket audio/control and live log
-    transport remain open.
+    compact `{"ok":true}` success bodies and validation strings. Focused
+    WebSocket coverage `remote_server_control_websocket_queues_json_frames`
+    and `remote_server_audio_websocket_streams_registered_sink_pcm` proves
+    control text frames queue JSON messages and audio sockets receive metadata
+    plus binary PCM frames from the server-backed audio sink.
+  - Status: REST transport and WebSocket audio/control transport fixed; live
+    log transport and mounted-client validation remain open.
 
 - Scheduler/wait ownership is only partially ported to CE fidelity.
   - Symptom: wait calls now flow through scheduler accounting and the first

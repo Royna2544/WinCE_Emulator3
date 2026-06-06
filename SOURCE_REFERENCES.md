@@ -58,6 +58,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   - `SetWindowRgn(HWND, HRGN, BOOL)` consumes the region shape owned by GWE and
     only requests redraw when the third argument is nonzero. v3 now mirrors
     that boundary generically instead of invalidating every region change.
+  - `SetWindowPos`/`MoveWindow` redraw behavior is controlled by the CE
+    `SWP_NOREDRAW`/repaint flags rather than by app-specific knowledge. v3 now
+    invalidates already-visible windows after move/size/z-order changes unless
+    no-redraw was requested, preserving the normal `WM_PAINT` path for child
+    bands and promoted controls.
 
 - Kernel thread/scheduler stack evidence:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c`,
@@ -76,6 +81,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\GWEAPI\msgqueue.cpp`, and
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`
+  - Remote REST touches and host mouse input must be routed into the same GWE
+    message queue and scheduler wake path regardless of whether a diagnostic
+    CPU wall-clock limit is active. v3 now drains those inputs from the normal
+    Unicorn live tick before the optional wall-stop check, so no-wall host
+    launches stay interactive while guest code is executing.
   - Host/presenter input must enter the same CE message queue and scheduler
     waiter path as guest/remote input. v3 now drains newly polled host input
     into the blocked raw `GetMessageW` thread/window when the host run loop is
@@ -162,6 +172,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `WM_WINDOWPOSCHANGED` for hidden geometry changes, but defers direct-hidden
     `WM_MOVE`/`WM_SIZE` until a later direct show, rather than delivering size
     and move messages into an HWND that is still hidden.
+  - CE `window.hpp` exposes `DestroyWindow_I`, `ShowWindow_I`,
+    `SetWindowPos_I`, `InvalidateRect_I`, `UpdateWindow_I`, and
+    `RedrawWindow_I` over the same window update-region state. v3 now treats a
+    destroyed/hidden/moved visible window as exposing its old screen rectangle:
+    surviving visible windows intersecting that rectangle are marked dirty
+    with clipped client update bounds, so repaint happens through normal
+    `WM_PAINT`/`BeginPaint` instead of leaving stale presenter pixels behind.
   - CE SDK `winuser.h` anchors `HWND_TOP`, `GW_HWNDFIRST`/`GW_HWNDNEXT`,
     `WindowFromPoint`, mouse messages, `WM_ACTIVATE`, `WM_SETFOCUS`, and
     `WM_KILLFOCUS`. Top-level windows created later should be frontmost until
@@ -1040,11 +1057,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     for validation/reference work.
 
 - COREDLL CRT/math exports:
+  `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\MIPSII\RETAIL\coredll.def`,
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/CORE/DLL/CRT/corelib1.def`
   and
   `/home/royna/WinCE-src_20201004/PRIVATE/WINCEOS/COREOS/INC/crt_ordinals.h`
-  - Define common CRT math exports such as `sqrt @1060`, `pow @1051`, and MIPS
-    helpers such as `__ll_div @2005`.
+  - Define common CRT math exports such as `_hypot @1023`, `sqrt @1060`,
+    `pow @1051`, and MIPS helpers such as `__ll_div @2005`.
   - The same checked-in ordinal evidence includes narrow CRT helpers used by
     real companion DLLs, including `strcat @1063` and `strcpy @1066`.
 

@@ -12,19 +12,63 @@
 
 ## Current Slice
 
-- Immediate remote-server follow-up: host-mode REST touch now uses the parked
-  `GetMessageW` thread/window target when the guest is idle in the message
-  pump, matching the existing host mouse path instead of relying on stale
-  active-window fallback; the Unicorn live tick now uses the same parked target
-  when it drains REST controls during long host execution. `target\safety_remote_trace_*`
-  proves a safety-screen OK tap delivered `WM_LBUTTONDOWN/WM_LBUTTONUP` to
-  HWND `0x00020080`; `target\remote_ok_tap_preidle_*` proves a pre-idle tap is
-  also delivered, but too early for the safety OK and thus hits `0x00020008`.
-  Continue from the duplicate `iNavi` mutex plus self `FindWindowW("iNavi")`
-  singleton/exit path: determine whether the first mutex/window lifetime is
-  wrong, whether `FindWindowW` is matching a CE-invisible/non-top-level/stale
-  window, or whether the app is being re-entered through startup/CRT ordering.
-  Do not weaken named mutex semantics or hardcode iNavi controls.
+- Next mounted route-search probe should use the rebuilt release binary with
+  the generic GWE `SetWindowPos` redraw fix and the Win32 host stopped-screen
+  presenter. Recheck the top-right `메뉴` plus bottom action-bar state from a
+  fresh visible render: if the action controls still only appear after a later
+  map/bottom-strip interaction, capture `messages` and `windows` again and
+  chase CE visibility/update/z-order dispatch rather than accepting the stale
+  visual as correct. When a wall-stop or guest stop happens in host monitor
+  mode, the window should show `Emulator process stopped` and discard input
+  until the next run segment, so do not confuse that state with a live ANR.
+- Current live UI frontier after `_hypot`: `target\hypot_route_host1_*`
+  supersedes `target\modal_drive_host1_*`. `_hypot @1023` is implemented, and
+  the mounted Win32-host run now drives through safety, closes the
+  destination/current-location modal, opens the bottom menu, selects
+  `목적지`, selects the highlighted row, and taps the red search button before
+  the 300 s diagnostic wall-stop. Continue from the valid post-search state:
+  final stop is a normal bounded wall-stop at
+  `pc=0x00114cc4(image:iNavi.exe+0x104cc4)` with main `GetMessageW`, worker
+  sleeps/kernel waits, timer `0x11d5`, and bounded file/RSS counters. Next
+  probe should use either no wall or a longer wall budget when manually driving
+  beyond search, and should trace exact input targets if a visible control
+  fails to react. Do not reopen `_hypot`, safety dismissal, stale framebuffer,
+  or route-modal X unless fresh evidence regresses them.
+- Safety-dismiss stale-frame follow-up is closed for the generic GWE exposure
+  case. `target\gwe_exposure_host2_after_tap.png` proves the safety notice is
+  gone after the accepted OK tap; the apparent "fullscreen dismiss not
+  happening" was stale pixels because v3 did not invalidate windows exposed by
+  destroy/hide paths. Continue from the real modal/ANR/device continuation
+  after the route/current-location dialog, using host mode and exact
+  `messages` traces for whichever control is unresponsive. Do not revisit
+  safety-window hit-testing or presenter framebuffer push unless a fresh run
+  again shows a live safety HWND or stale exposed pixels after this fix.
+- Immediate live-host follow-up: no-wall Win32-host launches now drain remote
+  REST controls and host input from the live Unicorn tick even when no
+  `--cpu-wall-clock-limit-ms` is set. `target\live_host_after_drain_fix.png`
+  proves a mounted no-wall launch with `--remote-server 192.168.0.39:8765`
+  accepts the safety OK tap and reaches the real map UI while staying
+  responsive and memory bounded. Continue from the post-map responsiveness and
+  device/scheduler frontier: if a specific map control feels dead, run a fresh
+  no-wall or bounded host trace with `messages`, deliver the exact tap, and
+  inspect the guest handler/timer/device continuation after the delivered
+  `WM_LBUTTONDOWN/UP`. Do not revisit black framebuffer, safety-screen REST
+  delivery, or multi-GB file/RSS theories unless fresh evidence regresses them.
+- Bounded validation follow-up: host `--cpu-wall-clock-limit-ms` now uses a
+  total run-loop budget. Use this for short probes without accidentally
+  continuing past the requested wall bound into the singleton/exit path.
+  `target\bounded_total_45s_*` is the current clean bounded evidence label.
+- Remote-server singleton follow-up: safety-screen REST delivery is now closed
+  for both bounded and no-wall host runs. The duplicate `iNavi` mutex plus
+  self `FindWindowW("iNavi")` singleton/exit trace should be treated as a
+  separate startup/teardown frontier only if it reproduces in a fresh no-wall
+  run after real map progress. Today’s bounded overrun showed that the old
+  validation harness could continue past its requested wall budget and then
+  manufacture a misleading second `main_init`/singleton abort. If a fresh
+  no-wall run reaches the same branch without a harness wall-stop, investigate
+  first mutex/window lifetime, CE visibility/top-level matching, and MFC
+  startup re-entry. Do not weaken named mutex semantics or hardcode iNavi
+  controls.
 - Scheduler bridge follow-up after the MsgWait no-peer fix: over-budget
   `MsgWaitForMultipleObjectsEx` now parks the current thread as a
   scheduler-owned blocked wait and stops Unicorn instead of falling through raw
@@ -61,14 +105,12 @@
   state that leads to the warning and encoded terminate path. Do not treat this
   as a presenter, framebuffer, timer-flood, hidden-layer, or file-I/O problem
   unless fresh evidence regresses those closed paths.
-- Immediate host/manual follow-up: `target\host_modal_clickburst_300s_*`
-  proves the GPS warning can be dismissed when clicks straddle the top-modal
-  creation. The final frame is back on the safety notice with the bottom OK
-  button, not the GPS warning. Run host again and click the GPS warning OK once
-  it appears, then click the safety notice OK; trace whether it advances to the
-  map/normal UI or reaches the encoded terminate path. If the clicks deliver
-  but do not advance, chase guest MFC handler/device state; if they drop, fix
-  generic GWE hit-test/focus/capture.
+- Host/manual input follow-up: `target\remote_ok_trace_*` and
+  `target\live_host_after_drain_fix.png` supersede the older safety-screen
+  ambiguity. Safety OK now advances to the map through real `WM_LBUTTONDOWN/UP`
+  delivery. Future manual probes should target the exact post-map control that
+  feels unresponsive and then chase the guest MFC handler, timer, serial/Deneb,
+  or scheduler continuation after delivery.
 - Current host/manual ANR slice: continue from
   `target\host_getmsg_sendwake_300s_*`. The pending synchronous-send deadlock
   from `target\host_handoff_300s_*` is closed: the blocked-current
@@ -1333,13 +1375,15 @@
   GPS/serial/system-state inputs and the app's reset-warning path through CE
   device/registry semantics, while continuing to validate that map rendering
   and GWE sends stay live under host Win32.
-- Extend the new Rust remote server beyond the now v2-aligned REST surface:
-  implement real WebSocket audio/control upgrade handling, stream PCM from the
-  existing per-client cursor model, expose recent log lines from `CeRemote`,
-  and add mounted iNavi validation that remote touch/GPS input advances through
-  the same scheduler/GWE paths as host input. REST handlers already match v2's
-  touch/key validation, compact success responses, NMEA/location errors, frame
-  `quality`, MJPEG `fps`/`quality`, and missing-framebuffer error shape.
+- Extend the new Rust remote server beyond the now v2-aligned REST/WebSocket
+  surface: expose recent log lines from `CeRemote`, add mounted iNavi
+  validation for `/api/v1/control/ws` and `/api/v1/audio/ws`, and keep proving
+  that remote touch/GPS input advances through the same scheduler/GWE paths as
+  host input. REST handlers already match v2's touch/key validation, compact
+  success responses, NMEA/location errors, frame `quality`, MJPEG
+  `fps`/`quality`, and missing-framebuffer error shape. WebSocket control/audio
+  upgrades now queue JSON control frames and stream server-backed PCM binary
+  frames.
 - Add ordinal/decorated-name evidence from the Windows CE 4.2 Mipsii SDK import
   libraries, alongside the source references already recorded.
 - Persist host-backed registry writes separately from the source dump.
