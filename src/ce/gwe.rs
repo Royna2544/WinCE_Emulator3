@@ -140,6 +140,8 @@ pub const WS_POPUP: u32 = 0x8000_0000;
 pub const WS_CHILD: u32 = 0x4000_0000;
 pub const WS_VISIBLE: u32 = 0x1000_0000;
 pub const WS_DISABLED: u32 = 0x0800_0000;
+pub const WS_CLIPSIBLINGS: u32 = 0x0400_0000;
+pub const WS_CLIPCHILDREN: u32 = 0x0200_0000;
 pub const WS_GROUP: u32 = 0x0002_0000;
 pub const WS_TABSTOP: u32 = 0x0001_0000;
 pub const WA_INACTIVE: u32 = 0;
@@ -1384,7 +1386,7 @@ impl Gwe {
             return Vec::new();
         };
         let origin = window.client_rect;
-        self.visible_client_screen_rects(hwnd)
+        self.visible_client_screen_rects_for_paint(hwnd)
             .into_iter()
             .map(|rect| rect.offset(-origin.left, -origin.top))
             .collect()
@@ -3075,7 +3077,15 @@ impl Gwe {
             .is_some_and(|window| !window.destroyed && window.style & style != 0)
     }
 
-    fn visible_client_screen_rects(&self, hwnd: u32) -> Vec<Rect> {
+    fn visible_client_screen_rects_for_paint(&self, hwnd: u32) -> Vec<Rect> {
+        self.visible_client_screen_rects(hwnd, true)
+    }
+
+    fn visible_client_screen_rects_for_ancestor_clip(&self, hwnd: u32) -> Vec<Rect> {
+        self.visible_client_screen_rects(hwnd, false)
+    }
+
+    fn visible_client_screen_rects(&self, hwnd: u32, clip_own_children: bool) -> Vec<Rect> {
         let Some(window) = self.windows.get(&hwnd) else {
             return Vec::new();
         };
@@ -3088,7 +3098,10 @@ impl Gwe {
             return visible;
         }
         if let Some(parent) = window.parent {
-            visible = intersect_rect_lists(&visible, &self.visible_client_screen_rects(parent));
+            visible = intersect_rect_lists(
+                &visible,
+                &self.visible_client_screen_rects_for_ancestor_clip(parent),
+            );
         }
         if let Some(region) = self.window_regions.get(&hwnd) {
             let region_rects: Vec<Rect> = region
@@ -3099,18 +3112,34 @@ impl Gwe {
             visible = intersect_rect_lists(&visible, &region_rects);
         }
 
-        let siblings = self.sibling_windows(window.parent);
-        for sibling in siblings {
-            if sibling == hwnd {
-                break;
+        let clip_siblings = window.parent.is_none() || window.style & WS_CLIPSIBLINGS != 0;
+        if clip_siblings {
+            let siblings = self.sibling_windows(window.parent);
+            for sibling in siblings {
+                if sibling == hwnd {
+                    break;
+                }
+                if !self.is_window_visible(sibling) {
+                    continue;
+                }
+                let sibling_rects = self.visible_client_screen_rects_for_paint(sibling);
+                visible = subtract_rect_lists(&visible, &sibling_rects);
+                if visible.is_empty() {
+                    break;
+                }
             }
-            if !self.is_window_visible(sibling) {
-                continue;
-            }
-            let sibling_rects = self.visible_client_screen_rects(sibling);
-            visible = subtract_rect_lists(&visible, &sibling_rects);
-            if visible.is_empty() {
-                break;
+        }
+
+        if clip_own_children && window.style & WS_CLIPCHILDREN != 0 {
+            for child in self.sibling_windows(Some(hwnd)) {
+                if !self.is_window_visible(child) {
+                    continue;
+                }
+                let child_rects = self.visible_client_screen_rects_for_paint(child);
+                visible = subtract_rect_lists(&visible, &child_rects);
+                if visible.is_empty() {
+                    break;
+                }
             }
         }
         visible
@@ -3496,6 +3525,147 @@ mod tests {
         );
         assert_eq!(gwe.get_window(first, GW_HWNDFIRST), Some(second));
         assert_eq!(gwe.get_window(second, GW_HWNDNEXT), Some(first));
+    }
+
+    #[test]
+    fn clip_children_excludes_visible_children_from_parent_paint() {
+        let mut gwe = Gwe::default();
+        let parent = gwe.create_window_ex_with_rect(
+            1,
+            "PARENT",
+            "parent",
+            None,
+            0,
+            WS_VISIBLE | WS_CLIPCHILDREN,
+            0,
+            Rect::from_origin_size(0, 0, 800, 480),
+        );
+        let _bottom_bar = gwe.create_window_ex_with_rect(
+            1,
+            "BAR",
+            "bar",
+            Some(parent),
+            0,
+            WS_VISIBLE | WS_CHILD,
+            0,
+            Rect::from_origin_size(0, 426, 800, 54),
+        );
+
+        assert_eq!(
+            gwe.visible_client_rects(parent),
+            vec![Rect::from_origin_size(0, 0, 800, 426)]
+        );
+    }
+
+    #[test]
+    fn parent_without_clip_children_can_paint_across_child_rects() {
+        let mut gwe = Gwe::default();
+        let parent = gwe.create_window_ex_with_rect(
+            1,
+            "PARENT",
+            "parent",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 800, 480),
+        );
+        let _bottom_bar = gwe.create_window_ex_with_rect(
+            1,
+            "BAR",
+            "bar",
+            Some(parent),
+            0,
+            WS_VISIBLE | WS_CHILD,
+            0,
+            Rect::from_origin_size(0, 426, 800, 54),
+        );
+
+        assert_eq!(
+            gwe.visible_client_rects(parent),
+            vec![Rect::from_origin_size(0, 0, 800, 480)]
+        );
+    }
+
+    #[test]
+    fn clip_siblings_excludes_higher_z_order_sibling_from_child_paint() {
+        let mut gwe = Gwe::default();
+        let parent = gwe.create_window_ex_with_rect(
+            1,
+            "PARENT",
+            "parent",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 200, 100),
+        );
+        let back = gwe.create_window_ex_with_rect(
+            1,
+            "BACK",
+            "back",
+            Some(parent),
+            0,
+            WS_VISIBLE | WS_CHILD | WS_CLIPSIBLINGS,
+            0,
+            Rect::from_origin_size(0, 0, 100, 100),
+        );
+        let _front = gwe.create_window_ex_with_rect(
+            1,
+            "FRONT",
+            "front",
+            Some(parent),
+            0,
+            WS_VISIBLE | WS_CHILD,
+            0,
+            Rect::from_origin_size(50, 0, 50, 100),
+        );
+        assert!(gwe.set_window_pos(_front, None, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE));
+
+        assert_eq!(
+            gwe.visible_client_rects(back),
+            vec![Rect::from_origin_size(0, 0, 50, 100)]
+        );
+    }
+
+    #[test]
+    fn child_without_clip_siblings_can_paint_across_higher_siblings() {
+        let mut gwe = Gwe::default();
+        let parent = gwe.create_window_ex_with_rect(
+            1,
+            "PARENT",
+            "parent",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 200, 100),
+        );
+        let back = gwe.create_window_ex_with_rect(
+            1,
+            "BACK",
+            "back",
+            Some(parent),
+            0,
+            WS_VISIBLE | WS_CHILD,
+            0,
+            Rect::from_origin_size(0, 0, 100, 100),
+        );
+        let _front = gwe.create_window_ex_with_rect(
+            1,
+            "FRONT",
+            "front",
+            Some(parent),
+            0,
+            WS_VISIBLE | WS_CHILD,
+            0,
+            Rect::from_origin_size(50, 0, 50, 100),
+        );
+
+        assert_eq!(
+            gwe.visible_client_rects(back),
+            vec![Rect::from_origin_size(0, 0, 100, 100)]
+        );
     }
 
     #[test]
