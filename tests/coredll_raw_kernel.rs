@@ -5,13 +5,14 @@ use wince_emulation_v3::{
         coredll_ordinals::{
             ORD_CE_GET_THREAD_PRIORITY, ORD_CE_SET_THREAD_PRIORITY, ORD_CLEAR_COMM_ERROR,
             ORD_CLOSE_HANDLE, ORD_CREATE_EVENT_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD,
-            ORD_EVENT_MODIFY, ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY, ORD_GET_COMM_MASK,
-            ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_EXIT_CODE_PROCESS,
-            ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
-            ORD_GET_MODULE_HANDLE_W, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
-            ORD_GET_PROCESS_ID, ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION,
-            ORD_GET_SYSTEM_TIME, ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_GET_THREAD_ID,
-            ORD_GET_THREAD_PRIORITY, ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT,
+            ORD_EVENT_MODIFY, ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY,
+            ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_COMM_MASK, ORD_GET_COMM_STATE,
+            ORD_GET_COMM_TIMEOUTS, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD,
+            ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W,
+            ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W, ORD_GET_PROCESS_ID,
+            ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID, ORD_GET_PROCESS_VERSION,
+            ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_TIME, ORD_GET_SYSTEM_TIME_AS_FILE_TIME,
+            ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY, ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT,
             ORD_GET_TIME_ZONE_INFORMATION, ORD_GET_VERSION_EX_W, ORD_INITIALIZE_CRITICAL_SECTION,
             ORD_INPUT_DEBUG_CHAR_W, ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_KERNEL_IO_CONTROL, ORD_LEAVE_CRITICAL_SECTION,
@@ -1035,6 +1036,7 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     ));
 
     let launch = kernel.queue_process_launch(Some("raw-child.exe".to_owned()), None);
+    let launch_process_index = launch.process_id.saturating_sub(0x42).saturating_add(1);
     let process_exit_ptr = 0x5080;
     memory.map_words(process_exit_ptr, 1);
     assert!(matches!(
@@ -1046,9 +1048,9 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
             [CE_CURRENT_PROCESS_PSEUDO_HANDLE],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::U32(1),
+            value: CoredllValue::U32(index),
             ..
-        }
+        } if index == launch_process_index
     ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -1076,6 +1078,60 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
             ..
         } if id == launch.process_id
     ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_PROCESS_INDEX_FROM_ID,
+            [launch.process_handle],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(index),
+            ..
+        } if index == launch_process_index
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_PROCESS_IDFROM_INDEX,
+            [launch_process_index],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(id),
+            ..
+        } if id == launch.process_id
+    ));
+    kernel.set_current_process_id(launch.process_id);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_PROCESS_INDEX_FROM_ID,
+            [CE_CURRENT_PROCESS_PSEUDO_HANDLE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(index),
+            ..
+        } if index == launch_process_index
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CALLER_PROCESS_INDEX,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(index),
+            ..
+        } if index == launch_process_index
+    ));
+    kernel.set_current_process_id(1);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,

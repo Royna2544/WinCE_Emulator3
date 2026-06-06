@@ -1448,6 +1448,7 @@ impl CeKernel {
 
     pub fn terminate_process(&mut self, handle: u32, exit_code: u32) -> bool {
         if Self::is_current_process_pseudo_handle(handle) {
+            self.destroy_process_windows(self.current_process_id, 0);
             self.current_process_exit_code = exit_code;
             self.current_process_signaled = true;
             self.queue_object_wake_candidates(handle);
@@ -3560,6 +3561,30 @@ mod tests {
             .copied()
             .expect("blocked target receives mouse up");
         assert!(up.2 > down.2);
+        Ok(())
+    }
+
+    #[test]
+    fn terminate_current_process_destroys_owned_windows() -> Result<()> {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let mut kernel = CeKernel::boot(config);
+        kernel.set_current_process_id(77);
+        let parent = kernel.create_window_ex_w(1, "PARENT", "", None, 0, 0, 0);
+        let child = kernel.create_window_ex_w(1, "CHILD", "", Some(parent), 0, WS_CHILD, 0);
+
+        kernel.set_current_process_id(88);
+        let survivor = kernel.create_window_ex_w(2, "SURVIVOR", "", None, 0, 0, 0);
+        kernel.set_current_process_id(77);
+
+        assert!(kernel.terminate_process(CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0x1234));
+
+        assert!(!kernel.gwe.is_window(parent));
+        assert!(!kernel.gwe.is_window(child));
+        assert!(kernel.gwe.is_window(survivor));
+        assert_eq!(
+            kernel.process_exit_code_for_handle(CE_CURRENT_PROCESS_PSEUDO_HANDLE),
+            Some(0x1234)
+        );
         Ok(())
     }
 }

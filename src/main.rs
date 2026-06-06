@@ -1,10 +1,19 @@
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::{
     collections::{BTreeMap, BTreeSet},
+    ffi::OsString,
     fmt::Write as FmtWrite,
     fs,
     io::{self, Write},
     net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::JoinHandle,
     time::{Duration, Instant},
 };
 
@@ -27,11 +36,19 @@ use wince_emulation_v3::{
     remote_server::{RemoteServer, RemoteServerConfig},
 };
 
+const HOST_LIVE_RUN_SLICE_MS: u64 = 120_000;
+const FAST_START_RUN_SLICE_INSTRUCTIONS: usize = 250_000;
+const COMPANION_START_DELAY_MS: u64 = 1_000;
+const COMPANION_INSTRUCTION_LIMIT: usize = 250_000_000;
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 #[derive(Debug, Clone)]
 struct Args {
     registry: PathBuf,
     devices: PathBuf,
     image: Option<PathBuf>,
+    companion_images: Vec<PathBuf>,
     dll_search_dirs: Vec<PathBuf>,
     mount_config: Option<PathBuf>,
     framebuffer_dump: Option<PathBuf>,
@@ -62,6 +79,21 @@ enum DesktopRuntime {
             wince_emulation_v3::ce::win32_desktop::Win32Presenter,
         >,
     ),
+}
+
+struct CompanionProcesses {
+    stop: Arc<AtomicBool>,
+    children: Arc<Mutex<Vec<Child>>>,
+    launcher: Option<JoinHandle<()>>,
+}
+
+#[derive(Debug, Clone)]
+struct CompanionLaunchSpec {
+    executable: PathBuf,
+    target: PathBuf,
+    args: Vec<OsString>,
+    stdout: PathBuf,
+    stderr: PathBuf,
 }
 
 #[derive(Clone)]
@@ -242,6 +274,7 @@ fn main() -> Result<()> {
         }
     }
 
+    let _companions = launch_delayed_companion_processes(&args)?;
     if args.run_cpu {
         run_cpu_loop(&mut cpu, &mut kernel, &mut desktop, &args)?;
         write_requested_tracefiles(&cpu, &args.tracefiles)?;
@@ -274,13 +307,23 @@ fn run_cpu_loop(
         if enqueue_desktop_input_for_current_wait(cpu, desktop, kernel, args.desktop)? != 0 {
             reported_blocked_message_wait = false;
         }
-        let wall_clock_limit_ms =
-            remaining_wall_clock_limit_ms(args.cpu_wall_clock_limit_ms, run_started.elapsed());
+        let instruction_limit = if args.cpu_instruction_limit == 0
+            && std::env::var_os("WINCE_EMU_FAST_START").is_some()
+        {
+            FAST_START_RUN_SLICE_INSTRUCTIONS
+        } else {
+            args.cpu_instruction_limit
+        };
+        let (wall_clock_limit_ms, implicit_host_live_slice) = effective_wall_clock_limit_ms(
+            args.cpu_wall_clock_limit_ms,
+            run_started.elapsed(),
+            args.desktop,
+        );
         if let Err(err) = desktop.run_cpu_until(
             cpu,
             kernel,
             UnicornRunLimits {
-                instruction_limit: args.cpu_instruction_limit,
+                instruction_limit,
                 wall_clock_limit_ms,
                 stop_pc: args.cpu_stop_pc,
             },
@@ -308,17 +351,52 @@ fn run_cpu_loop(
         }
         let total_wall_clock_expired =
             wall_clock_limit_expired(args.cpu_wall_clock_limit_ms, run_started.elapsed());
-        if let Some(snapshot) = cpu.last_debug_snapshot() {
-            if total_wall_clock_expired {
+        let active_process_exited = cpu
+            .last_debug_snapshot()
+            .is_some_and(|snapshot| snapshot.encoded_kernel_exit.is_some());
+        if total_wall_clock_expired {
+            if let Some(snapshot) = cpu.last_debug_snapshot() {
                 print_unicorn_stop(snapshot);
-                break;
             }
-            if args.desktop == DesktopMode::Host
-                && snapshot.blocked_get_message.is_some()
-                && snapshot.host_wall_clock_stop.is_none()
-            {
+            break;
+        }
+        if active_process_exited && cpu.switch_to_next_parked_child_process(kernel) {
+            reported_blocked_message_wait = false;
+            continue;
+        }
+        if let Some(target_process_id) = cpu
+            .last_debug_snapshot()
+            .and_then(|snapshot| snapshot.cross_process_send_yield.as_ref())
+            .map(|yielded| yielded.target_process_id)
+        {
+            if cpu.rotate_to_parked_process_id(kernel, target_process_id) {
+                reported_blocked_message_wait = false;
+                continue;
+            }
+        }
+        let snapshot_state = cpu.last_debug_snapshot().map(|snapshot| {
+            (
+                snapshot.host_wall_clock_stop.is_some(),
+                snapshot.blocked_get_message.is_some(),
+            )
+        });
+        if let Some((host_wall_clock_stop, blocked_get_message)) = snapshot_state {
+            let should_rotate_process = cpu.has_parked_child_processes()
+                && (blocked_get_message
+                    || (args.desktop == DesktopMode::Host && host_wall_clock_stop));
+            if should_rotate_process && cpu.rotate_to_next_parked_process(kernel) {
+                reported_blocked_message_wait = false;
+                continue;
+            }
+            if implicit_host_live_slice && host_wall_clock_stop {
+                reported_blocked_message_wait = false;
+                continue;
+            }
+            if args.desktop == DesktopMode::Host && blocked_get_message && !host_wall_clock_stop {
                 if !reported_blocked_message_wait {
-                    print_unicorn_stop(snapshot);
+                    if let Some(snapshot) = cpu.last_debug_snapshot() {
+                        print_unicorn_stop(snapshot);
+                    }
                     if let Some(path) = args.framebuffer_dump.as_ref() {
                         desktop.framebuffer().write_ppm(path)?;
                         println!("  framebuffer dump: {}", path.display());
@@ -328,7 +406,9 @@ fn run_cpu_loop(
                 std::thread::sleep(Duration::from_millis(16));
                 continue;
             }
-            print_unicorn_stop(snapshot);
+            if let Some(snapshot) = cpu.last_debug_snapshot() {
+                print_unicorn_stop(snapshot);
+            }
         }
         break;
     }
@@ -346,6 +426,183 @@ fn remaining_wall_clock_limit_ms(limit_ms: u64, elapsed: Duration) -> u64 {
 
 fn wall_clock_limit_expired(limit_ms: u64, elapsed: Duration) -> bool {
     limit_ms != 0 && elapsed >= Duration::from_millis(limit_ms)
+}
+
+fn effective_wall_clock_limit_ms(
+    explicit_limit_ms: u64,
+    elapsed: Duration,
+    desktop: DesktopMode,
+) -> (u64, bool) {
+    if desktop == DesktopMode::Host {
+        if explicit_limit_ms == 0 {
+            return (HOST_LIVE_RUN_SLICE_MS, true);
+        }
+        return (
+            remaining_wall_clock_limit_ms(explicit_limit_ms, elapsed).min(HOST_LIVE_RUN_SLICE_MS),
+            true,
+        );
+    }
+    (
+        remaining_wall_clock_limit_ms(explicit_limit_ms, elapsed),
+        false,
+    )
+}
+
+fn launch_delayed_companion_processes(args: &Args) -> Result<Option<CompanionProcesses>> {
+    let specs = companion_launch_specs(args)?;
+    if specs.is_empty() {
+        return Ok(None);
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    let children = Arc::new(Mutex::new(Vec::new()));
+    let launcher_stop = Arc::clone(&stop);
+    let launcher_children = Arc::clone(&children);
+    let launcher = std::thread::Builder::new()
+        .name("ce-companion-launcher".to_owned())
+        .spawn(move || {
+            std::thread::sleep(Duration::from_millis(COMPANION_START_DELAY_MS));
+            if launcher_stop.load(Ordering::SeqCst) {
+                return;
+            }
+            for (index, spec) in specs.into_iter().enumerate() {
+                if launcher_stop.load(Ordering::SeqCst) {
+                    return;
+                }
+                match spawn_companion_process(&spec) {
+                    Ok(child) => {
+                        println!(
+                            "  companion launched #{} pid={} target={} stdout={} stderr={}",
+                            index + 1,
+                            child.id(),
+                            spec.target.display(),
+                            spec.stdout.display(),
+                            spec.stderr.display()
+                        );
+                        if let Ok(mut children) = launcher_children.lock() {
+                            children.push(child);
+                        }
+                    }
+                    Err(err) => {
+                        eprintln!(
+                            "  companion launch failed #{} target={}: {err}",
+                            index + 1,
+                            spec.target.display()
+                        );
+                    }
+                }
+            }
+        })
+        .map_err(|err| {
+            wince_emulation_v3::Error::Backend(format!("spawn companion launcher: {err}"))
+        })?;
+    Ok(Some(CompanionProcesses {
+        stop,
+        children,
+        launcher: Some(launcher),
+    }))
+}
+
+fn companion_launch_specs(args: &Args) -> Result<Vec<CompanionLaunchSpec>> {
+    if args.companion_images.is_empty() {
+        return Ok(Vec::new());
+    }
+    let executable = std::env::current_exe()
+        .map_err(|err| wince_emulation_v3::Error::Backend(format!("current exe: {err}")))?;
+    fs::create_dir_all("target").map_err(|err| {
+        wince_emulation_v3::Error::Backend(format!("create companion log dir target: {err}"))
+    })?;
+    let mut specs = Vec::new();
+    for (index, target) in args.companion_images.iter().enumerate() {
+        if !target.is_file() {
+            return Err(wince_emulation_v3::Error::InvalidArgument(format!(
+                "--companion-image {} is not a file",
+                target.display()
+            )));
+        }
+        let log_stem = companion_log_stem(target, index + 1);
+        specs.push(CompanionLaunchSpec {
+            executable: executable.clone(),
+            target: target.clone(),
+            args: companion_command_args(args, target),
+            stdout: PathBuf::from("target").join(format!("{log_stem}.stdout.log")),
+            stderr: PathBuf::from("target").join(format!("{log_stem}.stderr.log")),
+        });
+    }
+    Ok(specs)
+}
+
+fn companion_command_args(args: &Args, image: &Path) -> Vec<OsString> {
+    let mut command_args = Vec::new();
+    push_arg_pair(&mut command_args, "--registry", &args.registry);
+    push_arg_pair(&mut command_args, "--devices", &args.devices);
+    if let Some(mount_config) = args.mount_config.as_ref() {
+        push_arg_pair(&mut command_args, "--mount-config", mount_config);
+    }
+    push_arg_pair(&mut command_args, "--image", image);
+    for dll_search_dir in &args.dll_search_dirs {
+        push_arg_pair(&mut command_args, "--dll-search-dir", dll_search_dir);
+    }
+    command_args.push(OsString::from("--desktop"));
+    command_args.push(OsString::from("virtual"));
+    command_args.push(OsString::from("--cpu-instruction-limit"));
+    command_args.push(OsString::from(COMPANION_INSTRUCTION_LIMIT.to_string()));
+    command_args.push(OsString::from("--run-cpu"));
+    command_args
+}
+
+fn push_arg_pair(args: &mut Vec<OsString>, flag: &str, value: &Path) {
+    args.push(OsString::from(flag));
+    args.push(value.as_os_str().to_owned());
+}
+
+fn companion_log_stem(target: &Path, index: usize) -> String {
+    let stem = target
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("companion");
+    let sanitized = stem
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    format!("companion_{index:02}_{sanitized}")
+}
+
+fn spawn_companion_process(spec: &CompanionLaunchSpec) -> io::Result<Child> {
+    let stdout = fs::File::create(&spec.stdout)?;
+    let stderr = fs::File::create(&spec.stderr)?;
+    let mut command = Command::new(&spec.executable);
+    command
+        .args(&spec.args)
+        .stdin(Stdio::null())
+        .stdout(stdout)
+        .stderr(stderr);
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+    command.spawn()
+}
+
+impl Drop for CompanionProcesses {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(launcher) = self.launcher.take() {
+            let _ = launcher.join();
+        }
+        let Ok(mut children) = self.children.lock() else {
+            return;
+        };
+        for child in children.iter_mut() {
+            if matches!(child.try_wait(), Ok(None)) {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
 }
 
 fn blocked_remote_input_target(
@@ -1526,6 +1783,7 @@ impl Args {
         let mut registry = PathBuf::from("regs.json");
         let mut devices = PathBuf::from("serial_devices.json");
         let mut image = None;
+        let mut companion_images = Vec::new();
         let mut dll_search_dirs = Vec::new();
         let mut mount_config = None;
         let mut framebuffer_dump = None;
@@ -1551,6 +1809,9 @@ impl Args {
                 }
                 "--image" => {
                     image = Some(next_path(&mut args, "--image")?);
+                }
+                "--companion-image" | "--companion-target" => {
+                    companion_images.push(next_path(&mut args, "--companion-image")?);
                 }
                 "--dll-search-dir" => {
                     dll_search_dirs.push(next_path(&mut args, "--dll-search-dir")?);
@@ -1670,6 +1931,7 @@ impl Args {
             registry,
             devices,
             image,
+            companion_images,
             dll_search_dirs,
             mount_config,
             framebuffer_dump,
@@ -1782,7 +2044,7 @@ fn next_tap(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<(i32,
 
 fn print_help() {
     println!(
-        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--mount-config mounts.toml] [--image INavi.exe] [--dll-search-dir DIR]... [--desktop virtual|host] [--remote-server [IP:PORT]] [--remote-bind IP] [--remote-port PORT] [--remote-token TOKEN] [--remote-video-fps N] [--remote-jpeg-quality N] [--remote-audio] [--remote-audio-sample-rate N] [--remote-audio-channels N] [--remote-audio-format s16le] [--framebuffer-dump OUT.ppm] [--tracefile KIND OUT.txt]... [--cpu-instruction-limit N] [--cpu-wall-clock-limit-ms N] [--cpu-stop-pc ADDR] [--tap X,Y]... [--run-cpu] [--monitor] [--verbose]"
+        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--mount-config mounts.toml] [--image INavi.exe] [--companion-image MultiTBT.exe]... [--dll-search-dir DIR]... [--desktop virtual|host] [--remote-server [IP:PORT]] [--remote-bind IP] [--remote-port PORT] [--remote-token TOKEN] [--remote-video-fps N] [--remote-jpeg-quality N] [--remote-audio] [--remote-audio-sample-rate N] [--remote-audio-channels N] [--remote-audio-format s16le] [--framebuffer-dump OUT.ppm] [--tracefile KIND OUT.txt]... [--cpu-instruction-limit N] [--cpu-wall-clock-limit-ms N] [--cpu-stop-pc ADDR] [--tap X,Y]... [--run-cpu] [--monitor] [--verbose]"
     );
 }
 
@@ -1978,6 +2240,77 @@ mod tests {
         );
         assert!(!wall_clock_limit_expired(500, Duration::from_millis(499)));
         assert!(wall_clock_limit_expired(500, Duration::from_millis(500)));
+    }
+
+    #[test]
+    fn host_no_wall_run_uses_implicit_live_slice() {
+        assert_eq!(
+            effective_wall_clock_limit_ms(0, Duration::from_secs(10), DesktopMode::Host),
+            (HOST_LIVE_RUN_SLICE_MS, true)
+        );
+        assert_eq!(
+            effective_wall_clock_limit_ms(0, Duration::from_secs(10), DesktopMode::Virtual),
+            (0, false)
+        );
+        assert_eq!(
+            effective_wall_clock_limit_ms(500, Duration::from_millis(125), DesktopMode::Host),
+            (375, true)
+        );
+    }
+
+    #[test]
+    fn companion_command_uses_shared_config_without_remote_or_nested_companions() {
+        let args = Args {
+            registry: PathBuf::from("regs.json"),
+            devices: PathBuf::from("serial_devices.json"),
+            image: Some(PathBuf::from(r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe")),
+            companion_images: vec![PathBuf::from(r"D:\INAVI_Emulator\INAVI\TBT\MultiTBT.exe")],
+            dll_search_dirs: vec![PathBuf::from(r"D:\INAVI_Emulator\DUMPPLZ\Windows")],
+            mount_config: Some(PathBuf::from("mounts.toml")),
+            framebuffer_dump: None,
+            tracefiles: Vec::new(),
+            desktop: DesktopMode::Host,
+            cpu_instruction_limit: 0,
+            cpu_wall_clock_limit_ms: 240_000,
+            cpu_stop_pc: None,
+            startup_taps: Vec::new(),
+            remote_server: Some(RemoteServerConfig::default()),
+            run_cpu: true,
+            monitor: false,
+            verbose: false,
+        };
+
+        let command_args = companion_command_args(
+            &args,
+            Path::new(r"D:\INAVI_Emulator\INAVI\TBT\MultiTBT.exe"),
+        )
+        .into_iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            command_args,
+            vec![
+                "--registry",
+                "regs.json",
+                "--devices",
+                "serial_devices.json",
+                "--mount-config",
+                "mounts.toml",
+                "--image",
+                r"D:\INAVI_Emulator\INAVI\TBT\MultiTBT.exe",
+                "--dll-search-dir",
+                r"D:\INAVI_Emulator\DUMPPLZ\Windows",
+                "--desktop",
+                "virtual",
+                "--cpu-instruction-limit",
+                "250000000",
+                "--run-cpu",
+            ]
+        );
+        assert!(!command_args.iter().any(|arg| arg == "--remote-server"));
+        assert!(!command_args.iter().any(|arg| arg == "--companion-image"));
+        assert!(!command_args.iter().any(|arg| arg == "--companion-target"));
     }
 
     #[test]

@@ -12,6 +12,69 @@
 
 ## Current Slice
 
+- Immediate stuck-screen next step: implement the child-process scheduler
+  handoff properly instead of reviving the backed-out host-loop rotation
+  experiment. Evidence in `target\stuck_process_processes.txt` shows
+  `happyway_win.exe` parked as process 67/thread 3, while the parent later
+  queues a cross-process `SendMessageW` to HWND `0x0002000c` and keeps working
+  through resource/allocator code. The failed experiment proved that simply
+  yielding after `CreateProcessW` and round-robining parked child CPUs can
+  enter child code but breaks bounded validation. The next implementation
+  should make cross-process `SendMessageW` and process waits scheduler-owned:
+  register the sender wait, activate the parked receiver process/thread with
+  the correct process address space, return through the sender context when
+  the receiver replies, and keep explicit wall budgets enforced across nested
+  child execution.
+- Immediate startup/UI frontier: continue from
+  `target\host_after_importgate_30s.png`,
+  `target\host_after_importgate_100s.png`, and
+  `target\host_after_importgate_200s.png`. The mounted Win32-host run with
+  `--remote-server 192.168.0.39:8765` is live/responsive and memory-bounded,
+  but remains at the real header/map composition with missing right-side and
+  bottom chrome. Progress samples are hot in `HeapAlloc @46` / `malloc @1041`
+  and app/resource code, while file I/O remains bounded to a few MB. Next work
+  should profile/trace the RSImage/resource allocator loop around return
+  addresses near `image:iNavi.exe+0x88a3xx` and `image:iNavi.exe+0x329a68`,
+  and determine why the receiver WNDPROC for the outstanding cross-thread
+  `SendMessageW(hwnd=0x0002000c,msg=0x0401,wParam=14)` does not return to
+  reveal the chrome. Do not treat this as a dead host window, black-screen
+  presenter issue, map DB preload, or stale hidden-layer leak unless fresh
+  evidence regresses those closed paths.
+- Fast-start follow-up: `WINCE_EMU_FAST_START` is still not production-ready.
+  It no longer immediately exits via `ce-import-traps+0xfff0` after generated
+  trampoline-origin `lui/ori` handling was added, but sparse hooks and
+  instruction slices do not yet outperform the normal global-hook path. Keep it
+  disabled for mounted host validation until it can reach at least the current
+  partial-map frame faster than the normal path and still honor host input,
+  remote input, wall stops, import traps, and scheduler wakes.
+- Route-search process/GWE handoff is now the active blocker. Continue from
+  `target\route_drive_procfix1_*`: `wcstoul @1083` is fixed and
+  `CreateProcessW` children that park without an encoded CE exit now remain
+  `STILL_ACTIVE` instead of being marked exited. The parent still reaches its
+  encoded exit path after launching/parking `happyway_win.exe` and
+  `iSearch.exe`; the final scheduler state includes an outstanding
+  cross-thread `SendMessageW` from thread 9 to HWND `0x00020004`. Next
+  implementation work should keep parked child Unicorn CPU contexts owned by
+  the main emulator and hand execution to a live child process when the active
+  process exits, while preserving shared CE kernel/GWE/mapping state. Do this
+  as generic CE process scheduling; do not special-case `iSearch.exe` or force
+  route UI state. Add a focused fixture for a parent that `CreateProcessW`s a
+  child, exits, and leaves the child window/message pump alive.
+- MultiTBT / companion follow-up: v3 can now launch v2-style diagnostic
+  companions explicitly with
+  `--companion-image D:\INAVI_Emulator\INAVI\TBT\MultiTBT.exe` while the main
+  mounted run continues to use `--remote-server 192.168.0.39:8765`. DUMPPLZ
+  has no direct MultiTBT launcher reference, so do not auto-start or hardcode
+  `MultiTBT.exe`: `..\wince_emulator_v2` only proves the harness-launched path
+  was viable. The old companion startup crash is fixed: loaded DLL images now
+  get a second external PE import pass so MFC's late `commctrl.dll` ordinal
+  imports resolve, and `AddFontResourceW` now succeeds against mounted font
+  files. Next route-search validation should include the companion and compare
+  against the current no-companion route probe, but treat any failure to affect
+  route search as the real CE-like process/mapping/window IPC gap. v3 external
+  companions still do not share v2's window registry/message broker or CE named
+  mapping state, so continue with the MappingSystem/process-handle manager work
+  rather than app-specific shortcuts.
 - Startup profiling follow-up: Windows-sudo flamegraphs
   `target\startup_flame_virtual_sudo1.svg` through
   `target\startup_flame_virtual_sudo3.svg` confirm the mounted virtual startup
@@ -36,8 +99,14 @@
   WNDPROC path after `WM_LBUTTONUP` and compare it against the bottom-strip
   success path: inspect the missing app-private post/command/custom messages,
   capture/focus/active/disabled/style state, `GetWindowLong`/`GetDlgCtrlID`
-  results, and MFC pretranslation. Do not fake the child visibility or force
-  iNavi menu state.
+  results, and MFC pretranslation. `ChildWindowFromPoint` is now CE-shaped for
+  hidden/disabled immediate children, but the old top-right trace did not call
+  it during the failed tap. The sharper evidence is that parent `0x00020004`
+  enumerates hidden child rects and sends a child mouse message to
+  `0x00020068`; compare the resulting `CallWindowProcW`/same-thread
+  `SendMessageW` path against the bottom strip's successful child `WM_LBUTTON`
+  path and `0x5734` post. Do not fake the child visibility or force iNavi menu
+  state.
 - Current live UI frontier after `_hypot`: `target\hypot_route_host1_*`
   supersedes `target\modal_drive_host1_*`. `_hypot @1023` is implemented, and
   the mounted Win32-host run now drives through safety, closes the
@@ -1392,6 +1461,26 @@
   GPS/serial/system-state inputs and the app's reset-warning path through CE
   device/registry semantics, while continuing to validate that map rendering
   and GWE sends stay live under host Win32.
+- Continue the route-search/companion-process path from
+  `target\route_drive_fast_locale1_*`. `vsprintf @1146` and
+  `IsValidLocale @209` are fixed, and the real search modal can be opened
+  after dismissing the bottom safety/notice bar. The active bug is now generic
+  process/window scheduling: after `CreateProcessChildActivated` for
+  `happyway_win.exe`, remote hit-test sends touches to thread 3
+  (`hwnd=0x0002000c`) while the host framebuffer still shows the parent iNavi
+  modal. Investigate CE process/window lifetime and foreground ownership
+  before forcing input to parent windows. Also disassemble/trace the new
+  happyway guest-code stop at
+  `pc=0x0003eac4(image:happyway_win.exe+0x2eac4)`,
+  `ra=0x0003ea0c`.
+- Continue from `target\route_drive_heapmap1_*`: the former
+  `happyway_win.exe+0x2eac4` heap-tail `WRITE_UNMAPPED` is fixed, and the
+  mounted host route-search path now reaches the real child iNavi SE splash.
+  The next work is to determine why that child splash does not advance into
+  its next route-search UI on the visible host run. Use a settled tap replay or
+  monitor-driven run so the trace captures the activated child state rather
+  than the parent pre-handoff timing seen in
+  `target\route_drive_heapmap_limit1_*`.
 - Extend the new Rust remote server beyond the now v2-aligned REST/WebSocket
   surface: expose recent log lines from `CeRemote`, add mounted iNavi
   validation for `/api/v1/control/ws` and `/api/v1/audio/ws`, and keep proving

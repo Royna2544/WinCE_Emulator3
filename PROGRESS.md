@@ -9,6 +9,97 @@
 
 ## Confirmed
 
+- Current stuck-screen investigation narrowed the partial startup to the CE
+  multi-process handoff, not to presenter blackness or map file I/O. Fresh
+  mounted virtual traces `target\stuck_process_*` show
+  `happyway_win.exe` is created and parked as process 67/thread 3, then the
+  parent queues `SendMessageW(hwnd=0x0002000c,msg=0x0401,wParam=14)` to that
+  helper window while thread-1 chrome `WM_SHOWWINDOW` /
+  `WM_WINDOWPOSCHANGED` messages accumulate. A naive experiment that yielded
+  immediately after a parked child was created did rotate into child code, but
+  longer bounded runs became non-returning around hot `HeapAlloc @46`; that
+  experiment was backed out. The safe conclusion is that v3 needs a real
+  scheduler-owned child-process run queue/cross-process SendMessage handoff,
+  not a host-loop shortcut.
+- Current mounted host startup frontier is a real, bounded CPU/resource path,
+  not a dead process or file-I/O/RSS regression. Fresh Win32-host validation
+  with dumped DLLs from `D:\INAVI_Emulator\DUMPPLZ\Windows` and
+  `--remote-server 192.168.0.39:8765` is live as PID `33428` during this
+  session. Remote `/api/v1/status` reports `running=true`, the host window
+  responds, and memory stays bounded around 260-306 MB. The visible frame in
+  `target\host_after_importgate_30s.png` and
+  `target\host_after_importgate_200s.png` is a real iNavi header plus map
+  composition, but the right-side and bottom chrome are still missing after
+  several minutes. Progress samples stay in app/resource work with hot
+  `COREDLL.dll!HeapAlloc @46` / `malloc @1041`, not in map DB file reads.
+- Two startup-speed experiments are now characterized. Heap spillover pages are
+  persisted as restorable RAM blobs, which removes the older post-route
+  unmapped heap fault shape without reintroducing large file preloads. The
+  qsort callout now uses a partitioning quicksort state machine instead of the
+  previous bubble-style comparator loop, but that did not materially move the
+  partial-map startup frontier. `WINCE_EMU_FAST_START` no longer immediately
+  returns from the PE entry to the thread-exit sentinel after adding generated
+  trampoline-origin handling, but it is still not a usable speed path: bounded
+  probes are slower/less advanced than the normal path, so do not use it for
+  host validation yet.
+- Default import bookkeeping now skips very hot CRT/heap/file/DIB imports
+  unless full/import trace is explicitly enabled, while keeping milestone,
+  window, and presentation imports visible by default. This reduces ordinary
+  host-run bookkeeping noise for imports such as `memcpy`, `memset`,
+  `ReadFile`, `HeapAlloc`, `malloc`, and `CreateDIBSection`; diagnostic runs
+  that need complete import counts should set `WINCE_EMU_IMPORT_TRACE=1` or
+  `WINCE_EMU_FULL_TRACE=1`.
+- Mounted route-search driving now gets past the `wcstoul @1083` import trap
+  and exposes the next process/GWE fidelity frontier. `wcstoul` is implemented
+  from the CE ordinal evidence in `coredll.def`/`crt_ordinals.h`, with focused
+  raw COREDLL coverage for decimal, prefix, end-pointer, and negative-wrap
+  cases. Fresh Win32-host runs with dumped runtime DLLs and
+  `--remote-server 192.168.0.39:8765` reached the bottom action/modal route
+  path without multi-GB RSS growth. `target\route_drive_procfix1_*` confirms
+  `happyway_win.exe` and `iSearch.exe` are no longer falsely marked exited
+  when their bounded child runner returns without an encoded CE exit; they are
+  recorded as `CreateProcessChildParked` with `STILL_ACTIVE`. The remaining
+  blocker is the larger CE process scheduler handoff: the parent `iNavi.exe`
+  exits while parked child/worker contexts and a thread-9 synchronous
+  `SendMessageW` transaction are still outstanding, so the host process stops
+  before route/search can continue in the child context.
+- v3 now has a generic v2-style diagnostic companion launcher for mounted
+  runs. `--companion-image PATH` and the v2-named alias
+  `--companion-target PATH` start an additional v3 process after a short delay,
+  using the same registry, devices, mount config, and DLL search paths as the
+  parent, but with `--desktop virtual`, `--cpu-instruction-limit 250000000`,
+  and no nested remote server. Companion stdout/stderr are written to
+  `target\companion_*.stdout.log` and `target\companion_*.stderr.log`, and the
+  parent cleans up still-running companions on exit. This mirrors
+  `..\wince_emulator_v2\tools\autodrive_inavi.ps1` evidence where
+  `TBT\MultiTBT.exe` is a harness-launched companion, not an observed guest
+  `CreateProcessW` target. Focused coverage
+  `companion_command_uses_shared_config_without_remote_or_nested_companions`
+  passes. This is only diagnostic parity: v3 still lacks v2's shared
+  cross-process window registry/message broker, so real CE process/mapping IPC
+  remains the fidelity target.
+- MultiTBT startup now passes the old dumped-MFC/commctrl crash frontier.
+  DUMPPLZ search found no `MultiTBT.exe` or direct `TBT\...` launcher evidence
+  under `D:\INAVI_Emulator\DUMPPLZ`; only CE `TBTCORE` feature macros appear in
+  `Windows\ceconfig.h`, so `..\wince_emulator_v2` remains harness evidence only.
+  The crash at `pc=0x80000002`, `ra=mfcce400.dll+0x29780` was an unresolved PE
+  ordinal import marker (`IMAGE_ORDINAL_FLAG32 | 2`) left in
+  `mfcce400.dll`'s `commctrl.dll` IAT because v3 patched each DLL before later
+  loaded DLL exports were known. The loader now does a second pass over loaded
+  DLL images to resolve external PE exports by name/ordinal after the full
+  dumped DLL export table is built. Focused coverage
+  `second_external_pass_patches_late_loaded_ordinal_imports` and
+  `patches_loaded_commctrl_exports_from_external_table_without_stub_trap`
+  passes. MultiTBT then reached `AddFontResourceW @893` for
+  `\SDMMC Disk\TBT\ygo550.ttf`; v3 now implements count-style
+  `AddFontResourceW` over guest file mounts, with focused coverage
+  `coredll_raw_add_font_resource_uses_guest_file_mounts`. Standalone
+  `target\multitbt_font_wall1_*` runs for a 60 s wall slice, creates a visible
+  zero-sized `MultiTBT` top window plus hidden child windows, receives timer
+  `WM_TIMER id=0xa`, and parks in `GetMessageW` without the old crash. Mounted
+  host validation `target\mounted_multitbt_fix1_*` launched the companion with
+  empty stdout/stderr and no crash before parent cleanup; the main iNavi process
+  still hit the known singleton/encoded-exit path after the wall slice.
 - Remote/host touch delivery now preserves event timing and mouse-button key
   state across the CE/GWE boundary. The remote queue records enqueue time on
   touch/key events, synthesized tap aliases give `WM_LBUTTONDOWN` and
@@ -41,6 +132,18 @@
   Therefore the visible delay of the bottom strip is currently consistent with
   CE/MFC child-window sequencing; the open bug is the separate top-right
   `메뉴` path not issuing the expected transition.
+- Raw `ChildWindowFromPoint` now follows CE/Win32 child-hit-test semantics
+  instead of reusing the normal visible/enabled input hit-test. CE docs state
+  that `ChildWindowFromPoint` returns a containing child even when it is hidden
+  or disabled, and the child search is restricted to immediate children; v3 now
+  implements that for raw ordinal `253` while leaving `WindowFromPoint` and
+  remote touch targeting on the visible/enabled recursive path. Focused
+  coverage in
+  `coredll_raw_window_from_point_hits_visible_thread_windows` now checks hidden
+  child, disabled child, parent fallback, outside-parent NULL, and strict
+  `WindowFromPoint` behavior. The current top-right `메뉴` trace did not show a
+  `ChildWindowFromPoint` call around the failed tap, so this is a confirmed CE
+  fidelity fix but not yet proven as the visible menu transition fix.
 - GWE message retrieval order now follows the CE message-queue order from
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`: posted messages are
   returned before received synchronous sends, then quit/paint. Focused coverage
@@ -3890,6 +3993,59 @@
   kernel path. Focused coverage
   `current_multiple_wait_timeout_writes_wait_timeout_result` and the full
   Unicorn wait scheduler suite pass.
+
+- Advanced the mounted route-search path through the first companion process
+  handoff. Parked child CPUs now retain their own Unicorn state and
+  `switch_to_next_parked_child_process` restores the child process identity
+  (`GetModuleFileNameW(0)` now reports
+  `\SDMMC Disk\INavi\happyway_win.exe`) when the parent reaches an encoded
+  process exit. Focused coverage
+  `switch_to_parked_child_restores_process_identity` passes. The required
+  host run with `--remote-server 192.168.0.39:8765` no longer dies at the
+  parent/child boundary; `happyway_win.exe` activates with process id 67 and
+  continues executing.
+
+- Added generic COREDLL narrow `vsprintf @1146` and NLS
+  `IsValidLocale @209` support. `vsprintf` reads a guest `va_list` using the
+  existing narrow printf formatter, and `IsValidLocale` accepts CE/Win32
+  installed/supported flags for default and known LCIDs including Korean
+  `0x0412`. Focused raw dispatch tests
+  `coredll_raw_vsprintf_reads_guest_va_list` and
+  `coredll_raw_is_valid_locale_accepts_korean_and_defaults` pass, along with
+  `cargo check --features unicorn,trace,win32-desktop` and the release
+  build. Mounted evidence: `target\route_drive_vsprintf1_*` stops moved from
+  `COREDLL.dll@1146` to `COREDLL.dll@209`, and
+  `target\route_drive_fast_locale1_*` moved past both imports.
+
+- Current route-search validation reaches the real map UI, dismisses the
+  bottom safety/notice bar, opens the real
+  `목적지 / 현위치 안내 정보` search modal, and keeps the process alive after
+  selecting/tapping rows. After parent handoff, however, remote hit-testing
+  routes later touches to `happyway_win.exe` thread 3 (`hwnd=0x0002000c`)
+  while the presented framebuffer still shows the parent iNavi modal. The new
+  execution frontier is guest code inside `happyway_win.exe` at
+  `pc=0x0003eac4(image:happyway_win.exe+0x2eac4)`, not a missing import.
+
+- Fixed two generic route-search handoff issues. `TerminateProcess` on the
+  current-process pseudo handle now destroys GWE windows owned by the current
+  process before marking the pseudo process signaled, matching the cleanup path
+  already used for launched child exits. The Win32 host presenter window is now
+  a fixed-size wrapper around the 800x480 CE client area, so hovering the host
+  window no longer advertises resize cursors. Focused coverage
+  `terminate_current_process_destroys_owned_windows` passes, along with the
+  parked-child identity test, `cargo check`, and release build.
+
+- Fixed the `happyway_win.exe` large-heap frontier. The previous route run
+  faulted at `happyway_win.exe+0x2eac4` writing inside a valid 16 MiB
+  `HeapAlloc(HEAP_ZERO_MEMORY, 0x01000000)` block because heap spillover
+  mapping could leave the tail of a newly allocated block unmapped. Unicorn
+  heap growth is now mapped through the page-aware guest range mapper after
+  import dispatch, and remap failures stop at the import boundary instead of
+  resuming with a partial heap. Mounted host validation
+  `target\route_drive_heapmap1_*` with `--remote-server 192.168.0.39:8765`
+  moves past the former `WRITE_UNMAPPED` and renders the child
+  `happyway_win.exe` iNavi SE splash while staying responsive at roughly
+  170-180 MiB RSS.
 
 ## False Leads
 

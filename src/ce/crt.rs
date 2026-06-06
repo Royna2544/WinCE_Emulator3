@@ -72,6 +72,22 @@ pub(crate) fn wcsstr_raw<M: CoredllGuestMemory>(memory: &M, haystack: u32, needl
     0
 }
 
+pub(crate) fn wcslen_raw<M: CoredllGuestMemory>(memory: &M, string: u32) -> u32 {
+    if string == 0 {
+        return 0;
+    }
+    for index in 0..0x8000u32 {
+        let addr = string.wrapping_add(index * 2);
+        let Ok(unit) = memory.read_u16(addr) else {
+            return index;
+        };
+        if unit == 0 {
+            return index;
+        }
+    }
+    0x8000
+}
+
 pub(crate) fn wcspbrk_raw<M: CoredllGuestMemory>(memory: &M, string: u32, accept: u32) -> u32 {
     if string == 0 || accept == 0 {
         return 0;
@@ -304,6 +320,44 @@ pub(crate) fn wtol_raw<M: CoredllGuestMemory>(memory: &M, text_ptr: u32) -> i32 
     parse_decimal_prefix(text.trim_start())
 }
 
+pub(crate) fn wcstoul_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    text_ptr: u32,
+    end_ptr: u32,
+    base: u32,
+) -> u32 {
+    if text_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(text) = read_wide_z(memory, text_ptr, 4096) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let parsed = parse_unsigned_prefix(&text, base);
+    if end_ptr != 0
+        && memory
+            .write_u32(
+                end_ptr,
+                text_ptr.wrapping_add((parsed.consumed as u32).saturating_mul(2)),
+            )
+            .is_err()
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    parsed.value
+}
+
 pub(crate) fn wcsncpy_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -439,6 +493,50 @@ pub(crate) fn malloc_raw(kernel: &mut CeKernel, thread_id: u32, bytes: u32) -> u
         .heap_alloc(kernel.memory.get_process_heap(), 0, bytes)
     {
         Some(ptr) => ptr,
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            0
+        }
+    }
+}
+
+pub(crate) fn realloc_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    ptr: u32,
+    bytes: u32,
+) -> u32 {
+    if ptr == 0 {
+        return malloc_raw(kernel, thread_id, bytes);
+    }
+    if bytes == 0 {
+        free_raw(kernel, ptr);
+        return 0;
+    }
+    match kernel
+        .memory
+        .heap_re_alloc_detail(kernel.memory.get_process_heap(), 0, ptr, bytes)
+    {
+        Some(result) => {
+            if result.moved {
+                let copy_len = result.old_actual_size.min(result.new_actual_size);
+                if copy_len != 0 {
+                    let Some(old_bytes) =
+                        read_guest_bytes(kernel, memory, thread_id, result.old_ptr, copy_len)
+                    else {
+                        return 0;
+                    };
+                    if !write_guest_bytes(kernel, memory, thread_id, result.ptr, &old_bytes) {
+                        return 0;
+                    }
+                }
+            }
+            kernel.threads.set_last_error(thread_id, 0);
+            result.ptr
+        }
         None => {
             kernel
                 .threads
@@ -622,6 +720,48 @@ pub(crate) fn strcat_raw<M: CoredllGuestMemory>(
     } else {
         0
     }
+}
+
+pub(crate) fn strupr_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    string: u32,
+) -> u32 {
+    if string == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    for index in 0..0x8000u32 {
+        let addr = string.wrapping_add(index);
+        let Ok(byte) = memory.read_u8(addr) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        if byte == 0 {
+            kernel.threads.set_last_error(thread_id, 0);
+            return string;
+        }
+        if byte.is_ascii_lowercase()
+            && !write_guest_bytes(
+                kernel,
+                memory,
+                thread_id,
+                addr,
+                &[byte.to_ascii_uppercase()],
+            )
+        {
+            return 0;
+        }
+    }
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+    0
 }
 
 pub(crate) fn strtok_raw<M: CoredllGuestMemory>(
@@ -1207,6 +1347,24 @@ pub(crate) fn vsnprintf_raw<M: CoredllGuestMemory>(
     }
     let args = read_va_list_words(memory, va_list, 64);
     snprintf_raw(kernel, memory, thread_id, dest, count, format, &args)
+}
+
+pub(crate) fn vsprintf_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    dest: u32,
+    format: u32,
+    va_list: u32,
+) -> u32 {
+    if va_list == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let args = read_va_list_words(memory, va_list, 64);
+    sprintf_raw(kernel, memory, thread_id, dest, format, &args)
 }
 
 pub(crate) fn wsprintf_w_raw<M: CoredllGuestMemory>(

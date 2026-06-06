@@ -2572,13 +2572,24 @@ impl Gwe {
 
     pub fn child_window_from_point_for_thread(
         &self,
-        thread_id: u32,
+        _thread_id: u32,
         parent: u32,
         point: Point,
     ) -> Option<u32> {
         let screen_point = self.client_to_screen(parent, point)?;
-        self.window_from_point_in_parent(thread_id, Some(parent), screen_point)
-            .or(Some(parent))
+        let parent_window = self.windows.get(&parent)?;
+        if !parent_window.client_rect.contains_point(screen_point) {
+            return None;
+        }
+        for hwnd in self.sibling_windows(Some(parent)) {
+            let Some(window) = self.windows.get(&hwnd) else {
+                continue;
+            };
+            if window.client_rect.contains_point(screen_point) {
+                return Some(hwnd);
+            }
+        }
+        Some(parent)
     }
 
     pub fn has_queue_input(&self, thread_id: u32, flags: u32) -> bool {

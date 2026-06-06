@@ -20,11 +20,12 @@ use windows::{
         UI::WindowsAndMessaging::{
             AdjustWindowRectEx, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW,
             DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW, HICON, HMENU, ICON_BIG,
-            ICON_SMALL, MSG, PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage,
-            PrivateExtractIconsW, RegisterClassW, SW_SHOW, SendMessageW, ShowWindow,
-            TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_DESTROY, WM_ERASEBKGND,
-            WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_SETICON,
-            WNDCLASSW, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+            ICON_SMALL, IDC_ARROW, LoadCursorW, MSG, PM_REMOVE, PeekMessageW, PostMessageW,
+            PostQuitMessage, PrivateExtractIconsW, RegisterClassW, SW_SHOW, SendMessageW,
+            SetCursor, ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WM_APP, WM_CLOSE, WM_DESTROY,
+            WM_ERASEBKGND, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+            WM_SETCURSOR, WM_SETICON, WNDCLASSW, WS_CAPTION, WS_MINIMIZEBOX, WS_OVERLAPPED,
+            WS_SYSMENU, WS_VISIBLE,
         },
     },
     core::{PCWSTR, w},
@@ -267,7 +268,7 @@ fn create_window_on_current_thread(
     register_window_class();
     let title_wide = wide_null(&title);
     let ex_style = WINDOW_EX_STYLE::default();
-    let style = WS_OVERLAPPEDWINDOW | WS_VISIBLE;
+    let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE;
     let mut window_rect = RECT {
         left: 0,
         top: 0,
@@ -322,6 +323,7 @@ fn register_window_class() {
     let class = WNDCLASSW {
         style: CS_HREDRAW | CS_VREDRAW,
         lpfnWndProc: Some(wnd_proc),
+        hCursor: arrow_cursor(),
         lpszClassName: CLASS_NAME,
         ..Default::default()
     };
@@ -569,6 +571,16 @@ fn wide_null(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+fn arrow_cursor() -> windows::Win32::UI::WindowsAndMessaging::HCURSOR {
+    unsafe { LoadCursorW(None, IDC_ARROW).unwrap_or_default() }
+}
+
+fn set_arrow_cursor() {
+    unsafe {
+        let _ = SetCursor(arrow_cursor());
+    }
+}
+
 fn mouse_x(lparam: LPARAM) -> i32 {
     (lparam.0 as u16 as i16) as i32
 }
@@ -618,8 +630,13 @@ unsafe extern "system" fn wnd_proc(
             }
             LRESULT(0)
         }
+        WM_SETCURSOR => {
+            set_arrow_cursor();
+            LRESULT(1)
+        }
         WM_ERASEBKGND => LRESULT(1),
         WM_LBUTTONDOWN => {
+            set_arrow_cursor();
             if is_stopped_content(hwnd) {
                 if let Ok(mut down) = touch_down().lock() {
                     *down = false;
@@ -636,6 +653,7 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
+            set_arrow_cursor();
             if is_stopped_content(hwnd) {
                 return LRESULT(0);
             }
@@ -649,6 +667,7 @@ unsafe extern "system" fn wnd_proc(
             LRESULT(0)
         }
         WM_LBUTTONUP => {
+            set_arrow_cursor();
             if is_stopped_content(hwnd) {
                 if let Ok(mut down) = touch_down().lock() {
                     *down = false;

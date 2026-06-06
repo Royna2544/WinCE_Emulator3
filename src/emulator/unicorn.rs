@@ -8,14 +8,14 @@ use crate::{
         imports::{
             DYNAMIC_COREDLL_PROC_TRAP_BASE, ExternalImportTable, IMPORT_TRAP_BASE,
             IMPORT_TRAP_PAGE_SIZE, ImportTrap, ImportTrapTable, import_trap_code_page,
-            patch_pe_coredll_imports, patch_pe_imports,
+            patch_external_imports, patch_pe_coredll_imports, patch_pe_imports,
         },
         memory::{MemoryMap, MemoryPerms},
     },
     error::{Error, Result},
     pe::PeImage,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 #[cfg(feature = "unicorn")]
 use unicorn_engine::RegisterMIPS;
 
@@ -40,6 +40,32 @@ pub struct UnicornMips {
     trampoline_jumps: Vec<MipsTrampolineJump>,
     last_debug: Option<UnicornDebugSnapshot>,
     last_wall_clock_debug: Option<UnicornDebugSnapshot>,
+    parked_child_processes: VecDeque<ParkedProcess>,
+    #[cfg(feature = "unicorn")]
+    pending_wndproc_returns: Vec<PendingWndProcReturn>,
+    #[cfg(feature = "unicorn")]
+    saved_context: Option<SavedCpuContext>,
+}
+
+#[derive(Debug, Clone)]
+struct ParkedProcess {
+    application: Option<String>,
+    process_handle: Option<u32>,
+    thread_handle: Option<u32>,
+    process_state: crate::ce::kernel::CurrentProcessState,
+    thread_id: u32,
+    cpu: Box<UnicornMips>,
+    module_base: u32,
+    module_path: String,
+    module_host_path: std::path::PathBuf,
+    command_line: String,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SavedCpuContext {
+    pc: u32,
+    regs: MipsGuestContext,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -116,6 +142,7 @@ pub struct UnicornDebugSnapshot {
     pub virtual_allocation_count: usize,
     pub virtual_allocation_bytes: u64,
     pub blocked_get_message: Option<UnicornBlockedGetMessage>,
+    pub cross_process_send_yield: Option<UnicornCrossProcessSendYield>,
     pub thread_state: Option<String>,
     pub thread_exit_reached: bool,
     pub encoded_kernel_exit: Option<EncodedKernelExit>,
@@ -338,6 +365,17 @@ impl UnicornDebugSnapshot {
                     .unwrap_or_else(|| "any".to_owned())
             ));
         }
+        if let Some(yielded) = &self.cross_process_send_yield {
+            parts.push(format!(
+                "cross_process_send=sender:{}:{} target:{}:{} hwnd=0x{:08x} msg=0x{:04x}",
+                yielded.sender_process_id,
+                yielded.sender_thread_id,
+                yielded.target_process_id,
+                yielded.target_thread_id,
+                yielded.hwnd,
+                yielded.msg
+            ));
+        }
         if let Some(thread_state) = &self.thread_state {
             parts.push(format!("threads={thread_state}"));
         }
@@ -423,6 +461,16 @@ pub struct UnicornHostWallClockStop {
     pub sp: u32,
     pub instruction: Option<u32>,
     pub elapsed_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnicornCrossProcessSendYield {
+    pub sender_thread_id: u32,
+    pub sender_process_id: u32,
+    pub target_thread_id: u32,
+    pub target_process_id: u32,
+    pub hwnd: u32,
+    pub msg: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -911,7 +959,10 @@ const GUEST_THREAD_RETURN_STUB_ADDR: u32 =
 #[cfg(feature = "unicorn")]
 const WNDPROC_RETURN_STUB_ADDR: u32 =
     CREATE_WINDOW_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
-const RESERVED_IMPORT_TRAP_STUB_BYTES: u32 = crate::emulator::imports::IMPORT_TRAP_STRIDE * 4;
+#[cfg(feature = "unicorn")]
+const QSORT_RETURN_STUB_ADDR: u32 =
+    WNDPROC_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
+const RESERVED_IMPORT_TRAP_STUB_BYTES: u32 = crate::emulator::imports::IMPORT_TRAP_STRIDE * 5;
 #[cfg(feature = "unicorn")]
 const CREATESTRUCTW_SIZE: u32 = 48;
 #[cfg(feature = "unicorn")]
@@ -1017,6 +1068,31 @@ struct PendingGuestThreadReturn {
     thread_handle: u32,
     return_pc: u32,
     creator_regs: MipsGuestContext,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingQsortReturn {
+    return_pc: u32,
+    return_sp: u32,
+    caller_regs: MipsGuestContext,
+    base: u32,
+    count: u32,
+    size: u32,
+    comparator: u32,
+    ranges: Vec<(u32, u32)>,
+    partition: Option<PendingQsortPartition>,
+    current_pair: Option<(u32, u32)>,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingQsortPartition {
+    low: u32,
+    high: u32,
+    i: u32,
+    j: u32,
+    pivot_addr: u32,
 }
 
 #[cfg(feature = "unicorn")]
@@ -1161,6 +1237,8 @@ struct MappedBlob {
     bytes: Vec<u8>,
 }
 
+const HEAP_SPILLOVER_BLOB_NAME: &str = "ram:heap-spillover";
+
 #[cfg(feature = "unicorn")]
 #[derive(Debug, Clone)]
 struct MappedCodeIndex {
@@ -1230,6 +1308,11 @@ impl UnicornMips {
             trampoline_jumps: Vec::new(),
             last_debug: None,
             last_wall_clock_debug: None,
+            parked_child_processes: VecDeque::new(),
+            #[cfg(feature = "unicorn")]
+            pending_wndproc_returns: Vec::new(),
+            #[cfg(feature = "unicorn")]
+            saved_context: None,
         })
     }
 
@@ -1240,7 +1323,11 @@ impl UnicornMips {
         perms: MemoryPerms,
         name: &str,
     ) -> Result<()> {
-        self.memory.map(base, size, perms, name)
+        self.memory.map(base, size, perms, name)?;
+        if matches!(name, "ce-heap-arena" | "guest-stack") && perms.contains(MemoryPerms::WRITE) {
+            ensure_mapped_ram_blob(&mut self.mapped_blobs, name, base, size)?;
+        }
+        Ok(())
     }
 
     pub fn set_dll_search_dirs(&mut self, dirs: Vec<std::path::PathBuf>) {
@@ -1282,6 +1369,154 @@ impl UnicornMips {
         self.last_wall_clock_debug
             .as_ref()
             .or(self.last_debug.as_ref())
+    }
+
+    pub fn has_parked_child_processes(&self) -> bool {
+        !self.parked_child_processes.is_empty()
+    }
+
+    pub fn switch_to_next_parked_child_process(&mut self, kernel: &mut CeKernel) -> bool {
+        self.switch_to_next_parked_process(kernel, false)
+    }
+
+    pub fn rotate_to_next_parked_process(&mut self, kernel: &mut CeKernel) -> bool {
+        self.switch_to_next_parked_process(kernel, true)
+    }
+
+    pub fn has_parked_process_id(&self, process_id: u32) -> bool {
+        self.parked_child_processes
+            .iter()
+            .any(|process| process.process_state.process_id == process_id)
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn persist_run_state(
+        &mut self,
+        parked_child_processes: &std::rc::Rc<std::cell::RefCell<VecDeque<ParkedProcess>>>,
+        pending_wndproc_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
+    ) {
+        self.parked_child_processes = parked_child_processes.borrow_mut().drain(..).collect();
+        self.pending_wndproc_returns = pending_wndproc_returns.borrow_mut().drain(..).collect();
+    }
+
+    pub fn rotate_to_parked_process_id(&mut self, kernel: &mut CeKernel, process_id: u32) -> bool {
+        let Some(index) = self
+            .parked_child_processes
+            .iter()
+            .position(|process| process.process_state.process_id == process_id)
+        else {
+            return false;
+        };
+        let Some(parked) = self.parked_child_processes.remove(index) else {
+            return false;
+        };
+        self.switch_to_parked_process(kernel, parked, true);
+        true
+    }
+
+    fn switch_to_next_parked_process(
+        &mut self,
+        kernel: &mut CeKernel,
+        requeue_current: bool,
+    ) -> bool {
+        let Some(parked) = self.parked_child_processes.pop_front() else {
+            return false;
+        };
+        self.switch_to_parked_process(kernel, parked, requeue_current);
+        true
+    }
+
+    fn switch_to_parked_process(
+        &mut self,
+        kernel: &mut CeKernel,
+        parked: ParkedProcess,
+        requeue_current: bool,
+    ) {
+        let current = requeue_current.then(|| self.park_current_process(kernel));
+        let ParkedProcess {
+            application,
+            process_handle,
+            thread_handle,
+            process_state,
+            thread_id,
+            cpu,
+            module_base,
+            module_path,
+            module_host_path,
+            command_line,
+        } = parked;
+        kernel.set_process_module_base(module_base);
+        kernel.set_process_module_path(module_path);
+        kernel.set_process_module_host_path(module_host_path);
+        kernel.set_process_command_line(command_line);
+        kernel.set_current_process_state(process_state);
+        let op = if process_handle.is_some() {
+            "CreateProcessChildActivated"
+        } else {
+            "ProcessActivated"
+        };
+        kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
+            op,
+            application,
+            command_line: Some(kernel.process_command_line().to_owned()),
+            path: Some(kernel.process_module_host_path().map_or_else(
+                || kernel.process_module_path().to_owned(),
+                |path| path.display().to_string(),
+            )),
+            process_handle,
+            thread_handle,
+            process_id: Some(process_state.process_id),
+            thread_id: Some(thread_id),
+            result: Some(1),
+            error: None,
+        });
+        let mut next_cpu = *cpu;
+        next_cpu
+            .parked_child_processes
+            .append(&mut self.parked_child_processes);
+        if let Some(current) = current {
+            next_cpu.parked_child_processes.push_back(current);
+        }
+        *self = next_cpu;
+    }
+
+    fn park_current_process(&mut self, kernel: &CeKernel) -> ParkedProcess {
+        ParkedProcess {
+            application: Some(kernel.process_module_path().to_owned()),
+            process_handle: None,
+            thread_handle: None,
+            process_state: kernel.current_process_state(),
+            thread_id: self.initial_thread_id,
+            cpu: Box::new(UnicornMips {
+                memory: std::mem::take(&mut self.memory),
+                import_traps: std::mem::take(&mut self.import_traps),
+                loaded_modules: std::mem::take(&mut self.loaded_modules),
+                dll_search_dirs: std::mem::take(&mut self.dll_search_dirs),
+                entry: self.entry.take(),
+                entry_image_base: self.entry_image_base.take(),
+                stack_top: self.stack_top.take(),
+                initial_thread_id: self.initial_thread_id,
+                mapped_blobs: std::mem::take(&mut self.mapped_blobs),
+                resource_strings: std::mem::take(&mut self.resource_strings),
+                resources: std::mem::take(&mut self.resources),
+                trampoline_ranges: std::mem::take(&mut self.trampoline_ranges),
+                trampoline_jumps: std::mem::take(&mut self.trampoline_jumps),
+                last_debug: self.last_debug.take(),
+                last_wall_clock_debug: self.last_wall_clock_debug.take(),
+                parked_child_processes: VecDeque::new(),
+                #[cfg(feature = "unicorn")]
+                pending_wndproc_returns: std::mem::take(&mut self.pending_wndproc_returns),
+                #[cfg(feature = "unicorn")]
+                saved_context: self.saved_context.take(),
+            }),
+            module_base: kernel.process_module_base(),
+            module_path: kernel.process_module_path().to_owned(),
+            module_host_path: kernel
+                .process_module_host_path()
+                .cloned()
+                .unwrap_or_default(),
+            command_line: kernel.process_command_line().to_owned(),
+        }
     }
 
     pub fn mapped_blob_ranges(&self) -> Vec<UnicornMappedBlobRange> {
@@ -1437,6 +1672,11 @@ impl UnicornMips {
             }
             self.loaded_modules.push(loaded_module_info(dll, load_base));
             loaded_dlls.push((dll.path.clone(), load_base, mapped));
+        }
+        for (path, _load_base, mapped) in &mut loaded_dlls {
+            if let Some(dll) = dlls.iter().find(|dll| dll.path == *path) {
+                patch_external_imports(mapped, &dll.imports, &external)?;
+            }
         }
 
         let mut mapped = image.mapped_image()?;
@@ -1756,6 +1996,7 @@ impl UnicornMips {
 
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
             .map_err(|err| Error::Backend(format!("{err:?}")))?;
+        let mut startup_mapped_ranges = Vec::new();
         for region in self.memory.regions() {
             uc.mem_map(
                 u64::from(region.base),
@@ -1763,19 +2004,34 @@ impl UnicornMips {
                 unicorn_perms(region.perms),
             )
             .map_err(|err| Error::Backend(format!("map {}: {err:?}", region.name)))?;
+            startup_mapped_ranges.push((region.base, region.size));
+        }
+        for blob in &self.mapped_blobs {
+            map_persisted_ram_blob_pages(&mut uc, &mut startup_mapped_ranges, blob)?;
         }
         for blob in &self.mapped_blobs {
             uc.mem_write(u64::from(blob.base), &blob.bytes)
                 .map_err(|err| Error::Backend(format!("write 0x{:08x}: {err:?}", blob.base)))?;
         }
-        if let Some(stack_top) = self.stack_top {
-            uc.reg_write(RegisterMIPS::SP, u64::from(stack_top))
-                .map_err(|err| Error::Backend(format!("set guest SP: {err:?}")))?;
-        }
-        uc.reg_write(RegisterMIPS::RA, u64::from(THREAD_EXIT_STUB_ADDR))
-            .map_err(|err| Error::Backend(format!("set guest RA: {err:?}")))?;
-        self.write_process_entry_context(kernel, &mut uc)?;
-        update_user_kdata_current_ids(&mut uc, 1, kernel.current_process_id())?;
+        let start_pc = if let Some(saved) = self.saved_context.as_ref() {
+            restore_mips_gprs(&mut uc, &saved.regs);
+            saved.pc
+        } else {
+            if let Some(stack_top) = self.stack_top {
+                uc.reg_write(RegisterMIPS::SP, u64::from(stack_top))
+                    .map_err(|err| Error::Backend(format!("set guest SP: {err:?}")))?;
+            }
+            uc.reg_write(RegisterMIPS::RA, u64::from(THREAD_EXIT_STUB_ADDR))
+                .map_err(|err| Error::Backend(format!("set guest RA: {err:?}")))?;
+            self.write_process_entry_context(kernel, &mut uc)?;
+            self.entry
+                .ok_or_else(|| Error::Backend("no PE entry point has been loaded".to_owned()))?
+        };
+        update_user_kdata_current_ids(
+            &mut uc,
+            self.initial_thread_id,
+            kernel.current_process_id(),
+        )?;
 
         let indirect_call_probe = Rc::new(RefCell::new(None));
         let indirect_call_probe_hook = Rc::clone(&indirect_call_probe);
@@ -1806,6 +2062,8 @@ impl UnicornMips {
         let full_trace_enabled = std::env::var_os("WINCE_EMU_FULL_TRACE").is_some();
         #[cfg(feature = "trace")]
         let resource_trace_enabled = std::env::var_os("WINCE_EMU_RESOURCE_TRACE").is_some();
+        let import_trace_all_enabled =
+            full_trace_enabled || std::env::var_os("WINCE_EMU_IMPORT_TRACE").is_some();
         #[cfg(feature = "trace")]
         let resource_only_trace_enabled =
             std::env::var_os("WINCE_EMU_RESOURCE_ONLY_TRACE").is_some();
@@ -1857,15 +2115,22 @@ impl UnicornMips {
         let trampoline_pages = trampoline_pages_for_ranges(&trampoline_ranges);
         let trampoline_stub_by_origin = trampoline_stub_by_origin(&trampoline_jumps);
         let trampoline_origin_by_stub = trampoline_origin_by_stub(&trampoline_jumps);
+        let progress_import_traps = self.import_traps.clone();
         let kernel_ptr = kernel as *mut CeKernel;
         let framebuffer_ptr = framebuffer as *mut dyn Framebuffer;
         let framebuffer_tick_error = Rc::new(RefCell::new(None::<Error>));
         let framebuffer_tick_error_hook = Rc::clone(&framebuffer_tick_error);
         let framebuffer_tick_error_code_hook = Rc::clone(&framebuffer_tick_error);
         let process_dll_search_dirs = self.dll_search_dirs.clone();
+        let parked_child_processes = Rc::new(RefCell::new(std::mem::take(
+            &mut self.parked_child_processes,
+        )));
+        let parked_child_processes_hook = Rc::clone(&parked_child_processes);
         let trampoline_ranges_code_hook = trampoline_ranges.clone();
         let blocked_get_message = Rc::new(RefCell::new(None::<UnicornBlockedGetMessage>));
         let blocked_get_message_live_hook = Rc::clone(&blocked_get_message);
+        let cross_process_send_yield = Rc::new(RefCell::new(None::<UnicornCrossProcessSendYield>));
+        let cross_process_send_yield_hook = Rc::clone(&cross_process_send_yield);
         if !fast_start_enabled {
             uc.add_code_hook(1, 0, move |uc, address, _size| {
             let pc = address as u32;
@@ -1989,8 +2254,23 @@ impl UnicornMips {
                     .unwrap_or(true)
                 {
                     *last_ms = Some(elapsed_ms);
+                    let import_pc = pc & !(crate::emulator::imports::IMPORT_TRAP_STRIDE - 1);
+                    let progress_import = progress_import_traps
+                        .trap_at(import_pc)
+                        .cloned()
+                        .or_else(|| crate::emulator::imports::dynamic_coredll_proc_trap(import_pc))
+                        .map(|trap| {
+                            format!(
+                                "{}!{}",
+                                trap.module_name,
+                                trap.name
+                                    .or_else(|| trap.ordinal.map(|ordinal| format!("@{ordinal}")))
+                                    .unwrap_or_else(|| "<unknown>".to_owned())
+                            )
+                        })
+                        .unwrap_or_else(|| "none".to_owned());
                     let progress = format!(
-                        "elapsed_ms={elapsed_ms} hooks={code_trace_index} pc=0x{pc:08x} ra=0x{:08x} sp=0x{:08x} v0=0x{:08x} a0=0x{:08x} a1=0x{:08x} a2=0x{:08x} a3=0x{:08x} insn={} current_trampoline_origin={} direct_jump_target={}\n",
+                        "elapsed_ms={elapsed_ms} hooks={code_trace_index} pc=0x{pc:08x} ra=0x{:08x} sp=0x{:08x} v0=0x{:08x} a0=0x{:08x} a1=0x{:08x} a2=0x{:08x} a3=0x{:08x} insn={} current_trampoline_origin={} direct_jump_target={} import={}\n",
                         read_mips_reg(uc, RegisterMIPS::RA),
                         read_mips_reg(uc, RegisterMIPS::SP),
                         read_mips_reg(uc, RegisterMIPS::V0),
@@ -2006,7 +2286,8 @@ impl UnicornMips {
                             .unwrap_or_else(|| "none".to_owned()),
                         direct_jump_target
                             .map(|value| format!("0x{value:08x}"))
-                            .unwrap_or_else(|| "none".to_owned())
+                            .unwrap_or_else(|| "none".to_owned()),
+                        progress_import
                     );
                     let _ = std::fs::write(path, progress);
                 }
@@ -2121,18 +2402,117 @@ impl UnicornMips {
         } else {
             let fast_mapped_code = Rc::new(MappedCodeIndex::new(self.mapped_blobs.clone()));
             let fast_trampoline_ranges = Rc::new(self.trampoline_ranges.clone());
-            for trampoline in &self.trampoline_jumps {
-                let origin = trampoline.origin;
+            let fast_trampoline_stub_by_origin = Rc::new(trampoline_stub_by_origin.clone());
+            let fast_code_trace_counter = Rc::clone(&code_trace_counter);
+            let fast_host_wall_clock_counter = Rc::clone(&host_wall_clock_counter);
+            let fast_host_wall_clock_stop = Rc::clone(&host_wall_clock_stop);
+            let fast_framebuffer_tick_error = Rc::clone(&framebuffer_tick_error_code_hook);
+            let fast_blocked_get_message = Rc::clone(&blocked_get_message);
+            let fast_pc_stop = Rc::clone(&pc_stop);
+            let mut fast_start_sites = fast_start_indirect_transfer_sites(&self.mapped_blobs);
+            fast_start_sites.extend(self.trampoline_jumps.iter().map(|jump| jump.origin));
+            fast_start_sites.sort_unstable();
+            fast_start_sites.dedup();
+            for site in fast_start_sites {
                 let mapped_code = Rc::clone(&fast_mapped_code);
                 let trampoline_ranges = Rc::clone(&fast_trampoline_ranges);
+                let stub_by_origin = Rc::clone(&fast_trampoline_stub_by_origin);
+                let code_trace_counter = Rc::clone(&fast_code_trace_counter);
+                let host_wall_clock_counter = Rc::clone(&fast_host_wall_clock_counter);
+                let host_wall_clock_stop = Rc::clone(&fast_host_wall_clock_stop);
+                let framebuffer_tick_error = Rc::clone(&fast_framebuffer_tick_error);
+                let blocked_get_message = Rc::clone(&fast_blocked_get_message);
+                let pc_stop = Rc::clone(&fast_pc_stop);
                 uc.add_code_hook(
-                    u64::from(origin),
-                    u64::from(origin),
+                    u64::from(site),
+                    u64::from(site),
                     move |uc, address, _size| {
                         let pc = address as u32;
+                        let code_trace_index = code_trace_counter.get().wrapping_add(1);
+                        code_trace_counter.set(code_trace_index);
+                        if code_trace_index % UNICORN_TB_CACHE_FLUSH_INTERVAL == 0 {
+                            let _ = uc.ctl_remove_cache(0, u64::MAX);
+                        }
                         let Some(instruction) = read_unicorn_code_u32(uc, &mapped_code, pc) else {
                             return;
                         };
+                        if stop_pc == Some(pc) {
+                            *pc_stop.borrow_mut() = Some(UnicornPcStop {
+                                pc,
+                                ra: read_mips_reg(uc, RegisterMIPS::RA),
+                                sp: read_mips_reg(uc, RegisterMIPS::SP),
+                                instruction: Some(instruction),
+                            });
+                            let _ = uc.emu_stop();
+                            return;
+                        }
+                        if code_trace_index & 0x0fff == 0 {
+                            if let Err(err) = unsafe { (&mut *framebuffer_ptr).emulator_tick() } {
+                                *framebuffer_tick_error.borrow_mut() = Some(err);
+                                let _ = uc.emu_stop();
+                                return;
+                            }
+                            if let Some(blocked) = blocked_get_message.borrow().as_ref() {
+                                unsafe { &mut *kernel_ptr }
+                                    .drain_remote_server_control_messages_to_thread_window(
+                                        blocked.thread_id,
+                                        blocked.hwnd,
+                                    );
+                            } else {
+                                unsafe {
+                                    (&mut *kernel_ptr).drain_remote_server_control_messages()
+                                };
+                            }
+                            if let Err(err) =
+                                drain_win32_host_input_to_active_window(unsafe { &mut *kernel_ptr })
+                            {
+                                *framebuffer_tick_error.borrow_mut() = Some(err);
+                                let _ = uc.emu_stop();
+                                return;
+                            }
+                        }
+                        if let Some(limit) = host_wall_clock_limit {
+                            let mut counter = host_wall_clock_counter.borrow_mut();
+                            *counter = counter.wrapping_add(1);
+                            if *counter & 0x0fff == 0 && host_wall_clock_started.elapsed() >= limit
+                            {
+                                *host_wall_clock_stop.borrow_mut() =
+                                    Some(UnicornHostWallClockStop {
+                                        pc,
+                                        ra: read_mips_reg(uc, RegisterMIPS::RA),
+                                        sp: read_mips_reg(uc, RegisterMIPS::SP),
+                                        instruction: Some(instruction),
+                                        elapsed_ms: host_wall_clock_started.elapsed().as_millis()
+                                            as u64,
+                                    });
+                                let _ = uc.emu_stop();
+                                return;
+                            }
+                        }
+                        if is_trampoline_sentinel_first_word(instruction) {
+                            if let Some(next_instruction) =
+                                read_unicorn_code_u32(uc, &mapped_code, pc.wrapping_add(4))
+                            {
+                                if let Some(target) =
+                                    decode_trampoline_sentinel_target(instruction, next_instruction)
+                                {
+                                    if target_in_ranges(target, &trampoline_ranges) {
+                                        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(target));
+                                    }
+                                }
+                            }
+                            return;
+                        }
+                        if let Some(register) = decode_jr_register(instruction)
+                            .or_else(|| decode_jalr_register(instruction))
+                        {
+                            if let Some(target) = read_mips_gpr(uc, register) {
+                                if let Some(stub) = stub_by_origin.get(&target).copied() {
+                                    let _ = write_mips_gpr(uc, register, stub);
+                                }
+                            }
+                            return;
+                        }
                         let Some(target) = decode_direct_jump_target(pc, instruction)
                             .filter(|target| target_in_ranges(*target, &trampoline_ranges))
                         else {
@@ -2155,7 +2535,7 @@ impl UnicornMips {
                 )
                 .map_err(|err| {
                     Error::Backend(format!(
-                        "install fast-start trampoline origin hook 0x{origin:08x}: {err:?}"
+                        "install fast-start control-transfer hook 0x{site:08x}: {err:?}"
                     ))
                 })?;
             }
@@ -2205,7 +2585,7 @@ impl UnicornMips {
             uc.add_block_hook(1, 0, move |uc, address, size| {
                 let counter = block_trace_counter_hook.get().wrapping_add(1);
                 block_trace_counter_hook.set(counter);
-                if counter % UNICORN_BLOCK_TRACE_SAMPLE_INTERVAL != 0 {
+                if !fast_start_enabled && counter % UNICORN_BLOCK_TRACE_SAMPLE_INTERVAL != 0 {
                     return;
                 }
                 let mut last_blocks = last_blocks_hook.borrow_mut();
@@ -2249,7 +2629,9 @@ impl UnicornMips {
         let last_imports_for_wndproc_hook = Rc::clone(&last_imports);
         let last_code_for_wndproc_hook = Rc::clone(&last_code);
         let last_readiness_code_for_wndproc_hook = Rc::clone(&last_readiness_code);
-        let pending_wndproc_returns = Rc::new(RefCell::new(Vec::<PendingWndProcReturn>::new()));
+        let pending_wndproc_returns = Rc::new(RefCell::new(std::mem::take(
+            &mut self.pending_wndproc_returns,
+        )));
         let pending_wndproc_returns_hook = Rc::clone(&pending_wndproc_returns);
         let create_window_returns = Rc::new(RefCell::new(Vec::<CreateWindowReturn>::new()));
         let create_window_returns_hook = Rc::clone(&create_window_returns);
@@ -2258,6 +2640,8 @@ impl UnicornMips {
         let pending_guest_thread_returns =
             Rc::new(RefCell::new(Vec::<PendingGuestThreadReturn>::new()));
         let pending_guest_thread_returns_hook = Rc::clone(&pending_guest_thread_returns);
+        let pending_qsort_returns = Rc::new(RefCell::new(Vec::<PendingQsortReturn>::new()));
+        let pending_qsort_returns_hook = Rc::clone(&pending_qsort_returns);
         let blocked_guest_thread = Rc::new(RefCell::new(None::<BlockedGuestThread>));
         let blocked_guest_thread_hook = Rc::clone(&blocked_guest_thread);
         let blocked_wait_threads = Rc::new(RefCell::new(Vec::<BlockedWaitThread>::new()));
@@ -2289,8 +2673,9 @@ impl UnicornMips {
         let blocked_wait_threads_timeslice_hook = Rc::clone(&blocked_wait_threads);
         let blocked_guest_thread_timeslice_hook = Rc::clone(&blocked_guest_thread);
         let pending_wndproc_returns_timeslice_hook = Rc::clone(&pending_wndproc_returns);
+        let pending_qsort_returns_timeslice_hook = Rc::clone(&pending_qsort_returns);
         let trampoline_ranges_timeslice_hook = trampoline_ranges.clone();
-        uc.add_code_hook(1, 0, move |uc, address, _size| {
+        uc.add_block_hook(1, 0, move |uc, address, _size| {
             let counter = scheduler_timeslice_counter_hook.get().wrapping_add(1);
             scheduler_timeslice_counter_hook.set(counter);
             if counter % UNICORN_SCHEDULER_TIMESLICE_INTERVAL == 0 {
@@ -2304,6 +2689,7 @@ impl UnicornMips {
             let safe_to_attempt = !(pc >= IMPORT_TRAP_BASE
                 || target_in_ranges(pc, &trampoline_ranges_timeslice_hook)
                 || !pending_wndproc_returns_timeslice_hook.borrow().is_empty()
+                || !pending_qsort_returns_timeslice_hook.borrow().is_empty()
                 || is_control_transfer_target(previous_pc, pc)
                 || is_mips_delay_slot_pc(uc, previous_pc, pc));
             if !scheduler_timeslice_consume_if_safe(
@@ -2366,8 +2752,10 @@ impl UnicornMips {
         }
         let traps = self.import_traps.clone();
         let stack_top = self.stack_top.unwrap_or(0);
-        let mapped_kernel_memory = Rc::new(RefCell::new(KernelMemoryMappings::new()));
+        let mapped_kernel_memory =
+            Rc::new(RefCell::new(KernelMemoryMappings::new(&self.mapped_blobs)));
         let mapped_kernel_memory_hook = Rc::clone(&mapped_kernel_memory);
+        let mapped_blobs_ptr = &mut self.mapped_blobs as *mut Vec<MappedBlob>;
         uc.add_code_hook(
             u64::from(IMPORT_TRAP_BASE),
             u64::from(IMPORT_TRAP_BASE + IMPORT_TRAP_PAGE_SIZE - 1),
@@ -2586,6 +2974,12 @@ impl UnicornMips {
                     }
                     return;
                 }
+                if address == QSORT_RETURN_STUB_ADDR {
+                    if !handle_qsort_return_stub(uc, &pending_qsort_returns_hook) {
+                        let _ = uc.emu_stop();
+                    }
+                    return;
+                }
                 if address == GUEST_THREAD_RETURN_STUB_ADDR {
                     let exit_code = read_mips_reg(uc, RegisterMIPS::V0);
                     let active_thread_id = *current_thread_id_hook.borrow();
@@ -2673,84 +3067,91 @@ impl UnicornMips {
                     return;
                 }
                 if let Some(trap) = trap {
+                    let trace_import =
+                        should_trace_import_by_default(trap) || import_trace_all_enabled;
                     let a0 = read_mips_reg(uc, RegisterMIPS::A0);
                     let a1 = read_mips_reg(uc, RegisterMIPS::A1);
                     let a2 = read_mips_reg(uc, RegisterMIPS::A2);
                     let a3 = read_mips_reg(uc, RegisterMIPS::A3);
                     let sp = read_mips_reg(uc, RegisterMIPS::SP);
                     let ra = read_mips_reg(uc, RegisterMIPS::RA);
-                    let trace_name =
-                        trace_import_name(trap.module_kind, trap.ordinal, trap.name.as_deref());
-                    import_counts_hook
-                        .borrow_mut()
-                        .entry(UnicornImportCountKey {
-                            module: trap.module_name.clone(),
-                            ordinal: trap.ordinal,
-                            name: trace_name.clone(),
+                    let trace_name = trace_import
+                        .then(|| {
+                            trace_import_name(trap.module_kind, trap.ordinal, trap.name.as_deref())
                         })
-                        .or_default()
-                        .record(a0, a1, a2, a3);
-                    {
-                        let mut imports = last_imports_hook.borrow_mut();
-                        if imports.len() == UNICORN_TRACE_LIMIT {
-                            imports.remove(0);
-                        }
-                        let import = UnicornLastImport {
-                            pc: address,
-                            ra,
-                            module: trap.module_name.clone(),
-                            kind: trap.module_kind,
-                            ordinal: trap.ordinal,
-                            name: trace_name.clone(),
-                            a0,
-                            a1,
-                            a2,
-                            a3,
-                            sp,
-                            result: None,
-                            detail: None,
-                        };
-                        imports.push(import.clone());
-                        #[cfg(feature = "trace")]
+                        .flatten();
+                    if trace_import {
+                        import_counts_hook
+                            .borrow_mut()
+                            .entry(UnicornImportCountKey {
+                                module: trap.module_name.clone(),
+                                ordinal: trap.ordinal,
+                                name: trace_name.clone(),
+                            })
+                            .or_default()
+                            .record(a0, a1, a2, a3);
                         {
-                            if is_import_milestone(trap.module_kind, trap.ordinal) {
-                                let mut milestones = import_milestones_hook.borrow_mut();
-                                if milestones.len() == UNICORN_IMPORT_MILESTONE_LIMIT {
-                                    milestones.remove(0);
-                                }
-                                milestones.push(import.clone());
+                            let mut imports = last_imports_hook.borrow_mut();
+                            if imports.len() == UNICORN_TRACE_LIMIT {
+                                imports.remove(0);
                             }
-                            if is_presentation_import(trap.module_kind, trap.ordinal) {
-                                let mut presentation = presentation_imports_hook.borrow_mut();
-                                if presentation.len() == UNICORN_PRESENTATION_TRACE_LIMIT {
-                                    presentation.remove(0);
+                            let import = UnicornLastImport {
+                                pc: address,
+                                ra,
+                                module: trap.module_name.clone(),
+                                kind: trap.module_kind,
+                                ordinal: trap.ordinal,
+                                name: trace_name.clone(),
+                                a0,
+                                a1,
+                                a2,
+                                a3,
+                                sp,
+                                result: None,
+                                detail: None,
+                            };
+                            imports.push(import.clone());
+                            #[cfg(feature = "trace")]
+                            {
+                                if is_import_milestone(trap.module_kind, trap.ordinal) {
+                                    let mut milestones = import_milestones_hook.borrow_mut();
+                                    if milestones.len() == UNICORN_IMPORT_MILESTONE_LIMIT {
+                                        milestones.remove(0);
+                                    }
+                                    milestones.push(import.clone());
                                 }
-                                presentation.push(import.clone());
-                            }
-                            if is_window_import(trap.module_kind, trap.ordinal) {
-                                let mut windows = window_imports_hook.borrow_mut();
-                                if windows.len() == UNICORN_WINDOW_TRACE_LIMIT {
-                                    windows.remove(0);
+                                if is_presentation_import(trap.module_kind, trap.ordinal) {
+                                    let mut presentation = presentation_imports_hook.borrow_mut();
+                                    if presentation.len() == UNICORN_PRESENTATION_TRACE_LIMIT {
+                                        presentation.remove(0);
+                                    }
+                                    presentation.push(import.clone());
                                 }
-                                windows.push(import.clone());
+                                if is_window_import(trap.module_kind, trap.ordinal) {
+                                    let mut windows = window_imports_hook.borrow_mut();
+                                    if windows.len() == UNICORN_WINDOW_TRACE_LIMIT {
+                                        windows.remove(0);
+                                    }
+                                    windows.push(import.clone());
+                                }
                             }
                         }
+                        tracing::debug!(
+                            target: "ce.imports",
+                            pc = format_args!("0x{address:08x}"),
+                            ra = format_args!("0x{ra:08x}"),
+                            module = trap.module_name.as_str(),
+                            kind = ?trap.module_kind,
+                            ordinal = trap.ordinal,
+                            name = trace_name.as_deref().unwrap_or("<ordinal>"),
+                            a0 = format_args!("0x{a0:08x}"),
+                            a1 = format_args!("0x{a1:08x}"),
+                            a2 = format_args!("0x{a2:08x}"),
+                            a3 = format_args!("0x{a3:08x}"),
+                            sp = format_args!("0x{sp:08x}"),
+                            "import trap"
+                        );
                     }
-                    tracing::debug!(
-                        target: "ce.imports",
-                        pc = format_args!("0x{address:08x}"),
-                        ra = format_args!("0x{ra:08x}"),
-                        module = trap.module_name.as_str(),
-                        kind = ?trap.module_kind,
-                        ordinal = trap.ordinal,
-                        name = trace_name.as_deref().unwrap_or("<ordinal>"),
-                        a0 = format_args!("0x{a0:08x}"),
-                        a1 = format_args!("0x{a1:08x}"),
-                        a2 = format_args!("0x{a2:08x}"),
-                        a3 = format_args!("0x{a3:08x}"),
-                        sp = format_args!("0x{sp:08x}"),
-                        "import trap"
-                    );
                 }
                 let args = read_mips_import_args(uc);
                 #[cfg(feature = "trace")]
@@ -2982,6 +3383,8 @@ impl UnicornMips {
                         &running_guest_thread_hook,
                         &blocked_wait_threads_hook,
                         &pending_wndproc_returns_hook,
+                        &parked_child_processes_hook,
+                        &cross_process_send_yield_hook,
                     )
                 }) {
                     return;
@@ -3087,6 +3490,17 @@ impl UnicornMips {
                 }) {
                     return;
                 }
+                if trap.is_some_and(|trap| {
+                    try_enter_qsort_callout(
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        &pending_qsort_returns_hook,
+                    )
+                }) {
+                    return;
+                }
                 let Some(import_return) = traps.dispatch_trap_registers_with_framebuffer(
                     unsafe { &mut *kernel_ptr },
                     &mut memory,
@@ -3099,11 +3513,17 @@ impl UnicornMips {
                     return;
                 };
                 let result = import_return.v0;
-                let _ = map_kernel_memory_allocations(
+                if map_kernel_memory_allocations(
                     memory.uc,
                     unsafe { &*kernel_ptr },
                     &mut mapped_kernel_memory_hook.borrow_mut(),
-                );
+                    unsafe { &mut *mapped_blobs_ptr },
+                )
+                .is_err()
+                {
+                    let _ = memory.uc.emu_stop();
+                    return;
+                }
                 if trap.is_some_and(|trap| {
                     trap.module_kind == crate::emulator::imports::ImportModuleKind::Coredll
                         && trap.ordinal == Some(crate::ce::coredll_ordinals::ORD_CREATE_PROCESS_W)
@@ -3115,94 +3535,97 @@ impl UnicornMips {
                         unsafe { &mut *framebuffer_ptr },
                         limits,
                         &process_dll_search_dirs,
+                        &parked_child_processes_hook,
                     );
                     let _ = sync_file_mapping_views_to_unicorn(memory.uc, unsafe { &*kernel_ptr });
                 }
                 if let Some(trap) = trap {
-                    let name =
-                        trace_import_name(trap.module_kind, trap.ordinal, trap.name.as_deref());
-                    let detail = import_detail_after_return(
-                        unsafe { &*kernel_ptr },
-                        memory.uc,
-                        trap.module_kind,
-                        trap.ordinal,
-                        &args,
-                        result,
-                        active_thread_id,
-                    );
-                    if let Some(import) = last_imports_hook
-                        .borrow_mut()
-                        .iter_mut()
-                        .rev()
-                        .find(|import| import.pc == address && import.result.is_none())
-                    {
-                        import.name = name.clone();
-                        import.result = Some(result);
-                        import.detail = detail.clone();
-                    }
-                    #[cfg(feature = "trace")]
-                    {
-                        if is_import_milestone(trap.module_kind, trap.ordinal)
-                            && let Some(import) = import_milestones_hook
-                                .borrow_mut()
-                                .iter_mut()
-                                .rev()
-                                .find(|import| import.pc == address && import.result.is_none())
-                        {
-                            import.name = name.clone();
-                            import.result = Some(result);
-                            import.detail = detail.clone();
-                        }
-                    }
-                    #[cfg(feature = "trace")]
-                    {
-                        if is_presentation_import(trap.module_kind, trap.ordinal)
-                            && let Some(import) = presentation_imports_hook
-                                .borrow_mut()
-                                .iter_mut()
-                                .rev()
-                                .find(|import| import.pc == address && import.result.is_none())
-                        {
-                            import.name = name.clone();
-                            import.result = Some(result);
-                            import.detail = detail.clone();
-                        }
-                        if is_window_import(trap.module_kind, trap.ordinal)
-                            && let Some(import) = window_imports_hook
-                                .borrow_mut()
-                                .iter_mut()
-                                .rev()
-                                .find(|import| import.pc == address && import.result.is_none())
-                        {
-                            import.name = name.clone();
-                            import.result = Some(result);
-                            import.detail = detail.clone();
-                        }
-                    }
-                    tracing::debug!(
-                        target: "ce.imports",
-                        pc = format_args!("0x{address:08x}"),
-                        module = trap.module_name.as_str(),
-                        kind = ?trap.module_kind,
-                        ordinal = trap.ordinal,
-                        name = trace_import_name(
+                    let trace_import =
+                        should_trace_import_by_default(trap) || import_trace_all_enabled;
+                    if trace_import {
+                        let name =
+                            trace_import_name(trap.module_kind, trap.ordinal, trap.name.as_deref());
+                        let detail = import_detail_after_return(
+                            unsafe { &*kernel_ptr },
+                            memory.uc,
                             trap.module_kind,
                             trap.ordinal,
-                            trap.name.as_deref(),
-                        )
-                        .as_deref()
-                        .unwrap_or("<ordinal>"),
-                        result = format_args!("0x{result:08x}"),
-                        "import trap return"
-                    );
-                    record_message_import(
-                        memory.uc,
-                        trap.module_kind,
-                        trap.ordinal,
-                        &args,
-                        Some(result),
-                        &last_messages_hook,
-                    );
+                            &args,
+                            result,
+                            active_thread_id,
+                        );
+                        if let Some(import) = last_imports_hook
+                            .borrow_mut()
+                            .iter_mut()
+                            .rev()
+                            .find(|import| import.pc == address && import.result.is_none())
+                        {
+                            import.name = name.clone();
+                            import.result = Some(result);
+                            import.detail = detail.clone();
+                        }
+                        #[cfg(feature = "trace")]
+                        {
+                            if is_import_milestone(trap.module_kind, trap.ordinal)
+                                && let Some(import) =
+                                    import_milestones_hook.borrow_mut().iter_mut().rev().find(
+                                        |import| import.pc == address && import.result.is_none(),
+                                    )
+                            {
+                                import.name = name.clone();
+                                import.result = Some(result);
+                                import.detail = detail.clone();
+                            }
+                        }
+                        #[cfg(feature = "trace")]
+                        {
+                            if is_presentation_import(trap.module_kind, trap.ordinal)
+                                && let Some(import) = presentation_imports_hook
+                                    .borrow_mut()
+                                    .iter_mut()
+                                    .rev()
+                                    .find(|import| import.pc == address && import.result.is_none())
+                            {
+                                import.name = name.clone();
+                                import.result = Some(result);
+                                import.detail = detail.clone();
+                            }
+                            if is_window_import(trap.module_kind, trap.ordinal)
+                                && let Some(import) =
+                                    window_imports_hook.borrow_mut().iter_mut().rev().find(
+                                        |import| import.pc == address && import.result.is_none(),
+                                    )
+                            {
+                                import.name = name.clone();
+                                import.result = Some(result);
+                                import.detail = detail.clone();
+                            }
+                        }
+                        tracing::debug!(
+                            target: "ce.imports",
+                            pc = format_args!("0x{address:08x}"),
+                            module = trap.module_name.as_str(),
+                            kind = ?trap.module_kind,
+                            ordinal = trap.ordinal,
+                            name = trace_import_name(
+                                trap.module_kind,
+                                trap.ordinal,
+                                trap.name.as_deref(),
+                            )
+                            .as_deref()
+                            .unwrap_or("<ordinal>"),
+                            result = format_args!("0x{result:08x}"),
+                            "import trap return"
+                        );
+                        record_message_import(
+                            memory.uc,
+                            trap.module_kind,
+                            trap.ordinal,
+                            &args,
+                            Some(result),
+                            &last_messages_hook,
+                        );
+                    }
                 }
                 if trap.is_some_and(|trap| {
                     try_enter_create_window_create_callout(
@@ -3213,6 +3636,7 @@ impl UnicornMips {
                         &args,
                         result,
                         &mapped_kernel_memory_hook,
+                        unsafe { &mut *mapped_blobs_ptr },
                         &create_window_returns_hook,
                     )
                 }) {
@@ -3421,12 +3845,10 @@ impl UnicornMips {
         })
         .map_err(|err| Error::Backend(format!("install invalid-instruction probe: {err:?}")))?;
 
-        let entry = self
-            .entry
-            .ok_or_else(|| Error::Backend("no PE entry point has been loaded".to_owned()))?;
-        let result = uc.emu_start(u64::from(entry), 0, 0, limits.instruction_limit);
+        let result = uc.emu_start(u64::from(start_pc), 0, 0, limits.instruction_limit);
         let snapshot_pc = read_mips_reg(&uc, RegisterMIPS::PC);
         let snapshot_ra = read_mips_reg(&uc, RegisterMIPS::RA);
+        let snapshot_context = capture_saved_cpu_context(&uc);
         let pc_region = self.address_region_label(snapshot_pc, kernel);
         let ra_region = self.address_region_label(snapshot_ra, kernel);
         let thread_state = describe_guest_thread_state(
@@ -3499,14 +3921,23 @@ impl UnicornMips {
                 .map(|allocation| u64::from(allocation.size))
                 .sum(),
             blocked_get_message.borrow().clone(),
+            cross_process_send_yield.borrow().clone(),
             Some(thread_state),
             *thread_exit_reached.borrow(),
         );
         if snapshot.host_wall_clock_stop.is_some() {
             self.last_wall_clock_debug = Some(snapshot.clone());
         }
+        self.saved_context = Some(snapshot_context);
+        if let Err(err) = sync_mapped_blobs_from_unicorn(&uc, &mut self.mapped_blobs) {
+            self.last_debug = Some(snapshot);
+            self.persist_run_state(&parked_child_processes, &pending_wndproc_returns);
+            let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
+            return Err(err);
+        }
         self.last_debug = Some(snapshot);
         if let Some(err) = framebuffer_tick_error.borrow_mut().take() {
+            self.persist_run_state(&parked_child_processes, &pending_wndproc_returns);
             let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
             return Err(err);
         }
@@ -3526,6 +3957,7 @@ impl UnicornMips {
                 if let Some(snapshot) = self.last_debug.as_mut() {
                     snapshot.encoded_kernel_exit = Some(exit);
                 }
+                self.persist_run_state(&parked_child_processes, &pending_wndproc_returns);
                 let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
                 return Ok(());
             }
@@ -3534,6 +3966,7 @@ impl UnicornMips {
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_else(|| "register snapshot unavailable".to_owned());
+            self.persist_run_state(&parked_child_processes, &pending_wndproc_returns);
             return Err(Error::Backend(format!(
                 "Unicorn run failed: {err:?}; {snapshot}"
             )));
@@ -3548,10 +3981,12 @@ impl UnicornMips {
                 .as_ref()
                 .map(ToString::to_string)
                 .unwrap_or_else(|| "register snapshot unavailable".to_owned());
+            self.persist_run_state(&parked_child_processes, &pending_wndproc_returns);
             return Err(Error::Backend(format!(
                 "Unicorn run stopped on guest CPU exception; {snapshot}"
             )));
         }
+        self.persist_run_state(&parked_child_processes, &pending_wndproc_returns);
         let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
         Ok(())
     }
@@ -3604,10 +4039,143 @@ fn ranges_overlap(lhs_base: u32, lhs_size: u32, rhs_base: u32, rhs_size: u32) ->
     lhs_base < rhs_end && rhs_base < lhs_end
 }
 
+fn range_contains(outer_base: u32, outer_size: u32, inner_base: u32, inner_size: u32) -> bool {
+    let outer_end = outer_base.saturating_add(outer_size);
+    let inner_end = inner_base.saturating_add(inner_size);
+    outer_base <= inner_base && inner_end <= outer_end
+}
+
 fn range_overlaps_any(base: u32, size: u32, ranges: &[(u32, u32)]) -> bool {
     ranges
         .iter()
         .any(|(other_base, other_size)| ranges_overlap(base, size, *other_base, *other_size))
+}
+
+fn ensure_mapped_ram_blob(
+    mapped_blobs: &mut Vec<MappedBlob>,
+    name: &str,
+    base: u32,
+    size: u32,
+) -> Result<()> {
+    if size == 0 {
+        return Ok(());
+    }
+    let blob_name = format!("ram:{name}");
+    if mapped_blobs.iter().any(|blob| {
+        blob.name == blob_name
+            && u32::try_from(blob.bytes.len())
+                .ok()
+                .is_some_and(|blob_size| range_contains(blob.base, blob_size, base, size))
+    }) {
+        return Ok(());
+    }
+    if mapped_blobs.iter().any(|blob| {
+        blob.name.starts_with("ram:")
+            && u32::try_from(blob.bytes.len())
+                .ok()
+                .is_some_and(|blob_size| ranges_overlap(blob.base, blob_size, base, size))
+    }) {
+        return Err(Error::InvalidArgument(format!(
+            "ram blob {blob_name} overlaps existing mapped RAM at 0x{base:08x}+0x{size:x}"
+        )));
+    }
+    let size = usize::try_from(size)
+        .map_err(|_| Error::InvalidArgument(format!("ram blob {blob_name} is too large")))?;
+    mapped_blobs.push(MappedBlob {
+        name: blob_name,
+        base,
+        bytes: vec![0; size],
+    });
+    Ok(())
+}
+
+#[cfg(feature = "unicorn")]
+fn ensure_mapped_ram_blobs_for_pages(
+    mapped_blobs: &mut Vec<MappedBlob>,
+    name: &str,
+    pages: &[u32],
+) -> Result<()> {
+    if pages.is_empty() {
+        return Ok(());
+    }
+    let mut pages = pages.to_vec();
+    pages.sort_unstable();
+    pages.dedup();
+
+    let mut start = pages[0];
+    let mut prev = start;
+    for page in pages.into_iter().skip(1) {
+        if page == prev.saturating_add(0x1000) {
+            prev = page;
+            continue;
+        }
+        let end = prev
+            .checked_add(0x1000)
+            .ok_or_else(|| Error::InvalidArgument("ram blob page range overflow".to_owned()))?;
+        ensure_mapped_ram_blob(mapped_blobs, name, start, end - start)?;
+        start = page;
+        prev = page;
+    }
+    let end = prev
+        .checked_add(0x1000)
+        .ok_or_else(|| Error::InvalidArgument("ram blob page range overflow".to_owned()))?;
+    ensure_mapped_ram_blob(mapped_blobs, name, start, end - start)
+}
+
+#[cfg(feature = "unicorn")]
+fn map_persisted_ram_blob_pages<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    mapped_ranges: &mut Vec<(u32, u32)>,
+    blob: &MappedBlob,
+) -> Result<()> {
+    if blob.name != HEAP_SPILLOVER_BLOB_NAME || blob.bytes.is_empty() {
+        return Ok(());
+    }
+    let size = u32::try_from(blob.bytes.len()).map_err(|_| {
+        Error::InvalidArgument(format!(
+            "persisted RAM blob {} at 0x{:08x} is too large",
+            blob.name, blob.base
+        ))
+    })?;
+    let first_page = blob.base & !0xfff;
+    let page_end = blob
+        .base
+        .checked_add(size)
+        .and_then(|end| end.checked_add(0xfff))
+        .map(|end| end & !0xfff)
+        .ok_or_else(|| {
+            Error::InvalidArgument(format!(
+                "persisted RAM blob {} at 0x{:08x} overflows",
+                blob.name, blob.base
+            ))
+        })?;
+    let mut page_base = first_page;
+    while page_base < page_end {
+        if mapped_ranges.iter().any(|(mapped_base, mapped_size)| {
+            page_base >= *mapped_base && page_base < mapped_base.saturating_add(*mapped_size)
+        }) {
+            page_base = page_base.checked_add(0x1000).ok_or_else(|| {
+                Error::InvalidArgument("persisted RAM blob page overflow".to_owned())
+            })?;
+            continue;
+        }
+        uc.mem_map(
+            u64::from(page_base),
+            0x1000,
+            unicorn_perms(MemoryPerms::READ | MemoryPerms::WRITE),
+        )
+        .map_err(|err| {
+            Error::Backend(format!(
+                "map persisted RAM blob {} page 0x{page_base:08x}: {err:?}",
+                blob.name
+            ))
+        })?;
+        mapped_ranges.push((page_base, 0x1000));
+        page_base = page_base
+            .checked_add(0x1000)
+            .ok_or_else(|| Error::InvalidArgument("persisted RAM blob page overflow".to_owned()))?;
+    }
+    Ok(())
 }
 
 fn choose_dll_load_base(
@@ -4081,6 +4649,36 @@ fn trampoline_origin_by_stub(jumps: &[MipsTrampolineJump]) -> HashMap<u32, u32> 
         .iter()
         .map(|jump| (jump.stub, jump.origin))
         .collect::<HashMap<_, _>>()
+}
+
+#[cfg(feature = "unicorn")]
+fn fast_start_indirect_transfer_sites(blobs: &[MappedBlob]) -> Vec<u32> {
+    let mut sites = Vec::new();
+    for blob in blobs {
+        if !(blob.name.starts_with("image:") || blob.name.starts_with("dll:")) {
+            continue;
+        }
+        for (index, bytes) in blob.bytes.chunks_exact(4).enumerate() {
+            let instruction = u32::from_le_bytes(bytes.try_into().unwrap());
+            if decode_jr_register(instruction).is_none()
+                && decode_jalr_register(instruction).is_none()
+            {
+                continue;
+            }
+            let Some(offset) = u32::try_from(index)
+                .ok()
+                .and_then(|index| index.checked_mul(4))
+            else {
+                continue;
+            };
+            if let Some(address) = blob.base.checked_add(offset) {
+                sites.push(address);
+            }
+        }
+    }
+    sites.sort_unstable();
+    sites.dedup();
+    sites
 }
 
 #[cfg(feature = "unicorn")]
@@ -4603,11 +5201,25 @@ struct KernelMemoryMappings {
 
 #[cfg(feature = "unicorn")]
 impl KernelMemoryMappings {
-    fn new() -> Self {
+    fn new(mapped_blobs: &[MappedBlob]) -> Self {
+        let mut ranges = vec![(GUEST_HEAP_ARENA_BASE, GUEST_HEAP_ARENA_SIZE)];
+        let mut heap_spill_cursor = GUEST_HEAP_ARENA_BASE + GUEST_HEAP_ARENA_SIZE;
+        for blob in mapped_blobs
+            .iter()
+            .filter(|blob| blob.name == HEAP_SPILLOVER_BLOB_NAME && !blob.bytes.is_empty())
+        {
+            let Ok(size) = u32::try_from(blob.bytes.len()) else {
+                continue;
+            };
+            let base = blob.base & !0xfff;
+            let size = size.saturating_add(0xfff) & !0xfff;
+            ranges.push((base, size));
+            heap_spill_cursor = heap_spill_cursor.max(base.saturating_add(size));
+        }
         Self {
-            ranges: vec![(GUEST_HEAP_ARENA_BASE, GUEST_HEAP_ARENA_SIZE)],
+            ranges,
             virtual_pages: HashSet::new(),
-            heap_spill_cursor: GUEST_HEAP_ARENA_BASE + GUEST_HEAP_ARENA_SIZE,
+            heap_spill_cursor,
             heap_generation: u64::MAX,
             virtual_generation: u64::MAX,
         }
@@ -4619,9 +5231,10 @@ fn map_kernel_memory_allocations<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     kernel: &CeKernel,
     mapped: &mut KernelMemoryMappings,
+    mapped_blobs: &mut Vec<MappedBlob>,
 ) -> Result<()> {
     if mapped.heap_generation != kernel.memory.heap_generation() {
-        map_heap_spillover(uc, kernel, mapped)?;
+        map_heap_spillover(uc, kernel, mapped, mapped_blobs)?;
         mapped.heap_generation = kernel.memory.heap_generation();
     }
 
@@ -4658,6 +5271,7 @@ fn map_heap_spillover<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     kernel: &CeKernel,
     mapped: &mut KernelMemoryMappings,
+    mapped_blobs: &mut Vec<MappedBlob>,
 ) -> Result<()> {
     let high_water = kernel.memory.heap_high_water_mark();
     if high_water <= mapped.heap_spill_cursor {
@@ -4671,7 +5285,7 @@ fn map_heap_spillover<D>(
     let size = mapped_end
         .checked_sub(base)
         .ok_or_else(|| Error::InvalidArgument("heap spillover range underflow".to_owned()))?;
-    map_guest_aligned_range(
+    let new_pages = map_guest_range(
         uc,
         mapped,
         base,
@@ -4679,39 +5293,11 @@ fn map_heap_spillover<D>(
         MemoryPerms::READ | MemoryPerms::WRITE,
         "heap spillover",
     )?;
+    ensure_mapped_ram_blobs_for_pages(mapped_blobs, "heap-spillover", &new_pages)?;
     mapped.heap_spill_cursor = mapped_end
         .checked_add(0xfff)
         .map(|end| end & !0xfff)
         .ok_or_else(|| Error::InvalidArgument("heap spillover cursor overflow".to_owned()))?;
-    Ok(())
-}
-
-#[cfg(feature = "unicorn")]
-fn map_guest_aligned_range<D>(
-    uc: &mut unicorn_engine::Unicorn<'_, D>,
-    mapped: &mut KernelMemoryMappings,
-    base: u32,
-    size: u32,
-    perms: MemoryPerms,
-    label: &str,
-) -> Result<()> {
-    if size == 0 {
-        return Ok(());
-    }
-    if base & 0xfff != 0 || size & 0xfff != 0 {
-        return Err(Error::InvalidArgument(format!(
-            "{label} range must be page aligned"
-        )));
-    }
-    if mapped.ranges.iter().any(|(mapped_base, mapped_size)| {
-        base >= *mapped_base
-            && base.saturating_add(size) <= mapped_base.saturating_add(*mapped_size)
-    }) {
-        return Ok(());
-    }
-    uc.mem_map(u64::from(base), u64::from(size), unicorn_perms(perms))
-        .map_err(|err| Error::Backend(format!("map {label} 0x{base:08x}+0x{size:x}: {err:?}")))?;
-    mapped.ranges.push((base, size));
     Ok(())
 }
 
@@ -4834,12 +5420,35 @@ fn sync_file_mapping_views_to_unicorn<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn sync_mapped_blobs_from_unicorn<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    blobs: &mut [MappedBlob],
+) -> Result<()> {
+    for blob in blobs {
+        if blob.bytes.is_empty() {
+            continue;
+        }
+        uc.mem_read(u64::from(blob.base), &mut blob.bytes)
+            .map_err(|err| {
+                Error::Backend(format!(
+                    "sync mapped blob {} at 0x{:08x}+0x{:x}: {err:?}",
+                    blob.name,
+                    blob.base,
+                    blob.bytes.len()
+                ))
+            })?;
+    }
+    Ok(())
+}
+
+#[cfg(feature = "unicorn")]
 fn run_pending_process_launches<D>(
     parent_uc: &mut unicorn_engine::Unicorn<'_, D>,
     kernel: &mut CeKernel,
     framebuffer: &mut dyn Framebuffer,
     limits: UnicornRunLimits,
     dll_search_dirs: &[std::path::PathBuf],
+    parked_child_processes: &std::rc::Rc<std::cell::RefCell<VecDeque<ParkedProcess>>>,
 ) -> Result<()> {
     let launches = kernel.take_pending_process_launches();
     if launches.is_empty() {
@@ -4886,28 +5495,30 @@ fn run_pending_process_launches<D>(
         let child_module_path = kernel
             .host_path_to_guest_mount(&path)
             .unwrap_or_else(|| path.to_string_lossy().replace('/', "\\"));
-        kernel.set_process_module_path(child_module_path);
+        kernel.set_process_module_path(child_module_path.clone());
         kernel.set_process_module_host_path(path.clone());
         kernel.set_process_command_line(launch.command_line.clone().unwrap_or_default());
         kernel.set_current_process_id(launch.process_id);
         kernel.reset_current_process_exit_state();
 
-        let child_result = (|| -> Result<u32> {
+        let child_result = (|| -> Result<(ChildProcessRunOutcome, Option<UnicornMips>)> {
             let mut child = UnicornMips::new()?;
             child.set_dll_search_dirs(dll_search_dirs.to_vec());
             child.set_initial_thread_id(launch.thread_id);
             let dll_images = load_child_import_dlls(&image, dll_search_dirs)?;
             child.load_pe_image_with_dlls(&image, &dll_images)?;
             child.run_until_import_trap_with_framebuffer_limits(kernel, framebuffer, limits)?;
-            Ok(child
+            let outcome = child
                 .last_debug_snapshot()
                 .and_then(|snapshot| {
                     snapshot
                         .encoded_kernel_exit
                         .as_ref()
-                        .map(|exit| exit.exit_code)
+                        .map(|exit| ChildProcessRunOutcome::Exited(exit.exit_code))
                 })
-                .unwrap_or(0))
+                .unwrap_or(ChildProcessRunOutcome::Parked);
+            let parked_child = (outcome == ChildProcessRunOutcome::Parked).then_some(child);
+            Ok((outcome, parked_child))
         })();
 
         kernel.set_process_module_base(saved_base);
@@ -4918,8 +5529,8 @@ fn run_pending_process_launches<D>(
         kernel.set_process_command_line(saved_command_line);
         kernel.set_current_process_state(saved_process_state);
 
-        let exit_code = match child_result {
-            Ok(exit_code) => exit_code,
+        let (outcome, child) = match child_result {
+            Ok((outcome, child)) => (outcome, child),
             Err(err) => {
                 kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
                     op: "CreateProcessChildError",
@@ -4936,21 +5547,66 @@ fn run_pending_process_launches<D>(
                 return Err(err);
             }
         };
-        kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
-            op: "CreateProcessChildReturned",
-            application: launch.application.clone(),
-            command_line: launch.command_line.clone(),
-            path: Some(path.display().to_string()),
-            process_handle: Some(launch.process_handle),
-            thread_handle: Some(launch.thread_handle),
-            process_id: Some(launch.process_id),
-            thread_id: Some(launch.thread_id),
-            result: Some(exit_code),
-            error: None,
-        });
-        kernel.mark_process_launch_exited(&launch, exit_code);
+        match outcome {
+            ChildProcessRunOutcome::Exited(exit_code) => {
+                kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
+                    op: "CreateProcessChildReturned",
+                    application: launch.application.clone(),
+                    command_line: launch.command_line.clone(),
+                    path: Some(path.display().to_string()),
+                    process_handle: Some(launch.process_handle),
+                    thread_handle: Some(launch.thread_handle),
+                    process_id: Some(launch.process_id),
+                    thread_id: Some(launch.thread_id),
+                    result: Some(exit_code),
+                    error: None,
+                });
+                kernel.mark_process_launch_exited(&launch, exit_code);
+            }
+            ChildProcessRunOutcome::Parked => {
+                if let Some(child) = child {
+                    parked_child_processes
+                        .borrow_mut()
+                        .push_back(ParkedProcess {
+                            application: launch.application.clone(),
+                            process_handle: Some(launch.process_handle),
+                            thread_handle: Some(launch.thread_handle),
+                            process_state: crate::ce::kernel::CurrentProcessState {
+                                process_id: launch.process_id,
+                                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                                signaled: false,
+                            },
+                            thread_id: launch.thread_id,
+                            cpu: Box::new(child),
+                            module_base: image.image_base(),
+                            module_path: child_module_path.clone(),
+                            module_host_path: path.clone(),
+                            command_line: launch.command_line.clone().unwrap_or_default(),
+                        });
+                }
+                kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
+                    op: "CreateProcessChildParked",
+                    application: launch.application.clone(),
+                    command_line: launch.command_line.clone(),
+                    path: Some(path.display().to_string()),
+                    process_handle: Some(launch.process_handle),
+                    thread_handle: Some(launch.thread_handle),
+                    process_id: Some(launch.process_id),
+                    thread_id: Some(launch.thread_id),
+                    result: Some(crate::ce::kernel::STILL_ACTIVE),
+                    error: None,
+                });
+            }
+        }
     }
     Ok(())
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChildProcessRunOutcome {
+    Exited(u32),
+    Parked,
 }
 
 #[cfg(feature = "unicorn")]
@@ -5167,28 +5823,60 @@ fn map_guest_range<D>(
         .and_then(|end| end.checked_add(0xfff))
         .map(|end| end & !0xfff)
         .ok_or_else(|| Error::InvalidArgument(format!("{label} range overflow")))?;
+    let (spans, newly_mapped) = unmapped_guest_spans(mapped, first_page, page_end, label)?;
+    for (span_base, span_size) in spans {
+        uc.mem_map(
+            u64::from(span_base),
+            u64::from(span_size),
+            unicorn_perms(perms),
+        )
+        .map_err(|err| {
+            Error::Backend(format!(
+                "map {label} span 0x{span_base:08x}+0x{span_size:x}: {err:?}"
+            ))
+        })?;
+        mapped.ranges.push((span_base, span_size));
+    }
+    Ok(newly_mapped)
+}
+
+#[cfg(feature = "unicorn")]
+fn unmapped_guest_spans(
+    mapped: &KernelMemoryMappings,
+    first_page: u32,
+    page_end: u32,
+    label: &str,
+) -> Result<(Vec<(u32, u32)>, Vec<u32>)> {
     let mut page_base = first_page;
+    let mut spans = Vec::new();
     let mut newly_mapped = Vec::new();
     while page_base < page_end {
-        if mapped.ranges.iter().any(|(mapped_base, mapped_size)| {
-            page_base >= *mapped_base && page_base < mapped_base.saturating_add(*mapped_size)
-        }) {
+        if is_guest_page_mapped(mapped, page_base) {
             page_base = page_base
                 .checked_add(0x1000)
                 .ok_or_else(|| Error::InvalidArgument(format!("{label} page overflow")))?;
             continue;
         }
-        uc.mem_map(u64::from(page_base), 0x1000, unicorn_perms(perms))
-            .map_err(|err| {
-                Error::Backend(format!("map {label} page 0x{page_base:08x}: {err:?}"))
-            })?;
-        mapped.ranges.push((page_base, 0x1000));
-        newly_mapped.push(page_base);
-        page_base = page_base
-            .checked_add(0x1000)
-            .ok_or_else(|| Error::InvalidArgument(format!("{label} page overflow")))?;
+        let span_base = page_base;
+        while page_base < page_end && !is_guest_page_mapped(mapped, page_base) {
+            newly_mapped.push(page_base);
+            page_base = page_base
+                .checked_add(0x1000)
+                .ok_or_else(|| Error::InvalidArgument(format!("{label} page overflow")))?;
+        }
+        let span_size = page_base
+            .checked_sub(span_base)
+            .ok_or_else(|| Error::InvalidArgument(format!("{label} span underflow")))?;
+        spans.push((span_base, span_size));
     }
-    Ok(newly_mapped)
+    Ok((spans, newly_mapped))
+}
+
+#[cfg(feature = "unicorn")]
+fn is_guest_page_mapped(mapped: &KernelMemoryMappings, page_base: u32) -> bool {
+    mapped.ranges.iter().any(|(mapped_base, mapped_size)| {
+        page_base >= *mapped_base && page_base < mapped_base.saturating_add(*mapped_size)
+    })
 }
 
 #[cfg(feature = "unicorn")]
@@ -11995,6 +12683,158 @@ mod guest_thread_stack_tests {
 
         assert!(eighth_stack >= process_stack_base + GUEST_THREAD_STACK_SLOT_SIZE);
     }
+
+    #[test]
+    fn heap_spillover_pages_are_tracked_as_restorable_ram_blobs() -> Result<()> {
+        let mut blobs = Vec::new();
+        ensure_mapped_ram_blobs_for_pages(
+            &mut blobs,
+            "heap-spillover",
+            &[0x3100_0000, 0x3100_1000, 0x3100_3000],
+        )?;
+
+        assert_eq!(blobs.len(), 2);
+        assert_eq!(blobs[0].name, HEAP_SPILLOVER_BLOB_NAME);
+        assert_eq!(blobs[0].base, 0x3100_0000);
+        assert_eq!(blobs[0].bytes.len(), 0x2000);
+        assert_eq!(blobs[1].base, 0x3100_3000);
+        assert_eq!(blobs[1].bytes.len(), 0x1000);
+
+        ensure_mapped_ram_blobs_for_pages(&mut blobs, "heap-spillover", &[0x3100_0000])?;
+        assert_eq!(blobs.len(), 2);
+
+        let mapped = KernelMemoryMappings::new(&blobs);
+        assert!(mapped.ranges.contains(&(0x3100_0000, 0x2000)));
+        assert!(mapped.ranges.contains(&(0x3100_3000, 0x1000)));
+        assert_eq!(mapped.heap_spill_cursor, 0x3100_4000);
+
+        Ok(())
+    }
+
+    #[test]
+    fn unmapped_guest_spans_group_contiguous_pages() -> Result<()> {
+        let mut mapped = KernelMemoryMappings::new(&[]);
+        let (spans, pages) =
+            unmapped_guest_spans(&mapped, 0x3100_0000, 0x3110_0000, "heap spillover")?;
+        assert_eq!(spans, vec![(0x3100_0000, 0x0010_0000)]);
+        assert_eq!(pages.len(), 0x100);
+        assert_eq!(pages[0], 0x3100_0000);
+        assert_eq!(pages[0xff], 0x310f_f000);
+
+        mapped.ranges.push((0x3100_2000, 0x1000));
+        let (spans, pages) =
+            unmapped_guest_spans(&mapped, 0x3100_0000, 0x3100_5000, "heap spillover")?;
+        assert_eq!(spans, vec![(0x3100_0000, 0x2000), (0x3100_3000, 0x2000)]);
+        assert_eq!(
+            pages,
+            vec![0x3100_0000, 0x3100_1000, 0x3100_3000, 0x3100_4000]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn switch_to_parked_child_restores_process_identity() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let mut kernel = CeKernel::boot(config);
+        let mut parent = UnicornMips::new()?;
+        let child = UnicornMips::new()?;
+        let launch = kernel.queue_process_launch(
+            Some("\\SDMMC Disk\\child.exe".to_owned()),
+            Some("child args".to_owned()),
+        );
+        let _ = kernel.take_pending_process_launches();
+
+        parent.parked_child_processes.push_back(ParkedProcess {
+            application: launch.application.clone(),
+            process_handle: Some(launch.process_handle),
+            thread_handle: Some(launch.thread_handle),
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: launch.process_id,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: launch.thread_id,
+            cpu: Box::new(child),
+            module_base: 0x0040_0000,
+            module_path: "\\SDMMC Disk\\child.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(r"D:\INAVI_Emulator\INAVI\child.exe"),
+            command_line: "child args".to_owned(),
+        });
+
+        assert!(parent.has_parked_child_processes());
+        assert!(parent.switch_to_next_parked_child_process(&mut kernel));
+        assert!(!parent.has_parked_child_processes());
+        assert_eq!(kernel.current_process_id(), launch.process_id);
+        assert_eq!(kernel.process_module_base(), 0x0040_0000);
+        assert_eq!(kernel.process_module_path(), "\\SDMMC Disk\\child.exe");
+        assert_eq!(kernel.process_command_line(), "child args");
+        assert_eq!(
+            kernel.process_exit_code_for_handle(launch.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn rotate_to_parked_process_requeues_current_process() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let mut kernel = CeKernel::boot(config);
+        let mut parent = UnicornMips::new()?;
+        parent.set_initial_thread_id(1);
+        kernel.set_process_module_base(0x0010_0000);
+        kernel.set_process_module_path("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned());
+        kernel.set_process_module_host_path(std::path::PathBuf::from(
+            r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe",
+        ));
+        kernel.set_process_command_line("parent args".to_owned());
+
+        let mut child = UnicornMips::new()?;
+        child.set_initial_thread_id(3);
+        let launch = kernel.queue_process_launch(
+            Some("\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned()),
+            Some("child args".to_owned()),
+        );
+        let _ = kernel.take_pending_process_launches();
+        parent.parked_child_processes.push_back(ParkedProcess {
+            application: launch.application.clone(),
+            process_handle: Some(launch.process_handle),
+            thread_handle: Some(launch.thread_handle),
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: launch.process_id,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: launch.thread_id,
+            cpu: Box::new(child),
+            module_base: 0x0040_0000,
+            module_path: "\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(
+                r"D:\INAVI_Emulator\INAVI\INavi\happyway_win.exe",
+            ),
+            command_line: "child args".to_owned(),
+        });
+
+        assert!(parent.rotate_to_next_parked_process(&mut kernel));
+        assert!(parent.has_parked_child_processes());
+        assert_eq!(kernel.current_process_id(), launch.process_id);
+        assert_eq!(
+            kernel.process_module_path(),
+            "\\SDMMC Disk\\INavi\\happyway_win.exe"
+        );
+
+        assert!(parent.rotate_to_next_parked_process(&mut kernel));
+        assert_eq!(kernel.current_process_id(), 1);
+        assert_eq!(
+            kernel.process_module_path(),
+            "\\SDMMC Disk\\INavi\\iNavi.exe"
+        );
+        assert_eq!(kernel.process_module_base(), 0x0010_0000);
+        assert_eq!(kernel.process_command_line(), "parent args");
+
+        Ok(())
+    }
 }
 
 #[cfg(feature = "unicorn")]
@@ -12007,6 +12847,14 @@ fn capture_mips_gprs<D>(uc: &unicorn_engine::Unicorn<'_, D>) -> MipsGuestContext
         regs,
         hi: uc.reg_read(RegisterMIPS::HI).unwrap_or(0) as u32,
         lo: uc.reg_read(RegisterMIPS::LO).unwrap_or(0) as u32,
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn capture_saved_cpu_context<D>(uc: &unicorn_engine::Unicorn<'_, D>) -> SavedCpuContext {
+    SavedCpuContext {
+        pc: read_mips_reg(uc, RegisterMIPS::PC),
+        regs: capture_mips_gprs(uc),
     }
 }
 
@@ -14561,6 +15409,47 @@ fn is_guest_wndproc(wndproc: u32) -> bool {
 }
 
 #[cfg(feature = "unicorn")]
+const CE_VA_SECTION_SHIFT: u32 = 25;
+#[cfg(feature = "unicorn")]
+const CE_PROCESS_SLOT_SIZE: u32 = 1 << CE_VA_SECTION_SHIFT;
+#[cfg(feature = "unicorn")]
+const CE_PROCESS_SLOT_MASK: u32 = CE_PROCESS_SLOT_SIZE - 1;
+#[cfg(feature = "unicorn")]
+const CE_USER_KERNEL_SPLIT: u32 = 0x8000_0000;
+
+#[cfg(feature = "unicorn")]
+fn can_read_unicorn_code<D>(uc: &unicorn_engine::Unicorn<'_, D>, address: u32) -> bool {
+    let mut bytes = [0; 4];
+    uc.mem_read(u64::from(address), &mut bytes).is_ok()
+}
+
+#[cfg(feature = "unicorn")]
+fn normalize_ce_process_slot_callback<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    callback: u32,
+) -> u32 {
+    if callback < CE_PROCESS_SLOT_SIZE || callback >= CE_USER_KERNEL_SPLIT {
+        return callback;
+    }
+    if can_read_unicorn_code(uc, callback) {
+        return callback;
+    }
+
+    let slot_zero_callback = callback & CE_PROCESS_SLOT_MASK;
+    if slot_zero_callback == 0 || !can_read_unicorn_code(uc, slot_zero_callback) {
+        return callback;
+    }
+
+    tracing::debug!(
+        target: "ce.gwe",
+        callback = format_args!("0x{callback:08x}"),
+        slot_zero_callback = format_args!("0x{slot_zero_callback:08x}"),
+        "mapped CE process-slot callback to current process"
+    );
+    slot_zero_callback
+}
+
+#[cfg(feature = "unicorn")]
 fn should_direct_call_send_message_wndproc(
     active_thread_id: u32,
     active_process_id: u32,
@@ -14740,6 +15629,10 @@ fn try_enter_send_message_callout<D>(
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
+    parked_child_processes: &std::rc::Rc<std::cell::RefCell<VecDeque<ParkedProcess>>>,
+    cross_process_send_yield: &std::rc::Rc<
+        std::cell::RefCell<Option<UnicornCrossProcessSendYield>>,
+    >,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
@@ -14792,6 +15685,54 @@ fn try_enter_send_message_callout<D>(
         wndproc,
     );
     if !should_direct && !should_receiver_context {
+        if active_process_id != target_process_id
+            && is_guest_wndproc(wndproc)
+            && parked_child_processes
+                .borrow()
+                .iter()
+                .any(|process| process.process_state.process_id == target_process_id)
+        {
+            let Some(_send_id) = kernel.begin_cross_thread_send_message_w(
+                active_thread_id,
+                hwnd,
+                msg,
+                wparam,
+                lparam,
+                None,
+            ) else {
+                return false;
+            };
+            kernel.threads.set_last_error(active_thread_id, 0);
+            *cross_process_send_yield.borrow_mut() = Some(UnicornCrossProcessSendYield {
+                sender_thread_id: active_thread_id,
+                sender_process_id: active_process_id,
+                target_thread_id,
+                target_process_id,
+                hwnd,
+                msg,
+            });
+            let writes = [
+                uc.reg_write(RegisterMIPS::V0, 0),
+                uc.reg_write(RegisterMIPS::PC, u64::from(return_pc)),
+                uc.reg_write(RegisterMIPS::RA, u64::from(return_pc)),
+            ];
+            if !writes.into_iter().all(|write| write.is_ok()) {
+                return false;
+            }
+            tracing::debug!(
+                target: "ce.gwe",
+                source,
+                hwnd = format_args!("0x{hwnd:08x}"),
+                msg = format_args!("0x{msg:08x}"),
+                sender_thread_id = active_thread_id,
+                sender_process_id = active_process_id,
+                target_thread_id,
+                target_process_id,
+                "SendMessage queued cross-process send and yielded CPU"
+            );
+            let _ = uc.emu_stop();
+            return true;
+        }
         if is_guest_wndproc(wndproc) {
             tracing::debug!(
                 target: "ce.gwe",
@@ -15368,6 +16309,7 @@ fn write_wndproc_call_registers<D>(
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
+    let call_wndproc = normalize_ce_process_slot_callback(uc, wndproc);
     let return_sp = read_mips_reg(uc, RegisterMIPS::SP);
     let call_sp = return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
     [
@@ -15377,11 +16319,339 @@ fn write_wndproc_call_registers<D>(
         uc.reg_write(RegisterMIPS::A2, u64::from(wparam)),
         uc.reg_write(RegisterMIPS::A3, u64::from(lparam)),
         uc.reg_write(RegisterMIPS::RA, u64::from(return_stub)),
-        uc.reg_write(RegisterMIPS::T9, u64::from(wndproc)),
-        uc.reg_write(RegisterMIPS::PC, u64::from(wndproc)),
+        uc.reg_write(RegisterMIPS::T9, u64::from(call_wndproc)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(call_wndproc)),
     ]
     .into_iter()
     .all(|write| write.is_ok())
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_qsort_callout<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingQsortReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_QSORT)
+    {
+        return false;
+    }
+    let base = args.first().copied().unwrap_or(0);
+    let count = args.get(1).copied().unwrap_or(0);
+    let size = args.get(2).copied().unwrap_or(0);
+    let comparator = args.get(3).copied().unwrap_or(0);
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+    if base == 0 || count < 2 || size == 0 || !is_guest_wndproc(comparator) {
+        let writes = [
+            uc.reg_write(RegisterMIPS::V0, 0),
+            uc.reg_write(RegisterMIPS::PC, u64::from(return_pc)),
+            uc.reg_write(RegisterMIPS::RA, u64::from(return_pc)),
+        ];
+        return writes.into_iter().all(|write| write.is_ok());
+    }
+    if count > 4096 || size > 1024 * 1024 {
+        return false;
+    }
+    let mut state = PendingQsortReturn {
+        return_pc,
+        return_sp: read_mips_reg(uc, RegisterMIPS::SP),
+        caller_regs: capture_mips_gprs(uc),
+        base,
+        count,
+        size,
+        comparator,
+        ranges: vec![(0, count - 1)],
+        partition: None,
+        current_pair: None,
+    };
+    tracing::debug!(
+        target: "ce.crt",
+        base = format_args!("0x{base:08x}"),
+        count,
+        size,
+        comparator = format_args!("0x{comparator:08x}"),
+        return_pc = format_args!("0x{return_pc:08x}"),
+        "qsort guest comparator callout"
+    );
+    match enter_next_qsort_comparator(uc, &mut state) {
+        QsortStep::ComparatorEntered => {}
+        QsortStep::Done => return finish_qsort_callout(uc, state),
+        QsortStep::Failed => return false,
+    }
+    pending_returns.borrow_mut().push(state);
+    true
+}
+
+#[cfg(feature = "unicorn")]
+fn handle_qsort_return_stub<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingQsortReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    let mut pending = pending_returns.borrow_mut();
+    let Some(state) = pending.last_mut() else {
+        return false;
+    };
+    let result = read_mips_reg(uc, RegisterMIPS::V0) as i32;
+    let Some((left, right)) = state.current_pair.take() else {
+        return false;
+    };
+    if !advance_qsort_partition_after_compare(uc, state, left, right, result) {
+        return false;
+    }
+    match enter_next_qsort_comparator(uc, state) {
+        QsortStep::ComparatorEntered => true,
+        QsortStep::Done => {
+            let state = pending.pop().unwrap();
+            finish_qsort_callout(uc, state)
+        }
+        QsortStep::Failed => false,
+    }
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum QsortStep {
+    ComparatorEntered,
+    Done,
+    Failed,
+}
+
+#[cfg(feature = "unicorn")]
+fn enter_next_qsort_comparator<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    state: &mut PendingQsortReturn,
+) -> QsortStep {
+    use unicorn_engine::RegisterMIPS;
+
+    loop {
+        if let Some(partition) = state.partition.as_ref() {
+            if partition.j < partition.high {
+                let Some(left) = qsort_record_addr(state, partition.j) else {
+                    return QsortStep::Failed;
+                };
+                let right = partition.pivot_addr;
+                state.current_pair = Some((left, right));
+                restore_mips_gprs(uc, &state.caller_regs);
+                let call_sp = state.return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
+                return if [
+                    uc.reg_write(RegisterMIPS::SP, u64::from(call_sp)),
+                    uc.reg_write(RegisterMIPS::A0, u64::from(left)),
+                    uc.reg_write(RegisterMIPS::A1, u64::from(right)),
+                    uc.reg_write(RegisterMIPS::RA, u64::from(QSORT_RETURN_STUB_ADDR)),
+                    uc.reg_write(RegisterMIPS::T9, u64::from(state.comparator)),
+                    uc.reg_write(RegisterMIPS::PC, u64::from(state.comparator)),
+                ]
+                .into_iter()
+                .all(|write| write.is_ok())
+                {
+                    QsortStep::ComparatorEntered
+                } else {
+                    QsortStep::Failed
+                };
+            }
+
+            let partition = state.partition.take().unwrap();
+            let Some(final_pivot_addr) = qsort_record_addr(state, partition.i) else {
+                return QsortStep::Failed;
+            };
+            if !swap_guest_qsort_records(uc, final_pivot_addr, partition.pivot_addr, state.size) {
+                return QsortStep::Failed;
+            }
+            push_qsort_ranges(
+                &mut state.ranges,
+                partition.low,
+                partition.high,
+                partition.i,
+            );
+            continue;
+        }
+
+        let Some((low, high)) = state.ranges.pop() else {
+            return QsortStep::Done;
+        };
+        if low >= high {
+            continue;
+        }
+        let pivot_index = low + ((high - low) / 2);
+        let Some(pivot_addr) = qsort_record_addr(state, pivot_index) else {
+            return QsortStep::Failed;
+        };
+        let Some(high_addr) = qsort_record_addr(state, high) else {
+            return QsortStep::Failed;
+        };
+        if !swap_guest_qsort_records(uc, pivot_addr, high_addr, state.size) {
+            return QsortStep::Failed;
+        }
+        state.partition = Some(PendingQsortPartition {
+            low,
+            high,
+            i: low,
+            j: low,
+            pivot_addr: high_addr,
+        });
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn advance_qsort_partition_after_compare<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    state: &mut PendingQsortReturn,
+    left: u32,
+    _right: u32,
+    result: i32,
+) -> bool {
+    let size = state.size;
+    let base = state.base;
+    let Some(partition) = state.partition.as_mut() else {
+        return false;
+    };
+    if result <= 0 {
+        let Some(insert_offset) = partition.i.checked_mul(size) else {
+            return false;
+        };
+        let Some(insert_addr) = base.checked_add(insert_offset) else {
+            return false;
+        };
+        if !swap_guest_qsort_records(uc, insert_addr, left, size) {
+            return false;
+        }
+        partition.i = partition.i.saturating_add(1);
+    }
+    partition.j = partition.j.saturating_add(1);
+    true
+}
+
+#[cfg(feature = "unicorn")]
+fn push_qsort_ranges(ranges: &mut Vec<(u32, u32)>, low: u32, high: u32, pivot: u32) {
+    let left = pivot.checked_sub(1).filter(|left_high| low < *left_high);
+    let right = pivot.checked_add(1).filter(|right_low| *right_low < high);
+    match (left, right) {
+        (Some(left_high), Some(right_low)) => {
+            let left_len = left_high - low;
+            let right_len = high - right_low;
+            if left_len > right_len {
+                ranges.push((low, left_high));
+                ranges.push((right_low, high));
+            } else {
+                ranges.push((right_low, high));
+                ranges.push((low, left_high));
+            }
+        }
+        (Some(left_high), None) => ranges.push((low, left_high)),
+        (None, Some(right_low)) => ranges.push((right_low, high)),
+        (None, None) => {}
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn qsort_record_addr(state: &PendingQsortReturn, index: u32) -> Option<u32> {
+    state.base.checked_add(index.checked_mul(state.size)?)
+}
+
+#[cfg(feature = "unicorn")]
+fn should_trace_import_by_default(trap: &ImportTrap) -> bool {
+    #[cfg(feature = "trace")]
+    if is_import_milestone(trap.module_kind, trap.ordinal)
+        || is_presentation_import(trap.module_kind, trap.ordinal)
+        || is_window_import(trap.module_kind, trap.ordinal)
+    {
+        return true;
+    }
+    if trap.module_kind != crate::emulator::imports::ImportModuleKind::Coredll {
+        return true;
+    }
+    !matches!(
+        trap.ordinal,
+        Some(crate::ce::coredll_ordinals::ORD_INTERLOCKED_TEST_EXCHANGE)
+            | Some(crate::ce::coredll_ordinals::ORD_INTERLOCKED_INCREMENT)
+            | Some(crate::ce::coredll_ordinals::ORD_INTERLOCKED_DECREMENT)
+            | Some(crate::ce::coredll_ordinals::ORD_INTERLOCKED_EXCHANGE)
+            | Some(crate::ce::coredll_ordinals::ORD_TLS_GET_VALUE)
+            | Some(crate::ce::coredll_ordinals::ORD_LOCAL_ALLOC)
+            | Some(crate::ce::coredll_ordinals::ORD_LOCAL_RE_ALLOC)
+            | Some(crate::ce::coredll_ordinals::ORD_LOCAL_SIZE)
+            | Some(crate::ce::coredll_ordinals::ORD_LOCAL_FREE)
+            | Some(crate::ce::coredll_ordinals::ORD_LOCAL_ALLOC_IN_PROCESS)
+            | Some(crate::ce::coredll_ordinals::ORD_LOCAL_FREE_IN_PROCESS)
+            | Some(crate::ce::coredll_ordinals::ORD_LOCAL_SIZE_IN_PROCESS)
+            | Some(crate::ce::coredll_ordinals::ORD_HEAP_ALLOC)
+            | Some(crate::ce::coredll_ordinals::ORD_HEAP_ALLOC_TRACE)
+            | Some(crate::ce::coredll_ordinals::ORD_HEAP_FREE)
+            | Some(crate::ce::coredll_ordinals::ORD_CREATE_DIBSECTION)
+            | Some(crate::ce::coredll_ordinals::ORD_READ_FILE)
+            | Some(crate::ce::coredll_ordinals::ORD_SET_FILE_POINTER)
+            | Some(crate::ce::coredll_ordinals::ORD_ATOI)
+            | Some(crate::ce::coredll_ordinals::ORD_MALLOC)
+            | Some(crate::ce::coredll_ordinals::ORD_MEMCMP)
+            | Some(crate::ce::coredll_ordinals::ORD_MEMCPY)
+            | Some(crate::ce::coredll_ordinals::ORD_MEMMOVE)
+            | Some(crate::ce::coredll_ordinals::ORD_MEMSET)
+            | Some(crate::ce::coredll_ordinals::ORD_STRCPY)
+            | Some(crate::ce::coredll_ordinals::ORD_STRTOK)
+            | Some(crate::ce::coredll_ordinals::ORD_FGETS)
+            | Some(crate::ce::coredll_ordinals::ORD_FREE)
+    )
+}
+
+#[cfg(feature = "unicorn")]
+fn finish_qsort_callout<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    state: PendingQsortReturn,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    restore_mips_gprs(uc, &state.caller_regs);
+    [
+        uc.reg_write(RegisterMIPS::SP, u64::from(state.return_sp)),
+        uc.reg_write(RegisterMIPS::V0, 0),
+        uc.reg_write(RegisterMIPS::PC, u64::from(state.return_pc)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(state.return_pc)),
+    ]
+    .into_iter()
+    .all(|write| write.is_ok())
+}
+
+#[cfg(feature = "unicorn")]
+fn swap_guest_qsort_records<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    left: u32,
+    right: u32,
+    size: u32,
+) -> bool {
+    if left == right || size == 0 {
+        return true;
+    }
+    const CHUNK: u32 = 64 * 1024;
+    let mut offset = 0u32;
+    let mut left_buf = vec![0; CHUNK.min(size) as usize];
+    let mut right_buf = vec![0; CHUNK.min(size) as usize];
+    while offset < size {
+        let count = (size - offset).min(CHUNK);
+        left_buf.resize(count as usize, 0);
+        right_buf.resize(count as usize, 0);
+        let Some(left_addr) = left.checked_add(offset) else {
+            return false;
+        };
+        let Some(right_addr) = right.checked_add(offset) else {
+            return false;
+        };
+        if uc.mem_read(u64::from(left_addr), &mut left_buf).is_err()
+            || uc.mem_read(u64::from(right_addr), &mut right_buf).is_err()
+            || uc.mem_write(u64::from(left_addr), &right_buf).is_err()
+            || uc.mem_write(u64::from(right_addr), &left_buf).is_err()
+        {
+            return false;
+        }
+        offset = offset.saturating_add(count);
+    }
+    true
 }
 
 #[cfg(feature = "unicorn")]
@@ -15782,6 +17052,7 @@ fn try_enter_create_window_create_callout<D>(
     args: &[u32],
     hwnd: u32,
     mapped_kernel_memory: &std::rc::Rc<std::cell::RefCell<KernelMemoryMappings>>,
+    mapped_blobs: &mut Vec<MappedBlob>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<CreateWindowReturn>>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
@@ -15809,7 +17080,14 @@ fn try_enter_create_window_create_callout<D>(
     ) else {
         return false;
     };
-    if map_kernel_memory_allocations(uc, kernel, &mut mapped_kernel_memory.borrow_mut()).is_err() {
+    if map_kernel_memory_allocations(
+        uc,
+        kernel,
+        &mut mapped_kernel_memory.borrow_mut(),
+        mapped_blobs,
+    )
+    .is_err()
+    {
         return false;
     }
     let bytes = create_structw_bytes(args);
@@ -16110,6 +17388,7 @@ fn capture_debug_snapshot<D>(
     virtual_allocation_count: usize,
     virtual_allocation_bytes: u64,
     blocked_get_message: Option<UnicornBlockedGetMessage>,
+    cross_process_send_yield: Option<UnicornCrossProcessSendYield>,
     thread_state: Option<String>,
     thread_exit_reached: bool,
 ) -> UnicornDebugSnapshot {
@@ -16181,6 +17460,7 @@ fn capture_debug_snapshot<D>(
         virtual_allocation_count,
         virtual_allocation_bytes,
         blocked_get_message,
+        cross_process_send_yield,
         thread_state,
         thread_exit_reached,
         encoded_kernel_exit: None,
@@ -18426,7 +19706,7 @@ impl<D> CoredllGuestMemory for UnicornGuestMemory<'_, '_, D> {
 #[cfg(all(test, feature = "unicorn"))]
 mod unicorn_tests {
     use crate::{ce::gwe::GWL_WNDPROC, ce::kernel::CeKernel, config::RuntimeConfig};
-    use std::{cell::RefCell, rc::Rc};
+    use std::{cell::RefCell, collections::VecDeque, rc::Rc};
     use unicorn_engine::{
         RegisterMIPS, Unicorn,
         unicorn_const::{Arch, Mode, Prot},
@@ -18470,6 +19750,55 @@ mod unicorn_tests {
         assert_eq!(field(36), 0x1000_0002);
         assert_eq!(field(40), 0x1000_0001);
         assert_eq!(field(44), 0x0000_00a1);
+    }
+
+    #[test]
+    fn wndproc_call_registers_map_ce_process_slot_callback_to_current_slot() {
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x0004_f000, 0x1000, Prot::ALL).unwrap();
+        write_u32(&mut uc, 0x0004_f134, 0x27bd_ffe0);
+        uc.reg_write(RegisterMIPS::SP, 0x7ffd_ff00).unwrap();
+
+        assert!(super::write_wndproc_call_registers(
+            &mut uc,
+            0x0002_0010,
+            crate::ce::gwe::WM_CREATE,
+            0,
+            0,
+            0x0804_f134,
+            super::WNDPROC_RETURN_STUB_ADDR,
+        ));
+
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, 0x0004_f134);
+        assert_eq!(uc.reg_read(RegisterMIPS::T9).unwrap() as u32, 0x0004_f134);
+        assert_eq!(uc.reg_read(RegisterMIPS::A0).unwrap() as u32, 0x0002_0010);
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::RA).unwrap() as u32,
+            super::WNDPROC_RETURN_STUB_ADDR
+        );
+    }
+
+    #[test]
+    fn wndproc_call_registers_keep_mapped_high_callback() {
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x0004_f000, 0x1000, Prot::ALL).unwrap();
+        uc.mem_map(0x6004_f000, 0x1000, Prot::ALL).unwrap();
+        write_u32(&mut uc, 0x0004_f134, 0x27bd_ffe0);
+        write_u32(&mut uc, 0x6004_f134, 0x27bd_ffe0);
+        uc.reg_write(RegisterMIPS::SP, 0x7ffd_ff00).unwrap();
+
+        assert!(super::write_wndproc_call_registers(
+            &mut uc,
+            0x0002_0010,
+            crate::ce::gwe::WM_CREATE,
+            0,
+            0,
+            0x6004_f134,
+            super::WNDPROC_RETURN_STUB_ADDR,
+        ));
+
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, 0x6004_f134);
+        assert_eq!(uc.reg_read(RegisterMIPS::T9).unwrap() as u32, 0x6004_f134);
     }
 
     #[test]
@@ -19167,6 +20496,8 @@ mod unicorn_tests {
         let running_thread = Rc::new(RefCell::new(Some((sender_thread, 0x0000_0120))));
         let blocked_waits = Rc::new(RefCell::new(Vec::new()));
         let pending = Rc::new(RefCell::new(Vec::new()));
+        let parked = Rc::new(RefCell::new(VecDeque::new()));
+        let cross_process_send_yield = Rc::new(RefCell::new(None));
         assert!(super::try_enter_send_message_callout(
             &mut kernel,
             &mut uc,
@@ -19178,6 +20509,8 @@ mod unicorn_tests {
             &running_thread,
             &blocked_waits,
             &pending,
+            &parked,
+            &cross_process_send_yield,
         ));
 
         assert_eq!(*current_thread_id.borrow(), receiver_thread);

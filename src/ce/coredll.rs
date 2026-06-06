@@ -1209,6 +1209,10 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
+        ORD_IS_VALID_LOCALE => Some(CoredllValue::Bool(is_valid_locale_raw(
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
         ORD_INPUT_DEBUG_CHAR_W => Some(CoredllValue::U32(input_debug_char_w_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -1456,6 +1460,19 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel,
             thread_id,
             raw_arg(args, 0),
+        ))),
+        ORD_GET_PROCESS_INDEX_FROM_ID => Some(CoredllValue::U32(process_index_from_id_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_GET_PROCESS_IDFROM_INDEX => Some(CoredllValue::U32(process_id_from_index_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_GET_CALLER_PROCESS_INDEX => Some(CoredllValue::U32(caller_process_index_raw(
+            kernel, thread_id,
         ))),
         ORD_GET_THREAD_TIMES => Some(CoredllValue::Bool(get_thread_times_raw(
             kernel, memory, thread_id, args,
@@ -1773,6 +1790,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
+        ORD_WCSLEN => Some(CoredllValue::U32(crt::wcslen_raw(memory, raw_arg(args, 0)))),
         ORD_ISWCTYPE => Some(CoredllValue::U32(iswctype_raw(
             raw_arg(args, 0),
             raw_arg(args, 1),
@@ -1786,6 +1804,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_WTOL => Some(CoredllValue::U32(
             crt::wtol_raw(memory, raw_arg(args, 0)) as u32
         )),
+        ORD_WCSTOUL => Some(CoredllValue::U32(crt::wcstoul_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ))),
         ORD_WCSICMP => {
             Some(CoredllValue::U32(
                 crt::wcsicmp_raw(memory, raw_arg(args, 0), raw_arg(args, 1)) as u32,
@@ -1891,6 +1917,13 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 raw_arg(args, 0),
             )))
         }
+        ORD_REALLOC => Some(CoredllValue::Handle(crt::realloc_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
         ORD_MEMCPY | ORD_MEMMOVE => Some(CoredllValue::Handle(crt::memcpy_raw(
             kernel,
             memory,
@@ -1928,6 +1961,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
+        ))),
+        ORD_STRUPR => Some(CoredllValue::Handle(crt::strupr_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
         ))),
         ORD_STRTOK => Some(CoredllValue::Handle(crt::strtok_raw(
             kernel,
@@ -2002,6 +2041,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 2),
             raw_arg(args, 3),
+        ))),
+        ORD_VSPRINTF => Some(CoredllValue::U32(crt::vsprintf_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2),
         ))),
         ORD_VSNWPRINTF => Some(CoredllValue::U32(crt::vsnwprintf_w_raw(
             kernel,
@@ -2108,9 +2155,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
         ))),
         ORD_RAND => Some(CoredllValue::U32(crt::rand_raw(kernel, thread_id))),
-        ORD_SECURITY_GEN_COOKIE2 => Some(CoredllValue::U32(security_gen_cookie2_raw(
-            kernel, thread_id,
-        ))),
+        ORD_SECURITY_GEN_COOKIE | ORD_SECURITY_GEN_COOKIE2 => Some(CoredllValue::U32(
+            security_gen_cookie_raw(kernel, thread_id),
+        )),
         ORD_FREE
         | ORD_OPERATOR_DELETE
         | ORD_OPERATOR_DELETE_ARRAY
@@ -2314,6 +2361,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         }
         ORD_UNMAP_VIEW_OF_FILE => Some(CoredllValue::Bool(unmap_view_of_file_raw(
             kernel,
+            memory,
             thread_id,
             raw_arg(args, 0),
         ))),
@@ -2427,6 +2475,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_CREATE_DIBSECTION => Some(CoredllValue::Handle(create_dib_section_raw(
             kernel, memory, thread_id, args,
+        ))),
+        ORD_ADD_FONT_RESOURCE_W => Some(CoredllValue::U32(add_font_resource_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
         ))),
         ORD_CREATE_FONT_INDIRECT_W => Some(CoredllValue::Handle(create_font_indirect_w_raw(
             kernel,
@@ -5406,6 +5460,120 @@ fn input_debug_char_w_raw<M: CoredllGuestMemory>(
     OEM_DEBUG_READ_NODATA
 }
 
+fn is_valid_locale_raw(locale: u32, flags: u32) -> bool {
+    const LCID_INSTALLED: u32 = 0x0000_0001;
+    const LCID_SUPPORTED: u32 = 0x0000_0002;
+    const LOCALE_USER_DEFAULT: u32 = 0x0000_0400;
+    const LOCALE_SYSTEM_DEFAULT: u32 = 0x0000_0800;
+    const LOCALE_CUSTOM_DEFAULT: u32 = 0x0000_0c00;
+    const LOCALE_CUSTOM_UNSPECIFIED: u32 = 0x0000_1000;
+    const LOCALE_CUSTOM_UI_DEFAULT: u32 = 0x0000_1400;
+
+    let valid_flags = flags == LCID_INSTALLED || flags == LCID_SUPPORTED;
+    if !valid_flags {
+        return false;
+    }
+
+    matches!(
+        locale,
+        LOCALE_USER_DEFAULT
+            | LOCALE_SYSTEM_DEFAULT
+            | LOCALE_CUSTOM_DEFAULT
+            | LOCALE_CUSTOM_UNSPECIFIED
+            | LOCALE_CUSTOM_UI_DEFAULT
+    ) || is_known_supported_lcid(locale)
+}
+
+fn is_known_supported_lcid(locale: u32) -> bool {
+    let langid = locale & 0xffff;
+    matches!(
+        langid,
+        0x0401
+            | 0x0404
+            | 0x0405
+            | 0x0406
+            | 0x0407
+            | 0x0408
+            | 0x0409
+            | 0x040a
+            | 0x040b
+            | 0x040c
+            | 0x040d
+            | 0x040e
+            | 0x040f
+            | 0x0410
+            | 0x0411
+            | 0x0412
+            | 0x0413
+            | 0x0414
+            | 0x0415
+            | 0x0416
+            | 0x0418
+            | 0x0419
+            | 0x041a
+            | 0x041b
+            | 0x041d
+            | 0x041e
+            | 0x041f
+            | 0x0421
+            | 0x0422
+            | 0x0424
+            | 0x0425
+            | 0x0426
+            | 0x0427
+            | 0x0429
+            | 0x042a
+            | 0x042d
+            | 0x0436
+            | 0x0437
+            | 0x0438
+            | 0x0439
+            | 0x043e
+            | 0x043f
+            | 0x0440
+            | 0x0441
+            | 0x0442
+            | 0x0443
+            | 0x0444
+            | 0x0445
+            | 0x0446
+            | 0x0447
+            | 0x0449
+            | 0x044a
+            | 0x044b
+            | 0x044e
+            | 0x0804
+            | 0x0807
+            | 0x0809
+            | 0x080a
+            | 0x080c
+            | 0x0810
+            | 0x0813
+            | 0x0814
+            | 0x0816
+            | 0x081a
+            | 0x0c0a
+            | 0x0c0c
+            | 0x1009
+            | 0x1409
+            | 0x1809
+            | 0x1c09
+            | 0x2009
+            | 0x2409
+            | 0x2809
+            | 0x2c09
+            | 0x3009
+            | 0x3409
+            | 0x3809
+            | 0x3c09
+            | 0x4009
+            | 0x4409
+            | 0x4809
+            | 0x4c09
+            | 0x5009
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SystemTimeFields {
     year: u16,
@@ -7462,7 +7630,41 @@ fn sync_file_mapping_views_to_guest<M: CoredllGuestMemory>(
     }
 }
 
-fn unmap_view_of_file_raw(kernel: &mut CeKernel, thread_id: u32, base: u32) -> bool {
+fn unmap_view_of_file_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    base: u32,
+) -> bool {
+    let Some((mapping, view)) = kernel
+        .handles
+        .file_mapping_view(base)
+        .map(|(mapping, view)| (mapping.clone(), view))
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, base, view.size) else {
+        return false;
+    };
+    let (views, data) = if let Some((mapping, view)) = kernel.handles.file_mapping_by_view_mut(base)
+    {
+        let start = view.offset as usize;
+        let end = start.saturating_add(bytes.len());
+        if end > mapping.data.len() {
+            mapping.data.resize(end, 0);
+        }
+        mapping.data[start..end].copy_from_slice(&bytes);
+        (mapping.views.clone(), mapping.data.clone())
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    sync_file_mapping_views_to_guest(memory, base, &views, &data);
+    if let Some(file_id) = mapping.file_id {
+        let _ = kernel.write_file_at(file_id, view.offset as usize, &bytes);
+    }
     if kernel.handles.remove_file_mapping_view(base).is_some() {
         let _ = kernel.memory.virtual_free(base, 0, MEM_RELEASE);
         kernel.threads.set_last_error(thread_id, 0);
@@ -7743,6 +7945,47 @@ fn get_process_id_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32
             0
         }
     }
+}
+
+const FIRST_LAUNCHED_PROCESS_ID: u32 = 0x42;
+
+fn process_id_from_handle_or_id(kernel: &CeKernel, handle_or_id: u32) -> Option<u32> {
+    kernel
+        .process_id_for_handle(handle_or_id)
+        .or_else(|| (handle_or_id != 0).then_some(handle_or_id))
+}
+
+fn process_index_from_id_raw(kernel: &mut CeKernel, thread_id: u32, handle_or_id: u32) -> u32 {
+    let Some(process_id) = process_id_from_handle_or_id(kernel, handle_or_id) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return u32::MAX;
+    };
+    let index = if process_id >= FIRST_LAUNCHED_PROCESS_ID {
+        process_id
+            .wrapping_sub(FIRST_LAUNCHED_PROCESS_ID)
+            .wrapping_add(1)
+    } else {
+        process_id.saturating_sub(1)
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    index
+}
+
+fn process_id_from_index_raw(kernel: &mut CeKernel, thread_id: u32, index: u32) -> u32 {
+    let process_id = if index == 0 {
+        1
+    } else {
+        FIRST_LAUNCHED_PROCESS_ID.wrapping_add(index - 1)
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    process_id
+}
+
+fn caller_process_index_raw(kernel: &mut CeKernel, thread_id: u32) -> u32 {
+    let process_id = kernel.current_process_id();
+    process_index_from_id_raw(kernel, thread_id, process_id)
 }
 
 fn get_thread_times_raw<M: CoredllGuestMemory>(
@@ -11511,6 +11754,38 @@ fn create_font_indirect_w_raw<M: CoredllGuestMemory>(
     )
 }
 
+fn add_font_resource_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    path_ptr: u32,
+) -> u32 {
+    if path_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(path) = read_guest_wide_arg(memory, path_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    match kernel.read_guest_file(&path) {
+        Ok(_) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            1
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+            0
+        }
+    }
+}
+
 fn create_solid_brush_raw(kernel: &mut CeKernel, color: u32) -> u32 {
     kernel.resources.create_brush(color)
 }
@@ -14663,6 +14938,44 @@ fn combine_rgn_raw(
     src2: u32,
     mode: u32,
 ) -> u32 {
+    if mode == RGN_OR && dest == src1 {
+        let Some(rhs_rect) = kernel
+            .resources
+            .region(src2)
+            .and_then(|region| (region.rects.len() == 1).then_some(region.rects[0]))
+        else {
+            if kernel.resources.region(src1).is_none() || kernel.resources.region(src2).is_none() {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                return 0;
+            }
+            return combine_rgn_raw_slow(kernel, thread_id, dest, src1, src2, mode);
+        };
+        if !kernel.resources.union_region_with_rect(dest, rhs_rect) {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return 0;
+        }
+        kernel.threads.set_last_error(thread_id, 0);
+        return kernel
+            .resources
+            .region(dest)
+            .map(region_status_object)
+            .unwrap_or(ERROR_REGION);
+    }
+    combine_rgn_raw_slow(kernel, thread_id, dest, src1, src2, mode)
+}
+
+fn combine_rgn_raw_slow(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    dest: u32,
+    src1: u32,
+    src2: u32,
+    mode: u32,
+) -> u32 {
     let Some(lhs) = kernel
         .resources
         .region(src1)
@@ -15957,7 +16270,7 @@ fn raw_f64_pair(args: &[u32], low_index: usize, high_index: usize) -> f64 {
     f64::from_bits(raw_u64_pair(args, low_index, high_index))
 }
 
-fn security_gen_cookie2_raw(kernel: &CeKernel, thread_id: u32) -> u32 {
+fn security_gen_cookie_raw(kernel: &CeKernel, thread_id: u32) -> u32 {
     let mut cookie = 0xa5a5_5a5a_u32
         ^ kernel.current_process_id().rotate_left(5)
         ^ thread_id.rotate_left(13)

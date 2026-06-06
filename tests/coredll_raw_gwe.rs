@@ -1,10 +1,12 @@
+use std::fs;
+
 use wince_emulation_v3::{
     Result,
     ce::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
-            ORD_ADJUST_WINDOW_RECT_EX, ORD_APPEND_MENU_W, ORD_BEGIN_PAINT, ORD_BIT_BLT,
-            ORD_BRING_WINDOW_TO_TOP, ORD_CHECK_MENU_ITEM, ORD_CHECK_MENU_RADIO_ITEM,
+            ORD_ADD_FONT_RESOURCE_W, ORD_ADJUST_WINDOW_RECT_EX, ORD_APPEND_MENU_W, ORD_BEGIN_PAINT,
+            ORD_BIT_BLT, ORD_BRING_WINDOW_TO_TOP, ORD_CHECK_MENU_ITEM, ORD_CHECK_MENU_RADIO_ITEM,
             ORD_CHILD_WINDOW_FROM_POINT, ORD_CLIENT_TO_SCREEN, ORD_COMBINE_RGN, ORD_COPY_RECT,
             ORD_CREATE_COMPATIBLE_BITMAP, ORD_CREATE_COMPATIBLE_DC,
             ORD_CREATE_DIALOG_INDIRECT_PARAM_W, ORD_CREATE_DIBSECTION, ORD_CREATE_FONT_INDIRECT_W,
@@ -77,8 +79,8 @@ use wince_emulation_v3::{
         memory::PROCESS_HEAP_HANDLE,
         resource::ResourceId,
         thread::{
-            ERROR_ALREADY_EXISTS, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER,
-            ERROR_INVALID_WINDOW_HANDLE,
+            ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE,
+            ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE,
         },
     },
     config::RuntimeConfig,
@@ -4183,6 +4185,60 @@ fn coredll_raw_text_metrics_use_selected_logfont() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_add_font_resource_uses_guest_file_mounts() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let root = std::env::temp_dir().join(format!("wince_add_font_resource_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("create temporary mounted font directory");
+    fs::write(root.join("font.ttf"), b"fake-font").expect("write temporary mounted font");
+    kernel.mount_guest_root("\\SDMMC Disk", &root);
+
+    let font_path_ptr = 0x1_0000;
+    let missing_path_ptr = 0x1_0100;
+    memory.write_wide_z(font_path_ptr, "\\SDMMC Disk\\font.ttf");
+    memory.write_wide_z(missing_path_ptr, "\\SDMMC Disk\\missing.ttf");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ADD_FONT_RESOURCE_W,
+            [font_path_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ADD_FONT_RESOURCE_W,
+            [missing_path_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_FILE_NOT_FOUND
+    );
+
+    let _ = fs::remove_dir_all(&root);
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_get_text_extent_ex_point_fills_fit_dx_and_size() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
@@ -4548,9 +4604,20 @@ fn coredll_raw_window_from_point_hits_visible_thread_windows() -> Result<()> {
         0,
         Rect::from_origin_size(100, 60, 40, 40),
     );
+    let disabled_child = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "CHILD",
+        "disabled",
+        Some(parent),
+        4,
+        WS_VISIBLE | WS_CHILD | WS_DISABLED,
+        0,
+        Rect::from_origin_size(150, 60, 40, 40),
+    );
     assert!(kernel.gwe.is_window_visible(parent));
     assert!(kernel.gwe.is_window_visible(child));
     assert!(!kernel.gwe.is_window_visible(sibling));
+    assert!(!kernel.gwe.is_window_enabled(disabled_child));
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -4564,6 +4631,19 @@ fn coredll_raw_window_from_point_hits_visible_thread_windows() -> Result<()> {
             value: CoredllValue::Handle(hwnd),
             ..
         } if hwnd == child
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WINDOW_FROM_POINT,
+            [160, 80],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } if hwnd == parent
     ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -4589,7 +4669,46 @@ fn coredll_raw_window_from_point_hits_visible_thread_windows() -> Result<()> {
         CoredllDispatch::Returned {
             value: CoredllValue::Handle(hwnd),
             ..
+        } if hwnd == sibling
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CHILD_WINDOW_FROM_POINT,
+            [parent, 160, 70],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } if hwnd == disabled_child
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CHILD_WINDOW_FROM_POINT,
+            [parent, 280, 180],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
         } if hwnd == parent
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CHILD_WINDOW_FROM_POINT,
+            [parent, 900, 900],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
     ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -12434,6 +12553,94 @@ fn coredll_raw_region_or_canonicalizes_duplicate_coverage() -> Result<()> {
         }
     ));
     assert_eq!(kernel.resources.region(dest).unwrap().rects.len(), 1);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_region_or_incrementally_merges_scanline_rects() -> Result<()> {
+    const SIMPLEREGION: u32 = 2;
+    const RGN_OR: u32 = 2;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 14;
+
+    let dest = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN,
+        [0, 0, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(region),
+            ..
+        } => region,
+        other => panic!("CreateRectRgn(dest) did not return a region: {other:?}"),
+    };
+    for y in 0..4 {
+        for x in 0..128 {
+            let src = match table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_CREATE_RECT_RGN,
+                [x, y, x + 1, y + 1],
+            ) {
+                CoredllDispatch::Returned {
+                    value: CoredllValue::Handle(region),
+                    ..
+                } => region,
+                other => panic!("CreateRectRgn(pixel) did not return a region: {other:?}"),
+            };
+            assert!(matches!(
+                table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    thread_id,
+                    ORD_COMBINE_RGN,
+                    [dest, dest, src, RGN_OR],
+                ),
+                CoredllDispatch::Returned { .. }
+            ));
+            assert!(matches!(
+                table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    thread_id,
+                    ORD_DELETE_OBJECT,
+                    [src],
+                ),
+                CoredllDispatch::Returned { .. }
+            ));
+        }
+    }
+
+    assert_eq!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_RGN_BOX,
+            [dest, 0],
+        ),
+        CoredllDispatch::Returned {
+            export: table.resolve_ordinal(ORD_GET_RGN_BOX).unwrap().clone(),
+            value: CoredllValue::U32(SIMPLEREGION),
+        }
+    );
+    assert_eq!(
+        kernel.resources.region(dest).unwrap().rects,
+        vec![Rect {
+            left: 0,
+            top: 0,
+            right: 128,
+            bottom: 4,
+        }]
+    );
 
     Ok(())
 }

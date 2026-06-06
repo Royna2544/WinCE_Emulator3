@@ -6,7 +6,7 @@ pub struct CoredllOrdinalDef {
     pub ordinal: u32,
 }
 
-pub const COREDLL_EXPORTS: &[CoredllOrdinalDef; 1522] = &[
+pub const COREDLL_EXPORTS: &[CoredllOrdinalDef; 1523] = &[
     CoredllOrdinalDef {
         name: "??2@YAPAXI@Z",
         ordinal: 1095,
@@ -78,6 +78,10 @@ pub const COREDLL_EXPORTS: &[CoredllOrdinalDef; 1522] = &[
     CoredllOrdinalDef {
         name: "?__set_inconsistency@@YAP6AXXZP6AXXZ@Z",
         ordinal: 1555,
+    },
+    CoredllOrdinalDef {
+        name: "__security_gen_cookie",
+        ordinal: 1875,
     },
     CoredllOrdinalDef {
         name: "__security_gen_cookie2",
@@ -11638,14 +11642,18 @@ pub const ORD_WCSICMP: u32 = 230;
 pub const ORD_WCSNICMP: u32 = 229;
 pub const ORD_WCSNCMP: u32 = 65;
 pub const ORD_WCSCHR: u32 = 59;
+pub const ORD_WCSLEN: u32 = 63;
 pub const ORD_WCSCPY: u32 = 61;
 pub const ORD_WCSNCPY: u32 = 66;
 pub const ORD_WCSPBRK: u32 = 68;
+pub const ORD_WCSTOUL: u32 = 1083;
 pub const ORD_MALLOC: u32 = 1041;
+pub const ORD_REALLOC: u32 = 1054;
 pub const ORD_MEMCMP: u32 = 1043;
 pub const ORD_MEMCPY: u32 = 1044;
 pub const ORD_MEMMOVE: u32 = 1046;
 pub const ORD_MEMSET: u32 = 1047;
+pub const ORD_QSORT: u32 = 1052;
 pub const ORD_ATOF: u32 = 995;
 pub const ORD_ATOI: u32 = 993;
 pub const ORD_TOLOWER: u32 = 1090;
@@ -11654,6 +11662,7 @@ pub const ORD_STRCAT: u32 = 1063;
 pub const ORD_STRCPY: u32 = 1066;
 pub const ORD_STRTOK: u32 = 1073;
 pub const ORD_STRTOUL: u32 = 1405;
+pub const ORD_STRUPR: u32 = 1416;
 pub const ORD_OPERATOR_DELETE: u32 = 1094;
 pub const ORD_OPERATOR_NEW: u32 = 1095;
 pub const ORD_OPERATOR_NEW_ARRAY: u32 = 1456;
@@ -11663,6 +11672,7 @@ pub const ORD_OPERATOR_DELETE_ARRAY_NOTHROW: u32 = 1663;
 pub const ORD_SWPRINTF: u32 = 1097;
 pub const ORD_VSWPRINTF: u32 = 1099;
 pub const ORD_SPRINTF: u32 = 719;
+pub const ORD_VSPRINTF: u32 = 1146;
 pub const ORD_SNPRINTF: u32 = 729;
 pub const ORD_VSNPRINTF: u32 = 1147;
 pub const ORD_SNWPRINTF: u32 = 1096;
@@ -11681,6 +11691,7 @@ pub const ORD_FSEEK: u32 = 1130;
 pub const ORD_FTELL: u32 = 1131;
 pub const ORD_RAND: u32 = 1053;
 pub const ORD_SRAND: u32 = 1061;
+pub const ORD_SECURITY_GEN_COOKIE: u32 = 1875;
 pub const ORD_SECURITY_GEN_COOKIE2: u32 = 2696;
 pub const ORD_FREE: u32 = 1018;
 pub const ORD_LONGJMP: u32 = 1036;

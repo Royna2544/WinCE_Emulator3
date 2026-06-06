@@ -28,6 +28,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     DLL exports before shim classification, and `commctrl.dll`/`commctrlce.dll`
     are not classified as emulator common-controls shims; they must come from
     the configured runtime DLL search paths.
+  - Dumped `mfcce400.dll` imports `commctrl.dll` by ordinal through its IAT
+    (`addr 0x000674d0` in `llvm-objdump -p`). When MFC is loaded before
+    `commctrl.dll`, a single-pass loader leaves ordinal thunks such as
+    `0x80000002` in the IAT, and MFC later executes that marker through
+    `jalr`. v3 now keeps COREDLL trap patching intact, then does a second
+    external import pass after all loaded dumped DLL exports are known, so
+    cross-DLL imports by name and ordinal resolve to the loaded DLL export VA.
   - Host-presented probes of dumped `explorer.exe` using this same runtime DLL
     directory no longer fail on the old high-address trampoline from
     `0x00057108` to `0xffff832c`. After the COREDLL startup ordinal slice, the
@@ -35,6 +42,29 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     missing import trap.
 
 ## Windows CE Core OS
+
+- COREDLL CRT route-search import:
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\crt_ordinals.h` and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\MIPSII\RETAIL\coredll.def`
+  - CE maps `_ORDINAL_wcstoul` to ordinal 1083, and the MIPSII COREDLL export
+    file lists `wcstoul @1083 PRIVATE`. v3 uses that ordinal for the raw
+    COREDLL boundary reached by mounted iNavi route/current-location parsing.
+    The implementation parses guest wide strings and writes `endptr` in
+    two-byte character units.
+
+- CE process and message scheduler frontier:
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\thread.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c` where present, and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`
+  - `CreateProcessW` must create independent waitable process/thread objects;
+    a child that parks in its own wait/message loop is still `STILL_ACTIVE`.
+    The mounted `target\route_drive_procfix1_*` trace now preserves that handle
+    state for `happyway_win.exe` and `iSearch.exe`, but v3 still needs real
+    parked child CPU ownership and handoff when the active process exits.
+    Pending synchronous sends, including the observed thread-9
+    `SendMessageW`, must resume through the same scheduler/GWE send-state
+    model instead of being stranded at host process teardown.
 
 - GWE message-queue order:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`
@@ -76,6 +106,27 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     painting, and child windows only clip against higher z-order siblings when
     they requested `WS_CLIPSIBLINGS`. Top-level windows still clip against
     higher z-order top-levels.
+
+- GDI font resource loading:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h` and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\MIPSII\RETAIL\coredll.def`
+  - `wingdi.h` declares `AddFontResourceW(LPCWSTR)` as a count-returning GDI
+    API, and dumped MultiTBT reaches COREDLL ordinal `893`
+    (`AddFontResourceW`) with `\SDMMC Disk\TBT\ygo550.ttf`. v3 currently
+    implements the CE boundary enough to validate the mounted guest file path
+    and return one installed font on success, or zero with the normal last
+    error on invalid/missing paths. Full font engine registration remains a
+    later GDI/text fidelity item.
+
+- MultiTBT runtime evidence:
+  `D:\INAVI_Emulator\INAVI\TBT\MultiTBT.exe` and
+  `D:\INAVI_Emulator\INAVI\mapdata\Manager.xml`
+  - The mounted image set includes `TBT\MultiTBT.exe`, `TBTResData.bin`, and
+    `ygo550.ttf`; `Manager.xml` records those files in the iNavi G3 install
+    payload. A DUMPPLZ text search found only CE `TBTCORE` feature macros in
+    `D:\INAVI_Emulator\DUMPPLZ\Windows\ceconfig.h`, not an observed in-app
+    `CreateProcessW` launch of `MultiTBT.exe`. Treat v2 companion launch usage
+    as harness evidence until a mounted trace proves a guest launch path.
 
 - Kernel thread/scheduler stack evidence:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c`,
@@ -889,10 +940,16 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     WNDPROC-visible behavior rather than host-side shortcutting.
   - `winuser.h`, `gweapiset1.hpp`, and `window.hpp` expose
     `WindowFromPoint` and `ChildWindowFromPoint` with by-value `POINT`
-    arguments. Rust raw ordinals 252 and 253 now route through the virtual GWE
-    visible/enabled HWND hit-test path; `ChildWindowFromPoint` treats the input
-    point as parent-client coordinates and uses the existing
-    client-to-screen transform before searching child windows.
+    arguments. Rust raw ordinal 252 (`WindowFromPoint`) routes through the
+    normal visible/enabled recursive HWND hit-test used by mouse input. Raw
+    ordinal 253 (`ChildWindowFromPoint`) treats the input point as
+    parent-client coordinates, converts through the parent client-to-screen
+    transform, searches only immediate children in z-order, and returns hidden
+    or disabled children. Microsoft CE `ChildWindowFromPoint` documentation
+    states that hidden/disabled containing children are successful results and
+    that parent is returned when the point is inside the parent but no child
+    contains it; modern Win32 documentation corroborates the immediate-child
+    search restriction.
 
 - GWE dialog/control surface:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\dlgmgr.h`,
@@ -1156,6 +1213,21 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
 
 ## Prior Emulator Reference
 
+- v2 diagnostic companion launcher:
+  `..\wince_emulator_v2\tools\autodrive_inavi.ps1` and
+  `..\wince_emulator_v2\README.md`
+  - The autodrive harness starts `TBT\MultiTBT.exe` from the SDMMC backing when
+    present unless `-NoCompanion` is set, and `-CompanionTarget` can override
+    or add explicit companions. The companion uses the same emulator binary,
+    registry, SDMMC path, serial map, DLL search dirs, and a headless/limited
+    instruction run, with stdout/stderr captured beside the parent run.
+  - v2 documents this as route-search diagnostic support and notes that no
+    guest `CreateProcessW` launch for `MultiTBT.exe` had been observed. Rust
+    v3 therefore exposes an explicit generic `--companion-image` /
+    `--companion-target` launcher for parity, but keeps automatic app-specific
+    startup and final shared behavior out of the emulator core until CE-like
+    process/mapping/window IPC is implemented.
+
 - Remote server API shape:
   `../WinCE_Emulator_v2/src/remote_server.cpp` and
   `../WinCE_Emulator_v2/src/ce_remote.h`
@@ -1251,3 +1323,39 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     on the original thread with zero bytes transferred, while the wait
     registration is removed from both the local blocked-wait list and the
     kernel scheduler queue.
+
+- CE CRT narrow varargs formatting authority:
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\crt_ordinals.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\MIPSII\RETAIL\coredll.def`, and
+  the generated `src\ce\coredll_ordinals.rs`
+  - The MIPSII COREDLL export table maps `sprintf` to ordinal `719`,
+    `vsprintf` to ordinal `1146`, `_vsnprintf` to ordinal `1147`, and the
+    wide variants to the corresponding `swprintf`/`vswprintf` ordinals.
+  - Rust keeps `vsprintf` on the raw COREDLL syscall boundary and reads the
+    guest MIPS `va_list` as a pointer to DWORD arguments, matching the existing
+    `_vsnprintf`/wide varargs behavior rather than special-casing the mounted
+    `happyway_win.exe` call site.
+
+- CE locale validity authority:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winnls.h`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\MIPSII\RETAIL\coredll.def`
+  - COREDLL exports `IsValidLocale` as ordinal `209`.
+  - SDK NLS headers define the `LCID_INSTALLED` and `LCID_SUPPORTED` flag
+    shape used by `IsValidLocale(LCID, DWORD)`. Mounted evidence from
+    `happyway_win.exe` calls `IsValidLocale(0x0412, LCID_INSTALLED)`, so Rust
+    now treats Korean `0x0412` and normal default/known LCIDs as valid under
+    those CE/Win32 flags while rejecting invalid flag values.
+
+- CE process/window lifetime and heap mapping evidence:
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\GWE\GWEAPI\msgqueue.cpp`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`, and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\memory.h`
+  - CE process termination must signal process waiters and release thread/GWE
+    ownership; Rust now applies the same owned-window cleanup used for launched
+    child exits when the current-process pseudo handle is terminated.
+  - CE heap APIs return committed guest memory for the requested allocation
+    range. Rust's Unicorn backend now maps heap spillover pages with the same
+    page-aware range mapper used for virtual allocations so large
+    `HeapAlloc` results are writable all the way to their tail.

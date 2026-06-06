@@ -43,6 +43,19 @@ fn bounding_region_rect(rects: &[Rect]) -> Rect {
         .unwrap_or_default()
 }
 
+fn merge_last_adjacent_region_rect(rects: &mut Vec<Rect>) {
+    let len = rects.len();
+    if len < 2 {
+        return;
+    }
+    let previous = rects[len - 2];
+    let last = rects[len - 1];
+    if previous.left == last.left && previous.right == last.right && previous.bottom == last.top {
+        rects[len - 2].bottom = last.bottom;
+        rects.pop();
+    }
+}
+
 fn is_stock_brush(handle: u32) -> bool {
     matches!(
         stock_object_index(handle),
@@ -520,6 +533,58 @@ impl ResourceSystem {
         let Some(region) = self.regions.get_mut(&handle) else {
             return false;
         };
+        let rects = canonicalize_region_rects(rects);
+        region.rect = bounding_region_rect(&rects);
+        region.rects = rects;
+        true
+    }
+
+    pub fn union_region_with_rect(&mut self, handle: u32, rect: Rect) -> bool {
+        let Some(region) = self.regions.get_mut(&handle) else {
+            return false;
+        };
+        let rect = rect.normalized();
+        if rect.is_empty() {
+            return true;
+        }
+        if region.rects.iter().any(|current| {
+            rect.left >= current.left
+                && rect.top >= current.top
+                && rect.right <= current.right
+                && rect.bottom <= current.bottom
+        }) {
+            return true;
+        }
+        if let Some(last) = region.rects.last_mut() {
+            if last.top == rect.top
+                && last.bottom == rect.bottom
+                && rect.left >= last.left
+                && rect.left <= last.right
+            {
+                last.right = last.right.max(rect.right);
+                merge_last_adjacent_region_rect(&mut region.rects);
+                region.rect = region.rect.union(rect);
+                return true;
+            }
+            if last.left == rect.left && last.right == rect.right && last.bottom == rect.top {
+                last.bottom = rect.bottom;
+                region.rect = region.rect.union(rect);
+                return true;
+            }
+            if rect.top > last.top || (rect.top == last.top && rect.left >= last.left) {
+                region.rects.push(rect);
+                merge_last_adjacent_region_rect(&mut region.rects);
+                region.rect = region.rect.union(rect);
+                return true;
+            }
+        } else {
+            region.rect = rect;
+            region.rects.push(rect);
+            return true;
+        }
+
+        let mut rects = region.rects.clone();
+        rects.push(rect);
         let rects = canonicalize_region_rects(rects);
         region.rect = bounding_region_rect(&rects);
         region.rects = rects;

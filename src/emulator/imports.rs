@@ -344,6 +344,21 @@ pub fn patch_supported_imports_with_external(
     Ok(table)
 }
 
+pub fn patch_external_imports(
+    mapped: &mut [u8],
+    imports: &[ImportDescriptor],
+    external: &ExternalImportTable,
+) -> Result<()> {
+    for descriptor in imports {
+        for thunk in &descriptor.imports {
+            if let Some(address) = external.resolve(&descriptor.module_name, &thunk.import) {
+                write_mapped_u32(mapped, thunk.iat_rva, address)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn normalize_coredll_import_ordinal(ordinal: u32) -> u32 {
     if crate::ce::coredll_ordinals::SDK_ORDINALS
         .iter()
@@ -983,6 +998,42 @@ mod tests {
         assert_eq!(
             u32::from_le_bytes(mapped[0x3004..0x3008].try_into().unwrap()),
             0x6200_5678
+        );
+    }
+
+    #[test]
+    fn second_external_pass_patches_late_loaded_ordinal_imports() {
+        let imports = vec![ImportDescriptor {
+            module_name: "commctrl.dll".to_owned(),
+            original_first_thunk: 0x2000,
+            time_date_stamp: 0,
+            forwarder_chain: 0,
+            name_rva: 0x2040,
+            first_thunk: 0x3000,
+            imports: vec![ImportThunk {
+                thunk_rva: 0x2000,
+                iat_rva: 0x3000,
+                import: ImportBy::Ordinal(2),
+            }],
+        }];
+        let mut module = ExternalImportModule {
+            module_name: "commctrl.dll".to_owned(),
+            image_base: 0x4015_0000,
+            by_ordinal: BTreeMap::new(),
+            by_name: BTreeMap::new(),
+        };
+        module.by_ordinal.insert(2, 0x4017_9d5c);
+        let mut external = ExternalImportTable::default();
+        external.modules.insert("commctrl".to_owned(), module);
+
+        let mut mapped = vec![0; 0x4000];
+        mapped[0x3000..0x3004].copy_from_slice(&0x8000_0002u32.to_le_bytes());
+
+        patch_external_imports(&mut mapped, &imports, &external).unwrap();
+
+        assert_eq!(
+            u32::from_le_bytes(mapped[0x3000..0x3004].try_into().unwrap()),
+            0x4017_9d5c
         );
     }
 
