@@ -51,23 +51,51 @@
     {
       "guest": "LSD1:",
       "type": "ioctl_device",
-      "backend": "stub",
+      "backend": "light_sensor",
       "enabled": true,
       "note": "Drivers\\BuiltIn\\light_sensor_drv, light_sensor_drv.dll, light sensor"
     },
     {
       "guest": "MFS1:",
       "type": "ioctl_device",
-      "backend": "stub",
+      "backend": "magnetometer",
       "enabled": true,
       "note": "Drivers\\BuiltIn\\YAS526B, YAS526B.dll, magnetic field sensor and e-compass candidate"
     },
     {
       "guest": "SMB1:",
       "type": "ioctl_device",
-      "backend": "stub",
+      "backend": "accelerometer",
       "enabled": true,
       "note": "Drivers\\BuiltIn\\SMB380, SMB380.dll, accelerometer candidate"
+    },
+    {
+      "guest": "I2C2:",
+      "type": "ioctl_device",
+      "backend": "i2c_bus",
+      "enabled": true,
+      "note": "Drivers\\BuiltIn\\I2C, gio_i2c.dll, virtual sensor bus"
+    },
+    {
+      "guest": "I2C3:",
+      "type": "ioctl_device",
+      "backend": "i2c_bus",
+      "enabled": true,
+      "note": "Drivers\\BuiltIn\\I2C2, gio_i2c2.dll, virtual sensor bus"
+    },
+    {
+      "guest": "I2C4:",
+      "type": "ioctl_device",
+      "backend": "i2c_bus",
+      "enabled": true,
+      "note": "Drivers\\BuiltIn\\I2C3, gio_i2c3.dll, virtual sensor bus"
+    },
+    {
+      "guest": "I2C5:",
+      "type": "ioctl_device",
+      "backend": "i2c_bus",
+      "enabled": true,
+      "note": "Drivers\\BuiltIn\\I2C4, gio_i2c4.dll, virtual sensor bus"
     },
     {
       "guest": "CAM1:",

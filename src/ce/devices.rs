@@ -1,3 +1,8 @@
+mod accelerometer;
+mod i2c_bus;
+mod light_sensor;
+mod magnetometer;
+
 use std::collections::BTreeMap;
 #[cfg(windows)]
 use std::{
@@ -64,6 +69,10 @@ pub enum DeviceKind {
 pub enum DeviceBackend {
     Win32Com,
     Stub,
+    Accelerometer,
+    I2cBus,
+    LightSensor,
+    Magnetometer,
     #[serde(rename = "NANDUUID_RETURN")]
     NandUuidReturn,
 }
@@ -85,8 +94,18 @@ pub struct DeviceSession {
     comm_mask: u32,
     rx: Vec<u8>,
     tx: Vec<u8>,
+    runtime: DeviceRuntime,
     #[cfg(windows)]
     host_serial: Option<Win32ComPort>,
+}
+
+#[derive(Debug, Clone)]
+enum DeviceRuntime {
+    None,
+    Accelerometer(accelerometer::Accelerometer),
+    I2cBus(i2c_bus::I2cBus),
+    LightSensor(light_sensor::LightSensor),
+    Magnetometer(magnetometer::Magnetometer),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -186,6 +205,7 @@ impl DeviceNamespace {
             comm_mask: 0,
             rx: Vec::new(),
             tx: Vec::new(),
+            runtime: DeviceRuntime::from_backend(&config.backend),
             #[cfg(windows)]
             host_serial,
         })
@@ -221,6 +241,20 @@ impl DeviceNamespace {
             fallback.get_or_insert_with(|| device.guest.clone());
         }
         fallback
+    }
+}
+
+impl DeviceRuntime {
+    fn from_backend(backend: &DeviceBackend) -> Self {
+        match backend {
+            DeviceBackend::Accelerometer => {
+                Self::Accelerometer(accelerometer::Accelerometer::new())
+            }
+            DeviceBackend::I2cBus => Self::I2cBus(i2c_bus::I2cBus::new()),
+            DeviceBackend::LightSensor => Self::LightSensor(light_sensor::LightSensor::new()),
+            DeviceBackend::Magnetometer => Self::Magnetometer(magnetometer::Magnetometer::new()),
+            _ => Self::None,
+        }
     }
 }
 
@@ -320,11 +354,35 @@ impl DeviceSession {
     pub fn device_io_control(
         &mut self,
         ioctl_code: u32,
-        _input: &[u8],
+        input: &[u8],
         output_capacity: u32,
     ) -> DeviceIoControlResult {
+        match &mut self.runtime {
+            DeviceRuntime::Accelerometer(sensor) => {
+                return sensor.device_io_control(ioctl_code, input, output_capacity);
+            }
+            DeviceRuntime::I2cBus(bus) => {
+                return bus.device_io_control(ioctl_code, input, output_capacity);
+            }
+            DeviceRuntime::LightSensor(sensor) => {
+                return sensor.device_io_control(ioctl_code, input, output_capacity);
+            }
+            DeviceRuntime::Magnetometer(sensor) => {
+                return sensor.device_io_control(ioctl_code, input, output_capacity);
+            }
+            DeviceRuntime::None => {}
+        }
+
         match self.backend {
             DeviceBackend::Stub | DeviceBackend::Win32Com => DeviceIoControlResult {
+                success: false,
+                bytes_returned: 0,
+                output: Vec::new(),
+            },
+            DeviceBackend::Accelerometer
+            | DeviceBackend::I2cBus
+            | DeviceBackend::LightSensor
+            | DeviceBackend::Magnetometer => DeviceIoControlResult {
                 success: false,
                 bytes_returned: 0,
                 output: Vec::new(),
@@ -576,5 +634,89 @@ mod tests {
         assert_eq!(win32_com_path("COM21"), r"\\.\COM21");
         assert_eq!(win32_com_path(r"\\.\COM21"), r"\\.\COM21");
         assert_eq!(win32_com_path("COM7:"), r"\\.\COM7");
+    }
+
+    #[test]
+    fn sensor_backends_handle_decoded_ioctl_contracts() {
+        let namespace = DeviceNamespace::from_config(DeviceConfigFile {
+            version: 1,
+            defaults: DeviceDefaults::default(),
+            devices: vec![
+                DeviceConfig {
+                    guest: "SMB1:".to_owned(),
+                    kind: DeviceKind::IoctlDevice,
+                    backend: DeviceBackend::Accelerometer,
+                    host: None,
+                    enabled: true,
+                    note: None,
+                },
+                DeviceConfig {
+                    guest: "LSD1:".to_owned(),
+                    kind: DeviceKind::IoctlDevice,
+                    backend: DeviceBackend::LightSensor,
+                    host: None,
+                    enabled: true,
+                    note: None,
+                },
+                DeviceConfig {
+                    guest: "MFS1:".to_owned(),
+                    kind: DeviceKind::IoctlDevice,
+                    backend: DeviceBackend::Magnetometer,
+                    host: None,
+                    enabled: true,
+                    note: None,
+                },
+                DeviceConfig {
+                    guest: "I2C2:".to_owned(),
+                    kind: DeviceKind::IoctlDevice,
+                    backend: DeviceBackend::I2cBus,
+                    host: None,
+                    enabled: true,
+                    note: None,
+                },
+            ],
+        });
+
+        let mut accel = namespace.open("SMB1:").unwrap();
+        let xyz = accel.device_io_control(accelerometer::IOCTL_SMB380_READ_ACCEL_XYZT, &[], 6);
+        assert!(xyz.success);
+        assert_eq!(xyz.bytes_returned, 6);
+        assert_eq!(&xyz.output[4..6], &256i16.to_le_bytes());
+
+        let range_set = accel.device_io_control(accelerometer::IOCTL_SMB380_SET_RANGE, &[3], 0);
+        assert!(range_set.success);
+        let range_get = accel.device_io_control(accelerometer::IOCTL_SMB380_GET_RANGE, &[], 1);
+        assert_eq!(range_get.output, vec![3]);
+
+        let mut light = namespace.open("LSD1:").unwrap();
+        assert!(
+            light
+                .device_io_control(light_sensor::IOCTL_LSD_SET_CONTROL, &[0x7f], 0)
+                .success
+        );
+        let lux = light.device_io_control(light_sensor::IOCTL_LSD_READ_LUX, &[], 2);
+        assert!(lux.success);
+        assert_eq!(lux.bytes_returned, 2);
+
+        let mut mag = namespace.open("MFS1:").unwrap();
+        assert!(
+            mag.device_io_control(
+                magnetometer::IOCTL_MFS_WRITE_REGISTERS,
+                &[0, 0x40, 0, 0xaa],
+                0
+            )
+            .success
+        );
+        let mag_read =
+            mag.device_io_control(magnetometer::IOCTL_MFS_READ_REGISTERS, &[0, 0x40, 1, 0], 1);
+        assert_eq!(mag_read.output, vec![0xaa]);
+
+        let mut i2c = namespace.open("I2C2:").unwrap();
+        assert!(
+            i2c.device_io_control(i2c_bus::IOCTL_I2C_WRITE, &[0x10, 0x33], 0)
+                .success
+        );
+        let i2c_read = i2c.device_io_control(i2c_bus::IOCTL_I2C_READ, &[0x10], 1);
+        assert_eq!(i2c_read.output, vec![0x33]);
     }
 }
