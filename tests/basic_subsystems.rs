@@ -1360,9 +1360,9 @@ fn virtual_win32_api_smoke_covers_file_device_sync_gwe_and_audio() -> Result<()>
     assert!(kernel.close_handle(com)?);
 
     let uid = kernel.create_file_w("UID1:", GENERIC_READ, CREATE_ALWAYS)?;
-    let uid_ioctl = kernel.device_io_control(uid, 0x2222, &[], 16)?;
+    let uid_ioctl = kernel.device_io_control(uid, 0xa000_00cc, &[], 4)?;
     assert!(uid_ioctl.success);
-    assert!(uid_ioctl.bytes_returned > 0);
+    assert_eq!(uid_ioctl.bytes_returned, 4);
     assert!(kernel.close_handle(uid)?);
 
     let auto_event = kernel.create_event_w(Some("auto".to_owned()), false, true);

@@ -17846,7 +17846,6 @@ fn format_trace_string(value: &str) -> String {
     format!("{value:?}")
 }
 
-#[cfg(feature = "unicorn")]
 fn format_optional_hwnd(hwnd: Option<u32>) -> String {
     hwnd.map(|hwnd| format!("0x{hwnd:08x}"))
         .unwrap_or_else(|| "<none>".to_owned())
