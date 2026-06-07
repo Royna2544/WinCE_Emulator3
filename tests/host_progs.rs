@@ -43,13 +43,16 @@ fn host_tools_sources_cover_requested_utilities() {
     let taskmgr = fs::read_to_string("host_progs/taskmgr.cpp").expect("host_progs/taskmgr.cpp");
     assert!(taskmgr.contains("GlobalMemoryStatus"));
     assert!(taskmgr.contains("GetDiskFreeSpaceExW"));
+    assert!(taskmgr.contains("FILE_ATTRIBUTE_TEMPORARY"));
     assert!(taskmgr.contains("DynCreateToolhelp32Snapshot"));
     assert!(taskmgr.contains("CPU Usage"));
     assert!(taskmgr.contains("Processes"));
 
     let easy = fs::read_to_string("host_progs/easy_iNavi.cpp").expect("host_progs/easy_iNavi.cpp");
-    assert!(easy.contains("\\\\SDMMC Disk\\\\INavi\\\\iNavi.exe"));
+    assert!(easy.contains("\\\\SDMMC Disk\\\\INavi\\\\iNavi_main.exe"));
     assert!(easy.contains("\\\\Windows\\\\explorer.exe"));
+    assert!(easy.contains("CreateMutexW"));
+    assert!(easy.contains("Already running"));
     assert!(easy.contains("CreateProcessW"));
 
     let helper =

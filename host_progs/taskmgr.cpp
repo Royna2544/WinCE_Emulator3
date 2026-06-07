@@ -14,6 +14,7 @@ static HWND g_main;
 static HWND g_text;
 static DWORD g_last_tick;
 static DWORD g_last_idle;
+static DWORD g_static_idle_samples;
 
 static void CopyString(WCHAR *dst, int dst_chars, const WCHAR *src) {
     int i = 0;
@@ -113,6 +114,17 @@ static DWORD EstimateCpuUsage(BOOL *available) {
     if (g_last_tick && now_tick != g_last_tick && now_idle >= g_last_idle) {
         DWORD elapsed = now_tick - g_last_tick;
         DWORD idle = now_idle - g_last_idle;
+        if (elapsed >= 500 && idle == 0 && now_idle == g_last_idle) {
+            ++g_static_idle_samples;
+            if (g_static_idle_samples >= 2) {
+                *available = FALSE;
+                g_last_tick = now_tick;
+                g_last_idle = now_idle;
+                return 0;
+            }
+        } else {
+            g_static_idle_samples = 0;
+        }
         usage = idle >= elapsed ? 0 : ((elapsed - idle) * 100) / elapsed;
         if (usage > 100) {
             usage = 100;
@@ -201,6 +213,9 @@ static void AppendDisks(WCHAR *text, int text_chars) {
             if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
                 continue;
             }
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_TEMPORARY)) {
+                continue;
+            }
             if (fd.cFileName[0] == L'.') {
                 continue;
             }
@@ -233,10 +248,12 @@ static void AppendProcesses(WCHAR *text, int text_chars) {
             wsprintfW(line, L"%-28s %8lu  N/A   N/A     N/A",
                 pe.szExeFile, pe.th32ProcessID);
             AppendLine(text, text_chars, line);
+            ZeroMemory(&pe, sizeof(pe));
+            pe.dwSize = sizeof(pe);
         } while (DynProcess32Next(snap, &pe));
     } else {
         WCHAR line[120];
-        wsprintfW(line, L"Process list unavailable, error=%lu", GetLastError());
+        wsprintfW(line, L"Process32First unavailable, error=%lu", GetLastError());
         AppendLine(text, text_chars, line);
     }
     CloseHandle(snap);
