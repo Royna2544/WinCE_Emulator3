@@ -11,9 +11,9 @@ use crate::{
         gwe::{
             Gwe, GweStats, HWND_BROADCAST, HWND_TOP, Message, MessagePointerPayload, PeekFlags,
             Point, Rect, SMF_NULL, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-            SWP_NOZORDER, SWP_SHOWWINDOW, WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE,
-            WM_ENABLE, WM_KILLFOCUS, WM_MOVE, WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE,
-            WM_WINDOWPOSCHANGED, WindowPos,
+            SWP_NOZORDER, SWP_SHOWWINDOW, ShellNotificationMessage, WA_ACTIVE, WA_INACTIVE,
+            WM_ACTIVATE, WM_CANCELMODE, WM_ENABLE, WM_KILLFOCUS, WM_MOVE, WM_NOTIFY, WM_SETFOCUS,
+            WM_SHOWWINDOW, WM_SIZE, WM_WINDOWPOSCHANGED, WindowPos,
         },
         memory::{MemorySystem, PROCESS_HEAP_HANDLE},
         object::{
@@ -3021,6 +3021,40 @@ impl CeKernel {
         self.post_message_w(icon.hwnd, icon.callback_message, icon.id, event_lparam)
     }
 
+    pub fn post_shell_notification_callback(
+        &mut self,
+        clsid: [u8; 16],
+        id: u32,
+        code: u32,
+        data0: u32,
+        data1: u32,
+    ) -> bool {
+        let Some(record) = self.shell.notification(clsid, id).cloned() else {
+            return false;
+        };
+        if record.hwnd_sink == 0 || !self.gwe.is_window(record.hwnd_sink) {
+            return false;
+        }
+        let lparam = self.queue_shell_notification_payload(ShellNotificationMessage {
+            hwnd_from: 0,
+            id_from: record.id,
+            code,
+            lparam: record.lparam,
+            return_value: 0,
+            data0,
+            data1,
+        });
+        if lparam == 0 {
+            return false;
+        }
+        if self.post_message_w(record.hwnd_sink, WM_NOTIFY, record.id, lparam) {
+            true
+        } else {
+            let _ = self.release_message_pointer_payload(lparam);
+            false
+        }
+    }
+
     pub fn post_message_w_for_thread(
         &mut self,
         thread_id: u32,
@@ -3496,7 +3530,7 @@ impl CeKernel {
         if let Some(sent_context_thread) = sent_context_thread {
             self.complete_active_sent_message(sent_context_thread, result);
         }
-        if message.msg == WM_WINDOWPOSCHANGED {
+        if message.msg == WM_WINDOWPOSCHANGED || message.msg == WM_NOTIFY {
             self.release_message_pointer_payload(message.lparam);
         }
         result
@@ -4048,6 +4082,21 @@ impl CeKernel {
         if self
             .gwe
             .insert_message_pointer_payload(ptr, MessagePointerPayload::WindowPos(payload))
+        {
+            ptr
+        } else {
+            let _ = self.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
+            0
+        }
+    }
+
+    fn queue_shell_notification_payload(&mut self, payload: ShellNotificationMessage) -> u32 {
+        let Some(ptr) = self.memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 28) else {
+            return 0;
+        };
+        if self
+            .gwe
+            .insert_message_pointer_payload(ptr, MessagePointerPayload::ShellNotification(payload))
         {
             ptr
         } else {

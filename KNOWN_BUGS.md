@@ -103,10 +103,12 @@
     `Shell_NotifyIconW` tracks add/modify/delete state and can now post the
     registered owner callback message for shell-icon events, but does not yet
     render tray UI or own richer timeout/dismiss/icon lifetime.
-    `SHNotification*I` preserves/query data but not user interaction or
-    timeout/dismiss callbacks. `TrackPopupMenuEx` now sends CE menu-loop owner
-    notifications around tracked popup attempts, but still has no rendered
-    popup window or real interactive selection. `MessageBoxW` validates owners
+    `SHNotification*I` preserves/query data and can post `WM_NOTIFY`/`NMSHN`
+    sink callbacks for stored notification events, but not link-string
+    selection, COM callbacks, or timeout/dismiss policy. `TrackPopupMenuEx`
+    now sends CE menu-loop owner notifications around tracked popup attempts,
+    but still has no rendered popup window or real interactive selection.
+    `MessageBoxW` validates owners
     and records/defaults the requested modal result, but does not yet
     create/render a modal dialog or run a nested input pump. Basic
     `SHCreateShortcut`,
@@ -1975,10 +1977,12 @@
 - Shell notification data is stored, but shell bubble interaction is not.
   - Symptom: callers can add/update/remove/query `SHNotification*I` records,
     and `Shell_NotifyIconW` can post the registered owner callback message for
-    shell-icon events, but the emulator does not yet create taskbar bubble UI,
-    send `SHNN_*` callbacks, deliver dismiss/link selections, or expire
-    notification icons. Notification records tied to destroyed sink HWNDs are
-    now removed during normal window/process teardown.
+    shell-icon events. `SHNotification*I` can also post a `WM_NOTIFY`/`NMSHN`
+    payload to the stored sink HWND for generic notification events, but the
+    emulator does not yet create taskbar bubble UI, marshal link-selection
+    strings, call `IShellNotificationCallback`, own timeout/dismiss policy, or
+    expire notification icons. Notification records tied to destroyed sink
+    HWNDs are now removed during normal window/process teardown.
   - Evidence: CE `notification.cpp` routes notification records through
     taskbar bubble/tray lists and `WM_NOTIFY` callback paths; Rust currently
     implements the app-visible data store only.

@@ -21,6 +21,7 @@ pub const WM_SHOWWINDOW: u32 = 0x0018;
 pub const WM_CANCELMODE: u32 = 0x001f;
 pub const WM_SETCURSOR: u32 = 0x0020;
 pub const WM_WINDOWPOSCHANGED: u32 = 0x0047;
+pub const WM_NOTIFY: u32 = 0x004e;
 pub const WM_ACTIVATE: u32 = 0x0006;
 pub const WM_SETFOCUS: u32 = 0x0007;
 pub const WM_KILLFOCUS: u32 = 0x0008;
@@ -226,8 +227,20 @@ pub struct WindowPos {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShellNotificationMessage {
+    pub hwnd_from: u32,
+    pub id_from: u32,
+    pub code: u32,
+    pub lparam: u32,
+    pub return_value: u32,
+    pub data0: u32,
+    pub data1: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessagePointerPayload {
     WindowPos(WindowPos),
+    ShellNotification(ShellNotificationMessage),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

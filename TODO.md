@@ -96,13 +96,16 @@
   richer `SHGetFileInfo` icon extraction/image-list behavior, rich
   notification interaction callbacks above the now-stateful
   `SHNotification*I` data APIs and the now-backed `Shell_NotifyIconW` owner
-  callback posting path, recent-doc pruning/UI display and PIDL input above
-  the now-backed `SHAddToRecentDocs(SHARD_PATH/null)` recent shortcut/state
-  path, file-change event delivery/PIDL payloads above the now-stateful
-  `SHChangeNotifyRegisterI`/`SHFileNotifyRemoveI`/`SHFileNotifyFreeI`
-  registration/free path, rendered popup/menu windows and real selection above
-  the now-notifying `TrackPopupMenuEx` owner-message path, rendered modal `MessageBoxW`
-  window/nested pump/button input above the
+  callback posting path. `SHNotification*I` can now post `WM_NOTIFY`/`NMSHN`
+  payloads for stored notification events; continue with `SHNN_LINKSEL`
+  string marshalling, timeout/dismiss policy, COM notification callbacks, and
+  real taskbar/bubble UI. Also continue recent-doc pruning/UI display and PIDL
+  input above the now-backed `SHAddToRecentDocs(SHARD_PATH/null)` recent
+  shortcut/state path, file-change event delivery/PIDL payloads above the
+  now-stateful `SHChangeNotifyRegisterI`/`SHFileNotifyRemoveI`/
+  `SHFileNotifyFreeI` registration/free path, rendered popup/menu windows and
+  real selection above the now-notifying `TrackPopupMenuEx` owner-message
+  path, rendered modal `MessageBoxW` window/nested pump/button input above the
   now-recorded/default-result raw slice, keyboard translation, richer
   clipboard rendered ownership and delayed-render edge cases above the
   now-stateful raw clipboard store and allocation-copy path, and rendered

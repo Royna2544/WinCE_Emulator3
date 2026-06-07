@@ -4609,11 +4609,12 @@
   `SHNotificationAddI`, `SHNotificationUpdateI`, `SHNotificationRemoveI`, and
   `SHNotificationGetDataI` now decode the CE `SHNOTIFICATIONDATA` marshalled
   struct, key notifications by `CLSID + dwID`, preserve title/HTML/icon/
-  duration/sink/lParam state, return CE-style Win32 error codes, and copy
-  stored data back into guest buffers. Focused coverage
-  `shnotification_i_tracks_query_update_and_remove_state` passes. This keeps
-  shell-visible notification data honest without synthesizing taskbar bubble
-  UI.
+  duration/sink/lParam state, return CE-style Win32 error codes, copy stored
+  data back into guest buffers, and post a CE-shaped `WM_NOTIFY`/`NMSHN`
+  callback payload to the sink HWND for stored notification events. Focused
+  coverage `shnotification_i_tracks_query_update_and_remove_state` passes.
+  This keeps shell-visible notification data and callbacks honest without
+  synthesizing taskbar bubble UI.
 
 - Added shell notification lifetime cleanup on HWND destruction. The kernel
   destroy-window and process-window teardown paths now prune `Shell_NotifyIcon`

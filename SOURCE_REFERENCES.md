@@ -1563,16 +1563,23 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\shsdkstc.h`,
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\shellsdk.h`,
   `C:\WINCE600\PRIVATE\SHELL\SHELLPSL\HAVEAYGSHELL\api.cpp`, and
+  `C:\WINCE600\PRIVATE\SHELL\SHELLPSL\HAVEAYGSHELL\shellpsl.cpp`,
   `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\AYGSHELLFUNCS\HAVEAYGSHELL\notification.cpp`
   - `shsdkstc.h` defines `SHNOTIFICATIONDATA` as the 56-byte CE struct keyed
     by `CLSID` and `dwID`, with title/HTML strings carried through marshalled
     pointers in the `I` API set signatures.
+  - `shellsdk.h` defines `SHNN_SHOW`, `SHNN_DISMISS`, `SHNN_LINKSEL`, and the
+    `NMSHN` callback payload. `shellpsl.cpp` marshals `NMSHN` into the target
+    process and sends `WM_NOTIFY` with `wParam=hdr.idFrom` and
+    `lParam=NMSHN*`.
   - `api.cpp` maps `SHNotificationAddI`/`UpdateI`/`RemoveI`/`GetDataI` to the
     shell API set and returns Win32 error codes (`ERROR_SUCCESS`,
     `ERROR_INVALID_PARAMETER`, `ERROR_INVALID_DATA`) rather than BOOL success.
   - `notification.cpp` stores notification data in the taskbar/bubble lists
     and copies the persisted struct/title/HTML fields back through
     `GetNotificationData`. Rust now preserves that app-visible data in
-    `ShellSystem` and prunes records whose sink HWND is destroyed through
-    normal window/process teardown; visual bubble/taskbar rendering,
-    timeout/dismiss, and `SHNN_*` callbacks remain queued separately.
+    `ShellSystem`, can post the window-based `WM_NOTIFY`/`NMSHN` sink callback
+    for stored notification events, and prunes records whose sink HWND is
+    destroyed through normal window/process teardown; visual bubble/taskbar
+    rendering, link-string marshalling, COM callbacks, and timeout/dismiss
+    policy remain queued separately.

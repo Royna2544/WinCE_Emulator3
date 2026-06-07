@@ -18714,6 +18714,11 @@ fn write_message_pointer_payload<M: CoredllGuestMemory>(
         {
             write_guest_window_pos(kernel, memory, thread_id, message.lparam, window_pos)
         }
+        Some(MessagePointerPayload::ShellNotification(notification))
+            if message.msg == crate::ce::gwe::WM_NOTIFY =>
+        {
+            write_guest_shell_notification(kernel, memory, thread_id, message.lparam, notification)
+        }
         Some(_) | None => true,
     }
 }
@@ -18767,6 +18772,58 @@ fn write_guest_window_pos<M: CoredllGuestMemory>(
             thread_id,
             addr.wrapping_add(24),
             window_pos.flags,
+        )
+}
+
+fn write_guest_shell_notification<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    addr: u32,
+    notification: crate::ce::gwe::ShellNotificationMessage,
+) -> bool {
+    write_guest_u32(kernel, memory, thread_id, addr, notification.hwnd_from)
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            addr.wrapping_add(4),
+            notification.id_from,
+        )
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            addr.wrapping_add(8),
+            notification.code,
+        )
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            addr.wrapping_add(12),
+            notification.lparam,
+        )
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            addr.wrapping_add(16),
+            notification.return_value,
+        )
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            addr.wrapping_add(20),
+            notification.data0,
+        )
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            addr.wrapping_add(24),
+            notification.data1,
         )
 }
 

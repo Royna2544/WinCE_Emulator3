@@ -8,13 +8,13 @@ use wince_emulation_v3::{
             ORD_CE_GET_THREAD_PRIORITY, ORD_CE_SET_THREAD_PRIORITY, ORD_CLEAR_COMM_ERROR,
             ORD_CLOSE_CLIPBOARD, ORD_CLOSE_HANDLE, ORD_COUNT_CLIPBOARD_FORMATS, ORD_CREATE_EVENT_W,
             ORD_CREATE_PROCESS_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD,
-            ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_EMPTY_CLIPBOARD, ORD_ENUM_CLIPBOARD_FORMATS,
-            ORD_EVENT_MODIFY, ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY,
-            ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC,
-            ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK,
-            ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_EXIT_CODE_PROCESS,
-            ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
-            ORD_GET_MODULE_HANDLE_W, ORD_GET_OPEN_CLIPBOARD_WINDOW,
+            ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_DISPATCH_MESSAGE_W, ORD_EMPTY_CLIPBOARD,
+            ORD_ENUM_CLIPBOARD_FORMATS, ORD_EVENT_MODIFY, ORD_FILE_TIME_TO_SYSTEM_TIME,
+            ORD_FREE_LIBRARY, ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA,
+            ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER,
+            ORD_GET_COMM_MASK, ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS,
+            ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR,
+            ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W, ORD_GET_OPEN_CLIPBOARD_WINDOW,
             ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
             ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID,
             ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_TIME,
@@ -25,10 +25,11 @@ use wince_emulation_v3::{
             ORD_INTERLOCKED_INCREMENT, ORD_IS_CLIPBOARD_FORMAT_AVAILABLE, ORD_KERNEL_IO_CONTROL,
             ORD_LEAVE_CRITICAL_SECTION, ORD_LOAD_LIBRARY_EX_W, ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS,
             ORD_MESSAGE_BOX_W, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR,
-            ORD_OPEN_CLIPBOARD, ORD_OPEN_EVENT_W, ORD_PURGE_COMM, ORD_QUERY_PERFORMANCE_COUNTER,
-            ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_RELEASE_MUTEX,
-            ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD, ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK,
-            ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
+            ORD_OPEN_CLIPBOARD, ORD_OPEN_EVENT_W, ORD_PEEK_MESSAGE_W, ORD_PURGE_COMM,
+            ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY,
+            ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE,
+            ORD_RESUME_THREAD, ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK, ORD_SET_COMM_STATE,
+            ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
             ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT,
             ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON,
             ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO,
@@ -42,11 +43,15 @@ use wince_emulation_v3::{
         },
         devices::CommDcb,
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
-        gwe::{Message, PeekFlags, QS_POSTMESSAGE, QS_TIMER, WM_LBUTTONDOWN, WM_TIMER, WM_USER},
+        gwe::{
+            Message, PeekFlags, QS_POSTMESSAGE, QS_TIMER, WM_LBUTTONDOWN, WM_NOTIFY, WM_TIMER,
+            WM_USER,
+        },
         kernel::{
             CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
             LoadedModuleMetadata,
         },
+        memory::PROCESS_HEAP_HANDLE,
         object::MAX_SUSPEND_COUNT,
         registry::{ERROR_SUCCESS, RegistryValue},
         scheduler::SchedulerBlockedWaitKind,
@@ -2769,6 +2774,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     const SHNUM_ICON: u32 = 0x0004;
     const SHNUM_HTML: u32 = 0x0008;
     const SHNUM_TITLE: u32 = 0x0010;
+    const SHNN_SHOW: u32 = 0xffff_fc16;
 
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
@@ -2783,6 +2789,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     let out_title = 0x3002_e000;
     let out_html = 0x3002_f000;
     let html_len = 0x3002_f800;
+    let msg_ptr = 0x3002_fc00;
     let clsid = [
         0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x44, 0x33, 0x22, 0x11, 0xaa, 0xbb, 0xcc,
         0xdd,
@@ -2794,6 +2801,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     memory.map_bytes(out_title, 64);
     memory.map_bytes(out_html, 128);
     memory.map_words(html_len, 1);
+    memory.map_words(msg_ptr, 7);
     memory.write_word(data, SHNOTIFICATIONDATA_SIZE);
     memory.write_word(data + 4, 301);
     memory.write_word(data + 8, SHNP_INFORM);
@@ -2823,6 +2831,57 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     assert_eq!(record.title, "Route alert");
     assert_eq!(record.html, "<b>Drive now</b>");
     assert_eq!(record.duration_cs, 5);
+    assert!(kernel.post_shell_notification_callback(clsid, 301, SHNN_SHOW, 0, 0));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PEEK_MESSAGE_W,
+            [msg_ptr, hwnd, WM_NOTIFY, WM_NOTIFY, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(msg_ptr)?, hwnd);
+    assert_eq!(memory.read_u32(msg_ptr + 4)?, WM_NOTIFY);
+    assert_eq!(memory.read_u32(msg_ptr + 8)?, 301);
+    let nmshn_ptr = memory.read_u32(msg_ptr + 12)?;
+    assert_ne!(nmshn_ptr, 0);
+    assert_eq!(memory.read_u32(nmshn_ptr)?, 0);
+    assert_eq!(memory.read_u32(nmshn_ptr + 4)?, 301);
+    assert_eq!(memory.read_u32(nmshn_ptr + 8)?, SHNN_SHOW);
+    assert_eq!(memory.read_u32(nmshn_ptr + 12)?, 0xCAFE_BABE);
+    assert_eq!(memory.read_u32(nmshn_ptr + 16)?, 0);
+    assert_eq!(memory.read_u32(nmshn_ptr + 20)?, 0);
+    assert_eq!(memory.read_u32(nmshn_ptr + 24)?, 0);
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, nmshn_ptr)
+            .is_some()
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DISPATCH_MESSAGE_W,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, nmshn_ptr)
+            .is_none()
+    );
 
     memory.write_word(html_len, 8);
     let get_result = table.dispatch_raw_ordinal_with_memory(
