@@ -52,6 +52,20 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     The implementation parses guest wide strings and writes `endptr` in
     two-byte character units.
 
+- Old MIPS CE kernel-call encoding:
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\nkmips.h`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c`, and corroborating
+  v2 notes/code in `..\WinCE_Emulator_v2\PROGRESS.md`,
+  `..\WinCE_Emulator_v2\src\ce_kernel.cpp`, and
+  `..\WinCE_Emulator_v2\src\synthetic_dll.cpp`
+  - CE's old MIPS direct API-call encoding maps target `0xfffff3fa` to process
+    API set method 2, `TerminateProcess`. `DeviceParser.exe` reaches this via
+    `addiu t0,$zero,-0xc06; jalr t0`, with the process handle in `a0` and the
+    exit code in `a1`. v3 decodes that pattern at the Unicorn/CE boundary even
+    when Unicorn reports it as an interrupt/zero-PC stop, then routes it
+    through the same current-process terminate path as raw COREDLL
+    `TerminateProcess`.
+
 - CE process and message scheduler frontier:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\schedule.c`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\thread.c`,
@@ -72,6 +86,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     sent-message stack, paint list, then quit. v3 mirrors this for
     `GetMessageW` and removing `PeekMessageW`, so ordinary posted mouse/timer/
     private messages are not starved behind received synchronous sends.
+  - CE sent messages are processed as queue-internal work, not returned to the
+    caller as ordinary `MSG` records. v3 now uses that boundary for the route
+    helper IPC path: `GetMessageW` can enter the target guest WNDPROC for a
+    ready sent message, complete the GWE transaction, then resume the original
+    `GetMessageW` import so the receiver continues its normal message loop.
 
 - GWE/GDI region and window-region behavior:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h`,

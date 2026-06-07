@@ -48,6 +48,19 @@ pub enum MessagePumpResult {
     Idle,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemoteTouchTargeting {
+    Explicit,
+    ThreadHitTest,
+    DesktopHitTest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RemoteInputDrain {
+    posted: usize,
+    detail: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct CeKernel {
     pub registry: Registry,
@@ -169,7 +182,7 @@ const FILE_TRACE_LIMIT: usize = 512;
 const FILE_TRACE_PREVIEW_LIMIT: usize = 64;
 const PROCESS_TRACE_LIMIT: usize = 128;
 const EVENT_TRACE_LIMIT: usize = 256;
-const MESSAGE_TRACE_LIMIT: usize = 512;
+const MESSAGE_TRACE_LIMIT: usize = 2048;
 
 pub fn normalize_module_name(name: &str) -> String {
     name.trim()
@@ -476,7 +489,21 @@ impl CeKernel {
             .map(|window| window.hwnd)
             .collect::<Vec<_>>();
         for hwnd in &hwnds {
+            self.record_window_lifecycle_trace(
+                "destroy_window_begin",
+                thread_id,
+                Some(*hwnd),
+                Some(1),
+                Some(format!("reason=process_exit/process_id={process_id}")),
+            );
             let _ = self.gwe.destroy_window(*hwnd, self.timers.tick_count());
+            self.record_window_lifecycle_trace(
+                "destroy_window_end",
+                thread_id,
+                Some(*hwnd),
+                Some(1),
+                Some(format!("reason=process_exit/process_id={process_id}")),
+            );
         }
         if !hwnds.is_empty() {
             self.timers.remove_window_timers(&hwnds);
@@ -497,6 +524,21 @@ impl CeKernel {
                 timer.id,
                 timer.callback.unwrap_or(0),
                 self.timers.tick_count(),
+            );
+            self.record_message_op(
+                "timer_due",
+                target_thread_id,
+                &message,
+                Some(1),
+                Some(format!(
+                    "timer_thread={}/hwnd={}/id=0x{:08x}/period_ms={}/callback=0x{:08x}/target_thread={}",
+                    timer.thread_id,
+                    format_optional_hwnd(timer.hwnd),
+                    timer.id,
+                    timer.period_ms.unwrap_or(0),
+                    timer.callback.unwrap_or(0),
+                    target_thread_id
+                )),
             );
             self.post_gwe_message(target_thread_id, message);
         }
@@ -583,6 +625,36 @@ impl CeKernel {
             self.recent_message_ops.remove(0);
         }
         self.recent_message_ops.push(record);
+    }
+
+    pub fn record_window_lifecycle_trace(
+        &mut self,
+        op: &'static str,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        result: Option<u32>,
+        extra: Option<String>,
+    ) {
+        let detail = match (
+            hwnd.and_then(|hwnd| self.gwe.window(hwnd).map(window_lifecycle_detail)),
+            extra,
+        ) {
+            (Some(detail), Some(extra)) => Some(format!("{detail}/{extra}")),
+            (Some(detail), None) => Some(detail),
+            (None, extra) => extra,
+        };
+        self.record_message_trace(MessageTraceRecord {
+            op,
+            thread_id,
+            hwnd,
+            msg: None,
+            wparam: None,
+            lparam: None,
+            screen_pos: None,
+            source: None,
+            result,
+            detail,
+        });
     }
 
     fn record_message_op(
@@ -2190,6 +2262,15 @@ impl CeKernel {
                 rect,
             );
         self.handles.insert(KernelObject::Window(hwnd));
+        self.record_window_lifecycle_trace(
+            "create_window",
+            thread_id,
+            Some(hwnd),
+            Some(hwnd),
+            Some(format!(
+                "requested_class={class_name}/requested_title={title}/id=0x{id:08x}"
+            )),
+        );
         hwnd
     }
 
@@ -2208,8 +2289,27 @@ impl CeKernel {
         }
         let before = self.gwe.get_window_rect(hwnd);
         let was_direct_visible = self.direct_window_visible(hwnd);
+        let was_effective_visible = self.gwe.is_window_visible(hwnd);
         let previous = self.gwe.show_window(hwnd, visible);
         let is_direct_visible = self.direct_window_visible(hwnd);
+        let is_effective_visible = self.gwe.is_window_visible(hwnd);
+        if was_direct_visible != is_direct_visible || was_effective_visible != is_effective_visible
+        {
+            let thread_id = self
+                .gwe
+                .window(hwnd)
+                .map(|window| window.thread_id)
+                .unwrap_or(0);
+            self.record_window_lifecycle_trace(
+                "show_window",
+                thread_id,
+                Some(hwnd),
+                Some(u32::from(previous)),
+                Some(format!(
+                    "requested_visible={visible}/activate={activate}/was_direct={was_direct_visible}/is_direct={is_direct_visible}/was_effective={was_effective_visible}/is_effective={is_effective_visible}"
+                )),
+            );
+        }
         if was_direct_visible != is_direct_visible {
             self.post_window_message(hwnd, WM_SHOWWINDOW, u32::from(is_direct_visible), 0);
             let mut flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER;
@@ -2293,6 +2393,32 @@ impl CeKernel {
         if moved {
             let after = self.gwe.get_window_rect(hwnd);
             let is_visible = self.direct_window_visible(hwnd);
+            if was_visible != is_visible
+                || flags & (SWP_SHOWWINDOW | SWP_HIDEWINDOW) != 0
+                || flags & SWP_NOZORDER == 0
+            {
+                self.record_window_lifecycle_trace(
+                    "set_window_pos",
+                    self.gwe.window(hwnd).map(|window| window.thread_id).unwrap_or(0),
+                    Some(hwnd),
+                    Some(u32::from(moved)),
+                    Some(format!(
+                        "insert_after=0x{:08x}/flags=0x{flags:08x}/was_visible={was_visible}/is_visible={is_visible}/before={}/after={}",
+                        insert_after.unwrap_or(HWND_TOP),
+                        before
+                            .map(|rect| {
+                                format!("{},{}-{},{}", rect.left, rect.top, rect.right, rect.bottom)
+                            })
+                            .unwrap_or_else(|| "<none>".to_owned()),
+                        after
+                            .map(|rect| format!(
+                                "{},{}-{},{}",
+                                rect.left, rect.top, rect.right, rect.bottom
+                            ))
+                            .unwrap_or_else(|| "<none>".to_owned())
+                    )),
+                );
+            }
             self.post_window_visibility_message(hwnd, was_visible, is_visible);
             self.post_window_rect_messages(
                 hwnd,
@@ -2508,6 +2634,27 @@ impl CeKernel {
         self.clear_timer_message_pending(thread_id, &message);
         self.record_message_op(
             "get_message",
+            thread_id,
+            &message,
+            Some(1),
+            Some(format_filter_detail(hwnd, min_msg, max_msg)),
+        );
+        Some(message)
+    }
+
+    pub fn take_ready_sent_message_w_filtered(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
+        self.expire_timed_out_send_messages();
+        let message = self
+            .gwe
+            .take_sent_message_filtered(thread_id, hwnd, min_msg, max_msg)?;
+        self.record_message_op(
+            "dispatch_sent_message",
             thread_id,
             &message,
             Some(1),
@@ -2835,9 +2982,32 @@ impl CeKernel {
     }
 
     pub fn destroy_window(&mut self, hwnd: u32) -> bool {
+        self.destroy_window_with_reason(hwnd, "DestroyWindow")
+    }
+
+    pub fn destroy_window_with_reason(&mut self, hwnd: u32, reason: &'static str) -> bool {
         let Some(targets) = self.gwe.window_and_descendants(hwnd) else {
+            self.record_window_lifecycle_trace(
+                "destroy_window",
+                0,
+                Some(hwnd),
+                Some(0),
+                Some(format!("reason={reason}/invalid_window")),
+            );
             return false;
         };
+        let thread_id = self
+            .gwe
+            .window(hwnd)
+            .map(|window| window.thread_id)
+            .unwrap_or(0);
+        self.record_window_lifecycle_trace(
+            "destroy_window_begin",
+            thread_id,
+            Some(hwnd),
+            Some(targets.len() as u32),
+            Some(format!("reason={reason}/targets={targets:?}")),
+        );
         self.clear_destroyed_window_focus_and_activation(hwnd);
         let doomed_send_ids = self.gwe.sent_message_ids_for_windows(&targets);
         for target in targets.iter().rev().copied() {
@@ -2856,7 +3026,26 @@ impl CeKernel {
                 self.queue_send_reply_wake_candidates(send_id);
             }
         }
+        self.record_window_lifecycle_trace(
+            "destroy_window_end",
+            thread_id,
+            Some(hwnd),
+            Some(u32::from(destroyed)),
+            Some(format!("reason={reason}")),
+        );
         destroyed
+    }
+
+    pub fn end_dialog(&mut self, thread_id: u32, hwnd: u32, result: u32) -> bool {
+        let ok = self.gwe.end_dialog(hwnd, result);
+        self.record_window_lifecycle_trace(
+            "end_dialog",
+            thread_id,
+            Some(hwnd),
+            Some(u32::from(ok)),
+            Some(format!("dialog_result=0x{result:08x}")),
+        );
+        ok
     }
 
     pub fn send_notify_message_w(
@@ -3026,14 +3215,36 @@ impl CeKernel {
         period_ms: u32,
         callback: Option<u32>,
     ) -> u32 {
-        self.timers.set_timer(
+        let id = self.timers.set_timer(
             thread_id,
             hwnd,
             requested_id,
             period_ms,
             crate::ce::gwe::WM_TIMER,
             callback,
-        )
+        );
+        let message = crate::ce::gwe::Message::new(
+            hwnd.unwrap_or(0),
+            crate::ce::gwe::WM_TIMER,
+            id,
+            callback.unwrap_or(0),
+            self.timers.tick_count(),
+        );
+        self.record_message_op(
+            "set_timer",
+            thread_id,
+            &message,
+            Some(id),
+            Some(format!(
+                "hwnd={}/requested_id={}/id=0x{id:08x}/period_ms={period_ms}/callback=0x{:08x}",
+                format_optional_hwnd(hwnd),
+                requested_id
+                    .map(|id| format!("0x{id:08x}"))
+                    .unwrap_or_else(|| "auto".to_owned()),
+                callback.unwrap_or(0)
+            )),
+        );
+        id
     }
 
     pub fn kill_timer(&mut self, hwnd: Option<u32>, id: u32) -> bool {
@@ -3045,7 +3256,17 @@ impl CeKernel {
     }
 
     pub fn kill_timer_for_thread(&mut self, thread_id: u32, hwnd: Option<u32>, id: u32) -> bool {
-        self.timers.kill_timer(thread_id, hwnd, id)
+        let ok = self.timers.kill_timer(thread_id, hwnd, id);
+        let message =
+            crate::ce::gwe::Message::new(hwnd.unwrap_or(0), crate::ce::gwe::WM_TIMER, id, 0, 0);
+        self.record_message_op(
+            "kill_timer",
+            thread_id,
+            &message,
+            Some(u32::from(ok)),
+            Some(format!("hwnd={}/id=0x{id:08x}", format_optional_hwnd(hwnd))),
+        );
+        ok
     }
 
     pub fn remote_gps_target(&self) -> String {
@@ -3080,11 +3301,27 @@ impl CeKernel {
             return 0;
         }
         let mut applied = 0;
+        let touch_before = self.remote.touch_event_count();
         for message in messages {
             self.dispatch_remote_control_message(&message);
             applied += 1;
         }
-        self.drain_remote_input_to_active_window();
+        let touch_after_dispatch = self.remote.touch_event_count();
+        let drain = self.drain_remote_input_to_active_window_detailed();
+        if let Some(server) = self.remote_server.as_ref() {
+            server.publish_debug_text(
+                "remote-input",
+                format!(
+                    "messages={} route=active touch_before={} touch_after_dispatch={} posted={} touch_after={} targets={}\n",
+                    applied,
+                    touch_before,
+                    touch_after_dispatch,
+                    drain.posted,
+                    self.remote.touch_event_count(),
+                    drain.detail
+                ),
+            );
+        }
         self.publish_remote_server_status();
         applied
     }
@@ -3102,11 +3339,31 @@ impl CeKernel {
             return 0;
         }
         let mut applied = 0;
+        let touch_before = self.remote.touch_event_count();
         for message in messages {
             self.dispatch_remote_control_message(&message);
             applied += 1;
         }
-        applied += self.drain_remote_input_to_thread_window(thread_id, hwnd);
+        let touch_after_dispatch = self.remote.touch_event_count();
+        let drain = self.drain_remote_input_to_thread_window_detailed(thread_id, hwnd);
+        if let Some(server) = self.remote_server.as_ref() {
+            server.publish_debug_text(
+                "remote-input",
+                format!(
+                    "messages={} route=thread thread_id={} hwnd={} touch_before={} touch_after_dispatch={} posted={} touch_after={} targets={}\n",
+                    applied,
+                    thread_id,
+                    hwnd.map(|hwnd| format!("0x{hwnd:08x}"))
+                        .unwrap_or_else(|| "any".to_owned()),
+                    touch_before,
+                    touch_after_dispatch,
+                    drain.posted,
+                    self.remote.touch_event_count(),
+                    drain.detail
+                ),
+            );
+        }
+        applied += drain.posted;
         self.publish_remote_server_status();
         applied
     }
@@ -3133,15 +3390,16 @@ impl CeKernel {
         if !self.gwe.is_window(hwnd) {
             return 0;
         }
-        self.drain_remote_input_to_target(thread_id, Some(hwnd), false)
+        self.drain_remote_input_to_target(thread_id, Some(hwnd), RemoteTouchTargeting::Explicit)
+            .posted
     }
 
     fn drain_remote_input_to_target(
         &mut self,
         thread_id: u32,
         hwnd: Option<u32>,
-        hit_test_touches: bool,
-    ) -> usize {
+        touch_targeting: RemoteTouchTargeting,
+    ) -> RemoteInputDrain {
         let touch_events = self.remote.drain_touch_events();
         let key_events = self.remote.drain_key_events();
         let base_time_ms = self.timers.tick_count();
@@ -3152,6 +3410,7 @@ impl CeKernel {
             .min()
             .unwrap_or(0);
         let mut posted = 0;
+        let mut details = Vec::new();
 
         for event in touch_events {
             let time_ms = remote_event_time_ms(base_time_ms, first_input_ms, event.enqueued_at_ms);
@@ -3159,15 +3418,41 @@ impl CeKernel {
                 x: event.x,
                 y: event.y,
             };
-            let target = if hit_test_touches {
-                self.gwe
+            let target = match touch_targeting {
+                RemoteTouchTargeting::Explicit => hwnd.map(|hwnd| (thread_id, hwnd)),
+                RemoteTouchTargeting::ThreadHitTest => self
+                    .gwe
                     .get_capture()
                     .or_else(|| self.gwe.window_from_point_for_thread(thread_id, point))
                     .or(hwnd)
-            } else {
-                hwnd
+                    .map(|hwnd| (thread_id, hwnd)),
+                RemoteTouchTargeting::DesktopHitTest => self
+                    .gwe
+                    .get_capture()
+                    .or_else(|| self.gwe.window_from_point(point))
+                    .or_else(|| {
+                        hwnd.filter(|hwnd| {
+                            self.gwe.is_window_visible(*hwnd)
+                                && self.gwe.is_window_enabled(*hwnd)
+                                && self
+                                    .gwe
+                                    .get_window_rect(*hwnd)
+                                    .is_some_and(|rect| rect.contains_point(point))
+                        })
+                    })
+                    .and_then(|hwnd| {
+                        self.gwe
+                            .window_thread_process_id(hwnd)
+                            .map(|(target_thread_id, _)| (target_thread_id, hwnd))
+                    }),
             };
-            let Some(target) = target.filter(|hwnd| self.gwe.is_window(*hwnd)) else {
+            let Some((target_thread_id, target)) =
+                target.filter(|(_, hwnd)| self.gwe.is_window(*hwnd))
+            else {
+                details.push(format!(
+                    "drop:msg=0x{:04x}/screen={},{}",
+                    event.message, point.x, point.y
+                ));
                 self.record_message_trace(MessageTraceRecord {
                     op: "remote_touch_drop",
                     thread_id,
@@ -3178,11 +3463,14 @@ impl CeKernel {
                     screen_pos: Some(make_lparam(point.x, point.y)),
                     source: None,
                     result: Some(0),
-                    detail: Some(if hit_test_touches {
-                        "no hit-test target".to_owned()
-                    } else {
-                        "no target window".to_owned()
-                    }),
+                    detail: Some(
+                        match touch_targeting {
+                            RemoteTouchTargeting::Explicit => "no target window",
+                            RemoteTouchTargeting::ThreadHitTest => "no thread hit-test target",
+                            RemoteTouchTargeting::DesktopHitTest => "no desktop hit-test target",
+                        }
+                        .to_owned(),
+                    ),
                 });
                 continue;
             };
@@ -3196,7 +3484,7 @@ impl CeKernel {
                 0
             };
             self.post_gwe_message(
-                thread_id,
+                target_thread_id,
                 Message::new(
                     target,
                     event.message,
@@ -3206,9 +3494,13 @@ impl CeKernel {
                 )
                 .with_mouse_pos(make_lparam(point.x, point.y)),
             );
+            details.push(format!(
+                "touch:hwnd=0x{target:08x}/thread={target_thread_id}/msg=0x{:04x}/client={},{} /screen={},{}",
+                event.message, client.x, client.y, point.x, point.y
+            ));
             self.record_message_trace(MessageTraceRecord {
                 op: "remote_touch_target",
-                thread_id,
+                thread_id: target_thread_id,
                 hwnd: Some(target),
                 msg: Some(event.message),
                 wparam: Some(wparam),
@@ -3216,11 +3508,14 @@ impl CeKernel {
                 screen_pos: Some(make_lparam(point.x, point.y)),
                 source: Some(crate::ce::gwe::MSGSRC_SOFTWARE_POST),
                 result: Some(1),
-                detail: Some(if hit_test_touches {
-                    "hit-test".to_owned()
-                } else {
-                    "explicit-target".to_owned()
-                }),
+                detail: Some(
+                    match touch_targeting {
+                        RemoteTouchTargeting::Explicit => "explicit-target",
+                        RemoteTouchTargeting::ThreadHitTest => "thread-hit-test",
+                        RemoteTouchTargeting::DesktopHitTest => "desktop-hit-test",
+                    }
+                    .to_owned(),
+                ),
             });
             posted += 1;
         }
@@ -3231,6 +3526,10 @@ impl CeKernel {
         for event in key_events {
             let time_ms = remote_event_time_ms(base_time_ms, first_input_ms, event.enqueued_at_ms);
             let Some(key_target) = key_target.filter(|hwnd| self.gwe.is_window(*hwnd)) else {
+                details.push(format!(
+                    "drop:key=0x{:02x}/msg=0x{:04x}",
+                    event.vk, event.message
+                ));
                 self.record_message_trace(MessageTraceRecord {
                     op: "remote_key_drop",
                     thread_id,
@@ -3250,6 +3549,10 @@ impl CeKernel {
                 Message::new(key_target, event.message, event.vk, 1, time_ms)
                     .with_source(crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD),
             );
+            details.push(format!(
+                "key:hwnd=0x{key_target:08x}/thread={thread_id}/msg=0x{:04x}/vk=0x{:02x}",
+                event.message, event.vk
+            ));
             self.record_message_trace(MessageTraceRecord {
                 op: "remote_key_target",
                 thread_id,
@@ -3265,7 +3568,14 @@ impl CeKernel {
             posted += 1;
         }
 
-        posted
+        RemoteInputDrain {
+            posted,
+            detail: if details.is_empty() {
+                "none".to_owned()
+            } else {
+                details.join(",")
+            },
+        }
     }
 
     pub fn drain_remote_input_to_thread_window(
@@ -3273,26 +3583,55 @@ impl CeKernel {
         thread_id: u32,
         hwnd: Option<u32>,
     ) -> usize {
+        self.drain_remote_input_to_thread_window_detailed(thread_id, hwnd)
+            .posted
+    }
+
+    fn drain_remote_input_to_thread_window_detailed(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+    ) -> RemoteInputDrain {
+        let requested_hwnd = hwnd.filter(|hwnd| self.gwe.is_window(*hwnd));
+        let targeting = if requested_hwnd.is_some() {
+            RemoteTouchTargeting::ThreadHitTest
+        } else {
+            RemoteTouchTargeting::DesktopHitTest
+        };
         let hwnd = hwnd
             .filter(|hwnd| self.gwe.is_window(*hwnd))
             .or_else(|| self.gwe.get_capture())
             .or_else(|| self.gwe.get_active_window());
-        self.drain_remote_input_to_target(thread_id, hwnd, true)
+        self.drain_remote_input_to_target(thread_id, hwnd, targeting)
     }
 
     pub fn drain_remote_input_to_active_window(&mut self) -> usize {
+        self.drain_remote_input_to_active_window_detailed().posted
+    }
+
+    fn drain_remote_input_to_active_window_detailed(&mut self) -> RemoteInputDrain {
         let hwnd = self
             .gwe
             .get_capture()
             .or_else(|| self.gwe.get_active_window())
             .filter(|hwnd| self.gwe.is_window(*hwnd));
         let Some(hwnd) = hwnd else {
-            return 0;
+            return RemoteInputDrain {
+                posted: 0,
+                detail: "no active window".to_owned(),
+            };
         };
         let Some((thread_id, _process_id)) = self.gwe.window_thread_process_id(hwnd) else {
-            return 0;
+            return RemoteInputDrain {
+                posted: 0,
+                detail: format!("no thread for active hwnd=0x{hwnd:08x}"),
+            };
         };
-        self.drain_remote_input_to_target(thread_id, Some(hwnd), true)
+        self.drain_remote_input_to_target(
+            thread_id,
+            Some(hwnd),
+            RemoteTouchTargeting::DesktopHitTest,
+        )
     }
 
     pub fn wave_out_open(&mut self, format: WaveFormat) -> std::result::Result<u32, MmResult> {
@@ -3408,6 +3747,34 @@ fn format_filter_detail(hwnd: Option<u32>, min_msg: u32, max_msg: u32) -> String
     )
 }
 
+fn format_optional_hwnd(hwnd: Option<u32>) -> String {
+    hwnd.map_or_else(|| "none".to_owned(), |hwnd| format!("0x{hwnd:08x}"))
+}
+
+fn window_lifecycle_detail(window: &crate::ce::gwe::Window) -> String {
+    format!(
+        "class={}/title={}/tid={}/pid={}/parent={}/owner={}/vis={}/dead={}/style=0x{:08x}/ex=0x{:08x}/rect={},{}-{},{}",
+        window.class_name,
+        window.title,
+        window.thread_id,
+        window.process_id,
+        window
+            .parent
+            .map_or_else(|| "none".to_owned(), |hwnd| format!("0x{hwnd:08x}")),
+        window
+            .owner
+            .map_or_else(|| "none".to_owned(), |hwnd| format!("0x{hwnd:08x}")),
+        window.visible,
+        window.destroyed,
+        window.style,
+        window.ex_style,
+        window.rect.left,
+        window.rect.top,
+        window.rect.right,
+        window.rect.bottom
+    )
+}
+
 fn file_trace_preview(bytes: &[u8]) -> Option<String> {
     if bytes.is_empty() {
         return None;
@@ -3460,7 +3827,10 @@ fn make_lparam_i16(low: i32, high: i32) -> u32 {
 mod tests {
     use super::*;
     use crate::{
-        ce::gwe::{WM_ACTIVATE, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_SETFOCUS, WS_CHILD},
+        ce::gwe::{
+            WM_ACTIVATE, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_SETFOCUS, WS_CHILD,
+            WS_VISIBLE,
+        },
         config::RuntimeConfig,
     };
 
@@ -3495,28 +3865,47 @@ mod tests {
         let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
         let mut kernel = CeKernel::boot(config);
         let thread_id = 1;
-        let hwnd = kernel.create_window_ex_w(thread_id, "ACTIVE", "", None, 0, 0, 0);
+        let hwnd = kernel.create_window_ex_w_with_rect(
+            thread_id,
+            "ACTIVE",
+            "",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 800, 480),
+        );
         assert_eq!(kernel.gwe.set_active_window(Some(hwnd)), None);
         kernel.remote.set_framebuffer_size(800, 480);
         kernel.remote.enqueue_touch("tap", 10, 20).unwrap();
 
         assert_eq!(kernel.drain_remote_input_to_active_window(), 2);
 
-        let mut messages = Vec::new();
-        while let Some(message) = kernel.gwe.get_message(thread_id) {
-            messages.push((message.hwnd, message.msg, message.time_ms));
-        }
-        let down = messages
-            .iter()
-            .find(|(message_hwnd, msg, _)| *message_hwnd == hwnd && *msg == WM_LBUTTONDOWN)
-            .copied()
+        let down = kernel
+            .gwe
+            .peek_message_filtered(
+                thread_id,
+                Some(hwnd),
+                WM_LBUTTONDOWN,
+                WM_LBUTTONUP,
+                PeekFlags::REMOVE,
+            )
             .expect("remote tap posts mouse down");
-        let up = messages
-            .iter()
-            .find(|(message_hwnd, msg, _)| *message_hwnd == hwnd && *msg == WM_LBUTTONUP)
-            .copied()
+        assert_eq!(down.hwnd, hwnd);
+        assert_eq!(down.msg, WM_LBUTTONDOWN);
+        let up = kernel
+            .gwe
+            .peek_message_filtered(
+                thread_id,
+                Some(hwnd),
+                WM_LBUTTONDOWN,
+                WM_LBUTTONUP,
+                PeekFlags::REMOVE,
+            )
             .expect("remote tap posts mouse up");
-        assert!(up.2 > down.2);
+        assert_eq!(up.hwnd, hwnd);
+        assert_eq!(up.msg, WM_LBUTTONUP);
+        assert!(up.time_ms > down.time_ms);
         Ok(())
     }
 
@@ -3561,6 +3950,153 @@ mod tests {
             .copied()
             .expect("blocked target receives mouse up");
         assert!(up.2 > down.2);
+        Ok(())
+    }
+
+    #[test]
+    fn remote_input_any_blocked_thread_uses_desktop_hit_test_owner() -> Result<()> {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let mut kernel = CeKernel::boot(config);
+        let visible_thread_id = 1;
+        let helper_thread_id = 2;
+        let visible = kernel.create_window_ex_w_with_rect(
+            visible_thread_id,
+            "VISIBLE",
+            "",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 800, 480),
+        );
+        let hidden_helper = kernel.create_window_ex_w_with_rect(
+            helper_thread_id,
+            "HELPER",
+            "",
+            None,
+            0,
+            0,
+            0,
+            Rect::from_origin_size(0, 0, 800, 480),
+        );
+        assert_eq!(kernel.gwe.set_active_window(Some(hidden_helper)), None);
+
+        kernel.remote.set_framebuffer_size(800, 480);
+        kernel.remote.enqueue_touch("tap", 410, 454).unwrap();
+
+        assert_eq!(
+            kernel.drain_remote_input_to_thread_window(helper_thread_id, None),
+            2
+        );
+
+        let down = kernel
+            .gwe
+            .peek_message_filtered(
+                visible_thread_id,
+                Some(visible),
+                WM_LBUTTONDOWN,
+                WM_LBUTTONUP,
+                PeekFlags::REMOVE,
+            )
+            .expect("visible owner receives mouse down");
+        assert_eq!(down.hwnd, visible);
+        assert_eq!(down.msg, WM_LBUTTONDOWN);
+        let up = kernel
+            .gwe
+            .peek_message_filtered(
+                visible_thread_id,
+                Some(visible),
+                WM_LBUTTONDOWN,
+                WM_LBUTTONUP,
+                PeekFlags::REMOVE,
+            )
+            .expect("visible owner receives mouse up");
+        assert_eq!(up.hwnd, visible);
+        assert_eq!(up.msg, WM_LBUTTONUP);
+        assert!(
+            kernel
+                .gwe
+                .peek_message_filtered(
+                    helper_thread_id,
+                    Some(hidden_helper),
+                    WM_LBUTTONDOWN,
+                    WM_LBUTTONUP,
+                    PeekFlags::REMOVE,
+                )
+                .is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn remote_input_active_window_uses_desktop_hit_test_over_hidden_active_window() -> Result<()> {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let mut kernel = CeKernel::boot(config);
+        let visible_thread_id = 1;
+        let hidden_thread_id = 2;
+        let visible = kernel.create_window_ex_w_with_rect(
+            visible_thread_id,
+            "VISIBLE",
+            "",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 800, 480),
+        );
+        let hidden = kernel.create_window_ex_w_with_rect(
+            hidden_thread_id,
+            "HIDDEN",
+            "",
+            None,
+            0,
+            0,
+            0,
+            Rect::from_origin_size(0, 0, 800, 480),
+        );
+        assert_eq!(kernel.gwe.set_active_window(Some(hidden)), None);
+
+        kernel.remote.set_framebuffer_size(800, 480);
+        kernel.remote.enqueue_touch("tap", 768, 88).unwrap();
+
+        assert_eq!(kernel.drain_remote_input_to_active_window(), 2);
+
+        let down = kernel
+            .gwe
+            .peek_message_filtered(
+                visible_thread_id,
+                Some(visible),
+                WM_LBUTTONDOWN,
+                WM_LBUTTONUP,
+                PeekFlags::REMOVE,
+            )
+            .expect("visible desktop hit-test target receives mouse down");
+        assert_eq!(down.hwnd, visible);
+        assert_eq!(down.msg, WM_LBUTTONDOWN);
+        let up = kernel
+            .gwe
+            .peek_message_filtered(
+                visible_thread_id,
+                Some(visible),
+                WM_LBUTTONDOWN,
+                WM_LBUTTONUP,
+                PeekFlags::REMOVE,
+            )
+            .expect("visible desktop hit-test target receives mouse up");
+        assert_eq!(up.hwnd, visible);
+        assert_eq!(up.msg, WM_LBUTTONUP);
+        assert!(
+            kernel
+                .gwe
+                .peek_message_filtered(
+                    hidden_thread_id,
+                    Some(hidden),
+                    WM_LBUTTONDOWN,
+                    WM_LBUTTONUP,
+                    PeekFlags::REMOVE,
+                )
+                .is_none()
+        );
         Ok(())
     }
 

@@ -14,8 +14,8 @@ use crate::{
         file::FindData,
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat},
         gwe::{
-            Message, MessagePointerPayload, PeekFlags, Point, Rect, WNDCLASSW_SIZE, WS_CHILD,
-            WindowPos,
+            GWL_STYLE, Message, MessagePointerPayload, PeekFlags, Point, Rect, WNDCLASSW_SIZE,
+            WS_CHILD, WS_VISIBLE, WindowPos,
         },
         kernel::{CeKernel, MessagePumpResult},
         memory::{HEAP_ZERO_MEMORY, MEM_RELEASE, PROCESS_HEAP_HANDLE},
@@ -1012,7 +1012,7 @@ fn dispatch_resolved(
             CoredllValue::U32(kernel.gwe.get_window_long(hwnd, index).unwrap_or(0))
         }
         CoredllCall::SetWindowLongW { hwnd, index, value } => {
-            CoredllValue::U32(kernel.gwe.set_window_long(hwnd, index, value).unwrap_or(0))
+            CoredllValue::U32(set_window_long_traced(kernel, 0, hwnd, index, value))
         }
         CoredllCall::GetMessageW { thread_id } => {
             CoredllValue::OptionalMessage(kernel.get_message_w(thread_id))
@@ -2403,7 +2403,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel, memory, thread_id, args,
         ))),
         ORD_DESTROY_WINDOW => Some(CoredllValue::Bool(kernel.destroy_window(raw_arg(args, 0)))),
-        ORD_SHOW_WINDOW => Some(CoredllValue::Bool(show_window_raw(kernel, args))),
+        ORD_SHOW_WINDOW => Some(CoredllValue::Bool(show_window_raw(kernel, thread_id, args))),
         ORD_UPDATE_WINDOW => Some(CoredllValue::Bool(kernel.update_window(raw_arg(args, 0)))),
         ORD_INVALIDATE_RECT => Some(CoredllValue::Bool(invalidate_rect_raw(
             kernel, memory, thread_id, args,
@@ -3044,7 +3044,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_CLASS_NAME_W => Some(CoredllValue::U32(get_class_name_w_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_SET_WINDOW_LONG_W => Some(CoredllValue::U32(set_window_long_w_raw(kernel, args))),
+        ORD_SET_WINDOW_LONG_W => Some(CoredllValue::U32(set_window_long_w_raw(
+            kernel, thread_id, args,
+        ))),
         ORD_GET_WINDOW_LONG_W => Some(CoredllValue::U32(get_window_long_w_raw(kernel, args))),
         ORD_BRING_WINDOW_TO_TOP => Some(CoredllValue::Bool(
             kernel.bring_window_to_top(raw_arg(args, 0)),
@@ -8486,15 +8488,38 @@ fn get_class_name_w_raw<M: CoredllGuestMemory>(
     write_wide_result(kernel, memory, thread_id, buffer, capacity, &class_name)
 }
 
-fn set_window_long_w_raw(kernel: &mut CeKernel, args: &[u32]) -> u32 {
+fn set_window_long_w_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
     let hwnd = raw_arg(args, 0);
     let index = raw_i32_arg(args, 1);
     let value = raw_arg(args, 2);
+    set_window_long_traced(kernel, thread_id, hwnd, index, value)
+}
+
+fn set_window_long_traced(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    hwnd: u32,
+    index: i32,
+    value: u32,
+) -> u32 {
     let class_name = kernel
         .gwe
         .window(hwnd)
         .map(|window| window.class_name.clone());
     let previous = kernel.gwe.set_window_long(hwnd, index, value).unwrap_or(0);
+    if index == GWL_STYLE {
+        kernel.record_window_lifecycle_trace(
+            "set_window_long_style",
+            thread_id,
+            Some(hwnd),
+            Some(previous),
+            Some(format!(
+                "previous=0x{previous:08x}/value=0x{value:08x}/prev_visible={}/new_visible={}",
+                previous & WS_VISIBLE != 0,
+                value & WS_VISIBLE != 0
+            )),
+        );
+    }
     tracing::debug!(
         target: "ce.gwe",
         hwnd = format_args!("0x{hwnd:08x}"),
@@ -8595,7 +8620,7 @@ fn create_dialog_indirect_param_w_raw<M: CoredllGuestMemory>(
 }
 
 fn end_dialog_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32, result: u32) -> bool {
-    if !kernel.gwe.end_dialog(hwnd, result) {
+    if !kernel.end_dialog(thread_id, hwnd, result) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
@@ -10977,7 +11002,7 @@ fn set_parent_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32, parent: u32)
     previous
 }
 
-fn show_window_raw(kernel: &mut CeKernel, args: &[u32]) -> bool {
+fn show_window_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
     const SW_HIDE: u32 = 0;
     const SW_SHOWNOACTIVATE: u32 = 4;
     const SW_SHOWMINNOACTIVE: u32 = 7;
@@ -10986,7 +11011,15 @@ fn show_window_raw(kernel: &mut CeKernel, args: &[u32]) -> bool {
     let cmd = raw_arg(args, 1);
     let visible = cmd != SW_HIDE;
     let activate = visible && !matches!(cmd, SW_SHOWNOACTIVATE | SW_SHOWMINNOACTIVE | SW_SHOWNA);
-    kernel.show_window_with_activation(hwnd, visible, activate)
+    let previous = kernel.show_window_with_activation(hwnd, visible, activate);
+    kernel.record_window_lifecycle_trace(
+        "show_window_cmd",
+        thread_id,
+        Some(hwnd),
+        Some(u32::from(previous)),
+        Some(format!("cmd={cmd}/visible={visible}/activate={activate}")),
+    );
+    previous
 }
 
 fn set_foreground_window_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> bool {

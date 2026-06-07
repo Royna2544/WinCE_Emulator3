@@ -12,6 +12,93 @@
 
 ## Current Slice
 
+- Route-search child-startup blocker closed/watch: `target\route_deviceexit1_*`
+  confirms the old MIPS CE `TerminateProcess` thunk in `DeviceParser.exe`
+  decodes through the interrupt/zero-PC path and the child exits cleanly. The
+  same probe reaches `happyway_win.exe`, `iSearch.exe`, and
+  `gwe=send:1 done:1`, then returns to the established hidden `afxwnd42u`
+  chrome state. Continue by chasing the later guest show/update sequence for
+  those existing child controls; do not revisit `DeviceParser.exe` unless a
+  fresh trace again records `CreateProcessChildError`.
+- Bounded virtual trace caveat: `target\route_deviceexit_long1_*` still does
+  not reach the later route chrome reveal after 34 one-second slices. It is
+  useful evidence for the clean child-exit path and the hidden-preload state,
+  but the practical route-search drive should use the live host path that has
+  already reached real map/modal UI, not early taps against this partial
+  header/map frame.
+- Route-search visibility frontier update: `target\route_showcmd2_messages.txt`
+  proves the `afxwnd42u` route/chrome children are hidden by guest
+  `ShowWindow(cmd=0/SW_HIDE)` immediately after creation; the bounded run does
+  not yet reach a later `ShowWindow(cmd=5)` for those controls. Continue by
+  driving or speeding the startup path until the guest should reveal the
+  right/bottom chrome, then compare the missing show sequence against the
+  successful bottom-strip/menu path. Do not force `WS_VISIBLE`: this trace says
+  the preload hide is guest behavior.
+- Route-search path next step after the sent-message fix: continue from
+  `target\route_after_sendfix1_*`. The old `happyway_win.exe`
+  `SendMessageW(hwnd=0x0002000c,msg=0x0401,wParam=14)` deadlock is closed/watch:
+  CE-style internal sent-message dispatch during `GetMessageW` now completes
+  the transaction and parked sender resume restores the parent context. The
+  current route-search frontier is whatever follows that IPC: inspect the
+  later `iSearch.exe` activation, `afxwnd42u` child-window creation/show
+  sequence, route dialog lifetime, and remaining sleep/timer waits. Do not
+  force visibility or change route coordinates unless fresh traces show input
+  routing regressed.
+- Route-search visibility frontier: continue from `target\route_pos1_*`.
+  Evidence now says `iSearch.exe` starts and the route/control children are
+  created, but they end hidden before any finished route chrome appears. Use
+  the new `set_window_long_style` and `set_window_pos` lifecycle records to
+  find the first transition that clears `WS_VISIBLE` on the `afxwnd42u`
+  children (`0x00020014` and siblings). Compare against CE/MFC window style
+  behavior before changing semantics; do not simply keep the controls visible.
+- Route-search live timing follow-up: keep the `live_pump` guards on
+  `GetMessageW` / `MsgWaitForMultipleObjectsEx` timer fast-forwarding and the
+  real-wall current `Sleep` / finite-wait inline completion. Fresh evidence
+  `target\route_search_resume_120ms_*` proves the red search tap reached
+  `TGNaviDlg` but the 1500 ms `0x19fe` timer fired before a 120 ms host
+  capture. The immediate next route probe should use the normal live run-loop
+  or a monitor command that shares the same process-handoff semantics, wait for
+  the full right chrome and bottom strip, then tap red search and capture
+  `TGNaviDlg` before `WM_TIMER`. Do not use early startup taps against the
+  partial header/map frame as route-search evidence.
+- Route-search input-routing follow-up: `hwnd=any` blocked helper drains now
+  use desktop hit-testing and post to the hit HWND owner's queue; keep the new
+  `remote_input_any_blocked_thread_uses_desktop_hit_test_owner` coverage. The
+  controlled validation `target\route_search_ownerfix1_*` no longer attempted
+  a bottom-strip tap because the bottom/current-location chrome remained
+  hidden for the whole wait window. Continue with a host/direct run that first
+  reaches visible bottom chrome, then tap the bottom strip and inspect the
+  `TGNaviDlg` `WM_TIMER`/`DestroyWindow` trace tail. Do not accept a
+  `thread_id=3, hwnd=0x00020004` remote-touch record as valid; window messages
+  must be queued to the HWND owner's thread.
+- Route-search path next step: continue from
+  `target\route_wndproc1_bottom_tap_*`. Input routing is no longer the blocker:
+  saved scheduler `GetMessageW` waiters are used for host/remote input, and
+  the bottom-strip tap is delivered to thread 1. The tap creates owned
+  `TGNaviDlg` HWND `0x00020084`, but the window snapshot already marks it
+  `dead=true` and it is not in z-order, so the presenter remains on the map.
+  Trace the dialog creation/destruction path next: capture the create/destroy
+  WNDPROC return, `EndDialog`/`DestroyWindow` caller, dialog result, resource
+  lookup failures, and any dependency on `iSearch.exe`/`happyway_win.exe`
+  process IPC. Do not keep changing coordinates or force the dialog visible.
+- Route-search path: do not drive taps while the frame is still the partial
+  header/map composition. `target\route_path_drive1_montage.png` proves all
+  route-path taps were accepted by REST but landed before the right chrome and
+  bottom current-location strip were visible. Continue from
+  `target\route_chrome_rich1_*`: child windows for the right controls and
+  bottom strip exist but remain hidden while `iNavi.exe` is still loading
+  `resmapi_800x480.bin` RSImage resources through `CreateDIBSection`. Next
+  work should either reduce the live-slice remap/teardown tax safely or chase
+  the CE/MFC resource/window-show sequence that makes these existing child
+  windows visible. Do not force visibility or hardcode iNavi UI state.
+- Live virtual/remote process rotation is fixed/watch. Keep the
+  `should_rotate_parked_process(... live_pump && wall_stop ...)` behavior so
+  remote virtual runs schedule parked children like host runs. The validation
+  artifacts are `target\route_chrome_block_v1_processes.txt` versus
+  `target\route_chrome_rotate_v1_processes.txt`: the latter repeatedly cycles
+  `iNavi.exe`, `happyway_win.exe`, and `iSearch.exe`. The route chrome still
+  does not appear, so the next blocker is not "children never run" but resource
+  throughput/hidden-child show sequencing.
 - Startup profiling follow-up: the per-page Unicorn heap-spillover map churn is
   fixed/watch. Keep `map_guest_range` span batching only on heap spillover and
   keep virtual allocations page-granular unless `reclaim_stale_virtual_memory_pages`

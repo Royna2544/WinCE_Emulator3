@@ -2566,8 +2566,12 @@ impl Gwe {
         self.z_order.clone()
     }
 
+    pub fn window_from_point(&self, point: Point) -> Option<u32> {
+        self.window_from_point_in_parent(None, None, point)
+    }
+
     pub fn window_from_point_for_thread(&self, thread_id: u32, point: Point) -> Option<u32> {
-        self.window_from_point_in_parent(thread_id, None, point)
+        self.window_from_point_in_parent(Some(thread_id), None, point)
     }
 
     pub fn child_window_from_point_for_thread(
@@ -2674,6 +2678,16 @@ impl Gwe {
             .insert(thread_id, message.source);
         self.record_last_message_pos(thread_id, &message);
         Some(message)
+    }
+
+    pub fn take_sent_message_filtered(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+        min_msg: u32,
+        max_msg: u32,
+    ) -> Option<Message> {
+        self.take_matching_sent_message(thread_id, hwnd, min_msg, max_msg)
     }
 
     pub fn peek_message_filtered(
@@ -3174,7 +3188,7 @@ impl Gwe {
 
     fn window_from_point_in_parent(
         &self,
-        thread_id: u32,
+        thread_id: Option<u32>,
         parent: Option<u32>,
         point: Point,
     ) -> Option<u32> {
@@ -3191,7 +3205,7 @@ impl Gwe {
             if let Some(child) = self.window_from_point_in_parent(thread_id, Some(hwnd), point) {
                 return Some(child);
             }
-            if window.thread_id == thread_id {
+            if thread_id.is_none_or(|thread_id| window.thread_id == thread_id) {
                 return Some(hwnd);
             }
         }
@@ -3539,6 +3553,41 @@ mod tests {
         );
         assert_eq!(gwe.get_window(first, GW_HWNDFIRST), Some(second));
         assert_eq!(gwe.get_window(second, GW_HWNDNEXT), Some(first));
+    }
+
+    #[test]
+    fn window_from_point_skips_hidden_top_level_above_visible_window() {
+        let mut gwe = Gwe::default();
+        let visible = gwe.create_window_ex_with_rect(
+            1,
+            "VISIBLE",
+            "visible",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 800, 480),
+        );
+        let hidden = gwe.create_window_ex_with_rect(
+            2,
+            "HIDDEN",
+            "hidden",
+            None,
+            0,
+            0,
+            0,
+            Rect::from_origin_size(0, 0, 800, 480),
+        );
+
+        assert_eq!(gwe.get_window(visible, GW_HWNDFIRST), Some(hidden));
+        assert_eq!(
+            gwe.window_from_point(Point { x: 768, y: 88 }),
+            Some(visible)
+        );
+        assert_eq!(
+            gwe.window_from_point_for_thread(2, Point { x: 768, y: 88 }),
+            None
+        );
     }
 
     #[test]

@@ -14,13 +14,22 @@
 //   running, guestWidth, guestHeight, guestFps, videoEnabled, videoCodec,
 //   audioEnabled, audioCodec, audioSampleRate, audioChannels, audioFormat,
 //   gpsEnabled, gpsTarget, paused, queuedTouchEvents, queuedKeyEvents,
-//   queuedSerialBytes, audioClients, queuedAudioChunks.
+//   queuedSerialBytes, audioClients, queuedAudioChunks, pendingControlMessages.
 // - GET /status is a legacy alias for /api/v1/status.
 //
 // Frame/video:
 // - GET /api/v1/frame.jpg[?quality=1..100] returns the latest framebuffer as
 //   JPEG, or 503 {"ok":false,"error":"no framebuffer"} before the first frame.
 // - GET /api/v1/debug/screenshot.png returns the latest framebuffer as PNG.
+// - GET /api/v1/debug/summary.txt returns the latest emulator debug summary.
+// - GET /api/v1/debug/windows.txt returns the latest GWE window snapshot text.
+// - GET /api/v1/debug/messages.txt returns the latest GWE/message trace text.
+// - GET /api/v1/debug/processes.txt returns recent process/thread ops.
+// - GET /api/v1/debug/wndproc.txt returns recent WNDPROC call/return traces.
+// - GET /api/v1/debug/imports.txt returns recent import calls.
+// - GET /api/v1/debug/calls.txt returns recent guest call targets.
+// - GET /api/v1/debug/code.txt returns recent guest code samples.
+// - GET /api/v1/debug/remote-input.txt returns the latest remote input drain line.
 // - GET /api/v1/video.mjpg[?fps=1..60][&quality=1..100] streams multipart
 //   MJPEG frames until the client disconnects.
 // - GET /framebuffer.ppm is a legacy/debug PPM framebuffer endpoint.
@@ -123,6 +132,7 @@ struct RemoteServerState {
     pending_control: Mutex<VecDeque<Value>>,
     latest_status: Mutex<Value>,
     latest_framebuffer: Mutex<Option<RemoteFramebufferImage>>,
+    latest_debug: Mutex<BTreeMap<String, String>>,
     audio: Mutex<RemoteAudioState>,
 }
 
@@ -188,6 +198,7 @@ impl RemoteServer {
                     queued_audio_chunks: 0,
                 })),
                 latest_framebuffer: Mutex::new(None),
+                latest_debug: Mutex::new(BTreeMap::new()),
                 audio: Mutex::new(RemoteAudioState {
                     chunks: VecDeque::new(),
                     clients: BTreeMap::new(),
@@ -240,6 +251,10 @@ impl RemoteServer {
             object.insert("guestFps".to_owned(), json!(self.state.config.video_fps));
             object.insert("audioClients".to_owned(), json!(audio.clients.len()));
             object.insert("queuedAudioChunks".to_owned(), json!(audio.chunks.len()));
+            object.insert(
+                "pendingControlMessages".to_owned(),
+                json!(self.pending_control_count()),
+            );
         }
         *self
             .state
@@ -255,6 +270,14 @@ impl RemoteServer {
             .latest_framebuffer
             .lock()
             .expect("remote framebuffer mutex") = Some(image);
+    }
+
+    pub fn publish_debug_text(&self, key: impl Into<String>, text: impl Into<String>) {
+        self.state
+            .latest_debug
+            .lock()
+            .expect("remote debug mutex")
+            .insert(key.into(), text.into());
     }
 
     pub fn drain_control_messages(&self) -> Vec<Value> {
@@ -334,6 +357,17 @@ impl RemoteServer {
             }
             ("GET", "/api/v1/frame.jpg") => self.latest_jpeg_response(&request).into(),
             ("GET", "/api/v1/debug/screenshot.png") => self.latest_png_response().into(),
+            ("GET", "/api/v1/debug/summary.txt") => self.latest_debug_text("summary").into(),
+            ("GET", "/api/v1/debug/windows.txt") => self.latest_debug_text("windows").into(),
+            ("GET", "/api/v1/debug/messages.txt") => self.latest_debug_text("messages").into(),
+            ("GET", "/api/v1/debug/processes.txt") => self.latest_debug_text("processes").into(),
+            ("GET", "/api/v1/debug/wndproc.txt") => self.latest_debug_text("wndproc").into(),
+            ("GET", "/api/v1/debug/imports.txt") => self.latest_debug_text("imports").into(),
+            ("GET", "/api/v1/debug/calls.txt") => self.latest_debug_text("calls").into(),
+            ("GET", "/api/v1/debug/code.txt") => self.latest_debug_text("code").into(),
+            ("GET", "/api/v1/debug/remote-input.txt") => {
+                self.latest_debug_text("remote-input").into()
+            }
             ("GET", "/api/v1/video.mjpg") => RemoteHttpResponse::Mjpeg { request },
             ("GET", "/framebuffer.ppm") => self.latest_ppm_response().into(),
             ("POST", "/api/v1/input/touch") => self.post_touch(request).into(),
@@ -385,6 +419,15 @@ impl RemoteServer {
                     "status": "GET /api/v1/status",
                     "frame": "GET /api/v1/frame.jpg",
                     "screenshot": "GET /api/v1/debug/screenshot.png",
+                    "debugSummary": "GET /api/v1/debug/summary.txt",
+                    "debugWindows": "GET /api/v1/debug/windows.txt",
+                    "debugMessages": "GET /api/v1/debug/messages.txt",
+                    "debugProcesses": "GET /api/v1/debug/processes.txt",
+                    "debugWndProc": "GET /api/v1/debug/wndproc.txt",
+                    "debugImports": "GET /api/v1/debug/imports.txt",
+                    "debugCalls": "GET /api/v1/debug/calls.txt",
+                    "debugCode": "GET /api/v1/debug/code.txt",
+                    "debugRemoteInput": "GET /api/v1/debug/remote-input.txt",
                     "video": "GET /api/v1/video.mjpg",
                     "touch": "POST /api/v1/input/touch",
                     "key": "POST /api/v1/input/key",
@@ -424,13 +467,13 @@ impl RemoteServer {
                 json!({"ok": false, "error": "unsupported touch type"}),
             );
         }
-        self.queue_control(json!({
+        let pending = self.queue_control(json!({
             "type": "touch",
             "phase": phase,
             "x": x,
             "y": y
         }));
-        HttpResponse::json(200, json!({"ok": true}))
+        HttpResponse::json(200, json!({"ok": true, "pending": pending}))
     }
 
     fn post_key(&self, request: HttpRequest) -> HttpResponse {
@@ -453,12 +496,12 @@ impl RemoteServer {
                 json!({"ok": false, "error": "vk must be between 1 and 255"}),
             );
         }
-        self.queue_control(json!({
+        let pending = self.queue_control(json!({
             "type": "key",
             "phase": kind,
             "vk": vk
         }));
-        HttpResponse::json(200, json!({"ok": true}))
+        HttpResponse::json(200, json!({"ok": true, "pending": pending}))
     }
 
     fn post_location(&self, request: HttpRequest) -> HttpResponse {
@@ -540,6 +583,16 @@ impl RemoteServer {
         match self.latest_framebuffer_image() {
             Some(image) => HttpResponse::bytes(200, "image/x-portable-pixmap", encode_ppm(&image)),
             None => framebuffer_unavailable(),
+        }
+    }
+
+    fn latest_debug_text(&self, key: &str) -> HttpResponse {
+        let debug = self.state.latest_debug.lock().expect("remote debug mutex");
+        match debug.get(key) {
+            Some(text) => {
+                HttpResponse::bytes(200, "text/plain; charset=utf-8", text.as_bytes().to_vec())
+            }
+            None => HttpResponse::json(503, json!({"ok": false, "error": "no debug snapshot"})),
         }
     }
 

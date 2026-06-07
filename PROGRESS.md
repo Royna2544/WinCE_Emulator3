@@ -9,6 +9,118 @@
 
 ## Confirmed
 
+- Fresh route-search visibility probes `target\route_showcmd1_*` and
+  `target\route_showcmd2_*` show that the post-IPC `afxwnd42u` route/chrome
+  children are not being hidden by an untraced z-order side effect. They are
+  created visible and then the guest explicitly calls raw
+  `ShowWindow(cmd=0/SW_HIDE)` for each child; no matching `cmd=5`/show appears
+  before the bounded stop. The only early positive show in this slice is the
+  owner/popup class `Afx:10000:3:0:b5000:0` with `cmd=5`. The framebuffer
+  remains the partial header/map, `gwe=send:1 done:1`, and render milestones
+  are still `none`, so this remains a generic startup/resource/show-sequencing
+  frontier rather than stale hidden-layer leakage or a stranded sent message.
+- Route-search monitor handoff now gets through the `happyway_win.exe`
+  cross-process `SendMessageW` frontier instead of stranding the sender. CE
+  sent messages are dispatched internally during `GetMessageW` rather than
+  returned to the guest as ordinary `MSG`s, and parked sender CPU snapshots now
+  complete ready scheduler-backed send waits when execution rotates back to
+  the parent. Fresh evidence `target\route_after_sendfix1_*` records
+  `dispatch_sent_message` for HWND `0x0002000c`, guest WNDPROC return from
+  `GetMessageW/SentMessage`, `gwe=send:1 done:1`, parent reactivation, and
+  later `iSearch.exe` activation plus many `afxwnd42u` child-window creations.
+  Focused coverage `rotate_to_parked_process_skips_send_blocked_process_until_ready`
+  and the send-message test set pass. The route path is not complete yet: the
+  next frontier is the post-IPC route chrome/dialog sequence, not the old
+  stuck synchronous send.
+- Post-IPC route probes now show the next concrete blocker. Fresh captures
+  `target\route_postipc3_*` and `target\route_pos1_*` still render only the
+  header/map framebuffer, but traces prove the app advances past helper IPC:
+  `iSearch.exe` is created/activated, and iNavi creates `afxwnd42u` child
+  windows for IDs `0x2710` through `0x2743` under parent `0x00020004`. The
+  final window snapshot has those children present but hidden (`WS_VISIBLE`
+  cleared; e.g. `0x00020014` style `0x44000000`, rect `3,102-103,237`) and no
+  iNavi display/render milestones. New diagnostic trace records now capture
+  `SetWindowLongW(GWL_STYLE)` and visibility-affecting `SetWindowPos` calls so
+  the next route probe can identify the exact guest/API transition that hides
+  these controls. This is trace-only; it does not force child visibility.
+- Route-search retry on the fresh host/remote path confirmed two separate
+  issues. In the live remote run, tapping the red search button on the settled
+  map created owned top-level `TGNaviDlg` HWND `0x00020084`, delivered
+  `WM_PAINT`, set `WM_TIMER id=0x19fe` for 1500 ms, then destroyed the dialog
+  through the guest `WM_TIMER` path; the 120 ms capture
+  `target\route_search_resume_120ms_*` had already recorded `timer_due`, so
+  v3 was still compressing live UI time in some wait paths. Live
+  `GetMessageW` and `MsgWaitForMultipleObjectsEx` short-timer fast-forwarding
+  are now guarded by `live_pump`, and current-thread finite `Sleep` /
+  `WaitForSingleObject` inline completion now sleeps real wall time in live
+  mode instead of throttling to 1 ms while advancing the full CE timeout.
+  Focused coverage `live_pump_getmessage_does_not_fast_forward_short_ui_timer`,
+  `live_pump_msg_wait_does_not_fast_forward_short_ui_timer`, and the current
+  wait/sleep scheduler tests pass. The route UI is not fixed yet: scripted
+  monitor probes `target\route_mon_live1_*` and
+  `target\route_mon_progress2_*` show taps before the right chrome/bottom strip
+  are still too early, and monitor mode still needs better parity with the
+  normal live run-loop to drive the parked child/process handoff.
+- Remote input for `hwnd=any` blocked helper threads now routes mouse messages
+  through the visible desktop hit-test target's owning thread instead of
+  posting a foreign HWND to the active helper's queue. Fresh route evidence
+  `target\route_search_tail4_messages.txt` showed the bad shape:
+  `happyway_win.exe` thread 3 was blocked in `GetMessageW`, but a tap over
+  visible parent HWND `0x00020004` was posted as
+  `thread_id=3, hwnd=0x00020004`. `drain_remote_input_to_thread_window` now
+  uses desktop hit-testing when the blocked waiter has `hwnd=any`, while
+  explicit HWND drains keep the existing blocked-thread behavior. Focused
+  coverage `remote_input_any_blocked_thread_uses_desktop_hit_test_owner`,
+  `remote_input_blocked_thread_target_overrides_stale_active_window`,
+  `remote_input_active_window_uses_desktop_hit_test_over_hidden_active_window`,
+  and `saved_remote_input_target_uses_saved_get_message_waiter` passes. The
+  follow-up controlled probe `target\route_search_ownerfix1_*` did not reach
+  visible bottom chrome within the wait window, so it did not re-enter the
+  `TGNaviDlg` timer/destroy frontier.
+- Current route-search host run now routes REST/host taps to the saved main
+  `GetMessageW` waiter when the active CPU context is a hidden helper process.
+  The previous tap path could post input while `happyway_win.exe` was current;
+  `target\route_savedwait1_bottom_tap_remote_input.txt` now shows
+  `route=thread thread_id=1 hwnd=any`, and focused coverage
+  `saved_remote_input_target_uses_saved_get_message_waiter`,
+  `remote_input_active_window_uses_desktop_hit_test_over_hidden_active_window`,
+  and `window_from_point_skips_hidden_top_level_above_visible_window` passes.
+  Host pointer input also uses a desktop-wide visible hit-test before falling
+  back to the active window, so a hidden top-level helper above the map no
+  longer steals taps. The route path is not finished: after tapping the bottom
+  current-location strip, iNavi creates top-level owned `TGNaviDlg`
+  `0x00020084`, but it is already `dead=true` and removed from z-order in
+  `target\route_wndproc1_bottom_tap_windows.txt`; even an 80 ms capture
+  (`target\route_wndproc1_bottom_retap_80ms.png`) never shows the route dialog.
+  The current frontier is dialog/window lifetime or guest early-close behavior,
+  not remote input delivery.
+- Current route-search retry returned to the real startup/chrome blocker, not
+  to a touch-coordinate problem. The in-shell Win32-host drive harness
+  `target\route_path_drive1_montage.png` kept the remote endpoint alive and
+  accepted taps for safety/bottom/current-location/route-search coordinates,
+  but every frame stayed on the partial header/map composition with no
+  right-side chrome or bottom current-location strip. Rich virtual evidence
+  `target\route_chrome_rich1_*` shows the chrome child HWNDs already exist
+  under parent `0x00020004`, but are still hidden (`0x00020020`..`0x00020030`
+  for right-side buttons, `0x00020070` for the bottom strip) while iNavi is
+  still loading `resmapi_800x480.bin` RSImage/PNG resources through repeated
+  `CreateDIBSection` calls. Route driving must wait for, or speed up/fix, this
+  generic startup/chrome path; tapping before those children are visible is not
+  meaningful route UI progress.
+- Live virtual/remote runs now rotate parked child processes on live-pump wall
+  stops, matching the host-presenter scheduling policy instead of making CE
+  process scheduling depend on the presenter. Pre-fix
+  `target\route_chrome_block_v1_processes.txt` activated
+  `happyway_win.exe` and `iSearch.exe` once, then returned to `iNavi.exe` only.
+  Post-fix `target\route_chrome_rotate_v1_processes.txt` shows repeated
+  `iNavi.exe -> happyway_win.exe -> iSearch.exe` activation cycles across the
+  120 s virtual/remote probe. Focused coverage
+  `live_wall_stop_rotates_parked_processes` and
+  `host_no_wall_run_uses_implicit_live_slice` passes, and
+  `cargo check --features unicorn,trace,win32-desktop` passes with only the
+  known unused IOCTL/incremental-cleanup warnings. This does not yet reveal the
+  route chrome; the active bottleneck has moved to the resource/GDI throughput
+  and hidden-child show/update sequencing after the process handoff.
 - Startup speed regression from Unicorn heap-spillover mapping is closed for
   the current mounted virtual profile. Windows-sudo flame
   `target\startup_debugsym2_flame.svg` showed
@@ -750,8 +862,23 @@
   method 2 terminate target (`api2.2`, e.g. `target=0xfffff3fa`) it now applies
   `kernel.terminate_process(process, exit_code)` before returning `Ok(())`.
   This keeps waitable current-process state and exit code consistent with the
-  raw `TerminateProcess` path. Host output now reports this as a CE process
-  exit rather than only a generic Unicorn stop.
+  raw `TerminateProcess` path. The decoder is now also checked before
+  interrupt-probe stops are reported as fatal, matching the `DeviceParser.exe`
+  zero-PC shape from v2. Fresh mounted validation
+  `target\route_deviceexit1_*` records `DeviceParser.exe` as
+  `CreateProcessChildReturned`/`CreateProcessExited` instead of
+  `CreateProcessChildError`, then continues through `happyway_win.exe`,
+  `iSearch.exe`, and the completed `SendMessageW` helper transaction
+  (`gwe=send:1 done:1`). The active route frontier is again the hidden
+  `afxwnd42u` chrome show sequence, not the old encoded-exit crash.
+- Longer bounded virtual validation `target\route_deviceexit_long1_*` keeps
+  the same shape after the decoded `DeviceParser.exe` exit: file I/O plateaus
+  at about 2.35 MB (`host_open=178`, `host_read=23172/2350816B`), scheduler
+  state remains compact with one finite sleep waiter, and the CPU repeatedly
+  stops in iNavi image/resource/geometry code around `image:iNavi.exe+0x2ff*`
+  and `+0x332*` with hot `memcpy @1044`. No later `ShowWindow(cmd=5)` is
+  reached for the hidden `afxwnd42u` route/chrome controls, and render/display
+  milestones are still `none`.
 - Complex GDI clip regions now paint through their full CE region rect list
   instead of the old bounding-box shortcut. `FillRect`, memory/display
   `Polygon`, `Polyline`, `BitBlt`, `StretchBlt`, and `TransparentImage` now
