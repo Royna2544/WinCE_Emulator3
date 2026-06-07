@@ -152,3 +152,6 @@ fixtures plus mounted iNavi evidence:
   over mounts, storage-volume presentation, file type/display/icon metadata,
   change notification handles, shell change notifications, create/delete/
   rename/update refresh events, and storage insertion/removal notifications.
+
+- User todos:
+Create a basic cmd.exe like desktop Windows. under host_progs/cmd.cpp, Make sure it is compilable with eVC4 and compilable.
