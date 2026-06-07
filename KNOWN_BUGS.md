@@ -39,12 +39,15 @@
     and IAT imports through forwarder DLLs. Runtime no-resolve loads now map
     the module and expose ordinary exports while skipping dependency loads,
     import patching, TLS callbacks, `DllMain`, and final detach callouts.
+    Raw/non-Unicorn `LoadLibraryExW` now aligns the supported-flag reuse case
+    for already registered modules, including refcounting; missing raw loads
+    still fail explicitly because that path cannot map guest DLL bytes.
     Final dynamic `FreeLibrary` now enters guest TLS callbacks and
     `DllMain(DLL_PROCESS_DETACH)` before marking normally loaded modules
     unload-pending.
-  - Required fix: finish raw/non-Unicorn no-resolve/datafile alignment where
-    practical and fuller runtime trampoline handling. Guest TLS callbacks,
-    `DllMain(DLL_PROCESS_ATTACH)`, direct-DLL final
+  - Required fix: finish fuller runtime trampoline handling and any future raw
+    helper behavior that can be represented without pretending to map bytes.
+    Guest TLS callbacks, `DllMain(DLL_PROCESS_ATTACH)`, direct-DLL final
     `DllMain(DLL_PROCESS_DETACH)`, TLS detach ordering, forwarded exports,
     no-resolve runtime mapping, and datafile resource loads are covered by
     runtime eVC fixtures.

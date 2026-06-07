@@ -13,10 +13,11 @@
 ## Current Slice
 
 - Queued runtime loader gaps from `PLAN.MD`: harden runtime trampoline handling
-  for high/relocated DLLs; align raw/non-Unicorn no-resolve/datafile behavior
-  where practical; add compact runtime loader audit counters; extend
+  for high/relocated DLLs; add compact runtime loader audit counters; extend
   forwarded-export/no-resolve/resource fixture variants when real dumped DLL
-  traces demand more cases.
+  traces demand more cases. Raw/non-Unicorn `LoadLibraryExW` supported-flag
+  reuse is aligned for already registered modules; real raw DLL byte mapping
+  remains an explicit failure because that path has no Unicorn memory context.
 - CE fidelity catch-up next slice: finish the runtime guest DLL loader at the
   Unicorn import-trap boundary. The kernel-side module manager/refcount shape
   now exists and the shared CE-aware DLL search order is implemented for
@@ -46,7 +47,7 @@
   resource-only/no-resolve image, exposes `FindResourceW`/`LoadResource`/
   `LoadStringW` immediately through `kernel.resources`, and hides code exports
   from `GetProcAddress`; next loader work should harden high-address runtime
-  trampolines and raw/non-Unicorn alignment.
+  trampolines.
   Keep
   `C:\WINCE600` as the behavior reference and update `PLAN.MD` after each port.
 - COREDLL fallback audit follow-up: stubs now carry audit classification plus

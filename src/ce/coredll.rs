@@ -6637,20 +6637,29 @@ fn load_library_ex_w_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
         return 0;
     }
-    if flags != 0 {
-        let name_ptr = raw_arg(args, 0);
-        if name_ptr == 0 || read_guest_wide_arg(memory, name_ptr).is_none() {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-        } else {
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-        }
-        return 0;
+    if flags == 0 {
+        return load_library_w_raw(kernel, memory, thread_id, raw_arg(args, 0));
     }
-    load_library_w_raw(kernel, memory, thread_id, raw_arg(args, 0))
+
+    let name_ptr = raw_arg(args, 0);
+    let Some(name) = read_guest_wide_arg(memory, name_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if is_coredll_module_name(&name) {
+        kernel.threads.set_last_error(thread_id, 0);
+        return COREDLL_MODULE_HANDLE;
+    }
+    if let Some(handle) = kernel.retain_loaded_module_by_name(&name) {
+        kernel.threads.set_last_error(thread_id, 0);
+        return handle;
+    }
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+    0
 }
 
 fn free_library_raw(kernel: &mut CeKernel, thread_id: u32, module: u32) -> bool {

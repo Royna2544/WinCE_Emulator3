@@ -1799,7 +1799,8 @@ fn coredll_raw_module_apis_resolve_preloaded_search_dll_exports() -> Result<()> 
 }
 
 #[test]
-fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_fail_explicitly() -> Result<()> {
+fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_modules()
+-> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
     let mut kernel = CeKernel::boot(config);
@@ -1861,6 +1862,42 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_fail_explicitl
             thread_id,
             ORD_LOAD_LIBRARY_EX_W,
             [module_name_ptr, 0, 0x0000_0002],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle == module_base
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(kernel.loaded_module_snapshots()[0].ref_count, 3);
+
+    let missing_name_ptr = 0x1_9040;
+    memory.write_wide_z(missing_name_ptr, "missing.dll");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_LIBRARY_EX_W,
+            [missing_name_ptr, 0, 0x0000_0003],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_FILE_NOT_FOUND
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_LIBRARY_EX_W,
+            [module_name_ptr, 0, 0x0000_0040],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Handle(0),

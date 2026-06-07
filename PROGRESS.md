@@ -51,7 +51,12 @@
   `176_loadlibrary_datafile_resource` fixture proves `LoadStringW`,
   `FindResourceW`, `SizeofResource`, and `LoadResource` work from the loaded
   resource module without dependency loading or `DllMain`, then a later normal
-  load resolves imports and runs attach. The updated
+  load resolves imports and runs attach. The raw/non-Unicorn
+  `LoadLibraryExW` helper now accepts supported no-resolve/datafile flags when
+  reusing COREDLL or an already registered module, increments the reused module
+  refcount, reports `ERROR_FILE_NOT_FOUND` for missing modules, and still
+  returns `ERROR_NOT_SUPPORTED` for unsupported flags instead of pretending to
+  map bytes without a Unicorn memory context. The updated
   `173_loadlibrary_tls_callback` fixture arms an EXE-owned detach order marker
   and proves the complete lifecycle order word `0x01020304`: TLS attach,
   `DllMain` attach, TLS detach, `DllMain` detach.
