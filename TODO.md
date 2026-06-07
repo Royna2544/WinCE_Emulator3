@@ -12,6 +12,14 @@
 
 ## Current Slice
 
+- Host utility follow-up: the `host_progs` sources for `cmd`, `snip`,
+  `taskmgr`, and `easy_iNavi` now compile with eVC4 MIPSII into
+  `target\host_progs\build_check`. When the main emulator tree is buildable
+  again, rerun `cargo test --test host_progs`; the attempted run in this slice
+  was blocked before the source test by the pre-existing
+  `src\emulator\unicorn.rs` compile errors in the inherited worktree. If these
+  tools are needed on a mounted image, copy the freshly built EXEs from
+  `target\host_progs\build_check` into the desired CE-visible folder.
 - Queued runtime loader gaps from `PLAN.MD`: extend forwarded-export/
   no-resolve/resource fixture variants when real dumped DLL traces demand more
   cases. Runtime normal/no-resolve DLL loads now patch inline MIPS Unicorn

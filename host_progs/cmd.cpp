@@ -1,4 +1,5 @@
 #include <windows.h>
+#include "dyn_resolve_helper.h"
 
 #define CMD_EDIT_OUT 1001
 #define CMD_EDIT_IN 1002
@@ -100,6 +101,18 @@ static BOOL StartsWithSwitch(const WCHAR *text, WCHAR sw) {
         sw = (WCHAR)(sw - (L'a' - L'A'));
     }
     return ch == sw && (text[2] == 0 || IsSpace(text[2]));
+}
+
+static DWORD ParseUnsigned(const WCHAR *text, BOOL *ok) {
+    DWORD value = 0;
+    const WCHAR *p = SkipSpaces(text);
+    *ok = FALSE;
+    while (*p >= L'0' && *p <= L'9') {
+        *ok = TRUE;
+        value = value * 10 + (DWORD)(*p - L'0');
+        ++p;
+    }
+    return value;
 }
 
 static const WCHAR *BaseName(const WCHAR *path) {
@@ -342,6 +355,36 @@ static DWORD CmdRmdir(const WCHAR *arg) {
     return 0;
 }
 
+static DWORD CmdKill(const WCHAR *arg) {
+    BOOL parsed = FALSE;
+    DWORD pid = ParseUnsigned(arg, &parsed);
+    HANDLE process;
+    if (!parsed || pid == 0) {
+        AppendText(L"Usage: _kill <pid>\r\n");
+        return 1;
+    }
+    process = DynOpenProcess(PROCESS_TERMINATE, FALSE, pid);
+    if (!process) {
+        WCHAR msg[96];
+        wsprintfW(msg, L"_kill: OpenProcess(%lu) failed, error=%lu\r\n", pid, GetLastError());
+        AppendText(msg);
+        return 1;
+    }
+    if (!DynTerminateProcess(process, 1)) {
+        WCHAR msg[96];
+        wsprintfW(msg, L"_kill: TerminateProcess(%lu) failed, error=%lu\r\n", pid, GetLastError());
+        CloseHandle(process);
+        AppendText(msg);
+        return 1;
+    }
+    CloseHandle(process);
+    AppendText(L"_kill: terminated process ");
+    WCHAR msg[32];
+    wsprintfW(msg, L"%lu\r\n", pid);
+    AppendText(msg);
+    return 0;
+}
+
 static DWORD RunExternal(const WCHAR *command) {
     WCHAR exe[MAX_PATH_CE];
     WCHAR cmdline[MAX_CMD];
@@ -430,6 +473,9 @@ static DWORD ExecuteCommand(const WCHAR *command, BOOL interactive) {
         AppendText(g_cwd);
         AppendText(L"\r\n");
         return 0;
+    }
+    if (CompareNoCase(name, L"_kill") == 0) {
+        return CmdKill(args);
     }
     if (CompareNoCase(name, L"exit") == 0) {
         PostQuitMessage(0);

@@ -1071,6 +1071,8 @@ const MIPS_NOP: u32 = 0x0000_0000;
 const WNDPROC_CALL_FRAME_BYTES: u32 = 0x20;
 #[cfg(feature = "unicorn")]
 const CURRENT_WAIT_HOST_THROTTLE_MS: u64 = 1;
+#[cfg(feature = "unicorn")]
+const REALTIME_WAIT_THROTTLE_ENV: &str = "WINCE_EMU_REALTIME_WAITS";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CreateWindowReturn {
@@ -10070,11 +10072,25 @@ fn complete_current_sleep_timeout<D>(
 
 #[cfg(feature = "unicorn")]
 fn throttle_current_wait_host_loop(timeout_ms: u32, _live_pump: bool) {
-    if timeout_ms == 0 || timeout_ms == crate::ce::timer::INFINITE {
-        return;
+    if let Some(sleep_ms) = host_wait_throttle_duration_ms(
+        timeout_ms,
+        std::env::var_os(REALTIME_WAIT_THROTTLE_ENV).is_some_and(|value| {
+            matches!(
+                value.to_string_lossy().trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        }),
+    ) {
+        std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
     }
-    let sleep_ms = u64::from(timeout_ms).min(CURRENT_WAIT_HOST_THROTTLE_MS);
-    std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
+}
+
+#[cfg(feature = "unicorn")]
+fn host_wait_throttle_duration_ms(timeout_ms: u32, realtime_waits: bool) -> Option<u64> {
+    if !realtime_waits || timeout_ms == 0 || timeout_ms == crate::ce::timer::INFINITE {
+        return None;
+    }
+    Some(u64::from(timeout_ms).min(CURRENT_WAIT_HOST_THROTTLE_MS))
 }
 
 #[cfg(feature = "unicorn")]
@@ -12859,6 +12875,17 @@ mod wait_scheduler_tests {
             uc.reg_read(unicorn_engine::RegisterMIPS::PC).unwrap() as u32,
             return_pc
         );
+    }
+
+    #[test]
+    fn host_wait_throttle_is_opt_in_for_fast_guest_time() {
+        assert_eq!(super::host_wait_throttle_duration_ms(500, false), None);
+        assert_eq!(super::host_wait_throttle_duration_ms(0, true), None);
+        assert_eq!(
+            super::host_wait_throttle_duration_ms(crate::ce::timer::INFINITE, true),
+            None
+        );
+        assert_eq!(super::host_wait_throttle_duration_ms(500, true), Some(1));
     }
 
     #[test]

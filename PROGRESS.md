@@ -9,6 +9,18 @@
 
 ## Confirmed
 
+- Added CE/eVC4 host utility sources under `host_progs`: `snip.cpp` captures the
+  full screen into `\SDMMC Disk\SnipTool_<seconds since 2005-04-04>.bmp` by
+  default and reports success/failure with `MessageBoxW`; `taskmgr.cpp`
+  displays live CPU/memory/storage/process data using CE APIs and dynamic
+  Toolhelp resolution; `easy_iNavi.cpp` offers two large buttons for launching
+  `\SDMMC Disk\INavi\iNavi.exe` and `\Windows\explorer.exe`; and
+  `dyn_resolve_helper.cpp/.h` centralizes runtime DLL export lookup for APIs
+  that may exist in dumped runtime DLLs rather than SDK import libraries.
+  Existing `host_progs\cmd.cpp` now has `_kill <pid>` using dynamically
+  resolved `OpenProcess`/`TerminateProcess`. Direct eVC4 MIPSII validation with
+  `CLMIPS.EXE`/`LINK.EXE` produced `target\host_progs\build_check\cmd.exe`,
+  `snip.exe`, `taskmgr.exe`, and `easy_iNavi.exe`.
 - Parked-process and suspended-thread scheduling now treat queued nonqueued
   `SendMessageW` work as receiver-ready CE work. A live host run had frozen
   with `gwe=send:13 done:12` and thread 9 blocked on a send to the main iNavi
