@@ -3089,6 +3089,21 @@ impl CeKernel {
         }
     }
 
+    pub fn post_shell_notification_dismiss_callback(
+        &mut self,
+        clsid: [u8; 16],
+        id: u32,
+        timed_out: bool,
+    ) -> bool {
+        self.post_shell_notification_callback(
+            clsid,
+            id,
+            crate::ce::shell::SHNN_DISMISS,
+            u32::from(timed_out),
+            0,
+        )
+    }
+
     pub fn post_message_w_for_thread(
         &mut self,
         thread_id: u32,

@@ -1573,7 +1573,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     process and sends `WM_NOTIFY` with `wParam=hdr.idFrom` and
     `lParam=NMSHN*`; for link-selection notifications it appends the selected
     link string after the `NMSHN` allocation and points `pszLink` at that
-    receiver-local string.
+    receiver-local string. CE bubble dismiss callbacks carry the timeout
+    boolean through `NMSHN.fTimeout` in the same union field.
   - `api.cpp` maps `SHNotificationAddI`/`UpdateI`/`RemoveI`/`GetDataI` to the
     shell API set and returns Win32 error codes (`ERROR_SUCCESS`,
     `ERROR_INVALID_PARAMETER`, `ERROR_INVALID_DATA`) rather than BOOL success.
@@ -1582,7 +1583,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `GetNotificationData`. Rust now preserves that app-visible data in
     `ShellSystem`, can post the window-based `WM_NOTIFY`/`NMSHN` sink callback
     for stored notification events, marshals optional `SHNN_LINKSEL` link
-    strings into the receiver `NMSHN` allocation, and prunes records whose sink
-    HWND is destroyed through normal window/process teardown; visual bubble/
-    taskbar rendering, COM callbacks, and timeout/dismiss policy remain queued
-    separately.
+    strings into the receiver `NMSHN` allocation, carries `SHNN_DISMISS`
+    `fTimeout`, and prunes records whose sink HWND is destroyed through normal
+    window/process teardown; visual bubble/taskbar rendering, COM callbacks,
+    and automatic timeout/dismiss ownership remain queued separately.

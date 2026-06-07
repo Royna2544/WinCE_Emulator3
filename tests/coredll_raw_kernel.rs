@@ -2775,6 +2775,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     const SHNUM_HTML: u32 = 0x0008;
     const SHNUM_TITLE: u32 = 0x0010;
     const SHNN_SHOW: u32 = 0xffff_fc16;
+    const SHNN_DISMISS: u32 = 0xffff_fc17;
     const SHNN_LINKSEL: u32 = 0xffff_fc18;
 
     let table = CoredllExportTable::default();
@@ -2934,6 +2935,50 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
             .heap_size(PROCESS_HEAP_HANDLE, 0, link_nmshn_ptr)
             .is_none()
     );
+
+    assert!(kernel.post_shell_notification_dismiss_callback(clsid, 301, true));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PEEK_MESSAGE_W,
+            [msg_ptr, hwnd, WM_NOTIFY, WM_NOTIFY, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let dismiss_nmshn_ptr = memory.read_u32(msg_ptr + 12)?;
+    assert_ne!(dismiss_nmshn_ptr, 0);
+    assert_eq!(memory.read_u32(dismiss_nmshn_ptr)?, 0);
+    assert_eq!(memory.read_u32(dismiss_nmshn_ptr + 4)?, 301);
+    assert_eq!(memory.read_u32(dismiss_nmshn_ptr + 8)?, SHNN_DISMISS);
+    assert_eq!(memory.read_u32(dismiss_nmshn_ptr + 12)?, 0xCAFE_BABE);
+    assert_eq!(memory.read_u32(dismiss_nmshn_ptr + 16)?, 0);
+    assert_eq!(memory.read_u32(dismiss_nmshn_ptr + 20)?, 1);
+    assert_eq!(memory.read_u32(dismiss_nmshn_ptr + 24)?, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DISPATCH_MESSAGE_W,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, dismiss_nmshn_ptr)
+            .is_none()
+    );
+    assert!(kernel.shell.notification(clsid, 301).is_some());
 
     memory.write_word(html_len, 8);
     let get_result = table.dispatch_raw_ordinal_with_memory(

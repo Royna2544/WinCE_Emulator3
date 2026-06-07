@@ -4623,6 +4623,12 @@
   through the existing `DispatchMessageW` payload cleanup. Focused coverage
   remains `shnotification_i_tracks_query_update_and_remove_state`.
 
+- Added the matching CE `SHNN_DISMISS` callback marshalling helper. Dismiss
+  callbacks now reuse the stored notification `lParam`, write the `fTimeout`
+  flag into the `NMSHN` union DWORD, and keep the notification record alive
+  until an explicit remove or window/process cleanup. Focused coverage remains
+  `shnotification_i_tracks_query_update_and_remove_state`.
+
 - Added shell notification lifetime cleanup on HWND destruction. The kernel
   destroy-window and process-window teardown paths now prune `Shell_NotifyIcon`
   records and `SHNotification*I` records whose sink window is being destroyed,
