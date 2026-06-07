@@ -79,10 +79,12 @@
     transaction but return 0 instead of waiting for completion and writing the
     result. Raw clipboard APIs now track open/owner/data/format-name state, but
     allocation-copy variants and deeper ownership/render integration are still
+    incomplete. Raw caret APIs now track owner/position/show-count/blink-time
+    state, but rendered blinking and focus/update invalidation are still
     incomplete.
   - Required fix: implement keyboard modifiers/layout, accelerators/menu
     shortcuts, `WM_SYSKEY*`, dead-key/IME handoff, clipboard allocation-copy
-    and deeper ownership edge cases, caret state/blink/position,
+    and deeper ownership edge cases, rendered caret blink/focus invalidation,
     focus/capture integration, and CE-like
     `SendMessageTimeout` wait/result/flag/destruction/reentrancy behavior.
   - Status: open. Source-reference this against CE GWE/input/clipboard/caret

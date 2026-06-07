@@ -3464,6 +3464,41 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .gwe
                 .get_message_queue_ready_time_stamp(thread_id, raw_arg(args, 0)),
         )),
+        ORD_CREATE_CARET => Some(CoredllValue::Bool(create_caret_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_DESTROY_CARET => Some(CoredllValue::Bool(destroy_caret_raw(kernel, thread_id))),
+        ORD_HIDE_CARET => Some(CoredllValue::Bool(hide_caret_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_SHOW_CARET => Some(CoredllValue::Bool(show_caret_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_SET_CARET_POS => Some(CoredllValue::Bool(set_caret_pos_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_GET_CARET_POS => Some(CoredllValue::Bool(get_caret_pos_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_SET_CARET_BLINK_TIME => Some(CoredllValue::Bool(set_caret_blink_time_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_GET_CARET_BLINK_TIME => Some(CoredllValue::U32(kernel.gwe.get_caret_blink_time())),
+        ORD_DISABLE_CARET_SYSTEM_WIDE => Some(CoredllValue::Bool(disable_caret_system_wide_raw(
+            kernel, thread_id,
+        ))),
+        ORD_ENABLE_CARET_SYSTEM_WIDE => Some(CoredllValue::Bool(enable_caret_system_wide_raw(
+            kernel, thread_id,
+        ))),
         ORD_OPEN_CLIPBOARD => Some(CoredllValue::Bool(open_clipboard_raw(
             kernel,
             thread_id,
@@ -5615,6 +5650,143 @@ fn message_box_default_result(style: u32) -> Option<u32> {
         .get(index)
         .copied()
         .or_else(|| buttons.first().copied())
+}
+
+fn create_caret_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let hwnd = raw_arg(args, 0);
+    if hwnd == 0 || !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    }
+    if kernel.gwe.create_caret(
+        hwnd,
+        raw_arg(args, 1),
+        raw_i32_arg(args, 2),
+        raw_i32_arg(args, 3),
+    ) {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        false
+    }
+}
+
+fn destroy_caret_raw(kernel: &mut CeKernel, thread_id: u32) -> bool {
+    if kernel.gwe.destroy_caret() {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        false
+    }
+}
+
+fn hide_caret_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> bool {
+    if hwnd != 0 && !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    }
+    if kernel.gwe.hide_caret(hwnd) {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        false
+    }
+}
+
+fn show_caret_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> bool {
+    if hwnd != 0 && !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    }
+    if kernel.gwe.show_caret(hwnd) {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        false
+    }
+}
+
+fn set_caret_pos_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    if kernel
+        .gwe
+        .set_caret_pos(raw_i32_arg(args, 0), raw_i32_arg(args, 1))
+    {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        false
+    }
+}
+
+fn get_caret_pos_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    point_ptr: u32,
+) -> bool {
+    if point_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(point) = kernel.gwe.get_caret_pos() else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if write_guest_point(kernel, memory, thread_id, point_ptr, point) {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        false
+    }
+}
+
+fn set_caret_blink_time_raw(kernel: &mut CeKernel, thread_id: u32, milliseconds: u32) -> bool {
+    if kernel.gwe.set_caret_blink_time(milliseconds) {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        false
+    }
+}
+
+fn disable_caret_system_wide_raw(kernel: &mut CeKernel, thread_id: u32) -> bool {
+    kernel.gwe.disable_caret_system_wide();
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn enable_caret_system_wide_raw(kernel: &mut CeKernel, thread_id: u32) -> bool {
+    kernel.gwe.enable_caret_system_wide();
+    kernel.threads.set_last_error(thread_id, 0);
+    true
 }
 
 fn open_clipboard_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> bool {

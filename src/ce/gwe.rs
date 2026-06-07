@@ -570,6 +570,16 @@ impl Default for ClipboardState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CaretState {
+    pub hwnd: u32,
+    pub bitmap: u32,
+    pub width: i32,
+    pub height: i32,
+    pub position: Point,
+    pub show_count: i32,
+}
+
 #[derive(Debug, Clone)]
 pub struct Gwe {
     next_hwnd: u32,
@@ -606,6 +616,9 @@ pub struct Gwe {
     message_pointer_payloads: BTreeMap<u32, MessagePointerPayload>,
     replied_send_depth_by_thread: BTreeMap<u32, BTreeSet<u32>>,
     clipboard: ClipboardState,
+    caret: Option<CaretState>,
+    caret_blink_time_ms: u32,
+    caret_system_enabled: bool,
     next_lifecycle_message_order: u64,
     stats: GweStats,
 }
@@ -682,6 +695,9 @@ impl Default for Gwe {
             message_pointer_payloads: BTreeMap::new(),
             replied_send_depth_by_thread: BTreeMap::new(),
             clipboard: ClipboardState::default(),
+            caret: None,
+            caret_blink_time_ms: 500,
+            caret_system_enabled: true,
             next_lifecycle_message_order: 1,
             stats: GweStats::default(),
         }
@@ -987,6 +1003,91 @@ impl Gwe {
             .map(String::as_str)
     }
 
+    pub fn create_caret(&mut self, hwnd: u32, bitmap: u32, width: i32, height: i32) -> bool {
+        if !self.is_window(hwnd) || width < 0 || height < 0 {
+            return false;
+        }
+        self.caret = Some(CaretState {
+            hwnd,
+            bitmap,
+            width,
+            height,
+            position: Point { x: 0, y: 0 },
+            show_count: -1,
+        });
+        true
+    }
+
+    pub fn destroy_caret(&mut self) -> bool {
+        if self.caret.is_none() {
+            return false;
+        }
+        self.caret = None;
+        true
+    }
+
+    pub fn hide_caret(&mut self, hwnd: u32) -> bool {
+        let Some(caret) = self.caret.as_mut() else {
+            return false;
+        };
+        if hwnd != 0 && caret.hwnd != hwnd {
+            return false;
+        }
+        caret.show_count = caret.show_count.saturating_sub(1);
+        true
+    }
+
+    pub fn show_caret(&mut self, hwnd: u32) -> bool {
+        let Some(caret) = self.caret.as_mut() else {
+            return false;
+        };
+        if hwnd != 0 && caret.hwnd != hwnd {
+            return false;
+        }
+        caret.show_count = caret.show_count.saturating_add(1);
+        true
+    }
+
+    pub fn set_caret_pos(&mut self, x: i32, y: i32) -> bool {
+        let Some(caret) = self.caret.as_mut() else {
+            return false;
+        };
+        caret.position = Point { x, y };
+        true
+    }
+
+    pub fn get_caret_pos(&self) -> Option<Point> {
+        self.caret.map(|caret| caret.position)
+    }
+
+    pub fn caret(&self) -> Option<CaretState> {
+        self.caret
+    }
+
+    pub fn set_caret_blink_time(&mut self, milliseconds: u32) -> bool {
+        if milliseconds == 0 {
+            return false;
+        }
+        self.caret_blink_time_ms = milliseconds;
+        true
+    }
+
+    pub fn get_caret_blink_time(&self) -> u32 {
+        self.caret_blink_time_ms
+    }
+
+    pub fn disable_caret_system_wide(&mut self) {
+        self.caret_system_enabled = false;
+    }
+
+    pub fn enable_caret_system_wide(&mut self) {
+        self.caret_system_enabled = true;
+    }
+
+    pub fn caret_system_enabled(&self) -> bool {
+        self.caret_system_enabled
+    }
+
     pub fn register_gesture(
         &mut self,
         id: u32,
@@ -1073,6 +1174,12 @@ impl Gwe {
         }
         if targets.contains(&self.active_window.unwrap_or(0)) {
             self.active_window = None;
+        }
+        if self
+            .caret
+            .is_some_and(|caret| targets.contains(&caret.hwnd))
+        {
+            self.caret = None;
         }
         self.keyboard_target_by_thread
             .retain(|_, hwnd| !targets.contains(hwnd));

@@ -145,6 +145,16 @@
   `clipboard_raw_ordinals_reject_invalid_open_and_missing_lock` passes. Richer
   allocation/copy ownership behavior such as `GetClipboardDataAlloc` remains
   queued.
+- Raw caret COREDLL ordinals now have GWE-owned state instead of broad fallback
+  behavior. Using CE `PUBLIC\COMMON\SDK\INC\winuser.h` caret prototypes as the
+  source reference, `CreateCaret`, `DestroyCaret`, `ShowCaret`, `HideCaret`,
+  `SetCaretPos`, `GetCaretPos`, `SetCaretBlinkTime`, `GetCaretBlinkTime`, and
+  the CE ordinal-only system-wide enable/disable calls track owner HWND,
+  bitmap, size, signed position, show count, blink time, system enable state,
+  and cleanup when the owner window is destroyed. Focused coverage
+  `coredll_raw_caret_ordinals_track_position_visibility_and_blink` and
+  `coredll_raw_caret_rejects_invalid_state_and_destroys_with_owner` passes.
+  Rendered caret blinking and focus/update invalidation remain queued.
 - Runtime guest-DLL loading now has a shared CE-aware search helper in
   `emulator::dll_search`, replacing duplicate private startup/child-process
   search logic. It resolves exact mounted CE paths first, then the active

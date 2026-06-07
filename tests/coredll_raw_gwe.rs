@@ -8,18 +8,20 @@ use wince_emulation_v3::{
             ORD_ADD_FONT_RESOURCE_W, ORD_ADJUST_WINDOW_RECT_EX, ORD_APPEND_MENU_W, ORD_BEGIN_PAINT,
             ORD_BIT_BLT, ORD_BRING_WINDOW_TO_TOP, ORD_CHECK_MENU_ITEM, ORD_CHECK_MENU_RADIO_ITEM,
             ORD_CHILD_WINDOW_FROM_POINT, ORD_CLIENT_TO_SCREEN, ORD_COMBINE_RGN, ORD_COPY_RECT,
-            ORD_CREATE_COMPATIBLE_BITMAP, ORD_CREATE_COMPATIBLE_DC,
+            ORD_CREATE_CARET, ORD_CREATE_COMPATIBLE_BITMAP, ORD_CREATE_COMPATIBLE_DC,
             ORD_CREATE_DIALOG_INDIRECT_PARAM_W, ORD_CREATE_DIBSECTION, ORD_CREATE_FONT_INDIRECT_W,
             ORD_CREATE_MENU, ORD_CREATE_MUTEX_W, ORD_CREATE_PALETTE, ORD_CREATE_PATTERN_BRUSH,
             ORD_CREATE_PEN_INDIRECT, ORD_CREATE_POPUP_MENU, ORD_CREATE_RECT_RGN,
             ORD_CREATE_SOLID_BRUSH, ORD_CREATE_WINDOW_EX_W, ORD_DEF_WINDOW_PROC_W,
-            ORD_DELETE_OBJECT, ORD_DESTROY_ICON, ORD_DESTROY_WINDOW, ORD_DISPATCH_MESSAGE_W,
-            ORD_DRAW_MENU_BAR, ORD_ENABLE_MENU_ITEM, ORD_ENABLE_WINDOW, ORD_END_PAINT,
+            ORD_DELETE_OBJECT, ORD_DESTROY_CARET, ORD_DESTROY_ICON, ORD_DESTROY_WINDOW,
+            ORD_DISABLE_CARET_SYSTEM_WIDE, ORD_DISPATCH_MESSAGE_W, ORD_DRAW_MENU_BAR,
+            ORD_ENABLE_CARET_SYSTEM_WIDE, ORD_ENABLE_MENU_ITEM, ORD_ENABLE_WINDOW, ORD_END_PAINT,
             ORD_EQUAL_RECT, ORD_EXT_TEXT_OUT_W, ORD_FILL_RECT, ORD_FIND_RESOURCE_W,
             ORD_FIND_WINDOW_W, ORD_GET_ACTIVE_WINDOW, ORD_GET_ASSOCIATED_MENU,
             ORD_GET_ASYNC_KEY_STATE, ORD_GET_ASYNC_SHIFT_FLAGS, ORD_GET_CAPTURE,
-            ORD_GET_CLASS_INFO_W, ORD_GET_CLASS_NAME_W, ORD_GET_CLIENT_RECT, ORD_GET_CURSOR_POS,
-            ORD_GET_DC, ORD_GET_DEVICE_CAPS, ORD_GET_DIALOG_BASE_UNITS, ORD_GET_DIBCOLOR_TABLE,
+            ORD_GET_CARET_BLINK_TIME, ORD_GET_CARET_POS, ORD_GET_CLASS_INFO_W,
+            ORD_GET_CLASS_NAME_W, ORD_GET_CLIENT_RECT, ORD_GET_CURSOR_POS, ORD_GET_DC,
+            ORD_GET_DEVICE_CAPS, ORD_GET_DIALOG_BASE_UNITS, ORD_GET_DIBCOLOR_TABLE,
             ORD_GET_DLG_CTRL_ID, ORD_GET_DLG_ITEM, ORD_GET_DLG_ITEM_INT, ORD_GET_DLG_ITEM_TEXT_W,
             ORD_GET_FOCUS, ORD_GET_FOREGROUND_KEYBOARD_TARGET, ORD_GET_FOREGROUND_WINDOW,
             ORD_GET_KEY_STATE, ORD_GET_KEYBOARD_TARGET, ORD_GET_MENU, ORD_GET_MENU_ITEM_INFO_W,
@@ -33,27 +35,28 @@ use wince_emulation_v3::{
             ORD_GET_TEXT_FACE_W, ORD_GET_TEXT_METRICS_W, ORD_GET_UPDATE_RECT, ORD_GET_UPDATE_RGN,
             ORD_GET_WINDOW, ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_RGN,
             ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W, ORD_GET_WINDOW_THREAD_PROCESS_ID,
-            ORD_GLOBAL_MEMORY_STATUS, ORD_IN_SEND_MESSAGE, ORD_INFLATE_RECT, ORD_INSERT_MENU_W,
-            ORD_INTERSECT_RECT, ORD_INVALIDATE_RECT, ORD_IS_CHILD, ORD_IS_DIALOG_MESSAGE_W,
-            ORD_IS_RECT_EMPTY, ORD_IS_WINDOW, ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE,
-            ORD_KEYBD_EVENT, ORD_KILL_TIMER, ORD_LINE_TO, ORD_LOAD_ICON_W, ORD_LOAD_RESOURCE,
-            ORD_LOAD_STRING_W, ORD_MAP_DIALOG_RECT, ORD_MAP_WINDOW_POINTS, ORD_MESSAGE_BOX_W,
-            ORD_MOVE_TO_EX, ORD_MOVE_WINDOW, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_OFFSET_RECT,
-            ORD_PAT_BLT, ORD_PEEK_MESSAGE_W, ORD_POLYGON, ORD_POLYLINE, ORD_POST_KEYBD_MESSAGE,
-            ORD_POST_MESSAGE_W, ORD_POST_QUIT_MESSAGE, ORD_POST_THREAD_MESSAGE_W, ORD_PT_IN_RECT,
-            ORD_PT_IN_REGION, ORD_REALIZE_PALETTE, ORD_RECT_IN_REGION, ORD_REDRAW_WINDOW,
-            ORD_REGISTER_CLASS_W, ORD_REGISTER_GESTURE, ORD_RELEASE_CAPTURE, ORD_RELEASE_DC,
-            ORD_RELEASE_MUTEX, ORD_REMOVE_MENU, ORD_ROUND_RECT, ORD_SCREEN_TO_CLIENT,
-            ORD_SELECT_CLIP_RGN, ORD_SELECT_OBJECT, ORD_SELECT_PALETTE,
-            ORD_SEND_DLG_ITEM_MESSAGE_W, ORD_SEND_MESSAGE_TIMEOUT, ORD_SEND_MESSAGE_W,
-            ORD_SEND_NOTIFY_MESSAGE_W, ORD_SET_ACTIVE_WINDOW, ORD_SET_ASSOCIATED_MENU,
-            ORD_SET_BK_COLOR, ORD_SET_BRUSH_ORG_EX, ORD_SET_CAPTURE, ORD_SET_DIBCOLOR_TABLE,
+            ORD_GLOBAL_MEMORY_STATUS, ORD_HIDE_CARET, ORD_IN_SEND_MESSAGE, ORD_INFLATE_RECT,
+            ORD_INSERT_MENU_W, ORD_INTERSECT_RECT, ORD_INVALIDATE_RECT, ORD_IS_CHILD,
+            ORD_IS_DIALOG_MESSAGE_W, ORD_IS_RECT_EMPTY, ORD_IS_WINDOW, ORD_IS_WINDOW_ENABLED,
+            ORD_IS_WINDOW_VISIBLE, ORD_KEYBD_EVENT, ORD_KILL_TIMER, ORD_LINE_TO, ORD_LOAD_ICON_W,
+            ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_MAP_DIALOG_RECT, ORD_MAP_WINDOW_POINTS,
+            ORD_MESSAGE_BOX_W, ORD_MOVE_TO_EX, ORD_MOVE_WINDOW,
+            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_OFFSET_RECT, ORD_PAT_BLT, ORD_PEEK_MESSAGE_W,
+            ORD_POLYGON, ORD_POLYLINE, ORD_POST_KEYBD_MESSAGE, ORD_POST_MESSAGE_W,
+            ORD_POST_QUIT_MESSAGE, ORD_POST_THREAD_MESSAGE_W, ORD_PT_IN_RECT, ORD_PT_IN_REGION,
+            ORD_REALIZE_PALETTE, ORD_RECT_IN_REGION, ORD_REDRAW_WINDOW, ORD_REGISTER_CLASS_W,
+            ORD_REGISTER_GESTURE, ORD_RELEASE_CAPTURE, ORD_RELEASE_DC, ORD_RELEASE_MUTEX,
+            ORD_REMOVE_MENU, ORD_ROUND_RECT, ORD_SCREEN_TO_CLIENT, ORD_SELECT_CLIP_RGN,
+            ORD_SELECT_OBJECT, ORD_SELECT_PALETTE, ORD_SEND_DLG_ITEM_MESSAGE_W,
+            ORD_SEND_MESSAGE_TIMEOUT, ORD_SEND_MESSAGE_W, ORD_SEND_NOTIFY_MESSAGE_W,
+            ORD_SET_ACTIVE_WINDOW, ORD_SET_ASSOCIATED_MENU, ORD_SET_BK_COLOR, ORD_SET_BRUSH_ORG_EX,
+            ORD_SET_CAPTURE, ORD_SET_CARET_BLINK_TIME, ORD_SET_CARET_POS, ORD_SET_DIBCOLOR_TABLE,
             ORD_SET_DIBITS_TO_DEVICE, ORD_SET_DLG_ITEM_INT, ORD_SET_DLG_ITEM_TEXT_W, ORD_SET_FOCUS,
             ORD_SET_FOREGROUND_WINDOW, ORD_SET_KEYBOARD_TARGET, ORD_SET_MENU,
             ORD_SET_MENU_ITEM_INFO_W, ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_RECT,
             ORD_SET_RECT_EMPTY, ORD_SET_ROP2, ORD_SET_TEXT_ALIGN, ORD_SET_TEXT_COLOR,
             ORD_SET_TIMER, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_RGN,
-            ORD_SET_WINDOW_TEXT_W, ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_SLEEP,
+            ORD_SET_WINDOW_TEXT_W, ORD_SHOW_CARET, ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_SLEEP,
             ORD_STRETCH_BLT, ORD_STRETCH_DIBITS, ORD_SYSTEM_PARAMETERS_INFO_W,
             ORD_TRACK_POPUP_MENU_EX, ORD_TRANSPARENT_IMAGE, ORD_UNION_RECT, ORD_UPDATE_WINDOW,
             ORD_VALIDATE_RECT, ORD_WINDOW_FROM_POINT,
@@ -13403,6 +13406,254 @@ fn coredll_raw_dialog_controls_support_text_and_message_forwarding() -> Result<(
             ..
         }
     ));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_caret_ordinals_track_position_visibility_and_blink() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 260;
+    let hwnd = kernel.create_window_ex_w(thread_id, "CARET_OWNER", "", None, 0, WS_VISIBLE, 0);
+    let other = kernel.create_window_ex_w(thread_id, "CARET_OTHER", "", None, 0, WS_VISIBLE, 0);
+    let point_ptr = 0x2a_0000;
+    memory.map_words(point_ptr, 2);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_CARET,
+            [hwnd, 0x000b_7000, 2, 18],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let caret = kernel.gwe.caret().expect("caret created");
+    assert_eq!(caret.hwnd, hwnd);
+    assert_eq!(caret.bitmap, 0x000b_7000);
+    assert_eq!(caret.width, 2);
+    assert_eq!(caret.height, 18);
+    assert_eq!(caret.show_count, -1);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHOW_CARET,
+            [hwnd],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.gwe.caret().expect("caret").show_count, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_HIDE_CARET,
+            [other],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_HIDE_CARET,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.gwe.caret().expect("caret").show_count, -1);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_CARET_POS,
+            [123, (-45i32) as u32],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CARET_POS,
+            [point_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(point_ptr)?, 123);
+    assert_eq!(memory.read_u32(point_ptr + 4)? as i32, -45);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_CARET_BLINK_TIME,
+            [750],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CARET_BLINK_TIME,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(750),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DISABLE_CARET_SYSTEM_WIDE,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(!kernel.gwe.caret_system_enabled());
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ENABLE_CARET_SYSTEM_WIDE,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(kernel.gwe.caret_system_enabled());
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_caret_rejects_invalid_state_and_destroys_with_owner() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 261;
+    let hwnd = kernel.create_window_ex_w(thread_id, "CARET_DESTROY", "", None, 0, WS_VISIBLE, 0);
+    let point_ptr = 0x2b_0000;
+    memory.map_words(point_ptr, 2);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CARET_POS,
+            [point_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_CARET,
+            [hwnd, 0, (-1i32) as u32, 8],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_CARET,
+            [hwnd, 0, 1, 8],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(kernel.gwe.caret().is_some());
+    assert!(kernel.destroy_window_with_reason(hwnd, "test"));
+    assert!(kernel.gwe.caret().is_none());
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DESTROY_CARET,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
 
     Ok(())
 }
