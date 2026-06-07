@@ -22,12 +22,11 @@
   registration, TLS callbacks, and `DllMain` attach/detach callouts. Keep
   `C:\WINCE600` as the behavior reference and update `PLAN.MD` after each
   port.
-- COREDLL fallback audit follow-up: stubs now carry audit classification and
-  log must-implement fallbacks, but caller PC/module context is not yet wired
-  through the Unicorn import hook. Add a raw-dispatch context from the trap
-  handler so app-hit audit logs include ordinal/name/caller PC/thread/module,
-  then make shell/UI/process/loader critical fallbacks fail loudly under an
-  audit mode instead of merely warning.
+- COREDLL fallback audit follow-up: stubs now carry audit classification plus
+  raw import-trap context with thread id, caller PC, and trap PC. Next, add the
+  remaining owning-module context where available and make
+  shell/UI/process/loader critical fallbacks fail loudly under an audit mode
+  instead of merely warning.
 - Shell fidelity follow-up: `ShellExecuteEx` now handles the basic CE launch
   chain through shortcuts, registry associations, and `CreateProcessW`
   queuing. Continue with the remaining shell APIs from the attachment:

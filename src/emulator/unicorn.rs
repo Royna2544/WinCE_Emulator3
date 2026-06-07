@@ -3985,11 +3985,16 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                let Some(import_return) = traps.dispatch_trap_registers_with_framebuffer(
+                let caller_pc = read_mips_reg(memory.uc, RegisterMIPS::RA);
+                let Some(import_return) = traps.dispatch_trap_registers_with_framebuffer_and_context(
                     unsafe { &mut *kernel_ptr },
                     &mut memory,
                     Some(unsafe { &mut *framebuffer_ptr }),
-                    active_thread_id,
+                    crate::ce::coredll::CoredllRawContext {
+                        thread_id: active_thread_id,
+                        caller_pc: Some(caller_pc),
+                        trap_pc: Some(address),
+                    },
                     address,
                     args.as_slice(),
                 ) else {

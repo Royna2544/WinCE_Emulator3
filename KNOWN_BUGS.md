@@ -37,12 +37,17 @@
     resume through the CE scheduler.
   - Status: open. Next network work should add scheduler wait reasons and host
     readiness wakeups instead of extending timeout/spin behavior.
-- Open/watch: COREDLL stub audit lacks caller-PC/module context.
-  - Symptom: stub fallback records are now classified and must-implement
-    fallbacks log warnings, but the raw dispatch context does not yet carry the
-    Unicorn caller PC or owning module.
-  - Status: open/watch. Add trap-handler context before turning warnings into
-    fail-loud behavior for mounted app runs.
+- Closed/watch: COREDLL stub audit now includes raw import-trap caller context.
+  - Symptom: stub fallback records were classified and must-implement
+    fallbacks logged warnings, but raw dispatch did not carry the Unicorn
+    caller PC.
+  - Fix: `CoredllRawContext` now records thread id, caller PC, and trap PC;
+    the Unicorn import hook populates it before raw COREDLL dispatch, and
+    fallback logs include those PCs. `SHGetFileInfo` is explicitly
+    must-implement so shell-visible file-info fallback cannot hide as a generic
+    safe failure.
+  - Status: closed/watch. Remaining audit work is owning-module attribution and
+    fail-loud mode for shell/UI/process/loader critical fallbacks.
 - Closed/watch: `DeviceParser.exe` old MIPS CE terminate thunk no longer dies
   through the interrupt/zero-PC path.
   - Symptom: route-search startup could record `CreateProcessChildError` for

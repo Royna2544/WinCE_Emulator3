@@ -403,8 +403,16 @@ pub struct CoredllStubResult {
     pub subsystem: CoredllSubsystem,
     pub policy: CoredllStubPolicy,
     pub audit: CoredllStubAuditClassification,
+    pub context: Option<CoredllRawContext>,
     pub return_value: u32,
     pub args: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CoredllRawContext {
+    pub thread_id: u32,
+    pub caller_pc: Option<u32>,
+    pub trap_pc: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -548,8 +556,8 @@ impl CoredllExportTable {
         match self.resolve_ordinal(ordinal).cloned() {
             Some(export) => {
                 let args = args.into_iter().collect();
-                let stub = CoredllStubResult::for_export(&export, args);
-                trace_stub_fallback(&export, &stub, None, None);
+                let stub = CoredllStubResult::for_export(&export, args, None);
+                trace_stub_fallback(&export, &stub);
                 CoredllDispatch::Stubbed { export, stub }
             }
             None => CoredllDispatch::UnresolvedOrdinal(ordinal),
@@ -585,11 +593,39 @@ impl CoredllExportTable {
         I: IntoIterator<Item = u32>,
     {
         let args = args.into_iter().collect::<Vec<_>>();
-        self.dispatch_raw_ordinal_with_framebuffer_args(
+        self.dispatch_raw_ordinal_with_framebuffer_args_and_context(
             kernel,
             memory,
             framebuffer,
-            thread_id,
+            CoredllRawContext {
+                thread_id,
+                caller_pc: None,
+                trap_pc: None,
+            },
+            ordinal,
+            &args,
+        )
+    }
+
+    pub fn dispatch_raw_ordinal_with_framebuffer_and_context<M, I>(
+        &self,
+        kernel: &mut CeKernel,
+        memory: &mut M,
+        framebuffer: Option<&mut dyn Framebuffer>,
+        context: CoredllRawContext,
+        ordinal: u32,
+        args: I,
+    ) -> CoredllDispatch
+    where
+        M: CoredllGuestMemory,
+        I: IntoIterator<Item = u32>,
+    {
+        let args = args.into_iter().collect::<Vec<_>>();
+        self.dispatch_raw_ordinal_with_framebuffer_args_and_context(
+            kernel,
+            memory,
+            framebuffer,
+            context,
             ordinal,
             &args,
         )
@@ -607,15 +643,46 @@ impl CoredllExportTable {
     where
         M: CoredllGuestMemory,
     {
+        self.dispatch_raw_ordinal_with_framebuffer_args_and_context(
+            kernel,
+            memory,
+            framebuffer,
+            CoredllRawContext {
+                thread_id,
+                caller_pc: None,
+                trap_pc: None,
+            },
+            ordinal,
+            args,
+        )
+    }
+
+    pub fn dispatch_raw_ordinal_with_framebuffer_args_and_context<M>(
+        &self,
+        kernel: &mut CeKernel,
+        memory: &mut M,
+        framebuffer: Option<&mut dyn Framebuffer>,
+        context: CoredllRawContext,
+        ordinal: u32,
+        args: &[u32],
+    ) -> CoredllDispatch
+    where
+        M: CoredllGuestMemory,
+    {
         match self.resolve_ordinal(ordinal).cloned() {
             Some(export) => {
-                if let Some(value) =
-                    dispatch_real_raw_ordinal(kernel, memory, framebuffer, thread_id, &export, args)
-                {
+                if let Some(value) = dispatch_real_raw_ordinal(
+                    kernel,
+                    memory,
+                    framebuffer,
+                    context.thread_id,
+                    &export,
+                    args,
+                ) {
                     CoredllDispatch::Returned { export, value }
                 } else {
-                    let stub = CoredllStubResult::for_export(&export, args.to_vec());
-                    trace_stub_fallback(&export, &stub, Some(thread_id), None);
+                    let stub = CoredllStubResult::for_export(&export, args.to_vec(), Some(context));
+                    trace_stub_fallback(&export, &stub);
                     CoredllDispatch::Stubbed { export, stub }
                 }
             }
@@ -643,12 +710,10 @@ impl CoredllExportTable {
     }
 }
 
-fn trace_stub_fallback(
-    export: &CoredllExport,
-    stub: &CoredllStubResult,
-    thread_id: Option<u32>,
-    caller_pc: Option<u32>,
-) {
+fn trace_stub_fallback(export: &CoredllExport, stub: &CoredllStubResult) {
+    let thread_id = stub.context.map(|context| context.thread_id);
+    let caller_pc = stub.context.and_then(|context| context.caller_pc);
+    let trap_pc = stub.context.and_then(|context| context.trap_pc);
     match stub.audit {
         CoredllStubAuditClassification::MustImplement => tracing::warn!(
             target: "ce.coredll.stub",
@@ -656,6 +721,7 @@ fn trace_stub_fallback(
             name = export.name.as_str(),
             thread_id,
             caller_pc = caller_pc.map(|pc| format!("0x{pc:08x}")),
+            trap_pc = trap_pc.map(|pc| format!("0x{pc:08x}")),
             policy = ?stub.policy,
             subsystem = ?stub.subsystem,
             "must-implement COREDLL export reached stub fallback"
@@ -667,6 +733,7 @@ fn trace_stub_fallback(
                 name = export.name.as_str(),
                 thread_id,
                 caller_pc = caller_pc.map(|pc| format!("0x{pc:08x}")),
+                trap_pc = trap_pc.map(|pc| format!("0x{pc:08x}")),
                 policy = ?stub.policy,
                 audit = ?stub.audit,
                 subsystem = ?stub.subsystem,
@@ -677,7 +744,11 @@ fn trace_stub_fallback(
 }
 
 impl CoredllStubResult {
-    fn for_export(export: &CoredllExport, args: Vec<u32>) -> Self {
+    fn for_export(
+        export: &CoredllExport,
+        args: Vec<u32>,
+        context: Option<CoredllRawContext>,
+    ) -> Self {
         let subsystem = export.subsystem();
         let policy = CoredllStubPolicy::for_export(export, subsystem);
         let audit = CoredllStubAuditClassification::for_export(export, subsystem, policy);
@@ -685,6 +756,7 @@ impl CoredllStubResult {
             subsystem,
             policy,
             audit,
+            context,
             return_value: policy.return_value(),
             args,
         }
@@ -17644,6 +17716,7 @@ const MUST_IMPLEMENT_STUBS: &[&str] = &[
     "LoadLibraryW",
     "MapViewOfFile",
     "MessageBoxW",
+    "SHGetFileInfo",
     "ShellExecuteEx",
     "SendNotifyMessageW",
     "TrackPopupMenu",

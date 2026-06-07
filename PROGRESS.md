@@ -9,6 +9,13 @@
 
 ## Confirmed
 
+- COREDLL fallback audit now carries real raw-dispatch context from the import
+  trap boundary. `CoredllRawContext` records thread id, caller PC, and trap PC;
+  the Unicorn import hook fills it from the active CE thread and guest RA before
+  dispatching COREDLL ordinals, and fallback logs include both caller/trap PCs.
+  `SHGetFileInfo` is now explicitly classified as `must implement` instead of
+  slipping through the broad kernel-private safe-failure bucket. Focused
+  coverage `raw_stub_audit_keeps_import_trap_context` passes.
 - CE fidelity catch-up now has a durable implementation ledger in `PLAN.MD`;
   its first line is `Reference C:\WINCE600 sources` as requested. The first
   structural slice is implemented without app-specific behavior: loaded guest

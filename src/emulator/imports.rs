@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 
 use crate::{
     ce::{
-        coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
+        coredll::{
+            CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllRawContext,
+            CoredllValue,
+        },
         kernel::CeKernel,
         ole,
     },
@@ -150,6 +153,32 @@ impl ImportTrapTable {
         address: u32,
         args: I,
     ) -> Option<ImportTrapReturn> {
+        self.dispatch_trap_registers_with_framebuffer_and_context(
+            kernel,
+            memory,
+            framebuffer,
+            CoredllRawContext {
+                thread_id,
+                caller_pc: None,
+                trap_pc: Some(address),
+            },
+            address,
+            args,
+        )
+    }
+
+    pub fn dispatch_trap_registers_with_framebuffer_and_context<
+        M: CoredllGuestMemory,
+        I: AsRef<[u32]>,
+    >(
+        &self,
+        kernel: &mut CeKernel,
+        memory: &mut M,
+        framebuffer: Option<&mut dyn crate::ce::framebuffer::Framebuffer>,
+        context: CoredllRawContext,
+        address: u32,
+        args: I,
+    ) -> Option<ImportTrapReturn> {
         let args = args.as_ref();
         let dynamic_trap;
         let trap = if let Some(trap) = self.trap_at(address) {
@@ -165,18 +194,18 @@ impl ImportTrapTable {
                 };
                 dispatch_return_to_registers(
                     CoredllExportTable::static_ordinals()
-                        .dispatch_raw_ordinal_with_framebuffer_args(
+                        .dispatch_raw_ordinal_with_framebuffer_args_and_context(
                             kernel,
                             memory,
                             framebuffer,
-                            thread_id,
+                            context,
                             ordinal,
                             args,
                         ),
                 )?
             }
             ImportModuleKind::Winsock | ImportModuleKind::Ole => ImportTrapReturn::v0(
-                dispatch_external_stub_to_u32(kernel, trap, memory, thread_id, args),
+                dispatch_external_stub_to_u32(kernel, trap, memory, context.thread_id, args),
             ),
             ImportModuleKind::Mfc => return None,
         })

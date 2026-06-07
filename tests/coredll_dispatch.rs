@@ -5,8 +5,8 @@ use wince_emulation_v3::{
         cemath::{CeMathBinaryF32, CeMathBinaryF64, CeMathCall, CeMathUnaryF64, CeMathValue},
         coredll::{
             CoredllCall, CoredllDispatch, CoredllExportTable, CoredllImplementationStatus,
-            CoredllStubAuditClassification, CoredllStubPolicy, CoredllSubsystem, CoredllValue,
-            EventModifyAction,
+            CoredllRawContext, CoredllStubAuditClassification, CoredllStubPolicy, CoredllSubsystem,
+            CoredllValue, EventModifyAction,
         },
         coredll_ordinals::{
             ORD_ATOF, ORD_CLOSE_HANDLE, ORD_CREATE_APISET, ORD_CREATE_FILE_W,
@@ -16,9 +16,9 @@ use wince_emulation_v3::{
             ORD_GET_MESSAGE_W, ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_HYPOT,
             ORD_INITIALIZE_CRITICAL_SECTION, ORD_ISWCTYPE, ORD_LITODP, ORD_LITOFP, ORD_LL_DIV,
             ORD_LONGJMP, ORD_LTD, ORD_NES, ORD_POST_MESSAGE_W, ORD_POW, ORD_REG_OPEN_KEY_EX_W,
-            ORD_REGISTER_GESTURE, ORD_SETJMP, ORD_SHELL_EXECUTE_EX, ORD_SLEEP, ORD_SQRT,
-            ORD_ULTODP, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE, current_static_export_count,
-            lookup,
+            ORD_REGISTER_GESTURE, ORD_SETJMP, ORD_SHELL_EXECUTE_EX, ORD_SHGET_FILE_INFO, ORD_SLEEP,
+            ORD_SQRT, ORD_ULTODP, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE,
+            current_static_export_count, lookup,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::WM_USER,
@@ -783,6 +783,46 @@ fn coredll_raw_dispatch_routes_atof_as_double_return() -> Result<()> {
             ..
         } if value.to_bits() == (-125.0_f64).to_bits()
     ));
+
+    Ok(())
+}
+
+#[test]
+fn raw_stub_audit_keeps_import_trap_context() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+
+    let dispatch = table.dispatch_raw_ordinal_with_framebuffer_and_context(
+        &mut kernel,
+        &mut memory,
+        None,
+        CoredllRawContext {
+            thread_id: 7,
+            caller_pc: Some(0x0040_1234),
+            trap_pc: Some(0x7fff_4000),
+        },
+        ORD_SHGET_FILE_INFO,
+        [0, 0, 0, 0, 0],
+    );
+
+    assert!(
+        matches!(
+            dispatch,
+            CoredllDispatch::Stubbed {
+                ref export,
+                ref stub,
+            } if export.name == "SHGetFileInfo"
+                && stub.audit == CoredllStubAuditClassification::MustImplement
+                && stub.context == Some(CoredllRawContext {
+                    thread_id: 7,
+                    caller_pc: Some(0x0040_1234),
+                    trap_pc: Some(0x7fff_4000),
+                })
+        ),
+        "{dispatch:?}"
+    );
 
     Ok(())
 }
