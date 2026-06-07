@@ -9,6 +9,28 @@
 
 ## Confirmed
 
+- CE fidelity catch-up now has a durable implementation ledger in `PLAN.MD`;
+  its first line is `Reference C:\WINCE600 sources` as requested. The first
+  structural slice is implemented without app-specific behavior: loaded guest
+  module metadata now tracks guest/host path, image size, entrypoint,
+  dependencies, TLS callback slots, refcount, load flags, dynamic/pinned state,
+  and unload-pending state. Startup-preloaded DLLs are registered through this
+  richer shape, `LoadLibraryW` increments refcounts for already loaded modules,
+  `LoadLibraryExW` rejects unsupported/datafile/no-resolve runtime flags
+  explicitly instead of ignoring them, and `FreeLibrary` decrements dynamic
+  modules while keeping mapped ranges reserved. Raw `ShellExecuteEx` now reads
+  `SHELLEXECUTEINFO`, resolves CE `.lnk` text shortcuts and registry
+  association command templates, queues the existing `CreateProcessW` launch
+  path, fills `hInstApp`, and returns `hProcess` for
+  `SEE_MASK_NOCLOSEPROCESS`. COREDLL fallback stubs now carry an audit
+  classification (`safe no-op`, `safe failure`, or `must implement`) and log
+  must-implement fallbacks. WINSOCK now exposes an isolated CE-facing NAT model
+  with guest IP `10.0.0.2` and gateway `10.0.0.1`; local name resolution uses
+  those CE addresses while host sockets remain the transport boundary. Focused
+  tests pass for raw module refcounts/`LoadLibraryExW` failure, registry-backed
+  `ShellExecuteEx`, stub audit classification, and isolated Winsock local name
+  resolution. Full `cargo check --features unicorn,trace,win32-desktop` passes
+  with only the existing unused IOCTL warning.
 - WINSOCK import traps now route through the top-level `src/winsock.rs`
   subsystem boundary instead of living inline in `src/emulator/imports.rs`.
   The first host-backed slice is implemented there: `socket`, `connect`,

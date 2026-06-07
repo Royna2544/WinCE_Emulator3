@@ -116,6 +116,13 @@ struct SavedCpuContext {
 pub struct LoadedPeModuleInfo {
     pub name: String,
     pub base: u32,
+    pub guest_path: Option<String>,
+    pub host_path: Option<std::path::PathBuf>,
+    pub image_size: u32,
+    pub entry_point: u32,
+    pub dependencies: Vec<String>,
+    pub tls_callbacks: Vec<u32>,
+    pub dynamic: bool,
     pub exports_by_name: HashMap<String, u32>,
     pub exports_by_ordinal: HashMap<u32, u32>,
 }
@@ -4758,6 +4765,17 @@ fn loaded_module_info(image: &PeImage, load_base: u32) -> LoadedPeModuleInfo {
     LoadedPeModuleInfo {
         name: module_file_name(&image.path).to_owned(),
         base: load_base,
+        guest_path: None,
+        host_path: Some(std::path::PathBuf::from(&image.path)),
+        image_size: image.optional_header.size_of_image,
+        entry_point: image.entry_point_va(),
+        dependencies: image
+            .imports
+            .iter()
+            .map(|descriptor| descriptor.module_name.clone())
+            .collect(),
+        tls_callbacks: Vec::new(),
+        dynamic: false,
         exports_by_name,
         exports_by_ordinal,
     }

@@ -12,6 +12,34 @@
 
 ## Current Slice
 
+- CE fidelity catch-up next slice: finish the runtime guest DLL loader at the
+  Unicorn import-trap boundary. The kernel-side module manager/refcount shape
+  now exists, but `LoadLibraryW/LoadLibraryExW` can only reuse already
+  registered modules; it does not yet synchronously map a new dumped MIPS DLL
+  from `D:\INAVI_Emulator\DUMPPLZ\Windows`. Implement the Unicorn-owned
+  runtime mapper next: search path resolution, PE map/relocate/import patching,
+  dynamic trap-page refresh, external guest-DLL import resolution, export
+  registration, TLS callbacks, and `DllMain` attach/detach callouts. Keep
+  `C:\WINCE600` as the behavior reference and update `PLAN.MD` after each
+  port.
+- COREDLL fallback audit follow-up: stubs now carry audit classification and
+  log must-implement fallbacks, but caller PC/module context is not yet wired
+  through the Unicorn import hook. Add a raw-dispatch context from the trap
+  handler so app-hit audit logs include ordinal/name/caller PC/thread/module,
+  then make shell/UI/process/loader critical fallbacks fail loudly under an
+  audit mode instead of merely warning.
+- Shell fidelity follow-up: `ShellExecuteEx` now handles the basic CE launch
+  chain through shortcuts, registry associations, and `CreateProcessW`
+  queuing. Continue with the remaining shell APIs from the attachment:
+  `SHCreateShortcut`, `SHGetShortcutTarget`, `SHGetFileInfo`, notify icons,
+  notification data, recent docs, shell change notifications, popup/menu
+  behavior, modal `MessageBoxW`, keyboard translation, clipboard, and caret
+  state. Keep behavior registry-backed and generic; do not fake route UI.
+- Winsock fidelity follow-up: guest-visible local names now use the isolated
+  `10.0.0.1`/`10.0.0.2` model while host sockets remain the transport. Blocking
+  `connect`, `accept`, `recv`, `recvfrom`, and `select` still need to park
+  through the scheduler instead of returning `WSAEWOULDBLOCK`/short host
+  timeout behavior.
 - Route-search child-startup blocker closed/watch: `target\route_deviceexit1_*`
   confirms the old MIPS CE `TerminateProcess` thunk in `DeviceParser.exe`
   decodes through the interrupt/zero-PC path and the child exits cleanly. The

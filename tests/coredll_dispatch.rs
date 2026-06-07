@@ -5,7 +5,8 @@ use wince_emulation_v3::{
         cemath::{CeMathBinaryF32, CeMathBinaryF64, CeMathCall, CeMathUnaryF64, CeMathValue},
         coredll::{
             CoredllCall, CoredllDispatch, CoredllExportTable, CoredllImplementationStatus,
-            CoredllStubPolicy, CoredllSubsystem, CoredllValue, EventModifyAction,
+            CoredllStubAuditClassification, CoredllStubPolicy, CoredllSubsystem, CoredllValue,
+            EventModifyAction,
         },
         coredll_ordinals::{
             ORD_ATOF, ORD_CLOSE_HANDLE, ORD_CREATE_APISET, ORD_CREATE_FILE_W,
@@ -15,8 +16,9 @@ use wince_emulation_v3::{
             ORD_GET_MESSAGE_W, ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_HYPOT,
             ORD_INITIALIZE_CRITICAL_SECTION, ORD_ISWCTYPE, ORD_LITODP, ORD_LITOFP, ORD_LL_DIV,
             ORD_LONGJMP, ORD_LTD, ORD_NES, ORD_POST_MESSAGE_W, ORD_POW, ORD_REG_OPEN_KEY_EX_W,
-            ORD_REGISTER_GESTURE, ORD_SETJMP, ORD_SLEEP, ORD_SQRT, ORD_ULTODP,
-            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE, current_static_export_count, lookup,
+            ORD_REGISTER_GESTURE, ORD_SETJMP, ORD_SHELL_EXECUTE_EX, ORD_SLEEP, ORD_SQRT,
+            ORD_ULTODP, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE, current_static_export_count,
+            lookup,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::WM_USER,
@@ -742,6 +744,14 @@ fn coredll_dispatcher_routes_ordinals_to_virtual_win32_framework() -> Result<()>
         CoredllDispatch::Stubbed { export, stub }
             if export.name == "InitializeCriticalSection"
                 && stub.policy == CoredllStubPolicy::VoidNoOp
+                && stub.audit == CoredllStubAuditClassification::SafeNoOp
+    ));
+    let critical = table.dispatch_untyped_ordinal(ORD_SHELL_EXECUTE_EX);
+    assert!(matches!(
+        critical,
+        CoredllDispatch::Stubbed { export, stub }
+            if export.name == "ShellExecuteEx"
+                && stub.audit == CoredllStubAuditClassification::MustImplement
     ));
 
     Ok(())

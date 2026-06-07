@@ -1,3 +1,5 @@
+use std::fs;
+
 use wince_emulation_v3::{
     Result,
     ce::{
@@ -16,27 +18,30 @@ use wince_emulation_v3::{
             ORD_GET_TIME_ZONE_INFORMATION, ORD_GET_VERSION_EX_W, ORD_INITIALIZE_CRITICAL_SECTION,
             ORD_INPUT_DEBUG_CHAR_W, ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_KERNEL_IO_CONTROL, ORD_LEAVE_CRITICAL_SECTION,
-            ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX,
-            ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_OPEN_EVENT_W, ORD_PURGE_COMM,
-            ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_RELEASE_MUTEX,
-            ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD, ORD_SET_COMM_MASK, ORD_SET_COMM_STATE,
-            ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
-            ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SLEEP, ORD_SLEEP_TILL_TICK, ORD_SUSPEND_THREAD,
-            ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS, ORD_TLS_GET_VALUE,
-            ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_COMM_EVENT,
-            ORD_WAIT_FOR_MULTIPLE_OBJECTS, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSTOMBS,
-            ORD_WIDE_CHAR_TO_MULTI_BYTE,
+            ORD_LOAD_LIBRARY_EX_W, ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS,
+            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_OPEN_EVENT_W,
+            ORD_PURGE_COMM, ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY,
+            ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD, ORD_SET_COMM_MASK,
+            ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
+            ORD_SHELL_EXECUTE_EX, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SLEEP, ORD_SLEEP_TILL_TICK,
+            ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS,
+            ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION,
+            ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_MULTIPLE_OBJECTS, ORD_WAIT_FOR_SINGLE_OBJECT,
+            ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE,
         },
         devices::CommDcb,
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::{Message, QS_POSTMESSAGE, QS_TIMER, WM_TIMER},
-        kernel::{CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel},
+        kernel::{
+            CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
+            LoadedModuleMetadata,
+        },
         object::MAX_SUSPEND_COUNT,
         registry::{ERROR_SUCCESS, RegistryValue},
         scheduler::SchedulerBlockedWaitKind,
         thread::{
             ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOT_OWNER,
-            ERROR_SIGNAL_REFUSED,
+            ERROR_NOT_SUPPORTED, ERROR_SIGNAL_REFUSED,
         },
         timer::{INFINITE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
@@ -44,7 +49,7 @@ use wince_emulation_v3::{
 };
 
 mod support;
-use support::TestGuestMemory;
+use support::{TestGuestMemory, unique_test_root};
 
 #[test]
 fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Result<()> {
@@ -1790,6 +1795,142 @@ fn coredll_raw_module_apis_resolve_preloaded_search_dll_exports() -> Result<()> 
         }
     ));
 
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_fail_explicitly() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 42;
+    let module_name_ptr = 0x1_9000;
+    let module_base = 0x6300_0000;
+
+    kernel.register_loaded_module_with_metadata(
+        "dynamic.dll",
+        module_base,
+        std::collections::BTreeMap::new(),
+        std::collections::BTreeMap::new(),
+        LoadedModuleMetadata {
+            dynamic: true,
+            guest_path: Some(r"\Windows\dynamic.dll".to_owned()),
+            image_size: 0x12000,
+            ..LoadedModuleMetadata::default()
+        },
+    );
+    memory.write_wide_z(module_name_ptr, "dynamic.dll");
+
+    for _ in 0..2 {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_LOAD_LIBRARY_W,
+                [module_name_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(handle),
+                ..
+            } if handle == module_base
+        ));
+    }
+    assert_eq!(kernel.loaded_module_snapshots()[0].ref_count, 3);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FREE_LIBRARY,
+            [module_base],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.loaded_module_snapshots()[0].ref_count, 2);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_LIBRARY_EX_W,
+            [module_name_ptr, 0, 0x0000_0002],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NOT_SUPPORTED
+    );
+
+    Ok(())
+}
+
+#[test]
+fn shell_execute_ex_resolves_registry_association_and_queues_process() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("shell_execute_ex_assoc");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("Windows")).unwrap();
+    fs::write(root.join("Windows").join("viewer.exe"), b"fake exe").unwrap();
+    kernel.set_file_root(&root);
+    kernel
+        .registry
+        .set_value(r"HKCR\.nav", "", RegistryValue::string("navfile"));
+    kernel.registry.set_value(
+        r"HKCR\navfile\Shell\Open\Command",
+        "",
+        RegistryValue::string(r#""\Windows\viewer.exe" "%1""#),
+    );
+
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 43;
+    let info = 0x2_0000;
+    let file_ptr = 0x2_0100;
+    memory.map_words(info, 16);
+    memory.write_word(info, 60);
+    memory.write_word(info + 4, 0x0000_0040);
+    memory.write_word(info + 16, file_ptr);
+    memory.write_wide_z(file_ptr, r"\Docs\route.nav");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_EXECUTE_EX,
+            [info],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(info + 32)?, 33);
+    assert_ne!(memory.read_u32(info + 56)?, 0);
+    let launches = kernel.take_pending_process_launches();
+    assert_eq!(launches.len(), 1);
+    assert_eq!(
+        launches[0].application.as_deref(),
+        Some(r"\Windows\viewer.exe")
+    );
+    assert_eq!(
+        launches[0].command_line.as_deref(),
+        Some(r#""\Windows\viewer.exe" "\Docs\route.nav""#)
+    );
+
+    let _ = fs::remove_dir_all(root);
     Ok(())
 }
 

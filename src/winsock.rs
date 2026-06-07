@@ -26,6 +26,26 @@ const SOCK_DGRAM: u32 = 2;
 const FIONBIO: u32 = 0x8004_667e;
 const SOCKET_HANDLE_BASE: u32 = 0x7100_0000;
 const MAX_GUEST_IO: usize = 1024 * 1024;
+const CE_GATEWAY_IP: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 1);
+const CE_GUEST_IP: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 2);
+const HOST_LOOPBACK_IP: Ipv4Addr = Ipv4Addr::new(127, 0, 0, 1);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WinsockNetworkMode {
+    IsolatedNat {
+        gateway: Ipv4Addr,
+        guest_ip: Ipv4Addr,
+    },
+}
+
+impl Default for WinsockNetworkMode {
+    fn default() -> Self {
+        Self::IsolatedNat {
+            gateway: CE_GATEWAY_IP,
+            guest_ip: CE_GUEST_IP,
+        }
+    }
+}
 
 const WSAEINTR: u32 = 10004;
 const WSAEBADF: u32 = 10009;
@@ -254,6 +274,10 @@ static WINSOCK_STATE: OnceLock<Mutex<WinsockState>> = OnceLock::new();
 
 fn state() -> &'static Mutex<WinsockState> {
     WINSOCK_STATE.get_or_init(|| Mutex::new(WinsockState::default()))
+}
+
+pub fn network_mode() -> WinsockNetworkMode {
+    WinsockNetworkMode::default()
 }
 
 fn socket_raw(
@@ -850,7 +874,13 @@ fn gethostbyname_raw<M: CoredllGuestMemory>(
         set_wsa_error(kernel, thread_id, WSAEFAULT);
         return 0;
     };
-    let addr = if let Ok(ip) = name.parse::<Ipv4Addr>() {
+    let addr = if name.eq_ignore_ascii_case("fakece") {
+        CE_GUEST_IP
+    } else if name.eq_ignore_ascii_case("gateway") {
+        CE_GATEWAY_IP
+    } else if name.eq_ignore_ascii_case("localhost") {
+        CE_GATEWAY_IP
+    } else if let Ok(ip) = name.parse::<Ipv4Addr>() {
         ip
     } else {
         match (name.as_str(), 0)
@@ -944,7 +974,7 @@ fn read_sockaddr_in<M: CoredllGuestMemory>(
         memory.read_u8(ptr + 6).map_err(|_| WSAEFAULT)?,
         memory.read_u8(ptr + 7).map_err(|_| WSAEFAULT)?,
     );
-    Ok(SocketAddr::V4(SocketAddrV4::new(ip, port)))
+    Ok(guest_to_host_addr(SocketAddrV4::new(ip, port)))
 }
 
 fn write_sockaddr_in<M: CoredllGuestMemory>(
@@ -957,7 +987,7 @@ fn write_sockaddr_in<M: CoredllGuestMemory>(
     if len < 16 {
         return Ok(());
     }
-    let SocketAddr::V4(addr) = addr else {
+    let SocketAddr::V4(addr) = host_to_guest_addr(addr) else {
         return Ok(());
     };
     memory.write_u16(ptr, AF_INET as u16)?;
@@ -993,6 +1023,31 @@ fn write_hostent<M: CoredllGuestMemory>(
     memory.write_u16(hostent_ptr + 10, 4).ok()?;
     memory.write_u32(hostent_ptr + 12, addr_list_ptr).ok()?;
     Some(hostent_ptr)
+}
+
+fn guest_to_host_addr(addr: SocketAddrV4) -> SocketAddr {
+    let ip = *addr.ip();
+    let translated = if ip == CE_GATEWAY_IP || ip == CE_GUEST_IP {
+        HOST_LOOPBACK_IP
+    } else if ip == Ipv4Addr::UNSPECIFIED {
+        Ipv4Addr::UNSPECIFIED
+    } else {
+        ip
+    };
+    SocketAddr::V4(SocketAddrV4::new(translated, addr.port()))
+}
+
+fn host_to_guest_addr(addr: SocketAddr) -> SocketAddr {
+    let SocketAddr::V4(addr) = addr else {
+        return addr;
+    };
+    let ip = *addr.ip();
+    let translated = if ip == HOST_LOOPBACK_IP || ip == Ipv4Addr::UNSPECIFIED {
+        CE_GATEWAY_IP
+    } else {
+        ip
+    };
+    SocketAddr::V4(SocketAddrV4::new(translated, addr.port()))
 }
 
 fn write_heap_c_string<M: CoredllGuestMemory>(
@@ -1361,5 +1416,44 @@ mod tests {
             ),
             0x7856_3412
         );
+    }
+
+    #[test]
+    fn isolated_nat_mode_reports_ce_gateway_and_guest_ip() {
+        assert_eq!(
+            network_mode(),
+            WinsockNetworkMode::IsolatedNat {
+                gateway: Ipv4Addr::new(10, 0, 0, 1),
+                guest_ip: Ipv4Addr::new(10, 0, 0, 2),
+            }
+        );
+    }
+
+    #[test]
+    fn gethostbyname_uses_isolated_ce_addresses_for_local_names() {
+        reset_for_tests();
+        let mut kernel = test_kernel();
+        let mut memory = TestMemory::default();
+        let name_ptr = 0x3000_2000;
+        memory.write_bytes_at(name_ptr, b"fakece\0");
+
+        let hostent = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("gethostbyname"),
+            &mut memory,
+            &[name_ptr],
+        );
+        assert_ne!(hostent, 0);
+        let addr_list = memory.read_u32(hostent + 12).unwrap();
+        let addr_ptr = memory.read_u32(addr_list).unwrap();
+        let addr = [
+            memory.read_u8(addr_ptr).unwrap(),
+            memory.read_u8(addr_ptr + 1).unwrap(),
+            memory.read_u8(addr_ptr + 2).unwrap(),
+            memory.read_u8(addr_ptr + 3).unwrap(),
+        ];
+        assert_eq!(addr, [10, 0, 0, 2]);
     }
 }

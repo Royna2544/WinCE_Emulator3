@@ -105,8 +105,66 @@ pub struct CeKernel {
 pub struct LoadedModule {
     pub name: String,
     pub base: u32,
+    pub guest_path: Option<String>,
+    pub host_path: Option<PathBuf>,
+    pub image_size: u32,
+    pub entry_point: u32,
     pub exports_by_name: BTreeMap<String, u32>,
     pub exports_by_ordinal: BTreeMap<u32, u32>,
+    pub dependencies: Vec<String>,
+    pub tls_callbacks: Vec<u32>,
+    pub ref_count: u32,
+    pub load_flags: u32,
+    pub dynamic: bool,
+    pub unload_pending: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedModuleMetadata {
+    pub guest_path: Option<String>,
+    pub host_path: Option<PathBuf>,
+    pub image_size: u32,
+    pub entry_point: u32,
+    pub dependencies: Vec<String>,
+    pub tls_callbacks: Vec<u32>,
+    pub ref_count: u32,
+    pub load_flags: u32,
+    pub dynamic: bool,
+}
+
+impl Default for LoadedModuleMetadata {
+    fn default() -> Self {
+        Self {
+            guest_path: None,
+            host_path: None,
+            image_size: 0,
+            entry_point: 0,
+            dependencies: Vec::new(),
+            tls_callbacks: Vec::new(),
+            ref_count: 1,
+            load_flags: 0,
+            dynamic: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedModuleSnapshot {
+    pub name: String,
+    pub base: u32,
+    pub ref_count: u32,
+    pub dynamic: bool,
+    pub unload_pending: bool,
+    pub guest_path: Option<String>,
+    pub host_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FreeLibraryResult {
+    InvalidHandle,
+    Pinned,
+    StillReferenced { ref_count: u32 },
+    UnloadPending,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -302,6 +360,23 @@ impl CeKernel {
         exports_by_name: BTreeMap<String, u32>,
         exports_by_ordinal: BTreeMap<u32, u32>,
     ) {
+        self.register_loaded_module_with_metadata(
+            name,
+            base,
+            exports_by_name,
+            exports_by_ordinal,
+            LoadedModuleMetadata::default(),
+        );
+    }
+
+    pub fn register_loaded_module_with_metadata(
+        &mut self,
+        name: impl Into<String>,
+        base: u32,
+        exports_by_name: BTreeMap<String, u32>,
+        exports_by_ordinal: BTreeMap<u32, u32>,
+        metadata: LoadedModuleMetadata,
+    ) {
         let name = name.into();
         let exports_by_name = exports_by_name
             .into_iter()
@@ -312,8 +387,18 @@ impl CeKernel {
             LoadedModule {
                 name,
                 base,
+                guest_path: metadata.guest_path,
+                host_path: metadata.host_path,
+                image_size: metadata.image_size,
+                entry_point: metadata.entry_point,
                 exports_by_name,
                 exports_by_ordinal,
+                dependencies: metadata.dependencies,
+                tls_callbacks: metadata.tls_callbacks,
+                ref_count: metadata.ref_count.max(1),
+                load_flags: metadata.load_flags,
+                dynamic: metadata.dynamic,
+                unload_pending: false,
             },
         );
     }
@@ -321,20 +406,67 @@ impl CeKernel {
     pub fn loaded_module_handle(&self, name: &str) -> Option<u32> {
         self.loaded_modules
             .get(&normalize_module_name(name))
+            .filter(|module| !module.unload_pending)
             .map(|module| module.base)
     }
 
     pub fn is_loaded_module_handle(&self, module: u32) -> bool {
         self.loaded_modules
             .values()
-            .any(|loaded| loaded.base == module)
+            .any(|loaded| loaded.base == module && !loaded.unload_pending)
+    }
+
+    pub fn retain_loaded_module_by_name(&mut self, name: &str) -> Option<u32> {
+        let module = self.loaded_modules.get_mut(&normalize_module_name(name))?;
+        if module.unload_pending {
+            return None;
+        }
+        module.ref_count = module.ref_count.saturating_add(1);
+        Some(module.base)
+    }
+
+    pub fn release_loaded_module(&mut self, module: u32) -> FreeLibraryResult {
+        let Some((_name, loaded)) = self
+            .loaded_modules
+            .iter_mut()
+            .find(|(_name, loaded)| loaded.base == module && !loaded.unload_pending)
+        else {
+            return FreeLibraryResult::InvalidHandle;
+        };
+        if !loaded.dynamic {
+            return FreeLibraryResult::Pinned;
+        }
+        if loaded.ref_count > 1 {
+            loaded.ref_count -= 1;
+            return FreeLibraryResult::StillReferenced {
+                ref_count: loaded.ref_count,
+            };
+        }
+        loaded.ref_count = 0;
+        loaded.unload_pending = true;
+        FreeLibraryResult::UnloadPending
+    }
+
+    pub fn loaded_module_snapshots(&self) -> Vec<LoadedModuleSnapshot> {
+        self.loaded_modules
+            .values()
+            .map(|module| LoadedModuleSnapshot {
+                name: module.name.clone(),
+                base: module.base,
+                ref_count: module.ref_count,
+                dynamic: module.dynamic,
+                unload_pending: module.unload_pending,
+                guest_path: module.guest_path.clone(),
+                host_path: module.host_path.clone(),
+            })
+            .collect()
     }
 
     pub fn resolve_loaded_module_proc_by_name(&self, module: u32, name: &str) -> Option<u32> {
         let symbol = normalize_symbol_name(name);
         self.loaded_modules
             .values()
-            .find(|loaded| loaded.base == module)?
+            .find(|loaded| loaded.base == module && !loaded.unload_pending)?
             .exports_by_name
             .get(&symbol)
             .copied()
@@ -343,7 +475,7 @@ impl CeKernel {
     pub fn resolve_loaded_module_proc_by_ordinal(&self, module: u32, ordinal: u32) -> Option<u32> {
         self.loaded_modules
             .values()
-            .find(|loaded| loaded.base == module)?
+            .find(|loaded| loaded.base == module && !loaded.unload_pending)?
             .exports_by_ordinal
             .get(&ordinal)
             .copied()

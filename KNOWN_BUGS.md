@@ -12,6 +12,37 @@
 
 ## Recently Closed / Watch
 
+- Open: runtime `LoadLibraryW` / `LoadLibraryExW` cannot yet map a new dumped
+  guest MIPS DLL on demand.
+  - Symptom: the raw COREDLL loader path can return handles for COREDLL and
+    already registered startup/preloaded modules, but a not-yet-loaded guest
+    DLL still fails instead of being mapped dynamically.
+  - Current state: the module manager now tracks CE-relevant metadata,
+    refcounts, load flags, dynamic/pinned state, and unload-pending state.
+    `GetProcAddress` works for registered guest DLL exports by name/ordinal,
+    and `FreeLibrary` decrements dynamic modules without reclaiming mapped
+    memory. `LoadLibraryExW` no longer ignores datafile/no-resolve flags; it
+    fails explicitly until runtime mapping can honor them.
+  - Required fix: wire the Unicorn import-trap path to a runtime PE loader that
+    can search `D:\INAVI_Emulator\DUMPPLZ\Windows`, map/relocate the DLL,
+    patch COREDLL and external guest-DLL imports, refresh import traps,
+    register exports, and run TLS/`DllMain` attach/detach callouts.
+  - Status: open. Do not treat the new module refcount surface as full dynamic
+    guest DLL loading.
+- Open: Winsock isolated subnet is address-model only; blocking socket waits
+  are not scheduler-backed yet.
+  - Symptom: guest-visible local names now report CE-style `10.0.0.2` and
+    gateway `10.0.0.1`, with host sockets still doing real transport, but
+    blocking `connect`/`accept`/`recv`/`recvfrom`/`select` do not yet park and
+    resume through the CE scheduler.
+  - Status: open. Next network work should add scheduler wait reasons and host
+    readiness wakeups instead of extending timeout/spin behavior.
+- Open/watch: COREDLL stub audit lacks caller-PC/module context.
+  - Symptom: stub fallback records are now classified and must-implement
+    fallbacks log warnings, but the raw dispatch context does not yet carry the
+    Unicorn caller PC or owning module.
+  - Status: open/watch. Add trap-handler context before turning warnings into
+    fail-loud behavior for mounted app runs.
 - Closed/watch: `DeviceParser.exe` old MIPS CE terminate thunk no longer dies
   through the interrupt/zero-PC path.
   - Symptom: route-search startup could record `CreateProcessChildError` for

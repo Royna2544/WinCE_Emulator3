@@ -24,7 +24,7 @@ use wince_emulation_v3::{
         desktop::{VirtualDesktop, VirtualInputEvent},
         framebuffer::{Framebuffer, FramebufferInfo, FramebufferRect, VirtualFramebuffer},
         gwe::WM_TIMER,
-        kernel::CeKernel,
+        kernel::{CeKernel, LoadedModuleMetadata},
         registry::{ERROR_SUCCESS, HKEY_LOCAL_MACHINE},
         scheduler::SchedulerBlockedWaitKind,
     },
@@ -2467,7 +2467,7 @@ fn preload_search_dll_if_present(
 
 fn register_loaded_modules(kernel: &mut CeKernel, cpu: &UnicornMips) {
     for module in cpu.loaded_modules() {
-        kernel.register_loaded_module(
+        kernel.register_loaded_module_with_metadata(
             module.name.clone(),
             module.base,
             module
@@ -2480,6 +2480,17 @@ fn register_loaded_modules(kernel: &mut CeKernel, cpu: &UnicornMips) {
                 .iter()
                 .map(|(ordinal, address)| (*ordinal, *address))
                 .collect::<BTreeMap<_, _>>(),
+            LoadedModuleMetadata {
+                guest_path: module.guest_path.clone(),
+                host_path: module.host_path.clone(),
+                image_size: module.image_size,
+                entry_point: module.entry_point,
+                dependencies: module.dependencies.clone(),
+                tls_callbacks: module.tls_callbacks.clone(),
+                ref_count: 1,
+                load_flags: 0,
+                dynamic: module.dynamic,
+            },
         );
     }
 }

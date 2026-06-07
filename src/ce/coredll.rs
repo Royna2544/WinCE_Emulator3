@@ -17,7 +17,7 @@ use crate::{
             GWL_STYLE, Message, MessagePointerPayload, PeekFlags, Point, Rect, WNDCLASSW_SIZE,
             WS_CHILD, WS_VISIBLE, WindowPos,
         },
-        kernel::{CeKernel, MessagePumpResult},
+        kernel::{CeKernel, FreeLibraryResult, MessagePumpResult},
         memory::{HEAP_ZERO_MEMORY, MEM_RELEASE, PROCESS_HEAP_HANDLE},
         object::{
             CriticalSectionObject, FileMappingView, KernelObject, ThreadResumeResult,
@@ -81,6 +81,12 @@ const TPM_RETURNCMD: u32 = 0x0100;
 const TPMPARAMS_SIZE: u32 = 20;
 const STRSAFE_E_INSUFFICIENT_BUFFER: u32 = 0x8007_007a;
 const STRSAFE_E_INVALID_PARAMETER: u32 = 0x8007_0057;
+const SEE_MASK_NOCLOSEPROCESS: u32 = 0x0000_0040;
+const SHELLEXECUTEINFO_HINSTAPP_OFFSET: u32 = 32;
+const SHELLEXECUTEINFO_HPROCESS_OFFSET: u32 = 56;
+const SHELL_EXECUTE_SUCCESS: u32 = 33;
+const SE_ERR_FNF: u32 = 2;
+const SE_ERR_NOASSOC: u32 = 31;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CoredllSubsystem {
@@ -396,6 +402,7 @@ pub enum CoredllDispatch {
 pub struct CoredllStubResult {
     pub subsystem: CoredllSubsystem,
     pub policy: CoredllStubPolicy,
+    pub audit: CoredllStubAuditClassification,
     pub return_value: u32,
     pub args: Vec<u32>,
 }
@@ -408,6 +415,13 @@ pub enum CoredllStubPolicy {
     NullPointer,
     InvalidHandle,
     ZeroValue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CoredllStubAuditClassification {
+    SafeNoOp,
+    SafeFailure,
+    MustImplement,
 }
 
 impl CoredllExportTable {
@@ -535,6 +549,7 @@ impl CoredllExportTable {
             Some(export) => {
                 let args = args.into_iter().collect();
                 let stub = CoredllStubResult::for_export(&export, args);
+                trace_stub_fallback(&export, &stub, None, None);
                 CoredllDispatch::Stubbed { export, stub }
             }
             None => CoredllDispatch::UnresolvedOrdinal(ordinal),
@@ -600,6 +615,7 @@ impl CoredllExportTable {
                     CoredllDispatch::Returned { export, value }
                 } else {
                     let stub = CoredllStubResult::for_export(&export, args.to_vec());
+                    trace_stub_fallback(&export, &stub, Some(thread_id), None);
                     CoredllDispatch::Stubbed { export, stub }
                 }
             }
@@ -627,15 +643,82 @@ impl CoredllExportTable {
     }
 }
 
+fn trace_stub_fallback(
+    export: &CoredllExport,
+    stub: &CoredllStubResult,
+    thread_id: Option<u32>,
+    caller_pc: Option<u32>,
+) {
+    match stub.audit {
+        CoredllStubAuditClassification::MustImplement => tracing::warn!(
+            target: "ce.coredll.stub",
+            ordinal = export.ordinal,
+            name = export.name.as_str(),
+            thread_id,
+            caller_pc = caller_pc.map(|pc| format!("0x{pc:08x}")),
+            policy = ?stub.policy,
+            subsystem = ?stub.subsystem,
+            "must-implement COREDLL export reached stub fallback"
+        ),
+        CoredllStubAuditClassification::SafeNoOp | CoredllStubAuditClassification::SafeFailure => {
+            tracing::debug!(
+                target: "ce.coredll.stub",
+                ordinal = export.ordinal,
+                name = export.name.as_str(),
+                thread_id,
+                caller_pc = caller_pc.map(|pc| format!("0x{pc:08x}")),
+                policy = ?stub.policy,
+                audit = ?stub.audit,
+                subsystem = ?stub.subsystem,
+                "COREDLL export reached classified stub fallback"
+            );
+        }
+    }
+}
+
 impl CoredllStubResult {
     fn for_export(export: &CoredllExport, args: Vec<u32>) -> Self {
         let subsystem = export.subsystem();
         let policy = CoredllStubPolicy::for_export(export, subsystem);
+        let audit = CoredllStubAuditClassification::for_export(export, subsystem, policy);
         Self {
             subsystem,
             policy,
+            audit,
             return_value: policy.return_value(),
             args,
+        }
+    }
+}
+
+impl CoredllStubAuditClassification {
+    fn for_export(
+        export: &CoredllExport,
+        subsystem: CoredllSubsystem,
+        policy: CoredllStubPolicy,
+    ) -> Self {
+        let name = normalize_name(&export.name);
+        if MUST_IMPLEMENT_STUBS
+            .iter()
+            .any(|stub_name| normalize_name(stub_name) == name)
+            || matches!(
+                subsystem,
+                CoredllSubsystem::ShellUi
+                    | CoredllSubsystem::GweWindow
+                    | CoredllSubsystem::GweMessage
+                    | CoredllSubsystem::ThreadProcess
+                    | CoredllSubsystem::FileSystem
+                    | CoredllSubsystem::Memory
+            )
+        {
+            return Self::MustImplement;
+        }
+        match policy {
+            CoredllStubPolicy::VoidNoOp | CoredllStubPolicy::BoolSuccess => Self::SafeNoOp,
+            CoredllStubPolicy::BoolFailure
+            | CoredllStubPolicy::NullPointer
+            | CoredllStubPolicy::InvalidHandle
+            | CoredllStubPolicy::ZeroValue => Self::SafeFailure,
         }
     }
 }
@@ -1754,9 +1837,15 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
-        ORD_LOAD_LIBRARY_W | ORD_LOAD_LIBRARY_EX_W => Some(CoredllValue::Handle(
-            load_library_w_raw(kernel, memory, thread_id, raw_arg(args, 0)),
-        )),
+        ORD_LOAD_LIBRARY_W => Some(CoredllValue::Handle(load_library_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_LOAD_LIBRARY_EX_W => Some(CoredllValue::Handle(load_library_ex_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_FREE_LIBRARY => Some(CoredllValue::Bool(free_library_raw(
             kernel,
             thread_id,
@@ -3214,6 +3303,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
         ))),
         ORD_MESSAGE_BOX_W => Some(CoredllValue::U32(message_box_w_raw(memory, args))),
+        ORD_SHELL_EXECUTE_EX => Some(CoredllValue::Bool(shell_execute_ex_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_SHGET_SPECIAL_FOLDER_PATH => Some(CoredllValue::Bool(sh_get_special_folder_path_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -6397,6 +6489,8 @@ fn get_module_file_name_w_raw<M: CoredllGuestMemory>(
 }
 
 const COREDLL_MODULE_HANDLE: u32 = 0x7000_0001;
+const LOAD_LIBRARY_AS_DATAFILE: u32 = 0x0000_0002;
+const DONT_RESOLVE_DLL_REFERENCES: u32 = 0x0000_0001;
 
 fn get_module_handle_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
@@ -6444,7 +6538,7 @@ fn load_library_w_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return COREDLL_MODULE_HANDLE;
     }
-    if let Some(handle) = kernel.loaded_module_handle(&name) {
+    if let Some(handle) = kernel.retain_loaded_module_by_name(&name) {
         kernel.threads.set_last_error(thread_id, 0);
         return handle;
     }
@@ -6454,18 +6548,55 @@ fn load_library_w_raw<M: CoredllGuestMemory>(
     0
 }
 
+fn load_library_ex_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let flags = raw_arg(args, 2);
+    let supported_flags = DONT_RESOLVE_DLL_REFERENCES | LOAD_LIBRARY_AS_DATAFILE;
+    if flags & !supported_flags != 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+        return 0;
+    }
+    if flags != 0 {
+        let name_ptr = raw_arg(args, 0);
+        if name_ptr == 0 || read_guest_wide_arg(memory, name_ptr).is_none() {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        } else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+        }
+        return 0;
+    }
+    load_library_w_raw(kernel, memory, thread_id, raw_arg(args, 0))
+}
+
 fn free_library_raw(kernel: &mut CeKernel, thread_id: u32, module: u32) -> bool {
-    if module == COREDLL_MODULE_HANDLE
-        || module == kernel.process_module_base()
-        || kernel.is_loaded_module_handle(module)
-    {
+    if module == COREDLL_MODULE_HANDLE || module == kernel.process_module_base() {
         kernel.threads.set_last_error(thread_id, 0);
         return true;
     }
-    kernel
-        .threads
-        .set_last_error(thread_id, ERROR_INVALID_HANDLE);
-    false
+    match kernel.release_loaded_module(module) {
+        FreeLibraryResult::Pinned
+        | FreeLibraryResult::StillReferenced { .. }
+        | FreeLibraryResult::UnloadPending => {
+            kernel.threads.set_last_error(thread_id, 0);
+            true
+        }
+        FreeLibraryResult::InvalidHandle => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            false
+        }
+    }
 }
 
 fn get_proc_address_w_raw<M: CoredllGuestMemory>(
@@ -9673,6 +9804,307 @@ fn sh_get_special_folder_path_raw<M: CoredllGuestMemory>(
     } else {
         false
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShellLaunchCommand {
+    application: Option<String>,
+    command_line: Option<String>,
+    hinst_app: u32,
+}
+
+fn shell_execute_ex_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let info_ptr = raw_arg(args, 0);
+    if info_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(cb_size) = read_guest_u32(kernel, memory, thread_id, info_ptr) else {
+        return false;
+    };
+    if cb_size < SHELLEXECUTEINFO_HINSTAPP_OFFSET + 4 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(fmask) = read_guest_u32(kernel, memory, thread_id, info_ptr.wrapping_add(4)) else {
+        return false;
+    };
+    let verb = read_optional_shell_string(kernel, memory, thread_id, info_ptr.wrapping_add(12))
+        .unwrap_or_else(|| "open".to_owned());
+    let Some(file) =
+        read_optional_shell_string(kernel, memory, thread_id, info_ptr.wrapping_add(16))
+    else {
+        let _ = write_optional_u32(
+            kernel,
+            memory,
+            thread_id,
+            info_ptr.wrapping_add(SHELLEXECUTEINFO_HINSTAPP_OFFSET),
+            SE_ERR_FNF,
+        );
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let parameters =
+        read_optional_shell_string(kernel, memory, thread_id, info_ptr.wrapping_add(20));
+    let directory =
+        read_optional_shell_string(kernel, memory, thread_id, info_ptr.wrapping_add(24));
+
+    let launch = match resolve_shell_launch(
+        kernel,
+        &file,
+        &verb,
+        parameters.as_deref(),
+        directory.as_deref(),
+    ) {
+        Some(launch) => launch,
+        None => {
+            let error = if file_extension(&file).is_some() {
+                SE_ERR_NOASSOC
+            } else {
+                SE_ERR_FNF
+            };
+            let _ = write_optional_u32(
+                kernel,
+                memory,
+                thread_id,
+                info_ptr.wrapping_add(SHELLEXECUTEINFO_HINSTAPP_OFFSET),
+                error,
+            );
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+            return false;
+        }
+    };
+
+    let queued = kernel.queue_process_launch(launch.application, launch.command_line);
+    if !write_optional_u32(
+        kernel,
+        memory,
+        thread_id,
+        info_ptr.wrapping_add(SHELLEXECUTEINFO_HINSTAPP_OFFSET),
+        launch.hinst_app,
+    ) {
+        return false;
+    }
+    if fmask & SEE_MASK_NOCLOSEPROCESS != 0
+        && cb_size >= SHELLEXECUTEINFO_HPROCESS_OFFSET + 4
+        && !write_optional_u32(
+            kernel,
+            memory,
+            thread_id,
+            info_ptr.wrapping_add(SHELLEXECUTEINFO_HPROCESS_OFFSET),
+            queued.process_handle,
+        )
+    {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn read_optional_shell_string<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    field_ptr: u32,
+) -> Option<String> {
+    let ptr = read_guest_u32(kernel, memory, thread_id, field_ptr)?;
+    if ptr == 0 {
+        return None;
+    }
+    read_guest_wide_arg(memory, ptr).map(|value| value.trim().to_owned())
+}
+
+fn resolve_shell_launch(
+    kernel: &CeKernel,
+    file: &str,
+    verb: &str,
+    parameters: Option<&str>,
+    directory: Option<&str>,
+) -> Option<ShellLaunchCommand> {
+    let file = normalize_shell_path(file, directory);
+    let target = if is_shell_shortcut(&file) {
+        resolve_ce_shortcut(kernel, &file)?
+    } else {
+        file
+    };
+    if is_executable_shell_path(&target) && kernel.file_attributes_w(&target).is_ok() {
+        return Some(ShellLaunchCommand {
+            application: Some(target.clone()),
+            command_line: combine_shell_command_line(&target, parameters),
+            hinst_app: SHELL_EXECUTE_SUCCESS,
+        });
+    }
+    let command_template = shell_association_command(kernel, &target, verb)?;
+    let command = expand_shell_command_template(&command_template, &target, parameters);
+    let (application, command_line) = split_shell_command(&command);
+    Some(ShellLaunchCommand {
+        application,
+        command_line,
+        hinst_app: SHELL_EXECUTE_SUCCESS,
+    })
+}
+
+fn normalize_shell_path(file: &str, directory: Option<&str>) -> String {
+    let file = file.trim().replace('/', "\\");
+    if file.starts_with('\\') || file.contains(':') || directory.is_none() {
+        return file;
+    }
+    let mut dir = directory.unwrap_or_default().trim().replace('/', "\\");
+    while dir.ends_with('\\') {
+        dir.pop();
+    }
+    if dir.is_empty() {
+        file
+    } else {
+        format!("{dir}\\{file}")
+    }
+}
+
+fn is_shell_shortcut(path: &str) -> bool {
+    file_extension(path).is_some_and(|extension| extension.eq_ignore_ascii_case("lnk"))
+}
+
+fn is_executable_shell_path(path: &str) -> bool {
+    file_extension(path).is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
+}
+
+fn resolve_ce_shortcut(kernel: &CeKernel, path: &str) -> Option<String> {
+    let bytes = kernel.files.read_guest_file(path).ok()?;
+    let text = String::from_utf8_lossy(&bytes);
+    let (_, rest) = text.split_once('#')?;
+    let rest = rest.trim();
+    if let Some(quoted) = rest.strip_prefix('"') {
+        let (target, _tail) = quoted.split_once('"')?;
+        return Some(target.replace('/', "\\"));
+    }
+    rest.split_whitespace()
+        .next()
+        .map(|target| target.replace('/', "\\"))
+}
+
+fn shell_association_command(kernel: &CeKernel, target: &str, verb: &str) -> Option<String> {
+    let extension = file_extension(target)?;
+    let extension_key = format!(r"HKCR\.{extension}");
+    let class = registry_string(kernel, &extension_key, "")
+        .or_else(|| registry_string(kernel, &format!(r"HKLM\Software\Classes\.{extension}"), ""))?;
+    let verb = if verb.trim().is_empty() {
+        "open"
+    } else {
+        verb.trim()
+    };
+    registry_string(kernel, &format!(r"HKCR\{class}\Shell\{verb}\Command"), "")
+        .or_else(|| {
+            registry_string(
+                kernel,
+                &format!(r"HKLM\Software\Classes\{class}\Shell\{verb}\Command"),
+                "",
+            )
+        })
+        .or_else(|| registry_string(kernel, &format!(r"HKCR\{class}\Shell\Open\Command"), ""))
+        .or_else(|| {
+            registry_string(
+                kernel,
+                &format!(r"HKLM\Software\Classes\{class}\Shell\Open\Command"),
+                "",
+            )
+        })
+}
+
+fn registry_string(kernel: &CeKernel, key: &str, value: &str) -> Option<String> {
+    kernel
+        .registry
+        .query_value(key, value)
+        .ok()
+        .and_then(|value| value.as_str())
+        .map(str::to_owned)
+}
+
+fn expand_shell_command_template(template: &str, target: &str, parameters: Option<&str>) -> String {
+    let quoted_target = quote_shell_arg(target);
+    let params = parameters.unwrap_or_default();
+    let mut command = template
+        .replace("\"%1\"", &quoted_target)
+        .replace("\"%l\"", &quoted_target)
+        .replace("\"%L\"", &quoted_target)
+        .replace("%1", &quoted_target)
+        .replace("%l", &quoted_target)
+        .replace("%L", &quoted_target)
+        .replace("%*", params);
+    if !params.is_empty() && !command.contains(params) {
+        command.push(' ');
+        command.push_str(params);
+    }
+    command
+}
+
+fn combine_shell_command_line(application: &str, parameters: Option<&str>) -> Option<String> {
+    let params = parameters.unwrap_or_default().trim();
+    if params.is_empty() {
+        Some(quote_shell_arg(application))
+    } else {
+        Some(format!("{} {params}", quote_shell_arg(application)))
+    }
+}
+
+fn split_shell_command(command: &str) -> (Option<String>, Option<String>) {
+    let command = command.trim();
+    if command.is_empty() {
+        return (None, None);
+    }
+    if let Some(rest) = command.strip_prefix('"') {
+        if let Some((application, tail)) = rest.split_once('"') {
+            let tail = tail.trim();
+            return (
+                Some(application.replace('/', "\\")),
+                Some(if tail.is_empty() {
+                    quote_shell_arg(application)
+                } else {
+                    format!("{} {tail}", quote_shell_arg(application))
+                }),
+            );
+        }
+    }
+    let (application, tail) = command
+        .split_once(char::is_whitespace)
+        .map(|(head, tail)| (head, tail.trim()))
+        .unwrap_or((command, ""));
+    (
+        Some(application.replace('/', "\\")),
+        Some(if tail.is_empty() {
+            quote_shell_arg(application)
+        } else {
+            format!("{} {tail}", quote_shell_arg(application))
+        }),
+    )
+}
+
+fn quote_shell_arg(arg: &str) -> String {
+    if arg.starts_with('"') && arg.ends_with('"') {
+        arg.to_owned()
+    } else {
+        format!("\"{arg}\"")
+    }
+}
+
+fn file_extension(path: &str) -> Option<&str> {
+    path.rsplit(['\\', '/'])
+        .next()
+        .and_then(|name| name.rsplit_once('.'))
+        .map(|(_stem, extension)| extension)
+        .filter(|extension| !extension.is_empty())
 }
 
 fn special_folder_path(kernel: &CeKernel, folder: u32) -> Option<String> {
@@ -16472,6 +16904,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "GetVersionEx",
     "GetVersionExW",
     "GetSystemMetrics",
+    "ShellExecuteEx",
     "SHGetSpecialFolderPath",
     "SystemParametersInfoW",
     "CopyRect",
@@ -17195,6 +17628,26 @@ const BOOL_SUCCESS_STUBS: &[&str] = &[
     "TryEnterCriticalSection",
     "IsValidLocale",
     "IsValidCodePage",
+];
+
+const MUST_IMPLEMENT_STUBS: &[&str] = &[
+    "CreateFileMappingW",
+    "CreateFileForMappingW",
+    "CreateProcessW",
+    "CreateThread",
+    "DefWindowProcW",
+    "FreeLibrary",
+    "GetModuleHandleW",
+    "GetProcAddressA",
+    "GetProcAddressW",
+    "LoadLibraryExW",
+    "LoadLibraryW",
+    "MapViewOfFile",
+    "MessageBoxW",
+    "ShellExecuteEx",
+    "SendNotifyMessageW",
+    "TrackPopupMenu",
+    "TrackPopupMenuEx",
 ];
 
 const INVALID_HANDLE_STUBS: &[&str] = &[
