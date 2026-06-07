@@ -3521,6 +3521,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
+        ORD_GET_CLIPBOARD_DATA_ALLOC => Some(CoredllValue::Handle(get_clipboard_data_alloc_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_IS_CLIPBOARD_FORMAT_AVAILABLE => Some(CoredllValue::Bool(
             kernel.gwe.is_clipboard_format_available(raw_arg(args, 0)),
         )),
@@ -5875,6 +5881,54 @@ fn get_clipboard_data_raw(kernel: &mut CeKernel, thread_id: u32, format: u32) ->
             0
         }
     }
+}
+
+fn get_clipboard_data_alloc_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    format: u32,
+) -> u32 {
+    if format == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(source) = kernel.gwe.get_clipboard_data(format) else {
+        if !kernel.gwe.clipboard_is_open() {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+        } else {
+            kernel.threads.set_last_error(thread_id, 0);
+        }
+        return 0;
+    };
+    let Some(size) = kernel.memory.local_size(source) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    let Some(copy) = kernel.memory.local_alloc(0, size) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+        return 0;
+    };
+    if size != 0 {
+        let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, source, size) else {
+            let _ = kernel.memory.local_free(copy);
+            return 0;
+        };
+        if !write_guest_bytes(kernel, memory, thread_id, copy, &bytes) {
+            let _ = kernel.memory.local_free(copy);
+            return 0;
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    copy
 }
 
 fn get_priority_clipboard_format_raw<M: CoredllGuestMemory>(

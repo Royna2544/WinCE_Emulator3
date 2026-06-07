@@ -107,6 +107,16 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     The implementation parses guest wide strings and writes `endptr` in
     two-byte character units.
 
+- Clipboard allocation-copy API:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`
+  - CE declares `SetClipboardData`, `GetClipboardData`, and
+    `GetClipboardDataAlloc` together in the clipboard API group. v3 now routes
+    raw `GetClipboardDataAlloc` through the same GWE clipboard format store as
+    `GetClipboardData`, allocates a fresh local handle for emulator-tracked
+    local clipboard data, copies guest bytes by the tracked local allocation
+    size, and fails unknown source handles explicitly instead of inventing a
+    size.
+
 - Old MIPS CE kernel-call encoding:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\nkmips.h`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c`, and corroborating

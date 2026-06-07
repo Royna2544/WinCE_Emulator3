@@ -9,6 +9,13 @@
 
 ## Confirmed
 
+- Raw clipboard fidelity now includes `GetClipboardDataAlloc` for clipboard
+  data stored as emulator-tracked local heap handles. The COREDLL raw path
+  looks up the format through GWE clipboard state, derives the source size from
+  `LocalSize`, allocates a fresh local handle, copies the guest bytes, and
+  rejects unknown source handles with `ERROR_INVALID_HANDLE` rather than
+  guessing a buffer length. Focused raw clipboard fixtures cover successful
+  byte-copy independence and the unknown-handle failure path.
 - Runtime guest-DLL normal loads now enter guest lifecycle code before
   returning from `LoadLibraryW` / `LoadLibraryExW(flags=0)`. The PE parser reads
   the TLS directory callback table into loaded-module metadata, and the Unicorn

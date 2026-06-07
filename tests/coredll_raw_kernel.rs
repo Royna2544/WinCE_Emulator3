@@ -10,8 +10,8 @@ use wince_emulation_v3::{
             ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD, ORD_DISABLE_THREAD_LIBRARY_CALLS,
             ORD_EMPTY_CLIPBOARD, ORD_ENUM_CLIPBOARD_FORMATS, ORD_EVENT_MODIFY,
             ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY, ORD_GET_CALLER_PROCESS_INDEX,
-            ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER,
-            ORD_GET_COMM_MASK, ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS,
+            ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_GET_CLIPBOARD_FORMAT_NAME_W,
+            ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK, ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS,
             ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR,
             ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W, ORD_GET_OPEN_CLIPBOARD_WINDOW,
             ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
@@ -2940,6 +2940,155 @@ fn clipboard_raw_ordinals_reject_invalid_open_and_missing_lock() -> Result<()> {
     assert_eq!(
         kernel.threads.get_last_error(thread_id),
         ERROR_ACCESS_DENIED
+    );
+
+    Ok(())
+}
+
+#[test]
+fn clipboard_data_alloc_copies_known_local_handle_contents() -> Result<()> {
+    const CF_TEXT: u32 = 1;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 53;
+    let owner = kernel.create_window_ex_w(thread_id, "CLIP_ALLOC", "", None, 0, 0, 0);
+    let source = kernel.memory.local_alloc(0, 6).unwrap();
+    memory.write_bytes(source, b"abc\0xy");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_OPEN_CLIPBOARD,
+            [owner],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EMPTY_CLIPBOARD,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_CLIPBOARD_DATA,
+            [CF_TEXT, source],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle == source
+    ));
+
+    let copy = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_CLIPBOARD_DATA_ALLOC,
+        [CF_TEXT],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("unexpected GetClipboardDataAlloc result: {other:?}"),
+    };
+    assert_ne!(copy, 0);
+    assert_ne!(copy, source);
+    assert_eq!(kernel.memory.local_size(copy), Some(6));
+    assert_eq!(memory.read_bytes(copy, 6), b"abc\0xy");
+
+    memory.write_bytes(source, b"zzz\0xy");
+    assert_eq!(memory.read_bytes(copy, 6), b"abc\0xy");
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn clipboard_data_alloc_rejects_unknown_source_handle() -> Result<()> {
+    const CF_TEXT: u32 = 1;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 54;
+    let owner = kernel.create_window_ex_w(thread_id, "CLIP_BAD_ALLOC", "", None, 0, 0, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_OPEN_CLIPBOARD,
+            [owner],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EMPTY_CLIPBOARD,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_CLIPBOARD_DATA,
+            [CF_TEXT, 0x7000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0x7000),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CLIPBOARD_DATA_ALLOC,
+            [CF_TEXT],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
     );
 
     Ok(())

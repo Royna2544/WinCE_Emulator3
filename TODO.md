@@ -72,9 +72,11 @@
   shell namespace/storage presentation, and file-change notifications.
 - GWE/input fidelity queue from `PLAN.MD`: `TranslateMessage` is still minimal.
   Implement keyboard modifiers/layout, accelerators and menu shortcuts,
-  `WM_SYSKEY*`, dead-key/IME handoff, richer clipboard allocation-copy edge
-  cases above the raw clipboard store, rendered caret blink/focus invalidation
-  above the raw caret store, and focus/capture integration. Also complete
+  `WM_SYSKEY*`, dead-key/IME handoff, richer clipboard rendered ownership and
+  delayed-render edge cases above the raw clipboard store and
+  `GetClipboardDataAlloc` local-handle copy path, rendered caret
+  blink/focus invalidation above the raw caret store, and focus/capture
+  integration. Also complete
   cross-thread `SendMessageTimeout` so it waits until reply or timeout, writes
   the result pointer, honors `SMTO_*` flags, handles receiver/sender
   destruction, and performs CE-required reentrant dispatch while waiting.
@@ -86,10 +88,11 @@
   above the now-stateful `SHNotification*I` data APIs, recent docs, shell
   change notifications, popup/menu behavior, rendered modal `MessageBoxW`
   window/nested pump/button input above the now-recorded/default-result raw
-  slice, keyboard translation, richer clipboard allocation-copy edge cases
-  above the now-stateful raw clipboard store, and rendered caret blink/focus
-  integration above the raw caret state. Notification records are now pruned
-  during normal HWND/process teardown. Keep behavior
+  slice, keyboard translation, richer clipboard rendered ownership and
+  delayed-render edge cases above the now-stateful raw clipboard store and
+  allocation-copy path, and rendered caret blink/focus integration above the
+  raw caret state. Notification records are now pruned during normal
+  HWND/process teardown. Keep behavior
   registry-backed and generic; do not fake route UI.
 - Winsock fidelity follow-up: guest-visible local names now use the isolated
   `10.0.0.1`/`10.0.0.2` model while host sockets remain the transport. Blocking
