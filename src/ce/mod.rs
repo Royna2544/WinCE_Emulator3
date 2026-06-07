@@ -17,6 +17,7 @@ pub mod registry;
 pub mod remote;
 pub mod resource;
 pub mod scheduler;
+pub mod shell;
 pub mod thread;
 pub mod timer;
 #[cfg(all(windows, feature = "win32-desktop"))]

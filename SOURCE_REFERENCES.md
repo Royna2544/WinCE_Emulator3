@@ -354,6 +354,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     HRESULTs. `winuser.h` anchors the icon/cursor signatures; v3 currently
     has lightweight synthetic stock icon handles and `DestroyIcon` validation
     rather than a full icon resource manager.
+  - `shellapi.h` also anchors `Shell_NotifyIcon` and the `NOTIFYICONDATAW`
+    prefix. v3 now stores notify icon add/modify/delete state in
+    `ShellSystem` and validates owner HWNDs through GWE, while leaving
+    interaction callback delivery and `SHNotification*` behavior for the next
+    shell-notification port instead of inventing taskbar events.
   - The generated COREDLL ordinal table remains behavior data from these CE
     ordinal sources. v3 now caches ordinal-to-export lookup in the same
     precedence order as the old scan (`COREDLL_EXPORTS`, SDK-only exports, then

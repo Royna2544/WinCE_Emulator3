@@ -112,6 +112,15 @@
   and generic icon handles. The focused raw shell test
   `sh_get_file_info_uses_registry_associations_and_attributes` passes; real
   icon extraction/image-list ownership remains queued.
+- Shell notification state now has a dedicated `ShellSystem` instead of a
+  COREDLL-local placeholder. Raw `Shell_NotifyIconW @481` decodes the
+  `NOTIFYICONDATAW` prefix, validates owner HWNDs, tracks add/modify/delete
+  records keyed by `(HWND,uID)`, preserves callback message/icon/tip/state, and
+  reports CE-shaped `ERROR_INVALID_PARAMETER`, `ERROR_INVALID_WINDOW_HANDLE`,
+  or `ERROR_INVALID_HANDLE` failures. Focused coverage
+  `shell_notify_icon_tracks_add_modify_delete_state` passes. Real user
+  interaction callback delivery, `SHNotification*`, process/window cleanup, and
+  taskbar rendering remain queued.
 - Runtime guest-DLL loading now has a shared CE-aware search helper in
   `emulator::dll_search`, replacing duplicate private startup/child-process
   search logic. It resolves exact mounted CE paths first, then the active

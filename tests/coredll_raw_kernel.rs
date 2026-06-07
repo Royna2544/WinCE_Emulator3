@@ -23,15 +23,16 @@ use wince_emulation_v3::{
             ORD_PURGE_COMM, ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY,
             ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD, ORD_SET_COMM_MASK,
             ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
-            ORD_SHELL_EXECUTE_EX, ORD_SHGET_FILE_INFO, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SLEEP,
-            ORD_SLEEP_TILL_TICK, ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME,
-            ORD_TERMINATE_PROCESS, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
-            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_MULTIPLE_OBJECTS,
-            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE,
+            ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON, ORD_SHGET_FILE_INFO,
+            ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SLEEP, ORD_SLEEP_TILL_TICK, ORD_SUSPEND_THREAD,
+            ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS, ORD_TLS_GET_VALUE,
+            ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_COMM_EVENT,
+            ORD_WAIT_FOR_MULTIPLE_OBJECTS, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSTOMBS,
+            ORD_WIDE_CHAR_TO_MULTI_BYTE,
         },
         devices::CommDcb,
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
-        gwe::{Message, QS_POSTMESSAGE, QS_TIMER, WM_TIMER},
+        gwe::{Message, QS_POSTMESSAGE, QS_TIMER, WM_TIMER, WM_USER},
         kernel::{
             CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
             LoadedModuleMetadata,
@@ -2106,6 +2107,100 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
         memory.read_wide_z(info_ptr + SHFILEINFO_TYPE_NAME_OFFSET, 80),
         "Route Plan"
     );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn shell_notify_icon_tracks_add_modify_delete_state() -> Result<()> {
+    const NIM_ADD: u32 = 0;
+    const NIM_MODIFY: u32 = 1;
+    const NIM_DELETE: u32 = 2;
+    const NIF_MESSAGE: u32 = 0x0000_0001;
+    const NIF_ICON: u32 = 0x0000_0002;
+    const NIF_TIP: u32 = 0x0000_0004;
+    const NIF_STATE: u32 = 0x0000_0008;
+    const NID_SIZE: u32 = 160;
+    const NID_TIP_OFFSET: u32 = 24;
+    const NID_STATE_OFFSET: u32 = 152;
+    const NID_STATE_MASK_OFFSET: u32 = 156;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 46;
+    let hwnd = kernel.create_window_ex_w(thread_id, "SHELL_NOTIFY", "", None, 0, 0, 0);
+    let data = 0x2_9000;
+    memory.map_words(data, NID_SIZE / 4);
+    memory.map_halfwords(data + NID_TIP_OFFSET, 64);
+    memory.write_word(data, NID_SIZE);
+    memory.write_word(data + 4, hwnd);
+    memory.write_word(data + 8, 77);
+    memory.write_word(data + 12, NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_STATE);
+    memory.write_word(data + 16, WM_USER + 88);
+    memory.write_word(data + 20, 0x000b_8001);
+    memory.write_wide_z(data + NID_TIP_OFFSET, "Route ready");
+    memory.write_word(data + NID_STATE_OFFSET, 0x2);
+    memory.write_word(data + NID_STATE_MASK_OFFSET, 0xffff_ffff);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_ADD, data],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let icon = kernel.shell.notify_icon(hwnd, 77).expect("notify icon");
+    assert_eq!(icon.callback_message, WM_USER + 88);
+    assert_eq!(icon.icon, 0x000b_8001);
+    assert_eq!(icon.tip, "Route ready");
+    assert_eq!(icon.state, 0x2);
+
+    memory.write_word(data + 12, NIF_TIP | NIF_STATE);
+    memory.write_wide_z(data + NID_TIP_OFFSET, "Route updated");
+    memory.write_word(data + NID_STATE_OFFSET, 0);
+    memory.write_word(data + NID_STATE_MASK_OFFSET, 0x2);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_MODIFY, data],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let icon = kernel.shell.notify_icon(hwnd, 77).expect("notify icon");
+    assert_eq!(icon.callback_message, WM_USER + 88);
+    assert_eq!(icon.icon, 0x000b_8001);
+    assert_eq!(icon.tip, "Route updated");
+    assert_eq!(icon.state, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_DELETE, data],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(kernel.shell.notify_icon(hwnd, 77).is_none());
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
     Ok(())

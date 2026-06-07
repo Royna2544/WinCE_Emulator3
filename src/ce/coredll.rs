@@ -27,6 +27,7 @@ use crate::{
             AcceleratorEntry, FontObject, MenuItem, PopupMenuTracking, RegionObject, ResourceId,
             stock_object_handle,
         },
+        shell::{NotifyIconData, NotifyIconOp},
         thread::{
             ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_CLASS_DOES_NOT_EXIST,
             ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER,
@@ -108,6 +109,12 @@ const SHGFI_ATTR_SPECIFIED: u32 = 0x0002_0000;
 const SHELL_GENERIC_FILE_ICON: u32 = 32512;
 const SHELL_GENERIC_FOLDER_ICON: u32 = 32513;
 const SHELL_SYSTEM_IMAGE_LIST_HANDLE: u32 = 0x000b_f000;
+const NOTIFYICONDATA_MIN_SIZE_W: u32 = 24;
+const NOTIFYICONDATA_TIP_OFFSET: u32 = 24;
+const NOTIFYICONDATA_TIP_CHARS: usize = 64;
+const NOTIFYICONDATA_STATE_OFFSET: u32 =
+    NOTIFYICONDATA_TIP_OFFSET + (NOTIFYICONDATA_TIP_CHARS as u32 * 2);
+const NOTIFYICONDATA_STATE_MASK_OFFSET: u32 = NOTIFYICONDATA_STATE_OFFSET + 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CoredllSubsystem {
@@ -3456,6 +3463,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_MESSAGE_BOX_W => Some(CoredllValue::U32(message_box_w_raw(memory, args))),
         ORD_SHELL_EXECUTE_EX => Some(CoredllValue::Bool(shell_execute_ex_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_SHELL_NOTIFY_ICON => Some(CoredllValue::Bool(shell_notify_icon_w_raw(
             kernel, memory, thread_id, args,
         ))),
         ORD_SHGET_FILE_INFO => Some(CoredllValue::U32(sh_get_file_info_w_raw(
@@ -9991,6 +10001,106 @@ fn sh_get_special_folder_path_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         true
     } else {
+        false
+    }
+}
+
+fn shell_notify_icon_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let Some(op) = NotifyIconOp::from_raw(raw_arg(args, 0)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let data_ptr = raw_arg(args, 1);
+    if data_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(cb_size) = read_guest_u32(kernel, memory, thread_id, data_ptr) else {
+        return false;
+    };
+    if cb_size < NOTIFYICONDATA_MIN_SIZE_W {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(hwnd) = read_guest_u32(kernel, memory, thread_id, data_ptr + 4) else {
+        return false;
+    };
+    let Some(id) = read_guest_u32(kernel, memory, thread_id, data_ptr + 8) else {
+        return false;
+    };
+    let Some(flags) = read_guest_u32(kernel, memory, thread_id, data_ptr + 12) else {
+        return false;
+    };
+    let Some(callback_message) = read_guest_u32(kernel, memory, thread_id, data_ptr + 16) else {
+        return false;
+    };
+    let Some(icon) = read_guest_u32(kernel, memory, thread_id, data_ptr + 20) else {
+        return false;
+    };
+    if hwnd != 0 && !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    }
+
+    let tip = if cb_size > NOTIFYICONDATA_TIP_OFFSET {
+        let chars = ((cb_size - NOTIFYICONDATA_TIP_OFFSET) / 2).min(NOTIFYICONDATA_TIP_CHARS as u32)
+            as usize;
+        read_guest_wide_z(memory, data_ptr + NOTIFYICONDATA_TIP_OFFSET, chars).unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let state = if cb_size >= NOTIFYICONDATA_STATE_OFFSET + 4 {
+        read_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            data_ptr + NOTIFYICONDATA_STATE_OFFSET,
+        )
+        .unwrap_or(0)
+    } else {
+        0
+    };
+    let state_mask = if cb_size >= NOTIFYICONDATA_STATE_MASK_OFFSET + 4 {
+        read_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            data_ptr + NOTIFYICONDATA_STATE_MASK_OFFSET,
+        )
+        .unwrap_or(0)
+    } else {
+        0
+    };
+    let data = NotifyIconData {
+        hwnd,
+        id,
+        flags,
+        callback_message,
+        icon,
+        tip,
+        state,
+        state_mask,
+    };
+    if kernel.shell.apply_notify_icon(op, data) {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         false
     }
 }
@@ -17368,6 +17478,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "GetVersionExW",
     "GetSystemMetrics",
     "ShellExecuteEx",
+    "Shell_NotifyIcon",
     "SHGetFileInfo",
     "SHGetSpecialFolderPath",
     "SystemParametersInfoW",
