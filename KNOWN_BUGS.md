@@ -74,22 +74,25 @@
     readiness wakeups instead of extending timeout/spin behavior.
 - Open: input/accelerator/clipboard/caret/IME and cross-thread
   `SendMessageTimeout` fidelity are still incomplete.
-  - Symptom: `TranslateMessage` only handles a minimal `WM_KEYDOWN` to
-    `WM_CHAR` path, and cross-thread `SendMessageTimeout` can create a send
-    transaction but return 0 instead of waiting for completion and writing the
-    result. Raw clipboard APIs now track open/owner/data/format-name state, but
+  - Symptom: `TranslateMessage` now covers the basic ASCII letter/digit path
+    with Shift/CapsLock and `WM_SYSKEYDOWN` to `WM_SYSCHAR`, but does not yet
+    implement real keyboard-layout selection, dead keys, IME handoff, or
+    broader menu shortcut integration. Cross-thread `SendMessageTimeout` can
+    create a send transaction but return 0 instead of waiting for completion
+    and writing the result. Raw clipboard APIs now track open/owner/data/
+    format-name state, but
     rendered ownership/delayed-render integration is still incomplete.
     `GetClipboardDataAlloc` now copies known local clipboard handles into a
     fresh local allocation and rejects unknown handles instead of fabricating a
     size. Raw caret APIs now track owner/position/show-count/blink-time state,
     but rendered blinking and focus/update invalidation are still incomplete.
-  - Required fix: implement keyboard layout, broader accelerator/menu shortcut
-    routing above the now-backed `TranslateAcceleratorW`
+  - Required fix: implement keyboard layout selection, broader accelerator/
+    menu shortcut routing above the now-backed `TranslateAcceleratorW`
     modifier/`WM_SYSKEYDOWN` path, dead-key/IME handoff, clipboard rendered
     ownership/delayed-render edge cases, rendered caret blink/focus
-    invalidation, focus/capture integration, and CE-like
-    `SendMessageTimeout` wait/result/destruction/reentrancy behavior above the
-    now-backed CE `SMTO_NORMAL`-only flag validation.
+    invalidation, focus/capture integration, and CE-like `SendMessageTimeout`
+    wait/result/destruction/reentrancy behavior above the now-backed CE
+    `SMTO_NORMAL`-only flag validation.
   - Status: open. Source-reference this against CE GWE/input/clipboard/caret
     behavior before changing guest-visible UI behavior.
 - Open: several shell-visible APIs are still state tracking or cheap success

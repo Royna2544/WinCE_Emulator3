@@ -17973,19 +17973,28 @@ fn translate_message_raw<M: CoredllGuestMemory>(
     let Some(message) = read_guest_message(kernel, memory, thread_id, msg_ptr) else {
         return false;
     };
-    if message.msg != crate::ce::gwe::WM_KEYDOWN || message.hwnd == 0 {
+    if !matches!(
+        message.msg,
+        crate::ce::gwe::WM_KEYDOWN | crate::ce::gwe::WM_SYSKEYDOWN
+    ) || message.hwnd == 0
+    {
         kernel.threads.set_last_error(thread_id, 0);
         return false;
     }
-    let char_code = translate_virtual_key_to_char(message.wparam);
+    let char_code = translate_virtual_key_to_char(kernel, message.wparam);
     if char_code == 0 {
         kernel.threads.set_last_error(thread_id, 0);
         return false;
     }
+    let translated_msg = if message.msg == crate::ce::gwe::WM_SYSKEYDOWN {
+        crate::ce::gwe::WM_SYSCHAR
+    } else {
+        crate::ce::gwe::WM_CHAR
+    };
     let posted = kernel.post_message_w_for_thread(
         thread_id,
         message.hwnd,
-        crate::ce::gwe::WM_CHAR,
+        translated_msg,
         char_code,
         message.lparam,
     );
@@ -17993,10 +18002,45 @@ fn translate_message_raw<M: CoredllGuestMemory>(
     posted
 }
 
-fn translate_virtual_key_to_char(vkey: u32) -> u32 {
+fn translate_virtual_key_to_char(kernel: &CeKernel, vkey: u32) -> u32 {
+    let shift = kernel.gwe.get_key_state(crate::ce::gwe::VK_SHIFT) & 0x8000_0000 != 0;
+    let caps = kernel.gwe.get_key_state(crate::ce::gwe::VK_CAPITAL) & 0x0001 != 0;
     match vkey {
-        0x30..=0x39 | 0x41..=0x5a | 0x61..=0x7a => vkey,
+        0x30..=0x39 => translate_digit_key(vkey, shift),
+        0x41..=0x5a => {
+            if shift ^ caps {
+                vkey
+            } else {
+                vkey + 0x20
+            }
+        }
+        0x61..=0x7a => {
+            if shift ^ caps {
+                vkey - 0x20
+            } else {
+                vkey
+            }
+        }
         0x20 => 0x20,
+        _ => 0,
+    }
+}
+
+fn translate_digit_key(vkey: u32, shift: bool) -> u32 {
+    if !shift {
+        return vkey;
+    }
+    match vkey {
+        0x30 => b')' as u32,
+        0x31 => b'!' as u32,
+        0x32 => b'@' as u32,
+        0x33 => b'#' as u32,
+        0x34 => b'$' as u32,
+        0x35 => b'%' as u32,
+        0x36 => b'^' as u32,
+        0x37 => b'&' as u32,
+        0x38 => b'*' as u32,
+        0x39 => b'(' as u32,
         _ => 0,
     }
 }

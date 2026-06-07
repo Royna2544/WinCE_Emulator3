@@ -58,8 +58,9 @@ use wince_emulation_v3::{
             ORD_SET_TIMER, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_RGN,
             ORD_SET_WINDOW_TEXT_W, ORD_SHOW_CARET, ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_SLEEP,
             ORD_STRETCH_BLT, ORD_STRETCH_DIBITS, ORD_SYSTEM_PARAMETERS_INFO_W,
-            ORD_TRACK_POPUP_MENU_EX, ORD_TRANSLATE_ACCELERATOR_W, ORD_TRANSPARENT_IMAGE,
-            ORD_UNION_RECT, ORD_UPDATE_WINDOW, ORD_VALIDATE_RECT, ORD_WINDOW_FROM_POINT,
+            ORD_TRACK_POPUP_MENU_EX, ORD_TRANSLATE_ACCELERATOR_W, ORD_TRANSLATE_MESSAGE,
+            ORD_TRANSPARENT_IMAGE, ORD_UNION_RECT, ORD_UPDATE_WINDOW, ORD_VALIDATE_RECT,
+            ORD_WINDOW_FROM_POINT,
         },
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat, VirtualFramebuffer},
         gwe::{
@@ -71,13 +72,13 @@ use wince_emulation_v3::{
             PeekFlags, Point, QS_PAINT, QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER, Rect,
             SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN, SMF_NOTIFY_MESSAGE, SMF_SENDER_NO_WAIT,
             SMF_TIMEOUT, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-            SWP_SHOWWINDOW, VK_CONTROL, VK_LSHIFT, VK_MENU, VK_SHIFT, WA_ACTIVE, WA_INACTIVE,
-            WM_ACTIVATE, WM_CANCELMODE, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_ENABLE,
-            WM_ENTERMENULOOP, WM_ERASEBKGND, WM_EXITMENULOOP, WM_GETDLGCODE, WM_GETTEXT,
+            SWP_SHOWWINDOW, VK_CAPITAL, VK_CONTROL, VK_LSHIFT, VK_MENU, VK_SHIFT, WA_ACTIVE,
+            WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_DESTROY,
+            WM_ENABLE, WM_ENTERMENULOOP, WM_ERASEBKGND, WM_EXITMENULOOP, WM_GETDLGCODE, WM_GETTEXT,
             WM_GETTEXTLENGTH, WM_INITMENUPOPUP, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
             WM_MOVE, WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETFOCUS, WM_SETTEXT, WM_SHOWWINDOW,
-            WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_CHILD, WS_DISABLED,
-            WS_GROUP, WS_POPUP, WS_TABSTOP, WS_VISIBLE,
+            WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN, WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_CHILD,
+            WS_DISABLED, WS_GROUP, WS_POPUP, WS_TABSTOP, WS_VISIBLE,
         },
         kernel::CeKernel,
         memory::PROCESS_HEAP_HANDLE,
@@ -10273,6 +10274,185 @@ fn coredll_raw_track_popup_menu_records_attempt_without_fake_selection() -> Resu
         kernel.threads.get_last_error(thread_id),
         ERROR_INVALID_PARAMETER
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_translate_message_uses_shift_caps_and_syschar() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 37;
+    let msg_ptr = 0x1_7d00;
+    memory.map_words(msg_ptr, 7);
+    let hwnd = kernel.create_window_ex_w(thread_id, "TRANSLATE_OWNER", "", None, 0, 0, 0);
+
+    write_raw_message(
+        &mut memory,
+        msg_ptr,
+        hwnd,
+        WM_KEYDOWN,
+        u32::from(b'A'),
+        0x44,
+    )?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRANSLATE_MESSAGE,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let translated = kernel
+        .gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_CHAR, WM_CHAR, PeekFlags::REMOVE)
+        .expect("plain letter should post WM_CHAR");
+    assert_eq!(translated.wparam, u32::from(b'a'));
+    assert_eq!(translated.lparam, 0x44);
+
+    assert!(kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYDOWN, VK_LSHIFT, 0));
+    write_raw_message(&mut memory, msg_ptr, hwnd, WM_KEYDOWN, u32::from(b'A'), 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRANSLATE_MESSAGE,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let translated = kernel
+        .gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_CHAR, WM_CHAR, PeekFlags::REMOVE)
+        .expect("shifted letter should post WM_CHAR");
+    assert_eq!(translated.wparam, u32::from(b'A'));
+
+    write_raw_message(&mut memory, msg_ptr, hwnd, WM_KEYDOWN, u32::from(b'1'), 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRANSLATE_MESSAGE,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let translated = kernel
+        .gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_CHAR, WM_CHAR, PeekFlags::REMOVE)
+        .expect("shifted digit should post WM_CHAR");
+    assert_eq!(translated.wparam, u32::from(b'!'));
+    assert!(kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYUP, VK_LSHIFT, 0));
+
+    assert!(kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYDOWN, VK_CAPITAL, 0));
+    assert!(kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYUP, VK_CAPITAL, 0));
+    write_raw_message(&mut memory, msg_ptr, hwnd, WM_KEYDOWN, u32::from(b'A'), 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRANSLATE_MESSAGE,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let translated = kernel
+        .gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_CHAR, WM_CHAR, PeekFlags::REMOVE)
+        .expect("caps letter should post WM_CHAR");
+    assert_eq!(translated.wparam, u32::from(b'A'));
+
+    assert!(kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYDOWN, VK_LSHIFT, 0));
+    write_raw_message(&mut memory, msg_ptr, hwnd, WM_KEYDOWN, u32::from(b'A'), 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRANSLATE_MESSAGE,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let translated = kernel
+        .gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_CHAR, WM_CHAR, PeekFlags::REMOVE)
+        .expect("shift plus caps should post WM_CHAR");
+    assert_eq!(translated.wparam, u32::from(b'a'));
+    assert!(kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYUP, VK_LSHIFT, 0));
+    assert!(kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYDOWN, VK_CAPITAL, 0));
+    assert!(kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYUP, VK_CAPITAL, 0));
+
+    write_raw_message(
+        &mut memory,
+        msg_ptr,
+        hwnd,
+        WM_SYSKEYDOWN,
+        u32::from(b'M'),
+        0x55,
+    )?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRANSLATE_MESSAGE,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let translated = kernel
+        .gwe
+        .peek_message_filtered(
+            thread_id,
+            Some(hwnd),
+            WM_SYSCHAR,
+            WM_SYSCHAR,
+            PeekFlags::REMOVE,
+        )
+        .expect("syskey letter should post WM_SYSCHAR");
+    assert_eq!(translated.wparam, u32::from(b'm'));
+    assert_eq!(translated.lparam, 0x55);
+
+    write_raw_message(&mut memory, msg_ptr, hwnd, WM_KEYUP, u32::from(b'A'), 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRANSLATE_MESSAGE,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
 
     Ok(())
 }

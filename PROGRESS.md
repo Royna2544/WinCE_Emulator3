@@ -171,6 +171,12 @@
   existing `WM_COMMAND` queue behavior only for a matching entry. Focused
   coverage:
   `coredll_raw_translate_accelerator_honors_modifiers_and_syskey`.
+- Raw `TranslateMessage` now uses GWE key state for the basic CE keyboard
+  translation path instead of echoing virtual keys. It translates ASCII
+  letters with Shift/CapsLock XOR casing, maps the shifted digit row to
+  punctuation, preserves the original lParam, posts `WM_CHAR` for `WM_KEYDOWN`,
+  and posts `WM_SYSCHAR` for `WM_SYSKEYDOWN`. Focused coverage:
+  `coredll_raw_translate_message_uses_shift_caps_and_syschar`.
 - Shell notification state now has a dedicated `ShellSystem` instead of a
   COREDLL-local placeholder. Raw `Shell_NotifyIconW @481` decodes the
   `NOTIFYICONDATAW` prefix, validates owner HWNDs, tracks add/modify/delete

@@ -178,6 +178,15 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     including the Alt/syskey path, instead of matching solely on the virtual
     key.
 
+- Keyboard translation APIs:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`
+  - CE defines `TranslateMessage(CONST MSG *pMsg)`, `WM_CHAR`,
+    `WM_SYSKEYDOWN`, `WM_SYSCHAR`, `VK_SHIFT`, and `VK_CAPITAL` in the same
+    input API surface. v3 now routes raw `TranslateMessage` through GWE key
+    state for the basic ASCII letter/digit path, including Shift/CapsLock
+    casing and the syskey-to-`WM_SYSCHAR` message path. Full keyboard layout
+    selection, dead keys, and IME handoff remain queued.
+
 - Old MIPS CE kernel-call encoding:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\nkmips.h`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c`, and corroborating

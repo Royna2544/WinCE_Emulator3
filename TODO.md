@@ -71,14 +71,15 @@
   `MessageBoxW`, shell special-folder fallback policy/CSIDL coverage above the
   now-backed `fCreate`/`CSIDL_FLAG_CREATE` path, notification APIs, shell
   namespace/storage presentation, and file-change notifications.
-- GWE/input fidelity queue from `PLAN.MD`: `TranslateMessage` is still minimal.
-  Implement keyboard layout, broader accelerator/menu shortcut routing above
-  the now-backed `TranslateAcceleratorW` modifier/`WM_SYSKEYDOWN` match path,
-  dead-key/IME handoff, richer clipboard rendered ownership and
-  delayed-render edge cases above the raw clipboard store and
-  `GetClipboardDataAlloc` local-handle copy path, rendered caret
-  blink/focus invalidation above the raw caret store, and focus/capture
-  integration. Also complete
+- GWE/input fidelity queue from `PLAN.MD`: raw `TranslateMessage` now covers
+  basic ASCII letters/digits with Shift/CapsLock and the `WM_SYSKEYDOWN` to
+  `WM_SYSCHAR` path. Implement real keyboard-layout selection, broader
+  accelerator/menu shortcut routing above the now-backed
+  `TranslateAcceleratorW` modifier/`WM_SYSKEYDOWN` match path, dead-key/IME
+  handoff, richer clipboard rendered ownership and delayed-render edge cases
+  above the raw clipboard store and `GetClipboardDataAlloc` local-handle copy
+  path, rendered caret blink/focus invalidation above the raw caret store, and
+  focus/capture integration. Also complete
   cross-thread `SendMessageTimeout` so it waits until reply or timeout, writes
   the result pointer, handles receiver/sender destruction, and performs
   CE-required reentrant dispatch while waiting. The raw boundary now rejects

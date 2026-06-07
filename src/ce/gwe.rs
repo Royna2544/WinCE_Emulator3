@@ -34,6 +34,7 @@ pub const WM_KEYUP: u32 = 0x0101;
 pub const WM_CHAR: u32 = 0x0102;
 pub const WM_SYSKEYDOWN: u32 = 0x0104;
 pub const WM_SYSKEYUP: u32 = 0x0105;
+pub const WM_SYSCHAR: u32 = 0x0106;
 pub const WM_COMMAND: u32 = 0x0111;
 pub const WM_TIMER: u32 = 0x0113;
 pub const WM_INITMENUPOPUP: u32 = 0x0117;
@@ -2351,8 +2352,8 @@ impl Gwe {
 
     fn update_key_state_for_message(&mut self, msg: u32, virtual_key: u32) {
         match msg {
-            WM_KEYDOWN => self.set_key_down(virtual_key),
-            WM_KEYUP => self.set_key_up(virtual_key),
+            WM_KEYDOWN | WM_SYSKEYDOWN => self.set_key_down(virtual_key),
+            WM_KEYUP | WM_SYSKEYUP => self.set_key_up(virtual_key),
             WM_LBUTTONDOWN => self.set_key_down(VK_LBUTTON),
             WM_LBUTTONUP => self.set_key_up(VK_LBUTTON),
             _ => {}
