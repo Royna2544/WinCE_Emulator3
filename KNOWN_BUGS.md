@@ -12,6 +12,22 @@
 
 ## Recently Closed / Watch
 
+- Closed/watch: parked helper processes could starve the parent iNavi process
+  even after its finite sleep/wait timeout had expired.
+  - Symptom: mounted host runs could stay on the loading/frontier frame while
+    process traces repeatedly rotated `happyway_win.exe` / `iSearch.exe` and
+    parked parent waits were already timeout-ready.
+  - Fix: parked-process selection now prefers priority-ready work first,
+    rejects idle blocked `GetMessageW` waiters as runnable work, and treats
+    `blocked_wait_timed_out(...)` as ready alongside signaled waits for parked
+    parent sleep/finite waits.
+  - Validation: focused tests
+    `switch_to_next_parked_child_skips_idle_blocked_get_message` and
+    `switch_to_next_parked_child_prefers_expired_sleep_over_runnable_child`
+    pass. Fresh host validation `target\host_livecheck2.png` reaches the real
+    map with the bottom current-location bar visible.
+  - Status: closed/watch. Route/search dialog behavior remains separate and
+    should be traced from a settled visible map state.
 - Closed/watch: a later host-presenter frozen frame was caused by parked/
   suspended receiver scheduling not treating queued nonqueued sends as ready
   work.

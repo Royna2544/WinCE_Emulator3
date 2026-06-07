@@ -12,6 +12,14 @@
 
 ## Current Slice
 
+- Startup/progress scheduler fix is now in the current worktree: expired
+  parked sleep/finite waits are considered ready, while idle parked
+  `GetMessageW` waiters no longer run just because they are parked. Keep the
+  focused scheduler tests passing and commit this separately from diagnostics.
+  Fresh host validation `target\host_livecheck2.png` proves the host presenter
+  can reach the actual map again; the next route-search slice should be a
+  tap-driven trace from that visible map/bottom-bar state, not another early
+  splash/frontier tap.
 - Host utility follow-up: the `host_progs` sources for `cmd`, `snip`,
   `taskmgr`, and `easy_iNavi` now compile with eVC4 MIPSII into
   `target\host_progs\build_check`. When the main emulator tree is buildable

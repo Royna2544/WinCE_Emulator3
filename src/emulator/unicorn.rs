@@ -1665,10 +1665,14 @@ impl UnicornMips {
         let count = self.parked_child_processes.len();
         for _ in 0..count {
             let parked = self.parked_child_processes.pop_front()?;
-            let send_ready = parked
-                .blocked_send_id
-                .is_some_and(|send_id| kernel.sent_message_result_ready(send_id));
-            if parked.blocked_send_id.is_none() || send_ready {
+            if Self::parked_process_has_priority_ready_work(&parked, kernel) {
+                return Some(parked);
+            }
+            self.parked_child_processes.push_back(parked);
+        }
+        for _ in 0..count {
+            let parked = self.parked_child_processes.pop_front()?;
+            if Self::parked_process_can_run(&parked, kernel) {
                 return Some(parked);
             }
             self.parked_child_processes.push_back(parked);
@@ -1677,16 +1681,53 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
+    fn parked_process_has_priority_ready_work(parked: &ParkedProcess, kernel: &CeKernel) -> bool {
+        parked
+            .blocked_send_id
+            .is_some_and(|send_id| kernel.sent_message_result_ready(send_id))
+            || Self::parked_process_has_ready_receiver_work(parked, kernel)
+    }
+
+    #[cfg(not(feature = "unicorn"))]
+    fn parked_process_has_priority_ready_work(parked: &ParkedProcess, kernel: &CeKernel) -> bool {
+        parked
+            .blocked_send_id
+            .is_some_and(|send_id| kernel.sent_message_result_ready(send_id))
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn parked_process_can_run(parked: &ParkedProcess, kernel: &CeKernel) -> bool {
+        if let Some(send_id) = parked.blocked_send_id {
+            return kernel.sent_message_result_ready(send_id);
+        }
+        if Self::parked_process_has_ready_receiver_work(parked, kernel) {
+            return true;
+        }
+        parked.cpu.blocked_guest_thread.is_none() && parked.cpu.blocked_wait_threads.is_empty()
+    }
+
+    #[cfg(not(feature = "unicorn"))]
+    fn parked_process_can_run(parked: &ParkedProcess, kernel: &CeKernel) -> bool {
+        parked
+            .blocked_send_id
+            .is_none_or(|send_id| kernel.sent_message_result_ready(send_id))
+    }
+
+    #[cfg(feature = "unicorn")]
     fn parked_process_ready_wait_id(parked: &ParkedProcess, kernel: &CeKernel) -> Option<u64> {
         if let Some(blocked) = parked.cpu.blocked_guest_thread.as_ref() {
             let wait = kernel.blocked_waiter(blocked.wait_id)?;
-            if scheduler_blocked_wait_is_ready(wait, kernel) {
+            if scheduler_blocked_wait_is_ready(wait, kernel)
+                || crate::ce::scheduler::blocked_wait_timed_out(wait, kernel.timers.tick_count())
+            {
                 return Some(blocked.wait_id);
             }
         }
         parked.cpu.blocked_wait_threads.iter().find_map(|blocked| {
             let wait = kernel.blocked_waiter(blocked.wait_id)?;
-            scheduler_blocked_wait_is_ready(wait, kernel).then_some(blocked.wait_id)
+            (scheduler_blocked_wait_is_ready(wait, kernel)
+                || crate::ce::scheduler::blocked_wait_timed_out(wait, kernel.timers.tick_count()))
+            .then_some(blocked.wait_id)
         })
     }
 
@@ -15020,6 +15061,193 @@ mod guest_thread_stack_tests {
         assert_eq!(
             kernel.process_exit_code_for_handle(launch.process_handle),
             Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn switch_to_next_parked_child_skips_idle_blocked_get_message() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let mut kernel = CeKernel::boot(config);
+        let mut parent = UnicornMips::new()?;
+
+        let idle_thread = 3;
+        let idle_handle = 0x303;
+        let wait_id = kernel.register_blocked_waiter(
+            idle_thread,
+            idle_handle,
+            Vec::new(),
+            crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            },
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        let mut idle_child = UnicornMips::new()?;
+        idle_child.set_initial_thread_id(idle_thread);
+        idle_child.current_thread_id = idle_thread;
+        idle_child.blocked_guest_thread = Some(BlockedGuestThread {
+            wait_id,
+            thread_id: idle_thread,
+            thread_handle: idle_handle,
+            regs: MipsGuestContext::zero(),
+            return_pc: 0x0040_1000,
+            msg_ptr: 0x3000_0100,
+            hwnd: None,
+            min_msg: 0,
+            max_msg: 0,
+        });
+        parent.parked_child_processes.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\idle_child.exe".to_owned()),
+            process_handle: Some(0x333),
+            thread_handle: Some(idle_handle),
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 67,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: idle_thread,
+            cpu: Box::new(idle_child),
+            blocked_send_id: None,
+            module_base: 0x0040_0000,
+            module_path: "\\SDMMC Disk\\INavi\\idle_child.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(
+                r"D:\INAVI_Emulator\INAVI\INavi\idle_child.exe",
+            ),
+            command_line: String::new(),
+            current_directory: None,
+        });
+
+        let runnable_thread = 4;
+        let mut runnable_child = UnicornMips::new()?;
+        runnable_child.set_initial_thread_id(runnable_thread);
+        parent.parked_child_processes.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\runnable_child.exe".to_owned()),
+            process_handle: Some(0x444),
+            thread_handle: Some(0x404),
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 68,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: runnable_thread,
+            cpu: Box::new(runnable_child),
+            blocked_send_id: None,
+            module_base: 0x0080_0000,
+            module_path: "\\SDMMC Disk\\INavi\\runnable_child.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(
+                r"D:\INAVI_Emulator\INAVI\INavi\runnable_child.exe",
+            ),
+            command_line: String::new(),
+            current_directory: None,
+        });
+
+        assert!(parent.switch_to_next_parked_child_process(&mut kernel));
+        assert_eq!(kernel.current_process_id(), 68);
+        assert_eq!(
+            kernel.process_module_path(),
+            "\\SDMMC Disk\\INavi\\runnable_child.exe"
+        );
+        assert!(
+            parent
+                .parked_child_processes
+                .iter()
+                .any(|process| process.process_state.process_id == 67)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn switch_to_next_parked_child_prefers_expired_sleep_over_runnable_child() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let mut kernel = CeKernel::boot(config);
+        let mut parent = UnicornMips::new()?;
+
+        let runnable_thread = 4;
+        let mut runnable_child = UnicornMips::new()?;
+        runnable_child.set_initial_thread_id(runnable_thread);
+        parent.parked_child_processes.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\runnable_child.exe".to_owned()),
+            process_handle: Some(0x444),
+            thread_handle: Some(0x404),
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 68,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: runnable_thread,
+            cpu: Box::new(runnable_child),
+            blocked_send_id: None,
+            module_base: 0x0080_0000,
+            module_path: "\\SDMMC Disk\\INavi\\runnable_child.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(
+                r"D:\INAVI_Emulator\INAVI\INavi\runnable_child.exe",
+            ),
+            command_line: String::new(),
+            current_directory: None,
+        });
+
+        let sleeping_thread = 1;
+        let sleeping_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
+        let wait_started_ms = kernel.timers.tick_count().wrapping_sub(10);
+        let wait_id = kernel.register_blocked_waiter(
+            sleeping_thread,
+            sleeping_handle,
+            Vec::new(),
+            crate::ce::scheduler::SchedulerBlockedWaitKind::Sleep,
+            wait_started_ms,
+            1,
+        );
+        let mut sleeping_parent = UnicornMips::new()?;
+        sleeping_parent.set_initial_thread_id(sleeping_thread);
+        sleeping_parent.current_thread_id = sleeping_thread;
+        sleeping_parent
+            .blocked_wait_threads
+            .push(BlockedWaitThread {
+                wait_id,
+                thread_id: sleeping_thread,
+                thread_handle: sleeping_handle,
+                wait_handles: Vec::new(),
+                kind: BlockedWaitKind::Sleep,
+                wait_started_ms,
+                timeout_ms: 1,
+                regs: MipsGuestContext::zero(),
+                return_pc: 0x0005_4321,
+            });
+        parent.parked_child_processes.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned()),
+            process_handle: None,
+            thread_handle: None,
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 1,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: sleeping_thread,
+            cpu: Box::new(sleeping_parent),
+            blocked_send_id: None,
+            module_base: 0x0010_0000,
+            module_path: "\\SDMMC Disk\\INavi\\iNavi.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe"),
+            command_line: String::new(),
+            current_directory: None,
+        });
+
+        assert!(parent.switch_to_next_parked_child_process(&mut kernel));
+        assert_eq!(kernel.current_process_id(), 1);
+        assert_eq!(
+            kernel.process_module_path(),
+            "\\SDMMC Disk\\INavi\\iNavi.exe"
+        );
+        assert!(
+            parent
+                .parked_child_processes
+                .iter()
+                .any(|process| process.process_state.process_id == 68)
         );
 
         Ok(())

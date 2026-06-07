@@ -9,6 +9,22 @@
 
 ## Confirmed
 
+- Parked-process startup selection now treats expired finite waits as runnable
+  CE work instead of starving them behind runnable helper children. The previous
+  host probes could cycle `happyway_win.exe` / `iSearch.exe` while the parent
+  `iNavi.exe` sleep waiter had already expired, leaving the live host window on
+  the loading/frontier frame. `pop_next_runnable_parked_process` now first
+  selects priority-ready work (completed cross-process sends or pending
+  receiver sends), then selects only genuinely runnable processes, and
+  `parked_process_ready_wait_id` counts both signaled waits and timed-out waits.
+  Focused coverage:
+  `switch_to_next_parked_child_skips_idle_blocked_get_message` and
+  `switch_to_next_parked_child_prefers_expired_sleep_over_runnable_child`.
+  Fresh host validation with `--remote-server 192.168.0.39:8765` reached the
+  real map frame in `target\host_livecheck2.png` with the bottom
+  current-location bar visible; `TGNaviDlg` was created and later destroyed by
+  its own `0x19fe` 1500 ms timer, so route/search interaction still needs a
+  separate tap-driven trace before changing dialog behavior.
 - Added CE/eVC4 host utility sources under `host_progs`: `snip.cpp` captures the
   full screen into `\SDMMC Disk\SnipTool_<seconds since 2005-04-04>.bmp` by
   default and reports success/failure with `MessageBoxW`; `taskmgr.cpp`
