@@ -157,6 +157,13 @@
   `afxwnd42u` child-window creation/show, route dialog lifetime, and remaining
   sleep/timer waits. Do not force visibility or change route coordinates
   unless fresh traces show input routing regressed.
+- Route-search scheduler follow-up after `target\host_presenter_sendfix1_*`:
+  the later frozen-frame send gap is closed/watch. The fresh host run no longer
+  sits at `gwe=send:13 done:12`; queued sent messages now make parked receiver
+  processes and suspended receiver threads ready, and validation holds
+  `gwe=send:1 done:1` while the framebuffer advances. The remaining route
+  frontier is not that specific send deadlock; continue with the slow
+  guest-side resource/window-show path and visible chrome timing.
 - Route-search visibility frontier: continue from `target\route_pos1_*`.
   Evidence now says `iSearch.exe` starts and the route/control children are
   created, but they end hidden before any finished route chrome appears. Use

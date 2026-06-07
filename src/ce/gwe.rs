@@ -2732,6 +2732,16 @@ impl Gwe {
             .is_some_and(|sent| sent.flags & SMF_RESULT_READY != 0)
     }
 
+    pub fn has_pending_sent_message_for_thread(&self, thread_id: u32) -> bool {
+        self.sent_queues.get(&thread_id).is_some_and(|queue| {
+            queue.iter().any(|id| {
+                self.sent_messages
+                    .get(id)
+                    .is_some_and(|sent| sent.flags & SMF_RESULT_READY == 0)
+            })
+        })
+    }
+
     pub fn sent_message_ids_for_windows(&self, hwnds: &[u32]) -> Vec<u64> {
         self.sent_messages
             .iter()

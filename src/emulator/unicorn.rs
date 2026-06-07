@@ -1542,7 +1542,7 @@ impl UnicornMips {
     pub fn has_ready_parked_wait_unblock(&self, kernel: &CeKernel) -> bool {
         self.parked_child_processes
             .iter()
-            .any(|process| Self::parked_process_ready_wait_id(process, kernel).is_some())
+            .any(|process| Self::parked_process_has_ready_receiver_work(process, kernel))
     }
 
     #[cfg(not(feature = "unicorn"))]
@@ -1555,7 +1555,7 @@ impl UnicornMips {
         let Some(index) = self
             .parked_child_processes
             .iter()
-            .position(|process| Self::parked_process_ready_wait_id(process, kernel).is_some())
+            .position(|process| Self::parked_process_has_ready_receiver_work(process, kernel))
         else {
             return false;
         };
@@ -1686,6 +1686,23 @@ impl UnicornMips {
             let wait = kernel.blocked_waiter(blocked.wait_id)?;
             scheduler_blocked_wait_is_ready(wait, kernel).then_some(blocked.wait_id)
         })
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn parked_process_has_ready_receiver_work(parked: &ParkedProcess, kernel: &CeKernel) -> bool {
+        Self::parked_process_ready_wait_id(parked, kernel).is_some()
+            || kernel.thread_has_pending_sent_message(parked.cpu.current_thread_id)
+            || kernel.thread_has_pending_sent_message(parked.thread_id)
+            || parked
+                .cpu
+                .suspended_guest_thread
+                .as_ref()
+                .is_some_and(|thread| kernel.thread_has_pending_sent_message(thread.thread_id))
+            || parked
+                .cpu
+                .suspended_guest_thread_queue
+                .iter()
+                .any(|thread| kernel.thread_has_pending_sent_message(thread.thread_id))
     }
 
     fn switch_to_parked_process(
@@ -13962,6 +13979,80 @@ mod wait_scheduler_tests {
     }
 
     #[test]
+    fn timeslice_prefers_suspended_receiver_with_pending_sent_message() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let active_thread_id = 5;
+        let active_thread_handle = 0x105;
+        let older_suspended_thread_id = 6;
+        let receiver_thread_id = 1;
+        let receiver_thread_handle = 0x101;
+        let active_pc = 0x3333_0000_u32;
+        let receiver_pc = 0x4444_0000_u32;
+        let hwnd = kernel.create_window_ex_w(receiver_thread_id, "SEND_TARGET", "", None, 0, 0, 0);
+        let send_id = kernel
+            .begin_cross_thread_send_message_w(9, hwnd, crate::ce::gwe::WM_USER + 152, 1, 0, None)
+            .expect("queued send");
+
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(active_thread_id));
+        let suspended_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some(super::SuspendedGuestThread {
+                thread_id: older_suspended_thread_id,
+                thread_handle: Some(0x106),
+                regs: super::MipsGuestContext::zero(),
+                pc: 0x5555_0000,
+            })));
+        let suspended_queue =
+            std::rc::Rc::new(std::cell::RefCell::new(std::collections::VecDeque::from([
+                super::SuspendedGuestThread {
+                    thread_id: receiver_thread_id,
+                    thread_handle: Some(receiver_thread_handle),
+                    regs: super::MipsGuestContext::zero(),
+                    pc: receiver_pc,
+                },
+            ])));
+        let running_thread = std::rc::Rc::new(std::cell::RefCell::new(Some((
+            active_thread_id,
+            active_thread_handle,
+        ))));
+
+        assert!(kernel.gwe.sent_message(send_id).is_some());
+        assert!(super::try_timeslice_to_suspended_thread(
+            &kernel,
+            &mut uc,
+            active_thread_id,
+            active_pc,
+            &current_thread_id,
+            &suspended_thread,
+            &suspended_queue,
+            &running_thread,
+        ));
+
+        assert_eq!(*current_thread_id.borrow(), receiver_thread_id);
+        assert_eq!(
+            *running_thread.borrow(),
+            Some((receiver_thread_id, receiver_thread_handle))
+        );
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::PC).unwrap() as u32,
+            receiver_pc
+        );
+        assert_eq!(
+            suspended_thread.borrow().as_ref().unwrap().thread_id,
+            older_suspended_thread_id
+        );
+        let queue = suspended_queue.borrow();
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue[0].thread_id, active_thread_id);
+        assert_eq!(queue[0].thread_handle, Some(active_thread_handle));
+    }
+
+    #[test]
     fn user_kdata_page_exposes_current_thread_and_process_ids() {
         let page = super::user_kdata_page();
         let thread_offset = super::user_kdata_handle_address(super::SYS_HANDLE_CURRENT_THREAD)
@@ -14577,6 +14668,20 @@ fn pop_suspended_guest_thread(
 }
 
 #[cfg(feature = "unicorn")]
+fn pop_suspended_guest_thread_matching(
+    slot: &SuspendedGuestThreadSlot,
+    queue: &SuspendedGuestThreadQueue,
+    mut predicate: impl FnMut(&SuspendedGuestThread) -> bool,
+) -> Option<SuspendedGuestThread> {
+    if slot.borrow().as_ref().is_some_and(&mut predicate) {
+        return slot.borrow_mut().take();
+    }
+    let mut queue_ref = queue.borrow_mut();
+    let index = queue_ref.iter().position(predicate)?;
+    queue_ref.remove(index)
+}
+
+#[cfg(feature = "unicorn")]
 fn remove_suspended_guest_threads_for_thread(
     slot: &SuspendedGuestThreadSlot,
     queue: Option<&SuspendedGuestThreadQueue>,
@@ -14607,7 +14712,13 @@ fn try_timeslice_to_suspended_thread<D>(
     suspended_queue: &SuspendedGuestThreadQueue,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
 ) -> bool {
-    let Some(resume) = pop_suspended_guest_thread(suspended_thread, Some(suspended_queue)) else {
+    let Some(resume) =
+        pop_suspended_guest_thread_matching(suspended_thread, suspended_queue, |thread| {
+            thread.thread_id != active_thread_id
+                && kernel.thread_has_pending_sent_message(thread.thread_id)
+        })
+        .or_else(|| pop_suspended_guest_thread(suspended_thread, Some(suspended_queue)))
+    else {
         return false;
     };
     if resume.thread_id == active_thread_id {
@@ -15207,6 +15318,73 @@ mod guest_thread_stack_tests {
                 .iter()
                 .any(|process| process.process_state.process_id == 68)
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn rotate_to_ready_parked_process_with_pending_sent_receiver() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+        scheduler.set_initial_thread_id(4);
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 68,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        kernel.set_process_module_path("\\SDMMC Disk\\INavi\\iSearch.exe".to_owned());
+        kernel.set_process_module_host_path(std::path::PathBuf::from(
+            r"D:\INAVI_Emulator\INAVI\iSearch.exe",
+        ));
+
+        let parent_thread = 1;
+        let sender_thread = 9;
+        let hwnd = kernel.create_window_ex_w(parent_thread, "SEND_TARGET", "", None, 0, 0, 0);
+        let send_id = kernel
+            .begin_cross_thread_send_message_w(
+                sender_thread,
+                hwnd,
+                crate::ce::gwe::WM_USER + 151,
+                1,
+                0,
+                None,
+            )
+            .expect("queued send to parked receiver");
+
+        let mut parent_cpu = UnicornMips::new()?;
+        parent_cpu.set_initial_thread_id(parent_thread);
+        parent_cpu.current_thread_id = 5;
+        parent_cpu.suspended_guest_thread = Some(SuspendedGuestThread {
+            thread_id: parent_thread,
+            thread_handle: Some(0x101),
+            regs: MipsGuestContext::zero(),
+            pc: 0x0040_2000,
+        });
+        scheduler.parked_child_processes.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned()),
+            process_handle: None,
+            thread_handle: None,
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 1,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: parent_thread,
+            cpu: Box::new(parent_cpu),
+            blocked_send_id: None,
+            module_base: 0x0010_0000,
+            module_path: "\\SDMMC Disk\\INavi\\iNavi.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(r"D:\INAVI_Emulator\INAVI\iNavi.exe"),
+            command_line: "parent".to_owned(),
+            current_directory: None,
+        });
+
+        assert!(kernel.gwe.sent_message(send_id).is_some());
+        assert!(scheduler.has_ready_parked_wait_unblock(&kernel));
+        assert!(scheduler.rotate_to_ready_parked_wait(&mut kernel));
+        assert_eq!(kernel.current_process_id(), 1);
+        assert_eq!(scheduler.current_thread_id, 5);
 
         Ok(())
     }

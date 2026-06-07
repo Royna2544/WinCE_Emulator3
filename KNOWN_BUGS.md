@@ -12,6 +12,24 @@
 
 ## Recently Closed / Watch
 
+- Closed/watch: a later host-presenter frozen frame was caused by parked/
+  suspended receiver scheduling not treating queued nonqueued sends as ready
+  work.
+  - Symptom: the host window stayed responsive and CPU kept advancing, but the
+    frame hash froze while debug summaries showed `gwe=send:13 done:12` and a
+    blocked `SendMessageW` sender to main HWND `0x00020004`.
+  - Fix: pending sent-message queues are now visible through GWE/kernel,
+    parked-process readiness notices receiver threads with pending sent work,
+    and timeslice selection prefers a suspended receiver thread with pending
+    sent work before ordinary FIFO suspended-thread rotation.
+  - Validation: focused tests
+    `rotate_to_ready_parked_process_with_pending_sent_receiver` and
+    `timeslice_prefers_suspended_receiver_with_pending_sent_message` pass.
+    Mounted host validation `target\host_presenter_sendfix1_*` keeps
+    `gwe=send:1 done:1`; the frame hash later advances from the earlier frozen
+    value.
+  - Status: closed/watch. Remaining slow startup/resource work is a separate
+    route/UI frontier, not this send scheduler bug.
 - Open/watch: runtime `LoadLibraryW` / `LoadLibraryExW` maps normal dumped
   guest MIPS DLLs, but loader fidelity is still incomplete.
   - Symptom: the raw COREDLL-only helper path can still only return handles for

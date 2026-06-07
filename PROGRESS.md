@@ -9,6 +9,17 @@
 
 ## Confirmed
 
+- Parked-process and suspended-thread scheduling now treat queued nonqueued
+  `SendMessageW` work as receiver-ready CE work. A live host run had frozen
+  with `gwe=send:13 done:12` and thread 9 blocked on a send to the main iNavi
+  window while the receiver was not parked in `GetMessageW`; the fix exposes
+  pending sent-message state through GWE/kernel, lets parked-process readiness
+  notice pending receiver sends, and makes the intra-process timeslice selector
+  prefer a suspended receiver with queued sent work. Focused coverage:
+  `rotate_to_ready_parked_process_with_pending_sent_receiver` and
+  `timeslice_prefers_suspended_receiver_with_pending_sent_message`. Fresh host
+  validation `target\host_presenter_sendfix1_*` keeps `gwe=send:1 done:1` and
+  advances the framebuffer beyond the previous frozen frame with PID `20956`.
 - `SHGetSpecialFolderPath` now honors CE creation intent. The raw COREDLL path
   masks `CSIDL_FLAG_CREATE`, also respects the explicit `fCreate` parameter,
   creates missing mounted shell folders only when requested, and fails

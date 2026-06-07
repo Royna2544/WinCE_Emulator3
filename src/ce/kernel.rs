@@ -2380,6 +2380,10 @@ impl CeKernel {
         self.gwe.sent_message_result_ready(send_id)
     }
 
+    pub fn thread_has_pending_sent_message(&self, thread_id: u32) -> bool {
+        self.gwe.has_pending_sent_message_for_thread(thread_id)
+    }
+
     pub fn select_ready_blocked_waiter(
         &self,
         active_thread_id: u32,
