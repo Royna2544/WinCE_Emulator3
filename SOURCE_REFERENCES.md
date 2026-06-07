@@ -35,6 +35,15 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `jalr`. v3 now keeps COREDLL trap patching intact, then does a second
     external import pass after all loaded dumped DLL exports are known, so
     cross-DLL imports by name and ordinal resolve to the loaded DLL export VA.
+  - Runtime `LoadLibraryW` / `LoadLibraryExW(flags=0)` now uses the same
+    dumped-DLL byte source and CE-aware search order at the Unicorn import-trap
+    boundary. The first runtime slice maps/relocates normal MIPS DLL images,
+    recursively loads non-emulator dependencies, patches COREDLL imports to
+    trap slots, patches imports against already loaded guest DLL exports,
+    refreshes the live and persisted import trap page, and registers exports
+    with the kernel module table. TLS callbacks, `DllMain`, forwarded exports,
+    datafile loads, and `DONT_RESOLVE_DLL_REFERENCES` remain explicit open
+    gaps.
   - Host-presented probes of dumped `explorer.exe` using this same runtime DLL
     directory no longer fail on the old high-address trampoline from
     `0x00057108` to `0xffff832c`. After the COREDLL startup ordinal slice, the

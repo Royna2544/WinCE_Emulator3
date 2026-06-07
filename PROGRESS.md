@@ -31,6 +31,19 @@
   allocation and persisted-state hooks it needs. Focused
   `next_static_trap_base_*` and
   `refresh_import_trap_page_blob_replaces_existing_blob` coverage passes.
+- Runtime normal-code guest DLL loading has its first Unicorn import-trap path.
+  `LoadLibraryW` and `LoadLibraryExW(flags=0)` now search through the shared
+  CE-aware DLL search order, parse dumped MIPS PE DLLs, recursively load
+  non-emulator dependencies, relocate/map the image into guest memory, patch
+  COREDLL/WINSOCK/OLE imports to trap slots, patch external guest-DLL imports
+  against the kernel's loaded-module export snapshots, rewrite the live import
+  trap page, refresh the persisted trap blob, register PE resources/exports,
+  and record the module as dynamic with CE-style refcounts. Datafile and
+  `DONT_RESOLVE_DLL_REFERENCES` flags still fail explicitly, and TLS callbacks,
+  `DllMain` attach/detach, forwarded exports, and fuller runtime trampoline
+  handling remain open. Focused coverage passes for loaded-module export
+  snapshots, runtime occupied-range calculation, and the existing raw
+  `LoadLibraryExW` flag/refcount behavior.
 - `ExternalImportTable` now has a public `add_module_exports` path for
   already-loaded guest DLL metadata, not only `PeImage` startup inputs. This is
   the import-resolution surface the runtime loader will use after mapping a

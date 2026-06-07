@@ -16,20 +16,16 @@
   Unicorn import-trap boundary. The kernel-side module manager/refcount shape
   now exists and the shared CE-aware DLL search order is implemented for
   startup preload, child-process preload, and future runtime loads. The
-  remaining blocker is the Unicorn-owned runtime mapper itself:
-  `LoadLibraryW/LoadLibraryExW` still only reuse already registered modules and
-  do not yet synchronously map a new dumped MIPS DLL from
-  `D:\INAVI_Emulator\DUMPPLZ\Windows`. Implement PE map/relocate/import
-  patching, live Unicorn trap-page refresh, external guest-DLL import
-  resolution, export registration, TLS callbacks, and `DllMain` attach/detach
-  callouts. The live import hook now has a mutable/persisted trap table,
-  static slot allocation preserves the dynamic COREDLL proc range, and the
-  persisted `ce-import-traps` blob can be refreshed in place. The next mapper
-  step should map the DLL, patch imports starting from
-  `next_static_trap_base(...)`, merge the new traps, write the refreshed page
-  into live Unicorn memory, and register exports through
-  `ExternalImportTable::add_module_exports`. Keep `C:\WINCE600` as the
-  behavior reference and update `PLAN.MD` after each port.
+  remaining blocker is completing the Unicorn-owned runtime mapper:
+  `LoadLibraryW/LoadLibraryExW(flags=0)` now synchronously maps dumped MIPS
+  DLLs from `D:\INAVI_Emulator\DUMPPLZ\Windows`, relocates them, recursively
+  loads non-emulator dependencies, patches imports, rewrites the live trap
+  page, registers resources/exports, and records dynamic module refcounts.
+  Next loader work should add a direct runtime fixture with a guest DLL export
+  call, then implement forwarded exports, TLS callbacks, and `DllMain`
+  attach/detach callouts. Datafile and `DONT_RESOLVE_DLL_REFERENCES` loads
+  still fail explicitly until CE-like support is implemented. Keep
+  `C:\WINCE600` as the behavior reference and update `PLAN.MD` after each port.
 - COREDLL fallback audit follow-up: stubs now carry audit classification plus
   raw import-trap context with thread id, caller PC, and trap PC. Next, add the
   remaining owning-module context where available and make

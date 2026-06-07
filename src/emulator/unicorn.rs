@@ -16,7 +16,11 @@ use crate::{
     error::{Error, Result},
     pe::PeImage,
 };
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    rc::Rc,
+};
 #[cfg(feature = "unicorn")]
 use unicorn_engine::RegisterMIPS;
 
@@ -1864,13 +1868,13 @@ impl UnicornMips {
     pub fn load_pe_image_with_dlls(&mut self, image: &PeImage, dlls: &[PeImage]) -> Result<()> {
         let mut external = ExternalImportTable::default();
         let mut loaded_dlls = Vec::new();
-        #[cfg(feature = "unicorn")]
-        let mut trampoline_blobs: Vec<(String, u32, Vec<u8>)> = Vec::new();
         let mut next_dll_base = 0x6000_0000u32;
-        #[cfg(feature = "unicorn")]
-        let mut next_trampoline_base = EXTERNAL_TRAMPOLINE_BASE;
         let mut next_trap_base = IMPORT_TRAP_BASE;
         let mut image_occupancy = image.mapped_image()?;
+        #[cfg(feature = "unicorn")]
+        let mut trampoline_blobs: Vec<(String, u32, Vec<u8>)> = Vec::new();
+        #[cfg(feature = "unicorn")]
+        let mut next_trampoline_base = EXTERNAL_TRAMPOLINE_BASE;
         #[cfg(feature = "unicorn")]
         {
             let _ = patch_mips_unicorn_trampolines(
@@ -3103,6 +3107,10 @@ impl UnicornMips {
         let mapped_kernel_memory =
             Rc::new(RefCell::new(KernelMemoryMappings::new(&self.mapped_blobs)));
         let mapped_kernel_memory_hook = Rc::clone(&mapped_kernel_memory);
+        let memory_map_ptr = &mut self.memory as *mut MemoryMap;
+        let loaded_modules_ptr = &mut self.loaded_modules as *mut Vec<LoadedPeModuleInfo>;
+        let resource_strings_ptr = &mut self.resource_strings as *mut Vec<MappedResourceString>;
+        let resources_ptr = &mut self.resources as *mut Vec<MappedResource>;
         let mapped_blobs_ptr = &mut self.mapped_blobs as *mut Vec<MappedBlob>;
         uc.add_code_hook(
             u64::from(IMPORT_TRAP_BASE),
@@ -3981,6 +3989,33 @@ impl UnicornMips {
                 }) {
                     return;
                 }
+                if let Some(result) = trap.as_ref().and_then(|trap| {
+                    try_handle_runtime_load_library_import(
+                        memory.uc,
+                        unsafe { &mut *kernel_ptr },
+                        unsafe { &mut *memory_map_ptr },
+                        unsafe { &mut *mapped_blobs_ptr },
+                        unsafe { &mut *loaded_modules_ptr },
+                        unsafe { &mut *resource_strings_ptr },
+                        unsafe { &mut *resources_ptr },
+                        &traps,
+                        &process_dll_search_dirs,
+                        active_thread_id,
+                        trap,
+                        &args,
+                    )
+                }) {
+                    let _ = memory.uc.reg_write(RegisterMIPS::V0, u64::from(result));
+                    if let Some(import) = last_imports_hook
+                        .borrow_mut()
+                        .iter_mut()
+                        .rev()
+                        .find(|import| import.pc == address && import.result.is_none())
+                    {
+                        import.result = Some(result);
+                    }
+                    return;
+                }
                 let caller_pc = read_mips_reg(memory.uc, RegisterMIPS::RA);
                 let Some(import_return) = traps
                     .borrow()
@@ -4772,7 +4807,7 @@ fn loaded_module_info(image: &PeImage, load_base: u32) -> LoadedPeModuleInfo {
         guest_path: None,
         host_path: Some(std::path::PathBuf::from(&image.path)),
         image_size: image.optional_header.size_of_image,
-        entry_point: image.entry_point_va(),
+        entry_point: load_base.wrapping_add(image.optional_header.address_of_entry_point),
         dependencies: image
             .imports
             .iter()
@@ -5751,6 +5786,320 @@ fn refresh_import_trap_page_blob(mapped_blobs: &mut Vec<MappedBlob>, traps: &Imp
             bytes: trap_page,
         });
     }
+}
+
+#[cfg(feature = "unicorn")]
+const RUNTIME_DLL_LOAD_BASE: u32 = 0x1000_0000;
+#[cfg(feature = "unicorn")]
+const RUNTIME_LOAD_LIBRARY_AS_DATAFILE: u32 = 0x0000_0002;
+#[cfg(feature = "unicorn")]
+const RUNTIME_DONT_RESOLVE_DLL_REFERENCES: u32 = 0x0000_0001;
+#[cfg(feature = "unicorn")]
+const RUNTIME_COREDLL_MODULE_HANDLE: u32 = 0x7000_0001;
+
+#[cfg(feature = "unicorn")]
+fn try_handle_runtime_load_library_import<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    kernel: &mut CeKernel,
+    memory_map: &mut MemoryMap,
+    mapped_blobs: &mut Vec<MappedBlob>,
+    loaded_modules: &mut Vec<LoadedPeModuleInfo>,
+    resource_strings: &mut Vec<MappedResourceString>,
+    resources: &mut Vec<MappedResource>,
+    traps: &Rc<RefCell<ImportTrapTable>>,
+    search_dirs: &[std::path::PathBuf],
+    thread_id: u32,
+    trap: &ImportTrap,
+    args: &[u32],
+) -> Option<u32> {
+    if trap.module_kind != crate::emulator::imports::ImportModuleKind::Coredll {
+        return None;
+    }
+    let ordinal = trap.ordinal?;
+    let is_load_library_w = ordinal == crate::ce::coredll_ordinals::ORD_LOAD_LIBRARY_W;
+    let is_load_library_ex_w = ordinal == crate::ce::coredll_ordinals::ORD_LOAD_LIBRARY_EX_W;
+    if !is_load_library_w && !is_load_library_ex_w {
+        return None;
+    }
+
+    let flags = if is_load_library_ex_w {
+        args.get(2).copied().unwrap_or(0)
+    } else {
+        0
+    };
+    let name_ptr = args.first().copied().unwrap_or(0);
+    let Some(module_name) = read_unicorn_wide_z(uc, name_ptr, 260) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, crate::ce::thread::ERROR_INVALID_PARAMETER);
+        return Some(0);
+    };
+    let normalized = normalize_module_name(&module_name);
+    if normalized == "coredll" {
+        kernel.threads.set_last_error(thread_id, 0);
+        return Some(RUNTIME_COREDLL_MODULE_HANDLE);
+    }
+    if flags & !(RUNTIME_DONT_RESOLVE_DLL_REFERENCES | RUNTIME_LOAD_LIBRARY_AS_DATAFILE) != 0
+        || flags != 0
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, crate::ce::thread::ERROR_NOT_SUPPORTED);
+        return Some(0);
+    }
+    if let Some(handle) = kernel.retain_loaded_module_by_name(&module_name) {
+        kernel.threads.set_last_error(thread_id, 0);
+        return Some(handle);
+    }
+
+    let Some(path) = resolve_dll_path(&module_name, Some(kernel), search_dirs) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, crate::ce::thread::ERROR_FILE_NOT_FOUND);
+        return Some(0);
+    };
+    let mut loading = BTreeSet::new();
+    match runtime_load_guest_dll_from_path(
+        uc,
+        kernel,
+        memory_map,
+        mapped_blobs,
+        loaded_modules,
+        resource_strings,
+        resources,
+        traps,
+        search_dirs,
+        &path,
+        &mut loading,
+    ) {
+        Ok(handle) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(handle)
+        }
+        Err(err) => {
+            tracing::warn!(
+                target: "ce.loader",
+                module = module_name.as_str(),
+                path = %path.display(),
+                error = %err,
+                "runtime LoadLibraryW failed"
+            );
+            kernel
+                .threads
+                .set_last_error(thread_id, crate::ce::thread::ERROR_NOT_SUPPORTED);
+            Some(0)
+        }
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn runtime_load_guest_dll_from_path<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    kernel: &mut CeKernel,
+    memory_map: &mut MemoryMap,
+    mapped_blobs: &mut Vec<MappedBlob>,
+    loaded_modules: &mut Vec<LoadedPeModuleInfo>,
+    resource_strings: &mut Vec<MappedResourceString>,
+    resources: &mut Vec<MappedResource>,
+    traps: &Rc<RefCell<ImportTrapTable>>,
+    search_dirs: &[std::path::PathBuf],
+    path: &std::path::Path,
+    loading: &mut BTreeSet<String>,
+) -> Result<u32> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_owned();
+    let normalized = normalize_module_name(&file_name);
+    if let Some(handle) = kernel.retain_loaded_module_by_name(&file_name) {
+        return Ok(handle);
+    }
+    if !loading.insert(normalized.clone()) {
+        return Err(Error::InvalidArgument(format!(
+            "cyclic runtime DLL dependency: {file_name}"
+        )));
+    }
+
+    let image = PeImage::inspect(path)?;
+    for descriptor in &image.imports {
+        let dependency_name = normalize_module_name(&descriptor.module_name);
+        if emulator_provided_import_module(&dependency_name)
+            || kernel
+                .loaded_module_handle(&descriptor.module_name)
+                .is_some()
+        {
+            continue;
+        }
+        let dependency_path = resolve_dll_path(&descriptor.module_name, Some(kernel), search_dirs)
+            .ok_or_else(|| Error::MissingImportDll {
+                dll: descriptor.module_name.clone(),
+            })?;
+        runtime_load_guest_dll_from_path(
+            uc,
+            kernel,
+            memory_map,
+            mapped_blobs,
+            loaded_modules,
+            resource_strings,
+            resources,
+            traps,
+            search_dirs,
+            &dependency_path,
+            loading,
+        )?;
+    }
+
+    let dll_size = align_up_4k(image.optional_header.size_of_image)?;
+    let mut next_dll_base = RUNTIME_DLL_LOAD_BASE;
+    let preferred_base = if image.image_base() < GUEST_HEAP_ARENA_BASE {
+        image.image_base()
+    } else {
+        RUNTIME_DLL_LOAD_BASE
+    };
+    let load_base = choose_dll_load_base(
+        preferred_base,
+        dll_size,
+        &runtime_occupied_ranges(memory_map, mapped_blobs),
+        &mut next_dll_base,
+    )?;
+    let mut mapped = image.mapped_image_at(load_base)?;
+    let external = external_imports_from_loaded_modules(kernel);
+    let next_trap_base = traps
+        .borrow()
+        .next_static_trap_base(RESERVED_IMPORT_TRAP_STUB_BYTES)?;
+    let new_traps = patch_pe_imports(
+        &image,
+        &mut mapped,
+        &crate::ce::coredll::CoredllExportTable::default(),
+        next_trap_base,
+        &external,
+    )?;
+    let mapped_size = align_up_4k(mapped.len() as u32)?;
+    let label = format!("dll:{}", path.display());
+    memory_map.map(
+        load_base,
+        mapped_size,
+        MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC,
+        &label,
+    )?;
+    uc.mem_map(
+        u64::from(load_base),
+        u64::from(mapped_size),
+        unicorn_perms(MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC),
+    )
+    .map_err(|err| Error::Backend(format!("map runtime DLL {label}: {err:?}")))?;
+    uc.mem_write(u64::from(load_base), &mapped)
+        .map_err(|err| Error::Backend(format!("write runtime DLL {label}: {err:?}")))?;
+
+    {
+        let mut trap_table = traps.borrow_mut();
+        trap_table.merge(new_traps);
+        let trap_page = import_trap_code_page(&trap_table);
+        uc.mem_write(u64::from(IMPORT_TRAP_BASE), &trap_page)
+            .map_err(|err| Error::Backend(format!("rewrite import trap page: {err:?}")))?;
+        refresh_import_trap_page_blob(mapped_blobs, &trap_table);
+    }
+
+    let mut module_info = loaded_module_info(&image, load_base);
+    module_info.name = file_name.clone();
+    module_info.guest_path = kernel.host_path_to_guest_mount(path);
+    module_info.host_path = Some(path.to_path_buf());
+    module_info.dynamic = true;
+    register_runtime_module_with_kernel(kernel, &module_info);
+    loaded_modules.push(module_info);
+    register_runtime_resources(&image, load_base, resource_strings, resources)?;
+    mapped_blobs.push(MappedBlob {
+        name: label,
+        base: load_base,
+        bytes: mapped,
+    });
+    Ok(load_base)
+}
+
+#[cfg(feature = "unicorn")]
+fn runtime_occupied_ranges(memory_map: &MemoryMap, mapped_blobs: &[MappedBlob]) -> Vec<(u32, u32)> {
+    let mut ranges: Vec<(u32, u32)> = memory_map
+        .regions()
+        .map(|region| (region.base, region.size))
+        .collect();
+    for blob in mapped_blobs {
+        if let Ok(size) = u32::try_from(blob.bytes.len()) {
+            ranges.push((blob.base, size.saturating_add(0xfff) & !0xfff));
+        }
+    }
+    ranges
+}
+
+#[cfg(feature = "unicorn")]
+fn external_imports_from_loaded_modules(kernel: &CeKernel) -> ExternalImportTable {
+    let mut external = ExternalImportTable::default();
+    for module in kernel.loaded_module_export_snapshots() {
+        external.add_module_exports(
+            &module.name,
+            module.base,
+            module.exports_by_name,
+            module.exports_by_ordinal,
+        );
+    }
+    external
+}
+
+#[cfg(feature = "unicorn")]
+fn register_runtime_module_with_kernel(kernel: &mut CeKernel, module: &LoadedPeModuleInfo) {
+    kernel.register_loaded_module_with_metadata(
+        module.name.clone(),
+        module.base,
+        module
+            .exports_by_name
+            .iter()
+            .map(|(name, address)| (name.clone(), *address))
+            .collect::<BTreeMap<_, _>>(),
+        module
+            .exports_by_ordinal
+            .iter()
+            .map(|(ordinal, address)| (*ordinal, *address))
+            .collect::<BTreeMap<_, _>>(),
+        crate::ce::kernel::LoadedModuleMetadata {
+            guest_path: module.guest_path.clone(),
+            host_path: module.host_path.clone(),
+            image_size: module.image_size,
+            entry_point: module.entry_point,
+            dependencies: module.dependencies.clone(),
+            tls_callbacks: module.tls_callbacks.clone(),
+            ref_count: 1,
+            load_flags: 0,
+            dynamic: true,
+        },
+    );
+}
+
+#[cfg(feature = "unicorn")]
+fn register_runtime_resources(
+    image: &PeImage,
+    load_base: u32,
+    resource_strings: &mut Vec<MappedResourceString>,
+    resources: &mut Vec<MappedResource>,
+) -> Result<()> {
+    for string in image.resource_strings()? {
+        resource_strings.push(MappedResourceString {
+            module: load_base,
+            id: string.id,
+            text: string.text,
+            data_ptr: Some(load_base.wrapping_add(string.data_rva)),
+        });
+    }
+    for resource in image.resource_data_entries()? {
+        resources.push(MappedResource {
+            module: load_base,
+            name: resource.name,
+            name_string: resource.name_string,
+            kind: resource.kind,
+            data_ptr: load_base.wrapping_add(resource.data_rva),
+            size: resource.size,
+        });
+    }
+    Ok(())
 }
 
 #[cfg(feature = "unicorn")]
@@ -21237,6 +21586,29 @@ mod unicorn_tests {
             &0x03e0_0008u32.to_le_bytes()
         );
         assert!(blobs.iter().any(|blob| blob.name == "other"));
+    }
+
+    #[test]
+    fn runtime_occupied_ranges_include_memory_regions_and_blobs() {
+        let mut memory = crate::emulator::memory::MemoryMap::default();
+        memory
+            .map(
+                0x1000_0000,
+                0x0000_2000,
+                crate::emulator::memory::MemoryPerms::READ,
+                "existing",
+            )
+            .unwrap();
+        let blobs = vec![super::MappedBlob {
+            name: "dll:later.dll".to_owned(),
+            base: 0x2000_1000,
+            bytes: vec![0; 0x1800],
+        }];
+
+        let ranges = super::runtime_occupied_ranges(&memory, &blobs);
+
+        assert!(ranges.contains(&(0x1000_0000, 0x0000_2000)));
+        assert!(ranges.contains(&(0x2000_1000, 0x0000_2000)));
     }
 
     #[test]

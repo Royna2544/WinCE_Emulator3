@@ -159,6 +159,14 @@ pub struct LoadedModuleSnapshot {
     pub host_path: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadedModuleExportSnapshot {
+    pub name: String,
+    pub base: u32,
+    pub exports_by_name: BTreeMap<String, u32>,
+    pub exports_by_ordinal: BTreeMap<u32, u32>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FreeLibraryResult {
     InvalidHandle,
@@ -458,6 +466,19 @@ impl CeKernel {
                 unload_pending: module.unload_pending,
                 guest_path: module.guest_path.clone(),
                 host_path: module.host_path.clone(),
+            })
+            .collect()
+    }
+
+    pub fn loaded_module_export_snapshots(&self) -> Vec<LoadedModuleExportSnapshot> {
+        self.loaded_modules
+            .values()
+            .filter(|module| !module.unload_pending)
+            .map(|module| LoadedModuleExportSnapshot {
+                name: module.name.clone(),
+                base: module.base,
+                exports_by_name: module.exports_by_name.clone(),
+                exports_by_ordinal: module.exports_by_ordinal.clone(),
             })
             .collect()
     }
@@ -3965,6 +3986,44 @@ mod tests {
         },
         config::RuntimeConfig,
     };
+
+    #[test]
+    fn loaded_module_export_snapshots_skip_unload_pending_modules() -> Result<()> {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let mut kernel = CeKernel::boot(config);
+        let mut exports_by_name = BTreeMap::new();
+        exports_by_name.insert("NamedExport".to_owned(), 0x1000_1234);
+        let mut exports_by_ordinal = BTreeMap::new();
+        exports_by_ordinal.insert(7, 0x1000_5678);
+        kernel.register_loaded_module_with_metadata(
+            "dynamic.dll",
+            0x1000_0000,
+            exports_by_name,
+            exports_by_ordinal,
+            LoadedModuleMetadata {
+                dynamic: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            kernel.release_loaded_module(0x1000_0000),
+            FreeLibraryResult::UnloadPending
+        );
+
+        kernel.register_loaded_module(
+            "still_loaded.dll",
+            0x2000_0000,
+            BTreeMap::from([("Visible".to_owned(), 0x2000_0100)]),
+            BTreeMap::from([(3, 0x2000_0200)]),
+        );
+
+        let snapshots = kernel.loaded_module_export_snapshots();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].name, "still_loaded.dll");
+        assert_eq!(snapshots[0].exports_by_name["visible"], 0x2000_0100);
+        assert_eq!(snapshots[0].exports_by_ordinal[&3], 0x2000_0200);
+        Ok(())
+    }
 
     #[test]
     fn destroy_cleanup_clears_dead_active_without_posting_inactive_app_window() -> Result<()> {
