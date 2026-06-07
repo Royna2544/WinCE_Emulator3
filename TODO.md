@@ -12,8 +12,7 @@
 
 ## Current Slice
 
-- Queued runtime loader gaps from `PLAN.MD`: add focused TLS-callback fixture
-  coverage and verify callback invocation; call detach callbacks/
+- Queued runtime loader gaps from `PLAN.MD`: call detach callbacks/
   `DllMain(DLL_PROCESS_DETACH)` on final
   `FreeLibrary`; implement forwarded exports; implement
   `DONT_RESOLVE_DLL_REFERENCES`; implement datafile/resource-style
@@ -29,10 +28,10 @@
   loads non-emulator dependencies, patches imports, rewrites the live trap
   page, registers resources/exports, records dynamic module refcounts, parses
   TLS callback addresses into module metadata, and invokes guest
-  `DllMain(DLL_PROCESS_ATTACH)` before returning from normal loads. The direct
-  and dependent runtime guest-DLL fixtures now pass with eVC-built MIPS bytes
-  and assert attach counts; next loader work should implement forwarded
-  exports, TLS callback fixture coverage, and `DllMain`/TLS detach callouts.
+  TLS callbacks and `DllMain(DLL_PROCESS_ATTACH)` before returning from normal
+  loads. The direct, dependent, and TLS runtime guest-DLL fixtures now pass
+  with eVC-built MIPS bytes and assert attach/TLS ordering; next loader work
+  should implement forwarded exports and `DllMain`/TLS detach callouts.
   Datafile and
   `DONT_RESOLVE_DLL_REFERENCES` loads still fail explicitly until CE-like
   support is implemented. Keep

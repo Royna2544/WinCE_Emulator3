@@ -13,16 +13,21 @@
   returning from `LoadLibraryW` / `LoadLibraryExW(flags=0)`. The PE parser reads
   the TLS directory callback table into loaded-module metadata, and the Unicorn
   import-trap path queues dependency-order lifecycle callouts through a
-  reserved return stub. The implemented lifecycle slice invokes guest
-  `DllMain(hinst, DLL_PROCESS_ATTACH, 0)` for newly mapped normal-code DLLs,
-  preserves the importing thread registers around the callout, and returns the
-  module handle only after attach completes. Focused eVC fixtures now assert
+  reserved return stub. The implemented lifecycle slice invokes guest TLS
+  callbacks and then `DllMain(hinst, DLL_PROCESS_ATTACH, 0)` for newly mapped
+  normal-code DLLs, preserves the importing thread registers around the
+  callout, and returns the module handle only after attach completes. Focused
+  eVC fixtures now assert
   exactly one attach for `171_loadlibrary_guest_dll` across handle reuse and
   exactly one attach for both dependency and dependent DLLs in
-  `172_loadlibrary_dependent_guest_dll`. Focused PE/TLS parser coverage and the
-  full `cargo test --features unicorn,trace,win32-desktop` suite pass. TLS
-  callback execution fixtures, detach callouts, forwarded exports, datafile
-  loads, and no-resolve loads remain queued.
+  `172_loadlibrary_dependent_guest_dll`. The new
+  `173_loadlibrary_tls_callback` fixture uses an eVC-built MIPS DLL with a
+  real PE TLS directory (`TLSTableRVA=0x2000`, size `0x18`) and proves the TLS
+  callback executes before `DllMain` by checking the order word `0x0102`.
+  Focused PE/TLS parser coverage and the full
+  `cargo test --features unicorn,trace,win32-desktop` suite pass. Detach
+  callouts, forwarded exports, datafile loads, and no-resolve loads remain
+  queued.
 - eVC fixture infrastructure now supports fixture-local runtime DLLs under
   `tests\test_progs\<fixture>\dlls\<dll-name>\`. The runner discovers `.cpp`,
   `.rc`, and optional `.def` files, links each DLL with an import library,
@@ -86,9 +91,9 @@
   against the kernel's loaded-module export snapshots, rewrite the live import
   trap page, refresh the persisted trap blob, register PE resources/exports,
   and record the module as dynamic with CE-style refcounts. Datafile and
-  `DONT_RESOLVE_DLL_REFERENCES` flags still fail explicitly. TLS callback
-  execution fixture coverage, `DllMain`/TLS detach, forwarded exports, and
-  fuller runtime trampoline handling remain open. Focused coverage passes for loaded-module export
+  `DONT_RESOLVE_DLL_REFERENCES` flags still fail explicitly. `DllMain`/TLS
+  detach, forwarded exports, and fuller runtime trampoline handling remain
+  open. Focused coverage passes for loaded-module export
   snapshots, runtime occupied-range calculation, and the existing raw
   `LoadLibraryExW` flag/refcount behavior.
 - `ExternalImportTable` now has a public `add_module_exports` path for

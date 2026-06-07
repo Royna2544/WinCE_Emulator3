@@ -32,11 +32,11 @@
     non-emulator dependencies, patches imports, rewrites the live trap page,
     refreshes the persisted `ce-import-traps` blob, registers resources, and
     publishes exports into the kernel module table.
-  - Required fix: finish forwarded export resolution, focused TLS callback
-    execution coverage, `DllMain`/TLS detach on final `FreeLibrary`,
-    datafile/no-resolve load modes, and fuller runtime trampoline handling.
-    Guest `DllMain(DLL_PROCESS_ATTACH)` is now implemented and covered by the
-    direct and dependent eVC runtime-DLL fixtures.
+  - Required fix: finish forwarded export resolution, `DllMain`/TLS detach on
+    final `FreeLibrary`, datafile/no-resolve load modes, and fuller runtime
+    trampoline handling. Guest TLS callbacks and
+    `DllMain(DLL_PROCESS_ATTACH)` are now implemented and covered by direct,
+    dependent, and TLS eVC runtime-DLL fixtures.
   - Status: open/watch. Normal code-DLL mapping and attach are started; do not
     treat this as complete CE loader fidelity until the remaining lifecycle and
     load-mode gaps close.

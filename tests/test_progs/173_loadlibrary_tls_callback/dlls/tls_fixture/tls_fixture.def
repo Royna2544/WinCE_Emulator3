@@ -1,0 +1,6 @@
+LIBRARY tls_fixture
+
+EXPORTS
+    TlsCallbackCount @3
+    TlsAttachCount @4
+    TlsOrderWord @5
