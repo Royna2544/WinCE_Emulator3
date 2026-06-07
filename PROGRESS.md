@@ -99,11 +99,19 @@
   MIPS DLLs.
 - The latest attachment audit has been merged into `PLAN.MD`/`TODO.md` as
   explicit queued fidelity work: raw/non-Unicorn loader alignment, core-vs-guest
-  DLL boundary diagnostics, actionable must-implement stub hits,
+  DLL boundary diagnostics, actionable must-implement stub hits, richer
   `SHGetFileInfo`, popup menus, modal `MessageBoxW`, shell special-folder
   fallback policy, notification APIs, shell namespace/storage presentation,
   file-change notifications, input/IME/caret/clipboard, and full
   `SendMessageTimeout` semantics.
+- `SHGetFileInfo` now has a registry-backed raw COREDLL implementation instead
+  of a must-implement stub fallback. The first slice handles Unicode paths,
+  `SHGFI_USEFILEATTRIBUTES`, display names, type names from HKCR class
+  descriptions, attributes including `SHGFI_ATTR_SPECIFIED`, default icon
+  location parsing from `HKCR\<class>\DefaultIcon`, stable system icon indexes,
+  and generic icon handles. The focused raw shell test
+  `sh_get_file_info_uses_registry_associations_and_attributes` passes; real
+  icon extraction/image-list ownership remains queued.
 - Runtime guest-DLL loading now has a shared CE-aware search helper in
   `emulator::dll_search`, replacing duplicate private startup/child-process
   search logic. It resolves exact mounted CE paths first, then the active

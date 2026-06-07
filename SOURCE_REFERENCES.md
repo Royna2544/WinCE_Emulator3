@@ -344,7 +344,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     access validation. `shellapi.h` anchors the CE CSIDL values used by
     `SHGetSpecialFolderPath`; v3 consults
     `HKLM\System\Explorer\Shell Folders` first and uses CE-shaped fallbacks
-    when the dump lacks those values. `strsafe.h` anchors the `StringCch*`
+    when the dump lacks those values. The same `shellapi.h` `SHFILEINFO`
+    layout and `SHGFI_*` flags anchor the first `SHGetFileInfo` slice: v3
+    reads HKCR extension classes/default icons, writes display/type/attribute
+    metadata, and returns explicit generic icon handles/indexes until real CE
+    icon extraction/image-list behavior is ported. `strsafe.h` anchors the
+    `StringCch*`
     character-count and `StringCb*` byte-count distinction plus truncation
     HRESULTs. `winuser.h` anchors the icon/cursor signatures; v3 currently
     has lightweight synthetic stock icon handles and `DestroyIcon` validation

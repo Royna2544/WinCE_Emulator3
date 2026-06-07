@@ -23,11 +23,11 @@ use wince_emulation_v3::{
             ORD_PURGE_COMM, ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY,
             ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD, ORD_SET_COMM_MASK,
             ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
-            ORD_SHELL_EXECUTE_EX, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SLEEP, ORD_SLEEP_TILL_TICK,
-            ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS,
-            ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION,
-            ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_MULTIPLE_OBJECTS, ORD_WAIT_FOR_SINGLE_OBJECT,
-            ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE,
+            ORD_SHELL_EXECUTE_EX, ORD_SHGET_FILE_INFO, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SLEEP,
+            ORD_SLEEP_TILL_TICK, ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME,
+            ORD_TERMINATE_PROCESS, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
+            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_MULTIPLE_OBJECTS,
+            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE,
         },
         devices::CommDcb,
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
@@ -2027,6 +2027,87 @@ fn shell_execute_ex_resolves_registry_association_and_queues_process() -> Result
     );
 
     let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
+    const SHFILEINFO_SIZE_W: u32 = 692;
+    const SHFILEINFO_IICON_OFFSET: u32 = 4;
+    const SHFILEINFO_ATTRIBUTES_OFFSET: u32 = 8;
+    const SHFILEINFO_DISPLAY_NAME_OFFSET: u32 = 12;
+    const SHFILEINFO_TYPE_NAME_OFFSET: u32 = 532;
+    const SHGFI_DISPLAYNAME: u32 = 0x0000_0200;
+    const SHGFI_TYPENAME: u32 = 0x0000_0400;
+    const SHGFI_ATTRIBUTES: u32 = 0x0000_0800;
+    const SHGFI_ICONLOCATION: u32 = 0x0000_1000;
+    const SHGFI_USEFILEATTRIBUTES: u32 = 0x0000_0010;
+    const FILE_ATTRIBUTE_ARCHIVE: u32 = 0x0000_0020;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    kernel
+        .registry
+        .set_value(r"HKCR\.nav", "", RegistryValue::string("navfile"));
+    kernel
+        .registry
+        .set_value(r"HKCR\navfile", "", RegistryValue::string("Route Plan"));
+    kernel.registry.set_value(
+        r"HKCR\navfile\DefaultIcon",
+        "",
+        RegistryValue::string(r"\Windows\navicons.dll,-7"),
+    );
+
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 45;
+    let path_ptr = 0x2_4000;
+    let info_ptr = 0x2_5000;
+    memory.map_halfwords(path_ptr, 64);
+    memory.write_wide_z(path_ptr, r"\Docs\morning.nav");
+    memory.map_words(info_ptr, SHFILEINFO_SIZE_W / 4);
+    memory.map_halfwords(info_ptr + SHFILEINFO_DISPLAY_NAME_OFFSET, 260);
+    memory.map_halfwords(info_ptr + SHFILEINFO_TYPE_NAME_OFFSET, 80);
+
+    let ret = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SHGET_FILE_INFO,
+        [
+            path_ptr,
+            FILE_ATTRIBUTE_ARCHIVE,
+            info_ptr,
+            SHFILEINFO_SIZE_W,
+            SHGFI_USEFILEATTRIBUTES
+                | SHGFI_DISPLAYNAME
+                | SHGFI_TYPENAME
+                | SHGFI_ATTRIBUTES
+                | SHGFI_ICONLOCATION,
+        ],
+    );
+    assert!(matches!(
+        ret,
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(info_ptr + SHFILEINFO_ATTRIBUTES_OFFSET)?,
+        FILE_ATTRIBUTE_ARCHIVE
+    );
+    assert_eq!(memory.read_i32(info_ptr + SHFILEINFO_IICON_OFFSET)?, -7);
+    assert_eq!(
+        memory.read_wide_z(info_ptr + SHFILEINFO_DISPLAY_NAME_OFFSET, 260),
+        r"\Windows\navicons.dll"
+    );
+    assert_eq!(
+        memory.read_wide_z(info_ptr + SHFILEINFO_TYPE_NAME_OFFSET, 80),
+        "Route Plan"
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
     Ok(())
 }
 

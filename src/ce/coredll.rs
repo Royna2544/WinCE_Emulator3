@@ -10,8 +10,7 @@ use crate::{
         coredll_ordinals::{self, *},
         crt,
         devices::{CommDcb, CommTimeouts, DeviceIoControlResult},
-        file::FileIoResult,
-        file::FindData,
+        file::{FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FileIoResult, FindData},
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat},
         gwe::{
             GWL_STYLE, Message, MessagePointerPayload, PeekFlags, Point, Rect, WNDCLASSW_SIZE,
@@ -87,6 +86,28 @@ const SHELLEXECUTEINFO_HPROCESS_OFFSET: u32 = 56;
 const SHELL_EXECUTE_SUCCESS: u32 = 33;
 const SE_ERR_FNF: u32 = 2;
 const SE_ERR_NOASSOC: u32 = 31;
+const SHFILEINFO_HICON_OFFSET: u32 = 0;
+const SHFILEINFO_IICON_OFFSET: u32 = 4;
+const SHFILEINFO_ATTRIBUTES_OFFSET: u32 = 8;
+const SHFILEINFO_DISPLAY_NAME_OFFSET: u32 = 12;
+const SHFILEINFO_DISPLAY_NAME_CHARS: usize = 260;
+const SHFILEINFO_TYPE_NAME_OFFSET: u32 =
+    SHFILEINFO_DISPLAY_NAME_OFFSET + (SHFILEINFO_DISPLAY_NAME_CHARS as u32 * 2);
+const SHFILEINFO_TYPE_NAME_CHARS: usize = 80;
+const SHFILEINFO_SIZE_W: u32 =
+    SHFILEINFO_TYPE_NAME_OFFSET + (SHFILEINFO_TYPE_NAME_CHARS as u32 * 2);
+const SHGFI_ICON: u32 = 0x0000_0100;
+const SHGFI_DISPLAYNAME: u32 = 0x0000_0200;
+const SHGFI_TYPENAME: u32 = 0x0000_0400;
+const SHGFI_ATTRIBUTES: u32 = 0x0000_0800;
+const SHGFI_ICONLOCATION: u32 = 0x0000_1000;
+const SHGFI_SYSICONINDEX: u32 = 0x0000_4000;
+const SHGFI_PIDL: u32 = 0x0000_0008;
+const SHGFI_USEFILEATTRIBUTES: u32 = 0x0000_0010;
+const SHGFI_ATTR_SPECIFIED: u32 = 0x0002_0000;
+const SHELL_GENERIC_FILE_ICON: u32 = 32512;
+const SHELL_GENERIC_FOLDER_ICON: u32 = 32513;
+const SHELL_SYSTEM_IMAGE_LIST_HANDLE: u32 = 0x000b_f000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CoredllSubsystem {
@@ -3435,6 +3456,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_MESSAGE_BOX_W => Some(CoredllValue::U32(message_box_w_raw(memory, args))),
         ORD_SHELL_EXECUTE_EX => Some(CoredllValue::Bool(shell_execute_ex_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_SHGET_FILE_INFO => Some(CoredllValue::U32(sh_get_file_info_w_raw(
             kernel, memory, thread_id, args,
         ))),
         ORD_SHGET_SPECIAL_FOLDER_PATH => Some(CoredllValue::Bool(sh_get_special_folder_path_raw(
@@ -9971,6 +9995,190 @@ fn sh_get_special_folder_path_raw<M: CoredllGuestMemory>(
     }
 }
 
+fn sh_get_file_info_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let path_ptr = raw_arg(args, 0);
+    let requested_attributes = raw_arg(args, 1);
+    let info_ptr = raw_arg(args, 2);
+    let info_size = raw_arg(args, 3);
+    let flags = raw_arg(args, 4);
+
+    if flags & SHGFI_PIDL != 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+        return 0;
+    }
+    if path_ptr == 0 || info_ptr == 0 || info_size < SHFILEINFO_SIZE_W {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(path) = read_guest_wide_arg(memory, path_ptr).map(|path| path.replace('/', "\\"))
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+
+    let attributes = if flags & SHGFI_USEFILEATTRIBUTES != 0 {
+        if requested_attributes == 0 {
+            FILE_ATTRIBUTE_ARCHIVE
+        } else {
+            requested_attributes
+        }
+    } else {
+        match kernel.file_attributes_w(&path) {
+            Ok(data) => data.attributes,
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+                return 0;
+            }
+        }
+    };
+    let class = shell_file_class(kernel, &path, attributes);
+    let icon_index = shell_icon_index(&class, attributes);
+    let icon_handle = shell_icon_handle(attributes);
+    let requested_attribute_mask = if flags & (SHGFI_ATTRIBUTES | SHGFI_ATTR_SPECIFIED)
+        == (SHGFI_ATTRIBUTES | SHGFI_ATTR_SPECIFIED)
+    {
+        let Some(mask) = read_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            info_ptr + SHFILEINFO_ATTRIBUTES_OFFSET,
+        ) else {
+            return 0;
+        };
+        Some(mask)
+    } else {
+        None
+    };
+
+    if !write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        info_ptr + SHFILEINFO_HICON_OFFSET,
+        0,
+    ) || !write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        info_ptr + SHFILEINFO_IICON_OFFSET,
+        0,
+    ) || !write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        info_ptr + SHFILEINFO_ATTRIBUTES_OFFSET,
+        0,
+    ) {
+        return 0;
+    }
+
+    if flags & SHGFI_ATTRIBUTES != 0 {
+        let attributes = if let Some(mask) = requested_attribute_mask {
+            attributes & mask
+        } else {
+            attributes
+        };
+        if !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            info_ptr + SHFILEINFO_ATTRIBUTES_OFFSET,
+            attributes,
+        ) {
+            return 0;
+        }
+    }
+    if flags & SHGFI_ICON != 0
+        && !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            info_ptr + SHFILEINFO_HICON_OFFSET,
+            icon_handle,
+        )
+    {
+        return 0;
+    }
+    if flags & (SHGFI_SYSICONINDEX | SHGFI_ICONLOCATION) != 0
+        && !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            info_ptr + SHFILEINFO_IICON_OFFSET,
+            icon_index as u32,
+        )
+    {
+        return 0;
+    }
+    if flags & SHGFI_TYPENAME != 0 {
+        let type_name = shell_file_type_name(kernel, &path, attributes, &class);
+        if !write_guest_wide_fixed(
+            kernel,
+            memory,
+            thread_id,
+            info_ptr + SHFILEINFO_TYPE_NAME_OFFSET,
+            &type_name,
+            SHFILEINFO_TYPE_NAME_CHARS,
+        ) {
+            return 0;
+        }
+    }
+    if flags & SHGFI_ICONLOCATION != 0 {
+        let (icon_location, icon_index) =
+            shell_default_icon_location(kernel, &path, attributes, &class);
+        if !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            info_ptr + SHFILEINFO_IICON_OFFSET,
+            icon_index as u32,
+        ) || !write_guest_wide_fixed(
+            kernel,
+            memory,
+            thread_id,
+            info_ptr + SHFILEINFO_DISPLAY_NAME_OFFSET,
+            &icon_location,
+            SHFILEINFO_DISPLAY_NAME_CHARS,
+        ) {
+            return 0;
+        }
+    } else if flags & SHGFI_DISPLAYNAME != 0 {
+        let display_name = shell_file_display_name(&path);
+        if !write_guest_wide_fixed(
+            kernel,
+            memory,
+            thread_id,
+            info_ptr + SHFILEINFO_DISPLAY_NAME_OFFSET,
+            &display_name,
+            SHFILEINFO_DISPLAY_NAME_CHARS,
+        ) {
+            return 0;
+        }
+    }
+
+    kernel.threads.set_last_error(thread_id, 0);
+    if flags & SHGFI_SYSICONINDEX != 0 {
+        SHELL_SYSTEM_IMAGE_LIST_HANDLE
+    } else if flags & SHGFI_ICON != 0 {
+        icon_handle
+    } else {
+        1
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ShellLaunchCommand {
     application: Option<String>,
@@ -10186,6 +10394,96 @@ fn shell_association_command(kernel: &CeKernel, target: &str, verb: &str) -> Opt
                 "",
             )
         })
+}
+
+fn shell_file_class(kernel: &CeKernel, path: &str, attributes: u32) -> String {
+    if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+        return "folder".to_owned();
+    }
+    let Some(extension) = file_extension(path) else {
+        return "file".to_owned();
+    };
+    registry_string(kernel, &format!(r"HKCR\.{extension}"), "")
+        .or_else(|| registry_string(kernel, &format!(r"HKLM\Software\Classes\.{extension}"), ""))
+        .unwrap_or_else(|| format!("{extension}file"))
+}
+
+fn shell_file_type_name(kernel: &CeKernel, path: &str, attributes: u32, class: &str) -> String {
+    if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+        return registry_string(kernel, r"HKCR\Folder", "")
+            .or_else(|| registry_string(kernel, r"HKCR\Directory", ""))
+            .unwrap_or_else(|| "File Folder".to_owned());
+    }
+    registry_string(kernel, &format!(r"HKCR\{class}"), "")
+        .or_else(|| registry_string(kernel, &format!(r"HKLM\Software\Classes\{class}"), ""))
+        .unwrap_or_else(|| {
+            file_extension(path)
+                .map(|extension| format!("{} File", extension.to_ascii_uppercase()))
+                .unwrap_or_else(|| "File".to_owned())
+        })
+}
+
+fn shell_default_icon_location(
+    kernel: &CeKernel,
+    path: &str,
+    attributes: u32,
+    class: &str,
+) -> (String, i32) {
+    let icon = if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+        registry_string(kernel, r"HKCR\Folder\DefaultIcon", "")
+            .or_else(|| registry_string(kernel, r"HKCR\Directory\DefaultIcon", ""))
+    } else {
+        registry_string(kernel, &format!(r"HKCR\{class}\DefaultIcon"), "").or_else(|| {
+            registry_string(
+                kernel,
+                &format!(r"HKLM\Software\Classes\{class}\DefaultIcon"),
+                "",
+            )
+        })
+    };
+    let icon = icon
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| r"\Windows\ceshell.dll,0".to_owned())
+        .replace("%1", path);
+    split_shell_icon_location(&icon)
+}
+
+fn split_shell_icon_location(icon: &str) -> (String, i32) {
+    let icon = icon.trim();
+    let Some((path, index)) = icon.rsplit_once(',') else {
+        return (icon.trim_matches('"').to_owned(), 0);
+    };
+    let index = index.trim().parse::<i32>().unwrap_or(0);
+    (path.trim().trim_matches('"').to_owned(), index)
+}
+
+fn shell_icon_index(class: &str, attributes: u32) -> i32 {
+    if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+        return 3;
+    }
+    let hash = class.bytes().fold(0u32, |acc, byte| {
+        acc.wrapping_mul(33).wrapping_add(byte as u32)
+    });
+    10 + (hash % 4096) as i32
+}
+
+fn shell_icon_handle(attributes: u32) -> u32 {
+    let stock = if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+        SHELL_GENERIC_FOLDER_ICON
+    } else {
+        SHELL_GENERIC_FILE_ICON
+    };
+    0x000b_8000 | stock
+}
+
+fn shell_file_display_name(path: &str) -> String {
+    let trimmed = path.trim_end_matches(['\\', '/']);
+    trimmed
+        .rsplit(['\\', '/'])
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(path)
+        .to_owned()
 }
 
 fn registry_string(kernel: &CeKernel, key: &str, value: &str) -> Option<String> {
@@ -17070,6 +17368,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "GetVersionExW",
     "GetSystemMetrics",
     "ShellExecuteEx",
+    "SHGetFileInfo",
     "SHGetSpecialFolderPath",
     "SystemParametersInfoW",
     "CopyRect",

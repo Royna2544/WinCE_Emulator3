@@ -80,10 +80,11 @@
 - Shell fidelity follow-up: `ShellExecuteEx` now handles the basic CE launch
   chain through shortcuts, registry associations, and `CreateProcessW`
   queuing. Continue with the remaining shell APIs from the attachment:
-  `SHCreateShortcut`, `SHGetShortcutTarget`, `SHGetFileInfo`, notify icons,
-  notification data, recent docs, shell change notifications, popup/menu
-  behavior, modal `MessageBoxW`, keyboard translation, clipboard, and caret
-  state. Keep behavior registry-backed and generic; do not fake route UI.
+  `SHCreateShortcut`, `SHGetShortcutTarget`, richer `SHGetFileInfo` icon
+  extraction/image-list behavior, notify icons, notification data, recent docs,
+  shell change notifications, popup/menu behavior, modal `MessageBoxW`,
+  keyboard translation, clipboard, and caret state. Keep behavior
+  registry-backed and generic; do not fake route UI.
 - Winsock fidelity follow-up: guest-visible local names now use the isolated
   `10.0.0.1`/`10.0.0.2` model while host sockets remain the transport. Blocking
   `connect`, `accept`, `recv`, `recvfrom`, and `select` still need to park

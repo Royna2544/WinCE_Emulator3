@@ -86,11 +86,12 @@
     behavior before changing guest-visible UI behavior.
 - Open: several shell-visible APIs are still state tracking or cheap success
   rather than CE-like behavior.
-  - Symptom: `SHGetFileInfo` is must-implement but not implemented;
-    `TrackPopupMenu*` tracks popup state without interactive selection;
-    `MessageBoxW` logs and returns a fixed success; notification APIs,
-    shell namespace/storage presentation, and file-change notifications are
-    incomplete.
+  - Symptom: `SHGetFileInfo` now covers registry-backed display/type/
+    attribute/icon-location metadata, but real icon extraction and image-list
+    ownership are not implemented yet. `TrackPopupMenu*` tracks popup state
+    without interactive selection; `MessageBoxW` logs and returns a fixed
+    success; notification APIs, shell namespace/storage presentation, and
+    file-change notifications are incomplete.
   - Required fix: implement the queued shell/UI section in `PLAN.MD` using
     registry/mount/window state and CE source references, with explicit failure
     rather than plausible fake success where behavior is not implemented.
