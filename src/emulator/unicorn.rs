@@ -90,6 +90,7 @@ struct ParkedProcess {
     module_path: String,
     module_host_path: std::path::PathBuf,
     command_line: String,
+    current_directory: Option<String>,
 }
 
 #[cfg(feature = "unicorn")]
@@ -1706,11 +1707,13 @@ impl UnicornMips {
             module_path,
             module_host_path,
             command_line,
+            current_directory,
         } = parked;
         kernel.set_process_module_base(module_base);
         kernel.set_process_module_path(module_path);
         kernel.set_process_module_host_path(module_host_path);
         kernel.set_process_command_line(command_line);
+        kernel.set_process_current_directory(current_directory);
         kernel.set_current_process_state(process_state);
         let op = if process_handle.is_some() {
             "CreateProcessChildActivated"
@@ -1863,6 +1866,7 @@ impl UnicornMips {
                 .cloned()
                 .unwrap_or_default(),
             command_line: kernel.process_command_line().to_owned(),
+            current_directory: kernel.process_current_directory().map(ToOwned::to_owned),
         }
     }
 
@@ -7135,6 +7139,7 @@ fn run_pending_process_launches<D>(
         let saved_path = kernel.process_module_path().to_owned();
         let saved_host_path = kernel.process_module_host_path().cloned();
         let saved_command_line = kernel.process_command_line().to_owned();
+        let saved_current_directory = kernel.process_current_directory().map(ToOwned::to_owned);
         let saved_show_cmd = kernel.process_show_cmd();
         let saved_process_state = kernel.current_process_state();
 
@@ -7145,6 +7150,12 @@ fn run_pending_process_launches<D>(
         kernel.set_process_module_path(child_module_path.clone());
         kernel.set_process_module_host_path(path.clone());
         kernel.set_process_command_line(launch.command_line.clone().unwrap_or_default());
+        kernel.set_process_current_directory(
+            launch
+                .current_directory
+                .clone()
+                .or(saved_current_directory.clone()),
+        );
         kernel.set_process_show_cmd(launch.show_cmd.unwrap_or(crate::ce::kernel::SW_SHOWNORMAL));
         kernel.set_current_process_id(launch.process_id);
         kernel.reset_current_process_exit_state();
@@ -7168,6 +7179,7 @@ fn run_pending_process_launches<D>(
             let parked_child = (outcome == ChildProcessRunOutcome::Parked).then_some(child);
             Ok((outcome, parked_child))
         })();
+        let child_current_directory = kernel.process_current_directory().map(ToOwned::to_owned);
 
         kernel.set_process_module_base(saved_base);
         kernel.set_process_module_path(saved_path);
@@ -7175,6 +7187,7 @@ fn run_pending_process_launches<D>(
             kernel.set_process_module_host_path(saved_host_path);
         }
         kernel.set_process_command_line(saved_command_line);
+        kernel.set_process_current_directory(saved_current_directory);
         kernel.set_process_show_cmd(saved_show_cmd);
         kernel.set_current_process_state(saved_process_state);
 
@@ -7232,6 +7245,7 @@ fn run_pending_process_launches<D>(
                             module_path: child_module_path.clone(),
                             module_host_path: path.clone(),
                             command_line: launch.command_line.clone().unwrap_or_default(),
+                            current_directory: child_current_directory.clone(),
                         });
                 }
                 kernel.record_process_trace(crate::ce::kernel::ProcessTraceRecord {
@@ -7285,6 +7299,22 @@ fn resolve_process_launch_path(
     let separator = std::path::MAIN_SEPARATOR.to_string();
     let relative = raw_path.replace('\\', &separator);
     let relative_path = std::path::Path::new(&relative);
+    if let Some(current_directory) = launch
+        .current_directory
+        .as_deref()
+        .or_else(|| kernel.process_current_directory())
+    {
+        let guest_candidate = format!(
+            "{}\\{}",
+            current_directory.trim_end_matches(['\\', '/']),
+            raw_path.trim_start_matches(['\\', '/'])
+        );
+        if let Ok(host_path) = kernel.host_path_for_guest(&guest_candidate) {
+            if host_path.exists() {
+                return Ok(Some(host_path));
+            }
+        }
+    }
     let Some(parent_exe) = kernel.process_module_host_path() else {
         return Ok(None);
     };
@@ -14835,6 +14865,7 @@ mod guest_thread_stack_tests {
             module_path: "\\SDMMC Disk\\child.exe".to_owned(),
             module_host_path: std::path::PathBuf::from(r"D:\INAVI_Emulator\INAVI\child.exe"),
             command_line: "child args".to_owned(),
+            current_directory: Some("\\SDMMC Disk\\ChildDir".to_owned()),
         });
 
         assert!(parent.has_parked_child_processes());
@@ -14845,10 +14876,49 @@ mod guest_thread_stack_tests {
         assert_eq!(kernel.process_module_path(), "\\SDMMC Disk\\child.exe");
         assert_eq!(kernel.process_command_line(), "child args");
         assert_eq!(
+            kernel.process_current_directory(),
+            Some("\\SDMMC Disk\\ChildDir")
+        );
+        assert_eq!(
             kernel.process_exit_code_for_handle(launch.process_handle),
             Some(crate::ce::kernel::STILL_ACTIVE)
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn process_launch_resolution_uses_queued_current_directory() -> Result<()> {
+        let root =
+            std::env::temp_dir().join(format!("wince-current-dir-resolve-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("Apps").join("Parent")).unwrap();
+        std::fs::create_dir_all(root.join("Apps").join("Child")).unwrap();
+        std::fs::write(
+            root.join("Apps").join("Parent").join("parent.exe"),
+            b"parent",
+        )
+        .unwrap();
+        std::fs::write(root.join("Apps").join("Child").join("child.exe"), b"child").unwrap();
+
+        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let mut kernel = CeKernel::boot(config);
+        kernel.set_file_root(&root);
+        kernel.set_process_module_host_path(root.join("Apps").join("Parent").join("parent.exe"));
+        let launch = kernel.queue_process_launch_with_options(
+            Some("child.exe".to_owned()),
+            None,
+            Some("\\Apps\\Child".to_owned()),
+            None,
+        );
+
+        let resolved = resolve_process_launch_path(&kernel, &launch)?;
+        assert_eq!(
+            resolved.as_deref(),
+            Some(root.join("Apps").join("Child").join("child.exe").as_path())
+        );
+
+        let _ = std::fs::remove_dir_all(root);
         Ok(())
     }
 
@@ -14864,6 +14934,7 @@ mod guest_thread_stack_tests {
             r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe",
         ));
         kernel.set_process_command_line("parent args".to_owned());
+        kernel.set_process_current_directory(Some("\\SDMMC Disk\\INavi".to_owned()));
 
         let mut child = UnicornMips::new()?;
         child.set_initial_thread_id(3);
@@ -14890,6 +14961,7 @@ mod guest_thread_stack_tests {
                 r"D:\INAVI_Emulator\INAVI\INavi\happyway_win.exe",
             ),
             command_line: "child args".to_owned(),
+            current_directory: Some("\\SDMMC Disk\\INavi\\Tools".to_owned()),
         });
 
         assert!(parent.rotate_to_next_parked_process(&mut kernel));
@@ -14898,6 +14970,10 @@ mod guest_thread_stack_tests {
         assert_eq!(
             kernel.process_module_path(),
             "\\SDMMC Disk\\INavi\\happyway_win.exe"
+        );
+        assert_eq!(
+            kernel.process_current_directory(),
+            Some("\\SDMMC Disk\\INavi\\Tools")
         );
 
         assert!(parent.rotate_to_next_parked_process(&mut kernel));
@@ -14908,6 +14984,10 @@ mod guest_thread_stack_tests {
         );
         assert_eq!(kernel.process_module_base(), 0x0010_0000);
         assert_eq!(kernel.process_command_line(), "parent args");
+        assert_eq!(
+            kernel.process_current_directory(),
+            Some("\\SDMMC Disk\\INavi")
+        );
 
         Ok(())
     }
@@ -14980,6 +15060,7 @@ mod guest_thread_stack_tests {
             module_path: "\\SDMMC Disk\\INavi\\iNavi.exe".to_owned(),
             module_host_path: std::path::PathBuf::from(r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe"),
             command_line: "parent".to_owned(),
+            current_directory: None,
         });
         scheduler.parked_child_processes.push_back(ParkedProcess {
             application: Some("\\SDMMC Disk\\INavi\\happyway_win.exe".to_owned()),
@@ -14999,6 +15080,7 @@ mod guest_thread_stack_tests {
                 r"D:\INAVI_Emulator\INAVI\INavi\happyway_win.exe",
             ),
             command_line: "child".to_owned(),
+            current_directory: None,
         });
 
         assert!(scheduler.rotate_to_next_parked_process(&mut kernel));
@@ -15104,6 +15186,7 @@ mod guest_thread_stack_tests {
             module_path: "\\SDMMC Disk\\INavi\\iNavi.exe".to_owned(),
             module_host_path: std::path::PathBuf::from(r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe"),
             command_line: "parent".to_owned(),
+            current_directory: None,
         });
 
         assert!(!scheduler.has_ready_parked_wait_unblock(&kernel));
@@ -15188,6 +15271,7 @@ mod guest_thread_stack_tests {
                 r"D:\INAVI_Emulator\INAVI\INavi\iSearch.exe",
             ),
             command_line: String::new(),
+            current_directory: None,
         });
 
         assert!(!scheduler.has_ready_parked_wait_unblock(&kernel));
@@ -23348,6 +23432,7 @@ mod unicorn_tests {
                 r"D:\INAVI_Emulator\INAVI\INavi\happyway_win.exe",
             ),
             command_line: "child".to_owned(),
+            current_directory: None,
         }])));
         let current_thread_id = Rc::new(RefCell::new(sender_thread));
         let running_thread = Rc::new(RefCell::new(Some((sender_thread, sender_handle))));

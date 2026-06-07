@@ -84,6 +84,7 @@ pub struct CeKernel {
     process_module_path: String,
     process_module_host_path: Option<PathBuf>,
     process_command_line: String,
+    process_current_directory: Option<String>,
     process_show_cmd: u32,
     current_process_id: u32,
     current_process_exit_code: u32,
@@ -205,6 +206,7 @@ pub enum FreeLibraryResult {
 pub struct PendingProcessLaunch {
     pub application: Option<String>,
     pub command_line: Option<String>,
+    pub current_directory: Option<String>,
     pub show_cmd: Option<u32>,
     pub process_handle: u32,
     pub thread_handle: u32,
@@ -335,6 +337,7 @@ impl CeKernel {
             process_module_path: "\\FakeCE\\process.exe".to_owned(),
             process_module_host_path: None,
             process_command_line: String::new(),
+            process_current_directory: None,
             process_show_cmd: SW_SHOWNORMAL,
             current_process_id: 1,
             current_process_exit_code: STILL_ACTIVE,
@@ -618,6 +621,14 @@ impl CeKernel {
         &self.process_command_line
     }
 
+    pub fn set_process_current_directory(&mut self, directory: Option<String>) {
+        self.process_current_directory = directory;
+    }
+
+    pub fn process_current_directory(&self) -> Option<&str> {
+        self.process_current_directory.as_deref()
+    }
+
     pub fn set_process_show_cmd(&mut self, show_cmd: u32) {
         self.process_show_cmd = show_cmd;
     }
@@ -666,13 +677,23 @@ impl CeKernel {
         application: Option<String>,
         command_line: Option<String>,
     ) -> PendingProcessLaunch {
-        self.queue_process_launch_with_show(application, command_line, None)
+        self.queue_process_launch_with_options(application, command_line, None, None)
     }
 
     pub fn queue_process_launch_with_show(
         &mut self,
         application: Option<String>,
         command_line: Option<String>,
+        show_cmd: Option<u32>,
+    ) -> PendingProcessLaunch {
+        self.queue_process_launch_with_options(application, command_line, None, show_cmd)
+    }
+
+    pub fn queue_process_launch_with_options(
+        &mut self,
+        application: Option<String>,
+        command_line: Option<String>,
+        current_directory: Option<String>,
         show_cmd: Option<u32>,
     ) -> PendingProcessLaunch {
         let process_id = self.next_process_id;
@@ -683,6 +704,7 @@ impl CeKernel {
         let launch = PendingProcessLaunch {
             application,
             command_line,
+            current_directory,
             show_cmd,
             process_handle,
             thread_handle,

@@ -7,13 +7,14 @@ use wince_emulation_v3::{
         coredll_ordinals::{
             ORD_CE_GET_THREAD_PRIORITY, ORD_CE_SET_THREAD_PRIORITY, ORD_CLEAR_COMM_ERROR,
             ORD_CLOSE_CLIPBOARD, ORD_CLOSE_HANDLE, ORD_COUNT_CLIPBOARD_FORMATS, ORD_CREATE_EVENT_W,
-            ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD, ORD_DISABLE_THREAD_LIBRARY_CALLS,
-            ORD_EMPTY_CLIPBOARD, ORD_ENUM_CLIPBOARD_FORMATS, ORD_EVENT_MODIFY,
-            ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY, ORD_GET_CALLER_PROCESS_INDEX,
-            ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_GET_CLIPBOARD_FORMAT_NAME_W,
-            ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK, ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS,
-            ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR,
-            ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W, ORD_GET_OPEN_CLIPBOARD_WINDOW,
+            ORD_CREATE_PROCESS_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD,
+            ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_EMPTY_CLIPBOARD, ORD_ENUM_CLIPBOARD_FORMATS,
+            ORD_EVENT_MODIFY, ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY,
+            ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC,
+            ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK,
+            ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_EXIT_CODE_PROCESS,
+            ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
+            ORD_GET_MODULE_HANDLE_W, ORD_GET_OPEN_CLIPBOARD_WINDOW,
             ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
             ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID,
             ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_TIME,
@@ -2086,11 +2087,14 @@ fn shell_execute_ex_resolves_registry_association_and_queues_process() -> Result
     let thread_id = 43;
     let info = 0x2_0000;
     let file_ptr = 0x2_0100;
+    let directory_ptr = 0x2_0200;
     memory.map_words(info, 16);
     memory.write_word(info, 60);
     memory.write_word(info + 4, 0x0000_0040);
     memory.write_word(info + 16, file_ptr);
-    memory.write_wide_z(file_ptr, r"\Docs\route.nav");
+    memory.write_word(info + 24, directory_ptr);
+    memory.write_wide_z(file_ptr, "route.nav");
+    memory.write_wide_z(directory_ptr, r"\Docs\");
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -2117,8 +2121,48 @@ fn shell_execute_ex_resolves_registry_association_and_queues_process() -> Result
         launches[0].command_line.as_deref(),
         Some(r#""\Windows\viewer.exe" "\Docs\route.nav""#)
     );
+    assert_eq!(launches[0].current_directory.as_deref(), Some(r"\Docs"));
 
     let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_create_process_preserves_current_directory() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 45;
+    let app_ptr = 0x2_4000;
+    let dir_ptr = 0x2_4200;
+    let process_info = 0x2_4400;
+    memory.map_words(process_info, 4);
+    memory.write_wide_z(app_ptr, "child.exe");
+    memory.write_wide_z(dir_ptr, r"\SDMMC Disk\INavi\bin\");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_PROCESS_W,
+            [app_ptr, 0, 0, 0, 0, 0, 0, dir_ptr, 0, process_info],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let launches = kernel.take_pending_process_launches();
+    assert_eq!(launches.len(), 1);
+    assert_eq!(launches[0].application.as_deref(), Some("child.exe"));
+    assert_eq!(
+        launches[0].current_directory.as_deref(),
+        Some(r"\SDMMC Disk\INavi\bin")
+    );
+    assert_eq!(memory.read_u32(process_info)?, launches[0].process_handle);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     Ok(())
 }
 

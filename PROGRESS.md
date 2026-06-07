@@ -41,7 +41,12 @@
   output, and `SHELLEXECUTEINFO.nShow` propagation into pending launch
   metadata. Child MIPS startup now passes the current process show command as
   `WinMain`'s `nCmdShow` argument instead of forcing `SW_SHOWNORMAL` for shell
-  launches. `SHCreateShortcutEx` now shares the CE text-link writer, chooses a
+  launches. `ShellExecuteEx` and raw `CreateProcessW` also preserve explicit
+  current-directory fields in pending process launches; relative child EXE
+  resolution now checks that CE current directory before the existing parent
+  executable fallback, and parked process switching restores the effective
+  current directory with module path and command line. `SHCreateShortcutEx` now
+  shares the CE text-link writer, chooses a
   bounded unique sibling name with ` (2)` style suffixes when the requested
   link already exists, writes the actual name to the optional output buffer
   when it fits, and reports the required character count without creating a

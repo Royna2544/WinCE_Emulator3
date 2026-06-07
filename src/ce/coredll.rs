@@ -7892,7 +7892,16 @@ fn create_process_w_raw<M: CoredllGuestMemory>(
         return false;
     }
 
-    let launch = kernel.queue_process_launch(application, command_line);
+    let current_directory = read_optional_guest_wide_arg(memory, raw_arg(args, 7))
+        .map(|directory| directory.and_then(|value| normalize_shell_directory(&value)))
+        .unwrap_or(None);
+
+    let launch = kernel.queue_process_launch_with_options(
+        application,
+        command_line,
+        current_directory,
+        None,
+    );
     for (offset, value) in [
         (0, launch.process_handle),
         (4, launch.thread_handle),
@@ -11317,6 +11326,7 @@ fn sh_get_file_info_w_raw<M: CoredllGuestMemory>(
 struct ShellLaunchCommand {
     application: Option<String>,
     command_line: Option<String>,
+    current_directory: Option<String>,
     hinst_app: u32,
 }
 
@@ -11403,9 +11413,10 @@ fn shell_execute_ex_w_raw<M: CoredllGuestMemory>(
         }
     };
 
-    let queued = kernel.queue_process_launch_with_show(
+    let queued = kernel.queue_process_launch_with_options(
         launch.application,
         launch.command_line,
+        launch.current_directory,
         Some(n_show),
     );
     if !write_optional_u32(
@@ -11840,6 +11851,7 @@ fn resolve_shell_launch(
         return Some(ShellLaunchCommand {
             application: Some(target.clone()),
             command_line: combine_shell_command_line(&target, parameters),
+            current_directory: directory.and_then(normalize_shell_directory),
             hinst_app: SHELL_EXECUTE_SUCCESS,
         });
     }
@@ -11849,8 +11861,17 @@ fn resolve_shell_launch(
     Some(ShellLaunchCommand {
         application,
         command_line,
+        current_directory: directory.and_then(normalize_shell_directory),
         hinst_app: SHELL_EXECUTE_SUCCESS,
     })
+}
+
+fn normalize_shell_directory(directory: &str) -> Option<String> {
+    let mut directory = directory.trim().replace('/', "\\");
+    while directory.len() > 1 && directory.ends_with('\\') {
+        directory.pop();
+    }
+    (!directory.is_empty()).then_some(directory)
 }
 
 fn normalize_shell_path(file: &str, directory: Option<&str>) -> String {

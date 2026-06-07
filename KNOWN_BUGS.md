@@ -111,6 +111,9 @@
     `SHCreateShortcut`,
     `SHGetShortcutTarget`, and bounded `SHCreateShortcutEx` unique-name/
     buffer-return behavior now create/read CE text shortcuts.
+    `ShellExecuteEx.lpDirectory` and raw `CreateProcessW.pszCurDir` now
+    propagate to queued child process state, relative EXE resolution, and
+    parked-process restore.
     `SHAddToRecentDocs(SHARD_PATH/null)` now creates/clears Recent-folder CE
     shortcuts and tracks recent-document shell state, but PIDL input, pruning,
     and UI presentation remain incomplete. `SHChangeNotifyRegisterI`,

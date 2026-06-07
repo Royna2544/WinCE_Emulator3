@@ -447,6 +447,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     preserves `nShow`, returns the queued process handle when
     `SEE_MASK_NOCLOSEPROCESS` is set, and feeds that show command into the
     child process entry context.
+  - `shellapi.h` also defines `SHELLEXECUTEINFO.lpDirectory`, and
+    `winbase.h` defines `CreateProcessW(..., LPWSTR pszCurDir, ...)`. v3 now
+    preserves those explicit CE current-directory values in pending child
+    launches, uses them for relative child executable lookup, and restores the
+    effective current directory when parked processes are activated.
   - `shellapi.h` also anchors `Shell_NotifyIcon` and the `NOTIFYICONDATAW`
     prefix. v3 now stores notify icon add/modify/delete state in
     `ShellSystem` and validates owner HWNDs through GWE, while leaving
