@@ -2190,6 +2190,7 @@ fn shell_shortcut_ordinals_create_read_and_launch_ce_lnk_files() -> Result<()> {
     memory.write_word(info, 60);
     memory.write_word(info + 4, 0x0000_0040);
     memory.write_word(info + 16, file_ptr);
+    memory.write_word(info + 28, 5);
     memory.write_wide_z(file_ptr, r"\RouteSearch.lnk");
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -2210,6 +2211,8 @@ fn shell_shortcut_ordinals_create_read_and_launch_ce_lnk_files() -> Result<()> {
         launches[0].application.as_deref(),
         Some(r"\Windows\viewer.exe")
     );
+    assert_eq!(launches[0].show_cmd, Some(5));
+    assert_eq!(memory.read_u32(info + 56)?, launches[0].process_handle);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

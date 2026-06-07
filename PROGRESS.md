@@ -37,11 +37,15 @@
   while `SHGetShortcutTarget` reads the same file format, validates caller
   buffers, and returns the stored target text. The focused raw shell fixture
   proves create, readback, launch through `ShellExecuteEx`, existing-file
-  failure, and insufficient-buffer failure. `SHCreateShortcutEx` now shares the
-  CE text-link writer, chooses a bounded unique sibling name with ` (2)` style
-  suffixes when the requested link already exists, writes the actual name to
-  the optional output buffer when it fits, and reports the required character
-  count without creating a file when the caller buffer is too small.
+  failure, insufficient-buffer failure, `SEE_MASK_NOCLOSEPROCESS` hProcess
+  output, and `SHELLEXECUTEINFO.nShow` propagation into pending launch
+  metadata. Child MIPS startup now passes the current process show command as
+  `WinMain`'s `nCmdShow` argument instead of forcing `SW_SHOWNORMAL` for shell
+  launches. `SHCreateShortcutEx` now shares the CE text-link writer, chooses a
+  bounded unique sibling name with ` (2)` style suffixes when the requested
+  link already exists, writes the actual name to the optional output buffer
+  when it fits, and reports the required character count without creating a
+  file when the caller buffer is too small.
 - Raw clipboard fidelity now includes `GetClipboardDataAlloc` for clipboard
   data stored as emulator-tracked local heap handles. The COREDLL raw path
   looks up the format through GWE clipboard state, derives the source size from

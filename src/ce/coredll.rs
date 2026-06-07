@@ -94,6 +94,7 @@ const ACCEL_FALT: u8 = 0x10;
 const STRSAFE_E_INSUFFICIENT_BUFFER: u32 = 0x8007_007a;
 const STRSAFE_E_INVALID_PARAMETER: u32 = 0x8007_0057;
 const SEE_MASK_NOCLOSEPROCESS: u32 = 0x0000_0040;
+const SHELLEXECUTEINFO_NSHOW_OFFSET: u32 = 28;
 const SHELLEXECUTEINFO_HINSTAPP_OFFSET: u32 = 32;
 const SHELLEXECUTEINFO_HPROCESS_OFFSET: u32 = 56;
 const SHELL_EXECUTE_SUCCESS: u32 = 33;
@@ -11365,6 +11366,14 @@ fn shell_execute_ex_w_raw<M: CoredllGuestMemory>(
         read_optional_shell_string(kernel, memory, thread_id, info_ptr.wrapping_add(20));
     let directory =
         read_optional_shell_string(kernel, memory, thread_id, info_ptr.wrapping_add(24));
+    let Some(n_show) = read_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        info_ptr.wrapping_add(SHELLEXECUTEINFO_NSHOW_OFFSET),
+    ) else {
+        return false;
+    };
 
     let launch = match resolve_shell_launch(
         kernel,
@@ -11394,7 +11403,11 @@ fn shell_execute_ex_w_raw<M: CoredllGuestMemory>(
         }
     };
 
-    let queued = kernel.queue_process_launch(launch.application, launch.command_line);
+    let queued = kernel.queue_process_launch_with_show(
+        launch.application,
+        launch.command_line,
+        Some(n_show),
+    );
     if !write_optional_u32(
         kernel,
         memory,

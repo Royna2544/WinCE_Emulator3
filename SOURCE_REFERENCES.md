@@ -442,6 +442,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     HRESULTs. `winuser.h` anchors the icon/cursor signatures; v3 currently
     has lightweight synthetic stock icon handles and `DestroyIcon` validation
     rather than a full icon resource manager.
+  - `shellapi.h` defines `SHELLEXECUTEINFO`, `SEE_MASK_NOCLOSEPROCESS`,
+    `nShow`, `hInstApp`, and `hProcess`. v3's raw `ShellExecuteEx` now
+    preserves `nShow`, returns the queued process handle when
+    `SEE_MASK_NOCLOSEPROCESS` is set, and feeds that show command into the
+    child process entry context.
   - `shellapi.h` also anchors `Shell_NotifyIcon` and the `NOTIFYICONDATAW`
     prefix. v3 now stores notify icon add/modify/delete state in
     `ShellSystem` and validates owner HWNDs through GWE, while leaving

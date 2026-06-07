@@ -84,6 +84,7 @@ pub struct CeKernel {
     process_module_path: String,
     process_module_host_path: Option<PathBuf>,
     process_command_line: String,
+    process_show_cmd: u32,
     current_process_id: u32,
     current_process_exit_code: u32,
     current_process_signaled: bool,
@@ -204,6 +205,7 @@ pub enum FreeLibraryResult {
 pub struct PendingProcessLaunch {
     pub application: Option<String>,
     pub command_line: Option<String>,
+    pub show_cmd: Option<u32>,
     pub process_handle: u32,
     pub thread_handle: u32,
     pub process_id: u32,
@@ -308,6 +310,7 @@ pub const CE_SH_CURPROC: u32 = 2;
 pub const CE_CURRENT_THREAD_PSEUDO_HANDLE: u32 = CE_SYS_HANDLE_BASE + CE_SH_CURTHREAD;
 pub const CE_CURRENT_PROCESS_PSEUDO_HANDLE: u32 = CE_SYS_HANDLE_BASE + CE_SH_CURPROC;
 pub const STILL_ACTIVE: u32 = 259;
+pub const SW_SHOWNORMAL: u32 = 1;
 
 impl CeKernel {
     pub fn boot(config: RuntimeConfig) -> Self {
@@ -332,6 +335,7 @@ impl CeKernel {
             process_module_path: "\\FakeCE\\process.exe".to_owned(),
             process_module_host_path: None,
             process_command_line: String::new(),
+            process_show_cmd: SW_SHOWNORMAL,
             current_process_id: 1,
             current_process_exit_code: STILL_ACTIVE,
             current_process_signaled: false,
@@ -614,6 +618,14 @@ impl CeKernel {
         &self.process_command_line
     }
 
+    pub fn set_process_show_cmd(&mut self, show_cmd: u32) {
+        self.process_show_cmd = show_cmd;
+    }
+
+    pub fn process_show_cmd(&self) -> u32 {
+        self.process_show_cmd
+    }
+
     pub fn set_current_process_id(&mut self, process_id: u32) {
         self.current_process_id = process_id;
     }
@@ -654,6 +666,15 @@ impl CeKernel {
         application: Option<String>,
         command_line: Option<String>,
     ) -> PendingProcessLaunch {
+        self.queue_process_launch_with_show(application, command_line, None)
+    }
+
+    pub fn queue_process_launch_with_show(
+        &mut self,
+        application: Option<String>,
+        command_line: Option<String>,
+        show_cmd: Option<u32>,
+    ) -> PendingProcessLaunch {
         let process_id = self.next_process_id;
         self.next_process_id = self.next_process_id.saturating_add(1);
         let thread_id = self.threads.allocate_guest_thread_id();
@@ -662,6 +683,7 @@ impl CeKernel {
         let launch = PendingProcessLaunch {
             application,
             command_line,
+            show_cmd,
             process_handle,
             thread_handle,
             process_id,

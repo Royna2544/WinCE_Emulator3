@@ -2274,8 +2274,6 @@ impl UnicornMips {
         use unicorn_engine::RegisterMIPS;
 
         const STACK_COMMAND_LINE_OFFSET: u32 = 0x800;
-        const SW_SHOWNORMAL: u32 = 1;
-
         let Some(hinstance) = self.entry_image_base else {
             return Ok(());
         };
@@ -2300,7 +2298,7 @@ impl UnicornMips {
             (RegisterMIPS::A0, hinstance, "A0/hInstance"),
             (RegisterMIPS::A1, 0, "A1/hPrevInstance"),
             (RegisterMIPS::A2, command_line, "A2/lpCmdLine"),
-            (RegisterMIPS::A3, SW_SHOWNORMAL, "A3/nCmdShow"),
+            (RegisterMIPS::A3, kernel.process_show_cmd(), "A3/nCmdShow"),
         ] {
             uc.reg_write(register, u64::from(value))
                 .map_err(|err| Error::Backend(format!("set guest {name}: {err:?}")))?;
@@ -7137,6 +7135,7 @@ fn run_pending_process_launches<D>(
         let saved_path = kernel.process_module_path().to_owned();
         let saved_host_path = kernel.process_module_host_path().cloned();
         let saved_command_line = kernel.process_command_line().to_owned();
+        let saved_show_cmd = kernel.process_show_cmd();
         let saved_process_state = kernel.current_process_state();
 
         kernel.set_process_module_base(image.image_base());
@@ -7146,6 +7145,7 @@ fn run_pending_process_launches<D>(
         kernel.set_process_module_path(child_module_path.clone());
         kernel.set_process_module_host_path(path.clone());
         kernel.set_process_command_line(launch.command_line.clone().unwrap_or_default());
+        kernel.set_process_show_cmd(launch.show_cmd.unwrap_or(crate::ce::kernel::SW_SHOWNORMAL));
         kernel.set_current_process_id(launch.process_id);
         kernel.reset_current_process_exit_state();
 
@@ -7175,6 +7175,7 @@ fn run_pending_process_launches<D>(
             kernel.set_process_module_host_path(saved_host_path);
         }
         kernel.set_process_command_line(saved_command_line);
+        kernel.set_process_show_cmd(saved_show_cmd);
         kernel.set_current_process_state(saved_process_state);
 
         let (outcome, child) = match child_result {

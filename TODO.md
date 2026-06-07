@@ -85,8 +85,9 @@
   CE-required reentrant dispatch while waiting. The raw boundary now rejects
   non-CE `fuFlags` instead of queuing unsupported desktop-style variants.
 - Shell fidelity follow-up: `ShellExecuteEx` now handles the basic CE launch
-  chain through shortcuts, registry associations, and `CreateProcessW`
-  queuing. Continue with the remaining shell APIs from the attachment:
+  chain through shortcuts, registry associations, `CreateProcessW` queuing,
+  `SEE_MASK_NOCLOSEPROCESS` hProcess output, and `nShow` propagation into child
+  `WinMain`. Continue with the remaining shell APIs from the attachment:
   richer `SHGetFileInfo` icon extraction/image-list behavior, notification
   interaction/callback delivery above the now-stateful `SHNotification*I` data
   APIs, recent-doc pruning/UI display and PIDL input above the now-backed
@@ -102,8 +103,9 @@
   caret blink/focus integration above the raw caret state. Basic
   `SHCreateShortcut`/`SHGetShortcutTarget` CE text-link create/read behavior is
   covered and still feeds `ShellExecuteEx`; `SHCreateShortcutEx` now covers
-  bounded unique-name and output-buffer behavior. Notification records are now
-  pruned during normal HWND/process teardown. Keep behavior
+  bounded unique-name and output-buffer behavior. Precise shell errors,
+  working-directory behavior, and command-template edge cases remain queued.
+  Notification records are now pruned during normal HWND/process teardown. Keep behavior
   registry-backed and generic; do not fake route UI.
 - Winsock fidelity follow-up: guest-visible local names now use the isolated
   `10.0.0.1`/`10.0.0.2` model while host sockets remain the transport. Blocking
