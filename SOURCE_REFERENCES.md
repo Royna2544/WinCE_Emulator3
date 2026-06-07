@@ -459,9 +459,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     when the template did not include that placeholder.
   - `shellapi.h` also anchors `Shell_NotifyIcon` and the `NOTIFYICONDATAW`
     prefix. v3 now stores notify icon add/modify/delete state in
-    `ShellSystem` and validates owner HWNDs through GWE, while leaving
-    interaction callback delivery and `SHNotification*` behavior for the next
-    shell-notification port instead of inventing taskbar events.
+    `ShellSystem`, validates owner HWNDs through GWE, and posts the registered
+    `uCallbackMessage` to `hWnd` with `wParam=uID` and `lParam` carrying the
+    shell event. Rich `SHNotification*`, timeout/dismiss, icon lifetime, and
+    taskbar rendering behavior remain queued instead of inventing shell UI.
   - The generated COREDLL ordinal table remains behavior data from these CE
     ordinal sources. v3 now caches ordinal-to-export lookup in the same
     precedence order as the old scan (`COREDLL_EXPORTS`, SDK-only exports, then

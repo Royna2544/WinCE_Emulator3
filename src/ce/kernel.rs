@@ -3006,6 +3006,21 @@ impl CeKernel {
         self.post_message_w_for_thread(0, hwnd, msg, wparam, lparam)
     }
 
+    pub fn post_shell_notify_icon_callback(
+        &mut self,
+        hwnd: u32,
+        id: u32,
+        event_lparam: u32,
+    ) -> bool {
+        let Some(icon) = self.shell.notify_icon(hwnd, id).cloned() else {
+            return false;
+        };
+        if icon.callback_message == 0 || !self.gwe.is_window(icon.hwnd) {
+            return false;
+        }
+        self.post_message_w(icon.hwnd, icon.callback_message, icon.id, event_lparam)
+    }
+
     pub fn post_message_w_for_thread(
         &mut self,
         thread_id: u32,

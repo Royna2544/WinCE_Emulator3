@@ -42,7 +42,7 @@ use wince_emulation_v3::{
         },
         devices::CommDcb,
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
-        gwe::{Message, QS_POSTMESSAGE, QS_TIMER, WM_TIMER, WM_USER},
+        gwe::{Message, PeekFlags, QS_POSTMESSAGE, QS_TIMER, WM_LBUTTONDOWN, WM_TIMER, WM_USER},
         kernel::{
             CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
             LoadedModuleMetadata,
@@ -2649,7 +2649,7 @@ fn sh_get_file_info_rejects_unsupported_and_colliding_flags() -> Result<()> {
 }
 
 #[test]
-fn shell_notify_icon_tracks_add_modify_delete_state() -> Result<()> {
+fn shell_notify_icon_tracks_add_modify_delete_and_posts_callback() -> Result<()> {
     const NIM_ADD: u32 = 0;
     const NIM_MODIFY: u32 = 1;
     const NIM_DELETE: u32 = 2;
@@ -2699,6 +2699,21 @@ fn shell_notify_icon_tracks_add_modify_delete_state() -> Result<()> {
     assert_eq!(icon.icon, 0x000b_8001);
     assert_eq!(icon.tip, "Route ready");
     assert_eq!(icon.state, 0x2);
+    assert!(kernel.post_shell_notify_icon_callback(hwnd, 77, WM_LBUTTONDOWN));
+    let callback = kernel
+        .gwe
+        .peek_message_filtered(
+            thread_id,
+            Some(hwnd),
+            WM_USER + 88,
+            WM_USER + 88,
+            PeekFlags::REMOVE,
+        )
+        .expect("notify callback message");
+    assert_eq!(callback.hwnd, hwnd);
+    assert_eq!(callback.msg, WM_USER + 88);
+    assert_eq!(callback.wparam, 77);
+    assert_eq!(callback.lparam, WM_LBUTTONDOWN);
 
     memory.write_word(data + 12, NIF_TIP | NIF_STATE);
     memory.write_wide_z(data + NID_TIP_OFFSET, "Route updated");
@@ -2738,6 +2753,7 @@ fn shell_notify_icon_tracks_add_modify_delete_state() -> Result<()> {
     ));
     assert!(kernel.shell.notify_icon(hwnd, 77).is_none());
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(!kernel.post_shell_notify_icon_callback(hwnd, 77, WM_LBUTTONDOWN));
 
     Ok(())
 }

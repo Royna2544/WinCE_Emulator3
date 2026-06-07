@@ -100,8 +100,9 @@
   - Symptom: `SHGetFileInfo` now covers registry-backed display/type/
     attribute/sysicon metadata and rejects unsupported/colliding CE flags, but
     real icon extraction and image-list ownership are not implemented yet.
-    `Shell_NotifyIconW` tracks add/modify/delete state but does not yet deliver
-    real interaction callbacks.
+    `Shell_NotifyIconW` tracks add/modify/delete state and can now post the
+    registered owner callback message for shell-icon events, but does not yet
+    render tray UI or own richer timeout/dismiss/icon lifetime.
     `SHNotification*I` preserves/query data but not user interaction or
     timeout/dismiss callbacks. `TrackPopupMenuEx` now sends CE menu-loop owner
     notifications around tracked popup attempts, but still has no rendered
@@ -1973,10 +1974,11 @@
 
 - Shell notification data is stored, but shell bubble interaction is not.
   - Symptom: callers can add/update/remove/query `SHNotification*I` records,
-    but the emulator does not yet create taskbar bubble UI, send `SHNN_*`
-    callbacks, deliver dismiss/link selections, or expire notification icons.
-    Notification records tied to destroyed sink HWNDs are now removed during
-    normal window/process teardown.
+    and `Shell_NotifyIconW` can post the registered owner callback message for
+    shell-icon events, but the emulator does not yet create taskbar bubble UI,
+    send `SHNN_*` callbacks, deliver dismiss/link selections, or expire
+    notification icons. Notification records tied to destroyed sink HWNDs are
+    now removed during normal window/process teardown.
   - Evidence: CE `notification.cpp` routes notification records through
     taskbar bubble/tray lists and `WM_NOTIFY` callback paths; Rust currently
     implements the app-visible data store only.

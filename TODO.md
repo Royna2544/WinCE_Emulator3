@@ -93,11 +93,12 @@
   CE `"%1" %*` command-template shape and appends `lpParameters` only when no
   `%*` placeholder is present. Continue with the remaining shell APIs from the
   attachment:
-  richer `SHGetFileInfo` icon extraction/image-list behavior, notification
-  interaction/callback delivery above the now-stateful `SHNotification*I` data
-  APIs, recent-doc pruning/UI display and PIDL input above the now-backed
-  `SHAddToRecentDocs(SHARD_PATH/null)` recent shortcut/state path, file-change
-  event delivery/PIDL payloads above the now-stateful
+  richer `SHGetFileInfo` icon extraction/image-list behavior, rich
+  notification interaction callbacks above the now-stateful
+  `SHNotification*I` data APIs and the now-backed `Shell_NotifyIconW` owner
+  callback posting path, recent-doc pruning/UI display and PIDL input above
+  the now-backed `SHAddToRecentDocs(SHARD_PATH/null)` recent shortcut/state
+  path, file-change event delivery/PIDL payloads above the now-stateful
   `SHChangeNotifyRegisterI`/`SHFileNotifyRemoveI`/`SHFileNotifyFreeI`
   registration/free path, rendered popup/menu windows and real selection above
   the now-notifying `TrackPopupMenuEx` owner-message path, rendered modal `MessageBoxW`
