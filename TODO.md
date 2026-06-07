@@ -1750,8 +1750,9 @@
   NMEA/location errors, frame `quality`, MJPEG `fps`/`quality`, missing-
   framebuffer error shape, and `/api/v1/logs/recent` now returns recent
   `CeRemote` log lines instead of the old empty placeholder. WebSocket control
-  now answers `{"type":"logs"}` from the same recent-log ring; audio upgrades
-  stream server-backed PCM binary frames.
+  now answers `{"type":"logs"}` and `{"type":"status"}` directly from the
+  recent-log/status rings; audio upgrades stream server-backed PCM binary
+  frames.
 - Add ordinal/decorated-name evidence from the Windows CE 4.2 Mipsii SDK import
   libraries, alongside the source references already recorded.
 - Persist host-backed registry writes separately from the source dump.

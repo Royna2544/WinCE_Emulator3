@@ -56,8 +56,9 @@
 // - POST /api/v1/control/pause queues {"type":"pause"} and returns paused true.
 // - POST /api/v1/control/resume queues {"type":"resume"} and returns paused false.
 // - GET /api/v1/control/ws upgrades to WebSocket. Text frames must be JSON
-//   control messages; each valid frame is queued unchanged and acknowledged
-//   with {"ok":true,"queued":true,"pending":N}. Ping/pong/close are supported.
+//   control messages. "status" and "logs" are answered directly; other valid
+//   frames are queued unchanged and acknowledged with
+//   {"ok":true,"queued":true,"pending":N}. Ping/pong/close are supported.
 // - GET /api/v1/audio/ws upgrades to WebSocket. The server first sends a JSON
 //   text metadata frame, then streams guest PCM chunks as binary frames when a
 //   RemoteServer audio sink is registered with the CE audio system.
@@ -695,8 +696,8 @@ impl RemoteServer {
             match frame.opcode {
                 WebSocketOpcode::Text => {
                     let response = match serde_json::from_slice::<Value>(&frame.payload) {
-                        Ok(message) => {
-                            if message.get("type").and_then(Value::as_str) == Some("logs") {
+                        Ok(message) => match message.get("type").and_then(Value::as_str) {
+                            Some("logs") => {
                                 let lines = message
                                     .get("lines")
                                     .and_then(Value::as_u64)
@@ -704,11 +705,21 @@ impl RemoteServer {
                                     .clamp(1, 4096)
                                     as usize;
                                 json!({"type": "log", "ok": true, "lines": self.recent_log_lines(lines)})
-                            } else {
+                            }
+                            Some("status") => {
+                                let status = self
+                                    .state
+                                    .latest_status
+                                    .lock()
+                                    .expect("remote status mutex")
+                                    .clone();
+                                json!({"type": "status", "ok": true, "status": status})
+                            }
+                            _ => {
                                 let pending = self.queue_control(message);
                                 json!({"ok": true, "queued": true, "pending": pending})
                             }
-                        }
+                        },
                         Err(err) => json!({"ok": false, "error": format!("invalid JSON: {err}")}),
                     };
                     if write_websocket_text(&mut stream, &response.to_string()).is_err() {
@@ -1653,6 +1664,51 @@ mod tests {
         let queued = server.drain_control_messages();
         assert_eq!(queued.len(), 1);
         assert_eq!(queued[0]["type"], "tap");
+    }
+
+    #[test]
+    fn remote_server_control_websocket_status_returns_latest_status_without_queueing() {
+        let server = RemoteServer::start(RemoteServerConfig {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            ..RemoteServerConfig::default()
+        })
+        .unwrap();
+        server.publish_status(&RemoteStatus {
+            running: true,
+            guest_width: 800,
+            guest_height: 480,
+            guest_fps: 20,
+            video_enabled: true,
+            video_codec: "mjpeg",
+            audio_enabled: false,
+            audio_codec: "pcm",
+            audio_sample_rate: 44_100,
+            audio_channels: 2,
+            audio_format: "s16le".to_owned(),
+            gps_enabled: true,
+            gps_target: "COM7:".to_owned(),
+            paused: false,
+            queued_touch_events: 0,
+            queued_key_events: 0,
+            queued_serial_bytes: 0,
+            audio_clients: 0,
+            queued_audio_chunks: 0,
+        });
+
+        let mut stream = websocket_connect(server.local_addr(), "/api/v1/control/ws");
+        stream
+            .write_all(&websocket_client_frame(
+                WebSocketOpcode::Text,
+                br#"{"type":"status"}"#,
+            ))
+            .unwrap();
+        let ack = read_unmasked_server_frame(&mut stream);
+        let payload = String::from_utf8_lossy(&ack.payload);
+        assert_eq!(ack.opcode, WebSocketOpcode::Text);
+        assert!(payload.contains(r#""type":"status""#));
+        assert!(payload.contains(r#""guestWidth":800"#));
+        assert!(payload.contains(r#""guestHeight":480"#));
+        assert!(server.drain_control_messages().is_empty());
     }
 
     #[test]

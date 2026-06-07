@@ -1438,6 +1438,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     both read `runtime.recentRemoteLogLines(lines)`; Rust v3 mirrors the same
     shape by publishing the bounded `CeRemote` recent-log ring through
     `RemoteServer`.
+  - v2's control WebSocket answers `"status"` in-place from
+    `runtime.remoteStatusJson()`; Rust v3 now returns the latest published
+    v2-shaped status without queueing a synthetic control message.
   - `materializeRemoteAudioChunkLocked` and `CeAudio::liveSlice` tie remote
     audio to the host playback cursor, so the Rust websocket sink models
     host-time client cursors and partial-chunk late joins instead of a single

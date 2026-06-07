@@ -880,6 +880,11 @@
   `recent_log_lines_follow_limit_and_clamp` and
   `remote_server_serves_recent_logs_over_rest_and_control_ws` covers ordering,
   line clamping, REST shape, and the control WebSocket log response.
+- The control WebSocket now also answers v2-style `{"type":"status"}` requests
+  directly from the latest published status instead of queueing a fake CE
+  control command; focused coverage
+  `remote_server_control_websocket_status_returns_latest_status_without_queueing`
+  proves the camelCase status payload and empty control queue.
 - The Unicorn `MsgWaitForMultipleObjectsEx` parking bridge now preserves
   scheduler-owned blocked state when the current guest thread has no runnable
   suspended peer. Previously the raw ordinal bridge could register the current

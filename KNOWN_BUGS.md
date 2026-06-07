@@ -1741,11 +1741,13 @@
     compact `{"ok":true}` success bodies and validation strings. Focused
     recent-log coverage `recent_log_lines_follow_limit_and_clamp` and
     `remote_server_serves_recent_logs_over_rest_and_control_ws` proves the REST
-    endpoint and control-WS `"logs"` request read the same bounded log data.
+    endpoint and control-WS `"logs"` request read the same bounded log data;
+    `remote_server_control_websocket_status_returns_latest_status_without_queueing`
+    proves `"status"` returns the latest v2-shaped status without queueing.
     WebSocket coverage `remote_server_control_websocket_queues_json_frames` and
     `remote_server_audio_websocket_streams_registered_sink_pcm` proves control
-    text frames queue JSON messages and audio sockets receive metadata plus
-    binary PCM frames from the server-backed audio sink.
+    mutating text frames queue JSON messages and audio sockets receive metadata
+    plus binary PCM frames from the server-backed audio sink.
   - Status: REST transport and WebSocket audio/control transport fixed; live
     mounted-client validation remains open.
 
