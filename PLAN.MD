@@ -14,7 +14,7 @@ and isolated guest networking.
 
 | Subsystem | CE source reference | v2 corroboration | Implemented APIs | Open gaps | Fixture coverage | Latest iNavi evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| Guest DLL loader | `NK\KERNEL`, PE loader and SDK loader headers | startup preload path only | startup import DLL registration, CE-aware DLL search order, live-mutable import trap table, static trap-base allocator with reserved dynamic range, live/persisted import trap-page refresh, runtime normal-code DLL map/relocate/import patching from `LoadLibraryW/LoadLibraryExW(flags=0)`, recursive dependency loading, runtime module export table ingestion, module metadata/refcounts, registered-export lookup, non-reclaiming `FreeLibrary` | TLS callbacks, guest `DllMain` attach/detach callouts, forwarded exports, datafile/no-resolve loads, fuller runtime trampoline handling | `dll_search`, import-trap tests, `refresh_import_trap_page_blob_replaces_existing_blob`, `runtime_occupied_ranges_include_memory_regions_and_blobs`, `loaded_module_export_snapshots_skip_unload_pending_modules`, `external_table_accepts_runtime_loaded_module_exports`, `065_loadlibrary_getprocaddress_module`, `171_loadlibrary_guest_dll` source/harness, raw module refcount tests | dumped DLLs from `D:\INAVI_Emulator\DUMPPLZ\Windows` are authoritative runtime bytes |
+| Guest DLL loader | `NK\KERNEL`, PE loader and SDK loader headers | startup preload path only | startup import DLL registration, CE-aware DLL search order, live-mutable import trap table, static trap-base allocator with reserved dynamic range, live/persisted import trap-page refresh, runtime normal-code DLL map/relocate/import patching from `LoadLibraryW/LoadLibraryExW(flags=0)`, recursive dependency loading, runtime module export table ingestion, module metadata/refcounts, registered-export lookup, non-reclaiming `FreeLibrary` | TLS callbacks, guest `DllMain` attach/detach callouts, forwarded exports, datafile/no-resolve loads, fuller runtime trampoline handling | `dll_search`, import-trap tests, `refresh_import_trap_page_blob_replaces_existing_blob`, `runtime_occupied_ranges_include_memory_regions_and_blobs`, `loaded_module_export_snapshots_skip_unload_pending_modules`, `external_table_accepts_runtime_loaded_module_exports`, `065_loadlibrary_getprocaddress_module`, `171_loadlibrary_guest_dll`, raw module refcount tests | dumped DLLs from `D:\INAVI_Emulator\DUMPPLZ\Windows` are authoritative runtime bytes |
 | COREDLL stub audit | COREDLL API sets and SDK headers | broad stub policy proved convenient but unsafe | static ordinal table, implemented/stubbed plan, fallback audit classification/logging, raw thread/caller/trap PC context | owning-module context and fail-loud audit mode | `raw_stub_audit_keeps_import_trap_context`, `tests\coredll_dispatch.rs` | shell/UI/process calls must not silently fake success |
 | Shell launch/settings | `SHELL`, Explorer registry conventions | v2 shell path shape only | `SHGetSpecialFolderPath`, basic registry/shortcut-backed `ShellExecuteEx` launch chain | `SHGetFileInfo`, notify icons, recent docs, fuller namespace/policy | raw `ShellExecuteEx` association test | route UI still needs real shell/process/GWE semantics |
 | GWE defaults/input/send | `GWE\INC`, `window.hpp`, CE `winuser.h`, MFC `wincore.cpp`, CE input/clipboard/caret/IME headers | window broker behavior evidence | core window/message pump, partial defaults, minimal `TranslateMessage`, partial cross-thread send | fuller `DefWindowProcW`, `SendNotifyMessageW` edge cases, keyboard modifiers/layout, accelerators/menu shortcuts, `WM_SYSKEY*`, dead keys/IME handoff, clipboard ownership/formats, caret blink/position/focus integration, full `SendMessageTimeout` wait/result/flag/destruction/reentrancy semantics | existing GWE fixtures | hidden chrome is guest-driven; do not force visibility |
@@ -78,12 +78,12 @@ and isolated guest networking.
 These are not implemented yet and must remain queued until closed by focused
 fixtures plus mounted iNavi evidence:
 
-- Build and run the direct runtime guest-DLL fixture
-  `tests\test_progs\171_loadlibrary_guest_dll`: it contains one DLL with
-  `DllMain`, one named export, one ordinal export, and one EXE that calls
-  `LoadLibraryW`, `GetProcAddress`, invokes both exports, and `FreeLibrary`.
-  The Rust harness compiles with `evc4-fixtures`, but the eVC-produced guest
-  bytes still need a focused run before this gate is closed.
+- Extend runtime guest-DLL fixtures to assert lifecycle behavior once it is
+  implemented. `tests\test_progs\171_loadlibrary_guest_dll` now proves the
+  direct export-call path with one DLL containing `DllMain`, one named export,
+  one ordinal export, and one EXE that calls `LoadLibraryW`, `GetProcAddress`,
+  invokes both exports, and `FreeLibrary`; it does not yet assert
+  `DllMain`/TLS attach or detach counts.
 - Align non-Unicorn/raw `LoadLibraryW` / `LoadLibraryExW` behavior with the
   runtime path where practical. The raw helper currently returns COREDLL or
   already registered modules only; when it cannot map a new DLL, it should fail

@@ -19,8 +19,9 @@
   and paired `FreeLibrary` calls against a generated MIPS DLL. The DLL also
   defines `DllMain` counters for the next attach/detach fidelity slice, but
   this fixture does not assert them yet. `cargo check --features
-  unicorn,evc4-fixtures --test fixture_exes` passes; the focused eVC build/run
-  remains the next validation step.
+  unicorn,evc4-fixtures --test fixture_exes` passes, and the focused eVC run
+  `WINCE_FIXTURE_FILTER=171_loadlibrary_guest_dll cargo test --features
+  unicorn,evc4-fixtures --test fixture_exes -- --ignored --nocapture` passes.
 - The latest attachment audit has been merged into `PLAN.MD`/`TODO.md` as
   explicit queued fidelity work: raw/non-Unicorn loader alignment, core-vs-guest
   DLL boundary diagnostics, actionable must-implement stub hits,

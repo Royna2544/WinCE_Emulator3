@@ -3,7 +3,7 @@
 static volatile DWORD g_attachCount = 0;
 static volatile DWORD g_detachCount = 0;
 
-extern "C" BOOL WINAPI DllMain(HINSTANCE, DWORD reason, LPVOID) {
+BOOL WINAPI DllMain(HANDLE, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         ++g_attachCount;
     } else if (reason == DLL_PROCESS_DETACH) {

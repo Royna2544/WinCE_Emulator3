@@ -12,14 +12,14 @@
 
 ## Current Slice
 
-- Queued runtime loader gaps from `PLAN.MD`: run and close the new direct
-  `171_loadlibrary_guest_dll` eVC fixture; add a dependent-DLL fixture; parse
+- Queued runtime loader gaps from `PLAN.MD`: add a dependent-DLL fixture; parse
   and invoke runtime TLS callbacks; call guest `DllMain(DLL_PROCESS_ATTACH)`
-  on successful normal loads; call detach callbacks/`DllMain(DLL_PROCESS_DETACH)`
-  on final `FreeLibrary`; implement forwarded exports; implement
-  `DONT_RESOLVE_DLL_REFERENCES`; implement datafile/resource-style
-  `LoadLibraryExW`; harden runtime trampoline handling for high/relocated DLLs;
-  add compact runtime loader audit counters.
+  on successful normal loads; extend `171_loadlibrary_guest_dll` to assert
+  attach counts after that call path exists; call detach callbacks/
+  `DllMain(DLL_PROCESS_DETACH)` on final `FreeLibrary`; implement forwarded
+  exports; implement `DONT_RESOLVE_DLL_REFERENCES`; implement
+  datafile/resource-style `LoadLibraryExW`; harden runtime trampoline handling
+  for high/relocated DLLs; add compact runtime loader audit counters.
 - CE fidelity catch-up next slice: finish the runtime guest DLL loader at the
   Unicorn import-trap boundary. The kernel-side module manager/refcount shape
   now exists and the shared CE-aware DLL search order is implemented for
@@ -29,10 +29,10 @@
   DLLs from `D:\INAVI_Emulator\DUMPPLZ\Windows`, relocates them, recursively
   loads non-emulator dependencies, patches imports, rewrites the live trap
   page, registers resources/exports, and records dynamic module refcounts.
-  The harness/source for a direct runtime guest-DLL export-call fixture now
-  exists; next loader work should build/run it with eVC, fix any resulting
-  runtime mapper breakage, then implement forwarded exports, TLS callbacks,
-  and `DllMain` attach/detach callouts. Datafile and
+  The direct runtime guest-DLL export-call fixture now passes with eVC-built
+  MIPS bytes; next loader work should add a dependent-DLL fixture, then
+  implement forwarded exports, TLS callbacks, and `DllMain` attach/detach
+  callouts. Datafile and
   `DONT_RESOLVE_DLL_REFERENCES` loads still fail explicitly until CE-like
   support is implemented. Keep
   `C:\WINCE600` as the behavior reference and update `PLAN.MD` after each port.
