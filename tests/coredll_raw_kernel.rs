@@ -28,14 +28,14 @@ use wince_emulation_v3::{
             ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_RELEASE_MUTEX,
             ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD, ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK,
             ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
-            ORD_SHCREATE_SHORTCUT, ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON,
-            ORD_SHGET_FILE_INFO, ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH,
-            ORD_SHNOTIFICATION_ADD_I, ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
-            ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP, ORD_SLEEP_TILL_TICK, ORD_SUSPEND_THREAD,
-            ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS, ORD_TLS_GET_VALUE,
-            ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_COMM_EVENT,
-            ORD_WAIT_FOR_MULTIPLE_OBJECTS, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSTOMBS,
-            ORD_WIDE_CHAR_TO_MULTI_BYTE,
+            ORD_SHCREATE_SHORTCUT, ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX,
+            ORD_SHELL_NOTIFY_ICON, ORD_SHGET_FILE_INFO, ORD_SHGET_SHORTCUT_TARGET,
+            ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I, ORD_SHNOTIFICATION_GET_DATA_I,
+            ORD_SHNOTIFICATION_REMOVE_I, ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP,
+            ORD_SLEEP_TILL_TICK, ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME,
+            ORD_TERMINATE_PROCESS, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
+            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_MULTIPLE_OBJECTS,
+            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE,
         },
         devices::CommDcb,
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
@@ -2157,6 +2157,91 @@ fn shell_shortcut_ordinals_create_read_and_launch_ce_lnk_files() -> Result<()> {
         }
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), 122);
+
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn shell_create_shortcut_ex_returns_unique_name_and_checks_output_capacity() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("shell_shortcut_ex");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("Windows")).unwrap();
+    fs::write(root.join("Existing.lnk"), b"old shortcut").unwrap();
+    fs::write(root.join("Windows").join("viewer.exe"), b"fake exe").unwrap();
+    kernel.set_file_root(&root);
+
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 46;
+    let requested_ptr = 0x2_8000;
+    let target_ptr = 0x2_8200;
+    let out_ptr = 0x2_8400;
+    let out_capacity_ptr = 0x2_8800;
+    let readback_ptr = 0x2_8a00;
+    memory.map_halfwords(requested_ptr, 80);
+    memory.map_halfwords(target_ptr, 120);
+    memory.map_halfwords(out_ptr, 120);
+    memory.map_halfwords(readback_ptr, 120);
+    memory.map_words(out_capacity_ptr, 1);
+    memory.write_wide_z(requested_ptr, r"\Existing.lnk");
+    memory.write_wide_z(target_ptr, r#""\Windows\viewer.exe" -route"#);
+
+    memory.write_word(out_capacity_ptr, 4);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHCREATE_SHORTCUT_EX,
+            [requested_ptr, target_ptr, out_ptr, out_capacity_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 122);
+    assert_eq!(memory.read_u32(out_capacity_ptr)?, 18);
+    assert!(!root.join("Existing (2).lnk").exists());
+
+    memory.write_word(out_capacity_ptr, 120);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHCREATE_SHORTCUT_EX,
+            [requested_ptr, target_ptr, out_ptr, out_capacity_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_wide_z(out_ptr, 120), r"\Existing (2).lnk");
+    assert!(root.join("Existing (2).lnk").exists());
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHGET_SHORTCUT_TARGET,
+            [out_ptr, readback_ptr, 120],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_wide_z(readback_ptr, 120),
+        r#""\Windows\viewer.exe" -route"#
+    );
 
     let _ = fs::remove_dir_all(root);
     Ok(())

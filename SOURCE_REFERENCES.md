@@ -125,10 +125,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `SHGetShortcutTarget`, while the MIPSII COREDLL export file maps the raw
     ordinals used by iNavi-era callers. CE's `Shortcut_Write` stores shortcut
     files as UTF-8 text with a BOM, decimal character count, `#`, and a quoted
-    target executable plus optional arguments. v3 now implements the basic raw
-    `SHCreateShortcut` and `SHGetShortcutTarget` path against mounted CE files
-    with `CREATE_NEW` behavior and buffer-fit validation; `SHCreateShortcutEx`
-    unique-name/buffer-return behavior remains queued.
+    target executable plus optional arguments. v3 now implements the raw
+    `SHCreateShortcut`, `SHGetShortcutTarget`, and `SHCreateShortcutEx` paths
+    against mounted CE files with `CREATE_NEW` behavior, buffer-fit validation,
+    and bounded unique-name generation for existing shortcut names.
 
 - Old MIPS CE kernel-call encoding:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\nkmips.h`,

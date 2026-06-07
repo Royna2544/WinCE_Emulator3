@@ -3578,6 +3578,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_SHGET_SHORTCUT_TARGET => Some(CoredllValue::Bool(sh_get_shortcut_target_w_raw(
             kernel, memory, thread_id, args,
         ))),
+        ORD_SHCREATE_SHORTCUT_EX => Some(CoredllValue::U32(sh_create_shortcut_ex_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_SHELL_NOTIFY_ICON => Some(CoredllValue::Bool(shell_notify_icon_w_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -11327,17 +11330,13 @@ fn sh_create_shortcut_w_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
-    let Some(shortcut) =
-        read_guest_wide_arg(memory, raw_arg(args, 0)).map(|path| path.trim().replace('/', "\\"))
-    else {
+    let Some(shortcut) = read_shell_api_path_arg(memory, raw_arg(args, 0)) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     };
-    let Some(target) =
-        read_guest_wide_arg(memory, raw_arg(args, 1)).map(|path| path.trim().replace('/', "\\"))
-    else {
+    let Some(target) = read_shell_api_path_arg(memory, raw_arg(args, 1)) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -11357,6 +11356,93 @@ fn sh_create_shortcut_w_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_FILENAME_EXCED_RANGE_LOCAL);
         return 0;
     }
+    if create_ce_shortcut_file(kernel, thread_id, &shortcut, &target) {
+        1
+    } else {
+        0
+    }
+}
+
+fn sh_create_shortcut_ex_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let Some(requested) = read_shell_api_path_arg(memory, raw_arg(args, 0)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let Some(target) = read_shell_api_path_arg(memory, raw_arg(args, 1)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if requested.is_empty() || target.is_empty() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    if requested.encode_utf16().count() + 1 >= MAX_PATH_CHARS
+        || target.encode_utf16().count() + 1 >= MAX_SHORTCUT_TARGET_CHARS
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILENAME_EXCED_RANGE_LOCAL);
+        return 0;
+    }
+    let Some(shortcut) = unique_shell_shortcut_path(kernel, &requested) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILE_EXISTS_LOCAL);
+        return 0;
+    };
+    let out_ptr = raw_arg(args, 2);
+    let out_capacity_ptr = raw_arg(args, 3);
+    if out_ptr != 0 && out_capacity_ptr != 0 {
+        let Some(capacity) = read_guest_u32(kernel, memory, thread_id, out_capacity_ptr) else {
+            return 0;
+        };
+        let required = shortcut.encode_utf16().count() as u32 + 1;
+        if capacity < required {
+            let _ = write_guest_u32(kernel, memory, thread_id, out_capacity_ptr, required);
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INSUFFICIENT_BUFFER_LOCAL);
+            return 0;
+        }
+        if !write_guest_wide_fixed(
+            kernel,
+            memory,
+            thread_id,
+            out_ptr,
+            &shortcut,
+            capacity as usize,
+        ) {
+            return 0;
+        }
+    }
+    if create_ce_shortcut_file(kernel, thread_id, &shortcut, &target) {
+        1
+    } else {
+        0
+    }
+}
+
+fn read_shell_api_path_arg<M: CoredllGuestMemory>(memory: &M, ptr: u32) -> Option<String> {
+    read_guest_wide_arg(memory, ptr).map(|path| path.trim().replace('/', "\\"))
+}
+
+fn create_ce_shortcut_file(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    shortcut: &str,
+    target: &str,
+) -> bool {
     let bytes = make_ce_shortcut_bytes(&target);
     let handle = match kernel.create_file_w(&shortcut, GENERIC_WRITE, CREATE_NEW) {
         Ok(handle) => handle,
@@ -11367,7 +11453,7 @@ fn sh_create_shortcut_w_raw<M: CoredllGuestMemory>(
                 ERROR_FILE_NOT_FOUND
             };
             kernel.threads.set_last_error(thread_id, error);
-            return 0;
+            return false;
         }
     };
     let write_ok = kernel
@@ -11378,10 +11464,10 @@ fn sh_create_shortcut_w_raw<M: CoredllGuestMemory>(
         kernel
             .threads
             .set_last_error(thread_id, ERROR_ACCESS_DENIED);
-        return 0;
+        return false;
     }
     kernel.threads.set_last_error(thread_id, 0);
-    1
+    true
 }
 
 fn sh_get_shortcut_target_w_raw<M: CoredllGuestMemory>(
@@ -11390,9 +11476,7 @@ fn sh_get_shortcut_target_w_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> bool {
-    let Some(shortcut) =
-        read_guest_wide_arg(memory, raw_arg(args, 0)).map(|path| path.trim().replace('/', "\\"))
-    else {
+    let Some(shortcut) = read_shell_api_path_arg(memory, raw_arg(args, 0)) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -11478,6 +11562,50 @@ fn parse_ce_shortcut_target_bytes(bytes: &[u8]) -> Option<String> {
         return None;
     }
     Some(target.trim_end_matches('\0').replace('/', "\\"))
+}
+
+fn unique_shell_shortcut_path(kernel: &CeKernel, requested: &str) -> Option<String> {
+    if kernel.file_attributes_w(requested).is_err() {
+        return Some(requested.to_owned());
+    }
+    let (dir, file_name) = split_shell_path_parent_file(requested);
+    let (stem, extension) = split_shell_file_stem_extension(&file_name);
+    for index in 2..=999 {
+        let candidate = join_shell_path(&dir, &format!("{stem} ({index}){extension}"));
+        if candidate.encode_utf16().count() + 1 >= MAX_PATH_CHARS {
+            return None;
+        }
+        if kernel.file_attributes_w(&candidate).is_err() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn split_shell_path_parent_file(path: &str) -> (String, String) {
+    let trimmed = path.trim_end_matches('\\');
+    match trimmed.rfind('\\') {
+        Some(0) => ("\\".to_owned(), trimmed[1..].to_owned()),
+        Some(index) => (trimmed[..index].to_owned(), trimmed[index + 1..].to_owned()),
+        None => (String::new(), trimmed.to_owned()),
+    }
+}
+
+fn split_shell_file_stem_extension(file_name: &str) -> (String, String) {
+    match file_name.rfind('.') {
+        Some(index) if index > 0 => (file_name[..index].to_owned(), file_name[index..].to_owned()),
+        _ => (file_name.to_owned(), String::new()),
+    }
+}
+
+fn join_shell_path(dir: &str, file_name: &str) -> String {
+    if dir.is_empty() {
+        file_name.to_owned()
+    } else if dir == "\\" {
+        format!("\\{file_name}")
+    } else {
+        format!("{dir}\\{file_name}")
+    }
 }
 
 fn resolve_shell_launch(

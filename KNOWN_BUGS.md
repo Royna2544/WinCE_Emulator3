@@ -100,10 +100,10 @@
     timeout/dismiss callbacks. `TrackPopupMenu*` tracks popup state without
     interactive selection. `MessageBoxW` validates owners and records/defaults
     the requested modal result, but does not yet create/render a modal dialog
-    or run a nested input pump. Basic `SHCreateShortcut` and
-    `SHGetShortcutTarget` now create/read CE text shortcuts, but
-    `SHCreateShortcutEx` unique-name/buffer-return behavior is still queued.
-    Shell namespace/storage presentation and file-change notifications are
+    or run a nested input pump. Basic `SHCreateShortcut`,
+    `SHGetShortcutTarget`, and bounded `SHCreateShortcutEx` unique-name/
+    buffer-return behavior now create/read CE text shortcuts. Shell
+    namespace/storage presentation and file-change notifications are
     incomplete.
   - Required fix: implement the queued shell/UI section in `PLAN.MD` using
     registry/mount/window state and CE source references, with explicit failure
