@@ -8,6 +8,7 @@ use crate::{
     },
     error::{Error, Result},
     pe::{ImportBy, ImportDescriptor, PeImage},
+    winsock,
 };
 
 pub const IMPORT_TRAP_BASE: u32 = 0x7fff_0000;
@@ -428,7 +429,14 @@ fn dispatch_external_stub_to_u32<M: CoredllGuestMemory>(
         "external DLL import stub"
     );
     match trap.module_kind {
-        ImportModuleKind::Winsock => winsock_stub_return(trap, memory, args),
+        ImportModuleKind::Winsock => winsock::dispatch_import(
+            kernel,
+            thread_id,
+            trap.ordinal,
+            trap.name.as_deref(),
+            memory,
+            args,
+        ),
         ImportModuleKind::Ole => ole_stub_return(kernel, memory, thread_id, name, args),
         ImportModuleKind::Coredll => 0,
         ImportModuleKind::Mfc => {
@@ -439,70 +447,6 @@ fn dispatch_external_stub_to_u32<M: CoredllGuestMemory>(
 
 fn raw_import_arg(args: &[u32], index: usize) -> u32 {
     args.get(index).copied().unwrap_or(0)
-}
-
-fn winsock_stub_return<M: CoredllGuestMemory>(
-    trap: &ImportTrap,
-    memory: &mut M,
-    args: &[u32],
-) -> u32 {
-    let name = trap.name.as_deref().unwrap_or("");
-    match (trap.ordinal, normalize_symbol(name).as_str()) {
-        (Some(3), _) | (_, "wsastartup") => {
-            wsa_startup(memory, raw_import_arg(args, 0), raw_import_arg(args, 1))
-        }
-        (Some(1), _) | (_, "wsacleanup") => 0,
-        (_, "socket" | "accept") => u32::MAX,
-        _ => 0,
-    }
-}
-
-fn wsa_startup<M: CoredllGuestMemory>(memory: &mut M, requested: u32, data_ptr: u32) -> u32 {
-    const WSAVERNOTSUPPORTED: u32 = 10092;
-    const WSADESCRIPTION_LEN: usize = 256;
-    const WSASYS_STATUS_LEN: usize = 128;
-    if data_ptr == 0 {
-        return WSAVERNOTSUPPORTED;
-    }
-    let major = ((requested >> 8) & 0xff).clamp(1, 2) as u16;
-    let minor = (requested & 0xff).min(2) as u16;
-    let version = (major << 8) | minor;
-    if memory.write_u16(data_ptr, version).is_err()
-        || memory.write_u16(data_ptr + 2, 0x0202).is_err()
-        || write_guest_bytes(
-            memory,
-            data_ptr + 4,
-            b"FakeCE Winsock\0",
-            WSADESCRIPTION_LEN + 1,
-        )
-        .is_err()
-        || write_guest_bytes(
-            memory,
-            data_ptr + 4 + 257,
-            b"Running\0",
-            WSASYS_STATUS_LEN + 1,
-        )
-        .is_err()
-        || memory.write_u16(data_ptr + 4 + 257 + 129, 0).is_err()
-        || memory.write_u16(data_ptr + 4 + 257 + 129 + 2, 0).is_err()
-        || memory.write_u32(data_ptr + 4 + 257 + 129 + 4, 0).is_err()
-    {
-        return WSAVERNOTSUPPORTED;
-    }
-    0
-}
-
-fn write_guest_bytes<M: CoredllGuestMemory>(
-    memory: &mut M,
-    addr: u32,
-    bytes: &[u8],
-    capacity: usize,
-) -> Result<()> {
-    for index in 0..capacity {
-        let value = bytes.get(index).copied().unwrap_or(0);
-        memory.write_u8(addr + index as u32, value)?;
-    }
-    Ok(())
 }
 
 fn ole_stub_return<M: CoredllGuestMemory>(

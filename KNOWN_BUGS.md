@@ -1565,8 +1565,12 @@
     available and does so before shim classification. MFC and `commctrl`
     imports are deliberately not stubbed anymore; unresolved slots are left for
     the loaded DLL path instead of being patched to emulator return shims.
+    WINSOCK runtime dispatch now routes through `src/winsock.rs`, with focused
+    tests covering the CE-shaped `WSAStartup` data, byte-order/address helpers,
+    and real host loopback TCP `socket`/`connect`/`send`/`recv`.
   - Status: active launch-enabling diagnostic layer for WINSOCK/OLE external
-    DLLs.
+    DLLs. WINSOCK has a direct host backend now, but not an isolated CE
+    subnet/gateway model or scheduler-backed blocking socket waits.
 
 - PE resources are only partially loaded into `ResourceSystem`.
   - Symptom: resource API behavior works for registered virtual resources and

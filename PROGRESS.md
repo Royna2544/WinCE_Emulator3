@@ -9,6 +9,17 @@
 
 ## Confirmed
 
+- WINSOCK import traps now route through the top-level `src/winsock.rs`
+  subsystem boundary instead of living inline in `src/emulator/imports.rs`.
+  The first host-backed slice is implemented there: `socket`, `connect`,
+  `bind`, `listen`, `accept`, `send`, `recv`, `sendto`, `recvfrom`,
+  `closesocket`, `ioctlsocket(FIONBIO)`, `shutdown`, `select`/`__WSAFDIsSet`,
+  byte-order helpers, `inet_addr`, `inet_ntoa`, `gethostname`,
+  `gethostbyname`, `WSAGetLastError`, and `WSASetLastError` now dispatch
+  through a WINSOCK-owned socket table and host TCP/UDP sockets. Focused tests
+  cover `WSAStartup`, byte-order/address conversion, and real loopback
+  `connect`/`send`/`recv`. This is direct host networking, not the future
+  isolated CE subnet/gateway model.
 - Windows-sudo `cargo flamegraph` profiling of the mounted Win32-host route
   startup path now identifies and closes another generic startup-speed tax.
   Pre-fix `target\route_search_host_90s_20260607_debugforced2_flame.svg`
@@ -3015,7 +3026,8 @@
   - guest heap pages are mapped as a CE heap arena for APIs that allocate and
     populate memory during the same import call
   - non-COREDLL supported DLLs other than MFC/loaded `commctrl.dll` currently
-    use module-owned launch stubs with debug logs, not final API semantics
+    use module-owned launch stubs with debug logs, not final API semantics;
+    WINSOCK dispatch is now owned by `src/winsock.rs`
 - SDK CE 4.2 Mipsii COREDLL ordinal evidence from `coredll.lib` is now captured
   for the launch-demanded CRT ordinals: `_wcsdup`, `wcsrchr`, `_wcsnicmp`,
   `malloc`, `memcpy`, `memset`, operator `new`, `swprintf`, `printf`, `free`,

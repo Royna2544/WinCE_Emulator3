@@ -881,9 +881,11 @@
   - Source refs: `D:\INAVI_Emulator\DUMPPLZ\Windows` for target runtime DLL
     bytes, and the mounted executable directory for real app companion DLL
     bytes; CE/MFC/SDK trees only as behavior evidence.
-  - Current v3 status: COREDLL remains emulator-provided. WINSOCK/OLE remain
-    shimmed launch-surface libraries. `commctrl.dll` is no longer treated as
-    emulator-provided; startup preloads it from the DLL search paths and
+  - Current v3 status: COREDLL remains emulator-provided. OLE remains a
+    shimmed launch-surface library. WINSOCK dispatch now goes through
+    `src/winsock.rs` and has a first direct-host TCP/UDP implementation for
+    the mounted app's classic WINSOCK imports. `commctrl.dll` is no longer
+    treated as emulator-provided; startup preloads it from the DLL search paths and
     registered mapped-module exports are available to module APIs. Import
     patching resolves loaded external exports before shim classification, so
     search-path `commctrl.dll` import slots now patch directly to mapped DLL
@@ -897,9 +899,12 @@
     can be inspected and mapped.
   - Open gaps: runtime `LoadLibraryW` is not yet a general on-demand DLL
     mapper for arbitrary non-preloaded DLLs; sibling preload is a launch bridge
-    and should graduate to CE-like on-demand module mapping. WINSOCK/OLE
-    behavior still needs subsystem-backed implementation only where fixtures or
-    traces demand it.
+    and should graduate to CE-like on-demand module mapping. WINSOCK currently
+    uses direct host sockets, shares CE thread last-error storage for
+    `WSAGetLastError`, and does not yet provide a virtual NIC, isolated
+    10.0.0.x subnet, scheduler-backed blocking waits, or complete `hostent`
+    lifetime cleanup. OLE behavior still needs subsystem-backed implementation
+    only where fixtures or traces demand it.
   - Fixture gates: keep PE zero-fill tests and module-loader tests passing;
     add focused runtime `LoadLibraryW`/`GetProcAddress` fixtures before
     expanding on-demand DLL mapping.
@@ -1479,9 +1484,12 @@
   determine which preceding CE/MFC resource, window, or service result is
   causing the app to shut down before useful drawing.
 - Replace launch-stub behavior for WINSOCK and OLE imports with real
-  subsystem-backed implementations as import traces demand. Keep MFC and
-  `commctrl.dll` on the loaded DLL path only; do not add emulator MFC or
-  common-controls stubs.
+  subsystem-backed implementations as import traces demand. WINSOCK already
+  routes through `src/winsock.rs` and has a direct-host socket table; add any
+  isolated host-network bridge, scheduler-backed blocking behavior, and richer
+  lookup/option semantics there rather than growing import-dispatch glue. Keep
+  MFC and `commctrl.dll` on the loaded DLL path only; do not add emulator MFC
+  or common-controls stubs.
 - Continue burning down COREDLL ordinals subsystem by subsystem, replacing
   stubbed ordinal plan entries with CE/MFC/SDK-referenced semantics. Next
   likely tranche: `BitBlt`, `PatBlt`, `StretchDIBits`, `SetDIBitsToDevice`,
@@ -1641,7 +1649,10 @@
   waveOut work copies guest PCM into registered sinks and `main` registers the
   Windows `winmm` host-sink boundary, but the host backend still retains chunks
   instead of owning a full playback queue.
-- Implement socket behavior for WINSOCK imports.
+- Extend WINSOCK beyond the first direct-host implementation: isolate traffic
+  behind a CE-like subnet/gateway model if needed, make blocking socket calls
+  scheduler-backed instead of short host timeouts, and add focused fixtures for
+  `bind`/`listen`/`accept`, UDP, `select`, and lookup edge cases.
 
 ## Parked
 
