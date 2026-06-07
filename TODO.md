@@ -1605,6 +1605,15 @@
   monitor-driven run so the trace captures the activated child state rather
   than the parent pre-handoff timing seen in
   `target\route_drive_heapmap_limit1_*`.
+- Continue from `target\route_ready_wait2_*`: the patched host/live scheduler
+  reaches `iSearch.exe` without the duplicate `happyway_win.exe` regression,
+  but the visible route controls are still hidden after the 170s mounted run.
+  Remote evidence shows `visibleChildCount=0`, `hiddenChildCount=28`, and the
+  last imports are still dominated by `resmapi_800x480.bin`, `CreateDIBSection`,
+  `RSImage LoadPNG`, and `MoveWindow` for the hidden chrome. Next work should
+  measure and fix the generic startup/resource hot path or the CE
+  show/update/paint transition that keeps these HWNDs hidden; do not force
+  button visibility or route-search state.
 - Extend the new Rust remote server beyond the now v2-aligned REST/WebSocket
   surface: expose recent log lines from `CeRemote`, add mounted iNavi
   validation for `/api/v1/control/ws` and `/api/v1/audio/ws`, and keep proving

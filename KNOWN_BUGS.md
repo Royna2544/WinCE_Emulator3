@@ -1805,3 +1805,30 @@
   - Status: fixed. Heap spillover uses the page-aware guest range mapper and
     import-boundary remap errors stop immediately. Mounted validation reaches
     the child iNavi SE splash instead of the heap write fault.
+
+- Route startup creates the main chrome HWNDs but keeps them guest-hidden.
+  - Symptom: the host Win32 presenter remains responsive and the map/banner
+    framebuffer paints, but the right-side route/search buttons and bottom bar
+    are not visible or actionable.
+  - Evidence: `target\route_ready_wait2_170s.png` plus remote
+    `windows.txt` show 28 child windows under `hwnd=0x00020004`, including
+    the expected right-side and bottom rectangles, all with `vis=false`.
+    `imports.txt` still shows repeated `resmapi_800x480.bin` opens,
+    `CreateDIBSection`, `RSImage LoadPNG`, and `MoveWindow` for the hidden
+    chrome. Process traces show real `iNavi.exe`, `happyway_win.exe`, and
+    `iSearch.exe` handoff rather than a presenter/input ANR.
+  - Status: active. Fix through CE startup/resource/GWE show-update semantics
+    or generic hot-path performance. Do not force visibility or synthesize
+    route UI.
+
+- Parked wait timeout preemption can duplicate companion startup.
+  - Symptom: a broad ready-parked-wait experiment treated timed-out parked
+    waits as immediate handoff readiness and duplicated
+    `happyway_win.exe` as process id 68 instead of reaching `iSearch.exe`.
+  - Evidence: `target\route_ready_wait_37s.png` and its process trace contain
+    a second `CreateProcessWQueued` / `CreateProcessChildParked` for
+    `happyway_win.exe`. Tightening the ready check to non-timeout readiness
+    restored the viable `iSearch.exe` trace in `target\route_ready_wait2_*`.
+  - Status: fixed in the current working tree; keep timeout completion inside
+    the resumed process context rather than using timeout expiry as an
+    immediate cross-process preemption signal.

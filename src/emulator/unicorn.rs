@@ -1464,6 +1464,39 @@ impl UnicornMips {
             .any(|send_id| kernel.sent_message_result_ready(send_id))
     }
 
+    #[cfg(feature = "unicorn")]
+    pub fn has_ready_parked_wait_unblock(&self, kernel: &CeKernel) -> bool {
+        self.parked_child_processes
+            .iter()
+            .any(|process| Self::parked_process_ready_wait_id(process, kernel).is_some())
+    }
+
+    #[cfg(not(feature = "unicorn"))]
+    pub fn has_ready_parked_wait_unblock(&self, _kernel: &CeKernel) -> bool {
+        false
+    }
+
+    #[cfg(feature = "unicorn")]
+    pub fn rotate_to_ready_parked_wait(&mut self, kernel: &mut CeKernel) -> bool {
+        let Some(index) = self
+            .parked_child_processes
+            .iter()
+            .position(|process| Self::parked_process_ready_wait_id(process, kernel).is_some())
+        else {
+            return false;
+        };
+        let Some(parked) = self.parked_child_processes.remove(index) else {
+            return false;
+        };
+        self.switch_to_parked_process(kernel, parked, true);
+        true
+    }
+
+    #[cfg(not(feature = "unicorn"))]
+    pub fn rotate_to_ready_parked_wait(&mut self, _kernel: &mut CeKernel) -> bool {
+        false
+    }
+
     pub fn last_stop_is_guest_thread_return_stub(&self) -> bool {
         self.last_debug
             .as_ref()
@@ -1560,6 +1593,20 @@ impl UnicornMips {
             self.parked_child_processes.push_back(parked);
         }
         None
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn parked_process_ready_wait_id(parked: &ParkedProcess, kernel: &CeKernel) -> Option<u64> {
+        if let Some(blocked) = parked.cpu.blocked_guest_thread.as_ref() {
+            let wait = kernel.blocked_waiter(blocked.wait_id)?;
+            if scheduler_blocked_wait_is_ready(wait, kernel) {
+                return Some(blocked.wait_id);
+            }
+        }
+        parked.cpu.blocked_wait_threads.iter().find_map(|blocked| {
+            let wait = kernel.blocked_waiter(blocked.wait_id)?;
+            scheduler_blocked_wait_is_ready(wait, kernel).then_some(blocked.wait_id)
+        })
     }
 
     fn switch_to_parked_process(
@@ -2232,7 +2279,7 @@ impl UnicornMips {
             uc.mem_write(u64::from(blob.base), &blob.bytes)
                 .map_err(|err| Error::Backend(format!("write 0x{:08x}: {err:?}", blob.base)))?;
         }
-        let start_pc = if let Some(saved) = self.saved_context.as_ref() {
+        let mut start_pc = if let Some(saved) = self.saved_context.as_ref() {
             restore_mips_gprs(&mut uc, &saved.regs);
             saved.pc
         } else {
@@ -2929,6 +2976,34 @@ impl UnicornMips {
             running_guest_thread: &running_guest_thread,
             guest_thread_stack_slots: &guest_thread_stack_slots,
         };
+        if running_guest_thread.borrow().is_none() {
+            let active_thread_id = *current_thread_id.borrow();
+            if try_resume_blocked_wait_with_active_pc(
+                kernel,
+                &mut uc,
+                active_thread_id,
+                &current_thread_id,
+                &blocked_wait_threads,
+                &suspended_guest_thread,
+                Some(&suspended_guest_thread_queue),
+                &running_guest_thread,
+                None,
+                false,
+            ) || try_resume_blocked_get_message_with_active_pc(
+                kernel,
+                &mut uc,
+                active_thread_id,
+                &current_thread_id,
+                &blocked_guest_thread,
+                &suspended_guest_thread,
+                Some(&suspended_guest_thread_queue),
+                &running_guest_thread,
+                None,
+                false,
+            ) {
+                start_pc = read_mips_reg(&uc, RegisterMIPS::PC);
+            }
+        }
         let scheduler_timeslice_counter = Rc::new(Cell::new(0u32));
         let scheduler_timeslice_counter_hook = Rc::clone(&scheduler_timeslice_counter);
         let scheduler_timeslice_pending = Rc::new(Cell::new(false));
@@ -8784,6 +8859,9 @@ fn complete_current_single_wait_timeout<D>(
     if writes.into_iter().any(|write| write.is_err()) {
         let _ = uc.emu_stop();
     }
+    if live_pump {
+        let _ = uc.emu_stop();
+    }
     true
 }
 
@@ -8811,19 +8889,18 @@ fn complete_current_sleep_timeout<D>(
     if writes.into_iter().any(|write| write.is_err()) {
         let _ = uc.emu_stop();
     }
+    if live_pump {
+        let _ = uc.emu_stop();
+    }
     true
 }
 
 #[cfg(feature = "unicorn")]
-fn throttle_current_wait_host_loop(timeout_ms: u32, live_pump: bool) {
+fn throttle_current_wait_host_loop(timeout_ms: u32, _live_pump: bool) {
     if timeout_ms == 0 || timeout_ms == crate::ce::timer::INFINITE {
         return;
     }
-    let sleep_ms = if live_pump {
-        u64::from(timeout_ms)
-    } else {
-        u64::from(timeout_ms).min(CURRENT_WAIT_HOST_THROTTLE_MS)
-    };
+    let sleep_ms = u64::from(timeout_ms).min(CURRENT_WAIT_HOST_THROTTLE_MS);
     std::thread::sleep(std::time::Duration::from_millis(sleep_ms));
 }
 
@@ -11457,6 +11534,63 @@ mod wait_scheduler_tests {
     }
 
     #[test]
+    fn live_pump_current_single_wait_completes_one_timeout_slice() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let thread_id = super::MAIN_GUEST_THREAD_ID;
+        let thread_handle = 0x101;
+        let event = kernel.create_event_w(None, true, false);
+        let return_pc = 0x1357_5000u32;
+        let tick_before = kernel.timers.tick_count();
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(super::try_block_wait_for_single_object(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_WAIT_FOR_SINGLE_OBJECT),
+            &[event, 500],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &blocked_get_message,
+            &suspended_thread,
+            &running_thread,
+            std::time::Instant::now(),
+            Some(std::time::Duration::from_secs(1)),
+            true,
+        ));
+
+        assert_eq!(*running_thread.borrow(), Some((thread_id, thread_handle)));
+        assert!(blocked_waits.borrow().is_empty());
+        let elapsed = kernel.timers.tick_count().wrapping_sub(tick_before);
+        assert!((500..=520).contains(&elapsed), "elapsed={elapsed}");
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
+            WAIT_TIMEOUT
+        );
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::PC).unwrap() as u32,
+            return_pc
+        );
+    }
+
+    #[test]
     fn current_sleep_timeout_advances_timers_and_returns_zero() {
         let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
@@ -11493,6 +11627,65 @@ mod wait_scheduler_tests {
         assert_eq!(timer.hwnd, hwnd);
         assert_eq!(timer.msg, WM_TIMER);
         assert_eq!(timer.wparam, 99);
+    }
+
+    #[test]
+    fn live_pump_current_sleep_completes_one_timeout_slice() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let thread_id = super::MAIN_GUEST_THREAD_ID;
+        let thread_handle = 0x101;
+        let return_pc = 0x0040_5000u32;
+        let tick_before = kernel.timers.tick_count();
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let blocked_get_message = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let self_suspended_threads =
+            std::rc::Rc::new(std::cell::RefCell::new(std::collections::BTreeMap::new()));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(super::try_block_sleep(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SLEEP),
+            &[500],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &blocked_get_message,
+            &suspended_thread,
+            &self_suspended_threads,
+            &running_thread,
+            std::time::Instant::now(),
+            Some(std::time::Duration::from_secs(1)),
+            true,
+        ));
+
+        assert_eq!(*running_thread.borrow(), Some((thread_id, thread_handle)));
+        assert!(blocked_waits.borrow().is_empty());
+        let elapsed = kernel.timers.tick_count().wrapping_sub(tick_before);
+        assert!((501..=521).contains(&elapsed), "elapsed={elapsed}");
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
+            0
+        );
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::PC).unwrap() as u32,
+            return_pc
+        );
     }
 
     #[test]
@@ -13693,6 +13886,168 @@ mod guest_thread_stack_tests {
         assert_eq!(saved.regs.regs[2], 0x4455_6677);
         assert_eq!(saved.regs.regs[16], 0x7777_6677);
         assert_eq!(saved.regs.regs[31], sender_return_pc);
+
+        Ok(())
+    }
+
+    #[test]
+    fn rotate_to_ready_parked_wait_process() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+        scheduler.set_initial_thread_id(4);
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 68,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        kernel.set_process_module_path("\\SDMMC Disk\\INavi\\iSearch.exe".to_owned());
+        kernel.set_process_module_host_path(std::path::PathBuf::from(
+            r"D:\INAVI_Emulator\INAVI\INavi\iSearch.exe",
+        ));
+
+        let parent_thread = 1;
+        let parent_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
+        let wait_id = kernel.register_blocked_waiter(
+            parent_thread,
+            parent_handle,
+            Vec::new(),
+            crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            },
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        let mut parent_cpu = UnicornMips::new()?;
+        parent_cpu.set_initial_thread_id(parent_thread);
+        parent_cpu.current_thread_id = parent_thread;
+        parent_cpu.running_guest_thread = None;
+        parent_cpu.blocked_guest_thread = Some(BlockedGuestThread {
+            wait_id,
+            thread_id: parent_thread,
+            thread_handle: parent_handle,
+            regs: MipsGuestContext::zero(),
+            return_pc: 0x0040_1000,
+            msg_ptr: 0x3000_0100,
+            hwnd: None,
+            min_msg: 0,
+            max_msg: 0,
+        });
+        scheduler.parked_child_processes.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned()),
+            process_handle: None,
+            thread_handle: None,
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 1,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: parent_thread,
+            cpu: Box::new(parent_cpu),
+            blocked_send_id: None,
+            module_base: 0x0010_0000,
+            module_path: "\\SDMMC Disk\\INavi\\iNavi.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe"),
+            command_line: "parent".to_owned(),
+        });
+
+        assert!(!scheduler.has_ready_parked_wait_unblock(&kernel));
+        assert!(kernel.post_thread_message_w(parent_thread, crate::ce::gwe::WM_USER + 7, 1, 2));
+        assert!(scheduler.has_ready_parked_wait_unblock(&kernel));
+        assert!(scheduler.rotate_to_ready_parked_wait(&mut kernel));
+        assert_eq!(kernel.current_process_id(), 1);
+        assert_eq!(
+            kernel.process_module_path(),
+            "\\SDMMC Disk\\INavi\\iNavi.exe"
+        );
+        assert_eq!(scheduler.current_thread_id, parent_thread);
+        assert!(scheduler.blocked_guest_thread.is_some());
+        assert_eq!(scheduler.parked_child_processes.len(), 1);
+        assert!(
+            scheduler
+                .parked_child_processes
+                .iter()
+                .any(|process| process.process_state.process_id == 68)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn rotate_to_ready_parked_kernel_wait_process() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+        scheduler.set_initial_thread_id(1);
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 1,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        kernel.set_process_module_path("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned());
+        kernel.set_process_module_host_path(std::path::PathBuf::from(
+            r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe",
+        ));
+
+        let child_thread = 4;
+        let child_handle = 0x404;
+        let event = kernel.create_event_w(None, true, false);
+        let wait_id = kernel.register_blocked_waiter(
+            child_thread,
+            child_handle,
+            vec![event],
+            crate::ce::scheduler::SchedulerBlockedWaitKind::Kernel,
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        let mut child_cpu = UnicornMips::new()?;
+        child_cpu.set_initial_thread_id(child_thread);
+        child_cpu.current_thread_id = child_thread;
+        child_cpu.running_guest_thread = None;
+        child_cpu.blocked_wait_threads.push(BlockedWaitThread {
+            wait_id,
+            thread_id: child_thread,
+            thread_handle: child_handle,
+            wait_handles: vec![event],
+            kind: BlockedWaitKind::Kernel,
+            wait_started_ms: kernel.timers.tick_count(),
+            timeout_ms: crate::ce::timer::INFINITE,
+            regs: MipsGuestContext::zero(),
+            return_pc: 0x0800_1000,
+        });
+        scheduler.parked_child_processes.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\iSearch.exe".to_owned()),
+            process_handle: Some(0x680),
+            thread_handle: Some(child_handle),
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 68,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: child_thread,
+            cpu: Box::new(child_cpu),
+            blocked_send_id: None,
+            module_base: 0x0800_0000,
+            module_path: "\\SDMMC Disk\\INavi\\iSearch.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(
+                r"D:\INAVI_Emulator\INAVI\INavi\iSearch.exe",
+            ),
+            command_line: String::new(),
+        });
+
+        assert!(!scheduler.has_ready_parked_wait_unblock(&kernel));
+        assert!(kernel.set_event(event));
+        assert!(scheduler.has_ready_parked_wait_unblock(&kernel));
+        assert!(scheduler.rotate_to_ready_parked_wait(&mut kernel));
+        assert_eq!(kernel.current_process_id(), 68);
+        assert_eq!(
+            kernel.process_module_path(),
+            "\\SDMMC Disk\\INavi\\iSearch.exe"
+        );
+        assert_eq!(scheduler.current_thread_id, child_thread);
+        assert_eq!(scheduler.blocked_wait_threads.len(), 1);
 
         Ok(())
     }
@@ -22475,6 +22830,81 @@ mod unicorn_tests {
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, 0x0040_1000);
         assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap() as u32, 0x0040_1000);
         assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 1);
+    }
+
+    #[test]
+    fn get_message_resume_from_no_running_thread_consumes_posted_input() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x3000_0000, 0x1000, unicorn_engine::Prot::ALL)
+            .unwrap();
+
+        let main_thread_id = super::MAIN_GUEST_THREAD_ID;
+        let main_thread_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
+        let active_thread_id = 4;
+        let msg_ptr = 0x3000_0100;
+        let return_pc = 0x0040_1000;
+        let wait_id = kernel.register_blocked_waiter(
+            main_thread_id,
+            main_thread_handle,
+            Vec::new(),
+            crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            },
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        let blocked_guest_thread = Rc::new(RefCell::new(Some(super::BlockedGuestThread {
+            wait_id,
+            thread_id: main_thread_id,
+            thread_handle: main_thread_handle,
+            regs: super::MipsGuestContext::zero(),
+            return_pc,
+            msg_ptr,
+            hwnd: None,
+            min_msg: 0,
+            max_msg: 0,
+        })));
+        let current_thread_id = Rc::new(RefCell::new(active_thread_id));
+        let suspended_thread = Rc::new(RefCell::new(None));
+        let running_thread = Rc::new(RefCell::new(None));
+        assert!(kernel.post_thread_message_w(
+            main_thread_id,
+            crate::ce::gwe::WM_LBUTTONDOWN,
+            1,
+            (84 << 16) | 767
+        ));
+
+        assert!(super::try_resume_blocked_get_message_after_current_blocked(
+            &mut kernel,
+            &mut uc,
+            active_thread_id,
+            &current_thread_id,
+            &blocked_guest_thread,
+            &suspended_thread,
+            &running_thread,
+        ));
+
+        assert!(kernel.blocked_waiter(wait_id).is_none());
+        assert!(blocked_guest_thread.borrow().is_none());
+        assert_eq!(*current_thread_id.borrow(), main_thread_id);
+        assert_eq!(
+            *running_thread.borrow(),
+            Some((main_thread_id, main_thread_handle))
+        );
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::RA).unwrap() as u32, return_pc);
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 1);
+        let mut msg_bytes = [0; 12];
+        uc.mem_read(u64::from(msg_ptr), &mut msg_bytes).unwrap();
+        assert_eq!(
+            u32::from_le_bytes(msg_bytes[4..8].try_into().unwrap()),
+            crate::ce::gwe::WM_LBUTTONDOWN
+        );
+        assert_eq!(u32::from_le_bytes(msg_bytes[8..12].try_into().unwrap()), 1);
     }
 
     #[test]

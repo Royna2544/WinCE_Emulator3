@@ -4225,6 +4225,27 @@
   `happyway_win.exe` iNavi SE splash while staying responsive at roughly
   170-180 MiB RSS.
 
+- Advanced the host/live multiprocess scheduler around route startup. Parked
+  process handoff now detects ready `GetMessage` and non-timeout blocked waits
+  before idling the Win32 host presenter, and Unicorn can resume a saved
+  blocked wait/GetMessage context when a parked CPU is re-entered with no
+  running guest thread. The first broad version also treated timed-out parked
+  waits as immediate readiness and caused a duplicate `happyway_win.exe`
+  launch; that was tightened so only signaled/input/send/serial readiness
+  preempts. Focused coverage
+  `rotate_to_ready_parked_wait_process`,
+  `rotate_to_ready_parked_kernel_wait_process`,
+  `get_message_resume_from_no_running_thread_consumes_posted_input`, and the
+  live-pump finite wait/sleep timeout tests pass. Mounted host validation with
+  `--remote-server 192.168.0.39:8765` reaches the viable
+  `happyway_win.exe` + `iSearch.exe` path without the duplicate companion.
+  Current live evidence from `target\route_ready_wait2_170s.png` and the
+  remote summaries: the app remains responsive under 300 MiB RSS, process
+  traces cycle through `iNavi.exe`, `happyway_win.exe`, and `iSearch.exe`, but
+  the route chrome is still not actionable because all 28 children under
+  `hwnd=0x00020004` are guest-hidden while the app continues the
+  `resmapi_800x480.bin` / `RSImage LoadPNG` startup path.
+
 ## False Leads
 
 - A process-directory fallback for rooted `CreateFileW` paths was tested and

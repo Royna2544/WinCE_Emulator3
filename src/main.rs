@@ -40,6 +40,7 @@ use wince_emulation_v3::{
 const FAST_START_RUN_SLICE_INSTRUCTIONS: usize = 250_000;
 const HOST_LIVE_RUN_SLICE_MS: u64 = 120_000;
 const HOST_IDLE_MESSAGE_POLL_SLICE_MS: u64 = 100;
+const HOST_REMOTE_BUSY_RUN_SLICE_MS: u64 = 5_000;
 const REMOTE_LIVE_RUN_SLICE_MS: u64 = 1_000;
 const COMPANION_START_DELAY_MS: u64 = 1_000;
 const COMPANION_INSTRUCTION_LIMIT: usize = 250_000_000;
@@ -321,6 +322,10 @@ fn run_cpu_loop(
         if desktop_queued != 0 {
             reported_blocked_message_wait = false;
         }
+        if cpu.rotate_to_ready_parked_wait(kernel) {
+            reported_blocked_message_wait = false;
+            continue;
+        }
         if remote_drained == 0
             && desktop_queued == 0
             && should_idle_host_message_pump(cpu, kernel, args.desktop)
@@ -374,6 +379,10 @@ fn run_cpu_loop(
         if service_remote_endpoint(cpu, kernel, desktop, blocked_remote_target.as_ref()) != 0 {
             reported_blocked_message_wait = false;
         }
+        if cpu.rotate_to_ready_parked_wait(kernel) {
+            reported_blocked_message_wait = false;
+            continue;
+        }
         let total_wall_clock_expired =
             wall_clock_limit_expired(args.cpu_wall_clock_limit_ms, run_started.elapsed());
         let active_process_exited = cpu
@@ -413,6 +422,7 @@ fn run_cpu_loop(
             let should_rotate_process = should_rotate_parked_process(
                 cpu.has_parked_child_processes(),
                 cpu.has_ready_parked_send_unblock(kernel),
+                cpu.has_ready_parked_wait_unblock(kernel),
                 message_waiter,
                 host_wall_clock_stop,
                 live_pump_slice,
@@ -465,16 +475,17 @@ fn wall_clock_limit_expired(limit_ms: u64, elapsed: Duration) -> bool {
 fn should_rotate_parked_process(
     has_parked_child_processes: bool,
     has_ready_parked_send_unblock: bool,
+    has_ready_parked_wait_unblock: bool,
     message_waiter: bool,
     host_wall_clock_stop: bool,
     live_pump_slice: bool,
     idle_message_poll_slice: bool,
 ) -> bool {
     has_parked_child_processes
-        && ((message_waiter && has_ready_parked_send_unblock)
+        && ((message_waiter && (has_ready_parked_send_unblock || has_ready_parked_wait_unblock))
             || (live_pump_slice
                 && host_wall_clock_stop
-                && (!idle_message_poll_slice || message_waiter)))
+                && (!idle_message_poll_slice || has_ready_parked_wait_unblock || message_waiter)))
 }
 
 fn host_idle_message_poll_slice(cpu: &UnicornMips, desktop: DesktopMode) -> bool {
@@ -494,6 +505,7 @@ fn should_idle_host_message_pump(
             .last_debug_snapshot()
             .is_some_and(snapshot_has_saved_get_message_waiter)
         && !cpu.has_ready_parked_send_unblock(kernel)
+        && !cpu.has_ready_parked_wait_unblock(kernel)
         && !cpu.has_parked_child_processes()
 }
 
@@ -527,10 +539,20 @@ fn effective_wall_clock_limit_ms(
             );
         }
         if explicit_limit_ms == 0 {
-            return (HOST_LIVE_RUN_SLICE_MS, true);
+            let live_slice = if remote_server_enabled {
+                HOST_REMOTE_BUSY_RUN_SLICE_MS
+            } else {
+                HOST_LIVE_RUN_SLICE_MS
+            };
+            return (live_slice, true);
         }
+        let live_slice = if remote_server_enabled {
+            HOST_REMOTE_BUSY_RUN_SLICE_MS
+        } else {
+            HOST_LIVE_RUN_SLICE_MS
+        };
         return (
-            remaining_wall_clock_limit_ms(explicit_limit_ms, elapsed).min(HOST_LIVE_RUN_SLICE_MS),
+            remaining_wall_clock_limit_ms(explicit_limit_ms, elapsed).min(live_slice),
             true,
         );
     }
@@ -1227,6 +1249,7 @@ fn monitor_continue_process_handoff(
     let should_rotate_process = should_rotate_parked_process(
         cpu.has_parked_child_processes(),
         cpu.has_ready_parked_send_unblock(kernel),
+        cpu.has_ready_parked_wait_unblock(kernel),
         message_waiter,
         host_wall_clock_stop,
         limits.live_pump,
@@ -2569,6 +2592,16 @@ mod tests {
             effective_wall_clock_limit_ms(
                 0,
                 Duration::from_secs(10),
+                DesktopMode::Host,
+                true,
+                false,
+            ),
+            (HOST_REMOTE_BUSY_RUN_SLICE_MS, true)
+        );
+        assert_eq!(
+            effective_wall_clock_limit_ms(
+                0,
+                Duration::from_secs(10),
                 DesktopMode::Virtual,
                 false,
                 false,
@@ -2597,6 +2630,16 @@ mod tests {
         );
         assert_eq!(
             effective_wall_clock_limit_ms(
+                2_000,
+                Duration::from_millis(125),
+                DesktopMode::Host,
+                true,
+                false,
+            ),
+            (2_000 - 125, true)
+        );
+        assert_eq!(
+            effective_wall_clock_limit_ms(
                 500,
                 Duration::from_millis(125),
                 DesktopMode::Host,
@@ -2620,25 +2663,25 @@ mod tests {
     #[test]
     fn live_wall_stop_rotates_parked_processes() {
         assert!(should_rotate_parked_process(
-            true, false, false, true, true, false
+            true, false, false, false, true, true, false
         ));
         assert!(should_rotate_parked_process(
-            true, true, true, false, false, true
+            true, true, false, true, false, false, true
         ));
         assert!(!should_rotate_parked_process(
-            true, false, true, false, false, true
+            true, false, false, true, false, false, true
         ));
         assert!(should_rotate_parked_process(
-            true, false, true, true, true, true
+            true, false, true, false, true, true, true
         ));
         assert!(!should_rotate_parked_process(
-            true, false, false, true, true, true
+            true, false, false, false, true, true, true
         ));
         assert!(!should_rotate_parked_process(
-            true, false, false, true, false, false
+            true, false, false, false, true, false, false
         ));
         assert!(!should_rotate_parked_process(
-            false, true, true, true, true, false
+            false, true, true, true, true, true, false
         ));
     }
 
