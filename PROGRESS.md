@@ -885,6 +885,27 @@
   control command; focused coverage
   `remote_server_control_websocket_status_returns_latest_status_without_queueing`
   proves the camelCase status payload and empty control queue.
+- Mounted remote WebSocket validation now has live evidence on the required
+  bind. A parallel virtual mounted iNavi run with
+  `--remote-server 192.168.0.39:8765 --remote-audio` wrote
+  `target\remote_ws_validation_parallel_probe.json`: REST status returned the
+  v2-shaped `800x480` status with audio enabled and GPS target `COM21`, REST
+  logs returned `{"ok":true,"lines":[]}`, control WS returned v2-shaped
+  `status` and `log` responses, and audio WS returned the text PCM metadata
+  frame. The guest then stopped at the known idle `GetMessageW @861` frontier
+  in `target\remote_ws_validation_parallel_summary.txt`, so this validates the
+  mounted transport handshake/status/log path without claiming real app audio
+  PCM production.
+- A visible Win32 host-presenter run is live as PID `47696` with
+  `--remote-server 192.168.0.39:8765 --remote-audio`; probe artifacts
+  `target\host_presenter_once_probe.json` and
+  `target\host_presenter_once_control_ws.json` confirm REST status/logs and
+  control-WS status/logs from the host run. REST status reports `800x480`,
+  audio enabled, GPS target `COM21`, and one queued audio chunk. A late-joining
+  audio WebSocket in `target\host_presenter_once_audio_ws.json` received the
+  PCM metadata frame but no binary PCM frame within 3 s, so real mounted app
+  audio chunk delivery remains watch-only beyond the focused server-backed PCM
+  unit coverage.
 - The Unicorn `MsgWaitForMultipleObjectsEx` parking bridge now preserves
   scheduler-owned blocked state when the current guest thread has no runnable
   suspended peer. Previously the raw ordinal bridge could register the current

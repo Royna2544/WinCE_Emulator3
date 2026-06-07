@@ -95,8 +95,11 @@ input, NMEA/location injection, per-request frame `quality`, and MJPEG
 `fps`/`quality`.
 The `--remote-bind`, `--remote-port`, `--remote-token`,
 `--remote-video-fps`, `--remote-jpeg-quality`, and `--remote-audio*` flags are
-accepted for v2 CLI compatibility; WebSocket audio/control upgrade paths are
-reserved but not implemented yet.
+accepted for v2 CLI compatibility. `GET /api/v1/control/ws` upgrades to a
+text control WebSocket: `status` and `logs` are answered directly, while
+mutating control messages are queued for the CE remote input path. `GET
+/api/v1/audio/ws` upgrades to a PCM WebSocket, sends a metadata text frame, and
+streams binary PCM chunks when guest audio reaches the registered remote sink.
 
 Use `--cpu-instruction-limit N` or `--cpu-wall-clock-limit-ms N` with
 `--run-cpu` to make Unicorn return a bounded diagnostic snapshot instead of

@@ -1743,16 +1743,18 @@
   show/update/paint transition that keeps these HWNDs hidden; do not force
   button visibility or route-search state.
 - Extend the new Rust remote server beyond the now v2-aligned REST/WebSocket
-  surface: mounted iNavi validation is still needed for `/api/v1/control/ws`
-  and `/api/v1/audio/ws`, and remote touch/GPS input still needs repeated
-  proof through the same scheduler/GWE paths as host input. REST handlers
-  already match v2's touch/key validation, compact success responses,
-  NMEA/location errors, frame `quality`, MJPEG `fps`/`quality`, missing-
-  framebuffer error shape, and `/api/v1/logs/recent` now returns recent
-  `CeRemote` log lines instead of the old empty placeholder. WebSocket control
-  now answers `{"type":"logs"}` and `{"type":"status"}` directly from the
-  recent-log/status rings; audio upgrades stream server-backed PCM binary
-  frames.
+  surface with external-client/watch validation as the app frontier advances.
+  The mounted validation `target\remote_ws_validation_parallel_*` bound the
+  required `--remote-server 192.168.0.39:8765`, served REST status/logs,
+  answered control-WS `{"type":"status"}` and `{"type":"logs"}`, and accepted
+  audio-WS with PCM metadata while the guest stopped at the known
+  `GetMessageW @861` frontier. Keep proving remote touch/GPS input through the
+  same scheduler/GWE paths as host input, and capture mounted audio binary PCM
+  once the real app emits wave data during a live remote run. The visible host
+  presenter probe `target\host_presenter_once_*` confirms REST/control-WS
+  status/logs and audio-WS metadata with one queued audio chunk visible in
+  status, but a late-joining audio WS client did not receive a binary frame
+  within 3 s.
 - Add ordinal/decorated-name evidence from the Windows CE 4.2 Mipsii SDK import
   libraries, alongside the source references already recorded.
 - Persist host-backed registry writes separately from the source dump.

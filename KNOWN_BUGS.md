@@ -1724,15 +1724,13 @@
     `FindResourceW(hModule=0x00010000, name=0x0e01, type=6)` and receives 0.
   - Status: next PE/resource integration step beyond strings.
 
-- Remote API live log streaming and mounted WebSocket validation are still
-  incomplete.
+- Remote API mounted WebSocket validation is closed/watch, with remaining live
+  client/audio-data evidence tied to app progress.
   - Symptom: v3 now has a Rust HTTP listener serving the v2-compatible REST
     surface under `/api/v1/...`, including status, JPEG/PNG/MJPEG framebuffer
     snapshots, touch/key input, GPS/NMEA/IMU injection, and pause/resume.
     `/api/v1/control/ws` and `/api/v1/audio/ws` now upgrade successfully, and
-    `/api/v1/logs/recent` now returns the recent `CeRemote` log ring, but the
-    new WS endpoints still need mounted iNavi validation against real remote
-    tooling.
+    `/api/v1/logs/recent` returns the recent `CeRemote` log ring.
   - Evidence: `src/remote_server.rs` queues REST control JSON into
     `CeKernel::dispatch_remote_control_message`, publishes real framebuffer
     pixels from the normal present/live-blit boundary, and has focused tests
@@ -1748,8 +1746,24 @@
     `remote_server_audio_websocket_streams_registered_sink_pcm` proves control
     mutating text frames queue JSON messages and audio sockets receive metadata
     plus binary PCM frames from the server-backed audio sink.
-  - Status: REST transport and WebSocket audio/control transport fixed; live
-    mounted-client validation remains open.
+  - Mounted validation: `target\remote_ws_validation_parallel_probe.json`
+    connected to the required `--remote-server 192.168.0.39:8765` during a
+    mounted virtual iNavi run. REST status reported `800x480`, audio enabled,
+    GPS target `COM21`, and no pending control messages; REST logs returned
+    `{"ok":true,"lines":[]}`; control WS returned v2-shaped `status` and `log`
+    responses; audio WS returned the text PCM metadata frame. The run stopped
+    at the known idle `GetMessageW @861` frontier:
+    `target\remote_ws_validation_parallel_summary.txt`.
+  - Host-presenter validation: visible Win32 host run PID `47696` produced
+    `target\host_presenter_once_probe.json` and
+    `target\host_presenter_once_control_ws.json`, confirming REST status/logs
+    and control-WS status/logs on the live host presenter. Status showed one
+    queued audio chunk, but `target\host_presenter_once_audio_ws.json` only
+    received the audio metadata frame before a 3 s late-join timeout.
+  - Status: closed/watch for mounted REST/control-WS/audio-WS handshake
+    validation. Reopen if external remote tooling cannot connect to the same
+    bind, if mounted status/log control frames regress, or once real mounted
+    audio chunks are needed beyond the existing server-backed PCM unit test.
 
 - Scheduler/wait ownership is only partially ported to CE fidelity.
   - Symptom: wait calls now flow through scheduler accounting and the first
