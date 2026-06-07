@@ -187,6 +187,7 @@ impl ImportTrapTable {
                 thread_id,
                 caller_pc: None,
                 trap_pc: Some(address),
+                caller_module: None,
             },
             address,
             args,

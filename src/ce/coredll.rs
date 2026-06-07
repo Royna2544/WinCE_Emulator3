@@ -408,11 +408,12 @@ pub struct CoredllStubResult {
     pub args: Vec<u32>,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CoredllRawContext {
     pub thread_id: u32,
     pub caller_pc: Option<u32>,
     pub trap_pc: Option<u32>,
+    pub caller_module: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -601,6 +602,7 @@ impl CoredllExportTable {
                 thread_id,
                 caller_pc: None,
                 trap_pc: None,
+                caller_module: None,
             },
             ordinal,
             &args,
@@ -651,6 +653,7 @@ impl CoredllExportTable {
                 thread_id,
                 caller_pc: None,
                 trap_pc: None,
+                caller_module: None,
             },
             ordinal,
             args,
@@ -711,9 +714,11 @@ impl CoredllExportTable {
 }
 
 fn trace_stub_fallback(export: &CoredllExport, stub: &CoredllStubResult) {
-    let thread_id = stub.context.map(|context| context.thread_id);
-    let caller_pc = stub.context.and_then(|context| context.caller_pc);
-    let trap_pc = stub.context.and_then(|context| context.trap_pc);
+    let context = stub.context.as_ref();
+    let thread_id = context.map(|context| context.thread_id);
+    let caller_pc = context.and_then(|context| context.caller_pc);
+    let trap_pc = context.and_then(|context| context.trap_pc);
+    let caller_module = context.and_then(|context| context.caller_module.as_deref());
     match stub.audit {
         CoredllStubAuditClassification::MustImplement => tracing::warn!(
             target: "ce.coredll.stub",
@@ -722,6 +727,7 @@ fn trace_stub_fallback(export: &CoredllExport, stub: &CoredllStubResult) {
             thread_id,
             caller_pc = caller_pc.map(|pc| format!("0x{pc:08x}")),
             trap_pc = trap_pc.map(|pc| format!("0x{pc:08x}")),
+            caller_module,
             policy = ?stub.policy,
             subsystem = ?stub.subsystem,
             "must-implement COREDLL export reached stub fallback"
@@ -734,6 +740,7 @@ fn trace_stub_fallback(export: &CoredllExport, stub: &CoredllStubResult) {
                 thread_id,
                 caller_pc = caller_pc.map(|pc| format!("0x{pc:08x}")),
                 trap_pc = trap_pc.map(|pc| format!("0x{pc:08x}")),
+                caller_module,
                 policy = ?stub.policy,
                 audit = ?stub.audit,
                 subsystem = ?stub.subsystem,

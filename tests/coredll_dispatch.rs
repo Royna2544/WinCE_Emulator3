@@ -802,6 +802,7 @@ fn raw_stub_audit_keeps_import_trap_context() -> Result<()> {
             thread_id: 7,
             caller_pc: Some(0x0040_1234),
             trap_pc: Some(0x7fff_4000),
+            caller_module: Some("dll:mfcce400.dll".to_owned()),
         },
         ORD_SHGET_FILE_INFO,
         [0, 0, 0, 0, 0],
@@ -819,6 +820,7 @@ fn raw_stub_audit_keeps_import_trap_context() -> Result<()> {
                     thread_id: 7,
                     caller_pc: Some(0x0040_1234),
                     trap_pc: Some(0x7fff_4000),
+                    caller_module: Some("dll:mfcce400.dll".to_owned()),
                 })
         ),
         "{dispatch:?}"

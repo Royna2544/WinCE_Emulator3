@@ -157,7 +157,12 @@
   dispatching COREDLL ordinals, and fallback logs include both caller/trap PCs.
   `SHGetFileInfo` is now explicitly classified as `must implement` instead of
   slipping through the broad kernel-private safe-failure bucket. Focused
-  coverage `raw_stub_audit_keeps_import_trap_context` passes.
+  coverage `raw_stub_audit_keeps_import_trap_context` passes. The same context
+  now also includes caller-module attribution when the guest RA falls inside a
+  mapped process image or runtime DLL blob, giving must-implement stub hits the
+  responsible `image:`/`dll:` owner in fallback logs. Focused coverage
+  `mapped_blob_module_for_pc_attributes_image_and_runtime_dlls` verifies that
+  ordinary RAM blobs are not mislabeled as module callers.
 - CE fidelity catch-up now has a durable implementation ledger in `PLAN.MD`;
   its first line is `Reference C:\WINCE600 sources` as requested. The first
   structural slice is implemented without app-specific behavior: loaded guest

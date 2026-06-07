@@ -58,10 +58,10 @@
   Keep
   `C:\WINCE600` as the behavior reference and update `PLAN.MD` after each port.
 - COREDLL fallback audit follow-up: stubs now carry audit classification plus
-  raw import-trap context with thread id, caller PC, and trap PC. Next, add the
-  remaining owning-module context where available and make
-  shell/UI/process/loader critical fallbacks fail loudly under an audit mode
-  instead of merely warning.
+  raw import-trap context with thread id, caller PC, trap PC, and caller module
+  for mapped EXE/DLL callsites. Next, make shell/UI/process/loader critical
+  fallbacks fail loudly under an audit mode instead of merely warning, and add
+  any non-mapped callsite attribution that mounted traces prove necessary.
 - Attachment fidelity queue merged into `PLAN.MD`: align raw/non-Unicorn
   `LoadLibraryW` with runtime behavior or explicit failure; keep
   emulator-provided core DLL classification audited; make must-implement stub

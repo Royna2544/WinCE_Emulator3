@@ -98,14 +98,16 @@
 - Closed/watch: COREDLL stub audit now includes raw import-trap caller context.
   - Symptom: stub fallback records were classified and must-implement
     fallbacks logged warnings, but raw dispatch did not carry the Unicorn
-    caller PC.
-  - Fix: `CoredllRawContext` now records thread id, caller PC, and trap PC;
+    caller PC or module owner.
+  - Fix: `CoredllRawContext` now records thread id, caller PC, trap PC, and
+    caller module when the guest RA falls inside a mapped EXE/DLL image blob;
     the Unicorn import hook populates it before raw COREDLL dispatch, and
-    fallback logs include those PCs. `SHGetFileInfo` is explicitly
+    fallback logs include those callsite details. `SHGetFileInfo` is explicitly
     must-implement so shell-visible file-info fallback cannot hide as a generic
     safe failure.
-  - Status: closed/watch. Remaining audit work is owning-module attribution and
-    fail-loud mode for shell/UI/process/loader critical fallbacks.
+  - Status: closed/watch. Remaining audit work is fail-loud mode for
+    shell/UI/process/loader critical fallbacks plus any non-mapped caller
+    attribution that mounted traces prove necessary.
 - Closed/watch: `DeviceParser.exe` old MIPS CE terminate thunk no longer dies
   through the interrupt/zero-PC path.
   - Symptom: route-search startup could record `CreateProcessChildError` for

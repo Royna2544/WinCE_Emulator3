@@ -4114,6 +4114,8 @@ impl UnicornMips {
                     return;
                 }
                 let caller_pc = read_mips_reg(memory.uc, RegisterMIPS::RA);
+                let caller_module =
+                    mapped_blob_module_for_pc(unsafe { &*mapped_blobs_ptr }, caller_pc);
                 let Some(import_return) = traps
                     .borrow()
                     .dispatch_trap_registers_with_framebuffer_and_context(
@@ -4124,6 +4126,7 @@ impl UnicornMips {
                         thread_id: active_thread_id,
                         caller_pc: Some(caller_pc),
                         trap_pc: Some(address),
+                        caller_module,
                     },
                     address,
                     args.as_slice(),
@@ -8409,6 +8412,22 @@ fn compact_mapped_blob_name(name: &str) -> String {
         return format!("{kind}:{file_name}");
     }
     name.to_owned()
+}
+
+#[cfg(feature = "unicorn")]
+fn mapped_blob_module_for_pc(mapped_blobs: &[MappedBlob], pc: u32) -> Option<String> {
+    for blob in mapped_blobs {
+        if !(blob.name.starts_with("image:") || blob.name.starts_with("dll:")) {
+            continue;
+        }
+        let Some(offset) = pc.checked_sub(blob.base) else {
+            continue;
+        };
+        if offset < blob.bytes.len() as u32 {
+            return Some(compact_mapped_blob_name(&blob.name));
+        }
+    }
+    None
 }
 
 fn write_call_target_import(
@@ -23011,6 +23030,37 @@ mod unicorn_tests {
         assert!(summary.contains("tls:6"));
         assert!(summary.contains("dllmain:2/1"));
         assert!(summary.contains("fail:1"));
+    }
+
+    #[test]
+    fn mapped_blob_module_for_pc_attributes_image_and_runtime_dlls() {
+        let blobs = vec![
+            super::MappedBlob {
+                name: "ram:heap".to_owned(),
+                base: 0x0010_0000,
+                bytes: vec![0; 0x1000],
+            },
+            super::MappedBlob {
+                name: r"image:D:\app\iNavi.exe".to_owned(),
+                base: 0x0040_0000,
+                bytes: vec![0; 0x2000],
+            },
+            super::MappedBlob {
+                name: r"dll:D:\dump\mfcce400.dll".to_owned(),
+                base: 0x1000_0000,
+                bytes: vec![0; 0x3000],
+            },
+        ];
+
+        assert_eq!(
+            super::mapped_blob_module_for_pc(&blobs, 0x0040_0100).as_deref(),
+            Some("image:iNavi.exe")
+        );
+        assert_eq!(
+            super::mapped_blob_module_for_pc(&blobs, 0x1000_0200).as_deref(),
+            Some("dll:mfcce400.dll")
+        );
+        assert_eq!(super::mapped_blob_module_for_pc(&blobs, 0x0010_0010), None);
     }
 
     #[test]

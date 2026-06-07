@@ -85,6 +85,17 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
 
 ## Windows CE Core OS
 
+- COREDLL stub audit diagnostics:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\coredll.h`, CE API-set headers, and the
+  generated COREDLL ordinal/export evidence remain the boundary for deciding
+  whether an ordinal is implemented, a safe failure, or a must-implement stub.
+  v3 now carries raw import-trap context through this boundary, including
+  thread id, caller PC, trap PC, and caller-module attribution when the guest
+  return address falls inside a mapped process image or runtime DLL blob. This
+  is diagnostic evidence for subsystem ports; it must not become app-specific
+  behavior or a reason to return plausible fake success for shell/UI/process
+  loader calls.
+
 - COREDLL CRT route-search import:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\crt_ordinals.h` and
   `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\MIPSII\RETAIL\coredll.def`
