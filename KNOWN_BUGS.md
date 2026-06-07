@@ -93,9 +93,10 @@
 - Open: several shell-visible APIs are still state tracking or cheap success
   rather than CE-like behavior.
   - Symptom: `SHGetFileInfo` now covers registry-backed display/type/
-    attribute/icon-location metadata, but real icon extraction and image-list
-    ownership are not implemented yet. `Shell_NotifyIconW` tracks add/modify/
-    delete state but does not yet deliver real interaction callbacks.
+    attribute/sysicon metadata and rejects unsupported/colliding CE flags, but
+    real icon extraction and image-list ownership are not implemented yet.
+    `Shell_NotifyIconW` tracks add/modify/delete state but does not yet deliver
+    real interaction callbacks.
     `SHNotification*I` preserves/query data but not user interaction or
     timeout/dismiss callbacks. `TrackPopupMenu*` tracks popup state without
     interactive selection. `MessageBoxW` validates owners and records/defaults

@@ -97,6 +97,7 @@ const ERROR_BAD_FORMAT_LOCAL: u32 = 11;
 const ERROR_FILE_EXISTS_LOCAL: u32 = 80;
 const ERROR_INSUFFICIENT_BUFFER_LOCAL: u32 = 122;
 const ERROR_FILENAME_EXCED_RANGE_LOCAL: u32 = 206;
+const ERROR_INVALID_FLAGS_LOCAL: u32 = 1004;
 const MAX_PATH_CHARS: usize = 260;
 const MAX_SHORTCUT_TARGET_CHARS: usize = MAX_PATH_CHARS - 2;
 const CSIDL_FLAG_CREATE: u32 = 0x0000_8000;
@@ -119,9 +120,16 @@ const SHGFI_TYPENAME: u32 = 0x0000_0400;
 const SHGFI_ATTRIBUTES: u32 = 0x0000_0800;
 const SHGFI_ICONLOCATION: u32 = 0x0000_1000;
 const SHGFI_SYSICONINDEX: u32 = 0x0000_4000;
-const SHGFI_PIDL: u32 = 0x0000_0008;
+const SHGFI_SMALLICON: u32 = 0x0000_0001;
 const SHGFI_USEFILEATTRIBUTES: u32 = 0x0000_0010;
 const SHGFI_ATTR_SPECIFIED: u32 = 0x0002_0000;
+const SHGFI_SUPPORTED_CE_FLAGS: u32 = SHGFI_ICON
+    | SHGFI_SMALLICON
+    | SHGFI_DISPLAYNAME
+    | SHGFI_TYPENAME
+    | SHGFI_ATTRIBUTES
+    | SHGFI_SYSICONINDEX
+    | SHGFI_USEFILEATTRIBUTES;
 const SHELL_GENERIC_FILE_ICON: u32 = 32512;
 const SHELL_GENERIC_FOLDER_ICON: u32 = 32513;
 const SHELL_SYSTEM_IMAGE_LIST_HANDLE: u32 = 0x000b_f000;
@@ -11164,16 +11172,20 @@ fn sh_get_file_info_w_raw<M: CoredllGuestMemory>(
     let info_size = raw_arg(args, 3);
     let flags = raw_arg(args, 4);
 
-    if flags & SHGFI_PIDL != 0 {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-        return 0;
-    }
-    if path_ptr == 0 || info_ptr == 0 || info_size < SHFILEINFO_SIZE_W {
+    if path_ptr == 0 || info_ptr == 0 || info_size != SHFILEINFO_SIZE_W {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    if flags & !SHGFI_SUPPORTED_CE_FLAGS != 0
+        || flags & (SHGFI_ATTRIBUTES | SHGFI_USEFILEATTRIBUTES)
+            == (SHGFI_ATTRIBUTES | SHGFI_USEFILEATTRIBUTES)
+        || flags & SHGFI_SMALLICON != 0 && flags & (SHGFI_ICON | SHGFI_SYSICONINDEX) == 0
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_FLAGS_LOCAL);
         return 0;
     }
     let Some(path) = read_guest_wide_arg(memory, path_ptr).map(|path| path.replace('/', "\\"))

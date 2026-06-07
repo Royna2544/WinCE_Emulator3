@@ -146,12 +146,16 @@
   `SendMessageTimeout` semantics.
 - `SHGetFileInfo` now has a registry-backed raw COREDLL implementation instead
   of a must-implement stub fallback. The first slice handles Unicode paths,
-  `SHGFI_USEFILEATTRIBUTES`, display names, type names from HKCR class
-  descriptions, attributes including `SHGFI_ATTR_SPECIFIED`, default icon
-  location parsing from `HKCR\<class>\DefaultIcon`, stable system icon indexes,
-  and generic icon handles. The focused raw shell test
-  `sh_get_file_info_uses_registry_associations_and_attributes` passes; real
-  icon extraction/image-list ownership remains queued.
+  display names, type names from HKCR class descriptions, real mounted-file
+  attributes, stable system icon indexes, and generic icon handles. The raw
+  boundary now mirrors CE's supported flag subset: unsupported or colliding
+  `SHGFI_ICONLOCATION`, `SHGFI_ATTR_SPECIFIED`, `SHGFI_PIDL`, `SHGFI_SMALLICON`
+  without icon/index, and `SHGFI_ATTRIBUTES | SHGFI_USEFILEATTRIBUTES` calls
+  fail with `ERROR_INVALID_FLAGS` instead of returning plausible desktop-style
+  metadata. Focused raw shell tests
+  `sh_get_file_info_uses_registry_associations_and_attributes` and
+  `sh_get_file_info_rejects_unsupported_and_colliding_flags` pass; real icon
+  extraction/image-list ownership remains queued.
 - Shell notification state now has a dedicated `ShellSystem` instead of a
   COREDLL-local placeholder. Raw `Shell_NotifyIconW @481` decodes the
   `NOTIFYICONDATAW` prefix, validates owner HWNDs, tracks add/modify/delete

@@ -400,10 +400,14 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     the dump lacks those values, honors `fCreate`/`CSIDL_FLAG_CREATE` by
     creating the resolved mounted folder, and rejects overlong resolved paths
     instead of truncating the fixed MAX_PATH output. The same `shellapi.h` `SHFILEINFO`
-    layout and `SHGFI_*` flags anchor the first `SHGetFileInfo` slice: v3
-    reads HKCR extension classes/default icons, writes display/type/attribute
-    metadata, and returns explicit generic icon handles/indexes until real CE
-    icon extraction/image-list behavior is ported. `strsafe.h` anchors the
+    layout and `SHGFI_*` flags, plus HPC shell `api.cpp`, anchor the first
+    `SHGetFileInfo` slices: v3 reads HKCR extension classes, writes display/
+    type/attribute metadata, returns explicit generic icon handles/indexes
+    until real CE icon extraction/image-list behavior is ported, and rejects
+    unsupported/colliding flags such as `SHGFI_ICONLOCATION`,
+    `SHGFI_ATTR_SPECIFIED`, `SHGFI_PIDL`, small-icon requests without
+    icon/index output, and `SHGFI_ATTRIBUTES | SHGFI_USEFILEATTRIBUTES` with
+    `ERROR_INVALID_FLAGS`. `strsafe.h` anchors the
     `StringCch*`
     character-count and `StringCb*` byte-count distinction plus truncation
     HRESULTs. `winuser.h` anchors the icon/cursor signatures; v3 currently

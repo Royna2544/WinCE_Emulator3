@@ -2417,13 +2417,18 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
     const SHGFI_DISPLAYNAME: u32 = 0x0000_0200;
     const SHGFI_TYPENAME: u32 = 0x0000_0400;
     const SHGFI_ATTRIBUTES: u32 = 0x0000_0800;
-    const SHGFI_ICONLOCATION: u32 = 0x0000_1000;
-    const SHGFI_USEFILEATTRIBUTES: u32 = 0x0000_0010;
+    const SHGFI_SYSICONINDEX: u32 = 0x0000_4000;
+    const SHGFI_SMALLICON: u32 = 0x0000_0001;
     const FILE_ATTRIBUTE_ARCHIVE: u32 = 0x0000_0020;
 
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
     let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("shget_file_info");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("Docs")).unwrap();
+    fs::write(root.join("Docs").join("morning.nav"), b"route").unwrap();
+    kernel.set_file_root(&root);
     kernel
         .registry
         .set_value(r"HKCR\.nav", "", RegistryValue::string("navfile"));
@@ -2453,20 +2458,20 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
         ORD_SHGET_FILE_INFO,
         [
             path_ptr,
-            FILE_ATTRIBUTE_ARCHIVE,
+            0,
             info_ptr,
             SHFILEINFO_SIZE_W,
-            SHGFI_USEFILEATTRIBUTES
-                | SHGFI_DISPLAYNAME
+            SHGFI_DISPLAYNAME
                 | SHGFI_TYPENAME
                 | SHGFI_ATTRIBUTES
-                | SHGFI_ICONLOCATION,
+                | SHGFI_SYSICONINDEX
+                | SHGFI_SMALLICON,
         ],
     );
     assert!(matches!(
         ret,
         CoredllDispatch::Returned {
-            value: CoredllValue::U32(1),
+            value: CoredllValue::U32(0x000b_f000),
             ..
         }
     ));
@@ -2474,16 +2479,66 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
         memory.read_u32(info_ptr + SHFILEINFO_ATTRIBUTES_OFFSET)?,
         FILE_ATTRIBUTE_ARCHIVE
     );
-    assert_eq!(memory.read_i32(info_ptr + SHFILEINFO_IICON_OFFSET)?, -7);
+    assert_ne!(memory.read_i32(info_ptr + SHFILEINFO_IICON_OFFSET)?, 0);
     assert_eq!(
         memory.read_wide_z(info_ptr + SHFILEINFO_DISPLAY_NAME_OFFSET, 260),
-        r"\Windows\navicons.dll"
+        "morning.nav"
     );
     assert_eq!(
         memory.read_wide_z(info_ptr + SHFILEINFO_TYPE_NAME_OFFSET, 80),
         "Route Plan"
     );
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn sh_get_file_info_rejects_unsupported_and_colliding_flags() -> Result<()> {
+    const ERROR_INVALID_FLAGS: u32 = 1004;
+    const SHFILEINFO_SIZE_W: u32 = 692;
+    const SHGFI_DISPLAYNAME: u32 = 0x0000_0200;
+    const SHGFI_ATTRIBUTES: u32 = 0x0000_0800;
+    const SHGFI_ICONLOCATION: u32 = 0x0000_1000;
+    const SHGFI_SMALLICON: u32 = 0x0000_0001;
+    const SHGFI_USEFILEATTRIBUTES: u32 = 0x0000_0010;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 45;
+    let path_ptr = 0x2_7000;
+    let info_ptr = 0x2_8000;
+    memory.map_halfwords(path_ptr, 64);
+    memory.write_wide_z(path_ptr, r"\Docs\morning.nav");
+    memory.map_words(info_ptr, SHFILEINFO_SIZE_W / 4);
+
+    for flags in [
+        SHGFI_ICONLOCATION,
+        SHGFI_ATTRIBUTES | SHGFI_USEFILEATTRIBUTES,
+        SHGFI_DISPLAYNAME | SHGFI_SMALLICON,
+    ] {
+        let result = table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHGET_FILE_INFO,
+            [path_ptr, 0, info_ptr, SHFILEINFO_SIZE_W, flags],
+        );
+        assert!(matches!(
+            result,
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_FLAGS
+        );
+    }
 
     Ok(())
 }
