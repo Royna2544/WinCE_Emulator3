@@ -88,7 +88,8 @@
     modifier/`WM_SYSKEYDOWN` path, dead-key/IME handoff, clipboard rendered
     ownership/delayed-render edge cases, rendered caret blink/focus
     invalidation, focus/capture integration, and CE-like
-    `SendMessageTimeout` wait/result/flag/destruction/reentrancy behavior.
+    `SendMessageTimeout` wait/result/destruction/reentrancy behavior above the
+    now-backed CE `SMTO_NORMAL`-only flag validation.
   - Status: open. Source-reference this against CE GWE/input/clipboard/caret
     behavior before changing guest-visible UI behavior.
 - Open: several shell-visible APIs are still state tracking or cheap success

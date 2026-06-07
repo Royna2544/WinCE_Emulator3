@@ -86,6 +86,7 @@ const KF_UP_LPARAM: u32 = 0x8000_0000;
 const TPM_NONOTIFY: u32 = 0x0080;
 const TPM_RETURNCMD: u32 = 0x0100;
 const TPMPARAMS_SIZE: u32 = 20;
+const SMTO_SUPPORTED_CE_FLAGS: u32 = 0;
 const ACCEL_FVIRTKEY: u8 = 0x01;
 const ACCEL_FSHIFT: u8 = 0x04;
 const ACCEL_FCONTROL: u8 = 0x08;
@@ -17907,8 +17908,15 @@ fn send_message_timeout_raw<M: CoredllGuestMemory>(
     let msg = raw_arg(args, 1);
     let wparam = raw_arg(args, 2);
     let lparam = raw_arg(args, 3);
+    let flags = raw_arg(args, 4);
     let timeout_ms = raw_arg(args, 5);
     let result_ptr = raw_arg(args, 6);
+    if flags & !SMTO_SUPPORTED_CE_FLAGS != 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_FLAGS_LOCAL);
+        return 0;
+    }
     let Some(target_thread) = kernel
         .gwe
         .window(hwnd)

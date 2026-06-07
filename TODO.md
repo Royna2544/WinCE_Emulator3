@@ -80,8 +80,9 @@
   blink/focus invalidation above the raw caret store, and focus/capture
   integration. Also complete
   cross-thread `SendMessageTimeout` so it waits until reply or timeout, writes
-  the result pointer, honors `SMTO_*` flags, handles receiver/sender
-  destruction, and performs CE-required reentrant dispatch while waiting.
+  the result pointer, handles receiver/sender destruction, and performs
+  CE-required reentrant dispatch while waiting. The raw boundary now rejects
+  non-CE `fuFlags` instead of queuing unsupported desktop-style variants.
 - Shell fidelity follow-up: `ShellExecuteEx` now handles the basic CE launch
   chain through shortcuts, registry associations, and `CreateProcessW`
   queuing. Continue with the remaining shell APIs from the attachment:

@@ -4161,7 +4161,11 @@
   or a Unicorn sender wait completes. Raw `timeout=0` behavior still creates
   and immediately expires the same transaction. Focused raw GWE coverage proves
   nonzero timeout queueing, `SMF_TIMEOUT` metadata, receiver retrieval, and
-  dispatch completion, and the raw GWE suite now has 79 passing tests.
+  dispatch completion. The raw syscall boundary now also follows CE
+  `winuser.h`'s exposed `SMTO_NORMAL`-only flag surface: unsupported
+  desktop-style `fuFlags` fail with `ERROR_INVALID_FLAGS`, leave the result
+  pointer untouched, and do not queue a receiver-side send. Focused coverage:
+  `coredll_raw_send_message_timeout_rejects_non_ce_flags_without_queueing`.
 - Tightened the CE-backed `SendNotifyMessageW` transaction metadata. Different-
   thread notifications already used the receiver-side sent-message queue; they
   now also carry `SMF_SENDER_NO_WAIT | SMF_NOTIFY_MESSAGE`, matching the

@@ -1065,8 +1065,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     receiver shortcut. Raw `SendMessageTimeout(..., timeout>0)` across threads
     also creates a timeout-flagged sent transaction and leaves it queued for
     receiver retrieval rather than fabricating a synchronous result in the
-    caller thread; the Unicorn guest path then parks the sender context on that
-    same transaction when a guest WNDPROC callout is possible. The scheduler
+    caller thread. CE SDK `winuser.h` exposes only `SMTO_NORMAL` for this
+    target; raw calls with unsupported `fuFlags` now fail with
+    `ERROR_INVALID_FLAGS` before queueing any sent transaction. The Unicorn
+    guest path then parks the sender context on that same transaction when a
+    guest WNDPROC callout is possible. The scheduler
     now has a send-reply blocked-wait kind
     keyed by sent-message id, mirroring the sender-side `pSentNext`/reply wait
     relationship: normal WNDPROC completion, timeout expiry, receiver
