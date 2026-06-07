@@ -37,11 +37,17 @@
   search/load of the target guest DLL, and COREDLL forwarders return dynamic
   trap addresses. The new `174_loadlibrary_forwarded_export` fixture proves a
   forwarded export by name, ordinal lookup on the forwarder export, and import
-  patching through a forwarder DLL. The updated
+  patching through a forwarder DLL. Runtime
+  `LoadLibraryExW(DONT_RESOLVE_DLL_REFERENCES)` now maps and registers ordinary
+  exports without recursive dependency loading, import patching, TLS callbacks,
+  `DllMain`, or final detach callouts; the new
+  `175_loadlibrary_noresolve` fixture proves a staged imported dependency is
+  not loaded in no-resolve mode, the target DLL attach count remains zero, and
+  a later normal `LoadLibraryW` resolves imports and runs attach. The updated
   `173_loadlibrary_tls_callback` fixture arms an EXE-owned detach order marker
   and proves the complete lifecycle order word `0x01020304`: TLS attach,
-  `DllMain` attach, TLS detach, `DllMain` detach. Datafile loads and
-  no-resolve loads remain queued.
+  `DllMain` attach, TLS detach, `DllMain` detach. Datafile/resource loads
+  remain queued.
 - eVC fixture infrastructure now supports fixture-local runtime DLLs under
   `tests\test_progs\<fixture>\dlls\<dll-name>\`. The runner discovers `.cpp`,
   `.rc`, and optional `.def` files, links each DLL with an import library,
@@ -105,13 +111,16 @@
   COREDLL/WINSOCK/OLE imports to trap slots, patch external guest-DLL imports
   against the kernel's loaded-module export snapshots, rewrite the live import
   trap page, refresh the persisted trap blob, register PE resources/exports,
-  and record the module as dynamic with CE-style refcounts. Datafile and
-  `DONT_RESOLVE_DLL_REFERENCES` flags still fail explicitly. Guest
+  and record the module as dynamic with CE-style refcounts. The runtime
+  `DONT_RESOLVE_DLL_REFERENCES` path maps/reuses modules and exposes ordinary
+  exports while deliberately skipping dependency loads, import patching,
+  forwarder resolution, TLS callbacks, and `DllMain`; datafile/resource-style
+  flags still fail explicitly. Guest
   `DllMain(DLL_PROCESS_DETACH)` on final dynamic `FreeLibrary` plus TLS detach
   ordering are now covered by direct/TLS runtime fixtures; forwarded exports
-  are covered by runtime `GetProcAddress` and import-patching fixtures.
-  Datafile/no-resolve modes and fuller runtime trampoline handling remain
-  open. Focused coverage passes
+  are covered by runtime `GetProcAddress` and import-patching fixtures, and
+  no-resolve mode is covered by fixture 175. Datafile/resource modes and fuller
+  runtime trampoline handling remain open. Focused coverage passes
   for loaded-module export snapshots, runtime occupied-range calculation, and
   the existing raw `LoadLibraryExW` flag/refcount behavior.
 - `ExternalImportTable` now has a public `add_module_exports` path for
@@ -133,8 +142,9 @@
   dependencies, TLS callback slots, refcount, load flags, dynamic/pinned state,
   and unload-pending state. Startup-preloaded DLLs are registered through this
   richer shape, `LoadLibraryW` increments refcounts for already loaded modules,
-  `LoadLibraryExW` rejects unsupported/datafile/no-resolve runtime flags
-  explicitly instead of ignoring them, and `FreeLibrary` decrements dynamic
+  `LoadLibraryExW` rejects unsupported/datafile runtime flags explicitly
+  instead of ignoring them, runtime no-resolve loads now map modules without
+  dependency/import/lifecycle resolution, and `FreeLibrary` decrements dynamic
   modules while keeping mapped ranges reserved. Raw `ShellExecuteEx` now reads
   `SHELLEXECUTEINFO`, resolves CE `.lnk` text shortcuts and registry
   association command templates, queues the existing `CreateProcessW` launch

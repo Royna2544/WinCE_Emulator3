@@ -22,9 +22,9 @@
     refcounts, load flags, dynamic/pinned state, and unload-pending state.
     `GetProcAddress` works for registered guest DLL exports by name/ordinal,
     and `FreeLibrary` decrements dynamic modules without reclaiming mapped
-    memory. `LoadLibraryExW` no longer ignores datafile/no-resolve flags; it
-    fails explicitly until runtime mapping can honor them. Runtime DLL search
-    order is now shared and CE-aware (exact mounted CE path, process directory,
+    memory. `LoadLibraryExW` no longer ignores datafile/resource-style flags;
+    those still fail explicitly until runtime mapping can honor them. Runtime
+    DLL search order is now shared and CE-aware (exact mounted CE path, process directory,
     configured search dirs, mounted `\Windows`) for startup/child preload and
     runtime loads. The live import hook now uses a mutable/persisted trap
     table, static trap allocation preserves the dynamic `GetProcAddress` trap
@@ -34,13 +34,18 @@
     publishes exports into the kernel module table. Forwarded PE exports are
     retained and resolved through already-loaded modules or CE search/load of
     forwarded-to guest DLLs, and the runtime path now patches `GetProcAddress`
-    and IAT imports through forwarder DLLs. Final dynamic `FreeLibrary` now
-    enters guest TLS callbacks and `DllMain(DLL_PROCESS_DETACH)` before
-    marking the module unload-pending.
-  - Required fix: finish datafile/no-resolve load modes and fuller runtime
-    trampoline handling. Guest TLS callbacks, `DllMain(DLL_PROCESS_ATTACH)`,
-    direct-DLL final `DllMain(DLL_PROCESS_DETACH)`, TLS detach ordering, and
-    forwarded exports are covered by runtime eVC fixtures.
+    and IAT imports through forwarder DLLs. Runtime no-resolve loads now map
+    the module and expose ordinary exports while skipping dependency loads,
+    import patching, TLS callbacks, `DllMain`, and final detach callouts.
+    Final dynamic `FreeLibrary` now enters guest TLS callbacks and
+    `DllMain(DLL_PROCESS_DETACH)` before marking normally loaded modules
+    unload-pending.
+  - Required fix: finish datafile/resource-style load modes, raw/non-Unicorn
+    no-resolve alignment where practical, and fuller runtime trampoline
+    handling. Guest TLS callbacks, `DllMain(DLL_PROCESS_ATTACH)`, direct-DLL
+    final `DllMain(DLL_PROCESS_DETACH)`, TLS detach ordering, forwarded
+    exports, and no-resolve runtime mapping are covered by runtime eVC
+    fixtures.
   - Status: open/watch. Normal code-DLL mapping and attach are started; do not
     treat this as complete CE loader fidelity until the remaining lifecycle and
     load-mode gaps close.

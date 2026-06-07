@@ -1,0 +1,4 @@
+LIBRARY a_noresolve_dependency
+
+EXPORTS
+    DependencyValue @3

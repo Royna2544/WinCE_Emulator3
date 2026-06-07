@@ -48,7 +48,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     Forwarded exports are retained from the PE export directory and resolved
     through already-loaded guest modules or CE search/load of the forwarded-to
     DLL, including runtime `GetProcAddress` and import-patching paths.
-    Datafile loads and `DONT_RESOLVE_DLL_REFERENCES` remain explicit open gaps.
+    `LoadLibraryExW(DONT_RESOLVE_DLL_REFERENCES)` now maps/reuses the runtime
+    DLL and publishes ordinary exports without recursive dependency loading,
+    import patching, TLS callbacks, `DllMain`, or detach callouts on final
+    release. Datafile/resource-style loads remain an explicit open gap.
 
 - CE loader lifecycle anchors:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\loader.c` and

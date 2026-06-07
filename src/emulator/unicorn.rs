@@ -132,6 +132,7 @@ pub struct LoadedPeModuleInfo {
     pub entry_point: u32,
     pub dependencies: Vec<String>,
     pub tls_callbacks: Vec<u32>,
+    pub load_flags: u32,
     pub dynamic: bool,
     pub exports_by_name: HashMap<String, u32>,
     pub exports_by_ordinal: HashMap<u32, u32>,
@@ -4895,6 +4896,7 @@ fn loaded_module_info(image: &PeImage, load_base: u32) -> Result<LoadedPeModuleI
             .map(|descriptor| descriptor.module_name.clone())
             .collect(),
         tls_callbacks: image.tls_callback_vas(load_base)?,
+        load_flags: 0,
         dynamic: false,
         exports_by_name,
         exports_by_ordinal,
@@ -5947,7 +5949,7 @@ fn try_handle_runtime_loader_import<D>(
         ));
     }
     if flags & !(RUNTIME_DONT_RESOLVE_DLL_REFERENCES | RUNTIME_LOAD_LIBRARY_AS_DATAFILE) != 0
-        || flags != 0
+        || flags & RUNTIME_LOAD_LIBRARY_AS_DATAFILE != 0
     {
         kernel
             .threads
@@ -5978,13 +5980,17 @@ fn try_handle_runtime_loader_import<D>(
         traps,
         search_dirs,
         &path,
+        flags,
         &mut loading,
         &mut newly_loaded_modules,
     ) {
         Ok(handle) => {
             kernel.threads.set_last_error(thread_id, 0);
-            let lifecycle_calls =
-                dll_attach_lifecycle_calls_for_modules(kernel, &newly_loaded_modules);
+            let lifecycle_calls = if flags & RUNTIME_DONT_RESOLVE_DLL_REFERENCES != 0 {
+                Vec::new()
+            } else {
+                dll_attach_lifecycle_calls_for_modules(kernel, &newly_loaded_modules)
+            };
             if lifecycle_calls.is_empty() {
                 Some(RuntimeLoaderImportResult::Complete(handle))
             } else if enter_dll_lifecycle_callout(
@@ -6061,7 +6067,11 @@ fn handle_runtime_free_library_import<D>(
         };
     }
 
-    let lifecycle_calls = dll_detach_lifecycle_calls_for_module(&loaded);
+    let lifecycle_calls = if loaded.load_flags & RUNTIME_DONT_RESOLVE_DLL_REFERENCES != 0 {
+        Vec::new()
+    } else {
+        dll_detach_lifecycle_calls_for_module(&loaded)
+    };
     if lifecycle_calls.is_empty() {
         let result = kernel.release_loaded_module(module);
         if matches!(result, FreeLibraryResult::UnloadPending) {
@@ -6102,6 +6112,7 @@ fn runtime_load_guest_dll_from_path<D>(
     traps: &Rc<RefCell<ImportTrapTable>>,
     search_dirs: &[std::path::PathBuf],
     path: &std::path::Path,
+    load_flags: u32,
     loading: &mut BTreeSet<String>,
     newly_loaded_modules: &mut Vec<u32>,
 ) -> Result<u32> {
@@ -6121,33 +6132,39 @@ fn runtime_load_guest_dll_from_path<D>(
     }
 
     let image = PeImage::inspect(path)?;
-    for descriptor in &image.imports {
-        let dependency_name = normalize_module_name(&descriptor.module_name);
-        if emulator_provided_import_module(&dependency_name)
-            || kernel
-                .loaded_module_handle(&descriptor.module_name)
-                .is_some()
-        {
-            continue;
+    let dont_resolve = load_flags & RUNTIME_DONT_RESOLVE_DLL_REFERENCES != 0;
+    if !dont_resolve {
+        for descriptor in &image.imports {
+            let dependency_name = normalize_module_name(&descriptor.module_name);
+            if emulator_provided_import_module(&dependency_name)
+                || kernel
+                    .loaded_module_handle(&descriptor.module_name)
+                    .is_some()
+            {
+                continue;
+            }
+            let dependency_path =
+                resolve_dll_path(&descriptor.module_name, Some(kernel), search_dirs).ok_or_else(
+                    || Error::MissingImportDll {
+                        dll: descriptor.module_name.clone(),
+                    },
+                )?;
+            runtime_load_guest_dll_from_path(
+                uc,
+                kernel,
+                memory_map,
+                mapped_blobs,
+                loaded_modules,
+                resource_strings,
+                resources,
+                traps,
+                search_dirs,
+                &dependency_path,
+                0,
+                loading,
+                newly_loaded_modules,
+            )?;
         }
-        let dependency_path = resolve_dll_path(&descriptor.module_name, Some(kernel), search_dirs)
-            .ok_or_else(|| Error::MissingImportDll {
-                dll: descriptor.module_name.clone(),
-            })?;
-        runtime_load_guest_dll_from_path(
-            uc,
-            kernel,
-            memory_map,
-            mapped_blobs,
-            loaded_modules,
-            resource_strings,
-            resources,
-            traps,
-            search_dirs,
-            &dependency_path,
-            loading,
-            newly_loaded_modules,
-        )?;
     }
 
     let dll_size = align_up_4k(image.optional_header.size_of_image)?;
@@ -6164,17 +6181,21 @@ fn runtime_load_guest_dll_from_path<D>(
         &mut next_dll_base,
     )?;
     let mut mapped = image.mapped_image_at(load_base)?;
-    let external = external_imports_from_loaded_modules(kernel);
-    let next_trap_base = traps
-        .borrow()
-        .next_static_trap_base(RESERVED_IMPORT_TRAP_STUB_BYTES)?;
-    let new_traps = patch_pe_imports(
-        &image,
-        &mut mapped,
-        &crate::ce::coredll::CoredllExportTable::default(),
-        next_trap_base,
-        &external,
-    )?;
+    let new_traps = if dont_resolve {
+        ImportTrapTable::default()
+    } else {
+        let external = external_imports_from_loaded_modules(kernel);
+        let next_trap_base = traps
+            .borrow()
+            .next_static_trap_base(RESERVED_IMPORT_TRAP_STUB_BYTES)?;
+        patch_pe_imports(
+            &image,
+            &mut mapped,
+            &crate::ce::coredll::CoredllExportTable::default(),
+            next_trap_base,
+            &external,
+        )?
+    };
     let mapped_size = align_up_4k(mapped.len() as u32)?;
     let label = format!("dll:{}", path.display());
     memory_map.map(
@@ -6192,7 +6213,7 @@ fn runtime_load_guest_dll_from_path<D>(
     uc.mem_write(u64::from(load_base), &mapped)
         .map_err(|err| Error::Backend(format!("write runtime DLL {label}: {err:?}")))?;
 
-    {
+    if !new_traps.is_empty() {
         let mut trap_table = traps.borrow_mut();
         trap_table.merge(new_traps);
         let trap_page = import_trap_code_page(&trap_table);
@@ -6202,23 +6223,26 @@ fn runtime_load_guest_dll_from_path<D>(
     }
 
     let mut module_info = loaded_module_info(&image, load_base)?;
-    resolve_runtime_forwarders(
-        uc,
-        kernel,
-        memory_map,
-        mapped_blobs,
-        loaded_modules,
-        resource_strings,
-        resources,
-        traps,
-        search_dirs,
-        &mut module_info,
-        loading,
-        newly_loaded_modules,
-    )?;
+    if !dont_resolve {
+        resolve_runtime_forwarders(
+            uc,
+            kernel,
+            memory_map,
+            mapped_blobs,
+            loaded_modules,
+            resource_strings,
+            resources,
+            traps,
+            search_dirs,
+            &mut module_info,
+            loading,
+            newly_loaded_modules,
+        )?;
+    }
     module_info.name = file_name.clone();
     module_info.guest_path = kernel.host_path_to_guest_mount(path);
     module_info.host_path = Some(path.to_path_buf());
+    module_info.load_flags = load_flags;
     module_info.dynamic = true;
     register_runtime_module_with_kernel(kernel, &module_info);
     loaded_modules.push(module_info);
@@ -6333,6 +6357,7 @@ fn resolve_runtime_forwarder<D>(
             traps,
             search_dirs,
             &path,
+            0,
             loading,
             newly_loaded_modules,
         )?;
@@ -6429,7 +6454,7 @@ fn register_runtime_module_with_kernel(kernel: &mut CeKernel, module: &LoadedPeM
                 .map(|(ordinal, forwarder)| (*ordinal, forwarder.clone()))
                 .collect::<BTreeMap<_, _>>(),
             ref_count: 1,
-            load_flags: 0,
+            load_flags: module.load_flags,
             dynamic: true,
         },
     );

@@ -14,7 +14,7 @@ and isolated guest networking.
 
 | Subsystem | CE source reference | v2 corroboration | Implemented APIs | Open gaps | Fixture coverage | Latest iNavi evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| Guest DLL loader | `NK\KERNEL\loader.c`, `NK\KERNEL\thread.c`, PE loader and SDK loader headers | startup preload path only | startup import DLL registration, CE-aware DLL search order, live-mutable import trap table, static trap-base allocator with reserved dynamic range, live/persisted import trap-page refresh, runtime normal-code DLL map/relocate/import patching from `LoadLibraryW/LoadLibraryExW(flags=0)`, recursive dependency loading, runtime module export table ingestion, module metadata/refcounts, registered-export lookup, PE forwarded-export metadata retention, runtime forwarder resolution through guest DLL search/load and COREDLL trap addresses, TLS callback metadata parsing, guest TLS and `DllMain(DLL_PROCESS_ATTACH)` callouts, final dynamic `FreeLibrary` guest TLS and `DllMain(DLL_PROCESS_DETACH)` callouts before non-reclaiming unload-pending release | datafile/no-resolve loads, fuller runtime trampoline handling, broader forwarded-export fixture variants | `dll_search`, import-trap tests, `refresh_import_trap_page_blob_replaces_existing_blob`, `runtime_occupied_ranges_include_memory_regions_and_blobs`, `loaded_module_export_snapshots_skip_unload_pending_modules`, `external_table_accepts_runtime_loaded_module_exports`, `external_table_resolves_forwarded_exports_through_loaded_modules`, `065_loadlibrary_getprocaddress_module`, `171_loadlibrary_guest_dll`, `172_loadlibrary_dependent_guest_dll`, `173_loadlibrary_tls_callback`, `174_loadlibrary_forwarded_export`, raw module refcount tests | dumped DLLs from `D:\INAVI_Emulator\DUMPPLZ\Windows` are authoritative runtime bytes |
+| Guest DLL loader | `NK\KERNEL\loader.c`, `NK\KERNEL\thread.c`, PE loader and SDK loader headers | startup preload path only | startup import DLL registration, CE-aware DLL search order, live-mutable import trap table, static trap-base allocator with reserved dynamic range, live/persisted import trap-page refresh, runtime normal-code DLL map/relocate/import patching from `LoadLibraryW/LoadLibraryExW(flags=0)`, recursive dependency loading, runtime `LoadLibraryExW(DONT_RESOLVE_DLL_REFERENCES)` mapping without dependency/import/lifecycle resolution, runtime module export table ingestion, module metadata/refcounts, registered-export lookup, PE forwarded-export metadata retention, runtime forwarder resolution through guest DLL search/load and COREDLL trap addresses, TLS callback metadata parsing, guest TLS and `DllMain(DLL_PROCESS_ATTACH)` callouts, final dynamic `FreeLibrary` guest TLS and `DllMain(DLL_PROCESS_DETACH)` callouts before non-reclaiming unload-pending release | datafile/resource-style loads, fuller runtime trampoline handling, raw/non-Unicorn no-resolve alignment, broader forwarded-export/no-resolve fixture variants | `dll_search`, import-trap tests, `refresh_import_trap_page_blob_replaces_existing_blob`, `runtime_occupied_ranges_include_memory_regions_and_blobs`, `loaded_module_export_snapshots_skip_unload_pending_modules`, `external_table_accepts_runtime_loaded_module_exports`, `external_table_resolves_forwarded_exports_through_loaded_modules`, `065_loadlibrary_getprocaddress_module`, `171_loadlibrary_guest_dll`, `172_loadlibrary_dependent_guest_dll`, `173_loadlibrary_tls_callback`, `174_loadlibrary_forwarded_export`, `175_loadlibrary_noresolve`, raw module refcount tests | dumped DLLs from `D:\INAVI_Emulator\DUMPPLZ\Windows` are authoritative runtime bytes |
 | COREDLL stub audit | COREDLL API sets and SDK headers | broad stub policy proved convenient but unsafe | static ordinal table, implemented/stubbed plan, fallback audit classification/logging, raw thread/caller/trap PC context | owning-module context and fail-loud audit mode | `raw_stub_audit_keeps_import_trap_context`, `tests\coredll_dispatch.rs` | shell/UI/process calls must not silently fake success |
 | Shell launch/settings | `SHELL`, Explorer registry conventions | v2 shell path shape only | `SHGetSpecialFolderPath`, basic registry/shortcut-backed `ShellExecuteEx` launch chain | `SHGetFileInfo`, notify icons, recent docs, fuller namespace/policy | raw `ShellExecuteEx` association test | route UI still needs real shell/process/GWE semantics |
 | GWE defaults/input/send | `GWE\INC`, `window.hpp`, CE `winuser.h`, MFC `wincore.cpp`, CE input/clipboard/caret/IME headers | window broker behavior evidence | core window/message pump, partial defaults, minimal `TranslateMessage`, partial cross-thread send | fuller `DefWindowProcW`, `SendNotifyMessageW` edge cases, keyboard modifiers/layout, accelerators/menu shortcuts, `WM_SYSKEY*`, dead keys/IME handoff, clipboard ownership/formats, caret blink/position/focus integration, full `SendMessageTimeout` wait/result/flag/destruction/reentrancy semantics | existing GWE fixtures | hidden chrome is guest-driven; do not force visibility |
@@ -75,8 +75,8 @@ and isolated guest networking.
 
 ## Queued Loader Gaps
 
-These are not implemented yet and must remain queued until closed by focused
-fixtures plus mounted iNavi evidence:
+These remaining gaps and coverage watchpoints must stay queued until closed by
+focused fixtures plus mounted iNavi evidence:
 
 - Extend runtime guest-DLL fixtures as more lifecycle behavior lands.
   `tests\test_progs\171_loadlibrary_guest_dll` now proves the
@@ -112,9 +112,12 @@ fixtures plus mounted iNavi evidence:
   dynamic trap addresses. Add more fixture variants as real dumped DLL traces
   demand them; unresolved or unsupported forwarders must continue to fail
   loudly, not return a plausible fake pointer.
-- Implement `DONT_RESOLVE_DLL_REFERENCES` semantics: map/reuse the module and
-  expose exports without recursive import resolution, TLS callbacks, or
-  `DllMain`, and clearly prevent execution paths that require unresolved IATs.
+- Keep `DONT_RESOLVE_DLL_REFERENCES` coverage current. The Unicorn runtime path
+  now maps/reuses the module and exposes ordinary exports without recursive
+  dependency loading, import patching, TLS callbacks, or `DllMain`; final
+  `FreeLibrary` also skips detach callouts for modules that never received
+  attach callouts. Add more fixture variants for forwarded exports or unsafe
+  unresolved-IAT execution paths as traces demand them.
 - Implement datafile/resource-style `LoadLibraryExW` modes for resource access
   without normal code execution, including `FindResourceW`/`LoadResource`
   behavior from the loaded resource module.

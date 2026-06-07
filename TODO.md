@@ -12,11 +12,11 @@
 
 ## Current Slice
 
-- Queued runtime loader gaps from `PLAN.MD`: implement
-  `DONT_RESOLVE_DLL_REFERENCES`; implement datafile/resource-style
+- Queued runtime loader gaps from `PLAN.MD`: implement datafile/resource-style
   `LoadLibraryExW`; harden runtime trampoline handling for high/relocated
-  DLLs; add compact runtime loader audit counters; extend forwarded-export
-  fixture variants when real dumped DLL traces demand more cases.
+  DLLs; align raw/non-Unicorn no-resolve behavior where practical; add compact
+  runtime loader audit counters; extend forwarded-export/no-resolve fixture
+  variants when real dumped DLL traces demand more cases.
 - CE fidelity catch-up next slice: finish the runtime guest DLL loader at the
   Unicorn import-trap boundary. The kernel-side module manager/refcount shape
   now exists and the shared CE-aware DLL search order is implemented for
@@ -36,12 +36,14 @@
   metadata/resolution is now implemented for normal-code DLLs: forwarder
   strings are retained, resolved through already-loaded modules or CE
   search/load of forwarded-to guest DLLs, and patched into `GetProcAddress`
-  and IAT import paths. The direct, dependent, TLS, and forwarded-export
-  runtime guest-DLL fixtures now pass with eVC-built MIPS bytes; next loader
-  work should implement no-resolve/datafile modes.
-  Datafile and
-  `DONT_RESOLVE_DLL_REFERENCES` loads still fail explicitly until CE-like
-  support is implemented. Keep
+  and IAT import paths. Runtime no-resolve mapping is now implemented for
+  `LoadLibraryExW(DONT_RESOLVE_DLL_REFERENCES)`: the module maps and exposes
+  ordinary exports without dependency loading, import patching, TLS callbacks,
+  `DllMain`, or final detach callouts. The direct, dependent, TLS,
+  forwarded-export, and no-resolve runtime guest-DLL fixtures now pass with
+  eVC-built MIPS bytes; next loader work should implement datafile/resource
+  modes and raw/non-Unicorn alignment.
+  Datafile loads still fail explicitly until CE-like support is implemented. Keep
   `C:\WINCE600` as the behavior reference and update `PLAN.MD` after each port.
 - COREDLL fallback audit follow-up: stubs now carry audit classification plus
   raw import-trap context with thread id, caller PC, and trap PC. Next, add the

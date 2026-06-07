@@ -1,0 +1,7 @@
+LIBRARY b_noresolve_user
+
+EXPORTS
+    NoResolveAttachCount @3
+    NoResolveDetachCount @4
+    NoResolvePlainValue @5
+    NoResolveImportedValue @6
