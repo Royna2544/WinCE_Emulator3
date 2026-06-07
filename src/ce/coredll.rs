@@ -118,11 +118,9 @@ const SHGFI_ICON: u32 = 0x0000_0100;
 const SHGFI_DISPLAYNAME: u32 = 0x0000_0200;
 const SHGFI_TYPENAME: u32 = 0x0000_0400;
 const SHGFI_ATTRIBUTES: u32 = 0x0000_0800;
-const SHGFI_ICONLOCATION: u32 = 0x0000_1000;
 const SHGFI_SYSICONINDEX: u32 = 0x0000_4000;
 const SHGFI_SMALLICON: u32 = 0x0000_0001;
 const SHGFI_USEFILEATTRIBUTES: u32 = 0x0000_0010;
-const SHGFI_ATTR_SPECIFIED: u32 = 0x0002_0000;
 const SHGFI_SUPPORTED_CE_FLAGS: u32 = SHGFI_ICON
     | SHGFI_SMALLICON
     | SHGFI_DISPLAYNAME
@@ -11216,22 +11214,6 @@ fn sh_get_file_info_w_raw<M: CoredllGuestMemory>(
     let class = shell_file_class(kernel, &path, attributes);
     let icon_index = shell_icon_index(&class, attributes);
     let icon_handle = shell_icon_handle(attributes);
-    let requested_attribute_mask = if flags & (SHGFI_ATTRIBUTES | SHGFI_ATTR_SPECIFIED)
-        == (SHGFI_ATTRIBUTES | SHGFI_ATTR_SPECIFIED)
-    {
-        let Some(mask) = read_guest_u32(
-            kernel,
-            memory,
-            thread_id,
-            info_ptr + SHFILEINFO_ATTRIBUTES_OFFSET,
-        ) else {
-            return 0;
-        };
-        Some(mask)
-    } else {
-        None
-    };
-
     if !write_guest_u32(
         kernel,
         memory,
@@ -11255,11 +11237,6 @@ fn sh_get_file_info_w_raw<M: CoredllGuestMemory>(
     }
 
     if flags & SHGFI_ATTRIBUTES != 0 {
-        let attributes = if let Some(mask) = requested_attribute_mask {
-            attributes & mask
-        } else {
-            attributes
-        };
         if !write_guest_u32(
             kernel,
             memory,
@@ -11281,7 +11258,7 @@ fn sh_get_file_info_w_raw<M: CoredllGuestMemory>(
     {
         return 0;
     }
-    if flags & (SHGFI_SYSICONINDEX | SHGFI_ICONLOCATION) != 0
+    if flags & SHGFI_SYSICONINDEX != 0
         && !write_guest_u32(
             kernel,
             memory,
@@ -11305,26 +11282,7 @@ fn sh_get_file_info_w_raw<M: CoredllGuestMemory>(
             return 0;
         }
     }
-    if flags & SHGFI_ICONLOCATION != 0 {
-        let (icon_location, icon_index) =
-            shell_default_icon_location(kernel, &path, attributes, &class);
-        if !write_guest_u32(
-            kernel,
-            memory,
-            thread_id,
-            info_ptr + SHFILEINFO_IICON_OFFSET,
-            icon_index as u32,
-        ) || !write_guest_wide_fixed(
-            kernel,
-            memory,
-            thread_id,
-            info_ptr + SHFILEINFO_DISPLAY_NAME_OFFSET,
-            &icon_location,
-            SHFILEINFO_DISPLAY_NAME_CHARS,
-        ) {
-            return 0;
-        }
-    } else if flags & SHGFI_DISPLAYNAME != 0 {
+    if flags & SHGFI_DISPLAYNAME != 0 {
         let display_name = shell_file_display_name(&path);
         if !write_guest_wide_fixed(
             kernel,
@@ -11967,40 +11925,6 @@ fn shell_file_type_name(kernel: &CeKernel, path: &str, attributes: u32, class: &
                 .map(|extension| format!("{} File", extension.to_ascii_uppercase()))
                 .unwrap_or_else(|| "File".to_owned())
         })
-}
-
-fn shell_default_icon_location(
-    kernel: &CeKernel,
-    path: &str,
-    attributes: u32,
-    class: &str,
-) -> (String, i32) {
-    let icon = if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
-        registry_string(kernel, r"HKCR\Folder\DefaultIcon", "")
-            .or_else(|| registry_string(kernel, r"HKCR\Directory\DefaultIcon", ""))
-    } else {
-        registry_string(kernel, &format!(r"HKCR\{class}\DefaultIcon"), "").or_else(|| {
-            registry_string(
-                kernel,
-                &format!(r"HKLM\Software\Classes\{class}\DefaultIcon"),
-                "",
-            )
-        })
-    };
-    let icon = icon
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| r"\Windows\ceshell.dll,0".to_owned())
-        .replace("%1", path);
-    split_shell_icon_location(&icon)
-}
-
-fn split_shell_icon_location(icon: &str) -> (String, i32) {
-    let icon = icon.trim();
-    let Some((path, index)) = icon.rsplit_once(',') else {
-        return (icon.trim_matches('"').to_owned(), 0);
-    };
-    let index = index.trim().parse::<i32>().unwrap_or(0);
-    (path.trim().trim_matches('"').to_owned(), index)
 }
 
 fn shell_icon_index(class: &str, attributes: u32) -> i32 {
