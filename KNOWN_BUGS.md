@@ -32,11 +32,14 @@
     non-emulator dependencies, patches imports, rewrites the live trap page,
     refreshes the persisted `ce-import-traps` blob, registers resources, and
     publishes exports into the kernel module table.
-  - Required fix: finish forwarded export resolution, TLS callbacks,
-    `DllMain(DLL_PROCESS_ATTACH/DETACH)`, datafile/no-resolve load modes, and
-    fuller runtime trampoline handling.
-  - Status: open/watch. Normal code-DLL mapping is started; do not treat this
-    as complete CE loader fidelity until the fixture and lifecycle gaps close.
+  - Required fix: finish forwarded export resolution, focused TLS callback
+    execution coverage, `DllMain`/TLS detach on final `FreeLibrary`,
+    datafile/no-resolve load modes, and fuller runtime trampoline handling.
+    Guest `DllMain(DLL_PROCESS_ATTACH)` is now implemented and covered by the
+    direct and dependent eVC runtime-DLL fixtures.
+  - Status: open/watch. Normal code-DLL mapping and attach are started; do not
+    treat this as complete CE loader fidelity until the remaining lifecycle and
+    load-mode gaps close.
 - Open: Winsock isolated subnet is address-model only; blocking socket waits
   are not scheduler-backed yet.
   - Symptom: guest-visible local names now report CE-style `10.0.0.2` and

@@ -12,11 +12,9 @@
 
 ## Current Slice
 
-- Queued runtime loader gaps from `PLAN.MD`: parse and invoke runtime TLS
-  callbacks; call guest `DllMain(DLL_PROCESS_ATTACH)` on successful normal
-  loads; extend `171_loadlibrary_guest_dll` and
-  `172_loadlibrary_dependent_guest_dll` to assert attach counts after that call
-  path exists; call detach callbacks/`DllMain(DLL_PROCESS_DETACH)` on final
+- Queued runtime loader gaps from `PLAN.MD`: add focused TLS-callback fixture
+  coverage and verify callback invocation; call detach callbacks/
+  `DllMain(DLL_PROCESS_DETACH)` on final
   `FreeLibrary`; implement forwarded exports; implement
   `DONT_RESOLVE_DLL_REFERENCES`; implement datafile/resource-style
   `LoadLibraryExW`; harden runtime trampoline handling for high/relocated DLLs;
@@ -29,10 +27,13 @@
   `LoadLibraryW/LoadLibraryExW(flags=0)` now synchronously maps dumped MIPS
   DLLs from `D:\INAVI_Emulator\DUMPPLZ\Windows`, relocates them, recursively
   loads non-emulator dependencies, patches imports, rewrites the live trap
-  page, registers resources/exports, and records dynamic module refcounts.
-  The direct and dependent runtime guest-DLL fixtures now pass with eVC-built
-  MIPS bytes; next loader work should implement forwarded exports, TLS
-  callbacks, and `DllMain` attach/detach callouts. Datafile and
+  page, registers resources/exports, records dynamic module refcounts, parses
+  TLS callback addresses into module metadata, and invokes guest
+  `DllMain(DLL_PROCESS_ATTACH)` before returning from normal loads. The direct
+  and dependent runtime guest-DLL fixtures now pass with eVC-built MIPS bytes
+  and assert attach counts; next loader work should implement forwarded
+  exports, TLS callback fixture coverage, and `DllMain`/TLS detach callouts.
+  Datafile and
   `DONT_RESOLVE_DLL_REFERENCES` loads still fail explicitly until CE-like
   support is implemented. Keep
   `C:\WINCE600` as the behavior reference and update `PLAN.MD` after each port.

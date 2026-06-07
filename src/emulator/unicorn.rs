@@ -53,6 +53,8 @@ pub struct UnicornMips {
     #[cfg(feature = "unicorn")]
     pending_qsort_returns: Vec<PendingQsortReturn>,
     #[cfg(feature = "unicorn")]
+    pending_dll_lifecycle_returns: Vec<PendingDllLifecycleReturn>,
+    #[cfg(feature = "unicorn")]
     pending_create_window_returns: Vec<CreateWindowReturn>,
     #[cfg(feature = "unicorn")]
     pending_wndproc_returns: Vec<PendingWndProcReturn>,
@@ -96,6 +98,8 @@ struct UnicornRunStateHandles<'a> {
     pending_guest_thread_returns:
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
     pending_qsort_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<PendingQsortReturn>>>,
+    pending_dll_lifecycle_returns:
+        &'a std::rc::Rc<std::cell::RefCell<Vec<PendingDllLifecycleReturn>>>,
     create_window_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<CreateWindowReturn>>>,
     pending_wndproc_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
     blocked_guest_thread: &'a std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
@@ -1020,7 +1024,11 @@ const WNDPROC_RETURN_STUB_ADDR: u32 =
 #[cfg(feature = "unicorn")]
 const QSORT_RETURN_STUB_ADDR: u32 =
     WNDPROC_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
-const RESERVED_IMPORT_TRAP_STUB_BYTES: u32 = crate::emulator::imports::IMPORT_TRAP_STRIDE * 5;
+#[cfg(feature = "unicorn")]
+const DLL_LIFECYCLE_RETURN_STUB_ADDR: u32 =
+    QSORT_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
+#[cfg(feature = "unicorn")]
+const RESERVED_IMPORT_TRAP_STUB_BYTES: u32 = crate::emulator::imports::IMPORT_TRAP_STRIDE * 6;
 #[cfg(feature = "unicorn")]
 const CREATESTRUCTW_SIZE: u32 = 48;
 #[cfg(feature = "unicorn")]
@@ -1059,6 +1067,27 @@ struct ResumeImportAfterWndProc {
     running_thread: Option<(u32, u32)>,
     regs: MipsGuestContext,
     import_pc: u32,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DllLifecycleCall {
+    module: u32,
+    target: u32,
+    reason: u32,
+    returns_bool: bool,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingDllLifecycleReturn {
+    current: DllLifecycleCall,
+    remaining: Vec<DllLifecycleCall>,
+    return_pc: u32,
+    return_sp: u32,
+    caller_regs: MipsGuestContext,
+    api_result: u32,
+    release_after_return: Option<u32>,
 }
 
 #[cfg(feature = "unicorn")]
@@ -1384,6 +1413,8 @@ impl UnicornMips {
             #[cfg(feature = "unicorn")]
             pending_qsort_returns: Vec::new(),
             #[cfg(feature = "unicorn")]
+            pending_dll_lifecycle_returns: Vec::new(),
+            #[cfg(feature = "unicorn")]
             pending_create_window_returns: Vec::new(),
             #[cfg(feature = "unicorn")]
             pending_wndproc_returns: Vec::new(),
@@ -1543,6 +1574,11 @@ impl UnicornMips {
             .drain(..)
             .collect();
         self.pending_qsort_returns = state.pending_qsort_returns.borrow_mut().drain(..).collect();
+        self.pending_dll_lifecycle_returns = state
+            .pending_dll_lifecycle_returns
+            .borrow_mut()
+            .drain(..)
+            .collect();
         self.pending_create_window_returns =
             state.create_window_returns.borrow_mut().drain(..).collect();
         self.pending_wndproc_returns = state
@@ -1759,6 +1795,10 @@ impl UnicornMips {
                 #[cfg(feature = "unicorn")]
                 pending_qsort_returns: std::mem::take(&mut self.pending_qsort_returns),
                 #[cfg(feature = "unicorn")]
+                pending_dll_lifecycle_returns: std::mem::take(
+                    &mut self.pending_dll_lifecycle_returns,
+                ),
+                #[cfg(feature = "unicorn")]
                 pending_create_window_returns: std::mem::take(
                     &mut self.pending_create_window_returns,
                 ),
@@ -1947,7 +1987,8 @@ impl UnicornMips {
                 }
                 self.trampoline_jumps.extend(trampoline_patch.jumps);
             }
-            self.loaded_modules.push(loaded_module_info(dll, load_base));
+            self.loaded_modules
+                .push(loaded_module_info(dll, load_base)?);
             loaded_dlls.push((dll.path.clone(), load_base, mapped));
         }
         for (path, _load_base, mapped) in &mut loaded_dlls {
@@ -2948,6 +2989,10 @@ impl UnicornMips {
             &mut self.pending_qsort_returns,
         )));
         let pending_qsort_returns_hook = Rc::clone(&pending_qsort_returns);
+        let pending_dll_lifecycle_returns = Rc::new(RefCell::new(std::mem::take(
+            &mut self.pending_dll_lifecycle_returns,
+        )));
+        let pending_dll_lifecycle_returns_hook = Rc::clone(&pending_dll_lifecycle_returns);
         let blocked_guest_thread = Rc::new(RefCell::new(self.blocked_guest_thread.take()));
         let blocked_guest_thread_hook = Rc::clone(&blocked_guest_thread);
         let blocked_wait_threads =
@@ -2973,6 +3018,7 @@ impl UnicornMips {
             current_thread_id: &current_thread_id,
             pending_guest_thread_returns: &pending_guest_thread_returns,
             pending_qsort_returns: &pending_qsort_returns,
+            pending_dll_lifecycle_returns: &pending_dll_lifecycle_returns,
             create_window_returns: &create_window_returns,
             pending_wndproc_returns: &pending_wndproc_returns,
             blocked_guest_thread: &blocked_guest_thread,
@@ -3025,6 +3071,8 @@ impl UnicornMips {
         let blocked_guest_thread_timeslice_hook = Rc::clone(&blocked_guest_thread);
         let pending_wndproc_returns_timeslice_hook = Rc::clone(&pending_wndproc_returns);
         let pending_qsort_returns_timeslice_hook = Rc::clone(&pending_qsort_returns);
+        let pending_dll_lifecycle_returns_timeslice_hook =
+            Rc::clone(&pending_dll_lifecycle_returns);
         let trampoline_ranges_timeslice_hook = trampoline_ranges.clone();
         uc.add_block_hook(1, 0, move |uc, address, _size| {
             let counter = scheduler_timeslice_counter_hook.get().wrapping_add(1);
@@ -3041,6 +3089,9 @@ impl UnicornMips {
                 || target_in_ranges(pc, &trampoline_ranges_timeslice_hook)
                 || !pending_wndproc_returns_timeslice_hook.borrow().is_empty()
                 || !pending_qsort_returns_timeslice_hook.borrow().is_empty()
+                || !pending_dll_lifecycle_returns_timeslice_hook
+                    .borrow()
+                    .is_empty()
                 || is_control_transfer_target(previous_pc, pc)
                 || is_mips_delay_slot_pc(uc, previous_pc, pc));
             if !scheduler_timeslice_consume_if_safe(
@@ -3388,6 +3439,16 @@ impl UnicornMips {
                         uc.reg_write(RegisterMIPS::RA, u64::from(callout.return_pc)),
                     ];
                     if writes.into_iter().any(|write| write.is_err()) {
+                        let _ = uc.emu_stop();
+                    }
+                    return;
+                }
+                if address == DLL_LIFECYCLE_RETURN_STUB_ADDR {
+                    if !handle_dll_lifecycle_return_stub(
+                        unsafe { &mut *kernel_ptr },
+                        uc,
+                        &pending_dll_lifecycle_returns_hook,
+                    ) {
                         let _ = uc.emu_stop();
                     }
                     return;
@@ -4003,8 +4064,13 @@ impl UnicornMips {
                         active_thread_id,
                         trap,
                         &args,
+                        &pending_dll_lifecycle_returns_hook,
                     )
                 }) {
+                    let result = match result {
+                        RuntimeLoaderImportResult::Complete(result) => result,
+                        RuntimeLoaderImportResult::EnteredLifecycle => return,
+                    };
                     let _ = memory.uc.reg_write(RegisterMIPS::V0, u64::from(result));
                     if let Some(import) = last_imports_hook
                         .borrow_mut()
@@ -4786,7 +4852,7 @@ fn module_file_name(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
-fn loaded_module_info(image: &PeImage, load_base: u32) -> LoadedPeModuleInfo {
+fn loaded_module_info(image: &PeImage, load_base: u32) -> Result<LoadedPeModuleInfo> {
     let mut exports_by_name = HashMap::new();
     let mut exports_by_ordinal = HashMap::new();
     if let Some(exports) = image.exports.as_ref() {
@@ -4801,7 +4867,7 @@ fn loaded_module_info(image: &PeImage, load_base: u32) -> LoadedPeModuleInfo {
             }
         }
     }
-    LoadedPeModuleInfo {
+    Ok(LoadedPeModuleInfo {
         name: module_file_name(&image.path).to_owned(),
         base: load_base,
         guest_path: None,
@@ -4813,11 +4879,11 @@ fn loaded_module_info(image: &PeImage, load_base: u32) -> LoadedPeModuleInfo {
             .iter()
             .map(|descriptor| descriptor.module_name.clone())
             .collect(),
-        tls_callbacks: Vec::new(),
+        tls_callbacks: image.tls_callback_vas(load_base)?,
         dynamic: false,
         exports_by_name,
         exports_by_ordinal,
-    }
+    })
 }
 
 fn user_kdata_page() -> Vec<u8> {
@@ -5796,6 +5862,14 @@ const RUNTIME_LOAD_LIBRARY_AS_DATAFILE: u32 = 0x0000_0002;
 const RUNTIME_DONT_RESOLVE_DLL_REFERENCES: u32 = 0x0000_0001;
 #[cfg(feature = "unicorn")]
 const RUNTIME_COREDLL_MODULE_HANDLE: u32 = 0x7000_0001;
+#[cfg(feature = "unicorn")]
+const DLL_PROCESS_ATTACH: u32 = 1;
+
+#[cfg(feature = "unicorn")]
+enum RuntimeLoaderImportResult {
+    Complete(u32),
+    EnteredLifecycle,
+}
 
 #[cfg(feature = "unicorn")]
 fn try_handle_runtime_load_library_import<D>(
@@ -5811,7 +5885,8 @@ fn try_handle_runtime_load_library_import<D>(
     thread_id: u32,
     trap: &ImportTrap,
     args: &[u32],
-) -> Option<u32> {
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingDllLifecycleReturn>>>,
+) -> Option<RuntimeLoaderImportResult> {
     if trap.module_kind != crate::emulator::imports::ImportModuleKind::Coredll {
         return None;
     }
@@ -5832,12 +5907,14 @@ fn try_handle_runtime_load_library_import<D>(
         kernel
             .threads
             .set_last_error(thread_id, crate::ce::thread::ERROR_INVALID_PARAMETER);
-        return Some(0);
+        return Some(RuntimeLoaderImportResult::Complete(0));
     };
     let normalized = normalize_module_name(&module_name);
     if normalized == "coredll" {
         kernel.threads.set_last_error(thread_id, 0);
-        return Some(RUNTIME_COREDLL_MODULE_HANDLE);
+        return Some(RuntimeLoaderImportResult::Complete(
+            RUNTIME_COREDLL_MODULE_HANDLE,
+        ));
     }
     if flags & !(RUNTIME_DONT_RESOLVE_DLL_REFERENCES | RUNTIME_LOAD_LIBRARY_AS_DATAFILE) != 0
         || flags != 0
@@ -5845,20 +5922,21 @@ fn try_handle_runtime_load_library_import<D>(
         kernel
             .threads
             .set_last_error(thread_id, crate::ce::thread::ERROR_NOT_SUPPORTED);
-        return Some(0);
+        return Some(RuntimeLoaderImportResult::Complete(0));
     }
     if let Some(handle) = kernel.retain_loaded_module_by_name(&module_name) {
         kernel.threads.set_last_error(thread_id, 0);
-        return Some(handle);
+        return Some(RuntimeLoaderImportResult::Complete(handle));
     }
 
     let Some(path) = resolve_dll_path(&module_name, Some(kernel), search_dirs) else {
         kernel
             .threads
             .set_last_error(thread_id, crate::ce::thread::ERROR_FILE_NOT_FOUND);
-        return Some(0);
+        return Some(RuntimeLoaderImportResult::Complete(0));
     };
     let mut loading = BTreeSet::new();
+    let mut newly_loaded_modules = Vec::new();
     match runtime_load_guest_dll_from_path(
         uc,
         kernel,
@@ -5871,10 +5949,28 @@ fn try_handle_runtime_load_library_import<D>(
         search_dirs,
         &path,
         &mut loading,
+        &mut newly_loaded_modules,
     ) {
         Ok(handle) => {
             kernel.threads.set_last_error(thread_id, 0);
-            Some(handle)
+            let lifecycle_calls =
+                dll_lifecycle_calls_for_modules(kernel, &newly_loaded_modules, DLL_PROCESS_ATTACH);
+            if lifecycle_calls.is_empty() {
+                Some(RuntimeLoaderImportResult::Complete(handle))
+            } else if enter_dll_lifecycle_callout(uc, lifecycle_calls, handle, pending_returns) {
+                Some(RuntimeLoaderImportResult::EnteredLifecycle)
+            } else {
+                tracing::warn!(
+                    target: "ce.loader",
+                    module = module_name.as_str(),
+                    path = %path.display(),
+                    "runtime LoadLibraryW failed to enter DLL lifecycle callout"
+                );
+                kernel
+                    .threads
+                    .set_last_error(thread_id, crate::ce::thread::ERROR_NOT_SUPPORTED);
+                Some(RuntimeLoaderImportResult::Complete(0))
+            }
         }
         Err(err) => {
             tracing::warn!(
@@ -5887,7 +5983,7 @@ fn try_handle_runtime_load_library_import<D>(
             kernel
                 .threads
                 .set_last_error(thread_id, crate::ce::thread::ERROR_NOT_SUPPORTED);
-            Some(0)
+            Some(RuntimeLoaderImportResult::Complete(0))
         }
     }
 }
@@ -5905,6 +6001,7 @@ fn runtime_load_guest_dll_from_path<D>(
     search_dirs: &[std::path::PathBuf],
     path: &std::path::Path,
     loading: &mut BTreeSet<String>,
+    newly_loaded_modules: &mut Vec<u32>,
 ) -> Result<u32> {
     let file_name = path
         .file_name()
@@ -5947,6 +6044,7 @@ fn runtime_load_guest_dll_from_path<D>(
             search_dirs,
             &dependency_path,
             loading,
+            newly_loaded_modules,
         )?;
     }
 
@@ -6001,7 +6099,7 @@ fn runtime_load_guest_dll_from_path<D>(
         refresh_import_trap_page_blob(mapped_blobs, &trap_table);
     }
 
-    let mut module_info = loaded_module_info(&image, load_base);
+    let mut module_info = loaded_module_info(&image, load_base)?;
     module_info.name = file_name.clone();
     module_info.guest_path = kernel.host_path_to_guest_mount(path);
     module_info.host_path = Some(path.to_path_buf());
@@ -6014,6 +6112,7 @@ fn runtime_load_guest_dll_from_path<D>(
         base: load_base,
         bytes: mapped,
     });
+    newly_loaded_modules.push(load_base);
     Ok(load_base)
 }
 
@@ -6100,6 +6199,122 @@ fn register_runtime_resources(
         });
     }
     Ok(())
+}
+
+#[cfg(feature = "unicorn")]
+fn dll_lifecycle_calls_for_modules(
+    kernel: &CeKernel,
+    modules: &[u32],
+    reason: u32,
+) -> Vec<DllLifecycleCall> {
+    let mut calls = Vec::new();
+    for module_base in modules {
+        let Some(module) = kernel.loaded_module_by_handle(*module_base) else {
+            continue;
+        };
+        if reason == DLL_PROCESS_ATTACH {
+            for callback in module.tls_callbacks {
+                if callback != 0 {
+                    calls.push(DllLifecycleCall {
+                        module: module.base,
+                        target: callback,
+                        reason,
+                        returns_bool: false,
+                    });
+                }
+            }
+            if module.entry_point != module.base && module.entry_point != 0 {
+                calls.push(DllLifecycleCall {
+                    module: module.base,
+                    target: module.entry_point,
+                    reason,
+                    returns_bool: true,
+                });
+            }
+        }
+    }
+    calls
+}
+
+#[cfg(feature = "unicorn")]
+fn enter_dll_lifecycle_callout<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    mut calls: Vec<DllLifecycleCall>,
+    api_result: u32,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingDllLifecycleReturn>>>,
+) -> bool {
+    let Some(first) = (!calls.is_empty()).then(|| calls.remove(0)) else {
+        return false;
+    };
+    let pending = PendingDllLifecycleReturn {
+        current: first,
+        remaining: calls,
+        return_pc: read_mips_reg(uc, RegisterMIPS::RA),
+        return_sp: read_mips_reg(uc, RegisterMIPS::SP),
+        caller_regs: capture_mips_gprs(uc),
+        api_result,
+        release_after_return: None,
+    };
+    if !enter_current_dll_lifecycle_call(uc, &pending) {
+        return false;
+    }
+    pending_returns.borrow_mut().push(pending);
+    true
+}
+
+#[cfg(feature = "unicorn")]
+fn enter_current_dll_lifecycle_call<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    pending: &PendingDllLifecycleReturn,
+) -> bool {
+    restore_mips_gprs(uc, &pending.caller_regs);
+    let call_sp = pending.return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
+    let target = normalize_ce_process_slot_callback(uc, pending.current.target);
+    [
+        uc.reg_write(RegisterMIPS::SP, u64::from(call_sp)),
+        uc.reg_write(RegisterMIPS::A0, u64::from(pending.current.module)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(pending.current.reason)),
+        uc.reg_write(RegisterMIPS::A2, 0),
+        uc.reg_write(RegisterMIPS::RA, u64::from(DLL_LIFECYCLE_RETURN_STUB_ADDR)),
+        uc.reg_write(RegisterMIPS::T9, u64::from(target)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(target)),
+    ]
+    .into_iter()
+    .all(|write| write.is_ok())
+}
+
+#[cfg(feature = "unicorn")]
+fn handle_dll_lifecycle_return_stub<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingDllLifecycleReturn>>>,
+) -> bool {
+    let mut pending_returns = pending_returns.borrow_mut();
+    let Some(pending) = pending_returns.last_mut() else {
+        return false;
+    };
+    let result = read_mips_reg(uc, RegisterMIPS::V0);
+    if pending.current.returns_bool && result == 0 {
+        pending.api_result = 0;
+        pending.remaining.clear();
+    }
+    if let Some(next) = (!pending.remaining.is_empty()).then(|| pending.remaining.remove(0)) {
+        pending.current = next;
+        return enter_current_dll_lifecycle_call(uc, pending);
+    }
+    let pending = pending_returns.pop().unwrap();
+    restore_mips_gprs(uc, &pending.caller_regs);
+    if let Some(module) = pending.release_after_return {
+        let _ = kernel.release_loaded_module(module);
+    }
+    [
+        uc.reg_write(RegisterMIPS::SP, u64::from(pending.return_sp)),
+        uc.reg_write(RegisterMIPS::V0, u64::from(pending.api_result)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(pending.return_pc)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(pending.return_pc)),
+    ]
+    .into_iter()
+    .all(|write| write.is_ok())
 }
 
 #[cfg(feature = "unicorn")]

@@ -2,14 +2,21 @@
 #include "../common/fixture_status.h"
 
 typedef DWORD (WINAPI *PFN_FIXTURE_EXPORT)(DWORD);
+typedef DWORD (WINAPI *PFN_FIXTURE_COUNT)();
 
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     HMODULE module = LoadLibraryW(L"runtime_fixture.dll");
     if (!module) return FixtureFail(17101);
 
+    FARPROC attachProc = GetProcAddressW(module, L"FixtureAttachCount");
+    if (!attachProc) return FixtureFail(17110);
+    PFN_FIXTURE_COUNT attachCount = (PFN_FIXTURE_COUNT)attachProc;
+    if (attachCount() != 1) return FixtureFail(17111);
+
     HMODULE retained = LoadLibraryW(L"runtime_fixture.dll");
     if (!retained) return FixtureFail(17102);
     if (retained != module) return FixtureFail(17103);
+    if (attachCount() != 1) return FixtureFail(17112);
 
     FARPROC namedProc = GetProcAddressW(module, L"FixtureNamedExport");
     if (!namedProc) return FixtureFail(17104);

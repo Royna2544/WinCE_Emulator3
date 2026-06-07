@@ -273,6 +273,36 @@ impl PeImage {
         self.optional_header.data_directories.get(index).copied()
     }
 
+    pub fn tls_callback_vas(&self, load_base: u32) -> Result<Vec<u32>> {
+        let Some(directory) = self.data_directory(IMAGE_DIRECTORY_ENTRY_TLS) else {
+            return Ok(Vec::new());
+        };
+        if directory.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let address_of_callbacks =
+            self.read_u32_rva(rva_add(directory.virtual_address, 12, &self.path)?)?;
+        if address_of_callbacks == 0 {
+            return Ok(Vec::new());
+        }
+        let callbacks_rva = self.va_to_rva(address_of_callbacks)?;
+
+        let mut callbacks = Vec::new();
+        let mut cursor = callbacks_rva;
+        for _ in 0..4096 {
+            let callback_va = self.read_u32_rva(cursor)?;
+            if callback_va == 0 {
+                return Ok(callbacks);
+            }
+            let callback_rva = self.va_to_rva(callback_va)?;
+            callbacks.push(load_base.wrapping_add(callback_rva));
+            cursor = rva_add(cursor, 4, &self.path)?;
+        }
+
+        Err(pe_error(&self.path, "TLS callback table did not terminate"))
+    }
+
     pub fn resource_strings(&self) -> Result<Vec<PeResourceString>> {
         const RT_STRING: u32 = 6;
 
@@ -401,6 +431,19 @@ impl PeImage {
 
         let offset = section.pointer_to_raw_data as usize + delta;
         (offset < self.bytes.len()).then_some(offset)
+    }
+
+    fn va_to_rva(&self, va: u32) -> Result<u32> {
+        va.checked_sub(self.optional_header.image_base)
+            .ok_or_else(|| {
+                pe_error(
+                    &self.path,
+                    format!(
+                        "VA 0x{va:08x} is below image base 0x{:08x}",
+                        self.optional_header.image_base
+                    ),
+                )
+            })
     }
 
     pub fn mapped_image(&self) -> Result<Vec<u8>> {
@@ -1164,6 +1207,11 @@ mod tests {
             Some("SyntheticExport")
         );
         assert_eq!(exports.functions[0].rva, 0x1010);
+        assert_eq!(
+            image.tls_callback_vas(image.image_base())?,
+            vec![0x0040_1020]
+        );
+        assert_eq!(image.tls_callback_vas(0x0050_0000)?, vec![0x0050_1020]);
 
         assert_eq!(image.base_relocations.len(), 1);
         assert_eq!(image.base_relocations[0].page_rva, 0x1000);
@@ -1299,6 +1347,13 @@ mod tests {
             0x4000,
             0x0c,
         );
+        put_directory(
+            &mut bytes,
+            optional,
+            IMAGE_DIRECTORY_ENTRY_TLS,
+            0x20c0,
+            0x18,
+        );
 
         let section = 0x178;
         put_section(
@@ -1346,6 +1401,14 @@ mod tests {
         put_u32(&mut bytes, 0x470, 0x2060);
         put_u32(&mut bytes, 0x474, IMAGE_ORDINAL_FLAG32 | 461);
         put_u32(&mut bytes, 0x478, 0);
+        put_u32(&mut bytes, 0x4c0, 0);
+        put_u32(&mut bytes, 0x4c4, 0);
+        put_u32(&mut bytes, 0x4c8, 0);
+        put_u32(&mut bytes, 0x4cc, 0x0040_20e0);
+        put_u32(&mut bytes, 0x4d0, 0);
+        put_u32(&mut bytes, 0x4d4, 0);
+        put_u32(&mut bytes, 0x4e0, 0x0040_1020);
+        put_u32(&mut bytes, 0x4e4, 0);
 
         put_u32(&mut bytes, 0x600, 0x1000);
         put_u32(&mut bytes, 0x604, 0x0c);

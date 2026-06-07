@@ -2,3 +2,4 @@ LIBRARY dependency_user
 
 EXPORTS
     DependentUserExport @6
+    DependencyUserAttachCount @8

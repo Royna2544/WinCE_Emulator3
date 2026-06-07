@@ -9,6 +9,20 @@
 
 ## Confirmed
 
+- Runtime guest-DLL normal loads now enter guest lifecycle code before
+  returning from `LoadLibraryW` / `LoadLibraryExW(flags=0)`. The PE parser reads
+  the TLS directory callback table into loaded-module metadata, and the Unicorn
+  import-trap path queues dependency-order lifecycle callouts through a
+  reserved return stub. The implemented lifecycle slice invokes guest
+  `DllMain(hinst, DLL_PROCESS_ATTACH, 0)` for newly mapped normal-code DLLs,
+  preserves the importing thread registers around the callout, and returns the
+  module handle only after attach completes. Focused eVC fixtures now assert
+  exactly one attach for `171_loadlibrary_guest_dll` across handle reuse and
+  exactly one attach for both dependency and dependent DLLs in
+  `172_loadlibrary_dependent_guest_dll`. Focused PE/TLS parser coverage and the
+  full `cargo test --features unicorn,trace,win32-desktop` suite pass. TLS
+  callback execution fixtures, detach callouts, forwarded exports, datafile
+  loads, and no-resolve loads remain queued.
 - eVC fixture infrastructure now supports fixture-local runtime DLLs under
   `tests\test_progs\<fixture>\dlls\<dll-name>\`. The runner discovers `.cpp`,
   `.rc`, and optional `.def` files, links each DLL with an import library,
@@ -16,9 +30,9 @@
   treats DLL outputs as rebuild dependencies. The new
   `171_loadlibrary_guest_dll` fixture source exercises `LoadLibraryW`,
   same-module reuse, named and ordinal `GetProcAddress`, guest export calls,
-  and paired `FreeLibrary` calls against a generated MIPS DLL. The DLL also
-  defines `DllMain` counters for the next attach/detach fidelity slice, but
-  this fixture does not assert them yet. `cargo check --features
+  and paired `FreeLibrary` calls against a generated MIPS DLL. The fixture now
+  asserts one `DllMain(DLL_PROCESS_ATTACH)` call across handle reuse.
+  `cargo check --features
   unicorn,evc4-fixtures --test fixture_exes` passes, and the focused eVC run
   `WINCE_FIXTURE_FILTER=171_loadlibrary_guest_dll cargo test --features
   unicorn,evc4-fixtures --test fixture_exes -- --ignored --nocapture` passes.
@@ -28,11 +42,13 @@
   imports between sibling DLLs. The fixture builds `dependency_user.dll` with a
   normal import from `dependency_base.dll`, then the EXE loads only
   `dependency_user.dll`, resolves `DependentUserExport`, and calls through the
-  patched guest IAT into the base DLL. The focused eVC run
+  patched guest IAT into the base DLL. It now also asserts one attach for the
+  recursively loaded base DLL and one attach for the user DLL. The focused eVC run
   `WINCE_FIXTURE_FILTER=172_loadlibrary_dependent_guest_dll cargo test
   --features unicorn,evc4-fixtures --test fixture_exes -- --ignored
   --nocapture` passes, proving recursive runtime dependency loading and
-  guest-DLL-to-guest-DLL import resolution for eVC-built MIPS DLLs.
+  guest-DLL-to-guest-DLL import resolution plus attach callouts for eVC-built
+  MIPS DLLs.
 - The latest attachment audit has been merged into `PLAN.MD`/`TODO.md` as
   explicit queued fidelity work: raw/non-Unicorn loader alignment, core-vs-guest
   DLL boundary diagnostics, actionable must-implement stub hits,
@@ -70,9 +86,9 @@
   against the kernel's loaded-module export snapshots, rewrite the live import
   trap page, refresh the persisted trap blob, register PE resources/exports,
   and record the module as dynamic with CE-style refcounts. Datafile and
-  `DONT_RESOLVE_DLL_REFERENCES` flags still fail explicitly, and TLS callbacks,
-  `DllMain` attach/detach, forwarded exports, and fuller runtime trampoline
-  handling remain open. Focused coverage passes for loaded-module export
+  `DONT_RESOLVE_DLL_REFERENCES` flags still fail explicitly. TLS callback
+  execution fixture coverage, `DllMain`/TLS detach, forwarded exports, and
+  fuller runtime trampoline handling remain open. Focused coverage passes for loaded-module export
   snapshots, runtime occupied-range calculation, and the existing raw
   `LoadLibraryExW` flag/refcount behavior.
 - `ExternalImportTable` now has a public `add_module_exports` path for

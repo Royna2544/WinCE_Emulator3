@@ -483,6 +483,13 @@ impl CeKernel {
             .collect()
     }
 
+    pub fn loaded_module_by_handle(&self, module: u32) -> Option<LoadedModule> {
+        self.loaded_modules
+            .values()
+            .find(|loaded| loaded.base == module && !loaded.unload_pending)
+            .cloned()
+    }
+
     pub fn resolve_loaded_module_proc_by_name(&self, module: u32, name: &str) -> Option<u32> {
         let symbol = normalize_symbol_name(name);
         self.loaded_modules
