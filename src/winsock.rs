@@ -4,7 +4,7 @@ use crate::{
 };
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     io::{ErrorKind, Read, Write},
     net::{
         Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpListener, TcpStream, ToSocketAddrs,
@@ -24,6 +24,11 @@ const AF_INET: u32 = 2;
 const SOCK_STREAM: u32 = 1;
 const SOCK_DGRAM: u32 = 2;
 const FIONBIO: u32 = 0x8004_667e;
+const SOL_SOCKET: u32 = 0xffff;
+const SO_SNDTIMEO: u32 = 0x1005;
+const SO_RCVTIMEO: u32 = 0x1006;
+const SO_ERROR: u32 = 0x1007;
+const MSG_OOB: u32 = 0x0001;
 const SOCKET_HANDLE_BASE: u32 = 0x7100_0000;
 const MAX_GUEST_IO: usize = 1024 * 1024;
 const CE_GATEWAY_IP: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 1);
@@ -53,9 +58,11 @@ const WSAEFAULT: u32 = 10014;
 const WSAEINVAL: u32 = 10022;
 const WSAEMFILE: u32 = 10024;
 const WSAEWOULDBLOCK: u32 = 10035;
+const WSAENOPROTOOPT: u32 = 10042;
 const WSAEADDRINUSE: u32 = 10048;
 const WSAECONNRESET: u32 = 10054;
 const WSAENOTCONN: u32 = 10057;
+const WSAECONNREFUSED: u32 = 10061;
 const WSAEOPNOTSUPP: u32 = 10045;
 const WSAEAFNOSUPPORT: u32 = 10047;
 const WSAHOST_NOT_FOUND: u32 = 11001;
@@ -124,6 +131,7 @@ pub fn dispatch_import<M: CoredllGuestMemory>(
             raw_import_arg(args, 0),
             raw_import_arg(args, 1),
             raw_import_arg(args, 2),
+            raw_import_arg(args, 3),
         ),
         (_, "recv" | "wsarecv") => recv_raw(
             kernel,
@@ -132,6 +140,7 @@ pub fn dispatch_import<M: CoredllGuestMemory>(
             raw_import_arg(args, 0),
             raw_import_arg(args, 1),
             raw_import_arg(args, 2),
+            raw_import_arg(args, 3),
         ),
         (_, "sendto" | "wsasendto") => sendto_raw(
             kernel,
@@ -140,6 +149,7 @@ pub fn dispatch_import<M: CoredllGuestMemory>(
             raw_import_arg(args, 0),
             raw_import_arg(args, 1),
             raw_import_arg(args, 2),
+            raw_import_arg(args, 3),
             raw_import_arg(args, 4),
             raw_import_arg(args, 5),
         ),
@@ -172,10 +182,26 @@ pub fn dispatch_import<M: CoredllGuestMemory>(
             raw_import_arg(args, 1),
             raw_import_arg(args, 2),
         ),
-        (_, "setsockopt") | (_, "getsockopt") => {
-            set_wsa_error(kernel, thread_id, 0);
-            0
-        }
+        (_, "setsockopt") => setsockopt_raw(
+            kernel,
+            thread_id,
+            memory,
+            raw_import_arg(args, 0),
+            raw_import_arg(args, 1),
+            raw_import_arg(args, 2),
+            raw_import_arg(args, 3),
+            raw_import_arg(args, 4),
+        ),
+        (_, "getsockopt") => getsockopt_raw(
+            kernel,
+            thread_id,
+            memory,
+            raw_import_arg(args, 0),
+            raw_import_arg(args, 1),
+            raw_import_arg(args, 2),
+            raw_import_arg(args, 3),
+            raw_import_arg(args, 4),
+        ),
         (_, "shutdown") => shutdown_raw(
             kernel,
             thread_id,
@@ -243,14 +269,27 @@ enum HostSocket {
         nonblocking: bool,
     },
     TcpStream(TcpStream),
-    TcpListener(TcpListener),
+    TcpListener {
+        listener: TcpListener,
+        pending: VecDeque<(TcpStream, SocketAddr)>,
+    },
     Udp(UdpSocket),
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct SocketOptions {
+    recv_timeout_ms: u32,
+    send_timeout_ms: u32,
+    nonblocking: bool,
+    last_error: u32,
+    oob_ready: bool,
 }
 
 #[derive(Default)]
 struct WinsockState {
     next_socket: u32,
     sockets: BTreeMap<u32, HostSocket>,
+    options: BTreeMap<u32, SocketOptions>,
 }
 
 impl WinsockState {
@@ -263,6 +302,7 @@ impl WinsockState {
             self.next_socket = self.next_socket.wrapping_add(1);
             if handle != INVALID_SOCKET && !self.sockets.contains_key(&handle) {
                 self.sockets.insert(handle, socket);
+                self.options.insert(handle, SocketOptions::default());
                 return Some(handle);
             }
         }
@@ -278,6 +318,100 @@ fn state() -> &'static Mutex<WinsockState> {
 
 pub fn network_mode() -> WinsockNetworkMode {
     WinsockNetworkMode::default()
+}
+
+pub fn socket_read_ready(socket: u32) -> bool {
+    let mut state = match state().lock() {
+        Ok(state) => state,
+        Err(_) => return false,
+    };
+    let options = state.options.get(&socket).copied().unwrap_or_default();
+    state
+        .sockets
+        .get_mut(&socket)
+        .is_some_and(|socket| probe_host_socket_read_ready(socket, options))
+}
+
+pub fn socket_read_wait_candidate(socket: u32) -> bool {
+    state()
+        .lock()
+        .ok()
+        .and_then(|state| state.sockets.get(&socket).map(host_socket_can_read_wait))
+        .unwrap_or(false)
+}
+
+pub fn socket_accept_wait_candidate(socket: u32) -> bool {
+    state()
+        .lock()
+        .ok()
+        .and_then(|state| {
+            state
+                .sockets
+                .get(&socket)
+                .map(|socket| matches!(socket, HostSocket::TcpListener { .. }))
+        })
+        .unwrap_or(false)
+}
+
+pub fn socket_write_ready(socket: u32) -> bool {
+    state()
+        .lock()
+        .ok()
+        .and_then(|state| state.sockets.get(&socket).map(host_socket_write_ready))
+        .unwrap_or(false)
+}
+
+pub fn socket_write_wait_candidate(socket: u32) -> bool {
+    state()
+        .lock()
+        .ok()
+        .and_then(|state| state.sockets.get(&socket).map(host_socket_can_write_wait))
+        .unwrap_or(false)
+}
+
+pub fn socket_except_wait_candidate(socket: u32) -> bool {
+    state()
+        .lock()
+        .ok()
+        .is_some_and(|state| state.sockets.contains_key(&socket))
+}
+
+pub fn socket_except_ready(socket: u32) -> bool {
+    let mut state = match state().lock() {
+        Ok(state) => state,
+        Err(_) => return false,
+    };
+    if !state.sockets.contains_key(&socket) {
+        return false;
+    }
+    if let Some(error) = state
+        .sockets
+        .get(&socket)
+        .and_then(host_socket_take_error)
+        .filter(|error| *error != 0)
+    {
+        set_socket_last_error(&mut state, socket, error);
+    }
+    state
+        .options
+        .get(&socket)
+        .is_some_and(|options| options.last_error != 0 || options.oob_ready)
+}
+
+pub fn socket_recv_timeout_ms(socket: u32) -> Option<u32> {
+    state()
+        .lock()
+        .ok()
+        .and_then(|state| state.options.get(&socket).copied())
+        .and_then(|options| (options.recv_timeout_ms != 0).then_some(options.recv_timeout_ms))
+}
+
+pub fn socket_nonblocking(socket: u32) -> bool {
+    state()
+        .lock()
+        .ok()
+        .and_then(|state| state.options.get(&socket).copied())
+        .is_some_and(|options| options.nonblocking)
 }
 
 fn socket_raw(
@@ -318,10 +452,10 @@ fn socket_raw(
 }
 
 fn closesocket_raw(kernel: &mut CeKernel, thread_id: u32, socket: u32) -> u32 {
-    let removed = state()
-        .lock()
-        .ok()
-        .and_then(|mut state| state.sockets.remove(&socket));
+    let removed = state().lock().ok().and_then(|mut state| {
+        state.options.remove(&socket);
+        state.sockets.remove(&socket)
+    });
     if removed.is_some() {
         set_wsa_error(kernel, thread_id, 0);
         0
@@ -353,6 +487,7 @@ fn connect_raw<M: CoredllGuestMemory>(
             return SOCKET_ERROR;
         }
     };
+    let options = state.options.get(&socket).copied().unwrap_or_default();
     let Some(entry) = state.sockets.get_mut(&socket) else {
         set_wsa_error(kernel, thread_id, WSAEBADF);
         return SOCKET_ERROR;
@@ -371,7 +506,7 @@ fn connect_raw<M: CoredllGuestMemory>(
             };
             match TcpStream::connect_timeout(&addr, timeout) {
                 Ok(stream) => {
-                    configure_stream(&stream, *nonblocking);
+                    configure_stream(&stream, options);
                     *entry = HostSocket::TcpStream(stream);
                     Ok(())
                 }
@@ -390,6 +525,7 @@ fn connect_raw<M: CoredllGuestMemory>(
                     match udp.connect(addr) {
                         Ok(()) => {
                             *entry = HostSocket::Udp(udp);
+                            apply_socket_options(entry, options);
                             Ok(())
                         }
                         Err(error) => Err(io_to_wsa_error(&error)),
@@ -401,7 +537,17 @@ fn connect_raw<M: CoredllGuestMemory>(
         HostSocket::TcpStream(_) | HostSocket::Udp(_) => Ok(()),
         _ => Err(WSAEOPNOTSUPP),
     };
-    finish_socket_result(kernel, thread_id, result)
+    match result {
+        Ok(()) => {
+            set_socket_last_error(&mut state, socket, 0);
+            finish_socket_result(kernel, thread_id, Ok(()))
+        }
+        Err(error) => {
+            record_socket_last_error(&mut state, socket, error);
+            set_wsa_error(kernel, thread_id, error);
+            SOCKET_ERROR
+        }
+    }
 }
 
 fn bind_raw<M: CoredllGuestMemory>(
@@ -426,6 +572,7 @@ fn bind_raw<M: CoredllGuestMemory>(
             return SOCKET_ERROR;
         }
     };
+    let options = state.options.get(&socket).copied().unwrap_or_default();
     let Some(entry) = state.sockets.get_mut(&socket) else {
         set_wsa_error(kernel, thread_id, WSAEBADF);
         return SOCKET_ERROR;
@@ -439,7 +586,10 @@ fn bind_raw<M: CoredllGuestMemory>(
         } if *family == AF_INET && *socket_type == SOCK_STREAM => match TcpListener::bind(addr) {
             Ok(listener) => {
                 let _ = listener.set_nonblocking(true);
-                *entry = HostSocket::TcpListener(listener);
+                *entry = HostSocket::TcpListener {
+                    listener,
+                    pending: VecDeque::new(),
+                };
                 Ok(())
             }
             Err(error) => Err(io_to_wsa_error(&error)),
@@ -453,6 +603,7 @@ fn bind_raw<M: CoredllGuestMemory>(
             Ok(udp) => {
                 let _ = udp.set_nonblocking(*nonblocking);
                 *entry = HostSocket::Udp(udp);
+                apply_socket_options(entry, options);
                 Ok(())
             }
             Err(error) => Err(io_to_wsa_error(&error)),
@@ -470,7 +621,7 @@ fn listen_raw(kernel: &mut CeKernel, thread_id: u32, socket: u32) -> u32 {
             state
                 .sockets
                 .get(&socket)
-                .map(|socket| matches!(socket, HostSocket::TcpListener(_)))
+                .map(|socket| matches!(socket, HostSocket::TcpListener { .. }))
         })
         .unwrap_or(false);
     if ok {
@@ -498,27 +649,40 @@ fn accept_raw<M: CoredllGuestMemory>(
                 return INVALID_SOCKET;
             }
         };
-        let Some(HostSocket::TcpListener(listener)) = state.sockets.get(&socket) else {
-            set_wsa_error(kernel, thread_id, WSAEBADF);
-            return INVALID_SOCKET;
-        };
-        match listener.accept() {
-            Ok((stream, remote)) => {
-                configure_stream(&stream, true);
-                let handle = match state.allocate(HostSocket::TcpStream(stream)) {
-                    Some(handle) => handle,
-                    None => {
-                        set_wsa_error(kernel, thread_id, WSAEMFILE);
-                        return INVALID_SOCKET;
+        let accepted = match state.sockets.get_mut(&socket) {
+            Some(HostSocket::TcpListener { listener, pending }) => {
+                if let Some(accepted) = pending.pop_front() {
+                    accepted
+                } else {
+                    match listener.accept() {
+                        Ok(accepted) => accepted,
+                        Err(error) => {
+                            set_wsa_error(kernel, thread_id, io_to_wsa_error(&error));
+                            return INVALID_SOCKET;
+                        }
                     }
-                };
-                (handle, remote)
+                }
             }
-            Err(error) => {
-                set_wsa_error(kernel, thread_id, io_to_wsa_error(&error));
+            Some(_) | None => {
+                set_wsa_error(kernel, thread_id, WSAEBADF);
                 return INVALID_SOCKET;
             }
-        }
+        };
+        configure_stream(
+            &accepted.0,
+            SocketOptions {
+                nonblocking: true,
+                ..SocketOptions::default()
+            },
+        );
+        let handle = match state.allocate(HostSocket::TcpStream(accepted.0)) {
+            Some(handle) => handle,
+            None => {
+                set_wsa_error(kernel, thread_id, WSAEMFILE);
+                return INVALID_SOCKET;
+            }
+        };
+        (handle, accepted.1)
     };
     if addr_ptr != 0 && addr_len_ptr != 0 {
         let _ = write_sockaddr_in(memory, addr_ptr, addr_len_ptr, accepted.1);
@@ -534,6 +698,7 @@ fn send_raw<M: CoredllGuestMemory>(
     socket: u32,
     buf_ptr: u32,
     len: u32,
+    flags: u32,
 ) -> u32 {
     let len = len.min(MAX_GUEST_IO as u32) as usize;
     let mut bytes = vec![0; len];
@@ -541,25 +706,51 @@ fn send_raw<M: CoredllGuestMemory>(
         set_wsa_error(kernel, thread_id, WSAEFAULT);
         return SOCKET_ERROR;
     }
-    let mut state = match state().lock() {
-        Ok(state) => state,
-        Err(_) => {
-            set_wsa_error(kernel, thread_id, WSAEINTR);
-            return SOCKET_ERROR;
+    let (result, sockets) = {
+        let mut state = match state().lock() {
+            Ok(state) => state,
+            Err(_) => {
+                set_wsa_error(kernel, thread_id, WSAEINTR);
+                return SOCKET_ERROR;
+            }
+        };
+        let oob_peer_handles = if flags & MSG_OOB != 0 {
+            tcp_peer_socket_handles(&state, socket)
+        } else {
+            Vec::new()
+        };
+        let result = match state.sockets.get_mut(&socket) {
+            Some(HostSocket::TcpStream(stream)) => stream.write(&bytes),
+            Some(HostSocket::Udp(udp)) => udp.send(&bytes),
+            Some(_) => {
+                set_wsa_error(kernel, thread_id, WSAENOTCONN);
+                return SOCKET_ERROR;
+            }
+            None => {
+                set_wsa_error(kernel, thread_id, WSAEBADF);
+                return SOCKET_ERROR;
+            }
+        };
+        let sockets = (result.as_ref().ok().copied().unwrap_or(0) > 0)
+            .then(|| state.sockets.keys().copied().collect::<Vec<_>>());
+        match &result {
+            Ok(count) => {
+                set_socket_last_error(&mut state, socket, 0);
+                if flags & MSG_OOB != 0 && *count != 0 {
+                    for peer in oob_peer_handles {
+                        if let Some(options) = state.options.get_mut(&peer) {
+                            options.oob_ready = true;
+                        }
+                    }
+                }
+            }
+            Err(error) => record_socket_last_error(&mut state, socket, io_to_wsa_error(error)),
         }
+        (result, sockets)
     };
-    let result = match state.sockets.get_mut(&socket) {
-        Some(HostSocket::TcpStream(stream)) => stream.write(&bytes),
-        Some(HostSocket::Udp(udp)) => udp.send(&bytes),
-        Some(_) => {
-            set_wsa_error(kernel, thread_id, WSAENOTCONN);
-            return SOCKET_ERROR;
-        }
-        None => {
-            set_wsa_error(kernel, thread_id, WSAEBADF);
-            return SOCKET_ERROR;
-        }
-    };
+    if let Some(sockets) = sockets {
+        kernel.queue_winsock_wake_candidates_for_handles(sockets);
+    }
     finish_socket_count(kernel, thread_id, result)
 }
 
@@ -570,6 +761,7 @@ fn recv_raw<M: CoredllGuestMemory>(
     socket: u32,
     buf_ptr: u32,
     len: u32,
+    flags: u32,
 ) -> u32 {
     let len = len.min(MAX_GUEST_IO as u32) as usize;
     let mut bytes = vec![0; len];
@@ -594,6 +786,12 @@ fn recv_raw<M: CoredllGuestMemory>(
     };
     match result {
         Ok(count) => {
+            set_socket_last_error(&mut state, socket, 0);
+            if flags & MSG_OOB != 0
+                && let Some(options) = state.options.get_mut(&socket)
+            {
+                options.oob_ready = false;
+            }
             if memory.write_bytes(buf_ptr, &bytes[..count]).is_err() {
                 set_wsa_error(kernel, thread_id, WSAEFAULT);
                 SOCKET_ERROR
@@ -603,7 +801,9 @@ fn recv_raw<M: CoredllGuestMemory>(
             }
         }
         Err(error) => {
-            set_wsa_error(kernel, thread_id, io_to_wsa_error(&error));
+            let error = io_to_wsa_error(&error);
+            record_socket_last_error(&mut state, socket, error);
+            set_wsa_error(kernel, thread_id, error);
             SOCKET_ERROR
         }
     }
@@ -616,11 +816,12 @@ fn sendto_raw<M: CoredllGuestMemory>(
     socket: u32,
     buf_ptr: u32,
     len: u32,
+    flags: u32,
     to_ptr: u32,
     to_len: u32,
 ) -> u32 {
     if to_ptr == 0 {
-        return send_raw(kernel, thread_id, memory, socket, buf_ptr, len);
+        return send_raw(kernel, thread_id, memory, socket, buf_ptr, len, flags);
     }
     let addr = match read_sockaddr_in(memory, to_ptr, to_len) {
         Ok(addr) => addr,
@@ -635,24 +836,36 @@ fn sendto_raw<M: CoredllGuestMemory>(
         set_wsa_error(kernel, thread_id, WSAEFAULT);
         return SOCKET_ERROR;
     }
-    let mut state = match state().lock() {
-        Ok(state) => state,
-        Err(_) => {
-            set_wsa_error(kernel, thread_id, WSAEINTR);
-            return SOCKET_ERROR;
+    let (result, sockets) = {
+        let mut state = match state().lock() {
+            Ok(state) => state,
+            Err(_) => {
+                set_wsa_error(kernel, thread_id, WSAEINTR);
+                return SOCKET_ERROR;
+            }
+        };
+        let result = match state.sockets.get_mut(&socket) {
+            Some(HostSocket::Udp(udp)) => udp.send_to(&bytes, addr),
+            Some(_) => {
+                set_wsa_error(kernel, thread_id, WSAEOPNOTSUPP);
+                return SOCKET_ERROR;
+            }
+            None => {
+                set_wsa_error(kernel, thread_id, WSAEBADF);
+                return SOCKET_ERROR;
+            }
+        };
+        let sockets = (result.as_ref().ok().copied().unwrap_or(0) > 0)
+            .then(|| state.sockets.keys().copied().collect::<Vec<_>>());
+        match &result {
+            Ok(_) => set_socket_last_error(&mut state, socket, 0),
+            Err(error) => record_socket_last_error(&mut state, socket, io_to_wsa_error(error)),
         }
+        (result, sockets)
     };
-    let result = match state.sockets.get_mut(&socket) {
-        Some(HostSocket::Udp(udp)) => udp.send_to(&bytes, addr),
-        Some(_) => {
-            set_wsa_error(kernel, thread_id, WSAEOPNOTSUPP);
-            return SOCKET_ERROR;
-        }
-        None => {
-            set_wsa_error(kernel, thread_id, WSAEBADF);
-            return SOCKET_ERROR;
-        }
-    };
+    if let Some(sockets) = sockets {
+        kernel.queue_winsock_wake_candidates_for_handles(sockets);
+    }
     finish_socket_count(kernel, thread_id, result)
 }
 
@@ -688,6 +901,7 @@ fn recvfrom_raw<M: CoredllGuestMemory>(
     };
     match result {
         Ok((count, from)) => {
+            set_socket_last_error(&mut state, socket, 0);
             if memory.write_bytes(buf_ptr, &bytes[..count]).is_err() {
                 set_wsa_error(kernel, thread_id, WSAEFAULT);
                 return SOCKET_ERROR;
@@ -699,7 +913,9 @@ fn recvfrom_raw<M: CoredllGuestMemory>(
             count as u32
         }
         Err(error) => {
-            set_wsa_error(kernel, thread_id, io_to_wsa_error(&error));
+            let error = io_to_wsa_error(&error);
+            record_socket_last_error(&mut state, socket, error);
+            set_wsa_error(kernel, thread_id, error);
             SOCKET_ERROR
         }
     }
@@ -714,11 +930,12 @@ fn select_raw<M: CoredllGuestMemory>(
     exceptfds_ptr: u32,
 ) -> u32 {
     let mut ready = 0;
-    ready += filter_fd_set(memory, readfds_ptr, |socket| socket_read_ready(socket)).unwrap_or(0);
-    ready += filter_fd_set(memory, writefds_ptr, |socket| socket_write_ready(socket)).unwrap_or(0);
-    if exceptfds_ptr != 0 {
-        let _ = memory.write_u32(exceptfds_ptr, 0);
-    }
+    ready += filter_fd_set_by_socket(memory, readfds_ptr, socket_read_ready).unwrap_or(0);
+    ready += filter_fd_set(memory, writefds_ptr, |socket| {
+        host_socket_write_ready(socket)
+    })
+    .unwrap_or(0);
+    ready += filter_fd_set_by_socket(memory, exceptfds_ptr, socket_except_ready).unwrap_or(0);
     set_wsa_error(kernel, thread_id, 0);
     ready
 }
@@ -758,23 +975,136 @@ fn ioctlsocket_raw<M: CoredllGuestMemory>(
             return SOCKET_ERROR;
         }
     };
+    if !state.sockets.contains_key(&socket) {
+        set_wsa_error(kernel, thread_id, WSAEBADF);
+        return SOCKET_ERROR;
+    };
+    let options = state.options.entry(socket).or_default();
+    options.nonblocking = nonblocking;
+    let options = *options;
     let Some(entry) = state.sockets.get_mut(&socket) else {
         set_wsa_error(kernel, thread_id, WSAEBADF);
         return SOCKET_ERROR;
     };
-    match entry {
-        HostSocket::Pending {
-            nonblocking: mode, ..
-        } => *mode = nonblocking,
-        HostSocket::TcpStream(stream) => {
-            let _ = stream.set_nonblocking(nonblocking);
+    apply_socket_options(entry, options);
+    set_wsa_error(kernel, thread_id, 0);
+    0
+}
+
+fn setsockopt_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    memory: &mut M,
+    socket: u32,
+    level: u32,
+    optname: u32,
+    optval: u32,
+    optlen: u32,
+) -> u32 {
+    if optval == 0 || optlen < 4 {
+        set_wsa_error(kernel, thread_id, WSAEFAULT);
+        return SOCKET_ERROR;
+    }
+    if level != SOL_SOCKET || !matches!(optname, SO_RCVTIMEO | SO_SNDTIMEO) {
+        set_wsa_error(kernel, thread_id, WSAENOPROTOOPT);
+        return SOCKET_ERROR;
+    }
+    let timeout_ms = match memory.read_u32(optval) {
+        Ok(timeout_ms) => timeout_ms,
+        Err(_) => {
+            set_wsa_error(kernel, thread_id, WSAEFAULT);
+            return SOCKET_ERROR;
         }
-        HostSocket::TcpListener(listener) => {
-            let _ = listener.set_nonblocking(nonblocking);
+    };
+    let mut state = match state().lock() {
+        Ok(state) => state,
+        Err(_) => {
+            set_wsa_error(kernel, thread_id, WSAEINTR);
+            return SOCKET_ERROR;
         }
-        HostSocket::Udp(udp) => {
-            let _ = udp.set_nonblocking(nonblocking);
+    };
+    if !state.sockets.contains_key(&socket) {
+        set_wsa_error(kernel, thread_id, WSAEBADF);
+        return SOCKET_ERROR;
+    }
+    let options = state.options.entry(socket).or_default();
+    match optname {
+        SO_RCVTIMEO => options.recv_timeout_ms = timeout_ms,
+        SO_SNDTIMEO => options.send_timeout_ms = timeout_ms,
+        _ => unreachable!(),
+    }
+    let options = *options;
+    if let Some(entry) = state.sockets.get_mut(&socket) {
+        apply_socket_options(entry, options);
+    }
+    set_wsa_error(kernel, thread_id, 0);
+    0
+}
+
+fn getsockopt_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    memory: &mut M,
+    socket: u32,
+    level: u32,
+    optname: u32,
+    optval: u32,
+    optlen_ptr: u32,
+) -> u32 {
+    if optval == 0 || optlen_ptr == 0 {
+        set_wsa_error(kernel, thread_id, WSAEFAULT);
+        return SOCKET_ERROR;
+    }
+    if level != SOL_SOCKET || !matches!(optname, SO_RCVTIMEO | SO_SNDTIMEO | SO_ERROR) {
+        set_wsa_error(kernel, thread_id, WSAENOPROTOOPT);
+        return SOCKET_ERROR;
+    }
+    let optlen = match memory.read_u32(optlen_ptr) {
+        Ok(optlen) => optlen,
+        Err(_) => {
+            set_wsa_error(kernel, thread_id, WSAEFAULT);
+            return SOCKET_ERROR;
         }
+    };
+    if optlen < 4 {
+        set_wsa_error(kernel, thread_id, WSAEFAULT);
+        return SOCKET_ERROR;
+    }
+    let value = {
+        let mut state = match state().lock() {
+            Ok(state) => state,
+            Err(_) => {
+                set_wsa_error(kernel, thread_id, WSAEINTR);
+                return SOCKET_ERROR;
+            }
+        };
+        if !state.sockets.contains_key(&socket) {
+            set_wsa_error(kernel, thread_id, WSAEBADF);
+            return SOCKET_ERROR;
+        }
+        if let Some(error) = state
+            .sockets
+            .get(&socket)
+            .and_then(host_socket_take_error)
+            .filter(|error| *error != 0)
+        {
+            set_socket_last_error(&mut state, socket, error);
+        }
+        let options = state.options.get(&socket).copied().unwrap_or_default();
+        match optname {
+            SO_RCVTIMEO => options.recv_timeout_ms,
+            SO_SNDTIMEO => options.send_timeout_ms,
+            SO_ERROR => {
+                let error = options.last_error;
+                set_socket_last_error(&mut state, socket, 0);
+                error
+            }
+            _ => unreachable!(),
+        }
+    };
+    if memory.write_u32(optval, value).is_err() || memory.write_u32(optlen_ptr, 4).is_err() {
+        set_wsa_error(kernel, thread_id, WSAEFAULT);
+        return SOCKET_ERROR;
     }
     set_wsa_error(kernel, thread_id, 0);
     0
@@ -911,23 +1241,23 @@ fn gethostbyname_raw<M: CoredllGuestMemory>(
     }
 }
 
-fn filter_fd_set<M, F>(memory: &mut M, fdset_ptr: u32, ready_fn: F) -> Result<u32>
+fn filter_fd_set<M, F>(memory: &mut M, fdset_ptr: u32, mut ready_fn: F) -> Result<u32>
 where
     M: CoredllGuestMemory,
-    F: Fn(&HostSocket) -> bool,
+    F: FnMut(&mut HostSocket) -> bool,
 {
     if fdset_ptr == 0 {
         return Ok(0);
     }
     let count = memory.read_u32(fdset_ptr)?.min(64);
     let mut ready_sockets = Vec::new();
-    let state = state().lock().ok();
+    let mut state = state().lock().ok();
     for index in 0..count {
         let socket = memory.read_u32(fdset_ptr + 4 + index * 4)?;
         if state
-            .as_ref()
-            .and_then(|state| state.sockets.get(&socket))
-            .is_some_and(&ready_fn)
+            .as_mut()
+            .and_then(|state| state.sockets.get_mut(&socket))
+            .is_some_and(&mut ready_fn)
         {
             ready_sockets.push(socket);
         }
@@ -939,19 +1269,149 @@ where
     Ok(ready_sockets.len() as u32)
 }
 
-fn socket_read_ready(socket: &HostSocket) -> bool {
+fn filter_fd_set_by_socket<M, F>(memory: &mut M, fdset_ptr: u32, mut ready_fn: F) -> Result<u32>
+where
+    M: CoredllGuestMemory,
+    F: FnMut(u32) -> bool,
+{
+    if fdset_ptr == 0 {
+        return Ok(0);
+    }
+    let count = memory.read_u32(fdset_ptr)?.min(64);
+    let mut ready_sockets = Vec::new();
+    for index in 0..count {
+        let socket = memory.read_u32(fdset_ptr + 4 + index * 4)?;
+        if ready_fn(socket) {
+            ready_sockets.push(socket);
+        }
+    }
+    memory.write_u32(fdset_ptr, ready_sockets.len() as u32)?;
+    for (index, socket) in ready_sockets.iter().copied().enumerate() {
+        memory.write_u32(fdset_ptr + 4 + index as u32 * 4, socket)?;
+    }
+    Ok(ready_sockets.len() as u32)
+}
+
+fn host_socket_read_ready(socket: &HostSocket, options: SocketOptions) -> bool {
     match socket {
         HostSocket::TcpStream(stream) => {
             let mut byte = [0; 1];
             matches!(stream.peek(&mut byte), Ok(count) if count > 0)
         }
-        HostSocket::Udp(_) | HostSocket::TcpListener(_) => true,
+        HostSocket::Udp(udp) => udp_socket_read_ready(udp, options),
+        HostSocket::TcpListener { pending, .. } => !pending.is_empty(),
         HostSocket::Pending { .. } => false,
     }
 }
 
-fn socket_write_ready(socket: &HostSocket) -> bool {
+fn host_socket_can_read_wait(socket: &HostSocket) -> bool {
+    matches!(
+        socket,
+        HostSocket::TcpStream(_) | HostSocket::TcpListener { .. } | HostSocket::Udp(_)
+    )
+}
+
+fn host_socket_can_write_wait(socket: &HostSocket) -> bool {
+    matches!(
+        socket,
+        HostSocket::TcpStream(_)
+            | HostSocket::Udp(_)
+            | HostSocket::Pending {
+                family: AF_INET,
+                socket_type: SOCK_STREAM,
+                ..
+            }
+    )
+}
+
+fn tcp_peer_socket_handles(state: &WinsockState, socket: u32) -> Vec<u32> {
+    let Some(HostSocket::TcpStream(stream)) = state.sockets.get(&socket) else {
+        return Vec::new();
+    };
+    let Ok(local) = stream.local_addr() else {
+        return Vec::new();
+    };
+    let Ok(peer) = stream.peer_addr() else {
+        return Vec::new();
+    };
+    state
+        .sockets
+        .iter()
+        .filter_map(|(handle, candidate)| {
+            if *handle == socket {
+                return None;
+            }
+            let HostSocket::TcpStream(candidate) = candidate else {
+                return None;
+            };
+            let candidate_local = candidate.local_addr().ok()?;
+            let candidate_peer = candidate.peer_addr().ok()?;
+            (candidate_local == peer && candidate_peer == local).then_some(*handle)
+        })
+        .collect()
+}
+
+fn probe_host_socket_read_ready(socket: &mut HostSocket, options: SocketOptions) -> bool {
+    match socket {
+        HostSocket::TcpListener { listener, pending } => {
+            if !pending.is_empty() {
+                return true;
+            }
+            match listener.accept() {
+                Ok((stream, remote)) => {
+                    configure_stream(
+                        &stream,
+                        SocketOptions {
+                            nonblocking: true,
+                            ..SocketOptions::default()
+                        },
+                    );
+                    pending.push_back((stream, remote));
+                    true
+                }
+                Err(error) if error.kind() == ErrorKind::WouldBlock => false,
+                Err(_) => false,
+            }
+        }
+        socket => host_socket_read_ready(socket, options),
+    }
+}
+
+fn udp_socket_read_ready(udp: &UdpSocket, options: SocketOptions) -> bool {
+    let mut bytes = [0; 2048];
+    if options.nonblocking {
+        return udp.peek_from(&mut bytes).is_ok();
+    }
+    let _ = udp.set_nonblocking(true);
+    let ready = udp.peek_from(&mut bytes).is_ok();
+    let _ = udp.set_nonblocking(false);
+    ready
+}
+
+fn host_socket_write_ready(socket: &HostSocket) -> bool {
     matches!(socket, HostSocket::TcpStream(_) | HostSocket::Udp(_))
+}
+
+fn host_socket_take_error(socket: &HostSocket) -> Option<u32> {
+    let error = match socket {
+        HostSocket::TcpStream(stream) => stream.take_error().ok().flatten(),
+        HostSocket::TcpListener { listener, .. } => listener.take_error().ok().flatten(),
+        HostSocket::Udp(udp) => udp.take_error().ok().flatten(),
+        HostSocket::Pending { .. } => None,
+    }?;
+    Some(io_to_wsa_error(&error))
+}
+
+fn set_socket_last_error(state: &mut WinsockState, socket: u32, error: u32) {
+    if let Some(options) = state.options.get_mut(&socket) {
+        options.last_error = error;
+    }
+}
+
+fn record_socket_last_error(state: &mut WinsockState, socket: u32, error: u32) {
+    if error != WSAEWOULDBLOCK {
+        set_socket_last_error(state, socket, error);
+    }
 }
 
 fn read_sockaddr_in<M: CoredllGuestMemory>(
@@ -1086,11 +1546,48 @@ fn read_guest_c_string<M: CoredllGuestMemory>(
     None
 }
 
-fn configure_stream(stream: &TcpStream, nonblocking: bool) {
-    let _ = stream.set_nonblocking(nonblocking);
-    if !nonblocking {
-        let _ = stream.set_read_timeout(Some(Duration::from_millis(1)));
-        let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
+fn apply_socket_options(socket: &mut HostSocket, options: SocketOptions) {
+    match socket {
+        HostSocket::Pending { nonblocking, .. } => *nonblocking = options.nonblocking,
+        HostSocket::TcpStream(stream) => configure_stream(stream, options),
+        HostSocket::TcpListener { listener, .. } => {
+            let _ = listener.set_nonblocking(options.nonblocking);
+        }
+        HostSocket::Udp(udp) => {
+            let _ = udp.set_nonblocking(options.nonblocking);
+            if !options.nonblocking {
+                let _ = udp.set_read_timeout(Some(socket_timeout_duration(
+                    options.recv_timeout_ms,
+                    Duration::from_millis(1),
+                )));
+                let _ = udp.set_write_timeout(Some(socket_timeout_duration(
+                    options.send_timeout_ms,
+                    Duration::from_secs(3),
+                )));
+            }
+        }
+    }
+}
+
+fn configure_stream(stream: &TcpStream, options: SocketOptions) {
+    let _ = stream.set_nonblocking(options.nonblocking);
+    if !options.nonblocking {
+        let _ = stream.set_read_timeout(Some(socket_timeout_duration(
+            options.recv_timeout_ms,
+            Duration::from_millis(1),
+        )));
+        let _ = stream.set_write_timeout(Some(socket_timeout_duration(
+            options.send_timeout_ms,
+            Duration::from_secs(3),
+        )));
+    }
+}
+
+fn socket_timeout_duration(timeout_ms: u32, fallback: Duration) -> Duration {
+    if timeout_ms == 0 {
+        fallback
+    } else {
+        Duration::from_millis(u64::from(timeout_ms))
     }
 }
 
@@ -1139,6 +1636,7 @@ fn io_to_wsa_error(error: &std::io::Error) -> u32 {
             WSAECONNRESET
         }
         ErrorKind::AddrInUse => WSAEADDRINUSE,
+        ErrorKind::ConnectionRefused => WSAECONNREFUSED,
         ErrorKind::InvalidInput | ErrorKind::InvalidData => WSAEINVAL,
         ErrorKind::NotConnected => WSAENOTCONN,
         ErrorKind::Unsupported => WSAEOPNOTSUPP,
@@ -1172,15 +1670,39 @@ fn write_guest_bytes<M: CoredllGuestMemory>(
 }
 
 #[cfg(test)]
-fn reset_for_tests() {
-    *state().lock().unwrap() = WinsockState::default();
+pub(crate) fn reset_for_tests() {
+    *state()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = WinsockState::default();
+}
+
+#[cfg(test)]
+pub(crate) fn locked_reset_for_tests() -> std::sync::MutexGuard<'static, ()> {
+    static WINSOCK_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    let guard = WINSOCK_TEST_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    reset_for_tests();
+    guard
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Result, config::RuntimeConfig};
-    use std::{collections::BTreeMap, io::Read, net::TcpListener, thread};
+    use crate::{
+        Result,
+        ce::{scheduler::SchedulerBlockedWaitKind, timer::INFINITE},
+        config::RuntimeConfig,
+    };
+    use std::{
+        collections::BTreeMap,
+        io::Read,
+        net::{TcpListener, UdpSocket},
+        sync::mpsc,
+        thread,
+        time::{Duration, Instant},
+    };
 
     #[derive(Default)]
     struct TestMemory {
@@ -1259,9 +1781,23 @@ mod tests {
         CeKernel::boot(RuntimeConfig::load("regs.json", "serial_devices.json").unwrap())
     }
 
+    fn host_socket_timeouts(socket: u32) -> Option<(Option<Duration>, Option<Duration>)> {
+        let state = state().lock().unwrap();
+        match state.sockets.get(&socket)? {
+            HostSocket::TcpStream(stream) => Some((
+                stream.read_timeout().unwrap(),
+                stream.write_timeout().unwrap(),
+            )),
+            HostSocket::Udp(udp) => {
+                Some((udp.read_timeout().unwrap(), udp.write_timeout().unwrap()))
+            }
+            _ => None,
+        }
+    }
+
     #[test]
     fn wsa_startup_writes_ce_shaped_wsadata() {
-        reset_for_tests();
+        let _winsock_guard = locked_reset_for_tests();
         let mut kernel = test_kernel();
         let mut memory = TestMemory::default();
         let data = 0x3000_0000;
@@ -1289,7 +1825,7 @@ mod tests {
 
     #[test]
     fn wsa_startup_rejects_null_wsadata_pointer() {
-        reset_for_tests();
+        let _winsock_guard = locked_reset_for_tests();
         let mut kernel = test_kernel();
         let mut memory = TestMemory::default();
 
@@ -1301,7 +1837,7 @@ mod tests {
 
     #[test]
     fn host_tcp_socket_connect_send_and_recv_use_loopback() {
-        reset_for_tests();
+        let _winsock_guard = locked_reset_for_tests();
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         let server = thread::spawn(move || {
@@ -1383,8 +1919,1340 @@ mod tests {
     }
 
     #[test]
+    fn socket_timeouts_round_trip_through_setsockopt_getsockopt() {
+        let _winsock_guard = locked_reset_for_tests();
+        let mut kernel = test_kernel();
+        let mut memory = TestMemory::default();
+        let optval = 0x3000_5100;
+        let optlen = 0x3000_5200;
+        let socket = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("socket"),
+            &mut memory,
+            &[AF_INET, SOCK_STREAM, 0],
+        );
+        assert_ne!(socket, INVALID_SOCKET);
+
+        memory.write_u32(optval, 250).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("setsockopt"),
+                &mut memory,
+                &[socket, SOL_SOCKET, SO_RCVTIMEO, optval, 4],
+            ),
+            0
+        );
+        assert_eq!(socket_recv_timeout_ms(socket), Some(250));
+
+        memory.write_u32(optval, 0).unwrap();
+        memory.write_u32(optlen, 4).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("getsockopt"),
+                &mut memory,
+                &[socket, SOL_SOCKET, SO_RCVTIMEO, optval, optlen],
+            ),
+            0
+        );
+        assert_eq!(memory.read_u32(optval).unwrap(), 250);
+        assert_eq!(memory.read_u32(optlen).unwrap(), 4);
+
+        memory.write_u32(optval, 750).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("setsockopt"),
+                &mut memory,
+                &[socket, SOL_SOCKET, SO_SNDTIMEO, optval, 4],
+            ),
+            0
+        );
+        memory.write_u32(optval, 0).unwrap();
+        memory.write_u32(optlen, 4).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("getsockopt"),
+                &mut memory,
+                &[socket, SOL_SOCKET, SO_SNDTIMEO, optval, optlen],
+            ),
+            0
+        );
+        assert_eq!(memory.read_u32(optval).unwrap(), 750);
+
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("setsockopt"),
+                &mut memory,
+                &[socket, SOL_SOCKET, 0xdead, optval, 4],
+            ),
+            SOCKET_ERROR
+        );
+        assert_eq!(kernel.threads.get_last_error(1), WSAENOPROTOOPT);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("closesocket"),
+                &mut memory,
+                &[socket],
+            ),
+            0
+        );
+        assert_eq!(socket_recv_timeout_ms(socket), None);
+    }
+
+    #[test]
+    fn socket_timeouts_apply_to_host_tcp_and_udp_sockets() {
+        let _winsock_guard = locked_reset_for_tests();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let tcp_port = listener.local_addr().unwrap().port();
+        let (accepted_tx, accepted_rx) = mpsc::channel();
+        let (close_tx, close_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            accepted_tx.send(()).unwrap();
+            close_rx.recv().unwrap();
+        });
+        let udp_probe = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let udp_port = udp_probe.local_addr().unwrap().port();
+        drop(udp_probe);
+
+        let mut kernel = test_kernel();
+        let mut memory = TestMemory::default();
+        let tcp_addr = 0x3000_8600;
+        let udp_addr = 0x3000_8700;
+        let optval = 0x3000_8800;
+        memory.write_sockaddr_v4(tcp_addr, Ipv4Addr::LOCALHOST, tcp_port);
+        memory.write_sockaddr_v4(udp_addr, Ipv4Addr::LOCALHOST, udp_port);
+
+        let tcp = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("socket"),
+            &mut memory,
+            &[AF_INET, SOCK_STREAM, 0],
+        );
+        assert_ne!(tcp, INVALID_SOCKET);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("connect"),
+                &mut memory,
+                &[tcp, tcp_addr, 16],
+            ),
+            0
+        );
+        accepted_rx.recv().unwrap();
+
+        memory.write_u32(optval, 125).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("setsockopt"),
+                &mut memory,
+                &[tcp, SOL_SOCKET, SO_RCVTIMEO, optval, 4],
+            ),
+            0
+        );
+        memory.write_u32(optval, 375).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("setsockopt"),
+                &mut memory,
+                &[tcp, SOL_SOCKET, SO_SNDTIMEO, optval, 4],
+            ),
+            0
+        );
+        assert_eq!(
+            host_socket_timeouts(tcp),
+            Some((
+                Some(Duration::from_millis(125)),
+                Some(Duration::from_millis(375))
+            ))
+        );
+
+        let udp = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("socket"),
+            &mut memory,
+            &[AF_INET, SOCK_DGRAM, 0],
+        );
+        assert_ne!(udp, INVALID_SOCKET);
+        memory.write_u32(optval, 222).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("setsockopt"),
+                &mut memory,
+                &[udp, SOL_SOCKET, SO_RCVTIMEO, optval, 4],
+            ),
+            0
+        );
+        memory.write_u32(optval, 444).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("setsockopt"),
+                &mut memory,
+                &[udp, SOL_SOCKET, SO_SNDTIMEO, optval, 4],
+            ),
+            0
+        );
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("bind"),
+                &mut memory,
+                &[udp, udp_addr, 16],
+            ),
+            0
+        );
+        assert_eq!(
+            host_socket_timeouts(udp),
+            Some((
+                Some(Duration::from_millis(222)),
+                Some(Duration::from_millis(444))
+            ))
+        );
+
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("closesocket"),
+                &mut memory,
+                &[udp],
+            ),
+            0
+        );
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("closesocket"),
+                &mut memory,
+                &[tcp],
+            ),
+            0
+        );
+        close_tx.send(()).unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn so_error_tracks_failed_connect_and_drives_exception_select() {
+        let _winsock_guard = locked_reset_for_tests();
+        let probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let mut kernel = test_kernel();
+        let mut memory = TestMemory::default();
+        let sockaddr = 0x3000_8100;
+        let optval = 0x3000_8200;
+        let optlen = 0x3000_8300;
+        let exceptfds = 0x3000_8400;
+        memory.write_sockaddr_v4(sockaddr, Ipv4Addr::LOCALHOST, port);
+        let socket = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("socket"),
+            &mut memory,
+            &[AF_INET, SOCK_STREAM, 0],
+        );
+        assert_ne!(socket, INVALID_SOCKET);
+
+        memory.write_u32(optval, u32::MAX).unwrap();
+        memory.write_u32(optlen, 4).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("getsockopt"),
+                &mut memory,
+                &[socket, SOL_SOCKET, SO_ERROR, optval, optlen],
+            ),
+            0
+        );
+        assert_eq!(memory.read_u32(optval).unwrap(), 0);
+
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("connect"),
+                &mut memory,
+                &[socket, sockaddr, 16],
+            ),
+            SOCKET_ERROR
+        );
+        assert_eq!(kernel.threads.get_last_error(1), WSAECONNREFUSED);
+        assert!(socket_except_ready(socket));
+
+        memory.write_u32(exceptfds, 1).unwrap();
+        memory.write_u32(exceptfds + 4, socket).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("select"),
+                &mut memory,
+                &[0, 0, 0, exceptfds, 0],
+            ),
+            1
+        );
+        assert_eq!(memory.read_u32(exceptfds).unwrap(), 1);
+        assert_eq!(memory.read_u32(exceptfds + 4).unwrap(), socket);
+
+        memory.write_u32(optval, 0).unwrap();
+        memory.write_u32(optlen, 4).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("getsockopt"),
+                &mut memory,
+                &[socket, SOL_SOCKET, SO_ERROR, optval, optlen],
+            ),
+            0
+        );
+        assert_eq!(memory.read_u32(optval).unwrap(), WSAECONNREFUSED);
+        assert_eq!(memory.read_u32(optlen).unwrap(), 4);
+        assert!(!socket_except_ready(socket));
+
+        memory.write_u32(exceptfds, 1).unwrap();
+        memory.write_u32(exceptfds + 4, socket).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("select"),
+                &mut memory,
+                &[0, 0, 0, exceptfds, 0],
+            ),
+            0
+        );
+        assert_eq!(memory.read_u32(exceptfds).unwrap(), 0);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("closesocket"),
+                &mut memory,
+                &[socket],
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn oob_send_marks_peer_exception_select_without_so_error() {
+        let _winsock_guard = locked_reset_for_tests();
+        let probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let mut kernel = test_kernel();
+        let mut memory = TestMemory::default();
+        let sockaddr = 0x3000_8500;
+        let readfds = 0x3000_8600;
+        let exceptfds = 0x3000_8700;
+        let optval = 0x3000_8800;
+        let optlen = 0x3000_8900;
+        let remote_addr = 0x3000_8a00;
+        let remote_len = 0x3000_8b00;
+        let send_buf = 0x3000_8c00;
+        let recv_buf = 0x3000_8d00;
+        memory.write_sockaddr_v4(sockaddr, Ipv4Addr::LOCALHOST, port);
+        memory.write_bytes_at(send_buf, b"!");
+
+        let listener = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("socket"),
+            &mut memory,
+            &[AF_INET, SOCK_STREAM, 0],
+        );
+        assert_ne!(listener, INVALID_SOCKET);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("bind"),
+                &mut memory,
+                &[listener, sockaddr, 16],
+            ),
+            0
+        );
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("listen"),
+                &mut memory,
+                &[listener, 1],
+            ),
+            0
+        );
+
+        let client = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("socket"),
+            &mut memory,
+            &[AF_INET, SOCK_STREAM, 0],
+        );
+        assert_ne!(client, INVALID_SOCKET);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("connect"),
+                &mut memory,
+                &[client, sockaddr, 16],
+            ),
+            0
+        );
+
+        memory.write_u32(readfds, 1).unwrap();
+        memory.write_u32(readfds + 4, listener).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("select"),
+                &mut memory,
+                &[0, readfds, 0, 0, 0],
+            ),
+            1
+        );
+        memory.write_u32(remote_len, 16).unwrap();
+        let accepted = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("accept"),
+            &mut memory,
+            &[listener, remote_addr, remote_len],
+        );
+        assert_ne!(accepted, INVALID_SOCKET);
+        assert!(!socket_except_ready(accepted));
+
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("send"),
+                &mut memory,
+                &[client, send_buf, 1, MSG_OOB],
+            ),
+            1
+        );
+        assert!(socket_except_ready(accepted));
+        memory.write_u32(exceptfds, 1).unwrap();
+        memory.write_u32(exceptfds + 4, accepted).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("select"),
+                &mut memory,
+                &[0, 0, 0, exceptfds, 0],
+            ),
+            1
+        );
+        assert_eq!(memory.read_u32(exceptfds).unwrap(), 1);
+        assert_eq!(memory.read_u32(exceptfds + 4).unwrap(), accepted);
+
+        memory.write_u32(optval, u32::MAX).unwrap();
+        memory.write_u32(optlen, 4).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("getsockopt"),
+                &mut memory,
+                &[accepted, SOL_SOCKET, SO_ERROR, optval, optlen],
+            ),
+            0
+        );
+        assert_eq!(memory.read_u32(optval).unwrap(), 0);
+        assert!(socket_except_ready(accepted));
+
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("recv"),
+                &mut memory,
+                &[accepted, recv_buf, 1, MSG_OOB],
+            ),
+            1
+        );
+        assert_eq!(memory.read_u8(recv_buf).unwrap(), b'!');
+        assert!(!socket_except_ready(accepted));
+        memory.write_u32(exceptfds, 1).unwrap();
+        memory.write_u32(exceptfds + 4, accepted).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("select"),
+                &mut memory,
+                &[0, 0, 0, exceptfds, 0],
+            ),
+            0
+        );
+        assert_eq!(memory.read_u32(exceptfds).unwrap(), 0);
+
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("closesocket"),
+                &mut memory,
+                &[accepted],
+            ),
+            0
+        );
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("closesocket"),
+                &mut memory,
+                &[client],
+            ),
+            0
+        );
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("closesocket"),
+                &mut memory,
+                &[listener],
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn nonblocking_recv_without_data_returns_wouldblock_without_waiting() {
+        let _winsock_guard = locked_reset_for_tests();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (accepted_tx, accepted_rx) = mpsc::channel();
+        let (close_tx, close_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            accepted_tx.send(()).unwrap();
+            close_rx.recv().unwrap();
+        });
+
+        let mut kernel = test_kernel();
+        let mut memory = TestMemory::default();
+        let sockaddr = 0x3000_6100;
+        let nonblocking_ptr = 0x3000_6200;
+        let recv_buf = 0x3000_6300;
+        let optval = 0x3000_6400;
+        let optlen = 0x3000_6500;
+        memory.write_sockaddr_v4(sockaddr, Ipv4Addr::LOCALHOST, port);
+        let socket = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("socket"),
+            &mut memory,
+            &[AF_INET, SOCK_STREAM, 0],
+        );
+        assert_ne!(socket, INVALID_SOCKET);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("connect"),
+                &mut memory,
+                &[socket, sockaddr, 16],
+            ),
+            0
+        );
+        accepted_rx.recv().unwrap();
+        memory.write_u32(nonblocking_ptr, 1).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("ioctlsocket"),
+                &mut memory,
+                &[socket, FIONBIO, nonblocking_ptr],
+            ),
+            0
+        );
+        assert!(socket_nonblocking(socket));
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("recv"),
+                &mut memory,
+                &[socket, recv_buf, 4, 0],
+            ),
+            SOCKET_ERROR
+        );
+        assert_eq!(kernel.threads.get_last_error(1), WSAEWOULDBLOCK);
+        assert!(!socket_except_ready(socket));
+        memory.write_u32(optval, u32::MAX).unwrap();
+        memory.write_u32(optlen, 4).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("getsockopt"),
+                &mut memory,
+                &[socket, SOL_SOCKET, SO_ERROR, optval, optlen],
+            ),
+            0
+        );
+        assert_eq!(memory.read_u32(optval).unwrap(), 0);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("closesocket"),
+                &mut memory,
+                &[socket],
+            ),
+            0
+        );
+        close_tx.send(()).unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn nonblocking_recvfrom_without_datagram_returns_wouldblock_without_waiting() {
+        let _winsock_guard = locked_reset_for_tests();
+        let probe = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let mut kernel = test_kernel();
+        let mut memory = TestMemory::default();
+        let bind_addr = 0x3000_a100;
+        let nonblocking_ptr = 0x3000_a200;
+        let recv_buf = 0x3000_a300;
+        let from_addr = 0x3000_a400;
+        let from_len = 0x3000_a500;
+        let optval = 0x3000_a600;
+        let optlen = 0x3000_a700;
+        memory.write_sockaddr_v4(bind_addr, Ipv4Addr::LOCALHOST, port);
+        memory.write_u32(from_len, 16).unwrap();
+        let socket = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("socket"),
+            &mut memory,
+            &[AF_INET, SOCK_DGRAM, 0],
+        );
+        assert_ne!(socket, INVALID_SOCKET);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("bind"),
+                &mut memory,
+                &[socket, bind_addr, 16],
+            ),
+            0
+        );
+        memory.write_u32(nonblocking_ptr, 1).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("ioctlsocket"),
+                &mut memory,
+                &[socket, FIONBIO, nonblocking_ptr],
+            ),
+            0
+        );
+        assert!(socket_nonblocking(socket));
+        assert!(!socket_read_ready(socket));
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("recvfrom"),
+                &mut memory,
+                &[socket, recv_buf, 4, 0, from_addr, from_len],
+            ),
+            SOCKET_ERROR
+        );
+        assert_eq!(kernel.threads.get_last_error(1), WSAEWOULDBLOCK);
+        assert!(!socket_except_ready(socket));
+        memory.write_u32(optval, u32::MAX).unwrap();
+        memory.write_u32(optlen, 4).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("getsockopt"),
+                &mut memory,
+                &[socket, SOL_SOCKET, SO_ERROR, optval, optlen],
+            ),
+            0
+        );
+        assert_eq!(memory.read_u32(optval).unwrap(), 0);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("closesocket"),
+                &mut memory,
+                &[socket],
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn nonblocking_accept_without_client_returns_wouldblock_without_waiting() {
+        let _winsock_guard = locked_reset_for_tests();
+        let probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let mut kernel = test_kernel();
+        let mut memory = TestMemory::default();
+        let bind_addr = 0x3000_7100;
+        let nonblocking_ptr = 0x3000_7200;
+        let remote_addr = 0x3000_7300;
+        let remote_len = 0x3000_7400;
+        memory.write_sockaddr_v4(bind_addr, Ipv4Addr::LOCALHOST, port);
+        memory.write_u32(remote_len, 16).unwrap();
+        let listener = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("socket"),
+            &mut memory,
+            &[AF_INET, SOCK_STREAM, 0],
+        );
+        assert_ne!(listener, INVALID_SOCKET);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("bind"),
+                &mut memory,
+                &[listener, bind_addr, 16],
+            ),
+            0
+        );
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("listen"),
+                &mut memory,
+                &[listener, 1],
+            ),
+            0
+        );
+        memory.write_u32(nonblocking_ptr, 1).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("ioctlsocket"),
+                &mut memory,
+                &[listener, FIONBIO, nonblocking_ptr],
+            ),
+            0
+        );
+        assert!(socket_nonblocking(listener));
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("accept"),
+                &mut memory,
+                &[listener, remote_addr, remote_len],
+            ),
+            INVALID_SOCKET
+        );
+        assert_eq!(kernel.threads.get_last_error(1), WSAEWOULDBLOCK);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("closesocket"),
+                &mut memory,
+                &[listener],
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn scheduler_waiter_can_use_socket_read_readiness() {
+        let _winsock_guard = locked_reset_for_tests();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (accepted_tx, accepted_rx) = mpsc::channel();
+        let (write_tx, write_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            accepted_tx.send(()).unwrap();
+            write_rx.recv().unwrap();
+            stream.write_all(b"wake").unwrap();
+        });
+
+        let mut kernel = test_kernel();
+        let mut memory = TestMemory::default();
+        let sockaddr = 0x3000_4100;
+        let recv_buf = 0x3000_4200;
+        memory.write_sockaddr_v4(sockaddr, Ipv4Addr::LOCALHOST, port);
+        let socket = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("socket"),
+            &mut memory,
+            &[AF_INET, SOCK_STREAM, 0],
+        );
+        assert_ne!(socket, INVALID_SOCKET);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("connect"),
+                &mut memory,
+                &[socket, sockaddr, 16],
+            ),
+            0
+        );
+        accepted_rx.recv().unwrap();
+        assert!(!socket_read_ready(socket));
+
+        let wait_id = kernel.register_blocked_waiter(
+            70,
+            0x770,
+            vec![socket],
+            SchedulerBlockedWaitKind::Kernel,
+            0,
+            INFINITE,
+        );
+        assert_eq!(kernel.queue_winsock_wake_candidates(socket), 1);
+        assert_eq!(
+            kernel.select_ready_blocked_waiter(1, 0, |blocked, _kernel| {
+                blocked.wait_handles.iter().copied().any(socket_read_ready)
+            }),
+            None
+        );
+
+        write_tx.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !socket_read_ready(socket) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(socket_read_ready(socket));
+        assert_eq!(kernel.queue_winsock_wake_candidates(socket), 0);
+        assert_eq!(
+            kernel.select_ready_blocked_waiter(1, 0, |blocked, _kernel| {
+                blocked.wait_handles.iter().copied().any(socket_read_ready)
+            }),
+            Some(wait_id)
+        );
+        kernel.remove_blocked_waiter(wait_id).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("recv"),
+                &mut memory,
+                &[socket, recv_buf, 4, 0],
+            ),
+            4
+        );
+        assert_eq!(
+            (0..4)
+                .map(|offset| memory.read_u8(recv_buf + offset).unwrap())
+                .collect::<Vec<_>>(),
+            b"wake"
+        );
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("closesocket"),
+                &mut memory,
+                &[socket],
+            ),
+            0
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn select_buffers_tcp_listener_readiness_for_accept() {
+        let _winsock_guard = locked_reset_for_tests();
+        let probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let mut kernel = test_kernel();
+        let mut memory = TestMemory::default();
+        let bind_addr = 0x3000_5100;
+        let readfds = 0x3000_5200;
+        let remote_addr = 0x3000_5300;
+        let remote_len = 0x3000_5400;
+        memory.write_sockaddr_v4(bind_addr, Ipv4Addr::LOCALHOST, port);
+        let listener = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("socket"),
+            &mut memory,
+            &[AF_INET, SOCK_STREAM, 0],
+        );
+        assert_ne!(listener, INVALID_SOCKET);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("bind"),
+                &mut memory,
+                &[listener, bind_addr, 16],
+            ),
+            0
+        );
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("listen"),
+                &mut memory,
+                &[listener, 1],
+            ),
+            0
+        );
+
+        memory.write_u32(readfds, 1).unwrap();
+        memory.write_u32(readfds + 4, listener).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("select"),
+                &mut memory,
+                &[0, readfds, 0, 0, 0],
+            ),
+            0
+        );
+        assert_eq!(memory.read_u32(readfds).unwrap(), 0);
+
+        let client = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        memory.write_u32(readfds, 1).unwrap();
+        memory.write_u32(readfds + 4, listener).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("select"),
+                &mut memory,
+                &[0, readfds, 0, 0, 0],
+            ),
+            1
+        );
+        assert_eq!(memory.read_u32(readfds).unwrap(), 1);
+        assert_eq!(memory.read_u32(readfds + 4).unwrap(), listener);
+        assert!(socket_read_ready(listener));
+
+        memory.write_u32(remote_len, 16).unwrap();
+        let accepted = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("accept"),
+            &mut memory,
+            &[listener, remote_addr, remote_len],
+        );
+        assert_ne!(accepted, INVALID_SOCKET);
+        assert_eq!(memory.read_u32(remote_len).unwrap(), 16);
+        drop(client);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("closesocket"),
+                &mut memory,
+                &[accepted],
+            ),
+            0
+        );
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("closesocket"),
+                &mut memory,
+                &[listener],
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn udp_select_readiness_waits_for_datagram_before_recvfrom() {
+        let _winsock_guard = locked_reset_for_tests();
+        let probe = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let mut kernel = test_kernel();
+        let mut memory = TestMemory::default();
+        let bind_addr = 0x3000_9100;
+        let readfds = 0x3000_9200;
+        let recv_buf = 0x3000_9300;
+        let remote_addr = 0x3000_9400;
+        let remote_len = 0x3000_9500;
+        memory.write_sockaddr_v4(bind_addr, Ipv4Addr::LOCALHOST, port);
+        memory.write_u32(remote_len, 16).unwrap();
+        let socket = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("socket"),
+            &mut memory,
+            &[AF_INET, SOCK_DGRAM, 0],
+        );
+        assert_ne!(socket, INVALID_SOCKET);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("bind"),
+                &mut memory,
+                &[socket, bind_addr, 16],
+            ),
+            0
+        );
+        assert!(socket_read_wait_candidate(socket));
+        assert!(!socket_read_ready(socket));
+
+        memory.write_u32(readfds, 1).unwrap();
+        memory.write_u32(readfds + 4, socket).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("select"),
+                &mut memory,
+                &[0, readfds, 0, 0, 0],
+            ),
+            0
+        );
+        assert_eq!(memory.read_u32(readfds).unwrap(), 0);
+
+        let sender = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        sender
+            .send_to(b"gram", (Ipv4Addr::LOCALHOST, port))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !socket_read_ready(socket) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(socket_read_ready(socket));
+
+        memory.write_u32(readfds, 1).unwrap();
+        memory.write_u32(readfds + 4, socket).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("select"),
+                &mut memory,
+                &[0, readfds, 0, 0, 0],
+            ),
+            1
+        );
+        assert_eq!(memory.read_u32(readfds).unwrap(), 1);
+        assert_eq!(memory.read_u32(readfds + 4).unwrap(), socket);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("recvfrom"),
+                &mut memory,
+                &[socket, recv_buf, 4, 0, remote_addr, remote_len],
+            ),
+            4
+        );
+        assert_eq!(
+            (0..4)
+                .map(|offset| memory.read_u8(recv_buf + offset).unwrap())
+                .collect::<Vec<_>>(),
+            b"gram"
+        );
+        assert_eq!(memory.read_u32(remote_len).unwrap(), 16);
+        assert!(!socket_read_ready(socket));
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("closesocket"),
+                &mut memory,
+                &[socket],
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn tcp_send_queues_peer_socket_wait_candidate() {
+        let _winsock_guard = locked_reset_for_tests();
+        let probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let mut kernel = test_kernel();
+        let mut memory = TestMemory::default();
+        let bind_addr = 0x3000_6100;
+        let readfds = 0x3000_6200;
+        let send_buf = 0x3000_6300;
+        let recv_buf = 0x3000_6400;
+        memory.write_sockaddr_v4(bind_addr, Ipv4Addr::LOCALHOST, port);
+        memory.write_bytes_at(send_buf, b"peer");
+        let listener = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("socket"),
+            &mut memory,
+            &[AF_INET, SOCK_STREAM, 0],
+        );
+        assert_ne!(listener, INVALID_SOCKET);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("bind"),
+                &mut memory,
+                &[listener, bind_addr, 16],
+            ),
+            0
+        );
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("listen"),
+                &mut memory,
+                &[listener, 1],
+            ),
+            0
+        );
+        let client = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("socket"),
+            &mut memory,
+            &[AF_INET, SOCK_STREAM, 0],
+        );
+        assert_ne!(client, INVALID_SOCKET);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("connect"),
+                &mut memory,
+                &[client, bind_addr, 16],
+            ),
+            0
+        );
+        memory.write_u32(readfds, 1).unwrap();
+        memory.write_u32(readfds + 4, listener).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("select"),
+                &mut memory,
+                &[0, readfds, 0, 0, 0],
+            ),
+            1
+        );
+        let accepted = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("accept"),
+            &mut memory,
+            &[listener, 0, 0],
+        );
+        assert_ne!(accepted, INVALID_SOCKET);
+        assert!(!socket_read_ready(client));
+
+        let wait_id = kernel.register_blocked_waiter(
+            71,
+            0x771,
+            vec![client],
+            SchedulerBlockedWaitKind::Kernel,
+            0,
+            INFINITE,
+        );
+        assert_eq!(
+            kernel.select_ready_blocked_waiter(1, 0, |blocked, _kernel| {
+                blocked.wait_handles.iter().copied().any(socket_read_ready)
+            }),
+            None
+        );
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("send"),
+                &mut memory,
+                &[accepted, send_buf, 4, 0],
+            ),
+            4
+        );
+        assert!(socket_read_ready(client));
+        assert_eq!(
+            kernel.select_ready_blocked_waiter(1, 0, |blocked, _kernel| {
+                blocked.wait_handles.iter().copied().any(socket_read_ready)
+            }),
+            Some(wait_id)
+        );
+        kernel.remove_blocked_waiter(wait_id).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("recv"),
+                &mut memory,
+                &[client, recv_buf, 4, 0],
+            ),
+            4
+        );
+        assert_eq!(
+            (0..4)
+                .map(|offset| memory.read_u8(recv_buf + offset).unwrap())
+                .collect::<Vec<_>>(),
+            b"peer"
+        );
+        for socket in [accepted, client, listener] {
+            assert_eq!(
+                dispatch_import(
+                    &mut kernel,
+                    1,
+                    None,
+                    Some("closesocket"),
+                    &mut memory,
+                    &[socket],
+                ),
+                0
+            );
+        }
+    }
+
+    #[test]
     fn inet_and_byte_order_helpers_match_guest_layout() {
-        reset_for_tests();
+        let _winsock_guard = locked_reset_for_tests();
         let mut kernel = test_kernel();
         let mut memory = TestMemory::default();
         let text = 0x3000_1000;
@@ -1431,7 +3299,7 @@ mod tests {
 
     #[test]
     fn gethostbyname_uses_isolated_ce_addresses_for_local_names() {
-        reset_for_tests();
+        let _winsock_guard = locked_reset_for_tests();
         let mut kernel = test_kernel();
         let mut memory = TestMemory::default();
         let name_ptr = 0x3000_2000;

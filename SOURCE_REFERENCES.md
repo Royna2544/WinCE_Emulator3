@@ -128,7 +128,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     target executable plus optional arguments. v3 now implements the raw
     `SHCreateShortcut`, `SHGetShortcutTarget`, and `SHCreateShortcutEx` paths
     against mounted CE files with `CREATE_NEW` behavior, buffer-fit validation,
-    and bounded unique-name generation for existing shortcut names.
+    and bounded unique-name generation for existing shortcut names. The
+    `ShellExecuteEx` shortcut launch path now preserves the shortcut's stored
+    argument tail and appends explicit `lpParameters` after it.
 
 - Shell recent-document API:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\shellapi.h`,
@@ -146,7 +148,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
 - Shell file-change notification APIs:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\shellsdk.h`,
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\shsdkstc.h`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winnt.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mwinbase.h`,
   `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\CESHELL\UI\filechangemgr.cpp`, and
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\pathapi.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\volumeapi.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\fileapi.cpp`, and
   `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\MIPSII\RETAIL\coredll.def`
   - `shellsdk.h` exposes `SHChangeNotifyRegister`,
     `SHChangeNotifyDeregister`, and `SHChangeNotifyFree`; `shsdkstc.h`
@@ -154,9 +162,36 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `FILECHANGENOTIFY`. The HPC shell file-change manager maps filesystem
     notifications into `SHCNE_*` events for registered shell views. v3 now
     implements the raw `SHChangeNotifyRegisterI`, `SHFileNotifyRemoveI`, and
-    `SHFileNotifyFreeI` ordinals as durable shell state with HWND cleanup.
-    Actual `WM_FILECHANGEINFO` posting, PIDL-style item payloads, and event
-    filtering remain queued until a CE-like file-notification source is wired.
+    `SHFileNotifyFreeI` ordinals as durable shell state with HWND cleanup and
+    posts CE-style `WM_FILECHANGEINFO` path or PIDL payloads from matching
+    filesystem mutations.
+  - `winbase.h` declares `FindFirstChangeNotificationW`,
+    `FindNextChangeNotification`, `CeGetFileNotificationInfo`, and
+    `FindCloseChangeNotification`; `winnt.h` defines the
+    `FILE_NOTIFY_CHANGE_*` masks, and `mwinbase.h` maps the public trap ids.
+    FSDMGR `pathapi.cpp` canonicalizes the watched path, resolves the owning
+    volume, and routes to `AFS_FindFirstChangeNotificationW`; `volumeapi.cpp`
+    creates a notification event only for an existing directory, while
+    `fileapi.cpp` shows file writes notifying `FILE_NOTIFY_CHANGE_LAST_WRITE`.
+    Rust now creates waitable directory-change handles for the public and
+    direct AFS first-change ordinals, signals them from matching create/delete/
+    rename/write/attribute directory events, exposes pending action/name
+    records through `CeGetFileNotificationInfo` using the standard
+    `FILE_NOTIFY_INFORMATION` layout, including recursive directory-create,
+    rename old/new, and directory-removal records, and rearms/closes them
+    through `FindNextChangeNotification`/`FindCloseChangeNotification`.
+    `PRIVATE\WINCEOS\COREOS\STORAGE\NOTIFY\fsnotify.cpp` `NotifyReset` drains
+    only the records that fit the caller buffer, sets `ERROR_MORE_DATA` after a
+    successful prefix copy, reports remaining bytes through `lpBytesAvailable`,
+    re-signals the event while records remain, returns
+    `ERROR_INSUFFICIENT_BUFFER` when the first record cannot fit, and returns
+    `ERROR_NO_MORE_ITEMS` for data fetches with no pending notifications; v3 now
+    mirrors those byte-count and re-signal semantics.
+    `mounttable.cpp` also calls `NotifyPathChange` with `FILE_ACTION_ADDED` or
+    `FILE_ACTION_REMOVED` for visible mount folders on the root notification
+    handle; v3 mirrors that for root-directory waiters when guest roots are
+    mounted or unmounted. Full FSDMGR volume-handle ownership, deeper
+    coalescing details, and broader mounted edge behavior remain queued.
 
 - Shell popup-menu APIs:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`,
@@ -166,8 +201,16 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `WM_ENTERMENULOOP`, `WM_INITMENUPOPUP`, and `WM_EXITMENULOOP`. Shell code
     uses `TrackPopupMenu` both for blocking notification-style popups and for
     `TPM_RETURNCMD` command queries. v3 now records popup tracking and sends
-    the CE owner notification sequence unless `TPM_NONOTIFY` is set, while it
-    still refuses to invent a command result without real user selection.
+    the CE owner notification sequence unless `TPM_NONOTIFY` is set, returns
+    the enabled default command (or first enabled command, including commands
+    inside enabled `MF_POPUP` submenus) for state-backed command queries,
+    sends/records nested `WM_INITMENUPOPUP` notifications for the submenu path
+    that produced that command, and covers the no-selectable-item cancellation
+    shape by returning `0` without synthesizing `WM_COMMAND`. Framebuffer-backed
+    raw `TrackPopupMenuEx` calls also paint a popup surface from the current
+    menu item state, including disabled/default/checked rows, separators, and
+    submenu markers. A real modal menu pump, live highlight, and pointer/key
+    selection remain queued.
 
 - Accelerator input APIs:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`
@@ -422,18 +465,51 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `StringCbCatW @1694`, `wcsncmp @65`, and `DestroyIcon @725`.
   - `syncobj.c` anchors `OpenEventW` as an existing named event open with
     access validation. `shellapi.h` anchors the CE CSIDL values used by
-    `SHGetSpecialFolderPath`, and HPC shell `api.cpp` shows callers masking
-    `CSIDL_FLAG_CREATE` before forwarding creation intent to
-    `SHGetSpecialFolderPath`; v3 consults
+    `SHGetSpecialFolderPath` (`Desktop`, `Programs`, `Personal`, `Favorites`,
+    `Startup`, `Recent`, `Start Menu`, `DesktopDirectory`, `Fonts`, `AppData`,
+    `Windows`, `Program Files`, and `Profile`), while HPC shell `api.cpp` and
+    `NOUI\api.cpp` show callers masking `CSIDL_FLAG_CREATE` before forwarding
+    creation intent to `SHGetSpecialFolderPath` and keeping virtual
+    `CSIDL_DESKTOP` handling in `SHGetSpecialFolderLocation`. v3 consults
     `HKLM\System\Explorer\Shell Folders` first, uses CE-shaped fallbacks when
-    the dump lacks those values, honors `fCreate`/`CSIDL_FLAG_CREATE` by
-    creating the resolved mounted folder, and rejects overlong resolved paths
-    instead of truncating the fixed MAX_PATH output. The same `shellapi.h` `SHFILEINFO`
+    the dump lacks those values, preserves the existing `CSIDL_SYSTEM`
+    compatibility fallback, honors `fCreate`/`CSIDL_FLAG_CREATE` by creating
+    the resolved root-relative or nested mounted folder, and rejects overlong
+    resolved paths instead of truncating the fixed MAX_PATH output. HPC shell
+    `recbin.cpp` uses
+    `CSIDL_PROFILE`, while `shelldialogs.cpp` asks `CSIDL_DESKTOPDIRECTORY`
+    with creation enabled; both call shapes are now covered by the raw tests.
+    The same `shellapi.h` `SHFILEINFO`
     layout and `SHGFI_*` flags, plus HPC shell `api.cpp`, anchor the first
     `SHGetFileInfo` slices: v3 reads HKCR extension classes, writes display/
-    type/attribute metadata, returns explicit generic icon handles/indexes
-    until real CE icon extraction/image-list behavior is ported, and rejects
-    unsupported/colliding flags such as `SHGFI_ICONLOCATION`,
+    type/attribute metadata, returns explicit generic icon handles/indexes,
+    and follows the CE `iconcache.cpp`/`resource.h` default image-list order
+    from `ceshapi_base.rc` for document, folder, application, storage-card,
+    network-folder, and shortcut pseudo slots. Removable mount roots with
+    `FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_TEMPORARY` use the storage-card
+    branch and `Storage Card` type name, while temporary `\\share`,
+    `\release`, and `\network` directories use the CE network-folder branch
+    and `Network Folder` type name. `shelllistview.cpp`, `taskbar.cpp`, and
+    `browse.cpp` call `SHGetFileInfo(TEXT(""), ..., SHGFI_SYSICONINDEX...)` to
+    obtain the shared shell image list, so v3 now accepts empty-path
+    system-image-list probes without trying to stat a file. Framebuffer-backed
+    raw `ImageList_Draw*` calls now paint clipped deterministic pseudo-icons
+    for these image-list slots until real icon bitmap extraction is ported.
+    The `api.cpp` attribute-probe branch treats
+    inaccessible UNC paths with access/network errors as
+    `FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_TEMPORARY`, so raw
+    `SHGetFileInfo` now returns the same network-folder type/icon metadata for
+    missing UNC paths and writes `SFGAO_FILESYSTEM | SFGAO_FOLDER` when
+    `SHGFI_ATTRIBUTES` is requested. The `api.cpp` unknown-file branch sets
+    `ERROR_MOD_NOT_FOUND`, so raw `SHGetFileInfo` uses that failure shape for
+    other missing non-`SHGFI_USEFILEATTRIBUTES` paths. The same `iconcache.cpp` `PathIsLink`
+    loop and `GetType` branches anchor v3's `.lnk` `Shortcut` type name,
+    bounded nested target-followed icon selection, and shortcut overlay pseudo
+    `HICON` handles until real CE icon extraction/image-list behavior is
+    ported. Raw user-created image lists also preserve overlay identity for
+    `ImageList_GetIcon` through deterministic pseudo handles, matching the same
+    overlay mapping used by `ImageList_Draw*`. It rejects unsupported/colliding flags such as
+    `SHGFI_ICONLOCATION`,
     `SHGFI_ATTR_SPECIFIED`, `SHGFI_PIDL`, small-icon requests without
     icon/index output, and `SHGFI_ATTRIBUTES | SHGFI_USEFILEATTRIBUTES` with
     `ERROR_INVALID_FLAGS`. `strsafe.h` anchors the
@@ -450,19 +526,54 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   - `shellapi.h` also defines `SHELLEXECUTEINFO.lpDirectory`, and
     `winbase.h` defines `CreateProcessW(..., LPWSTR pszCurDir, ...)`. v3 now
     preserves those explicit CE current-directory values in pending child
-    launches, uses them for relative child executable lookup, and restores the
-    effective current directory when parked processes are activated.
+    launches, uses them for relative child executable lookup, falls back to the
+    current CE process directory for relative `ShellExecuteEx` targets when
+    `lpDirectory` is absent, and restores the effective current directory when
+    parked processes are activated.
   - `PUBLIC\SHELL\OAK\FILES\shell.reg` uses registry association command
-    templates such as `"\"%1\" %*"` for `exefile` and `explorer.exe %1` for
+    templates such as `"\"%1\" %*"` for `exefile`, `explorer.exe -u%1` for
+    `urlfile`, and `explorer.exe %1` for
     generic files. v3's `ShellExecuteEx` association path now treats `%*` as
     the explicit `lpParameters` insertion point and only appends parameters
-    when the template did not include that placeholder.
+    when the template did not include that placeholder, while the CE
+    `urlfile` `-u%1` shape preserves the embedded target argument without
+    inserting quotes between `-u` and the target; existing extensionless
+    documents can use the CE `HKCR\file` command path, while missing
+    extensionless targets, missing associated non-EXE documents, and
+    association commands whose absolute executable target is missing still fail
+    as file-not-found instead of queueing a plausible launch. Empty association
+    command strings are treated as unusable associations and report
+    `SE_ERR_NOASSOC`.
+  - `winuser.h` anchors the public `MessageBoxW` signature, button groups,
+    default-button flags, icons, and `ID*` return codes. `OWNERDRAWLIB`
+    `animlibbase.h` and `appalert.cpp` add the CE owner-draw `MB_YESALL` and
+    `MB_CANCEL` alert modes, and `appalert.cpp` maps each alert mode onto
+    left/center/right button labels before converting button messages into
+    return IDs; v3's raw `MessageBoxW` records the requested modal
+    text/caption/style plus button IDs, those CE button slots/labels,
+    default-button index, icon class, owner enabled-state, transient dialog and
+    child-control HWNDs, and result, and now derives default return codes for
+    both SDK and owner-draw button groups while closing the transient skeleton
+    through `EndDialog`; framebuffer-backed raw calls also paint the dialog
+    surface from the same caption, text, icon, and button-layout state. The
+    nested modal message pump and user-driven button/key routing remain queued.
   - `shellapi.h` also anchors `Shell_NotifyIcon` and the `NOTIFYICONDATAW`
     prefix. v3 now stores notify icon add/modify/delete state in
     `ShellSystem`, validates owner HWNDs through GWE, and posts the registered
     `uCallbackMessage` to `hWnd` with `wParam=uID` and `lParam` carrying the
-    shell event. Rich `SHNotification*`, timeout/dismiss, icon lifetime, and
-    taskbar rendering behavior remain queued instead of inventing shell UI.
+    shell event. `HPC\EXPLORER\INC\taskbar.hxx`, `TASKBAR\taskbar.cpp`, and
+    `TASKBAR\taskbarnotification.cpp` define `HHTBF_DESTROYICON`,
+    `NotifyTagDestroyIcon`, and notify-item update/delete paths that destroy
+    owned taskbar icons when replaced or removed; v3 records those would-destroy
+    `HICON` handles on replacement, explicit delete, and owner-window cleanup.
+    Stored `SHNotificationAddI`/`SHNotificationUpdateI` records also validate
+    nonzero sink HWNDs against live GWE windows, so stale notification sinks
+    fail before mutating shell notification state. CE `notification.cpp`
+    rejects zero or unknown `SHNUM_*` update masks in `UpdateBubble`, and only
+    replaces an icon when `SHNUM_ICON` carries a non-null `hicon`; v3 mirrors
+    both raw update edges.
+    Rich `SHNotification*` guest-COM invocation and taskbar rendering behavior
+    remain queued instead of inventing shell UI.
   - The generated COREDLL ordinal table remains behavior data from these CE
     ordinal sources. v3 now caches ordinal-to-export lookup in the same
     precedence order as the old scan (`COREDLL_EXPORTS`, SDK-only exports, then
@@ -1193,8 +1304,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     moves focus on TAB/Shift+TAB through the existing dialog tab traversal using
     queued-key `GetKeyState(VK_SHIFT)`, and routes Enter/Escape as dialog
     commands without special-casing iNavi. Return uses a focused pushbutton or
-    the dialog's default pushbutton with `IDOK` fallback, and GWE now reports
-    `DLGC_DEFPUSHBUTTON`/`DLGC_UNDEFPUSHBUTTON` plus
+    the dialog's default pushbutton with `IDOK` fallback, while Escape resolves
+    an existing `IDCANCEL` pushbutton HWND before falling back to the command id
+    alone. GWE now reports `DLGC_DEFPUSHBUTTON`/`DLGC_UNDEFPUSHBUTTON` plus
     `DM_GETDEFID`/`DM_SETDEFID` over child button style state. The same queued
     key state now backs the first raw `GetAsyncKeyState` and
     `GetAsyncShiftFlags` implementation.
@@ -1453,13 +1565,54 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
 
 - CE file namespace / SDMMC mount precedent:
   `../WinCE_Emulator_v2/README.md`,
-  `../WinCE_Emulator_v2/src/synthetic_dll.cpp`, and
-  `../WinCE_Emulator_v2/src/coredll_fs.cpp`
+  `../WinCE_Emulator_v2/src/synthetic_dll.cpp`,
+  `../WinCE_Emulator_v2/src/coredll_fs.cpp`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\fsioctl.h`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\storemgr.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\extfile.h`,
+  `C:\WINCE600\PUBLIC\COMMON\OAK\INC\mextfile.h`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\pathapi.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\STORAGE\FSDMGR\volumeapi.cpp`,
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\apis.c`,
+  `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\CESHELL\API\shfileop.cpp`,
+  `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\CESHELL\API\recbin.cpp`, and
+  `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\CESHELL\UI\shelldialogs.cpp`
   - v2 exposed `SDMMC Disk` as a CE virtual root and mapped the main module
     under `\SDMMC Disk\...` when the host image lived beneath that root.
   - Root-relative probes under the SDMMC backing were supported, but `\`
-    itself represented the CE namespace and should enumerate mount-point
-    prefixes such as `SDMMC Disk` rather than the host filesystem root.
+    itself represented the CE namespace. FSDMGR `pathapi.cpp`
+    `InternalFindFirstFileW` sends root-directory searches through
+    `ROOTFS_FindFirstFileW`, while `fsdmain.cpp` `STOREMGR_GetOidInfoEx`
+    reports mount folders as directory objects and adds
+    `FILE_ATTRIBUTE_TEMPORARY` for non-permanent mounts. Rust now merges visible
+    mount folders and object-store root entries for root `FindFirstFileW`
+    enumeration, with mount metadata taking precedence over same-named
+    object-store directories.
+  - `winbase.h` declares `GetDiskFreeSpaceExW` with three `ULARGE_INTEGER`
+    outputs, while `extfile.h`/`mextfile.h` declare and trap
+    `AFS_GetDiskFreeSpace` as the sector/cluster FSD boundary. FSDMGR
+    `pathapi.cpp` resolves a path to a volume, calls `AFS_GetDiskFreeSpace`,
+    and multiplies clusters by sectors/bytes-per-sector for the Ex byte
+    totals; the CE shell file-operation/recycle-bin/storage-dialog code calls
+    `GetDiskFreeSpaceEx` when presenting copy/delete/storage capacity
+    decisions. Rust now routes mounted CE paths to their configured mount
+    total/free byte counts while null/object-store paths keep using the
+    configured object-store capacity, and reports matching `AFS_*`
+    sector/cluster values for lower-level callers. The same `extfile.h`
+    signatures and FSDMGR `pathapi.cpp` call sites anchor the direct AFS
+    create/remove-directory, get/set-attributes, create-file, delete,
+    move/presto-chango rename, find-first, and first-change-notification
+    ordinals; Rust currently routes full guest paths through the existing CE
+    namespace. `fsioctl.h` defines `FSCTL_GET_VOLUME_INFO`, `storemgr.h`
+    defines `CE_VOLUME_INFO` and its store/RAMFS/removable flags, FSDMGR
+    `volumeapi.cpp` validates the info-level input and fixed output size
+    before returning volume metadata, and COREDLL `apis.c` uses
+    `CeFsIoControlW(... FSCTL_GET_VOLUME_INFO ...)` for RAMFS-aware file
+    copying. Rust now reports matching mounted-root/object-store
+    `CE_VOLUME_INFO` through `CeFsIoControlW`, direct `AFS_FsIoControlW`, and
+    `CeGetVolumeInfoW`; full mount-table volume handles and broader FSCTL
+    forwarding remain queued fidelity gaps.
 
 - CE file write syscall and error surface:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winbase.h`,
@@ -1571,7 +1724,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\shellsdk.h`,
   `C:\WINCE600\PRIVATE\SHELL\SHELLPSL\HAVEAYGSHELL\api.cpp`, and
   `C:\WINCE600\PRIVATE\SHELL\SHELLPSL\HAVEAYGSHELL\shellpsl.cpp`,
-  `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\AYGSHELLFUNCS\HAVEAYGSHELL\notification.cpp`
+  `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\AYGSHELLFUNCS\HAVEAYGSHELL\notification.cpp`,
+  and
+  `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\AYGSHELLFUNCS\HAVEAYGSHELL\bubble.cpp`
   - `shsdkstc.h` defines `SHNOTIFICATIONDATA` as the 56-byte CE struct keyed
     by `CLSID` and `dwID`, with title/HTML strings carried through marshalled
     pointers in the `I` API set signatures.
@@ -1584,13 +1739,37 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     boolean through `NMSHN.fTimeout` in the same union field.
   - `api.cpp` maps `SHNotificationAddI`/`UpdateI`/`RemoveI`/`GetDataI` to the
     shell API set and returns Win32 error codes (`ERROR_SUCCESS`,
-    `ERROR_INVALID_PARAMETER`, `ERROR_INVALID_DATA`) rather than BOOL success.
+    `ERROR_INVALID_PARAMETER`, `ERROR_INVALID_DATA`) rather than BOOL success;
+    the PSL signatures pass the full `SHNOTIFICATIONDATA` for add and update.
   - `notification.cpp` stores notification data in the taskbar/bubble lists
     and copies the persisted struct/title/HTML fields back through
     `GetNotificationData`. Rust now preserves that app-visible data in
     `ShellSystem`, can post the window-based `WM_NOTIFY`/`NMSHN` sink callback
-    for stored notification events, marshals optional `SHNN_LINKSEL` link
-    strings into the receiver `NMSHN` allocation, carries `SHNN_DISMISS`
-    `fTimeout`, and prunes records whose sink HWND is destroyed through normal
-    window/process teardown; visual bubble/taskbar rendering, COM callbacks,
-    and automatic timeout/dismiss ownership remain queued separately.
+    for stored notification events, rejects add/update records with nonzero
+    dead sink HWNDs, rejects zero/unknown update masks, keeps the previous icon
+    on null `SHNUM_ICON` updates, preserves the CE add-vs-update duration split
+    where add defaults zero duration but update stores `pndNew->csDuration`
+    literally, and leaves add-time `grfFlags`, `hwndSink`, and `lParam`
+    unchanged because `UpdateBubble` only assigns the masked bubble fields.
+    Rust also marshals optional `SHNN_LINKSEL` link strings into the receiver
+    `NMSHN` allocation, carries `SHNN_DISMISS` `fTimeout`, and prunes records
+    whose sink HWND is destroyed through normal window/process teardown.
+    `bubble.cpp` attempts
+    `IShellNotificationCallback` COM methods for show/link/dismiss/command
+    events before also notifying the sink window, so Rust now records the
+    callback method, CE vtable offset, and typed arguments for non-null
+    notification CLSIDs and posts the command-selection `WM_COMMAND` sink
+    message; actual guest COM vtable invocation, visual bubble/taskbar
+    rendering, and richer icon lifetime remain queued separately.
+
+- CE Winsock exception-readiness authority:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winsock.h` and
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winsock2.h`
+  - The CE Winsock headers define `SO_ERROR` as the socket error status queried
+    by `getsockopt`, `MSG_OOB` as out-of-band data, and the `select` signature
+    with an in/out `exceptfds` set. Rust now keeps `SO_ERROR`-backed exception
+    readiness separate from stateful `MSG_OOB` readiness: an OOB send marks the
+    connected peer as exception-ready, `select` retains that peer in
+    `exceptfds` on both raw imports and parked Unicorn scheduler replay,
+    `getsockopt(SO_ERROR)` still reports zero for pure OOB readiness, and
+    `recv(..., MSG_OOB)` clears the OOB-ready bit after reading.

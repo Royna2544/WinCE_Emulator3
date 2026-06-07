@@ -1266,6 +1266,15 @@ struct BlockedGuestThread {
 
 #[cfg(feature = "unicorn")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WinsockReadyKind {
+    Read,
+    Write,
+    ReadWrite,
+    Except,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BlockedWaitKind {
     Kernel,
     Sleep,
@@ -1282,6 +1291,16 @@ enum BlockedWaitKind {
     SerialCommEvent {
         handle: u32,
         event_ptr: u32,
+    },
+    WinsockRead {
+        socket: u32,
+        readiness: WinsockReadyKind,
+        read_mask: u64,
+        write_mask: u64,
+        except_mask: u64,
+        name: Option<&'static str>,
+        ordinal: Option<u32>,
+        args: [u32; 6],
     },
     SendMessage {
         send_id: u64,
@@ -1325,9 +1344,35 @@ fn scheduler_blocked_wait_kind(
         BlockedWaitKind::SerialCommEvent { handle, .. } => {
             crate::ce::scheduler::SchedulerBlockedWaitKind::SerialCommEvent { handle }
         }
+        BlockedWaitKind::WinsockRead {
+            socket,
+            readiness,
+            read_mask,
+            write_mask,
+            except_mask,
+            ..
+        } => crate::ce::scheduler::SchedulerBlockedWaitKind::WinsockRead {
+            socket,
+            readiness: scheduler_winsock_ready_kind(readiness),
+            read_mask,
+            write_mask,
+            except_mask,
+        },
         BlockedWaitKind::SendMessage { send_id, .. } => {
             crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { send_id }
         }
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn scheduler_winsock_ready_kind(
+    readiness: WinsockReadyKind,
+) -> crate::ce::scheduler::SchedulerWinsockReadyKind {
+    match readiness {
+        WinsockReadyKind::Read => crate::ce::scheduler::SchedulerWinsockReadyKind::Read,
+        WinsockReadyKind::Write => crate::ce::scheduler::SchedulerWinsockReadyKind::Write,
+        WinsockReadyKind::ReadWrite => crate::ce::scheduler::SchedulerWinsockReadyKind::ReadWrite,
+        WinsockReadyKind::Except => crate::ce::scheduler::SchedulerWinsockReadyKind::Except,
     }
 }
 
@@ -3933,6 +3978,24 @@ impl UnicornMips {
                         uc,
                         trap.module_kind,
                         trap.ordinal,
+                        &args,
+                        active_thread_id,
+                        &blocked_wait_threads_hook,
+                        &pending_guest_thread_returns_hook,
+                        &current_thread_id_hook,
+                        &suspended_guest_thread_hook,
+                        &running_guest_thread_hook,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_block_winsock_read(
+                        unsafe { &mut *kernel_ptr },
+                        uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        trap.name.as_deref(),
                         &args,
                         active_thread_id,
                         &blocked_wait_threads_hook,
@@ -9353,6 +9416,7 @@ fn unicorn_blocked_wait_kind_name(
         crate::ce::scheduler::SchedulerBlockedWaitKind::SerialCommEvent { .. } => {
             "serial_comm_event"
         }
+        crate::ce::scheduler::SchedulerBlockedWaitKind::WinsockRead { .. } => "winsock_read",
         crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { .. } => "send_message",
     }
 }
@@ -11292,6 +11356,404 @@ fn block_wait_comm_event<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn try_block_winsock_read<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    name: Option<&str>,
+    args: &[u32],
+    thread_id: u32,
+    blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+) -> bool {
+    if module_kind != crate::emulator::imports::ImportModuleKind::Winsock {
+        return false;
+    }
+    let Some(name) = winsock_read_import_name(name) else {
+        return false;
+    };
+    let Some((socket, wait_handles, timeout_ms, readiness, read_mask, write_mask, except_mask)) =
+        winsock_read_wait_plan(uc, name, args)
+    else {
+        return false;
+    };
+    if winsock_wait_handles_ready(&wait_handles, read_mask, write_mask, except_mask) {
+        return false;
+    }
+    block_winsock_read(
+        kernel,
+        uc,
+        thread_id,
+        blocked_waits,
+        pending_returns,
+        current_thread_id,
+        suspended_thread,
+        running_thread,
+        socket,
+        name,
+        ordinal,
+        winsock_replay_args(args),
+        wait_handles,
+        timeout_ms,
+        readiness,
+        read_mask,
+        write_mask,
+        except_mask,
+    )
+}
+
+#[cfg(feature = "unicorn")]
+fn winsock_read_import_name(name: Option<&str>) -> Option<&'static str> {
+    let name = name?;
+    if name.eq_ignore_ascii_case("accept") || name.eq_ignore_ascii_case("WSAAccept") {
+        Some("accept")
+    } else if name.eq_ignore_ascii_case("recv") || name.eq_ignore_ascii_case("WSARecv") {
+        Some("recv")
+    } else if name.eq_ignore_ascii_case("recvfrom") || name.eq_ignore_ascii_case("WSARecvFrom") {
+        Some("recvfrom")
+    } else if name.eq_ignore_ascii_case("select") {
+        Some("select")
+    } else {
+        None
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn winsock_read_wait_plan<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    name: &str,
+    args: &[u32],
+) -> Option<(u32, Vec<u32>, u32, WinsockReadyKind, u64, u64, u64)> {
+    let socket = args.first().copied().unwrap_or(0);
+    if name == "accept" {
+        if crate::winsock::socket_nonblocking(socket) {
+            return None;
+        }
+        let timeout_ms =
+            crate::winsock::socket_recv_timeout_ms(socket).unwrap_or(crate::ce::timer::INFINITE);
+        crate::winsock::socket_accept_wait_candidate(socket).then_some((
+            socket,
+            vec![socket],
+            timeout_ms,
+            WinsockReadyKind::Read,
+            1,
+            0,
+            0,
+        ))
+    } else if name == "select" {
+        winsock_select_wait_plan(uc, args)
+    } else {
+        let buffer = args.get(1).copied().unwrap_or(0);
+        let requested = args.get(2).copied().unwrap_or(0);
+        if crate::winsock::socket_nonblocking(socket) {
+            return None;
+        }
+        let timeout_ms =
+            crate::winsock::socket_recv_timeout_ms(socket).unwrap_or(crate::ce::timer::INFINITE);
+        (requested != 0 && buffer != 0 && crate::winsock::socket_read_wait_candidate(socket))
+            .then_some((
+                socket,
+                vec![socket],
+                timeout_ms,
+                WinsockReadyKind::Read,
+                1,
+                0,
+                0,
+            ))
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn winsock_select_wait_plan<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    args: &[u32],
+) -> Option<(u32, Vec<u32>, u32, WinsockReadyKind, u64, u64, u64)> {
+    let readfds = args.get(1).copied().unwrap_or(0);
+    let writefds = args.get(2).copied().unwrap_or(0);
+    let exceptfds = args.get(3).copied().unwrap_or(0);
+    if readfds == 0 && writefds == 0 && exceptfds == 0 {
+        return None;
+    }
+    let timeout_ms = winsock_select_timeout_ms(uc, args.get(4).copied().unwrap_or(0))?;
+    if timeout_ms == 0 {
+        return None;
+    }
+    let mut handles = Vec::new();
+    let mut read_mask = 0u64;
+    let mut write_mask = 0u64;
+    let mut except_mask = 0u64;
+    if readfds != 0 {
+        winsock_collect_select_fdset(
+            uc,
+            readfds,
+            crate::winsock::socket_read_wait_candidate,
+            &mut handles,
+            &mut read_mask,
+        )?;
+    }
+    if writefds != 0 {
+        winsock_collect_select_fdset(
+            uc,
+            writefds,
+            crate::winsock::socket_write_wait_candidate,
+            &mut handles,
+            &mut write_mask,
+        )?;
+    }
+    if exceptfds != 0 {
+        winsock_collect_select_fdset(
+            uc,
+            exceptfds,
+            crate::winsock::socket_except_wait_candidate,
+            &mut handles,
+            &mut except_mask,
+        )?;
+    }
+    let readiness = match (read_mask != 0, write_mask != 0, except_mask != 0) {
+        (true, true, _) => WinsockReadyKind::ReadWrite,
+        (true, false, _) => WinsockReadyKind::Read,
+        (false, true, _) => WinsockReadyKind::Write,
+        (false, false, true) => WinsockReadyKind::Except,
+        (false, false, false) => return None,
+    };
+    handles.first().copied().map(|socket| {
+        (
+            socket,
+            handles,
+            timeout_ms,
+            readiness,
+            read_mask,
+            write_mask,
+            except_mask,
+        )
+    })
+}
+
+#[cfg(feature = "unicorn")]
+fn winsock_collect_select_fdset<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    fdset: u32,
+    wait_candidate: fn(u32) -> bool,
+    handles: &mut Vec<u32>,
+    mask: &mut u64,
+) -> Option<()> {
+    let count = read_unicorn_u32(uc, fdset)?.min(64);
+    for index in 0..count {
+        let socket = read_unicorn_u32(uc, fdset.wrapping_add(4 + index * 4))?;
+        if !wait_candidate(socket) {
+            continue;
+        }
+        let position = if let Some(position) = handles
+            .iter()
+            .position(|existing_socket| *existing_socket == socket)
+        {
+            position
+        } else {
+            if handles.len() >= 64 {
+                continue;
+            }
+            handles.push(socket);
+            handles.len() - 1
+        };
+        *mask |= 1u64 << position;
+    }
+    Some(())
+}
+
+#[cfg(feature = "unicorn")]
+fn winsock_select_timeout_ms<D>(
+    uc: &unicorn_engine::Unicorn<'_, D>,
+    timeout_ptr: u32,
+) -> Option<u32> {
+    if timeout_ptr == 0 {
+        return Some(crate::ce::timer::INFINITE);
+    }
+    let seconds = read_unicorn_u32(uc, timeout_ptr)?;
+    let microseconds = read_unicorn_u32(uc, timeout_ptr.wrapping_add(4))?;
+    let millis = u64::from(seconds)
+        .saturating_mul(1_000)
+        .saturating_add(u64::from(microseconds).saturating_add(999) / 1_000);
+    Some(millis.min(u64::from(crate::ce::timer::INFINITE - 1)) as u32)
+}
+
+#[cfg(feature = "unicorn")]
+fn winsock_wait_handles_ready(
+    wait_handles: &[u32],
+    read_mask: u64,
+    write_mask: u64,
+    except_mask: u64,
+) -> bool {
+    wait_handles
+        .iter()
+        .copied()
+        .enumerate()
+        .any(|(index, socket)| {
+            let bit = 1u64 << index;
+            ((read_mask & bit) != 0 && crate::winsock::socket_read_ready(socket))
+                || ((write_mask & bit) != 0 && crate::winsock::socket_write_ready(socket))
+                || ((except_mask & bit) != 0 && crate::winsock::socket_except_ready(socket))
+        })
+}
+
+#[cfg(feature = "unicorn")]
+fn scheduler_winsock_wait_handles_ready(
+    wait_handles: &[u32],
+    read_mask: u64,
+    write_mask: u64,
+    except_mask: u64,
+) -> bool {
+    wait_handles
+        .iter()
+        .copied()
+        .enumerate()
+        .any(|(index, socket)| {
+            let bit = 1u64 << index;
+            ((read_mask & bit) != 0 && crate::winsock::socket_read_ready(socket))
+                || ((write_mask & bit) != 0 && crate::winsock::socket_write_ready(socket))
+                || ((except_mask & bit) != 0 && crate::winsock::socket_except_ready(socket))
+        })
+}
+
+#[cfg(feature = "unicorn")]
+fn winsock_replay_args(args: &[u32]) -> [u32; 6] {
+    [
+        args.first().copied().unwrap_or(0),
+        args.get(1).copied().unwrap_or(0),
+        args.get(2).copied().unwrap_or(0),
+        args.get(3).copied().unwrap_or(0),
+        args.get(4).copied().unwrap_or(0),
+        args.get(5).copied().unwrap_or(0),
+    ]
+}
+
+#[cfg(feature = "unicorn")]
+#[allow(clippy::too_many_arguments)]
+fn block_winsock_read<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    thread_id: u32,
+    blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+    socket: u32,
+    name: &'static str,
+    ordinal: Option<u32>,
+    args: [u32; 6],
+    wait_handles: Vec<u32>,
+    timeout_ms: u32,
+    readiness: WinsockReadyKind,
+    read_mask: u64,
+    write_mask: u64,
+    except_mask: u64,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    kernel.record_blocked_single_wait(timeout_ms);
+    let wait_started_ms = kernel.timers.tick_count();
+    let kind = BlockedWaitKind::WinsockRead {
+        socket,
+        readiness,
+        read_mask,
+        write_mask,
+        except_mask,
+        name: Some(name),
+        ordinal,
+        args,
+    };
+    let regs = capture_mips_gprs(uc);
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+
+    if let Some(callout) = pop_pending_guest_thread_return_for_thread(pending_returns, thread_id) {
+        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
+        let wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            callout.thread_handle,
+            wait_handles.clone(),
+            scheduler_blocked_wait_kind(kind),
+            wait_started_ms,
+            timeout_ms,
+        );
+        blocked_waits.borrow_mut().push(BlockedWaitThread {
+            wait_id,
+            thread_id,
+            thread_handle: callout.thread_handle,
+            wait_handles,
+            kind,
+            wait_started_ms,
+            timeout_ms,
+            regs,
+            return_pc,
+        });
+        *running_thread.borrow_mut() = None;
+        *current_thread_id.borrow_mut() = callout.creator_thread_id;
+        let _ = update_user_kdata_current_ids(
+            uc,
+            callout.creator_thread_id,
+            kernel.current_process_id(),
+        );
+        restore_mips_gprs(uc, &callout.creator_regs);
+        let writes = [
+            uc.reg_write(RegisterMIPS::V0, u64::from(callout.thread_handle)),
+            uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc)),
+            uc.reg_write(RegisterMIPS::RA, u64::from(callout.return_pc)),
+        ];
+        if writes.into_iter().any(|write| write.is_err()) {
+            let _ = uc.emu_stop();
+        }
+        return true;
+    }
+
+    let running = *running_thread.borrow();
+    if let Some((_, thread_handle)) = running {
+        remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
+        let wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            thread_handle,
+            wait_handles.clone(),
+            scheduler_blocked_wait_kind(kind),
+            wait_started_ms,
+            timeout_ms,
+        );
+        blocked_waits.borrow_mut().push(BlockedWaitThread {
+            wait_id,
+            thread_id,
+            thread_handle,
+            wait_handles,
+            kind,
+            wait_started_ms,
+            timeout_ms,
+            regs,
+            return_pc,
+        });
+        *running_thread.borrow_mut() = None;
+        if let Some(suspended) = suspended_thread.borrow_mut().take() {
+            activate_suspended_thread(uc, kernel, current_thread_id, running_thread, &suspended);
+            return true;
+        }
+        if try_resume_blocked_wait(
+            kernel,
+            uc,
+            thread_id,
+            current_thread_id,
+            blocked_waits,
+            suspended_thread,
+            running_thread,
+        ) {
+            return true;
+        }
+        let _ = uc.emu_stop();
+        return true;
+    }
+    false
+}
+
+#[cfg(feature = "unicorn")]
 fn try_resume_blocked_wait<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
@@ -11374,12 +11836,16 @@ fn try_resume_blocked_wait_with_active_pc<D>(
         pulsed_handle.is_some() || blocked_wait_has_ready_handle(&blocked, kernel);
     let serial_read_ready = blocked_serial_read_ready(&blocked, kernel);
     let serial_comm_event_ready = blocked_serial_comm_event_ready(&blocked, kernel);
+    let winsock_read_ready = blocked_winsock_read_ready(&blocked);
+    let winsock_read_timed_out =
+        blocked_winsock_read_timed_out(&blocked, kernel.timers.tick_count());
     let serial_read_timed_out = matches!(blocked.kind, BlockedWaitKind::SerialRead { .. })
         && blocked_wait_timed_out(&blocked, kernel.timers.tick_count());
     let send_message_ready = blocked_send_message_ready(&blocked, kernel);
     let message_input_ready = !has_ready_handle
         && !serial_read_ready
         && !serial_comm_event_ready
+        && !winsock_read_ready
         && blocked_msg_wait_has_input(&blocked, kernel);
     let sleep_timed_out = matches!(blocked.kind, BlockedWaitKind::Sleep)
         && blocked_wait_timed_out(&blocked, kernel.timers.tick_count());
@@ -11415,6 +11881,10 @@ fn try_resume_blocked_wait_with_active_pc<D>(
         complete_blocked_serial_read(&blocked, kernel, uc)
     } else if serial_comm_event_ready {
         complete_blocked_serial_comm_event(&blocked, kernel, uc)
+    } else if winsock_read_ready {
+        complete_blocked_winsock_read(&blocked, kernel, uc)
+    } else if winsock_read_timed_out {
+        complete_blocked_winsock_read(&blocked, kernel, uc)
     } else if send_message_ready {
         complete_blocked_send_message(&blocked, kernel, uc)
     } else if blocked_wait_timed_out(&blocked, kernel.timers.tick_count()) {
@@ -11441,6 +11911,11 @@ fn try_resume_blocked_wait_with_active_pc<D>(
                 crate::ce::timer::WAIT_FAILED
             })
         }
+        BlockedWaitKind::WinsockRead { .. } => kernel.record_resumed_wait(if winsock_read_ready {
+            crate::ce::timer::WAIT_OBJECT_0
+        } else {
+            crate::ce::timer::WAIT_TIMEOUT
+        }),
         BlockedWaitKind::SendMessage { .. } => kernel.record_resumed_wait(if send_message_ready {
             crate::ce::timer::WAIT_OBJECT_0
         } else {
@@ -11776,11 +12251,49 @@ fn blocked_serial_comm_event_ready(blocked: &BlockedWaitThread, kernel: &CeKerne
 }
 
 #[cfg(feature = "unicorn")]
+fn blocked_winsock_read_ready(blocked: &BlockedWaitThread) -> bool {
+    match blocked.kind {
+        BlockedWaitKind::WinsockRead {
+            read_mask,
+            write_mask,
+            except_mask,
+            ..
+        } => winsock_wait_handles_ready(&blocked.wait_handles, read_mask, write_mask, except_mask),
+        _ => false,
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn blocked_winsock_read_timed_out(blocked: &BlockedWaitThread, now_ms: u32) -> bool {
+    matches!(blocked.kind, BlockedWaitKind::WinsockRead { .. })
+        && blocked_wait_timed_out(blocked, now_ms)
+}
+
+#[cfg(feature = "unicorn")]
 fn blocked_send_message_ready(blocked: &BlockedWaitThread, kernel: &CeKernel) -> bool {
     match blocked.kind {
         BlockedWaitKind::SendMessage { send_id, .. } => kernel.sent_message_result_ready(send_id),
         _ => false,
     }
+}
+
+#[cfg(feature = "unicorn")]
+fn complete_blocked_winsock_read<D>(
+    blocked: &BlockedWaitThread,
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+) -> u32 {
+    let BlockedWaitKind::WinsockRead {
+        name,
+        ordinal,
+        args,
+        ..
+    } = blocked.kind
+    else {
+        return crate::winsock::SOCKET_ERROR;
+    };
+    let mut memory = UnicornGuestMemory { uc };
+    crate::winsock::dispatch_import(kernel, blocked.thread_id, ordinal, name, &mut memory, &args)
 }
 
 #[cfg(feature = "unicorn")]
@@ -11911,6 +12424,7 @@ fn blocked_msg_wait_has_input(blocked: &BlockedWaitThread, kernel: &CeKernel) ->
         BlockedWaitKind::Sleep => false,
         BlockedWaitKind::SerialRead { .. } => false,
         BlockedWaitKind::SerialCommEvent { .. } => false,
+        BlockedWaitKind::WinsockRead { .. } => false,
         BlockedWaitKind::SendMessage { .. } => false,
         BlockedWaitKind::MsgWait {
             wake_mask,
@@ -11935,6 +12449,7 @@ fn scheduler_blocked_msg_wait_has_input(
         | crate::ce::scheduler::SchedulerBlockedWaitKind::Sleep
         | crate::ce::scheduler::SchedulerBlockedWaitKind::SerialRead { .. }
         | crate::ce::scheduler::SchedulerBlockedWaitKind::SerialCommEvent { .. }
+        | crate::ce::scheduler::SchedulerBlockedWaitKind::WinsockRead { .. }
         | crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { .. } => false,
         crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
             hwnd,
@@ -11987,6 +12502,17 @@ fn scheduler_blocked_wait_is_ready(
                 kernel.comm_event_mask_changed_wait(blocked.id)
                     || kernel.serial_comm_event_ready(handle)
             }
+            crate::ce::scheduler::SchedulerBlockedWaitKind::WinsockRead {
+                read_mask,
+                write_mask,
+                except_mask,
+                ..
+            } => scheduler_winsock_wait_handles_ready(
+                &blocked.wait_handles,
+                read_mask,
+                write_mask,
+                except_mask,
+            ),
             crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { send_id } => {
                 kernel.sent_message_result_ready(send_id)
             }
@@ -12016,19 +12542,32 @@ fn select_ready_blocked_wait_index(
 #[cfg(all(test, feature = "unicorn"))]
 mod wait_scheduler_tests {
     use super::{
-        BlockedWaitKind, BlockedWaitThread, block_serial_read_file, blocked_msg_wait_has_input,
-        blocked_serial_comm_event_ready, blocked_wait_timed_out,
-        complete_blocked_serial_comm_event, msg_wait_timer_delay_can_complete,
-        select_ready_blocked_wait_index,
+        BlockedWaitKind, BlockedWaitThread, WinsockReadyKind, block_serial_read_file,
+        blocked_msg_wait_has_input, blocked_serial_comm_event_ready, blocked_wait_timed_out,
+        blocked_winsock_read_ready, complete_blocked_serial_comm_event,
+        complete_blocked_winsock_read, msg_wait_timer_delay_can_complete,
+        scheduler_blocked_wait_is_ready, select_ready_blocked_wait_index,
     };
     use crate::{
         ce::{
+            coredll::CoredllGuestMemory,
             file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
             gwe::{QS_POSTMESSAGE, QS_TIMER, WM_TIMER},
             timer::{INFINITE, WAIT_OBJECT_0, WAIT_TIMEOUT},
         },
         config::RuntimeConfig,
     };
+    use std::{
+        io::Write,
+        net::{Ipv4Addr, TcpListener, TcpStream, UdpSocket},
+        sync::{MutexGuard, mpsc},
+        thread,
+        time::{Duration, Instant},
+    };
+
+    fn reset_winsock_for_scheduler_test() -> MutexGuard<'static, ()> {
+        crate::winsock::locked_reset_for_tests()
+    }
 
     fn blocked_wait(start: u32, timeout: u32) -> BlockedWaitThread {
         BlockedWaitThread {
@@ -12069,6 +12608,2220 @@ mod wait_scheduler_tests {
             timeout_ms: crate::ce::timer::INFINITE,
             regs: super::MipsGuestContext::zero(),
             return_pc: 0,
+        }
+    }
+
+    #[test]
+    fn winsock_recv_parks_until_socket_read_ready_and_replays_import() {
+        let _winsock_guard = reset_winsock_for_scheduler_test();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (accepted_tx, accepted_rx) = mpsc::channel();
+        let (write_tx, write_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            accepted_tx.send(()).unwrap();
+            write_rx.recv().unwrap();
+            stream.write_all(b"wake").unwrap();
+        });
+
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let base = 0x3000_0000u32;
+        uc.mem_map(base.into(), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        let sockaddr = base + 0x1000;
+        let recv_buf = base + 0x2000;
+        let socket = {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            memory.write_u16(sockaddr, 2).unwrap();
+            let port_bytes = port.to_be_bytes();
+            memory.write_u8(sockaddr + 2, port_bytes[0]).unwrap();
+            memory.write_u8(sockaddr + 3, port_bytes[1]).unwrap();
+            memory
+                .write_bytes(sockaddr + 4, &Ipv4Addr::LOCALHOST.octets())
+                .unwrap();
+            memory.fill_bytes(sockaddr + 8, 0, 8).unwrap();
+            let socket = crate::winsock::dispatch_import(
+                &mut kernel,
+                7,
+                None,
+                Some("socket"),
+                &mut memory,
+                &[2, 1, 0],
+            );
+            assert_ne!(socket, crate::winsock::INVALID_SOCKET);
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    7,
+                    None,
+                    Some("connect"),
+                    &mut memory,
+                    &[socket, sockaddr, 16],
+                ),
+                0
+            );
+            socket
+        };
+        accepted_rx.recv().unwrap();
+        assert!(crate::winsock::socket_read_wait_candidate(socket));
+        assert!(!crate::winsock::socket_read_ready(socket));
+
+        let thread_id = 7;
+        let thread_handle = 0x707;
+        let return_pc = 0x0040_7000u32;
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(super::try_block_winsock_read(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Winsock,
+            None,
+            Some("recv"),
+            &[socket, recv_buf, 4, 0],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+        ));
+        assert_eq!(*running_thread.borrow(), None);
+        let blocked = blocked_waits.borrow()[0].clone();
+        assert_eq!(blocked.thread_id, thread_id);
+        assert_eq!(blocked.thread_handle, thread_handle);
+        assert_eq!(blocked.wait_handles, vec![socket]);
+        assert!(matches!(
+            blocked.kind,
+            BlockedWaitKind::WinsockRead {
+                socket: actual_socket,
+                name: Some("recv"),
+                args,
+                ..
+            } if actual_socket == socket && args == [socket, recv_buf, 4, 0, 0, 0]
+        ));
+        let scheduler_wait = kernel.blocked_waiter(blocked.wait_id).unwrap();
+        assert!(matches!(
+            scheduler_wait.kind,
+            crate::ce::scheduler::SchedulerBlockedWaitKind::WinsockRead {
+                socket: actual_socket,
+                readiness: crate::ce::scheduler::SchedulerWinsockReadyKind::Read,
+                read_mask: 1,
+                write_mask: 0,
+                except_mask: 0,
+            } if actual_socket == socket
+        ));
+        assert!(!scheduler_blocked_wait_is_ready(scheduler_wait, &kernel));
+
+        write_tx.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !crate::winsock::socket_read_ready(socket) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        let scheduler_wait = kernel.blocked_waiter(blocked.wait_id).unwrap();
+        assert!(scheduler_blocked_wait_is_ready(scheduler_wait, &kernel));
+        assert_eq!(
+            complete_blocked_winsock_read(&blocked, &mut kernel, &mut uc),
+            4
+        );
+        let mut bytes = [0; 4];
+        uc.mem_read(recv_buf.into(), &mut bytes).unwrap();
+        assert_eq!(&bytes, b"wake");
+        let _ = kernel.remove_blocked_waiter(blocked.wait_id);
+        {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    7,
+                    None,
+                    Some("closesocket"),
+                    &mut memory,
+                    &[socket],
+                ),
+                0
+            );
+        }
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn winsock_recvfrom_parks_until_udp_datagram_ready_and_replays_import() {
+        let _winsock_guard = reset_winsock_for_scheduler_test();
+        let probe = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let base = 0x3008_0000u32;
+        uc.mem_map(base.into(), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        let bind_addr = base + 0x1000;
+        let recv_buf = base + 0x2000;
+        let remote_addr = base + 0x3000;
+        let remote_len = base + 0x4000;
+        let socket = {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            memory.write_u16(bind_addr, 2).unwrap();
+            let port_bytes = port.to_be_bytes();
+            memory.write_u8(bind_addr + 2, port_bytes[0]).unwrap();
+            memory.write_u8(bind_addr + 3, port_bytes[1]).unwrap();
+            memory
+                .write_bytes(bind_addr + 4, &Ipv4Addr::LOCALHOST.octets())
+                .unwrap();
+            memory.fill_bytes(bind_addr + 8, 0, 8).unwrap();
+            memory.write_u32(remote_len, 16).unwrap();
+            let socket = crate::winsock::dispatch_import(
+                &mut kernel,
+                15,
+                None,
+                Some("socket"),
+                &mut memory,
+                &[2, 2, 0],
+            );
+            assert_ne!(socket, crate::winsock::INVALID_SOCKET);
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    15,
+                    None,
+                    Some("bind"),
+                    &mut memory,
+                    &[socket, bind_addr, 16],
+                ),
+                0
+            );
+            socket
+        };
+        assert!(crate::winsock::socket_read_wait_candidate(socket));
+        assert!(!crate::winsock::socket_read_ready(socket));
+
+        let thread_id = 15;
+        let thread_handle = 0xf0f;
+        let return_pc = 0x0040_f000u32;
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(super::try_block_winsock_read(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Winsock,
+            None,
+            Some("recvfrom"),
+            &[socket, recv_buf, 4, 0, remote_addr, remote_len],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+        ));
+        let blocked = blocked_waits.borrow()[0].clone();
+        assert_eq!(blocked.wait_handles, vec![socket]);
+        assert!(matches!(
+            blocked.kind,
+            BlockedWaitKind::WinsockRead {
+                socket: actual_socket,
+                name: Some("recvfrom"),
+                args,
+                ..
+            } if actual_socket == socket
+                && args == [socket, recv_buf, 4, 0, remote_addr, remote_len]
+        ));
+        let scheduler_wait = kernel.blocked_waiter(blocked.wait_id).unwrap();
+        assert!(!scheduler_blocked_wait_is_ready(scheduler_wait, &kernel));
+
+        let sender = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        sender
+            .send_to(b"wake", (Ipv4Addr::LOCALHOST, port))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !crate::winsock::socket_read_ready(socket) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        let scheduler_wait = kernel.blocked_waiter(blocked.wait_id).unwrap();
+        assert!(scheduler_blocked_wait_is_ready(scheduler_wait, &kernel));
+        assert_eq!(
+            complete_blocked_winsock_read(&blocked, &mut kernel, &mut uc),
+            4
+        );
+        let mut bytes = [0; 4];
+        uc.mem_read(recv_buf.into(), &mut bytes).unwrap();
+        assert_eq!(&bytes, b"wake");
+        let mut len_bytes = [0; 4];
+        uc.mem_read(remote_len.into(), &mut len_bytes).unwrap();
+        assert_eq!(u32::from_le_bytes(len_bytes), 16);
+        assert!(!crate::winsock::socket_read_ready(socket));
+        let _ = kernel.remove_blocked_waiter(blocked.wait_id);
+        {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    15,
+                    None,
+                    Some("closesocket"),
+                    &mut memory,
+                    &[socket],
+                ),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn winsock_accept_parks_until_listener_read_ready_and_replays_import() {
+        let _winsock_guard = reset_winsock_for_scheduler_test();
+        let probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let base = 0x3001_0000u32;
+        uc.mem_map(base.into(), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        let bind_addr = base + 0x1000;
+        let remote_addr = base + 0x2000;
+        let remote_len = base + 0x3000;
+        let listener = {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            memory.write_u16(bind_addr, 2).unwrap();
+            let port_bytes = port.to_be_bytes();
+            memory.write_u8(bind_addr + 2, port_bytes[0]).unwrap();
+            memory.write_u8(bind_addr + 3, port_bytes[1]).unwrap();
+            memory
+                .write_bytes(bind_addr + 4, &Ipv4Addr::LOCALHOST.octets())
+                .unwrap();
+            memory.fill_bytes(bind_addr + 8, 0, 8).unwrap();
+            memory.write_u32(remote_len, 16).unwrap();
+            let listener = crate::winsock::dispatch_import(
+                &mut kernel,
+                8,
+                None,
+                Some("socket"),
+                &mut memory,
+                &[2, 1, 0],
+            );
+            assert_ne!(listener, crate::winsock::INVALID_SOCKET);
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    8,
+                    None,
+                    Some("bind"),
+                    &mut memory,
+                    &[listener, bind_addr, 16],
+                ),
+                0
+            );
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    8,
+                    None,
+                    Some("listen"),
+                    &mut memory,
+                    &[listener, 1],
+                ),
+                0
+            );
+            listener
+        };
+        assert!(crate::winsock::socket_accept_wait_candidate(listener));
+        assert!(!crate::winsock::socket_read_ready(listener));
+
+        let thread_id = 8;
+        let thread_handle = 0x808;
+        let return_pc = 0x0040_8000u32;
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(super::try_block_winsock_read(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Winsock,
+            None,
+            Some("accept"),
+            &[listener, remote_addr, remote_len],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+        ));
+        assert_eq!(*running_thread.borrow(), None);
+        let blocked = blocked_waits.borrow()[0].clone();
+        assert_eq!(blocked.wait_handles, vec![listener]);
+        assert!(matches!(
+            blocked.kind,
+            BlockedWaitKind::WinsockRead {
+                socket: actual_socket,
+                name: Some("accept"),
+                args,
+                ..
+            } if actual_socket == listener && args == [listener, remote_addr, remote_len, 0, 0, 0]
+        ));
+        let scheduler_wait = kernel.blocked_waiter(blocked.wait_id).unwrap();
+        assert!(!scheduler_blocked_wait_is_ready(scheduler_wait, &kernel));
+
+        let client = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        let scheduler_wait = kernel.blocked_waiter(blocked.wait_id).unwrap();
+        assert!(scheduler_blocked_wait_is_ready(scheduler_wait, &kernel));
+        let accepted = complete_blocked_winsock_read(&blocked, &mut kernel, &mut uc);
+        assert_ne!(accepted, crate::winsock::INVALID_SOCKET);
+        let mut len_bytes = [0; 4];
+        uc.mem_read(remote_len.into(), &mut len_bytes).unwrap();
+        assert_eq!(u32::from_le_bytes(len_bytes), 16);
+        let mut family = [0; 2];
+        uc.mem_read(remote_addr.into(), &mut family).unwrap();
+        assert_eq!(u16::from_le_bytes(family), 2);
+        let mut ip = [0; 4];
+        uc.mem_read((remote_addr + 4).into(), &mut ip).unwrap();
+        assert_eq!(ip, [10, 0, 0, 1]);
+        let _ = kernel.remove_blocked_waiter(blocked.wait_id);
+        drop(client);
+        {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            for socket in [accepted, listener] {
+                assert_eq!(
+                    crate::winsock::dispatch_import(
+                        &mut kernel,
+                        8,
+                        None,
+                        Some("closesocket"),
+                        &mut memory,
+                        &[socket],
+                    ),
+                    0
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn winsock_select_parks_until_read_fdset_socket_ready_and_replays_import() {
+        let _winsock_guard = reset_winsock_for_scheduler_test();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (accepted_tx, accepted_rx) = mpsc::channel();
+        let (write_tx, write_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            accepted_tx.send(()).unwrap();
+            write_rx.recv().unwrap();
+            stream.write_all(b"sel!").unwrap();
+        });
+
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let base = 0x3002_0000u32;
+        uc.mem_map(base.into(), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        let sockaddr = base + 0x1000;
+        let readfds = base + 0x2000;
+        let recv_buf = base + 0x3000;
+        let socket = {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            memory.write_u16(sockaddr, 2).unwrap();
+            let port_bytes = port.to_be_bytes();
+            memory.write_u8(sockaddr + 2, port_bytes[0]).unwrap();
+            memory.write_u8(sockaddr + 3, port_bytes[1]).unwrap();
+            memory
+                .write_bytes(sockaddr + 4, &Ipv4Addr::LOCALHOST.octets())
+                .unwrap();
+            memory.fill_bytes(sockaddr + 8, 0, 8).unwrap();
+            let socket = crate::winsock::dispatch_import(
+                &mut kernel,
+                9,
+                None,
+                Some("socket"),
+                &mut memory,
+                &[2, 1, 0],
+            );
+            assert_ne!(socket, crate::winsock::INVALID_SOCKET);
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    9,
+                    None,
+                    Some("connect"),
+                    &mut memory,
+                    &[socket, sockaddr, 16],
+                ),
+                0
+            );
+            memory.write_u32(readfds, 1).unwrap();
+            memory.write_u32(readfds + 4, socket).unwrap();
+            socket
+        };
+        accepted_rx.recv().unwrap();
+        assert!(!crate::winsock::socket_read_ready(socket));
+
+        let thread_id = 9;
+        let thread_handle = 0x909;
+        let return_pc = 0x0040_9000u32;
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(super::try_block_winsock_read(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Winsock,
+            None,
+            Some("select"),
+            &[0, readfds, 0, 0, 0],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+        ));
+        let blocked = blocked_waits.borrow()[0].clone();
+        assert_eq!(blocked.wait_handles, vec![socket]);
+        assert!(matches!(
+            blocked.kind,
+            BlockedWaitKind::WinsockRead {
+                socket: actual_socket,
+                name: Some("select"),
+                args,
+                ..
+            } if actual_socket == socket && args == [0, readfds, 0, 0, 0, 0]
+        ));
+        let scheduler_wait = kernel.blocked_waiter(blocked.wait_id).unwrap();
+        assert!(!scheduler_blocked_wait_is_ready(scheduler_wait, &kernel));
+
+        write_tx.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !crate::winsock::socket_read_ready(socket) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        let scheduler_wait = kernel.blocked_waiter(blocked.wait_id).unwrap();
+        assert!(scheduler_blocked_wait_is_ready(scheduler_wait, &kernel));
+        assert_eq!(
+            complete_blocked_winsock_read(&blocked, &mut kernel, &mut uc),
+            1
+        );
+        let mut count = [0; 4];
+        let mut selected = [0; 4];
+        uc.mem_read(readfds.into(), &mut count).unwrap();
+        uc.mem_read((readfds + 4).into(), &mut selected).unwrap();
+        assert_eq!(u32::from_le_bytes(count), 1);
+        assert_eq!(u32::from_le_bytes(selected), socket);
+        let _ = kernel.remove_blocked_waiter(blocked.wait_id);
+        {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    9,
+                    None,
+                    Some("recv"),
+                    &mut memory,
+                    &[socket, recv_buf, 4, 0],
+                ),
+                4
+            );
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    9,
+                    None,
+                    Some("closesocket"),
+                    &mut memory,
+                    &[socket],
+                ),
+                0
+            );
+        }
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn winsock_select_finite_timeout_resumes_with_zero_ready_count() {
+        let _winsock_guard = reset_winsock_for_scheduler_test();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (accepted_tx, accepted_rx) = mpsc::channel();
+        let (close_tx, close_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            accepted_tx.send(()).unwrap();
+            close_rx.recv().unwrap();
+        });
+
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let base = 0x3003_0000u32;
+        uc.mem_map(base.into(), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        let sockaddr = base + 0x1000;
+        let readfds = base + 0x2000;
+        let timeout = base + 0x3000;
+        let socket = {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            memory.write_u16(sockaddr, 2).unwrap();
+            let port_bytes = port.to_be_bytes();
+            memory.write_u8(sockaddr + 2, port_bytes[0]).unwrap();
+            memory.write_u8(sockaddr + 3, port_bytes[1]).unwrap();
+            memory
+                .write_bytes(sockaddr + 4, &Ipv4Addr::LOCALHOST.octets())
+                .unwrap();
+            memory.fill_bytes(sockaddr + 8, 0, 8).unwrap();
+            memory.write_u32(readfds, 1).unwrap();
+            let socket = crate::winsock::dispatch_import(
+                &mut kernel,
+                10,
+                None,
+                Some("socket"),
+                &mut memory,
+                &[2, 1, 0],
+            );
+            assert_ne!(socket, crate::winsock::INVALID_SOCKET);
+            memory.write_u32(readfds + 4, socket).unwrap();
+            memory.write_u32(timeout, 0).unwrap();
+            memory.write_u32(timeout + 4, 20_000).unwrap();
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    10,
+                    None,
+                    Some("connect"),
+                    &mut memory,
+                    &[socket, sockaddr, 16],
+                ),
+                0
+            );
+            socket
+        };
+        accepted_rx.recv().unwrap();
+        assert!(!crate::winsock::socket_read_ready(socket));
+
+        let thread_id = 10;
+        let thread_handle = 0xa0a;
+        let return_pc = 0x0040_a000u32;
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(super::try_block_winsock_read(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Winsock,
+            None,
+            Some("select"),
+            &[0, readfds, 0, 0, timeout],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+        ));
+        let blocked = blocked_waits.borrow()[0].clone();
+        assert_eq!(blocked.wait_handles, vec![socket]);
+        assert_eq!(blocked.timeout_ms, 20);
+        assert!(kernel.blocked_waiter(blocked.wait_id).is_some());
+        assert!(!super::try_resume_blocked_wait(
+            &mut kernel,
+            &mut uc,
+            0,
+            &current_thread_id,
+            &blocked_waits,
+            &suspended_thread,
+            &running_thread,
+        ));
+
+        kernel.timers.sleep_ms(20);
+        assert!(super::try_resume_blocked_wait(
+            &mut kernel,
+            &mut uc,
+            0,
+            &current_thread_id,
+            &blocked_waits,
+            &suspended_thread,
+            &running_thread,
+        ));
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
+            0
+        );
+        let mut count = [0; 4];
+        uc.mem_read(readfds.into(), &mut count).unwrap();
+        assert_eq!(u32::from_le_bytes(count), 0);
+        assert!(kernel.blocked_waiter(blocked.wait_id).is_none());
+        let stats = kernel.scheduler_stats();
+        assert_eq!(stats.wait_timeout_count, 1);
+
+        {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    10,
+                    None,
+                    Some("closesocket"),
+                    &mut memory,
+                    &[socket],
+                ),
+                0
+            );
+        }
+        close_tx.send(()).unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn winsock_recv_uses_so_rcvtimeo_for_blocked_wait_timeout() {
+        let _winsock_guard = reset_winsock_for_scheduler_test();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (accepted_tx, accepted_rx) = mpsc::channel();
+        let (close_tx, close_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            accepted_tx.send(()).unwrap();
+            close_rx.recv().unwrap();
+        });
+
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let base = 0x3007_0000u32;
+        uc.mem_map(base.into(), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        let sockaddr = base + 0x1000;
+        let timeout_opt = base + 0x2000;
+        let recv_buf = base + 0x3000;
+        let socket = {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            memory.write_u16(sockaddr, 2).unwrap();
+            let port_bytes = port.to_be_bytes();
+            memory.write_u8(sockaddr + 2, port_bytes[0]).unwrap();
+            memory.write_u8(sockaddr + 3, port_bytes[1]).unwrap();
+            memory
+                .write_bytes(sockaddr + 4, &Ipv4Addr::LOCALHOST.octets())
+                .unwrap();
+            memory.fill_bytes(sockaddr + 8, 0, 8).unwrap();
+            let socket = crate::winsock::dispatch_import(
+                &mut kernel,
+                14,
+                None,
+                Some("socket"),
+                &mut memory,
+                &[2, 1, 0],
+            );
+            assert_ne!(socket, crate::winsock::INVALID_SOCKET);
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    14,
+                    None,
+                    Some("connect"),
+                    &mut memory,
+                    &[socket, sockaddr, 16],
+                ),
+                0
+            );
+            memory.write_u32(timeout_opt, 25).unwrap();
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    14,
+                    None,
+                    Some("setsockopt"),
+                    &mut memory,
+                    &[socket, 0xffff, 0x1006, timeout_opt, 4],
+                ),
+                0
+            );
+            socket
+        };
+        accepted_rx.recv().unwrap();
+        assert!(!crate::winsock::socket_read_ready(socket));
+
+        let thread_id = 14;
+        let thread_handle = 0xe0e;
+        let return_pc = 0x0040_e000u32;
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(super::try_block_winsock_read(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Winsock,
+            None,
+            Some("recv"),
+            &[socket, recv_buf, 4, 0],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+        ));
+        let blocked = blocked_waits.borrow()[0].clone();
+        assert_eq!(blocked.wait_handles, vec![socket]);
+        assert_eq!(blocked.timeout_ms, 25);
+        assert!(!super::try_resume_blocked_wait(
+            &mut kernel,
+            &mut uc,
+            0,
+            &current_thread_id,
+            &blocked_waits,
+            &suspended_thread,
+            &running_thread,
+        ));
+
+        kernel.timers.sleep_ms(25);
+        assert!(super::try_resume_blocked_wait(
+            &mut kernel,
+            &mut uc,
+            0,
+            &current_thread_id,
+            &blocked_waits,
+            &suspended_thread,
+            &running_thread,
+        ));
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
+            crate::winsock::SOCKET_ERROR
+        );
+        assert_eq!(kernel.threads.get_last_error(thread_id), 10035);
+        assert!(kernel.blocked_waiter(blocked.wait_id).is_none());
+
+        {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    14,
+                    None,
+                    Some("closesocket"),
+                    &mut memory,
+                    &[socket],
+                ),
+                0
+            );
+        }
+        close_tx.send(()).unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn winsock_recvfrom_uses_so_rcvtimeo_for_blocked_wait_timeout() {
+        let _winsock_guard = reset_winsock_for_scheduler_test();
+        let probe = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let base = 0x300b_0000u32;
+        uc.mem_map(base.into(), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        let bind_addr = base + 0x1000;
+        let timeout_opt = base + 0x2000;
+        let recv_buf = base + 0x3000;
+        let from_addr = base + 0x4000;
+        let from_len = base + 0x5000;
+        let socket = {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            memory.write_u16(bind_addr, 2).unwrap();
+            let port_bytes = port.to_be_bytes();
+            memory.write_u8(bind_addr + 2, port_bytes[0]).unwrap();
+            memory.write_u8(bind_addr + 3, port_bytes[1]).unwrap();
+            memory
+                .write_bytes(bind_addr + 4, &Ipv4Addr::LOCALHOST.octets())
+                .unwrap();
+            memory.fill_bytes(bind_addr + 8, 0, 8).unwrap();
+            memory.write_u32(from_len, 16).unwrap();
+            let socket = crate::winsock::dispatch_import(
+                &mut kernel,
+                18,
+                None,
+                Some("socket"),
+                &mut memory,
+                &[2, 2, 0],
+            );
+            assert_ne!(socket, crate::winsock::INVALID_SOCKET);
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    18,
+                    None,
+                    Some("bind"),
+                    &mut memory,
+                    &[socket, bind_addr, 16],
+                ),
+                0
+            );
+            memory.write_u32(timeout_opt, 30).unwrap();
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    18,
+                    None,
+                    Some("setsockopt"),
+                    &mut memory,
+                    &[socket, 0xffff, 0x1006, timeout_opt, 4],
+                ),
+                0
+            );
+            socket
+        };
+        assert!(!crate::winsock::socket_read_ready(socket));
+
+        let thread_id = 18;
+        let thread_handle = 0x1212;
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, 0x0041_2000)
+            .unwrap();
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(super::try_block_winsock_read(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Winsock,
+            None,
+            Some("recvfrom"),
+            &[socket, recv_buf, 4, 0, from_addr, from_len],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+        ));
+        let blocked = blocked_waits.borrow()[0].clone();
+        assert_eq!(blocked.wait_handles, vec![socket]);
+        assert_eq!(blocked.timeout_ms, 30);
+        assert!(!super::try_resume_blocked_wait(
+            &mut kernel,
+            &mut uc,
+            0,
+            &current_thread_id,
+            &blocked_waits,
+            &suspended_thread,
+            &running_thread,
+        ));
+
+        kernel.timers.sleep_ms(30);
+        assert!(super::try_resume_blocked_wait(
+            &mut kernel,
+            &mut uc,
+            0,
+            &current_thread_id,
+            &blocked_waits,
+            &suspended_thread,
+            &running_thread,
+        ));
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
+            crate::winsock::SOCKET_ERROR
+        );
+        assert_eq!(kernel.threads.get_last_error(thread_id), 10035);
+        assert!(kernel.blocked_waiter(blocked.wait_id).is_none());
+
+        {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    18,
+                    None,
+                    Some("closesocket"),
+                    &mut memory,
+                    &[socket],
+                ),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn winsock_nonblocking_recv_does_not_park_and_returns_wouldblock() {
+        let _winsock_guard = reset_winsock_for_scheduler_test();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (accepted_tx, accepted_rx) = mpsc::channel();
+        let (close_tx, close_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            accepted_tx.send(()).unwrap();
+            close_rx.recv().unwrap();
+        });
+
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let base = 0x3008_0000u32;
+        uc.mem_map(base.into(), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        let sockaddr = base + 0x1000;
+        let nonblocking_ptr = base + 0x2000;
+        let recv_buf = base + 0x3000;
+        let socket = {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            memory.write_u16(sockaddr, 2).unwrap();
+            let port_bytes = port.to_be_bytes();
+            memory.write_u8(sockaddr + 2, port_bytes[0]).unwrap();
+            memory.write_u8(sockaddr + 3, port_bytes[1]).unwrap();
+            memory
+                .write_bytes(sockaddr + 4, &Ipv4Addr::LOCALHOST.octets())
+                .unwrap();
+            memory.fill_bytes(sockaddr + 8, 0, 8).unwrap();
+            let socket = crate::winsock::dispatch_import(
+                &mut kernel,
+                15,
+                None,
+                Some("socket"),
+                &mut memory,
+                &[2, 1, 0],
+            );
+            assert_ne!(socket, crate::winsock::INVALID_SOCKET);
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    15,
+                    None,
+                    Some("connect"),
+                    &mut memory,
+                    &[socket, sockaddr, 16],
+                ),
+                0
+            );
+            memory.write_u32(nonblocking_ptr, 1).unwrap();
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    15,
+                    None,
+                    Some("ioctlsocket"),
+                    &mut memory,
+                    &[socket, 0x8004_667e, nonblocking_ptr],
+                ),
+                0
+            );
+            socket
+        };
+        accepted_rx.recv().unwrap();
+        assert!(!crate::winsock::socket_read_ready(socket));
+        assert!(crate::winsock::socket_nonblocking(socket));
+
+        let thread_id = 15;
+        let thread_handle = 0xf0f;
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, 0x0040_f000)
+            .unwrap();
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(!super::try_block_winsock_read(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Winsock,
+            None,
+            Some("recv"),
+            &[socket, recv_buf, 4, 0],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+        ));
+        assert!(blocked_waits.borrow().is_empty());
+        {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    thread_id,
+                    None,
+                    Some("recv"),
+                    &mut memory,
+                    &[socket, recv_buf, 4, 0],
+                ),
+                crate::winsock::SOCKET_ERROR
+            );
+            assert_eq!(kernel.threads.get_last_error(thread_id), 10035);
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    thread_id,
+                    None,
+                    Some("closesocket"),
+                    &mut memory,
+                    &[socket],
+                ),
+                0
+            );
+        }
+        close_tx.send(()).unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn winsock_nonblocking_recvfrom_does_not_park_and_returns_wouldblock() {
+        let _winsock_guard = reset_winsock_for_scheduler_test();
+        let probe = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let base = 0x300a_0000u32;
+        uc.mem_map(base.into(), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        let bind_addr = base + 0x1000;
+        let nonblocking_ptr = base + 0x2000;
+        let recv_buf = base + 0x3000;
+        let from_addr = base + 0x4000;
+        let from_len = base + 0x5000;
+        let socket = {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            memory.write_u16(bind_addr, 2).unwrap();
+            let port_bytes = port.to_be_bytes();
+            memory.write_u8(bind_addr + 2, port_bytes[0]).unwrap();
+            memory.write_u8(bind_addr + 3, port_bytes[1]).unwrap();
+            memory
+                .write_bytes(bind_addr + 4, &Ipv4Addr::LOCALHOST.octets())
+                .unwrap();
+            memory.fill_bytes(bind_addr + 8, 0, 8).unwrap();
+            memory.write_u32(from_len, 16).unwrap();
+            let socket = crate::winsock::dispatch_import(
+                &mut kernel,
+                17,
+                None,
+                Some("socket"),
+                &mut memory,
+                &[2, 2, 0],
+            );
+            assert_ne!(socket, crate::winsock::INVALID_SOCKET);
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    17,
+                    None,
+                    Some("bind"),
+                    &mut memory,
+                    &[socket, bind_addr, 16],
+                ),
+                0
+            );
+            memory.write_u32(nonblocking_ptr, 1).unwrap();
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    17,
+                    None,
+                    Some("ioctlsocket"),
+                    &mut memory,
+                    &[socket, 0x8004_667e, nonblocking_ptr],
+                ),
+                0
+            );
+            socket
+        };
+        assert!(!crate::winsock::socket_read_ready(socket));
+        assert!(crate::winsock::socket_nonblocking(socket));
+
+        let thread_id = 17;
+        let thread_handle = 0x111;
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, 0x0041_1000)
+            .unwrap();
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(!super::try_block_winsock_read(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Winsock,
+            None,
+            Some("recvfrom"),
+            &[socket, recv_buf, 4, 0, from_addr, from_len],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+        ));
+        assert!(blocked_waits.borrow().is_empty());
+        {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    thread_id,
+                    None,
+                    Some("recvfrom"),
+                    &mut memory,
+                    &[socket, recv_buf, 4, 0, from_addr, from_len],
+                ),
+                crate::winsock::SOCKET_ERROR
+            );
+            assert_eq!(kernel.threads.get_last_error(thread_id), 10035);
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    thread_id,
+                    None,
+                    Some("closesocket"),
+                    &mut memory,
+                    &[socket],
+                ),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn winsock_nonblocking_accept_does_not_park_and_returns_wouldblock() {
+        let _winsock_guard = reset_winsock_for_scheduler_test();
+        let probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let base = 0x3009_0000u32;
+        uc.mem_map(base.into(), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        let bind_addr = base + 0x1000;
+        let nonblocking_ptr = base + 0x2000;
+        let remote_addr = base + 0x3000;
+        let remote_len = base + 0x4000;
+        let listener = {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            memory.write_u16(bind_addr, 2).unwrap();
+            let port_bytes = port.to_be_bytes();
+            memory.write_u8(bind_addr + 2, port_bytes[0]).unwrap();
+            memory.write_u8(bind_addr + 3, port_bytes[1]).unwrap();
+            memory
+                .write_bytes(bind_addr + 4, &Ipv4Addr::LOCALHOST.octets())
+                .unwrap();
+            memory.fill_bytes(bind_addr + 8, 0, 8).unwrap();
+            memory.write_u32(remote_len, 16).unwrap();
+            let listener = crate::winsock::dispatch_import(
+                &mut kernel,
+                16,
+                None,
+                Some("socket"),
+                &mut memory,
+                &[2, 1, 0],
+            );
+            assert_ne!(listener, crate::winsock::INVALID_SOCKET);
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    16,
+                    None,
+                    Some("bind"),
+                    &mut memory,
+                    &[listener, bind_addr, 16],
+                ),
+                0
+            );
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    16,
+                    None,
+                    Some("listen"),
+                    &mut memory,
+                    &[listener, 1],
+                ),
+                0
+            );
+            memory.write_u32(nonblocking_ptr, 1).unwrap();
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    16,
+                    None,
+                    Some("ioctlsocket"),
+                    &mut memory,
+                    &[listener, 0x8004_667e, nonblocking_ptr],
+                ),
+                0
+            );
+            listener
+        };
+        assert!(crate::winsock::socket_nonblocking(listener));
+        assert!(!crate::winsock::socket_read_ready(listener));
+
+        let thread_id = 16;
+        let thread_handle = 0x1010;
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, 0x0041_0000)
+            .unwrap();
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(!super::try_block_winsock_read(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Winsock,
+            None,
+            Some("accept"),
+            &[listener, remote_addr, remote_len],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+        ));
+        assert!(blocked_waits.borrow().is_empty());
+        {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    thread_id,
+                    None,
+                    Some("accept"),
+                    &mut memory,
+                    &[listener, remote_addr, remote_len],
+                ),
+                crate::winsock::INVALID_SOCKET
+            );
+            assert_eq!(kernel.threads.get_last_error(thread_id), 10035);
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    thread_id,
+                    None,
+                    Some("closesocket"),
+                    &mut memory,
+                    &[listener],
+                ),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn winsock_select_write_fdset_parks_pending_socket_until_timeout() {
+        let _winsock_guard = reset_winsock_for_scheduler_test();
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let base = 0x3004_0000u32;
+        uc.mem_map(base.into(), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        let writefds = base + 0x2000;
+        let timeout = base + 0x3000;
+        let socket = {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            let socket = crate::winsock::dispatch_import(
+                &mut kernel,
+                11,
+                None,
+                Some("socket"),
+                &mut memory,
+                &[2, 1, 0],
+            );
+            assert_ne!(socket, crate::winsock::INVALID_SOCKET);
+            memory.write_u32(writefds, 1).unwrap();
+            memory.write_u32(writefds + 4, socket).unwrap();
+            memory.write_u32(timeout, 0).unwrap();
+            memory.write_u32(timeout + 4, 15_000).unwrap();
+            socket
+        };
+        assert!(crate::winsock::socket_write_wait_candidate(socket));
+        assert!(!crate::winsock::socket_write_ready(socket));
+
+        let thread_id = 11;
+        let thread_handle = 0xb0b;
+        let return_pc = 0x0040_b000u32;
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(super::try_block_winsock_read(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Winsock,
+            None,
+            Some("select"),
+            &[0, 0, writefds, 0, timeout],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+        ));
+        let blocked = blocked_waits.borrow()[0].clone();
+        assert_eq!(blocked.wait_handles, vec![socket]);
+        assert_eq!(blocked.timeout_ms, 15);
+        assert!(matches!(
+            blocked.kind,
+            BlockedWaitKind::WinsockRead {
+                socket: actual_socket,
+                readiness: WinsockReadyKind::Write,
+                name: Some("select"),
+                args,
+                ..
+            } if actual_socket == socket && args == [0, 0, writefds, 0, timeout, 0]
+        ));
+        let scheduler_wait = kernel.blocked_waiter(blocked.wait_id).unwrap();
+        assert!(matches!(
+            scheduler_wait.kind,
+            crate::ce::scheduler::SchedulerBlockedWaitKind::WinsockRead {
+                socket: actual_socket,
+                readiness: crate::ce::scheduler::SchedulerWinsockReadyKind::Write,
+                read_mask: 0,
+                write_mask: 1,
+                except_mask: 0,
+            } if actual_socket == socket
+        ));
+        assert!(!scheduler_blocked_wait_is_ready(scheduler_wait, &kernel));
+
+        kernel.timers.sleep_ms(15);
+        assert!(super::try_resume_blocked_wait(
+            &mut kernel,
+            &mut uc,
+            0,
+            &current_thread_id,
+            &blocked_waits,
+            &suspended_thread,
+            &running_thread,
+        ));
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
+            0
+        );
+        let mut count = [0; 4];
+        uc.mem_read(writefds.into(), &mut count).unwrap();
+        assert_eq!(u32::from_le_bytes(count), 0);
+        assert!(kernel.blocked_waiter(blocked.wait_id).is_none());
+
+        {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    11,
+                    None,
+                    Some("closesocket"),
+                    &mut memory,
+                    &[socket],
+                ),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn winsock_select_mixed_read_write_fdsets_use_masked_readiness_until_timeout() {
+        let _winsock_guard = reset_winsock_for_scheduler_test();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (accepted_tx, accepted_rx) = mpsc::channel();
+        let (close_tx, close_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            accepted_tx.send(()).unwrap();
+            close_rx.recv().unwrap();
+        });
+
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let base = 0x3005_0000u32;
+        uc.mem_map(base.into(), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        let sockaddr = base + 0x1000;
+        let readfds = base + 0x2000;
+        let writefds = base + 0x2800;
+        let timeout = base + 0x3000;
+        let (read_socket, write_socket) = {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            memory.write_u16(sockaddr, 2).unwrap();
+            let port_bytes = port.to_be_bytes();
+            memory.write_u8(sockaddr + 2, port_bytes[0]).unwrap();
+            memory.write_u8(sockaddr + 3, port_bytes[1]).unwrap();
+            memory
+                .write_bytes(sockaddr + 4, &Ipv4Addr::LOCALHOST.octets())
+                .unwrap();
+            memory.fill_bytes(sockaddr + 8, 0, 8).unwrap();
+            let read_socket = crate::winsock::dispatch_import(
+                &mut kernel,
+                12,
+                None,
+                Some("socket"),
+                &mut memory,
+                &[2, 1, 0],
+            );
+            assert_ne!(read_socket, crate::winsock::INVALID_SOCKET);
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    12,
+                    None,
+                    Some("connect"),
+                    &mut memory,
+                    &[read_socket, sockaddr, 16],
+                ),
+                0
+            );
+            let write_socket = crate::winsock::dispatch_import(
+                &mut kernel,
+                12,
+                None,
+                Some("socket"),
+                &mut memory,
+                &[2, 1, 0],
+            );
+            assert_ne!(write_socket, crate::winsock::INVALID_SOCKET);
+            memory.write_u32(readfds, 1).unwrap();
+            memory.write_u32(readfds + 4, read_socket).unwrap();
+            memory.write_u32(writefds, 1).unwrap();
+            memory.write_u32(writefds + 4, write_socket).unwrap();
+            memory.write_u32(timeout, 0).unwrap();
+            memory.write_u32(timeout + 4, 25_000).unwrap();
+            (read_socket, write_socket)
+        };
+        accepted_rx.recv().unwrap();
+        assert!(!crate::winsock::socket_read_ready(read_socket));
+        assert!(crate::winsock::socket_write_ready(read_socket));
+        assert!(crate::winsock::socket_write_wait_candidate(write_socket));
+        assert!(!crate::winsock::socket_write_ready(write_socket));
+
+        let thread_id = 12;
+        let thread_handle = 0xc0c;
+        let return_pc = 0x0040_c000u32;
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(super::try_block_winsock_read(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Winsock,
+            None,
+            Some("select"),
+            &[0, readfds, writefds, 0, timeout],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+        ));
+        let blocked = blocked_waits.borrow()[0].clone();
+        assert_eq!(blocked.wait_handles, vec![read_socket, write_socket]);
+        assert_eq!(blocked.timeout_ms, 25);
+        assert!(matches!(
+            blocked.kind,
+            BlockedWaitKind::WinsockRead {
+                socket: actual_socket,
+                readiness: WinsockReadyKind::ReadWrite,
+                read_mask: 1,
+                write_mask: 2,
+                name: Some("select"),
+                args,
+                ..
+            } if actual_socket == read_socket && args == [0, readfds, writefds, 0, timeout, 0]
+        ));
+        let scheduler_wait = kernel.blocked_waiter(blocked.wait_id).unwrap();
+        assert!(matches!(
+            scheduler_wait.kind,
+            crate::ce::scheduler::SchedulerBlockedWaitKind::WinsockRead {
+                socket: actual_socket,
+                readiness: crate::ce::scheduler::SchedulerWinsockReadyKind::ReadWrite,
+                read_mask: 1,
+                write_mask: 2,
+                except_mask: 0,
+            } if actual_socket == read_socket
+        ));
+        assert!(!scheduler_blocked_wait_is_ready(scheduler_wait, &kernel));
+
+        kernel.timers.sleep_ms(25);
+        assert!(super::try_resume_blocked_wait(
+            &mut kernel,
+            &mut uc,
+            0,
+            &current_thread_id,
+            &blocked_waits,
+            &suspended_thread,
+            &running_thread,
+        ));
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
+            0
+        );
+        let mut read_count = [0; 4];
+        let mut write_count = [0; 4];
+        uc.mem_read(readfds.into(), &mut read_count).unwrap();
+        uc.mem_read(writefds.into(), &mut write_count).unwrap();
+        assert_eq!(u32::from_le_bytes(read_count), 0);
+        assert_eq!(u32::from_le_bytes(write_count), 0);
+
+        {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            for socket in [read_socket, write_socket] {
+                assert_eq!(
+                    crate::winsock::dispatch_import(
+                        &mut kernel,
+                        12,
+                        None,
+                        Some("closesocket"),
+                        &mut memory,
+                        &[socket],
+                    ),
+                    0
+                );
+            }
+        }
+        close_tx.send(()).unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn winsock_select_except_fdset_parks_until_timeout_and_clears_fdset() {
+        let _winsock_guard = reset_winsock_for_scheduler_test();
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let base = 0x3006_0000u32;
+        uc.mem_map(base.into(), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        let exceptfds = base + 0x2000;
+        let timeout = base + 0x3000;
+        let socket = {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            let socket = crate::winsock::dispatch_import(
+                &mut kernel,
+                13,
+                None,
+                Some("socket"),
+                &mut memory,
+                &[2, 1, 0],
+            );
+            assert_ne!(socket, crate::winsock::INVALID_SOCKET);
+            memory.write_u32(exceptfds, 1).unwrap();
+            memory.write_u32(exceptfds + 4, socket).unwrap();
+            memory.write_u32(timeout, 0).unwrap();
+            memory.write_u32(timeout + 4, 30_000).unwrap();
+            socket
+        };
+        assert!(crate::winsock::socket_except_wait_candidate(socket));
+
+        let thread_id = 13;
+        let thread_handle = 0xd0d;
+        let return_pc = 0x0040_d000u32;
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(super::try_block_winsock_read(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Winsock,
+            None,
+            Some("select"),
+            &[0, 0, 0, exceptfds, timeout],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+        ));
+        let blocked = blocked_waits.borrow()[0].clone();
+        assert_eq!(blocked.wait_handles, vec![socket]);
+        assert_eq!(blocked.timeout_ms, 30);
+        assert!(matches!(
+            blocked.kind,
+            BlockedWaitKind::WinsockRead {
+                socket: actual_socket,
+                readiness: WinsockReadyKind::Except,
+                read_mask: 0,
+                write_mask: 0,
+                except_mask: 1,
+                name: Some("select"),
+                args,
+                ..
+            } if actual_socket == socket && args == [0, 0, 0, exceptfds, timeout, 0]
+        ));
+        let scheduler_wait = kernel.blocked_waiter(blocked.wait_id).unwrap();
+        assert!(matches!(
+            scheduler_wait.kind,
+            crate::ce::scheduler::SchedulerBlockedWaitKind::WinsockRead {
+                socket: actual_socket,
+                readiness: crate::ce::scheduler::SchedulerWinsockReadyKind::Except,
+                read_mask: 0,
+                write_mask: 0,
+                except_mask: 1,
+            } if actual_socket == socket
+        ));
+        assert!(!scheduler_blocked_wait_is_ready(scheduler_wait, &kernel));
+
+        kernel.timers.sleep_ms(30);
+        assert!(super::try_resume_blocked_wait(
+            &mut kernel,
+            &mut uc,
+            0,
+            &current_thread_id,
+            &blocked_waits,
+            &suspended_thread,
+            &running_thread,
+        ));
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
+            0
+        );
+        let mut count = [0; 4];
+        uc.mem_read(exceptfds.into(), &mut count).unwrap();
+        assert_eq!(u32::from_le_bytes(count), 0);
+        assert!(kernel.blocked_waiter(blocked.wait_id).is_none());
+
+        {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    13,
+                    None,
+                    Some("closesocket"),
+                    &mut memory,
+                    &[socket],
+                ),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn winsock_select_except_fdset_resumes_when_socket_error_becomes_ready() {
+        let _winsock_guard = reset_winsock_for_scheduler_test();
+        let probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let base = 0x3007_0000u32;
+        uc.mem_map(base.into(), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        let sockaddr = base + 0x1000;
+        let exceptfds = base + 0x2000;
+        let timeout = base + 0x3000;
+        let socket = {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            let socket = crate::winsock::dispatch_import(
+                &mut kernel,
+                14,
+                None,
+                Some("socket"),
+                &mut memory,
+                &[2, 1, 0],
+            );
+            assert_ne!(socket, crate::winsock::INVALID_SOCKET);
+            let port_bytes = port.to_be_bytes();
+            memory.write_u16(sockaddr, 2).unwrap();
+            memory.write_u8(sockaddr + 2, port_bytes[0]).unwrap();
+            memory.write_u8(sockaddr + 3, port_bytes[1]).unwrap();
+            memory
+                .write_bytes(sockaddr + 4, &Ipv4Addr::LOCALHOST.octets())
+                .unwrap();
+            memory.fill_bytes(sockaddr + 8, 0, 8).unwrap();
+            memory.write_u32(exceptfds, 1).unwrap();
+            memory.write_u32(exceptfds + 4, socket).unwrap();
+            memory.write_u32(timeout, 1).unwrap();
+            memory.write_u32(timeout + 4, 0).unwrap();
+            socket
+        };
+        assert!(crate::winsock::socket_except_wait_candidate(socket));
+        assert!(!crate::winsock::socket_except_ready(socket));
+
+        let thread_id = 14;
+        let thread_handle = 0xe0e;
+        let return_pc = 0x0040_e000u32;
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(super::try_block_winsock_read(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Winsock,
+            None,
+            Some("select"),
+            &[0, 0, 0, exceptfds, timeout],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+        ));
+        let blocked = blocked_waits.borrow()[0].clone();
+        assert!(matches!(
+            blocked.kind,
+            BlockedWaitKind::WinsockRead {
+                readiness: WinsockReadyKind::Except,
+                except_mask: 1,
+                ..
+            }
+        ));
+        assert!(!blocked_winsock_read_ready(&blocked));
+
+        {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    thread_id,
+                    None,
+                    Some("connect"),
+                    &mut memory,
+                    &[socket, sockaddr, 16],
+                ),
+                crate::winsock::SOCKET_ERROR
+            );
+        }
+        assert!(crate::winsock::socket_except_ready(socket));
+        assert!(blocked_winsock_read_ready(&blocked));
+        let scheduler_wait = kernel.blocked_waiter(blocked.wait_id).unwrap();
+        assert!(scheduler_blocked_wait_is_ready(scheduler_wait, &kernel));
+
+        assert!(super::try_resume_blocked_wait(
+            &mut kernel,
+            &mut uc,
+            0,
+            &current_thread_id,
+            &blocked_waits,
+            &suspended_thread,
+            &running_thread,
+        ));
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
+            1
+        );
+        let mut count = [0; 4];
+        uc.mem_read(exceptfds.into(), &mut count).unwrap();
+        assert_eq!(u32::from_le_bytes(count), 1);
+        let mut handle = [0; 4];
+        uc.mem_read((exceptfds + 4).into(), &mut handle).unwrap();
+        assert_eq!(u32::from_le_bytes(handle), socket);
+        assert!(kernel.blocked_waiter(blocked.wait_id).is_none());
+
+        {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    thread_id,
+                    None,
+                    Some("closesocket"),
+                    &mut memory,
+                    &[socket],
+                ),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn winsock_select_except_fdset_resumes_when_oob_data_becomes_ready() {
+        const MSG_OOB: u32 = 0x0001;
+
+        let _winsock_guard = reset_winsock_for_scheduler_test();
+        let probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let base = 0x3008_0000u32;
+        uc.mem_map(base.into(), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        let sockaddr = base + 0x1000;
+        let readfds = base + 0x2000;
+        let exceptfds = base + 0x3000;
+        let timeout = base + 0x4000;
+        let remote_addr = base + 0x5000;
+        let remote_len = base + 0x6000;
+        let send_buf = base + 0x7000;
+        let recv_buf = base + 0x8000;
+        let (listener, client, accepted) = {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            memory.write_u16(sockaddr, 2).unwrap();
+            let port_bytes = port.to_be_bytes();
+            memory.write_u8(sockaddr + 2, port_bytes[0]).unwrap();
+            memory.write_u8(sockaddr + 3, port_bytes[1]).unwrap();
+            memory
+                .write_bytes(sockaddr + 4, &Ipv4Addr::LOCALHOST.octets())
+                .unwrap();
+            memory.fill_bytes(sockaddr + 8, 0, 8).unwrap();
+            memory.write_bytes(send_buf, b"!").unwrap();
+
+            let listener = crate::winsock::dispatch_import(
+                &mut kernel,
+                15,
+                None,
+                Some("socket"),
+                &mut memory,
+                &[2, 1, 0],
+            );
+            assert_ne!(listener, crate::winsock::INVALID_SOCKET);
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    15,
+                    None,
+                    Some("bind"),
+                    &mut memory,
+                    &[listener, sockaddr, 16],
+                ),
+                0
+            );
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    15,
+                    None,
+                    Some("listen"),
+                    &mut memory,
+                    &[listener, 1],
+                ),
+                0
+            );
+
+            let client = crate::winsock::dispatch_import(
+                &mut kernel,
+                15,
+                None,
+                Some("socket"),
+                &mut memory,
+                &[2, 1, 0],
+            );
+            assert_ne!(client, crate::winsock::INVALID_SOCKET);
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    15,
+                    None,
+                    Some("connect"),
+                    &mut memory,
+                    &[client, sockaddr, 16],
+                ),
+                0
+            );
+
+            memory.write_u32(readfds, 1).unwrap();
+            memory.write_u32(readfds + 4, listener).unwrap();
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    15,
+                    None,
+                    Some("select"),
+                    &mut memory,
+                    &[0, readfds, 0, 0, 0],
+                ),
+                1
+            );
+            memory.write_u32(remote_len, 16).unwrap();
+            let accepted = crate::winsock::dispatch_import(
+                &mut kernel,
+                15,
+                None,
+                Some("accept"),
+                &mut memory,
+                &[listener, remote_addr, remote_len],
+            );
+            assert_ne!(accepted, crate::winsock::INVALID_SOCKET);
+            memory.write_u32(exceptfds, 1).unwrap();
+            memory.write_u32(exceptfds + 4, accepted).unwrap();
+            memory.write_u32(timeout, 1).unwrap();
+            memory.write_u32(timeout + 4, 0).unwrap();
+            (listener, client, accepted)
+        };
+        assert!(crate::winsock::socket_except_wait_candidate(accepted));
+        assert!(!crate::winsock::socket_except_ready(accepted));
+
+        let thread_id = 15;
+        let thread_handle = 0xf0f;
+        let return_pc = 0x0040_f000u32;
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(super::try_block_winsock_read(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Winsock,
+            None,
+            Some("select"),
+            &[0, 0, 0, exceptfds, timeout],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+        ));
+        let blocked = blocked_waits.borrow()[0].clone();
+        assert!(matches!(
+            blocked.kind,
+            BlockedWaitKind::WinsockRead {
+                socket: actual_socket,
+                readiness: WinsockReadyKind::Except,
+                read_mask: 0,
+                write_mask: 0,
+                except_mask: 1,
+                name: Some("select"),
+                args,
+                ..
+            } if actual_socket == accepted && args == [0, 0, 0, exceptfds, timeout, 0]
+        ));
+        assert!(!blocked_winsock_read_ready(&blocked));
+        let scheduler_wait = kernel.blocked_waiter(blocked.wait_id).unwrap();
+        assert!(!scheduler_blocked_wait_is_ready(scheduler_wait, &kernel));
+
+        {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    thread_id,
+                    None,
+                    Some("send"),
+                    &mut memory,
+                    &[client, send_buf, 1, MSG_OOB],
+                ),
+                1
+            );
+        }
+        assert!(crate::winsock::socket_except_ready(accepted));
+        assert!(blocked_winsock_read_ready(&blocked));
+        let scheduler_wait = kernel.blocked_waiter(blocked.wait_id).unwrap();
+        assert!(scheduler_blocked_wait_is_ready(scheduler_wait, &kernel));
+
+        assert!(super::try_resume_blocked_wait(
+            &mut kernel,
+            &mut uc,
+            0,
+            &current_thread_id,
+            &blocked_waits,
+            &suspended_thread,
+            &running_thread,
+        ));
+        assert_eq!(
+            uc.reg_read(unicorn_engine::RegisterMIPS::V0).unwrap() as u32,
+            1
+        );
+        let mut count = [0; 4];
+        uc.mem_read(exceptfds.into(), &mut count).unwrap();
+        assert_eq!(u32::from_le_bytes(count), 1);
+        let mut handle = [0; 4];
+        uc.mem_read((exceptfds + 4).into(), &mut handle).unwrap();
+        assert_eq!(u32::from_le_bytes(handle), accepted);
+        assert!(kernel.blocked_waiter(blocked.wait_id).is_none());
+
+        {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    thread_id,
+                    None,
+                    Some("recv"),
+                    &mut memory,
+                    &[accepted, recv_buf, 1, MSG_OOB],
+                ),
+                1
+            );
+            assert_eq!(memory.read_u8(recv_buf).unwrap(), b'!');
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    thread_id,
+                    None,
+                    Some("closesocket"),
+                    &mut memory,
+                    &[accepted],
+                ),
+                0
+            );
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    thread_id,
+                    None,
+                    Some("closesocket"),
+                    &mut memory,
+                    &[client],
+                ),
+                0
+            );
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    thread_id,
+                    None,
+                    Some("closesocket"),
+                    &mut memory,
+                    &[listener],
+                ),
+                0
+            );
         }
     }
 

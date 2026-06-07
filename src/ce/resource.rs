@@ -155,6 +155,12 @@ pub struct PopupMenuNotification {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PopupMenuCommandSelection {
+    pub command: u32,
+    pub submenus: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MenuItem {
     pub id: u32,
     pub item_type: u32,
@@ -213,6 +219,78 @@ pub struct AcceleratorObject {
     pub name: ResourceId,
     pub resource_handle: Option<u32>,
     pub entries: Vec<AcceleratorEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageListObject {
+    pub handle: u32,
+    pub width: i32,
+    pub height: i32,
+    pub flags: u32,
+    pub grow: i32,
+    pub bk_color: u32,
+    pub images: Vec<ImageListImage>,
+    pub overlays: BTreeMap<u32, i32>,
+    pub last_draw: Option<ImageListDraw>,
+    pub last_dither_copy: Option<ImageListDitherCopy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageListImage {
+    pub bitmap: u32,
+    pub mask: u32,
+    pub icon: u32,
+}
+
+fn overlay_icon_handle(base_icon: u32, overlay_index: i32) -> u32 {
+    let overlay = (overlay_index.saturating_add(1) as u32).min(0xff);
+    base_icon | (overlay << 24)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImageListImageInfo {
+    pub bitmap: u32,
+    pub mask: u32,
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImageListDraw {
+    pub image_list: u32,
+    pub index: i32,
+    pub hdc: u32,
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub flags: u32,
+    pub overlay_image: Option<i32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImageListDitherCopy {
+    pub dst_image_list: u32,
+    pub dst_index: i32,
+    pub x: i32,
+    pub y: i32,
+    pub src_image_list: u32,
+    pub src_index: i32,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImageListDragState {
+    pub image_list: u32,
+    pub index: i32,
+    pub hotspot_x: i32,
+    pub hotspot_y: i32,
+    pub lock_hwnd: u32,
+    pub x: i32,
+    pub y: i32,
+    pub visible: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -299,6 +377,7 @@ pub struct ResourceSystem {
     regions: BTreeMap<u32, RegionObject>,
     menus: BTreeMap<u32, MenuObject>,
     accelerators: BTreeMap<u32, AcceleratorObject>,
+    image_lists: BTreeMap<u32, ImageListObject>,
     fonts: BTreeMap<u32, FontObject>,
     brushes: BTreeMap<u32, BrushObject>,
     pens: BTreeMap<u32, PenObject>,
@@ -308,6 +387,7 @@ pub struct ResourceSystem {
     dc_clips: BTreeMap<u32, u32>,
     last_popup_tracking: Option<PopupMenuTracking>,
     popup_notifications: Vec<PopupMenuNotification>,
+    image_list_drag: Option<ImageListDragState>,
 }
 
 impl Default for ResourceSystem {
@@ -322,6 +402,7 @@ impl Default for ResourceSystem {
             regions: BTreeMap::new(),
             menus: BTreeMap::new(),
             accelerators: BTreeMap::new(),
+            image_lists: BTreeMap::new(),
             fonts: BTreeMap::new(),
             brushes: BTreeMap::new(),
             pens: BTreeMap::new(),
@@ -331,6 +412,7 @@ impl Default for ResourceSystem {
             dc_clips: BTreeMap::new(),
             last_popup_tracking: None,
             popup_notifications: Vec::new(),
+            image_list_drag: None,
         }
     }
 }
@@ -812,6 +894,106 @@ impl ResourceSystem {
         true
     }
 
+    pub fn popup_menu_return_command(&self, handle: u32) -> Option<u32> {
+        self.popup_menu_command_selection(handle)
+            .map(|selection| selection.command)
+    }
+
+    pub fn popup_menu_command_selection(&self, handle: u32) -> Option<PopupMenuCommandSelection> {
+        let mut visited = BTreeSet::new();
+        self.popup_menu_default_command(handle, &mut visited)
+            .or_else(|| {
+                let mut visited = BTreeSet::new();
+                self.popup_menu_first_command(handle, &mut visited)
+            })
+    }
+
+    fn popup_menu_default_command(
+        &self,
+        handle: u32,
+        visited: &mut BTreeSet<u32>,
+    ) -> Option<PopupMenuCommandSelection> {
+        if !visited.insert(handle) {
+            return None;
+        }
+        let menu = self.menus.get(&handle)?;
+        for item in menu
+            .items
+            .iter()
+            .filter(|item| popup_menu_item_is_enabled(item) && item.state & MFS_DEFAULT != 0)
+        {
+            if popup_menu_item_is_selectable(item) {
+                return Some(PopupMenuCommandSelection {
+                    command: item.id,
+                    submenus: Vec::new(),
+                });
+            }
+            if item.submenu != 0 {
+                let mut default_visited = visited.clone();
+                if let Some(mut selection) =
+                    self.popup_menu_default_command(item.submenu, &mut default_visited)
+                {
+                    selection.submenus.insert(0, item.submenu);
+                    return Some(selection);
+                }
+                let mut first_visited = visited.clone();
+                if let Some(mut selection) =
+                    self.popup_menu_first_command(item.submenu, &mut first_visited)
+                {
+                    selection.submenus.insert(0, item.submenu);
+                    return Some(selection);
+                }
+            }
+        }
+        for item in menu
+            .items
+            .iter()
+            .filter(|item| popup_menu_item_is_enabled(item) && item.submenu != 0)
+        {
+            let mut nested_visited = visited.clone();
+            if let Some(mut selection) =
+                self.popup_menu_default_command(item.submenu, &mut nested_visited)
+            {
+                selection.submenus.insert(0, item.submenu);
+                return Some(selection);
+            }
+        }
+        None
+    }
+
+    fn popup_menu_first_command(
+        &self,
+        handle: u32,
+        visited: &mut BTreeSet<u32>,
+    ) -> Option<PopupMenuCommandSelection> {
+        if !visited.insert(handle) {
+            return None;
+        }
+        let menu = self.menus.get(&handle)?;
+        for item in menu
+            .items
+            .iter()
+            .filter(|item| popup_menu_item_is_enabled(item))
+        {
+            if popup_menu_item_is_selectable(item) {
+                return Some(PopupMenuCommandSelection {
+                    command: item.id,
+                    submenus: Vec::new(),
+                });
+            }
+            if item.submenu != 0 {
+                let mut nested_visited = visited.clone();
+                if let Some(mut selection) =
+                    self.popup_menu_first_command(item.submenu, &mut nested_visited)
+                {
+                    selection.submenus.insert(0, item.submenu);
+                    return Some(selection);
+                }
+            }
+        }
+        None
+    }
+
     pub fn last_popup_tracking(&self) -> Option<&PopupMenuTracking> {
         self.last_popup_tracking.as_ref()
     }
@@ -852,6 +1034,496 @@ impl ResourceSystem {
 
     pub fn delete_accelerator(&mut self, handle: u32) -> bool {
         self.accelerators.remove(&handle).is_some()
+    }
+
+    pub fn create_image_list(
+        &mut self,
+        width: i32,
+        height: i32,
+        flags: u32,
+        initial: i32,
+        grow: i32,
+    ) -> Option<u32> {
+        if width <= 0 || height <= 0 {
+            return None;
+        }
+        let handle = self.next_gdi_handle;
+        self.next_gdi_handle += 4;
+        self.image_lists.insert(
+            handle,
+            ImageListObject {
+                handle,
+                width,
+                height,
+                flags,
+                grow,
+                bk_color: 0xffff_ffff,
+                images: Vec::with_capacity(initial.max(0) as usize),
+                overlays: BTreeMap::new(),
+                last_draw: None,
+                last_dither_copy: None,
+            },
+        );
+        Some(handle)
+    }
+
+    pub fn create_shell_system_image_list(&mut self, handle: u32, width: i32, height: i32) {
+        self.image_lists
+            .entry(handle)
+            .or_insert_with(|| ImageListObject {
+                handle,
+                width,
+                height,
+                flags: 0,
+                grow: 0,
+                bk_color: 0xffff_ffff,
+                images: Vec::new(),
+                overlays: BTreeMap::new(),
+                last_draw: None,
+                last_dither_copy: None,
+            });
+    }
+
+    pub fn image_list(&self, handle: u32) -> Option<&ImageListObject> {
+        self.image_lists.get(&handle)
+    }
+
+    pub fn image_list_mut(&mut self, handle: u32) -> Option<&mut ImageListObject> {
+        self.image_lists.get_mut(&handle)
+    }
+
+    pub fn set_image_list_size(&mut self, handle: u32, width: i32, height: i32) -> Option<bool> {
+        if width <= 0 || height <= 0 {
+            return Some(false);
+        }
+        let list = self.image_lists.get_mut(&handle)?;
+        list.width = width;
+        list.height = height;
+        Some(true)
+    }
+
+    pub fn destroy_image_list(&mut self, handle: u32) -> bool {
+        let removed = self.image_lists.remove(&handle).is_some();
+        if removed
+            && self
+                .image_list_drag
+                .is_some_and(|drag| drag.image_list == handle)
+        {
+            self.image_list_drag = None;
+        }
+        removed
+    }
+
+    pub fn duplicate_image_list(&mut self, handle: u32) -> Option<u32> {
+        let mut duplicate = self.image_lists.get(&handle)?.clone();
+        let new_handle = self.next_gdi_handle;
+        self.next_gdi_handle += 4;
+        duplicate.handle = new_handle;
+        duplicate.last_draw = None;
+        self.image_lists.insert(new_handle, duplicate);
+        Some(new_handle)
+    }
+
+    pub fn merge_image_list_images(
+        &mut self,
+        first_handle: u32,
+        first_index: i32,
+        second_handle: u32,
+        second_index: i32,
+        dx: i32,
+        dy: i32,
+    ) -> Option<u32> {
+        if first_index < 0 || second_index < 0 {
+            return None;
+        }
+        let first = self.image_lists.get(&first_handle)?;
+        let first_image = first.images.get(first_index as usize)?.clone();
+        let width = first.width.saturating_add(dx.saturating_abs()).max(1);
+        let height = first.height.saturating_add(dy.saturating_abs()).max(1);
+        let overlays = first.overlays.clone();
+        let second_image = self
+            .image_lists
+            .get(&second_handle)?
+            .images
+            .get(second_index as usize)?
+            .clone();
+
+        let handle = self.next_gdi_handle;
+        self.next_gdi_handle += 4;
+        self.image_lists.insert(
+            handle,
+            ImageListObject {
+                handle,
+                width,
+                height,
+                flags: first.flags,
+                grow: first.grow,
+                bk_color: first.bk_color,
+                images: vec![first_image, second_image],
+                overlays,
+                last_draw: None,
+                last_dither_copy: None,
+            },
+        );
+        Some(handle)
+    }
+
+    pub fn add_image_list_image(&mut self, handle: u32, bitmap: u32, mask: u32) -> Option<i32> {
+        if bitmap == 0 {
+            return None;
+        }
+        let list = self.image_lists.get_mut(&handle)?;
+        let index = list.images.len();
+        list.images.push(ImageListImage {
+            bitmap,
+            mask,
+            icon: 0,
+        });
+        i32::try_from(index).ok()
+    }
+
+    pub fn replace_image_list_image(
+        &mut self,
+        handle: u32,
+        index: i32,
+        bitmap: u32,
+        mask: u32,
+    ) -> Option<bool> {
+        if index < 0 || bitmap == 0 {
+            return Some(false);
+        }
+        let list = self.image_lists.get_mut(&handle)?;
+        let Some(image) = list.images.get_mut(index as usize) else {
+            return Some(false);
+        };
+        *image = ImageListImage {
+            bitmap,
+            mask,
+            icon: 0,
+        };
+        Some(true)
+    }
+
+    pub fn replace_image_list_icon(&mut self, handle: u32, index: i32, icon: u32) -> Option<i32> {
+        if icon == 0 {
+            return None;
+        }
+        let list = self.image_lists.get_mut(&handle)?;
+        if index < 0 {
+            let index = list.images.len();
+            list.images.push(ImageListImage {
+                bitmap: 0,
+                mask: 0,
+                icon,
+            });
+            return i32::try_from(index).ok();
+        }
+        let image = list.images.get_mut(index as usize)?;
+        image.icon = icon;
+        Some(index)
+    }
+
+    pub fn remove_image_list_image(&mut self, handle: u32, index: i32) -> Option<bool> {
+        let list = self.image_lists.get_mut(&handle)?;
+        if index < 0 {
+            list.images.clear();
+            list.overlays.clear();
+            return Some(true);
+        }
+        let index = index as usize;
+        if index >= list.images.len() {
+            return Some(false);
+        }
+        list.images.remove(index);
+        list.overlays
+            .retain(|_, overlay_index| *overlay_index as usize != index);
+        for overlay_index in list.overlays.values_mut() {
+            let overlay_index_usize = *overlay_index as usize;
+            if overlay_index_usize > index {
+                *overlay_index -= 1;
+            }
+        }
+        Some(true)
+    }
+
+    pub fn copy_image_list_image(
+        &mut self,
+        dst_handle: u32,
+        dst_index: i32,
+        src_handle: u32,
+        src_index: i32,
+        remove_source: bool,
+    ) -> Option<bool> {
+        if src_index < 0 {
+            return Some(false);
+        }
+        let image = self
+            .image_lists
+            .get(&src_handle)?
+            .images
+            .get(src_index as usize)?
+            .clone();
+        let dst = self.image_lists.get_mut(&dst_handle)?;
+        if dst_index < 0 || dst_index as usize >= dst.images.len() {
+            dst.images.push(image);
+        } else {
+            dst.images[dst_index as usize] = image;
+        }
+        if remove_source {
+            let Some(src) = self.image_lists.get_mut(&src_handle) else {
+                return Some(false);
+            };
+            if src_index as usize >= src.images.len() {
+                return Some(false);
+            }
+            src.images.remove(src_index as usize);
+        }
+        Some(true)
+    }
+
+    pub fn copy_dither_image_list_image(
+        &mut self,
+        dst_handle: u32,
+        dst_index: i32,
+        x: i32,
+        y: i32,
+        src_handle: u32,
+        src_index: i32,
+        flags: u32,
+    ) -> Option<bool> {
+        if dst_index < 0 || src_index < 0 {
+            return Some(false);
+        }
+        let image = self
+            .image_lists
+            .get(&src_handle)?
+            .images
+            .get(src_index as usize)?
+            .clone();
+        let dst = self.image_lists.get_mut(&dst_handle)?;
+        let Some(dst_image) = dst.images.get_mut(dst_index as usize) else {
+            return Some(false);
+        };
+        *dst_image = image;
+        dst.last_dither_copy = Some(ImageListDitherCopy {
+            dst_image_list: dst_handle,
+            dst_index,
+            x,
+            y,
+            src_image_list: src_handle,
+            src_index,
+            flags,
+        });
+        Some(true)
+    }
+
+    pub fn set_image_list_count(&mut self, handle: u32, count: u32) -> Option<bool> {
+        let list = self.image_lists.get_mut(&handle)?;
+        let count = count as usize;
+        if count > list.images.len() {
+            list.images.resize(
+                count,
+                ImageListImage {
+                    bitmap: 0,
+                    mask: 0,
+                    icon: 0,
+                },
+            );
+        } else {
+            list.images.truncate(count);
+            list.overlays.retain(|_, index| (*index as usize) < count);
+        }
+        Some(true)
+    }
+
+    pub fn image_list_count(&self, handle: u32) -> Option<usize> {
+        Some(self.image_lists.get(&handle)?.images.len())
+    }
+
+    pub fn image_list_icon(
+        &self,
+        handle: u32,
+        index: i32,
+        fallback_icon: u32,
+        flags: u32,
+    ) -> Option<u32> {
+        const ILD_OVERLAYMASK: u32 = 0x0000_0f00;
+        if index < 0 {
+            return None;
+        }
+        let list = self.image_lists.get(&handle)?;
+        let image = list.images.get(index as usize)?;
+        let base_icon = if image.icon != 0 {
+            Some(image.icon)
+        } else if fallback_icon != 0 {
+            Some(fallback_icon)
+        } else if image.bitmap != 0 {
+            Some(0x000b_8000 | (image.bitmap & 0x0000_ffff))
+        } else {
+            Some(0)
+        }?;
+        let overlay = (flags & ILD_OVERLAYMASK) >> 8;
+        if overlay == 0 {
+            return Some(base_icon);
+        }
+        Some(match list.overlays.get(&overlay) {
+            Some(overlay_index) => overlay_icon_handle(base_icon, *overlay_index),
+            None => base_icon,
+        })
+    }
+
+    pub fn image_list_info(&self, handle: u32, index: i32) -> Option<ImageListImageInfo> {
+        if index < 0 {
+            return None;
+        }
+        let list = self.image_lists.get(&handle)?;
+        let image = list.images.get(index as usize)?;
+        let left = index.saturating_mul(list.width);
+        Some(ImageListImageInfo {
+            bitmap: image.bitmap,
+            mask: image.mask,
+            left,
+            top: 0,
+            right: left.saturating_add(list.width),
+            bottom: list.height,
+        })
+    }
+
+    pub fn set_image_list_bk_color(&mut self, handle: u32, color: u32) -> Option<u32> {
+        let list = self.image_lists.get_mut(&handle)?;
+        let previous = list.bk_color;
+        list.bk_color = color;
+        Some(previous)
+    }
+
+    pub fn set_image_list_overlay(
+        &mut self,
+        handle: u32,
+        image_index: i32,
+        overlay: i32,
+    ) -> Option<bool> {
+        if image_index < 0 || !(1..=15).contains(&overlay) {
+            return Some(false);
+        }
+        let list = self.image_lists.get_mut(&handle)?;
+        if image_index as usize >= list.images.len() {
+            return Some(false);
+        }
+        list.overlays.insert(overlay as u32, image_index);
+        Some(true)
+    }
+
+    pub fn record_image_list_draw(&mut self, mut draw: ImageListDraw) -> Option<bool> {
+        const ILD_OVERLAYMASK: u32 = 0x0000_0f00;
+        let list = self.image_lists.get_mut(&draw.image_list)?;
+        if draw.index < 0 || draw.index as usize >= list.images.len() {
+            return Some(false);
+        }
+        let overlay = (draw.flags & ILD_OVERLAYMASK) >> 8;
+        draw.overlay_image = if overlay == 0 {
+            None
+        } else {
+            list.overlays.get(&overlay).copied()
+        };
+        list.last_draw = Some(draw);
+        Some(true)
+    }
+
+    pub fn begin_image_list_drag(
+        &mut self,
+        handle: u32,
+        index: i32,
+        hotspot_x: i32,
+        hotspot_y: i32,
+    ) -> Option<bool> {
+        if !self.image_list_has_index(handle, index) {
+            return Some(false);
+        }
+        self.image_list_drag = Some(ImageListDragState {
+            image_list: handle,
+            index,
+            hotspot_x,
+            hotspot_y,
+            lock_hwnd: 0,
+            x: 0,
+            y: 0,
+            visible: true,
+        });
+        Some(true)
+    }
+
+    pub fn set_image_list_drag_cursor(
+        &mut self,
+        handle: u32,
+        index: i32,
+        hotspot_x: i32,
+        hotspot_y: i32,
+    ) -> Option<bool> {
+        if !self.image_list_has_index(handle, index) {
+            return Some(false);
+        }
+        let Some(drag) = self.image_list_drag.as_mut() else {
+            return Some(false);
+        };
+        drag.image_list = handle;
+        drag.index = index;
+        drag.hotspot_x = hotspot_x;
+        drag.hotspot_y = hotspot_y;
+        Some(true)
+    }
+
+    pub fn image_list_drag_enter(&mut self, hwnd: u32, x: i32, y: i32) -> bool {
+        let Some(drag) = self.image_list_drag.as_mut() else {
+            return false;
+        };
+        drag.lock_hwnd = hwnd;
+        drag.x = x;
+        drag.y = y;
+        true
+    }
+
+    pub fn image_list_drag_move(&mut self, x: i32, y: i32) -> bool {
+        let Some(drag) = self.image_list_drag.as_mut() else {
+            return false;
+        };
+        drag.x = x;
+        drag.y = y;
+        true
+    }
+
+    pub fn image_list_drag_leave(&mut self, hwnd: u32) -> bool {
+        let Some(drag) = self.image_list_drag.as_mut() else {
+            return false;
+        };
+        if hwnd != 0 && drag.lock_hwnd != 0 && drag.lock_hwnd != hwnd {
+            return false;
+        }
+        drag.lock_hwnd = 0;
+        true
+    }
+
+    pub fn image_list_drag_show(&mut self, visible: bool) -> bool {
+        let Some(drag) = self.image_list_drag.as_mut() else {
+            return false;
+        };
+        drag.visible = visible;
+        true
+    }
+
+    pub fn end_image_list_drag(&mut self) -> bool {
+        self.image_list_drag.take().is_some()
+    }
+
+    pub fn image_list_drag(&self) -> Option<ImageListDragState> {
+        self.image_list_drag
+    }
+
+    fn image_list_has_index(&self, handle: u32, index: i32) -> bool {
+        index >= 0
+            && self
+                .image_lists
+                .get(&handle)
+                .is_some_and(|list| (index as usize) < list.images.len())
     }
 
     pub fn create_font(
@@ -959,6 +1631,8 @@ impl ResourceSystem {
             "palette"
         } else if self.regions.contains_key(&handle) {
             "region"
+        } else if self.image_lists.contains_key(&handle) {
+            "image_list"
         } else if self.memory_dcs.contains(&handle) {
             "memory_dc"
         } else {
@@ -1162,6 +1836,7 @@ impl ResourceSystem {
         removed |= self.pens.remove(&handle).is_some();
         removed |= self.bitmaps.remove(&handle).is_some();
         removed |= self.delete_region(handle);
+        removed |= self.image_lists.remove(&handle).is_some();
         removed |= self.palettes.remove(&handle).is_some();
         for state in self.dc_states.values_mut() {
             if state.selected_object == handle {
@@ -1185,6 +1860,14 @@ impl ResourceSystem {
         }
         removed
     }
+}
+
+fn popup_menu_item_is_selectable(item: &MenuItem) -> bool {
+    item.submenu == 0 && item.id != 0 && item.id != u32::MAX && popup_menu_item_is_enabled(item)
+}
+
+fn popup_menu_item_is_enabled(item: &MenuItem) -> bool {
+    item.item_type & MF_SEPARATOR == 0 && item.state & (MF_DISABLED | MF_GRAYED) == 0
 }
 
 fn menu_item_index(menu: &MenuObject, item_or_pos: u32, by_position: bool) -> Option<usize> {

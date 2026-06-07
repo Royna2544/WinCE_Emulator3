@@ -21,6 +21,7 @@ pub enum KernelObject {
     Semaphore(SemaphoreObject),
     File(FileObject),
     FindFile(FindFileObject),
+    FileChangeNotification(FileChangeNotificationObject),
     Device(DeviceSession),
     Window(u32),
     WaveOut(u32),
@@ -61,6 +62,21 @@ pub struct FileObject {
 pub struct FindFileObject {
     pub guest_pattern: String,
     pub find_id: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct FileChangeNotificationObject {
+    pub watch_path: String,
+    pub recursive: bool,
+    pub notify_filter: u32,
+    pub signaled: bool,
+    pub pending: Vec<FileChangeRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileChangeRecord {
+    pub action: u32,
+    pub path: String,
 }
 
 #[derive(Debug, Clone)]
@@ -179,6 +195,12 @@ impl HandleTable {
         self.objects.is_empty()
     }
 
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (u32, &mut KernelObject)> {
+        self.objects
+            .iter_mut()
+            .map(|(handle, object)| (*handle, object))
+    }
+
     pub fn describe_handle(&self, handle: u32) -> String {
         match self.get(handle) {
             Ok(KernelObject::Event(event)) => format!(
@@ -208,6 +230,13 @@ impl HandleTable {
             Ok(KernelObject::FindFile(find)) => {
                 format!("find(id={},pattern={})", find.find_id, find.guest_pattern)
             }
+            Ok(KernelObject::FileChangeNotification(notification)) => format!(
+                "file_change(path={},recursive={},filter=0x{:08x},signaled={})",
+                notification.watch_path,
+                notification.recursive,
+                notification.notify_filter,
+                notification.signaled
+            ),
             Ok(KernelObject::Device(_)) => "device".to_owned(),
             Ok(KernelObject::Window(hwnd)) => format!("window(hwnd=0x{hwnd:08x})"),
             Ok(KernelObject::WaveOut(id)) => format!("waveout(id={id})"),
@@ -683,6 +712,9 @@ impl HandleTable {
                 semaphore.count -= 1;
                 WaitResult::Object0
             }
+            KernelObject::FileChangeNotification(notification) if notification.signaled => {
+                WaitResult::Object0
+            }
             KernelObject::File(_)
             | KernelObject::FindFile(_)
             | KernelObject::Device(_)
@@ -728,6 +760,7 @@ impl HandleTable {
                 mutex.owner_thread.is_none() || mutex.owner_thread == Some(thread_id)
             }
             KernelObject::Semaphore(semaphore) => semaphore.count > 0,
+            KernelObject::FileChangeNotification(notification) => notification.signaled,
             KernelObject::Thread(thread) => thread.signaled,
             KernelObject::Process(process) => process.signaled,
             KernelObject::File(_)

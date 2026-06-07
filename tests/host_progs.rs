@@ -47,12 +47,16 @@ fn host_tools_sources_cover_requested_utilities() {
     assert!(taskmgr.contains("DynCreateToolhelp32Snapshot"));
     assert!(taskmgr.contains("CPU Usage"));
     assert!(taskmgr.contains("Processes"));
+    assert!(taskmgr.contains("PID(hex)"));
 
     let easy = fs::read_to_string("host_progs/easy_iNavi.cpp").expect("host_progs/easy_iNavi.cpp");
     assert!(easy.contains("\\\\SDMMC Disk\\\\INavi\\\\iNavi_main.exe"));
     assert!(easy.contains("\\\\Windows\\\\explorer.exe"));
     assert!(easy.contains("CreateMutexW"));
     assert!(easy.contains("Already running"));
+    assert!(easy.contains("cwd = "));
+    assert!(easy.contains("process args = ["));
+    assert!(easy.contains("process env = {"));
     assert!(easy.contains("CreateProcessW"));
 
     let helper =

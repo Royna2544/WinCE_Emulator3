@@ -655,6 +655,21 @@ fn message_and_timer_transitions_queue_scheduler_msg_wait_candidates() -> Result
                     kernel.comm_event_mask_changed_wait(blocked.id)
                         || kernel.serial_comm_event_ready(handle)
                 }
+                SchedulerBlockedWaitKind::WinsockRead {
+                    socket, readiness, ..
+                } => match readiness {
+                    wince_emulation_v3::ce::scheduler::SchedulerWinsockReadyKind::Read => {
+                        wince_emulation_v3::winsock::socket_read_ready(socket)
+                    }
+                    wince_emulation_v3::ce::scheduler::SchedulerWinsockReadyKind::Write => {
+                        wince_emulation_v3::winsock::socket_write_ready(socket)
+                    }
+                    wince_emulation_v3::ce::scheduler::SchedulerWinsockReadyKind::ReadWrite => {
+                        wince_emulation_v3::winsock::socket_read_ready(socket)
+                            || wince_emulation_v3::winsock::socket_write_ready(socket)
+                    }
+                    wince_emulation_v3::ce::scheduler::SchedulerWinsockReadyKind::Except => false,
+                },
                 SchedulerBlockedWaitKind::SendMessage { send_id } => {
                     kernel.sent_message_result_ready(send_id)
                 }
@@ -1175,6 +1190,21 @@ fn remote_serial_injection_queues_scheduler_serial_read_candidates() -> Result<(
             SchedulerBlockedWaitKind::SerialCommEvent { handle } => {
                 kernel.serial_comm_event_ready(handle)
             }
+            SchedulerBlockedWaitKind::WinsockRead {
+                socket, readiness, ..
+            } => match readiness {
+                wince_emulation_v3::ce::scheduler::SchedulerWinsockReadyKind::Read => {
+                    wince_emulation_v3::winsock::socket_read_ready(socket)
+                }
+                wince_emulation_v3::ce::scheduler::SchedulerWinsockReadyKind::Write => {
+                    wince_emulation_v3::winsock::socket_write_ready(socket)
+                }
+                wince_emulation_v3::ce::scheduler::SchedulerWinsockReadyKind::ReadWrite => {
+                    wince_emulation_v3::winsock::socket_read_ready(socket)
+                        || wince_emulation_v3::winsock::socket_write_ready(socket)
+                }
+                wince_emulation_v3::ce::scheduler::SchedulerWinsockReadyKind::Except => false,
+            },
             SchedulerBlockedWaitKind::GetMessage { .. } => false,
             SchedulerBlockedWaitKind::MsgWait { .. } => false,
             SchedulerBlockedWaitKind::SendMessage { send_id } => {
@@ -1238,6 +1268,21 @@ fn remote_serial_injection_queues_scheduler_comm_event_candidates() -> Result<()
                 kernel.comm_event_mask_changed_wait(blocked.id)
                     || kernel.serial_comm_event_ready(handle)
             }
+            SchedulerBlockedWaitKind::WinsockRead {
+                socket, readiness, ..
+            } => match readiness {
+                wince_emulation_v3::ce::scheduler::SchedulerWinsockReadyKind::Read => {
+                    wince_emulation_v3::winsock::socket_read_ready(socket)
+                }
+                wince_emulation_v3::ce::scheduler::SchedulerWinsockReadyKind::Write => {
+                    wince_emulation_v3::winsock::socket_write_ready(socket)
+                }
+                wince_emulation_v3::ce::scheduler::SchedulerWinsockReadyKind::ReadWrite => {
+                    wince_emulation_v3::winsock::socket_read_ready(socket)
+                        || wince_emulation_v3::winsock::socket_write_ready(socket)
+                }
+                wince_emulation_v3::ce::scheduler::SchedulerWinsockReadyKind::Except => false,
+            },
             SchedulerBlockedWaitKind::GetMessage { .. } => false,
             SchedulerBlockedWaitKind::MsgWait { .. } => false,
             SchedulerBlockedWaitKind::SendMessage { send_id } => {

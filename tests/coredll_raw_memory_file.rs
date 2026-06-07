@@ -4,36 +4,49 @@ use wince_emulation_v3::{
     ce::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
-            ORD_ATOI, ORD_CHAR_LOWER_W, ORD_CHAR_UPPER_W, ORD_CLOSE_HANDLE, ORD_COPY_FILE_W,
+            ORD_AFS_CREATE_DIRECTORY_W, ORD_AFS_CREATE_FILE_W, ORD_AFS_DELETE_FILE_W,
+            ORD_AFS_FIND_FIRST_CHANGE_NOTIFICATION_W, ORD_AFS_FIND_FIRST_FILE_W,
+            ORD_AFS_FS_IO_CONTROL_W, ORD_AFS_GET_DISK_FREE_SPACE, ORD_AFS_GET_FILE_ATTRIBUTES_W,
+            ORD_AFS_MOVE_FILE_W, ORD_AFS_PRESTO_CHANGO_FILE_NAME, ORD_AFS_REMOVE_DIRECTORY_W,
+            ORD_AFS_SET_FILE_ATTRIBUTES_W, ORD_ATOI, ORD_CE_FS_IO_CONTROL_W,
+            ORD_CE_GET_FILE_NOTIFICATION_INFO, ORD_CE_GET_VOLUME_INFO_W, ORD_CHAR_LOWER_W,
+            ORD_CHAR_UPPER_W, ORD_CLOSE_HANDLE, ORD_COPY_FILE_W, ORD_CREATE_DIRECTORY_W,
             ORD_CREATE_FILE_MAPPING_W, ORD_CREATE_FILE_W, ORD_DEVICE_IO_CONTROL, ORD_FCLOSE,
-            ORD_FEOF, ORD_FGETS, ORD_FIND_CLOSE, ORD_FIND_FIRST_FILE_W, ORD_FIND_NEXT_FILE_W,
-            ORD_FLUSH_FILE_BUFFERS, ORD_FLUSH_INSTRUCTION_CACHE, ORD_FLUSH_VIEW_OF_FILE, ORD_FOPEN,
-            ORD_FREAD, ORD_FREE, ORD_FSEEK, ORD_FTELL, ORD_GET_FILE_ATTRIBUTES_W,
+            ORD_FEOF, ORD_FGETS, ORD_FIND_CLOSE, ORD_FIND_CLOSE_CHANGE_NOTIFICATION,
+            ORD_FIND_FIRST_CHANGE_NOTIFICATION_W, ORD_FIND_FIRST_FILE_W,
+            ORD_FIND_NEXT_CHANGE_NOTIFICATION, ORD_FIND_NEXT_FILE_W, ORD_FLUSH_FILE_BUFFERS,
+            ORD_FLUSH_INSTRUCTION_CACHE, ORD_FLUSH_VIEW_OF_FILE, ORD_FOPEN, ORD_FREAD, ORD_FREE,
+            ORD_FSEEK, ORD_FTELL, ORD_GET_DISK_FREE_SPACE_EX_W, ORD_GET_FILE_ATTRIBUTES_W,
             ORD_GET_FILE_SIZE, ORD_GET_MODULE_FILE_NAME_W, ORD_GET_PROCESS_HEAP, ORD_HEAP_ALLOC,
             ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_SIZE, ORD_IS_BAD_READ_PTR,
             ORD_IS_BAD_WRITE_PTR, ORD_IS_VALID_LOCALE, ORD_LOCAL_ALLOC, ORD_LOCAL_FREE,
             ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_MALLOC, ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP,
-            ORD_MEMCPY, ORD_MEMMOVE, ORD_MEMSET, ORD_MSIZE, ORD_MULTI_BYTE_TO_WIDE_CHAR,
-            ORD_OPERATOR_DELETE, ORD_OPERATOR_DELETE_ARRAY, ORD_OPERATOR_NEW,
-            ORD_OPERATOR_NEW_ARRAY, ORD_RAND, ORD_READ_FILE, ORD_REALLOC, ORD_REG_CLOSE_KEY,
-            ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_VALUE_W, ORD_REG_ENUM_VALUE_W,
-            ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W, ORD_SECURITY_GEN_COOKIE,
-            ORD_SECURITY_GEN_COOKIE2, ORD_SET_FILE_POINTER, ORD_SNPRINTF, ORD_SNWPRINTF,
-            ORD_SPRINTF, ORD_SRAND, ORD_STRCAT, ORD_STRCPY, ORD_STRING_CB_CAT_W,
-            ORD_STRING_CCH_CAT_W, ORD_STRING_CCH_LENGTH_W, ORD_STRTOK, ORD_STRTOUL, ORD_STRUPR,
-            ORD_SWPRINTF, ORD_TOLOWER, ORD_TOUPPER, ORD_UNMAP_VIEW_OF_FILE, ORD_VIRTUAL_ALLOC,
-            ORD_VIRTUAL_FREE, ORD_VSNPRINTF, ORD_VSNWPRINTF, ORD_VSPRINTF, ORD_VSWPRINTF,
-            ORD_WCSCHR, ORD_WCSCPY, ORD_WCSDUP, ORD_WCSICMP, ORD_WCSLEN, ORD_WCSNCMP, ORD_WCSNCPY,
+            ORD_MEMCPY, ORD_MEMMOVE, ORD_MEMSET, ORD_MOVE_FILE_W, ORD_MSIZE,
+            ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_OPERATOR_DELETE, ORD_OPERATOR_DELETE_ARRAY,
+            ORD_OPERATOR_NEW, ORD_OPERATOR_NEW_ARRAY, ORD_RAND, ORD_READ_FILE, ORD_REALLOC,
+            ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_VALUE_W,
+            ORD_REG_ENUM_VALUE_W, ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W,
+            ORD_REMOVE_DIRECTORY_W, ORD_SECURITY_GEN_COOKIE, ORD_SECURITY_GEN_COOKIE2,
+            ORD_SET_FILE_POINTER, ORD_SNPRINTF, ORD_SNWPRINTF, ORD_SPRINTF, ORD_SRAND, ORD_STRCAT,
+            ORD_STRCPY, ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W, ORD_STRING_CCH_LENGTH_W,
+            ORD_STRTOK, ORD_STRTOUL, ORD_STRUPR, ORD_SWPRINTF, ORD_TOLOWER, ORD_TOUPPER,
+            ORD_UNMAP_VIEW_OF_FILE, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSNPRINTF,
+            ORD_VSNWPRINTF, ORD_VSPRINTF, ORD_VSWPRINTF, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSCHR,
+            ORD_WCSCPY, ORD_WCSDUP, ORD_WCSICMP, ORD_WCSLEN, ORD_WCSNCMP, ORD_WCSNCPY,
             ORD_WCSNICMP, ORD_WCSPBRK, ORD_WCSRCHR, ORD_WCSSTR, ORD_WCSTOUL, ORD_WFOPEN,
             ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         kernel::CeKernel,
         memory::{HEAP_NO_SERIALIZE, HEAP_ZERO_MEMORY, LMEM_ZEROINIT, MEM_COMMIT, MEM_RELEASE},
-        registry::{ERROR_SUCCESS, HKEY_CURRENT_USER, REG_DWORD},
-        thread::{
-            ERROR_ACCESS_DENIED, ERROR_INVALID_PARAMETER, ERROR_NO_MORE_FILES, ERROR_NOT_SUPPORTED,
+        registry::{
+            ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HKEY_CURRENT_USER, REG_DWORD,
         },
+        thread::{
+            ERROR_ACCESS_DENIED, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER,
+            ERROR_NO_MORE_FILES, ERROR_NOT_SUPPORTED,
+        },
+        timer::{WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
     config::RuntimeConfig,
 };
@@ -2126,6 +2139,7 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
     fs::create_dir_all(&root).unwrap();
     let sdmmc_root = root.join("sdmmc");
     fs::create_dir_all(&sdmmc_root).unwrap();
+    fs::create_dir_all(root.join("Documents")).unwrap();
     fs::write(sdmmc_root.join("mapinfo.bin"), b"mounted").unwrap();
     fs::write(sdmmc_root.join("z-next.bin"), b"next").unwrap();
     kernel.set_file_root(&root);
@@ -3083,6 +3097,21 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
             &mut kernel,
             &mut memory,
             thread_id,
+            ORD_FIND_NEXT_FILE_W,
+            [root_find, find_data_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(find_data_ptr)?, 0x10);
+    assert_eq!(memory.read_wide_z(find_data_ptr + 40, 260), "Documents");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_FIND_CLOSE,
             [root_find],
         ),
@@ -3107,6 +3136,238 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
         other => panic!("GetFileAttributesW did not return attributes: {other:?}"),
     };
     assert_eq!(sdmmc_attrs, 0x110);
+
+    let free_to_caller_ptr = 0x1_7200;
+    let total_ptr = 0x1_7210;
+    let total_free_ptr = 0x1_7220;
+    memory.map_words(free_to_caller_ptr, 2);
+    memory.map_words(total_ptr, 2);
+    memory.map_words(total_free_ptr, 2);
+    let read_u64 = |memory: &TestGuestMemory, ptr: u32| -> Result<u64> {
+        Ok(u64::from(memory.read_u32(ptr)?)
+            | (u64::from(memory.read_u32(ptr.wrapping_add(4))?) << 32))
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DISK_FREE_SPACE_EX_W,
+            [
+                find_pattern_ptr,
+                free_to_caller_ptr,
+                total_ptr,
+                total_free_ptr
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        read_u64(&memory, free_to_caller_ptr)?,
+        4096_u64 * 1024 * 1024
+    );
+    assert_eq!(read_u64(&memory, total_ptr)?, 8192_u64 * 1024 * 1024);
+    assert_eq!(read_u64(&memory, total_free_ptr)?, 4096_u64 * 1024 * 1024);
+
+    let object_store = kernel.files.object_store();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_DISK_FREE_SPACE_EX_W,
+            [0, free_to_caller_ptr, total_ptr, total_free_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        read_u64(&memory, free_to_caller_ptr)?,
+        object_store.free_bytes
+    );
+    assert_eq!(read_u64(&memory, total_ptr)?, object_store.total_bytes);
+    assert_eq!(read_u64(&memory, total_free_ptr)?, object_store.free_bytes);
+
+    let sectors_per_cluster_ptr = 0x1_7230;
+    let bytes_per_sector_ptr = 0x1_7240;
+    let free_clusters_ptr = 0x1_7250;
+    let clusters_ptr = 0x1_7260;
+    memory.map_words(sectors_per_cluster_ptr, 1);
+    memory.map_words(bytes_per_sector_ptr, 1);
+    memory.map_words(free_clusters_ptr, 1);
+    memory.map_words(clusters_ptr, 1);
+    memory.write_wide_z(find_pattern_ptr, "\\SDMMC Disk");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_AFS_GET_DISK_FREE_SPACE,
+            [
+                0,
+                find_pattern_ptr,
+                sectors_per_cluster_ptr,
+                bytes_per_sector_ptr,
+                free_clusters_ptr,
+                clusters_ptr
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(sectors_per_cluster_ptr)?, 8);
+    assert_eq!(memory.read_u32(bytes_per_sector_ptr)?, 512);
+    assert_eq!(memory.read_u32(free_clusters_ptr)?, 1_048_576);
+    assert_eq!(memory.read_u32(clusters_ptr)?, 2_097_152);
+
+    const FSCTL_GET_VOLUME_INFO: u32 = 0x0009_0080;
+    const CE_VOLUME_INFO_SIZE: u32 = 144;
+    const CE_VOLUME_ATTRIBUTE_REMOVABLE: u32 = 0x0000_0004;
+    const CE_VOLUME_FLAG_STORE: u32 = 0x0000_0020;
+    const CE_VOLUME_FLAG_RAMFS: u32 = 0x0000_0040;
+
+    let info_level_ptr = 0x1_7270;
+    let bytes_returned_ptr = 0x1_7280;
+    let volume_info_ptr = 0x3000_2000;
+    memory.map_words(info_level_ptr, 1);
+    memory.map_words(bytes_returned_ptr, 1);
+    memory.write_word(info_level_ptr, 0);
+
+    let read_le_u32 = |bytes: &[u8], offset: usize| -> u32 {
+        u32::from_le_bytes(
+            bytes[offset..offset + 4]
+                .try_into()
+                .expect("volume info DWORD"),
+        )
+    };
+    let read_fixed_wide = |bytes: &[u8], offset: usize, chars: usize| -> String {
+        let units = bytes[offset..offset + chars * 2]
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .take_while(|unit| *unit != 0)
+            .collect::<Vec<_>>();
+        String::from_utf16_lossy(&units)
+    };
+    let assert_sdmmc_volume_info = |memory: &TestGuestMemory| {
+        let volume = memory.read_bytes(volume_info_ptr, CE_VOLUME_INFO_SIZE as usize);
+        assert_eq!(read_le_u32(&volume, 0), CE_VOLUME_INFO_SIZE);
+        assert_eq!(
+            read_le_u32(&volume, 4) & CE_VOLUME_ATTRIBUTE_REMOVABLE,
+            CE_VOLUME_ATTRIBUTE_REMOVABLE
+        );
+        assert_eq!(
+            read_le_u32(&volume, 8) & CE_VOLUME_FLAG_STORE,
+            CE_VOLUME_FLAG_STORE
+        );
+        assert_eq!(read_le_u32(&volume, 12), 4096);
+        assert_eq!(read_fixed_wide(&volume, 16, 32), "SDMMC Disk");
+        assert_eq!(read_fixed_wide(&volume, 80, 32), "SDMMC Disk");
+    };
+    let assert_object_store_volume_info = |memory: &TestGuestMemory| {
+        let volume = memory.read_bytes(volume_info_ptr, CE_VOLUME_INFO_SIZE as usize);
+        assert_eq!(read_le_u32(&volume, 0), CE_VOLUME_INFO_SIZE);
+        assert_eq!(
+            read_le_u32(&volume, 8) & CE_VOLUME_FLAG_RAMFS,
+            CE_VOLUME_FLAG_RAMFS
+        );
+        assert_eq!(read_le_u32(&volume, 12), 4096);
+        assert_eq!(read_fixed_wide(&volume, 16, 32), "ObjectStore");
+        assert_eq!(read_fixed_wide(&volume, 80, 32), "ObjectStore");
+    };
+
+    memory.write_wide_z(find_pattern_ptr, "\\SDMMC Disk");
+    match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CE_FS_IO_CONTROL_W,
+        [
+            find_pattern_ptr,
+            FSCTL_GET_VOLUME_INFO,
+            info_level_ptr,
+            4,
+            volume_info_ptr,
+            CE_VOLUME_INFO_SIZE,
+            bytes_returned_ptr,
+            0,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        } => {}
+        other => panic!(
+            "CeFsIoControlW(FSCTL_GET_VOLUME_INFO) returned {other:?}, last_error={}",
+            kernel.threads.get_last_error(thread_id)
+        ),
+    }
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, CE_VOLUME_INFO_SIZE);
+    assert_sdmmc_volume_info(&memory);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_VOLUME_INFO_W,
+            [find_pattern_ptr, 0, volume_info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_sdmmc_volume_info(&memory);
+
+    memory.write_wide_z(find_pattern_ptr, "\\");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_VOLUME_INFO_W,
+            [find_pattern_ptr, 0, volume_info_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_object_store_volume_info(&memory);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_AFS_FS_IO_CONTROL_W,
+            [
+                0,
+                0,
+                FSCTL_GET_VOLUME_INFO,
+                info_level_ptr,
+                4,
+                volume_info_ptr,
+                CE_VOLUME_INFO_SIZE,
+                bytes_returned_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, CE_VOLUME_INFO_SIZE);
+    assert_object_store_volume_info(&memory);
+
+    memory.write_wide_z(find_pattern_ptr, "\\SDMMC Disk");
     let exact_sdmmc_find = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
@@ -3254,6 +3515,1083 @@ fn coredll_raw_copy_file_w_copies_between_ce_paths() -> Result<()> {
             ..
         }
     ));
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_afs_path_ordinals_use_ce_file_namespace() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("afs_path_ordinals");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    kernel.files.mount_guest_root("\\ResidentFlash", &root);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let dir = 0x1_0000;
+    let path = 0x1_0100;
+    let moved_path = 0x1_0200;
+    let presto_path = 0x1_0280;
+    let write_buffer = 0x1_0300;
+    let count_ptr = 0x1_0400;
+    let find_data_ptr = 0x1_0500;
+    memory.map_halfwords(dir, 64);
+    memory.map_halfwords(path, 64);
+    memory.map_halfwords(moved_path, 64);
+    memory.map_halfwords(presto_path, 64);
+    memory.map_bytes(write_buffer, 16);
+    memory.map_words(count_ptr, 1);
+    memory.map_words(find_data_ptr, 11);
+    memory.map_halfwords(find_data_ptr + 40, 260);
+    memory.write_wide_z(dir, r"\ResidentFlash\afs");
+    memory.write_wide_z(path, r"\ResidentFlash\afs\payload.bin");
+    memory.write_wide_z(moved_path, r"\ResidentFlash\afs\moved.bin");
+    memory.write_wide_z(presto_path, r"\ResidentFlash\afs\presto.bin");
+    memory.write_bytes(write_buffer, b"afs-data");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_AFS_CREATE_DIRECTORY_W,
+            [0, dir, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(root.join("afs").is_dir());
+
+    let file = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_AFS_CREATE_FILE_W,
+        [
+            0,
+            0,
+            path,
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            0,
+            CREATE_ALWAYS,
+            0,
+            0,
+            0,
+            0,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("AFS_CreateFileW did not return a file handle: {other:?}"),
+    };
+    assert_ne!(file, u32::MAX);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WRITE_FILE,
+            [file, write_buffer, 8, count_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(count_ptr)?, 8);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CLOSE_HANDLE,
+            [file],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        fs::read(root.join("afs").join("payload.bin")).unwrap(),
+        b"afs-data"
+    );
+
+    let attrs = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_AFS_GET_FILE_ATTRIBUTES_W,
+        [0, path],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(attrs),
+            ..
+        } => attrs,
+        other => panic!("AFS_GetFileAttributesW did not return attributes: {other:?}"),
+    };
+    assert_eq!(attrs, 0x20);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_AFS_SET_FILE_ATTRIBUTES_W,
+            [0, path, 0x21],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let attrs = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_AFS_GET_FILE_ATTRIBUTES_W,
+        [0, path],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(attrs),
+            ..
+        } => attrs,
+        other => panic!("AFS_GetFileAttributesW did not return readonly attributes: {other:?}"),
+    };
+    assert_eq!(attrs, 0x21);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_AFS_SET_FILE_ATTRIBUTES_W,
+            [0, path, 0x20],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    let find = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_AFS_FIND_FIRST_FILE_W,
+        [0, 0, path, find_data_ptr, 560],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("AFS_FindFirstFileW did not return a find handle: {other:?}"),
+    };
+    assert_ne!(find, u32::MAX);
+    assert_eq!(memory.read_u32(find_data_ptr)?, 0x20);
+    assert_eq!(memory.read_wide_z(find_data_ptr + 40, 260), "payload.bin");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_CLOSE,
+            [find],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_AFS_MOVE_FILE_W,
+            [0, path, moved_path],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(!root.join("afs").join("payload.bin").exists());
+    assert!(root.join("afs").join("moved.bin").exists());
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_AFS_PRESTO_CHANGO_FILE_NAME,
+            [0, moved_path, presto_path],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(!root.join("afs").join("moved.bin").exists());
+    assert!(root.join("afs").join("presto.bin").exists());
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_AFS_DELETE_FILE_W,
+            [0, presto_path],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(!root.join("afs").join("presto.bin").exists());
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_AFS_REMOVE_DIRECTORY_W,
+            [0, dir],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(!root.join("afs").exists());
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_change_notification_handles_signal_and_rearm() -> Result<()> {
+    const FILE_NOTIFY_CHANGE_FILE_NAME: u32 = 0x0000_0001;
+    const FILE_NOTIFY_CHANGE_DIR_NAME: u32 = 0x0000_0002;
+    const FILE_NOTIFY_CHANGE_LAST_WRITE: u32 = 0x0000_0010;
+    const FILE_ACTION_ADDED: u32 = 1;
+    const FILE_ACTION_REMOVED: u32 = 2;
+    const FILE_ACTION_MODIFIED: u32 = 3;
+    const FILE_ACTION_RENAMED_OLD_NAME: u32 = 4;
+    const FILE_ACTION_RENAMED_NEW_NAME: u32 = 5;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("change_notification");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("watch")).unwrap();
+    fs::create_dir_all(root.join("watch").join("old_dir")).unwrap();
+    kernel.files.mount_guest_root("\\ResidentFlash", &root);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let watch_path = 0x1_0000;
+    let file_path = 0x1_0100;
+    let child_dir_path = 0x1_0300;
+    let write_buffer = 0x1_0400;
+    let count_ptr = 0x1_0500;
+    let returned_ptr = 0x1_0600;
+    let available_ptr = 0x1_0604;
+    let renamed_file_path = 0x1_0700;
+    let old_dir_path = 0x1_0800;
+    let notification_buffer = 0x3000_1000;
+    memory.map_halfwords(watch_path, 64);
+    memory.map_halfwords(file_path, 64);
+    memory.map_halfwords(child_dir_path, 64);
+    memory.map_halfwords(renamed_file_path, 64);
+    memory.map_halfwords(old_dir_path, 64);
+    memory.map_bytes(write_buffer, 16);
+    memory.map_words(count_ptr, 1);
+    memory.map_words(returned_ptr, 2);
+    memory.write_wide_z(watch_path, r"\ResidentFlash\watch");
+    memory.write_wide_z(file_path, r"\ResidentFlash\watch\first.bin");
+    memory.write_wide_z(child_dir_path, r"\ResidentFlash\watch\child");
+    memory.write_wide_z(renamed_file_path, r"\ResidentFlash\watch\child\renamed.bin");
+    memory.write_wide_z(old_dir_path, r"\ResidentFlash\watch\old_dir");
+    memory.write_bytes(write_buffer, b"changed!");
+
+    let change = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_FIND_FIRST_CHANGE_NOTIFICATION_W,
+        [
+            watch_path,
+            0,
+            FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("FindFirstChangeNotificationW did not return a handle: {other:?}"),
+    };
+    assert_ne!(change, u32::MAX);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [change, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_TIMEOUT),
+            ..
+        }
+    ));
+
+    let file = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_W,
+        [
+            file_path,
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            0,
+            CREATE_ALWAYS,
+            0,
+            0,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateFileW did not return a file handle: {other:?}"),
+    };
+    assert_ne!(file, u32::MAX);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WRITE_FILE,
+            [file, write_buffer, 8, count_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CLOSE_HANDLE,
+            [file],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [change, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_OBJECT_0),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_FILE_NOTIFICATION_INFO,
+            [
+                change,
+                0,
+                notification_buffer,
+                128,
+                returned_ptr,
+                available_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let returned = memory.read_u32(returned_ptr)?;
+    assert_eq!(memory.read_u32(available_ptr)?, 0);
+    assert!(returned >= 28);
+    let notification = memory.read_bytes(notification_buffer, returned as usize);
+    assert_eq!(
+        parse_file_notification_records(&notification),
+        vec![
+            (FILE_ACTION_ADDED, "first.bin".to_owned()),
+            (FILE_ACTION_MODIFIED, "first.bin".to_owned()),
+        ]
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [change, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_TIMEOUT),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_CLOSE_CHANGE_NOTIFICATION,
+            [change],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    let recursive_change = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_AFS_FIND_FIRST_CHANGE_NOTIFICATION_W,
+        [
+            0,
+            0,
+            watch_path,
+            1,
+            FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_FILE_NAME,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("AFS_FindFirstChangeNotificationW did not return a handle: {other:?}"),
+    };
+    assert_ne!(recursive_change, u32::MAX);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_DIRECTORY_W,
+            [child_dir_path, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [recursive_change, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_OBJECT_0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_FILE_NOTIFICATION_INFO,
+            [
+                recursive_change,
+                0,
+                notification_buffer,
+                128,
+                returned_ptr,
+                available_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let returned = memory.read_u32(returned_ptr)?;
+    assert_eq!(memory.read_u32(available_ptr)?, 0);
+    assert_eq!(
+        parse_file_notification_records(&memory.read_bytes(notification_buffer, returned as usize)),
+        vec![(FILE_ACTION_ADDED, "child".to_owned())]
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_MOVE_FILE_W,
+            [file_path, renamed_file_path],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [recursive_change, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_OBJECT_0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_FILE_NOTIFICATION_INFO,
+            [
+                recursive_change,
+                0,
+                notification_buffer,
+                128,
+                returned_ptr,
+                available_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let returned = memory.read_u32(returned_ptr)?;
+    assert_eq!(memory.read_u32(available_ptr)?, 0);
+    assert_eq!(
+        parse_file_notification_records(&memory.read_bytes(notification_buffer, returned as usize)),
+        vec![
+            (FILE_ACTION_RENAMED_OLD_NAME, "first.bin".to_owned()),
+            (
+                FILE_ACTION_RENAMED_NEW_NAME,
+                r"child\renamed.bin".to_owned()
+            ),
+        ]
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REMOVE_DIRECTORY_W,
+            [old_dir_path],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [recursive_change, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_OBJECT_0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_FILE_NOTIFICATION_INFO,
+            [
+                recursive_change,
+                0,
+                notification_buffer,
+                128,
+                returned_ptr,
+                available_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let returned = memory.read_u32(returned_ptr)?;
+    assert_eq!(memory.read_u32(available_ptr)?, 0);
+    assert_eq!(
+        parse_file_notification_records(&memory.read_bytes(notification_buffer, returned as usize)),
+        vec![(FILE_ACTION_REMOVED, "old_dir".to_owned())]
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_CLOSE_CHANGE_NOTIFICATION,
+            [recursive_change],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_NEXT_CHANGE_NOTIFICATION,
+            [recursive_change],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_file_notification_info_partially_drains_pending_records() -> Result<()> {
+    const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+    const FILE_NOTIFY_CHANGE_FILE_NAME: u32 = 0x0000_0001;
+    const FILE_ACTION_ADDED: u32 = 1;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("change_notification_partial");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("watch")).unwrap();
+    kernel.files.mount_guest_root("\\ResidentFlash", &root);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let watch_path = 0x1_0000;
+    let file_a_path = 0x1_0100;
+    let file_b_path = 0x1_0200;
+    let notification_buffer = 0x3002_1000;
+    let returned_ptr = 0x3002_2000;
+    let available_ptr = 0x3002_2004;
+    memory.map_halfwords(watch_path, 64);
+    memory.map_halfwords(file_a_path, 64);
+    memory.map_halfwords(file_b_path, 64);
+    memory.map_bytes(notification_buffer, 128);
+    memory.map_words(returned_ptr, 2);
+    memory.write_wide_z(watch_path, r"\ResidentFlash\watch");
+    memory.write_wide_z(file_a_path, r"\ResidentFlash\watch\a");
+    memory.write_wide_z(file_b_path, r"\ResidentFlash\watch\b");
+
+    let change = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_FIND_FIRST_CHANGE_NOTIFICATION_W,
+        [watch_path, 0, FILE_NOTIFY_CHANGE_FILE_NAME],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("FindFirstChangeNotificationW did not return a handle: {other:?}"),
+    };
+    assert_ne!(change, u32::MAX);
+    for path in [file_a_path, file_b_path] {
+        let file = match table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_FILE_W,
+            [path, GENERIC_WRITE, 0, 0, CREATE_ALWAYS, 0, 0],
+        ) {
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(handle),
+                ..
+            } => handle,
+            other => panic!("CreateFileW did not return a file handle: {other:?}"),
+        };
+        assert_ne!(file, u32::MAX);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_CLOSE_HANDLE,
+                [file],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+    }
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [change, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_OBJECT_0),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_FILE_NOTIFICATION_INFO,
+            [change, 0, 0, 0, returned_ptr, available_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(returned_ptr)?, 0);
+    assert_eq!(memory.read_u32(available_ptr)?, 32);
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INSUFFICIENT_BUFFER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_FILE_NOTIFICATION_INFO,
+            [
+                change,
+                0,
+                notification_buffer,
+                16,
+                returned_ptr,
+                available_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(returned_ptr)?, 16);
+    assert_eq!(memory.read_u32(available_ptr)?, 16);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_MORE_DATA);
+    assert_eq!(
+        parse_file_notification_records(&memory.read_bytes(notification_buffer, 16)),
+        vec![(FILE_ACTION_ADDED, "a".to_owned())]
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [change, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_OBJECT_0),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_FILE_NOTIFICATION_INFO,
+            [
+                change,
+                0,
+                notification_buffer,
+                128,
+                returned_ptr,
+                available_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(returned_ptr)?, 16);
+    assert_eq!(memory.read_u32(available_ptr)?, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    assert_eq!(
+        parse_file_notification_records(&memory.read_bytes(notification_buffer, 16)),
+        vec![(FILE_ACTION_ADDED, "b".to_owned())]
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [change, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_TIMEOUT),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_FILE_NOTIFICATION_INFO,
+            [
+                change,
+                0,
+                notification_buffer,
+                128,
+                returned_ptr,
+                available_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(returned_ptr)?, 0);
+    assert_eq!(memory.read_u32(available_ptr)?, 0);
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NO_MORE_ITEMS
+    );
+
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+fn parse_file_notification_records(bytes: &[u8]) -> Vec<(u32, String)> {
+    let mut records = Vec::new();
+    let mut offset = 0usize;
+    while offset + 12 <= bytes.len() {
+        let read_u32 = |relative: usize| {
+            u32::from_le_bytes([
+                bytes[offset + relative],
+                bytes[offset + relative + 1],
+                bytes[offset + relative + 2],
+                bytes[offset + relative + 3],
+            ])
+        };
+        let next_offset = read_u32(0) as usize;
+        let action = read_u32(4);
+        let name_len = read_u32(8) as usize;
+        if offset + 12 + name_len > bytes.len() {
+            break;
+        }
+        let name_units = bytes[offset + 12..offset + 12 + name_len]
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect::<Vec<_>>();
+        records.push((action, String::from_utf16_lossy(&name_units)));
+        if next_offset == 0 {
+            break;
+        }
+        offset = offset.saturating_add(next_offset);
+    }
+    records
+}
+
+#[test]
+fn coredll_raw_root_change_notification_sees_mount_add_remove() -> Result<()> {
+    const FILE_NOTIFY_CHANGE_DIR_NAME: u32 = 0x0000_0002;
+    const FILE_ACTION_ADDED: u32 = 1;
+    const FILE_ACTION_REMOVED: u32 = 2;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("root_change_notification");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("SDMMC")).unwrap();
+    kernel.set_file_root(&root);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let root_path = 0x1_0000;
+    let notification_buffer = 0x3001_1000;
+    let returned_ptr = 0x3001_2000;
+    let available_ptr = 0x3001_2004;
+    memory.map_halfwords(root_path, 4);
+    memory.write_wide_z(root_path, r"\");
+    memory.map_bytes(notification_buffer, 128);
+    memory.map_words(returned_ptr, 2);
+
+    let change = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_FIND_FIRST_CHANGE_NOTIFICATION_W,
+        [root_path, 0, FILE_NOTIFY_CHANGE_DIR_NAME],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("FindFirstChangeNotificationW did not return a handle: {other:?}"),
+    };
+    assert_ne!(change, u32::MAX);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [change, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_TIMEOUT),
+            ..
+        }
+    ));
+
+    kernel.mount_guest_root(r"\SDMMC Disk", root.join("SDMMC"));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [change, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_OBJECT_0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_FILE_NOTIFICATION_INFO,
+            [
+                change,
+                0,
+                notification_buffer,
+                128,
+                returned_ptr,
+                available_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let returned = memory.read_u32(returned_ptr)?;
+    assert_eq!(memory.read_u32(available_ptr)?, 0);
+    assert_eq!(
+        parse_file_notification_records(&memory.read_bytes(notification_buffer, returned as usize)),
+        vec![(FILE_ACTION_ADDED, "SDMMC Disk".to_owned())]
+    );
+
+    assert!(kernel.unmount_guest_root(r"\SDMMC Disk"));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAIT_FOR_SINGLE_OBJECT,
+            [change, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(WAIT_OBJECT_0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_GET_FILE_NOTIFICATION_INFO,
+            [
+                change,
+                0,
+                notification_buffer,
+                128,
+                returned_ptr,
+                available_ptr,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let returned = memory.read_u32(returned_ptr)?;
+    assert_eq!(memory.read_u32(available_ptr)?, 0);
+    assert_eq!(
+        parse_file_notification_records(&memory.read_bytes(notification_buffer, returned as usize)),
+        vec![(FILE_ACTION_REMOVED, "SDMMC Disk".to_owned())]
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FIND_CLOSE_CHANGE_NOTIFICATION,
+            [change],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let _ = fs::remove_dir_all(root);
     Ok(())
 }
 

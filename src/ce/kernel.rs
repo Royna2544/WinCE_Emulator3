@@ -5,21 +5,24 @@ use crate::{
         com::ComSystem,
         devices::{DeviceIoControlResult, DeviceNamespace, PURGE_RXCLEAR},
         file::{
-            FileIoResult, FileIoStats, FindData, GENERIC_READ, GENERIC_WRITE, HostFileSystem,
-            OPEN_EXISTING,
+            CREATE_ALWAYS, CREATE_NEW, FILE_ATTRIBUTE_DIRECTORY, FileIoResult, FileIoStats,
+            FindData, GENERIC_READ, GENERIC_WRITE, HostFileSystem, OPEN_ALWAYS, OPEN_EXISTING,
+            TRUNCATE_EXISTING,
         },
         gwe::{
-            Gwe, GweStats, HWND_BROADCAST, HWND_TOP, Message, MessagePointerPayload, PeekFlags,
-            Point, Rect, SMF_NULL, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-            SWP_NOZORDER, SWP_SHOWWINDOW, ShellNotificationMessage, WA_ACTIVE, WA_INACTIVE,
-            WM_ACTIVATE, WM_CANCELMODE, WM_ENABLE, WM_KILLFOCUS, WM_MOVE, WM_NOTIFY, WM_SETFOCUS,
+            FileChangeNotificationMessage, Gwe, GweStats, HWND_BROADCAST, HWND_TOP, Message,
+            MessagePointerPayload, PeekFlags, Point, Rect, SMF_NULL, SWP_HIDEWINDOW,
+            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+            ShellNotificationMessage, WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE,
+            WM_ENABLE, WM_FILECHANGEINFO, WM_KILLFOCUS, WM_MOVE, WM_NOTIFY, WM_SETFOCUS,
             WM_SHOWWINDOW, WM_SIZE, WM_WINDOWPOSCHANGED, WindowPos,
         },
         memory::{MemorySystem, PROCESS_HEAP_HANDLE},
         object::{
-            CE_THREAD_PRIORITY_NORMAL, FileObject, FindFileObject, HandleTable, KernelObject,
-            MAX_SUSPEND_COUNT, ThreadResumeResult, ThreadSuspendResult, WaitMultipleResult,
-            WaitResult, ce_thread_priority_to_win32, win32_thread_priority_to_ce,
+            CE_THREAD_PRIORITY_NORMAL, FileChangeNotificationObject, FileChangeRecord, FileObject,
+            FindFileObject, HandleTable, KernelObject, MAX_SUSPEND_COUNT, ThreadResumeResult,
+            ThreadSuspendResult, WaitMultipleResult, WaitResult, ce_thread_priority_to_win32,
+            win32_thread_priority_to_ce,
         },
         registry::Registry,
         remote::{CeRemote, RemoteStatus, WM_LBUTTONDOWN, WM_MOUSEMOVE, make_lparam},
@@ -28,7 +31,10 @@ use crate::{
             Scheduler, SchedulerBlockedWait, SchedulerBlockedWaitKind, SchedulerStats,
             SchedulerWaitKind, SchedulerWakeReason,
         },
-        shell::ShellSystem,
+        shell::{
+            ShellChangeNotifyRegistration, ShellNotificationCallbackMethod,
+            ShellNotificationCallbackRecord, ShellNotificationRecord, ShellSystem,
+        },
         thread::ThreadSystem,
         timer::{TimerSystem, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
@@ -278,6 +284,41 @@ const FILE_TRACE_PREVIEW_LIMIT: usize = 64;
 const PROCESS_TRACE_LIMIT: usize = 128;
 const EVENT_TRACE_LIMIT: usize = 256;
 const MESSAGE_TRACE_LIMIT: usize = 2048;
+const SHCNE_RENAMEITEM: u32 = 0x0000_0001;
+const SHCNE_CREATE: u32 = 0x0000_0002;
+const SHCNE_DELETE: u32 = 0x0000_0004;
+const SHCNE_MKDIR: u32 = 0x0000_0008;
+const SHCNE_RMDIR: u32 = 0x0000_0010;
+const SHCNE_DRIVEREMOVED: u32 = 0x0000_0080;
+const SHCNE_DRIVEADD: u32 = 0x0000_0100;
+const SHCNE_ATTRIBUTES: u32 = 0x0000_0800;
+const SHCNE_UPDATEITEM: u32 = 0x0000_2000;
+const SHCNF_IDLIST: u32 = 0x0000_0000;
+const SHCNF_PATHW: u32 = 0x0000_0005;
+const FILE_NOTIFY_CHANGE_FILE_NAME: u32 = 0x0000_0001;
+const FILE_NOTIFY_CHANGE_DIR_NAME: u32 = 0x0000_0002;
+const FILE_NOTIFY_CHANGE_ATTRIBUTES: u32 = 0x0000_0004;
+const FILE_NOTIFY_CHANGE_SIZE: u32 = 0x0000_0008;
+const FILE_NOTIFY_CHANGE_LAST_WRITE: u32 = 0x0000_0010;
+const FILE_NOTIFY_CHANGE_LAST_ACCESS: u32 = 0x0000_0020;
+const FILE_NOTIFY_CHANGE_CREATION: u32 = 0x0000_0040;
+const FILE_NOTIFY_CHANGE_SECURITY: u32 = 0x0000_0100;
+const FILE_NOTIFY_CHANGE_CEGETINFO: u32 = 0x8000_0000;
+const FILE_NOTIFY_CHANGE_SUPPORTED_MASK: u32 = FILE_NOTIFY_CHANGE_FILE_NAME
+    | FILE_NOTIFY_CHANGE_DIR_NAME
+    | FILE_NOTIFY_CHANGE_ATTRIBUTES
+    | FILE_NOTIFY_CHANGE_SIZE
+    | FILE_NOTIFY_CHANGE_LAST_WRITE
+    | FILE_NOTIFY_CHANGE_LAST_ACCESS
+    | FILE_NOTIFY_CHANGE_CREATION
+    | FILE_NOTIFY_CHANGE_SECURITY
+    | FILE_NOTIFY_CHANGE_CEGETINFO;
+const FILE_ACTION_ADDED: u32 = 0x0000_0001;
+const FILE_ACTION_REMOVED: u32 = 0x0000_0002;
+const FILE_ACTION_MODIFIED: u32 = 0x0000_0003;
+const FILE_ACTION_RENAMED_OLD_NAME: u32 = 0x0000_0004;
+const FILE_ACTION_RENAMED_NEW_NAME: u32 = 0x0000_0005;
+const FILECHANGENOTIFY_BASE_SIZE: usize = 40;
 
 pub fn normalize_module_name(name: &str) -> String {
     name.trim()
@@ -760,6 +801,7 @@ impl CeKernel {
     }
 
     fn destroy_process_windows(&mut self, process_id: u32, thread_id: u32) {
+        self.gwe.terminate_sent_messages_from_sender(thread_id);
         let hwnds = self
             .gwe
             .windows_snapshot()
@@ -796,6 +838,7 @@ impl CeKernel {
 
     pub fn pump_timers_to_gwe(&mut self, thread_id: u32) {
         self.expire_timed_out_send_messages();
+        self.expire_shell_notifications();
         for timer in self.timers.due_timers() {
             let target_thread_id = if timer.thread_id == 0 {
                 thread_id
@@ -844,6 +887,18 @@ impl CeKernel {
 
     pub fn mount_guest_root(&mut self, guest_root: &str, host_root: impl Into<std::path::PathBuf>) {
         self.files.mount_guest_root(guest_root, host_root);
+        self.post_shell_file_change_notifications(SHCNE_DRIVEADD, Some(guest_root), None);
+        self.signal_file_change_notifications(SHCNE_DRIVEADD, Some(guest_root), None);
+    }
+
+    pub fn unmount_guest_root(&mut self, guest_root: &str) -> bool {
+        if self.files.unmount_guest_root(guest_root).is_some() {
+            self.post_shell_file_change_notifications(SHCNE_DRIVEREMOVED, Some(guest_root), None);
+            self.signal_file_change_notifications(SHCNE_DRIVEREMOVED, Some(guest_root), None);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn host_path_to_guest_mount(&self, host_path: &std::path::Path) -> Option<String> {
@@ -1193,6 +1248,7 @@ impl CeKernel {
             return Ok(handle);
         }
 
+        let existed_before = self.files.file_attributes_w(path).is_ok();
         let file_id = match self
             .files
             .create_file_w(path, desired_access, creation_disposition)
@@ -1228,6 +1284,19 @@ impl CeKernel {
             result: Some(handle),
             error: None,
         });
+        let create_event = matches!(
+            creation_disposition,
+            CREATE_NEW | CREATE_ALWAYS | OPEN_ALWAYS
+        ) && !existed_before;
+        let update_event =
+            matches!(creation_disposition, CREATE_ALWAYS | TRUNCATE_EXISTING) && existed_before;
+        if create_event {
+            self.post_shell_file_change_notifications(SHCNE_CREATE, Some(path), None);
+            self.signal_file_change_notifications(SHCNE_CREATE, Some(path), None);
+        } else if update_event {
+            self.post_shell_file_change_notifications(SHCNE_UPDATEITEM, Some(path), None);
+            self.signal_file_change_notifications(SHCNE_UPDATEITEM, Some(path), None);
+        }
         Ok(handle)
     }
 
@@ -1362,34 +1431,73 @@ impl CeKernel {
         self.files.file_attributes_w(path)
     }
 
-    pub fn create_directory_w(&self, path: &str) -> Result<()> {
-        self.files.create_directory_w(path)
+    pub fn create_directory_w(&mut self, path: &str) -> Result<()> {
+        let result = self.files.create_directory_w(path);
+        if result.is_ok() {
+            self.post_shell_file_change_notifications(SHCNE_MKDIR, Some(path), None);
+            self.signal_file_change_notifications(SHCNE_MKDIR, Some(path), None);
+        }
+        result
     }
 
-    pub fn remove_directory_w(&self, path: &str) -> Result<()> {
-        self.files.remove_directory_w(path)
+    pub fn remove_directory_w(&mut self, path: &str) -> Result<()> {
+        let result = self.files.remove_directory_w(path);
+        if result.is_ok() {
+            self.post_shell_file_change_notifications(SHCNE_RMDIR, Some(path), None);
+            self.signal_file_change_notifications(SHCNE_RMDIR, Some(path), None);
+        }
+        result
     }
 
-    pub fn delete_file_w(&self, path: &str) -> Result<()> {
-        self.files.delete_file_w(path)
+    pub fn delete_file_w(&mut self, path: &str) -> Result<()> {
+        let result = self.files.delete_file_w(path);
+        if result.is_ok() {
+            self.post_shell_file_change_notifications(SHCNE_DELETE, Some(path), None);
+            self.signal_file_change_notifications(SHCNE_DELETE, Some(path), None);
+        }
+        result
     }
 
-    pub fn move_file_w(&self, existing_path: &str, new_path: &str) -> Result<()> {
-        self.files.move_file_w(existing_path, new_path)
+    pub fn move_file_w(&mut self, existing_path: &str, new_path: &str) -> Result<()> {
+        let result = self.files.move_file_w(existing_path, new_path);
+        if result.is_ok() {
+            self.post_shell_file_change_notifications(
+                SHCNE_RENAMEITEM,
+                Some(existing_path),
+                Some(new_path),
+            );
+            self.signal_file_change_notifications(
+                SHCNE_RENAMEITEM,
+                Some(existing_path),
+                Some(new_path),
+            );
+        }
+        result
     }
 
     pub fn copy_file_w(
-        &self,
+        &mut self,
         existing_path: &str,
         new_path: &str,
         fail_if_exists: bool,
     ) -> Result<()> {
-        self.files
-            .copy_file_w(existing_path, new_path, fail_if_exists)
+        let result = self
+            .files
+            .copy_file_w(existing_path, new_path, fail_if_exists);
+        if result.is_ok() {
+            self.post_shell_file_change_notifications(SHCNE_CREATE, Some(new_path), None);
+            self.signal_file_change_notifications(SHCNE_CREATE, Some(new_path), None);
+        }
+        result
     }
 
-    pub fn set_file_attributes_w(&self, path: &str, attributes: u32) -> Result<()> {
-        self.files.set_file_attributes_w(path, attributes)
+    pub fn set_file_attributes_w(&mut self, path: &str, attributes: u32) -> Result<()> {
+        let result = self.files.set_file_attributes_w(path, attributes);
+        if result.is_ok() {
+            self.post_shell_file_change_notifications(SHCNE_ATTRIBUTES, Some(path), None);
+            self.signal_file_change_notifications(SHCNE_ATTRIBUTES, Some(path), None);
+        }
+        result
     }
 
     pub fn write_file(&mut self, handle: u32, bytes: &[u8]) -> Result<FileIoResult> {
@@ -1411,7 +1519,7 @@ impl CeKernel {
         self.push_file_trace(FileTraceRecord {
             op: "WriteFile",
             handle: Some(handle),
-            path,
+            path: path.clone(),
             preview: file_trace_preview(bytes),
             requested: Some(bytes.len() as u32),
             transferred: result.as_ref().ok().map(|io| io.bytes_transferred),
@@ -1419,6 +1527,15 @@ impl CeKernel {
             result: result.as_ref().ok().map(|io| u32::from(io.success)),
             error: result.as_ref().err().map(ToString::to_string),
         });
+        if result
+            .as_ref()
+            .is_ok_and(|io| io.success && io.bytes_transferred != 0)
+            && let Some(path) = path.as_deref()
+            && path.starts_with('\\')
+        {
+            self.post_shell_file_change_notifications(SHCNE_UPDATEITEM, Some(path), None);
+            self.signal_file_change_notifications(SHCNE_UPDATEITEM, Some(path), None);
+        }
         result
     }
 
@@ -1610,6 +1727,96 @@ impl CeKernel {
             return Err(crate::error::Error::InvalidHandle(handle));
         };
         self.files.find_close(find.find_id)?;
+        self.handles.close(handle)?;
+        Ok(true)
+    }
+
+    pub fn find_first_change_notification_w(
+        &mut self,
+        path: &str,
+        recursive: bool,
+        notify_filter: u32,
+    ) -> Result<u32> {
+        if notify_filter & !FILE_NOTIFY_CHANGE_SUPPORTED_MASK != 0 {
+            return Err(Error::InvalidArgument(format!(
+                "unsupported file notification filter 0x{notify_filter:08x}"
+            )));
+        }
+        let data = self.files.file_attributes_w(path)?;
+        if data.attributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+            return Err(Error::InvalidArgument(format!(
+                "change notification path is not a directory: {path}"
+            )));
+        }
+        let handle = self.handles.insert(KernelObject::FileChangeNotification(
+            FileChangeNotificationObject {
+                watch_path: normalize_shell_change_path(path),
+                recursive,
+                notify_filter,
+                signaled: false,
+                pending: Vec::new(),
+            },
+        ));
+        self.push_file_trace(FileTraceRecord {
+            op: "FindFirstChangeNotificationW",
+            handle: Some(handle),
+            path: Some(path.to_owned()),
+            preview: Some(format!(
+                "recursive={recursive} filter=0x{notify_filter:08x}"
+            )),
+            requested: Some(notify_filter),
+            transferred: None,
+            position: None,
+            result: Some(handle),
+            error: None,
+        });
+        Ok(handle)
+    }
+
+    pub fn find_next_change_notification(&mut self, handle: u32) -> Result<bool> {
+        let KernelObject::FileChangeNotification(notification) = self.handles.get_mut(handle)?
+        else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        notification.signaled = false;
+        notification.pending.clear();
+        Ok(true)
+    }
+
+    pub fn file_change_notification_records(&self, handle: u32) -> Result<Vec<FileChangeRecord>> {
+        let KernelObject::FileChangeNotification(notification) = self.handles.get(handle)? else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        Ok(notification.pending.clone())
+    }
+
+    pub fn drain_file_change_notification_records(
+        &mut self,
+        handle: u32,
+        count: usize,
+    ) -> Result<bool> {
+        let KernelObject::FileChangeNotification(notification) = self.handles.get_mut(handle)?
+        else {
+            return Err(Error::InvalidHandle(handle));
+        };
+        let drain_count = count.min(notification.pending.len());
+        notification.pending.drain(..drain_count);
+        notification.signaled = !notification.pending.is_empty();
+        let still_pending = notification.signaled;
+        if still_pending {
+            self.queue_object_wake_candidates(handle);
+        }
+        Ok(still_pending)
+    }
+
+    pub fn clear_file_change_notification(&mut self, handle: u32) -> Result<bool> {
+        self.find_next_change_notification(handle)
+    }
+
+    pub fn find_close_change_notification(&mut self, handle: u32) -> Result<bool> {
+        let KernelObject::FileChangeNotification(_) = self.handles.get(handle)? else {
+            return Err(Error::InvalidHandle(handle));
+        };
         self.handles.close(handle)?;
         Ok(true)
     }
@@ -2376,6 +2583,22 @@ impl CeKernel {
         self.scheduler.queue_send_reply_wake_candidates(send_id)
     }
 
+    pub fn queue_winsock_wake_candidates(&mut self, socket: u32) -> usize {
+        let wait_ids = self.scheduler.waiter_ids_for_handle(socket);
+        self.scheduler.queue_pending_wake_ids(wait_ids)
+    }
+
+    pub fn queue_winsock_wake_candidates_for_handles(
+        &mut self,
+        sockets: impl IntoIterator<Item = u32>,
+    ) -> usize {
+        let wait_ids = sockets
+            .into_iter()
+            .flat_map(|socket| self.scheduler.waiter_ids_for_handle(socket))
+            .collect::<Vec<_>>();
+        self.scheduler.queue_pending_wake_ids(wait_ids)
+    }
+
     pub fn sent_message_result_ready(&self, send_id: u64) -> bool {
         self.gwe.sent_message_result_ready(send_id)
     }
@@ -3036,28 +3259,7 @@ impl CeKernel {
         let Some(record) = self.shell.notification(clsid, id).cloned() else {
             return false;
         };
-        if record.hwnd_sink == 0 || !self.gwe.is_window(record.hwnd_sink) {
-            return false;
-        }
-        let lparam = self.queue_shell_notification_payload(ShellNotificationMessage {
-            hwnd_from: 0,
-            id_from: record.id,
-            code,
-            lparam: record.lparam,
-            return_value: 0,
-            data0,
-            data1,
-            link: None,
-        });
-        if lparam == 0 {
-            return false;
-        }
-        if self.post_message_w(record.hwnd_sink, WM_NOTIFY, record.id, lparam) {
-            true
-        } else {
-            let _ = self.release_message_pointer_payload(lparam);
-            false
-        }
+        self.post_shell_notification_record_callback(&record, code, data0, data1, None)
     }
 
     pub fn post_shell_notification_link_callback(
@@ -3069,28 +3271,39 @@ impl CeKernel {
         let Some(record) = self.shell.notification(clsid, id).cloned() else {
             return false;
         };
-        if record.hwnd_sink == 0 || !self.gwe.is_window(record.hwnd_sink) {
+        self.post_shell_notification_record_callback(
+            &record,
+            crate::ce::shell::SHNN_LINKSEL,
+            0,
+            0,
+            Some(link.to_owned()),
+        )
+    }
+
+    pub fn post_shell_notification_command_callback(
+        &mut self,
+        clsid: [u8; 16],
+        id: u32,
+        command_id: u32,
+    ) -> bool {
+        let Some(record) = self.shell.notification(clsid, id).cloned() else {
             return false;
-        }
-        let lparam = self.queue_shell_notification_payload(ShellNotificationMessage {
-            hwnd_from: 0,
-            id_from: record.id,
-            code: crate::ce::shell::SHNN_LINKSEL,
-            lparam: record.lparam,
-            return_value: 0,
-            data0: 0,
-            data1: 0,
-            link: Some(link.to_owned()),
-        });
-        if lparam == 0 {
-            return false;
-        }
-        if self.post_message_w(record.hwnd_sink, WM_NOTIFY, record.id, lparam) {
-            true
+        };
+        let delivered_com = self.record_shell_notification_com_callback(
+            &record,
+            ShellNotificationCallbackMethod::OnCommandSelected { command_id },
+        );
+        let delivered_window = if record.hwnd_sink != 0 && self.gwe.is_window(record.hwnd_sink) {
+            self.post_message_w(
+                record.hwnd_sink,
+                crate::ce::gwe::WM_COMMAND,
+                command_id,
+                record.id,
+            )
         } else {
-            let _ = self.release_message_pointer_payload(lparam);
             false
-        }
+        };
+        delivered_com || delivered_window
     }
 
     pub fn post_shell_notification_dismiss_callback(
@@ -3106,6 +3319,104 @@ impl CeKernel {
             u32::from(timed_out),
             0,
         )
+    }
+
+    pub fn expire_shell_notifications(&mut self) -> usize {
+        let expired = self.shell.expire_notifications(self.timers.tick_count());
+        let mut posted = 0usize;
+        for record in expired {
+            if self.post_shell_notification_record_callback(
+                &record,
+                crate::ce::shell::SHNN_DISMISS,
+                1,
+                0,
+                None,
+            ) {
+                posted = posted.saturating_add(1);
+            }
+        }
+        posted
+    }
+
+    fn post_shell_notification_record_callback(
+        &mut self,
+        record: &ShellNotificationRecord,
+        code: u32,
+        data0: u32,
+        data1: u32,
+        link: Option<String>,
+    ) -> bool {
+        let method = match code {
+            crate::ce::shell::SHNN_SHOW => {
+                ShellNotificationCallbackMethod::OnShow { x: data0, y: data1 }
+            }
+            crate::ce::shell::SHNN_LINKSEL => ShellNotificationCallbackMethod::OnLinkSelected {
+                link: link.clone().unwrap_or_default(),
+            },
+            crate::ce::shell::SHNN_DISMISS => ShellNotificationCallbackMethod::OnDismiss {
+                timed_out: data0 != 0,
+            },
+            _ => {
+                return self
+                    .post_shell_notification_window_callback(record, code, data0, data1, link);
+            }
+        };
+        let delivered_com = self.record_shell_notification_com_callback(record, method);
+        let delivered_window =
+            self.post_shell_notification_window_callback(record, code, data0, data1, link);
+        delivered_com || delivered_window
+    }
+
+    fn record_shell_notification_com_callback(
+        &mut self,
+        record: &ShellNotificationRecord,
+        method: ShellNotificationCallbackMethod,
+    ) -> bool {
+        if record.clsid == [0; 16] {
+            return false;
+        }
+        self.shell
+            .record_notification_callback(ShellNotificationCallbackRecord {
+                clsid: record.clsid,
+                id: record.id,
+                vtable_offset: method.com_vtable_offset(),
+                arguments: method.com_arguments(record.id, record.lparam),
+                method,
+                lparam: record.lparam,
+            });
+        true
+    }
+
+    fn post_shell_notification_window_callback(
+        &mut self,
+        record: &ShellNotificationRecord,
+        code: u32,
+        data0: u32,
+        data1: u32,
+        link: Option<String>,
+    ) -> bool {
+        if record.hwnd_sink == 0 || !self.gwe.is_window(record.hwnd_sink) {
+            return false;
+        }
+        let lparam = self.queue_shell_notification_payload(ShellNotificationMessage {
+            hwnd_from: 0,
+            id_from: record.id,
+            code,
+            lparam: record.lparam,
+            return_value: 0,
+            data0,
+            data1,
+            link,
+        });
+        if lparam == 0 {
+            return false;
+        }
+        if self.post_message_w(record.hwnd_sink, WM_NOTIFY, record.id, lparam) {
+            true
+        } else {
+            let _ = self.release_message_pointer_payload(lparam);
+            false
+        }
     }
 
     pub fn post_message_w_for_thread(
@@ -4168,6 +4479,121 @@ impl CeKernel {
         }
     }
 
+    fn post_shell_file_change_notifications(
+        &mut self,
+        event_id: u32,
+        path1: Option<&str>,
+        path2: Option<&str>,
+    ) -> usize {
+        let registrations: Vec<_> = self.shell.change_notifications().cloned().collect();
+        let mut posted = 0usize;
+        for registration in registrations {
+            if registration.event_mask & event_id == 0
+                || !self.gwe.is_window(registration.hwnd)
+                || !shell_change_registration_matches(&registration, path1, path2)
+            {
+                continue;
+            }
+            let data_path = path2.or(path1);
+            let (attributes, file_size) = data_path
+                .and_then(|path| self.file_attributes_w(path).ok())
+                .map(|data| {
+                    (
+                        data.attributes,
+                        data.file_size.try_into().unwrap_or(u32::MAX),
+                    )
+                })
+                .unwrap_or((0, 0));
+            let payload = FileChangeNotificationMessage {
+                event_id,
+                flags: shell_change_notify_payload_flags(registration.notify_flags),
+                path1: path1.map(normalize_shell_change_path),
+                path2: path2.map(normalize_shell_change_path),
+                pidl1: path1.map(shell_change_path_pidl),
+                pidl2: path2.map(shell_change_path_pidl),
+                attributes,
+                file_size,
+            };
+            let lparam = self.queue_shell_file_change_payload(payload);
+            if lparam == 0 {
+                continue;
+            }
+            self.post_window_message(registration.hwnd, WM_FILECHANGEINFO, event_id, lparam);
+            posted = posted.saturating_add(1);
+        }
+        posted
+    }
+
+    fn signal_file_change_notifications(
+        &mut self,
+        event_id: u32,
+        path1: Option<&str>,
+        path2: Option<&str>,
+    ) -> usize {
+        let Some(required_filter) = file_notify_filter_for_shell_event(event_id) else {
+            return 0;
+        };
+        let mut handles = Vec::new();
+        for (handle, object) in self.handles.iter_mut() {
+            let KernelObject::FileChangeNotification(notification) = object else {
+                continue;
+            };
+            if notification.notify_filter & required_filter == 0
+                || !file_change_notification_matches(notification, path1, path2)
+            {
+                continue;
+            }
+            notification.pending.extend(file_change_records_for_event(
+                event_id,
+                notification,
+                path1,
+                path2,
+            ));
+            notification.signaled = true;
+            handles.push(handle);
+        }
+        for handle in &handles {
+            self.queue_object_wake_candidates(*handle);
+        }
+        handles.len()
+    }
+
+    fn queue_shell_file_change_payload(&mut self, payload: FileChangeNotificationMessage) -> u32 {
+        let item_bytes = if payload.flags == SHCNF_IDLIST {
+            payload
+                .pidl1
+                .as_ref()
+                .into_iter()
+                .chain(payload.pidl2.as_ref())
+                .map(Vec::len)
+                .sum::<usize>()
+        } else {
+            payload
+                .path1
+                .as_ref()
+                .into_iter()
+                .chain(payload.path2.as_ref())
+                .map(|path| (path.encode_utf16().count() + 1) * 2)
+                .sum::<usize>()
+        };
+        let alloc_size = FILECHANGENOTIFY_BASE_SIZE.saturating_add(item_bytes);
+        let Some(ptr) = self
+            .memory
+            .heap_alloc(PROCESS_HEAP_HANDLE, 0, alloc_size as u32)
+        else {
+            return 0;
+        };
+        if self.gwe.insert_message_pointer_payload(
+            ptr,
+            MessagePointerPayload::FileChangeNotification(payload),
+        ) {
+            ptr
+        } else {
+            let _ = self.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
+            0
+        }
+    }
+
     fn post_window_message(&mut self, hwnd: u32, msg: u32, wparam: u32, lparam: u32) {
         let Some(window) = self.gwe.window(hwnd) else {
             return;
@@ -4259,6 +4685,172 @@ fn file_read_trace_preview(
 
 fn is_file_open_trace(op: &str) -> bool {
     matches!(op, "CreateFileW" | "CreateFileWArg" | "FindFirstFileW")
+}
+
+fn shell_change_registration_matches(
+    registration: &ShellChangeNotifyRegistration,
+    path1: Option<&str>,
+    path2: Option<&str>,
+) -> bool {
+    let Some(watch_dir) = registration.watch_dir.as_deref() else {
+        return true;
+    };
+    let watch_dir = normalize_shell_change_path(watch_dir);
+    [path1, path2]
+        .into_iter()
+        .flatten()
+        .any(|path| shell_change_path_matches(&watch_dir, path, registration.recursive))
+}
+
+fn file_change_notification_matches(
+    notification: &FileChangeNotificationObject,
+    path1: Option<&str>,
+    path2: Option<&str>,
+) -> bool {
+    [path1, path2].into_iter().flatten().any(|path| {
+        shell_change_path_matches(&notification.watch_path, path, notification.recursive)
+    })
+}
+
+fn file_notify_filter_for_shell_event(event_id: u32) -> Option<u32> {
+    Some(match event_id {
+        SHCNE_RENAMEITEM | SHCNE_CREATE | SHCNE_DELETE => {
+            FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_CREATION
+        }
+        SHCNE_MKDIR | SHCNE_RMDIR | SHCNE_DRIVEADD | SHCNE_DRIVEREMOVED => {
+            FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_CREATION
+        }
+        SHCNE_ATTRIBUTES => FILE_NOTIFY_CHANGE_ATTRIBUTES,
+        SHCNE_UPDATEITEM => FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE,
+        _ => return None,
+    })
+}
+
+fn file_change_records_for_event(
+    event_id: u32,
+    notification: &FileChangeNotificationObject,
+    path1: Option<&str>,
+    path2: Option<&str>,
+) -> Vec<FileChangeRecord> {
+    match event_id {
+        SHCNE_RENAMEITEM => [
+            path1.map(|path| (FILE_ACTION_RENAMED_OLD_NAME, path)),
+            path2.map(|path| (FILE_ACTION_RENAMED_NEW_NAME, path)),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|(_, path)| {
+            shell_change_path_matches(&notification.watch_path, path, notification.recursive)
+        })
+        .map(|(action, path)| FileChangeRecord {
+            action,
+            path: file_change_relative_path(&notification.watch_path, path),
+        })
+        .collect(),
+        SHCNE_CREATE | SHCNE_MKDIR | SHCNE_DRIVEADD => path1
+            .into_iter()
+            .filter(|path| {
+                shell_change_path_matches(&notification.watch_path, path, notification.recursive)
+            })
+            .map(|path| FileChangeRecord {
+                action: FILE_ACTION_ADDED,
+                path: file_change_relative_path(&notification.watch_path, path),
+            })
+            .collect(),
+        SHCNE_DELETE | SHCNE_RMDIR | SHCNE_DRIVEREMOVED => path1
+            .into_iter()
+            .filter(|path| {
+                shell_change_path_matches(&notification.watch_path, path, notification.recursive)
+            })
+            .map(|path| FileChangeRecord {
+                action: FILE_ACTION_REMOVED,
+                path: file_change_relative_path(&notification.watch_path, path),
+            })
+            .collect(),
+        SHCNE_ATTRIBUTES | SHCNE_UPDATEITEM => path1
+            .into_iter()
+            .filter(|path| {
+                shell_change_path_matches(&notification.watch_path, path, notification.recursive)
+            })
+            .map(|path| FileChangeRecord {
+                action: FILE_ACTION_MODIFIED,
+                path: file_change_relative_path(&notification.watch_path, path),
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn file_change_relative_path(watch_path: &str, path: &str) -> String {
+    let path = normalize_shell_change_path(path);
+    if watch_path == "\\" {
+        return path.trim_start_matches('\\').to_owned();
+    }
+    if path.eq_ignore_ascii_case(watch_path) {
+        return String::new();
+    }
+    let prefix = format!("{watch_path}\\");
+    path.get(..prefix.len())
+        .filter(|head| head.eq_ignore_ascii_case(&prefix))
+        .and_then(|_| path.get(prefix.len()..))
+        .unwrap_or(path.as_str())
+        .to_owned()
+}
+
+fn shell_change_notify_payload_flags(flags: u32) -> u32 {
+    if flags == SHCNF_IDLIST {
+        SHCNF_IDLIST
+    } else {
+        SHCNF_PATHW
+    }
+}
+
+fn shell_change_path_pidl(path: &str) -> Vec<u8> {
+    let path = normalize_shell_change_path(path);
+    let mut payload = Vec::new();
+    for unit in path.encode_utf16().chain(std::iter::once(0)) {
+        payload.extend_from_slice(&unit.to_le_bytes());
+    }
+    let item_size = 2usize.saturating_add(payload.len()).min(u16::MAX as usize) as u16;
+    let mut pidl = Vec::with_capacity(usize::from(item_size) + 2);
+    pidl.extend_from_slice(&item_size.to_le_bytes());
+    pidl.extend_from_slice(&payload[..usize::from(item_size).saturating_sub(2)]);
+    pidl.extend_from_slice(&0u16.to_le_bytes());
+    pidl
+}
+
+fn shell_change_path_matches(watch_dir: &str, path: &str, recursive: bool) -> bool {
+    let path = normalize_shell_change_path(path);
+    if watch_dir == "\\" {
+        return true;
+    }
+    if path.eq_ignore_ascii_case(watch_dir) {
+        return true;
+    }
+    if recursive {
+        let prefix = format!("{watch_dir}\\");
+        return path
+            .get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(&prefix));
+    }
+    let parent = path
+        .trim_end_matches('\\')
+        .rsplit_once('\\')
+        .map(|(parent, _name)| if parent.is_empty() { "\\" } else { parent })
+        .unwrap_or("");
+    parent.eq_ignore_ascii_case(watch_dir)
+}
+
+fn normalize_shell_change_path(path: &str) -> String {
+    let mut path = path.trim().replace('/', "\\");
+    while path.len() > 1 && path.ends_with('\\') {
+        path.pop();
+    }
+    if path.is_empty() {
+        "\\".to_owned()
+    } else {
+        path
+    }
 }
 
 fn remote_event_time_ms(base_time_ms: u32, first_input_ms: u64, event_input_ms: u64) -> u32 {

@@ -11,13 +11,14 @@ use crate::{
         crt,
         devices::{CommDcb, CommTimeouts, DeviceIoControlResult},
         file::{
-            CREATE_NEW, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FileIoResult, FindData,
-            GENERIC_WRITE,
+            CREATE_NEW, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_TEMPORARY,
+            FileIoResult, FindData, GENERIC_WRITE, VolumeInfo,
         },
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat},
         gwe::{
-            GWL_STYLE, Message, MessagePointerPayload, PeekFlags, Point, Rect, WNDCLASSW_SIZE,
-            WS_CHILD, WS_VISIBLE, WindowPos,
+            BS_DEFPUSHBUTTON, BS_PUSHBUTTON, GWL_STYLE, Message, MessagePointerPayload, PeekFlags,
+            Point, Rect, WM_FILECHANGEINFO, WNDCLASSW_SIZE, WS_CHILD, WS_POPUP, WS_TABSTOP,
+            WS_VISIBLE, WindowPos,
         },
         kernel::{CeKernel, FreeLibraryResult, MessagePumpResult},
         memory::{HEAP_ZERO_MEMORY, MEM_RELEASE, PROCESS_HEAP_HANDLE},
@@ -25,14 +26,18 @@ use crate::{
             CriticalSectionObject, FileMappingView, KernelObject, ThreadResumeResult,
             ThreadSuspendResult,
         },
-        registry::{HKey, RegOpenResult, RegQueryValueResult},
+        registry::{
+            ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, HKey, RegOpenResult, RegQueryValueResult,
+        },
         resource::{
-            AcceleratorEntry, FontObject, MenuItem, PopupMenuNotification, PopupMenuTracking,
-            RegionObject, ResourceId, stock_object_handle,
+            AcceleratorEntry, FontObject, ImageListDraw, MenuItem, PopupMenuNotification,
+            PopupMenuTracking, RegionObject, ResourceId, stock_object_handle,
         },
         shell::{
+            MessageBoxButton, MessageBoxButtonLabel, MessageBoxButtonSlot, MessageBoxIcon,
             MessageBoxRecord, NotificationResult, NotifyIconData, NotifyIconOp,
             RecentDocumentRecord, ShellChangeNotifyRegistration, ShellNotificationData,
+            ShellSpecialFolderFallbackPolicy, ShellSpecialFolderRecord, ShellSpecialFolderSource,
         },
         thread::{
             ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_CLASS_DOES_NOT_EXIST,
@@ -67,6 +72,11 @@ const SPI_GETOEMINFO: u32 = 0x0102;
 const SYSTEM_PARAMETERS_INFO_REGISTRY_PATH: &str = r"HKLM\System\Emulator\SystemParametersInfo";
 const SHELL_FOLDERS_REGISTRY_PATH: &str = r"HKLM\System\Explorer\Shell Folders";
 const IOCTL_HAL_GET_DEVICEID: u32 = 0x0101_207c;
+const ERROR_PATH_NOT_FOUND: u32 = 3;
+const FSCTL_GET_VOLUME_INFO: u32 = 0x0009_0080;
+const CE_VOLUME_INFO_LEVEL_STANDARD: u32 = 0;
+const CE_VOLUME_INFO_SIZE: u32 = 144;
+const CE_VOLUME_INFO_NAME_CHARS: usize = 32;
 const EVENT_ALL_ACCESS: u32 = 0x001f_0003;
 const RDW_INVALIDATE: u32 = 0x0001;
 const RDW_INTERNALPAINT: u32 = 0x0002;
@@ -102,15 +112,33 @@ const SE_ERR_FNF: u32 = 2;
 const SE_ERR_NOASSOC: u32 = 31;
 const ERROR_BAD_FORMAT_LOCAL: u32 = 11;
 const ERROR_FILE_EXISTS_LOCAL: u32 = 80;
+const ERROR_MOD_NOT_FOUND_LOCAL: u32 = 126;
 const ERROR_INSUFFICIENT_BUFFER_LOCAL: u32 = 122;
 const ERROR_FILENAME_EXCED_RANGE_LOCAL: u32 = 206;
 const ERROR_INVALID_FLAGS_LOCAL: u32 = 1004;
 const MAX_PATH_CHARS: usize = 260;
 const MAX_SHORTCUT_TARGET_CHARS: usize = MAX_PATH_CHARS - 2;
 const CSIDL_FLAG_CREATE: u32 = 0x0000_8000;
+const CSIDL_DESKTOP: u32 = 0x0000;
+const CSIDL_PROGRAMS: u32 = 0x0002;
+const CSIDL_PERSONAL: u32 = 0x0005;
+const CSIDL_FAVORITES: u32 = 0x0006;
+const CSIDL_STARTUP: u32 = 0x0007;
 const CSIDL_RECENT: u32 = 0x0008;
+const CSIDL_STARTMENU: u32 = 0x000b;
+const CSIDL_DESKTOPDIRECTORY: u32 = 0x0010;
+const CSIDL_FONTS: u32 = 0x0014;
+const CSIDL_APPDATA: u32 = 0x001a;
+const CSIDL_WINDOWS: u32 = 0x0024;
+const CSIDL_SYSTEM: u32 = 0x0025;
+const CSIDL_PROGRAM_FILES: u32 = 0x0026;
+const CSIDL_PROFILE: u32 = 0x0028;
 const SHARD_PIDL: u32 = 0x0000_0001;
 const SHARD_PATH: u32 = 0x0000_0002;
+const FILECHANGEINFO_SIZE: u32 = 36;
+const FILECHANGENOTIFY_SIZE: u32 = 40;
+const SHCNF_IDLIST: u32 = 0x0000_0000;
+const SHCNF_PATHW: u32 = 0x0000_0005;
 const SHFILEINFO_HICON_OFFSET: u32 = 0;
 const SHFILEINFO_IICON_OFFSET: u32 = 4;
 const SHFILEINFO_ATTRIBUTES_OFFSET: u32 = 8;
@@ -135,9 +163,21 @@ const SHGFI_SUPPORTED_CE_FLAGS: u32 = SHGFI_ICON
     | SHGFI_ATTRIBUTES
     | SHGFI_SYSICONINDEX
     | SHGFI_USEFILEATTRIBUTES;
-const SHELL_GENERIC_FILE_ICON: u32 = 32512;
+const SFGAO_FOLDER: u32 = 0x2000_0000;
+const SFGAO_FILESYSTEM: u32 = 0x4000_0000;
+const SHELL_DOCUMENT_ICON: u32 = 32512;
 const SHELL_GENERIC_FOLDER_ICON: u32 = 32513;
+const SHELL_APPLICATION_ICON: u32 = 32514;
+const SHELL_STORAGE_CARD_ICON: u32 = 32515;
+const SHELL_NETWORK_FOLDER_ICON: u32 = 32516;
+const SHELL_SHORTCUT_ICON: u32 = 32517;
+const SHELL_ICON_OVERLAY_SHIFT: u32 = 24;
+const SHELL_ICON_OVERLAY_MASK: u32 = 0x0f00;
 const SHELL_SYSTEM_IMAGE_LIST_HANDLE: u32 = 0x000b_f000;
+const SHELL_SYSTEM_IMAGE_LIST_COUNT: u32 = 8192;
+const SHELL_SYSTEM_IMAGE_LIST_CX: i32 = 16;
+const SHELL_SYSTEM_IMAGE_LIST_CY: i32 = 16;
+const CLR_NONE: u32 = 0xffff_ffff;
 const NOTIFYICONDATA_MIN_SIZE_W: u32 = 24;
 const NOTIFYICONDATA_TIP_OFFSET: u32 = 24;
 const NOTIFYICONDATA_TIP_CHARS: usize = 64;
@@ -1583,6 +1623,21 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
+        ORD_GET_DISK_FREE_SPACE_EX_W => Some(CoredllValue::Bool(get_disk_free_space_ex_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_AFS_GET_DISK_FREE_SPACE => Some(CoredllValue::Bool(afs_get_disk_free_space_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_CE_FS_IO_CONTROL_W => Some(CoredllValue::Bool(ce_fs_io_control_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_AFS_FS_IO_CONTROL_W => Some(CoredllValue::Bool(afs_fs_io_control_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_CE_GET_VOLUME_INFO_W => Some(CoredllValue::Bool(ce_get_volume_info_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_GET_SYSTEM_INFO => {
             write_system_info(kernel, memory, thread_id, raw_arg(args, 0));
             Some(CoredllValue::U32(0))
@@ -1890,6 +1945,13 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
+        ORD_AFS_FIND_FIRST_FILE_W => Some(CoredllValue::Handle(find_first_file_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 2),
+            raw_arg(args, 3),
+        ))),
         ORD_FIND_NEXT_FILE_W => Some(CoredllValue::Bool(find_next_file_w_raw(
             kernel,
             memory,
@@ -1897,41 +1959,140 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
-        ORD_CREATE_DIRECTORY_W => Some(CoredllValue::Bool(path_bool_raw(
+        ORD_FIND_FIRST_CHANGE_NOTIFICATION_W => {
+            Some(CoredllValue::Handle(find_first_change_notification_w_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+                raw_arg(args, 2),
+            )))
+        }
+        ORD_AFS_FIND_FIRST_CHANGE_NOTIFICATION_W => {
+            Some(CoredllValue::Handle(find_first_change_notification_w_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 2),
+                raw_arg(args, 3),
+                raw_arg(args, 4),
+            )))
+        }
+        ORD_FIND_NEXT_CHANGE_NOTIFICATION => Some(CoredllValue::Bool(
+            find_next_change_notification_raw(kernel, thread_id, raw_arg(args, 0)),
+        )),
+        ORD_FIND_CLOSE_CHANGE_NOTIFICATION => Some(CoredllValue::Bool(
+            find_close_change_notification_raw(kernel, thread_id, raw_arg(args, 0)),
+        )),
+        ORD_CE_GET_FILE_NOTIFICATION_INFO => Some(CoredllValue::Bool(
+            ce_get_file_notification_info_raw(kernel, memory, thread_id, args),
+        )),
+        ORD_CREATE_DIRECTORY_W => Some(CoredllValue::Bool(path_mutating_bool_raw(
             kernel,
             memory,
             thread_id,
             raw_arg(args, 0),
             CeKernel::create_directory_w,
         ))),
-        ORD_REMOVE_DIRECTORY_W => Some(CoredllValue::Bool(path_bool_raw(
+        ORD_AFS_CREATE_DIRECTORY_W => Some(CoredllValue::Bool(path_mutating_bool_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 1),
+            CeKernel::create_directory_w,
+        ))),
+        ORD_REMOVE_DIRECTORY_W => Some(CoredllValue::Bool(path_mutating_bool_raw(
             kernel,
             memory,
             thread_id,
             raw_arg(args, 0),
             CeKernel::remove_directory_w,
         ))),
-        ORD_DELETE_FILE_W => Some(CoredllValue::Bool(path_bool_raw(
+        ORD_AFS_REMOVE_DIRECTORY_W => Some(CoredllValue::Bool(path_mutating_bool_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 1),
+            CeKernel::remove_directory_w,
+        ))),
+        ORD_DELETE_FILE_W => Some(CoredllValue::Bool(path_mutating_bool_raw(
             kernel,
             memory,
             thread_id,
             raw_arg(args, 0),
             CeKernel::delete_file_w,
         ))),
+        ORD_AFS_DELETE_FILE_W => Some(CoredllValue::Bool(path_mutating_bool_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 1),
+            CeKernel::delete_file_w,
+        ))),
         ORD_MOVE_FILE_W => Some(CoredllValue::Bool(move_file_w_raw(
-            kernel, memory, thread_id, args,
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_AFS_MOVE_FILE_W => Some(CoredllValue::Bool(move_file_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ))),
+        ORD_AFS_PRESTO_CHANGO_FILE_NAME => Some(CoredllValue::Bool(move_file_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 1),
+            raw_arg(args, 2),
+        ))),
+        ORD_AFS_CREATE_FILE_W => Some(CoredllValue::Handle(create_file_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            &[
+                raw_arg(args, 2),
+                raw_arg(args, 3),
+                raw_arg(args, 4),
+                raw_arg(args, 5),
+                raw_arg(args, 6),
+                raw_arg(args, 7),
+                raw_arg(args, 8),
+            ],
         ))),
         ORD_COPY_FILE_W => Some(CoredllValue::Bool(copy_file_w_raw(
             kernel, memory, thread_id, args,
         ))),
         ORD_SET_FILE_ATTRIBUTES_W => Some(CoredllValue::Bool(set_file_attributes_w_raw(
-            kernel, memory, thread_id, args,
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_AFS_SET_FILE_ATTRIBUTES_W => Some(CoredllValue::Bool(set_file_attributes_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 1),
+            raw_arg(args, 2),
         ))),
         ORD_GET_FILE_ATTRIBUTES_W => Some(CoredllValue::U32(get_file_attributes_w_raw(
             kernel,
             memory,
             thread_id,
             raw_arg(args, 0),
+        ))),
+        ORD_AFS_GET_FILE_ATTRIBUTES_W => Some(CoredllValue::U32(get_file_attributes_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 1),
         ))),
         ORD_GET_FILE_ATTRIBUTES_EX_W => Some(CoredllValue::Bool(get_file_attributes_ex_w_raw(
             kernel, memory, thread_id, args,
@@ -3584,7 +3745,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
         ))),
         ORD_MESSAGE_BOX_W => Some(CoredllValue::U32(message_box_w_raw(
-            kernel, memory, thread_id, args,
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            args,
         ))),
         ORD_SHELL_EXECUTE_EX => Some(CoredllValue::Bool(shell_execute_ex_w_raw(
             kernel, memory, thread_id, args,
@@ -3675,7 +3840,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel, memory, thread_id, args,
         ))),
         ORD_TRACK_POPUP_MENU_EX => Some(CoredllValue::U32(track_popup_menu_ex_raw(
-            kernel, memory, thread_id, args,
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            args,
         ))),
         ORD_GET_SUB_MENU => Some(CoredllValue::Handle(get_sub_menu_raw(
             kernel,
@@ -3760,6 +3929,118 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
+        ORD_IMAGE_LIST_CREATE => Some(CoredllValue::Handle(image_list_create_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_IMAGE_LIST_DESTROY => Some(CoredllValue::Bool(image_list_destroy_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_IMAGE_LIST_LOAD_IMAGE => Some(CoredllValue::Handle(image_list_load_image_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_IMAGE_LIST_ADD | ORD_IMAGE_LIST_ADD_MASKED => Some(CoredllValue::U32(
+            image_list_add_raw(kernel, thread_id, args) as u32,
+        )),
+        ORD_IMAGE_LIST_REPLACE_ICON => Some(CoredllValue::U32(image_list_replace_icon_raw(
+            kernel, thread_id, args,
+        ) as u32)),
+        ORD_IMAGE_LIST_REPLACE => Some(CoredllValue::Bool(image_list_replace_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_IMAGE_LIST_REMOVE => Some(CoredllValue::Bool(image_list_remove_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_IMAGE_LIST_SET_ICON_SIZE => Some(CoredllValue::Bool(image_list_set_icon_size_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_IMAGE_LIST_SET_IMAGE_COUNT => Some(CoredllValue::Bool(image_list_set_image_count_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_IMAGE_LIST_GET_IMAGE_COUNT => Some(CoredllValue::U32(image_list_get_count_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_IMAGE_LIST_GET_ICON_SIZE => Some(CoredllValue::Bool(image_list_get_icon_size_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_IMAGE_LIST_GET_ICON => Some(CoredllValue::Handle(image_list_get_icon_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_IMAGE_LIST_GET_IMAGE_INFO => Some(CoredllValue::Bool(image_list_get_image_info_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_IMAGE_LIST_SET_BK_COLOR => Some(CoredllValue::U32(image_list_set_bk_color_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_IMAGE_LIST_GET_BK_COLOR => Some(CoredllValue::U32(image_list_get_bk_color_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_IMAGE_LIST_DRAW => Some(CoredllValue::Bool(image_list_draw_raw(
+            kernel,
+            framebuffer,
+            thread_id,
+            args,
+        ))),
+        ORD_IMAGE_LIST_DRAW_EX => Some(CoredllValue::Bool(image_list_draw_ex_raw(
+            kernel,
+            framebuffer,
+            thread_id,
+            args,
+        ))),
+        ORD_IMAGE_LIST_DRAW_INDIRECT => Some(CoredllValue::Bool(image_list_draw_indirect_raw(
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_IMAGE_LIST_COPY_DITHER_IMAGE => {
+            image_list_copy_dither_image_raw(kernel, thread_id, args);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_IMAGE_LIST_COPY => Some(CoredllValue::Bool(image_list_copy_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_IMAGE_LIST_MERGE => Some(CoredllValue::Handle(image_list_merge_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_IMAGE_LIST_DUPLICATE => Some(CoredllValue::Handle(image_list_duplicate_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_IMAGE_LIST_BEGIN_DRAG => Some(CoredllValue::Bool(image_list_begin_drag_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_IMAGE_LIST_DRAG_ENTER => Some(CoredllValue::Bool(image_list_drag_enter_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_IMAGE_LIST_DRAG_LEAVE => Some(CoredllValue::Bool(image_list_drag_leave_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_IMAGE_LIST_DRAG_MOVE => Some(CoredllValue::Bool(image_list_drag_move_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK => Some(CoredllValue::Bool(image_list_drag_show_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_IMAGE_LIST_END_DRAG => Some(CoredllValue::Bool(image_list_end_drag_raw(
+            kernel, thread_id,
+        ))),
+        ORD_IMAGE_LIST_GET_DRAG_IMAGE => Some(CoredllValue::Handle(image_list_get_drag_image_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE => Some(CoredllValue::Bool(
+            image_list_set_drag_cursor_raw(kernel, thread_id, args),
+        )),
+        ORD_IMAGE_LIST_SET_OVERLAY_IMAGE => Some(CoredllValue::Bool(
+            image_list_set_overlay_image_raw(kernel, thread_id, args),
+        )),
         ORD_GET_OBJECT_W => Some(CoredllValue::U32(get_object_w_raw(
             kernel,
             memory,
@@ -4139,6 +4420,256 @@ fn write_store_information<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn get_disk_free_space_ex_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let directory_ptr = raw_arg(args, 0);
+    let directory = match read_optional_guest_wide_arg(memory, directory_ptr) {
+        Some(path) => path.map(|path| path.replace('/', "\\")),
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
+    };
+    let disk_space = kernel.files.disk_space_for_path(directory.as_deref());
+    if !write_optional_u64(
+        kernel,
+        memory,
+        thread_id,
+        raw_arg(args, 1),
+        disk_space.free_bytes,
+    ) || !write_optional_u64(
+        kernel,
+        memory,
+        thread_id,
+        raw_arg(args, 2),
+        disk_space.total_bytes,
+    ) || !write_optional_u64(
+        kernel,
+        memory,
+        thread_id,
+        raw_arg(args, 3),
+        disk_space.free_bytes,
+    ) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn afs_get_disk_free_space_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let path = match read_optional_guest_wide_arg(memory, raw_arg(args, 1)) {
+        Some(path) => path.map(|path| path.replace('/', "\\")),
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
+    };
+    let sectors_per_cluster_ptr = raw_arg(args, 2);
+    let bytes_per_sector_ptr = raw_arg(args, 3);
+    let free_clusters_ptr = raw_arg(args, 4);
+    let clusters_ptr = raw_arg(args, 5);
+    if sectors_per_cluster_ptr == 0
+        || bytes_per_sector_ptr == 0
+        || free_clusters_ptr == 0
+        || clusters_ptr == 0
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+
+    let disk_space = kernel.files.disk_space_for_path(path.as_deref());
+    let bytes_per_sector: u32 = 512;
+    let sectors_per_cluster: u32 = 8;
+    let cluster_size = u64::from(bytes_per_sector * sectors_per_cluster);
+    let free_clusters = (disk_space.free_bytes / cluster_size).min(u32::MAX as u64) as u32;
+    let clusters = (disk_space.total_bytes / cluster_size).min(u32::MAX as u64) as u32;
+    if !write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        sectors_per_cluster_ptr,
+        sectors_per_cluster,
+    ) || !write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        bytes_per_sector_ptr,
+        bytes_per_sector,
+    ) || !write_guest_u32(kernel, memory, thread_id, free_clusters_ptr, free_clusters)
+        || !write_guest_u32(kernel, memory, thread_id, clusters_ptr, clusters)
+    {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn ce_fs_io_control_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let Some(root_path) = read_guest_wide_arg(memory, raw_arg(args, 0)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    fs_io_control_volume_info_raw(
+        kernel,
+        memory,
+        thread_id,
+        Some(root_path.as_str()),
+        raw_arg(args, 1),
+        raw_arg(args, 2),
+        raw_arg(args, 3),
+        raw_arg(args, 4),
+        raw_arg(args, 5),
+        raw_arg(args, 6),
+    )
+}
+
+fn afs_fs_io_control_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    fs_io_control_volume_info_raw(
+        kernel,
+        memory,
+        thread_id,
+        None,
+        raw_arg(args, 2),
+        raw_arg(args, 3),
+        raw_arg(args, 4),
+        raw_arg(args, 5),
+        raw_arg(args, 6),
+        raw_arg(args, 7),
+    )
+}
+
+fn ce_get_volume_info_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let Some(root_path) = read_guest_wide_arg(memory, raw_arg(args, 0)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let info_level = raw_arg(args, 1);
+    let out_ptr = raw_arg(args, 2);
+    if info_level != CE_VOLUME_INFO_LEVEL_STANDARD || out_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let info = kernel.files.volume_info_for_path(Some(&root_path));
+    if !write_ce_volume_info(kernel, memory, thread_id, out_ptr, &info) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn fs_io_control_volume_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    root_path: Option<&str>,
+    ioctl: u32,
+    in_ptr: u32,
+    in_size: u32,
+    out_ptr: u32,
+    out_size: u32,
+    bytes_returned_ptr: u32,
+) -> bool {
+    if ioctl != FSCTL_GET_VOLUME_INFO {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+        return false;
+    }
+    if in_ptr == 0
+        || in_size != 4
+        || out_ptr == 0
+        || out_size != CE_VOLUME_INFO_SIZE
+        || memory.read_u32(in_ptr).ok() != Some(CE_VOLUME_INFO_LEVEL_STANDARD)
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let info = kernel.files.volume_info_for_path(root_path);
+    if !write_ce_volume_info(kernel, memory, thread_id, out_ptr, &info)
+        || !write_optional_count(
+            kernel,
+            memory,
+            thread_id,
+            bytes_returned_ptr,
+            CE_VOLUME_INFO_SIZE,
+        )
+    {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn write_ce_volume_info<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    out_ptr: u32,
+    info: &VolumeInfo,
+) -> bool {
+    let mut bytes = Vec::with_capacity(CE_VOLUME_INFO_SIZE as usize);
+    for value in [
+        CE_VOLUME_INFO_SIZE,
+        info.attributes,
+        info.flags,
+        info.block_size,
+    ] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    append_fixed_wide_field(&mut bytes, &info.store_name, CE_VOLUME_INFO_NAME_CHARS);
+    append_fixed_wide_field(&mut bytes, &info.partition_name, CE_VOLUME_INFO_NAME_CHARS);
+    write_guest_bytes(kernel, memory, thread_id, out_ptr, &bytes)
+}
+
+fn append_fixed_wide_field(bytes: &mut Vec<u8>, text: &str, capacity_chars: usize) {
+    let mut units = text.encode_utf16().take(capacity_chars).collect::<Vec<_>>();
+    if units.len() == capacity_chars {
+        units[capacity_chars - 1] = 0;
+    }
+    units.resize(capacity_chars, 0);
+    for unit in units {
+        bytes.extend_from_slice(&unit.to_le_bytes());
+    }
 }
 
 fn write_system_info<M: CoredllGuestMemory>(
@@ -5589,9 +6120,217 @@ fn find_first_file_w_raw<M: CoredllGuestMemory>(
     handle
 }
 
+fn find_first_change_notification_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    path_ptr: u32,
+    recursive: u32,
+    notify_filter: u32,
+) -> u32 {
+    let Some(path) = read_guest_wide_arg(memory, path_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return u32::MAX;
+    };
+    let Ok(data) = kernel.file_attributes_w(&path) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_PATH_NOT_FOUND);
+        return u32::MAX;
+    };
+    if data.attributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_PATH_NOT_FOUND);
+        return u32::MAX;
+    }
+    match kernel.find_first_change_notification_w(&path, recursive != 0, notify_filter) {
+        Ok(handle) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            handle
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            u32::MAX
+        }
+    }
+}
+
+fn find_next_change_notification_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {
+    match kernel.find_next_change_notification(handle) {
+        Ok(ok) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            ok
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            false
+        }
+    }
+}
+
+fn find_close_change_notification_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {
+    match kernel.find_close_change_notification(handle) {
+        Ok(ok) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            ok
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            false
+        }
+    }
+}
+
+fn ce_get_file_notification_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let handle = raw_arg(args, 0);
+    let buffer = raw_arg(args, 2);
+    let buffer_len = raw_arg(args, 3) as usize;
+    let returned_ptr = raw_arg(args, 4);
+    let available_ptr = raw_arg(args, 5);
+    let records = match kernel.file_change_notification_records(handle) {
+        Ok(records) => records,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return false;
+        }
+    };
+    let required = encoded_file_notification_len(&records) as u32;
+    if records.is_empty() {
+        let wrote_counts = write_optional_count(kernel, memory, thread_id, returned_ptr, 0)
+            && write_optional_count(kernel, memory, thread_id, available_ptr, 0);
+        if !wrote_counts {
+            return false;
+        }
+        let _ = kernel.clear_file_change_notification(handle);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NO_MORE_ITEMS);
+        return false;
+    }
+
+    let (fit_count, returned) = file_notification_prefix_fit(&records, buffer, buffer_len);
+    if fit_count == 0 {
+        let _ = write_optional_count(kernel, memory, thread_id, returned_ptr, 0);
+        if !write_optional_count(kernel, memory, thread_id, available_ptr, required) {
+            return false;
+        }
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INSUFFICIENT_BUFFER);
+        return false;
+    }
+    let encoded = encode_file_notification_records(&records[..fit_count]);
+    let available = encoded_file_notification_len(&records[fit_count..]) as u32;
+    if !write_guest_bytes(kernel, memory, thread_id, buffer, &encoded)
+        || !write_optional_count(kernel, memory, thread_id, returned_ptr, returned as u32)
+        || !write_optional_count(kernel, memory, thread_id, available_ptr, available)
+    {
+        return false;
+    }
+    match kernel.drain_file_change_notification_records(handle, fit_count) {
+        Ok(_) => {
+            let error = if available == 0 { 0 } else { ERROR_MORE_DATA };
+            kernel.threads.set_last_error(thread_id, error);
+            true
+        }
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            false
+        }
+    }
+}
+
+fn file_notification_prefix_fit(
+    records: &[crate::ce::object::FileChangeRecord],
+    buffer: u32,
+    buffer_len: usize,
+) -> (usize, usize) {
+    if buffer == 0 {
+        return (0, 0);
+    }
+    let mut fit_count = 0usize;
+    let mut returned = 0usize;
+    for record in records {
+        let record_len = encoded_file_notification_record_len(record);
+        if returned
+            .checked_add(record_len)
+            .is_none_or(|needed| needed > buffer_len)
+        {
+            break;
+        }
+        returned += record_len;
+        fit_count += 1;
+    }
+    (fit_count, returned)
+}
+
+fn encoded_file_notification_len(records: &[crate::ce::object::FileChangeRecord]) -> usize {
+    records
+        .iter()
+        .map(encoded_file_notification_record_len)
+        .sum()
+}
+
+fn encoded_file_notification_record_len(record: &crate::ce::object::FileChangeRecord) -> usize {
+    let name_len = record.path.encode_utf16().count() * 2;
+    align_usize_to_u32(12usize + name_len)
+}
+
+fn encode_file_notification_records(records: &[crate::ce::object::FileChangeRecord]) -> Vec<u8> {
+    let mut encoded_records = Vec::with_capacity(records.len());
+    let mut total_len = 0usize;
+    for record in records {
+        let mut name = Vec::new();
+        for unit in record.path.encode_utf16() {
+            name.extend_from_slice(&unit.to_le_bytes());
+        }
+        let aligned_len = encoded_file_notification_record_len(record);
+        let record_len = 12usize + name.len();
+        total_len += aligned_len;
+        encoded_records.push((record.action, name, record_len, aligned_len));
+    }
+    let mut out = Vec::with_capacity(total_len);
+    for (index, (action, name, record_len, aligned_len)) in encoded_records.iter().enumerate() {
+        let next_offset = if index + 1 == encoded_records.len() {
+            0
+        } else {
+            *aligned_len as u32
+        };
+        out.extend_from_slice(&next_offset.to_le_bytes());
+        out.extend_from_slice(&action.to_le_bytes());
+        out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        out.extend_from_slice(name);
+        out.resize(out.len() + aligned_len.saturating_sub(*record_len), 0);
+    }
+    out
+}
+
+fn align_usize_to_u32(value: usize) -> usize {
+    (value + 3) & !3
+}
+
 fn message_box_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
+    framebuffer: Option<&mut dyn Framebuffer>,
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
@@ -5617,7 +6356,7 @@ fn message_box_w_raw<M: CoredllGuestMemory>(
         return 0;
     };
     let style = raw_arg(args, 3);
-    let Some(result) = message_box_default_result(style) else {
+    let Some(selection) = message_box_selection(style) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -5634,24 +6373,284 @@ fn message_box_w_raw<M: CoredllGuestMemory>(
         text = %text,
         caption = %caption,
         style = format_args!("0x{:08x}", style),
-        result = result,
+        result = selection.result,
         "MessageBoxW"
     );
-    if let Some(was_enabled) = owner_was_enabled {
+    if owner_was_enabled.is_some() {
         let _ = kernel.enable_window(owner_hwnd, false);
+    }
+    let window_state =
+        create_message_box_window(kernel, thread_id, owner_hwnd, &caption, &text, &selection);
+    let rendered = if let Some(framebuffer) = framebuffer {
+        render_message_box_framebuffer(framebuffer, &caption, &text, &selection);
+        true
+    } else {
+        false
+    };
+    let _ = kernel.end_dialog(thread_id, window_state.dialog_hwnd, selection.result);
+    let _ = kernel.destroy_window_with_reason(window_state.dialog_hwnd, "MessageBoxW");
+    if let Some(was_enabled) = owner_was_enabled {
         let _ = kernel.enable_window(owner_hwnd, was_enabled);
     }
     kernel.shell.record_message_box(MessageBoxRecord {
         thread_id,
         owner_hwnd,
+        dialog_hwnd: window_state.dialog_hwnd,
+        text_hwnd: window_state.text_hwnd,
         text,
         caption,
         style,
-        result,
+        buttons: selection.buttons,
+        button_hwnds: window_state.button_hwnds,
+        button_layout: selection.button_layout,
+        default_button_index: selection.default_button_index,
+        icon: selection.icon,
+        result: selection.result,
         owner_was_enabled,
+        rendered,
     });
     kernel.threads.set_last_error(thread_id, 0);
-    result
+    selection.result
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MessageBoxWindowState {
+    dialog_hwnd: u32,
+    text_hwnd: u32,
+    button_hwnds: Vec<u32>,
+}
+
+fn create_message_box_window(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    owner_hwnd: u32,
+    caption: &str,
+    text: &str,
+    selection: &MessageBoxSelection,
+) -> MessageBoxWindowState {
+    let owner = (owner_hwnd != 0).then_some(owner_hwnd);
+    let dialog = kernel.create_window_ex_w_with_parent_owner_and_rect(
+        thread_id,
+        "Dialog",
+        caption,
+        None,
+        owner,
+        0,
+        WS_POPUP | WS_VISIBLE,
+        0,
+        Rect::from_origin_size(24, 24, 220, 96),
+    );
+    let text_hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "Static",
+        text,
+        Some(dialog),
+        0,
+        WS_CHILD | WS_VISIBLE,
+        0,
+        Rect::from_origin_size(12, 12, 196, 34),
+    );
+    let button_width = 58;
+    let button_height = 18;
+    let button_y = 62;
+    let button_hwnds = selection
+        .button_layout
+        .iter()
+        .enumerate()
+        .map(|(index, button)| {
+            let button_style = if index == selection.default_button_index {
+                BS_DEFPUSHBUTTON
+            } else {
+                BS_PUSHBUTTON
+            };
+            let style = WS_CHILD | WS_VISIBLE | WS_TABSTOP | button_style;
+            kernel.create_window_ex_w_with_rect(
+                thread_id,
+                "Button",
+                message_box_button_title(button.label),
+                Some(dialog),
+                button.id,
+                style,
+                0,
+                Rect::from_origin_size(
+                    message_box_button_x(button.slot, button_width),
+                    button_y,
+                    button_width,
+                    button_height,
+                ),
+            )
+        })
+        .collect();
+    MessageBoxWindowState {
+        dialog_hwnd: dialog,
+        text_hwnd,
+        button_hwnds,
+    }
+}
+
+fn render_message_box_framebuffer(
+    framebuffer: &mut dyn Framebuffer,
+    caption: &str,
+    text: &str,
+    selection: &MessageBoxSelection,
+) {
+    const DIALOG_LEFT: i32 = 24;
+    const DIALOG_TOP: i32 = 24;
+    const DIALOG_WIDTH: i32 = 220;
+    const DIALOG_HEIGHT: i32 = 96;
+
+    let dialog = Rect::from_origin_size(DIALOG_LEFT, DIALOG_TOP, DIALOG_WIDTH, DIALOG_HEIGHT);
+    let caption_rect =
+        Rect::from_origin_size(DIALOG_LEFT + 2, DIALOG_TOP + 2, DIALOG_WIDTH - 4, 14);
+    fill_framebuffer_screen_rect(framebuffer, dialog, rgb(0x00, 0x00, 0x00));
+    fill_framebuffer_screen_rect(
+        framebuffer,
+        Rect::from_origin_size(
+            DIALOG_LEFT + 1,
+            DIALOG_TOP + 1,
+            DIALOG_WIDTH - 2,
+            DIALOG_HEIGHT - 2,
+        ),
+        rgb(0xc0, 0xc0, 0xc0),
+    );
+    fill_framebuffer_screen_rect(framebuffer, caption_rect, rgb(0x00, 0x00, 0x80));
+    render_framebuffer_text_marks(
+        framebuffer,
+        Rect::from_origin_size(DIALOG_LEFT + 8, DIALOG_TOP + 5, 150, 7),
+        caption,
+        rgb(0xff, 0xff, 0xff),
+    );
+
+    if let Some(icon) = selection.icon {
+        let color = match icon {
+            MessageBoxIcon::Hand => rgb(0xc0, 0x00, 0x00),
+            MessageBoxIcon::Question => rgb(0x00, 0x40, 0xff),
+            MessageBoxIcon::Exclamation => rgb(0xff, 0xc0, 0x00),
+            MessageBoxIcon::Asterisk => rgb(0x00, 0x80, 0x40),
+        };
+        fill_framebuffer_screen_rect(
+            framebuffer,
+            Rect::from_origin_size(DIALOG_LEFT + 12, DIALOG_TOP + 28, 18, 18),
+            rgb(0xff, 0xff, 0xff),
+        );
+        fill_framebuffer_screen_rect(
+            framebuffer,
+            Rect::from_origin_size(DIALOG_LEFT + 15, DIALOG_TOP + 31, 12, 12),
+            color,
+        );
+    }
+
+    fill_framebuffer_screen_rect(
+        framebuffer,
+        Rect::from_origin_size(DIALOG_LEFT + 38, DIALOG_TOP + 25, 168, 24),
+        rgb(0xff, 0xff, 0xff),
+    );
+    render_framebuffer_text_marks(
+        framebuffer,
+        Rect::from_origin_size(DIALOG_LEFT + 42, DIALOG_TOP + 30, 156, 12),
+        text,
+        rgb(0x00, 0x00, 0x00),
+    );
+
+    for (index, button) in selection.button_layout.iter().enumerate() {
+        let button_rect = Rect::from_origin_size(
+            DIALOG_LEFT + message_box_button_x(button.slot, 58),
+            DIALOG_TOP + 62,
+            58,
+            18,
+        );
+        fill_framebuffer_screen_rect(framebuffer, button_rect, rgb(0x00, 0x00, 0x00));
+        fill_framebuffer_screen_rect(
+            framebuffer,
+            Rect::from_origin_size(
+                button_rect.left + 1,
+                button_rect.top + 1,
+                button_rect.width() - 2,
+                button_rect.height() - 2,
+            ),
+            rgb(0xd8, 0xd8, 0xd8),
+        );
+        if index == selection.default_button_index {
+            fill_framebuffer_screen_rect(
+                framebuffer,
+                Rect::from_origin_size(
+                    button_rect.left + 3,
+                    button_rect.top + 3,
+                    button_rect.width() - 6,
+                    1,
+                ),
+                rgb(0x00, 0x00, 0x00),
+            );
+            fill_framebuffer_screen_rect(
+                framebuffer,
+                Rect::from_origin_size(
+                    button_rect.left + 3,
+                    button_rect.bottom - 4,
+                    button_rect.width() - 6,
+                    1,
+                ),
+                rgb(0x00, 0x00, 0x00),
+            );
+        }
+        render_framebuffer_text_marks(
+            framebuffer,
+            Rect::from_origin_size(button_rect.left + 7, button_rect.top + 7, 44, 6),
+            message_box_button_title(button.label),
+            rgb(0x00, 0x00, 0x00),
+        );
+    }
+}
+
+fn render_framebuffer_text_marks(
+    framebuffer: &mut dyn Framebuffer,
+    rect: Rect,
+    text: &str,
+    color: u32,
+) {
+    let mut x = rect.left;
+    let mut y = rect.top;
+    let max_right = rect.right;
+    let max_bottom = rect.bottom;
+    for ch in text.chars().take(96) {
+        if ch == '\r' {
+            continue;
+        }
+        if ch == '\n' || x + 4 > max_right {
+            x = rect.left;
+            y += 6;
+            if ch == '\n' {
+                continue;
+            }
+        }
+        if y + 5 > max_bottom {
+            break;
+        }
+        if !ch.is_whitespace() {
+            fill_framebuffer_screen_rect(framebuffer, Rect::from_origin_size(x, y, 3, 5), color);
+        }
+        x += 4;
+    }
+}
+
+fn message_box_button_x(slot: MessageBoxButtonSlot, button_width: i32) -> i32 {
+    match slot {
+        MessageBoxButtonSlot::Left => 26,
+        MessageBoxButtonSlot::Center => 110 - button_width / 2,
+        MessageBoxButtonSlot::Right => 220 - 26 - button_width,
+    }
+}
+
+fn message_box_button_title(label: MessageBoxButtonLabel) -> &'static str {
+    match label {
+        MessageBoxButtonLabel::Ok => "OK",
+        MessageBoxButtonLabel::Cancel => "Cancel",
+        MessageBoxButtonLabel::Abort => "Abort",
+        MessageBoxButtonLabel::Retry => "Retry",
+        MessageBoxButtonLabel::Ignore => "Ignore",
+        MessageBoxButtonLabel::Yes => "Yes",
+        MessageBoxButtonLabel::No => "No",
+        MessageBoxButtonLabel::YesAll => "Yes to All",
+    }
 }
 
 fn read_message_box_string<M: CoredllGuestMemory>(memory: &M, ptr: u32) -> Option<String> {
@@ -5662,19 +6661,35 @@ fn read_message_box_string<M: CoredllGuestMemory>(memory: &M, ptr: u32) -> Optio
     }
 }
 
-fn message_box_default_result(style: u32) -> Option<u32> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MessageBoxSelection {
+    buttons: Vec<u32>,
+    button_layout: Vec<MessageBoxButton>,
+    default_button_index: usize,
+    icon: Option<MessageBoxIcon>,
+    result: u32,
+}
+
+fn message_box_selection(style: u32) -> Option<MessageBoxSelection> {
     const MB_TYPEMASK: u32 = 0x0000_000f;
     const MB_DEFMASK: u32 = 0x0000_0300;
+    const MB_ICONMASK: u32 = 0x0000_00f0;
     const MB_OK: u32 = 0x0000_0000;
     const MB_OKCANCEL: u32 = 0x0000_0001;
     const MB_ABORTRETRYIGNORE: u32 = 0x0000_0002;
     const MB_YESNOCANCEL: u32 = 0x0000_0003;
     const MB_YESNO: u32 = 0x0000_0004;
     const MB_RETRYCANCEL: u32 = 0x0000_0005;
+    const MB_YESALL: u32 = 0x0000_0006;
+    const MB_CANCEL: u32 = 0x0000_0007;
     const MB_DEFBUTTON1: u32 = 0x0000_0000;
     const MB_DEFBUTTON2: u32 = 0x0000_0100;
     const MB_DEFBUTTON3: u32 = 0x0000_0200;
     const MB_DEFBUTTON4: u32 = 0x0000_0300;
+    const MB_ICONHAND: u32 = 0x0000_0010;
+    const MB_ICONQUESTION: u32 = 0x0000_0020;
+    const MB_ICONEXCLAMATION: u32 = 0x0000_0030;
+    const MB_ICONASTERISK: u32 = 0x0000_0040;
     const IDOK: u32 = 1;
     const IDCANCEL: u32 = 2;
     const IDABORT: u32 = 3;
@@ -5683,26 +6698,135 @@ fn message_box_default_result(style: u32) -> Option<u32> {
     const IDYES: u32 = 6;
     const IDNO: u32 = 7;
 
-    let buttons: &[u32] = match style & MB_TYPEMASK {
-        MB_OK => &[IDOK],
-        MB_OKCANCEL => &[IDOK, IDCANCEL],
-        MB_ABORTRETRYIGNORE => &[IDABORT, IDRETRY, IDIGNORE],
-        MB_YESNOCANCEL => &[IDYES, IDNO, IDCANCEL],
-        MB_YESNO => &[IDYES, IDNO],
-        MB_RETRYCANCEL => &[IDRETRY, IDCANCEL],
+    let button_layout: Vec<MessageBoxButton> = match style & MB_TYPEMASK {
+        MB_OK => vec![message_box_button(
+            IDOK,
+            MessageBoxButtonLabel::Ok,
+            MessageBoxButtonSlot::Center,
+        )],
+        MB_OKCANCEL => vec![
+            message_box_button(IDOK, MessageBoxButtonLabel::Ok, MessageBoxButtonSlot::Left),
+            message_box_button(
+                IDCANCEL,
+                MessageBoxButtonLabel::Cancel,
+                MessageBoxButtonSlot::Right,
+            ),
+        ],
+        MB_ABORTRETRYIGNORE => vec![
+            message_box_button(
+                IDABORT,
+                MessageBoxButtonLabel::Abort,
+                MessageBoxButtonSlot::Left,
+            ),
+            message_box_button(
+                IDRETRY,
+                MessageBoxButtonLabel::Retry,
+                MessageBoxButtonSlot::Center,
+            ),
+            message_box_button(
+                IDIGNORE,
+                MessageBoxButtonLabel::Ignore,
+                MessageBoxButtonSlot::Right,
+            ),
+        ],
+        MB_YESNOCANCEL => vec![
+            message_box_button(
+                IDYES,
+                MessageBoxButtonLabel::Yes,
+                MessageBoxButtonSlot::Left,
+            ),
+            message_box_button(
+                IDNO,
+                MessageBoxButtonLabel::No,
+                MessageBoxButtonSlot::Center,
+            ),
+            message_box_button(
+                IDCANCEL,
+                MessageBoxButtonLabel::Cancel,
+                MessageBoxButtonSlot::Right,
+            ),
+        ],
+        MB_YESNO => vec![
+            message_box_button(
+                IDYES,
+                MessageBoxButtonLabel::Yes,
+                MessageBoxButtonSlot::Left,
+            ),
+            message_box_button(IDNO, MessageBoxButtonLabel::No, MessageBoxButtonSlot::Right),
+        ],
+        MB_RETRYCANCEL => vec![
+            message_box_button(
+                IDRETRY,
+                MessageBoxButtonLabel::Retry,
+                MessageBoxButtonSlot::Left,
+            ),
+            message_box_button(
+                IDCANCEL,
+                MessageBoxButtonLabel::Cancel,
+                MessageBoxButtonSlot::Right,
+            ),
+        ],
+        MB_YESALL => vec![
+            message_box_button(
+                IDYES,
+                MessageBoxButtonLabel::Yes,
+                MessageBoxButtonSlot::Left,
+            ),
+            message_box_button(
+                IDNO,
+                MessageBoxButtonLabel::No,
+                MessageBoxButtonSlot::Center,
+            ),
+            message_box_button(
+                IDCANCEL,
+                MessageBoxButtonLabel::YesAll,
+                MessageBoxButtonSlot::Right,
+            ),
+        ],
+        MB_CANCEL => vec![message_box_button(
+            IDCANCEL,
+            MessageBoxButtonLabel::Cancel,
+            MessageBoxButtonSlot::Center,
+        )],
         _ => return None,
     };
-    let index = match style & MB_DEFMASK {
+    let buttons: Vec<u32> = button_layout.iter().map(|button| button.id).collect();
+    let requested_index = match style & MB_DEFMASK {
         MB_DEFBUTTON1 => 0,
         MB_DEFBUTTON2 => 1,
         MB_DEFBUTTON3 => 2,
         MB_DEFBUTTON4 => 3,
         _ => 0,
     };
-    buttons
-        .get(index)
-        .copied()
-        .or_else(|| buttons.first().copied())
+    let default_button_index = if requested_index < button_layout.len() {
+        requested_index
+    } else {
+        0
+    };
+    let icon = match style & MB_ICONMASK {
+        0 => None,
+        MB_ICONHAND => Some(MessageBoxIcon::Hand),
+        MB_ICONQUESTION => Some(MessageBoxIcon::Question),
+        MB_ICONEXCLAMATION => Some(MessageBoxIcon::Exclamation),
+        MB_ICONASTERISK => Some(MessageBoxIcon::Asterisk),
+        _ => None,
+    };
+    let result = buttons[default_button_index];
+    Some(MessageBoxSelection {
+        buttons,
+        button_layout,
+        default_button_index,
+        icon,
+        result,
+    })
+}
+
+fn message_box_button(
+    id: u32,
+    label: MessageBoxButtonLabel,
+    slot: MessageBoxButtonSlot,
+) -> MessageBoxButton {
+    MessageBoxButton { id, label, slot }
 }
 
 fn create_caret_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
@@ -6112,12 +7236,12 @@ fn find_next_file_w_raw<M: CoredllGuestMemory>(
     }
 }
 
-fn path_bool_raw<M: CoredllGuestMemory>(
+fn path_mutating_bool_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
     thread_id: u32,
     path_ptr: u32,
-    op: fn(&CeKernel, &str) -> Result<()>,
+    op: fn(&mut CeKernel, &str) -> Result<()>,
 ) -> bool {
     let Some(path) = read_guest_wide_arg(memory, path_ptr) else {
         kernel
@@ -6143,15 +7267,16 @@ fn move_file_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
     thread_id: u32,
-    args: &[u32],
+    existing_path_ptr: u32,
+    new_path_ptr: u32,
 ) -> bool {
-    let Some(existing_path) = read_guest_wide_arg(memory, raw_arg(args, 0)) else {
+    let Some(existing_path) = read_guest_wide_arg(memory, existing_path_ptr) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     };
-    let Some(new_path) = read_guest_wide_arg(memory, raw_arg(args, 1)) else {
+    let Some(new_path) = read_guest_wide_arg(memory, new_path_ptr) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -6207,15 +7332,16 @@ fn set_file_attributes_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
     thread_id: u32,
-    args: &[u32],
+    path_ptr: u32,
+    attributes: u32,
 ) -> bool {
-    let Some(path) = read_guest_wide_arg(memory, raw_arg(args, 0)) else {
+    let Some(path) = read_guest_wide_arg(memory, path_ptr) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     };
-    match kernel.set_file_attributes_w(&path, raw_arg(args, 1)) {
+    match kernel.set_file_attributes_w(&path, attributes) {
         Ok(()) => {
             kernel.threads.set_last_error(thread_id, 0);
             true
@@ -9971,7 +11097,9 @@ fn handle_dialog_key_message(
             true
         }
         VK_ESCAPE => {
-            let _ = kernel.send_message_w(dialog, crate::ce::gwe::WM_COMMAND, IDCANCEL, 0);
+            let (command_id, command_hwnd) = kernel.gwe.dialog_cancel_command(dialog, IDCANCEL);
+            let _ =
+                kernel.send_message_w(dialog, crate::ce::gwe::WM_COMMAND, command_id, command_hwnd);
             true
         }
         _ => false,
@@ -10607,12 +11735,32 @@ fn sh_get_special_folder_path_raw<M: CoredllGuestMemory>(
     }
     let folder_arg = raw_arg(args, 2);
     let create = raw_arg(args, 3) != 0 || folder_arg & CSIDL_FLAG_CREATE != 0;
-    let Some(path) = special_folder_path(kernel, folder_arg) else {
+    let Some(resolution) = special_folder_resolution(kernel, folder_arg) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     };
+    let path = resolution.path.clone();
+    let source = resolution.source;
+    let fallback_policy = kernel.shell.special_folder_fallback_policy();
+    kernel
+        .shell
+        .record_special_folder_query(ShellSpecialFolderRecord {
+            csidl: resolution.csidl,
+            value_name: resolution.value_name,
+            path: path.clone(),
+            source,
+            create_requested: create,
+        });
+    if source != ShellSpecialFolderSource::Registry
+        && fallback_policy == ShellSpecialFolderFallbackPolicy::Strict
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+        return false;
+    }
     if path.encode_utf16().count() >= MAX_PATH_CHARS {
         kernel
             .threads
@@ -10678,6 +11826,9 @@ fn sh_change_notify_register_i_raw<M: CoredllGuestMemory>(
     else {
         return false;
     };
+    let notify_flags = memory
+        .read_u32(entry_ptr.wrapping_add(12))
+        .unwrap_or(SHCNF_PATHW);
     let watch_dir = if watch_dir_ptr == 0 {
         None
     } else {
@@ -10694,6 +11845,7 @@ fn sh_change_notify_register_i_raw<M: CoredllGuestMemory>(
         .register_change_notification(ShellChangeNotifyRegistration {
             hwnd,
             event_mask,
+            notify_flags,
             watch_dir,
             recursive: recursive != 0,
         });
@@ -10736,9 +11888,11 @@ fn sh_file_notify_remove_i_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u3
 }
 
 fn sh_file_notify_free_i_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
-    kernel
-        .shell
-        .record_freed_file_notification(raw_arg(args, 0));
+    let ptr = raw_arg(args, 0);
+    kernel.shell.record_freed_file_notification(ptr);
+    if ptr != 0 && kernel.release_message_pointer_payload(ptr).is_none() {
+        let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
+    }
     kernel.threads.set_last_error(thread_id, 0);
     0
 }
@@ -10862,7 +12016,11 @@ fn sh_notification_add_i_raw<M: CoredllGuestMemory>(
     if data.hwnd_sink != 0 && !kernel.gwe.is_window(data.hwnd_sink) {
         return ERROR_INVALID_PARAMETER;
     }
-    notification_result_to_error(kernel.shell.add_notification(data))
+    notification_result_to_error(
+        kernel
+            .shell
+            .add_notification(data, kernel.timers.tick_count()),
+    )
 }
 
 fn sh_notification_update_i_raw<M: CoredllGuestMemory>(
@@ -10881,7 +12039,14 @@ fn sh_notification_update_i_raw<M: CoredllGuestMemory>(
     ) else {
         return ERROR_INVALID_PARAMETER;
     };
-    notification_result_to_error(kernel.shell.update_notification(raw_arg(args, 0), data))
+    if data.hwnd_sink != 0 && !kernel.gwe.is_window(data.hwnd_sink) {
+        return ERROR_INVALID_PARAMETER;
+    }
+    notification_result_to_error(kernel.shell.update_notification(
+        raw_arg(args, 0),
+        data,
+        kernel.timers.tick_count(),
+    ))
 }
 
 fn sh_notification_remove_i_raw<M: CoredllGuestMemory>(
@@ -11210,26 +12375,42 @@ fn sh_get_file_info_w_raw<M: CoredllGuestMemory>(
         return 0;
     };
 
+    let system_image_list_probe = path.trim().is_empty() && flags & SHGFI_SYSICONINDEX != 0;
+    let mut shell_attributes_override = None;
     let attributes = if flags & SHGFI_USEFILEATTRIBUTES != 0 {
         if requested_attributes == 0 {
             FILE_ATTRIBUTE_ARCHIVE
         } else {
             requested_attributes
         }
+    } else if system_image_list_probe {
+        FILE_ATTRIBUTE_ARCHIVE
     } else {
         match kernel.file_attributes_w(&path) {
             Ok(data) => data.attributes,
+            Err(_) if is_shell_unc_path(&path) => {
+                if flags & SHGFI_ATTRIBUTES != 0 {
+                    shell_attributes_override = Some(SFGAO_FILESYSTEM | SFGAO_FOLDER);
+                }
+                FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_TEMPORARY
+            }
             Err(_) => {
                 kernel
                     .threads
-                    .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+                    .set_last_error(thread_id, ERROR_MOD_NOT_FOUND_LOCAL);
                 return 0;
             }
         }
     };
     let class = shell_file_class(kernel, &path, attributes);
-    let icon_index = shell_icon_index(&class, attributes);
-    let icon_handle = shell_icon_handle(attributes);
+    let icon = shell_file_icon(kernel, &path, attributes, &class);
+    if flags & SHGFI_SYSICONINDEX != 0 {
+        kernel.resources.create_shell_system_image_list(
+            SHELL_SYSTEM_IMAGE_LIST_HANDLE,
+            SHELL_SYSTEM_IMAGE_LIST_CX,
+            SHELL_SYSTEM_IMAGE_LIST_CY,
+        );
+    }
     if !write_guest_u32(
         kernel,
         memory,
@@ -11258,7 +12439,7 @@ fn sh_get_file_info_w_raw<M: CoredllGuestMemory>(
             memory,
             thread_id,
             info_ptr + SHFILEINFO_ATTRIBUTES_OFFSET,
-            attributes,
+            shell_attributes_override.unwrap_or(attributes),
         ) {
             return 0;
         }
@@ -11269,7 +12450,7 @@ fn sh_get_file_info_w_raw<M: CoredllGuestMemory>(
             memory,
             thread_id,
             info_ptr + SHFILEINFO_HICON_OFFSET,
-            icon_handle,
+            icon.handle,
         )
     {
         return 0;
@@ -11280,7 +12461,7 @@ fn sh_get_file_info_w_raw<M: CoredllGuestMemory>(
             memory,
             thread_id,
             info_ptr + SHFILEINFO_IICON_OFFSET,
-            icon_index as u32,
+            icon.index as u32,
         )
     {
         return 0;
@@ -11316,7 +12497,7 @@ fn sh_get_file_info_w_raw<M: CoredllGuestMemory>(
     if flags & SHGFI_SYSICONINDEX != 0 {
         SHELL_SYSTEM_IMAGE_LIST_HANDLE
     } else if flags & SHGFI_ICON != 0 {
-        icon_handle
+        icon.handle
     } else {
         1
     }
@@ -11328,6 +12509,18 @@ struct ShellLaunchCommand {
     command_line: Option<String>,
     current_directory: Option<String>,
     hinst_app: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShellLaunchError {
+    FileNotFound,
+    NoAssociation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShellShortcutTarget {
+    path: String,
+    arguments: Option<String>,
 }
 
 fn shell_execute_ex_w_raw<M: CoredllGuestMemory>(
@@ -11392,19 +12585,18 @@ fn shell_execute_ex_w_raw<M: CoredllGuestMemory>(
         parameters.as_deref(),
         directory.as_deref(),
     ) {
-        Some(launch) => launch,
-        None => {
-            let error = if file_extension(&file).is_some() {
-                SE_ERR_NOASSOC
-            } else {
-                SE_ERR_FNF
+        Ok(launch) => launch,
+        Err(error) => {
+            let hinst_app = match error {
+                ShellLaunchError::FileNotFound => SE_ERR_FNF,
+                ShellLaunchError::NoAssociation => SE_ERR_NOASSOC,
             };
             let _ = write_optional_u32(
                 kernel,
                 memory,
                 thread_id,
                 info_ptr.wrapping_add(SHELLEXECUTEINFO_HINSTAPP_OFFSET),
-                error,
+                hinst_app,
             );
             kernel
                 .threads
@@ -11659,7 +12851,9 @@ fn sh_add_to_recent_docs_raw<M: CoredllGuestMemory>(
 ) -> u32 {
     let flags = raw_arg(args, 0);
     let value = raw_arg(args, 1);
-    let Some(recent_dir) = special_folder_path(kernel, CSIDL_RECENT) else {
+    let Some(recent_dir) =
+        special_folder_resolution(kernel, CSIDL_RECENT).map(|folder| folder.path)
+    else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
@@ -11671,25 +12865,23 @@ fn sh_add_to_recent_docs_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return 0;
     }
-    if flags == SHARD_PIDL {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-        return 0;
-    }
-    if flags != SHARD_PATH {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-        return 0;
-    }
-    let Some(target_path) = read_shell_api_path_arg(memory, value) else {
+    let target = match flags {
+        SHARD_PATH => read_shell_api_path_arg(memory, value).map(RecentDocumentTarget::path),
+        SHARD_PIDL => read_shell_pidl_arg(kernel, memory, thread_id, value),
+        _ => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+    };
+    let Some(target) = target else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     };
-    let Some(shortcut_path) = recent_doc_shortcut_path(&recent_dir, &target_path) else {
+    let Some(shortcut_path) = recent_doc_shortcut_path(&recent_dir, &target) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -11701,13 +12893,18 @@ fn sh_add_to_recent_docs_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_ACCESS_DENIED);
         return 0;
     }
-    let quoted_target = quote_shell_arg(&target_path);
+    let quoted_target = quote_shell_arg(&target.target_path);
     if create_ce_shortcut_file(kernel, thread_id, &shortcut_path, &quoted_target) {
-        kernel.shell.record_recent_document(RecentDocumentRecord {
+        let pruned = kernel.shell.record_recent_document(RecentDocumentRecord {
             flags,
-            target_path,
+            target_path: target.target_path,
+            display_name: target.display_name,
             shortcut_path,
+            pidl_bytes: target.pidl_bytes,
         });
+        for record in pruned {
+            let _ = kernel.delete_file_w(&record.shortcut_path);
+        }
     }
     0
 }
@@ -11758,17 +12955,107 @@ fn parse_ce_shortcut_target_bytes(bytes: &[u8]) -> Option<String> {
     Some(target.trim_end_matches('\0').replace('/', "\\"))
 }
 
-fn recent_doc_shortcut_path(recent_dir: &str, target_path: &str) -> Option<String> {
-    let target_path = target_path.trim().trim_matches('"').replace('/', "\\");
-    let (_dir, file_name) = split_shell_path_parent_file(&target_path);
-    if file_name.is_empty() {
-        return None;
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RecentDocumentTarget {
+    target_path: String,
+    display_name: String,
+    pidl_bytes: Option<Vec<u8>>,
+}
+
+impl RecentDocumentTarget {
+    fn path(path: String) -> Self {
+        let target_path = path.trim().trim_matches('"').replace('/', "\\");
+        let (_dir, file_name) = split_shell_path_parent_file(&target_path);
+        let (stem, _extension) = split_shell_file_stem_extension(&file_name);
+        Self {
+            target_path,
+            display_name: stem.to_owned(),
+            pidl_bytes: None,
+        }
     }
-    let (stem, _extension) = split_shell_file_stem_extension(&file_name);
+}
+
+fn recent_doc_shortcut_path(recent_dir: &str, target: &RecentDocumentTarget) -> Option<String> {
+    let display_name = if target.display_name.is_empty() {
+        let (_dir, file_name) = split_shell_path_parent_file(&target.target_path);
+        let (stem, _extension) = split_shell_file_stem_extension(&file_name);
+        stem.to_owned()
+    } else {
+        target.display_name.clone()
+    };
+    let stem = sanitize_recent_shortcut_stem(&display_name);
     if stem.is_empty() {
         return None;
     }
     Some(join_shell_path(recent_dir, &format!("{stem}.lnk")))
+}
+
+fn sanitize_recent_shortcut_stem(name: &str) -> String {
+    name.trim()
+        .trim_matches('"')
+        .chars()
+        .map(|ch| match ch {
+            '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            ch if ch.is_control() => '_',
+            ch => ch,
+        })
+        .collect::<String>()
+        .trim_matches('.')
+        .trim()
+        .to_owned()
+}
+
+fn read_shell_pidl_arg<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    ptr: u32,
+) -> Option<RecentDocumentTarget> {
+    let cb = u32::from(read_guest_u16(kernel, memory, thread_id, ptr)?);
+    if cb < 4 || cb > 2 + 2 * MAX_PATH_CHARS as u32 {
+        return None;
+    }
+    if read_guest_u16(kernel, memory, thread_id, ptr.wrapping_add(cb))? != 0 {
+        return None;
+    }
+    let payload = read_guest_bytes(kernel, memory, thread_id, ptr.wrapping_add(2), cb - 2)?;
+    if cb % 2 == 0 {
+        let mut units = Vec::new();
+        for chunk in payload.chunks_exact(2) {
+            let unit = u16::from_le_bytes([chunk[0], chunk[1]]);
+            if unit == 0 {
+                break;
+            }
+            units.push(unit);
+        }
+        if !units.is_empty() {
+            if let Ok(path) = String::from_utf16(&units) {
+                let path = path.trim().replace('/', "\\");
+                if !path.is_empty()
+                    && (path.starts_with('\\') || path.contains(':') || path.contains('\\'))
+                {
+                    return Some(RecentDocumentTarget::path(path));
+                }
+            }
+        }
+    }
+    let hex = hex_lower(&payload);
+    let display_name = format!("Namespace PIDL {}", &hex[..hex.len().min(12)]);
+    Some(RecentDocumentTarget {
+        target_path: format!("::pidl:{hex}"),
+        display_name,
+        pidl_bytes: Some(payload),
+    })
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 fn clear_recent_docs(kernel: &mut CeKernel, recent_dir: &str) {
@@ -11840,28 +13127,58 @@ fn resolve_shell_launch(
     verb: &str,
     parameters: Option<&str>,
     directory: Option<&str>,
-) -> Option<ShellLaunchCommand> {
-    let file = normalize_shell_path(file, directory);
-    let target = if is_shell_shortcut(&file) {
-        resolve_ce_shortcut(kernel, &file)?
+) -> std::result::Result<ShellLaunchCommand, ShellLaunchError> {
+    let current_directory = directory.and_then(normalize_shell_directory).or_else(|| {
+        kernel
+            .process_current_directory()
+            .and_then(normalize_shell_directory)
+    });
+    let file = normalize_shell_path(file, current_directory.as_deref());
+    let (target, launch_parameters) = if is_shell_shortcut(&file) {
+        let shortcut = resolve_ce_shortcut(kernel, &file).ok_or(ShellLaunchError::FileNotFound)?;
+        (
+            shortcut.path,
+            combine_shell_parameters(shortcut.arguments.as_deref(), parameters),
+        )
     } else {
-        file
+        (file, parameters.map(str::to_owned))
     };
-    if is_executable_shell_path(&target) && kernel.file_attributes_w(&target).is_ok() {
-        return Some(ShellLaunchCommand {
+    if is_executable_shell_path(&target) {
+        if kernel.file_attributes_w(&target).is_err() {
+            return Err(ShellLaunchError::FileNotFound);
+        }
+        return Ok(ShellLaunchCommand {
             application: Some(target.clone()),
-            command_line: combine_shell_command_line(&target, parameters),
-            current_directory: directory.and_then(normalize_shell_directory),
+            command_line: combine_shell_command_line(&target, launch_parameters.as_deref()),
+            current_directory,
             hinst_app: SHELL_EXECUTE_SUCCESS,
         });
     }
-    let command_template = shell_association_command(kernel, &target, verb)?;
-    let command = expand_shell_command_template(&command_template, &target, parameters);
+    if kernel.file_attributes_w(&target).is_err() {
+        return Err(ShellLaunchError::FileNotFound);
+    }
+    let command_template = shell_association_command(kernel, &target, verb).ok_or_else(|| {
+        if file_extension(&target).is_some() {
+            ShellLaunchError::NoAssociation
+        } else {
+            ShellLaunchError::NoAssociation
+        }
+    })?;
+    let command =
+        expand_shell_command_template(&command_template, &target, launch_parameters.as_deref());
     let (application, command_line) = split_shell_command(&command);
-    Some(ShellLaunchCommand {
+    let Some(application_path) = application.as_deref() else {
+        return Err(ShellLaunchError::NoAssociation);
+    };
+    if is_absolute_shell_path(application_path)
+        && kernel.file_attributes_w(application_path).is_err()
+    {
+        return Err(ShellLaunchError::FileNotFound);
+    }
+    Ok(ShellLaunchCommand {
         application,
         command_line,
-        current_directory: directory.and_then(normalize_shell_directory),
+        current_directory,
         hinst_app: SHELL_EXECUTE_SUCCESS,
     })
 }
@@ -11898,25 +13215,33 @@ fn is_executable_shell_path(path: &str) -> bool {
     file_extension(path).is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
 }
 
-fn resolve_ce_shortcut(kernel: &CeKernel, path: &str) -> Option<String> {
+fn is_absolute_shell_path(path: &str) -> bool {
+    let path = path.trim();
+    path.starts_with('\\') || path.contains(':')
+}
+
+fn resolve_ce_shortcut(kernel: &CeKernel, path: &str) -> Option<ShellShortcutTarget> {
     let bytes = kernel.files.read_guest_file(path).ok()?;
-    let text = String::from_utf8_lossy(&bytes);
-    let (_, rest) = text.split_once('#')?;
-    let rest = rest.trim();
-    if let Some(quoted) = rest.strip_prefix('"') {
-        let (target, _tail) = quoted.split_once('"')?;
-        return Some(target.replace('/', "\\"));
+    let target = parse_ce_shortcut_target_bytes(&bytes)?;
+    let (path, arguments) = split_shortcut_target_args(&target);
+    if path.is_empty() {
+        return None;
     }
-    rest.split_whitespace()
-        .next()
-        .map(|target| target.replace('/', "\\"))
+    Some(ShellShortcutTarget {
+        path,
+        arguments: (!arguments.is_empty()).then_some(arguments),
+    })
 }
 
 fn shell_association_command(kernel: &CeKernel, target: &str, verb: &str) -> Option<String> {
-    let extension = file_extension(target)?;
-    let extension_key = format!(r"HKCR\.{extension}");
-    let class = registry_string(kernel, &extension_key, "")
-        .or_else(|| registry_string(kernel, &format!(r"HKLM\Software\Classes\.{extension}"), ""))?;
+    let class = if let Some(extension) = file_extension(target) {
+        let extension_key = format!(r"HKCR\.{extension}");
+        registry_string(kernel, &extension_key, "").or_else(|| {
+            registry_string(kernel, &format!(r"HKLM\Software\Classes\.{extension}"), "")
+        })?
+    } else {
+        "file".to_owned()
+    };
     let verb = if verb.trim().is_empty() {
         "open"
     } else {
@@ -11953,10 +13278,24 @@ fn shell_file_class(kernel: &CeKernel, path: &str, attributes: u32) -> String {
 }
 
 fn shell_file_type_name(kernel: &CeKernel, path: &str, attributes: u32, class: &str) -> String {
+    if path.trim_end_matches(['\\', '/']) == "\\" {
+        return "System Folder".to_owned();
+    }
     if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
-        return registry_string(kernel, r"HKCR\Folder", "")
-            .or_else(|| registry_string(kernel, r"HKCR\Directory", ""))
-            .unwrap_or_else(|| "File Folder".to_owned());
+        if attributes & FILE_ATTRIBUTE_TEMPORARY != 0 {
+            return if is_shell_network_folder_path(path) {
+                "Network Folder".to_owned()
+            } else {
+                "Storage Card".to_owned()
+            };
+        }
+        return "Folder".to_owned();
+    }
+    if is_executable_shell_path(path) {
+        return "Application".to_owned();
+    }
+    if is_shell_shortcut(path) {
+        return "Shortcut".to_owned();
     }
     registry_string(kernel, &format!(r"HKCR\{class}"), "")
         .or_else(|| registry_string(kernel, &format!(r"HKLM\Software\Classes\{class}"), ""))
@@ -11967,23 +13306,123 @@ fn shell_file_type_name(kernel: &CeKernel, path: &str, attributes: u32, class: &
         })
 }
 
-fn shell_icon_index(class: &str, attributes: u32) -> i32 {
-    if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
-        return 3;
-    }
-    let hash = class.bytes().fold(0u32, |acc, byte| {
-        acc.wrapping_mul(33).wrapping_add(byte as u32)
-    });
-    10 + (hash % 4096) as i32
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ShellFileIcon {
+    index: i32,
+    handle: u32,
 }
 
-fn shell_icon_handle(attributes: u32) -> u32 {
-    let stock = if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
-        SHELL_GENERIC_FOLDER_ICON
-    } else {
-        SHELL_GENERIC_FILE_ICON
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShellDefaultIcon {
+    location: String,
+    index: i32,
+}
+
+fn shell_file_icon(kernel: &CeKernel, path: &str, attributes: u32, class: &str) -> ShellFileIcon {
+    let index = shell_icon_index(kernel, path, class, attributes);
+    let flags = if is_shell_shortcut(path) { 1 << 8 } else { 0 };
+    ShellFileIcon {
+        index,
+        handle: shell_icon_handle_with_flags(index, flags),
+    }
+}
+
+fn shell_icon_index(kernel: &CeKernel, path: &str, class: &str, attributes: u32) -> i32 {
+    if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+        if attributes & FILE_ATTRIBUTE_TEMPORARY != 0 {
+            return if is_shell_network_folder_path(path) {
+                4
+            } else {
+                3
+            };
+        }
+        return 1;
+    }
+    if is_shell_shortcut(path) {
+        if let Some(shortcut) = resolve_ce_shortcut_icon_target(kernel, path) {
+            let target_attributes = kernel
+                .file_attributes_w(&shortcut.path)
+                .map(|data| data.attributes)
+                .unwrap_or(FILE_ATTRIBUTE_ARCHIVE);
+            let target_class = shell_file_class(kernel, &shortcut.path, target_attributes);
+            return shell_icon_index(kernel, &shortcut.path, &target_class, target_attributes);
+        }
+    }
+    if is_executable_shell_path(path) {
+        return 2;
+    }
+    if let Some(default_icon) = shell_default_icon(kernel, class) {
+        let location_hash = default_icon.location.bytes().fold(0u32, |acc, byte| {
+            acc.wrapping_mul(33)
+                .wrapping_add(byte.to_ascii_lowercase() as u32)
+        });
+        let index = default_icon.index.unsigned_abs();
+        return 100 + ((location_hash ^ index) % 4096) as i32;
+    }
+    0
+}
+
+fn resolve_ce_shortcut_icon_target(kernel: &CeKernel, path: &str) -> Option<ShellShortcutTarget> {
+    let mut current = path.to_owned();
+    for _ in 0..8 {
+        let shortcut = resolve_ce_shortcut(kernel, &current)?;
+        current = shortcut.path.clone();
+        if !is_shell_shortcut(&current) {
+            return Some(shortcut);
+        }
+    }
+    None
+}
+
+fn shell_icon_handle_with_flags(index: i32, flags: u32) -> u32 {
+    let stock = match index {
+        0 => SHELL_DOCUMENT_ICON,
+        1 => SHELL_GENERIC_FOLDER_ICON,
+        2 => SHELL_APPLICATION_ICON,
+        3 => SHELL_STORAGE_CARD_ICON,
+        4 => SHELL_NETWORK_FOLDER_ICON,
+        5 => SHELL_SHORTCUT_ICON,
+        value => 0x0000_c000 | ((value as u32) & 0x3fff),
     };
-    0x000b_8000 | stock
+    let overlay = (flags & SHELL_ICON_OVERLAY_MASK) >> 8;
+    0x000b_8000 | stock | (overlay << SHELL_ICON_OVERLAY_SHIFT)
+}
+
+fn is_shell_network_folder_path(path: &str) -> bool {
+    let trimmed = path.trim_end_matches(['\\', '/']);
+    is_shell_unc_path(trimmed)
+        || trimmed.eq_ignore_ascii_case(r"\release")
+        || trimmed.eq_ignore_ascii_case(r"\network")
+}
+
+fn is_shell_unc_path(path: &str) -> bool {
+    path.starts_with(r"\\")
+}
+
+fn shell_default_icon(kernel: &CeKernel, class: &str) -> Option<ShellDefaultIcon> {
+    let raw = registry_string(kernel, &format!(r"HKCR\{class}\DefaultIcon"), "").or_else(|| {
+        registry_string(
+            kernel,
+            &format!(r"HKLM\Software\Classes\{class}\DefaultIcon"),
+            "",
+        )
+    })?;
+    parse_shell_default_icon(&raw)
+}
+
+fn parse_shell_default_icon(raw: &str) -> Option<ShellDefaultIcon> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let (location, index) = match raw.rsplit_once(',') {
+        Some((location, index)) => (
+            location.trim().trim_matches('"').replace('/', "\\"),
+            index.trim().parse::<i32>().unwrap_or(0),
+        ),
+        None => (raw.trim_matches('"').replace('/', "\\"), 0),
+    };
+    (!location.is_empty()).then_some(ShellDefaultIcon { location, index })
 }
 
 fn shell_file_display_name(path: &str) -> String {
@@ -12007,9 +13446,13 @@ fn registry_string(kernel: &CeKernel, key: &str, value: &str) -> Option<String> 
 
 fn expand_shell_command_template(template: &str, target: &str, parameters: Option<&str>) -> String {
     let quoted_target = quote_shell_arg(target);
+    let bare_target = target.trim_matches('"');
     let params = parameters.unwrap_or_default().trim();
     let has_parameter_placeholder = template.contains("%*");
     let mut command = template
+        .replace("-u%1", &format!("-u{bare_target}"))
+        .replace("-u%l", &format!("-u{bare_target}"))
+        .replace("-u%L", &format!("-u{bare_target}"))
         .replace("\"%1\"", &quoted_target)
         .replace("\"%l\"", &quoted_target)
         .replace("\"%L\"", &quoted_target)
@@ -12030,6 +13473,17 @@ fn combine_shell_command_line(application: &str, parameters: Option<&str>) -> Op
         Some(quote_shell_arg(application))
     } else {
         Some(format!("{} {params}", quote_shell_arg(application)))
+    }
+}
+
+fn combine_shell_parameters(first: Option<&str>, second: Option<&str>) -> Option<String> {
+    let first = first.unwrap_or_default().trim();
+    let second = second.unwrap_or_default().trim();
+    match (first.is_empty(), second.is_empty()) {
+        (true, true) => None,
+        (false, true) => Some(first.to_owned()),
+        (true, false) => Some(second.to_owned()),
+        (false, false) => Some(format!("{first} {second}")),
     }
 }
 
@@ -12081,32 +13535,119 @@ fn file_extension(path: &str) -> Option<&str> {
         .filter(|extension| !extension.is_empty())
 }
 
-fn special_folder_path(kernel: &CeKernel, folder: u32) -> Option<String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SpecialFolderResolution {
+    csidl: u32,
+    value_name: String,
+    path: String,
+    source: ShellSpecialFolderSource,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SpecialFolderDef {
+    csidl: u32,
+    value_name: &'static str,
+    fallback: &'static str,
+}
+
+const SPECIAL_FOLDER_DEFS: &[SpecialFolderDef] = &[
+    SpecialFolderDef {
+        csidl: CSIDL_DESKTOP,
+        value_name: "Desktop",
+        fallback: r"\Windows\Desktop",
+    },
+    SpecialFolderDef {
+        csidl: CSIDL_PROGRAMS,
+        value_name: "Programs",
+        fallback: r"\Windows\Programs",
+    },
+    SpecialFolderDef {
+        csidl: CSIDL_PERSONAL,
+        value_name: "Personal",
+        fallback: r"\My Documents",
+    },
+    SpecialFolderDef {
+        csidl: CSIDL_FAVORITES,
+        value_name: "Favorites",
+        fallback: r"\Windows\Favorites",
+    },
+    SpecialFolderDef {
+        csidl: CSIDL_STARTUP,
+        value_name: "Startup",
+        fallback: r"\Windows\Startup",
+    },
+    SpecialFolderDef {
+        csidl: CSIDL_RECENT,
+        value_name: "Recent",
+        fallback: r"\Windows\Recent",
+    },
+    SpecialFolderDef {
+        csidl: CSIDL_STARTMENU,
+        value_name: "Start Menu",
+        fallback: r"\Windows\Start Menu",
+    },
+    SpecialFolderDef {
+        csidl: CSIDL_DESKTOPDIRECTORY,
+        value_name: "Desktop",
+        fallback: r"\Windows\Desktop",
+    },
+    SpecialFolderDef {
+        csidl: CSIDL_FONTS,
+        value_name: "Fonts",
+        fallback: r"\Windows\Fonts",
+    },
+    SpecialFolderDef {
+        csidl: CSIDL_APPDATA,
+        value_name: "AppData",
+        fallback: r"\Application Data",
+    },
+    SpecialFolderDef {
+        csidl: CSIDL_WINDOWS,
+        value_name: "Windows",
+        fallback: r"\Windows",
+    },
+    SpecialFolderDef {
+        csidl: CSIDL_SYSTEM,
+        value_name: "System",
+        fallback: r"\Windows",
+    },
+    SpecialFolderDef {
+        csidl: CSIDL_PROGRAM_FILES,
+        value_name: "Program Files",
+        fallback: r"\Program Files",
+    },
+    SpecialFolderDef {
+        csidl: CSIDL_PROFILE,
+        value_name: "Profile",
+        fallback: r"\Windows\Profiles",
+    },
+];
+
+fn special_folder_resolution(kernel: &CeKernel, folder: u32) -> Option<SpecialFolderResolution> {
     let folder = folder & !CSIDL_FLAG_CREATE;
-    let (value_name, fallback) = match folder {
-        0x0000 | 0x0010 => ("Desktop", r"\Windows\Desktop"),
-        0x0002 => ("Programs", r"\Windows\Programs"),
-        0x0005 => ("Personal", r"\My Documents"),
-        0x0006 => ("Favorites", r"\Windows\Favorites"),
-        0x0007 => ("Startup", r"\Windows\Startup"),
-        0x0008 => ("Recent", r"\Windows\Recent"),
-        0x000b => ("Start Menu", r"\Windows\Start Menu"),
-        0x0014 => ("Fonts", r"\Windows\Fonts"),
-        0x001a => ("AppData", r"\Application Data"),
-        0x0024 => ("Windows", r"\Windows"),
-        0x0026 => ("Program Files", r"\Program Files"),
-        0x0028 => ("Profile", r"\Windows\Profiles"),
-        _ => return None,
+    let def = SPECIAL_FOLDER_DEFS.iter().find(|def| def.csidl == folder)?;
+    let (path, source) = match kernel
+        .registry
+        .query_value(SHELL_FOLDERS_REGISTRY_PATH, def.value_name)
+    {
+        Ok(value) => match value.as_str() {
+            Some(path) => (path.to_owned(), ShellSpecialFolderSource::Registry),
+            None => (
+                def.fallback.to_owned(),
+                ShellSpecialFolderSource::FallbackNonString,
+            ),
+        },
+        Err(_) => (
+            def.fallback.to_owned(),
+            ShellSpecialFolderSource::FallbackMissing,
+        ),
     };
-    Some(
-        kernel
-            .registry
-            .query_value(SHELL_FOLDERS_REGISTRY_PATH, value_name)
-            .ok()
-            .and_then(|value| value.as_str())
-            .unwrap_or(fallback)
-            .to_owned(),
-    )
+    Some(SpecialFolderResolution {
+        csidl: folder,
+        value_name: def.value_name.to_owned(),
+        path,
+        source,
+    })
 }
 
 fn find_resource<M: CoredllGuestMemory>(
@@ -12342,6 +13883,7 @@ fn append_menu_w_raw<M: CoredllGuestMemory>(
 fn track_popup_menu_ex_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
+    framebuffer: Option<&mut dyn Framebuffer>,
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
@@ -12398,20 +13940,62 @@ fn track_popup_menu_ex_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     }
-    notify_popup_menu_owner(kernel, hwnd, menu, flags);
+    if let Some(framebuffer) = framebuffer {
+        render_popup_menu_framebuffer(
+            framebuffer,
+            kernel.resources.menu(menu).unwrap(),
+            raw_i32_arg(args, 2),
+            raw_i32_arg(args, 3),
+        );
+    }
     kernel.threads.set_last_error(thread_id, 0);
-    if flags & TPM_RETURNCMD != 0 { 0 } else { 1 }
+    let selection = kernel.resources.popup_menu_command_selection(menu);
+    let command = selection
+        .as_ref()
+        .map(|selection| selection.command)
+        .unwrap_or(0);
+    let submenus = selection
+        .as_ref()
+        .map(|selection| selection.submenus.as_slice())
+        .unwrap_or(&[]);
+    notify_popup_menu_owner(kernel, hwnd, menu, flags, submenus);
+    if flags & TPM_RETURNCMD != 0 {
+        command
+    } else {
+        notify_popup_menu_command(kernel, hwnd, flags, command);
+        1
+    }
 }
 
-fn notify_popup_menu_owner(kernel: &mut CeKernel, hwnd: u32, menu: u32, flags: u32) {
+fn notify_popup_menu_owner(
+    kernel: &mut CeKernel,
+    hwnd: u32,
+    menu: u32,
+    flags: u32,
+    submenus: &[u32],
+) {
     if hwnd == 0 || flags & TPM_NONOTIFY != 0 {
         return;
     }
-    for (msg, wparam, lparam) in [
+    let mut notifications = vec![
         (crate::ce::gwe::WM_ENTERMENULOOP, 1, 0),
         (crate::ce::gwe::WM_INITMENUPOPUP, menu, 0),
-        (crate::ce::gwe::WM_EXITMENULOOP, 1, 0),
-    ] {
+    ];
+    notifications.extend(
+        submenus
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, submenu)| {
+                (
+                    crate::ce::gwe::WM_INITMENUPOPUP,
+                    submenu,
+                    index.saturating_add(1) as u32,
+                )
+            }),
+    );
+    notifications.push((crate::ce::gwe::WM_EXITMENULOOP, 1, 0));
+    for (msg, wparam, lparam) in notifications {
         kernel
             .resources
             .record_popup_notification(PopupMenuNotification {
@@ -12422,6 +14006,107 @@ fn notify_popup_menu_owner(kernel: &mut CeKernel, hwnd: u32, menu: u32, flags: u
             });
         let _ = kernel.send_message_w(hwnd, msg, wparam, lparam);
     }
+}
+
+fn notify_popup_menu_command(kernel: &mut CeKernel, hwnd: u32, flags: u32, command: u32) {
+    if hwnd == 0 || command == 0 || flags & TPM_NONOTIFY != 0 {
+        return;
+    }
+    kernel
+        .resources
+        .record_popup_notification(PopupMenuNotification {
+            hwnd,
+            msg: crate::ce::gwe::WM_COMMAND,
+            wparam: command,
+            lparam: 0,
+        });
+    let _ = kernel.send_message_w(hwnd, crate::ce::gwe::WM_COMMAND, command, 0);
+}
+
+fn render_popup_menu_framebuffer(
+    framebuffer: &mut dyn Framebuffer,
+    menu: &crate::ce::resource::MenuObject,
+    x: i32,
+    y: i32,
+) {
+    let item_height = 18;
+    let item_count = menu.items.len().max(1) as i32;
+    let width = menu_popup_width(menu);
+    let height = item_count * item_height + 4;
+    let outer = Rect::from_origin_size(x, y, width, height);
+    fill_framebuffer_screen_rect(framebuffer, outer, rgb(0x00, 0x00, 0x00));
+    fill_framebuffer_screen_rect(
+        framebuffer,
+        Rect::from_origin_size(x + 1, y + 1, width - 2, height - 2),
+        rgb(0xf0, 0xf0, 0xf0),
+    );
+    for (index, item) in menu.items.iter().enumerate() {
+        let item_top = y + 2 + (index as i32) * item_height;
+        let item_rect = Rect::from_origin_size(x + 2, item_top, width - 4, item_height);
+        let disabled =
+            item.state & (crate::ce::resource::MF_DISABLED | crate::ce::resource::MF_GRAYED) != 0;
+        let default = item.state & crate::ce::resource::MFS_DEFAULT != 0;
+        let separator = item.item_type & crate::ce::resource::MF_SEPARATOR != 0;
+        let checked = item.state & crate::ce::resource::MF_CHECKED != 0;
+        let has_submenu = item.submenu != 0;
+        if default {
+            fill_framebuffer_screen_rect(framebuffer, item_rect, rgb(0xd8, 0xe8, 0xff));
+        }
+        if separator {
+            fill_framebuffer_screen_rect(
+                framebuffer,
+                Rect::from_origin_size(x + 8, item_top + item_height / 2, width - 16, 1),
+                rgb(0x80, 0x80, 0x80),
+            );
+            continue;
+        }
+        if checked {
+            fill_framebuffer_screen_rect(
+                framebuffer,
+                Rect::from_origin_size(x + 7, item_top + 5, 8, 8),
+                rgb(0x00, 0x80, 0x00),
+            );
+        }
+        let text_color = if disabled {
+            rgb(0x80, 0x80, 0x80)
+        } else {
+            rgb(0x00, 0x00, 0x00)
+        };
+        render_framebuffer_text_marks(
+            framebuffer,
+            Rect::from_origin_size(x + 22, item_top + 6, width - 42, 7),
+            item.text.as_deref().unwrap_or_default(),
+            text_color,
+        );
+        if has_submenu {
+            fill_framebuffer_screen_rect(
+                framebuffer,
+                Rect::from_origin_size(x + width - 15, item_top + 6, 7, 2),
+                text_color,
+            );
+            fill_framebuffer_screen_rect(
+                framebuffer,
+                Rect::from_origin_size(x + width - 12, item_top + 8, 4, 2),
+                text_color,
+            );
+            fill_framebuffer_screen_rect(
+                framebuffer,
+                Rect::from_origin_size(x + width - 10, item_top + 10, 2, 2),
+                text_color,
+            );
+        }
+    }
+}
+
+fn menu_popup_width(menu: &crate::ce::resource::MenuObject) -> i32 {
+    let text_chars = menu
+        .items
+        .iter()
+        .filter_map(|item| item.text.as_deref())
+        .map(|text| text.chars().count() as i32)
+        .max()
+        .unwrap_or(6);
+    (text_chars.saturating_mul(4) + 58).clamp(90, 220)
 }
 
 fn get_sub_menu_raw(kernel: &mut CeKernel, thread_id: u32, menu: u32, position: u32) -> u32 {
@@ -12965,6 +14650,984 @@ fn destroy_icon_raw(kernel: &mut CeKernel, thread_id: u32, icon: u32) -> bool {
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn image_list_create_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
+    let width = raw_i32_arg(args, 0);
+    let height = raw_i32_arg(args, 1);
+    let flags = raw_arg(args, 2);
+    let initial = raw_i32_arg(args, 3);
+    let grow = raw_i32_arg(args, 4);
+    match kernel
+        .resources
+        .create_image_list(width, height, flags, initial, grow)
+    {
+        Some(handle) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            handle
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            0
+        }
+    }
+}
+
+fn image_list_destroy_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {
+    if handle != SHELL_SYSTEM_IMAGE_LIST_HANDLE && kernel.resources.destroy_image_list(handle) {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        false
+    }
+}
+
+fn image_list_load_image_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let module = raw_arg(args, 0);
+    let name = raw_arg(args, 1);
+    let requested_cx = raw_i32_arg(args, 2);
+    let grow = raw_i32_arg(args, 3);
+    let mask = raw_arg(args, 4);
+    let image_type = raw_arg(args, 5);
+    let flags = raw_arg(args, 6);
+    if image_type != IMAGE_BITMAP {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let bitmap = load_image_w_raw(
+        kernel,
+        memory,
+        thread_id,
+        &[module, name, IMAGE_BITMAP, 0, 0, flags],
+    );
+    if bitmap == 0 {
+        return 0;
+    }
+    let Some(bitmap_info) = kernel.resources.bitmap(bitmap).cloned() else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    let width = if requested_cx > 0 {
+        requested_cx
+    } else {
+        bitmap_info.width.abs().max(1)
+    };
+    let height = bitmap_info.height.max(1);
+    let Some(list) = kernel
+        .resources
+        .create_image_list(width, height, 0, 1, grow)
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if kernel
+        .resources
+        .add_image_list_image(list, bitmap, mask)
+        .is_none()
+    {
+        kernel.resources.destroy_image_list(list);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    list
+}
+
+fn image_list_add_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> i32 {
+    let handle = raw_arg(args, 0);
+    let bitmap = raw_arg(args, 1);
+    let mask = raw_arg(args, 2);
+    match kernel.resources.add_image_list_image(handle, bitmap, mask) {
+        Some(index) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            index
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            -1
+        }
+    }
+}
+
+fn image_list_replace_icon_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> i32 {
+    let handle = raw_arg(args, 0);
+    let index = raw_i32_arg(args, 1);
+    let icon = raw_arg(args, 2);
+    match kernel
+        .resources
+        .replace_image_list_icon(handle, index, icon)
+    {
+        Some(index) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            index
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            -1
+        }
+    }
+}
+
+fn image_list_replace_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let handle = raw_arg(args, 0);
+    let index = raw_i32_arg(args, 1);
+    let bitmap = raw_arg(args, 2);
+    let mask = raw_arg(args, 3);
+    match kernel
+        .resources
+        .replace_image_list_image(handle, index, bitmap, mask)
+    {
+        Some(true) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            true
+        }
+        Some(false) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            false
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            false
+        }
+    }
+}
+
+fn image_list_remove_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let handle = raw_arg(args, 0);
+    let index = raw_i32_arg(args, 1);
+    match kernel.resources.remove_image_list_image(handle, index) {
+        Some(true) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            true
+        }
+        Some(false) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            false
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            false
+        }
+    }
+}
+
+fn image_list_set_icon_size_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let handle = raw_arg(args, 0);
+    let width = raw_i32_arg(args, 1);
+    let height = raw_i32_arg(args, 2);
+    match kernel.resources.set_image_list_size(handle, width, height) {
+        Some(true) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            true
+        }
+        Some(false) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            false
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            false
+        }
+    }
+}
+
+fn image_list_set_image_count_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let handle = raw_arg(args, 0);
+    let count = raw_arg(args, 1);
+    match kernel.resources.set_image_list_count(handle, count) {
+        Some(ok) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            ok
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            false
+        }
+    }
+}
+
+fn image_list_get_count_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {
+    if handle == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
+        kernel.threads.set_last_error(thread_id, 0);
+        return SHELL_SYSTEM_IMAGE_LIST_COUNT;
+    }
+    match kernel.resources.image_list_count(handle) {
+        Some(count) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            count as u32
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            0
+        }
+    }
+}
+
+fn image_list_get_icon_size_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let handle = raw_arg(args, 0);
+    let cx_ptr = raw_arg(args, 1);
+    let cy_ptr = raw_arg(args, 2);
+    let size = if handle == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
+        Some((SHELL_SYSTEM_IMAGE_LIST_CX, SHELL_SYSTEM_IMAGE_LIST_CY))
+    } else {
+        kernel
+            .resources
+            .image_list(handle)
+            .map(|list| (list.width, list.height))
+    };
+    let Some((cx, cy)) = size else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    if !write_guest_i32(kernel, memory, thread_id, cx_ptr, cx)
+        || !write_guest_i32(kernel, memory, thread_id, cy_ptr, cy)
+    {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn image_list_get_icon_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
+    let handle = raw_arg(args, 0);
+    let index = raw_i32_arg(args, 1);
+    let flags = raw_arg(args, 2);
+    if handle == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
+        if index < 0 || index as u32 >= SHELL_SYSTEM_IMAGE_LIST_COUNT {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        }
+        kernel.threads.set_last_error(thread_id, 0);
+        return shell_icon_handle_with_flags(index, flags);
+    }
+    match kernel.resources.image_list_icon(handle, index, 0, flags) {
+        Some(icon) if icon != 0 => {
+            kernel.threads.set_last_error(thread_id, 0);
+            icon
+        }
+        Some(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            0
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            0
+        }
+    }
+}
+
+fn image_list_get_image_info_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let handle = raw_arg(args, 0);
+    let index = raw_i32_arg(args, 1);
+    let info_ptr = raw_arg(args, 2);
+    if info_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let info = if handle == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
+        if index < 0 || index as u32 >= SHELL_SYSTEM_IMAGE_LIST_COUNT {
+            None
+        } else {
+            let left = index.saturating_mul(SHELL_SYSTEM_IMAGE_LIST_CX);
+            Some((
+                shell_system_image_bitmap_handle(index),
+                0,
+                left,
+                0,
+                left.saturating_add(SHELL_SYSTEM_IMAGE_LIST_CX),
+                SHELL_SYSTEM_IMAGE_LIST_CY,
+            ))
+        }
+    } else {
+        kernel.resources.image_list_info(handle, index).map(|info| {
+            (
+                info.bitmap,
+                info.mask,
+                info.left,
+                info.top,
+                info.right,
+                info.bottom,
+            )
+        })
+    };
+    let Some((bitmap, mask, left, top, right, bottom)) = info else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    if !write_guest_u32(kernel, memory, thread_id, info_ptr, bitmap)
+        || !write_guest_u32(kernel, memory, thread_id, info_ptr.wrapping_add(4), mask)
+        || !write_guest_u32(kernel, memory, thread_id, info_ptr.wrapping_add(8), 0)
+        || !write_guest_u32(kernel, memory, thread_id, info_ptr.wrapping_add(12), 0)
+        || !write_guest_i32(kernel, memory, thread_id, info_ptr.wrapping_add(16), left)
+        || !write_guest_i32(kernel, memory, thread_id, info_ptr.wrapping_add(20), top)
+        || !write_guest_i32(kernel, memory, thread_id, info_ptr.wrapping_add(24), right)
+        || !write_guest_i32(kernel, memory, thread_id, info_ptr.wrapping_add(28), bottom)
+    {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn image_list_set_bk_color_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
+    let handle = raw_arg(args, 0);
+    let color = raw_arg(args, 1);
+    if handle == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
+        kernel.threads.set_last_error(thread_id, 0);
+        return CLR_NONE;
+    }
+    match kernel.resources.set_image_list_bk_color(handle, color) {
+        Some(previous) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            previous
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            CLR_NONE
+        }
+    }
+}
+
+fn image_list_get_bk_color_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {
+    if handle == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
+        kernel.threads.set_last_error(thread_id, 0);
+        return CLR_NONE;
+    }
+    match kernel.resources.image_list(handle) {
+        Some(list) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            list.bk_color
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            CLR_NONE
+        }
+    }
+}
+
+fn image_list_draw_raw(
+    kernel: &mut CeKernel,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let handle = raw_arg(args, 0);
+    let index = raw_i32_arg(args, 1);
+    let hdc = raw_arg(args, 2);
+    let x = raw_i32_arg(args, 3);
+    let y = raw_i32_arg(args, 4);
+    let flags = raw_arg(args, 5);
+    let (width, height) = if handle == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
+        (SHELL_SYSTEM_IMAGE_LIST_CX, SHELL_SYSTEM_IMAGE_LIST_CY)
+    } else if let Some(list) = kernel.resources.image_list(handle) {
+        (list.width, list.height)
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    let draw = ImageListDraw {
+        image_list: handle,
+        index,
+        hdc,
+        x,
+        y,
+        width,
+        height,
+        flags,
+        overlay_image: None,
+    };
+    let rendered = record_image_list_draw(kernel, thread_id, draw);
+    if rendered {
+        render_image_list_draw_framebuffer(kernel, framebuffer, draw);
+    }
+    rendered
+}
+
+fn image_list_draw_ex_raw(
+    kernel: &mut CeKernel,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let handle = raw_arg(args, 0);
+    let index = raw_i32_arg(args, 1);
+    let hdc = raw_arg(args, 2);
+    let x = raw_i32_arg(args, 3);
+    let y = raw_i32_arg(args, 4);
+    let width = raw_i32_arg(args, 5);
+    let height = raw_i32_arg(args, 6);
+    let flags = raw_arg(args, 9);
+    if handle != SHELL_SYSTEM_IMAGE_LIST_HANDLE && kernel.resources.image_list(handle).is_none() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    let draw = ImageListDraw {
+        image_list: handle,
+        index,
+        hdc,
+        x,
+        y,
+        width,
+        height,
+        flags,
+        overlay_image: None,
+    };
+    let rendered = record_image_list_draw(kernel, thread_id, draw);
+    if rendered {
+        render_image_list_draw_framebuffer(kernel, framebuffer, draw);
+    }
+    rendered
+}
+
+fn image_list_draw_indirect_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    draw_ptr: u32,
+) -> bool {
+    if draw_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(size) = read_guest_u32(kernel, memory, thread_id, draw_ptr) else {
+        return false;
+    };
+    if size < 40 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(handle) = read_guest_u32(kernel, memory, thread_id, draw_ptr.wrapping_add(4)) else {
+        return false;
+    };
+    let Some(index) = read_guest_i32(kernel, memory, thread_id, draw_ptr.wrapping_add(8)) else {
+        return false;
+    };
+    let Some(hdc) = read_guest_u32(kernel, memory, thread_id, draw_ptr.wrapping_add(12)) else {
+        return false;
+    };
+    let Some(x) = read_guest_i32(kernel, memory, thread_id, draw_ptr.wrapping_add(16)) else {
+        return false;
+    };
+    let Some(y) = read_guest_i32(kernel, memory, thread_id, draw_ptr.wrapping_add(20)) else {
+        return false;
+    };
+    let Some(width) = read_guest_i32(kernel, memory, thread_id, draw_ptr.wrapping_add(24)) else {
+        return false;
+    };
+    let Some(height) = read_guest_i32(kernel, memory, thread_id, draw_ptr.wrapping_add(28)) else {
+        return false;
+    };
+    let Some(flags) = read_guest_u32(kernel, memory, thread_id, draw_ptr.wrapping_add(36)) else {
+        return false;
+    };
+    let draw = ImageListDraw {
+        image_list: handle,
+        index,
+        hdc,
+        x,
+        y,
+        width,
+        height,
+        flags,
+        overlay_image: None,
+    };
+    let rendered = record_image_list_draw(kernel, thread_id, draw);
+    if rendered {
+        render_image_list_draw_framebuffer(kernel, framebuffer, draw);
+    }
+    rendered
+}
+
+fn render_image_list_draw_framebuffer(
+    kernel: &CeKernel,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    draw: ImageListDraw,
+) {
+    let Some(framebuffer) = framebuffer else {
+        return;
+    };
+    let (default_width, default_height) = if draw.image_list == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
+        (SHELL_SYSTEM_IMAGE_LIST_CX, SHELL_SYSTEM_IMAGE_LIST_CY)
+    } else if let Some(list) = kernel.resources.image_list(draw.image_list) {
+        (list.width, list.height)
+    } else {
+        return;
+    };
+    let width = if draw.width > 0 {
+        draw.width
+    } else {
+        default_width
+    };
+    let height = if draw.height > 0 {
+        draw.height
+    } else {
+        default_height
+    };
+    if width <= 0 || height <= 0 {
+        return;
+    }
+    let rect = Rect::from_origin_size(draw.x, draw.y, width, height);
+    fill_framebuffer_rect_for_hdc(kernel, framebuffer, draw.hdc, rect, rgb(0x00, 0x00, 0x00));
+    if width <= 2 || height <= 2 {
+        return;
+    }
+    let seed = draw
+        .index
+        .max(0)
+        .unsigned_abs()
+        .wrapping_mul(37)
+        .wrapping_add(draw.image_list.rotate_left(5));
+    let body = rgb(
+        0x40 + (seed & 0x7f),
+        0x50 + ((seed >> 4) & 0x7f),
+        0x60 + ((seed >> 8) & 0x7f),
+    );
+    fill_framebuffer_rect_for_hdc(
+        kernel,
+        framebuffer,
+        draw.hdc,
+        Rect::from_origin_size(draw.x + 1, draw.y + 1, width - 2, height - 2),
+        body,
+    );
+    let overlay = draw
+        .overlay_image
+        .map(|overlay| overlay.saturating_add(1) as u32)
+        .unwrap_or((draw.flags >> 8) & 0x0f);
+    if overlay != 0 && width >= 6 && height >= 6 {
+        fill_framebuffer_rect_for_hdc(
+            kernel,
+            framebuffer,
+            draw.hdc,
+            Rect::from_origin_size(draw.x + width - 5, draw.y + height - 5, 4, 4),
+            rgb(0xff, 0xff, 0xff),
+        );
+        fill_framebuffer_rect_for_hdc(
+            kernel,
+            framebuffer,
+            draw.hdc,
+            Rect::from_origin_size(draw.x + width - 4, draw.y + height - 4, 2, 2),
+            rgb(0x00, 0x80, 0x00),
+        );
+    }
+}
+
+fn image_list_copy_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    const ILCF_MOVE: u32 = 0x0000_0000;
+    let dst_handle = raw_arg(args, 0);
+    let dst_index = raw_i32_arg(args, 1);
+    let src_handle = raw_arg(args, 2);
+    let src_index = raw_i32_arg(args, 3);
+    let flags = raw_arg(args, 4);
+    match kernel.resources.copy_image_list_image(
+        dst_handle,
+        dst_index,
+        src_handle,
+        src_index,
+        flags == ILCF_MOVE,
+    ) {
+        Some(true) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            true
+        }
+        Some(false) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            false
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            false
+        }
+    }
+}
+
+fn image_list_copy_dither_image_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) {
+    let dst_handle = raw_arg(args, 0);
+    let dst_index = raw_i32_arg(args, 1) & 0xffff;
+    let x = raw_i32_arg(args, 2);
+    let y = raw_i32_arg(args, 3);
+    let src_handle = raw_arg(args, 4);
+    let src_index = raw_i32_arg(args, 5);
+    let flags = raw_arg(args, 6);
+    match kernel
+        .resources
+        .copy_dither_image_list_image(dst_handle, dst_index, x, y, src_handle, src_index, flags)
+    {
+        Some(true) => {
+            kernel.threads.set_last_error(thread_id, 0);
+        }
+        Some(false) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        }
+    }
+}
+
+fn image_list_merge_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
+    let first_handle = raw_arg(args, 0);
+    let first_index = raw_i32_arg(args, 1);
+    let second_handle = raw_arg(args, 2);
+    let second_index = raw_i32_arg(args, 3);
+    let dx = raw_i32_arg(args, 4);
+    let dy = raw_i32_arg(args, 5);
+    match kernel.resources.merge_image_list_images(
+        first_handle,
+        first_index,
+        second_handle,
+        second_index,
+        dx,
+        dy,
+    ) {
+        Some(handle) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            handle
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            0
+        }
+    }
+}
+
+fn image_list_begin_drag_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let handle = raw_arg(args, 0);
+    let index = raw_i32_arg(args, 1);
+    let hotspot_x = raw_i32_arg(args, 2);
+    let hotspot_y = raw_i32_arg(args, 3);
+    match kernel
+        .resources
+        .begin_image_list_drag(handle, index, hotspot_x, hotspot_y)
+    {
+        Some(true) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            true
+        }
+        Some(false) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            false
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            false
+        }
+    }
+}
+
+fn image_list_set_drag_cursor_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let handle = raw_arg(args, 0);
+    let index = raw_i32_arg(args, 1);
+    let hotspot_x = raw_i32_arg(args, 2);
+    let hotspot_y = raw_i32_arg(args, 3);
+    match kernel
+        .resources
+        .set_image_list_drag_cursor(handle, index, hotspot_x, hotspot_y)
+    {
+        Some(true) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            true
+        }
+        Some(false) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            false
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            false
+        }
+    }
+}
+
+fn image_list_drag_enter_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    if kernel.resources.image_list_drag_enter(
+        raw_arg(args, 0),
+        raw_i32_arg(args, 1),
+        raw_i32_arg(args, 2),
+    ) {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        false
+    }
+}
+
+fn image_list_drag_move_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    if kernel
+        .resources
+        .image_list_drag_move(raw_i32_arg(args, 0), raw_i32_arg(args, 1))
+    {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        false
+    }
+}
+
+fn image_list_drag_leave_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    if kernel.resources.image_list_drag_leave(raw_arg(args, 0)) {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        false
+    }
+}
+
+fn image_list_drag_show_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    if kernel.resources.image_list_drag_show(raw_arg(args, 0) != 0) {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        false
+    }
+}
+
+fn image_list_end_drag_raw(kernel: &mut CeKernel, thread_id: u32) -> bool {
+    if kernel.resources.end_image_list_drag() {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        false
+    }
+}
+
+fn image_list_get_drag_image_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let Some(drag) = kernel.resources.image_list_drag() else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return 0;
+    };
+    let point_ptr = raw_arg(args, 0);
+    let hotspot_ptr = raw_arg(args, 1);
+    if point_ptr != 0
+        && !write_guest_point(
+            kernel,
+            memory,
+            thread_id,
+            point_ptr,
+            Point {
+                x: drag.x,
+                y: drag.y,
+            },
+        )
+    {
+        return 0;
+    }
+    if hotspot_ptr != 0
+        && !write_guest_point(
+            kernel,
+            memory,
+            thread_id,
+            hotspot_ptr,
+            Point {
+                x: drag.hotspot_x,
+                y: drag.hotspot_y,
+            },
+        )
+    {
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    drag.image_list
+}
+
+fn image_list_duplicate_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> u32 {
+    if handle == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
+        kernel
+            .resources
+            .create_shell_system_image_list(SHELL_SYSTEM_IMAGE_LIST_HANDLE, 16, 16);
+    }
+    match kernel.resources.duplicate_image_list(handle) {
+        Some(duplicate) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            duplicate
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            0
+        }
+    }
+}
+
+fn image_list_set_overlay_image_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let handle = raw_arg(args, 0);
+    let image_index = raw_i32_arg(args, 1);
+    let overlay = raw_i32_arg(args, 2);
+    match kernel
+        .resources
+        .set_image_list_overlay(handle, image_index, overlay)
+    {
+        Some(true) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            true
+        }
+        Some(false) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            false
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            false
+        }
+    }
+}
+
+fn record_image_list_draw(kernel: &mut CeKernel, thread_id: u32, draw: ImageListDraw) -> bool {
+    if draw.hdc == 0 || draw.index < 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    if draw.image_list == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
+        if draw.index as u32 >= SHELL_SYSTEM_IMAGE_LIST_COUNT {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        }
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+    match kernel.resources.record_image_list_draw(draw) {
+        Some(true) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            true
+        }
+        Some(false) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            false
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            false
+        }
+    }
+}
+
+fn shell_system_image_bitmap_handle(index: i32) -> u32 {
+    0x000b_d000 | ((index as u32) & 0x0fff)
 }
 
 fn load_stock_or_resource_image(
@@ -17906,7 +20569,7 @@ fn peek_message_w_raw<M: CoredllGuestMemory>(
 
 fn dispatch_message_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
-    memory: &M,
+    memory: &mut M,
     thread_id: u32,
     msg_ptr: u32,
 ) -> u32 {
@@ -17930,7 +20593,28 @@ fn dispatch_message_w_raw<M: CoredllGuestMemory>(
         wndproc = format_args!("0x{wndproc:08x}"),
         "DispatchMessageW"
     );
-    kernel.dispatch_message_w_for_thread(thread_id, message)
+    let send_id = kernel.gwe.active_sent_message_id(thread_id);
+    let result = kernel.dispatch_message_w_for_thread(thread_id, message);
+    if let Some(send_id) = send_id {
+        write_completed_send_message_timeout_result(kernel, memory, thread_id, send_id);
+    }
+    result
+}
+
+fn write_completed_send_message_timeout_result<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    send_id: u64,
+) -> bool {
+    let Some((result_ptr, result)) = kernel.gwe.sent_message(send_id).and_then(|sent| {
+        sent.result_ptr
+            .zip(sent.result)
+            .filter(|_| sent.flags & crate::ce::gwe::SMF_RESULT_READY != 0)
+    }) else {
+        return true;
+    };
+    write_guest_u32(kernel, memory, thread_id, result_ptr, result)
 }
 
 fn send_message_timeout_raw<M: CoredllGuestMemory>(
@@ -17977,6 +20661,7 @@ fn send_message_timeout_raw<M: CoredllGuestMemory>(
                 .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
             return 0;
         };
+        kernel.gwe.set_sent_message_result_ptr(send_id, result_ptr);
         if timeout_ms == 0 {
             let expired = kernel.expire_timed_out_send_messages();
             if expired.contains(&send_id) {
@@ -18457,6 +21142,24 @@ fn write_optional_u32<M: CoredllGuestMemory>(
     write_optional_count(kernel, memory, thread_id, addr, value)
 }
 
+fn write_optional_u64<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    addr: u32,
+    value: u64,
+) -> bool {
+    addr == 0
+        || (write_guest_u32(kernel, memory, thread_id, addr, value as u32)
+            && write_guest_u32(
+                kernel,
+                memory,
+                thread_id,
+                addr.wrapping_add(4),
+                (value >> 32) as u32,
+            ))
+}
+
 fn read_guest_u32<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
@@ -18719,6 +21422,17 @@ fn write_message_pointer_payload<M: CoredllGuestMemory>(
         {
             write_guest_shell_notification(kernel, memory, thread_id, message.lparam, notification)
         }
+        Some(MessagePointerPayload::FileChangeNotification(notification))
+            if message.msg == WM_FILECHANGEINFO =>
+        {
+            write_guest_file_change_notification(
+                kernel,
+                memory,
+                thread_id,
+                message.lparam,
+                notification,
+            )
+        }
         Some(_) | None => true,
     }
 }
@@ -18833,6 +21547,141 @@ fn write_guest_shell_notification<M: CoredllGuestMemory>(
         )
     } else {
         true
+    }
+}
+
+fn write_guest_file_change_notification<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    addr: u32,
+    notification: crate::ce::gwe::FileChangeNotificationMessage,
+) -> bool {
+    let item1 = notification_item_bytes(&notification, true);
+    let item2 = notification_item_bytes(&notification, false);
+    let item1_ptr = item1
+        .as_ref()
+        .map(|_| addr.wrapping_add(FILECHANGENOTIFY_SIZE))
+        .unwrap_or(0);
+    let item1_len = item1.as_ref().map(|bytes| bytes.len() as u32).unwrap_or(0);
+    let item2_ptr = item2
+        .as_ref()
+        .map(|_| addr.wrapping_add(FILECHANGENOTIFY_SIZE + item1_len))
+        .unwrap_or(0);
+    let fixed_written = write_guest_u32(kernel, memory, thread_id, addr, 1)
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            addr.wrapping_add(4),
+            FILECHANGEINFO_SIZE,
+        )
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            addr.wrapping_add(8),
+            notification.event_id,
+        )
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            addr.wrapping_add(12),
+            notification.flags,
+        )
+        && write_guest_u32(kernel, memory, thread_id, addr.wrapping_add(16), item1_ptr)
+        && write_guest_u32(kernel, memory, thread_id, addr.wrapping_add(20), item2_ptr)
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            addr.wrapping_add(24),
+            notification.attributes,
+        )
+        && write_guest_u32(kernel, memory, thread_id, addr.wrapping_add(28), 0)
+        && write_guest_u32(kernel, memory, thread_id, addr.wrapping_add(32), 0)
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            addr.wrapping_add(36),
+            notification.file_size,
+        );
+    if !fixed_written {
+        return false;
+    }
+    if item1.is_some()
+        && !write_notification_item(kernel, memory, thread_id, item1_ptr, &notification, true)
+    {
+        return false;
+    }
+    if item2.is_some()
+        && !write_notification_item(kernel, memory, thread_id, item2_ptr, &notification, false)
+    {
+        return false;
+    }
+    true
+}
+
+fn write_notification_item<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    addr: u32,
+    notification: &crate::ce::gwe::FileChangeNotificationMessage,
+    first: bool,
+) -> bool {
+    if notification.flags == SHCNF_IDLIST {
+        return if let Some(bytes) = notification_item_bytes(notification, first) {
+            write_guest_bytes(kernel, memory, thread_id, addr, &bytes)
+        } else {
+            true
+        };
+    } else {
+        let Some(path) = (if first {
+            notification.path1.as_deref()
+        } else {
+            notification.path2.as_deref()
+        }) else {
+            return true;
+        };
+        for (index, unit) in path.encode_utf16().chain(std::iter::once(0)).enumerate() {
+            if !write_guest_u16(
+                kernel,
+                memory,
+                thread_id,
+                addr.wrapping_add((index as u32) * 2),
+                unit,
+            ) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+fn notification_item_bytes(
+    notification: &crate::ce::gwe::FileChangeNotificationMessage,
+    first: bool,
+) -> Option<Vec<u8>> {
+    if notification.flags == SHCNF_IDLIST {
+        if first {
+            notification.pidl1.clone()
+        } else {
+            notification.pidl2.clone()
+        }
+    } else {
+        let path = if first {
+            notification.path1.as_deref()
+        } else {
+            notification.path2.as_deref()
+        }?;
+        let mut bytes = Vec::with_capacity((path.encode_utf16().count() + 1) * 2);
+        for unit in path.encode_utf16().chain(std::iter::once(0)) {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        Some(bytes)
     }
 }
 

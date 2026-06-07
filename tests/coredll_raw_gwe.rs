@@ -20,8 +20,8 @@ use wince_emulation_v3::{
             ORD_FIND_WINDOW_W, ORD_GET_ACTIVE_WINDOW, ORD_GET_ASSOCIATED_MENU,
             ORD_GET_ASYNC_KEY_STATE, ORD_GET_ASYNC_SHIFT_FLAGS, ORD_GET_CAPTURE,
             ORD_GET_CARET_BLINK_TIME, ORD_GET_CARET_POS, ORD_GET_CLASS_INFO_W,
-            ORD_GET_CLASS_NAME_W, ORD_GET_CLIENT_RECT, ORD_GET_CURSOR_POS, ORD_GET_DC,
-            ORD_GET_DEVICE_CAPS, ORD_GET_DIALOG_BASE_UNITS, ORD_GET_DIBCOLOR_TABLE,
+            ORD_GET_CLASS_NAME_W, ORD_GET_CLIENT_RECT, ORD_GET_CURSOR, ORD_GET_CURSOR_POS,
+            ORD_GET_DC, ORD_GET_DEVICE_CAPS, ORD_GET_DIALOG_BASE_UNITS, ORD_GET_DIBCOLOR_TABLE,
             ORD_GET_DLG_CTRL_ID, ORD_GET_DLG_ITEM, ORD_GET_DLG_ITEM_INT, ORD_GET_DLG_ITEM_TEXT_W,
             ORD_GET_FOCUS, ORD_GET_FOREGROUND_KEYBOARD_TARGET, ORD_GET_FOREGROUND_WINDOW,
             ORD_GET_KEY_STATE, ORD_GET_KEYBOARD_TARGET, ORD_GET_MENU, ORD_GET_MENU_ITEM_INFO_W,
@@ -38,9 +38,9 @@ use wince_emulation_v3::{
             ORD_GLOBAL_MEMORY_STATUS, ORD_HIDE_CARET, ORD_IN_SEND_MESSAGE, ORD_INFLATE_RECT,
             ORD_INSERT_MENU_W, ORD_INTERSECT_RECT, ORD_INVALIDATE_RECT, ORD_IS_CHILD,
             ORD_IS_DIALOG_MESSAGE_W, ORD_IS_RECT_EMPTY, ORD_IS_WINDOW, ORD_IS_WINDOW_ENABLED,
-            ORD_IS_WINDOW_VISIBLE, ORD_KEYBD_EVENT, ORD_KILL_TIMER, ORD_LINE_TO, ORD_LOAD_ICON_W,
-            ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_MAP_DIALOG_RECT, ORD_MAP_WINDOW_POINTS,
-            ORD_MESSAGE_BOX_W, ORD_MOVE_TO_EX, ORD_MOVE_WINDOW,
+            ORD_IS_WINDOW_VISIBLE, ORD_KEYBD_EVENT, ORD_KILL_TIMER, ORD_LINE_TO, ORD_LOAD_CURSOR_W,
+            ORD_LOAD_ICON_W, ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_MAP_DIALOG_RECT,
+            ORD_MAP_WINDOW_POINTS, ORD_MESSAGE_BOX_W, ORD_MOVE_TO_EX, ORD_MOVE_WINDOW,
             ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_OFFSET_RECT, ORD_PAT_BLT, ORD_PEEK_MESSAGE_W,
             ORD_POLYGON, ORD_POLYLINE, ORD_POST_KEYBD_MESSAGE, ORD_POST_MESSAGE_W,
             ORD_POST_QUIT_MESSAGE, ORD_POST_THREAD_MESSAGE_W, ORD_PT_IN_RECT, ORD_PT_IN_REGION,
@@ -50,25 +50,25 @@ use wince_emulation_v3::{
             ORD_SELECT_OBJECT, ORD_SELECT_PALETTE, ORD_SEND_DLG_ITEM_MESSAGE_W,
             ORD_SEND_MESSAGE_TIMEOUT, ORD_SEND_MESSAGE_W, ORD_SEND_NOTIFY_MESSAGE_W,
             ORD_SET_ACTIVE_WINDOW, ORD_SET_ASSOCIATED_MENU, ORD_SET_BK_COLOR, ORD_SET_BRUSH_ORG_EX,
-            ORD_SET_CAPTURE, ORD_SET_CARET_BLINK_TIME, ORD_SET_CARET_POS, ORD_SET_DIBCOLOR_TABLE,
-            ORD_SET_DIBITS_TO_DEVICE, ORD_SET_DLG_ITEM_INT, ORD_SET_DLG_ITEM_TEXT_W, ORD_SET_FOCUS,
-            ORD_SET_FOREGROUND_WINDOW, ORD_SET_KEYBOARD_TARGET, ORD_SET_MENU,
-            ORD_SET_MENU_ITEM_INFO_W, ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_RECT,
-            ORD_SET_RECT_EMPTY, ORD_SET_ROP2, ORD_SET_TEXT_ALIGN, ORD_SET_TEXT_COLOR,
-            ORD_SET_TIMER, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_RGN,
-            ORD_SET_WINDOW_TEXT_W, ORD_SHOW_CARET, ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_SLEEP,
-            ORD_STRETCH_BLT, ORD_STRETCH_DIBITS, ORD_SYSTEM_PARAMETERS_INFO_W,
-            ORD_TRACK_POPUP_MENU_EX, ORD_TRANSLATE_ACCELERATOR_W, ORD_TRANSLATE_MESSAGE,
-            ORD_TRANSPARENT_IMAGE, ORD_UNION_RECT, ORD_UPDATE_WINDOW, ORD_VALIDATE_RECT,
-            ORD_WINDOW_FROM_POINT,
+            ORD_SET_CAPTURE, ORD_SET_CARET_BLINK_TIME, ORD_SET_CARET_POS, ORD_SET_CURSOR,
+            ORD_SET_DIBCOLOR_TABLE, ORD_SET_DIBITS_TO_DEVICE, ORD_SET_DLG_ITEM_INT,
+            ORD_SET_DLG_ITEM_TEXT_W, ORD_SET_FOCUS, ORD_SET_FOREGROUND_WINDOW,
+            ORD_SET_KEYBOARD_TARGET, ORD_SET_MENU, ORD_SET_MENU_ITEM_INFO_W,
+            ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_RECT, ORD_SET_RECT_EMPTY,
+            ORD_SET_ROP2, ORD_SET_TEXT_ALIGN, ORD_SET_TEXT_COLOR, ORD_SET_TIMER,
+            ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_RGN, ORD_SET_WINDOW_TEXT_W,
+            ORD_SHOW_CARET, ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_SLEEP, ORD_STRETCH_BLT,
+            ORD_STRETCH_DIBITS, ORD_SYSTEM_PARAMETERS_INFO_W, ORD_TRACK_POPUP_MENU_EX,
+            ORD_TRANSLATE_ACCELERATOR_W, ORD_TRANSLATE_MESSAGE, ORD_TRANSPARENT_IMAGE,
+            ORD_UNION_RECT, ORD_UPDATE_WINDOW, ORD_VALIDATE_RECT, ORD_WINDOW_FROM_POINT,
         },
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat, VirtualFramebuffer},
         gwe::{
             BS_DEFPUSHBUTTON, BS_PUSHBUTTON, DC_HASDEFID, DLGC_BUTTON, DLGC_DEFPUSHBUTTON,
             DLGC_UNDEFPUSHBUTTON, DM_GETDEFID, DM_SETDEFID, GW_CHILD, GW_HWNDFIRST, GW_HWNDNEXT,
-            GW_HWNDPREV, GW_OWNER, GWL_USERDATA, HTCLIENT, HTNOWHERE, HWND_BROADCAST,
+            GW_HWNDPREV, GW_OWNER, GWL_USERDATA, HTCLIENT, HTNOWHERE, HTTOPLEFT, HWND_BROADCAST,
             KEY_SHIFT_ANY_SHIFT_FLAG, KEY_STATE_DOWN_FLAG, KEY_STATE_GET_ASYNC_DOWN_FLAG,
-            KEY_STATE_PREV_DOWN_FLAG, MSGSRC_HARDWARE_KEYBOARD, MSGSRC_SOFTWARE_POST,
+            KEY_STATE_PREV_DOWN_FLAG, MA_ACTIVATE, MSGSRC_HARDWARE_KEYBOARD, MSGSRC_SOFTWARE_POST,
             MSGSRC_SOFTWARE_SEND, Message, PeekFlags, Point, QS_PAINT, QS_POSTMESSAGE,
             QS_SENDMESSAGE, QS_TIMER, Rect, SC_CLOSE, SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN,
             SMF_NOTIFY_MESSAGE, SMF_SENDER_NO_WAIT, SMF_TIMEOUT, SWP_HIDEWINDOW, SWP_NOACTIVATE,
@@ -76,10 +76,10 @@ use wince_emulation_v3::{
             VK_LSHIFT, VK_MENU, VK_SHIFT, WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE,
             WM_CHAR, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_ENABLE, WM_ENTERMENULOOP, WM_ERASEBKGND,
             WM_EXITMENULOOP, WM_GETDLGCODE, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENUPOPUP,
-            WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_MOVE, WM_NCDESTROY,
-            WM_NCHITTEST, WM_PAINT, WM_QUIT, WM_SETFOCUS, WM_SETTEXT, WM_SHOWWINDOW, WM_SIZE,
-            WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED,
-            WS_CHILD, WS_DISABLED, WS_GROUP, WS_POPUP, WS_TABSTOP, WS_VISIBLE,
+            WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WM_MOVE,
+            WM_NCDESTROY, WM_NCHITTEST, WM_PAINT, WM_QUIT, WM_SETCURSOR, WM_SETFOCUS, WM_SETTEXT,
+            WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WM_USER,
+            WM_WINDOWPOSCHANGED, WS_CHILD, WS_DISABLED, WS_GROUP, WS_POPUP, WS_TABSTOP, WS_VISIBLE,
         },
         kernel::CeKernel,
         memory::PROCESS_HEAP_HANDLE,
@@ -9292,6 +9292,7 @@ fn coredll_raw_send_message_timeout_nonzero_cross_thread_queues_transaction() ->
     assert_eq!(sent.receiver_thread_id, receiver_thread);
     assert_ne!(sent.flags & SMF_TIMEOUT, 0);
     assert_eq!(sent.timeout_ms, Some(250));
+    assert_eq!(sent.result_ptr, Some(result_ptr));
 
     assert_next_message(
         &table,
@@ -9318,6 +9319,7 @@ fn coredll_raw_send_message_timeout_nonzero_cross_thread_queues_transaction() ->
             ..
         }
     ));
+    assert_eq!(memory.read_u32(result_ptr)?, 1);
     assert_eq!(kernel.take_completed_send_message_result(1), Some(1));
 
     Ok(())
@@ -10420,10 +10422,15 @@ fn coredll_raw_menu_items_round_trip_through_ce_menuiteminfo() -> Result<()> {
 }
 
 #[test]
-fn coredll_raw_track_popup_menu_records_attempt_without_fake_selection() -> Result<()> {
+fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() -> Result<()> {
     const TPM_LEFTBUTTON: u32 = 0x0000;
     const TPM_NONOTIFY: u32 = 0x0080;
     const TPM_RETURNCMD: u32 = 0x0100;
+    const MF_DISABLED: u32 = 0x0002;
+    const MF_CHECKED: u32 = 0x0008;
+    const MF_POPUP: u32 = 0x0010;
+    const MF_SEPARATOR: u32 = 0x0800;
+    const MFS_DEFAULT: u32 = 0x1000;
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
     let mut kernel = CeKernel::boot(config);
@@ -10436,9 +10443,31 @@ fn coredll_raw_track_popup_menu_records_attempt_without_fake_selection() -> Resu
     memory.write_word(tpm_ptr + 8, 20);
     memory.write_word(tpm_ptr + 12, 110);
     memory.write_word(tpm_ptr + 16, 140);
+    let disabled_text = 0x1_7c00;
+    let first_text = 0x1_7d00;
+    let default_text = 0x1_7e00;
+    memory.map_halfwords(disabled_text, 32);
+    memory.map_halfwords(first_text, 32);
+    memory.map_halfwords(default_text, 32);
+    memory.write_wide_z(disabled_text, "Disabled");
+    memory.write_wide_z(first_text, "Route list");
+    memory.write_wide_z(default_text, "Open");
 
     let hwnd = kernel.create_window_ex_w(thread_id, "POPUP_OWNER", "", None, 0, 0, 0);
     let popup = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_POPUP_MENU,
+        [],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreatePopupMenu did not return a handle: {other:?}"),
+    };
+    let render_submenu = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
         thread_id,
@@ -10500,11 +10529,147 @@ fn coredll_raw_track_popup_menu_records_attempt_without_fake_selection() -> Resu
             &mut kernel,
             &mut memory,
             thread_id,
+            ORD_APPEND_MENU_W,
+            [popup, MF_DISABLED | MFS_DEFAULT, 700, disabled_text],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_APPEND_MENU_W,
+            [popup, 0, 701, first_text],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_APPEND_MENU_W,
+            [popup, MFS_DEFAULT, 702, default_text],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_APPEND_MENU_W,
+            [popup, MF_SEPARATOR, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_APPEND_MENU_W,
+            [popup, MF_CHECKED, 703, default_text],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_APPEND_MENU_W,
+            [popup, MF_POPUP, render_submenu, first_text],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        {
+            let mut framebuffer = VirtualFramebuffer::new(460, 300, PixelFormat::Rgb565)?;
+            let _ = framebuffer.take_dirty_rects();
+            let result = table.dispatch_raw_ordinal_with_framebuffer(
+                &mut kernel,
+                &mut memory,
+                Some(&mut framebuffer),
+                thread_id,
+                ORD_TRACK_POPUP_MENU_EX,
+                [popup, TPM_LEFTBUTTON, 121, 51, hwnd, 0],
+            );
+            assert!(!framebuffer.dirty_rects().is_empty());
+            assert!(framebuffer.dirty_rects().iter().any(|rect| {
+                rect.x <= 121
+                    && rect.y <= 51
+                    && rect.x + rect.width >= 211
+                    && rect.y + rect.height >= 163
+            }));
+            assert!(
+                framebuffer
+                    .pixels()
+                    .chunks_exact(PixelFormat::Rgb565.bytes_per_pixel())
+                    .filter(|pixel| *pixel != [0, 0])
+                    .count()
+                    > 100
+            );
+            result
+        },
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    let notifications = kernel.resources.popup_notifications();
+    assert_eq!(notifications.len(), 7);
+    assert_eq!(
+        notifications
+            .iter()
+            .map(|notification| (
+                notification.hwnd,
+                notification.msg,
+                notification.wparam,
+                notification.lparam
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (hwnd, WM_ENTERMENULOOP, 1, 0),
+            (hwnd, WM_INITMENUPOPUP, popup, 0),
+            (hwnd, WM_EXITMENULOOP, 1, 0),
+            (hwnd, WM_ENTERMENULOOP, 1, 0),
+            (hwnd, WM_INITMENUPOPUP, popup, 0),
+            (hwnd, WM_EXITMENULOOP, 1, 0),
+            (hwnd, WM_COMMAND, 702, 0),
+        ]
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_TRACK_POPUP_MENU_EX,
             [popup, TPM_RETURNCMD, 321, 201, hwnd, 0],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::U32(0),
+            value: CoredllValue::U32(702),
             ..
         }
     ));
@@ -10515,7 +10680,7 @@ fn coredll_raw_track_popup_menu_records_attempt_without_fake_selection() -> Resu
         .expect("return-command tracking should still be recorded");
     assert_eq!(tracking.flags, TPM_RETURNCMD);
     assert_eq!(tracking.exclude_rect, None);
-    assert_eq!(kernel.resources.popup_notifications().len(), 6);
+    assert_eq!(kernel.resources.popup_notifications().len(), 10);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -10536,7 +10701,203 @@ fn coredll_raw_track_popup_menu_records_attempt_without_fake_selection() -> Resu
         .last_popup_tracking()
         .expect("nonotify tracking should still be recorded");
     assert_eq!(tracking.flags, TPM_NONOTIFY);
-    assert_eq!(kernel.resources.popup_notifications().len(), 6);
+    assert_eq!(kernel.resources.popup_notifications().len(), 10);
+
+    let disabled_only_popup = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_POPUP_MENU,
+        [],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreatePopupMenu did not return a handle: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_APPEND_MENU_W,
+            [
+                disabled_only_popup,
+                MF_DISABLED | MFS_DEFAULT,
+                800,
+                disabled_text
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRACK_POPUP_MENU_EX,
+            [disabled_only_popup, TPM_RETURNCMD, 323, 203, hwnd, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.resources.popup_notifications().len(), 13);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRACK_POPUP_MENU_EX,
+            [disabled_only_popup, 0, 324, 204, hwnd, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    let notifications = kernel.resources.popup_notifications();
+    assert_eq!(notifications.len(), 16);
+    assert!(
+        !notifications
+            .iter()
+            .any(|notification| { notification.msg == WM_COMMAND && notification.wparam == 800 })
+    );
+
+    let submenu_parent = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_POPUP_MENU,
+        [],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreatePopupMenu did not return a handle: {other:?}"),
+    };
+    let submenu_child = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_POPUP_MENU,
+        [],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreatePopupMenu did not return a handle: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_APPEND_MENU_W,
+            [submenu_child, 0, 903, default_text],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_APPEND_MENU_W,
+            [
+                submenu_parent,
+                MF_POPUP | MFS_DEFAULT,
+                submenu_child,
+                first_text
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRACK_POPUP_MENU_EX,
+            [submenu_parent, TPM_RETURNCMD, 325, 205, hwnd, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(903),
+            ..
+        }
+    ));
+    let notifications = kernel.resources.popup_notifications();
+    assert_eq!(notifications.len(), 20);
+    assert_eq!(
+        notifications
+            .iter()
+            .skip(16)
+            .map(|notification| (
+                notification.hwnd,
+                notification.msg,
+                notification.wparam,
+                notification.lparam
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (hwnd, WM_ENTERMENULOOP, 1, 0),
+            (hwnd, WM_INITMENUPOPUP, submenu_parent, 0),
+            (hwnd, WM_INITMENUPOPUP, submenu_child, 1),
+            (hwnd, WM_EXITMENULOOP, 1, 0),
+        ]
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRACK_POPUP_MENU_EX,
+            [submenu_parent, 0, 326, 206, hwnd, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    let notifications = kernel.resources.popup_notifications();
+    assert_eq!(notifications.len(), 25);
+    assert_eq!(
+        notifications
+            .iter()
+            .skip(20)
+            .map(|notification| (
+                notification.hwnd,
+                notification.msg,
+                notification.wparam,
+                notification.lparam
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (hwnd, WM_ENTERMENULOOP, 1, 0),
+            (hwnd, WM_INITMENUPOPUP, submenu_parent, 0),
+            (hwnd, WM_INITMENUPOPUP, submenu_child, 1),
+            (hwnd, WM_EXITMENULOOP, 1, 0),
+            (hwnd, WM_COMMAND, 903, 0),
+        ]
+    );
+    assert!(
+        notifications
+            .iter()
+            .any(|notification| { notification.msg == WM_COMMAND && notification.wparam == 903 })
+    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -12440,6 +12801,20 @@ fn coredll_raw_def_window_proc_handles_hit_test_and_syscommand_close() -> Result
             &mut memory,
             thread_id,
             ORD_DEF_WINDOW_PROC_W,
+            [hwnd, WM_MOUSEACTIVATE, hwnd, HTCLIENT],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(MA_ACTIVATE),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEF_WINDOW_PROC_W,
             [hwnd, WM_SYSCOMMAND, SC_CLOSE, 0],
         ),
         CoredllDispatch::Returned {
@@ -12459,7 +12834,158 @@ fn coredll_raw_def_window_proc_handles_hit_test_and_syscommand_close() -> Result
 }
 
 #[test]
+fn coredll_raw_def_window_proc_setcursor_uses_class_cursor() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 81;
+    let class_ptr = 0x1_0000;
+    let title_ptr = 0x1_0040;
+    let wndclass_ptr = 0x1_0080;
+    memory.write_wide_z(class_ptr, "CURSORDEF");
+    memory.write_wide_z(title_ptr, "cursor default");
+    memory.map_bytes(wndclass_ptr, 40);
+
+    let class_cursor = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOAD_CURSOR_W,
+        [0, 32512],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(cursor),
+            ..
+        } => cursor,
+        other => panic!("LoadCursorW did not return a stock cursor handle: {other:?}"),
+    };
+    assert_ne!(class_cursor, 0);
+    let prior_cursor = class_cursor ^ 0x40;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_CURSOR,
+            [prior_cursor],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+
+    let mut wndclass = [0; 40];
+    wndclass[4..8].copy_from_slice(&0x0040_5678u32.to_le_bytes());
+    wndclass[24..28].copy_from_slice(&class_cursor.to_le_bytes());
+    wndclass[36..40].copy_from_slice(&class_ptr.to_le_bytes());
+    memory.write_bytes(wndclass_ptr, &wndclass);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REGISTER_CLASS_W,
+            [wndclass_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(atom),
+            ..
+        } if atom >= 0xc000
+    ));
+    let hwnd = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_WINDOW_EX_W,
+        [
+            0, class_ptr, title_ptr, WS_VISIBLE, 10, 20, 70, 30, 0, 0, 0, 0,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } => hwnd,
+        other => panic!("CreateWindowExW did not create raw hwnd: {other:?}"),
+    };
+    assert_ne!(hwnd, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEF_WINDOW_PROC_W,
+            [hwnd, WM_SETCURSOR, hwnd, HTCLIENT],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CURSOR,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(cursor),
+            ..
+        } if cursor == class_cursor
+    ));
+
+    let resize_cursor = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOAD_CURSOR_W,
+        [0, 32642],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(cursor),
+            ..
+        } => cursor,
+        other => panic!("LoadCursorW did not return a stock resize cursor handle: {other:?}"),
+    };
+    assert_ne!(resize_cursor, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEF_WINDOW_PROC_W,
+            [hwnd, WM_SETCURSOR, hwnd, HTTOPLEFT],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CURSOR,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(cursor),
+            ..
+        } if cursor == resize_cursor
+    ));
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_dialog_buttons_report_default_codes_and_ids() -> Result<()> {
+    const IDCANCEL: u32 = 2;
+
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
     let mut kernel = CeKernel::boot(config);
@@ -12495,6 +13021,16 @@ fn coredll_raw_dialog_buttons_report_default_codes_and_ids() -> Result<()> {
         WS_VISIBLE | WS_CHILD | WS_TABSTOP | BS_DEFPUSHBUTTON,
         0,
         Rect::from_origin_size(50, 0, 40, 20),
+    );
+    let cancel = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "BUTTON",
+        "cancel",
+        Some(dialog),
+        IDCANCEL,
+        WS_VISIBLE | WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON,
+        0,
+        Rect::from_origin_size(100, 0, 40, 20),
     );
 
     assert!(matches!(
@@ -12589,6 +13125,15 @@ fn coredll_raw_dialog_buttons_report_default_codes_and_ids() -> Result<()> {
             ..
         } if result == ((DC_HASDEFID << 16) | 10)
     ));
+
+    assert_eq!(
+        kernel.gwe.dialog_cancel_command(dialog, IDCANCEL),
+        (IDCANCEL, cancel)
+    );
+    assert_eq!(
+        kernel.gwe.dialog_cancel_command(default, IDCANCEL),
+        (IDCANCEL, 0)
+    );
 
     Ok(())
 }

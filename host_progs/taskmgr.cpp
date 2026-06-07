@@ -232,7 +232,7 @@ static void AppendProcesses(WCHAR *text, int text_chars) {
     HANDLE snap;
     PROCESSENTRY32 pe;
     AppendLine(text, text_chars, L"Processes");
-    AppendLine(text, text_chars, L"Name                         PID      User  Memory  CPU");
+    AppendLine(text, text_chars, L"Name                         PID(hex)    Parent     Thrd  Memory  CPU");
     snap = DynCreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (snap == INVALID_HANDLE_VALUE) {
         WCHAR line[120];
@@ -245,8 +245,11 @@ static void AppendProcesses(WCHAR *text, int text_chars) {
     if (DynProcess32First(snap, &pe)) {
         do {
             WCHAR line[260];
-            wsprintfW(line, L"%-28s %8lu  N/A   N/A     N/A",
-                pe.szExeFile, pe.th32ProcessID);
+            wsprintfW(line, L"%-28s 0x%08lx 0x%08lx %4lu  N/A     N/A",
+                pe.szExeFile,
+                pe.th32ProcessID,
+                pe.th32ParentProcessID,
+                pe.cntThreads);
             AppendLine(text, text_chars, line);
             ZeroMemory(&pe, sizeof(pe));
             pe.dwSize = sizeof(pe);

@@ -16,6 +16,14 @@ pub enum SchedulerWakeReason {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchedulerWinsockReadyKind {
+    Read,
+    Write,
+    ReadWrite,
+    Except,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SchedulerStats {
     pub wait_single_count: u64,
@@ -64,6 +72,13 @@ pub enum SchedulerBlockedWaitKind {
     },
     SerialCommEvent {
         handle: u32,
+    },
+    WinsockRead {
+        socket: u32,
+        readiness: SchedulerWinsockReadyKind,
+        read_mask: u64,
+        write_mask: u64,
+        except_mask: u64,
     },
     SendMessage {
         send_id: u64,

@@ -25,6 +25,13 @@ pub const FILE_ATTRIBUTE_SYSTEM: u32 = 0x0000_0004;
 pub const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
 pub const FILE_ATTRIBUTE_ARCHIVE: u32 = 0x0000_0020;
 pub const FILE_ATTRIBUTE_TEMPORARY: u32 = 0x0000_0100;
+const CE_VOLUME_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
+const CE_VOLUME_ATTRIBUTE_HIDDEN: u32 = 0x0000_0002;
+const CE_VOLUME_ATTRIBUTE_REMOVABLE: u32 = 0x0000_0004;
+const CE_VOLUME_ATTRIBUTE_SYSTEM: u32 = 0x0000_0008;
+const CE_VOLUME_FLAG_STORE: u32 = 0x0000_0020;
+const CE_VOLUME_FLAG_RAMFS: u32 = 0x0000_0040;
+const CE_VOLUME_DEFAULT_BLOCK_SIZE: u32 = 4096;
 
 #[derive(Debug, Clone)]
 pub struct HostFileSystem {
@@ -56,6 +63,21 @@ pub struct FileMount {
 pub struct ObjectStore {
     pub total_bytes: u64,
     pub free_bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiskSpace {
+    pub total_bytes: u64,
+    pub free_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeInfo {
+    pub attributes: u32,
+    pub flags: u32,
+    pub block_size: u32,
+    pub store_name: String,
+    pub partition_name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -336,6 +358,19 @@ impl HostFileSystem {
         });
     }
 
+    pub fn unmount_guest_root(&mut self, guest_root: &str) -> Option<FileMount> {
+        let guest_root = normalize_guest_path(guest_root);
+        let mount = self.mounts.get(&guest_root)?;
+        if !mount.removable {
+            return None;
+        }
+        self.mount_order.retain(|entry| entry != &guest_root);
+        if self.root_relative_mount.as_deref() == Some(guest_root.as_str()) {
+            self.root_relative_mount = None;
+        }
+        self.mounts.remove(&guest_root)
+    }
+
     pub fn mount(&mut self, mount: MountConfig) {
         let guest_root = normalize_guest_path(&mount.guest_root);
         if guest_root.is_empty() {
@@ -368,6 +403,59 @@ impl HostFileSystem {
 
     pub fn object_store(&self) -> ObjectStore {
         self.object_store
+    }
+
+    pub fn disk_space_for_path(&self, guest_path: Option<&str>) -> DiskSpace {
+        if let Some(mount) = guest_path.and_then(|path| self.mount_for_guest_path(path)) {
+            return DiskSpace {
+                total_bytes: mount.total_bytes,
+                free_bytes: mount.free_bytes.min(mount.total_bytes),
+            };
+        }
+        DiskSpace {
+            total_bytes: self.object_store.total_bytes,
+            free_bytes: self
+                .object_store
+                .free_bytes
+                .min(self.object_store.total_bytes),
+        }
+    }
+
+    pub fn volume_info_for_path(&self, guest_path: Option<&str>) -> VolumeInfo {
+        if let Some(mount) = guest_path.and_then(|path| self.mount_for_guest_path(path)) {
+            let mut attributes = 0;
+            if !mount.writable {
+                attributes |= CE_VOLUME_ATTRIBUTE_READONLY;
+            }
+            if mount.hidden {
+                attributes |= CE_VOLUME_ATTRIBUTE_HIDDEN;
+            }
+            if mount.removable {
+                attributes |= CE_VOLUME_ATTRIBUTE_REMOVABLE;
+            }
+            if mount.system {
+                attributes |= CE_VOLUME_ATTRIBUTE_SYSTEM;
+            }
+            let name = mount
+                .name
+                .as_deref()
+                .map(str::to_owned)
+                .unwrap_or_else(|| volume_name_from_guest_root(&mount.guest_root));
+            return VolumeInfo {
+                attributes,
+                flags: CE_VOLUME_FLAG_STORE,
+                block_size: CE_VOLUME_DEFAULT_BLOCK_SIZE,
+                store_name: name.clone(),
+                partition_name: name,
+            };
+        }
+        VolumeInfo {
+            attributes: 0,
+            flags: CE_VOLUME_FLAG_RAMFS,
+            block_size: CE_VOLUME_DEFAULT_BLOCK_SIZE,
+            store_name: "ObjectStore".to_owned(),
+            partition_name: "ObjectStore".to_owned(),
+        }
     }
 
     pub fn io_stats(&self) -> FileIoStats {
@@ -926,6 +1014,7 @@ impl HostFileSystem {
 
     fn root_namespace_entries(&self, pattern: &str) -> Vec<FindData> {
         let mut entries = Vec::new();
+        let mut seen_names = Vec::new();
         for mount in self.mounts_in_order() {
             if mount.hidden {
                 continue;
@@ -938,7 +1027,18 @@ impl HostFileSystem {
             if !pattern.is_empty() && !wildcard_match(pattern, file_name) {
                 continue;
             }
+            seen_names.push(file_name.to_ascii_lowercase());
             entries.push(mount_root_find_data(mount, file_name.to_owned()));
+        }
+        if let Ok(host_entries) = root_host_find_data(&self.root, pattern) {
+            for entry in host_entries {
+                let lower_name = entry.file_name.to_ascii_lowercase();
+                if seen_names.iter().any(|seen| seen == &lower_name) {
+                    continue;
+                }
+                seen_names.push(lower_name);
+                entries.push(entry);
+            }
         }
         tracing::debug!(
             target: "ce.file",
@@ -1029,6 +1129,35 @@ fn mount_root_find_data(mount: &FileMount, file_name: String) -> FindData {
         file_size: 0,
         file_name,
     }
+}
+
+fn root_host_find_data(root: &Path, pattern: &str) -> Result<Vec<FindData>> {
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(root).map_err(|source| Error::Io {
+        path: root.to_path_buf(),
+        source,
+    })? {
+        let entry = entry.map_err(|source| Error::Io {
+            path: root.to_path_buf(),
+            source,
+        })?;
+        let file_name = entry.file_name().to_string_lossy().into_owned();
+        if !pattern.is_empty() && !wildcard_match(pattern, &file_name) {
+            continue;
+        }
+        entries.push(find_data_from_path(&entry.path(), file_name)?);
+    }
+    entries.sort_by(|lhs, rhs| lhs.file_name.cmp(&rhs.file_name));
+    Ok(entries)
+}
+
+fn volume_name_from_guest_root(guest_root: &str) -> String {
+    guest_root
+        .trim_matches('/')
+        .rsplit('/')
+        .find(|part| !part.is_empty())
+        .unwrap_or("ObjectStore")
+        .to_owned()
 }
 
 fn strip_host_prefix(host_path: &Path, host_root: &Path) -> Option<PathBuf> {
@@ -1309,13 +1438,24 @@ mod tests {
 
     #[test]
     fn root_find_is_empty_without_configured_mounts() {
-        let mut fs = HostFileSystem::new(".");
+        let root =
+            std::env::temp_dir().join(format!("wince_file_empty_root_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let mut fs = HostFileSystem::new(&root);
         assert!(fs.find_first_file_w("\\").is_err());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
-    fn root_find_lists_configured_ce_mount_points() {
-        let mut fs = HostFileSystem::new(".");
+    fn root_find_lists_configured_ce_mount_points_and_object_store_entries() {
+        let root =
+            std::env::temp_dir().join(format!("wince_file_root_find_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("Documents")).unwrap();
+        fs::create_dir_all(root.join("SDMMC Disk")).unwrap();
+        fs::write(root.join("object.txt"), b"object").unwrap();
+        let mut fs = HostFileSystem::new(&root);
         fs.mount(MountConfig {
             name: Some("sdmmc".to_owned()),
             guest_root: "\\SDMMC Disk".to_owned(),
@@ -1347,8 +1487,18 @@ mod tests {
         let next = fs.find_next_file_w(_id).unwrap().unwrap();
         assert_eq!(next.file_name, "ResidentFlash");
         assert_eq!(next.attributes, FILE_ATTRIBUTE_DIRECTORY);
+        let next = fs.find_next_file_w(_id).unwrap().unwrap();
+        assert_eq!(next.file_name, "Documents");
+        assert_eq!(next.attributes, FILE_ATTRIBUTE_DIRECTORY);
+        let next = fs.find_next_file_w(_id).unwrap().unwrap();
+        assert_eq!(next.file_name, "object.txt");
+        assert_eq!(next.attributes, FILE_ATTRIBUTE_ARCHIVE);
+        assert!(fs.find_next_file_w(_id).unwrap().is_none());
         let (_id, data) = fs.find_first_file_w("\\S*").unwrap();
         assert_eq!(data.file_name, "SDMMC Disk");
+        assert!(fs.find_next_file_w(_id).unwrap().is_none());
+        let (_id, data) = fs.find_first_file_w("\\D*").unwrap();
+        assert_eq!(data.file_name, "Documents");
         let (_id, data) = fs.find_first_file_w("\\SDMMC Disk").unwrap();
         assert_eq!(data.file_name, "SDMMC Disk");
         assert_eq!(
@@ -1356,6 +1506,7 @@ mod tests {
             FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_TEMPORARY
         );
         assert!(fs.find_first_file_w("\\SDMMC Disk\\*").is_err());
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

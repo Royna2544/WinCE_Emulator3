@@ -16,9 +16,9 @@ and isolated guest networking.
 | --- | --- | --- | --- | --- | --- | --- |
 | Guest DLL loader | `NK\KERNEL\loader.c`, `NK\KERNEL\thread.c`, PE loader and SDK loader headers | startup preload path only | startup import DLL registration, CE-aware DLL search order, live-mutable import trap table, static trap-base allocator with reserved dynamic range, live/persisted import trap-page refresh, runtime normal-code DLL map/relocate/import patching from `LoadLibraryW/LoadLibraryExW(flags=0)`, recursive dependency loading, runtime inline MIPS trampoline patching with live trampoline metadata updates, runtime `LoadLibraryExW(DONT_RESOLVE_DLL_REFERENCES)` mapping without dependency/import/lifecycle resolution, runtime `LoadLibraryExW(LOAD_LIBRARY_AS_DATAFILE)` resource-module mapping with immediate `FindResourceW`/`LoadResource`/`LoadStringW` visibility and no code exports, raw `LoadLibraryExW` supported-flag reuse of already registered modules, runtime loader audit counters in debug/monitor summaries, runtime module export table ingestion, module metadata/refcounts, registered-export lookup, PE forwarded-export metadata retention, runtime forwarder resolution through guest DLL search/load and COREDLL trap addresses, TLS callback metadata parsing, guest TLS and `DllMain(DLL_PROCESS_ATTACH)` callouts, final dynamic `FreeLibrary` guest TLS and `DllMain(DLL_PROCESS_DETACH)` callouts before non-reclaiming unload-pending release | fast-start runtime trampoline hook variants if trace evidence demands them, raw/non-Unicorn real DLL mapping remains explicit failure, broader forwarded-export/no-resolve/resource fixture variants | `dll_search`, import-trap tests, `refresh_import_trap_page_blob_replaces_existing_blob`, `runtime_occupied_ranges_include_memory_regions_and_blobs`, `loaded_module_export_snapshots_skip_unload_pending_modules`, `external_table_accepts_runtime_loaded_module_exports`, `external_table_resolves_forwarded_exports_through_loaded_modules`, `065_loadlibrary_getprocaddress_module`, `171_loadlibrary_guest_dll`, `172_loadlibrary_dependent_guest_dll`, `173_loadlibrary_tls_callback`, `174_loadlibrary_forwarded_export`, `175_loadlibrary_noresolve`, `176_loadlibrary_datafile_resource`, raw module refcount tests, `live_trampoline_state_extends_runtime_ranges_and_origin_maps`, `debug_summary_includes_runtime_loader_counters` | dumped DLLs from `D:\INAVI_Emulator\DUMPPLZ\Windows` are authoritative runtime bytes |
 | COREDLL stub audit | COREDLL API sets and SDK headers | broad stub policy proved convenient but unsafe | static ordinal table, implemented/stubbed plan, fallback audit classification/logging, raw thread/caller/trap PC context, caller module attribution from mapped image/DLL blobs, must-implement fallback `ERROR_NOT_SUPPORTED` side effects, explicit failure-shaped fallback returns for critical loader/process/shell/UI APIs | replace must-implement stubs with real subsystem behavior as traces hit them | `raw_stub_audit_keeps_import_trap_context`, `mapped_blob_module_for_pc_attributes_image_and_runtime_dlls`, `tests\coredll_dispatch.rs` | shell/UI/process calls must not silently fake success |
-| Shell launch/settings | `SHELL`, Explorer registry conventions, `PUBLIC\COMMON\SDK\INC\winuser.h` MessageBox/button/menu constants, `PUBLIC\COMMON\SDK\INC\shellsdk.h`, `PUBLIC\COMMON\SDK\INC\shsdkstc.h`, `PUBLIC\COMMON\SDK\INC\shellapi.h`, `PUBLIC\COMMON\SDK\INC\winbase.h`, `PUBLIC\SHELL\OAK\FILES\shell.reg`, `PUBLIC\SHELL\OAK\HPC\CESHELL\API\shortcut.cpp`, `PUBLIC\SHELL\OAK\HPC\CESHELL\API\api.cpp`, `PUBLIC\SHELL\OAK\HPC\CESHELL\UI\filechangemgr.cpp` | v2 shell path shape only | `SHGetSpecialFolderPath` registry/fallback lookup plus `fCreate`/`CSIDL_FLAG_CREATE` mounted-folder creation and MAX_PATH rejection, registry/shortcut-backed `ShellExecuteEx` launch chain with `hInstApp`, `SEE_MASK_NOCLOSEPROCESS` hProcess output, `nShow` propagation to child `WinMain`, `lpDirectory` current-directory propagation through pending launches, and CE `"%1" %*` association command-template expansion, raw `CreateProcessW` `pszCurDir` propagation, child relative-EXE resolution through queued/current CE directory, parked-process current-directory restore, raw `SHCreateShortcut` CE text-link creation, raw `SHGetShortcutTarget` CE text-link target extraction, raw `SHCreateShortcutEx` unique-name and optional buffer-return behavior, raw `SHAddToRecentDocs(SHARD_PATH/null)` recent-folder shortcut creation/clear plus `ShellSystem` recent-document state, raw `SHChangeNotifyRegisterI`/`SHFileNotifyRemoveI`/`SHFileNotifyFreeI` registration/free tracking with HWND cleanup, registry-backed `SHGetFileInfo` display/type/attribute/sysicon metadata with CE supported-flag validation and explicit `ERROR_INVALID_FLAGS` for unsupported/colliding flags, `TrackPopupMenuEx` tracked attempts plus CE menu-loop owner notifications honoring `TPM_NONOTIFY`, `Shell_NotifyIconW` add/modify/delete state and owner callback message posting over a dedicated `ShellSystem`, `SHNotificationAddI`/`UpdateI`/`RemoveI`/`GetDataI` data storage/query by `CLSID + dwID` plus `WM_NOTIFY`/`NMSHN` sink callback posting for stored notification events including `SHNN_LINKSEL` link strings and `SHNN_DISMISS` timeout flags, shell notification cleanup on HWND/process teardown, `MessageBoxW` owner validation plus recorded text/caption/style and CE default-button return selection | richer notification interaction (automatic timeout/dismiss policy, COM callback, bubble/taskbar UI), file-change event delivery/PIDL payloads, recent-doc pruning/UI display and PIDL input, fuller namespace/policy, real icon extraction/image lists, rendered popup/menu windows and real selection, rendered modal `MessageBoxW` window/nested pump/button input, precise shell errors and broader non-EXE document edge cases | raw `ShellExecuteEx` association tests, `shell_execute_ex_appends_parameters_without_template_placeholder`, `coredll_raw_create_process_preserves_current_directory`, `process_launch_resolution_uses_queued_current_directory`, parked-process identity tests, `shell_shortcut_ordinals_create_read_and_launch_ce_lnk_files`, `shell_create_shortcut_ex_returns_unique_name_and_checks_output_capacity`, `shell_add_to_recent_docs_creates_and_clears_recent_shortcuts`, `sh_change_notify_i_tracks_register_remove_and_free_state`, `coredll_raw_shget_special_folder_path_honors_create_flags`, `sh_get_file_info_uses_registry_associations_and_attributes`, `sh_get_file_info_rejects_unsupported_and_colliding_flags`, `coredll_raw_track_popup_menu_records_attempt_without_fake_selection`, `shell_notify_icon_tracks_add_modify_delete_and_posts_callback`, `shnotification_i_tracks_query_update_and_remove_state`, `shell_window_destroy_removes_notify_icon_and_notification_state`, `message_box_w_records_text_owner_and_returns_default_button`, `message_box_w_rejects_destroyed_owner_without_recording` | route UI still needs real shell/process/GWE semantics |
-| GWE defaults/input/send | `GWE\INC`, `window.hpp`, CE `winuser.h`, MFC `wincore.cpp`, CE input/clipboard/caret/IME headers, `PUBLIC\COMMON\SDK\INC\winuser.h` clipboard/caret/accelerator/timeout constants/prototypes | window broker behavior evidence | core window/message pump, partial defaults, raw/Unicorn-default `DefWindowProcW` `WM_NCHITTEST` and `WM_SYSCOMMAND/SC_CLOSE` handling, raw `TranslateMessage` ASCII letter/digit Shift/CapsLock and `WM_SYSKEYDOWN` to `WM_SYSCHAR` path, raw `TranslateAcceleratorW` modifier and `WM_SYSKEYDOWN` matching, raw `SendNotifyMessageW` same-thread direct delivery plus cross-thread/broadcast live-top-level no-wait sent-queue delivery, raw `SendMessageTimeout` CE `SMTO_NORMAL` flag validation plus timeout-transaction queueing, sent/nonqueued-before-posted `GetMessageW`/`PeekMessageW` ordering, pending sent-message receiver readiness for parked processes and suspended-thread timeslicing, partial cross-thread send, GWE-owned clipboard open/close/owner/data/format-enumeration/custom-format-name state plus `GetClipboardDataAlloc` local-handle copy through raw COREDLL clipboard ordinals, GWE-owned caret create/destroy/show-hide/position/blink-time/system-enable state through raw COREDLL caret ordinals | fuller `DefWindowProcW` focus/activation/cursor/mouse/default-command behavior, `SendNotifyMessageW` shell/device/storage notification integration and remaining ordering edge cases, real keyboard layout selection, broader accelerator/menu shortcut routing, dead keys/IME handoff, clipboard rendered ownership/delayed-render edge cases, rendered caret blink/focus invalidation integration, full `SendMessageTimeout` wait/result/destruction/reentrancy semantics | existing GWE fixtures, `coredll_raw_def_window_proc_handles_hit_test_and_syscommand_close`, `default_window_hit_test_reports_client_border_and_nowhere`, `coredll_raw_translate_message_uses_shift_caps_and_syschar`, `coredll_raw_translate_accelerator_honors_modifiers_and_syskey`, `coredll_raw_send_notify_message_is_async_across_threads`, `coredll_raw_send_notify_broadcast_uses_notify_send_for_live_top_level_windows`, `coredll_raw_send_message_timeout_rejects_non_ce_flags_without_queueing`, `coredll_raw_get_message_services_sent_before_posted`, `coredll_raw_peek_message_services_sent_before_posted`, `rotate_to_ready_parked_process_with_pending_sent_receiver`, `timeslice_prefers_suspended_receiver_with_pending_sent_message`, `clipboard_raw_ordinals_track_lock_owner_formats_and_names`, `clipboard_raw_ordinals_reject_invalid_open_and_missing_lock`, `clipboard_data_alloc_copies_known_local_handle_contents`, `clipboard_data_alloc_rejects_unknown_source_handle`, `coredll_raw_caret_ordinals_track_position_visibility_and_blink`, `coredll_raw_caret_rejects_invalid_state_and_destroys_with_owner` | hidden chrome is guest-driven; do not force visibility; `target\host_presenter_sendorder1_*` closed the earlier startup sent-message starvation and `target\host_presenter_sendfix1_*` closes the later frozen-frame send gap |
-| Winsock | CE Winsock headers and socket wait behavior | none | direct host socket traps, CE-facing isolated local names/IPs | scheduler-backed blocking waits | winsock startup/loopback/isolation tests | host transport works, subnet identity is now CE-facing |
+| Shell launch/settings | `SHELL`, Explorer registry conventions, `PUBLIC\COMMON\SDK\INC\winuser.h` MessageBox/button/menu constants, `PUBLIC\COMMON\SDK\INC\shellsdk.h`, `PUBLIC\COMMON\SDK\INC\shsdkstc.h`, `PUBLIC\COMMON\SDK\INC\shellapi.h`, `PUBLIC\COMMON\SDK\INC\winbase.h`, `PUBLIC\SHELL\OAK\FILES\shell.reg`, `PUBLIC\SHELL\OAK\HPC\CESHELL\API\shortcut.cpp`, `PUBLIC\SHELL\OAK\HPC\CESHELL\API\api.cpp`, `PUBLIC\SHELL\OAK\HPC\CESHELL\UI\filechangemgr.cpp` | v2 shell path shape only | `SHGetSpecialFolderPath` registry/fallback lookup with registry/missing/non-string source tracking, selectable compat-vs-strict fallback policy, plus `fCreate`/`CSIDL_FLAG_CREATE` mounted-folder creation and MAX_PATH rejection, registry/shortcut-backed `ShellExecuteEx` launch chain with `hInstApp`, `SEE_MASK_NOCLOSEPROCESS` hProcess output, `nShow` propagation to child `WinMain`, `lpDirectory` current-directory propagation through pending launches, and CE `%1`/`%L`/`%l`/`%*` association command-template expansion, raw `CreateProcessW` `pszCurDir` propagation, child relative-EXE resolution through queued/current CE directory, parked-process current-directory restore, raw `SHCreateShortcut` CE text-link creation, raw `SHGetShortcutTarget` CE text-link target extraction, raw `SHCreateShortcutEx` unique-name and optional buffer-return behavior, raw `SHAddToRecentDocs(SHARD_PATH/null/path-backed SHARD_PIDL/opaque namespace SHARD_PIDL)` recent-folder shortcut creation/clear plus MRU recent-document state capped to 10 shortcut files with display names, UI-facing display-entry projection, and raw PIDL byte retention, raw `SHChangeNotifyRegisterI`/`SHFileNotifyRemoveI`/`SHFileNotifyFreeI` registration/free tracking with HWND cleanup, matching raw file operations post heap-backed `WM_FILECHANGEINFO`/`FILECHANGENOTIFY` path or PIDL payloads for create/delete/mkdir/rmdir/rename/update events (honoring `SHCNF_PATHW`/`SHCNF_IDLIST`) plus live mount/unmount `SHCNE_DRIVEADD`/`SHCNE_DRIVEREMOVED` storage notifications, registry-backed `SHGetFileInfo` display/type/attribute/sysicon metadata with CE supported-flag validation, explicit `ERROR_INVALID_FLAGS` for unsupported/colliding flags, registry `DefaultIcon` pseudo image-list identity, CE-ordered document/folder/executable/storage-card/network-folder special icon slots including temporary `\\share`, `\release`, and `\network` network-folder detection, shell system image-list handle backing, and raw `ImageList_Create`/`LoadImage`/`Add`/`Replace`/`ReplaceIcon`/`Copy`/`CopyDitherImage`/`Merge`/`Remove`/`SetIconSize`/`SetImageCount`/`SetOverlayImage`/`Duplicate`/`Destroy` plus size/count/icon/image-info/background/draw-query overlay capture and drag-image begin/move/show/cursor/query/end behavior, `TrackPopupMenuEx` tracked attempts plus CE menu-loop owner notifications/default `WM_COMMAND` routing honoring `TPM_NONOTIFY` and state-backed `TPM_RETURNCMD` default-command return, `Shell_NotifyIconW` add/modify/delete state, owner callback message posting, and CE `HHTBF_DESTROYICON` owned-icon replacement/delete/teardown bookkeeping over a dedicated `ShellSystem`, `SHNotificationAddI`/`UpdateI`/`RemoveI`/`GetDataI` data storage/query by `CLSID + dwID` preserving notification `grfFlags` separately from update masks, plus `WM_NOTIFY`/`NMSHN` sink callback posting for stored notification events including `SHNN_LINKSEL` link strings and `SHNN_DISMISS` timeout flags, automatic notification timeout expiry/removal with `SHNN_DISMISS` callback delivery, shell notification cleanup on HWND/process teardown, `MessageBoxW` owner validation plus recorded text/caption/style, button IDs, default index, icon class, owner enabled-state, and CE default-button return selection | richer notification interaction (guest COM callback, bubble/taskbar UI), fuller namespace/policy and mounted CSIDL edge confirmation, actual icon bitmap extraction from DLL/icon resources and fuller rendered image-list blitting, rendered popup/menu windows and user-driven selection/hit-testing, rendered modal `MessageBoxW` window/nested pump/button input, precise shell errors and broader non-EXE document edge cases | raw `ShellExecuteEx` association tests, `shell_execute_ex_appends_parameters_without_template_placeholder`, `shell_execute_ex_expands_long_filename_template_placeholders`, `shell_execute_ex_resolves_hklm_software_classes_association`, `coredll_raw_create_process_preserves_current_directory`, `process_launch_resolution_uses_queued_current_directory`, parked-process identity tests, `shell_shortcut_ordinals_create_read_and_launch_ce_lnk_files`, `shell_create_shortcut_ex_returns_unique_name_and_checks_output_capacity`, `shell_add_to_recent_docs_creates_and_clears_recent_shortcuts`, `sh_change_notify_i_tracks_register_remove_and_free_state`, `sh_change_notify_i_posts_filechangeinfo_for_matching_file_operations`, `coredll_raw_shget_special_folder_path_returns_ce_paths`, `coredll_raw_shget_special_folder_path_strict_policy_rejects_fallbacks`, `coredll_raw_shget_special_folder_path_rejects_overlong_registry_path`, `coredll_raw_shget_special_folder_path_honors_create_flags`, `sh_get_file_info_uses_registry_associations_and_attributes`, `sh_get_file_info_system_image_list_supports_icon_queries_and_draw`, `image_list_ordinals_track_created_lists_and_icons`, `sh_get_file_info_rejects_unsupported_and_colliding_flags`, `coredll_raw_track_popup_menu_records_attempt_and_returns_default_command`, `shell_notify_icon_tracks_add_modify_delete_and_posts_callback`, `shnotification_i_tracks_query_update_and_remove_state`, `shnotification_i_posts_timeout_dismiss_and_removes_expired_record`, `shell_window_destroy_removes_notify_icon_and_notification_state`, `message_box_w_records_text_owner_and_returns_default_button`, `message_box_w_rejects_destroyed_owner_without_recording` | route UI still needs real shell/process/GWE semantics |
+| GWE defaults/input/send | `GWE\INC`, `window.hpp`, CE `winuser.h`, MFC `wincore.cpp`, CE input/clipboard/caret/IME headers, `PUBLIC\COMMON\SDK\INC\winuser.h` clipboard/caret/accelerator/timeout constants/prototypes | window broker behavior evidence | core window/message pump, partial defaults, raw/Unicorn-default `DefWindowProcW` `WM_NCHITTEST`, client `WM_SETCURSOR` class-cursor selection, non-client `WM_SETCURSOR` stock arrow/sizing cursor selection, `WM_MOUSEACTIVATE` activation, and `WM_SYSCOMMAND/SC_CLOSE` handling, raw `TranslateMessage` ASCII letter/digit Shift/CapsLock and `WM_SYSKEYDOWN` to `WM_SYSCHAR` path, raw `TranslateAcceleratorW` modifier and `WM_SYSKEYDOWN` matching, raw `SendNotifyMessageW` same-thread direct delivery plus cross-thread/broadcast live-top-level no-wait sent-queue delivery, raw `SendMessageTimeout` CE `SMTO_NORMAL` flag validation, timeout-transaction queueing, zero-timeout expiry, cross-thread `lpdwResult` write-back on dispatch completion, receiver-destruction result cleanup, and sender-termination cleanup for queued/active sent messages, sent/nonqueued-before-posted `GetMessageW`/`PeekMessageW` ordering, pending sent-message receiver readiness for parked processes and suspended-thread timeslicing, partial cross-thread send, GWE-owned clipboard open/close/owner/data/format-enumeration/custom-format-name state plus `GetClipboardDataAlloc` local-handle copy through raw COREDLL clipboard ordinals, GWE-owned caret create/destroy/show-hide/position/blink-time/system-enable state through raw COREDLL caret ordinals | fuller `DefWindowProcW` focus/activation/default-command behavior plus richer mouse edge cases, `SendNotifyMessageW` shell/device/storage notification integration and remaining ordering edge cases, real keyboard layout selection, broader accelerator/menu shortcut routing, dead keys/IME handoff, clipboard rendered ownership/delayed-render edge cases, rendered caret blink/focus invalidation integration, full `SendMessageTimeout` wait/reentrancy semantics | existing GWE fixtures, `coredll_raw_def_window_proc_handles_hit_test_and_syscommand_close`, `coredll_raw_def_window_proc_setcursor_uses_class_cursor`, `default_window_hit_test_reports_client_border_and_nowhere`, `coredll_raw_translate_message_uses_shift_caps_and_syschar`, `coredll_raw_translate_accelerator_honors_modifiers_and_syskey`, `coredll_raw_send_notify_message_is_async_across_threads`, `coredll_raw_send_notify_broadcast_uses_notify_send_for_live_top_level_windows`, `coredll_raw_send_message_timeout_rejects_non_ce_flags_without_queueing`, `coredll_raw_send_message_timeout_nonzero_cross_thread_queues_transaction`, `terminating_sender_removes_queued_sync_send_before_delivery`, `terminating_sender_marks_active_sync_send_without_result_ready`, `coredll_raw_get_message_services_sent_before_posted`, `coredll_raw_peek_message_services_sent_before_posted`, `rotate_to_ready_parked_process_with_pending_sent_receiver`, `timeslice_prefers_suspended_receiver_with_pending_sent_message`, `clipboard_raw_ordinals_track_lock_owner_formats_and_names`, `clipboard_raw_ordinals_reject_invalid_open_and_missing_lock`, `clipboard_data_alloc_copies_known_local_handle_contents`, `clipboard_data_alloc_rejects_unknown_source_handle`, `coredll_raw_caret_ordinals_track_position_visibility_and_blink`, `coredll_raw_caret_rejects_invalid_state_and_destroys_with_owner` | hidden chrome is guest-driven; do not force visibility; `target\host_presenter_sendorder1_*` closed the earlier startup sent-message starvation and `target\host_presenter_sendfix1_*` closes the later frozen-frame send gap |
+| Winsock | CE Winsock headers and socket wait behavior | none | direct host socket traps, CE-facing isolated local names/IPs, socket read/write readiness helpers including non-consuming UDP datagram probes, scheduler wake-candidate queuing for socket-handle waiters, `select`/listener readiness probing that buffers pending accepted TCP streams for `accept`, successful `send`/`sendto` wake fan-out to socket wait candidates, stateful `FIONBIO` plus `SO_RCVTIMEO`/`SO_SNDTIMEO` `setsockopt`/`getsockopt` with host TCP/UDP timeout application and `SO_ERROR` `getsockopt`, and Unicorn `accept`/`recv`/`recvfrom` plus read-only infinite/finite-timeout, write-only pending-socket finite-timeout, mixed read/write masked, except-fdset finite-timeout, socket-error-ready, and OOB-ready `select` parking/replay through scheduler `WinsockRead` waiters with read/write/except readiness metadata; `SO_RCVTIMEO` now bounds parked Winsock receive waits, including UDP `recvfrom`, and direct nonblocking `recv`/`recvfrom`/`accept` imports bypass parking so raw Winsock returns `WSAEWOULDBLOCK` without populating `SO_ERROR` | broader Winsock nonblocking/timeout/OOB edge cases as traces demand them | winsock startup/loopback/isolation tests, `winsock::tests::scheduler_waiter_can_use_socket_read_readiness`, `winsock::tests::select_buffers_tcp_listener_readiness_for_accept`, `winsock::tests::udp_select_readiness_waits_for_datagram_before_recvfrom`, `winsock::tests::tcp_send_queues_peer_socket_wait_candidate`, `winsock::tests::socket_timeouts_round_trip_through_setsockopt_getsockopt`, `winsock::tests::socket_timeouts_apply_to_host_tcp_and_udp_sockets`, `winsock::tests::so_error_tracks_failed_connect_and_drives_exception_select`, `winsock::tests::nonblocking_recv_without_data_returns_wouldblock_without_waiting`, `winsock::tests::nonblocking_recvfrom_without_datagram_returns_wouldblock_without_waiting`, `winsock::tests::nonblocking_accept_without_client_returns_wouldblock_without_waiting`, `emulator::unicorn::wait_scheduler_tests::winsock_recv_parks_until_socket_read_ready_and_replays_import`, `emulator::unicorn::wait_scheduler_tests::winsock_recvfrom_parks_until_udp_datagram_ready_and_replays_import`, `emulator::unicorn::wait_scheduler_tests::winsock_recv_uses_so_rcvtimeo_for_blocked_wait_timeout`, `emulator::unicorn::wait_scheduler_tests::winsock_recvfrom_uses_so_rcvtimeo_for_blocked_wait_timeout`, `emulator::unicorn::wait_scheduler_tests::winsock_nonblocking_recv_does_not_park_and_returns_wouldblock`, `emulator::unicorn::wait_scheduler_tests::winsock_nonblocking_recvfrom_does_not_park_and_returns_wouldblock`, `emulator::unicorn::wait_scheduler_tests::winsock_nonblocking_accept_does_not_park_and_returns_wouldblock`, `emulator::unicorn::wait_scheduler_tests::winsock_accept_parks_until_listener_read_ready_and_replays_import`, `emulator::unicorn::wait_scheduler_tests::winsock_select_parks_until_read_fdset_socket_ready_and_replays_import`, `emulator::unicorn::wait_scheduler_tests::winsock_select_finite_timeout_resumes_with_zero_ready_count`, `emulator::unicorn::wait_scheduler_tests::winsock_select_write_fdset_parks_pending_socket_until_timeout`, `emulator::unicorn::wait_scheduler_tests::winsock_select_mixed_read_write_fdsets_use_masked_readiness_until_timeout`, `emulator::unicorn::wait_scheduler_tests::winsock_select_except_fdset_parks_until_timeout_and_clears_fdset`, `emulator::unicorn::wait_scheduler_tests::winsock_select_except_fdset_resumes_when_socket_error_becomes_ready`, `emulator::unicorn::wait_scheduler_tests::winsock_select_except_fdset_resumes_when_oob_data_becomes_ready` | host transport works, subnet identity is now CE-facing |
 | Remote server/tooling | `CeRemote` API shape from v2 plus generic v3 framebuffer/audio/input state | `..\WinCE_Emulator_v2\src\remote_server.cpp`, `ce_remote.h` | v2-compatible REST status/frame/debug/input/GPS/NMEA/IMU/pause/resume/logs endpoints, MJPEG, control WebSocket, audio WebSocket, bounded recent-log publishing from `CeRemote`, direct control-WS log/status replies, mounted control/audio WS handshake validation | external-client/watch validation as remote tooling evolves, mounted real-app audio PCM evidence once the app emits wave data, broader live log streaming if external tooling demands it | remote server REST/WS tests, `recent_log_lines_follow_limit_and_clamp`, `remote_server_serves_recent_logs_over_rest_and_control_ws`, `remote_server_control_websocket_status_returns_latest_status_without_queueing`, `target\remote_ws_validation_parallel_probe.json`, `target\host_presenter_once_control_ws.json`, `target\host_presenter_sendorder1_probe_samples.json` | host-presenter validation on `--remote-server 192.168.0.39:8765` is live at PID `48432`; audio WS metadata works, binary late-join evidence remains watch |
 
 ## Key Changes
@@ -37,24 +37,72 @@ and isolated guest networking.
 - Implement `ShellExecuteEx` above `CreateProcessW`: normalize path, resolve CE
   shortcuts, query associations, expand command templates, locate executable,
   launch, apply show state, and return correct status. The current raw path
-  now preserves `nShow`, `lpDirectory`, `SEE_MASK_NOCLOSEPROCESS`, and the CE
-  `"%1" %*` command-template shape; finish the remaining fields/flags, precise
-  shell errors, non-EXE document edge cases, and broader command-template
-  substitutions as traces demand them.
+  now preserves `nShow`, `lpDirectory`, `SEE_MASK_NOCLOSEPROCESS`, current CE
+  process-directory fallback for relative targets, `.lnk` stored arguments
+  during shortcut launch, and the CE `"%1"`, `%L`/`%l`, and `%*`
+  command-template shape plus the `urlfile` `-u%1` embedded-target form; HKLM
+  `Software\Classes` document associations are honored; existing extensionless
+  documents now route through the CE `HKCR\file` generic association while
+  missing extensionless names still report `SE_ERR_FNF`; failed direct `.exe`
+  launches, missing associated non-EXE documents, and association commands
+  with missing absolute executables now report `SE_ERR_FNF` while unassociated
+  documents and empty association commands report `SE_ERR_NOASSOC`; finish the
+  remaining fields/flags, broader non-EXE document edge cases, and broader
+  command-template substitutions as traces demand them.
 - Expand registry-backed shell behavior for associations, icons, shell folders,
-  startup items, active devices, storage profiles, app paths, recent-doc UI/
-  pruning above the current `SHAddToRecentDocs` shortcut/state path, and UI
-  policy/settings.
+  startup items, active devices, storage profiles, app paths, rendered
+  recent-doc UI, and UI policy/settings. Recent-doc MRU pruning now caps stored
+  shortcuts at the CE `MAX_RECENT_FILES` count of 10; path-backed and opaque
+  namespace `SHARD_PIDL` input creates recent shortcut/MRU records; and shell
+  state now exposes ordered recent-document display entries for later UI/menu
+  rendering.
 - Implement shell-visible UI APIs that currently still succeed too cheaply:
-  `SHGetFileInfo`, `TrackPopupMenu*`, modal `MessageBoxW`, notification icons
-  and notification data, shell namespace/storage presentation, file type
-  metadata, and shell/file-change notifications. `MessageBoxW` now validates
-  owner HWNDs, records the requested modal data in `ShellSystem`, and returns
-  the CE default button for the requested button group; the rendered modal
-  window, nested pump, and real button/key interaction remain queued.
+  `SHGetFileInfo`, `ImageList_*`, `TrackPopupMenu*`, modal `MessageBoxW`,
+  notification icons and notification data, shell namespace/storage
+  presentation, file type metadata, and shell/file-change notifications.
+  Matching raw file operations now post CE-style `WM_FILECHANGEINFO` path
+  payloads to registered shell sinks. `SHGetFileInfo(SHGFI_SYSICONINDEX)` now
+  backs the returned system image-list handle with queryable pseudo icons, and
+  user-created image lists track file/resource bitmap loading, image/icon
+  entries, replacement, copying, merging, icon-size updates, size/count
+  queries, background color, duplication, removal, draw attempts, and
+  drag-image begin/move/show/cursor/query/end state.
+  `GetDiskFreeSpaceExW` now reports object-store capacity for object-store
+  paths and mount-specific total/free byte counts for mounted roots such as
+  `\SDMMC Disk`, with the lower-level `AFS_GetDiskFreeSpace` sector/cluster
+  ordinal backed by the same volume model, giving shell file/storage callers a
+  volume-aware size view. `CeFsIoControlW`/`AFS_FsIoControlW`
+  `FSCTL_GET_VOLUME_INFO` and `CeGetVolumeInfoW` now report `CE_VOLUME_INFO`
+  for mounted roots and the object store, including storage/removable versus
+  RAMFS flags, default block size, and fixed CE store/partition names. The
+  direct AFS path ordinals for create/remove directory, get/set attributes,
+  create file, delete, move/presto-chango rename, and find-first now reuse the
+  CE file namespace for full guest paths. Root `FindFirstFileW` namespace
+  enumeration now merges visible mount folders with object-store root entries
+  while preserving CE mount-folder attributes such as temporary removable
+  storage. Broader FSCTL forwarding and fuller mount-table volume-handle
+  semantics remain queued. Public
+  `FindFirstChangeNotificationW`/`FindNextChangeNotification`/
+  `FindCloseChangeNotification` and direct
+  `AFS_FindFirstChangeNotificationW` now create waitable directory-change
+  handles that signal on matching file create/delete/rename/write/attribute
+  events, expose pending `FILE_NOTIFY_INFORMATION` action/name records through
+  `CeGetFileNotificationInfo`, and rearm via `FindNext` or successful info
+  retrieval.
+  `MessageBoxW` now validates owner HWNDs, records text/caption/style plus
+  button IDs, default-button index, icon class, owner enabled-state, and result
+  in `ShellSystem`, and returns the CE default button for the requested button
+  group, including owner-draw `MB_YESALL` and `MB_CANCEL` modes from
+  `OWNERDRAWLIB\appalert.cpp`; the rendered modal window, nested pump, and real
+  button/key interaction remain queued.
 - Improve GWE defaults for focus, activation, non-client messages, hit testing,
-  keyboard navigation, mouse capture, close/destroy, command routing, dialog and
-  control notifications, and `SendNotifyMessageW` ordering.
+  client `WM_SETCURSOR` class-cursor selection, non-client
+  `WM_SETCURSOR` stock sizing/arrow cursor selection, `WM_MOUSEACTIVATE`
+  activation, keyboard navigation, mouse capture, close/destroy, command
+  routing, dialog and control notifications, and `SendNotifyMessageW`
+  ordering. Dialog default-button state now reports CE `DM_GETDEFID`/
+  `DM_SETDEFID` values over child pushbuttons, and Escape handling resolves an
+  actual `IDCANCEL` pushbutton HWND before falling back to a command id only.
 - Expand input and UI state fidelity beyond the current minimal
   `TranslateMessage`: keyboard modifiers/layout, accelerators and menu
   shortcuts, `WM_SYSKEY*`, dead-key/IME handoff, clipboard
@@ -63,12 +111,40 @@ and isolated guest networking.
   rendered caret blink/focus invalidation above the now-stateful raw caret
   store, and focus/capture integration.
 - Complete cross-thread `SendMessageTimeout` semantics: wait for reply or
-  timeout, write the result pointer on completion, honor `SMTO_*` flags, handle
-  receiver/sender destruction, and perform required reentrant dispatch while
-  waiting.
+  timeout, honor remaining `SMTO_*` flags, and perform required reentrant
+  dispatch while waiting. Cross-thread dispatch completion now writes
+  `lpdwResult` for timeout transactions, receiver destruction returns a
+  terminated zero result, and sender termination removes undelivered sends or
+  marks active sends with `SMF_SENDER_TERMINATED` before receiver unwind.
 - Replace direct-only WINSOCK with a CE-facing isolated NAT model: gateway
   `10.0.0.1`, guest IP `10.0.0.2`, host sockets as the transport boundary, and
-  blocking waits owned by the scheduler.
+  blocking waits owned by the scheduler. Socket-handle waiters can now be
+  queued and selected from host read readiness; TCP listener readiness now
+  probes nonblocking `accept` and buffers the accepted stream so `select` and
+  subsequent `accept` observe the same pending connection; successful
+  `send`/`sendto` calls now fan out wake candidates to socket-handle waiters
+  so peer read readiness can resume blocked work; UDP read readiness now uses
+  non-consuming datagram probes instead of treating every UDP socket as ready,
+  so empty `recvfrom` waits can park until a datagram arrives; Unicorn
+  `accept`/`recv`/`recvfrom`, read-only infinite or finite-timeout `select`, write-only
+  pending-socket finite-timeout `select`, mixed read/write masked `select`,
+  and except-fdset finite-timeout `select` can now park as scheduler
+  `WinsockRead` waiters with read/write/except readiness metadata and replay
+  the saved import once the socket becomes ready or the finite `select`
+  deadline expires. `SO_RCVTIMEO`/`SO_SNDTIMEO` now round-trip through
+  `setsockopt`/`getsockopt`, apply onto host TCP/UDP read/write timeouts as
+  sockets are connected, bound, or updated, and `SO_RCVTIMEO` bounds parked
+  Winsock `recv` and UDP `recvfrom` waits before replaying the saved import to
+  produce the Winsock timeout error shape. `SO_ERROR` now reports and clears stored socket errors, failed
+  connects drive raw `select` exception fdsets, and parked Unicorn
+  exception-fdset `select` resumes/replays once socket-error readiness appears.
+  `FIONBIO` mode is now retained after `ioctlsocket`, and direct nonblocking
+  `recv`/`recvfrom`/`accept` imports bypass scheduler parking so raw Winsock
+  returns `WSAEWOULDBLOCK` immediately without filling `SO_ERROR`. `MSG_OOB`
+  sends now mark the connected peer's exception readiness independently of
+  `SO_ERROR`, raw and parked Unicorn `select` report that peer in `exceptfds`,
+  and `recv(..., MSG_OOB)` clears the OOB readiness after consuming the data.
+  Broaden socket timeout/nonblocking/OOB edge coverage as traces demand it.
 
 ## Validation
 
@@ -157,39 +233,116 @@ focused fixtures plus mounted iNavi evidence:
   `ERROR_NOT_SUPPORTED` plus failure-shaped return values. The remaining work
   is replacing those stubs with real subsystem behavior and adding any
   non-mapped callsite attribution discovered by mounted traces.
-- Extend `SHGetFileInfo` beyond the first registry-backed slice: real icon
-  extraction/image-list handles, folder/executable special icon mapping, and
-  mounted-trace edge cases. CE-supported flag validation now rejects
-  unsupported/colliding `SHGFI_*` combinations instead of accepting
-  desktop-only icon-location/masked-attribute requests.
-- Implement real popup menu behavior for `TrackPopupMenu*`: menu popup or
-  equivalent UI, modal menu loop, pointer/key hit-testing, selection/highlight,
-  disabled/checked/default item rendering, submenu behavior, `WM_COMMAND`
-  routing, `TPM_RETURNCMD`, and cancellation.
+- Extend `SHGetFileInfo` beyond the current registry-backed slice: actual icon
+  bitmap extraction from DLL/icon resources, bitmap-backed image-list
+  blitting, and mounted-trace edge cases. The shell system image-list handle is
+  now queryable through raw `ImageList_*` ordinals, and created image lists keep
+  state for file/resource bitmap loading, image/icon entries, replace/copy and
+  merge operations, icon-size updates, count/size/image-info queries,
+  duplication, background color, removal, `GetIcon` overlay identity,
+  framebuffer-backed pseudo-icon draw attempts, and drag-image lifecycle/query
+  calls. Empty-path
+  `SHGetFileInfo(SHGFI_SYSICONINDEX)` calls now return the shell system
+  image-list handle for CE shell list/taskbar callers that are only probing
+  the shared image list.
+  CE-supported flag validation now rejects unsupported/colliding `SHGFI_*`
+  combinations instead of accepting desktop-only icon-location/masked-attribute
+  requests, and registry `DefaultIcon` plus CE-ordered document/folder/
+  executable/storage-card/network-folder special icon slots now produce stable
+  pseudo image-list identities, and `.lnk` files report the CE `Shortcut` type
+  while following bounded nested resolved targets for icon selection and
+  preserving the CE shortcut overlay in returned pseudo `HICON` handles.
+  Missing real paths now follow CE `SHGetFileInfo` by failing with
+  `ERROR_MOD_NOT_FOUND` rather than the generic file-not-found status.
+  Removable mount roots that surface as `FILE_ATTRIBUTE_DIRECTORY |
+  FILE_ATTRIBUTE_TEMPORARY` now use a storage-card pseudo icon/display/type
+  slice, while temporary `\\share`, `\release`, and `\network` directories use
+  the CE icon-cache network-folder branch with matching type metadata; missing
+  UNC paths also follow CE by falling back to that temporary network-folder
+  metadata and `SFGAO_FILESYSTEM | SFGAO_FOLDER` shell attributes instead of
+  failing unknown-file probing.
+- Implement real popup menu behavior for `TrackPopupMenu*`: modal menu loop,
+  pointer/key hit-testing, selection/highlight, submenu behavior, and
+  cancellation.
+  The raw path now records tracking/owner loop notifications, routes the
+  state-backed default `WM_COMMAND` when `TPM_RETURNCMD` is not requested, and
+  `TPM_RETURNCMD` returns the enabled default command (or first enabled command)
+  from the tracked popup menu instead of an unconditional fake cancellation.
+  That state-backed command selection now descends through enabled `MF_POPUP`
+  submenus and sends/records nested `WM_INITMENUPOPUP` notifications for the
+  submenu path that produced the selected command; disabled-only menus cover
+  the cancellation/no-command edge by returning `0` for `TPM_RETURNCMD` and
+  avoiding synthetic `WM_COMMAND`. Framebuffer-backed raw calls now render the
+  popup surface and item rows from menu state, including disabled, checked,
+  default, separator, and submenu-marker presentation.
 - Continue real modal `MessageBoxW`: the raw path now validates owners, records
-  text/caption/style/result, temporarily applies owner disable/reenable, and
-  derives the default `ID*` result from CE `winuser.h` button/default flags.
-  Still create/show the modal dialog, render button layout/icons/text, run the
-  nested message pump, and route Enter/Escape/button clicks to the final result.
-- Finish shell special-folder behavior: log or classify fallback use, add a
-  strict-vs-compat fallback policy, and confirm CSIDL coverage against
-  observed calls. The raw path now rejects overlong resolved paths and honors
-  both `fCreate` and `CSIDL_FLAG_CREATE` by creating missing mounted folders.
+  text/caption/style, button IDs, CE owner-draw left/center/right button
+  labels, default-button index, icon class, result, and owner enabled-state,
+  temporarily applies owner disable/reenable, creates a transient visible GWE
+  dialog with static text and button child windows, closes it through
+  `EndDialog`, paints the dialog/caption/icon/text/button surface into an
+  attached framebuffer, and derives the default `ID*` result from CE
+  `winuser.h` button/default flags, including the CE owner-draw `MB_YESALL`
+  and `MB_CANCEL` modes.
+  Still run the nested message pump and route Enter/Escape/button clicks to
+  the final result.
+- Extend file-change notification fidelity: shell `WM_FILECHANGEINFO` posting
+  and the waitable `FindFirstChangeNotificationW` handle path now share the
+  same CE filesystem mutation source, and `CeGetFileNotificationInfo` now
+  returns pending action/name records including recursive directory create,
+  rename old/new multi-record chains, directory removal, and root namespace
+  mount add/remove records. It now also mirrors CE partial-drain behavior for
+  capped buffers: too-small probes preserve pending records, successful prefix
+  reads return `ERROR_MORE_DATA` with the remaining byte count and keep the
+  handle signaled, full drains report zero bytes available, and empty data
+  reads fail with `ERROR_NO_MORE_ITEMS`. Full FSDMGR volume-handle notification
+  ownership, deeper coalescing behavior, and broader mounted edge cases remain
+  queued.
+- Finish shell special-folder behavior: confirm CSIDL coverage against observed
+  calls and mounted edge cases. The raw path now records each resolved
+  `SHGetSpecialFolderPath` query with registry/missing/non-string source
+  classification, supports a selectable compat-vs-strict fallback policy,
+  verifies the CE `shellapi.h` supported fallback set
+  (`Desktop`/`DesktopDirectory`, `Programs`, `Personal`, `Favorites`,
+  `Startup`, `Recent`, `Start Menu`, `Fonts`, `AppData`, `Windows`,
+  `Program Files`, and `Profile`) while preserving CE `CSIDL_SYSTEM`
+  compatibility coverage, rejects overlong resolved paths with focused
+  coverage, and honors both `fCreate` and `CSIDL_FLAG_CREATE` by creating
+  missing root-relative and nested mounted folders, including the CE shell's
+  observed `CSIDL_DESKTOPDIRECTORY | CSIDL_FLAG_CREATE` desktop creation path.
 - Extend notification APIs: `Shell_NotifyIconW` now tracks add/modify/delete
   records generically and can post the registered owner callback message for a
   shell-icon event; `SHNotificationAddI`/`UpdateI`/`RemoveI`/`GetDataI` now
-  preserve/query CE notification data by `CLSID + dwID` and can post a
-  `WM_NOTIFY`/`NMSHN` callback payload to the stored sink HWND for notification
+  preserve/query CE notification data by `CLSID + dwID`, keep notification
+  `grfFlags` separate from update masks, and can post a `WM_NOTIFY`/`NMSHN`
+  callback payload to the stored sink HWND for notification
   events, including CE-style `SHNN_LINKSEL` `pszLink` strings stored after the
-  `NMSHN` payload and `SHNN_DISMISS` `fTimeout` flags. Still implement
-  automatic timeout/dismiss ownership, COM notification callbacks, richer icon
-  lifetime, and optional shell/taskbar rendering only when backed by real shell
-  state.
+  `NMSHN` payload and `SHNN_DISMISS` `fTimeout` flags. The same stored
+  notification events now record the CE `IShellNotificationCallback` method,
+  vtable offset, and typed argument payload that would be invoked for non-null
+  CLSIDs (`OnShow`, `OnLinkSelected`, `OnDismiss`, and command selection),
+  while command selection also posts the CE `WM_COMMAND` sink message. Inform
+  notifications now track expiry from their CE centisecond duration, remove the
+  stored record on timeout, and post a timeout `SHNN_DISMISS` callback during
+  message pumping. `SHNotificationUpdateI` now rejects zero/unknown update masks,
+  preserves the previous notification icon for `SHNUM_ICON` updates that
+  carry a null icon handle, and stores zero `SHNUM_DURATION` updates literally
+  instead of reapplying add-time defaults, while leaving add-time `grfFlags`,
+  `hwndSink`, and `lParam` intact. Notify icons now track CE `HHTBF_DESTROYICON`
+  ownership and record old/current `HICON` handles that the taskbar would
+  destroy during icon replacement, explicit deletion, or owner-window teardown.
+  Add/update paths have raw coverage for rejecting nonzero notification sink
+  HWNDs that are no longer live. Still implement actual guest COM vtable invocation from that recorded call contract and
+  optional shell/taskbar rendering only when backed by real shell state.
   Notification records are pruned during normal HWND/process teardown.
-- Finish file namespace and file-change notifications: shell namespace roots
-  over mounts, storage-volume presentation, file type/display/icon metadata,
-  change notification handles, shell change notifications, create/delete/
-  rename/update refresh events, and storage insertion/removal notifications.
+- Finish file namespace and file-change notifications: root namespace
+  enumeration now surfaces visible mount folders alongside object-store root
+  entries and lets mount metadata override duplicate backing directories.
+  Continue storage-volume presentation, remaining file type/display/icon
+  metadata, fuller recent-doc rendering, namespace policy, and mounted edge
+  cases. Raw path-based and IDLIST-based create/delete/mkdir/rmdir/rename/update
+  refresh events now deliver heap-backed `FILECHANGENOTIFY` payloads to matching
+  `SHChangeNotifyRegisterI` subscribers.
 
 ## Completed User Todos
 

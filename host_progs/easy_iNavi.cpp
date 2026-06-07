@@ -4,13 +4,189 @@
 
 #define BTN_INAVI 1001
 #define BTN_EXPLORER 1002
+#define EDIT_DUMP 1003
+#define MAX_DUMP_TEXT 8192
+#define MAX_PATH_CE 260
 
 static HINSTANCE g_instance;
 static HWND g_main;
 static HWND g_inavi;
 static HWND g_explorer;
+static HWND g_dump;
 static HANDLE g_singleton;
 static HANDLE g_inavi_process;
+
+typedef DWORD (WINAPI *PFN_GetCurrentDirectoryW)(DWORD, LPWSTR);
+typedef LPWCH (WINAPI *PFN_GetEnvironmentStringsW)(VOID);
+typedef BOOL (WINAPI *PFN_FreeEnvironmentStringsW)(LPWCH);
+
+static FARPROC ResolveCoredllProc(LPCWSTR proc_name) {
+    HMODULE module = LoadLibraryW(L"coredll.dll");
+    if (!module) {
+        return NULL;
+    }
+    return GetProcAddress(module, proc_name);
+}
+
+static void CopyString(WCHAR *dst, int dst_chars, LPCWSTR src) {
+    int i = 0;
+    if (!dst || dst_chars <= 0) {
+        return;
+    }
+    if (src) {
+        for (; i < dst_chars - 1 && src[i]; ++i) {
+            dst[i] = src[i];
+        }
+    }
+    dst[i] = 0;
+}
+
+static void CatString(WCHAR *dst, int dst_chars, LPCWSTR src) {
+    int len = lstrlenW(dst);
+    if (len < dst_chars) {
+        CopyString(dst + len, dst_chars - len, src);
+    }
+}
+
+static void AppendPythonString(WCHAR *dst, int dst_chars, LPCWSTR src) {
+    CatString(dst, dst_chars, L"'");
+    if (src) {
+        for (int i = 0; src[i]; ++i) {
+            WCHAR ch[2];
+            ch[0] = src[i];
+            ch[1] = 0;
+            if (src[i] == L'\\') {
+                CatString(dst, dst_chars, L"\\\\");
+            } else if (src[i] == L'\'') {
+                CatString(dst, dst_chars, L"\\'");
+            } else if (src[i] == L'\r') {
+                CatString(dst, dst_chars, L"\\r");
+            } else if (src[i] == L'\n') {
+                CatString(dst, dst_chars, L"\\n");
+            } else {
+                CatString(dst, dst_chars, ch);
+            }
+        }
+    }
+    CatString(dst, dst_chars, L"'");
+}
+
+static void AppendLine(WCHAR *dst, int dst_chars, LPCWSTR line) {
+    CatString(dst, dst_chars, line);
+    CatString(dst, dst_chars, L"\r\n");
+}
+
+static BOOL NextCommandLineArg(LPCWSTR cmd, int *pos, WCHAR *out, int out_chars) {
+    int i = *pos;
+    int out_i = 0;
+    BOOL quoted = FALSE;
+    if (!cmd || !out || out_chars <= 0) {
+        return FALSE;
+    }
+    while (cmd[i] == L' ' || cmd[i] == L'\t') {
+        ++i;
+    }
+    if (!cmd[i]) {
+        out[0] = 0;
+        *pos = i;
+        return FALSE;
+    }
+    while (cmd[i]) {
+        WCHAR ch = cmd[i++];
+        if (ch == L'"') {
+            quoted = !quoted;
+            continue;
+        }
+        if (!quoted && (ch == L' ' || ch == L'\t')) {
+            break;
+        }
+        if (out_i < out_chars - 1) {
+            out[out_i++] = ch;
+        }
+    }
+    out[out_i] = 0;
+    *pos = i;
+    return TRUE;
+}
+
+static void AppendCommandLineArgs(WCHAR *dst, int dst_chars) {
+    LPCWSTR cmd = GetCommandLineW();
+    WCHAR arg[MAX_PATH_CE];
+    int pos = 0;
+    BOOL first = TRUE;
+    CatString(dst, dst_chars, L"process args = [");
+    while (NextCommandLineArg(cmd, &pos, arg, MAX_PATH_CE)) {
+        if (!first) {
+            CatString(dst, dst_chars, L", ");
+        }
+        AppendPythonString(dst, dst_chars, arg);
+        first = FALSE;
+    }
+    AppendLine(dst, dst_chars, L"]");
+}
+
+static void AppendCurrentDirectory(WCHAR *dst, int dst_chars) {
+    WCHAR cwd[MAX_PATH_CE];
+    PFN_GetCurrentDirectoryW proc =
+        (PFN_GetCurrentDirectoryW)ResolveCoredllProc(L"GetCurrentDirectoryW");
+    CatString(dst, dst_chars, L"cwd = ");
+    if (proc && proc(MAX_PATH_CE, cwd) != 0) {
+        AppendPythonString(dst, dst_chars, cwd);
+    } else {
+        AppendPythonString(dst, dst_chars, L"<unavailable>");
+    }
+    AppendLine(dst, dst_chars, L"");
+}
+
+static void AppendEnvironment(WCHAR *dst, int dst_chars) {
+    PFN_GetEnvironmentStringsW get_env =
+        (PFN_GetEnvironmentStringsW)ResolveCoredllProc(L"GetEnvironmentStringsW");
+    PFN_FreeEnvironmentStringsW free_env =
+        (PFN_FreeEnvironmentStringsW)ResolveCoredllProc(L"FreeEnvironmentStringsW");
+    LPWCH block;
+    BOOL first = TRUE;
+    CatString(dst, dst_chars, L"process env = {");
+    if (!get_env) {
+        AppendLine(dst, dst_chars, L"}");
+        return;
+    }
+    block = get_env();
+    if (!block) {
+        AppendLine(dst, dst_chars, L"}");
+        return;
+    }
+    for (LPWCH entry = block; *entry; entry += lstrlenW(entry) + 1) {
+        WCHAR *equals = entry;
+        while (*equals && *equals != L'=') {
+            ++equals;
+        }
+        if (*equals != L'=') {
+            continue;
+        }
+        if (!first) {
+            CatString(dst, dst_chars, L", ");
+        }
+        *equals = 0;
+        AppendPythonString(dst, dst_chars, entry);
+        CatString(dst, dst_chars, L": ");
+        AppendPythonString(dst, dst_chars, equals + 1);
+        *equals = L'=';
+        first = FALSE;
+    }
+    if (free_env) {
+        free_env(block);
+    }
+    AppendLine(dst, dst_chars, L"}");
+}
+
+static void RefreshDump() {
+    WCHAR text[MAX_DUMP_TEXT];
+    CopyString(text, MAX_DUMP_TEXT, L"");
+    AppendCurrentDirectory(text, MAX_DUMP_TEXT);
+    AppendCommandLineArgs(text, MAX_DUMP_TEXT);
+    AppendEnvironment(text, MAX_DUMP_TEXT);
+    SetWindowTextW(g_dump, text);
+}
 
 static BOOL IsProcessStillRunning(HANDLE process) {
     return process && WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
@@ -50,11 +226,13 @@ static void Layout(HWND hwnd) {
     int width = rc.right - rc.left;
     int height = rc.bottom - rc.top;
     int button_w = width * 4 / 5;
-    int button_h = height / 5;
+    int button_h = height / 7;
+    int dump_top = height / 2;
     int left = (width - button_w) / 2;
-    int top = height / 4;
+    int top = height / 12;
     MoveWindow(g_inavi, left, top, button_w, button_h, TRUE);
     MoveWindow(g_explorer, left, top + button_h + height / 10, button_w, button_h, TRUE);
+    MoveWindow(g_dump, 0, dump_top, width, height - dump_top, TRUE);
 }
 
 static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -66,6 +244,10 @@ static LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_explorer = CreateWindowW(L"BUTTON", L"Launch Explorer",
             WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
             0, 0, 0, 0, hwnd, (HMENU)BTN_EXPLORER, g_instance, NULL);
+        g_dump = CreateWindowW(L"EDIT", L"",
+            WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_LEFT | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
+            0, 0, 0, 0, hwnd, (HMENU)EDIT_DUMP, g_instance, NULL);
+        RefreshDump();
         Layout(hwnd);
         return 0;
     case WM_SIZE:

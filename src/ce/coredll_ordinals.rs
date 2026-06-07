@@ -13540,7 +13540,7 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef; 27] = &[
     },
 ];
 
-pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 6] = &[
+pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 9] = &[
     CoredllOrdinalDef {
         name: "GetSystemTimeAsFileTime",
         ordinal: ORD_GET_SYSTEM_TIME_AS_FILE_TIME,
@@ -13564,6 +13564,18 @@ pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 6] = &[
     CoredllOrdinalDef {
         name: "GetMenu",
         ordinal: ORD_GET_MENU,
+    },
+    CoredllOrdinalDef {
+        name: "CeFsIoControlW",
+        ordinal: ORD_CE_FS_IO_CONTROL_W,
+    },
+    CoredllOrdinalDef {
+        name: "AFS_FsIoControlW",
+        ordinal: ORD_AFS_FS_IO_CONTROL_W,
+    },
+    CoredllOrdinalDef {
+        name: "CeGetVolumeInfoW",
+        ordinal: ORD_CE_GET_VOLUME_INFO_W,
     },
 ];
 
