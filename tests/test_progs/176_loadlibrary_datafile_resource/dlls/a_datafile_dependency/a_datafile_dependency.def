@@ -1,0 +1,4 @@
+LIBRARY a_datafile_dependency
+
+EXPORTS
+    DatafileDependencyValue @3

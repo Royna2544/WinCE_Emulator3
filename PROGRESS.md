@@ -43,11 +43,18 @@
   `DllMain`, or final detach callouts; the new
   `175_loadlibrary_noresolve` fixture proves a staged imported dependency is
   not loaded in no-resolve mode, the target DLL attach count remains zero, and
-  a later normal `LoadLibraryW` resolves imports and runs attach. The updated
+  a later normal `LoadLibraryW` resolves imports and runs attach. Runtime
+  `LoadLibraryExW(LOAD_LIBRARY_AS_DATAFILE)` now follows CE's datafile-implies-
+  no-resolve rule, maps the image for resource access, registers strings and
+  raw resource entries immediately with `kernel.resources`, and hides code
+  exports from `GetProcAddress`; the new
+  `176_loadlibrary_datafile_resource` fixture proves `LoadStringW`,
+  `FindResourceW`, `SizeofResource`, and `LoadResource` work from the loaded
+  resource module without dependency loading or `DllMain`, then a later normal
+  load resolves imports and runs attach. The updated
   `173_loadlibrary_tls_callback` fixture arms an EXE-owned detach order marker
   and proves the complete lifecycle order word `0x01020304`: TLS attach,
-  `DllMain` attach, TLS detach, `DllMain` detach. Datafile/resource loads
-  remain queued.
+  `DllMain` attach, TLS detach, `DllMain` detach.
 - eVC fixture infrastructure now supports fixture-local runtime DLLs under
   `tests\test_progs\<fixture>\dlls\<dll-name>\`. The runner discovers `.cpp`,
   `.rc`, and optional `.def` files, links each DLL with an import library,
@@ -115,12 +122,13 @@
   `DONT_RESOLVE_DLL_REFERENCES` path maps/reuses modules and exposes ordinary
   exports while deliberately skipping dependency loads, import patching,
   forwarder resolution, TLS callbacks, and `DllMain`; datafile/resource-style
-  flags still fail explicitly. Guest
+  loads now expose resource APIs without code exports or lifecycle calls. Guest
   `DllMain(DLL_PROCESS_DETACH)` on final dynamic `FreeLibrary` plus TLS detach
   ordering are now covered by direct/TLS runtime fixtures; forwarded exports
   are covered by runtime `GetProcAddress` and import-patching fixtures, and
-  no-resolve mode is covered by fixture 175. Datafile/resource modes and fuller
-  runtime trampoline handling remain open. Focused coverage passes
+  no-resolve mode is covered by fixture 175, and datafile/resource mode is
+  covered by fixture 176. Fuller runtime trampoline handling remains open.
+  Focused coverage passes
   for loaded-module export snapshots, runtime occupied-range calculation, and
   the existing raw `LoadLibraryExW` flag/refcount behavior.
 - `ExternalImportTable` now has a public `add_module_exports` path for

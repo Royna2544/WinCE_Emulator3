@@ -47,6 +47,7 @@ These are intentionally tiny. Each fixture should test one layer or invariant be
 | `173_loadlibrary_tls_callback` | Runtime PE TLS callback invocation before DLL process attach and final detach. |
 | `174_loadlibrary_forwarded_export` | Runtime PE forwarded exports through `GetProcAddress` and guest-DLL import patching. |
 | `175_loadlibrary_noresolve` | Runtime `LoadLibraryExW(DONT_RESOLVE_DLL_REFERENCES)` maps exports without dependency loads or lifecycle calls. |
+| `176_loadlibrary_datafile_resource` | Runtime `LoadLibraryExW(LOAD_LIBRARY_AS_DATAFILE)` exposes resources without exports, dependency loads, or lifecycle calls. |
 | `asm/` | Optional assembly/reference snippets for executable-section branch/delay tests. |
 | `tools/make_raw_mips_blobs.py` | Generates raw MIPS little-endian blobs for CPU-only unit tests. |
 

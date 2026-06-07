@@ -51,7 +51,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `LoadLibraryExW(DONT_RESOLVE_DLL_REFERENCES)` now maps/reuses the runtime
     DLL and publishes ordinary exports without recursive dependency loading,
     import patching, TLS callbacks, `DllMain`, or detach callouts on final
-    release. Datafile/resource-style loads remain an explicit open gap.
+    release. CE `loader.c` treats `LOAD_LIBRARY_AS_DATAFILE` as also setting
+    `DONT_RESOLVE_DLL_REFERENCES`; v3 mirrors that for runtime datafile loads,
+    maps the image for resource access, registers resource strings/data
+    immediately with `kernel.resources`, and keeps code exports hidden from
+    `GetProcAddress`.
 
 - CE loader lifecycle anchors:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\loader.c` and

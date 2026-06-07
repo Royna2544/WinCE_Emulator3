@@ -5948,9 +5948,7 @@ fn try_handle_runtime_loader_import<D>(
             RUNTIME_COREDLL_MODULE_HANDLE,
         ));
     }
-    if flags & !(RUNTIME_DONT_RESOLVE_DLL_REFERENCES | RUNTIME_LOAD_LIBRARY_AS_DATAFILE) != 0
-        || flags & RUNTIME_LOAD_LIBRARY_AS_DATAFILE != 0
-    {
+    if flags & !(RUNTIME_DONT_RESOLVE_DLL_REFERENCES | RUNTIME_LOAD_LIBRARY_AS_DATAFILE) != 0 {
         kernel
             .threads
             .set_last_error(thread_id, crate::ce::thread::ERROR_NOT_SUPPORTED);
@@ -5969,6 +5967,11 @@ fn try_handle_runtime_loader_import<D>(
     };
     let mut loading = BTreeSet::new();
     let mut newly_loaded_modules = Vec::new();
+    let effective_flags = if flags & RUNTIME_LOAD_LIBRARY_AS_DATAFILE != 0 {
+        flags | RUNTIME_DONT_RESOLVE_DLL_REFERENCES
+    } else {
+        flags
+    };
     match runtime_load_guest_dll_from_path(
         uc,
         kernel,
@@ -5980,13 +5983,13 @@ fn try_handle_runtime_loader_import<D>(
         traps,
         search_dirs,
         &path,
-        flags,
+        effective_flags,
         &mut loading,
         &mut newly_loaded_modules,
     ) {
         Ok(handle) => {
             kernel.threads.set_last_error(thread_id, 0);
-            let lifecycle_calls = if flags & RUNTIME_DONT_RESOLVE_DLL_REFERENCES != 0 {
+            let lifecycle_calls = if effective_flags & RUNTIME_DONT_RESOLVE_DLL_REFERENCES != 0 {
                 Vec::new()
             } else {
                 dll_attach_lifecycle_calls_for_modules(kernel, &newly_loaded_modules)
@@ -6133,6 +6136,7 @@ fn runtime_load_guest_dll_from_path<D>(
 
     let image = PeImage::inspect(path)?;
     let dont_resolve = load_flags & RUNTIME_DONT_RESOLVE_DLL_REFERENCES != 0;
+    let datafile = load_flags & RUNTIME_LOAD_LIBRARY_AS_DATAFILE != 0;
     if !dont_resolve {
         for descriptor in &image.imports {
             let dependency_name = normalize_module_name(&descriptor.module_name);
@@ -6201,13 +6205,13 @@ fn runtime_load_guest_dll_from_path<D>(
     memory_map.map(
         load_base,
         mapped_size,
-        MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC,
+        runtime_dll_memory_perms(datafile),
         &label,
     )?;
     uc.mem_map(
         u64::from(load_base),
         u64::from(mapped_size),
-        unicorn_perms(MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC),
+        unicorn_perms(runtime_dll_memory_perms(datafile)),
     )
     .map_err(|err| Error::Backend(format!("map runtime DLL {label}: {err:?}")))?;
     uc.mem_write(u64::from(load_base), &mapped)
@@ -6223,6 +6227,12 @@ fn runtime_load_guest_dll_from_path<D>(
     }
 
     let mut module_info = loaded_module_info(&image, load_base)?;
+    if datafile {
+        module_info.exports_by_name.clear();
+        module_info.exports_by_ordinal.clear();
+        module_info.forwarders_by_name.clear();
+        module_info.forwarders_by_ordinal.clear();
+    }
     if !dont_resolve {
         resolve_runtime_forwarders(
             uc,
@@ -6246,7 +6256,7 @@ fn runtime_load_guest_dll_from_path<D>(
     module_info.dynamic = true;
     register_runtime_module_with_kernel(kernel, &module_info);
     loaded_modules.push(module_info);
-    register_runtime_resources(&image, load_base, resource_strings, resources)?;
+    register_runtime_resources(kernel, &image, load_base, resource_strings, resources)?;
     mapped_blobs.push(MappedBlob {
         name: label,
         base: load_base,
@@ -6408,6 +6418,15 @@ fn runtime_occupied_ranges(memory_map: &MemoryMap, mapped_blobs: &[MappedBlob]) 
 }
 
 #[cfg(feature = "unicorn")]
+fn runtime_dll_memory_perms(datafile: bool) -> MemoryPerms {
+    if datafile {
+        MemoryPerms::READ | MemoryPerms::WRITE
+    } else {
+        MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC
+    }
+}
+
+#[cfg(feature = "unicorn")]
 fn external_imports_from_loaded_modules(kernel: &CeKernel) -> ExternalImportTable {
     let mut external = ExternalImportTable::default();
     for module in kernel.loaded_module_export_snapshots() {
@@ -6462,26 +6481,43 @@ fn register_runtime_module_with_kernel(kernel: &mut CeKernel, module: &LoadedPeM
 
 #[cfg(feature = "unicorn")]
 fn register_runtime_resources(
+    kernel: &mut CeKernel,
     image: &PeImage,
     load_base: u32,
     resource_strings: &mut Vec<MappedResourceString>,
     resources: &mut Vec<MappedResource>,
 ) -> Result<()> {
     for string in image.resource_strings()? {
+        let data_ptr = Some(load_base.wrapping_add(string.data_rva));
+        kernel
+            .resources
+            .register_string(load_base, string.id, string.text.clone(), data_ptr);
         resource_strings.push(MappedResourceString {
             module: load_base,
             id: string.id,
             text: string.text,
-            data_ptr: Some(load_base.wrapping_add(string.data_rva)),
+            data_ptr,
         });
     }
     for resource in image.resource_data_entries()? {
+        let name = resource
+            .name_string
+            .as_ref()
+            .map(|name| crate::ce::resource::ResourceId::Name(name.clone()))
+            .unwrap_or(crate::ce::resource::ResourceId::Integer(
+                resource.name as u16,
+            ));
+        let kind = crate::ce::resource::ResourceId::Integer(resource.kind as u16);
+        let data_ptr = load_base.wrapping_add(resource.data_rva);
+        kernel
+            .resources
+            .register(load_base, name, kind, data_ptr, resource.size);
         resources.push(MappedResource {
             module: load_base,
             name: resource.name,
             name_string: resource.name_string,
             kind: resource.kind,
-            data_ptr: load_base.wrapping_add(resource.data_rva),
+            data_ptr,
             size: resource.size,
         });
     }

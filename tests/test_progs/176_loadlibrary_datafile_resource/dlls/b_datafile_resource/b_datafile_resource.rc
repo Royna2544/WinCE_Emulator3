@@ -1,0 +1,11 @@
+#include "..\\..\\resource.h"
+
+DATAFILE_BLOB RCDATA
+BEGIN
+    0x44, 0x41, 0x54, 0x41, 0x21
+END
+
+STRINGTABLE
+BEGIN
+    IDS_DATAFILE_STRING "datafile-resource-ok"
+END
