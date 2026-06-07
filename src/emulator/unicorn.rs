@@ -3102,7 +3102,8 @@ impl UnicornMips {
             })
             .map_err(|err| Error::Backend(format!("install guest entry trace hook: {err:?}")))?;
         }
-        let traps = self.import_traps.clone();
+        let import_traps_live = Rc::new(RefCell::new(self.import_traps.clone()));
+        let traps = Rc::clone(&import_traps_live);
         let stack_top = self.stack_top.unwrap_or(0);
         let mapped_kernel_memory =
             Rc::new(RefCell::new(KernelMemoryMappings::new(&self.mapped_blobs)));
@@ -3515,12 +3516,11 @@ impl UnicornMips {
                     );
                     return;
                 }
-                let dynamic_trap;
-                let trap = if let Some(trap) = traps.trap_at(address) {
-                    Some(trap)
-                } else {
-                    dynamic_trap = crate::emulator::imports::dynamic_coredll_proc_trap(address);
-                    dynamic_trap.as_ref()
+                let trap = {
+                    let traps = traps.borrow();
+                    traps.trap_at(address).cloned().or_else(|| {
+                        crate::emulator::imports::dynamic_coredll_proc_trap(address)
+                    })
                 };
                 if trap.is_none() {
                     return;
@@ -3530,7 +3530,7 @@ impl UnicornMips {
                     let _ = uc.emu_stop();
                     return;
                 }
-                if let Some(trap) = trap {
+                if let Some(trap) = trap.as_ref() {
                     let trace_import =
                         should_trace_import_by_default(trap) || import_trace_all_enabled;
                     let a0 = read_mips_reg(uc, RegisterMIPS::A0);
@@ -3621,7 +3621,7 @@ impl UnicornMips {
                 #[cfg(feature = "trace")]
                 if inavi_slot_trace_enabled
                     && let (Some(trap), Some(watched_slot)) =
-                        (trap, inavi_slot_watch_addr_import_hook.get())
+                        (trap.as_ref(), inavi_slot_watch_addr_import_hook.get())
                 {
                     record_inavi_slot_import_overlap_trace(
                         &inavi_render_milestones_import_hook,
@@ -3633,7 +3633,7 @@ impl UnicornMips {
                     );
                 }
                 let active_thread_id = *current_thread_id_hook.borrow();
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_enter_get_message_sent_callout(
                         unsafe { &mut *kernel_ptr },
                         uc,
@@ -3649,7 +3649,7 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_block_empty_get_message(
                         unsafe { &mut *kernel_ptr },
                         uc,
@@ -3672,7 +3672,7 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_block_sleep(
                         unsafe { &mut *kernel_ptr },
                         uc,
@@ -3694,7 +3694,7 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_block_wait_for_single_object(
                         unsafe { &mut *kernel_ptr },
                         uc,
@@ -3715,7 +3715,7 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_block_wait_for_multiple_objects(
                         unsafe { &mut *kernel_ptr },
                         uc,
@@ -3736,7 +3736,7 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_block_msg_wait_for_multiple_objects_ex(
                         unsafe { &mut *kernel_ptr },
                         uc,
@@ -3756,7 +3756,7 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_block_serial_read_file(
                         unsafe { &mut *kernel_ptr },
                         uc,
@@ -3773,7 +3773,7 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_block_wait_comm_event(
                         unsafe { &mut *kernel_ptr },
                         uc,
@@ -3790,7 +3790,7 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_exit_guest_thread_callout(
                         unsafe { &mut *kernel_ptr },
                         uc,
@@ -3807,7 +3807,7 @@ impl UnicornMips {
                     return;
                 }
                 let mut memory = UnicornGuestMemory { uc };
-                if let Some(setjmp_result) = trap.and_then(|trap| {
+                if let Some(setjmp_result) = trap.as_ref().and_then(|trap| {
                     try_handle_setjmp_longjmp(
                         &mut memory,
                         trap.module_kind,
@@ -3816,7 +3816,7 @@ impl UnicornMips {
                         &args,
                     )
                 }) {
-                    if let Some(trap) = trap {
+                    if let Some(trap) = trap.as_ref() {
                         if let Some(import) = last_imports_hook
                             .borrow_mut()
                             .iter_mut()
@@ -3843,7 +3843,7 @@ impl UnicornMips {
                     }
                     return;
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_enter_dispatch_message_callout(
                         unsafe { &*kernel_ptr },
                         memory.uc,
@@ -3856,7 +3856,7 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_enter_send_message_callout(
                         unsafe { &mut *kernel_ptr },
                         memory.uc,
@@ -3874,7 +3874,7 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_enter_def_window_proc_callout(
                         unsafe { &mut *kernel_ptr },
                         memory.uc,
@@ -3886,7 +3886,7 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_enter_def_dlg_proc_callout(
                         unsafe { &*kernel_ptr },
                         memory.uc,
@@ -3898,7 +3898,7 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_enter_enable_window_callout(
                         unsafe { &mut *kernel_ptr },
                         memory.uc,
@@ -3910,7 +3910,7 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_enter_destroy_window_callout(
                         unsafe { &mut *kernel_ptr },
                         memory.uc,
@@ -3922,7 +3922,7 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_enter_update_window_callout(
                         unsafe { &*kernel_ptr },
                         memory.uc,
@@ -3934,7 +3934,7 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_enter_is_dialog_message_callout(
                         unsafe { &*kernel_ptr },
                         memory.uc,
@@ -3946,7 +3946,7 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_enter_call_window_proc_callout(
                         unsafe { &mut *kernel_ptr },
                         memory.uc,
@@ -3958,7 +3958,7 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_enter_create_thread_callout(
                         unsafe { &mut *kernel_ptr },
                         memory.uc,
@@ -3975,7 +3975,7 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_enter_qsort_callout(
                         memory.uc,
                         trap.module_kind,
@@ -3987,7 +3987,9 @@ impl UnicornMips {
                     return;
                 }
                 let caller_pc = read_mips_reg(memory.uc, RegisterMIPS::RA);
-                let Some(import_return) = traps.dispatch_trap_registers_with_framebuffer_and_context(
+                let Some(import_return) = traps
+                    .borrow()
+                    .dispatch_trap_registers_with_framebuffer_and_context(
                     unsafe { &mut *kernel_ptr },
                     &mut memory,
                     Some(unsafe { &mut *framebuffer_ptr }),
@@ -4014,7 +4016,7 @@ impl UnicornMips {
                     let _ = memory.uc.emu_stop();
                     return;
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     trap.module_kind == crate::emulator::imports::ImportModuleKind::Coredll
                         && trap.ordinal == Some(crate::ce::coredll_ordinals::ORD_CREATE_PROCESS_W)
                         && result != 0
@@ -4029,7 +4031,7 @@ impl UnicornMips {
                     );
                     let _ = sync_file_mapping_views_to_unicorn(memory.uc, unsafe { &*kernel_ptr });
                 }
-                if let Some(trap) = trap {
+                if let Some(trap) = trap.as_ref() {
                     let trace_import =
                         should_trace_import_by_default(trap) || import_trace_all_enabled;
                     if trace_import {
@@ -4117,7 +4119,7 @@ impl UnicornMips {
                         );
                     }
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_enter_create_window_create_callout(
                         unsafe { &mut *kernel_ptr },
                         memory.uc,
@@ -4132,7 +4134,7 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_enter_dialog_init_callout(
                         unsafe { &mut *kernel_ptr },
                         memory.uc,
@@ -4145,7 +4147,7 @@ impl UnicornMips {
                 }) {
                     return;
                 }
-                if trap.is_some_and(|trap| {
+                if trap.as_ref().is_some_and(|trap| {
                     try_enter_resumed_thread_callout(
                         unsafe { &*kernel_ptr },
                         memory.uc,
@@ -4357,6 +4359,7 @@ impl UnicornMips {
                 elapsed_ms: host_wall_clock_started.elapsed().as_millis() as u64,
             });
         }
+        self.import_traps = import_traps_live.borrow().clone();
         let snapshot_pc = read_mips_reg(&uc, RegisterMIPS::PC);
         let snapshot_ra = read_mips_reg(&uc, RegisterMIPS::RA);
         let snapshot_context = capture_saved_cpu_context(&uc);

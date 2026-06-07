@@ -17,6 +17,11 @@
   preload, and child-process import preload all use this helper, so the future
   Unicorn-owned `LoadLibraryExW` mapper can share the same search order instead
   of inventing a third path. Focused `dll_search` tests pass.
+- The live Unicorn import-trap hook now owns a mutable shared
+  `ImportTrapTable` and persists it back to `self.import_traps` before debug
+  capture. Existing trap dispatch still behaves the same, but the runtime DLL
+  mapper can now add traps for newly mapped guest DLL imports and have both live
+  dispatch and later diagnostics see them. Focused import-trap coverage passes.
 - COREDLL fallback audit now carries real raw-dispatch context from the import
   trap boundary. `CoredllRawContext` records thread id, caller PC, and trap PC;
   the Unicorn import hook fills it from the active CE thread and guest RA before

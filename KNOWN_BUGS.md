@@ -25,7 +25,9 @@
     fails explicitly until runtime mapping can honor them. Runtime DLL search
     order is now shared and CE-aware (exact mounted CE path, process directory,
     configured search dirs, mounted `\Windows`) for startup/child preload and
-    the future runtime mapper.
+    the future runtime mapper. The live import hook now uses a mutable/persisted
+    trap table, so dynamically loaded DLL imports can be merged into live
+    dispatch once the mapper is added.
   - Required fix: wire the Unicorn import-trap path to a runtime PE loader that
     can search `D:\INAVI_Emulator\DUMPPLZ\Windows`, map/relocate the DLL,
     patch COREDLL and external guest-DLL imports, refresh import traps,

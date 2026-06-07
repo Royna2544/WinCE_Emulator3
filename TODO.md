@@ -21,9 +21,10 @@
   do not yet synchronously map a new dumped MIPS DLL from
   `D:\INAVI_Emulator\DUMPPLZ\Windows`. Implement PE map/relocate/import
   patching, dynamic trap-page refresh, external guest-DLL import resolution,
-  export registration, TLS callbacks, and `DllMain` attach/detach callouts.
-  Keep `C:\WINCE600` as the behavior reference and update `PLAN.MD` after each
-  port.
+  export registration, TLS callbacks, and `DllMain` attach/detach callouts. The
+  live import hook now has a mutable/persisted trap table, so the next mapper
+  step can merge new DLL import traps and rewrite the live trap page. Keep
+  `C:\WINCE600` as the behavior reference and update `PLAN.MD` after each port.
 - COREDLL fallback audit follow-up: stubs now carry audit classification plus
   raw import-trap context with thread id, caller PC, and trap PC. Next, add the
   remaining owning-module context where available and make
