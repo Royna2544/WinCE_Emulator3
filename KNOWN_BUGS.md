@@ -108,8 +108,10 @@
     and UI presentation remain incomplete. `SHChangeNotifyRegisterI`,
     `SHFileNotifyRemoveI`, and `SHFileNotifyFreeI` now preserve registration/
     free state and clean up on HWND destruction, but actual file-change event
-    delivery/PIDL payloads are not implemented yet. Shell namespace/storage
-    presentation is incomplete.
+    delivery/PIDL payloads are not implemented yet. `SHGetSpecialFolderPath`
+    now honors `fCreate`/`CSIDL_FLAG_CREATE` and rejects overlong output paths,
+    but fallback policy logging and broader observed CSIDL coverage remain
+    queued. Shell namespace/storage presentation is incomplete.
   - Required fix: implement the queued shell/UI section in `PLAN.MD` using
     registry/mount/window state and CE source references, with explicit failure
     rather than plausible fake success where behavior is not implemented.

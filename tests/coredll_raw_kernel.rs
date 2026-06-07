@@ -1700,6 +1700,87 @@ fn coredll_raw_shget_special_folder_path_returns_ce_paths() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_shget_special_folder_path_honors_create_flags() -> Result<()> {
+    const CSIDL_FLAG_CREATE: u32 = 0x0000_8000;
+    const CSIDL_FAVORITES: u32 = 0x0006;
+    const CSIDL_RECENT: u32 = 0x0008;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("shget_special_folder_create");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("Windows")).unwrap();
+    kernel.set_file_root(&root);
+    kernel.registry.set_value(
+        r"HKLM\System\Explorer\Shell Folders",
+        "Favorites",
+        RegistryValue::string(r"\Windows\Favorites"),
+    );
+    kernel.registry.set_value(
+        r"HKLM\System\Explorer\Shell Folders",
+        "Recent",
+        RegistryValue::string(r"\Windows\Recent"),
+    );
+
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let path_ptr = 0x5100;
+    memory.map_halfwords(path_ptr, 260);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHGET_SPECIAL_FOLDER_PATH,
+            [0, path_ptr, CSIDL_FAVORITES, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(path_ptr, 260), r"\Windows\Favorites");
+    assert!(!root.join("Windows").join("Favorites").exists());
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHGET_SPECIAL_FOLDER_PATH,
+            [0, path_ptr, CSIDL_FAVORITES, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(root.join("Windows").join("Favorites").is_dir());
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHGET_SPECIAL_FOLDER_PATH,
+            [0, path_ptr, CSIDL_RECENT | CSIDL_FLAG_CREATE, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(path_ptr, 260), r"\Windows\Recent");
+    assert!(root.join("Windows").join("Recent").is_dir());
+
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_module_apis_resolve_preloaded_search_dll_exports() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;

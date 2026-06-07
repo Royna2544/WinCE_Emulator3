@@ -99,6 +99,7 @@ const ERROR_INSUFFICIENT_BUFFER_LOCAL: u32 = 122;
 const ERROR_FILENAME_EXCED_RANGE_LOCAL: u32 = 206;
 const MAX_PATH_CHARS: usize = 260;
 const MAX_SHORTCUT_TARGET_CHARS: usize = MAX_PATH_CHARS - 2;
+const CSIDL_FLAG_CREATE: u32 = 0x0000_8000;
 const CSIDL_RECENT: u32 = 0x0008;
 const SHARD_PIDL: u32 = 0x0000_0001;
 const SHARD_PATH: u32 = 0x0000_0002;
@@ -10582,12 +10583,26 @@ fn sh_get_special_folder_path_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    let Some(path) = special_folder_path(kernel, raw_arg(args, 2)) else {
+    let folder_arg = raw_arg(args, 2);
+    let create = raw_arg(args, 3) != 0 || folder_arg & CSIDL_FLAG_CREATE != 0;
+    let Some(path) = special_folder_path(kernel, folder_arg) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     };
+    if path.encode_utf16().count() >= MAX_PATH_CHARS {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILENAME_EXCED_RANGE_LOCAL);
+        return false;
+    }
+    if create && kernel.create_directory_w(&path).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+        return false;
+    }
     if write_guest_wide_fixed(
         kernel,
         memory,
@@ -12090,6 +12105,7 @@ fn file_extension(path: &str) -> Option<&str> {
 }
 
 fn special_folder_path(kernel: &CeKernel, folder: u32) -> Option<String> {
+    let folder = folder & !CSIDL_FLAG_CREATE;
     let (value_name, fallback) = match folder {
         0x0000 | 0x0010 => ("Desktop", r"\Windows\Desktop"),
         0x0002 => ("Programs", r"\Windows\Programs"),

@@ -68,8 +68,9 @@
   `LoadLibraryW` with runtime behavior or explicit failure; keep
   emulator-provided core DLL classification audited; make must-implement stub
   hits actionable; finish `SHGetFileInfo`, `TrackPopupMenu*`, modal
-  `MessageBoxW`, shell special-folder fallback policy, notification APIs,
-  shell namespace/storage presentation, and file-change notifications.
+  `MessageBoxW`, shell special-folder fallback policy/CSIDL coverage above the
+  now-backed `fCreate`/`CSIDL_FLAG_CREATE` path, notification APIs, shell
+  namespace/storage presentation, and file-change notifications.
 - GWE/input fidelity queue from `PLAN.MD`: `TranslateMessage` is still minimal.
   Implement keyboard modifiers/layout, accelerators and menu shortcuts,
   `WM_SYSKEY*`, dead-key/IME handoff, richer clipboard rendered ownership and

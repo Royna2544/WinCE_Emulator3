@@ -393,9 +393,13 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `StringCbCatW @1694`, `wcsncmp @65`, and `DestroyIcon @725`.
   - `syncobj.c` anchors `OpenEventW` as an existing named event open with
     access validation. `shellapi.h` anchors the CE CSIDL values used by
+    `SHGetSpecialFolderPath`, and HPC shell `api.cpp` shows callers masking
+    `CSIDL_FLAG_CREATE` before forwarding creation intent to
     `SHGetSpecialFolderPath`; v3 consults
-    `HKLM\System\Explorer\Shell Folders` first and uses CE-shaped fallbacks
-    when the dump lacks those values. The same `shellapi.h` `SHFILEINFO`
+    `HKLM\System\Explorer\Shell Folders` first, uses CE-shaped fallbacks when
+    the dump lacks those values, honors `fCreate`/`CSIDL_FLAG_CREATE` by
+    creating the resolved mounted folder, and rejects overlong resolved paths
+    instead of truncating the fixed MAX_PATH output. The same `shellapi.h` `SHFILEINFO`
     layout and `SHGFI_*` flags anchor the first `SHGetFileInfo` slice: v3
     reads HKCR extension classes/default icons, writes display/type/attribute
     metadata, and returns explicit generic icon handles/indexes until real CE

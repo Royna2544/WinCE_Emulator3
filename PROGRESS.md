@@ -9,6 +9,12 @@
 
 ## Confirmed
 
+- `SHGetSpecialFolderPath` now honors CE creation intent. The raw COREDLL path
+  masks `CSIDL_FLAG_CREATE`, also respects the explicit `fCreate` parameter,
+  creates missing mounted shell folders only when requested, and fails
+  overlong resolved paths instead of truncating the fixed MAX_PATH output.
+  Focused coverage:
+  `coredll_raw_shget_special_folder_path_honors_create_flags`.
 - Shell file-change notification ordinals now have stateful raw coverage.
   `SHChangeNotifyRegisterI` accepts both the direct `(HWND,
   SHCHANGENOTIFYENTRY*)` shape and the one-pointer PSL-style packed shape,
