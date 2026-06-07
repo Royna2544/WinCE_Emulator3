@@ -102,9 +102,11 @@
     the requested modal result, but does not yet create/render a modal dialog
     or run a nested input pump. Basic `SHCreateShortcut`,
     `SHGetShortcutTarget`, and bounded `SHCreateShortcutEx` unique-name/
-    buffer-return behavior now create/read CE text shortcuts. Shell
-    namespace/storage presentation and file-change notifications are
-    incomplete.
+    buffer-return behavior now create/read CE text shortcuts.
+    `SHAddToRecentDocs(SHARD_PATH/null)` now creates/clears Recent-folder CE
+    shortcuts and tracks recent-document shell state, but PIDL input, pruning,
+    and UI presentation remain incomplete. Shell namespace/storage
+    presentation and file-change notifications are incomplete.
   - Required fix: implement the queued shell/UI section in `PLAN.MD` using
     registry/mount/window state and CE source references, with explicit failure
     rather than plausible fake success where behavior is not implemented.

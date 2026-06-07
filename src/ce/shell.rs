@@ -45,6 +45,7 @@ pub struct ShellSystem {
     notify_icons: BTreeMap<(u32, u32), NotifyIconRecord>,
     notifications: BTreeMap<([u8; 16], u32), ShellNotificationRecord>,
     message_boxes: Vec<MessageBoxRecord>,
+    recent_documents: Vec<RecentDocumentRecord>,
 }
 
 impl ShellSystem {
@@ -58,6 +59,20 @@ impl ShellSystem {
 
     pub fn message_boxes(&self) -> impl Iterator<Item = &MessageBoxRecord> {
         self.message_boxes.iter()
+    }
+
+    pub fn record_recent_document(&mut self, record: RecentDocumentRecord) {
+        self.recent_documents
+            .retain(|existing| existing.shortcut_path != record.shortcut_path);
+        self.recent_documents.insert(0, record);
+    }
+
+    pub fn clear_recent_documents(&mut self) {
+        self.recent_documents.clear();
+    }
+
+    pub fn recent_documents(&self) -> impl Iterator<Item = &RecentDocumentRecord> {
+        self.recent_documents.iter()
     }
 
     pub fn apply_notify_icon(&mut self, op: NotifyIconOp, data: NotifyIconData) -> bool {
@@ -156,6 +171,13 @@ impl ShellSystem {
         }
         cleanup
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecentDocumentRecord {
+    pub flags: u32,
+    pub target_path: String,
+    pub shortcut_path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

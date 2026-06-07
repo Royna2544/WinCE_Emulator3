@@ -130,6 +130,19 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     against mounted CE files with `CREATE_NEW` behavior, buffer-fit validation,
     and bounded unique-name generation for existing shortcut names.
 
+- Shell recent-document API:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\shellapi.h`,
+  `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\CESHELL\API\api.cpp`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\MIPSII\RETAIL\coredll.def`
+  - `shellapi.h` defines `SHARD_PATH`, `SHARD_PIDL`, and
+    `SHAddToRecentDocs`. The HPC shell implementation resolves
+    `CSIDL_RECENT`, clears the Recent folder when the item pointer is null,
+    and for path-backed documents creates a `.lnk` named from the document
+    file stem using the same CE shortcut writer. v3 now mirrors the
+    `SHARD_PATH` and null-clear behavior through mounted CE filesystem calls,
+    records recent-document state in `ShellSystem`, and explicitly fails PIDL
+    input until namespace PIDL support exists.
+
 - Old MIPS CE kernel-call encoding:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\nkmips.h`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c`, and corroborating

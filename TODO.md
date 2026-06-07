@@ -85,8 +85,10 @@
   queuing. Continue with the remaining shell APIs from the attachment:
   richer `SHGetFileInfo` icon extraction/image-list behavior, notification
   interaction/callback delivery above the now-stateful `SHNotification*I` data
-  APIs, recent docs, shell change notifications, popup/menu behavior, rendered
-  modal `MessageBoxW` window/nested pump/button input above the
+  APIs, recent-doc pruning/UI display and PIDL input above the now-backed
+  `SHAddToRecentDocs(SHARD_PATH/null)` recent shortcut/state path, shell
+  change notifications, popup/menu behavior, rendered modal `MessageBoxW`
+  window/nested pump/button input above the
   now-recorded/default-result raw slice, keyboard translation, richer
   clipboard rendered ownership and delayed-render edge cases above the
   now-stateful raw clipboard store and allocation-copy path, and rendered

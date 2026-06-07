@@ -32,7 +32,7 @@ use crate::{
         },
         shell::{
             MessageBoxRecord, NotificationResult, NotifyIconData, NotifyIconOp,
-            ShellNotificationData,
+            RecentDocumentRecord, ShellNotificationData,
         },
         thread::{
             ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_CLASS_DOES_NOT_EXIST,
@@ -99,6 +99,9 @@ const ERROR_INSUFFICIENT_BUFFER_LOCAL: u32 = 122;
 const ERROR_FILENAME_EXCED_RANGE_LOCAL: u32 = 206;
 const MAX_PATH_CHARS: usize = 260;
 const MAX_SHORTCUT_TARGET_CHARS: usize = MAX_PATH_CHARS - 2;
+const CSIDL_RECENT: u32 = 0x0008;
+const SHARD_PIDL: u32 = 0x0000_0001;
+const SHARD_PATH: u32 = 0x0000_0002;
 const SHFILEINFO_HICON_OFFSET: u32 = 0;
 const SHFILEINFO_IICON_OFFSET: u32 = 4;
 const SHFILEINFO_ATTRIBUTES_OFFSET: u32 = 8;
@@ -3579,6 +3582,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel, memory, thread_id, args,
         ))),
         ORD_SHCREATE_SHORTCUT_EX => Some(CoredllValue::U32(sh_create_shortcut_ex_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_SHADD_TO_RECENT_DOCS => Some(CoredllValue::U32(sh_add_to_recent_docs_raw(
             kernel, memory, thread_id, args,
         ))),
         ORD_SHELL_NOTIFY_ICON => Some(CoredllValue::Bool(shell_notify_icon_w_raw(
@@ -11518,6 +11524,67 @@ fn sh_get_shortcut_target_w_raw<M: CoredllGuestMemory>(
     true
 }
 
+fn sh_add_to_recent_docs_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let flags = raw_arg(args, 0);
+    let value = raw_arg(args, 1);
+    let Some(recent_dir) = special_folder_path(kernel, CSIDL_RECENT) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+        return 0;
+    };
+    if value == 0 {
+        clear_recent_docs(kernel, &recent_dir);
+        kernel.shell.clear_recent_documents();
+        kernel.threads.set_last_error(thread_id, 0);
+        return 0;
+    }
+    if flags == SHARD_PIDL {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+        return 0;
+    }
+    if flags != SHARD_PATH {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(target_path) = read_shell_api_path_arg(memory, value) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let Some(shortcut_path) = recent_doc_shortcut_path(&recent_dir, &target_path) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if kernel.create_directory_w(&recent_dir).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+        return 0;
+    }
+    let quoted_target = quote_shell_arg(&target_path);
+    if create_ce_shortcut_file(kernel, thread_id, &shortcut_path, &quoted_target) {
+        kernel.shell.record_recent_document(RecentDocumentRecord {
+            flags,
+            target_path,
+            shortcut_path,
+        });
+    }
+    0
+}
+
 fn make_ce_shortcut_bytes(target: &str) -> Vec<u8> {
     let (path, args) = split_shortcut_target_args(target);
     let mut count = path.encode_utf16().count() + 2;
@@ -11562,6 +11629,38 @@ fn parse_ce_shortcut_target_bytes(bytes: &[u8]) -> Option<String> {
         return None;
     }
     Some(target.trim_end_matches('\0').replace('/', "\\"))
+}
+
+fn recent_doc_shortcut_path(recent_dir: &str, target_path: &str) -> Option<String> {
+    let target_path = target_path.trim().trim_matches('"').replace('/', "\\");
+    let (_dir, file_name) = split_shell_path_parent_file(&target_path);
+    if file_name.is_empty() {
+        return None;
+    }
+    let (stem, _extension) = split_shell_file_stem_extension(&file_name);
+    if stem.is_empty() {
+        return None;
+    }
+    Some(join_shell_path(recent_dir, &format!("{stem}.lnk")))
+}
+
+fn clear_recent_docs(kernel: &mut CeKernel, recent_dir: &str) {
+    let _ = kernel.create_directory_w(recent_dir);
+    let pattern = join_shell_path(recent_dir, "*");
+    let Ok((handle, first)) = kernel.find_first_file_w(&pattern) else {
+        return;
+    };
+    let mut entries = vec![first];
+    while let Ok(Some(entry)) = kernel.find_next_file_w(handle) {
+        entries.push(entry);
+    }
+    let _ = kernel.find_close(handle);
+    for entry in entries {
+        if entry.attributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+            let path = join_shell_path(recent_dir, &entry.file_name);
+            let _ = kernel.delete_file_w(&path);
+        }
+    }
 }
 
 fn unique_shell_shortcut_path(kernel: &CeKernel, requested: &str) -> Option<String> {

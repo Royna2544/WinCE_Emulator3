@@ -9,6 +9,13 @@
 
 ## Confirmed
 
+- `SHAddToRecentDocs` now has a CE-backed raw path for `SHARD_PATH` and null
+  clear calls. It resolves `CSIDL_RECENT` through
+  `HKLM\System\Explorer\Shell Folders`, creates the Recent folder, writes CE
+  text `.lnk` shortcuts with file-name stems that preserve spaces, records
+  recent-document state in `ShellSystem`, and clears both the mounted recent
+  files and shell state when the caller passes a null item. Focused coverage:
+  `shell_add_to_recent_docs_creates_and_clears_recent_shortcuts`.
 - Shell shortcut raw APIs now cover the basic CE text-link path used by
   `ShellExecuteEx`. `SHCreateShortcut` creates a mounted `.lnk` using CE's
   UTF-8 BOM plus `count#"<target>" args` format with `CREATE_NEW` semantics,
