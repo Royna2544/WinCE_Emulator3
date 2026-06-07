@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
     ce::{
@@ -70,8 +70,14 @@ pub struct ExternalImportTable {
 pub struct ExternalImportModule {
     pub module_name: String,
     pub image_base: u32,
-    by_ordinal: BTreeMap<u32, u32>,
-    by_name: BTreeMap<String, u32>,
+    by_ordinal: BTreeMap<u32, ExternalImportTarget>,
+    by_name: BTreeMap<String, ExternalImportTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ExternalImportTarget {
+    Address(u32),
+    Forwarder(String),
 }
 
 impl ImportTrapTable {
@@ -431,17 +437,29 @@ impl ExternalImportTable {
         let mut by_name = BTreeMap::new();
         if let Some(exports) = image.exports.as_ref() {
             for export in &exports.functions {
-                if export.rva == 0 || export.forwarder.is_some() {
+                if export.rva == 0 {
                     continue;
                 }
-                let va = load_base.wrapping_add(export.rva);
-                by_ordinal.insert(export.ordinal, va);
+                let target = if let Some(forwarder) = export.forwarder.as_ref() {
+                    ExternalImportTarget::Forwarder(forwarder.clone())
+                } else {
+                    ExternalImportTarget::Address(load_base.wrapping_add(export.rva))
+                };
+                by_ordinal.insert(export.ordinal, target.clone());
                 if let Some(name) = export.name.as_deref() {
-                    by_name.insert(normalize_symbol(name), va);
+                    by_name.insert(normalize_symbol(name), target);
                 }
             }
         }
-        self.add_module_exports(module_name, load_base, by_name, by_ordinal);
+        self.modules.insert(
+            normalize_module(module_name),
+            ExternalImportModule {
+                module_name: module_name.to_owned(),
+                image_base: load_base,
+                by_ordinal,
+                by_name,
+            },
+        );
     }
 
     pub fn add_module_exports<N, O>(
@@ -461,20 +479,71 @@ impl ExternalImportTable {
             by_name: BTreeMap::new(),
         };
         for (name, address) in exports_by_name {
-            module.by_name.insert(normalize_symbol(&name), address);
+            module.by_name.insert(
+                normalize_symbol(&name),
+                ExternalImportTarget::Address(address),
+            );
         }
         for (ordinal, address) in exports_by_ordinal {
-            module.by_ordinal.insert(ordinal, address);
+            module
+                .by_ordinal
+                .insert(ordinal, ExternalImportTarget::Address(address));
         }
         self.modules.insert(normalize_module(module_name), module);
     }
 
     pub fn resolve(&self, module_name: &str, import: &ImportBy) -> Option<u32> {
-        let module = self.modules.get(&normalize_module(module_name))?;
-        match import {
-            ImportBy::Ordinal(ordinal) => module.by_ordinal.get(&u32::from(*ordinal)).copied(),
-            ImportBy::Name { name, .. } => module.by_name.get(&normalize_symbol(name)).copied(),
+        self.resolve_inner(module_name, import, &mut BTreeSet::new())
+    }
+
+    fn resolve_inner(
+        &self,
+        module_name: &str,
+        import: &ImportBy,
+        seen: &mut BTreeSet<String>,
+    ) -> Option<u32> {
+        let module_key = normalize_module(module_name);
+        let import_key = import_identity(import);
+        if !seen.insert(format!("{module_key}!{import_key}")) {
+            return None;
         }
+        let module = self.modules.get(&module_key)?;
+        let target = match import {
+            ImportBy::Ordinal(ordinal) => module.by_ordinal.get(&u32::from(*ordinal))?,
+            ImportBy::Name { name, .. } => module.by_name.get(&normalize_symbol(name))?,
+        };
+        match target {
+            ExternalImportTarget::Address(address) => Some(*address),
+            ExternalImportTarget::Forwarder(forwarder) => {
+                let (forward_module, forward_import) = parse_forwarder_target(forwarder)?;
+                self.resolve_inner(&forward_module, &forward_import, seen)
+            }
+        }
+    }
+}
+
+pub fn parse_forwarder_target(forwarder: &str) -> Option<(String, ImportBy)> {
+    let (module_name, symbol) = forwarder.rsplit_once('.')?;
+    let module_name = module_name.trim();
+    let symbol = symbol.trim();
+    if module_name.is_empty() || symbol.is_empty() {
+        return None;
+    }
+    let import = if let Some(ordinal) = symbol.strip_prefix('#') {
+        ImportBy::Ordinal(ordinal.parse::<u16>().ok()?)
+    } else {
+        ImportBy::Name {
+            hint: 0,
+            name: symbol.to_owned(),
+        }
+    };
+    Some((module_name.to_owned(), import))
+}
+
+fn import_identity(import: &ImportBy) -> String {
+    match import {
+        ImportBy::Ordinal(ordinal) => format!("#{ordinal}"),
+        ImportBy::Name { name, .. } => normalize_symbol(name),
     }
 }
 
@@ -1007,6 +1076,47 @@ mod tests {
         assert_eq!(
             u32::from_le_bytes(mapped[0x3004..0x3008].try_into().unwrap()),
             0x6200_5678
+        );
+    }
+
+    #[test]
+    fn external_table_resolves_forwarded_exports_through_loaded_modules() {
+        let mut external = ExternalImportTable::default();
+        external.add_module_exports(
+            "target.dll",
+            0x6300_0000,
+            [("RealExport".to_owned(), 0x6300_1234)],
+            [(7, 0x6300_7000)],
+        );
+        external.modules.insert(
+            normalize_module("forwarder.dll"),
+            ExternalImportModule {
+                module_name: "forwarder.dll".to_owned(),
+                image_base: 0x6400_0000,
+                by_name: BTreeMap::from([(
+                    normalize_symbol("AliasExport"),
+                    ExternalImportTarget::Forwarder("target.RealExport".to_owned()),
+                )]),
+                by_ordinal: BTreeMap::from([(
+                    4,
+                    ExternalImportTarget::Forwarder("target.#7".to_owned()),
+                )]),
+            },
+        );
+
+        assert_eq!(
+            external.resolve(
+                "forwarder.dll",
+                &ImportBy::Name {
+                    hint: 0,
+                    name: "AliasExport".to_owned()
+                }
+            ),
+            Some(0x6300_1234)
+        );
+        assert_eq!(
+            external.resolve("forwarder.dll", &ImportBy::Ordinal(4)),
+            Some(0x6300_7000)
         );
     }
 

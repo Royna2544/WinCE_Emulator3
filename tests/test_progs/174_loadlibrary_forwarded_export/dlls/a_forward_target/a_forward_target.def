@@ -1,0 +1,5 @@
+LIBRARY a_forward_target
+
+EXPORTS
+    TargetByName @3
+    TargetByOrdinal @7 NONAME

@@ -45,8 +45,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `DllMain(DLL_PROCESS_ATTACH)` run before returning from normal loads, and
     final dynamic `FreeLibrary` enters guest TLS callbacks followed by
     `DllMain(DLL_PROCESS_DETACH)` before marking the module unload-pending.
-    Forwarded exports, datafile loads, and `DONT_RESOLVE_DLL_REFERENCES`
-    remain explicit open gaps.
+    Forwarded exports are retained from the PE export directory and resolved
+    through already-loaded guest modules or CE search/load of the forwarded-to
+    DLL, including runtime `GetProcAddress` and import-patching paths.
+    Datafile loads and `DONT_RESOLVE_DLL_REFERENCES` remain explicit open gaps.
 
 - CE loader lifecycle anchors:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\loader.c` and

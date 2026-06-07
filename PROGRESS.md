@@ -31,11 +31,17 @@
   marking the module unload-pending and preserving the mapped range. The
   updated `171_loadlibrary_guest_dll` fixture arms an EXE-owned detach marker,
   proves a non-final `FreeLibrary` only decrements the refcount, and proves
-  final release runs one guest detach. The updated
+  final release runs one guest detach. PE forwarded-export metadata is now
+  retained and resolved in the runtime loader: `GetProcAddress` and guest-DLL
+  IAT patching follow forwarder strings through already-loaded modules or CE
+  search/load of the target guest DLL, and COREDLL forwarders return dynamic
+  trap addresses. The new `174_loadlibrary_forwarded_export` fixture proves a
+  forwarded export by name, ordinal lookup on the forwarder export, and import
+  patching through a forwarder DLL. The updated
   `173_loadlibrary_tls_callback` fixture arms an EXE-owned detach order marker
   and proves the complete lifecycle order word `0x01020304`: TLS attach,
-  `DllMain` attach, TLS detach, `DllMain` detach. Forwarded exports, datafile
-  loads, and no-resolve loads remain queued.
+  `DllMain` attach, TLS detach, `DllMain` detach. Datafile loads and
+  no-resolve loads remain queued.
 - eVC fixture infrastructure now supports fixture-local runtime DLLs under
   `tests\test_progs\<fixture>\dlls\<dll-name>\`. The runner discovers `.cpp`,
   `.rc`, and optional `.def` files, links each DLL with an import library,
@@ -103,7 +109,9 @@
   `DONT_RESOLVE_DLL_REFERENCES` flags still fail explicitly. Guest
   `DllMain(DLL_PROCESS_DETACH)` on final dynamic `FreeLibrary` plus TLS detach
   ordering are now covered by direct/TLS runtime fixtures; forwarded exports
-  and fuller runtime trampoline handling remain open. Focused coverage passes
+  are covered by runtime `GetProcAddress` and import-patching fixtures.
+  Datafile/no-resolve modes and fuller runtime trampoline handling remain
+  open. Focused coverage passes
   for loaded-module export snapshots, runtime occupied-range calculation, and
   the existing raw `LoadLibraryExW` flag/refcount behavior.
 - `ExternalImportTable` now has a public `add_module_exports` path for

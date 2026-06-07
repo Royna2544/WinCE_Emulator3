@@ -1,0 +1,4 @@
+LIBRARY c_forward_user
+
+EXPORTS
+    UserCallsForward @3

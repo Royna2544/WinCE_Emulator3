@@ -1923,6 +1923,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
+        ORD_DISABLE_THREAD_LIBRARY_CALLS => Some(CoredllValue::Bool(
+            disable_thread_library_calls_raw(kernel, thread_id, raw_arg(args, 0)),
+        )),
         ORD_GET_PROC_ADDRESS_W => Some(CoredllValue::Handle(get_proc_address_w_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -6668,6 +6671,21 @@ fn free_library_raw(kernel: &mut CeKernel, thread_id: u32, module: u32) -> bool 
                 .set_last_error(thread_id, ERROR_INVALID_HANDLE);
             false
         }
+    }
+}
+
+fn disable_thread_library_calls_raw(kernel: &mut CeKernel, thread_id: u32, module: u32) -> bool {
+    if module == COREDLL_MODULE_HANDLE
+        || module == kernel.process_module_base()
+        || kernel.is_loaded_module_handle(module)
+    {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        false
     }
 }
 

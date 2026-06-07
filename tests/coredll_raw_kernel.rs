@@ -7,8 +7,8 @@ use wince_emulation_v3::{
         coredll_ordinals::{
             ORD_CE_GET_THREAD_PRIORITY, ORD_CE_SET_THREAD_PRIORITY, ORD_CLEAR_COMM_ERROR,
             ORD_CLOSE_HANDLE, ORD_CREATE_EVENT_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD,
-            ORD_EVENT_MODIFY, ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY,
-            ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_COMM_MASK, ORD_GET_COMM_STATE,
+            ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_EVENT_MODIFY, ORD_FILE_TIME_TO_SYSTEM_TIME,
+            ORD_FREE_LIBRARY, ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_COMM_MASK, ORD_GET_COMM_STATE,
             ORD_GET_COMM_TIMEOUTS, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD,
             ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W,
             ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W, ORD_GET_PROCESS_ID,
@@ -1872,6 +1872,61 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_fail_explicitl
         ERROR_NOT_SUPPORTED
     );
 
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_disable_thread_library_calls_validates_module_handles() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 42;
+    let module_base = 0x6400_0000;
+
+    kernel.register_loaded_module_with_metadata(
+        "loaded.dll",
+        module_base,
+        std::collections::BTreeMap::new(),
+        std::collections::BTreeMap::new(),
+        LoadedModuleMetadata {
+            dynamic: true,
+            ..LoadedModuleMetadata::default()
+        },
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DISABLE_THREAD_LIBRARY_CALLS,
+            [module_base],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DISABLE_THREAD_LIBRARY_CALLS,
+            [0xdead_beef],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
     Ok(())
 }
 

@@ -111,6 +111,8 @@ pub struct LoadedModule {
     pub entry_point: u32,
     pub exports_by_name: BTreeMap<String, u32>,
     pub exports_by_ordinal: BTreeMap<u32, u32>,
+    pub forwarders_by_name: BTreeMap<String, String>,
+    pub forwarders_by_ordinal: BTreeMap<u32, String>,
     pub dependencies: Vec<String>,
     pub tls_callbacks: Vec<u32>,
     pub ref_count: u32,
@@ -127,6 +129,8 @@ pub struct LoadedModuleMetadata {
     pub entry_point: u32,
     pub dependencies: Vec<String>,
     pub tls_callbacks: Vec<u32>,
+    pub forwarders_by_name: BTreeMap<String, String>,
+    pub forwarders_by_ordinal: BTreeMap<u32, String>,
     pub ref_count: u32,
     pub load_flags: u32,
     pub dynamic: bool,
@@ -141,6 +145,8 @@ impl Default for LoadedModuleMetadata {
             entry_point: 0,
             dependencies: Vec::new(),
             tls_callbacks: Vec::new(),
+            forwarders_by_name: BTreeMap::new(),
+            forwarders_by_ordinal: BTreeMap::new(),
             ref_count: 1,
             load_flags: 0,
             dynamic: false,
@@ -165,6 +171,8 @@ pub struct LoadedModuleExportSnapshot {
     pub base: u32,
     pub exports_by_name: BTreeMap<String, u32>,
     pub exports_by_ordinal: BTreeMap<u32, u32>,
+    pub forwarders_by_name: BTreeMap<String, String>,
+    pub forwarders_by_ordinal: BTreeMap<u32, String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -390,6 +398,11 @@ impl CeKernel {
             .into_iter()
             .map(|(name, address)| (normalize_symbol_name(&name), address))
             .collect();
+        let forwarders_by_name = metadata
+            .forwarders_by_name
+            .into_iter()
+            .map(|(name, forwarder)| (normalize_symbol_name(&name), forwarder))
+            .collect();
         self.loaded_modules.insert(
             normalize_module_name(&name),
             LoadedModule {
@@ -401,6 +414,8 @@ impl CeKernel {
                 entry_point: metadata.entry_point,
                 exports_by_name,
                 exports_by_ordinal,
+                forwarders_by_name,
+                forwarders_by_ordinal: metadata.forwarders_by_ordinal,
                 dependencies: metadata.dependencies,
                 tls_callbacks: metadata.tls_callbacks,
                 ref_count: metadata.ref_count.max(1),
@@ -479,6 +494,8 @@ impl CeKernel {
                 base: module.base,
                 exports_by_name: module.exports_by_name.clone(),
                 exports_by_ordinal: module.exports_by_ordinal.clone(),
+                forwarders_by_name: module.forwarders_by_name.clone(),
+                forwarders_by_ordinal: module.forwarders_by_ordinal.clone(),
             })
             .collect()
     }

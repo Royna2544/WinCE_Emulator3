@@ -2489,6 +2489,16 @@ fn register_loaded_modules(kernel: &mut CeKernel, cpu: &UnicornMips) {
                 entry_point: module.entry_point,
                 dependencies: module.dependencies.clone(),
                 tls_callbacks: module.tls_callbacks.clone(),
+                forwarders_by_name: module
+                    .forwarders_by_name
+                    .iter()
+                    .map(|(name, forwarder)| (name.clone(), forwarder.clone()))
+                    .collect(),
+                forwarders_by_ordinal: module
+                    .forwarders_by_ordinal
+                    .iter()
+                    .map(|(ordinal, forwarder)| (*ordinal, forwarder.clone()))
+                    .collect(),
                 ref_count: 1,
                 load_flags: 0,
                 dynamic: module.dynamic,

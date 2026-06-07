@@ -31,14 +31,16 @@
     range, and the runtime loader maps/relocates DLLs, recursively loads
     non-emulator dependencies, patches imports, rewrites the live trap page,
     refreshes the persisted `ce-import-traps` blob, registers resources, and
-    publishes exports into the kernel module table. Final dynamic
-    `FreeLibrary` now enters guest TLS callbacks and
-    `DllMain(DLL_PROCESS_DETACH)` before marking the module unload-pending.
-  - Required fix: finish forwarded export resolution, datafile/no-resolve load
-    modes, and fuller runtime trampoline handling. Guest TLS callbacks,
-    `DllMain(DLL_PROCESS_ATTACH)`, direct-DLL final
-    `DllMain(DLL_PROCESS_DETACH)`, and TLS detach ordering are covered by the
-    runtime eVC fixtures.
+    publishes exports into the kernel module table. Forwarded PE exports are
+    retained and resolved through already-loaded modules or CE search/load of
+    forwarded-to guest DLLs, and the runtime path now patches `GetProcAddress`
+    and IAT imports through forwarder DLLs. Final dynamic `FreeLibrary` now
+    enters guest TLS callbacks and `DllMain(DLL_PROCESS_DETACH)` before
+    marking the module unload-pending.
+  - Required fix: finish datafile/no-resolve load modes and fuller runtime
+    trampoline handling. Guest TLS callbacks, `DllMain(DLL_PROCESS_ATTACH)`,
+    direct-DLL final `DllMain(DLL_PROCESS_DETACH)`, TLS detach ordering, and
+    forwarded exports are covered by runtime eVC fixtures.
   - Status: open/watch. Normal code-DLL mapping and attach are started; do not
     treat this as complete CE loader fidelity until the remaining lifecycle and
     load-mode gaps close.

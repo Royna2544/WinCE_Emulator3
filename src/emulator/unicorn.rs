@@ -9,7 +9,8 @@ use crate::{
         imports::{
             DYNAMIC_COREDLL_PROC_TRAP_BASE, ExternalImportTable, IMPORT_TRAP_BASE,
             IMPORT_TRAP_PAGE_SIZE, ImportTrap, ImportTrapTable, import_trap_code_page,
-            patch_external_imports, patch_pe_coredll_imports, patch_pe_imports,
+            parse_forwarder_target, patch_external_imports, patch_pe_coredll_imports,
+            patch_pe_imports,
         },
         memory::{MemoryMap, MemoryPerms},
     },
@@ -134,6 +135,8 @@ pub struct LoadedPeModuleInfo {
     pub dynamic: bool,
     pub exports_by_name: HashMap<String, u32>,
     pub exports_by_ordinal: HashMap<u32, u32>,
+    pub forwarders_by_name: HashMap<String, String>,
+    pub forwarders_by_ordinal: HashMap<u32, String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -4855,15 +4858,27 @@ fn module_file_name(path: &str) -> &str {
 fn loaded_module_info(image: &PeImage, load_base: u32) -> Result<LoadedPeModuleInfo> {
     let mut exports_by_name = HashMap::new();
     let mut exports_by_ordinal = HashMap::new();
+    let mut forwarders_by_name = HashMap::new();
+    let mut forwarders_by_ordinal = HashMap::new();
     if let Some(exports) = image.exports.as_ref() {
         for export in &exports.functions {
-            if export.rva == 0 || export.forwarder.is_some() {
+            if export.rva == 0 {
                 continue;
             }
-            let va = load_base.wrapping_add(export.rva);
-            exports_by_ordinal.insert(export.ordinal, va);
-            if let Some(name) = export.name.as_deref() {
-                exports_by_name.insert(crate::ce::kernel::normalize_symbol_name(name), va);
+            if let Some(forwarder) = export.forwarder.as_ref() {
+                forwarders_by_ordinal.insert(export.ordinal, forwarder.clone());
+                if let Some(name) = export.name.as_deref() {
+                    forwarders_by_name.insert(
+                        crate::ce::kernel::normalize_symbol_name(name),
+                        forwarder.clone(),
+                    );
+                }
+            } else {
+                let va = load_base.wrapping_add(export.rva);
+                exports_by_ordinal.insert(export.ordinal, va);
+                if let Some(name) = export.name.as_deref() {
+                    exports_by_name.insert(crate::ce::kernel::normalize_symbol_name(name), va);
+                }
             }
         }
     }
@@ -4883,6 +4898,8 @@ fn loaded_module_info(image: &PeImage, load_base: u32) -> Result<LoadedPeModuleI
         dynamic: false,
         exports_by_name,
         exports_by_ordinal,
+        forwarders_by_name,
+        forwarders_by_ordinal,
     })
 }
 
@@ -6185,6 +6202,20 @@ fn runtime_load_guest_dll_from_path<D>(
     }
 
     let mut module_info = loaded_module_info(&image, load_base)?;
+    resolve_runtime_forwarders(
+        uc,
+        kernel,
+        memory_map,
+        mapped_blobs,
+        loaded_modules,
+        resource_strings,
+        resources,
+        traps,
+        search_dirs,
+        &mut module_info,
+        loading,
+        newly_loaded_modules,
+    )?;
     module_info.name = file_name.clone();
     module_info.guest_path = kernel.host_path_to_guest_mount(path);
     module_info.host_path = Some(path.to_path_buf());
@@ -6199,6 +6230,142 @@ fn runtime_load_guest_dll_from_path<D>(
     });
     newly_loaded_modules.push(load_base);
     Ok(load_base)
+}
+
+#[cfg(feature = "unicorn")]
+fn resolve_runtime_forwarders<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    kernel: &mut CeKernel,
+    memory_map: &mut MemoryMap,
+    mapped_blobs: &mut Vec<MappedBlob>,
+    loaded_modules: &mut Vec<LoadedPeModuleInfo>,
+    resource_strings: &mut Vec<MappedResourceString>,
+    resources: &mut Vec<MappedResource>,
+    traps: &Rc<RefCell<ImportTrapTable>>,
+    search_dirs: &[std::path::PathBuf],
+    module_info: &mut LoadedPeModuleInfo,
+    loading: &mut BTreeSet<String>,
+    newly_loaded_modules: &mut Vec<u32>,
+) -> Result<()> {
+    for (name, forwarder) in module_info.forwarders_by_name.clone() {
+        let address = resolve_runtime_forwarder(
+            uc,
+            kernel,
+            memory_map,
+            mapped_blobs,
+            loaded_modules,
+            resource_strings,
+            resources,
+            traps,
+            search_dirs,
+            &forwarder,
+            loading,
+            newly_loaded_modules,
+        )?;
+        module_info.exports_by_name.insert(name, address);
+    }
+    for (ordinal, forwarder) in module_info.forwarders_by_ordinal.clone() {
+        let address = resolve_runtime_forwarder(
+            uc,
+            kernel,
+            memory_map,
+            mapped_blobs,
+            loaded_modules,
+            resource_strings,
+            resources,
+            traps,
+            search_dirs,
+            &forwarder,
+            loading,
+            newly_loaded_modules,
+        )?;
+        module_info.exports_by_ordinal.insert(ordinal, address);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "unicorn")]
+fn resolve_runtime_forwarder<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    kernel: &mut CeKernel,
+    memory_map: &mut MemoryMap,
+    mapped_blobs: &mut Vec<MappedBlob>,
+    loaded_modules: &mut Vec<LoadedPeModuleInfo>,
+    resource_strings: &mut Vec<MappedResourceString>,
+    resources: &mut Vec<MappedResource>,
+    traps: &Rc<RefCell<ImportTrapTable>>,
+    search_dirs: &[std::path::PathBuf],
+    forwarder: &str,
+    loading: &mut BTreeSet<String>,
+    newly_loaded_modules: &mut Vec<u32>,
+) -> Result<u32> {
+    let (target_module, target_import) = parse_forwarder_target(forwarder).ok_or_else(|| {
+        Error::InvalidArgument(format!("invalid forwarded export string: {forwarder}"))
+    })?;
+    let normalized = normalize_module_name(&target_module);
+    if normalized == "coredll" {
+        return resolve_coredll_forwarder(&target_import).ok_or_else(|| {
+            Error::InvalidArgument(format!(
+                "unresolved COREDLL forwarded export target {forwarder}"
+            ))
+        });
+    }
+    if emulator_provided_import_module(&normalized) {
+        return Err(Error::InvalidArgument(format!(
+            "unsupported emulator-provided forwarded export target {forwarder}"
+        )));
+    }
+    if kernel.loaded_module_handle(&target_module).is_none() {
+        let path =
+            resolve_dll_path(&target_module, Some(kernel), search_dirs).ok_or_else(|| {
+                Error::MissingImportDll {
+                    dll: target_module.clone(),
+                }
+            })?;
+        runtime_load_guest_dll_from_path(
+            uc,
+            kernel,
+            memory_map,
+            mapped_blobs,
+            loaded_modules,
+            resource_strings,
+            resources,
+            traps,
+            search_dirs,
+            &path,
+            loading,
+            newly_loaded_modules,
+        )?;
+    }
+    let handle =
+        kernel
+            .loaded_module_handle(&target_module)
+            .ok_or_else(|| Error::MissingImportDll {
+                dll: target_module.clone(),
+            })?;
+    let address = match target_import {
+        crate::pe::ImportBy::Name { name, .. } => {
+            kernel.resolve_loaded_module_proc_by_name(handle, &name)
+        }
+        crate::pe::ImportBy::Ordinal(ordinal) => {
+            kernel.resolve_loaded_module_proc_by_ordinal(handle, u32::from(ordinal))
+        }
+    };
+    address
+        .ok_or_else(|| Error::InvalidArgument(format!("unresolved forwarded export {forwarder}")))
+}
+
+#[cfg(feature = "unicorn")]
+fn resolve_coredll_forwarder(import: &crate::pe::ImportBy) -> Option<u32> {
+    let ordinal = match import {
+        crate::pe::ImportBy::Ordinal(ordinal) => u32::from(*ordinal),
+        crate::pe::ImportBy::Name { name, .. } => {
+            crate::ce::coredll::CoredllExportTable::static_ordinals()
+                .resolve_name(name)?
+                .ordinal
+        }
+    };
+    crate::emulator::imports::dynamic_coredll_proc_address(ordinal)
 }
 
 #[cfg(feature = "unicorn")]
@@ -6251,6 +6418,16 @@ fn register_runtime_module_with_kernel(kernel: &mut CeKernel, module: &LoadedPeM
             entry_point: module.entry_point,
             dependencies: module.dependencies.clone(),
             tls_callbacks: module.tls_callbacks.clone(),
+            forwarders_by_name: module
+                .forwarders_by_name
+                .iter()
+                .map(|(name, forwarder)| (name.clone(), forwarder.clone()))
+                .collect::<BTreeMap<_, _>>(),
+            forwarders_by_ordinal: module
+                .forwarders_by_ordinal
+                .iter()
+                .map(|(ordinal, forwarder)| (*ordinal, forwarder.clone()))
+                .collect::<BTreeMap<_, _>>(),
             ref_count: 1,
             load_flags: 0,
             dynamic: true,

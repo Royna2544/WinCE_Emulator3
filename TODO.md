@@ -12,10 +12,11 @@
 
 ## Current Slice
 
-- Queued runtime loader gaps from `PLAN.MD`: implement forwarded exports;
-  implement `DONT_RESOLVE_DLL_REFERENCES`; implement datafile/resource-style
+- Queued runtime loader gaps from `PLAN.MD`: implement
+  `DONT_RESOLVE_DLL_REFERENCES`; implement datafile/resource-style
   `LoadLibraryExW`; harden runtime trampoline handling for high/relocated
-  DLLs; add compact runtime loader audit counters.
+  DLLs; add compact runtime loader audit counters; extend forwarded-export
+  fixture variants when real dumped DLL traces demand more cases.
 - CE fidelity catch-up next slice: finish the runtime guest DLL loader at the
   Unicorn import-trap boundary. The kernel-side module manager/refcount shape
   now exists and the shared CE-aware DLL search order is implemented for
@@ -31,9 +32,13 @@
   `DllMain(DLL_PROCESS_DETACH)` before marking the module unload-pending; the
   direct runtime guest-DLL fixture proves no detach on a refcount decrement and
   one detach on final release, while the TLS fixture proves the
-  TLS-before-DllMain attach/detach order word `0x01020304`. The direct,
-  dependent, and TLS runtime guest-DLL fixtures now pass with eVC-built MIPS
-  bytes; next loader work should implement forwarded exports.
+  TLS-before-DllMain attach/detach order word `0x01020304`. Runtime forwarder
+  metadata/resolution is now implemented for normal-code DLLs: forwarder
+  strings are retained, resolved through already-loaded modules or CE
+  search/load of forwarded-to guest DLLs, and patched into `GetProcAddress`
+  and IAT import paths. The direct, dependent, TLS, and forwarded-export
+  runtime guest-DLL fixtures now pass with eVC-built MIPS bytes; next loader
+  work should implement no-resolve/datafile modes.
   Datafile and
   `DONT_RESOLVE_DLL_REFERENCES` loads still fail explicitly until CE-like
   support is implemented. Keep
