@@ -14,7 +14,7 @@ and isolated guest networking.
 
 | Subsystem | CE source reference | v2 corroboration | Implemented APIs | Open gaps | Fixture coverage | Latest iNavi evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| Guest DLL loader | `NK\KERNEL`, PE loader and SDK loader headers | startup preload path only | startup import DLL registration, CE-aware DLL search order, live-mutable import trap table, static trap-base allocator with reserved dynamic range, live/persisted import trap-page refresh, runtime normal-code DLL map/relocate/import patching from `LoadLibraryW/LoadLibraryExW(flags=0)`, recursive dependency loading, runtime module export table ingestion, module metadata/refcounts, registered-export lookup, TLS callback metadata parsing and attach invocation, guest `DllMain(DLL_PROCESS_ATTACH)` callouts, non-reclaiming `FreeLibrary` | guest `DllMain`/TLS detach callouts, forwarded exports, datafile/no-resolve loads, fuller runtime trampoline handling | `dll_search`, import-trap tests, `refresh_import_trap_page_blob_replaces_existing_blob`, `runtime_occupied_ranges_include_memory_regions_and_blobs`, `loaded_module_export_snapshots_skip_unload_pending_modules`, `external_table_accepts_runtime_loaded_module_exports`, `065_loadlibrary_getprocaddress_module`, `171_loadlibrary_guest_dll`, `172_loadlibrary_dependent_guest_dll`, `173_loadlibrary_tls_callback`, raw module refcount tests | dumped DLLs from `D:\INAVI_Emulator\DUMPPLZ\Windows` are authoritative runtime bytes |
+| Guest DLL loader | `NK\KERNEL\loader.c`, `NK\KERNEL\thread.c`, PE loader and SDK loader headers | startup preload path only | startup import DLL registration, CE-aware DLL search order, live-mutable import trap table, static trap-base allocator with reserved dynamic range, live/persisted import trap-page refresh, runtime normal-code DLL map/relocate/import patching from `LoadLibraryW/LoadLibraryExW(flags=0)`, recursive dependency loading, runtime module export table ingestion, module metadata/refcounts, registered-export lookup, TLS callback metadata parsing and attach invocation, guest `DllMain(DLL_PROCESS_ATTACH)` callouts, final dynamic `FreeLibrary` guest `DllMain(DLL_PROCESS_DETACH)` callout before non-reclaiming unload-pending release | TLS detach callback ordering, forwarded exports, datafile/no-resolve loads, fuller runtime trampoline handling | `dll_search`, import-trap tests, `refresh_import_trap_page_blob_replaces_existing_blob`, `runtime_occupied_ranges_include_memory_regions_and_blobs`, `loaded_module_export_snapshots_skip_unload_pending_modules`, `external_table_accepts_runtime_loaded_module_exports`, `065_loadlibrary_getprocaddress_module`, `171_loadlibrary_guest_dll`, `172_loadlibrary_dependent_guest_dll`, `173_loadlibrary_tls_callback`, raw module refcount tests | dumped DLLs from `D:\INAVI_Emulator\DUMPPLZ\Windows` are authoritative runtime bytes |
 | COREDLL stub audit | COREDLL API sets and SDK headers | broad stub policy proved convenient but unsafe | static ordinal table, implemented/stubbed plan, fallback audit classification/logging, raw thread/caller/trap PC context | owning-module context and fail-loud audit mode | `raw_stub_audit_keeps_import_trap_context`, `tests\coredll_dispatch.rs` | shell/UI/process calls must not silently fake success |
 | Shell launch/settings | `SHELL`, Explorer registry conventions | v2 shell path shape only | `SHGetSpecialFolderPath`, basic registry/shortcut-backed `ShellExecuteEx` launch chain | `SHGetFileInfo`, notify icons, recent docs, fuller namespace/policy | raw `ShellExecuteEx` association test | route UI still needs real shell/process/GWE semantics |
 | GWE defaults/input/send | `GWE\INC`, `window.hpp`, CE `winuser.h`, MFC `wincore.cpp`, CE input/clipboard/caret/IME headers | window broker behavior evidence | core window/message pump, partial defaults, minimal `TranslateMessage`, partial cross-thread send | fuller `DefWindowProcW`, `SendNotifyMessageW` edge cases, keyboard modifiers/layout, accelerators/menu shortcuts, `WM_SYSKEY*`, dead keys/IME handoff, clipboard ownership/formats, caret blink/position/focus integration, full `SendMessageTimeout` wait/result/flag/destruction/reentrancy semantics | existing GWE fixtures | hidden chrome is guest-driven; do not force visibility |
@@ -83,7 +83,9 @@ fixtures plus mounted iNavi evidence:
   direct export-call path with one DLL containing `DllMain`, one named export,
   one ordinal export, and one EXE that calls `LoadLibraryW`, `GetProcAddress`,
   invokes both exports, asserts a single `DllMain(DLL_PROCESS_ATTACH)` call
-  across handle reuse, and `FreeLibrary`; it does not yet assert detach counts.
+  across handle reuse, verifies no detach on non-final `FreeLibrary`, and
+  proves final `FreeLibrary` runs `DllMain(DLL_PROCESS_DETACH)` by writing a
+  DLL detach marker into EXE-owned memory.
 - Align non-Unicorn/raw `LoadLibraryW` / `LoadLibraryExW` behavior with the
   runtime path where practical. The raw helper currently returns COREDLL or
   already registered modules only; when it cannot map a new DLL, it should fail
@@ -100,9 +102,9 @@ fixtures plus mounted iNavi evidence:
   dependency loading, guest-DLL-to-guest-DLL import resolution through the
   module manager, and one `DllMain(DLL_PROCESS_ATTACH)` call for both the
   dependency and dependent DLL.
-- On final `FreeLibrary`, invoke guest `DllMain(..., DLL_PROCESS_DETACH, 0)`
-  and TLS detach callbacks, then mark the module unload-pending while keeping
-  mapped address ranges reserved.
+- Confirm and implement TLS detach callback ordering on final `FreeLibrary`;
+  guest `DllMain(..., DLL_PROCESS_DETACH, 0)` is now invoked before the module
+  is marked unload-pending, and mapped address ranges remain reserved.
 - Implement forwarded export resolution for `GetProcAddress` and import
   patching. Forwarders must resolve through already loaded modules or trigger
   CE search/load of the forwarded-to DLL; unresolved forwarders must fail

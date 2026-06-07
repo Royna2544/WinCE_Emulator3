@@ -25,9 +25,14 @@
   real PE TLS directory (`TLSTableRVA=0x2000`, size `0x18`) and proves the TLS
   callback executes before `DllMain` by checking the order word `0x0102`.
   Focused PE/TLS parser coverage and the full
-  `cargo test --features unicorn,trace,win32-desktop` suite pass. Detach
-  callouts, forwarded exports, datafile loads, and no-resolve loads remain
-  queued.
+  `cargo test --features unicorn,trace,win32-desktop` suite pass. Final dynamic
+  `FreeLibrary` now uses the same runtime-loader interception path to enter
+  guest `DllMain(hinst, DLL_PROCESS_DETACH, 0)` before marking the module
+  unload-pending and preserving the mapped range. The updated
+  `171_loadlibrary_guest_dll` fixture arms an EXE-owned detach marker, proves a
+  non-final `FreeLibrary` only decrements the refcount, and proves final release
+  runs one guest detach. TLS detach callback ordering, forwarded exports,
+  datafile loads, and no-resolve loads remain queued.
 - eVC fixture infrastructure now supports fixture-local runtime DLLs under
   `tests\test_progs\<fixture>\dlls\<dll-name>\`. The runner discovers `.cpp`,
   `.rc`, and optional `.def` files, links each DLL with an import library,
@@ -36,7 +41,8 @@
   `171_loadlibrary_guest_dll` fixture source exercises `LoadLibraryW`,
   same-module reuse, named and ordinal `GetProcAddress`, guest export calls,
   and paired `FreeLibrary` calls against a generated MIPS DLL. The fixture now
-  asserts one `DllMain(DLL_PROCESS_ATTACH)` call across handle reuse.
+  asserts one `DllMain(DLL_PROCESS_ATTACH)` call across handle reuse and one
+  `DllMain(DLL_PROCESS_DETACH)` call on final release.
   `cargo check --features
   unicorn,evc4-fixtures --test fixture_exes` passes, and the focused eVC run
   `WINCE_FIXTURE_FILTER=171_loadlibrary_guest_dll cargo test --features
@@ -91,11 +97,12 @@
   against the kernel's loaded-module export snapshots, rewrite the live import
   trap page, refresh the persisted trap blob, register PE resources/exports,
   and record the module as dynamic with CE-style refcounts. Datafile and
-  `DONT_RESOLVE_DLL_REFERENCES` flags still fail explicitly. `DllMain`/TLS
-  detach, forwarded exports, and fuller runtime trampoline handling remain
-  open. Focused coverage passes for loaded-module export
-  snapshots, runtime occupied-range calculation, and the existing raw
-  `LoadLibraryExW` flag/refcount behavior.
+  `DONT_RESOLVE_DLL_REFERENCES` flags still fail explicitly. Guest
+  `DllMain(DLL_PROCESS_DETACH)` on final dynamic `FreeLibrary` is now covered
+  in the direct runtime fixture; TLS detach ordering, forwarded exports, and
+  fuller runtime trampoline handling remain open. Focused coverage passes for
+  loaded-module export snapshots, runtime occupied-range calculation, and the
+  existing raw `LoadLibraryExW` flag/refcount behavior.
 - `ExternalImportTable` now has a public `add_module_exports` path for
   already-loaded guest DLL metadata, not only `PeImage` startup inputs. This is
   the import-resolution surface the runtime loader will use after mapping a

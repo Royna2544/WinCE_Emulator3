@@ -3,6 +3,9 @@
 
 typedef DWORD (WINAPI *PFN_FIXTURE_EXPORT)(DWORD);
 typedef DWORD (WINAPI *PFN_FIXTURE_COUNT)();
+typedef void (WINAPI *PFN_FIXTURE_ARM_DETACH)(volatile DWORD *);
+
+static volatile DWORD g_detachObserved = 0;
 
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     HMODULE module = LoadLibraryW(L"runtime_fixture.dll");
@@ -12,6 +15,14 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     if (!attachProc) return FixtureFail(17110);
     PFN_FIXTURE_COUNT attachCount = (PFN_FIXTURE_COUNT)attachProc;
     if (attachCount() != 1) return FixtureFail(17111);
+    FARPROC detachProc = GetProcAddressW(module, L"FixtureDetachCount");
+    if (!detachProc) return FixtureFail(17113);
+    PFN_FIXTURE_COUNT detachCount = (PFN_FIXTURE_COUNT)detachProc;
+    if (detachCount() != 0) return FixtureFail(17114);
+    FARPROC armDetachProc = GetProcAddressW(module, L"FixtureArmDetachPointer");
+    if (!armDetachProc) return FixtureFail(17115);
+    PFN_FIXTURE_ARM_DETACH armDetach = (PFN_FIXTURE_ARM_DETACH)armDetachProc;
+    armDetach(&g_detachObserved);
 
     HMODULE retained = LoadLibraryW(L"runtime_fixture.dll");
     if (!retained) return FixtureFail(17102);
@@ -29,7 +40,10 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     if (ordinal(0x30) != 0x7077) return FixtureFail(17107);
 
     if (!FreeLibrary(retained)) return FixtureFail(17108);
+    if (detachCount() != 0) return FixtureFail(17116);
+    if (g_detachObserved != 0) return FixtureFail(17117);
     if (!FreeLibrary(module)) return FixtureFail(17109);
+    if (g_detachObserved != 1) return FixtureFail(17118);
 
     return FIXTURE_OK;
 }

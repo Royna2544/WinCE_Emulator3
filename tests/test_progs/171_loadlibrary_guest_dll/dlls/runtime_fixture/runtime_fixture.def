@@ -5,3 +5,4 @@ EXPORTS
     FixtureOrdinalExport @7 NONAME
     FixtureAttachCount @8
     FixtureDetachCount @9
+    FixtureArmDetachPointer @10

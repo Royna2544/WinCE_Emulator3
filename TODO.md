@@ -12,10 +12,9 @@
 
 ## Current Slice
 
-- Queued runtime loader gaps from `PLAN.MD`: call detach callbacks/
-  `DllMain(DLL_PROCESS_DETACH)` on final
-  `FreeLibrary`; implement forwarded exports; implement
-  `DONT_RESOLVE_DLL_REFERENCES`; implement datafile/resource-style
+- Queued runtime loader gaps from `PLAN.MD`: confirm and implement TLS detach
+  callback ordering on final `FreeLibrary`; implement forwarded exports;
+  implement `DONT_RESOLVE_DLL_REFERENCES`; implement datafile/resource-style
   `LoadLibraryExW`; harden runtime trampoline handling for high/relocated DLLs;
   add compact runtime loader audit counters.
 - CE fidelity catch-up next slice: finish the runtime guest DLL loader at the
@@ -29,9 +28,13 @@
   page, registers resources/exports, records dynamic module refcounts, parses
   TLS callback addresses into module metadata, and invokes guest
   TLS callbacks and `DllMain(DLL_PROCESS_ATTACH)` before returning from normal
-  loads. The direct, dependent, and TLS runtime guest-DLL fixtures now pass
-  with eVC-built MIPS bytes and assert attach/TLS ordering; next loader work
-  should implement forwarded exports and `DllMain`/TLS detach callouts.
+  loads. Final dynamic `FreeLibrary` now enters guest
+  `DllMain(DLL_PROCESS_DETACH)` before marking the module unload-pending; the
+  direct runtime guest-DLL fixture proves no detach on a refcount decrement and
+  one detach on final release. The direct, dependent, and TLS runtime guest-DLL
+  fixtures now pass with eVC-built MIPS bytes and assert attach/TLS ordering
+  plus direct-DLL final detach; next loader work should implement forwarded
+  exports and TLS detach callback ordering.
   Datafile and
   `DONT_RESOLVE_DLL_REFERENCES` loads still fail explicitly until CE-like
   support is implemented. Keep

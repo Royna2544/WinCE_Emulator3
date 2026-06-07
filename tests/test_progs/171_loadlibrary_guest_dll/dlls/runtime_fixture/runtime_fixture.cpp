@@ -2,12 +2,16 @@
 
 static volatile DWORD g_attachCount = 0;
 static volatile DWORD g_detachCount = 0;
+static volatile DWORD *g_detachObserved = 0;
 
 BOOL WINAPI DllMain(HANDLE, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         ++g_attachCount;
     } else if (reason == DLL_PROCESS_DETACH) {
         ++g_detachCount;
+        if (g_detachObserved) {
+            *g_detachObserved = g_detachCount;
+        }
     }
     return TRUE;
 }
@@ -26,4 +30,8 @@ extern "C" DWORD WINAPI FixtureAttachCount() {
 
 extern "C" DWORD WINAPI FixtureDetachCount() {
     return g_detachCount;
+}
+
+extern "C" void WINAPI FixtureArmDetachPointer(volatile DWORD *value) {
+    g_detachObserved = value;
 }

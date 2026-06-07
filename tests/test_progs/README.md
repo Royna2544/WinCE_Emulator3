@@ -42,7 +42,7 @@ These are intentionally tiny. Each fixture should test one layer or invariant be
 | `167_sleep_infinite_resume` | Worker `Sleep(INFINITE)` self-suspends until `ResumeThread` makes it runnable again. |
 | `168_sendmessage_timeout_zero_cross_thread` | `SendMessageTimeout(..., timeout=0)` to another thread expires without stale receiver delivery. |
 | `169_post_keybd_message` | `PostKeybdMessage` posts hardware-sourced keydown/char/keyup messages and updates key state. |
-| `171_loadlibrary_guest_dll` | Runtime `LoadLibraryW`, `GetProcAddress`, guest export calls, refcount reuse, and DLL process attach. |
+| `171_loadlibrary_guest_dll` | Runtime `LoadLibraryW`, `GetProcAddress`, guest export calls, refcount reuse, process attach, and final process detach. |
 | `172_loadlibrary_dependent_guest_dll` | Runtime recursive guest-DLL dependency loading, import patching, and dependency-order process attach. |
 | `173_loadlibrary_tls_callback` | Runtime PE TLS callback invocation before DLL process attach. |
 | `asm/` | Optional assembly/reference snippets for executable-section branch/delay tests. |

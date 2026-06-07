@@ -2,7 +2,7 @@ use crate::{
     ce::{
         coredll::CoredllGuestMemory,
         framebuffer::{Framebuffer, VirtualFramebuffer},
-        kernel::CeKernel,
+        kernel::{CeKernel, FreeLibraryResult, LoadedModule},
     },
     emulator::{
         dll_search::{emulator_provided_import_module, normalize_module_name, resolve_dll_path},
@@ -4051,7 +4051,7 @@ impl UnicornMips {
                     return;
                 }
                 if let Some(result) = trap.as_ref().and_then(|trap| {
-                    try_handle_runtime_load_library_import(
+                    try_handle_runtime_loader_import(
                         memory.uc,
                         unsafe { &mut *kernel_ptr },
                         unsafe { &mut *memory_map_ptr },
@@ -5863,6 +5863,8 @@ const RUNTIME_DONT_RESOLVE_DLL_REFERENCES: u32 = 0x0000_0001;
 #[cfg(feature = "unicorn")]
 const RUNTIME_COREDLL_MODULE_HANDLE: u32 = 0x7000_0001;
 #[cfg(feature = "unicorn")]
+const DLL_PROCESS_DETACH: u32 = 0;
+#[cfg(feature = "unicorn")]
 const DLL_PROCESS_ATTACH: u32 = 1;
 
 #[cfg(feature = "unicorn")]
@@ -5872,7 +5874,7 @@ enum RuntimeLoaderImportResult {
 }
 
 #[cfg(feature = "unicorn")]
-fn try_handle_runtime_load_library_import<D>(
+fn try_handle_runtime_loader_import<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     kernel: &mut CeKernel,
     memory_map: &mut MemoryMap,
@@ -5893,8 +5895,19 @@ fn try_handle_runtime_load_library_import<D>(
     let ordinal = trap.ordinal?;
     let is_load_library_w = ordinal == crate::ce::coredll_ordinals::ORD_LOAD_LIBRARY_W;
     let is_load_library_ex_w = ordinal == crate::ce::coredll_ordinals::ORD_LOAD_LIBRARY_EX_W;
-    if !is_load_library_w && !is_load_library_ex_w {
+    let is_free_library = ordinal == crate::ce::coredll_ordinals::ORD_FREE_LIBRARY;
+    if !is_load_library_w && !is_load_library_ex_w && !is_free_library {
         return None;
+    }
+
+    if is_free_library {
+        return Some(handle_runtime_free_library_import(
+            uc,
+            kernel,
+            thread_id,
+            args.first().copied().unwrap_or(0),
+            pending_returns,
+        ));
     }
 
     let flags = if is_load_library_ex_w {
@@ -5954,10 +5967,16 @@ fn try_handle_runtime_load_library_import<D>(
         Ok(handle) => {
             kernel.threads.set_last_error(thread_id, 0);
             let lifecycle_calls =
-                dll_lifecycle_calls_for_modules(kernel, &newly_loaded_modules, DLL_PROCESS_ATTACH);
+                dll_attach_lifecycle_calls_for_modules(kernel, &newly_loaded_modules);
             if lifecycle_calls.is_empty() {
                 Some(RuntimeLoaderImportResult::Complete(handle))
-            } else if enter_dll_lifecycle_callout(uc, lifecycle_calls, handle, pending_returns) {
+            } else if enter_dll_lifecycle_callout(
+                uc,
+                lifecycle_calls,
+                handle,
+                None,
+                pending_returns,
+            ) {
                 Some(RuntimeLoaderImportResult::EnteredLifecycle)
             } else {
                 tracing::warn!(
@@ -5985,6 +6004,72 @@ fn try_handle_runtime_load_library_import<D>(
                 .set_last_error(thread_id, crate::ce::thread::ERROR_NOT_SUPPORTED);
             Some(RuntimeLoaderImportResult::Complete(0))
         }
+    }
+}
+
+#[cfg(feature = "unicorn")]
+fn handle_runtime_free_library_import<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    module: u32,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingDllLifecycleReturn>>>,
+) -> RuntimeLoaderImportResult {
+    if module == RUNTIME_COREDLL_MODULE_HANDLE || module == kernel.process_module_base() {
+        kernel.threads.set_last_error(thread_id, 0);
+        return RuntimeLoaderImportResult::Complete(1);
+    }
+
+    let Some(loaded) = kernel.loaded_module_by_handle(module) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, crate::ce::thread::ERROR_INVALID_HANDLE);
+        return RuntimeLoaderImportResult::Complete(0);
+    };
+
+    if !loaded.dynamic || loaded.ref_count > 1 {
+        return match kernel.release_loaded_module(module) {
+            FreeLibraryResult::Pinned
+            | FreeLibraryResult::StillReferenced { .. }
+            | FreeLibraryResult::UnloadPending => {
+                kernel.threads.set_last_error(thread_id, 0);
+                RuntimeLoaderImportResult::Complete(1)
+            }
+            FreeLibraryResult::InvalidHandle => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, crate::ce::thread::ERROR_INVALID_HANDLE);
+                RuntimeLoaderImportResult::Complete(0)
+            }
+        };
+    }
+
+    let lifecycle_calls = dll_detach_lifecycle_calls_for_module(&loaded);
+    if lifecycle_calls.is_empty() {
+        let result = kernel.release_loaded_module(module);
+        if matches!(result, FreeLibraryResult::UnloadPending) {
+            kernel.threads.set_last_error(thread_id, 0);
+            RuntimeLoaderImportResult::Complete(1)
+        } else {
+            kernel
+                .threads
+                .set_last_error(thread_id, crate::ce::thread::ERROR_INVALID_HANDLE);
+            RuntimeLoaderImportResult::Complete(0)
+        }
+    } else if enter_dll_lifecycle_callout(uc, lifecycle_calls, 1, Some(module), pending_returns) {
+        kernel.threads.set_last_error(thread_id, 0);
+        RuntimeLoaderImportResult::EnteredLifecycle
+    } else {
+        tracing::warn!(
+            target: "ce.loader",
+            module = loaded.name.as_str(),
+            base = format_args!("{:#010x}", loaded.base),
+            "runtime FreeLibrary failed to enter DLL detach callout"
+        );
+        kernel
+            .threads
+            .set_last_error(thread_id, crate::ce::thread::ERROR_NOT_SUPPORTED);
+        RuntimeLoaderImportResult::Complete(0)
     }
 }
 
@@ -6202,36 +6287,47 @@ fn register_runtime_resources(
 }
 
 #[cfg(feature = "unicorn")]
-fn dll_lifecycle_calls_for_modules(
+fn dll_attach_lifecycle_calls_for_modules(
     kernel: &CeKernel,
     modules: &[u32],
-    reason: u32,
 ) -> Vec<DllLifecycleCall> {
     let mut calls = Vec::new();
     for module_base in modules {
         let Some(module) = kernel.loaded_module_by_handle(*module_base) else {
             continue;
         };
-        if reason == DLL_PROCESS_ATTACH {
-            for callback in module.tls_callbacks {
-                if callback != 0 {
-                    calls.push(DllLifecycleCall {
-                        module: module.base,
-                        target: callback,
-                        reason,
-                        returns_bool: false,
-                    });
-                }
-            }
-            if module.entry_point != module.base && module.entry_point != 0 {
+        for callback in module.tls_callbacks {
+            if callback != 0 {
                 calls.push(DllLifecycleCall {
                     module: module.base,
-                    target: module.entry_point,
-                    reason,
-                    returns_bool: true,
+                    target: callback,
+                    reason: DLL_PROCESS_ATTACH,
+                    returns_bool: false,
                 });
             }
         }
+        if module.entry_point != module.base && module.entry_point != 0 {
+            calls.push(DllLifecycleCall {
+                module: module.base,
+                target: module.entry_point,
+                reason: DLL_PROCESS_ATTACH,
+                returns_bool: true,
+            });
+        }
+    }
+    calls
+}
+
+#[cfg(feature = "unicorn")]
+fn dll_detach_lifecycle_calls_for_module(module: &LoadedModule) -> Vec<DllLifecycleCall> {
+    let mut calls = Vec::new();
+    if module.entry_point != module.base && module.entry_point != 0 {
+        calls.push(DllLifecycleCall {
+            module: module.base,
+            target: module.entry_point,
+            reason: DLL_PROCESS_DETACH,
+            returns_bool: false,
+        });
     }
     calls
 }
@@ -6241,6 +6337,7 @@ fn enter_dll_lifecycle_callout<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     mut calls: Vec<DllLifecycleCall>,
     api_result: u32,
+    release_after_return: Option<u32>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingDllLifecycleReturn>>>,
 ) -> bool {
     let Some(first) = (!calls.is_empty()).then(|| calls.remove(0)) else {
@@ -6253,7 +6350,7 @@ fn enter_dll_lifecycle_callout<D>(
         return_sp: read_mips_reg(uc, RegisterMIPS::SP),
         caller_regs: capture_mips_gprs(uc),
         api_result,
-        release_after_return: None,
+        release_after_return,
     };
     if !enter_current_dll_lifecycle_call(uc, &pending) {
         return false;
