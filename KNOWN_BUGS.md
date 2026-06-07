@@ -105,8 +105,11 @@
     buffer-return behavior now create/read CE text shortcuts.
     `SHAddToRecentDocs(SHARD_PATH/null)` now creates/clears Recent-folder CE
     shortcuts and tracks recent-document shell state, but PIDL input, pruning,
-    and UI presentation remain incomplete. Shell namespace/storage
-    presentation and file-change notifications are incomplete.
+    and UI presentation remain incomplete. `SHChangeNotifyRegisterI`,
+    `SHFileNotifyRemoveI`, and `SHFileNotifyFreeI` now preserve registration/
+    free state and clean up on HWND destruction, but actual file-change event
+    delivery/PIDL payloads are not implemented yet. Shell namespace/storage
+    presentation is incomplete.
   - Required fix: implement the queued shell/UI section in `PLAN.MD` using
     registry/mount/window state and CE source references, with explicit failure
     rather than plausible fake success where behavior is not implemented.

@@ -28,8 +28,9 @@ use wince_emulation_v3::{
             ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_RELEASE_MUTEX,
             ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD, ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK,
             ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
-            ORD_SHADD_TO_RECENT_DOCS, ORD_SHCREATE_SHORTCUT, ORD_SHCREATE_SHORTCUT_EX,
-            ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON, ORD_SHGET_FILE_INFO,
+            ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT,
+            ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON,
+            ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO,
             ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I,
             ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
             ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP, ORD_SLEEP_TILL_TICK, ORD_SUSPEND_THREAD,
@@ -2676,6 +2677,132 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
 }
 
 #[test]
+fn sh_change_notify_i_tracks_register_remove_and_free_state() -> Result<()> {
+    const ERROR_INVALID_WINDOW_HANDLE: u32 = 1400;
+    const SHCNE_CREATE: u32 = 0x0000_0002;
+    const SHCNE_DELETE: u32 = 0x0000_0004;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 47;
+    let hwnd = kernel.create_window_ex_w(thread_id, "SHCNE_SINK", "", None, 0, 0, 0);
+    let entry = 0x3003_1000;
+    let watch_dir = 0x3003_2000;
+    let packed = 0x3003_3000;
+    memory.map_words(entry, 3);
+    memory.map_halfwords(watch_dir, 64);
+    memory.map_words(packed, 2);
+    memory.write_word(entry, SHCNE_CREATE | SHCNE_DELETE);
+    memory.write_word(entry + 4, watch_dir);
+    memory.write_word(entry + 8, 1);
+    memory.write_wide_z(watch_dir, r"\Windows");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHCHANGE_NOTIFY_REGISTER_I,
+            [hwnd, entry],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let registration = kernel
+        .shell
+        .change_notification(hwnd)
+        .expect("change notification registration");
+    assert_eq!(registration.event_mask, SHCNE_CREATE | SHCNE_DELETE);
+    assert_eq!(registration.watch_dir.as_deref(), Some(r"\Windows"));
+    assert!(registration.recursive);
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    memory.write_word(entry, SHCNE_DELETE);
+    memory.write_word(entry + 8, 0);
+    memory.write_word(packed, hwnd);
+    memory.write_word(packed + 4, entry);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHCHANGE_NOTIFY_REGISTER_I,
+            [packed, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let registrations: Vec<_> = kernel.shell.change_notifications().cloned().collect();
+    assert_eq!(registrations.len(), 1);
+    assert_eq!(registrations[0].event_mask, SHCNE_DELETE);
+    assert!(!registrations[0].recursive);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHFILE_NOTIFY_FREE_I,
+            [0x3003_f000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel
+            .shell
+            .freed_file_notifications()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![0x3003_f000]
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHFILE_NOTIFY_REMOVE_I,
+            [hwnd],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(kernel.shell.change_notification(hwnd).is_none());
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHFILE_NOTIFY_REMOVE_I,
+            [hwnd],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_WINDOW_HANDLE
+    );
+
+    Ok(())
+}
+
+#[test]
 fn shell_window_destroy_removes_notify_icon_and_notification_state() -> Result<()> {
     const NIM_ADD: u32 = 0;
     const NIF_MESSAGE: u32 = 0x0000_0001;
@@ -2696,6 +2823,7 @@ fn shell_window_destroy_removes_notify_icon_and_notification_state() -> Result<(
     let notify_data = 0x3003_1000;
     let title = 0x3003_2000;
     let html = 0x3003_3000;
+    let change_entry = 0x3003_4000;
     let clsid = [
         0x44, 0x33, 0x22, 0x11, 0xaa, 0xbb, 0xcc, 0xdd, 0x89, 0xab, 0xcd, 0xef, 0x10, 0x20, 0x30,
         0x40,
@@ -2732,6 +2860,7 @@ fn shell_window_destroy_removes_notify_icon_and_notification_state() -> Result<(
     memory.write_word(notify_data + 52, 0);
     memory.write_wide_z(title, "Cleanup");
     memory.write_wide_z(html, "<p>Cleanup</p>");
+    memory.map_words(change_entry, 3);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -2747,11 +2876,29 @@ fn shell_window_destroy_removes_notify_icon_and_notification_state() -> Result<(
     ));
     assert!(kernel.shell.notify_icon(hwnd, 11).is_some());
     assert!(kernel.shell.notification(clsid, 402).is_some());
+    memory.write_word(change_entry, 0x0000_0002);
+    memory.write_word(change_entry + 4, 0);
+    memory.write_word(change_entry + 8, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHCHANGE_NOTIFY_REGISTER_I,
+            [hwnd, change_entry],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(kernel.shell.change_notification(hwnd).is_some());
 
     assert!(kernel.destroy_window(hwnd));
 
     assert!(kernel.shell.notify_icon(hwnd, 11).is_none());
     assert!(kernel.shell.notification(clsid, 402).is_none());
+    assert!(kernel.shell.change_notification(hwnd).is_none());
 
     Ok(())
 }

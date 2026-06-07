@@ -143,6 +143,21 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     records recent-document state in `ShellSystem`, and explicitly fails PIDL
     input until namespace PIDL support exists.
 
+- Shell file-change notification APIs:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\shellsdk.h`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\shsdkstc.h`,
+  `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\CESHELL\UI\filechangemgr.cpp`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\MIPSII\RETAIL\coredll.def`
+  - `shellsdk.h` exposes `SHChangeNotifyRegister`,
+    `SHChangeNotifyDeregister`, and `SHChangeNotifyFree`; `shsdkstc.h`
+    defines `SHCHANGENOTIFYENTRY`, `FILECHANGEINFO`, and
+    `FILECHANGENOTIFY`. The HPC shell file-change manager maps filesystem
+    notifications into `SHCNE_*` events for registered shell views. v3 now
+    implements the raw `SHChangeNotifyRegisterI`, `SHFileNotifyRemoveI`, and
+    `SHFileNotifyFreeI` ordinals as durable shell state with HWND cleanup.
+    Actual `WM_FILECHANGEINFO` posting, PIDL-style item payloads, and event
+    filtering remain queued until a CE-like file-notification source is wired.
+
 - Old MIPS CE kernel-call encoding:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\nkmips.h`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c`, and corroborating

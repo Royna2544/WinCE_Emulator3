@@ -86,8 +86,10 @@
   richer `SHGetFileInfo` icon extraction/image-list behavior, notification
   interaction/callback delivery above the now-stateful `SHNotification*I` data
   APIs, recent-doc pruning/UI display and PIDL input above the now-backed
-  `SHAddToRecentDocs(SHARD_PATH/null)` recent shortcut/state path, shell
-  change notifications, popup/menu behavior, rendered modal `MessageBoxW`
+  `SHAddToRecentDocs(SHARD_PATH/null)` recent shortcut/state path, file-change
+  event delivery/PIDL payloads above the now-stateful
+  `SHChangeNotifyRegisterI`/`SHFileNotifyRemoveI`/`SHFileNotifyFreeI`
+  registration/free path, popup/menu behavior, rendered modal `MessageBoxW`
   window/nested pump/button input above the
   now-recorded/default-result raw slice, keyboard translation, richer
   clipboard rendered ownership and delayed-render edge cases above the

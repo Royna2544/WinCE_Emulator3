@@ -32,7 +32,7 @@ use crate::{
         },
         shell::{
             MessageBoxRecord, NotificationResult, NotifyIconData, NotifyIconOp,
-            RecentDocumentRecord, ShellNotificationData,
+            RecentDocumentRecord, ShellChangeNotifyRegistration, ShellNotificationData,
         },
         thread::{
             ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_CLASS_DOES_NOT_EXIST,
@@ -3586,6 +3586,15 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_SHADD_TO_RECENT_DOCS => Some(CoredllValue::U32(sh_add_to_recent_docs_raw(
             kernel, memory, thread_id, args,
+        ))),
+        ORD_SHCHANGE_NOTIFY_REGISTER_I => Some(CoredllValue::Bool(
+            sh_change_notify_register_i_raw(kernel, memory, thread_id, args),
+        )),
+        ORD_SHFILE_NOTIFY_REMOVE_I => Some(CoredllValue::Bool(sh_file_notify_remove_i_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_SHFILE_NOTIFY_FREE_I => Some(CoredllValue::U32(sh_file_notify_free_i_raw(
+            kernel, thread_id, args,
         ))),
         ORD_SHELL_NOTIFY_ICON => Some(CoredllValue::Bool(shell_notify_icon_w_raw(
             kernel, memory, thread_id, args,
@@ -10592,6 +10601,109 @@ fn sh_get_special_folder_path_raw<M: CoredllGuestMemory>(
     } else {
         false
     }
+}
+
+fn sh_change_notify_register_i_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let Some((hwnd, entry_ptr)) = read_shell_change_notify_register_args(
+        kernel,
+        memory,
+        thread_id,
+        raw_arg(args, 0),
+        raw_arg(args, 1),
+    ) else {
+        return false;
+    };
+    if hwnd == 0 || !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    }
+    if entry_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(event_mask) = read_guest_u32(kernel, memory, thread_id, entry_ptr) else {
+        return false;
+    };
+    let Some(watch_dir_ptr) = read_guest_u32(kernel, memory, thread_id, entry_ptr.wrapping_add(4))
+    else {
+        return false;
+    };
+    let Some(recursive) = read_guest_u32(kernel, memory, thread_id, entry_ptr.wrapping_add(8))
+    else {
+        return false;
+    };
+    let watch_dir = if watch_dir_ptr == 0 {
+        None
+    } else {
+        let Some(path) = read_shell_api_path_arg(memory, watch_dir_ptr) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        };
+        Some(path)
+    };
+    kernel
+        .shell
+        .register_change_notification(ShellChangeNotifyRegistration {
+            hwnd,
+            event_mask,
+            watch_dir,
+            recursive: recursive != 0,
+        });
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn read_shell_change_notify_register_args<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    first: u32,
+    second: u32,
+) -> Option<(u32, u32)> {
+    if second != 0 {
+        return Some((first, second));
+    }
+    if first == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
+    let hwnd = read_guest_u32(kernel, memory, thread_id, first)?;
+    let entry_ptr = read_guest_u32(kernel, memory, thread_id, first.wrapping_add(4))?;
+    Some((hwnd, entry_ptr))
+}
+
+fn sh_file_notify_remove_i_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let hwnd = raw_arg(args, 0);
+    if kernel.shell.remove_change_notification(hwnd).is_some() {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        false
+    }
+}
+
+fn sh_file_notify_free_i_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
+    kernel
+        .shell
+        .record_freed_file_notification(raw_arg(args, 0));
+    kernel.threads.set_last_error(thread_id, 0);
+    0
 }
 
 fn shell_notify_icon_w_raw<M: CoredllGuestMemory>(

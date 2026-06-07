@@ -44,6 +44,8 @@ pub struct NotifyIconRecord {
 pub struct ShellSystem {
     notify_icons: BTreeMap<(u32, u32), NotifyIconRecord>,
     notifications: BTreeMap<([u8; 16], u32), ShellNotificationRecord>,
+    change_notifications: BTreeMap<u32, ShellChangeNotifyRegistration>,
+    freed_file_notifications: Vec<u32>,
     message_boxes: Vec<MessageBoxRecord>,
     recent_documents: Vec<RecentDocumentRecord>,
 }
@@ -73,6 +75,36 @@ impl ShellSystem {
 
     pub fn recent_documents(&self) -> impl Iterator<Item = &RecentDocumentRecord> {
         self.recent_documents.iter()
+    }
+
+    pub fn register_change_notification(&mut self, registration: ShellChangeNotifyRegistration) {
+        self.change_notifications
+            .insert(registration.hwnd, registration);
+    }
+
+    pub fn remove_change_notification(
+        &mut self,
+        hwnd: u32,
+    ) -> Option<ShellChangeNotifyRegistration> {
+        self.change_notifications.remove(&hwnd)
+    }
+
+    pub fn change_notification(&self, hwnd: u32) -> Option<&ShellChangeNotifyRegistration> {
+        self.change_notifications.get(&hwnd)
+    }
+
+    pub fn change_notifications(&self) -> impl Iterator<Item = &ShellChangeNotifyRegistration> {
+        self.change_notifications.values()
+    }
+
+    pub fn record_freed_file_notification(&mut self, ptr: u32) {
+        if ptr != 0 {
+            self.freed_file_notifications.push(ptr);
+        }
+    }
+
+    pub fn freed_file_notifications(&self) -> impl Iterator<Item = &u32> {
+        self.freed_file_notifications.iter()
     }
 
     pub fn apply_notify_icon(&mut self, op: NotifyIconOp, data: NotifyIconData) -> bool {
@@ -155,9 +187,14 @@ impl ShellSystem {
         let before_notifications = self.notifications.len();
         self.notifications
             .retain(|(_clsid, _id), record| record.hwnd_sink != hwnd);
+        let before_change_notifications = self.change_notifications.len();
+        self.change_notifications
+            .retain(|_registered_hwnd, record| record.hwnd != hwnd);
         ShellWindowCleanup {
             notify_icons_removed: before_icons.saturating_sub(self.notify_icons.len()),
             notifications_removed: before_notifications.saturating_sub(self.notifications.len()),
+            change_notifications_removed: before_change_notifications
+                .saturating_sub(self.change_notifications.len()),
         }
     }
 
@@ -178,6 +215,14 @@ pub struct RecentDocumentRecord {
     pub flags: u32,
     pub target_path: String,
     pub shortcut_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellChangeNotifyRegistration {
+    pub hwnd: u32,
+    pub event_mask: u32,
+    pub watch_dir: Option<String>,
+    pub recursive: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -329,11 +374,13 @@ pub const SHNUM_TITLE: u32 = 0x0000_0010;
 pub struct ShellWindowCleanup {
     pub notify_icons_removed: usize,
     pub notifications_removed: usize,
+    pub change_notifications_removed: usize,
 }
 
 impl std::ops::AddAssign for ShellWindowCleanup {
     fn add_assign(&mut self, rhs: Self) {
         self.notify_icons_removed += rhs.notify_icons_removed;
         self.notifications_removed += rhs.notifications_removed;
+        self.change_notifications_removed += rhs.change_notifications_removed;
     }
 }

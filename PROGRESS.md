@@ -9,6 +9,15 @@
 
 ## Confirmed
 
+- Shell file-change notification ordinals now have stateful raw coverage.
+  `SHChangeNotifyRegisterI` accepts both the direct `(HWND,
+  SHCHANGENOTIFYENTRY*)` shape and the one-pointer PSL-style packed shape,
+  validates sink HWNDs, records event mask/watch directory/recursive state in
+  `ShellSystem`, and cleans registrations up when the HWND is destroyed.
+  `SHFileNotifyRemoveI` deregisters by HWND and `SHFileNotifyFreeI` records
+  freed notification payload pointers without fabricating event delivery.
+  Focused coverage:
+  `sh_change_notify_i_tracks_register_remove_and_free_state`.
 - `SHAddToRecentDocs` now has a CE-backed raw path for `SHARD_PATH` and null
   clear calls. It resolves `CSIDL_RECENT` through
   `HKLM\System\Explorer\Shell Folders`, creates the Recent folder, writes CE
