@@ -4616,6 +4616,13 @@
   This keeps shell-visible notification data and callbacks honest without
   synthesizing taskbar bubble UI.
 
+- Extended the raw shell notification callback payload to cover CE
+  `SHNN_LINKSEL` string marshalling. The queued `NMSHN` heap block now grows to
+  include an optional UTF-16 link string immediately after the 28-byte payload,
+  writes `pszLink` to that receiver-local string, and releases the allocation
+  through the existing `DispatchMessageW` payload cleanup. Focused coverage
+  remains `shnotification_i_tracks_query_update_and_remove_state`.
+
 - Added shell notification lifetime cleanup on HWND destruction. The kernel
   destroy-window and process-window teardown paths now prune `Shell_NotifyIcon`
   records and `SHNotification*I` records whose sink window is being destroyed,

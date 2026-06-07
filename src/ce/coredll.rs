@@ -18782,7 +18782,12 @@ fn write_guest_shell_notification<M: CoredllGuestMemory>(
     addr: u32,
     notification: crate::ce::gwe::ShellNotificationMessage,
 ) -> bool {
-    write_guest_u32(kernel, memory, thread_id, addr, notification.hwnd_from)
+    let (data0, data1) = if notification.link.is_some() {
+        (addr.wrapping_add(28), 0)
+    } else {
+        (notification.data0, notification.data1)
+    };
+    let header_written = write_guest_u32(kernel, memory, thread_id, addr, notification.hwnd_from)
         && write_guest_u32(
             kernel,
             memory,
@@ -18811,20 +18816,24 @@ fn write_guest_shell_notification<M: CoredllGuestMemory>(
             addr.wrapping_add(16),
             notification.return_value,
         )
-        && write_guest_u32(
+        && write_guest_u32(kernel, memory, thread_id, addr.wrapping_add(20), data0)
+        && write_guest_u32(kernel, memory, thread_id, addr.wrapping_add(24), data1);
+    if !header_written {
+        return false;
+    }
+    if let Some(link) = notification.link.as_deref() {
+        let capacity = link.encode_utf16().count() + 1;
+        write_guest_wide_fixed(
             kernel,
             memory,
             thread_id,
-            addr.wrapping_add(20),
-            notification.data0,
+            addr.wrapping_add(28),
+            link,
+            capacity,
         )
-        && write_guest_u32(
-            kernel,
-            memory,
-            thread_id,
-            addr.wrapping_add(24),
-            notification.data1,
-        )
+    } else {
+        true
+    }
 }
 
 fn get_sys_color(index: u32) -> u32 {

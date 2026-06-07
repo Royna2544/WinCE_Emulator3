@@ -1571,7 +1571,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   - `shellsdk.h` defines `SHNN_SHOW`, `SHNN_DISMISS`, `SHNN_LINKSEL`, and the
     `NMSHN` callback payload. `shellpsl.cpp` marshals `NMSHN` into the target
     process and sends `WM_NOTIFY` with `wParam=hdr.idFrom` and
-    `lParam=NMSHN*`.
+    `lParam=NMSHN*`; for link-selection notifications it appends the selected
+    link string after the `NMSHN` allocation and points `pszLink` at that
+    receiver-local string.
   - `api.cpp` maps `SHNotificationAddI`/`UpdateI`/`RemoveI`/`GetDataI` to the
     shell API set and returns Win32 error codes (`ERROR_SUCCESS`,
     `ERROR_INVALID_PARAMETER`, `ERROR_INVALID_DATA`) rather than BOOL success.
@@ -1579,7 +1581,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     and copies the persisted struct/title/HTML fields back through
     `GetNotificationData`. Rust now preserves that app-visible data in
     `ShellSystem`, can post the window-based `WM_NOTIFY`/`NMSHN` sink callback
-    for stored notification events, and prunes records whose sink HWND is
-    destroyed through normal window/process teardown; visual bubble/taskbar
-    rendering, link-string marshalling, COM callbacks, and timeout/dismiss
-    policy remain queued separately.
+    for stored notification events, marshals optional `SHNN_LINKSEL` link
+    strings into the receiver `NMSHN` allocation, and prunes records whose sink
+    HWND is destroyed through normal window/process teardown; visual bubble/
+    taskbar rendering, COM callbacks, and timeout/dismiss policy remain queued
+    separately.

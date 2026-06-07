@@ -3043,6 +3043,40 @@ impl CeKernel {
             return_value: 0,
             data0,
             data1,
+            link: None,
+        });
+        if lparam == 0 {
+            return false;
+        }
+        if self.post_message_w(record.hwnd_sink, WM_NOTIFY, record.id, lparam) {
+            true
+        } else {
+            let _ = self.release_message_pointer_payload(lparam);
+            false
+        }
+    }
+
+    pub fn post_shell_notification_link_callback(
+        &mut self,
+        clsid: [u8; 16],
+        id: u32,
+        link: &str,
+    ) -> bool {
+        let Some(record) = self.shell.notification(clsid, id).cloned() else {
+            return false;
+        };
+        if record.hwnd_sink == 0 || !self.gwe.is_window(record.hwnd_sink) {
+            return false;
+        }
+        let lparam = self.queue_shell_notification_payload(ShellNotificationMessage {
+            hwnd_from: 0,
+            id_from: record.id,
+            code: crate::ce::shell::SHNN_LINKSEL,
+            lparam: record.lparam,
+            return_value: 0,
+            data0: 0,
+            data1: 0,
+            link: Some(link.to_owned()),
         });
         if lparam == 0 {
             return false;
@@ -4091,7 +4125,16 @@ impl CeKernel {
     }
 
     fn queue_shell_notification_payload(&mut self, payload: ShellNotificationMessage) -> u32 {
-        let Some(ptr) = self.memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 28) else {
+        let link_bytes = payload
+            .link
+            .as_ref()
+            .map(|link| (link.encode_utf16().count() + 1) * 2)
+            .unwrap_or(0);
+        let alloc_size = 28usize.saturating_add(link_bytes);
+        let Some(ptr) = self
+            .memory
+            .heap_alloc(PROCESS_HEAP_HANDLE, 0, alloc_size as u32)
+        else {
             return 0;
         };
         if self

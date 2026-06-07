@@ -268,6 +268,7 @@ pub const NIF_MESSAGE: u32 = 0x0000_0001;
 pub const NIF_ICON: u32 = 0x0000_0002;
 pub const NIF_TIP: u32 = 0x0000_0004;
 pub const NIF_STATE: u32 = 0x0000_0008;
+pub const SHNN_LINKSEL: u32 = 0xffff_fc18;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationResult {

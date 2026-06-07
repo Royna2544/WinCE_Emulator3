@@ -226,7 +226,7 @@ pub struct WindowPos {
     pub flags: u32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShellNotificationMessage {
     pub hwnd_from: u32,
     pub id_from: u32,
@@ -235,9 +235,10 @@ pub struct ShellNotificationMessage {
     pub return_value: u32,
     pub data0: u32,
     pub data1: u32,
+    pub link: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MessagePointerPayload {
     WindowPos(WindowPos),
     ShellNotification(ShellNotificationMessage),
@@ -2138,7 +2139,7 @@ impl Gwe {
     }
 
     pub fn message_pointer_payload(&self, ptr: u32) -> Option<MessagePointerPayload> {
-        self.message_pointer_payloads.get(&ptr).copied()
+        self.message_pointer_payloads.get(&ptr).cloned()
     }
 
     pub fn take_message_pointer_payload(&mut self, ptr: u32) -> Option<MessagePointerPayload> {

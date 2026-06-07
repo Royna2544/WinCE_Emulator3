@@ -97,9 +97,10 @@
   notification interaction callbacks above the now-stateful
   `SHNotification*I` data APIs and the now-backed `Shell_NotifyIconW` owner
   callback posting path. `SHNotification*I` can now post `WM_NOTIFY`/`NMSHN`
-  payloads for stored notification events; continue with `SHNN_LINKSEL`
-  string marshalling, timeout/dismiss policy, COM notification callbacks, and
-  real taskbar/bubble UI. Also continue recent-doc pruning/UI display and PIDL
+  payloads for stored notification events and marshal `SHNN_LINKSEL` link
+  strings as `pszLink` data inside the receiver allocation; continue with
+  timeout/dismiss policy, COM notification callbacks, and real taskbar/bubble
+  UI. Also continue recent-doc pruning/UI display and PIDL
   input above the now-backed `SHAddToRecentDocs(SHARD_PATH/null)` recent
   shortcut/state path, file-change event delivery/PIDL payloads above the
   now-stateful `SHChangeNotifyRegisterI`/`SHFileNotifyRemoveI`/

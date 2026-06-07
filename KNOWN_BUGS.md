@@ -104,8 +104,9 @@
     registered owner callback message for shell-icon events, but does not yet
     render tray UI or own richer timeout/dismiss/icon lifetime.
     `SHNotification*I` preserves/query data and can post `WM_NOTIFY`/`NMSHN`
-    sink callbacks for stored notification events, but not link-string
-    selection, COM callbacks, or timeout/dismiss policy. `TrackPopupMenuEx`
+    sink callbacks for stored notification events, including `SHNN_LINKSEL`
+    link-string selection payloads, but not COM callbacks or timeout/dismiss
+    policy. `TrackPopupMenuEx`
     now sends CE menu-loop owner notifications around tracked popup attempts,
     but still has no rendered popup window or real interactive selection.
     `MessageBoxW` validates owners
@@ -1978,11 +1979,11 @@
   - Symptom: callers can add/update/remove/query `SHNotification*I` records,
     and `Shell_NotifyIconW` can post the registered owner callback message for
     shell-icon events. `SHNotification*I` can also post a `WM_NOTIFY`/`NMSHN`
-    payload to the stored sink HWND for generic notification events, but the
-    emulator does not yet create taskbar bubble UI, marshal link-selection
-    strings, call `IShellNotificationCallback`, own timeout/dismiss policy, or
-    expire notification icons. Notification records tied to destroyed sink
-    HWNDs are now removed during normal window/process teardown.
+    payload to the stored sink HWND for generic notification events and
+    `SHNN_LINKSEL` link-selection strings, but the emulator does not yet create
+    taskbar bubble UI, call `IShellNotificationCallback`, own timeout/dismiss
+    policy, or expire notification icons. Notification records tied to
+    destroyed sink HWNDs are now removed during normal window/process teardown.
   - Evidence: CE `notification.cpp` routes notification records through
     taskbar bubble/tray lists and `WM_NOTIFY` callback paths; Rust currently
     implements the app-visible data store only.
