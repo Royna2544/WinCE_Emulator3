@@ -4819,7 +4819,7 @@ fn coredll_raw_is_window_visible_observes_hidden_ancestors() -> Result<()> {
         CoredllDispatch::Returned {
             value: CoredllValue::Handle(hwnd),
             ..
-        } if hwnd == parent
+        } if hwnd == child
     ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

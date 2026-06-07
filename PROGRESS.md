@@ -9,6 +9,23 @@
 
 ## Confirmed
 
+- Windows-sudo `cargo flamegraph` profiling of the mounted Win32-host route
+  startup path now identifies and closes another generic startup-speed tax.
+  Pre-fix `target\route_search_host_90s_20260607_debugforced2_flame.svg`
+  spent about 27.96% of samples in
+  `map_persisted_ram_blob_pages` / `uc_mem_map` and about 31.91% in
+  `uc_close` / `memory_free_mipsel`, while the live summary still showed
+  bounded file I/O (`host_read=29778/2490133B`). Persisted heap-spillover RAM
+  blobs are now remapped into each fresh Unicorn instance as contiguous
+  unmapped spans instead of one 4 KiB map per page. Post-fix
+  `target\route_search_host_90s_postspan_flame.svg` removes the persisted-RAM
+  remap/teardown blocks from the top profile; the same bounded host profile
+  advances farther (`host_read=78968/4003851B`, PC in `mfcce400.dll`) and shows
+  actual `uc_emu_start`/TCG execution as the visible cost. Focused coverage
+  `persisted_ram_blob_remap_groups_unmapped_spans` passes, and the full
+  `cargo test --features unicorn,trace,win32-desktop` suite is green after
+  aligning two stale visibility/input fixtures with the current CE-ish
+  hit-test contract.
 - Fresh route-search visibility probes `target\route_showcmd1_*` and
   `target\route_showcmd2_*` show that the post-IPC `afxwnd42u` route/chrome
   children are not being hidden by an untraced z-order side effect. They are

@@ -1781,7 +1781,17 @@ fn get_message_drains_remote_touch_to_active_window() -> Result<()> {
     let mut kernel = CeKernel::boot(config);
     kernel.remote.set_framebuffer_size(800, 480);
 
-    let hwnd = kernel.create_window_ex_w(42, "REMOTE", "remote", None, 1, 0, 0);
+    let hwnd = kernel.gwe.create_window_ex_with_rect(
+        42,
+        "REMOTE",
+        "remote",
+        None,
+        1,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(0, 0, 800, 480),
+    );
+    kernel.gwe.set_active_window(Some(hwnd));
     kernel.gwe.set_focus(Some(hwnd));
     kernel.remote.enqueue_touch("tap", 21, 43).unwrap();
 

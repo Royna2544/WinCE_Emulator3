@@ -4674,21 +4674,31 @@ fn map_persisted_ram_blob_pages<D>(
             })?;
             continue;
         }
+        let span_base = page_base;
+        while page_base < page_end
+            && !mapped_ranges.iter().any(|(mapped_base, mapped_size)| {
+                page_base >= *mapped_base && page_base < mapped_base.saturating_add(*mapped_size)
+            })
+        {
+            page_base = page_base.checked_add(0x1000).ok_or_else(|| {
+                Error::InvalidArgument("persisted RAM blob page overflow".to_owned())
+            })?;
+        }
+        let span_size = page_base.checked_sub(span_base).ok_or_else(|| {
+            Error::InvalidArgument("persisted RAM blob span underflow".to_owned())
+        })?;
         uc.mem_map(
-            u64::from(page_base),
-            0x1000,
+            u64::from(span_base),
+            u64::from(span_size),
             unicorn_perms(MemoryPerms::READ | MemoryPerms::WRITE),
         )
         .map_err(|err| {
             Error::Backend(format!(
-                "map persisted RAM blob {} page 0x{page_base:08x}: {err:?}",
-                blob.name
+                "map persisted RAM blob {} span 0x{span_base:08x}+0x{span_size:x}: {err:?}",
+                blob.name,
             ))
         })?;
-        mapped_ranges.push((page_base, 0x1000));
-        page_base = page_base
-            .checked_add(0x1000)
-            .ok_or_else(|| Error::InvalidArgument("persisted RAM blob page overflow".to_owned()))?;
+        mapped_ranges.push((span_base, span_size));
     }
     Ok(())
 }
@@ -13650,6 +13660,33 @@ mod guest_thread_stack_tests {
             pages,
             vec![0x3100_0000, 0x3100_1000, 0x3100_3000, 0x3100_4000]
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn persisted_ram_blob_remap_groups_unmapped_spans() -> Result<()> {
+        use unicorn_engine::{
+            Unicorn,
+            unicorn_const::{Arch, Mode},
+        };
+
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN)
+            .map_err(|err| Error::Backend(format!("{err:?}")))?;
+        let mut mapped_ranges = vec![(0x3100_2000, 0x1000)];
+        let blob = MappedBlob {
+            name: HEAP_SPILLOVER_BLOB_NAME.to_owned(),
+            base: 0x3100_0000,
+            bytes: vec![0; 0x5000],
+        };
+
+        map_persisted_ram_blob_pages(&mut uc, &mut mapped_ranges, &blob)?;
+
+        assert!(mapped_ranges.contains(&(0x3100_0000, 0x2000)));
+        assert!(mapped_ranges.contains(&(0x3100_2000, 0x1000)));
+        assert!(mapped_ranges.contains(&(0x3100_3000, 0x2000)));
+        assert!(!mapped_ranges.contains(&(0x3100_0000, 0x1000)));
+        assert!(!mapped_ranges.contains(&(0x3100_3000, 0x1000)));
 
         Ok(())
     }

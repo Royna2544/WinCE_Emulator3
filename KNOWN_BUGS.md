@@ -209,7 +209,17 @@
     hide/show leakage. The active bottleneck is guest resource/GDI/allocator
     throughput under Unicorn hooks, possibly coupled to a long receiver WNDPROC
     that must complete before the chrome is shown.
-  - Status: open.
+  - Update: Windows-sudo flamegraph evidence
+    `target\route_search_host_90s_20260607_debugforced2_flame.svg` showed a
+    separate generic remap tax: persisted heap-spillover RAM was remapped into
+    fresh Unicorn instances one page at a time (`map_persisted_ram_blob_pages`
+    / `uc_mem_map` about 27.96% of samples). That is now fixed/watch by
+    contiguous-span remapping. Post-fix
+    `target\route_search_host_90s_postspan_flame.svg` advances farther
+    (`host_read=78968/4003851B`, PC in `mfcce400.dll`) and no longer has the
+    persisted-RAM remap/teardown blocks at the top profile.
+  - Status: open for missing route chrome/show sequence; closed/watch for the
+    persisted-RAM remap startup tax.
 - Open/watch: `WINCE_EMU_FAST_START` is still experimental and slower than the
   normal path for mounted iNavi.
   - Symptom: earlier fast-start returned directly from the PE entry block to

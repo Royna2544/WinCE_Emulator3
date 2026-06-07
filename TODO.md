@@ -127,15 +127,17 @@
   missing right/bottom chrome and parked child/process/GWE handoff; do not
   spend the next slice on remote touch delivery unless new traces show queued
   touches are not reaching GWE.
-- Current startup perf target from
-  `target\startup_flame_virtual_250m_20260607_sudo_debugsym.svg`: optimize
-  persisted-RAM remapping/topology churn before touching file I/O again.
-  `map_persisted_ram_blob_pages` / `uc_mem_map` is ~13.5% of the 250M mounted
-  virtual profile and Unicorn teardown is ~15.8%; actual `uc_emu_start` is
-  ~6.5%, code hook is ~1.8%, and `map_kernel_memory_allocations` is ~1.7%.
-  Investigate keeping the Unicorn instance or mapped persisted pages alive
-  across live-pump slices instead of rebuilding/remapping every slice, while
-  preserving CE memory semantics and mapped file synchronization.
+- Startup profiling follow-up: persisted-RAM page-by-page remapping is now
+  fixed/watch. Keep the contiguous-span remap path validated by
+  `persisted_ram_blob_remap_groups_unmapped_spans`; post-fix
+  `target\route_search_host_90s_postspan_flame.svg` no longer shows
+  `map_persisted_ram_blob_pages` / `uc_mem_map` as a top block and advances
+  farther through the mounted host startup slice. Next useful speed work should
+  profile the now-visible TCG/code-generation and hook paths
+  (`uc_emu_start`, `tcg_cpu_exec`, `tb_find`, `tb_gen_code_mipsel`,
+  import/code hooks) and only then consider longer-lived Unicorn instances.
+  Do not reopen host-file preload/reopen or per-page persisted-RAM remap unless
+  fresh flame evidence regresses those counters.
 - Immediate stuck-screen next step: implement the child-process scheduler
   handoff properly instead of reviving the backed-out host-loop rotation
   experiment. Evidence in `target\stuck_process_processes.txt` shows
