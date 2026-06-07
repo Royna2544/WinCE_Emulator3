@@ -5,6 +5,7 @@ use crate::{
         kernel::CeKernel,
     },
     emulator::{
+        dll_search::{emulator_provided_import_module, normalize_module_name, resolve_dll_path},
         imports::{
             DYNAMIC_COREDLL_PROC_TRAP_BASE, ExternalImportTable, IMPORT_TRAP_BASE,
             IMPORT_TRAP_PAGE_SIZE, ImportTrap, ImportTrapTable, import_trap_code_page,
@@ -6055,7 +6056,7 @@ fn run_pending_process_launches<D>(
             let mut child = UnicornMips::new()?;
             child.set_dll_search_dirs(dll_search_dirs.to_vec());
             child.set_initial_thread_id(launch.thread_id);
-            let dll_images = load_child_import_dlls(&image, dll_search_dirs)?;
+            let dll_images = load_child_import_dlls(&image, kernel, dll_search_dirs)?;
             child.load_pe_image_with_dlls(&image, &dll_images)?;
             child.run_until_import_trap_with_framebuffer_limits(kernel, framebuffer, limits)?;
             let outcome = child
@@ -6224,10 +6225,9 @@ fn resolve_process_launch_path(
 #[cfg(feature = "unicorn")]
 fn load_child_import_dlls(
     image: &PeImage,
+    kernel: &CeKernel,
     search_dirs: &[std::path::PathBuf],
 ) -> Result<Vec<PeImage>> {
-    let image_path = std::path::Path::new(&image.path);
-    let image_dir = image_path.parent();
     let mut loaded = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
 
@@ -6236,7 +6236,7 @@ fn load_child_import_dlls(
         if emulator_provided_import_module(&normalized) || !seen.insert(normalized) {
             continue;
         }
-        let path = resolve_child_dll_path(&descriptor.module_name, image_dir, search_dirs)
+        let path = resolve_dll_path(&descriptor.module_name, Some(kernel), search_dirs)
             .ok_or_else(|| Error::MissingImportDll {
                 dll: descriptor.module_name.clone(),
             })?;
@@ -6245,37 +6245,19 @@ fn load_child_import_dlls(
 
     preload_child_search_dll_if_present(
         "commctrl.dll",
-        image_dir,
+        kernel,
         search_dirs,
         &mut seen,
         &mut loaded,
     )?;
-    preload_child_image_directory_dlls(image_dir, &mut seen, &mut loaded)?;
+    preload_child_image_directory_dlls(kernel.process_module_host_path(), &mut seen, &mut loaded)?;
     Ok(loaded)
-}
-
-#[cfg(feature = "unicorn")]
-fn resolve_child_dll_path(
-    module_name: &str,
-    image_dir: Option<&std::path::Path>,
-    search_dirs: &[std::path::PathBuf],
-) -> Option<std::path::PathBuf> {
-    if let Some(dir) = image_dir {
-        let candidate = dir.join(module_name);
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-    }
-    search_dirs
-        .iter()
-        .map(|dir| dir.join(module_name))
-        .find(|candidate| candidate.is_file())
 }
 
 #[cfg(feature = "unicorn")]
 fn preload_child_search_dll_if_present(
     module_name: &str,
-    image_dir: Option<&std::path::Path>,
+    kernel: &CeKernel,
     search_dirs: &[std::path::PathBuf],
     seen: &mut std::collections::BTreeSet<String>,
     loaded: &mut Vec<PeImage>,
@@ -6284,7 +6266,7 @@ fn preload_child_search_dll_if_present(
     if emulator_provided_import_module(&normalized) || !seen.insert(normalized) {
         return Ok(());
     }
-    if let Some(path) = resolve_child_dll_path(module_name, image_dir, search_dirs) {
+    if let Some(path) = resolve_dll_path(module_name, Some(kernel), search_dirs) {
         loaded.push(PeImage::inspect(path)?);
     }
     Ok(())
@@ -6292,11 +6274,11 @@ fn preload_child_search_dll_if_present(
 
 #[cfg(feature = "unicorn")]
 fn preload_child_image_directory_dlls(
-    image_dir: Option<&std::path::Path>,
+    image_path: Option<&std::path::PathBuf>,
     seen: &mut std::collections::BTreeSet<String>,
     loaded: &mut Vec<PeImage>,
 ) -> Result<()> {
-    let Some(dir) = image_dir else {
+    let Some(dir) = image_path.and_then(|path| path.parent()) else {
         return Ok(());
     };
     let mut paths = Vec::new();
@@ -6329,19 +6311,6 @@ fn preload_child_image_directory_dlls(
         loaded.push(PeImage::inspect(path)?);
     }
     Ok(())
-}
-
-#[cfg(feature = "unicorn")]
-fn normalize_module_name(name: &str) -> String {
-    name.to_ascii_lowercase().replace('/', "\\")
-}
-
-#[cfg(feature = "unicorn")]
-fn emulator_provided_import_module(normalized: &str) -> bool {
-    matches!(
-        normalized,
-        "coredll.dll" | "winsock.dll" | "ole32.dll" | "oleaut32.dll"
-    )
 }
 
 #[cfg(feature = "unicorn")]

@@ -14,13 +14,15 @@
 
 - CE fidelity catch-up next slice: finish the runtime guest DLL loader at the
   Unicorn import-trap boundary. The kernel-side module manager/refcount shape
-  now exists, but `LoadLibraryW/LoadLibraryExW` can only reuse already
-  registered modules; it does not yet synchronously map a new dumped MIPS DLL
-  from `D:\INAVI_Emulator\DUMPPLZ\Windows`. Implement the Unicorn-owned
-  runtime mapper next: search path resolution, PE map/relocate/import patching,
-  dynamic trap-page refresh, external guest-DLL import resolution, export
-  registration, TLS callbacks, and `DllMain` attach/detach callouts. Keep
-  `C:\WINCE600` as the behavior reference and update `PLAN.MD` after each
+  now exists and the shared CE-aware DLL search order is implemented for
+  startup preload, child-process preload, and future runtime loads. The
+  remaining blocker is the Unicorn-owned runtime mapper itself:
+  `LoadLibraryW/LoadLibraryExW` still only reuse already registered modules and
+  do not yet synchronously map a new dumped MIPS DLL from
+  `D:\INAVI_Emulator\DUMPPLZ\Windows`. Implement PE map/relocate/import
+  patching, dynamic trap-page refresh, external guest-DLL import resolution,
+  export registration, TLS callbacks, and `DllMain` attach/detach callouts.
+  Keep `C:\WINCE600` as the behavior reference and update `PLAN.MD` after each
   port.
 - COREDLL fallback audit follow-up: stubs now carry audit classification plus
   raw import-trap context with thread id, caller PC, and trap PC. Next, add the

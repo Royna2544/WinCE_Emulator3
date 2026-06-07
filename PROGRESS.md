@@ -9,6 +9,14 @@
 
 ## Confirmed
 
+- Runtime guest-DLL loading now has a shared CE-aware search helper in
+  `emulator::dll_search`, replacing duplicate private startup/child-process
+  search logic. It resolves exact mounted CE paths first, then the active
+  process directory, configured DLL search dirs, and mounted `\Windows`, with
+  case variants and optional `.dll` suffixes. Startup preload, `commctrl.dll`
+  preload, and child-process import preload all use this helper, so the future
+  Unicorn-owned `LoadLibraryExW` mapper can share the same search order instead
+  of inventing a third path. Focused `dll_search` tests pass.
 - COREDLL fallback audit now carries real raw-dispatch context from the import
   trap boundary. `CoredllRawContext` records thread id, caller PC, and trap PC;
   the Unicorn import hook fills it from the active CE thread and guest RA before

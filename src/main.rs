@@ -30,6 +30,7 @@ use wince_emulation_v3::{
     },
     config::RuntimeConfig,
     emulator::{
+        dll_search::{emulator_provided_import_module, normalize_module_name, resolve_dll_path},
         memory::MemoryPerms,
         unicorn::{UnicornDebugSnapshot, UnicornMips, UnicornRunLimits, UnicornWindowSnapshot},
     },
@@ -2391,11 +2392,12 @@ fn load_import_dlls(image: &PeImage, search_dirs: &[PathBuf]) -> Result<Vec<PeIm
         if emulator_provided_import_module(&normalized) || !seen.insert(normalized) {
             continue;
         }
-        let path = resolve_dll_path(&descriptor.module_name, search_dirs).ok_or_else(|| {
-            wince_emulation_v3::Error::MissingImportDll {
-                dll: descriptor.module_name.clone(),
-            }
-        })?;
+        let path =
+            resolve_dll_path(&descriptor.module_name, None, search_dirs).ok_or_else(|| {
+                wince_emulation_v3::Error::MissingImportDll {
+                    dll: descriptor.module_name.clone(),
+                }
+            })?;
         loaded.push(PeImage::inspect(path)?);
     }
     preload_search_dll_if_present("commctrl.dll", search_dirs, &mut seen, &mut loaded)?;
@@ -2459,7 +2461,7 @@ fn preload_search_dll_if_present(
     if emulator_provided_import_module(&normalized) || !seen.insert(normalized) {
         return Ok(());
     }
-    if let Some(path) = resolve_dll_path(module_name, search_dirs) {
+    if let Some(path) = resolve_dll_path(module_name, None, search_dirs) {
         loaded.push(PeImage::inspect(path)?);
     }
     Ok(())
@@ -2493,45 +2495,6 @@ fn register_loaded_modules(kernel: &mut CeKernel, cpu: &UnicornMips) {
             },
         );
     }
-}
-
-fn emulator_provided_import_module(normalized_module_name: &str) -> bool {
-    matches!(
-        normalized_module_name,
-        "coredll" | "winsock" | "ws2" | "ws2_32" | "ole32" | "oleaut32" | "olece"
-    )
-}
-
-fn resolve_dll_path(module_name: &str, search_dirs: &[PathBuf]) -> Option<PathBuf> {
-    let candidates = [
-        module_name.to_owned(),
-        module_name.to_ascii_lowercase(),
-        module_name.to_ascii_uppercase(),
-    ];
-    for dir in search_dirs {
-        for candidate in &candidates {
-            let path = dir.join(candidate);
-            if path.is_file() {
-                return Some(path);
-            }
-        }
-        if Path::new(module_name).extension().is_none() {
-            let path = dir.join(format!("{module_name}.dll"));
-            if path.is_file() {
-                return Some(path);
-            }
-        }
-    }
-    None
-}
-
-fn normalize_module_name(module_name: &str) -> String {
-    module_name
-        .trim()
-        .trim_end_matches('\0')
-        .trim_end_matches(".dll")
-        .trim_end_matches(".DLL")
-        .to_ascii_lowercase()
 }
 
 fn ce_module_path_for_image(kernel: &CeKernel, path: &str) -> String {
@@ -2855,7 +2818,8 @@ mod tests {
         let dll = root.join("mfcce400.dll");
         std::fs::write(&dll, []).unwrap();
 
-        let mixed_case = resolve_dll_path("MFCcE400.DLL", std::slice::from_ref(&root)).unwrap();
+        let mixed_case =
+            resolve_dll_path("MFCcE400.DLL", None, std::slice::from_ref(&root)).unwrap();
         assert!(mixed_case.is_file());
         assert_eq!(
             mixed_case
@@ -2866,10 +2830,10 @@ mod tests {
             "mfcce400.dll"
         );
         assert_eq!(
-            resolve_dll_path("mfcce400", std::slice::from_ref(&root)).unwrap(),
+            resolve_dll_path("mfcce400", None, std::slice::from_ref(&root)).unwrap(),
             dll
         );
-        assert!(resolve_dll_path("missing.dll", &[root.clone()]).is_none());
+        assert!(resolve_dll_path("missing.dll", None, std::slice::from_ref(&root)).is_none());
 
         let _ = std::fs::remove_file(dll);
         let _ = std::fs::remove_dir(root);
