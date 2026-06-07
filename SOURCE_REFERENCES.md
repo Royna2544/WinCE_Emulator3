@@ -1458,5 +1458,6 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   - `notification.cpp` stores notification data in the taskbar/bubble lists
     and copies the persisted struct/title/HTML fields back through
     `GetNotificationData`. Rust now preserves that app-visible data in
-    `ShellSystem`; visual bubble/taskbar rendering and `SHNN_*` callbacks
-    remain queued separately.
+    `ShellSystem` and prunes records whose sink HWND is destroyed through
+    normal window/process teardown; visual bubble/taskbar rendering,
+    timeout/dismiss, and `SHNN_*` callbacks remain queued separately.

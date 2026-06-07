@@ -119,6 +119,30 @@ impl ShellSystem {
     pub fn notifications(&self) -> impl Iterator<Item = &ShellNotificationRecord> {
         self.notifications.values()
     }
+
+    pub fn remove_window_state(&mut self, hwnd: u32) -> ShellWindowCleanup {
+        let before_icons = self.notify_icons.len();
+        self.notify_icons
+            .retain(|(_icon_hwnd, _id), record| record.hwnd != hwnd);
+        let before_notifications = self.notifications.len();
+        self.notifications
+            .retain(|(_clsid, _id), record| record.hwnd_sink != hwnd);
+        ShellWindowCleanup {
+            notify_icons_removed: before_icons.saturating_sub(self.notify_icons.len()),
+            notifications_removed: before_notifications.saturating_sub(self.notifications.len()),
+        }
+    }
+
+    pub fn remove_windows_state<'a>(
+        &mut self,
+        hwnds: impl IntoIterator<Item = &'a u32>,
+    ) -> ShellWindowCleanup {
+        let mut cleanup = ShellWindowCleanup::default();
+        for hwnd in hwnds {
+            cleanup += self.remove_window_state(*hwnd);
+        }
+        cleanup
+    }
 }
 
 impl NotifyIconRecord {
@@ -254,3 +278,16 @@ pub const SHNUM_DURATION: u32 = 0x0000_0002;
 pub const SHNUM_ICON: u32 = 0x0000_0004;
 pub const SHNUM_HTML: u32 = 0x0000_0008;
 pub const SHNUM_TITLE: u32 = 0x0000_0010;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ShellWindowCleanup {
+    pub notify_icons_removed: usize,
+    pub notifications_removed: usize,
+}
+
+impl std::ops::AddAssign for ShellWindowCleanup {
+    fn add_assign(&mut self, rhs: Self) {
+        self.notify_icons_removed += rhs.notify_icons_removed;
+        self.notifications_removed += rhs.notifications_removed;
+    }
+}

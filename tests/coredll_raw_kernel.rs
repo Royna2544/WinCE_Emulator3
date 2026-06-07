@@ -2383,6 +2383,87 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
 }
 
 #[test]
+fn shell_window_destroy_removes_notify_icon_and_notification_state() -> Result<()> {
+    const NIM_ADD: u32 = 0;
+    const NIF_MESSAGE: u32 = 0x0000_0001;
+    const NIF_ICON: u32 = 0x0000_0002;
+    const NIF_TIP: u32 = 0x0000_0004;
+    const NID_SIZE: u32 = 160;
+    const NID_TIP_OFFSET: u32 = 24;
+    const SHNOTIFICATIONDATA_SIZE: u32 = 56;
+    const SHNP_INFORM: u32 = 0x1b1;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 48;
+    let hwnd = kernel.create_window_ex_w(thread_id, "SHN_CLEANUP", "", None, 0, 0, 0);
+    let notify_icon = 0x3003_0000;
+    let notify_data = 0x3003_1000;
+    let title = 0x3003_2000;
+    let html = 0x3003_3000;
+    let clsid = [
+        0x44, 0x33, 0x22, 0x11, 0xaa, 0xbb, 0xcc, 0xdd, 0x89, 0xab, 0xcd, 0xef, 0x10, 0x20, 0x30,
+        0x40,
+    ];
+    memory.write_word(notify_icon, NID_SIZE);
+    memory.write_word(notify_icon + 4, hwnd);
+    memory.write_word(notify_icon + 8, 11);
+    memory.write_word(notify_icon + 12, NIF_MESSAGE | NIF_ICON | NIF_TIP);
+    memory.write_word(notify_icon + 16, WM_USER + 11);
+    memory.write_word(notify_icon + 20, 0x000b_8002);
+    memory.write_wide_z(notify_icon + NID_TIP_OFFSET, "cleanup");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_ADD, notify_icon],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    memory.write_word(notify_data, SHNOTIFICATIONDATA_SIZE);
+    memory.write_word(notify_data + 4, 402);
+    memory.write_word(notify_data + 8, SHNP_INFORM);
+    memory.write_word(notify_data + 12, 0);
+    memory.write_word(notify_data + 16, 0x000b_9003);
+    memory.write_word(notify_data + 20, 0);
+    memory.write_bytes(notify_data + 24, &clsid);
+    memory.write_word(notify_data + 40, hwnd);
+    memory.write_word(notify_data + 52, 0);
+    memory.write_wide_z(title, "Cleanup");
+    memory.write_wide_z(html, "<p>Cleanup</p>");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHNOTIFICATION_ADD_I,
+            [notify_data, SHNOTIFICATIONDATA_SIZE, title, html],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert!(kernel.shell.notify_icon(hwnd, 11).is_some());
+    assert!(kernel.shell.notification(clsid, 402).is_some());
+
+    assert!(kernel.destroy_window(hwnd));
+
+    assert!(kernel.shell.notify_icon(hwnd, 11).is_none());
+    assert!(kernel.shell.notification(clsid, 402).is_none());
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_file_time_to_system_time_round_trips_guest_fields() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;

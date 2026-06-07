@@ -84,7 +84,8 @@
   extraction/image-list behavior, notification interaction/callback delivery
   above the now-stateful `SHNotification*I` data APIs, recent docs, shell
   change notifications, popup/menu behavior, modal `MessageBoxW`, keyboard
-  translation, clipboard, and caret state. Keep behavior
+  translation, clipboard, and caret state. Notification records are now pruned
+  during normal HWND/process teardown. Keep behavior
   registry-backed and generic; do not fake route UI.
 - Winsock fidelity follow-up: guest-visible local names now use the isolated
   `10.0.0.1`/`10.0.0.2` model while host sockets remain the transport. Blocking

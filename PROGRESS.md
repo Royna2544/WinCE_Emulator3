@@ -4483,6 +4483,13 @@
   shell-visible notification data honest without synthesizing taskbar bubble
   UI.
 
+- Added shell notification lifetime cleanup on HWND destruction. The kernel
+  destroy-window and process-window teardown paths now prune `Shell_NotifyIcon`
+  records and `SHNotification*I` records whose sink window is being destroyed,
+  so stale shell notification state does not survive normal CE window/process
+  lifetime. Focused coverage
+  `shell_window_destroy_removes_notify_icon_and_notification_state` passes.
+
 ## False Leads
 
 - A process-directory fallback for rooted `CreateFileW` paths was tested and

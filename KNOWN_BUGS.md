@@ -1941,11 +1941,14 @@
   - Symptom: callers can add/update/remove/query `SHNotification*I` records,
     but the emulator does not yet create taskbar bubble UI, send `SHNN_*`
     callbacks, deliver dismiss/link selections, or expire notification icons.
+    Notification records tied to destroyed sink HWNDs are now removed during
+    normal window/process teardown.
   - Evidence: CE `notification.cpp` routes notification records through
     taskbar bubble/tray lists and `WM_NOTIFY` callback paths; Rust currently
     implements the app-visible data store only.
-  - Status: active queued shell-fidelity gap. Implement callbacks/rendering
-    only through generic shell state, not app-specific UI injection.
+  - Status: active queued shell-fidelity gap for callbacks, timeout/dismiss,
+    and rendering. Implement those only through generic shell state, not
+    app-specific UI injection.
 
 - Parked wait timeout preemption can duplicate companion startup.
   - Symptom: a broad ready-parked-wait experiment treated timed-out parked
