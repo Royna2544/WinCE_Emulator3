@@ -117,6 +117,19 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     size, and fails unknown source handles explicitly instead of inventing a
     size.
 
+- Shell shortcut APIs:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\shellapi.h`,
+  `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\CESHELL\API\shortcut.cpp`, and
+  `C:\WINCE600\PUBLIC\COMMON\OAK\LIB\MIPSII\RETAIL\coredll.def`
+  - The SDK prototypes expose `SHCreateShortcut`, `SHCreateShortcutEx`, and
+    `SHGetShortcutTarget`, while the MIPSII COREDLL export file maps the raw
+    ordinals used by iNavi-era callers. CE's `Shortcut_Write` stores shortcut
+    files as UTF-8 text with a BOM, decimal character count, `#`, and a quoted
+    target executable plus optional arguments. v3 now implements the basic raw
+    `SHCreateShortcut` and `SHGetShortcutTarget` path against mounted CE files
+    with `CREATE_NEW` behavior and buffer-fit validation; `SHCreateShortcutEx`
+    unique-name/buffer-return behavior remains queued.
+
 - Old MIPS CE kernel-call encoding:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\nkmips.h`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c`, and corroborating

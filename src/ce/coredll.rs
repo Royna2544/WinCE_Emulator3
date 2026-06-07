@@ -10,7 +10,10 @@ use crate::{
         coredll_ordinals::{self, *},
         crt,
         devices::{CommDcb, CommTimeouts, DeviceIoControlResult},
-        file::{FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FileIoResult, FindData},
+        file::{
+            CREATE_NEW, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FileIoResult, FindData,
+            GENERIC_WRITE,
+        },
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat},
         gwe::{
             GWL_STYLE, Message, MessagePointerPayload, PeekFlags, Point, Rect, WNDCLASSW_SIZE,
@@ -90,6 +93,12 @@ const SHELLEXECUTEINFO_HPROCESS_OFFSET: u32 = 56;
 const SHELL_EXECUTE_SUCCESS: u32 = 33;
 const SE_ERR_FNF: u32 = 2;
 const SE_ERR_NOASSOC: u32 = 31;
+const ERROR_BAD_FORMAT_LOCAL: u32 = 11;
+const ERROR_FILE_EXISTS_LOCAL: u32 = 80;
+const ERROR_INSUFFICIENT_BUFFER_LOCAL: u32 = 122;
+const ERROR_FILENAME_EXCED_RANGE_LOCAL: u32 = 206;
+const MAX_PATH_CHARS: usize = 260;
+const MAX_SHORTCUT_TARGET_CHARS: usize = MAX_PATH_CHARS - 2;
 const SHFILEINFO_HICON_OFFSET: u32 = 0;
 const SHFILEINFO_IICON_OFFSET: u32 = 4;
 const SHFILEINFO_ATTRIBUTES_OFFSET: u32 = 8;
@@ -3561,6 +3570,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel, memory, thread_id, args,
         ))),
         ORD_SHELL_EXECUTE_EX => Some(CoredllValue::Bool(shell_execute_ex_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_SHCREATE_SHORTCUT => Some(CoredllValue::U32(sh_create_shortcut_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_SHGET_SHORTCUT_TARGET => Some(CoredllValue::Bool(sh_get_shortcut_target_w_raw(
             kernel, memory, thread_id, args,
         ))),
         ORD_SHELL_NOTIFY_ICON => Some(CoredllValue::Bool(shell_notify_icon_w_raw(
@@ -11304,6 +11319,165 @@ fn read_optional_shell_string<M: CoredllGuestMemory>(
         return None;
     }
     read_guest_wide_arg(memory, ptr).map(|value| value.trim().to_owned())
+}
+
+fn sh_create_shortcut_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let Some(shortcut) =
+        read_guest_wide_arg(memory, raw_arg(args, 0)).map(|path| path.trim().replace('/', "\\"))
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let Some(target) =
+        read_guest_wide_arg(memory, raw_arg(args, 1)).map(|path| path.trim().replace('/', "\\"))
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if shortcut.is_empty() || target.is_empty() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    if shortcut.encode_utf16().count() + 1 >= MAX_PATH_CHARS
+        || target.encode_utf16().count() + 1 >= MAX_SHORTCUT_TARGET_CHARS
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILENAME_EXCED_RANGE_LOCAL);
+        return 0;
+    }
+    let bytes = make_ce_shortcut_bytes(&target);
+    let handle = match kernel.create_file_w(&shortcut, GENERIC_WRITE, CREATE_NEW) {
+        Ok(handle) => handle,
+        Err(_) => {
+            let error = if kernel.file_attributes_w(&shortcut).is_ok() {
+                ERROR_FILE_EXISTS_LOCAL
+            } else {
+                ERROR_FILE_NOT_FOUND
+            };
+            kernel.threads.set_last_error(thread_id, error);
+            return 0;
+        }
+    };
+    let write_ok = kernel
+        .write_file(handle, &bytes)
+        .is_ok_and(|result| result.success && result.bytes_transferred == bytes.len() as u32);
+    let _ = kernel.close_handle(handle);
+    if !write_ok {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    1
+}
+
+fn sh_get_shortcut_target_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let Some(shortcut) =
+        read_guest_wide_arg(memory, raw_arg(args, 0)).map(|path| path.trim().replace('/', "\\"))
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    };
+    let target_ptr = raw_arg(args, 1);
+    let capacity = raw_arg(args, 2) as usize;
+    if shortcut.is_empty() || target_ptr == 0 || capacity == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let bytes = match kernel.read_guest_file(&shortcut) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+            return false;
+        }
+    };
+    let Some(target) = parse_ce_shortcut_target_bytes(&bytes) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_BAD_FORMAT_LOCAL);
+        return false;
+    };
+    if target.encode_utf16().count() + 1 > capacity {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INSUFFICIENT_BUFFER_LOCAL);
+        return false;
+    }
+    if !write_guest_wide_fixed(kernel, memory, thread_id, target_ptr, &target, capacity) {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn make_ce_shortcut_bytes(target: &str) -> Vec<u8> {
+    let (path, args) = split_shortcut_target_args(target);
+    let mut count = path.encode_utf16().count() + 2;
+    if !args.is_empty() {
+        count += 1 + args.encode_utf16().count();
+    }
+    let mut body = format!("{count}#\"{path}\"");
+    if !args.is_empty() {
+        body.push(' ');
+        body.push_str(&args);
+    }
+    let mut bytes = vec![0xef, 0xbb, 0xbf];
+    bytes.extend_from_slice(body.as_bytes());
+    bytes
+}
+
+fn split_shortcut_target_args(target: &str) -> (String, String) {
+    let target = target.trim();
+    if let Some(quoted) = target.strip_prefix('"') {
+        if let Some((path, rest)) = quoted.split_once('"') {
+            return (path.replace('/', "\\"), rest.trim().to_owned());
+        }
+    }
+    match target.split_once(char::is_whitespace) {
+        Some((path, rest)) => (
+            path.trim_matches('"').replace('/', "\\"),
+            rest.trim().to_owned(),
+        ),
+        None => (target.trim_matches('"').replace('/', "\\"), String::new()),
+    }
+}
+
+fn parse_ce_shortcut_target_bytes(bytes: &[u8]) -> Option<String> {
+    let bytes = if bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
+        &bytes[3..]
+    } else {
+        bytes
+    };
+    let text = String::from_utf8_lossy(bytes);
+    let (prefix, target) = text.split_once('#')?;
+    if !prefix.is_empty() && !prefix.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    Some(target.trim_end_matches('\0').replace('/', "\\"))
 }
 
 fn resolve_shell_launch(

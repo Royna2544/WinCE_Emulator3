@@ -83,16 +83,18 @@
 - Shell fidelity follow-up: `ShellExecuteEx` now handles the basic CE launch
   chain through shortcuts, registry associations, and `CreateProcessW`
   queuing. Continue with the remaining shell APIs from the attachment:
-  `SHCreateShortcut`, `SHGetShortcutTarget`, richer `SHGetFileInfo` icon
-  extraction/image-list behavior, notification interaction/callback delivery
-  above the now-stateful `SHNotification*I` data APIs, recent docs, shell
-  change notifications, popup/menu behavior, rendered modal `MessageBoxW`
-  window/nested pump/button input above the now-recorded/default-result raw
-  slice, keyboard translation, richer clipboard rendered ownership and
-  delayed-render edge cases above the now-stateful raw clipboard store and
-  allocation-copy path, and rendered caret blink/focus integration above the
-  raw caret state. Notification records are now pruned during normal
-  HWND/process teardown. Keep behavior
+  `SHCreateShortcutEx` unique-name/buffer-return behavior, richer
+  `SHGetFileInfo` icon extraction/image-list behavior, notification
+  interaction/callback delivery above the now-stateful `SHNotification*I` data
+  APIs, recent docs, shell change notifications, popup/menu behavior, rendered
+  modal `MessageBoxW` window/nested pump/button input above the
+  now-recorded/default-result raw slice, keyboard translation, richer
+  clipboard rendered ownership and delayed-render edge cases above the
+  now-stateful raw clipboard store and allocation-copy path, and rendered
+  caret blink/focus integration above the raw caret state. Basic
+  `SHCreateShortcut`/`SHGetShortcutTarget` CE text-link create/read behavior is
+  covered and still feeds `ShellExecuteEx`. Notification records are now
+  pruned during normal HWND/process teardown. Keep behavior
   registry-backed and generic; do not fake route UI.
 - Winsock fidelity follow-up: guest-visible local names now use the isolated
   `10.0.0.1`/`10.0.0.2` model while host sockets remain the transport. Blocking

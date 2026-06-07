@@ -9,6 +9,13 @@
 
 ## Confirmed
 
+- Shell shortcut raw APIs now cover the basic CE text-link path used by
+  `ShellExecuteEx`. `SHCreateShortcut` creates a mounted `.lnk` using CE's
+  UTF-8 BOM plus `count#"<target>" args` format with `CREATE_NEW` semantics,
+  while `SHGetShortcutTarget` reads the same file format, validates caller
+  buffers, and returns the stored target text. The focused raw shell fixture
+  proves create, readback, launch through `ShellExecuteEx`, existing-file
+  failure, and insufficient-buffer failure.
 - Raw clipboard fidelity now includes `GetClipboardDataAlloc` for clipboard
   data stored as emulator-tracked local heap handles. The COREDLL raw path
   looks up the format through GWE clipboard state, derives the source size from
