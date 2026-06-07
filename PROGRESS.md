@@ -177,6 +177,14 @@
   punctuation, preserves the original lParam, posts `WM_CHAR` for `WM_KEYDOWN`,
   and posts `WM_SYSCHAR` for `WM_SYSKEYDOWN`. Focused coverage:
   `coredll_raw_translate_message_uses_shift_caps_and_syschar`.
+- Raw `SendNotifyMessageW(HWND_BROADCAST, ...)` now follows the same CE
+  no-wait notification-send model as single-HWND notify sends instead of
+  falling back to posted broadcast messages. It filters to live application
+  top-level windows, skips the synthetic desktop, child windows, and destroyed
+  targets, runs same-thread targets synchronously, and queues different-thread
+  targets as `SMF_SENDER_NO_WAIT | SMF_NOTIFY_MESSAGE` sent transactions.
+  Focused coverage:
+  `coredll_raw_send_notify_broadcast_uses_notify_send_for_live_top_level_windows`.
 - Shell notification state now has a dedicated `ShellSystem` instead of a
   COREDLL-local placeholder. Raw `Shell_NotifyIconW @481` decodes the
   `NOTIFYICONDATAW` prefix, validates owner HWNDs, tracks add/modify/delete

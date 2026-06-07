@@ -3302,14 +3302,49 @@ impl CeKernel {
                 .gwe
                 .windows_snapshot()
                 .into_iter()
-                .filter(|window| !window.destroyed && window.parent.is_none())
+                .filter(|window| {
+                    !window.destroyed
+                        && window.parent.is_none()
+                        && window.hwnd != crate::ce::gwe::DESKTOP_HWND
+                })
                 .map(|window| (window.hwnd, window.thread_id))
                 .collect();
-            let posted =
-                self.gwe
-                    .post_broadcast_message(msg, wparam, lparam, self.timers.tick_count());
-            if posted {
-                for (target_hwnd, target_thread) in targets {
+            let mut delivered = false;
+            let time_ms = self.timers.tick_count();
+            for (target_hwnd, target_thread) in targets {
+                if target_thread == caller_thread_id {
+                    if self
+                        .send_message_w(target_hwnd, msg, wparam, lparam)
+                        .is_some()
+                    {
+                        delivered = true;
+                        self.record_message_trace(MessageTraceRecord {
+                            op: "send_notify_message",
+                            thread_id: target_thread,
+                            hwnd: Some(target_hwnd),
+                            msg: Some(msg),
+                            wparam: Some(wparam),
+                            lparam: Some(lparam),
+                            screen_pos: None,
+                            source: Some(crate::ce::gwe::MSGSRC_SOFTWARE_SEND),
+                            result: Some(1),
+                            detail: Some(format!("sender_thread={caller_thread_id}/broadcast")),
+                        });
+                    }
+                    continue;
+                }
+                let queued = self
+                    .gwe
+                    .queue_send_message_for_window(
+                        None,
+                        target_hwnd,
+                        Message::new(target_hwnd, msg, wparam, lparam, time_ms),
+                        crate::ce::gwe::SMF_SENDER_NO_WAIT | crate::ce::gwe::SMF_NOTIFY_MESSAGE,
+                        None,
+                    )
+                    .is_some();
+                if queued {
+                    delivered = true;
                     self.record_message_trace(MessageTraceRecord {
                         op: "send_notify_message",
                         thread_id: target_thread,
@@ -3325,7 +3360,7 @@ impl CeKernel {
                     self.queue_message_wake_candidates(target_thread);
                 }
             }
-            return posted;
+            return delivered;
         }
         let Some(target_thread) = self
             .gwe

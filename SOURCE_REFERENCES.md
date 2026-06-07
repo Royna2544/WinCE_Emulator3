@@ -1047,7 +1047,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     split at the syscall boundary: same-thread targets use synchronous send,
     while different-thread targets enter the receiver-side sent-message queue
     without sender blocking and carry `SMF_SENDER_NO_WAIT | SMF_NOTIFY_MESSAGE`
-    in the queued transaction state.
+    in the queued transaction state. `winuser.h` exposes `HWND_BROADCAST`;
+    v3's broadcast notify path now filters to live application top-level
+    windows and applies the same direct/sent delivery split instead of using
+    the posted-message broadcast helper.
   - GWE now keeps a receiver-side sent-message queue distinct from posted
     messages and paint requests. Retrieval prefers sent messages, marks
     `InSendMessage`, exposes `QS_SENDMESSAGE`, and records a send source.

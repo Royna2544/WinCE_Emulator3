@@ -8609,6 +8609,23 @@ fn coredll_raw_send_notify_message_is_async_across_threads() -> Result<()> {
             .is_some_and(|window| window.destroy_message_sent)
     );
     assert!(!kernel.gwe.in_send_message(caller_thread));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            caller_thread,
+            ORD_SEND_NOTIFY_MESSAGE_W,
+            [same_thread_hwnd, WM_CLOSE, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(caller_thread),
+        ERROR_INVALID_WINDOW_HANDLE
+    );
 
     let cross_thread_hwnd =
         kernel.create_window_ex_w(receiver_thread, "NOTIFY_CROSS", "", None, 0, 0, 0);
@@ -9131,6 +9148,134 @@ fn coredll_raw_send_message_timeout_nonzero_cross_thread_queues_transaction() ->
         }
     ));
     assert_eq!(kernel.take_completed_send_message_result(1), Some(1));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_send_notify_broadcast_uses_notify_send_for_live_top_level_windows() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let caller_thread = 46;
+    let receiver_thread = 47;
+    let other_thread = 48;
+    let msg_ptr = 0xa100;
+    memory.map_words(msg_ptr, 7);
+
+    let same_thread_hwnd =
+        kernel.create_window_ex_w(caller_thread, "NOTIFY_BROADCAST_SAME", "", None, 0, 0, 0);
+    let cross_thread_hwnd =
+        kernel.create_window_ex_w(receiver_thread, "NOTIFY_BROADCAST_CROSS", "", None, 0, 0, 0);
+    let child_hwnd = kernel.create_window_ex_w(
+        receiver_thread,
+        "NOTIFY_BROADCAST_CHILD",
+        "",
+        Some(cross_thread_hwnd),
+        7,
+        0,
+        0,
+    );
+    let destroyed_hwnd = kernel.create_window_ex_w(
+        other_thread,
+        "NOTIFY_BROADCAST_DESTROYED",
+        "",
+        None,
+        0,
+        0,
+        0,
+    );
+    assert!(kernel.destroy_window(destroyed_hwnd));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            caller_thread,
+            ORD_SEND_NOTIFY_MESSAGE_W,
+            [HWND_BROADCAST, WM_CLOSE, 0x64, 0x65],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(caller_thread), 0);
+
+    assert!(!kernel.gwe.is_window(same_thread_hwnd));
+    assert!(
+        kernel
+            .gwe
+            .window(same_thread_hwnd)
+            .is_some_and(|window| window.destroy_message_sent)
+    );
+    assert!(kernel.gwe.is_window(cross_thread_hwnd));
+    assert!(kernel.gwe.is_window(child_hwnd));
+    assert!(!kernel.gwe.is_window(destroyed_hwnd));
+
+    let sent = kernel
+        .gwe
+        .sent_message(1)
+        .expect("broadcast notify should queue cross-thread sent message");
+    assert_eq!(sent.sender_thread_id, None);
+    assert_eq!(sent.receiver_thread_id, receiver_thread);
+    assert_eq!(sent.message.hwnd, cross_thread_hwnd);
+    assert_eq!(sent.message.msg, WM_CLOSE);
+    assert_ne!(sent.flags & SMF_SENDER_NO_WAIT, 0);
+    assert_ne!(sent.flags & SMF_NOTIFY_MESSAGE, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            receiver_thread,
+            ORD_GET_QUEUE_STATUS,
+            [QS_SENDMESSAGE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(v),
+            ..
+        } if v == ((QS_SENDMESSAGE << 16) | QS_SENDMESSAGE)
+    ));
+    assert!(
+        kernel
+            .gwe
+            .peek_message_filtered(
+                receiver_thread,
+                Some(child_hwnd),
+                WM_CLOSE,
+                WM_CLOSE,
+                PeekFlags::NO_REMOVE,
+            )
+            .is_none()
+    );
+
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        receiver_thread,
+        msg_ptr,
+        cross_thread_hwnd,
+        WM_CLOSE,
+        0x64,
+        0x65,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            receiver_thread,
+            ORD_DISPATCH_MESSAGE_W,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(!kernel.gwe.is_window(cross_thread_hwnd));
 
     Ok(())
 }

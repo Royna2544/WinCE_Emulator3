@@ -1213,11 +1213,14 @@
     3. Message queues and synchronous sends: replace same-thread-only shortcuts
        with scheduler-owned sent queues, sender blocking, receiver-context
        execution, `InSendMessage`, timeout, destroyed-target, and reentrant
-       send behavior. `SendNotifyMessageW` has the first CE-backed no-wait
-       split, and receiver-side sent-message retrieval/source/depth state now
-       exists; cross-thread `SendNotifyMessageW` now uses that queue with
-       `SMF_SENDER_NO_WAIT | SMF_NOTIFY_MESSAGE` metadata and clears receiver
-       send depth after dispatch. Raw cross-thread `SendMessageW` now also
+       send behavior. `SendNotifyMessageW` now has a CE-backed no-wait split:
+       same-thread targets run synchronously, cross-thread targets use the
+       receiver sent queue with `SMF_SENDER_NO_WAIT | SMF_NOTIFY_MESSAGE`
+       metadata, and broadcast targets are filtered to live application
+       top-level windows with the same direct/sent delivery split instead of
+       posted broadcast messages. Receiver-side sent-message retrieval/source/
+       depth state now exists and clears receiver send depth after dispatch.
+       Raw cross-thread `SendMessageW` now also
        queues a sender/receiver sent transaction instead of executing the
        receiver shortcut in the caller thread, while `DefWindowProcW` remains
        direct default processing. Raw `SendDlgItemMessageW` now follows the CE
