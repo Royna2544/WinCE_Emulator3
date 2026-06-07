@@ -1729,21 +1729,25 @@
   - Symptom: v3 now has a Rust HTTP listener serving the v2-compatible REST
     surface under `/api/v1/...`, including status, JPEG/PNG/MJPEG framebuffer
     snapshots, touch/key input, GPS/NMEA/IMU injection, and pause/resume.
-    `/api/v1/control/ws` and `/api/v1/audio/ws` now upgrade successfully, but
-    `/api/v1/logs/recent` currently returns an empty line list and the new WS
-    endpoints still need mounted iNavi validation against real remote tooling.
+    `/api/v1/control/ws` and `/api/v1/audio/ws` now upgrade successfully, and
+    `/api/v1/logs/recent` now returns the recent `CeRemote` log ring, but the
+    new WS endpoints still need mounted iNavi validation against real remote
+    tooling.
   - Evidence: `src/remote_server.rs` queues REST control JSON into
     `CeKernel::dispatch_remote_control_message`, publishes real framebuffer
     pixels from the normal present/live-blit boundary, and has focused tests
     for v2 touch aliases, invalid input response bodies, frame `quality`, the
     missing-framebuffer error, and status shape. REST handlers now mirror v2's
     compact `{"ok":true}` success bodies and validation strings. Focused
-    WebSocket coverage `remote_server_control_websocket_queues_json_frames`
-    and `remote_server_audio_websocket_streams_registered_sink_pcm` proves
-    control text frames queue JSON messages and audio sockets receive metadata
-    plus binary PCM frames from the server-backed audio sink.
+    recent-log coverage `recent_log_lines_follow_limit_and_clamp` and
+    `remote_server_serves_recent_logs_over_rest_and_control_ws` proves the REST
+    endpoint and control-WS `"logs"` request read the same bounded log data.
+    WebSocket coverage `remote_server_control_websocket_queues_json_frames` and
+    `remote_server_audio_websocket_streams_registered_sink_pcm` proves control
+    text frames queue JSON messages and audio sockets receive metadata plus
+    binary PCM frames from the server-backed audio sink.
   - Status: REST transport and WebSocket audio/control transport fixed; live
-    log transport and mounted-client validation remain open.
+    mounted-client validation remains open.
 
 - Scheduler/wait ownership is only partially ported to CE fidelity.
   - Symptom: wait calls now flow through scheduler accounting and the first

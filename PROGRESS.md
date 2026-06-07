@@ -871,6 +871,15 @@
   reports `{"error":"no framebuffer"}`, and successful REST input/control
   responses use the compact v2 `{"ok":true}` shape while still queueing through
   generic `CeRemote`/`CeKernel` dispatch.
+- Recent remote logs are now wired through the Rust transport instead of the
+  old placeholder: `CeRemote` records compact remote control/sensor/audio-facing
+  log events in its bounded recent-log ring, `publish_remote_endpoint` mirrors
+  that ring into `RemoteServer`, `/api/v1/logs/recent?lines=N` returns the
+  latest lines, and `/api/v1/control/ws` answers `{"type":"logs"}` directly
+  without queueing a fake control message. Focused coverage
+  `recent_log_lines_follow_limit_and_clamp` and
+  `remote_server_serves_recent_logs_over_rest_and_control_ws` covers ordering,
+  line clamping, REST shape, and the control WebSocket log response.
 - The Unicorn `MsgWaitForMultipleObjectsEx` parking bridge now preserves
   scheduler-owned blocked state when the current guest thread has no runnable
   suspended peer. Previously the raw ordinal bridge could register the current

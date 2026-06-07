@@ -3707,6 +3707,7 @@ impl CeKernel {
     pub fn publish_remote_server_status(&self) {
         if let Some(server) = self.remote_server.as_ref() {
             server.publish_status(&self.remote_status());
+            server.publish_recent_logs(self.remote.recent_log_lines(4096));
         }
     }
 

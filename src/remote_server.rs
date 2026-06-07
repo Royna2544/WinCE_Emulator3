@@ -51,8 +51,8 @@
 //   "imu" when parse succeeds, and still returns {"ok":true}.
 //
 // Logs/control:
-// - GET /api/v1/logs/recent[?lines=1..4096] currently returns an empty
-//   {"ok":true,"lines":[]} placeholder.
+// - GET /api/v1/logs/recent[?lines=1..4096] returns recent CeRemote log lines
+//   as {"ok":true,"lines":[...]}.
 // - POST /api/v1/control/pause queues {"type":"pause"} and returns paused true.
 // - POST /api/v1/control/resume queues {"type":"resume"} and returns paused false.
 // - GET /api/v1/control/ws upgrades to WebSocket. Text frames must be JSON
@@ -89,6 +89,8 @@ use crate::{
 
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_PENDING_CONTROL_MESSAGES: usize = 1024;
+const MAX_RECENT_LOG_LINES: usize = 4096;
+const MAX_RECENT_LOG_LINE_BYTES: usize = 4096;
 const DEFAULT_VIDEO_FPS: u32 = 30;
 const DEFAULT_JPEG_QUALITY: u8 = 80;
 const WEBSOCKET_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -133,6 +135,7 @@ struct RemoteServerState {
     latest_status: Mutex<Value>,
     latest_framebuffer: Mutex<Option<RemoteFramebufferImage>>,
     latest_debug: Mutex<BTreeMap<String, String>>,
+    recent_logs: Mutex<VecDeque<String>>,
     audio: Mutex<RemoteAudioState>,
 }
 
@@ -199,6 +202,7 @@ impl RemoteServer {
                 })),
                 latest_framebuffer: Mutex::new(None),
                 latest_debug: Mutex::new(BTreeMap::new()),
+                recent_logs: Mutex::new(VecDeque::new()),
                 audio: Mutex::new(RemoteAudioState {
                     chunks: VecDeque::new(),
                     clients: BTreeMap::new(),
@@ -278,6 +282,37 @@ impl RemoteServer {
             .lock()
             .expect("remote debug mutex")
             .insert(key.into(), text.into());
+    }
+
+    pub fn publish_recent_logs(&self, lines: impl IntoIterator<Item = String>) {
+        let mut recent_logs = self
+            .state
+            .recent_logs
+            .lock()
+            .expect("remote recent-log mutex");
+        recent_logs.clear();
+        for line in lines {
+            recent_logs.push_back(clamp_log_line(line));
+            while recent_logs.len() > MAX_RECENT_LOG_LINES {
+                recent_logs.pop_front();
+            }
+        }
+    }
+
+    pub fn publish_log_line(&self, line: impl Into<String>) {
+        let mut recent_logs = self
+            .state
+            .recent_logs
+            .lock()
+            .expect("remote recent-log mutex");
+        recent_logs.push_back(clamp_log_line(line.into()));
+        while recent_logs.len() > MAX_RECENT_LOG_LINES {
+            recent_logs.pop_front();
+        }
+    }
+
+    pub fn recent_log_lines(&self, max_lines: usize) -> Vec<String> {
+        recent_log_lines(&self.state, max_lines)
     }
 
     pub fn drain_control_messages(&self) -> Vec<Value> {
@@ -376,8 +411,12 @@ impl RemoteServer {
             ("POST", "/api/v1/sensors/nmea") => self.post_nmea(request).into(),
             ("POST", "/api/v1/sensors/imu") => self.post_imu(request).into(),
             ("GET", "/api/v1/logs/recent") => {
-                let _lines = request.query_u64("lines", 200, 1, 4096);
-                HttpResponse::json(200, json!({"ok": true, "lines": Vec::<String>::new()})).into()
+                let lines = request.query_u64("lines", 200, 1, 4096) as usize;
+                HttpResponse::json(
+                    200,
+                    json!({"ok": true, "lines": self.recent_log_lines(lines)}),
+                )
+                .into()
             }
             ("POST", "/api/v1/control/pause") => {
                 self.queue_control(json!({"type": "pause"}));
@@ -657,8 +696,18 @@ impl RemoteServer {
                 WebSocketOpcode::Text => {
                     let response = match serde_json::from_slice::<Value>(&frame.payload) {
                         Ok(message) => {
-                            let pending = self.queue_control(message);
-                            json!({"ok": true, "queued": true, "pending": pending})
+                            if message.get("type").and_then(Value::as_str) == Some("logs") {
+                                let lines = message
+                                    .get("lines")
+                                    .and_then(Value::as_u64)
+                                    .unwrap_or(200)
+                                    .clamp(1, 4096)
+                                    as usize;
+                                json!({"type": "log", "ok": true, "lines": self.recent_log_lines(lines)})
+                            } else {
+                                let pending = self.queue_control(message);
+                                json!({"ok": true, "queued": true, "pending": pending})
+                            }
                         }
                         Err(err) => json!({"ok": false, "error": format!("invalid JSON: {err}")}),
                     };
@@ -857,6 +906,30 @@ fn queue_control_message(state: &RemoteServerState, message: Value) -> usize {
         pending.pop_front();
     }
     pending.len()
+}
+
+fn recent_log_lines(state: &RemoteServerState, max_lines: usize) -> Vec<String> {
+    let recent_logs = state.recent_logs.lock().expect("remote recent-log mutex");
+    let count = max_lines
+        .clamp(1, MAX_RECENT_LOG_LINES)
+        .min(recent_logs.len());
+    recent_logs
+        .iter()
+        .skip(recent_logs.len() - count)
+        .cloned()
+        .collect()
+}
+
+fn clamp_log_line(mut line: String) -> String {
+    if line.len() <= MAX_RECENT_LOG_LINE_BYTES {
+        return line;
+    }
+    let mut end = MAX_RECENT_LOG_LINE_BYTES;
+    while end > 0 && !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    line.truncate(end);
+    line
 }
 
 fn parse_json_body(
@@ -1525,6 +1598,38 @@ mod tests {
         assert!(response.contains("200 OK"));
         assert!(response.contains(r#""guestWidth":800"#));
         assert!(response.contains(r#""guestHeight":480"#));
+    }
+
+    #[test]
+    fn remote_server_serves_recent_logs_over_rest_and_control_ws() {
+        let server = RemoteServer::start(RemoteServerConfig {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            ..RemoteServerConfig::default()
+        })
+        .unwrap();
+        server.publish_recent_logs(vec!["first".to_owned(), "second".to_owned()]);
+        server.publish_log_line("third");
+
+        let response = http_request(
+            server.local_addr(),
+            "GET /api/v1/logs/recent?lines=2 HTTP/1.1\r\nHost: local\r\n\r\n",
+        );
+        assert!(response.contains("200 OK"));
+        assert!(response.contains(r#""lines":["second","third"]"#));
+
+        let mut stream = websocket_connect(server.local_addr(), "/api/v1/control/ws");
+        stream
+            .write_all(&websocket_client_frame(
+                WebSocketOpcode::Text,
+                br#"{"type":"logs","lines":1}"#,
+            ))
+            .unwrap();
+        let ack = read_unmasked_server_frame(&mut stream);
+        let payload = String::from_utf8_lossy(&ack.payload);
+        assert_eq!(ack.opcode, WebSocketOpcode::Text);
+        assert!(payload.contains(r#""type":"log""#));
+        assert!(payload.contains(r#""lines":["third"]"#));
+        assert!(server.drain_control_messages().is_empty());
     }
 
     #[test]

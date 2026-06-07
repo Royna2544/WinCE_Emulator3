@@ -196,6 +196,9 @@ impl CeRemote {
     }
 
     pub fn set_paused(&mut self, paused: bool) {
+        if self.paused != paused {
+            self.push_log_line(format!("remote pause={paused}"));
+        }
         self.paused = paused;
     }
 
@@ -228,6 +231,7 @@ impl CeRemote {
                 enqueued_at_ms: now_ms.saturating_add(touch_message_offset_ms(index)),
             });
         }
+        self.push_log_line(format!("remote touch phase={phase} x={x} y={y}"));
         Ok(())
     }
 
@@ -253,6 +257,7 @@ impl CeRemote {
             vk,
             enqueued_at_ms: system_time_ms(),
         });
+        self.push_log_line(format!("remote key phase={phase} vk=0x{vk:02x}"));
         Ok(())
     }
 
@@ -265,11 +270,15 @@ impl CeRemote {
     }
 
     pub fn inject_serial_bytes(&mut self, bytes: impl AsRef<[u8]>) {
-        for byte in bytes.as_ref() {
+        let bytes = bytes.as_ref();
+        for byte in bytes {
             self.serial_bytes.push_back(*byte);
         }
         while self.serial_bytes.len() > self.config.max_serial_bytes {
             self.serial_bytes.pop_front();
+        }
+        if !bytes.is_empty() {
+            self.push_log_line(format!("remote serial bytes={}", bytes.len()));
         }
     }
 
@@ -294,17 +303,25 @@ impl CeRemote {
             accepted += 1;
         }
         self.inject_serial_bytes(bytes);
+        if accepted > 0 {
+            self.push_log_line(format!("remote nmea sentences={accepted}"));
+        }
         accepted
     }
 
     pub fn inject_location_nmea(&mut self, fix: LocationFix) -> Vec<String> {
         let sentences = make_location_nmea(&fix);
         self.inject_nmea_sentences(sentences.iter().map(String::as_str));
+        self.push_log_line(format!(
+            "remote location lat={:.7} lon={:.7}",
+            fix.lat, fix.lon
+        ));
         sentences
     }
 
     pub fn update_imu_state(&mut self, state: Value) {
         self.imu_state = state;
+        self.push_log_line("remote imu update");
     }
 
     pub fn imu_state(&self) -> &Value {
@@ -679,6 +696,20 @@ mod tests {
         assert!(touch_events[1].enqueued_at_ms > touch_events[0].enqueued_at_ms);
         assert_eq!(remote.read_serial_bytes(2), b"ab");
         assert_eq!(remote.status("COM7:").gps_target, "COM7:");
+    }
+
+    #[test]
+    fn recent_log_lines_follow_limit_and_clamp() {
+        let mut remote = CeRemote::default();
+        remote.push_log_line("first");
+        remote.push_log_line("second");
+        remote.push_log_line("x".repeat(5000));
+
+        assert_eq!(
+            remote.recent_log_lines(2),
+            vec!["second".to_owned(), "x".repeat(4096)]
+        );
+        assert_eq!(remote.recent_log_lines(1), vec!["x".repeat(4096)]);
     }
 
     #[test]

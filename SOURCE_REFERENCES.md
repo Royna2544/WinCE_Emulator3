@@ -1434,6 +1434,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     NMEA, IMU, pause, resume, status, logs, frame, MJPEG, and audio endpoints.
   - `CeRemote` stores queued touch/key events, serial bytes, audio chunks, IMU
     state, audio client counts, and paused state.
+  - v2's `/api/v1/logs/recent?lines=N` and control WebSocket `"logs"` response
+    both read `runtime.recentRemoteLogLines(lines)`; Rust v3 mirrors the same
+    shape by publishing the bounded `CeRemote` recent-log ring through
+    `RemoteServer`.
   - `materializeRemoteAudioChunkLocked` and `CeAudio::liveSlice` tie remote
     audio to the host playback cursor, so the Rust websocket sink models
     host-time client cursors and partial-chunk late joins instead of a single

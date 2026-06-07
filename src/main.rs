@@ -791,6 +791,7 @@ fn publish_remote_endpoint(
 ) {
     if let Some(server) = server {
         server.publish_status(&kernel.remote_status());
+        server.publish_recent_logs(kernel.remote.recent_log_lines(4096));
         server.publish_framebuffer(framebuffer);
         if let Some(snapshot) = snapshot {
             server.publish_debug_text(

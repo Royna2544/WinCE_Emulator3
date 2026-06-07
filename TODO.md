@@ -1743,14 +1743,15 @@
   show/update/paint transition that keeps these HWNDs hidden; do not force
   button visibility or route-search state.
 - Extend the new Rust remote server beyond the now v2-aligned REST/WebSocket
-  surface: expose recent log lines from `CeRemote`, add mounted iNavi
-  validation for `/api/v1/control/ws` and `/api/v1/audio/ws`, and keep proving
-  that remote touch/GPS input advances through the same scheduler/GWE paths as
-  host input. REST handlers already match v2's touch/key validation, compact
-  success responses, NMEA/location errors, frame `quality`, MJPEG
-  `fps`/`quality`, and missing-framebuffer error shape. WebSocket control/audio
-  upgrades now queue JSON control frames and stream server-backed PCM binary
-  frames.
+  surface: mounted iNavi validation is still needed for `/api/v1/control/ws`
+  and `/api/v1/audio/ws`, and remote touch/GPS input still needs repeated
+  proof through the same scheduler/GWE paths as host input. REST handlers
+  already match v2's touch/key validation, compact success responses,
+  NMEA/location errors, frame `quality`, MJPEG `fps`/`quality`, missing-
+  framebuffer error shape, and `/api/v1/logs/recent` now returns recent
+  `CeRemote` log lines instead of the old empty placeholder. WebSocket control
+  now answers `{"type":"logs"}` from the same recent-log ring; audio upgrades
+  stream server-backed PCM binary frames.
 - Add ordinal/decorated-name evidence from the Windows CE 4.2 Mipsii SDK import
   libraries, alongside the source references already recorded.
 - Persist host-backed registry writes separately from the source dump.
