@@ -1,0 +1,7 @@
+LIBRARY runtime_fixture
+
+EXPORTS
+    FixtureNamedExport @3
+    FixtureOrdinalExport @7 NONAME
+    FixtureAttachCount @8
+    FixtureDetachCount @9

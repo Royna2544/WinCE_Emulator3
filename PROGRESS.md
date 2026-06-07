@@ -9,6 +9,25 @@
 
 ## Confirmed
 
+- eVC fixture infrastructure now supports fixture-local runtime DLLs under
+  `tests\test_progs\<fixture>\dlls\<dll-name>\`. The runner discovers `.cpp`,
+  `.rc`, and optional `.def` files, links each DLL with an import library,
+  stages the EXE/DLL artifacts under the per-fixture `\SDMMC Disk` mount, and
+  treats DLL outputs as rebuild dependencies. The new
+  `171_loadlibrary_guest_dll` fixture source exercises `LoadLibraryW`,
+  same-module reuse, named and ordinal `GetProcAddress`, guest export calls,
+  and paired `FreeLibrary` calls against a generated MIPS DLL. The DLL also
+  defines `DllMain` counters for the next attach/detach fidelity slice, but
+  this fixture does not assert them yet. `cargo check --features
+  unicorn,evc4-fixtures --test fixture_exes` passes; the focused eVC build/run
+  remains the next validation step.
+- The latest attachment audit has been merged into `PLAN.MD`/`TODO.md` as
+  explicit queued fidelity work: raw/non-Unicorn loader alignment, core-vs-guest
+  DLL boundary diagnostics, actionable must-implement stub hits,
+  `SHGetFileInfo`, popup menus, modal `MessageBoxW`, shell special-folder
+  fallback policy, notification APIs, shell namespace/storage presentation,
+  file-change notifications, input/IME/caret/clipboard, and full
+  `SendMessageTimeout` semantics.
 - Runtime guest-DLL loading now has a shared CE-aware search helper in
   `emulator::dll_search`, replacing duplicate private startup/child-process
   search logic. It resolves exact mounted CE paths first, then the active

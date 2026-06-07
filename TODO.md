@@ -12,13 +12,14 @@
 
 ## Current Slice
 
-- Queued runtime loader gaps from `PLAN.MD`: add direct guest-DLL and
-  dependent-DLL fixtures; parse and invoke runtime TLS callbacks; call guest
-  `DllMain(DLL_PROCESS_ATTACH)` on successful normal loads; call detach
-  callbacks/`DllMain(DLL_PROCESS_DETACH)` on final `FreeLibrary`; implement
-  forwarded exports; implement `DONT_RESOLVE_DLL_REFERENCES`; implement
-  datafile/resource-style `LoadLibraryExW`; harden runtime trampoline handling
-  for high/relocated DLLs; add compact runtime loader audit counters.
+- Queued runtime loader gaps from `PLAN.MD`: run and close the new direct
+  `171_loadlibrary_guest_dll` eVC fixture; add a dependent-DLL fixture; parse
+  and invoke runtime TLS callbacks; call guest `DllMain(DLL_PROCESS_ATTACH)`
+  on successful normal loads; call detach callbacks/`DllMain(DLL_PROCESS_DETACH)`
+  on final `FreeLibrary`; implement forwarded exports; implement
+  `DONT_RESOLVE_DLL_REFERENCES`; implement datafile/resource-style
+  `LoadLibraryExW`; harden runtime trampoline handling for high/relocated DLLs;
+  add compact runtime loader audit counters.
 - CE fidelity catch-up next slice: finish the runtime guest DLL loader at the
   Unicorn import-trap boundary. The kernel-side module manager/refcount shape
   now exists and the shared CE-aware DLL search order is implemented for
@@ -28,16 +29,31 @@
   DLLs from `D:\INAVI_Emulator\DUMPPLZ\Windows`, relocates them, recursively
   loads non-emulator dependencies, patches imports, rewrites the live trap
   page, registers resources/exports, and records dynamic module refcounts.
-  Next loader work should add a direct runtime fixture with a guest DLL export
-  call, then implement forwarded exports, TLS callbacks, and `DllMain`
-  attach/detach callouts. Datafile and `DONT_RESOLVE_DLL_REFERENCES` loads
-  still fail explicitly until CE-like support is implemented. Keep
+  The harness/source for a direct runtime guest-DLL export-call fixture now
+  exists; next loader work should build/run it with eVC, fix any resulting
+  runtime mapper breakage, then implement forwarded exports, TLS callbacks,
+  and `DllMain` attach/detach callouts. Datafile and
+  `DONT_RESOLVE_DLL_REFERENCES` loads still fail explicitly until CE-like
+  support is implemented. Keep
   `C:\WINCE600` as the behavior reference and update `PLAN.MD` after each port.
 - COREDLL fallback audit follow-up: stubs now carry audit classification plus
   raw import-trap context with thread id, caller PC, and trap PC. Next, add the
   remaining owning-module context where available and make
   shell/UI/process/loader critical fallbacks fail loudly under an audit mode
   instead of merely warning.
+- Attachment fidelity queue merged into `PLAN.MD`: align raw/non-Unicorn
+  `LoadLibraryW` with runtime behavior or explicit failure; keep
+  emulator-provided core DLL classification audited; make must-implement stub
+  hits actionable; finish `SHGetFileInfo`, `TrackPopupMenu*`, modal
+  `MessageBoxW`, shell special-folder fallback policy, notification APIs,
+  shell namespace/storage presentation, and file-change notifications.
+- GWE/input fidelity queue from `PLAN.MD`: `TranslateMessage` is still minimal.
+  Implement keyboard modifiers/layout, accelerators and menu shortcuts,
+  `WM_SYSKEY*`, dead-key/IME handoff, clipboard formats/ownership, caret
+  creation/blink/position, and focus/capture integration. Also complete
+  cross-thread `SendMessageTimeout` so it waits until reply or timeout, writes
+  the result pointer, honors `SMTO_*` flags, handles receiver/sender
+  destruction, and performs CE-required reentrant dispatch while waiting.
 - Shell fidelity follow-up: `ShellExecuteEx` now handles the basic CE launch
   chain through shortcuts, registry associations, and `CreateProcessW`
   queuing. Continue with the remaining shell APIs from the attachment:

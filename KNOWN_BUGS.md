@@ -32,9 +32,10 @@
     non-emulator dependencies, patches imports, rewrites the live trap page,
     refreshes the persisted `ce-import-traps` blob, registers resources, and
     publishes exports into the kernel module table.
-  - Required fix: add direct runtime guest-DLL fixtures and finish forwarded
-    export resolution, TLS callbacks, `DllMain(DLL_PROCESS_ATTACH/DETACH)`,
-    datafile/no-resolve load modes, and fuller runtime trampoline handling.
+  - Required fix: build/run the new direct runtime guest-DLL fixture, add the
+    dependent-DLL fixture, and finish forwarded export resolution, TLS
+    callbacks, `DllMain(DLL_PROCESS_ATTACH/DETACH)`, datafile/no-resolve load
+    modes, and fuller runtime trampoline handling.
   - Status: open/watch. Normal code-DLL mapping is started; do not treat this
     as complete CE loader fidelity until the fixture and lifecycle gaps close.
 - Open: Winsock isolated subnet is address-model only; blocking socket waits
@@ -45,6 +46,29 @@
     resume through the CE scheduler.
   - Status: open. Next network work should add scheduler wait reasons and host
     readiness wakeups instead of extending timeout/spin behavior.
+- Open: input/accelerator/clipboard/caret/IME and cross-thread
+  `SendMessageTimeout` fidelity are still incomplete.
+  - Symptom: `TranslateMessage` only handles a minimal `WM_KEYDOWN` to
+    `WM_CHAR` path, and cross-thread `SendMessageTimeout` can create a send
+    transaction but return 0 instead of waiting for completion and writing the
+    result.
+  - Required fix: implement keyboard modifiers/layout, accelerators/menu
+    shortcuts, `WM_SYSKEY*`, dead-key/IME handoff, clipboard ownership/formats,
+    caret state/blink/position, focus/capture integration, and CE-like
+    `SendMessageTimeout` wait/result/flag/destruction/reentrancy behavior.
+  - Status: open. Source-reference this against CE GWE/input/clipboard/caret
+    behavior before changing guest-visible UI behavior.
+- Open: several shell-visible APIs are still state tracking or cheap success
+  rather than CE-like behavior.
+  - Symptom: `SHGetFileInfo` is must-implement but not implemented;
+    `TrackPopupMenu*` tracks popup state without interactive selection;
+    `MessageBoxW` logs and returns a fixed success; notification APIs,
+    shell namespace/storage presentation, and file-change notifications are
+    incomplete.
+  - Required fix: implement the queued shell/UI section in `PLAN.MD` using
+    registry/mount/window state and CE source references, with explicit failure
+    rather than plausible fake success where behavior is not implemented.
+  - Status: open. This is generic shell fidelity work, not route-UI hardcoding.
 - Closed/watch: COREDLL stub audit now includes raw import-trap caller context.
   - Symptom: stub fallback records were classified and must-implement
     fallbacks logged warnings, but raw dispatch did not carry the Unicorn

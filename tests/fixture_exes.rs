@@ -44,10 +44,21 @@ mod fixtures {
         source_dir: PathBuf,
         cpp_sources: Vec<PathBuf>,
         rc_sources: Vec<PathBuf>,
+        dlls: Vec<FixtureDll>,
         output_dir: PathBuf,
         exe_path: PathBuf,
         expected_exit_code: u32,
         run_standalone: bool,
+    }
+
+    #[derive(Debug, Clone)]
+    struct FixtureDll {
+        name: String,
+        cpp_sources: Vec<PathBuf>,
+        rc_sources: Vec<PathBuf>,
+        def_file: Option<PathBuf>,
+        output_path: PathBuf,
+        import_lib_path: PathBuf,
     }
 
     #[derive(Debug, Clone)]
@@ -189,6 +200,7 @@ mod fixtures {
             }
             let rc_sources = sorted_files_with_extension(&path, "rc")?;
             let output_dir = output_root.join(&name);
+            let dlls = discover_fixture_dlls(&path, &output_dir)?;
             let exe_path = output_dir.join(format!("{name}.exe"));
             let run_standalone = !matches!(
                 name.as_str(),
@@ -199,6 +211,7 @@ mod fixtures {
                 source_dir: path,
                 cpp_sources,
                 rc_sources,
+                dlls,
                 output_dir,
                 exe_path,
                 expected_exit_code: 0,
@@ -208,6 +221,52 @@ mod fixtures {
 
         fixtures.sort_by(|lhs, rhs| lhs.name.cmp(&rhs.name));
         Ok(fixtures)
+    }
+
+    fn discover_fixture_dlls(source_dir: &Path, output_dir: &Path) -> Result<Vec<FixtureDll>> {
+        let dll_root = source_dir.join("dlls");
+        if !dll_root.is_dir() {
+            return Ok(Vec::new());
+        }
+
+        let mut dlls = Vec::new();
+        for entry in fs::read_dir(&dll_root).map_err(|source| Error::Read {
+            path: dll_root.clone(),
+            source,
+        })? {
+            let entry = entry.map_err(|source| Error::Read {
+                path: dll_root.clone(),
+                source,
+            })?;
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let cpp_sources = sorted_files_with_extension(&path, "cpp")?;
+            if cpp_sources.is_empty() {
+                continue;
+            }
+            let rc_sources = sorted_files_with_extension(&path, "rc")?;
+            let def_files = sorted_files_with_extension(&path, "def")?;
+            if def_files.len() > 1 {
+                return Err(Error::Backend(format!(
+                    "fixture DLL {} has multiple .def files",
+                    path.display()
+                )));
+            }
+            dlls.push(FixtureDll {
+                output_path: output_dir.join(format!("{name}.dll")),
+                import_lib_path: output_dir.join(format!("{name}.lib")),
+                name,
+                cpp_sources,
+                rc_sources,
+                def_file: def_files.into_iter().next(),
+            });
+        }
+
+        dlls.sort_by(|lhs, rhs| lhs.name.cmp(&rhs.name));
+        Ok(dlls)
     }
 
     fn filter_fixtures(fixtures: Vec<Fixture>) -> Result<Vec<Fixture>> {
@@ -258,13 +317,31 @@ mod fixtures {
         if force || !fixture.exe_path.is_file() {
             return Ok(true);
         }
-        let output_time = modified_at(&fixture.exe_path)?;
+        for dll in &fixture.dlls {
+            if !dll.output_path.is_file() {
+                return Ok(true);
+            }
+        }
+        let output_time = artifact_outputs(fixture)
+            .into_iter()
+            .map(|path| modified_at(&path))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .min()
+            .ok_or_else(|| Error::Backend(format!("fixture {} has no outputs", fixture.name)))?;
         for source in fixture_inputs(fixture, manifest_dir)? {
             if modified_at(&source)? > output_time {
                 return Ok(true);
             }
         }
         Ok(false)
+    }
+
+    fn artifact_outputs(fixture: &Fixture) -> Vec<PathBuf> {
+        let mut outputs = Vec::with_capacity(1 + fixture.dlls.len());
+        outputs.push(fixture.exe_path.clone());
+        outputs.extend(fixture.dlls.iter().map(|dll| dll.output_path.clone()));
+        outputs
     }
 
     fn fixture_inputs(fixture: &Fixture, manifest_dir: &Path) -> Result<Vec<PathBuf>> {
@@ -301,6 +378,10 @@ mod fixtures {
         })?;
 
         eprintln!("building eVC4 MIPSII fixture {}", fixture.name);
+        for dll in &fixture.dlls {
+            build_fixture_dll(dll, config, manifest_dir, &fixture.output_dir)?;
+        }
+
         let mut objects = Vec::new();
         for source in &fixture.cpp_sources {
             let obj = fixture
@@ -334,6 +415,37 @@ mod fixtures {
             fixture_uses_mfc(fixture)?,
         )?;
         Ok(())
+    }
+
+    fn build_fixture_dll(
+        dll: &FixtureDll,
+        config: &ToolConfig,
+        manifest_dir: &Path,
+        output_dir: &Path,
+    ) -> Result<()> {
+        eprintln!("building fixture DLL {}", dll.name);
+        let mut objects = Vec::new();
+        for source in &dll.cpp_sources {
+            let obj = output_dir.join(format!("{}_{}.obj", dll.name, file_stem(source)?));
+            run_compile(config, manifest_dir, source, &obj)?;
+            objects.push(obj);
+        }
+
+        let mut resources = Vec::new();
+        for source in &dll.rc_sources {
+            let Some(rc) = config.rc.as_ref() else {
+                return Err(Error::Backend(format!(
+                    "fixture DLL {} has resource source {} but WINCE_EVC4_RC is not set",
+                    dll.name,
+                    source.display()
+                )));
+            };
+            let res = output_dir.join(format!("{}_{}.res", dll.name, file_stem(source)?));
+            run_resource_compile(config, rc, manifest_dir, source, &res)?;
+            resources.push(res);
+        }
+
+        run_link_dll(config, &objects, &resources, dll, dll_uses_mfc(dll)?)
     }
 
     fn run_compile(
@@ -426,8 +538,53 @@ mod fixtures {
         run_command("link fixture exe", &mut command)
     }
 
+    fn run_link_dll(
+        config: &ToolConfig,
+        objects: &[PathBuf],
+        resources: &[PathBuf],
+        dll: &FixtureDll,
+        uses_mfc: bool,
+    ) -> Result<()> {
+        let mut command = Command::new(&config.link);
+        command.args([
+            "/nologo",
+            "/DLL",
+            "/MACHINE:MIPS",
+            "/SUBSYSTEM:WINDOWSCE,4.20",
+        ]);
+        command.arg(format!("/OUT:{}", dll.output_path.display()));
+        command.arg(format!("/IMPLIB:{}", dll.import_lib_path.display()));
+        if let Some(def_file) = dll.def_file.as_ref() {
+            command.arg(format!("/DEF:{}", def_file.display()));
+        }
+        for lib_dir in &config.lib_dirs {
+            command.arg(format!("/LIBPATH:{}", lib_dir.display()));
+        }
+        if uses_mfc {
+            command.arg("/FORCE:MULTIPLE");
+        }
+        command.args(&config.lflags);
+        command.args(objects);
+        command.args(resources);
+        command.args(["coredll.lib", "corelibc.lib"]);
+        run_command("link fixture dll", &mut command)
+    }
+
     fn fixture_uses_mfc(fixture: &Fixture) -> Result<bool> {
         for source in &fixture.cpp_sources {
+            let text = fs::read_to_string(source).map_err(|source_err| Error::Read {
+                path: source.clone(),
+                source: source_err,
+            })?;
+            if text.contains("<afxwin.h>") {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn dll_uses_mfc(dll: &FixtureDll) -> Result<bool> {
+        for source in &dll.cpp_sources {
             let text = fs::read_to_string(source).map_err(|source_err| Error::Read {
                 path: source.clone(),
                 source: source_err,
@@ -455,6 +612,7 @@ mod fixtures {
             path: sdmmc_root.clone(),
             source,
         })?;
+        stage_fixture_files(fixture, &sdmmc_root)?;
         kernel.mount_guest_root(GUEST_SDMMC, sdmmc_root);
 
         let mut framebuffer = VirtualFramebuffer::default_primary()?;
@@ -485,6 +643,30 @@ mod fixtures {
             )));
         }
 
+        Ok(())
+    }
+
+    fn stage_fixture_files(fixture: &Fixture, sdmmc_root: &Path) -> Result<()> {
+        let exe_target = sdmmc_root.join(fixture.exe_path.file_name().ok_or_else(|| {
+            Error::Backend(format!("fixture {} exe has no file name", fixture.name))
+        })?);
+        copy_fixture_artifact(&fixture.exe_path, &exe_target)?;
+
+        for dll in &fixture.dlls {
+            let dll_target = sdmmc_root.join(dll.output_path.file_name().ok_or_else(|| {
+                Error::Backend(format!("fixture DLL {} has no file name", dll.name))
+            })?);
+            copy_fixture_artifact(&dll.output_path, &dll_target)?;
+        }
+
+        Ok(())
+    }
+
+    fn copy_fixture_artifact(source: &Path, target: &Path) -> Result<()> {
+        fs::copy(source, target).map_err(|source_err| Error::Io {
+            path: target.to_path_buf(),
+            source: source_err,
+        })?;
         Ok(())
     }
 
