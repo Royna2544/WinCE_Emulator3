@@ -547,6 +547,29 @@ pub struct GweStats {
     pub max_sent_queue_depth: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClipboardState {
+    open_window: Option<u32>,
+    owner: Option<u32>,
+    data_by_format: BTreeMap<u32, u32>,
+    registered_formats_by_name: BTreeMap<String, u32>,
+    registered_format_names: BTreeMap<u32, String>,
+    next_registered_format: u32,
+}
+
+impl Default for ClipboardState {
+    fn default() -> Self {
+        Self {
+            open_window: None,
+            owner: None,
+            data_by_format: BTreeMap::new(),
+            registered_formats_by_name: BTreeMap::new(),
+            registered_format_names: BTreeMap::new(),
+            next_registered_format: 0xc000,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Gwe {
     next_hwnd: u32,
@@ -582,6 +605,7 @@ pub struct Gwe {
     async_key_down: [bool; 256],
     message_pointer_payloads: BTreeMap<u32, MessagePointerPayload>,
     replied_send_depth_by_thread: BTreeMap<u32, BTreeSet<u32>>,
+    clipboard: ClipboardState,
     next_lifecycle_message_order: u64,
     stats: GweStats,
 }
@@ -657,6 +681,7 @@ impl Default for Gwe {
             async_key_down: [false; 256],
             message_pointer_payloads: BTreeMap::new(),
             replied_send_depth_by_thread: BTreeMap::new(),
+            clipboard: ClipboardState::default(),
             next_lifecycle_message_order: 1,
             stats: GweStats::default(),
         }
@@ -842,6 +867,124 @@ impl Gwe {
         self.next_registered_message = self.next_registered_message.saturating_add(1);
         self.registered_messages.insert(name, message);
         Some(message)
+    }
+
+    pub fn open_clipboard(&mut self, hwnd: u32) -> bool {
+        if hwnd != 0 && !self.is_window(hwnd) {
+            return false;
+        }
+        if self.clipboard.open_window.is_some() {
+            return false;
+        }
+        self.clipboard.open_window = Some(hwnd);
+        true
+    }
+
+    pub fn close_clipboard(&mut self) -> bool {
+        if self.clipboard.open_window.is_none() {
+            return false;
+        }
+        self.clipboard.open_window = None;
+        true
+    }
+
+    pub fn get_open_clipboard_window(&self) -> u32 {
+        self.clipboard.open_window.unwrap_or(0)
+    }
+
+    pub fn clipboard_is_open(&self) -> bool {
+        self.clipboard.open_window.is_some()
+    }
+
+    pub fn get_clipboard_owner(&self) -> u32 {
+        self.clipboard.owner.unwrap_or(0)
+    }
+
+    pub fn empty_clipboard(&mut self) -> bool {
+        let Some(open_window) = self.clipboard.open_window else {
+            return false;
+        };
+        self.clipboard.data_by_format.clear();
+        self.clipboard.owner = Some(open_window);
+        true
+    }
+
+    pub fn set_clipboard_data(&mut self, format: u32, handle: u32) -> Option<u32> {
+        if self.clipboard.open_window.is_none() || format == 0 {
+            return None;
+        }
+        self.clipboard.data_by_format.insert(format, handle);
+        Some(handle)
+    }
+
+    pub fn get_clipboard_data(&self, format: u32) -> Option<u32> {
+        if self.clipboard.open_window.is_none() {
+            return None;
+        }
+        self.clipboard.data_by_format.get(&format).copied()
+    }
+
+    pub fn is_clipboard_format_available(&self, format: u32) -> bool {
+        self.clipboard.data_by_format.contains_key(&format)
+    }
+
+    pub fn count_clipboard_formats(&self) -> u32 {
+        self.clipboard
+            .data_by_format
+            .len()
+            .try_into()
+            .unwrap_or(u32::MAX)
+    }
+
+    pub fn enum_clipboard_formats(&self, previous: u32) -> u32 {
+        self.clipboard
+            .data_by_format
+            .keys()
+            .copied()
+            .find(|format| *format > previous)
+            .unwrap_or(0)
+    }
+
+    pub fn get_priority_clipboard_format(&self, formats: &[u32]) -> i32 {
+        if self.clipboard.data_by_format.is_empty() {
+            return 0;
+        }
+        formats
+            .iter()
+            .copied()
+            .find(|format| self.is_clipboard_format_available(*format))
+            .map(|format| format as i32)
+            .unwrap_or(-1)
+    }
+
+    pub fn register_clipboard_format(&mut self, name: &str) -> Option<u32> {
+        let normalized = normalize_class_name(name);
+        if normalized.is_empty() {
+            return None;
+        }
+        if let Some(format) = self.clipboard.registered_formats_by_name.get(&normalized) {
+            return Some(*format);
+        }
+        let format = self.clipboard.next_registered_format;
+        if format > 0xffff {
+            return None;
+        }
+        self.clipboard.next_registered_format =
+            self.clipboard.next_registered_format.saturating_add(1);
+        self.clipboard
+            .registered_formats_by_name
+            .insert(normalized, format);
+        self.clipboard
+            .registered_format_names
+            .insert(format, name.to_owned());
+        Some(format)
+    }
+
+    pub fn clipboard_format_name(&self, format: u32) -> Option<&str> {
+        self.clipboard
+            .registered_format_names
+            .get(&format)
+            .map(String::as_str)
     }
 
     pub fn register_gesture(

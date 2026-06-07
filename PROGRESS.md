@@ -131,6 +131,20 @@
   `message_box_w_rejects_destroyed_owner_without_recording` passes. The real
   rendered modal dialog, nested message pump, and button/key interaction remain
   queued.
+- Raw clipboard COREDLL ordinals now have GWE-owned state instead of broad
+  fallback behavior. Using CE `PUBLIC\COMMON\SDK\INC\winuser.h` clipboard
+  constants/prototypes as the source reference, `OpenClipboard`,
+  `CloseClipboard`, `EmptyClipboard`, `SetClipboardData`, `GetClipboardData`,
+  `GetClipboardOwner`, `GetOpenClipboardWindow`,
+  `IsClipboardFormatAvailable`, `CountClipboardFormats`,
+  `EnumClipboardFormats`, `GetPriorityClipboardFormat`,
+  `RegisterClipboardFormatW`, and `GetClipboardFormatNameW` track the open
+  lock, owner, format handles, standard/custom formats, enumeration, duplicate
+  custom format registration, and null-owner opens. Focused coverage
+  `clipboard_raw_ordinals_track_lock_owner_formats_and_names` and
+  `clipboard_raw_ordinals_reject_invalid_open_and_missing_lock` passes. Richer
+  allocation/copy ownership behavior such as `GetClipboardDataAlloc` remains
+  queued.
 - Runtime guest-DLL loading now has a shared CE-aware search helper in
   `emulator::dll_search`, replacing duplicate private startup/child-process
   search logic. It resolves exact mounted CE paths first, then the active

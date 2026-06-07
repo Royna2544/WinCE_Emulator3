@@ -77,10 +77,13 @@
   - Symptom: `TranslateMessage` only handles a minimal `WM_KEYDOWN` to
     `WM_CHAR` path, and cross-thread `SendMessageTimeout` can create a send
     transaction but return 0 instead of waiting for completion and writing the
-    result.
+    result. Raw clipboard APIs now track open/owner/data/format-name state, but
+    allocation-copy variants and deeper ownership/render integration are still
+    incomplete.
   - Required fix: implement keyboard modifiers/layout, accelerators/menu
-    shortcuts, `WM_SYSKEY*`, dead-key/IME handoff, clipboard ownership/formats,
-    caret state/blink/position, focus/capture integration, and CE-like
+    shortcuts, `WM_SYSKEY*`, dead-key/IME handoff, clipboard allocation-copy
+    and deeper ownership edge cases, caret state/blink/position,
+    focus/capture integration, and CE-like
     `SendMessageTimeout` wait/result/flag/destruction/reentrancy behavior.
   - Status: open. Source-reference this against CE GWE/input/clipboard/caret
     behavior before changing guest-visible UI behavior.

@@ -3464,6 +3464,46 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .gwe
                 .get_message_queue_ready_time_stamp(thread_id, raw_arg(args, 0)),
         )),
+        ORD_OPEN_CLIPBOARD => Some(CoredllValue::Bool(open_clipboard_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_CLOSE_CLIPBOARD => Some(CoredllValue::Bool(close_clipboard_raw(kernel, thread_id))),
+        ORD_EMPTY_CLIPBOARD => Some(CoredllValue::Bool(empty_clipboard_raw(kernel, thread_id))),
+        ORD_GET_CLIPBOARD_OWNER => Some(CoredllValue::Handle(kernel.gwe.get_clipboard_owner())),
+        ORD_GET_OPEN_CLIPBOARD_WINDOW => {
+            Some(CoredllValue::Handle(kernel.gwe.get_open_clipboard_window()))
+        }
+        ORD_SET_CLIPBOARD_DATA => Some(CoredllValue::Handle(set_clipboard_data_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_arg(args, 1),
+        ))),
+        ORD_GET_CLIPBOARD_DATA => Some(CoredllValue::Handle(get_clipboard_data_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_IS_CLIPBOARD_FORMAT_AVAILABLE => Some(CoredllValue::Bool(
+            kernel.gwe.is_clipboard_format_available(raw_arg(args, 0)),
+        )),
+        ORD_COUNT_CLIPBOARD_FORMATS => {
+            Some(CoredllValue::U32(kernel.gwe.count_clipboard_formats()))
+        }
+        ORD_ENUM_CLIPBOARD_FORMATS => Some(CoredllValue::U32(
+            kernel.gwe.enum_clipboard_formats(raw_arg(args, 0)),
+        )),
+        ORD_GET_PRIORITY_CLIPBOARD_FORMAT => Some(CoredllValue::U32(
+            get_priority_clipboard_format_raw(kernel, memory, thread_id, args) as u32,
+        )),
+        ORD_REGISTER_CLIPBOARD_FORMAT_W => Some(CoredllValue::U32(
+            register_clipboard_format_w_raw(kernel, memory, thread_id, raw_arg(args, 0)),
+        )),
+        ORD_GET_CLIPBOARD_FORMAT_NAME_W => Some(CoredllValue::U32(
+            get_clipboard_format_name_w_raw(kernel, memory, thread_id, args) as u32,
+        )),
         ORD_DISPATCH_MESSAGE_W => Some(CoredllValue::U32(dispatch_message_w_raw(
             kernel,
             memory,
@@ -5575,6 +5615,174 @@ fn message_box_default_result(style: u32) -> Option<u32> {
         .get(index)
         .copied()
         .or_else(|| buttons.first().copied())
+}
+
+fn open_clipboard_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> bool {
+    if hwnd != 0 && !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return false;
+    }
+    if kernel.gwe.open_clipboard(hwnd) {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+        false
+    }
+}
+
+fn close_clipboard_raw(kernel: &mut CeKernel, thread_id: u32) -> bool {
+    if kernel.gwe.close_clipboard() {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+        false
+    }
+}
+
+fn empty_clipboard_raw(kernel: &mut CeKernel, thread_id: u32) -> bool {
+    if kernel.gwe.empty_clipboard() {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+        false
+    }
+}
+
+fn set_clipboard_data_raw(kernel: &mut CeKernel, thread_id: u32, format: u32, handle: u32) -> u32 {
+    if format == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    match kernel.gwe.set_clipboard_data(format, handle) {
+        Some(stored) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            stored
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+            0
+        }
+    }
+}
+
+fn get_clipboard_data_raw(kernel: &mut CeKernel, thread_id: u32, format: u32) -> u32 {
+    if format == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    match kernel.gwe.get_clipboard_data(format) {
+        Some(handle) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            handle
+        }
+        None => {
+            if !kernel.gwe.clipboard_is_open() {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+            } else {
+                kernel.threads.set_last_error(thread_id, 0);
+            }
+            0
+        }
+    }
+}
+
+fn get_priority_clipboard_format_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> i32 {
+    let formats_ptr = raw_arg(args, 0);
+    let count = raw_arg(args, 1);
+    if formats_ptr == 0 || count == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return -1;
+    }
+    let mut formats = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        let Some(format) = read_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            formats_ptr.wrapping_add(index.wrapping_mul(4)),
+        ) else {
+            return -1;
+        };
+        formats.push(format);
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    kernel.gwe.get_priority_clipboard_format(&formats)
+}
+
+fn register_clipboard_format_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    name_ptr: u32,
+) -> u32 {
+    let Some(name) = read_guest_wide_arg(memory, name_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    match kernel.gwe.register_clipboard_format(&name) {
+        Some(format) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            format
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            0
+        }
+    }
+}
+
+fn get_clipboard_format_name_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> i32 {
+    let format = raw_arg(args, 0);
+    let buffer = raw_arg(args, 1);
+    let capacity = raw_arg(args, 2);
+    let Some(name) = kernel.gwe.clipboard_format_name(format).map(str::to_owned) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let written = write_wide_result(kernel, memory, thread_id, buffer, capacity as usize, &name);
+    if written == 0 {
+        0
+    } else {
+        kernel.threads.set_last_error(thread_id, 0);
+        written as i32
+    }
 }
 
 fn find_close_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {

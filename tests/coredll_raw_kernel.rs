@@ -6,22 +6,27 @@ use wince_emulation_v3::{
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
             ORD_CE_GET_THREAD_PRIORITY, ORD_CE_SET_THREAD_PRIORITY, ORD_CLEAR_COMM_ERROR,
-            ORD_CLOSE_HANDLE, ORD_CREATE_EVENT_W, ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD,
-            ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_EVENT_MODIFY, ORD_FILE_TIME_TO_SYSTEM_TIME,
-            ORD_FREE_LIBRARY, ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_COMM_MASK, ORD_GET_COMM_STATE,
-            ORD_GET_COMM_TIMEOUTS, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD,
-            ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W,
-            ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W, ORD_GET_PROCESS_ID,
-            ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID, ORD_GET_PROCESS_VERSION,
-            ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_TIME, ORD_GET_SYSTEM_TIME_AS_FILE_TIME,
-            ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY, ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT,
-            ORD_GET_TIME_ZONE_INFORMATION, ORD_GET_VERSION_EX_W, ORD_INITIALIZE_CRITICAL_SECTION,
-            ORD_INPUT_DEBUG_CHAR_W, ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
-            ORD_INTERLOCKED_INCREMENT, ORD_KERNEL_IO_CONTROL, ORD_LEAVE_CRITICAL_SECTION,
-            ORD_LOAD_LIBRARY_EX_W, ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS, ORD_MESSAGE_BOX_W,
-            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_OPEN_EVENT_W,
-            ORD_PURGE_COMM, ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY,
-            ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD, ORD_SET_COMM_MASK,
+            ORD_CLOSE_CLIPBOARD, ORD_CLOSE_HANDLE, ORD_COUNT_CLIPBOARD_FORMATS, ORD_CREATE_EVENT_W,
+            ORD_CREATE_SEMAPHORE_W, ORD_CREATE_THREAD, ORD_DISABLE_THREAD_LIBRARY_CALLS,
+            ORD_EMPTY_CLIPBOARD, ORD_ENUM_CLIPBOARD_FORMATS, ORD_EVENT_MODIFY,
+            ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY, ORD_GET_CALLER_PROCESS_INDEX,
+            ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER,
+            ORD_GET_COMM_MASK, ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS,
+            ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR,
+            ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W, ORD_GET_OPEN_CLIPBOARD_WINDOW,
+            ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
+            ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID,
+            ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_TIME,
+            ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_GET_THREAD_ID, ORD_GET_THREAD_PRIORITY,
+            ORD_GET_THREAD_TIMES, ORD_GET_TICK_COUNT, ORD_GET_TIME_ZONE_INFORMATION,
+            ORD_GET_VERSION_EX_W, ORD_INITIALIZE_CRITICAL_SECTION, ORD_INPUT_DEBUG_CHAR_W,
+            ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
+            ORD_INTERLOCKED_INCREMENT, ORD_IS_CLIPBOARD_FORMAT_AVAILABLE, ORD_KERNEL_IO_CONTROL,
+            ORD_LEAVE_CRITICAL_SECTION, ORD_LOAD_LIBRARY_EX_W, ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS,
+            ORD_MESSAGE_BOX_W, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR,
+            ORD_OPEN_CLIPBOARD, ORD_OPEN_EVENT_W, ORD_PURGE_COMM, ORD_QUERY_PERFORMANCE_COUNTER,
+            ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_RELEASE_MUTEX,
+            ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD, ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK,
             ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
             ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON, ORD_SHGET_FILE_INFO,
             ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I, ORD_SHNOTIFICATION_GET_DATA_I,
@@ -42,9 +47,9 @@ use wince_emulation_v3::{
         registry::{ERROR_SUCCESS, RegistryValue},
         scheduler::SchedulerBlockedWaitKind,
         thread::{
-            ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER,
-            ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_OWNER, ERROR_NOT_SUPPORTED,
-            ERROR_SIGNAL_REFUSED,
+            ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE,
+            ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_OWNER,
+            ERROR_NOT_SUPPORTED, ERROR_SIGNAL_REFUSED,
         },
         timer::{INFINITE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
@@ -2546,6 +2551,395 @@ fn message_box_w_rejects_destroyed_owner_without_recording() -> Result<()> {
     assert_eq!(
         kernel.threads.get_last_error(thread_id),
         ERROR_INVALID_WINDOW_HANDLE
+    );
+
+    Ok(())
+}
+
+#[test]
+fn clipboard_raw_ordinals_track_lock_owner_formats_and_names() -> Result<()> {
+    const CF_TEXT: u32 = 1;
+    const CF_UNICODETEXT: u32 = 13;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 51;
+    let owner = kernel.create_window_ex_w(thread_id, "CLIP_OWNER", "", None, 0, 0, 0);
+    let other = kernel.create_window_ex_w(thread_id, "CLIP_OTHER", "", None, 0, 0, 0);
+    let formats = 0x3006_0000;
+    let format_name = 0x3006_1000;
+    let out_name = 0x3006_2000;
+    memory.write_word(formats, CF_TEXT);
+    memory.write_word(formats + 4, CF_UNICODETEXT);
+    memory.write_wide_z(format_name, "iNavi.Route");
+    memory.map_halfwords(out_name, 64);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_OPEN_CLIPBOARD,
+            [owner],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_OPEN_CLIPBOARD,
+            [other],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_ACCESS_DENIED
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_OPEN_CLIPBOARD_WINDOW,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } if hwnd == owner
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EMPTY_CLIPBOARD,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CLIPBOARD_OWNER,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(hwnd),
+            ..
+        } if hwnd == owner
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_CLIPBOARD_DATA,
+            [CF_UNICODETEXT, 0x7000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0x7000),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CLIPBOARD_DATA,
+            [CF_UNICODETEXT],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0x7000),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IS_CLIPBOARD_FORMAT_AVAILABLE,
+            [CF_UNICODETEXT],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_COUNT_CLIPBOARD_FORMATS,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ENUM_CLIPBOARD_FORMATS,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(CF_UNICODETEXT),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_PRIORITY_CLIPBOARD_FORMAT,
+            [formats, 2],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(CF_UNICODETEXT),
+            ..
+        }
+    ));
+
+    let custom = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_REGISTER_CLIPBOARD_FORMAT_W,
+        [format_name],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(format),
+            ..
+        } => format,
+        other => panic!("unexpected RegisterClipboardFormatW result: {other:?}"),
+    };
+    assert!(custom >= 0xc000);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REGISTER_CLIPBOARD_FORMAT_W,
+            [format_name],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(format),
+            ..
+        } if format == custom
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CLIPBOARD_FORMAT_NAME_W,
+            [custom, out_name, 64],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(11),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(out_name, 64), "iNavi.Route");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_CLIPBOARD_DATA,
+            [custom, 0x9000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0x9000),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_COUNT_CLIPBOARD_FORMATS,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(2),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CLOSE_CLIPBOARD,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CLIPBOARD_DATA,
+            [CF_UNICODETEXT],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_ACCESS_DENIED
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_OPEN_CLIPBOARD,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_OPEN_CLIPBOARD_WINDOW,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CLIPBOARD_DATA,
+            [CF_UNICODETEXT],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0x7000),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CLOSE_CLIPBOARD,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn clipboard_raw_ordinals_reject_invalid_open_and_missing_lock() -> Result<()> {
+    const CF_UNICODETEXT: u32 = 13;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 52;
+    let hwnd = kernel.create_window_ex_w(thread_id, "CLIP_DEAD", "", None, 0, 0, 0);
+    assert!(kernel.destroy_window_with_reason(hwnd, "test"));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_OPEN_CLIPBOARD,
+            [hwnd],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_WINDOW_HANDLE
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EMPTY_CLIPBOARD,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_ACCESS_DENIED
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_CLIPBOARD_DATA,
+            [CF_UNICODETEXT, 0x7000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_ACCESS_DENIED
     );
 
     Ok(())

@@ -85,7 +85,8 @@
   above the now-stateful `SHNotification*I` data APIs, recent docs, shell
   change notifications, popup/menu behavior, rendered modal `MessageBoxW`
   window/nested pump/button input above the now-recorded/default-result raw
-  slice, keyboard translation, clipboard, and caret state. Notification
+  slice, keyboard translation, richer clipboard allocation-copy edge cases
+  above the now-stateful raw clipboard store, and caret state. Notification
   records are now pruned during normal HWND/process teardown. Keep behavior
   registry-backed and generic; do not fake route UI.
 - Winsock fidelity follow-up: guest-visible local names now use the isolated
