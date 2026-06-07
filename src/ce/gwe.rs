@@ -19,6 +19,7 @@ pub const WM_QUIT: u32 = 0x0012;
 pub const WM_ERASEBKGND: u32 = 0x0014;
 pub const WM_SHOWWINDOW: u32 = 0x0018;
 pub const WM_CANCELMODE: u32 = 0x001f;
+pub const WM_SETCURSOR: u32 = 0x0020;
 pub const WM_WINDOWPOSCHANGED: u32 = 0x0047;
 pub const WM_ACTIVATE: u32 = 0x0006;
 pub const WM_SETFOCUS: u32 = 0x0007;
@@ -26,6 +27,7 @@ pub const WM_KILLFOCUS: u32 = 0x0008;
 pub const WM_ENABLE: u32 = 0x000a;
 pub const WM_NCCREATE: u32 = 0x0081;
 pub const WM_GETDLGCODE: u32 = 0x0087;
+pub const WM_NCHITTEST: u32 = 0x0084;
 pub const WM_SETTEXT: u32 = 0x000c;
 pub const WM_GETTEXT: u32 = 0x000d;
 pub const WM_GETTEXTLENGTH: u32 = 0x000e;
@@ -36,6 +38,7 @@ pub const WM_SYSKEYDOWN: u32 = 0x0104;
 pub const WM_SYSKEYUP: u32 = 0x0105;
 pub const WM_SYSCHAR: u32 = 0x0106;
 pub const WM_COMMAND: u32 = 0x0111;
+pub const WM_SYSCOMMAND: u32 = 0x0112;
 pub const WM_TIMER: u32 = 0x0113;
 pub const WM_INITMENUPOPUP: u32 = 0x0117;
 pub const WM_MOUSEMOVE: u32 = 0x0200;
@@ -110,6 +113,17 @@ pub const QS_PAINT: u32 = 0x0020;
 pub const QS_SENDMESSAGE: u32 = 0x0040;
 
 pub const HWND_BROADCAST: u32 = 0x0000_ffff;
+pub const HTNOWHERE: u32 = 0;
+pub const HTCLIENT: u32 = 1;
+pub const HTLEFT: u32 = 10;
+pub const HTRIGHT: u32 = 11;
+pub const HTTOP: u32 = 12;
+pub const HTTOPLEFT: u32 = 13;
+pub const HTTOPRIGHT: u32 = 14;
+pub const HTBOTTOM: u32 = 15;
+pub const HTBOTTOMLEFT: u32 = 16;
+pub const HTBOTTOMRIGHT: u32 = 17;
+pub const SC_CLOSE: u32 = 0xf060;
 pub const DESKTOP_HWND: u32 = 0x0001_0000;
 pub const WNDCLASSW_SIZE: usize = 40;
 pub const DEFAULT_WNDPROC: u32 = 0xffff_fffc;
@@ -2209,11 +2223,22 @@ impl Gwe {
                 let _ = self.send_message(hwnd, WM_DESTROY, 0, 0);
                 self.destroy_window(hwnd, 0);
             }
+            WM_SYSCOMMAND if (wparam & 0xfff0) == SC_CLOSE => {
+                let _ = self.send_message(hwnd, WM_CLOSE, 0, 0);
+            }
             WM_DESTROY | WM_NCDESTROY => {
                 self.record_destroy_lifecycle_message(hwnd, msg);
             }
             WM_PAINT => {
                 self.validate_window(hwnd);
+            }
+            WM_NCHITTEST => {
+                let window = self.windows.get(&hwnd)?;
+                return Some(default_window_hit_test(
+                    window.rect,
+                    window.client_rect,
+                    lparam,
+                ));
             }
             WM_GETDLGCODE => return Some(self.window_dialog_code(hwnd)),
             DM_GETDEFID => return Some(self.dialog_default_id_result(hwnd)),
@@ -3578,6 +3603,34 @@ pub fn default_send_message_result(msg: u32, _wparam: u32, _lparam: u32) -> u32 
     }
 }
 
+pub fn default_window_hit_test(window_rect: Rect, client_rect: Rect, lparam: u32) -> u32 {
+    let point = Point {
+        x: lparam as u16 as i16 as i32,
+        y: (lparam >> 16) as u16 as i16 as i32,
+    };
+    if client_rect.contains_point(point) {
+        return HTCLIENT;
+    }
+    if !window_rect.contains_point(point) {
+        return HTNOWHERE;
+    }
+    let left = point.x < client_rect.left;
+    let right = point.x >= client_rect.right;
+    let top = point.y < client_rect.top;
+    let bottom = point.y >= client_rect.bottom;
+    match (left, right, top, bottom) {
+        (true, _, true, _) => HTTOPLEFT,
+        (_, true, true, _) => HTTOPRIGHT,
+        (true, _, _, true) => HTBOTTOMLEFT,
+        (_, true, _, true) => HTBOTTOMRIGHT,
+        (true, _, _, _) => HTLEFT,
+        (_, true, _, _) => HTRIGHT,
+        (_, _, true, _) => HTTOP,
+        (_, _, _, true) => HTBOTTOM,
+        _ => HTCLIENT,
+    }
+}
+
 fn queue_status_bit_for_message(msg: u32) -> u32 {
     match msg {
         WM_TIMER => QS_TIMER,
@@ -3676,6 +3729,45 @@ mod tests {
         assert_eq!(window.class_name, "static");
         assert_eq!(window.title, "ready");
         assert!(gwe.get_message(1).is_none());
+    }
+
+    #[test]
+    fn default_window_hit_test_reports_client_border_and_nowhere() {
+        let window = Rect::from_origin_size(10, 20, 100, 80);
+        let client = Rect::from_origin_size(20, 30, 80, 60);
+
+        assert_eq!(
+            default_window_hit_test(window, client, point_to_lparam(Point { x: 40, y: 50 })),
+            HTCLIENT
+        );
+        assert_eq!(
+            default_window_hit_test(window, client, point_to_lparam(Point { x: 0, y: 0 })),
+            HTNOWHERE
+        );
+        assert_eq!(
+            default_window_hit_test(window, client, point_to_lparam(Point { x: 15, y: 50 })),
+            HTLEFT
+        );
+        assert_eq!(
+            default_window_hit_test(window, client, point_to_lparam(Point { x: 105, y: 50 })),
+            HTRIGHT
+        );
+        assert_eq!(
+            default_window_hit_test(window, client, point_to_lparam(Point { x: 40, y: 25 })),
+            HTTOP
+        );
+        assert_eq!(
+            default_window_hit_test(window, client, point_to_lparam(Point { x: 40, y: 95 })),
+            HTBOTTOM
+        );
+        assert_eq!(
+            default_window_hit_test(window, client, point_to_lparam(Point { x: 15, y: 25 })),
+            HTTOPLEFT
+        );
+        assert_eq!(
+            default_window_hit_test(window, client, point_to_lparam(Point { x: 105, y: 95 })),
+            HTBOTTOMRIGHT
+        );
     }
 
     #[test]

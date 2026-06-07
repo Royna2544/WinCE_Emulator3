@@ -66,19 +66,20 @@ use wince_emulation_v3::{
         gwe::{
             BS_DEFPUSHBUTTON, BS_PUSHBUTTON, DC_HASDEFID, DLGC_BUTTON, DLGC_DEFPUSHBUTTON,
             DLGC_UNDEFPUSHBUTTON, DM_GETDEFID, DM_SETDEFID, GW_CHILD, GW_HWNDFIRST, GW_HWNDNEXT,
-            GW_HWNDPREV, GW_OWNER, GWL_USERDATA, HWND_BROADCAST, KEY_SHIFT_ANY_SHIFT_FLAG,
-            KEY_STATE_DOWN_FLAG, KEY_STATE_GET_ASYNC_DOWN_FLAG, KEY_STATE_PREV_DOWN_FLAG,
-            MSGSRC_HARDWARE_KEYBOARD, MSGSRC_SOFTWARE_POST, MSGSRC_SOFTWARE_SEND, Message,
-            PeekFlags, Point, QS_PAINT, QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER, Rect,
-            SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN, SMF_NOTIFY_MESSAGE, SMF_SENDER_NO_WAIT,
-            SMF_TIMEOUT, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-            SWP_SHOWWINDOW, VK_CAPITAL, VK_CONTROL, VK_LSHIFT, VK_MENU, VK_SHIFT, WA_ACTIVE,
-            WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_DESTROY,
-            WM_ENABLE, WM_ENTERMENULOOP, WM_ERASEBKGND, WM_EXITMENULOOP, WM_GETDLGCODE, WM_GETTEXT,
-            WM_GETTEXTLENGTH, WM_INITMENUPOPUP, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
-            WM_MOVE, WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETFOCUS, WM_SETTEXT, WM_SHOWWINDOW,
-            WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN, WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_CHILD,
-            WS_DISABLED, WS_GROUP, WS_POPUP, WS_TABSTOP, WS_VISIBLE,
+            GW_HWNDPREV, GW_OWNER, GWL_USERDATA, HTCLIENT, HTNOWHERE, HWND_BROADCAST,
+            KEY_SHIFT_ANY_SHIFT_FLAG, KEY_STATE_DOWN_FLAG, KEY_STATE_GET_ASYNC_DOWN_FLAG,
+            KEY_STATE_PREV_DOWN_FLAG, MSGSRC_HARDWARE_KEYBOARD, MSGSRC_SOFTWARE_POST,
+            MSGSRC_SOFTWARE_SEND, Message, PeekFlags, Point, QS_PAINT, QS_POSTMESSAGE,
+            QS_SENDMESSAGE, QS_TIMER, Rect, SC_CLOSE, SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN,
+            SMF_NOTIFY_MESSAGE, SMF_SENDER_NO_WAIT, SMF_TIMEOUT, SWP_HIDEWINDOW, SWP_NOACTIVATE,
+            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, VK_CAPITAL, VK_CONTROL,
+            VK_LSHIFT, VK_MENU, VK_SHIFT, WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE,
+            WM_CHAR, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_ENABLE, WM_ENTERMENULOOP, WM_ERASEBKGND,
+            WM_EXITMENULOOP, WM_GETDLGCODE, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENUPOPUP,
+            WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_MOVE, WM_NCDESTROY,
+            WM_NCHITTEST, WM_PAINT, WM_QUIT, WM_SETFOCUS, WM_SETTEXT, WM_SHOWWINDOW, WM_SIZE,
+            WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED,
+            WS_CHILD, WS_DISABLED, WS_GROUP, WS_POPUP, WS_TABSTOP, WS_VISIBLE,
         },
         kernel::CeKernel,
         memory::PROCESS_HEAP_HANDLE,
@@ -12214,6 +12215,75 @@ fn coredll_raw_get_message_no_wait_uses_gwe_queue_without_blocking() -> Result<(
     assert_eq!(memory.read_u32(msg_ptr)?, 0);
     assert_eq!(memory.read_u32(msg_ptr + 4)?, WM_QUIT);
     assert_eq!(memory.read_u32(msg_ptr + 8)?, 0x78);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_def_window_proc_handles_hit_test_and_syscommand_close() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 80;
+    let hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "DEFPROC",
+        "default proc",
+        None,
+        0,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(100, 200, 80, 40),
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEF_WINDOW_PROC_W,
+            [hwnd, WM_NCHITTEST, 0, make_test_lparam(120, 220)],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(HTCLIENT),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEF_WINDOW_PROC_W,
+            [hwnd, WM_NCHITTEST, 0, make_test_lparam(20, 20)],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(HTNOWHERE),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DEF_WINDOW_PROC_W,
+            [hwnd, WM_SYSCOMMAND, SC_CLOSE, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(!kernel.gwe.is_window(hwnd));
+    assert!(
+        kernel
+            .gwe
+            .window(hwnd)
+            .is_some_and(|window| window.destroy_message_sent)
+    );
 
     Ok(())
 }

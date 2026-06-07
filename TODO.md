@@ -1222,8 +1222,11 @@
        depth state now exists and clears receiver send depth after dispatch.
        Raw cross-thread `SendMessageW` now also
        queues a sender/receiver sent transaction instead of executing the
-       receiver shortcut in the caller thread, while `DefWindowProcW` remains
-       direct default processing. Raw `SendDlgItemMessageW` now follows the CE
+       receiver shortcut in the caller thread. `DefWindowProcW` remains direct
+       default processing, but now includes CE `WM_NCHITTEST` hit-test return
+       codes and `WM_SYSCOMMAND/SC_CLOSE`; continue with activation, cursor,
+       mouse, default-command, and remaining non-client behavior. Raw
+       `SendDlgItemMessageW` now follows the CE
        SDK wrapper shape by using the same queueing send path for normal
        messages after `GetDlgItem`. Sender-side transaction bookkeeping
        now exists for blocking sends, and raw receiver `DispatchMessageW`

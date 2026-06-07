@@ -1596,7 +1596,9 @@
     stopped at `pc=0x00339d8c` with no render milestones or framebuffer pixels.
     Raw cross-thread `SendMessageW` now joins the same sent-message queue
     instead of running receiver window processing immediately in the caller
-    thread, while `DefWindowProcW` remains direct default processing.
+    thread, while `DefWindowProcW` remains direct default processing with the
+    first CE non-client/default slice now covering `WM_NCHITTEST` and
+    `WM_SYSCOMMAND/SC_CLOSE`.
     `SendDlgItemMessageW` now follows the CE `GetDlgItem` plus `SendMessage`
     wrapper shape for normal messages, so cross-thread dialog-item sends also
     queue instead of bypassing scheduler-visible sent-message state.

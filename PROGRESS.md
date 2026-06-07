@@ -185,6 +185,13 @@
   targets as `SMF_SENDER_NO_WAIT | SMF_NOTIFY_MESSAGE` sent transactions.
   Focused coverage:
   `coredll_raw_send_notify_broadcast_uses_notify_send_for_live_top_level_windows`.
+- Raw and Unicorn-default `DefWindowProcW` now cover the first CE non-client
+  default slice. `WM_NCHITTEST` decodes screen coordinates from lParam and
+  returns CE `HT*` codes for client, border bands, and outside-window points,
+  while `WM_SYSCOMMAND/SC_CLOSE` routes through the same default `WM_CLOSE`
+  destroy path rather than returning a no-op. Focused coverage:
+  `coredll_raw_def_window_proc_handles_hit_test_and_syscommand_close` and
+  `default_window_hit_test_reports_client_border_and_nowhere`.
 - Shell notification state now has a dedicated `ShellSystem` instead of a
   COREDLL-local placeholder. Raw `Shell_NotifyIconW @481` decodes the
   `NOTIFYICONDATAW` prefix, validates owner HWNDs, tracks add/modify/delete

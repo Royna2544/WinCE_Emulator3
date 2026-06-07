@@ -18353,6 +18353,15 @@ fn default_window_proc_result(
     if msg == crate::ce::gwe::WM_PAINT {
         let _ = gwe.validate_window(hwnd);
     }
+    if msg == crate::ce::gwe::WM_NCHITTEST {
+        if let Some(window) = gwe.window(hwnd) {
+            return crate::ce::gwe::default_window_hit_test(
+                window.rect,
+                window.client_rect,
+                lparam,
+            );
+        }
+    }
     crate::ce::gwe::default_send_message_result(msg, wparam, lparam)
 }
 

@@ -849,6 +849,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     the last guest `WM_DESTROY` callback returns. A virtual lifecycle order
     counter exists only to verify this child-first sequence in focused
     fixtures.
+  - CE SDK `winuser.h` defines `WM_NCHITTEST`, the `HT*` mouse-position return
+    codes, `WM_SYSCOMMAND`, and `SC_CLOSE`. Rust raw and Unicorn-default
+    `DefWindowProcW` now return CE hit-test codes from the stored window/client
+    rectangles and route `WM_SYSCOMMAND/SC_CLOSE` through the default
+    `WM_CLOSE` destroy path.
   - CE `window.hpp` exposes `fBeingDestroyed` alongside the sent-destroy
     lifecycle bits; Rust virtual windows now keep the HWND valid while a
     `DestroyWindow` subtree is inside guest `WM_DESTROY` callouts and only mark
