@@ -180,6 +180,7 @@ pub struct UnicornDebugSnapshot {
     pub file_io_stats: crate::ce::file::FileIoStats,
     pub scheduler_stats: crate::ce::scheduler::SchedulerStats,
     pub gwe_stats: crate::ce::gwe::GweStats,
+    pub runtime_loader_stats: crate::ce::kernel::RuntimeLoaderStats,
     pub active_timers: Vec<UnicornTimerSnapshot>,
     pub active_blocked_waits: Vec<UnicornBlockedWaitSnapshot>,
     pub recent_file_open_ops: Vec<crate::ce::kernel::FileTraceRecord>,
@@ -268,6 +269,30 @@ impl UnicornDebugSnapshot {
                 self.file_io_stats.host_file_read_bytes,
                 self.file_io_stats.memory_backed_open_count,
                 self.file_io_stats.max_read_request
+            ));
+        }
+        if self.runtime_loader_stats.load_attempt_count != 0
+            || self.runtime_loader_stats.successful_map_count != 0
+            || self.runtime_loader_stats.dependency_load_count != 0
+            || self.runtime_loader_stats.export_lookup_count != 0
+            || self.runtime_loader_stats.forwarded_export_count != 0
+            || self.runtime_loader_stats.tls_callback_count != 0
+            || self.runtime_loader_stats.dllmain_attach_count != 0
+            || self.runtime_loader_stats.dllmain_detach_count != 0
+            || self.runtime_loader_stats.loud_failure_count != 0
+        {
+            parts.push(format!(
+                "loader=load:{}/map:{} dep:{} getproc:{}/miss:{} fwd:{} tls:{} dllmain:{}/{} fail:{}",
+                self.runtime_loader_stats.load_attempt_count,
+                self.runtime_loader_stats.successful_map_count,
+                self.runtime_loader_stats.dependency_load_count,
+                self.runtime_loader_stats.export_lookup_count,
+                self.runtime_loader_stats.export_lookup_miss_count,
+                self.runtime_loader_stats.forwarded_export_count,
+                self.runtime_loader_stats.tls_callback_count,
+                self.runtime_loader_stats.dllmain_attach_count,
+                self.runtime_loader_stats.dllmain_detach_count,
+                self.runtime_loader_stats.loud_failure_count
             ));
         }
         if self.scheduler_stats.wait_single_count != 0
@@ -1080,6 +1105,7 @@ struct DllLifecycleCall {
     target: u32,
     reason: u32,
     returns_bool: bool,
+    entrypoint: bool,
 }
 
 #[cfg(feature = "unicorn")]
@@ -4490,6 +4516,7 @@ impl UnicornMips {
             kernel.file_io_stats(),
             kernel.scheduler_stats(),
             kernel.gwe_stats(),
+            kernel.runtime_loader_stats(),
             kernel
                 .timers
                 .pending_timers()
@@ -6014,7 +6041,9 @@ fn try_handle_runtime_loader_import<D>(
             RUNTIME_COREDLL_MODULE_HANDLE,
         ));
     }
+    kernel.record_runtime_loader_load_attempt();
     if flags & !(RUNTIME_DONT_RESOLVE_DLL_REFERENCES | RUNTIME_LOAD_LIBRARY_AS_DATAFILE) != 0 {
+        kernel.record_runtime_loader_loud_failure();
         kernel
             .threads
             .set_last_error(thread_id, crate::ce::thread::ERROR_NOT_SUPPORTED);
@@ -6026,6 +6055,7 @@ fn try_handle_runtime_loader_import<D>(
     }
 
     let Some(path) = resolve_dll_path(&module_name, Some(kernel), search_dirs) else {
+        kernel.record_runtime_loader_loud_failure();
         kernel
             .threads
             .set_last_error(thread_id, crate::ce::thread::ERROR_FILE_NOT_FOUND);
@@ -6067,7 +6097,7 @@ fn try_handle_runtime_loader_import<D>(
                 Some(RuntimeLoaderImportResult::Complete(handle))
             } else if enter_dll_lifecycle_callout(
                 uc,
-                lifecycle_calls,
+                record_dll_lifecycle_calls(kernel, lifecycle_calls),
                 handle,
                 None,
                 pending_returns,
@@ -6080,6 +6110,7 @@ fn try_handle_runtime_loader_import<D>(
                     path = %path.display(),
                     "runtime LoadLibraryW failed to enter DLL lifecycle callout"
                 );
+                kernel.record_runtime_loader_loud_failure();
                 kernel
                     .threads
                     .set_last_error(thread_id, crate::ce::thread::ERROR_NOT_SUPPORTED);
@@ -6094,6 +6125,7 @@ fn try_handle_runtime_loader_import<D>(
                 error = %err,
                 "runtime LoadLibraryW failed"
             );
+            kernel.record_runtime_loader_loud_failure();
             kernel
                 .threads
                 .set_last_error(thread_id, crate::ce::thread::ERROR_NOT_SUPPORTED);
@@ -6155,7 +6187,13 @@ fn handle_runtime_free_library_import<D>(
                 .set_last_error(thread_id, crate::ce::thread::ERROR_INVALID_HANDLE);
             RuntimeLoaderImportResult::Complete(0)
         }
-    } else if enter_dll_lifecycle_callout(uc, lifecycle_calls, 1, Some(module), pending_returns) {
+    } else if enter_dll_lifecycle_callout(
+        uc,
+        record_dll_lifecycle_calls(kernel, lifecycle_calls),
+        1,
+        Some(module),
+        pending_returns,
+    ) {
         kernel.threads.set_last_error(thread_id, 0);
         RuntimeLoaderImportResult::EnteredLifecycle
     } else {
@@ -6165,6 +6203,7 @@ fn handle_runtime_free_library_import<D>(
             base = format_args!("{:#010x}", loaded.base),
             "runtime FreeLibrary failed to enter DLL detach callout"
         );
+        kernel.record_runtime_loader_loud_failure();
         kernel
             .threads
             .set_last_error(thread_id, crate::ce::thread::ERROR_NOT_SUPPORTED);
@@ -6225,6 +6264,7 @@ fn runtime_load_guest_dll_from_path<D>(
                         dll: descriptor.module_name.clone(),
                     },
                 )?;
+            kernel.record_runtime_loader_dependency_load();
             runtime_load_guest_dll_from_path(
                 uc,
                 kernel,
@@ -6296,6 +6336,7 @@ fn runtime_load_guest_dll_from_path<D>(
     .map_err(|err| Error::Backend(format!("map runtime DLL {label}: {err:?}")))?;
     uc.mem_write(u64::from(load_base), &mapped)
         .map_err(|err| Error::Backend(format!("write runtime DLL {label}: {err:?}")))?;
+    kernel.record_runtime_loader_successful_map();
 
     if let Some(range) = trampoline_patch.range {
         trampoline_ranges.push(range);
@@ -6374,6 +6415,7 @@ fn resolve_runtime_forwarders<D>(
     newly_loaded_modules: &mut Vec<u32>,
 ) -> Result<()> {
     for (name, forwarder) in module_info.forwarders_by_name.clone() {
+        kernel.record_runtime_loader_forwarded_export();
         let address = resolve_runtime_forwarder(
             uc,
             kernel,
@@ -6394,6 +6436,7 @@ fn resolve_runtime_forwarders<D>(
         module_info.exports_by_name.insert(name, address);
     }
     for (ordinal, forwarder) in module_info.forwarders_by_ordinal.clone() {
+        kernel.record_runtime_loader_forwarded_export();
         let address = resolve_runtime_forwarder(
             uc,
             kernel,
@@ -6645,6 +6688,7 @@ fn dll_attach_lifecycle_calls_for_modules(
                     target: callback,
                     reason: DLL_PROCESS_ATTACH,
                     returns_bool: false,
+                    entrypoint: false,
                 });
             }
         }
@@ -6654,6 +6698,7 @@ fn dll_attach_lifecycle_calls_for_modules(
                 target: module.entry_point,
                 reason: DLL_PROCESS_ATTACH,
                 returns_bool: true,
+                entrypoint: true,
             });
         }
     }
@@ -6670,6 +6715,7 @@ fn dll_detach_lifecycle_calls_for_module(module: &LoadedModule) -> Vec<DllLifecy
                 target: *callback,
                 reason: DLL_PROCESS_DETACH,
                 returns_bool: false,
+                entrypoint: false,
             });
         }
     }
@@ -6679,7 +6725,27 @@ fn dll_detach_lifecycle_calls_for_module(module: &LoadedModule) -> Vec<DllLifecy
             target: module.entry_point,
             reason: DLL_PROCESS_DETACH,
             returns_bool: false,
+            entrypoint: true,
         });
+    }
+    calls
+}
+
+#[cfg(feature = "unicorn")]
+fn record_dll_lifecycle_calls(
+    kernel: &mut CeKernel,
+    calls: Vec<DllLifecycleCall>,
+) -> Vec<DllLifecycleCall> {
+    for call in &calls {
+        if call.entrypoint {
+            if call.reason == DLL_PROCESS_ATTACH {
+                kernel.record_runtime_loader_dllmain_attach();
+            } else if call.reason == DLL_PROCESS_DETACH {
+                kernel.record_runtime_loader_dllmain_detach();
+            }
+        } else {
+            kernel.record_runtime_loader_tls_callback();
+        }
     }
     calls
 }
@@ -7727,7 +7793,7 @@ impl std::fmt::Display for UnicornDebugSnapshot {
         }
         write!(
             f,
-            " heap_live_count={} heap_live_bytes={} virtual_live_count={} virtual_live_bytes={} file_host_open_count={} file_host_read_count={} file_host_read_bytes={} file_memory_backed_open_count={} file_max_read_request={} sched_wait_single_count={} sched_wait_multiple_count={} sched_msg_wait_count={} sched_sleep_count={} sched_yield_count={} sched_wait_acquired_count={} sched_wait_timeout_count={} sched_wait_failed_count={} sched_wait_block_count={} sched_wait_wake_count={} sched_waiter_register_count={} sched_waiter_remove_count={} sched_object_signal_count={} sched_object_wake_candidate_count={} sched_message_input_signal_count={} sched_message_input_wake_candidate_count={} sched_serial_read_signal_count={} sched_serial_read_wake_candidate_count={} sched_serial_event_signal_count={} sched_serial_event_wake_candidate_count={} sched_send_reply_signal_count={} sched_send_reply_wake_candidate_count={} sched_max_registered_waits={} sched_max_pending_wakes={} gwe_send_transaction_count={} gwe_send_completed_count={} gwe_send_timeout_count={} gwe_send_receiver_terminated_count={} gwe_max_sent_queue_depth={}",
+            " heap_live_count={} heap_live_bytes={} virtual_live_count={} virtual_live_bytes={} file_host_open_count={} file_host_read_count={} file_host_read_bytes={} file_memory_backed_open_count={} file_max_read_request={} loader_load_attempt_count={} loader_successful_map_count={} loader_dependency_load_count={} loader_export_lookup_count={} loader_export_lookup_miss_count={} loader_forwarded_export_count={} loader_tls_callback_count={} loader_dllmain_attach_count={} loader_dllmain_detach_count={} loader_loud_failure_count={} sched_wait_single_count={} sched_wait_multiple_count={} sched_msg_wait_count={} sched_sleep_count={} sched_yield_count={} sched_wait_acquired_count={} sched_wait_timeout_count={} sched_wait_failed_count={} sched_wait_block_count={} sched_wait_wake_count={} sched_waiter_register_count={} sched_waiter_remove_count={} sched_object_signal_count={} sched_object_wake_candidate_count={} sched_message_input_signal_count={} sched_message_input_wake_candidate_count={} sched_serial_read_signal_count={} sched_serial_read_wake_candidate_count={} sched_serial_event_signal_count={} sched_serial_event_wake_candidate_count={} sched_send_reply_signal_count={} sched_send_reply_wake_candidate_count={} sched_max_registered_waits={} sched_max_pending_wakes={} gwe_send_transaction_count={} gwe_send_completed_count={} gwe_send_timeout_count={} gwe_send_receiver_terminated_count={} gwe_max_sent_queue_depth={}",
             self.heap_allocation_count,
             self.heap_allocation_bytes,
             self.virtual_allocation_count,
@@ -7737,6 +7803,16 @@ impl std::fmt::Display for UnicornDebugSnapshot {
             self.file_io_stats.host_file_read_bytes,
             self.file_io_stats.memory_backed_open_count,
             self.file_io_stats.max_read_request,
+            self.runtime_loader_stats.load_attempt_count,
+            self.runtime_loader_stats.successful_map_count,
+            self.runtime_loader_stats.dependency_load_count,
+            self.runtime_loader_stats.export_lookup_count,
+            self.runtime_loader_stats.export_lookup_miss_count,
+            self.runtime_loader_stats.forwarded_export_count,
+            self.runtime_loader_stats.tls_callback_count,
+            self.runtime_loader_stats.dllmain_attach_count,
+            self.runtime_loader_stats.dllmain_detach_count,
+            self.runtime_loader_stats.loud_failure_count,
             self.scheduler_stats.wait_single_count,
             self.scheduler_stats.wait_multiple_count,
             self.scheduler_stats.msg_wait_count,
@@ -19702,6 +19778,7 @@ fn capture_debug_snapshot<D>(
     file_io_stats: crate::ce::file::FileIoStats,
     scheduler_stats: crate::ce::scheduler::SchedulerStats,
     gwe_stats: crate::ce::gwe::GweStats,
+    runtime_loader_stats: crate::ce::kernel::RuntimeLoaderStats,
     active_timers: Vec<UnicornTimerSnapshot>,
     active_blocked_waits: Vec<UnicornBlockedWaitSnapshot>,
     trap_handle: Option<UnicornWaitHandleSnapshot>,
@@ -19775,6 +19852,7 @@ fn capture_debug_snapshot<D>(
         file_io_stats,
         scheduler_stats,
         gwe_stats,
+        runtime_loader_stats,
         active_timers,
         active_blocked_waits,
         recent_file_open_ops,
@@ -22905,6 +22983,34 @@ mod unicorn_tests {
         assert_eq!(state.stub_for_origin(0x1001_1234), Some(0x1002_0040));
         assert_eq!(state.origin_for_stub(0x1002_0040), Some(0x1001_1234));
         assert_eq!(state.origin_for_pc(0x1002_005c), Some(0x1001_1234));
+    }
+
+    #[test]
+    fn debug_summary_includes_runtime_loader_counters() {
+        let snapshot = super::UnicornDebugSnapshot {
+            runtime_loader_stats: crate::ce::kernel::RuntimeLoaderStats {
+                load_attempt_count: 3,
+                successful_map_count: 2,
+                dependency_load_count: 1,
+                export_lookup_count: 5,
+                export_lookup_miss_count: 1,
+                forwarded_export_count: 4,
+                tls_callback_count: 6,
+                dllmain_attach_count: 2,
+                dllmain_detach_count: 1,
+                loud_failure_count: 1,
+            },
+            ..Default::default()
+        };
+
+        let summary = snapshot.summary();
+        assert!(summary.contains("loader=load:3/map:2"));
+        assert!(summary.contains("dep:1"));
+        assert!(summary.contains("getproc:5/miss:1"));
+        assert!(summary.contains("fwd:4"));
+        assert!(summary.contains("tls:6"));
+        assert!(summary.contains("dllmain:2/1"));
+        assert!(summary.contains("fail:1"));
     }
 
     #[test]

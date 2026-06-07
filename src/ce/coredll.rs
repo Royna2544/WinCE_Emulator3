@@ -6745,21 +6745,26 @@ fn get_proc_address_name_raw(
     name: &str,
 ) -> u32 {
     if module == COREDLL_MODULE_HANDLE {
-        return get_coredll_proc_address_name_raw(kernel, thread_id, name);
+        let address = get_coredll_proc_address_name_raw(kernel, thread_id, name);
+        kernel.record_runtime_loader_export_lookup(address != 0);
+        return address;
     }
     if kernel.is_loaded_module_handle(module) {
         if let Some(address) = kernel.resolve_loaded_module_proc_by_name(module, name) {
             kernel.threads.set_last_error(thread_id, 0);
+            kernel.record_runtime_loader_export_lookup(true);
             return address;
         }
         kernel
             .threads
             .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+        kernel.record_runtime_loader_export_lookup(false);
         return 0;
     }
     kernel
         .threads
         .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+    kernel.record_runtime_loader_export_lookup(false);
     0
 }
 
@@ -6770,21 +6775,26 @@ fn get_proc_address_ordinal_raw(
     ordinal: u32,
 ) -> u32 {
     if module == COREDLL_MODULE_HANDLE {
-        return get_coredll_proc_address_ordinal_raw(kernel, thread_id, ordinal);
+        let address = get_coredll_proc_address_ordinal_raw(kernel, thread_id, ordinal);
+        kernel.record_runtime_loader_export_lookup(address != 0);
+        return address;
     }
     if kernel.is_loaded_module_handle(module) {
         if let Some(address) = kernel.resolve_loaded_module_proc_by_ordinal(module, ordinal) {
             kernel.threads.set_last_error(thread_id, 0);
+            kernel.record_runtime_loader_export_lookup(true);
             return address;
         }
         kernel
             .threads
             .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+        kernel.record_runtime_loader_export_lookup(false);
         return 0;
     }
     kernel
         .threads
         .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+    kernel.record_runtime_loader_export_lookup(false);
     0
 }
 

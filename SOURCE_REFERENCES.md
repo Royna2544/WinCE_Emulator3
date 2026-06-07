@@ -61,7 +61,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     Runtime executable DLL loads now run the same MIPS Unicorn trampoline
     patcher before map/write and publish inline stub ranges into live
     full-code-hook metadata so high/relocated DLL branch/call sites can execute
-    through generated stubs in the same run slice.
+    through generated stubs in the same run slice. Loader counters are now
+    carried on `CeKernel` and surfaced through `UnicornDebugSnapshot` so mounted
+    runs can compactly report load attempts, maps, dependencies, export
+    lookups, forwarders, lifecycle calls, and loud failures.
 
 - CE loader lifecycle anchors:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\loader.c` and

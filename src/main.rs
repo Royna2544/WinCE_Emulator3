@@ -1392,6 +1392,9 @@ fn monitor_trace_text(snapshot: &UnicornDebugSnapshot, selector: &str) -> String
         "counts" | "import-counts" => {
             push_monitor_records(&mut out, "import counts", &snapshot.import_counts)
         }
+        "loader" | "loader-summary" => {
+            push_monitor_loader_summary(&mut out, snapshot.runtime_loader_stats);
+        }
         "calls" => push_monitor_records(&mut out, "calls", &snapshot.last_calls),
         "code" => push_monitor_records(&mut out, "code", &snapshot.last_code),
         "blocks" => push_monitor_records(&mut out, "blocks", &snapshot.last_blocks),
@@ -1480,11 +1483,31 @@ fn monitor_trace_text(snapshot: &UnicornDebugSnapshot, selector: &str) -> String
         other => {
             let _ = writeln!(
                 &mut out,
-                "  unknown trace kind `{other}`; use all/imports/milestones/counts/calls/code/blocks/messages/window-imports/presentation/windows/wndproc/render/controller/guest/resource/files/files-full/processes/events"
+                "  unknown trace kind `{other}`; use all/imports/milestones/counts/loader/calls/code/blocks/messages/window-imports/presentation/windows/wndproc/render/controller/guest/resource/files/files-full/processes/events"
             );
         }
     }
     out
+}
+
+fn push_monitor_loader_summary(
+    out: &mut String,
+    stats: wince_emulation_v3::ce::kernel::RuntimeLoaderStats,
+) {
+    let _ = writeln!(
+        out,
+        "  loader counters: load_attempt_count={} successful_map_count={} dependency_load_count={} export_lookup_count={} export_lookup_miss_count={} forwarded_export_count={} tls_callback_count={} dllmain_attach_count={} dllmain_detach_count={} loud_failure_count={}",
+        stats.load_attempt_count,
+        stats.successful_map_count,
+        stats.dependency_load_count,
+        stats.export_lookup_count,
+        stats.export_lookup_miss_count,
+        stats.forwarded_export_count,
+        stats.tls_callback_count,
+        stats.dllmain_attach_count,
+        stats.dllmain_detach_count,
+        stats.loud_failure_count
+    );
 }
 
 fn is_resource_trace_label(label: &str) -> bool {

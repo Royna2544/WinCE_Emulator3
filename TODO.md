@@ -12,12 +12,13 @@
 
 ## Current Slice
 
-- Queued runtime loader gaps from `PLAN.MD`: add compact runtime loader audit
-  counters and extend forwarded-export/no-resolve/resource fixture variants
-  when real dumped DLL traces demand more cases. Runtime normal/no-resolve DLL
-  loads now patch inline MIPS Unicorn trampolines and update live full-hook
-  trampoline state; add fast-start dynamic-hook variants only if trace evidence
-  shows runtime DLL code executing under `WINCE_EMU_FAST_START`. Raw/non-Unicorn
+- Queued runtime loader gaps from `PLAN.MD`: extend forwarded-export/
+  no-resolve/resource fixture variants when real dumped DLL traces demand more
+  cases. Runtime normal/no-resolve DLL loads now patch inline MIPS Unicorn
+  trampolines and update live full-hook trampoline state; add fast-start
+  dynamic-hook variants only if trace evidence shows runtime DLL code executing
+  under `WINCE_EMU_FAST_START`. Runtime loader audit counters are now visible
+  in debug summaries and monitor `loader` output. Raw/non-Unicorn
   `LoadLibraryExW` supported-flag reuse is aligned for already registered
   modules; real raw DLL byte mapping remains an explicit failure because that
   path has no Unicorn memory context.
@@ -51,7 +52,9 @@
   `LoadStringW` immediately through `kernel.resources`, and hides code exports
   from `GetProcAddress`. Runtime executable DLL mapping now runs the MIPS
   trampoline patcher before map/write and keeps the live full-code-hook
-  trampoline state current.
+  trampoline state current. Runtime loader audit counters now cover load
+  attempts, successful maps, dependency loads, export lookups/misses, forwarded
+  exports, TLS callbacks, `DllMain` attach/detach calls, and loud failures.
   Keep
   `C:\WINCE600` as the behavior reference and update `PLAN.MD` after each port.
 - COREDLL fallback audit follow-up: stubs now carry audit classification plus

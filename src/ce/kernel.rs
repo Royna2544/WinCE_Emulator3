@@ -97,8 +97,23 @@ pub struct CeKernel {
     recent_process_ops: Vec<ProcessTraceRecord>,
     recent_event_ops: Vec<EventTraceRecord>,
     recent_message_ops: Vec<MessageTraceRecord>,
+    runtime_loader_stats: RuntimeLoaderStats,
     pulsed_wait_handles: BTreeMap<u64, u32>,
     comm_event_mask_changed_waits: BTreeSet<u64>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RuntimeLoaderStats {
+    pub load_attempt_count: u64,
+    pub successful_map_count: u64,
+    pub dependency_load_count: u64,
+    pub export_lookup_count: u64,
+    pub export_lookup_miss_count: u64,
+    pub forwarded_export_count: u64,
+    pub tls_callback_count: u64,
+    pub dllmain_attach_count: u64,
+    pub dllmain_detach_count: u64,
+    pub loud_failure_count: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -329,9 +344,53 @@ impl CeKernel {
             recent_process_ops: Vec::new(),
             recent_event_ops: Vec::new(),
             recent_message_ops: Vec::new(),
+            runtime_loader_stats: RuntimeLoaderStats::default(),
             pulsed_wait_handles: BTreeMap::new(),
             comm_event_mask_changed_waits: BTreeSet::new(),
         }
+    }
+
+    pub fn runtime_loader_stats(&self) -> RuntimeLoaderStats {
+        self.runtime_loader_stats
+    }
+
+    pub fn record_runtime_loader_load_attempt(&mut self) {
+        self.runtime_loader_stats.load_attempt_count += 1;
+    }
+
+    pub fn record_runtime_loader_successful_map(&mut self) {
+        self.runtime_loader_stats.successful_map_count += 1;
+    }
+
+    pub fn record_runtime_loader_dependency_load(&mut self) {
+        self.runtime_loader_stats.dependency_load_count += 1;
+    }
+
+    pub fn record_runtime_loader_export_lookup(&mut self, found: bool) {
+        self.runtime_loader_stats.export_lookup_count += 1;
+        if !found {
+            self.runtime_loader_stats.export_lookup_miss_count += 1;
+        }
+    }
+
+    pub fn record_runtime_loader_forwarded_export(&mut self) {
+        self.runtime_loader_stats.forwarded_export_count += 1;
+    }
+
+    pub fn record_runtime_loader_tls_callback(&mut self) {
+        self.runtime_loader_stats.tls_callback_count += 1;
+    }
+
+    pub fn record_runtime_loader_dllmain_attach(&mut self) {
+        self.runtime_loader_stats.dllmain_attach_count += 1;
+    }
+
+    pub fn record_runtime_loader_dllmain_detach(&mut self) {
+        self.runtime_loader_stats.dllmain_detach_count += 1;
+    }
+
+    pub fn record_runtime_loader_loud_failure(&mut self) {
+        self.runtime_loader_stats.loud_failure_count += 1;
     }
 
     pub fn crt_srand(&mut self, seed: u32) {

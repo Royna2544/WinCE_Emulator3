@@ -46,6 +46,10 @@
     patcher before map/write, embeds generated stubs inline in the mapped DLL
     image, and updates live full-code-hook trampoline state so newly loaded
     runtime DLL code can use those generated stubs in the same run slice.
+    Runtime loader audit counters now appear in debug summaries and monitor
+    `loader` output, covering load attempts, successful maps, dependency loads,
+    export lookups/misses, forwarded exports, TLS callbacks, `DllMain`
+    attach/detach calls, and loud loader failures.
     Final dynamic `FreeLibrary` now enters guest TLS callbacks and
     `DllMain(DLL_PROCESS_DETACH)` before marking normally loaded modules
     unload-pending.

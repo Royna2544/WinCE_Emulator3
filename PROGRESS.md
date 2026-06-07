@@ -61,7 +61,12 @@
   PE mapping before the DLL image is mapped, place generated stubs inline in
   the mapped DLL image, and publish new trampoline ranges/jumps into both the
   persisted emulator metadata and the live full-code-hook state; datafile loads
-  stay non-executable and skip trampoline patching. The updated
+  stay non-executable and skip trampoline patching. Runtime loader audit
+  counters now live on `CeKernel` and appear in `UnicornDebugSnapshot`
+  summaries, full display text, and monitor `loader` output: load attempts,
+  successful maps, dependency loads, export lookups/misses, forwarded exports,
+  TLS callbacks, `DllMain` attach/detach calls, and loud loader failures are
+  compactly visible during mounted runs. The updated
   `173_loadlibrary_tls_callback` fixture arms an EXE-owned detach order marker
   and proves the complete lifecycle order word `0x01020304`: TLS attach,
   `DllMain` attach, TLS detach, `DllMain` detach.

@@ -1781,6 +1781,10 @@ fn coredll_raw_module_apis_resolve_preloaded_search_dll_exports() -> Result<()> 
             ..
         } if address == proc_by_ordinal
     ));
+    let stats = kernel.runtime_loader_stats();
+    assert_eq!(stats.export_lookup_count, 3);
+    assert_eq!(stats.export_lookup_miss_count, 0);
+
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
