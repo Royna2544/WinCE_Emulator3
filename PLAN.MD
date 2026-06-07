@@ -174,5 +174,11 @@ focused fixtures plus mounted iNavi evidence:
   change notification handles, shell change notifications, create/delete/
   rename/update refresh events, and storage insertion/removal notifications.
 
-- User todos:
-Create a basic cmd.exe like desktop Windows. under host_progs/cmd.cpp, Make sure it is compilable with eVC4 and compilable.
+## Completed User Todos
+
+- Added `host_progs\cmd.cpp`: a basic desktop-Windows-like command prompt for
+  Windows CE/eVC4 with `/C` and `/K` handling, a small GUI command window, and
+  built-ins for `cd`, `dir`, `type`, `echo`, `copy`, `del`, `mkdir`, `rmdir`,
+  `cls`, `pwd`, and `exit`, plus `CreateProcessW` fallback for executables.
+  Verified it compiles and links with eVC4 MIPSII into
+  `target\host_progs\cmd\cmd.exe`.

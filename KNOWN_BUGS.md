@@ -1961,3 +1961,16 @@
   - Status: fixed in the current working tree; keep timeout completion inside
     the resumed process context rather than using timeout expiry as an
     immediate cross-process preemption signal.
+
+- Default no-feature `cargo test` does not currently compile.
+  - Symptom: running `cargo test host_cmd_source_is_evc4_friendly_command_shell`
+    without the normal feature set fails in `src\emulator\unicorn.rs` with
+    missing Unicorn-only names such as `GUEST_THREAD_RETURN_STUB_ADDR`,
+    `RESERVED_IMPORT_TRAP_STUB_BYTES`,
+    `complete_ready_blocked_send_for_parked_cpu`, and trampoline fields.
+  - Evidence: the failure appears before the new host-prog test runs. The
+    planned validation command with `--features unicorn,trace,win32-desktop`
+    passes.
+  - Status: active build-configuration hygiene gap. Fix separately by
+    tightening Unicorn-only cfg boundaries; do not mix it into unrelated
+    emulator behavior changes.

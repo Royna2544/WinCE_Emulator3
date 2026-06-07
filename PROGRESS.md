@@ -4490,6 +4490,15 @@
   lifetime. Focused coverage
   `shell_window_destroy_removes_notify_icon_and_notification_state` passes.
 
+- Added `host_progs\cmd.cpp`, a small Windows CE/eVC4-friendly command prompt
+  utility. It uses a GUI `WinMain` shell instead of a console subsystem,
+  supports `/C` and `/K`, implements basic desktop-cmd-like built-ins
+  (`cd`, `dir`, `type`, `echo`, `copy`, `del`, `mkdir`, `rmdir`, `cls`,
+  `pwd`, `exit`), and falls back to `CreateProcessW` for external commands.
+  Manual eVC4 MIPSII validation succeeded with `CLMIPS.EXE` and `LINK.EXE`,
+  producing `target\host_progs\cmd\cmd.exe`; the committed artifact is source
+  only, with generated objects/exe under ignored `target\`.
+
 ## False Leads
 
 - A process-directory fallback for rooted `CreateFileW` paths was tested and
