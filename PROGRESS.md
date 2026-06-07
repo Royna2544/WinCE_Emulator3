@@ -22,6 +22,17 @@
   unicorn,evc4-fixtures --test fixture_exes` passes, and the focused eVC run
   `WINCE_FIXTURE_FILTER=171_loadlibrary_guest_dll cargo test --features
   unicorn,evc4-fixtures --test fixture_exes -- --ignored --nocapture` passes.
+- The runtime guest-DLL fixture suite now includes
+  `172_loadlibrary_dependent_guest_dll`. The harness links later fixture DLLs
+  against import libraries produced by earlier fixture DLLs, allowing real PE
+  imports between sibling DLLs. The fixture builds `dependency_user.dll` with a
+  normal import from `dependency_base.dll`, then the EXE loads only
+  `dependency_user.dll`, resolves `DependentUserExport`, and calls through the
+  patched guest IAT into the base DLL. The focused eVC run
+  `WINCE_FIXTURE_FILTER=172_loadlibrary_dependent_guest_dll cargo test
+  --features unicorn,evc4-fixtures --test fixture_exes -- --ignored
+  --nocapture` passes, proving recursive runtime dependency loading and
+  guest-DLL-to-guest-DLL import resolution for eVC-built MIPS DLLs.
 - The latest attachment audit has been merged into `PLAN.MD`/`TODO.md` as
   explicit queued fidelity work: raw/non-Unicorn loader alignment, core-vs-guest
   DLL boundary diagnostics, actionable must-implement stub hits,

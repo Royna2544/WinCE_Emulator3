@@ -38,6 +38,10 @@ The runner links it as `<dll-name>.dll`, stages it beside the fixture EXE, and
 keeps the generated import library under the fixture output directory. Use a
 `.def` file for ordinal-only exports.
 
+Fixture DLLs are built in sorted directory-name order. Each later DLL is linked
+against import libraries produced by earlier DLLs in the same fixture, so name
+low-level dependency DLL directories before the DLLs that import from them.
+
 ## Important
 
 The emulator runtime must not invoke eVC4.

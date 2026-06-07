@@ -378,8 +378,16 @@ mod fixtures {
         })?;
 
         eprintln!("building eVC4 MIPSII fixture {}", fixture.name);
+        let mut fixture_import_libs = Vec::new();
         for dll in &fixture.dlls {
-            build_fixture_dll(dll, config, manifest_dir, &fixture.output_dir)?;
+            build_fixture_dll(
+                dll,
+                config,
+                manifest_dir,
+                &fixture.output_dir,
+                &fixture_import_libs,
+            )?;
+            fixture_import_libs.push(dll.import_lib_path.clone());
         }
 
         let mut objects = Vec::new();
@@ -422,6 +430,7 @@ mod fixtures {
         config: &ToolConfig,
         manifest_dir: &Path,
         output_dir: &Path,
+        fixture_import_libs: &[PathBuf],
     ) -> Result<()> {
         eprintln!("building fixture DLL {}", dll.name);
         let mut objects = Vec::new();
@@ -445,7 +454,14 @@ mod fixtures {
             resources.push(res);
         }
 
-        run_link_dll(config, &objects, &resources, dll, dll_uses_mfc(dll)?)
+        run_link_dll(
+            config,
+            &objects,
+            &resources,
+            dll,
+            fixture_import_libs,
+            dll_uses_mfc(dll)?,
+        )
     }
 
     fn run_compile(
@@ -543,6 +559,7 @@ mod fixtures {
         objects: &[PathBuf],
         resources: &[PathBuf],
         dll: &FixtureDll,
+        fixture_import_libs: &[PathBuf],
         uses_mfc: bool,
     ) -> Result<()> {
         let mut command = Command::new(&config.link);
@@ -566,6 +583,7 @@ mod fixtures {
         command.args(&config.lflags);
         command.args(objects);
         command.args(resources);
+        command.args(fixture_import_libs);
         command.args(["coredll.lib", "corelibc.lib"]);
         run_command("link fixture dll", &mut command)
     }

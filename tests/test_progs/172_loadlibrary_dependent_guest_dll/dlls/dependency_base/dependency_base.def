@@ -1,0 +1,4 @@
+LIBRARY dependency_base
+
+EXPORTS
+    DependencyBaseValue @5
