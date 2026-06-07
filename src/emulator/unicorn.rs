@@ -2076,12 +2076,7 @@ impl UnicornMips {
             base: USER_KDATA_PAGE_BASE,
             bytes: user_kdata_page(),
         });
-        let trap_page = import_trap_code_page(&self.import_traps);
-        self.mapped_blobs.push(MappedBlob {
-            name: "ce-import-traps".to_owned(),
-            base: IMPORT_TRAP_BASE,
-            bytes: trap_page,
-        });
+        refresh_import_trap_page_blob(&mut self.mapped_blobs, &self.import_traps);
         Ok(())
     }
 
@@ -5739,6 +5734,23 @@ fn advance_trap_base(current: u32, trap_count: usize) -> Result<u32> {
         ));
     }
     Ok(next)
+}
+
+fn refresh_import_trap_page_blob(mapped_blobs: &mut Vec<MappedBlob>, traps: &ImportTrapTable) {
+    let trap_page = import_trap_code_page(traps);
+    if let Some(blob) = mapped_blobs
+        .iter_mut()
+        .find(|blob| blob.name == "ce-import-traps")
+    {
+        blob.base = IMPORT_TRAP_BASE;
+        blob.bytes = trap_page;
+    } else {
+        mapped_blobs.push(MappedBlob {
+            name: "ce-import-traps".to_owned(),
+            base: IMPORT_TRAP_BASE,
+            bytes: trap_page,
+        });
+    }
 }
 
 #[cfg(feature = "unicorn")]
@@ -21185,6 +21197,46 @@ mod unicorn_tests {
         assert_eq!(field(36), 0x1000_0002);
         assert_eq!(field(40), 0x1000_0001);
         assert_eq!(field(44), 0x0000_00a1);
+    }
+
+    #[test]
+    fn refresh_import_trap_page_blob_replaces_existing_blob() {
+        let mut blobs = vec![
+            super::MappedBlob {
+                name: "ce-import-traps".to_owned(),
+                base: 0x1234_0000,
+                bytes: vec![0xaa; 16],
+            },
+            super::MappedBlob {
+                name: "other".to_owned(),
+                base: 0x2000_0000,
+                bytes: vec![1, 2, 3],
+            },
+        ];
+
+        super::refresh_import_trap_page_blob(
+            &mut blobs,
+            &crate::emulator::imports::ImportTrapTable::new(),
+        );
+
+        assert_eq!(blobs.len(), 2);
+        let trap_blob = blobs
+            .iter()
+            .find(|blob| blob.name == "ce-import-traps")
+            .unwrap();
+        assert_eq!(trap_blob.base, crate::emulator::imports::IMPORT_TRAP_BASE);
+        assert_eq!(
+            trap_blob.bytes.len(),
+            crate::emulator::imports::IMPORT_TRAP_PAGE_SIZE as usize
+        );
+        assert_eq!(trap_blob.bytes[0], 0);
+        let dynamic_offset = (crate::emulator::imports::DYNAMIC_COREDLL_PROC_TRAP_BASE
+            - crate::emulator::imports::IMPORT_TRAP_BASE) as usize;
+        assert_eq!(
+            &trap_blob.bytes[dynamic_offset..dynamic_offset + 4],
+            &0x03e0_0008u32.to_le_bytes()
+        );
+        assert!(blobs.iter().any(|blob| blob.name == "other"));
     }
 
     #[test]

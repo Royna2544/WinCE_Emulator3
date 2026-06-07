@@ -95,6 +95,26 @@ impl ImportTrapTable {
         self.traps.get(&address)
     }
 
+    pub fn next_static_trap_base(&self, reserved_bytes: u32) -> Result<u32> {
+        let mut next_address = IMPORT_TRAP_BASE;
+        for trap in self.traps.values() {
+            if trap.address < IMPORT_TRAP_BASE || trap.address >= DYNAMIC_COREDLL_PROC_TRAP_BASE {
+                continue;
+            }
+            let after_trap = trap
+                .address
+                .checked_add(IMPORT_TRAP_STRIDE)
+                .ok_or_else(|| Error::InvalidArgument("import trap base overflow".to_owned()))?;
+            next_address = next_address.max(after_trap);
+        }
+        if next_address >= DYNAMIC_COREDLL_PROC_TRAP_BASE.saturating_sub(reserved_bytes) {
+            return Err(Error::InvalidArgument(
+                "import trap page is full".to_owned(),
+            ));
+        }
+        Ok(next_address)
+    }
+
     pub fn merge(&mut self, other: Self) {
         self.traps.extend(other.traps);
     }
@@ -1043,6 +1063,56 @@ mod tests {
             external.resolve("DYNAMIC", &ImportBy::Ordinal(7)),
             Some(0x6500_7770)
         );
+    }
+
+    #[test]
+    fn next_static_trap_base_tracks_static_slots_without_dynamic_range() {
+        let mut table = ImportTrapTable::new();
+        assert_eq!(table.next_static_trap_base(0).unwrap(), IMPORT_TRAP_BASE);
+        table.insert(ImportTrap {
+            address: IMPORT_TRAP_BASE,
+            module_kind: ImportModuleKind::Coredll,
+            module_name: "coredll.dll".to_owned(),
+            ordinal: Some(1),
+            name: None,
+            iat_va: 0x1000,
+        });
+        table.insert(ImportTrap {
+            address: IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 3,
+            module_kind: ImportModuleKind::Winsock,
+            module_name: "winsock.dll".to_owned(),
+            ordinal: None,
+            name: Some("socket".to_owned()),
+            iat_va: 0x2000,
+        });
+        table.insert(ImportTrap {
+            address: DYNAMIC_COREDLL_PROC_TRAP_BASE,
+            module_kind: ImportModuleKind::Coredll,
+            module_name: "coredll.dll".to_owned(),
+            ordinal: Some(7),
+            name: None,
+            iat_va: 0,
+        });
+
+        assert_eq!(
+            table.next_static_trap_base(0).unwrap(),
+            IMPORT_TRAP_BASE + IMPORT_TRAP_STRIDE * 4
+        );
+    }
+
+    #[test]
+    fn next_static_trap_base_rejects_reserved_dynamic_space() {
+        let mut table = ImportTrapTable::new();
+        table.insert(ImportTrap {
+            address: DYNAMIC_COREDLL_PROC_TRAP_BASE - IMPORT_TRAP_STRIDE,
+            module_kind: ImportModuleKind::Coredll,
+            module_name: "coredll.dll".to_owned(),
+            ordinal: Some(1),
+            name: None,
+            iat_va: 0,
+        });
+
+        assert!(table.next_static_trap_base(IMPORT_TRAP_STRIDE).is_err());
     }
 
     #[test]

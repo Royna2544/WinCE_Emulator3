@@ -27,13 +27,16 @@
     configured search dirs, mounted `\Windows`) for startup/child preload and
     the future runtime mapper. The live import hook now uses a mutable/persisted
     trap table, so dynamically loaded DLL imports can be merged into live
-    dispatch once the mapper is added. `ExternalImportTable` can also now ingest
+    dispatch once the mapper is added. Static trap allocation now preserves the
+    dynamic `GetProcAddress` trap range, and the persisted `ce-import-traps`
+    blob can be refreshed in place. `ExternalImportTable` can also now ingest
     already-loaded module exports for runtime guest-DLL-to-guest-DLL import
     resolution.
   - Required fix: wire the Unicorn import-trap path to a runtime PE loader that
     can search `D:\INAVI_Emulator\DUMPPLZ\Windows`, map/relocate the DLL,
-    patch COREDLL and external guest-DLL imports, refresh import traps,
-    register exports, and run TLS/`DllMain` attach/detach callouts.
+    patch COREDLL and external guest-DLL imports, rewrite the refreshed trap
+    page into live Unicorn memory, register exports, and run TLS/`DllMain`
+    attach/detach callouts.
   - Status: open. Do not treat the new module refcount surface as full dynamic
     guest DLL loading.
 - Open: Winsock isolated subnet is address-model only; blocking socket waits

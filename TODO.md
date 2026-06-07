@@ -20,13 +20,16 @@
   `LoadLibraryW/LoadLibraryExW` still only reuse already registered modules and
   do not yet synchronously map a new dumped MIPS DLL from
   `D:\INAVI_Emulator\DUMPPLZ\Windows`. Implement PE map/relocate/import
-  patching, dynamic trap-page refresh, external guest-DLL import resolution,
-  export registration, TLS callbacks, and `DllMain` attach/detach callouts. The
-  live import hook now has a mutable/persisted trap table, so the next mapper
-  step can merge new DLL import traps and rewrite the live trap page, and
-  `ExternalImportTable::add_module_exports` can resolve imports against
-  already-loaded runtime modules. Keep `C:\WINCE600` as the behavior reference
-  and update `PLAN.MD` after each port.
+  patching, live Unicorn trap-page refresh, external guest-DLL import
+  resolution, export registration, TLS callbacks, and `DllMain` attach/detach
+  callouts. The live import hook now has a mutable/persisted trap table,
+  static slot allocation preserves the dynamic COREDLL proc range, and the
+  persisted `ce-import-traps` blob can be refreshed in place. The next mapper
+  step should map the DLL, patch imports starting from
+  `next_static_trap_base(...)`, merge the new traps, write the refreshed page
+  into live Unicorn memory, and register exports through
+  `ExternalImportTable::add_module_exports`. Keep `C:\WINCE600` as the
+  behavior reference and update `PLAN.MD` after each port.
 - COREDLL fallback audit follow-up: stubs now carry audit classification plus
   raw import-trap context with thread id, caller PC, and trap PC. Next, add the
   remaining owning-module context where available and make

@@ -22,6 +22,15 @@
   capture. Existing trap dispatch still behaves the same, but the runtime DLL
   mapper can now add traps for newly mapped guest DLL imports and have both live
   dispatch and later diagnostics see them. Focused import-trap coverage passes.
+- Runtime guest-DLL import patching now has the next trap-table groundwork:
+  `ImportTrapTable::next_static_trap_base` finds the next static import-trap
+  slot while preserving the dynamic `GetProcAddress` trap range, and Unicorn
+  image setup now refreshes the persisted `ce-import-traps` mapped blob through
+  a shared helper instead of pushing a one-shot page. This does not yet rewrite
+  the live Unicorn trap page after a runtime load, but it gives the mapper the
+  allocation and persisted-state hooks it needs. Focused
+  `next_static_trap_base_*` and
+  `refresh_import_trap_page_blob_replaces_existing_blob` coverage passes.
 - `ExternalImportTable` now has a public `add_module_exports` path for
   already-loaded guest DLL metadata, not only `PeImage` startup inputs. This is
   the import-resolution surface the runtime loader will use after mapping a
