@@ -72,11 +72,12 @@ use wince_emulation_v3::{
             SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN, SMF_NOTIFY_MESSAGE, SMF_SENDER_NO_WAIT,
             SMF_TIMEOUT, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
             SWP_SHOWWINDOW, VK_LSHIFT, VK_SHIFT, WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE,
-            WM_CANCELMODE, WM_CHAR, WM_CLOSE, WM_DESTROY, WM_ENABLE, WM_ERASEBKGND, WM_GETDLGCODE,
-            WM_GETTEXT, WM_GETTEXTLENGTH, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
-            WM_MOVE, WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETFOCUS, WM_SETTEXT, WM_SHOWWINDOW,
-            WM_SIZE, WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_CHILD, WS_DISABLED, WS_GROUP,
-            WS_POPUP, WS_TABSTOP, WS_VISIBLE,
+            WM_CANCELMODE, WM_CHAR, WM_CLOSE, WM_DESTROY, WM_ENABLE, WM_ENTERMENULOOP,
+            WM_ERASEBKGND, WM_EXITMENULOOP, WM_GETDLGCODE, WM_GETTEXT, WM_GETTEXTLENGTH,
+            WM_INITMENUPOPUP, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_MOVE,
+            WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETFOCUS, WM_SETTEXT, WM_SHOWWINDOW, WM_SIZE,
+            WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_CHILD, WS_DISABLED, WS_GROUP, WS_POPUP,
+            WS_TABSTOP, WS_VISIBLE,
         },
         kernel::CeKernel,
         memory::PROCESS_HEAP_HANDLE,
@@ -10058,6 +10059,7 @@ fn coredll_raw_menu_items_round_trip_through_ce_menuiteminfo() -> Result<()> {
 #[test]
 fn coredll_raw_track_popup_menu_records_attempt_without_fake_selection() -> Result<()> {
     const TPM_LEFTBUTTON: u32 = 0x0000;
+    const TPM_NONOTIFY: u32 = 0x0080;
     const TPM_RETURNCMD: u32 = 0x0100;
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
@@ -10111,6 +10113,24 @@ fn coredll_raw_track_popup_menu_records_attempt_without_fake_selection() -> Resu
     assert_eq!(tracking.y, 200);
     assert_eq!(tracking.hwnd, hwnd);
     assert_eq!(tracking.exclude_rect, Some([10, 20, 110, 140]));
+    assert_eq!(
+        kernel
+            .resources
+            .popup_notifications()
+            .iter()
+            .map(|notification| (
+                notification.hwnd,
+                notification.msg,
+                notification.wparam,
+                notification.lparam
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (hwnd, WM_ENTERMENULOOP, 1, 0),
+            (hwnd, WM_INITMENUPOPUP, popup, 0),
+            (hwnd, WM_EXITMENULOOP, 1, 0),
+        ]
+    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -10132,6 +10152,28 @@ fn coredll_raw_track_popup_menu_records_attempt_without_fake_selection() -> Resu
         .expect("return-command tracking should still be recorded");
     assert_eq!(tracking.flags, TPM_RETURNCMD);
     assert_eq!(tracking.exclude_rect, None);
+    assert_eq!(kernel.resources.popup_notifications().len(), 6);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRACK_POPUP_MENU_EX,
+            [popup, TPM_NONOTIFY, 322, 202, hwnd, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    let tracking = kernel
+        .resources
+        .last_popup_tracking()
+        .expect("nonotify tracking should still be recorded");
+    assert_eq!(tracking.flags, TPM_NONOTIFY);
+    assert_eq!(kernel.resources.popup_notifications().len(), 6);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

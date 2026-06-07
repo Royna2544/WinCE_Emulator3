@@ -90,7 +90,8 @@
   `SHAddToRecentDocs(SHARD_PATH/null)` recent shortcut/state path, file-change
   event delivery/PIDL payloads above the now-stateful
   `SHChangeNotifyRegisterI`/`SHFileNotifyRemoveI`/`SHFileNotifyFreeI`
-  registration/free path, popup/menu behavior, rendered modal `MessageBoxW`
+  registration/free path, rendered popup/menu windows and real selection above
+  the now-notifying `TrackPopupMenuEx` owner-message path, rendered modal `MessageBoxW`
   window/nested pump/button input above the
   now-recorded/default-result raw slice, keyboard translation, richer
   clipboard rendered ownership and delayed-render edge cases above the

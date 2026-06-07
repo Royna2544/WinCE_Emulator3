@@ -156,6 +156,14 @@
   `sh_get_file_info_uses_registry_associations_and_attributes` and
   `sh_get_file_info_rejects_unsupported_and_colliding_flags` pass; real icon
   extraction/image-list ownership remains queued.
+- `TrackPopupMenuEx` now mirrors the CE menu-loop notification boundary above
+  the existing popup tracking state. For valid owner HWNDs it sends and records
+  `WM_ENTERMENULOOP`, `WM_INITMENUPOPUP`, and `WM_EXITMENULOOP` unless
+  `TPM_NONOTIFY` is set, while `TPM_RETURNCMD` still returns no command rather
+  than fabricating a user selection. Focused coverage:
+  `coredll_raw_track_popup_menu_records_attempt_without_fake_selection`.
+  Rendered popup windows, hit-testing, keyboard navigation, and real command
+  selection remain queued.
 - Shell notification state now has a dedicated `ShellSystem` instead of a
   COREDLL-local placeholder. Raw `Shell_NotifyIconW @481` decodes the
   `NOTIFYICONDATAW` prefix, validates owner HWNDs, tracks add/modify/delete

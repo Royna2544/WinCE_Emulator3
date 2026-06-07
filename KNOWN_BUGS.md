@@ -98,10 +98,12 @@
     `Shell_NotifyIconW` tracks add/modify/delete state but does not yet deliver
     real interaction callbacks.
     `SHNotification*I` preserves/query data but not user interaction or
-    timeout/dismiss callbacks. `TrackPopupMenu*` tracks popup state without
-    interactive selection. `MessageBoxW` validates owners and records/defaults
-    the requested modal result, but does not yet create/render a modal dialog
-    or run a nested input pump. Basic `SHCreateShortcut`,
+    timeout/dismiss callbacks. `TrackPopupMenuEx` now sends CE menu-loop owner
+    notifications around tracked popup attempts, but still has no rendered
+    popup window or real interactive selection. `MessageBoxW` validates owners
+    and records/defaults the requested modal result, but does not yet
+    create/render a modal dialog or run a nested input pump. Basic
+    `SHCreateShortcut`,
     `SHGetShortcutTarget`, and bounded `SHCreateShortcutEx` unique-name/
     buffer-return behavior now create/read CE text shortcuts.
     `SHAddToRecentDocs(SHARD_PATH/null)` now creates/clears Recent-folder CE

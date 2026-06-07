@@ -147,6 +147,14 @@ pub struct PopupMenuTracking {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PopupMenuNotification {
+    pub hwnd: u32,
+    pub msg: u32,
+    pub wparam: u32,
+    pub lparam: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MenuItem {
     pub id: u32,
     pub item_type: u32,
@@ -299,6 +307,7 @@ pub struct ResourceSystem {
     dc_states: BTreeMap<u32, DcState>,
     dc_clips: BTreeMap<u32, u32>,
     last_popup_tracking: Option<PopupMenuTracking>,
+    popup_notifications: Vec<PopupMenuNotification>,
 }
 
 impl Default for ResourceSystem {
@@ -321,6 +330,7 @@ impl Default for ResourceSystem {
             dc_states: BTreeMap::new(),
             dc_clips: BTreeMap::new(),
             last_popup_tracking: None,
+            popup_notifications: Vec::new(),
         }
     }
 }
@@ -804,6 +814,14 @@ impl ResourceSystem {
 
     pub fn last_popup_tracking(&self) -> Option<&PopupMenuTracking> {
         self.last_popup_tracking.as_ref()
+    }
+
+    pub fn record_popup_notification(&mut self, notification: PopupMenuNotification) {
+        self.popup_notifications.push(notification);
+    }
+
+    pub fn popup_notifications(&self) -> &[PopupMenuNotification] {
+        &self.popup_notifications
     }
 
     pub fn create_accelerator(

@@ -158,6 +158,17 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     Actual `WM_FILECHANGEINFO` posting, PIDL-style item payloads, and event
     filtering remain queued until a CE-like file-notification source is wired.
 
+- Shell popup-menu APIs:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`,
+  `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\CESHELL\UI\defshellview.cpp`, and
+  `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\TASKBAR\extrasmenu.cpp`
+  - CE exposes `TPM_NONOTIFY`, `TPM_RETURNCMD`, and the menu-loop messages
+    `WM_ENTERMENULOOP`, `WM_INITMENUPOPUP`, and `WM_EXITMENULOOP`. Shell code
+    uses `TrackPopupMenu` both for blocking notification-style popups and for
+    `TPM_RETURNCMD` command queries. v3 now records popup tracking and sends
+    the CE owner notification sequence unless `TPM_NONOTIFY` is set, while it
+    still refuses to invent a command result without real user selection.
+
 - Old MIPS CE kernel-call encoding:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\nkmips.h`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c`, and corroborating

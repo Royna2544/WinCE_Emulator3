@@ -27,8 +27,8 @@ use crate::{
         },
         registry::{HKey, RegOpenResult, RegQueryValueResult},
         resource::{
-            AcceleratorEntry, FontObject, MenuItem, PopupMenuTracking, RegionObject, ResourceId,
-            stock_object_handle,
+            AcceleratorEntry, FontObject, MenuItem, PopupMenuNotification, PopupMenuTracking,
+            RegionObject, ResourceId, stock_object_handle,
         },
         shell::{
             MessageBoxRecord, NotificationResult, NotifyIconData, NotifyIconOp,
@@ -83,6 +83,7 @@ const KEYEVENTF_KEYUP: u32 = 0x0002;
 const KF_EXTENDED_LPARAM: u32 = 0x0100_0000;
 const KF_REPEAT_LPARAM: u32 = 0x4000_0000;
 const KF_UP_LPARAM: u32 = 0x8000_0000;
+const TPM_NONOTIFY: u32 = 0x0080;
 const TPM_RETURNCMD: u32 = 0x0100;
 const TPMPARAMS_SIZE: u32 = 20;
 const STRSAFE_E_INSUFFICIENT_BUFFER: u32 = 0x8007_007a;
@@ -12357,8 +12358,30 @@ fn track_popup_menu_ex_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     }
+    notify_popup_menu_owner(kernel, hwnd, menu, flags);
     kernel.threads.set_last_error(thread_id, 0);
     if flags & TPM_RETURNCMD != 0 { 0 } else { 1 }
+}
+
+fn notify_popup_menu_owner(kernel: &mut CeKernel, hwnd: u32, menu: u32, flags: u32) {
+    if hwnd == 0 || flags & TPM_NONOTIFY != 0 {
+        return;
+    }
+    for (msg, wparam, lparam) in [
+        (crate::ce::gwe::WM_ENTERMENULOOP, 1, 0),
+        (crate::ce::gwe::WM_INITMENUPOPUP, menu, 0),
+        (crate::ce::gwe::WM_EXITMENULOOP, 1, 0),
+    ] {
+        kernel
+            .resources
+            .record_popup_notification(PopupMenuNotification {
+                hwnd,
+                msg,
+                wparam,
+                lparam,
+            });
+        let _ = kernel.send_message_w(hwnd, msg, wparam, lparam);
+    }
 }
 
 fn get_sub_menu_raw(kernel: &mut CeKernel, thread_id: u32, menu: u32, position: u32) -> u32 {
