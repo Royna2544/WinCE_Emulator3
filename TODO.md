@@ -23,8 +23,10 @@
   patching, dynamic trap-page refresh, external guest-DLL import resolution,
   export registration, TLS callbacks, and `DllMain` attach/detach callouts. The
   live import hook now has a mutable/persisted trap table, so the next mapper
-  step can merge new DLL import traps and rewrite the live trap page. Keep
-  `C:\WINCE600` as the behavior reference and update `PLAN.MD` after each port.
+  step can merge new DLL import traps and rewrite the live trap page, and
+  `ExternalImportTable::add_module_exports` can resolve imports against
+  already-loaded runtime modules. Keep `C:\WINCE600` as the behavior reference
+  and update `PLAN.MD` after each port.
 - COREDLL fallback audit follow-up: stubs now carry audit classification plus
   raw import-trap context with thread id, caller PC, and trap PC. Next, add the
   remaining owning-module context where available and make

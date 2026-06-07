@@ -407,23 +407,44 @@ fn normalize_coredll_import_ordinal(ordinal: u32) -> u32 {
 
 impl ExternalImportTable {
     pub fn add_pe_image(&mut self, module_name: &str, image: &PeImage, load_base: u32) {
-        let mut module = ExternalImportModule {
-            module_name: module_name.to_owned(),
-            image_base: load_base,
-            by_ordinal: BTreeMap::new(),
-            by_name: BTreeMap::new(),
-        };
+        let mut by_ordinal = BTreeMap::new();
+        let mut by_name = BTreeMap::new();
         if let Some(exports) = image.exports.as_ref() {
             for export in &exports.functions {
                 if export.rva == 0 || export.forwarder.is_some() {
                     continue;
                 }
                 let va = load_base.wrapping_add(export.rva);
-                module.by_ordinal.insert(export.ordinal, va);
+                by_ordinal.insert(export.ordinal, va);
                 if let Some(name) = export.name.as_deref() {
-                    module.by_name.insert(normalize_symbol(name), va);
+                    by_name.insert(normalize_symbol(name), va);
                 }
             }
+        }
+        self.add_module_exports(module_name, load_base, by_name, by_ordinal);
+    }
+
+    pub fn add_module_exports<N, O>(
+        &mut self,
+        module_name: &str,
+        image_base: u32,
+        exports_by_name: N,
+        exports_by_ordinal: O,
+    ) where
+        N: IntoIterator<Item = (String, u32)>,
+        O: IntoIterator<Item = (u32, u32)>,
+    {
+        let mut module = ExternalImportModule {
+            module_name: module_name.to_owned(),
+            image_base,
+            by_ordinal: BTreeMap::new(),
+            by_name: BTreeMap::new(),
+        };
+        for (name, address) in exports_by_name {
+            module.by_name.insert(normalize_symbol(&name), address);
+        }
+        for (ordinal, address) in exports_by_ordinal {
+            module.by_ordinal.insert(ordinal, address);
         }
         self.modules.insert(normalize_module(module_name), module);
     }
@@ -939,18 +960,13 @@ mod tests {
                 },
             ],
         }];
-        let mut module = ExternalImportModule {
-            module_name: "commctrl.dll".to_owned(),
-            image_base: 0x6200_0000,
-            by_ordinal: BTreeMap::new(),
-            by_name: BTreeMap::new(),
-        };
-        module
-            .by_name
-            .insert("initcommoncontrolsex".to_owned(), 0x6200_1234);
-        module.by_ordinal.insert(17, 0x6200_5678);
         let mut external = ExternalImportTable::default();
-        external.modules.insert("commctrl".to_owned(), module);
+        external.add_module_exports(
+            "commctrl.dll",
+            0x6200_0000,
+            [("InitCommonControlsEx".to_owned(), 0x6200_1234)],
+            [(17, 0x6200_5678)],
+        );
 
         let mut mapped = vec![0; 0x4000];
         let table = patch_supported_imports_with_external(
@@ -989,15 +1005,8 @@ mod tests {
                 import: ImportBy::Ordinal(2),
             }],
         }];
-        let mut module = ExternalImportModule {
-            module_name: "commctrl.dll".to_owned(),
-            image_base: 0x4015_0000,
-            by_ordinal: BTreeMap::new(),
-            by_name: BTreeMap::new(),
-        };
-        module.by_ordinal.insert(2, 0x4017_9d5c);
         let mut external = ExternalImportTable::default();
-        external.modules.insert("commctrl".to_owned(), module);
+        external.add_module_exports("commctrl.dll", 0x4015_0000, [], [(2, 0x4017_9d5c)]);
 
         let mut mapped = vec![0; 0x4000];
         mapped[0x3000..0x3004].copy_from_slice(&0x8000_0002u32.to_le_bytes());
@@ -1007,6 +1016,32 @@ mod tests {
         assert_eq!(
             u32::from_le_bytes(mapped[0x3000..0x3004].try_into().unwrap()),
             0x4017_9d5c
+        );
+    }
+
+    #[test]
+    fn external_table_accepts_runtime_loaded_module_exports() {
+        let mut external = ExternalImportTable::default();
+        external.add_module_exports(
+            "Dynamic.DLL",
+            0x6500_0000,
+            [("MixedCaseExport".to_owned(), 0x6500_2340)],
+            [(7, 0x6500_7770)],
+        );
+
+        assert_eq!(
+            external.resolve(
+                "dynamic.dll",
+                &ImportBy::Name {
+                    hint: 0,
+                    name: "mixedcaseexport".to_owned(),
+                },
+            ),
+            Some(0x6500_2340)
+        );
+        assert_eq!(
+            external.resolve("DYNAMIC", &ImportBy::Ordinal(7)),
+            Some(0x6500_7770)
         );
     }
 

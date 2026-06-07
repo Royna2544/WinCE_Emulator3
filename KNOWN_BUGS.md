@@ -27,7 +27,9 @@
     configured search dirs, mounted `\Windows`) for startup/child preload and
     the future runtime mapper. The live import hook now uses a mutable/persisted
     trap table, so dynamically loaded DLL imports can be merged into live
-    dispatch once the mapper is added.
+    dispatch once the mapper is added. `ExternalImportTable` can also now ingest
+    already-loaded module exports for runtime guest-DLL-to-guest-DLL import
+    resolution.
   - Required fix: wire the Unicorn import-trap path to a runtime PE loader that
     can search `D:\INAVI_Emulator\DUMPPLZ\Windows`, map/relocate the DLL,
     patch COREDLL and external guest-DLL imports, refresh import traps,

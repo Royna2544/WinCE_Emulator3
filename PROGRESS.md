@@ -22,6 +22,11 @@
   capture. Existing trap dispatch still behaves the same, but the runtime DLL
   mapper can now add traps for newly mapped guest DLL imports and have both live
   dispatch and later diagnostics see them. Focused import-trap coverage passes.
+- `ExternalImportTable` now has a public `add_module_exports` path for
+  already-loaded guest DLL metadata, not only `PeImage` startup inputs. This is
+  the import-resolution surface the runtime loader will use after mapping a
+  DLL or when resolving a dynamically loaded DLL against previously loaded
+  guest modules. Focused runtime-module export lookup coverage passes.
 - COREDLL fallback audit now carries real raw-dispatch context from the import
   trap boundary. `CoredllRawContext` records thread id, caller PC, and trap PC;
   the Unicorn import hook fills it from the active CE thread and guest RA before
