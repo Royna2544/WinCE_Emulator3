@@ -2959,10 +2959,10 @@ impl Gwe {
         min_msg: u32,
         max_msg: u32,
     ) -> Option<Message> {
-        if let Some(message) = self.take_matching_message(thread_id, hwnd, min_msg, max_msg) {
+        if let Some(message) = self.take_matching_sent_message(thread_id, hwnd, min_msg, max_msg) {
             return Some(message);
         }
-        if let Some(message) = self.take_matching_sent_message(thread_id, hwnd, min_msg, max_msg) {
+        if let Some(message) = self.take_matching_message(thread_id, hwnd, min_msg, max_msg) {
             return Some(message);
         }
         if let Some(message) = self.take_quit_message(thread_id) {
@@ -2993,6 +2993,11 @@ impl Gwe {
         max_msg: u32,
         flags: PeekFlags,
     ) -> Option<Message> {
+        if let Some(message) =
+            self.peek_matching_sent_message(thread_id, hwnd, min_msg, max_msg, flags)
+        {
+            return Some(message);
+        }
         if let Some(queue) = self.queues.get_mut(&thread_id) {
             if let Some(index) = queue
                 .iter()
@@ -3010,11 +3015,6 @@ impl Gwe {
                     queue.get(index).cloned()
                 };
             }
-        }
-        if let Some(message) =
-            self.peek_matching_sent_message(thread_id, hwnd, min_msg, max_msg, flags)
-        {
-            return Some(message);
         }
         if flags.contains(PeekFlags::REMOVE) {
             if let Some(message) = self.take_quit_message(thread_id) {

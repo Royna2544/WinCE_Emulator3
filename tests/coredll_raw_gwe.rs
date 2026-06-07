@@ -8800,6 +8800,176 @@ fn coredll_raw_dispatch_completes_queued_cross_thread_send() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_peek_message_services_sent_before_posted() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let sender_thread = 146;
+    let receiver_thread = 147;
+    let msg_ptr = 0xb040;
+    memory.map_words(msg_ptr, 7);
+
+    let hwnd =
+        kernel.create_window_ex_w(receiver_thread, "SYNC_SEND_PEEK_ORDER", "", None, 0, 0, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            receiver_thread,
+            ORD_POST_MESSAGE_W,
+            [hwnd, WM_USER + 1, 0x1111, 0x2222],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            sender_thread,
+            ORD_SEND_MESSAGE_W,
+            [hwnd, WM_ERASEBKGND, 0x3333, 0x4444],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            receiver_thread,
+            ORD_PEEK_MESSAGE_W,
+            [msg_ptr, 0, 0, 0, PeekFlags::REMOVE.bits()],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(msg_ptr)?, hwnd);
+    assert_eq!(memory.read_u32(msg_ptr + 4)?, WM_ERASEBKGND);
+    assert_eq!(memory.read_u32(msg_ptr + 8)?, 0x3333);
+    assert_eq!(memory.read_u32(msg_ptr + 12)?, 0x4444);
+    assert!(kernel.gwe.in_send_message(receiver_thread));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            receiver_thread,
+            ORD_DISPATCH_MESSAGE_W,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.take_completed_send_message_result(1), Some(1));
+
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        receiver_thread,
+        msg_ptr,
+        hwnd,
+        WM_USER + 1,
+        0x1111,
+        0x2222,
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_get_message_services_sent_before_posted() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let sender_thread = 148;
+    let receiver_thread = 149;
+    let msg_ptr = 0xb080;
+    memory.map_words(msg_ptr, 7);
+
+    let hwnd = kernel.create_window_ex_w(receiver_thread, "SYNC_SEND_GET_ORDER", "", None, 0, 0, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            receiver_thread,
+            ORD_POST_MESSAGE_W,
+            [hwnd, WM_USER + 3, 0x5555, 0x6666],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            sender_thread,
+            ORD_SEND_MESSAGE_W,
+            [hwnd, WM_ERASEBKGND, 0x7777, 0x8888],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        receiver_thread,
+        msg_ptr,
+        hwnd,
+        WM_ERASEBKGND,
+        0x7777,
+        0x8888,
+    );
+    assert!(kernel.gwe.in_send_message(receiver_thread));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            receiver_thread,
+            ORD_DISPATCH_MESSAGE_W,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.take_completed_send_message_result(1), Some(1));
+
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        receiver_thread,
+        msg_ptr,
+        hwnd,
+        WM_USER + 3,
+        0x5555,
+        0x6666,
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_send_message_cross_thread_queues_transaction() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;

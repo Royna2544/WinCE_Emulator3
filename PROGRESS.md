@@ -661,14 +661,18 @@
   `WindowFromPoint` behavior. The current top-right `메뉴` trace did not show a
   `ChildWindowFromPoint` call around the failed tap, so this is a confirmed CE
   fidelity fix but not yet proven as the visible menu transition fix.
-- GWE message retrieval order now follows the CE message-queue order from
-  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`: posted messages are
-  returned before received synchronous sends, then quit/paint. Focused coverage
-  `posted_messages_are_retrieved_before_received_sends` and existing raw
-  queued cross-thread send coverage pass. This is a CE-correct queue-order fix,
-  but mounted `target\menu_popup_orderfix1_*` evidence showed it is not by
-  itself sufficient to make the top-right menu tap reveal the expected action
-  controls.
+- GWE message retrieval order now follows the CE sent/nonqueued-before-posted
+  queue shape from `C:\WINCE600\PRIVATE\WINCEOS\COREOS\GWE\INC\cmsgque.h`.
+  `GetMessageW` and `PeekMessageW(PM_REMOVE)` service queued synchronous sent
+  messages before ordinary posted messages, preserving `InSendMessage` state
+  until `DispatchMessageW` completes the transaction. Focused coverage
+  `coredll_raw_get_message_services_sent_before_posted` and
+  `coredll_raw_peek_message_services_sent_before_posted` passes. Fresh visible
+  host validation `target\host_presenter_sendorder1_*` closed the exact
+  `happyway_win.exe` cross-process send trap seen in the frozen run:
+  `gwe=send:1 done:0` advanced to `gwe=send:1 done:1`, screenshot hashes
+  changed during startup, and the run continued into the known
+  `resmapi_800x480.bin` resource/hidden-chrome frontier.
 - Windows-sudo `cargo flamegraph` profiling is now in use for mounted iNavi
   startup. Fresh virtual runs
   `target\startup_flame_virtual_sudo1.svg` and

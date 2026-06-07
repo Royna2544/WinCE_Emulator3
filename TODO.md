@@ -146,16 +146,17 @@
   right/bottom chrome, then compare the missing show sequence against the
   successful bottom-strip/menu path. Do not force `WS_VISIBLE`: this trace says
   the preload hide is guest behavior.
-- Route-search path next step after the sent-message fix: continue from
-  `target\route_after_sendfix1_*`. The old `happyway_win.exe`
-  `SendMessageW(hwnd=0x0002000c,msg=0x0401,wParam=14)` deadlock is closed/watch:
-  CE-style internal sent-message dispatch during `GetMessageW` now completes
-  the transaction and parked sender resume restores the parent context. The
-  current route-search frontier is whatever follows that IPC: inspect the
-  later `iSearch.exe` activation, `afxwnd42u` child-window creation/show
-  sequence, route dialog lifetime, and remaining sleep/timer waits. Do not
-  force visibility or change route coordinates unless fresh traces show input
-  routing regressed.
+- Route-search path next step after the sent-message ordering fix: continue
+  from `target\host_presenter_sendorder1_*`. The old `happyway_win.exe`
+  `SendMessageW(hwnd=0x0002000c,msg=0x0401,wParam=14)` startup trap is
+  closed/watch: CE-style sent/nonqueued-before-posted retrieval now lets
+  `PeekMessageW`/`GetMessageW` service synchronous sends before ordinary
+  posted messages, and the fresh host run advanced from `gwe=send:1 done:0`
+  to `gwe=send:1 done:1`. The current route-search frontier is again the
+  later resource/hidden-chrome sequence: inspect `iSearch.exe` activation,
+  `afxwnd42u` child-window creation/show, route dialog lifetime, and remaining
+  sleep/timer waits. Do not force visibility or change route coordinates
+  unless fresh traces show input routing regressed.
 - Route-search visibility frontier: continue from `target\route_pos1_*`.
   Evidence now says `iSearch.exe` starts and the route/control children are
   created, but they end hidden before any finished route chrome appears. Use

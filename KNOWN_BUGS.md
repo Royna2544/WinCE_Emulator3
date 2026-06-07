@@ -1990,7 +1990,12 @@
     `imports.txt` still shows repeated `resmapi_800x480.bin` opens,
     `CreateDIBSection`, `RSImage LoadPNG`, and `MoveWindow` for the hidden
     chrome. Process traces show real `iNavi.exe`, `happyway_win.exe`, and
-    `iSearch.exe` handoff rather than a presenter/input ANR.
+    `iSearch.exe` handoff rather than a presenter/input ANR. Fresh
+    `target\host_presenter_sendorder1_*` evidence confirms the earlier frozen
+    `happyway_win.exe` synchronous-send trap is closed: the host run advanced
+    from `gwe=send:1 done:0` to `gwe=send:1 done:1`, screenshot hashes changed
+    over time, and the remaining stall shape returned to resource/hidden-
+    chrome sequencing rather than a stranded send.
   - Status: active. Fix through CE startup/resource/GWE show-update semantics
     or generic hot-path performance. Do not force visibility or synthesize
     route UI.
