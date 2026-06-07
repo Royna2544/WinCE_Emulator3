@@ -12,6 +12,13 @@
 
 ## Current Slice
 
+- Queued runtime loader gaps from `PLAN.MD`: add direct guest-DLL and
+  dependent-DLL fixtures; parse and invoke runtime TLS callbacks; call guest
+  `DllMain(DLL_PROCESS_ATTACH)` on successful normal loads; call detach
+  callbacks/`DllMain(DLL_PROCESS_DETACH)` on final `FreeLibrary`; implement
+  forwarded exports; implement `DONT_RESOLVE_DLL_REFERENCES`; implement
+  datafile/resource-style `LoadLibraryExW`; harden runtime trampoline handling
+  for high/relocated DLLs; add compact runtime loader audit counters.
 - CE fidelity catch-up next slice: finish the runtime guest DLL loader at the
   Unicorn import-trap boundary. The kernel-side module manager/refcount shape
   now exists and the shared CE-aware DLL search order is implemented for

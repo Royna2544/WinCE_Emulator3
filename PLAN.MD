@@ -55,3 +55,40 @@ and isolated guest networking.
 - Recurring checks: `cargo fmt`, `cargo check --features unicorn,trace,win32-desktop`,
   `cargo test --features unicorn,trace,win32-desktop`, and a mounted iNavi run
   with `--remote-server 192.168.0.39:8765`.
+
+## Queued Loader Gaps
+
+These are not implemented yet and must remain queued until closed by focused
+fixtures plus mounted iNavi evidence:
+
+- Add direct runtime guest-DLL fixtures under `tests\test_progs`: one DLL with
+  `DllMain`, one named export, one ordinal export, and one EXE that calls
+  `LoadLibraryW`, `GetProcAddress`, invokes the export, and `FreeLibrary`.
+- Add a dependent-DLL runtime fixture where DLL A imports from DLL B, proving
+  recursive runtime dependency loading and guest-DLL-to-guest-DLL import
+  resolution through the module manager.
+- Parse PE TLS directory data for runtime DLLs, store callback addresses in
+  loaded-module metadata, and invoke TLS callbacks with
+  `DLL_PROCESS_ATTACH` before returning from a normal `LoadLibraryW`.
+- Invoke guest `DllMain(hinst, DLL_PROCESS_ATTACH, 0)` for normal code DLL
+  loads after import patching and TLS callbacks, using the same Unicorn guest
+  execution boundary as WNDPROC/thread callouts.
+- On final `FreeLibrary`, invoke guest `DllMain(..., DLL_PROCESS_DETACH, 0)`
+  and TLS detach callbacks, then mark the module unload-pending while keeping
+  mapped address ranges reserved.
+- Implement forwarded export resolution for `GetProcAddress` and import
+  patching. Forwarders must resolve through already loaded modules or trigger
+  CE search/load of the forwarded-to DLL; unresolved forwarders must fail
+  loudly, not return a plausible fake pointer.
+- Implement `DONT_RESOLVE_DLL_REFERENCES` semantics: map/reuse the module and
+  expose exports without recursive import resolution, TLS callbacks, or
+  `DllMain`, and clearly prevent execution paths that require unresolved IATs.
+- Implement datafile/resource-style `LoadLibraryExW` modes for resource access
+  without normal code execution, including `FindResourceW`/`LoadResource`
+  behavior from the loaded resource module.
+- Harden runtime trampoline handling for DLLs that relocate above ordinary
+  MIPS jump reach, matching the startup trampoline machinery without
+  corrupting guest code or reusing stale trampoline ranges.
+- Add compact loader audit counters/log summary: runtime load attempts,
+  successful maps, dependency loads, export lookups, forwarded exports, TLS
+  callbacks, `DllMain` attach/detach calls, and loud loader failures.
