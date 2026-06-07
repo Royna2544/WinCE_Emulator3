@@ -104,10 +104,13 @@
     the Unicorn import hook populates it before raw COREDLL dispatch, and
     fallback logs include those callsite details. `SHGetFileInfo` is explicitly
     must-implement so shell-visible file-info fallback cannot hide as a generic
-    safe failure.
-  - Status: closed/watch. Remaining audit work is fail-loud mode for
-    shell/UI/process/loader critical fallbacks plus any non-mapped caller
-    attribution that mounted traces prove necessary.
+    safe failure. Must-implement raw fallbacks now set
+    `ERROR_NOT_SUPPORTED` on the caller thread and use explicit failure-shaped
+    return values for critical loader/process/shell/UI APIs if they ever miss
+    the real path.
+  - Status: closed/watch. Remaining audit work is replacing the
+    must-implement stubs with real subsystem behavior plus any non-mapped
+    caller attribution that mounted traces prove necessary.
 - Closed/watch: `DeviceParser.exe` old MIPS CE terminate thunk no longer dies
   through the interrupt/zero-PC path.
   - Symptom: route-search startup could record `CreateProcessChildError` for

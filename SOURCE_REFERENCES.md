@@ -94,7 +94,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   return address falls inside a mapped process image or runtime DLL blob. This
   is diagnostic evidence for subsystem ports; it must not become app-specific
   behavior or a reason to return plausible fake success for shell/UI/process
-  loader calls.
+  loader calls. Must-implement raw fallbacks therefore record
+  `ERROR_NOT_SUPPORTED` for the caller thread and use explicit failure-shaped
+  return values until the specific CE API behavior is implemented.
 
 - COREDLL CRT route-search import:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\INC\crt_ordinals.h` and

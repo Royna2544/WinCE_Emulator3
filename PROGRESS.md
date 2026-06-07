@@ -162,7 +162,11 @@
   mapped process image or runtime DLL blob, giving must-implement stub hits the
   responsible `image:`/`dll:` owner in fallback logs. Focused coverage
   `mapped_blob_module_for_pc_attributes_image_and_runtime_dlls` verifies that
-  ordinary RAM blobs are not mislabeled as module callers.
+  ordinary RAM blobs are not mislabeled as module callers. Must-implement raw
+  fallbacks now also record `ERROR_NOT_SUPPORTED`, set that last-error value on
+  the caller thread when raw dispatch has context, and force explicit
+  failure-shaped return values for critical loader/process/shell/UI APIs such
+  as `LoadLibraryW` if they ever miss the real implementation path.
 - CE fidelity catch-up now has a durable implementation ledger in `PLAN.MD`;
   its first line is `Reference C:\WINCE600 sources` as requested. The first
   structural slice is implemented without app-specific behavior: loaded guest

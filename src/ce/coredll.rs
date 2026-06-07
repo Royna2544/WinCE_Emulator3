@@ -404,6 +404,7 @@ pub struct CoredllStubResult {
     pub policy: CoredllStubPolicy,
     pub audit: CoredllStubAuditClassification,
     pub context: Option<CoredllRawContext>,
+    pub last_error: Option<u32>,
     pub return_value: u32,
     pub args: Vec<u32>,
 }
@@ -686,6 +687,7 @@ impl CoredllExportTable {
                 } else {
                     let stub = CoredllStubResult::for_export(&export, args.to_vec(), Some(context));
                     trace_stub_fallback(&export, &stub);
+                    apply_stub_fallback_side_effects(kernel, &stub);
                     CoredllDispatch::Stubbed { export, stub }
                 }
             }
@@ -729,6 +731,7 @@ fn trace_stub_fallback(export: &CoredllExport, stub: &CoredllStubResult) {
             trap_pc = trap_pc.map(|pc| format!("0x{pc:08x}")),
             caller_module,
             policy = ?stub.policy,
+            last_error = stub.last_error,
             subsystem = ?stub.subsystem,
             "must-implement COREDLL export reached stub fallback"
         ),
@@ -742,6 +745,7 @@ fn trace_stub_fallback(export: &CoredllExport, stub: &CoredllStubResult) {
                 trap_pc = trap_pc.map(|pc| format!("0x{pc:08x}")),
                 caller_module,
                 policy = ?stub.policy,
+                last_error = stub.last_error,
                 audit = ?stub.audit,
                 subsystem = ?stub.subsystem,
                 "COREDLL export reached classified stub fallback"
@@ -759,11 +763,24 @@ impl CoredllStubResult {
         let subsystem = export.subsystem();
         let policy = CoredllStubPolicy::for_export(export, subsystem);
         let audit = CoredllStubAuditClassification::for_export(export, subsystem, policy);
+        let policy = match audit {
+            CoredllStubAuditClassification::MustImplement => {
+                CoredllStubPolicy::explicit_failure_for_export(export, policy)
+            }
+            CoredllStubAuditClassification::SafeNoOp
+            | CoredllStubAuditClassification::SafeFailure => policy,
+        };
+        let last_error = match audit {
+            CoredllStubAuditClassification::MustImplement => Some(ERROR_NOT_SUPPORTED),
+            CoredllStubAuditClassification::SafeNoOp
+            | CoredllStubAuditClassification::SafeFailure => None,
+        };
         Self {
             subsystem,
             policy,
             audit,
             context,
+            last_error,
             return_value: policy.return_value(),
             args,
         }
@@ -875,6 +892,38 @@ impl CoredllStubPolicy {
             Self::InvalidHandle => u32::MAX,
         }
     }
+
+    fn explicit_failure_for_export(export: &CoredllExport, current: Self) -> Self {
+        let name = normalize_name(&export.name);
+        if matches!(
+            name.as_str(),
+            "createfilemappingw"
+                | "createprocessw"
+                | "createthread"
+                | "getmodulehandlew"
+                | "getprocaddressa"
+                | "getprocaddressw"
+                | "loadlibraryexw"
+                | "loadlibraryw"
+                | "mapviewoffile"
+        ) {
+            return Self::NullPointer;
+        }
+        if matches!(current, Self::BoolSuccess | Self::VoidNoOp) {
+            return Self::BoolFailure;
+        }
+        current
+    }
+}
+
+fn apply_stub_fallback_side_effects(kernel: &mut CeKernel, stub: &CoredllStubResult) {
+    let Some(last_error) = stub.last_error else {
+        return;
+    };
+    let Some(context) = stub.context.as_ref() else {
+        return;
+    };
+    kernel.threads.set_last_error(context.thread_id, last_error);
 }
 
 impl CoredllExport {
