@@ -452,6 +452,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     preserves those explicit CE current-directory values in pending child
     launches, uses them for relative child executable lookup, and restores the
     effective current directory when parked processes are activated.
+  - `PUBLIC\SHELL\OAK\FILES\shell.reg` uses registry association command
+    templates such as `"\"%1\" %*"` for `exefile` and `explorer.exe %1` for
+    generic files. v3's `ShellExecuteEx` association path now treats `%*` as
+    the explicit `lpParameters` insertion point and only appends parameters
+    when the template did not include that placeholder.
   - `shellapi.h` also anchors `Shell_NotifyIcon` and the `NOTIFYICONDATAW`
     prefix. v3 now stores notify icon add/modify/delete state in
     `ShellSystem` and validates owner HWNDs through GWE, while leaving

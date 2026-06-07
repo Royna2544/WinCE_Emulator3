@@ -12007,7 +12007,8 @@ fn registry_string(kernel: &CeKernel, key: &str, value: &str) -> Option<String> 
 
 fn expand_shell_command_template(template: &str, target: &str, parameters: Option<&str>) -> String {
     let quoted_target = quote_shell_arg(target);
-    let params = parameters.unwrap_or_default();
+    let params = parameters.unwrap_or_default().trim();
+    let has_parameter_placeholder = template.contains("%*");
     let mut command = template
         .replace("\"%1\"", &quoted_target)
         .replace("\"%l\"", &quoted_target)
@@ -12016,7 +12017,7 @@ fn expand_shell_command_template(template: &str, target: &str, parameters: Optio
         .replace("%l", &quoted_target)
         .replace("%L", &quoted_target)
         .replace("%*", params);
-    if !params.is_empty() && !command.contains(params) {
+    if !params.is_empty() && !has_parameter_placeholder {
         command.push(' ');
         command.push_str(params);
     }

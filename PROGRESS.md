@@ -45,7 +45,10 @@
   current-directory fields in pending process launches; relative child EXE
   resolution now checks that CE current directory before the existing parent
   executable fallback, and parked process switching restores the effective
-  current directory with module path and command line. `SHCreateShortcutEx` now
+  current directory with module path and command line. Registry association
+  command templates now handle the CE `"%1" %*` shape from `shell.reg` by
+  replacing `%*` with `lpParameters`, and only append `lpParameters` when the
+  template lacks an explicit `%*` placeholder. `SHCreateShortcutEx` now
   shares the CE text-link writer, chooses a
   bounded unique sibling name with ` (2)` style suffixes when the requested
   link already exists, writes the actual name to the optional output buffer

@@ -89,8 +89,10 @@
   `SEE_MASK_NOCLOSEPROCESS` hProcess output, and `nShow` propagation into child
   `WinMain`. `ShellExecuteEx.lpDirectory` and raw `CreateProcessW.pszCurDir`
   now propagate into pending child launches, relative child-EXE resolution, and
-  parked-process identity restore. Continue with the remaining shell APIs from
-  the attachment:
+  parked-process identity restore. Registry association launch now covers the
+  CE `"%1" %*` command-template shape and appends `lpParameters` only when no
+  `%*` placeholder is present. Continue with the remaining shell APIs from the
+  attachment:
   richer `SHGetFileInfo` icon extraction/image-list behavior, notification
   interaction/callback delivery above the now-stateful `SHNotification*I` data
   APIs, recent-doc pruning/UI display and PIDL input above the now-backed
@@ -106,8 +108,9 @@
   caret blink/focus integration above the raw caret state. Basic
   `SHCreateShortcut`/`SHGetShortcutTarget` CE text-link create/read behavior is
   covered and still feeds `ShellExecuteEx`; `SHCreateShortcutEx` now covers
-  bounded unique-name and output-buffer behavior. Precise shell errors and
-  command-template edge cases remain queued.
+  bounded unique-name and output-buffer behavior. Precise shell errors,
+  non-EXE document edge cases, and broader command-template variants remain
+  queued.
   Notification records are now pruned during normal HWND/process teardown. Keep
   behavior registry-backed and generic; do not fake route UI.
 - Winsock fidelity follow-up: guest-visible local names now use the isolated

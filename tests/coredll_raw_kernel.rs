@@ -2080,7 +2080,7 @@ fn shell_execute_ex_resolves_registry_association_and_queues_process() -> Result
     kernel.registry.set_value(
         r"HKCR\navfile\Shell\Open\Command",
         "",
-        RegistryValue::string(r#""\Windows\viewer.exe" "%1""#),
+        RegistryValue::string(r#""\Windows\viewer.exe" "%1" %*"#),
     );
 
     let mut memory = TestGuestMemory::default();
@@ -2088,12 +2088,15 @@ fn shell_execute_ex_resolves_registry_association_and_queues_process() -> Result
     let info = 0x2_0000;
     let file_ptr = 0x2_0100;
     let directory_ptr = 0x2_0200;
+    let params_ptr = 0x2_0300;
     memory.map_words(info, 16);
     memory.write_word(info, 60);
     memory.write_word(info + 4, 0x0000_0040);
     memory.write_word(info + 16, file_ptr);
+    memory.write_word(info + 20, params_ptr);
     memory.write_word(info + 24, directory_ptr);
     memory.write_wide_z(file_ptr, "route.nav");
+    memory.write_wide_z(params_ptr, "-safe mode");
     memory.write_wide_z(directory_ptr, r"\Docs\");
 
     assert!(matches!(
@@ -2119,9 +2122,64 @@ fn shell_execute_ex_resolves_registry_association_and_queues_process() -> Result
     );
     assert_eq!(
         launches[0].command_line.as_deref(),
-        Some(r#""\Windows\viewer.exe" "\Docs\route.nav""#)
+        Some(r#""\Windows\viewer.exe" "\Docs\route.nav" -safe mode"#)
     );
     assert_eq!(launches[0].current_directory.as_deref(), Some(r"\Docs"));
+
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn shell_execute_ex_appends_parameters_without_template_placeholder() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("shell_execute_ex_assoc_append");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("Windows")).unwrap();
+    fs::write(root.join("Windows").join("viewer.exe"), b"fake exe").unwrap();
+    kernel.set_file_root(&root);
+    kernel
+        .registry
+        .set_value(r"HKCR\.nav", "", RegistryValue::string("navfile"));
+    kernel.registry.set_value(
+        r"HKCR\navfile\Shell\Open\Command",
+        "",
+        RegistryValue::string(r#""\Windows\viewer.exe" "%1""#),
+    );
+
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 46;
+    let info = 0x2_5000;
+    let file_ptr = 0x2_5100;
+    let params_ptr = 0x2_5200;
+    memory.map_words(info, 16);
+    memory.write_word(info, 60);
+    memory.write_word(info + 16, file_ptr);
+    memory.write_word(info + 20, params_ptr);
+    memory.write_wide_z(file_ptr, r"\Docs\route.nav");
+    memory.write_wide_z(params_ptr, "viewer.exe");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_EXECUTE_EX,
+            [info],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let launches = kernel.take_pending_process_launches();
+    assert_eq!(launches.len(), 1);
+    assert_eq!(
+        launches[0].command_line.as_deref(),
+        Some(r#""\Windows\viewer.exe" "\Docs\route.nav" viewer.exe"#)
+    );
 
     let _ = fs::remove_dir_all(root);
     Ok(())

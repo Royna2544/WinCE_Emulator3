@@ -114,6 +114,9 @@
     `ShellExecuteEx.lpDirectory` and raw `CreateProcessW.pszCurDir` now
     propagate to queued child process state, relative EXE resolution, and
     parked-process restore.
+    Registry association launch now handles the CE `"%1" %*` command-template
+    shape and avoids skipping parameter append merely because the parameter
+    text appears elsewhere in the command.
     `SHAddToRecentDocs(SHARD_PATH/null)` now creates/clears Recent-folder CE
     shortcuts and tracks recent-document shell state, but PIDL input, pruning,
     and UI presentation remain incomplete. `SHChangeNotifyRegisterI`,
