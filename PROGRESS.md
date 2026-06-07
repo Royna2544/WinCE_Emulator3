@@ -56,7 +56,12 @@
   reusing COREDLL or an already registered module, increments the reused module
   refcount, reports `ERROR_FILE_NOT_FOUND` for missing modules, and still
   returns `ERROR_NOT_SUPPORTED` for unsupported flags instead of pretending to
-  map bytes without a Unicorn memory context. The updated
+  map bytes without a Unicorn memory context. Runtime normal/no-resolve DLL
+  loads now also run the same MIPS Unicorn trampoline patcher used by startup
+  PE mapping before the DLL image is mapped, place generated stubs inline in
+  the mapped DLL image, and publish new trampoline ranges/jumps into both the
+  persisted emulator metadata and the live full-code-hook state; datafile loads
+  stay non-executable and skip trampoline patching. The updated
   `173_loadlibrary_tls_callback` fixture arms an EXE-owned detach order marker
   and proves the complete lifecycle order word `0x01020304`: TLS attach,
   `DllMain` attach, TLS detach, `DllMain` detach.

@@ -58,6 +58,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `GetProcAddress`. The raw/non-Unicorn helper cannot map new guest bytes,
     but it now mirrors the already-loaded-module reuse/refcount behavior for
     supported no-resolve/datafile flags and fails missing raw loads explicitly.
+    Runtime executable DLL loads now run the same MIPS Unicorn trampoline
+    patcher before map/write and publish inline stub ranges into live
+    full-code-hook metadata so high/relocated DLL branch/call sites can execute
+    through generated stubs in the same run slice.
 
 - CE loader lifecycle anchors:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\loader.c` and

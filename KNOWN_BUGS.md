@@ -42,12 +42,18 @@
     Raw/non-Unicorn `LoadLibraryExW` now aligns the supported-flag reuse case
     for already registered modules, including refcounting; missing raw loads
     still fail explicitly because that path cannot map guest DLL bytes.
+    Runtime normal/no-resolve DLL mapping now runs the MIPS Unicorn trampoline
+    patcher before map/write, embeds generated stubs inline in the mapped DLL
+    image, and updates live full-code-hook trampoline state so newly loaded
+    runtime DLL code can use those generated stubs in the same run slice.
     Final dynamic `FreeLibrary` now enters guest TLS callbacks and
     `DllMain(DLL_PROCESS_DETACH)` before marking normally loaded modules
     unload-pending.
-  - Required fix: finish fuller runtime trampoline handling and any future raw
-    helper behavior that can be represented without pretending to map bytes.
-    Guest TLS callbacks, `DllMain(DLL_PROCESS_ATTACH)`, direct-DLL final
+  - Required fix: add fast-start runtime trampoline hook variants only if
+    traces show runtime DLL code executing under `WINCE_EMU_FAST_START`, plus
+    any future raw helper behavior that can be represented without pretending
+    to map bytes. Guest TLS callbacks, `DllMain(DLL_PROCESS_ATTACH)`,
+    direct-DLL final
     `DllMain(DLL_PROCESS_DETACH)`, TLS detach ordering, forwarded exports,
     no-resolve runtime mapping, and datafile resource loads are covered by
     runtime eVC fixtures.

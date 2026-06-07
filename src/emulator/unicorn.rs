@@ -2431,9 +2431,11 @@ impl UnicornMips {
         let mapped_code = MappedCodeIndex::new(self.mapped_blobs.clone());
         let trampoline_ranges = self.trampoline_ranges.clone();
         let trampoline_jumps = self.trampoline_jumps.clone();
-        let trampoline_pages = trampoline_pages_for_ranges(&trampoline_ranges);
         let trampoline_stub_by_origin = trampoline_stub_by_origin(&trampoline_jumps);
-        let trampoline_origin_by_stub = trampoline_origin_by_stub(&trampoline_jumps);
+        let live_trampoline_state = Rc::new(RefCell::new(LiveTrampolineState::new(
+            trampoline_ranges.clone(),
+            trampoline_jumps.clone(),
+        )));
         let progress_import_traps = self.import_traps.clone();
         let kernel_ptr = kernel as *mut CeKernel;
         let framebuffer_ptr = framebuffer as *mut dyn Framebuffer;
@@ -2445,7 +2447,7 @@ impl UnicornMips {
             &mut self.parked_child_processes,
         )));
         let parked_child_processes_hook = Rc::clone(&parked_child_processes);
-        let trampoline_ranges_code_hook = trampoline_ranges.clone();
+        let live_trampoline_state_code_hook = Rc::clone(&live_trampoline_state);
         let blocked_get_message = Rc::new(RefCell::new(None::<UnicornBlockedGetMessage>));
         let blocked_get_message_live_hook = Rc::clone(&blocked_get_message);
         let cross_process_send_yield = Rc::new(RefCell::new(None::<UnicornCrossProcessSendYield>));
@@ -2525,8 +2527,9 @@ impl UnicornMips {
             }
             let direct_jump_target =
                 instruction.and_then(|instruction| decode_direct_jump_target(pc, instruction));
-            let direct_jump_target_in_trampoline = direct_jump_target
-                .is_some_and(|target| target_in_trampoline_pages(target, &trampoline_pages));
+            let trampoline_state = live_trampoline_state_code_hook.borrow();
+            let direct_jump_target_in_trampoline =
+                direct_jump_target.is_some_and(|target| trampoline_state.target_in_pages(target));
             if let (Some(instruction), Some(target)) = (instruction, direct_jump_target) {
                 if full_trace_enabled && instruction >> 26 == 0x03 {
                     push_unicorn_last_call(&last_calls_hook, uc, pc, target, "jal");
@@ -2553,31 +2556,23 @@ impl UnicornMips {
                 .and_then(decode_jr_register)
                 .and_then(|register| read_mips_gpr(uc, register).map(|target| (register, target)))
             {
-                if let Some(stub) = trampoline_stub_by_origin.get(&target).copied() {
+                if let Some(stub) = trampoline_state.stub_for_origin(target) {
                     let _ = write_mips_gpr(uc, register, stub);
                 }
             }
             if let Some(target) = sentinel_target {
-                if target_in_trampoline_pages(target, &trampoline_pages) {
+                if trampoline_state.target_in_pages(target) {
                     let _ = uc.reg_write(RegisterMIPS::PC, u64::from(target));
                     return;
                 }
             }
             let direct_jump_trampoline_origin = direct_jump_target
                 .filter(|_| direct_jump_target_in_trampoline)
-                .and_then(|target| trampoline_origin_by_stub.get(&target).copied());
+                .and_then(|target| trampoline_state.origin_for_stub(target));
             let current_trampoline_origin = ((full_trace_enabled || progress_file.is_some())
                 && sampled_code_trace
-                && target_in_ranges(pc, &trampoline_ranges_code_hook))
-            .then(|| {
-                trampoline_jumps.iter().find_map(|trampoline| {
-                    trampoline
-                        .stub
-                        .checked_add(trampoline.byte_len)
-                        .filter(|end| pc >= trampoline.stub && pc < *end)
-                        .map(|_| trampoline.origin)
-                })
-            })
+                && trampoline_state.target_in_ranges(pc))
+            .then(|| trampoline_state.origin_for_pc(pc))
             .flatten();
             if let Some(path) = progress_file.as_ref() {
                 let elapsed_ms = host_wall_clock_started.elapsed().as_millis() as u64;
@@ -2702,7 +2697,7 @@ impl UnicornMips {
                     instruction,
                     next_instruction,
                     target,
-                    &trampoline_ranges_code_hook,
+                    &trampoline_state.ranges,
                 ) {
                     let _ = uc.reg_write(RegisterMIPS::PC, u64::from(target));
                     return;
@@ -3167,6 +3162,9 @@ impl UnicornMips {
         let resource_strings_ptr = &mut self.resource_strings as *mut Vec<MappedResourceString>;
         let resources_ptr = &mut self.resources as *mut Vec<MappedResource>;
         let mapped_blobs_ptr = &mut self.mapped_blobs as *mut Vec<MappedBlob>;
+        let trampoline_ranges_ptr = &mut self.trampoline_ranges as *mut Vec<(u32, u32)>;
+        let trampoline_jumps_ptr = &mut self.trampoline_jumps as *mut Vec<MipsTrampolineJump>;
+        let live_trampoline_state_import_hook = Rc::clone(&live_trampoline_state);
         uc.add_code_hook(
             u64::from(IMPORT_TRAP_BASE),
             u64::from(IMPORT_TRAP_BASE + IMPORT_TRAP_PAGE_SIZE - 1),
@@ -4063,6 +4061,9 @@ impl UnicornMips {
                         unsafe { &mut *loaded_modules_ptr },
                         unsafe { &mut *resource_strings_ptr },
                         unsafe { &mut *resources_ptr },
+                        unsafe { &mut *trampoline_ranges_ptr },
+                        unsafe { &mut *trampoline_jumps_ptr },
+                        &live_trampoline_state_import_hook,
                         &traps,
                         &process_dll_search_dirs,
                         active_thread_id,
@@ -5124,6 +5125,68 @@ struct MipsTrampolineJump {
 }
 
 #[cfg(feature = "unicorn")]
+#[derive(Debug, Clone)]
+struct LiveTrampolineState {
+    ranges: Vec<(u32, u32)>,
+    jumps: Vec<MipsTrampolineJump>,
+    pages: HashSet<u32>,
+    stub_by_origin: HashMap<u32, u32>,
+    origin_by_stub: HashMap<u32, u32>,
+}
+
+#[cfg(feature = "unicorn")]
+impl LiveTrampolineState {
+    fn new(ranges: Vec<(u32, u32)>, jumps: Vec<MipsTrampolineJump>) -> Self {
+        let pages = trampoline_pages_for_ranges(&ranges);
+        let stub_by_origin = trampoline_stub_by_origin(&jumps);
+        let origin_by_stub = trampoline_origin_by_stub(&jumps);
+        Self {
+            ranges,
+            jumps,
+            pages,
+            stub_by_origin,
+            origin_by_stub,
+        }
+    }
+
+    fn extend(&mut self, patch: &MipsTrampolinePatchResult) {
+        if let Some(range) = patch.range {
+            self.ranges.push(range);
+        }
+        self.jumps.extend(patch.jumps.iter().copied());
+        self.pages = trampoline_pages_for_ranges(&self.ranges);
+        self.stub_by_origin = trampoline_stub_by_origin(&self.jumps);
+        self.origin_by_stub = trampoline_origin_by_stub(&self.jumps);
+    }
+
+    fn target_in_pages(&self, target: u32) -> bool {
+        target_in_trampoline_pages(target, &self.pages)
+    }
+
+    fn target_in_ranges(&self, target: u32) -> bool {
+        target_in_ranges(target, &self.ranges)
+    }
+
+    fn stub_for_origin(&self, origin: u32) -> Option<u32> {
+        self.stub_by_origin.get(&origin).copied()
+    }
+
+    fn origin_for_stub(&self, stub: u32) -> Option<u32> {
+        self.origin_by_stub.get(&stub).copied()
+    }
+
+    fn origin_for_pc(&self, pc: u32) -> Option<u32> {
+        self.jumps.iter().find_map(|trampoline| {
+            trampoline
+                .stub
+                .checked_add(trampoline.byte_len)
+                .filter(|end| pc >= trampoline.stub && pc < *end)
+                .map(|_| trampoline.origin)
+        })
+    }
+}
+
+#[cfg(feature = "unicorn")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MipsUnicornPatch {
     rva: u32,
@@ -5901,6 +5964,9 @@ fn try_handle_runtime_loader_import<D>(
     loaded_modules: &mut Vec<LoadedPeModuleInfo>,
     resource_strings: &mut Vec<MappedResourceString>,
     resources: &mut Vec<MappedResource>,
+    trampoline_ranges: &mut Vec<(u32, u32)>,
+    trampoline_jumps: &mut Vec<MipsTrampolineJump>,
+    live_trampoline_state: &Rc<RefCell<LiveTrampolineState>>,
     traps: &Rc<RefCell<ImportTrapTable>>,
     search_dirs: &[std::path::PathBuf],
     thread_id: u32,
@@ -5980,6 +6046,9 @@ fn try_handle_runtime_loader_import<D>(
         loaded_modules,
         resource_strings,
         resources,
+        trampoline_ranges,
+        trampoline_jumps,
+        live_trampoline_state,
         traps,
         search_dirs,
         &path,
@@ -6112,6 +6181,9 @@ fn runtime_load_guest_dll_from_path<D>(
     loaded_modules: &mut Vec<LoadedPeModuleInfo>,
     resource_strings: &mut Vec<MappedResourceString>,
     resources: &mut Vec<MappedResource>,
+    trampoline_ranges: &mut Vec<(u32, u32)>,
+    trampoline_jumps: &mut Vec<MipsTrampolineJump>,
+    live_trampoline_state: &Rc<RefCell<LiveTrampolineState>>,
     traps: &Rc<RefCell<ImportTrapTable>>,
     search_dirs: &[std::path::PathBuf],
     path: &std::path::Path,
@@ -6161,6 +6233,9 @@ fn runtime_load_guest_dll_from_path<D>(
                 loaded_modules,
                 resource_strings,
                 resources,
+                trampoline_ranges,
+                trampoline_jumps,
+                live_trampoline_state,
                 traps,
                 search_dirs,
                 &dependency_path,
@@ -6200,6 +6275,11 @@ fn runtime_load_guest_dll_from_path<D>(
             &external,
         )?
     };
+    let trampoline_patch = if datafile {
+        MipsTrampolinePatchResult::default()
+    } else {
+        patch_mips_unicorn_trampolines(&image, load_base, &mut mapped, None)?
+    };
     let mapped_size = align_up_4k(mapped.len() as u32)?;
     let label = format!("dll:{}", path.display());
     memory_map.map(
@@ -6216,6 +6296,12 @@ fn runtime_load_guest_dll_from_path<D>(
     .map_err(|err| Error::Backend(format!("map runtime DLL {label}: {err:?}")))?;
     uc.mem_write(u64::from(load_base), &mapped)
         .map_err(|err| Error::Backend(format!("write runtime DLL {label}: {err:?}")))?;
+
+    if let Some(range) = trampoline_patch.range {
+        trampoline_ranges.push(range);
+    }
+    trampoline_jumps.extend(trampoline_patch.jumps.iter().copied());
+    live_trampoline_state.borrow_mut().extend(&trampoline_patch);
 
     if !new_traps.is_empty() {
         let mut trap_table = traps.borrow_mut();
@@ -6242,6 +6328,9 @@ fn runtime_load_guest_dll_from_path<D>(
             loaded_modules,
             resource_strings,
             resources,
+            trampoline_ranges,
+            trampoline_jumps,
+            live_trampoline_state,
             traps,
             search_dirs,
             &mut module_info,
@@ -6275,6 +6364,9 @@ fn resolve_runtime_forwarders<D>(
     loaded_modules: &mut Vec<LoadedPeModuleInfo>,
     resource_strings: &mut Vec<MappedResourceString>,
     resources: &mut Vec<MappedResource>,
+    trampoline_ranges: &mut Vec<(u32, u32)>,
+    trampoline_jumps: &mut Vec<MipsTrampolineJump>,
+    live_trampoline_state: &Rc<RefCell<LiveTrampolineState>>,
     traps: &Rc<RefCell<ImportTrapTable>>,
     search_dirs: &[std::path::PathBuf],
     module_info: &mut LoadedPeModuleInfo,
@@ -6290,6 +6382,9 @@ fn resolve_runtime_forwarders<D>(
             loaded_modules,
             resource_strings,
             resources,
+            trampoline_ranges,
+            trampoline_jumps,
+            live_trampoline_state,
             traps,
             search_dirs,
             &forwarder,
@@ -6307,6 +6402,9 @@ fn resolve_runtime_forwarders<D>(
             loaded_modules,
             resource_strings,
             resources,
+            trampoline_ranges,
+            trampoline_jumps,
+            live_trampoline_state,
             traps,
             search_dirs,
             &forwarder,
@@ -6327,6 +6425,9 @@ fn resolve_runtime_forwarder<D>(
     loaded_modules: &mut Vec<LoadedPeModuleInfo>,
     resource_strings: &mut Vec<MappedResourceString>,
     resources: &mut Vec<MappedResource>,
+    trampoline_ranges: &mut Vec<(u32, u32)>,
+    trampoline_jumps: &mut Vec<MipsTrampolineJump>,
+    live_trampoline_state: &Rc<RefCell<LiveTrampolineState>>,
     traps: &Rc<RefCell<ImportTrapTable>>,
     search_dirs: &[std::path::PathBuf],
     forwarder: &str,
@@ -6364,6 +6465,9 @@ fn resolve_runtime_forwarder<D>(
             loaded_modules,
             resource_strings,
             resources,
+            trampoline_ranges,
+            trampoline_jumps,
+            live_trampoline_state,
             traps,
             search_dirs,
             &path,
@@ -22779,6 +22883,28 @@ mod unicorn_tests {
         assert!(words.contains(&super::encode_mips_lui(26, 0xffff)));
         assert!(words.contains(&super::encode_mips_ori(26, 26, 0x832c)));
         assert!(words.contains(&super::encode_mips_jr(26)));
+    }
+
+    #[test]
+    fn live_trampoline_state_extends_runtime_ranges_and_origin_maps() {
+        let mut state = super::LiveTrampolineState::new(Vec::new(), Vec::new());
+        let patch = super::MipsTrampolinePatchResult {
+            range: Some((0x1002_0000, 0x1000)),
+            jumps: vec![super::MipsTrampolineJump {
+                origin: 0x1001_1234,
+                stub: 0x1002_0040,
+                byte_len: 0x20,
+            }],
+            external_mapped: None,
+        };
+
+        state.extend(&patch);
+
+        assert!(state.target_in_pages(0x1002_0040));
+        assert!(state.target_in_ranges(0x1002_0ffc));
+        assert_eq!(state.stub_for_origin(0x1001_1234), Some(0x1002_0040));
+        assert_eq!(state.origin_for_stub(0x1002_0040), Some(0x1001_1234));
+        assert_eq!(state.origin_for_pc(0x1002_005c), Some(0x1001_1234));
     }
 
     #[test]
