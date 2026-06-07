@@ -1441,5 +1441,22 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     child exits when the current-process pseudo handle is terminated.
   - CE heap APIs return committed guest memory for the requested allocation
     range. Rust's Unicorn backend now maps heap spillover pages with the same
-    page-aware range mapper used for virtual allocations so large
-    `HeapAlloc` results are writable all the way to their tail.
+  page-aware range mapper used for virtual allocations so large
+  `HeapAlloc` results are writable all the way to their tail.
+
+- CE shell notification data authority:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\shsdkstc.h`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\shellsdk.h`,
+  `C:\WINCE600\PRIVATE\SHELL\SHELLPSL\HAVEAYGSHELL\api.cpp`, and
+  `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\AYGSHELLFUNCS\HAVEAYGSHELL\notification.cpp`
+  - `shsdkstc.h` defines `SHNOTIFICATIONDATA` as the 56-byte CE struct keyed
+    by `CLSID` and `dwID`, with title/HTML strings carried through marshalled
+    pointers in the `I` API set signatures.
+  - `api.cpp` maps `SHNotificationAddI`/`UpdateI`/`RemoveI`/`GetDataI` to the
+    shell API set and returns Win32 error codes (`ERROR_SUCCESS`,
+    `ERROR_INVALID_PARAMETER`, `ERROR_INVALID_DATA`) rather than BOOL success.
+  - `notification.cpp` stores notification data in the taskbar/bubble lists
+    and copies the persisted struct/title/HTML fields back through
+    `GetNotificationData`. Rust now preserves that app-visible data in
+    `ShellSystem`; visual bubble/taskbar rendering and `SHNN_*` callbacks
+    remain queued separately.

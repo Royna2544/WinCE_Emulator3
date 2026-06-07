@@ -27,7 +27,7 @@ use crate::{
             AcceleratorEntry, FontObject, MenuItem, PopupMenuTracking, RegionObject, ResourceId,
             stock_object_handle,
         },
-        shell::{NotifyIconData, NotifyIconOp},
+        shell::{NotificationResult, NotifyIconData, NotifyIconOp, ShellNotificationData},
         thread::{
             ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_CLASS_DOES_NOT_EXIST,
             ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER,
@@ -115,6 +115,18 @@ const NOTIFYICONDATA_TIP_CHARS: usize = 64;
 const NOTIFYICONDATA_STATE_OFFSET: u32 =
     NOTIFYICONDATA_TIP_OFFSET + (NOTIFYICONDATA_TIP_CHARS as u32 * 2);
 const NOTIFYICONDATA_STATE_MASK_OFFSET: u32 = NOTIFYICONDATA_STATE_OFFSET + 4;
+const ERROR_INVALID_DATA: u32 = 13;
+const SHNOTIFICATIONDATA_SIZE: u32 = 56;
+const SHNOTIFICATIONDATA_ID_OFFSET: u32 = 4;
+const SHNOTIFICATIONDATA_PRIORITY_OFFSET: u32 = 8;
+const SHNOTIFICATIONDATA_DURATION_OFFSET: u32 = 12;
+const SHNOTIFICATIONDATA_ICON_OFFSET: u32 = 16;
+const SHNOTIFICATIONDATA_FLAGS_OFFSET: u32 = 20;
+const SHNOTIFICATIONDATA_CLSID_OFFSET: u32 = 24;
+const SHNOTIFICATIONDATA_HWND_SINK_OFFSET: u32 = 40;
+const SHNOTIFICATIONDATA_PSZ_HTML_OFFSET: u32 = 44;
+const SHNOTIFICATIONDATA_PSZ_TITLE_OFFSET: u32 = 48;
+const SHNOTIFICATIONDATA_LPARAM_OFFSET: u32 = 52;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CoredllSubsystem {
@@ -3466,6 +3478,18 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel, memory, thread_id, args,
         ))),
         ORD_SHELL_NOTIFY_ICON => Some(CoredllValue::Bool(shell_notify_icon_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_SHNOTIFICATION_ADD_I => Some(CoredllValue::U32(sh_notification_add_i_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_SHNOTIFICATION_UPDATE_I => Some(CoredllValue::U32(sh_notification_update_i_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_SHNOTIFICATION_REMOVE_I => Some(CoredllValue::U32(sh_notification_remove_i_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_SHNOTIFICATION_GET_DATA_I => Some(CoredllValue::U32(sh_notification_get_data_i_raw(
             kernel, memory, thread_id, args,
         ))),
         ORD_SHGET_FILE_INFO => Some(CoredllValue::U32(sh_get_file_info_w_raw(
@@ -10102,6 +10126,337 @@ fn shell_notify_icon_w_raw<M: CoredllGuestMemory>(
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         false
+    }
+}
+
+fn sh_notification_add_i_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let Some(data) = read_shell_notification_data(
+        kernel,
+        memory,
+        thread_id,
+        raw_arg(args, 0),
+        raw_arg(args, 2),
+        raw_arg(args, 3),
+    ) else {
+        return ERROR_INVALID_PARAMETER;
+    };
+    if data.hwnd_sink != 0 && !kernel.gwe.is_window(data.hwnd_sink) {
+        return ERROR_INVALID_PARAMETER;
+    }
+    notification_result_to_error(kernel.shell.add_notification(data))
+}
+
+fn sh_notification_update_i_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let Some(data) = read_shell_notification_data(
+        kernel,
+        memory,
+        thread_id,
+        raw_arg(args, 1),
+        raw_arg(args, 3),
+        raw_arg(args, 4),
+    ) else {
+        return ERROR_INVALID_PARAMETER;
+    };
+    notification_result_to_error(kernel.shell.update_notification(raw_arg(args, 0), data))
+}
+
+fn sh_notification_remove_i_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let Some(clsid) = read_guest_clsid(kernel, memory, thread_id, raw_arg(args, 0)) else {
+        return ERROR_INVALID_PARAMETER;
+    };
+    notification_result_to_error(kernel.shell.remove_notification(clsid, raw_arg(args, 2)))
+}
+
+fn sh_notification_get_data_i_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let Some(clsid) = read_guest_clsid(kernel, memory, thread_id, raw_arg(args, 0)) else {
+        return ERROR_INVALID_DATA;
+    };
+    let Some(record) = kernel.shell.notification(clsid, raw_arg(args, 2)).cloned() else {
+        return ERROR_INVALID_DATA;
+    };
+    if raw_arg(args, 3) != 0
+        && !write_shell_notification_data(kernel, memory, thread_id, raw_arg(args, 3), &record)
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
+    if raw_arg(args, 5) != 0 {
+        let capacity = wide_capacity_from_cb(raw_arg(args, 6));
+        if capacity == 0
+            || !write_guest_wide_fixed(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 5),
+                &record.title,
+                capacity,
+            )
+        {
+            return ERROR_INVALID_PARAMETER;
+        }
+    }
+    if raw_arg(args, 7) != 0 {
+        let capacity = if raw_arg(args, 9) != 0 {
+            read_guest_u32(kernel, memory, thread_id, raw_arg(args, 9)).unwrap_or(0) as usize
+        } else {
+            wide_capacity_from_cb(raw_arg(args, 8))
+        };
+        if capacity == 0
+            || !write_guest_wide_fixed(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 7),
+                &record.html,
+                capacity,
+            )
+        {
+            return ERROR_INVALID_PARAMETER;
+        }
+    } else if raw_arg(args, 9) != 0
+        && !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 9),
+            record.html.encode_utf16().count() as u32 + 1,
+        )
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
+    0
+}
+
+fn read_shell_notification_data<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    ptr: u32,
+    title_ptr: u32,
+    html_ptr: u32,
+) -> Option<ShellNotificationData> {
+    if ptr == 0 {
+        return None;
+    }
+    let cb_struct = read_guest_u32(kernel, memory, thread_id, ptr)?;
+    if cb_struct != SHNOTIFICATIONDATA_SIZE {
+        return None;
+    }
+    let clsid = read_guest_clsid(
+        kernel,
+        memory,
+        thread_id,
+        ptr.wrapping_add(SHNOTIFICATIONDATA_CLSID_OFFSET),
+    )?;
+    let title = read_notification_marshalled_string(memory, title_ptr)
+        .or_else(|| {
+            read_guest_u32(
+                kernel,
+                memory,
+                thread_id,
+                ptr.wrapping_add(SHNOTIFICATIONDATA_PSZ_TITLE_OFFSET),
+            )
+            .and_then(|guest_ptr| read_notification_marshalled_string(memory, guest_ptr))
+        })
+        .unwrap_or_default();
+    let html = read_notification_marshalled_string(memory, html_ptr)
+        .or_else(|| {
+            read_guest_u32(
+                kernel,
+                memory,
+                thread_id,
+                ptr.wrapping_add(SHNOTIFICATIONDATA_PSZ_HTML_OFFSET),
+            )
+            .and_then(|guest_ptr| read_notification_marshalled_string(memory, guest_ptr))
+        })
+        .unwrap_or_default();
+    Some(ShellNotificationData {
+        id: read_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            ptr.wrapping_add(SHNOTIFICATIONDATA_ID_OFFSET),
+        )?,
+        priority: read_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            ptr.wrapping_add(SHNOTIFICATIONDATA_PRIORITY_OFFSET),
+        )?,
+        duration_cs: read_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            ptr.wrapping_add(SHNOTIFICATIONDATA_DURATION_OFFSET),
+        )?,
+        icon: read_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            ptr.wrapping_add(SHNOTIFICATIONDATA_ICON_OFFSET),
+        )?,
+        flags: read_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            ptr.wrapping_add(SHNOTIFICATIONDATA_FLAGS_OFFSET),
+        )?,
+        clsid,
+        hwnd_sink: read_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            ptr.wrapping_add(SHNOTIFICATIONDATA_HWND_SINK_OFFSET),
+        )?,
+        title,
+        html,
+        lparam: read_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            ptr.wrapping_add(SHNOTIFICATIONDATA_LPARAM_OFFSET),
+        )?,
+    })
+}
+
+fn read_guest_clsid<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    ptr: u32,
+) -> Option<[u8; 16]> {
+    if ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return None;
+    }
+    let bytes = read_guest_bytes(kernel, memory, thread_id, ptr, 16)?;
+    bytes.try_into().ok()
+}
+
+fn read_notification_marshalled_string<M: CoredllGuestMemory>(
+    memory: &M,
+    ptr: u32,
+) -> Option<String> {
+    if ptr == 0 {
+        return None;
+    }
+    read_guest_wide_z(memory, ptr, 4096).ok()
+}
+
+fn write_shell_notification_data<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    ptr: u32,
+    record: &crate::ce::shell::ShellNotificationRecord,
+) -> bool {
+    write_guest_u32(kernel, memory, thread_id, ptr, SHNOTIFICATIONDATA_SIZE)
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            ptr.wrapping_add(SHNOTIFICATIONDATA_ID_OFFSET),
+            record.id,
+        )
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            ptr.wrapping_add(SHNOTIFICATIONDATA_PRIORITY_OFFSET),
+            record.priority,
+        )
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            ptr.wrapping_add(SHNOTIFICATIONDATA_DURATION_OFFSET),
+            record.duration_cs,
+        )
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            ptr.wrapping_add(SHNOTIFICATIONDATA_ICON_OFFSET),
+            record.icon,
+        )
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            ptr.wrapping_add(SHNOTIFICATIONDATA_FLAGS_OFFSET),
+            record.flags,
+        )
+        && write_guest_bytes(
+            kernel,
+            memory,
+            thread_id,
+            ptr.wrapping_add(SHNOTIFICATIONDATA_CLSID_OFFSET),
+            &record.clsid,
+        )
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            ptr.wrapping_add(SHNOTIFICATIONDATA_HWND_SINK_OFFSET),
+            record.hwnd_sink,
+        )
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            ptr.wrapping_add(SHNOTIFICATIONDATA_PSZ_HTML_OFFSET),
+            0,
+        )
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            ptr.wrapping_add(SHNOTIFICATIONDATA_PSZ_TITLE_OFFSET),
+            0,
+        )
+        && write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            ptr.wrapping_add(SHNOTIFICATIONDATA_LPARAM_OFFSET),
+            record.lparam,
+        )
+}
+
+fn wide_capacity_from_cb(cb: u32) -> usize {
+    if cb <= 1 {
+        cb as usize
+    } else {
+        (cb / 2) as usize
+    }
+}
+
+fn notification_result_to_error(result: NotificationResult) -> u32 {
+    match result {
+        NotificationResult::Success => 0,
+        NotificationResult::InvalidParameter => ERROR_INVALID_PARAMETER,
+        NotificationResult::InvalidData => ERROR_INVALID_DATA,
     }
 }
 
@@ -17479,6 +17834,10 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "GetSystemMetrics",
     "ShellExecuteEx",
     "Shell_NotifyIcon",
+    "SHNotificationAddI",
+    "SHNotificationUpdateI",
+    "SHNotificationRemoveI",
+    "SHNotificationGetDataI",
     "SHGetFileInfo",
     "SHGetSpecialFolderPath",
     "SystemParametersInfoW",

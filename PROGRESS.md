@@ -4473,6 +4473,16 @@
   `hwnd=0x00020004` are guest-hidden while the app continues the
   `resmapi_800x480.bin` / `RSImage LoadPNG` startup path.
 
+- Added stateful shell notification APIs at the raw COREDLL boundary.
+  `SHNotificationAddI`, `SHNotificationUpdateI`, `SHNotificationRemoveI`, and
+  `SHNotificationGetDataI` now decode the CE `SHNOTIFICATIONDATA` marshalled
+  struct, key notifications by `CLSID + dwID`, preserve title/HTML/icon/
+  duration/sink/lParam state, return CE-style Win32 error codes, and copy
+  stored data back into guest buffers. Focused coverage
+  `shnotification_i_tracks_query_update_and_remove_state` passes. This keeps
+  shell-visible notification data honest without synthesizing taskbar bubble
+  UI.
+
 ## False Leads
 
 - A process-directory fallback for rooted `CreateFileW` paths was tested and

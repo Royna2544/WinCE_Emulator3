@@ -24,11 +24,12 @@ use wince_emulation_v3::{
             ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD, ORD_SET_COMM_MASK,
             ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
             ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON, ORD_SHGET_FILE_INFO,
-            ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SLEEP, ORD_SLEEP_TILL_TICK, ORD_SUSPEND_THREAD,
-            ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS, ORD_TLS_GET_VALUE,
-            ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_COMM_EVENT,
-            ORD_WAIT_FOR_MULTIPLE_OBJECTS, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSTOMBS,
-            ORD_WIDE_CHAR_TO_MULTI_BYTE,
+            ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I, ORD_SHNOTIFICATION_GET_DATA_I,
+            ORD_SHNOTIFICATION_REMOVE_I, ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP,
+            ORD_SLEEP_TILL_TICK, ORD_SUSPEND_THREAD, ORD_SYSTEM_TIME_TO_FILE_TIME,
+            ORD_TERMINATE_PROCESS, ORD_TLS_GET_VALUE, ORD_TLS_SET_VALUE,
+            ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_COMM_EVENT, ORD_WAIT_FOR_MULTIPLE_OBJECTS,
+            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSTOMBS, ORD_WIDE_CHAR_TO_MULTI_BYTE,
         },
         devices::CommDcb,
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
@@ -2202,6 +2203,181 @@ fn shell_notify_icon_tracks_add_modify_delete_state() -> Result<()> {
     ));
     assert!(kernel.shell.notify_icon(hwnd, 77).is_none());
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
+    const ERROR_INVALID_DATA: u32 = 13;
+    const SHNOTIFICATIONDATA_SIZE: u32 = 56;
+    const SHNP_INFORM: u32 = 0x1b1;
+    const SHNP_ICONIC: u32 = 0x1b2;
+    const SHNUM_PRIORITY: u32 = 0x0001;
+    const SHNUM_DURATION: u32 = 0x0002;
+    const SHNUM_ICON: u32 = 0x0004;
+    const SHNUM_HTML: u32 = 0x0008;
+    const SHNUM_TITLE: u32 = 0x0010;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 47;
+    let hwnd = kernel.create_window_ex_w(thread_id, "SHN_SINK", "", None, 0, 0, 0);
+    let data = 0x3002_a000;
+    let title = 0x3002_b000;
+    let html = 0x3002_c000;
+    let out = 0x3002_d000;
+    let out_title = 0x3002_e000;
+    let out_html = 0x3002_f000;
+    let html_len = 0x3002_f800;
+    let clsid = [
+        0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x44, 0x33, 0x22, 0x11, 0xaa, 0xbb, 0xcc,
+        0xdd,
+    ];
+    memory.map_words(data, SHNOTIFICATIONDATA_SIZE / 4);
+    memory.map_bytes(title, 64);
+    memory.map_bytes(html, 128);
+    memory.map_words(out, SHNOTIFICATIONDATA_SIZE / 4);
+    memory.map_bytes(out_title, 64);
+    memory.map_bytes(out_html, 128);
+    memory.map_words(html_len, 1);
+    memory.write_word(data, SHNOTIFICATIONDATA_SIZE);
+    memory.write_word(data + 4, 301);
+    memory.write_word(data + 8, SHNP_INFORM);
+    memory.write_word(data + 12, 0);
+    memory.write_word(data + 16, 0x000b_9001);
+    memory.write_word(data + 20, 0x10);
+    memory.write_bytes(data + 24, &clsid);
+    memory.write_word(data + 40, hwnd);
+    memory.write_word(data + 52, 0xCAFE_BABE);
+    memory.write_wide_z(title, "Route alert");
+    memory.write_wide_z(html, "<b>Drive now</b>");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHNOTIFICATION_ADD_I,
+            [data, SHNOTIFICATIONDATA_SIZE, title, html],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    let record = kernel.shell.notification(clsid, 301).expect("notification");
+    assert_eq!(record.title, "Route alert");
+    assert_eq!(record.html, "<b>Drive now</b>");
+    assert_eq!(record.duration_cs, 5);
+
+    memory.write_word(html_len, 8);
+    let get_result = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SHNOTIFICATION_GET_DATA_I,
+        [
+            data + 24,
+            16,
+            301,
+            out,
+            SHNOTIFICATIONDATA_SIZE,
+            out_title,
+            64,
+            out_html,
+            128,
+            html_len,
+        ],
+    );
+    match get_result {
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(value),
+            ..
+        } => assert_eq!(value, ERROR_SUCCESS),
+        other => panic!("unexpected SHNotificationGetDataI result: {other:?}"),
+    }
+    assert_eq!(memory.read_u32(out)?, SHNOTIFICATIONDATA_SIZE);
+    assert_eq!(memory.read_u32(out + 4)?, 301);
+    assert_eq!(memory.read_u32(out + 8)?, SHNP_INFORM);
+    assert_eq!(memory.read_u32(out + 12)?, 5);
+    assert_eq!(memory.read_u32(out + 16)?, 0x000b_9001);
+    assert_eq!(memory.read_u32(out + 40)?, hwnd);
+    assert_eq!(memory.read_u32(out + 52)?, 0xCAFE_BABE);
+    assert_eq!(memory.read_wide_z(out_title, 32), "Route alert");
+    assert_eq!(memory.read_wide_z(out_html, 32), "<b>Driv");
+
+    memory.write_word(data + 8, SHNP_ICONIC);
+    memory.write_word(data + 12, 3);
+    memory.write_word(data + 16, 0x000b_9002);
+    memory.write_wide_z(title, "Route changed");
+    memory.write_wide_z(html, "<i>Later</i>");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHNOTIFICATION_UPDATE_I,
+            [
+                SHNUM_PRIORITY | SHNUM_DURATION | SHNUM_ICON | SHNUM_TITLE | SHNUM_HTML,
+                data,
+                SHNOTIFICATIONDATA_SIZE,
+                title,
+                html
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    let record = kernel.shell.notification(clsid, 301).expect("notification");
+    assert_eq!(record.priority, SHNP_ICONIC);
+    assert_eq!(record.duration_cs, 3);
+    assert_eq!(record.icon, 0x000b_9002);
+    assert_eq!(record.title, "Route changed");
+    assert_eq!(record.html, "<i>Later</i>");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHNOTIFICATION_REMOVE_I,
+            [data + 24, 16, 301],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert!(kernel.shell.notification(clsid, 301).is_none());
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHNOTIFICATION_GET_DATA_I,
+            [
+                data + 24,
+                16,
+                301,
+                out,
+                SHNOTIFICATIONDATA_SIZE,
+                0,
+                0,
+                0,
+                0,
+                html_len
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_INVALID_DATA),
+            ..
+        }
+    ));
 
     Ok(())
 }

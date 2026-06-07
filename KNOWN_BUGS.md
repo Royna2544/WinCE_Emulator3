@@ -1937,6 +1937,16 @@
     or generic hot-path performance. Do not force visibility or synthesize
     route UI.
 
+- Shell notification data is stored, but shell bubble interaction is not.
+  - Symptom: callers can add/update/remove/query `SHNotification*I` records,
+    but the emulator does not yet create taskbar bubble UI, send `SHNN_*`
+    callbacks, deliver dismiss/link selections, or expire notification icons.
+  - Evidence: CE `notification.cpp` routes notification records through
+    taskbar bubble/tray lists and `WM_NOTIFY` callback paths; Rust currently
+    implements the app-visible data store only.
+  - Status: active queued shell-fidelity gap. Implement callbacks/rendering
+    only through generic shell state, not app-specific UI injection.
+
 - Parked wait timeout preemption can duplicate companion startup.
   - Symptom: a broad ready-parked-wait experiment treated timed-out parked
     waits as immediate handoff readiness and duplicated

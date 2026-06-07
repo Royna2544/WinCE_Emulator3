@@ -43,6 +43,7 @@ pub struct NotifyIconRecord {
 #[derive(Debug, Clone, Default)]
 pub struct ShellSystem {
     notify_icons: BTreeMap<(u32, u32), NotifyIconRecord>,
+    notifications: BTreeMap<([u8; 16], u32), ShellNotificationRecord>,
 }
 
 impl ShellSystem {
@@ -71,6 +72,52 @@ impl ShellSystem {
 
     pub fn notify_icons(&self) -> impl Iterator<Item = &NotifyIconRecord> {
         self.notify_icons.values()
+    }
+
+    pub fn add_notification(&mut self, data: ShellNotificationData) -> NotificationResult {
+        if !is_notification_priority_valid(data.priority)
+            || data.title.is_empty() && data.html.is_empty()
+        {
+            return NotificationResult::InvalidParameter;
+        }
+        if data.priority == SHNP_INFORM && data.html.is_empty() {
+            return NotificationResult::InvalidParameter;
+        }
+        let key = (data.clsid, data.id);
+        self.notifications
+            .insert(key, ShellNotificationRecord::from_data(data));
+        NotificationResult::Success
+    }
+
+    pub fn update_notification(
+        &mut self,
+        update_mask: u32,
+        data: ShellNotificationData,
+    ) -> NotificationResult {
+        if update_mask & SHNUM_PRIORITY != 0 && !is_notification_priority_valid(data.priority) {
+            return NotificationResult::InvalidParameter;
+        }
+        let Some(record) = self.notifications.get_mut(&(data.clsid, data.id)) else {
+            return NotificationResult::InvalidData;
+        };
+        record.update(update_mask, data);
+        NotificationResult::Success
+    }
+
+    pub fn remove_notification(&mut self, clsid: [u8; 16], id: u32) -> NotificationResult {
+        if self.notifications.remove(&(clsid, id)).is_some() {
+            NotificationResult::Success
+        } else {
+            NotificationResult::InvalidData
+        }
+    }
+
+    pub fn notification(&self, clsid: [u8; 16], id: u32) -> Option<&ShellNotificationRecord> {
+        self.notifications.get(&(clsid, id))
+    }
+
+    pub fn notifications(&self) -> impl Iterator<Item = &ShellNotificationRecord> {
+        self.notifications.values()
     }
 }
 
@@ -106,3 +153,104 @@ pub const NIF_MESSAGE: u32 = 0x0000_0001;
 pub const NIF_ICON: u32 = 0x0000_0002;
 pub const NIF_TIP: u32 = 0x0000_0004;
 pub const NIF_STATE: u32 = 0x0000_0008;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationResult {
+    Success,
+    InvalidParameter,
+    InvalidData,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellNotificationData {
+    pub id: u32,
+    pub priority: u32,
+    pub duration_cs: u32,
+    pub icon: u32,
+    pub flags: u32,
+    pub clsid: [u8; 16],
+    pub hwnd_sink: u32,
+    pub title: String,
+    pub html: String,
+    pub lparam: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellNotificationRecord {
+    pub id: u32,
+    pub priority: u32,
+    pub duration_cs: u32,
+    pub icon: u32,
+    pub flags: u32,
+    pub clsid: [u8; 16],
+    pub hwnd_sink: u32,
+    pub title: String,
+    pub html: String,
+    pub lparam: u32,
+}
+
+impl ShellNotificationRecord {
+    fn from_data(data: ShellNotificationData) -> Self {
+        let duration_cs = defaulted_notification_duration(data.priority, data.duration_cs);
+        Self {
+            id: data.id,
+            priority: data.priority,
+            duration_cs,
+            icon: data.icon,
+            flags: data.flags,
+            clsid: data.clsid,
+            hwnd_sink: data.hwnd_sink,
+            title: data.title,
+            html: data.html,
+            lparam: data.lparam,
+        }
+    }
+
+    fn update(&mut self, update_mask: u32, data: ShellNotificationData) {
+        let duration_priority = if update_mask & SHNUM_PRIORITY != 0 {
+            data.priority
+        } else {
+            self.priority
+        };
+        if update_mask & SHNUM_PRIORITY != 0 {
+            self.priority = data.priority;
+        }
+        if update_mask & SHNUM_DURATION != 0 {
+            self.duration_cs = defaulted_notification_duration(duration_priority, data.duration_cs);
+        }
+        if update_mask & SHNUM_ICON != 0 {
+            self.icon = data.icon;
+        }
+        if update_mask & SHNUM_HTML != 0 {
+            self.html = data.html;
+        }
+        if update_mask & SHNUM_TITLE != 0 {
+            self.title = data.title;
+        }
+        self.flags = update_mask;
+        self.hwnd_sink = data.hwnd_sink;
+        self.lparam = data.lparam;
+    }
+}
+
+fn is_notification_priority_valid(priority: u32) -> bool {
+    priority == SHNP_INFORM || priority == SHNP_ICONIC
+}
+
+fn defaulted_notification_duration(priority: u32, duration_cs: u32) -> u32 {
+    if duration_cs != 0 {
+        duration_cs
+    } else if priority == SHNP_ICONIC {
+        u32::MAX
+    } else {
+        5
+    }
+}
+
+pub const SHNP_INFORM: u32 = 0x0000_01b1;
+pub const SHNP_ICONIC: u32 = 0x0000_01b2;
+pub const SHNUM_PRIORITY: u32 = 0x0000_0001;
+pub const SHNUM_DURATION: u32 = 0x0000_0002;
+pub const SHNUM_ICON: u32 = 0x0000_0004;
+pub const SHNUM_HTML: u32 = 0x0000_0008;
+pub const SHNUM_TITLE: u32 = 0x0000_0010;
