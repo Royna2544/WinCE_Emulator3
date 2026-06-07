@@ -18,7 +18,7 @@ use wince_emulation_v3::{
             ORD_GET_TIME_ZONE_INFORMATION, ORD_GET_VERSION_EX_W, ORD_INITIALIZE_CRITICAL_SECTION,
             ORD_INPUT_DEBUG_CHAR_W, ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_KERNEL_IO_CONTROL, ORD_LEAVE_CRITICAL_SECTION,
-            ORD_LOAD_LIBRARY_EX_W, ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS,
+            ORD_LOAD_LIBRARY_EX_W, ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS, ORD_MESSAGE_BOX_W,
             ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_OPEN_EVENT_W,
             ORD_PURGE_COMM, ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY,
             ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD, ORD_SET_COMM_MASK,
@@ -42,8 +42,9 @@ use wince_emulation_v3::{
         registry::{ERROR_SUCCESS, RegistryValue},
         scheduler::SchedulerBlockedWaitKind,
         thread::{
-            ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOT_OWNER,
-            ERROR_NOT_SUPPORTED, ERROR_SIGNAL_REFUSED,
+            ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER,
+            ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_OWNER, ERROR_NOT_SUPPORTED,
+            ERROR_SIGNAL_REFUSED,
         },
         timer::{INFINITE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
@@ -2459,6 +2460,93 @@ fn shell_window_destroy_removes_notify_icon_and_notification_state() -> Result<(
 
     assert!(kernel.shell.notify_icon(hwnd, 11).is_none());
     assert!(kernel.shell.notification(clsid, 402).is_none());
+
+    Ok(())
+}
+
+#[test]
+fn message_box_w_records_text_owner_and_returns_default_button() -> Result<()> {
+    const MB_YESNOCANCEL: u32 = 0x0000_0003;
+    const MB_DEFBUTTON2: u32 = 0x0000_0100;
+    const MB_ICONQUESTION: u32 = 0x0000_0020;
+    const IDNO: u32 = 7;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 49;
+    let hwnd = kernel.create_window_ex_w(thread_id, "MSGBOX_OWNER", "", None, 0, 0, 0);
+    let text = 0x3004_0000;
+    let caption = 0x3004_1000;
+    memory.write_wide_z(text, "Route search failed");
+    memory.write_wide_z(caption, "iNavi");
+
+    let result = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_MESSAGE_BOX_W,
+        [
+            hwnd,
+            text,
+            caption,
+            MB_YESNOCANCEL | MB_DEFBUTTON2 | MB_ICONQUESTION,
+        ],
+    );
+    assert!(matches!(
+        result,
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(IDNO),
+            ..
+        }
+    ));
+    let record = kernel.shell.last_message_box().expect("message box record");
+    assert_eq!(record.thread_id, thread_id);
+    assert_eq!(record.owner_hwnd, hwnd);
+    assert_eq!(record.text, "Route search failed");
+    assert_eq!(record.caption, "iNavi");
+    assert_eq!(
+        record.style,
+        MB_YESNOCANCEL | MB_DEFBUTTON2 | MB_ICONQUESTION
+    );
+    assert_eq!(record.result, IDNO);
+    assert_eq!(record.owner_was_enabled, Some(true));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
+fn message_box_w_rejects_destroyed_owner_without_recording() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 50;
+    let hwnd = kernel.create_window_ex_w(thread_id, "MSGBOX_DEAD_OWNER", "", None, 0, 0, 0);
+    assert!(kernel.destroy_window_with_reason(hwnd, "test"));
+    memory.write_wide_z(0x3005_0000, "dead owner");
+
+    let result = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_MESSAGE_BOX_W,
+        [hwnd, 0x3005_0000, 0, 0],
+    );
+    assert!(matches!(
+        result,
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(kernel.shell.last_message_box().is_none());
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_WINDOW_HANDLE
+    );
 
     Ok(())
 }

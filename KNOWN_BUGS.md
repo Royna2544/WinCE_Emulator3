@@ -89,11 +89,13 @@
   - Symptom: `SHGetFileInfo` now covers registry-backed display/type/
     attribute/icon-location metadata, but real icon extraction and image-list
     ownership are not implemented yet. `Shell_NotifyIconW` tracks add/modify/
-    delete state but does not yet deliver real interaction callbacks or
-    implement `SHNotification*`; `TrackPopupMenu*` tracks popup state without
-    interactive selection; `MessageBoxW` logs and returns a fixed success;
-    shell namespace/storage presentation and file-change notifications are
-    incomplete.
+    delete state but does not yet deliver real interaction callbacks.
+    `SHNotification*I` preserves/query data but not user interaction or
+    timeout/dismiss callbacks. `TrackPopupMenu*` tracks popup state without
+    interactive selection. `MessageBoxW` validates owners and records/defaults
+    the requested modal result, but does not yet create/render a modal dialog
+    or run a nested input pump. Shell namespace/storage presentation and
+    file-change notifications are incomplete.
   - Required fix: implement the queued shell/UI section in `PLAN.MD` using
     registry/mount/window state and CE source references, with explicit failure
     rather than plausible fake success where behavior is not implemented.

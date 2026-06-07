@@ -121,6 +121,16 @@
   `shell_notify_icon_tracks_add_modify_delete_state` passes. Real user
   interaction callback delivery, `SHNotification*`, process/window cleanup, and
   taskbar rendering remain queued.
+- Raw `MessageBoxW` no longer returns a fixed success value. Using CE
+  `PUBLIC\COMMON\SDK\INC\winuser.h` constants as the source reference, it now
+  validates non-null owner HWNDs, rejects invalid string pointers, records
+  owner/text/caption/style/result in `ShellSystem`, briefly applies owner
+  disable/reenable bookkeeping, and returns the CE default `ID*` for the
+  requested button group/default-button flags. Focused coverage
+  `message_box_w_records_text_owner_and_returns_default_button` and
+  `message_box_w_rejects_destroyed_owner_without_recording` passes. The real
+  rendered modal dialog, nested message pump, and button/key interaction remain
+  queued.
 - Runtime guest-DLL loading now has a shared CE-aware search helper in
   `emulator::dll_search`, replacing duplicate private startup/child-process
   search logic. It resolves exact mounted CE paths first, then the active

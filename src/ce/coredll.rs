@@ -27,7 +27,10 @@ use crate::{
             AcceleratorEntry, FontObject, MenuItem, PopupMenuTracking, RegionObject, ResourceId,
             stock_object_handle,
         },
-        shell::{NotificationResult, NotifyIconData, NotifyIconOp, ShellNotificationData},
+        shell::{
+            MessageBoxRecord, NotificationResult, NotifyIconData, NotifyIconOp,
+            ShellNotificationData,
+        },
         thread::{
             ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_CLASS_DOES_NOT_EXIST,
             ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER,
@@ -3473,7 +3476,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
-        ORD_MESSAGE_BOX_W => Some(CoredllValue::U32(message_box_w_raw(memory, args))),
+        ORD_MESSAGE_BOX_W => Some(CoredllValue::U32(message_box_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_SHELL_EXECUTE_EX => Some(CoredllValue::Bool(shell_execute_ex_w_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -5456,18 +5461,120 @@ fn find_first_file_w_raw<M: CoredllGuestMemory>(
     handle
 }
 
-fn message_box_w_raw<M: CoredllGuestMemory>(memory: &M, args: &[u32]) -> u32 {
-    let text = read_guest_wide_arg(memory, raw_arg(args, 1)).unwrap_or_default();
-    let caption = read_guest_wide_arg(memory, raw_arg(args, 2)).unwrap_or_default();
+fn message_box_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let owner_hwnd = raw_arg(args, 0);
+    if owner_hwnd != 0 && !kernel.gwe.is_window(owner_hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    }
+    let text_ptr = raw_arg(args, 1);
+    let caption_ptr = raw_arg(args, 2);
+    let Some(text) = read_message_box_string(memory, text_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let Some(caption) = read_message_box_string(memory, caption_ptr) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let style = raw_arg(args, 3);
+    let Some(result) = message_box_default_result(style) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let owner_was_enabled = if owner_hwnd == 0 {
+        None
+    } else {
+        Some(kernel.gwe.is_window_enabled(owner_hwnd))
+    };
     tracing::debug!(
         target: "ce.gwe",
-        hwnd = format_args!("0x{:08x}", raw_arg(args, 0)),
+        hwnd = format_args!("0x{:08x}", owner_hwnd),
         text = %text,
         caption = %caption,
-        style = format_args!("0x{:08x}", raw_arg(args, 3)),
+        style = format_args!("0x{:08x}", style),
+        result = result,
         "MessageBoxW"
     );
-    1
+    if let Some(was_enabled) = owner_was_enabled {
+        let _ = kernel.enable_window(owner_hwnd, false);
+        let _ = kernel.enable_window(owner_hwnd, was_enabled);
+    }
+    kernel.shell.record_message_box(MessageBoxRecord {
+        thread_id,
+        owner_hwnd,
+        text,
+        caption,
+        style,
+        result,
+        owner_was_enabled,
+    });
+    kernel.threads.set_last_error(thread_id, 0);
+    result
+}
+
+fn read_message_box_string<M: CoredllGuestMemory>(memory: &M, ptr: u32) -> Option<String> {
+    if ptr == 0 {
+        Some(String::new())
+    } else {
+        read_guest_wide_arg(memory, ptr)
+    }
+}
+
+fn message_box_default_result(style: u32) -> Option<u32> {
+    const MB_TYPEMASK: u32 = 0x0000_000f;
+    const MB_DEFMASK: u32 = 0x0000_0300;
+    const MB_OK: u32 = 0x0000_0000;
+    const MB_OKCANCEL: u32 = 0x0000_0001;
+    const MB_ABORTRETRYIGNORE: u32 = 0x0000_0002;
+    const MB_YESNOCANCEL: u32 = 0x0000_0003;
+    const MB_YESNO: u32 = 0x0000_0004;
+    const MB_RETRYCANCEL: u32 = 0x0000_0005;
+    const MB_DEFBUTTON1: u32 = 0x0000_0000;
+    const MB_DEFBUTTON2: u32 = 0x0000_0100;
+    const MB_DEFBUTTON3: u32 = 0x0000_0200;
+    const MB_DEFBUTTON4: u32 = 0x0000_0300;
+    const IDOK: u32 = 1;
+    const IDCANCEL: u32 = 2;
+    const IDABORT: u32 = 3;
+    const IDRETRY: u32 = 4;
+    const IDIGNORE: u32 = 5;
+    const IDYES: u32 = 6;
+    const IDNO: u32 = 7;
+
+    let buttons: &[u32] = match style & MB_TYPEMASK {
+        MB_OK => &[IDOK],
+        MB_OKCANCEL => &[IDOK, IDCANCEL],
+        MB_ABORTRETRYIGNORE => &[IDABORT, IDRETRY, IDIGNORE],
+        MB_YESNOCANCEL => &[IDYES, IDNO, IDCANCEL],
+        MB_YESNO => &[IDYES, IDNO],
+        MB_RETRYCANCEL => &[IDRETRY, IDCANCEL],
+        _ => return None,
+    };
+    let index = match style & MB_DEFMASK {
+        MB_DEFBUTTON1 => 0,
+        MB_DEFBUTTON2 => 1,
+        MB_DEFBUTTON3 => 2,
+        MB_DEFBUTTON4 => 3,
+        _ => 0,
+    };
+    buttons
+        .get(index)
+        .copied()
+        .or_else(|| buttons.first().copied())
 }
 
 fn find_close_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) -> bool {

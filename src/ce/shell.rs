@@ -44,9 +44,22 @@ pub struct NotifyIconRecord {
 pub struct ShellSystem {
     notify_icons: BTreeMap<(u32, u32), NotifyIconRecord>,
     notifications: BTreeMap<([u8; 16], u32), ShellNotificationRecord>,
+    message_boxes: Vec<MessageBoxRecord>,
 }
 
 impl ShellSystem {
+    pub fn record_message_box(&mut self, record: MessageBoxRecord) {
+        self.message_boxes.push(record);
+    }
+
+    pub fn last_message_box(&self) -> Option<&MessageBoxRecord> {
+        self.message_boxes.last()
+    }
+
+    pub fn message_boxes(&self) -> impl Iterator<Item = &MessageBoxRecord> {
+        self.message_boxes.iter()
+    }
+
     pub fn apply_notify_icon(&mut self, op: NotifyIconOp, data: NotifyIconData) -> bool {
         let key = (data.hwnd, data.id);
         match op {
@@ -143,6 +156,17 @@ impl ShellSystem {
         }
         cleanup
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageBoxRecord {
+    pub thread_id: u32,
+    pub owner_hwnd: u32,
+    pub text: String,
+    pub caption: String,
+    pub style: u32,
+    pub result: u32,
+    pub owner_was_enabled: Option<bool>,
 }
 
 impl NotifyIconRecord {
