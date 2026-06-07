@@ -72,8 +72,9 @@
   now-backed `fCreate`/`CSIDL_FLAG_CREATE` path, notification APIs, shell
   namespace/storage presentation, and file-change notifications.
 - GWE/input fidelity queue from `PLAN.MD`: `TranslateMessage` is still minimal.
-  Implement keyboard modifiers/layout, accelerators and menu shortcuts,
-  `WM_SYSKEY*`, dead-key/IME handoff, richer clipboard rendered ownership and
+  Implement keyboard layout, broader accelerator/menu shortcut routing above
+  the now-backed `TranslateAcceleratorW` modifier/`WM_SYSKEYDOWN` match path,
+  dead-key/IME handoff, richer clipboard rendered ownership and
   delayed-render edge cases above the raw clipboard store and
   `GetClipboardDataAlloc` local-handle copy path, rendered caret
   blink/focus invalidation above the raw caret store, and focus/capture

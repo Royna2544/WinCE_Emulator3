@@ -58,8 +58,8 @@ use wince_emulation_v3::{
             ORD_SET_TIMER, ORD_SET_WINDOW_LONG_W, ORD_SET_WINDOW_POS, ORD_SET_WINDOW_RGN,
             ORD_SET_WINDOW_TEXT_W, ORD_SHOW_CARET, ORD_SHOW_WINDOW, ORD_SIZEOF_RESOURCE, ORD_SLEEP,
             ORD_STRETCH_BLT, ORD_STRETCH_DIBITS, ORD_SYSTEM_PARAMETERS_INFO_W,
-            ORD_TRACK_POPUP_MENU_EX, ORD_TRANSPARENT_IMAGE, ORD_UNION_RECT, ORD_UPDATE_WINDOW,
-            ORD_VALIDATE_RECT, ORD_WINDOW_FROM_POINT,
+            ORD_TRACK_POPUP_MENU_EX, ORD_TRANSLATE_ACCELERATOR_W, ORD_TRANSPARENT_IMAGE,
+            ORD_UNION_RECT, ORD_UPDATE_WINDOW, ORD_VALIDATE_RECT, ORD_WINDOW_FROM_POINT,
         },
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat, VirtualFramebuffer},
         gwe::{
@@ -71,17 +71,17 @@ use wince_emulation_v3::{
             PeekFlags, Point, QS_PAINT, QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER, Rect,
             SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN, SMF_NOTIFY_MESSAGE, SMF_SENDER_NO_WAIT,
             SMF_TIMEOUT, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-            SWP_SHOWWINDOW, VK_LSHIFT, VK_SHIFT, WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE,
-            WM_CANCELMODE, WM_CHAR, WM_CLOSE, WM_DESTROY, WM_ENABLE, WM_ENTERMENULOOP,
-            WM_ERASEBKGND, WM_EXITMENULOOP, WM_GETDLGCODE, WM_GETTEXT, WM_GETTEXTLENGTH,
-            WM_INITMENUPOPUP, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_MOVE,
-            WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETFOCUS, WM_SETTEXT, WM_SHOWWINDOW, WM_SIZE,
-            WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_CHILD, WS_DISABLED, WS_GROUP, WS_POPUP,
-            WS_TABSTOP, WS_VISIBLE,
+            SWP_SHOWWINDOW, VK_CONTROL, VK_LSHIFT, VK_MENU, VK_SHIFT, WA_ACTIVE, WA_INACTIVE,
+            WM_ACTIVATE, WM_CANCELMODE, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_ENABLE,
+            WM_ENTERMENULOOP, WM_ERASEBKGND, WM_EXITMENULOOP, WM_GETDLGCODE, WM_GETTEXT,
+            WM_GETTEXTLENGTH, WM_INITMENUPOPUP, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
+            WM_MOVE, WM_NCDESTROY, WM_PAINT, WM_QUIT, WM_SETFOCUS, WM_SETTEXT, WM_SHOWWINDOW,
+            WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_CHILD, WS_DISABLED,
+            WS_GROUP, WS_POPUP, WS_TABSTOP, WS_VISIBLE,
         },
         kernel::CeKernel,
         memory::PROCESS_HEAP_HANDLE,
-        resource::ResourceId,
+        resource::{AcceleratorEntry, ResourceId},
         thread::{
             ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE,
             ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE,
@@ -10227,6 +10227,143 @@ fn coredll_raw_track_popup_menu_records_attempt_without_fake_selection() -> Resu
         kernel.threads.get_last_error(thread_id),
         ERROR_INVALID_PARAMETER
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_translate_accelerator_honors_modifiers_and_syskey() -> Result<()> {
+    const FVIRTKEY: u8 = 0x01;
+    const FCONTROL: u8 = 0x08;
+    const FALT: u8 = 0x10;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 36;
+    let msg_ptr = 0x1_7c00;
+    memory.map_words(msg_ptr, 7);
+    let hwnd = kernel.create_window_ex_w(thread_id, "ACCEL_OWNER", "", None, 0, 0, 0);
+    let accel = kernel.resources.create_accelerator(
+        0,
+        ResourceId::Integer(700),
+        None,
+        vec![
+            AcceleratorEntry {
+                flags: FVIRTKEY | FCONTROL,
+                key: u16::from(b'N'),
+                command: 7001,
+            },
+            AcceleratorEntry {
+                flags: FVIRTKEY | FALT,
+                key: u16::from(b'M'),
+                command: 7002,
+            },
+        ],
+    );
+
+    write_raw_message(&mut memory, msg_ptr, hwnd, WM_KEYDOWN, u32::from(b'N'), 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRANSLATE_ACCELERATOR_W,
+            [hwnd, accel, msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(
+        kernel
+            .gwe
+            .peek_message_filtered(
+                thread_id,
+                Some(hwnd),
+                WM_COMMAND,
+                WM_COMMAND,
+                PeekFlags::NO_REMOVE
+            )
+            .is_none()
+    );
+
+    assert!(kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYDOWN, VK_CONTROL, 0));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRANSLATE_ACCELERATOR_W,
+            [hwnd, accel, msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    let command = kernel
+        .gwe
+        .peek_message_filtered(
+            thread_id,
+            Some(hwnd),
+            WM_COMMAND,
+            WM_COMMAND,
+            PeekFlags::REMOVE,
+        )
+        .expect("accelerator should queue WM_COMMAND");
+    assert_eq!(command.wparam, 7001);
+
+    assert!(kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYUP, VK_CONTROL, 0));
+    write_raw_message(
+        &mut memory,
+        msg_ptr,
+        hwnd,
+        WM_SYSKEYDOWN,
+        u32::from(b'M'),
+        0,
+    )?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRANSLATE_ACCELERATOR_W,
+            [hwnd, accel, msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    let command = kernel
+        .gwe
+        .peek_message_filtered(
+            thread_id,
+            Some(hwnd),
+            WM_COMMAND,
+            WM_COMMAND,
+            PeekFlags::REMOVE,
+        )
+        .expect("syskey accelerator should queue WM_COMMAND");
+    assert_eq!(command.wparam, 7002);
+    assert!(kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYDOWN, VK_MENU, 0));
+    write_raw_message(&mut memory, msg_ptr, hwnd, WM_KEYDOWN, u32::from(b'N'), 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRANSLATE_ACCELERATOR_W,
+            [hwnd, accel, msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
 
     Ok(())
 }

@@ -83,8 +83,9 @@
     fresh local allocation and rejects unknown handles instead of fabricating a
     size. Raw caret APIs now track owner/position/show-count/blink-time state,
     but rendered blinking and focus/update invalidation are still incomplete.
-  - Required fix: implement keyboard modifiers/layout, accelerators/menu
-    shortcuts, `WM_SYSKEY*`, dead-key/IME handoff, clipboard rendered
+  - Required fix: implement keyboard layout, broader accelerator/menu shortcut
+    routing above the now-backed `TranslateAcceleratorW`
+    modifier/`WM_SYSKEYDOWN` path, dead-key/IME handoff, clipboard rendered
     ownership/delayed-render edge cases, rendered caret blink/focus
     invalidation, focus/capture integration, and CE-like
     `SendMessageTimeout` wait/result/flag/destruction/reentrancy behavior.

@@ -164,6 +164,13 @@
   `coredll_raw_track_popup_menu_records_attempt_without_fake_selection`.
   Rendered popup windows, hit-testing, keyboard navigation, and real command
   selection remain queued.
+- Raw `TranslateAcceleratorW` now honors CE accelerator modifier bits instead
+  of matching only the virtual key. It accepts `WM_KEYDOWN` and
+  `WM_SYSKEYDOWN`, checks `FVIRTKEY`, `FSHIFT`, `FCONTROL`, and `FALT` against
+  GWE key state, treats `WM_SYSKEYDOWN` as the Alt path, and preserves the
+  existing `WM_COMMAND` queue behavior only for a matching entry. Focused
+  coverage:
+  `coredll_raw_translate_accelerator_honors_modifiers_and_syskey`.
 - Shell notification state now has a dedicated `ShellSystem` instead of a
   COREDLL-local placeholder. Raw `Shell_NotifyIconW @481` decodes the
   `NOTIFYICONDATAW` prefix, validates owner HWNDs, tracks add/modify/delete

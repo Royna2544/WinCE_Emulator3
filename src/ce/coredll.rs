@@ -86,6 +86,10 @@ const KF_UP_LPARAM: u32 = 0x8000_0000;
 const TPM_NONOTIFY: u32 = 0x0080;
 const TPM_RETURNCMD: u32 = 0x0100;
 const TPMPARAMS_SIZE: u32 = 20;
+const ACCEL_FVIRTKEY: u8 = 0x01;
+const ACCEL_FSHIFT: u8 = 0x04;
+const ACCEL_FCONTROL: u8 = 0x08;
+const ACCEL_FALT: u8 = 0x10;
 const STRSAFE_E_INSUFFICIENT_BUFFER: u32 = 0x8007_007a;
 const STRSAFE_E_INVALID_PARAMETER: u32 = 0x8007_0057;
 const SEE_MASK_NOCLOSEPROCESS: u32 = 0x0000_0040;
@@ -12764,12 +12768,18 @@ fn translate_accelerator_w_raw<M: CoredllGuestMemory>(
     let Some(message) = read_guest_message(kernel, memory, thread_id, msg_ptr) else {
         return 0;
     };
-    if message.msg != crate::ce::gwe::WM_KEYDOWN {
+    if !matches!(
+        message.msg,
+        crate::ce::gwe::WM_KEYDOWN | crate::ce::gwe::WM_SYSKEYDOWN
+    ) {
         kernel.threads.set_last_error(thread_id, 0);
         return 0;
     }
-    let key = message.wparam as u16;
-    let Some(entry) = accel_table.entries.iter().find(|entry| entry.key == key) else {
+    let Some(entry) = accel_table
+        .entries
+        .iter()
+        .find(|entry| accelerator_entry_matches(kernel, &message, entry))
+    else {
         kernel.threads.set_last_error(thread_id, 0);
         return 0;
     };
@@ -12787,6 +12797,37 @@ fn translate_accelerator_w_raw<M: CoredllGuestMemory>(
     );
     kernel.threads.set_last_error(thread_id, 0);
     1
+}
+
+fn accelerator_entry_matches(
+    kernel: &CeKernel,
+    message: &Message,
+    entry: &AcceleratorEntry,
+) -> bool {
+    let key = message.wparam as u16;
+    let matches_key = if entry.flags & ACCEL_FVIRTKEY != 0 {
+        entry.key == key
+    } else {
+        ascii_accel_key(entry.key) == ascii_accel_key(key)
+    };
+    if !matches_key {
+        return false;
+    }
+    let shift = kernel.gwe.get_key_state(crate::ce::gwe::VK_SHIFT) & 0x8000 != 0;
+    let control = kernel.gwe.get_key_state(crate::ce::gwe::VK_CONTROL) & 0x8000 != 0;
+    let alt = (kernel.gwe.get_key_state(crate::ce::gwe::VK_MENU) & 0x8000 != 0)
+        || message.msg == crate::ce::gwe::WM_SYSKEYDOWN;
+    (entry.flags & ACCEL_FSHIFT != 0) == shift
+        && (entry.flags & ACCEL_FCONTROL != 0) == control
+        && (entry.flags & ACCEL_FALT != 0) == alt
+}
+
+fn ascii_accel_key(key: u16) -> u16 {
+    if (u16::from(b'a')..=u16::from(b'z')).contains(&key) {
+        key - u16::from(b'a') + u16::from(b'A')
+    } else {
+        key
+    }
 }
 
 fn parse_accelerator_entries(bytes: &[u8]) -> Vec<AcceleratorEntry> {

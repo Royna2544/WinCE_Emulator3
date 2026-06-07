@@ -169,6 +169,15 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     the CE owner notification sequence unless `TPM_NONOTIFY` is set, while it
     still refuses to invent a command result without real user selection.
 
+- Accelerator input APIs:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`
+  - CE defines `FVIRTKEY`, `FSHIFT`, `FCONTROL`, `FALT`,
+    `TranslateAcceleratorW`, and `WM_SYSKEYDOWN` in the same input/menu API
+    surface. v3 now uses those modifier bits when matching raw
+    `TranslateAcceleratorW` entries against `MSG` records and GWE key state,
+    including the Alt/syskey path, instead of matching solely on the virtual
+    key.
+
 - Old MIPS CE kernel-call encoding:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\nkmips.h`,
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\process.c`, and corroborating
