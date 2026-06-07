@@ -6321,6 +6321,16 @@ fn dll_attach_lifecycle_calls_for_modules(
 #[cfg(feature = "unicorn")]
 fn dll_detach_lifecycle_calls_for_module(module: &LoadedModule) -> Vec<DllLifecycleCall> {
     let mut calls = Vec::new();
+    for callback in &module.tls_callbacks {
+        if *callback != 0 {
+            calls.push(DllLifecycleCall {
+                module: module.base,
+                target: *callback,
+                reason: DLL_PROCESS_DETACH,
+                returns_bool: false,
+            });
+        }
+    }
     if module.entry_point != module.base && module.entry_point != 0 {
         calls.push(DllLifecycleCall {
             module: module.base,

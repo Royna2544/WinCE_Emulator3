@@ -43,10 +43,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     refreshes the live and persisted import trap page, and registers exports
     with the kernel module table. TLS callbacks and
     `DllMain(DLL_PROCESS_ATTACH)` run before returning from normal loads, and
-    final dynamic `FreeLibrary` enters guest
+    final dynamic `FreeLibrary` enters guest TLS callbacks followed by
     `DllMain(DLL_PROCESS_DETACH)` before marking the module unload-pending.
-    TLS detach callback ordering, forwarded exports, datafile loads, and
-    `DONT_RESOLVE_DLL_REFERENCES` remain explicit open gaps.
+    Forwarded exports, datafile loads, and `DONT_RESOLVE_DLL_REFERENCES`
+    remain explicit open gaps.
 
 - CE loader lifecycle anchors:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\loader.c` and
@@ -55,10 +55,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     with `fCallDllMain`; process/thread exit paths notify
     `DLL_PROCESS_DETACH` through `NKPSLNotify`. v3's runtime Unicorn import
     path now mirrors the observable final dynamic `FreeLibrary` contract by
-    calling the guest DLL entrypoint with `DLL_PROCESS_DETACH` before marking
-    the loaded module unload-pending and leaving its mapped address range
-    reserved. TLS detach callbacks still need an ordered CE source pass before
-    implementation.
+    calling guest TLS callbacks and the DLL entrypoint with
+    `DLL_PROCESS_DETACH` before marking the loaded module unload-pending and
+    leaving its mapped address range reserved. The callback-before-entrypoint
+    ordering is covered by the PE TLS eVC fixture.
   - Host-presented probes of dumped `explorer.exe` using this same runtime DLL
     directory no longer fail on the old high-address trampoline from
     `0x00057108` to `0xffff832c`. After the COREDLL startup ordinal slice, the

@@ -4,3 +4,4 @@ EXPORTS
     TlsCallbackCount @3
     TlsAttachCount @4
     TlsOrderWord @5
+    TlsArmDetachOrderPointer @6

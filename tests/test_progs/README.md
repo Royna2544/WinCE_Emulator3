@@ -44,7 +44,7 @@ These are intentionally tiny. Each fixture should test one layer or invariant be
 | `169_post_keybd_message` | `PostKeybdMessage` posts hardware-sourced keydown/char/keyup messages and updates key state. |
 | `171_loadlibrary_guest_dll` | Runtime `LoadLibraryW`, `GetProcAddress`, guest export calls, refcount reuse, process attach, and final process detach. |
 | `172_loadlibrary_dependent_guest_dll` | Runtime recursive guest-DLL dependency loading, import patching, and dependency-order process attach. |
-| `173_loadlibrary_tls_callback` | Runtime PE TLS callback invocation before DLL process attach. |
+| `173_loadlibrary_tls_callback` | Runtime PE TLS callback invocation before DLL process attach and final detach. |
 | `asm/` | Optional assembly/reference snippets for executable-section branch/delay tests. |
 | `tools/make_raw_mips_blobs.py` | Generates raw MIPS little-endian blobs for CPU-only unit tests. |
 

@@ -12,11 +12,10 @@
 
 ## Current Slice
 
-- Queued runtime loader gaps from `PLAN.MD`: confirm and implement TLS detach
-  callback ordering on final `FreeLibrary`; implement forwarded exports;
+- Queued runtime loader gaps from `PLAN.MD`: implement forwarded exports;
   implement `DONT_RESOLVE_DLL_REFERENCES`; implement datafile/resource-style
-  `LoadLibraryExW`; harden runtime trampoline handling for high/relocated DLLs;
-  add compact runtime loader audit counters.
+  `LoadLibraryExW`; harden runtime trampoline handling for high/relocated
+  DLLs; add compact runtime loader audit counters.
 - CE fidelity catch-up next slice: finish the runtime guest DLL loader at the
   Unicorn import-trap boundary. The kernel-side module manager/refcount shape
   now exists and the shared CE-aware DLL search order is implemented for
@@ -28,13 +27,13 @@
   page, registers resources/exports, records dynamic module refcounts, parses
   TLS callback addresses into module metadata, and invokes guest
   TLS callbacks and `DllMain(DLL_PROCESS_ATTACH)` before returning from normal
-  loads. Final dynamic `FreeLibrary` now enters guest
+  loads. Final dynamic `FreeLibrary` now enters guest TLS callbacks and then
   `DllMain(DLL_PROCESS_DETACH)` before marking the module unload-pending; the
   direct runtime guest-DLL fixture proves no detach on a refcount decrement and
-  one detach on final release. The direct, dependent, and TLS runtime guest-DLL
-  fixtures now pass with eVC-built MIPS bytes and assert attach/TLS ordering
-  plus direct-DLL final detach; next loader work should implement forwarded
-  exports and TLS detach callback ordering.
+  one detach on final release, while the TLS fixture proves the
+  TLS-before-DllMain attach/detach order word `0x01020304`. The direct,
+  dependent, and TLS runtime guest-DLL fixtures now pass with eVC-built MIPS
+  bytes; next loader work should implement forwarded exports.
   Datafile and
   `DONT_RESOLVE_DLL_REFERENCES` loads still fail explicitly until CE-like
   support is implemented. Keep

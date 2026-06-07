@@ -15,10 +15,13 @@ static volatile DWORD g_tlsCount = 0;
 static volatile DWORD g_attachCount = 0;
 static volatile DWORD g_orderWord = 0;
 static volatile DWORD g_nextOrder = 1;
+static volatile DWORD *g_detachOrderObserved = 0;
 
 void NTAPI FixtureTlsCallback(PVOID, DWORD reason, PVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         ++g_tlsCount;
+        g_orderWord = (g_orderWord << 8) | g_nextOrder++;
+    } else if (reason == DLL_PROCESS_DETACH) {
         g_orderWord = (g_orderWord << 8) | g_nextOrder++;
     }
 }
@@ -27,6 +30,11 @@ BOOL WINAPI DllMain(HANDLE, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         ++g_attachCount;
         g_orderWord = (g_orderWord << 8) | g_nextOrder++;
+    } else if (reason == DLL_PROCESS_DETACH) {
+        g_orderWord = (g_orderWord << 8) | g_nextOrder++;
+        if (g_detachOrderObserved) {
+            *g_detachOrderObserved = g_orderWord;
+        }
     }
     return TRUE;
 }
@@ -41,6 +49,10 @@ extern "C" DWORD WINAPI TlsAttachCount() {
 
 extern "C" DWORD WINAPI TlsOrderWord() {
     return g_orderWord;
+}
+
+extern "C" void WINAPI TlsArmDetachOrderPointer(volatile DWORD *value) {
+    g_detachOrderObserved = value;
 }
 
 extern "C" DWORD _tls_index = 0;
