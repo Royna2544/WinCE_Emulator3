@@ -28,8 +28,8 @@ use wince_emulation_v3::{
     },
     config::RuntimeConfig,
     emulator::{
+        cpu::{CpuBackend as _, UnicornMips},
         memory::{MemoryMap, MemoryPerms},
-        unicorn::UnicornMips,
     },
 };
 

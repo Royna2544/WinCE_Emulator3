@@ -17,6 +17,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use wince_emulation_v3::emulator::cpu::CpuBackend as _;
 use wince_emulation_v3::{
     Result,
     ce::{
@@ -32,7 +33,7 @@ use wince_emulation_v3::{
     emulator::{
         dll_search::{emulator_provided_import_module, normalize_module_name, resolve_dll_path},
         memory::MemoryPerms,
-        unicorn::{UnicornDebugSnapshot, UnicornMips, UnicornRunLimits, UnicornWindowSnapshot},
+        cpu::{UnicornDebugSnapshot, UnicornMips, UnicornRunLimits, UnicornWindowSnapshot},
     },
     pe::PeImage,
     remote_server::{RemoteServer, RemoteServerConfig},
@@ -809,7 +810,7 @@ fn publish_remote_endpoint(
     }
 }
 
-fn print_unicorn_stop(snapshot: &wince_emulation_v3::emulator::unicorn::UnicornDebugSnapshot) {
+fn print_unicorn_stop(snapshot: &wince_emulation_v3::emulator::cpu::UnicornDebugSnapshot) {
     if let Some(exit) = snapshot.encoded_kernel_exit.as_ref() {
         println!(
             "  CE process exited: process=0x{:08x} code=0x{:08x}; {}",
@@ -2699,7 +2700,7 @@ mod tests {
         assert!(!snapshot_has_blocked_get_message(&snapshot));
 
         snapshot.active_blocked_waits.push(
-            wince_emulation_v3::emulator::unicorn::UnicornBlockedWaitSnapshot {
+            wince_emulation_v3::emulator::cpu::UnicornBlockedWaitSnapshot {
                 id: 1,
                 thread_id: 1,
                 thread_handle: 0x120,

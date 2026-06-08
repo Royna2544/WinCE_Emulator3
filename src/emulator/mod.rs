@@ -1,4 +1,9 @@
+pub mod cpu;
 pub mod dll_search;
 pub mod imports;
 pub mod memory;
+pub mod types;
+#[cfg(feature = "unicorn")]
 pub mod unicorn;
+#[cfg(not(feature = "unicorn"))]
+pub mod stub;
