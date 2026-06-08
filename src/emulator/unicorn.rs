@@ -1057,7 +1057,6 @@ const QSORT_RETURN_STUB_ADDR: u32 =
 #[cfg(feature = "unicorn")]
 const DLL_LIFECYCLE_RETURN_STUB_ADDR: u32 =
     QSORT_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
-#[cfg(feature = "unicorn")]
 const RESERVED_IMPORT_TRAP_STUB_BYTES: u32 = crate::emulator::imports::IMPORT_TRAP_STRIDE * 6;
 #[cfg(feature = "unicorn")]
 const CREATESTRUCTW_SIZE: u32 = 48;
@@ -1618,10 +1617,16 @@ impl UnicornMips {
         false
     }
 
+    #[cfg(feature = "unicorn")]
     pub fn last_stop_is_guest_thread_return_stub(&self) -> bool {
         self.last_debug
             .as_ref()
             .is_some_and(|snapshot| snapshot.pc == GUEST_THREAD_RETURN_STUB_ADDR)
+    }
+
+    #[cfg(not(feature = "unicorn"))]
+    pub fn last_stop_is_guest_thread_return_stub(&self) -> bool {
+        false
     }
 
     pub fn switch_to_next_parked_child_process(&mut self, kernel: &mut CeKernel) -> bool {
@@ -1841,6 +1846,7 @@ impl UnicornMips {
             error: None,
         });
         let mut next_cpu = *cpu;
+        #[cfg(feature = "unicorn")]
         if let Some(send_id) = blocked_send_id {
             let _ =
                 Self::complete_ready_blocked_send_for_parked_cpu(&mut next_cpu, kernel, send_id);
@@ -1919,7 +1925,9 @@ impl UnicornMips {
                 mapped_blobs: std::mem::take(&mut self.mapped_blobs),
                 resource_strings: std::mem::take(&mut self.resource_strings),
                 resources: std::mem::take(&mut self.resources),
+                #[cfg(feature = "unicorn")]
                 trampoline_ranges: std::mem::take(&mut self.trampoline_ranges),
+                #[cfg(feature = "unicorn")]
                 trampoline_jumps: std::mem::take(&mut self.trampoline_jumps),
                 last_debug: self.last_debug.take(),
                 last_wall_clock_debug: self.last_wall_clock_debug.take(),
