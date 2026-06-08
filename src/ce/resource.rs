@@ -118,6 +118,16 @@ pub struct BitmapObject {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IconObject {
+    pub handle: u32,
+    pub is_icon: bool,
+    pub x_hotspot: u32,
+    pub y_hotspot: u32,
+    pub mask_bitmap: u32,
+    pub color_bitmap: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegionObject {
     pub handle: u32,
     pub rect: Rect,
@@ -240,11 +250,21 @@ pub struct ImageListImage {
     pub bitmap: u32,
     pub mask: u32,
     pub icon: u32,
+    pub transparent_color: Option<u32>,
+    pub source_x: i32,
+    pub source_y: i32,
 }
 
 fn overlay_icon_handle(base_icon: u32, overlay_index: i32) -> u32 {
     let overlay = (overlay_index.saturating_add(1) as u32).min(0xff);
     base_icon | (overlay << 24)
+}
+
+fn image_list_bitmap_strip_count(bitmap_width: i32, image_width: i32) -> i32 {
+    if bitmap_width <= 0 || image_width <= 0 {
+        return 1;
+    }
+    bitmap_width.saturating_add(image_width - 1) / image_width
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -370,10 +390,12 @@ impl Default for DcState {
 pub struct ResourceSystem {
     next_handle: u32,
     next_gdi_handle: u32,
+    next_icon_handle: u32,
     by_key: BTreeMap<(u32, ResourceId, ResourceId), u32>,
     entries: BTreeMap<u32, ResourceEntry>,
     strings: BTreeMap<(u32, u32), ResourceString>,
     bitmaps: BTreeMap<u32, BitmapObject>,
+    icons: BTreeMap<u32, IconObject>,
     regions: BTreeMap<u32, RegionObject>,
     menus: BTreeMap<u32, MenuObject>,
     accelerators: BTreeMap<u32, AcceleratorObject>,
@@ -395,10 +417,12 @@ impl Default for ResourceSystem {
         Self {
             next_handle: 0x0009_0000,
             next_gdi_handle: 0x000a_0000,
+            next_icon_handle: 0x000c_8000,
             by_key: BTreeMap::new(),
             entries: BTreeMap::new(),
             strings: BTreeMap::new(),
             bitmaps: BTreeMap::new(),
+            icons: BTreeMap::new(),
             regions: BTreeMap::new(),
             menus: BTreeMap::new(),
             accelerators: BTreeMap::new(),
@@ -461,6 +485,10 @@ impl ResourceSystem {
 
     pub fn load_resource(&self, handle: u32) -> Option<u32> {
         Some(self.entries.get(&handle)?.data_ptr)
+    }
+
+    pub fn resource_entry(&self, handle: u32) -> Option<&ResourceEntry> {
+        self.entries.get(&handle)
     }
 
     pub fn lock_resource(&self, handle: u32) -> Option<u32> {
@@ -586,6 +614,43 @@ impl ResourceSystem {
 
     pub fn delete_bitmap(&mut self, handle: u32) -> bool {
         self.bitmaps.remove(&handle).is_some()
+    }
+
+    pub fn create_icon(
+        &mut self,
+        is_icon: bool,
+        x_hotspot: u32,
+        y_hotspot: u32,
+        mask_bitmap: u32,
+        color_bitmap: u32,
+    ) -> Option<u32> {
+        if !self.bitmaps.contains_key(&mask_bitmap)
+            || (color_bitmap != 0 && !self.bitmaps.contains_key(&color_bitmap))
+        {
+            return None;
+        }
+        let handle = self.next_icon_handle;
+        self.next_icon_handle += 4;
+        self.icons.insert(
+            handle,
+            IconObject {
+                handle,
+                is_icon,
+                x_hotspot,
+                y_hotspot,
+                mask_bitmap,
+                color_bitmap,
+            },
+        );
+        Some(handle)
+    }
+
+    pub fn icon(&self, handle: u32) -> Option<&IconObject> {
+        self.icons.get(&handle)
+    }
+
+    pub fn delete_icon(&mut self, handle: u32) -> bool {
+        self.icons.remove(&handle).is_some()
     }
 
     pub fn create_region(&mut self, rect: Rect) -> u32 {
@@ -828,6 +893,22 @@ impl ResourceSystem {
         }
         menu.checked_items.insert(menu_item.id, checked);
         Some(previous)
+    }
+
+    pub fn set_menu_hilite_index(&mut self, handle: u32, index: Option<usize>) -> bool {
+        let Some(menu) = self.menus.get_mut(&handle) else {
+            return false;
+        };
+        for (item_index, item) in menu.items.iter_mut().enumerate() {
+            let enabled =
+                item.item_type & MF_SEPARATOR == 0 && item.state & (MF_DISABLED | MF_GRAYED) == 0;
+            if enabled && Some(item_index) == index {
+                item.state |= MF_HILITE;
+            } else {
+                item.state &= !MF_HILITE;
+            }
+        }
+        true
     }
 
     pub fn check_menu_radio_item(
@@ -1172,13 +1253,54 @@ impl ResourceSystem {
         if bitmap == 0 {
             return None;
         }
+        let bitmap_width = self
+            .bitmaps
+            .get(&bitmap)
+            .map(|bitmap| bitmap.width.abs())
+            .unwrap_or(0);
         let list = self.image_lists.get_mut(&handle)?;
         let index = list.images.len();
-        list.images.push(ImageListImage {
-            bitmap,
-            mask,
-            icon: 0,
-        });
+        let count = image_list_bitmap_strip_count(bitmap_width, list.width);
+        for strip in 0..count {
+            list.images.push(ImageListImage {
+                bitmap,
+                mask,
+                icon: 0,
+                transparent_color: None,
+                source_x: strip.saturating_mul(list.width),
+                source_y: 0,
+            });
+        }
+        i32::try_from(index).ok()
+    }
+
+    pub fn add_masked_image_list_image(
+        &mut self,
+        handle: u32,
+        bitmap: u32,
+        transparent_color: u32,
+    ) -> Option<i32> {
+        if bitmap == 0 {
+            return None;
+        }
+        let bitmap_width = self
+            .bitmaps
+            .get(&bitmap)
+            .map(|bitmap| bitmap.width.abs())
+            .unwrap_or(0);
+        let list = self.image_lists.get_mut(&handle)?;
+        let index = list.images.len();
+        let count = image_list_bitmap_strip_count(bitmap_width, list.width);
+        for strip in 0..count {
+            list.images.push(ImageListImage {
+                bitmap,
+                mask: transparent_color,
+                icon: 0,
+                transparent_color: (transparent_color != 0xffff_ffff).then_some(transparent_color),
+                source_x: strip.saturating_mul(list.width),
+                source_y: 0,
+            });
+        }
         i32::try_from(index).ok()
     }
 
@@ -1200,6 +1322,9 @@ impl ResourceSystem {
             bitmap,
             mask,
             icon: 0,
+            transparent_color: None,
+            source_x: 0,
+            source_y: 0,
         };
         Some(true)
     }
@@ -1215,6 +1340,9 @@ impl ResourceSystem {
                 bitmap: 0,
                 mask: 0,
                 icon,
+                transparent_color: None,
+                source_x: 0,
+                source_y: 0,
             });
             return i32::try_from(index).ok();
         }
@@ -1327,6 +1455,9 @@ impl ResourceSystem {
                     bitmap: 0,
                     mask: 0,
                     icon: 0,
+                    transparent_color: None,
+                    source_x: 0,
+                    source_y: 0,
                 },
             );
         } else {
@@ -1378,14 +1509,14 @@ impl ResourceSystem {
         }
         let list = self.image_lists.get(&handle)?;
         let image = list.images.get(index as usize)?;
-        let left = index.saturating_mul(list.width);
+        let left = image.source_x;
         Some(ImageListImageInfo {
             bitmap: image.bitmap,
             mask: image.mask,
             left,
-            top: 0,
+            top: image.source_y,
             right: left.saturating_add(list.width),
-            bottom: list.height,
+            bottom: image.source_y.saturating_add(list.height),
         })
     }
 

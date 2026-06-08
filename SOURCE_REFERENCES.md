@@ -115,7 +115,31 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `GetClipboardData`, allocates a fresh local handle for emulator-tracked
     local clipboard data, copies guest bytes by the tracked local allocation
     size, and fails unknown source handles explicitly instead of inventing a
-    size.
+    size. `SetClipboardData(format, NULL)` is retained as a delayed-render
+    format: a later `GetClipboardData`/`GetClipboardDataAlloc` queues
+    `WM_RENDERFORMAT` to the clipboard owner and accepts the owner-supplied
+    handle only while the owner thread is actively servicing the matching
+    `WM_RENDERFORMAT`, without requiring the owner to reopen the clipboard;
+    repeated reads while that owner render is already active do not queue duplicate
+    `WM_RENDERFORMAT` sends, and an abandoned render callback clears the active
+    render marker so a later read can request the delayed format again. Replacing
+    clipboard contents with `EmptyClipboard` posts `WM_DESTROYCLIPBOARD` to the
+    previous live owner, and destroying the owner/open clipboard window clears
+    stale ownership/open-window state while dropping unresolved delayed
+    formats. If the destroyed owner still has delayed formats, the destroy path
+    sends `WM_RENDERALLFORMATS` first and preserves already-rendered data that
+    remains in the clipboard store.
+
+- Caret APIs:
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`
+  - CE declares `CreateCaret`, `DestroyCaret`, `ShowCaret`, `HideCaret`,
+    `SetCaretPos`, blink-time accessors, and system-wide caret enable/disable
+    together in the GWE-facing user API group. v3 now keeps the raw caret state
+    in GWE and marks the visible caret's old/new client rectangle dirty when
+    those calls make it appear, disappear, move, or change system-enable
+    visibility. Framebuffer-backed raw dispatch also marks the translated
+    screen rectangle dirty so host presentation can repaint the affected
+    region without claiming full bitmap/blink rendering is complete.
 
 - Shell shortcut APIs:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\shellapi.h`,
@@ -178,8 +202,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     rename/write/attribute directory events, exposes pending action/name
     records through `CeGetFileNotificationInfo` using the standard
     `FILE_NOTIFY_INFORMATION` layout, including recursive directory-create,
-    rename old/new, and directory-removal records, and rearms/closes them
-    through `FindNextChangeNotification`/`FindCloseChangeNotification`.
+    rename old/new, and directory-removal records, coalesces consecutive
+    duplicate action/name records, and rearms/closes them through
+    `FindNextChangeNotification`/`FindCloseChangeNotification`.
     `PRIVATE\WINCEOS\COREOS\STORAGE\NOTIFY\fsnotify.cpp` `NotifyReset` drains
     only the records that fit the caller buffer, sets `ERROR_MORE_DATA` after a
     successful prefix copy, reports remaining bytes through `lpBytesAvailable`,
@@ -191,7 +216,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `FILE_ACTION_REMOVED` for visible mount folders on the root notification
     handle; v3 mirrors that for root-directory waiters when guest roots are
     mounted or unmounted. Full FSDMGR volume-handle ownership, deeper
-    coalescing details, and broader mounted edge behavior remain queued.
+    non-identical coalescing details, and broader mounted edge behavior remain
+    queued.
 
 - Shell popup-menu APIs:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`,
@@ -207,10 +233,30 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     sends/records nested `WM_INITMENUPOPUP` notifications for the submenu path
     that produced that command, and covers the no-selectable-item cancellation
     shape by returning `0` without synthesizing `WM_COMMAND`. Framebuffer-backed
-    raw `TrackPopupMenuEx` calls also paint a popup surface from the current
-    menu item state, including disabled/default/checked rows, separators, and
-    submenu markers. A real modal menu pump, live highlight, and pointer/key
-    selection remain queued.
+    raw `TrackPopupMenuEx` calls also paint popup and highlighted child-submenu
+    surfaces from the current menu item state, including disabled/default/checked
+    rows, separators, and submenu markers. Current-cursor row hit-testing now
+    overrides the default/first-command path when the cursor lands on an
+    enabled command row, enabled submenu row, or command row inside a rendered
+    highlighted child submenu. v3 also consumes already queued owner-window
+    `WM_KEYDOWN` Up/Down/Enter/Escape messages for popup navigation, skips
+    disabled/separator rows, accepts the highlighted command or submenu command
+    on Enter, opens highlighted submenu panes on Right-arrow for multi-level
+    keyboard navigation and Enter selection, returns keyboard focus one pane
+    upward on Left-arrow, closes a child pane when pointer movement returns
+    to a parent row, and treats Escape inside a child pane as a one-level close,
+    accepts queued `WM_CHAR` menu mnemonics from `&`-marked item text,
+    stores the current row in menu `MF_HILITE` state with matching framebuffer
+    highlight repainting, consumes `WM_MOUSEMOVE` over enabled rows to update that highlighted
+    command before Enter, and returns `0` for Escape cancellation. Queued owner-window
+    `WM_CANCELMODE` and outside-click messages also cancel, while click
+    messages inside the popup select enabled rows from their screen-coordinate
+    `lParam`; right-button popup selection is only consumed when
+    `TPM_RIGHTBUTTON` is set. Queued posted/sent same-thread non-owner
+    messages, owner-window non-menu messages, and generated owner `WM_PAINT`
+    are now dispatched before default or later owner-window menu input resolves.
+    A full nested modal menu pump and remaining live submenu cancellation/routing
+    edge cases remain queued.
 
 - Accelerator input APIs:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`
@@ -219,16 +265,30 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     surface. v3 now uses those modifier bits when matching raw
     `TranslateAcceleratorW` entries against `MSG` records and GWE key state,
     including the Alt/syskey path, instead of matching solely on the virtual
-    key.
+    key; non-`FVIRTKEY` ASCII accelerators now compare against the translated
+    key character so shifted punctuation such as `!` can match the accelerator
+    table entry.
 
 - Keyboard translation APIs:
-  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`,
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\imm.h`, and
+  `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\main.cpp`
   - CE defines `TranslateMessage(CONST MSG *pMsg)`, `WM_CHAR`,
     `WM_SYSKEYDOWN`, `WM_SYSCHAR`, `VK_SHIFT`, and `VK_CAPITAL` in the same
     input API surface. v3 now routes raw `TranslateMessage` through GWE key
-    state for the basic ASCII letter/digit path, including Shift/CapsLock
-    casing and the syskey-to-`WM_SYSCHAR` message path. Full keyboard layout
-    selection, dead keys, and IME handoff remain queued.
+    state for the ASCII letter/digit/space path, control-character keys
+    (`Backspace`, `Tab`, `Return`, `Escape`), Ctrl-letter and Ctrl-OEM control
+    codes, numpad digits/operators, common OEM punctuation keys with Shift
+    variants, Shift/CapsLock casing, and the syskey-to-`WM_SYSCHAR` message
+    path. CE's keyboard-layout and IMM headers also expose
+    `GetKeyboardLayout*`, `LoadKeyboardLayoutW`,
+    `ActivateKeyboardLayout`, `ImmGetKeyboardLayout`, HIMC context,
+    open/conversion-status, `ImmIsIME`, `ImmGetIMEFileNameW`, and
+    `ImmDisableIME`; the CE GDI tests call `ImmDisableIME(0)` before drawing
+    work so IME UI does not interfere. v3 now keeps an explicit GWE keyboard
+    layout/KLID and minimal HIMC state for those raw probes, while still
+    reporting no pending composition data. Broader layout-specific keymaps,
+    dead keys, candidate/composition UI, and IME handoff remain queued.
 
 - Old MIPS CE kernel-call encoding:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\INC\nkmips.h`,
@@ -492,9 +552,28 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     and `Network Folder` type name. `shelllistview.cpp`, `taskbar.cpp`, and
     `browse.cpp` call `SHGetFileInfo(TEXT(""), ..., SHGFI_SYSICONINDEX...)` to
     obtain the shared shell image list, so v3 now accepts empty-path
-    system-image-list probes without trying to stat a file. Framebuffer-backed
-    raw `ImageList_Draw*` calls now paint clipped deterministic pseudo-icons
-    for these image-list slots until real icon bitmap extraction is ported.
+    system-image-list probes without trying to stat a file. Framebuffer- and
+    selected-memory-DIB-backed raw `ImageList_Draw*` calls now paint clipped
+    deterministic pseudo-icons for these image-list slots until real icon
+    bitmap extraction is ported.
+    File-backed `LoadImageW(..., IMAGE_BITMAP, LR_LOADFROMFILE)` now keeps the
+    BMP pixel rows in CE heap-backed bitmap storage. Resource-backed
+    `LoadImageW`/`LoadBitmapW` for RT_BITMAP DIB data also copies the resolved
+    pixel rows into owned bitmap storage, preserving RGB masks and indexed
+    color tables when present. Wide bitmap strips are split into per-index
+    source rectangles when added to narrower image lists, and raw
+    `ImageList_Draw*` blits those bitmap-backed image-list entries into the
+    attached framebuffer or selected memory DIB before falling back to
+    pseudo-icon rendering.
+    `ImageList_AddMasked` and the `ImageList_LoadImage` mask-color argument now
+    preserve a transparent color for BMP-backed entries, so masked
+    framebuffer draws skip matching source pixels while still rendering
+    non-transparent pixels. `ImageList_Add` with a bitmap `hbmMask` now also
+    reads that mask bitmap during framebuffer draws and skips non-black mask
+    pixels, preserving the distinct mask-handle path from color-key masking.
+    Bitmap-backed `ImageList_Draw*` also resolves `ILD_OVERLAYMASK` through
+    `ImageList_SetOverlayImage` and composites the registered overlay image
+    through the same transparent-color or mask-bitmap path.
     The `api.cpp` attribute-probe branch treats
     inaccessible UNC paths with access/network errors as
     `FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_TEMPORARY`, so raw
@@ -516,8 +595,17 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `StringCch*`
     character-count and `StringCb*` byte-count distinction plus truncation
     HRESULTs. `winuser.h` anchors the icon/cursor signatures; v3 currently
-    has lightweight synthetic stock icon handles and `DestroyIcon` validation
-    rather than a full icon resource manager.
+    has lightweight synthetic stock/shell pseudo icon handles plus
+    `RT_GROUP_ICON` resource handles, and `DestroyIcon` now validates that
+    namespace instead of accepting arbitrary nonzero/non-icon resource handles.
+    Raw `CreateIconIndirect` also validates the CE `ICONINFO` mask/color bitmap
+    handles, stores a state-backed synthetic icon object, and lets
+    `DestroyIcon` release that tracked object.
+    Raw `DrawIconEx` also validates the HDC/icon handle pair and paints a
+    deterministic pseudo-icon into attached window framebuffers and selected
+    memory DIBs, sharing the same placeholder rendering model as shell
+    image-list pseudo slots.
+    Full icon resource bitmap extraction remains queued.
   - `shellapi.h` defines `SHELLEXECUTEINFO`, `SEE_MASK_NOCLOSEPROCESS`,
     `nShow`, `hInstApp`, and `hProcess`. v3's raw `ShellExecuteEx` now
     preserves `nShow`, returns the queued process handle when
@@ -555,8 +643,18 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     child-control HWNDs, and result, and now derives default return codes for
     both SDK and owner-draw button groups while closing the transient skeleton
     through `EndDialog`; framebuffer-backed raw calls also paint the dialog
-    surface from the same caption, text, icon, and button-layout state. The
-    nested modal message pump and user-driven button/key routing remain queued.
+    surface from the same caption, text, icon, and button-layout state. v3 also
+    consumes already queued modal Enter/Escape key and character input, direct
+    button and dialog-client hit-tested button-down/release input, dialog
+    `WM_COMMAND`, dialog `WM_CLOSE`, and
+    dialog `WM_SYSCOMMAND/SC_CLOSE` messages addressed to the transient
+    dialog/buttons and routes them to the final `ID*` result, while dispatching
+    queued posted and sent same-thread non-dialog messages before later modal
+    dialog input resolves; generated non-dialog `WM_PAINT` is dispatched
+    before default fallback selection, and generated dialog `WM_PAINT` is also
+    dispatched so transient update regions are validated instead of being
+    repeatedly reselected. The full blocking modal wait and broader live
+    user-driven dispatch remain queued.
   - `shellapi.h` also anchors `Shell_NotifyIcon` and the `NOTIFYICONDATAW`
     prefix. v3 now stores notify icon add/modify/delete state in
     `ShellSystem`, validates owner HWNDs through GWE, and posts the registered
@@ -1210,8 +1308,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     also creates a timeout-flagged sent transaction and leaves it queued for
     receiver retrieval rather than fabricating a synchronous result in the
     caller thread. CE SDK `winuser.h` exposes only `SMTO_NORMAL` for this
-    target; raw calls with unsupported `fuFlags` now fail with
-    `ERROR_INVALID_FLAGS` before queueing any sent transaction. The Unicorn
+    target, while the CE private Office `winresrc.h` also defines
+    `SMTO_BLOCK` and `SMTO_ABORTIFHUNG`; v3 now accepts those two nonzero bits,
+    rejects still-unknown `fuFlags` with `ERROR_INVALID_FLAGS` before queueing,
+    and preserves the original accepted flag bits on the sent transaction so
+    later blocking/reentrancy work can honor the exact caller contract. The Unicorn
     guest path then parks the sender context on that same transaction when a
     guest WNDPROC callout is possible. The scheduler
     now has a send-reply blocked-wait kind
@@ -1315,8 +1416,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `MSGSRC_HARDWARE_KEYBOARD`; `keybd.h` defines `KeyStateDownFlag` and
     `KeyStatePrevDownFlag`. Rust raw ordinal 832 now queues hardware-sourced
     `WM_KEYDOWN`/`WM_KEYUP` plus optional character-buffer `WM_CHAR` messages
-    through the normal GWE thread queue, and raw `keybd_event` targets the
-    focused/active keyboard window with CE-style lParam transition bits.
+    through the normal GWE thread queue, including the compact and split
+    pointer/capacity `PostKeybdMessage` character-buffer shapes, and raw
+    `keybd_event` targets the focused/active keyboard window with CE-style
+    lParam transition bits.
   - `gweapiset1.hpp` declares `SetKeyboardTarget`/`GetKeyboardTarget`, and
     `cmsgque.h` stores `m_hwndKeyboardTarget` beside `m_hwndFocus` and
     `m_hwndActiveWindow` on the message queue. Rust now stores keyboard
@@ -1752,8 +1855,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     literally, and leaves add-time `grfFlags`, `hwndSink`, and `lParam`
     unchanged because `UpdateBubble` only assigns the masked bubble fields.
     Rust also marshals optional `SHNN_LINKSEL` link strings into the receiver
-    `NMSHN` allocation, carries `SHNN_DISMISS` `fTimeout`, and prunes records
-    whose sink HWND is destroyed through normal window/process teardown.
+    `NMSHN` allocation, carries `SHNN_DISMISS` `fTimeout`, and prunes
+    window-bound notify icon, notification, and change-notification records
+    when the sink HWND is destroyed directly or removed during process-exit
+    cleanup.
     `bubble.cpp` attempts
     `IShellNotificationCallback` COM methods for show/link/dismiss/command
     events before also notifying the sink window, so Rust now records the

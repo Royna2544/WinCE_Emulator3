@@ -46,8 +46,13 @@ pub const WM_INITMENUPOPUP: u32 = 0x0117;
 pub const WM_MOUSEMOVE: u32 = 0x0200;
 pub const WM_LBUTTONDOWN: u32 = 0x0201;
 pub const WM_LBUTTONUP: u32 = 0x0202;
+pub const WM_RBUTTONDOWN: u32 = 0x0204;
+pub const WM_RBUTTONUP: u32 = 0x0205;
 pub const WM_ENTERMENULOOP: u32 = 0x0211;
 pub const WM_EXITMENULOOP: u32 = 0x0212;
+pub const WM_RENDERFORMAT: u32 = 0x0305;
+pub const WM_RENDERALLFORMATS: u32 = 0x0306;
+pub const WM_DESTROYCLIPBOARD: u32 = 0x0307;
 pub const WM_USER: u32 = 0x0400;
 pub const WM_APP: u32 = 0x8000;
 pub const WM_NCDESTROY: u32 = WM_APP - 1;
@@ -156,6 +161,8 @@ pub const GW_OWNER: u32 = 4;
 pub const GW_CHILD: u32 = 5;
 
 pub const CW_USEDEFAULT: i32 = i32::MIN;
+pub const DEFAULT_KEYBOARD_LAYOUT_HKL: u32 = 0x0000_0412;
+pub const DEFAULT_KEYBOARD_LAYOUT_NAME: &str = "00000412";
 
 pub const SWP_NOSIZE: u32 = 0x0001;
 pub const SWP_NOMOVE: u32 = 0x0002;
@@ -275,6 +282,7 @@ pub struct SentMessage {
     pub message: Message,
     pub flags: u32,
     pub timeout_ms: Option<u32>,
+    pub send_timeout_flags: u32,
     pub result_ptr: Option<u32>,
     pub result: Option<u32>,
 }
@@ -529,6 +537,17 @@ fn bounding_region_rect(rects: &[Rect]) -> Rect {
         .unwrap_or_default()
 }
 
+fn normalize_keyboard_layout_name(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    if trimmed.len() > 8 || trimmed.is_empty() {
+        return None;
+    }
+    if !trimmed.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(format!("{:0>8}", trimmed).to_ascii_uppercase())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Point {
     pub x: i32,
@@ -609,6 +628,7 @@ pub struct GweStats {
 pub struct ClipboardState {
     open_window: Option<u32>,
     owner: Option<u32>,
+    render_window: Option<u32>,
     data_by_format: BTreeMap<u32, u32>,
     registered_formats_by_name: BTreeMap<String, u32>,
     registered_format_names: BTreeMap<u32, String>,
@@ -620,6 +640,7 @@ impl Default for ClipboardState {
         Self {
             open_window: None,
             owner: None,
+            render_window: None,
             data_by_format: BTreeMap::new(),
             registered_formats_by_name: BTreeMap::new(),
             registered_format_names: BTreeMap::new(),
@@ -636,6 +657,14 @@ pub struct CaretState {
     pub height: i32,
     pub position: Point,
     pub show_count: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImeContextState {
+    pub hwnd: Option<u32>,
+    pub open: bool,
+    pub conversion_status: u32,
+    pub sentence_status: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -671,6 +700,12 @@ pub struct Gwe {
     quit_by_thread: BTreeMap<u32, QuitState>,
     key_state: [u16; 256],
     async_key_down: [bool; 256],
+    keyboard_layout: u32,
+    keyboard_layout_name: String,
+    ime_disabled_threads: BTreeSet<u32>,
+    next_ime_context: u32,
+    ime_contexts: BTreeMap<u32, ImeContextState>,
+    ime_context_by_window: BTreeMap<u32, u32>,
     message_pointer_payloads: BTreeMap<u32, MessagePointerPayload>,
     replied_send_depth_by_thread: BTreeMap<u32, BTreeSet<u32>>,
     clipboard: ClipboardState,
@@ -750,6 +785,12 @@ impl Default for Gwe {
             quit_by_thread: BTreeMap::new(),
             key_state: [0; 256],
             async_key_down: [false; 256],
+            keyboard_layout: DEFAULT_KEYBOARD_LAYOUT_HKL,
+            keyboard_layout_name: DEFAULT_KEYBOARD_LAYOUT_NAME.to_owned(),
+            ime_disabled_threads: BTreeSet::new(),
+            next_ime_context: 0x000d_0001,
+            ime_contexts: BTreeMap::new(),
+            ime_context_by_window: BTreeMap::new(),
             message_pointer_payloads: BTreeMap::new(),
             replied_send_depth_by_thread: BTreeMap::new(),
             clipboard: ClipboardState::default(),
@@ -974,21 +1015,61 @@ impl Gwe {
         self.clipboard.owner.unwrap_or(0)
     }
 
+    pub fn clipboard_destroy_notification_owner(&self) -> Option<u32> {
+        let owner = self.clipboard.owner?;
+        (!self.clipboard.data_by_format.is_empty() && self.is_window(owner)).then_some(owner)
+    }
+
     pub fn empty_clipboard(&mut self) -> bool {
         let Some(open_window) = self.clipboard.open_window else {
             return false;
         };
         self.clipboard.data_by_format.clear();
+        self.clipboard.render_window = None;
         self.clipboard.owner = Some(open_window);
         true
     }
 
-    pub fn set_clipboard_data(&mut self, format: u32, handle: u32) -> Option<u32> {
-        if self.clipboard.open_window.is_none() || format == 0 {
+    pub fn set_clipboard_data(&mut self, thread_id: u32, format: u32, handle: u32) -> Option<u32> {
+        if format == 0 {
+            return None;
+        }
+        let delayed_format = self.clipboard.data_by_format.get(&format).copied() == Some(0);
+        let rendering_delayed_format =
+            delayed_format && self.active_clipboard_render_matches(thread_id, format);
+        if delayed_format && !rendering_delayed_format {
+            return None;
+        }
+        if self.clipboard.open_window.is_none() && !rendering_delayed_format {
             return None;
         }
         self.clipboard.data_by_format.insert(format, handle);
+        if rendering_delayed_format {
+            self.clipboard.render_window = None;
+        }
         Some(handle)
+    }
+
+    fn active_clipboard_render_matches(&self, thread_id: u32, format: u32) -> bool {
+        let Some(owner) = self.clipboard.render_window else {
+            return false;
+        };
+        let Some(id) = self.active_sent_message_id(thread_id) else {
+            return false;
+        };
+        self.sent_messages.get(&id).is_some_and(|sent| {
+            sent.receiver_thread_id == thread_id
+                && sent.flags & SMF_RESULT_READY == 0
+                && sent.message.hwnd == owner
+                && sent.message.msg == WM_RENDERFORMAT
+                && sent.message.wparam == format
+        })
+    }
+
+    fn finish_clipboard_render_message(&mut self, message: &Message) {
+        if message.msg == WM_RENDERFORMAT && self.clipboard.render_window == Some(message.hwnd) {
+            self.clipboard.render_window = None;
+        }
     }
 
     pub fn get_clipboard_data(&self, format: u32) -> Option<u32> {
@@ -996,6 +1077,66 @@ impl Gwe {
             return None;
         }
         self.clipboard.data_by_format.get(&format).copied()
+    }
+
+    pub fn clipboard_delayed_render_owner(&self, format: u32) -> Option<u32> {
+        if format == 0 || self.clipboard.open_window.is_none() {
+            return None;
+        }
+        if self.clipboard.render_window.is_some() {
+            return None;
+        }
+        if self.clipboard.data_by_format.get(&format).copied()? != 0 {
+            return None;
+        }
+        self.clipboard
+            .owner
+            .filter(|owner| *owner != 0 && self.is_window(*owner))
+    }
+
+    pub fn begin_clipboard_render(&mut self, format: u32) -> Option<u32> {
+        let owner = self.clipboard_delayed_render_owner(format)?;
+        self.clipboard.render_window = Some(owner);
+        Some(owner)
+    }
+
+    pub fn clipboard_render_all_owner(&self) -> Option<u32> {
+        let owner = self.clipboard.owner?;
+        if !self.is_window(owner) {
+            return None;
+        }
+        self.clipboard
+            .data_by_format
+            .values()
+            .any(|handle| *handle == 0)
+            .then_some(owner)
+    }
+
+    fn cleanup_clipboard_windows(&mut self, targets: &[u32]) {
+        if self
+            .clipboard
+            .open_window
+            .is_some_and(|hwnd| targets.contains(&hwnd))
+        {
+            self.clipboard.open_window = None;
+        }
+        if self
+            .clipboard
+            .render_window
+            .is_some_and(|hwnd| targets.contains(&hwnd))
+        {
+            self.clipboard.render_window = None;
+        }
+        if self
+            .clipboard
+            .owner
+            .is_some_and(|hwnd| targets.contains(&hwnd))
+        {
+            self.clipboard
+                .data_by_format
+                .retain(|_, handle| *handle != 0);
+            self.clipboard.owner = None;
+        }
     }
 
     pub fn is_clipboard_format_available(&self, format: u32) -> bool {
@@ -1239,8 +1380,13 @@ impl Gwe {
         {
             self.caret = None;
         }
+        self.cleanup_clipboard_windows(&targets);
         self.keyboard_target_by_thread
             .retain(|_, hwnd| !targets.contains(hwnd));
+        self.ime_context_by_window
+            .retain(|hwnd, _| !targets.contains(hwnd));
+        self.ime_contexts
+            .retain(|_, context| context.hwnd.is_none_or(|hwnd| !targets.contains(&hwnd)));
         for queue in self.queues.values_mut() {
             queue.retain(|message| message.hwnd == 0 || !targets.contains(&message.hwnd));
         }
@@ -1833,6 +1979,129 @@ impl Gwe {
             .or_else(|| self.get_active_window())
     }
 
+    pub fn keyboard_layout(&self) -> u32 {
+        self.keyboard_layout
+    }
+
+    pub fn keyboard_layout_name(&self) -> &str {
+        &self.keyboard_layout_name
+    }
+
+    pub fn set_keyboard_layout_from_name(&mut self, name: &str) -> Option<u32> {
+        let normalized = normalize_keyboard_layout_name(name)?;
+        let hkl = u32::from_str_radix(&normalized, 16).ok()?;
+        let previous = self.keyboard_layout;
+        self.keyboard_layout = hkl;
+        self.keyboard_layout_name = normalized;
+        Some(previous)
+    }
+
+    pub fn activate_keyboard_layout(&mut self, hkl: u32) -> Option<u32> {
+        if hkl == 0 {
+            return None;
+        }
+        let previous = self.keyboard_layout;
+        self.keyboard_layout = hkl;
+        self.keyboard_layout_name = format!("{hkl:08X}");
+        Some(previous)
+    }
+
+    pub fn keyboard_layout_list(&self) -> [u32; 1] {
+        [self.keyboard_layout]
+    }
+
+    pub fn set_ime_enabled_for_thread(&mut self, thread_id: u32, enabled: bool) {
+        if enabled {
+            self.ime_disabled_threads.remove(&thread_id);
+        } else {
+            self.ime_disabled_threads.insert(thread_id);
+        }
+    }
+
+    pub fn ime_enabled_for_thread(&self, thread_id: u32) -> bool {
+        !self.ime_disabled_threads.contains(&thread_id)
+    }
+
+    pub fn is_ime_layout(&self, hkl: u32) -> bool {
+        hkl != 0 && (hkl >> 16) != 0
+    }
+
+    pub fn get_ime_context(&mut self, hwnd: u32) -> Option<u32> {
+        let window = self.windows.get(&hwnd).filter(|window| !window.destroyed)?;
+        if !self.ime_enabled_for_thread(window.thread_id) {
+            return None;
+        }
+        if let Some(himc) = self
+            .ime_context_by_window
+            .get(&hwnd)
+            .copied()
+            .filter(|himc| self.ime_contexts.contains_key(himc))
+        {
+            return Some(himc);
+        }
+        let himc = self.allocate_ime_context(Some(hwnd));
+        self.ime_context_by_window.insert(hwnd, himc);
+        Some(himc)
+    }
+
+    pub fn create_ime_context(&mut self) -> u32 {
+        self.allocate_ime_context(None)
+    }
+
+    pub fn destroy_ime_context(&mut self, himc: u32) -> bool {
+        if self.ime_contexts.remove(&himc).is_none() {
+            return false;
+        }
+        self.ime_context_by_window.retain(|_, value| *value != himc);
+        true
+    }
+
+    pub fn release_ime_context(&self, hwnd: u32, himc: u32) -> bool {
+        self.ime_contexts
+            .get(&himc)
+            .is_some_and(|context| context.hwnd.is_none_or(|owner| owner == hwnd))
+    }
+
+    pub fn associate_ime_context(&mut self, hwnd: u32, himc: u32) -> Option<u32> {
+        if !self.is_window(hwnd) || (himc != 0 && !self.ime_contexts.contains_key(&himc)) {
+            return None;
+        }
+        let previous = self.ime_context_by_window.remove(&hwnd).unwrap_or(0);
+        if himc != 0 {
+            self.ime_context_by_window.insert(hwnd, himc);
+            if let Some(context) = self.ime_contexts.get_mut(&himc) {
+                context.hwnd = Some(hwnd);
+            }
+        }
+        Some(previous)
+    }
+
+    pub fn ime_context(&self, himc: u32) -> Option<ImeContextState> {
+        self.ime_contexts.get(&himc).copied()
+    }
+
+    pub fn set_ime_open_status(&mut self, himc: u32, open: bool) -> bool {
+        let Some(context) = self.ime_contexts.get_mut(&himc) else {
+            return false;
+        };
+        context.open = open;
+        true
+    }
+
+    pub fn set_ime_conversion_status(
+        &mut self,
+        himc: u32,
+        conversion_status: u32,
+        sentence_status: u32,
+    ) -> bool {
+        let Some(context) = self.ime_contexts.get_mut(&himc) else {
+            return false;
+        };
+        context.conversion_status = conversion_status;
+        context.sentence_status = sentence_status;
+        true
+    }
+
     pub fn keyboard_target_is_within(&self, hwnd: u32) -> bool {
         self.keyboard_target_by_thread
             .values()
@@ -1859,6 +2128,21 @@ impl Gwe {
         let previous = self.active_window;
         self.active_window = hwnd;
         previous
+    }
+
+    fn allocate_ime_context(&mut self, hwnd: Option<u32>) -> u32 {
+        let himc = self.next_ime_context;
+        self.next_ime_context = self.next_ime_context.saturating_add(1).max(0x000d_0001);
+        self.ime_contexts.insert(
+            himc,
+            ImeContextState {
+                hwnd,
+                open: false,
+                conversion_status: 0,
+                sentence_status: 0,
+            },
+        );
+        himc
     }
 
     pub fn set_capture(&mut self, hwnd: u32) -> Option<u32> {
@@ -2216,6 +2500,7 @@ impl Gwe {
                 message,
                 flags,
                 timeout_ms,
+                send_timeout_flags: 0,
                 result_ptr: None,
                 result: None,
             },
@@ -2237,6 +2522,14 @@ impl Gwe {
             return false;
         };
         sent.result_ptr = (result_ptr != 0).then_some(result_ptr);
+        true
+    }
+
+    pub fn set_sent_message_timeout_flags(&mut self, id: u64, timeout_flags: u32) -> bool {
+        let Some(sent) = self.sent_messages.get_mut(&id) else {
+            return false;
+        };
+        sent.send_timeout_flags = timeout_flags;
         true
     }
 
@@ -2757,6 +3050,9 @@ impl Gwe {
                     .send_transaction_completed_count
                     .saturating_add(1);
             }
+        }
+        if let Some(message) = self.sent_messages.get(&id).map(|sent| sent.message.clone()) {
+            self.finish_clipboard_render_message(&message);
         }
         self.end_send_message(thread_id);
         Some(id)

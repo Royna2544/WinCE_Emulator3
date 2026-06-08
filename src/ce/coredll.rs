@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, sync::OnceLock};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::OnceLock,
+};
 
 use crate::{
     ce::{
@@ -30,8 +33,9 @@ use crate::{
             ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, HKey, RegOpenResult, RegQueryValueResult,
         },
         resource::{
-            AcceleratorEntry, FontObject, ImageListDraw, MenuItem, PopupMenuNotification,
-            PopupMenuTracking, RegionObject, ResourceId, stock_object_handle,
+            AcceleratorEntry, FontObject, ImageListDraw, MenuItem, PopupMenuCommandSelection,
+            PopupMenuNotification, PopupMenuTracking, RegionObject, ResourceId, ResourceSystem,
+            stock_object_handle,
         },
         shell::{
             MessageBoxButton, MessageBoxButtonLabel, MessageBoxButtonSlot, MessageBoxIcon,
@@ -95,8 +99,11 @@ const KF_REPEAT_LPARAM: u32 = 0x4000_0000;
 const KF_UP_LPARAM: u32 = 0x8000_0000;
 const TPM_NONOTIFY: u32 = 0x0080;
 const TPM_RETURNCMD: u32 = 0x0100;
+const TPM_RIGHTBUTTON: u32 = 0x0002;
 const TPMPARAMS_SIZE: u32 = 20;
-const SMTO_SUPPORTED_CE_FLAGS: u32 = 0;
+const SMTO_BLOCK: u32 = 0x0001;
+const SMTO_ABORTIFHUNG: u32 = 0x0002;
+const SMTO_SUPPORTED_CE_FLAGS: u32 = SMTO_BLOCK | SMTO_ABORTIFHUNG;
 const ACCEL_FVIRTKEY: u8 = 0x01;
 const ACCEL_FSHIFT: u8 = 0x04;
 const ACCEL_FCONTROL: u8 = 0x08;
@@ -3440,10 +3447,26 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
+        ORD_CREATE_ICON_INDIRECT => Some(CoredllValue::Handle(create_icon_indirect_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_EXTRACT_ICON_EX_W => Some(CoredllValue::U32(extract_icon_ex_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
         ORD_DESTROY_ICON => Some(CoredllValue::Bool(destroy_icon_raw(
             kernel,
             thread_id,
             raw_arg(args, 0),
+        ))),
+        ORD_DRAW_ICON_EX => Some(CoredllValue::Bool(draw_icon_ex_raw(
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            args,
         ))),
         ORD_SET_CURSOR => Some(CoredllValue::Handle(
             kernel.gwe.set_cursor(raw_arg(args, 0)).unwrap_or(0),
@@ -3588,6 +3611,96 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_ASYNC_SHIFT_FLAGS => Some(CoredllValue::U32(
             kernel.gwe.get_async_shift_flags(raw_arg(args, 0)),
         )),
+        ORD_GET_KEYBOARD_LAYOUT | ORD_IMM_GET_KEYBOARD_LAYOUT => {
+            Some(CoredllValue::Handle(kernel.gwe.keyboard_layout()))
+        }
+        ORD_GET_FOREGROUND_KEYBOARD_LAYOUT_HANDLE => {
+            Some(CoredllValue::Handle(kernel.gwe.keyboard_layout()))
+        }
+        ORD_GET_KEYBOARD_LAYOUT_LIST => Some(CoredllValue::U32(get_keyboard_layout_list_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_GET_KEYBOARD_LAYOUT_NAME_W => Some(CoredllValue::Bool(get_keyboard_layout_name_w_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_LOAD_KEYBOARD_LAYOUT_W => Some(CoredllValue::Handle(load_keyboard_layout_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_ACTIVATE_KEYBOARD_LAYOUT => Some(CoredllValue::Handle(activate_keyboard_layout_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_IMM_DISABLE_IME => {
+            let target_thread = raw_arg(args, 0);
+            let target_thread = if target_thread == 0 {
+                thread_id
+            } else {
+                target_thread
+            };
+            kernel.gwe.set_ime_enabled_for_thread(target_thread, false);
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::Bool(true))
+        }
+        ORD_IMM_ENABLE_IME => {
+            let target_thread = raw_arg(args, 0);
+            let target_thread = if target_thread == 0 {
+                thread_id
+            } else {
+                target_thread
+            };
+            kernel.gwe.set_ime_enabled_for_thread(target_thread, true);
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::Bool(true))
+        }
+        ORD_IMM_IS_IME => Some(CoredllValue::Bool(
+            kernel.gwe.is_ime_layout(raw_arg(args, 0)),
+        )),
+        ORD_IMM_CREATE_CONTEXT => Some(CoredllValue::Handle(kernel.gwe.create_ime_context())),
+        ORD_IMM_DESTROY_CONTEXT => Some(CoredllValue::Bool(imm_destroy_context_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_IMM_GET_CONTEXT => Some(CoredllValue::Handle(imm_get_context_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_IMM_RELEASE_CONTEXT => Some(CoredllValue::Bool(imm_release_context_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_IMM_ASSOCIATE_CONTEXT => Some(CoredllValue::Handle(imm_associate_context_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_IMM_GET_OPEN_STATUS => Some(CoredllValue::Bool(imm_get_open_status_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
+        ORD_IMM_SET_OPEN_STATUS => Some(CoredllValue::Bool(imm_set_open_status_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_IMM_GET_CONVERSION_STATUS => Some(CoredllValue::Bool(imm_get_conversion_status_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_IMM_SET_CONVERSION_STATUS => Some(CoredllValue::Bool(imm_set_conversion_status_raw(
+            kernel, thread_id, args,
+        ))),
+        ORD_IMM_GET_COMPOSITION_STRING_W => Some(CoredllValue::U32(
+            imm_get_composition_string_w_raw(kernel, thread_id, args),
+        )),
+        ORD_IMM_GET_IMEFILE_NAME_W => Some(CoredllValue::U32(imm_get_ime_file_name_w_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_IMM_NOTIFY_IME => Some(CoredllValue::Bool(imm_notify_ime_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_POST_KEYBD_MESSAGE => Some(CoredllValue::Bool(post_keybd_message_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -3652,21 +3765,33 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .get_message_queue_ready_time_stamp(thread_id, raw_arg(args, 0)),
         )),
         ORD_CREATE_CARET => Some(CoredllValue::Bool(create_caret_raw(
-            kernel, thread_id, args,
+            kernel,
+            framebuffer,
+            thread_id,
+            args,
         ))),
-        ORD_DESTROY_CARET => Some(CoredllValue::Bool(destroy_caret_raw(kernel, thread_id))),
+        ORD_DESTROY_CARET => Some(CoredllValue::Bool(destroy_caret_raw(
+            kernel,
+            framebuffer,
+            thread_id,
+        ))),
         ORD_HIDE_CARET => Some(CoredllValue::Bool(hide_caret_raw(
             kernel,
+            framebuffer,
             thread_id,
             raw_arg(args, 0),
         ))),
         ORD_SHOW_CARET => Some(CoredllValue::Bool(show_caret_raw(
             kernel,
+            framebuffer,
             thread_id,
             raw_arg(args, 0),
         ))),
         ORD_SET_CARET_POS => Some(CoredllValue::Bool(set_caret_pos_raw(
-            kernel, thread_id, args,
+            kernel,
+            framebuffer,
+            thread_id,
+            args,
         ))),
         ORD_GET_CARET_POS => Some(CoredllValue::Bool(get_caret_pos_raw(
             kernel,
@@ -3681,10 +3806,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_GET_CARET_BLINK_TIME => Some(CoredllValue::U32(kernel.gwe.get_caret_blink_time())),
         ORD_DISABLE_CARET_SYSTEM_WIDE => Some(CoredllValue::Bool(disable_caret_system_wide_raw(
-            kernel, thread_id,
+            kernel,
+            framebuffer,
+            thread_id,
         ))),
         ORD_ENABLE_CARET_SYSTEM_WIDE => Some(CoredllValue::Bool(enable_caret_system_wide_raw(
-            kernel, thread_id,
+            kernel,
+            framebuffer,
+            thread_id,
         ))),
         ORD_OPEN_CLIPBOARD => Some(CoredllValue::Bool(open_clipboard_raw(
             kernel,
@@ -3940,9 +4069,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_IMAGE_LIST_LOAD_IMAGE => Some(CoredllValue::Handle(image_list_load_image_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_IMAGE_LIST_ADD | ORD_IMAGE_LIST_ADD_MASKED => Some(CoredllValue::U32(
+        ORD_IMAGE_LIST_ADD => Some(CoredllValue::U32(
             image_list_add_raw(kernel, thread_id, args) as u32,
         )),
+        ORD_IMAGE_LIST_ADD_MASKED => Some(CoredllValue::U32(image_list_add_masked_raw(
+            kernel, thread_id, args,
+        ) as u32)),
         ORD_IMAGE_LIST_REPLACE_ICON => Some(CoredllValue::U32(image_list_replace_icon_raw(
             kernel, thread_id, args,
         ) as u32)),
@@ -3982,12 +4114,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ))),
         ORD_IMAGE_LIST_DRAW => Some(CoredllValue::Bool(image_list_draw_raw(
             kernel,
+            memory,
             framebuffer,
             thread_id,
             args,
         ))),
         ORD_IMAGE_LIST_DRAW_EX => Some(CoredllValue::Bool(image_list_draw_ex_raw(
             kernel,
+            memory,
             framebuffer,
             thread_id,
             args,
@@ -6387,7 +6521,9 @@ fn message_box_w_raw<M: CoredllGuestMemory>(
     } else {
         false
     };
-    let _ = kernel.end_dialog(thread_id, window_state.dialog_hwnd, selection.result);
+    let result = message_box_modal_input_result(kernel, thread_id, &window_state, &selection)
+        .unwrap_or(selection.result);
+    let _ = kernel.end_dialog(thread_id, window_state.dialog_hwnd, result);
     let _ = kernel.destroy_window_with_reason(window_state.dialog_hwnd, "MessageBoxW");
     if let Some(was_enabled) = owner_was_enabled {
         let _ = kernel.enable_window(owner_hwnd, was_enabled);
@@ -6405,12 +6541,12 @@ fn message_box_w_raw<M: CoredllGuestMemory>(
         button_layout: selection.button_layout,
         default_button_index: selection.default_button_index,
         icon: selection.icon,
-        result: selection.result,
+        result,
         owner_was_enabled,
         rendered,
     });
     kernel.threads.set_last_error(thread_id, 0);
-    selection.result
+    result
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -6485,6 +6621,171 @@ fn create_message_box_window(
         dialog_hwnd: dialog,
         text_hwnd,
         button_hwnds,
+    }
+}
+
+fn message_box_modal_input_result(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    window_state: &MessageBoxWindowState,
+    selection: &MessageBoxSelection,
+) -> Option<u32> {
+    let modal_message_min = crate::ce::gwe::WM_PAINT;
+    while let Some(message) = kernel.gwe.peek_message_filtered(
+        thread_id,
+        None,
+        modal_message_min,
+        crate::ce::gwe::WM_LBUTTONUP,
+        PeekFlags::REMOVE,
+    ) {
+        if message_box_message_targets_window(window_state, message.hwnd) {
+            if let Some(result) =
+                message_box_message_result(kernel, window_state, selection, &message)
+            {
+                return Some(result);
+            }
+            if message.msg == crate::ce::gwe::WM_PAINT {
+                kernel.dispatch_message_w_for_thread(thread_id, message);
+            }
+        } else {
+            kernel.dispatch_message_w_for_thread(thread_id, message);
+        }
+    }
+    None
+}
+
+fn message_box_message_targets_window(window_state: &MessageBoxWindowState, hwnd: u32) -> bool {
+    hwnd == window_state.dialog_hwnd
+        || hwnd == window_state.text_hwnd
+        || window_state.button_hwnds.contains(&hwnd)
+}
+
+fn message_box_message_result(
+    kernel: &CeKernel,
+    window_state: &MessageBoxWindowState,
+    selection: &MessageBoxSelection,
+    message: &Message,
+) -> Option<u32> {
+    const VK_RETURN: u32 = 0x0d;
+    const VK_ESCAPE: u32 = 0x1b;
+
+    match message.msg {
+        crate::ce::gwe::WM_COMMAND => {
+            let command = message.wparam & 0xffff;
+            selection.buttons.contains(&command).then_some(command)
+        }
+        crate::ce::gwe::WM_CLOSE => Some(message_box_cancel_or_default_result(
+            kernel,
+            window_state,
+            selection,
+        )),
+        crate::ce::gwe::WM_SYSCOMMAND if (message.wparam & 0xfff0) == crate::ce::gwe::SC_CLOSE => {
+            Some(message_box_cancel_or_default_result(
+                kernel,
+                window_state,
+                selection,
+            ))
+        }
+        crate::ce::gwe::WM_KEYDOWN if message.wparam == VK_RETURN => {
+            let (command, _) = kernel.gwe.dialog_return_command(
+                window_state.dialog_hwnd,
+                message.hwnd,
+                selection.result,
+            );
+            Some(command)
+        }
+        crate::ce::gwe::WM_CHAR if message.wparam == VK_RETURN => {
+            let (command, _) = kernel.gwe.dialog_return_command(
+                window_state.dialog_hwnd,
+                message.hwnd,
+                selection.result,
+            );
+            Some(command)
+        }
+        crate::ce::gwe::WM_KEYDOWN if message.wparam == VK_ESCAPE => Some(
+            message_box_cancel_or_default_result(kernel, window_state, selection),
+        ),
+        crate::ce::gwe::WM_CHAR if message.wparam == VK_ESCAPE => Some(
+            message_box_cancel_or_default_result(kernel, window_state, selection),
+        ),
+        crate::ce::gwe::WM_LBUTTONDOWN => None,
+        crate::ce::gwe::WM_LBUTTONUP => {
+            if let Some(command) =
+                message_box_direct_button_command(kernel, window_state, selection, message.hwnd)
+            {
+                return Some(command);
+            }
+            if message.hwnd == window_state.dialog_hwnd {
+                return message_box_dialog_click_command(
+                    kernel,
+                    window_state,
+                    selection,
+                    message.lparam,
+                );
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn message_box_direct_button_command(
+    kernel: &CeKernel,
+    window_state: &MessageBoxWindowState,
+    selection: &MessageBoxSelection,
+    hwnd: u32,
+) -> Option<u32> {
+    window_state
+        .button_hwnds
+        .contains(&hwnd)
+        .then(|| kernel.gwe.get_dlg_ctrl_id(hwnd))
+        .flatten()
+        .filter(|id| selection.buttons.contains(id))
+}
+
+fn message_box_dialog_click_command(
+    kernel: &CeKernel,
+    window_state: &MessageBoxWindowState,
+    selection: &MessageBoxSelection,
+    lparam: u32,
+) -> Option<u32> {
+    let point = message_box_lparam_point(lparam);
+    let screen_point = kernel
+        .gwe
+        .client_to_screen(window_state.dialog_hwnd, point)?;
+    window_state
+        .button_hwnds
+        .iter()
+        .copied()
+        .find(|hwnd| {
+            kernel
+                .gwe
+                .get_window_rect(*hwnd)
+                .is_some_and(|rect| rect.contains_point(screen_point))
+        })
+        .and_then(|hwnd| message_box_direct_button_command(kernel, window_state, selection, hwnd))
+}
+
+fn message_box_lparam_point(lparam: u32) -> Point {
+    Point {
+        x: (lparam & 0xffff) as i16 as i32,
+        y: ((lparam >> 16) & 0xffff) as i16 as i32,
+    }
+}
+
+fn message_box_cancel_or_default_result(
+    kernel: &CeKernel,
+    window_state: &MessageBoxWindowState,
+    selection: &MessageBoxSelection,
+) -> u32 {
+    const IDCANCEL: u32 = 2;
+    if selection.buttons.contains(&IDCANCEL) {
+        let (command, _) = kernel
+            .gwe
+            .dialog_cancel_command(window_state.dialog_hwnd, IDCANCEL);
+        command
+    } else {
+        selection.result
     }
 }
 
@@ -6829,7 +7130,13 @@ fn message_box_button(
     MessageBoxButton { id, label, slot }
 }
 
-fn create_caret_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+fn create_caret_raw(
+    kernel: &mut CeKernel,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let old_rect = visible_caret_dirty_rect(kernel);
     let hwnd = raw_arg(args, 0);
     if hwnd == 0 || !kernel.gwe.is_window(hwnd) {
         kernel
@@ -6843,6 +7150,7 @@ fn create_caret_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool
         raw_i32_arg(args, 2),
         raw_i32_arg(args, 3),
     ) {
+        dirty_caret_rects(kernel, framebuffer, old_rect);
         kernel.threads.set_last_error(thread_id, 0);
         true
     } else {
@@ -6853,8 +7161,14 @@ fn create_caret_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool
     }
 }
 
-fn destroy_caret_raw(kernel: &mut CeKernel, thread_id: u32) -> bool {
+fn destroy_caret_raw(
+    kernel: &mut CeKernel,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+) -> bool {
+    let old_rect = visible_caret_dirty_rect(kernel);
     if kernel.gwe.destroy_caret() {
+        dirty_caret_rects(kernel, framebuffer, old_rect);
         kernel.threads.set_last_error(thread_id, 0);
         true
     } else {
@@ -6865,7 +7179,13 @@ fn destroy_caret_raw(kernel: &mut CeKernel, thread_id: u32) -> bool {
     }
 }
 
-fn hide_caret_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> bool {
+fn hide_caret_raw(
+    kernel: &mut CeKernel,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    hwnd: u32,
+) -> bool {
+    let old_rect = visible_caret_dirty_rect(kernel);
     if hwnd != 0 && !kernel.gwe.is_window(hwnd) {
         kernel
             .threads
@@ -6873,6 +7193,7 @@ fn hide_caret_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> bool {
         return false;
     }
     if kernel.gwe.hide_caret(hwnd) {
+        dirty_caret_rects(kernel, framebuffer, old_rect);
         kernel.threads.set_last_error(thread_id, 0);
         true
     } else {
@@ -6883,7 +7204,13 @@ fn hide_caret_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> bool {
     }
 }
 
-fn show_caret_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> bool {
+fn show_caret_raw(
+    kernel: &mut CeKernel,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    hwnd: u32,
+) -> bool {
+    let old_rect = visible_caret_dirty_rect(kernel);
     if hwnd != 0 && !kernel.gwe.is_window(hwnd) {
         kernel
             .threads
@@ -6891,6 +7218,7 @@ fn show_caret_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> bool {
         return false;
     }
     if kernel.gwe.show_caret(hwnd) {
+        dirty_caret_rects(kernel, framebuffer, old_rect);
         kernel.threads.set_last_error(thread_id, 0);
         true
     } else {
@@ -6901,11 +7229,18 @@ fn show_caret_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> bool {
     }
 }
 
-fn set_caret_pos_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+fn set_caret_pos_raw(
+    kernel: &mut CeKernel,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let old_rect = visible_caret_dirty_rect(kernel);
     if kernel
         .gwe
         .set_caret_pos(raw_i32_arg(args, 0), raw_i32_arg(args, 1))
     {
+        dirty_caret_rects(kernel, framebuffer, old_rect);
         kernel.threads.set_last_error(thread_id, 0);
         true
     } else {
@@ -6913,6 +7248,85 @@ fn set_caret_pos_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> boo
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         false
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CaretDirtyRect {
+    hwnd: u32,
+    client_rect: Rect,
+    screen_rect: Rect,
+}
+
+fn visible_caret_dirty_rect(kernel: &CeKernel) -> Option<CaretDirtyRect> {
+    let caret = kernel.gwe.caret()?;
+    if caret.show_count < 0
+        || !kernel.gwe.caret_system_enabled()
+        || !kernel.gwe.is_window_visible(caret.hwnd)
+    {
+        return None;
+    }
+    let width = caret.width.max(1);
+    let height = caret.height.max(1);
+    let client_bounds = kernel.gwe.get_client_rect(caret.hwnd)?;
+    let client_rect = Rect::from_origin_size(caret.position.x, caret.position.y, width, height)
+        .intersect(client_bounds)?;
+    let screen_origin = kernel.gwe.client_to_screen(
+        caret.hwnd,
+        Point {
+            x: client_rect.left,
+            y: client_rect.top,
+        },
+    )?;
+    Some(CaretDirtyRect {
+        hwnd: caret.hwnd,
+        client_rect,
+        screen_rect: Rect::from_origin_size(
+            screen_origin.x,
+            screen_origin.y,
+            client_rect.width(),
+            client_rect.height(),
+        ),
+    })
+}
+
+fn dirty_caret_rects(
+    kernel: &mut CeKernel,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    old_rect: Option<CaretDirtyRect>,
+) {
+    let new_rect = visible_caret_dirty_rect(kernel);
+    if let Some(rect) = old_rect {
+        dirty_caret_rect(kernel, rect);
+    }
+    if let Some(rect) = new_rect.filter(|rect| Some(*rect) != old_rect) {
+        dirty_caret_rect(kernel, rect);
+    }
+    if let Some(framebuffer) = framebuffer {
+        if let Some(rect) = old_rect {
+            mark_framebuffer_screen_rect(framebuffer, rect.screen_rect);
+        }
+        if let Some(rect) = new_rect.filter(|rect| Some(*rect) != old_rect) {
+            mark_framebuffer_screen_rect(framebuffer, rect.screen_rect);
+        }
+    }
+}
+
+fn dirty_caret_rect(kernel: &mut CeKernel, rect: CaretDirtyRect) {
+    let _ = kernel
+        .gwe
+        .invalidate_window(rect.hwnd, Some(rect.client_rect), false);
+}
+
+fn mark_framebuffer_screen_rect(framebuffer: &mut dyn Framebuffer, rect: Rect) {
+    let info = framebuffer.info();
+    let rect = rect.normalized();
+    let left = rect.left.max(0).min(info.width as i32) as u32;
+    let top = rect.top.max(0).min(info.height as i32) as u32;
+    let right = rect.right.max(0).min(info.width as i32) as u32;
+    let bottom = rect.bottom.max(0).min(info.height as i32) as u32;
+    if right > left && bottom > top {
+        framebuffer.mark_dirty(FramebufferRect::new(left, top, right - left, bottom - top));
     }
 }
 
@@ -6954,14 +7368,26 @@ fn set_caret_blink_time_raw(kernel: &mut CeKernel, thread_id: u32, milliseconds:
     }
 }
 
-fn disable_caret_system_wide_raw(kernel: &mut CeKernel, thread_id: u32) -> bool {
+fn disable_caret_system_wide_raw(
+    kernel: &mut CeKernel,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+) -> bool {
+    let old_rect = visible_caret_dirty_rect(kernel);
     kernel.gwe.disable_caret_system_wide();
+    dirty_caret_rects(kernel, framebuffer, old_rect);
     kernel.threads.set_last_error(thread_id, 0);
     true
 }
 
-fn enable_caret_system_wide_raw(kernel: &mut CeKernel, thread_id: u32) -> bool {
+fn enable_caret_system_wide_raw(
+    kernel: &mut CeKernel,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+) -> bool {
+    let old_rect = visible_caret_dirty_rect(kernel);
     kernel.gwe.enable_caret_system_wide();
+    dirty_caret_rects(kernel, framebuffer, old_rect);
     kernel.threads.set_last_error(thread_id, 0);
     true
 }
@@ -6997,6 +7423,9 @@ fn close_clipboard_raw(kernel: &mut CeKernel, thread_id: u32) -> bool {
 }
 
 fn empty_clipboard_raw(kernel: &mut CeKernel, thread_id: u32) -> bool {
+    if let Some(owner) = kernel.gwe.clipboard_destroy_notification_owner() {
+        let _ = kernel.post_message_w(owner, crate::ce::gwe::WM_DESTROYCLIPBOARD, 0, 0);
+    }
     if kernel.gwe.empty_clipboard() {
         kernel.threads.set_last_error(thread_id, 0);
         true
@@ -7015,7 +7444,7 @@ fn set_clipboard_data_raw(kernel: &mut CeKernel, thread_id: u32, format: u32, ha
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
-    match kernel.gwe.set_clipboard_data(format, handle) {
+    match kernel.gwe.set_clipboard_data(thread_id, format, handle) {
         Some(stored) => {
             kernel.threads.set_last_error(thread_id, 0);
             stored
@@ -7036,6 +7465,9 @@ fn get_clipboard_data_raw(kernel: &mut CeKernel, thread_id: u32, format: u32) ->
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
+    if kernel.gwe.clipboard_delayed_render_owner(format).is_some() {
+        request_delayed_clipboard_render(kernel, format);
+    }
     match kernel.gwe.get_clipboard_data(format) {
         Some(handle) => {
             kernel.threads.set_last_error(thread_id, 0);
@@ -7054,6 +7486,28 @@ fn get_clipboard_data_raw(kernel: &mut CeKernel, thread_id: u32, format: u32) ->
     }
 }
 
+fn request_delayed_clipboard_render(kernel: &mut CeKernel, format: u32) -> bool {
+    let Some(owner) = kernel.gwe.begin_clipboard_render(format) else {
+        return false;
+    };
+    let Some((target_thread, _)) = kernel.gwe.window_thread_process_id(owner) else {
+        return false;
+    };
+    let message = Message::new(
+        owner,
+        crate::ce::gwe::WM_RENDERFORMAT,
+        format,
+        0,
+        kernel.timers.tick_count(),
+    );
+    if kernel.gwe.queue_sent_message_for_window(owner, message) {
+        kernel.queue_message_wake_candidates(target_thread);
+        true
+    } else {
+        false
+    }
+}
+
 fn get_clipboard_data_alloc_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -7066,6 +7520,9 @@ fn get_clipboard_data_alloc_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
+    if kernel.gwe.clipboard_delayed_render_owner(format).is_some() {
+        request_delayed_clipboard_render(kernel, format);
+    }
     let Some(source) = kernel.gwe.get_clipboard_data(format) else {
         if !kernel.gwe.clipboard_is_open() {
             kernel
@@ -7076,6 +7533,10 @@ fn get_clipboard_data_alloc_raw<M: CoredllGuestMemory>(
         }
         return 0;
     };
+    if source == 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return 0;
+    }
     let Some(size) = kernel.memory.local_size(source) else {
         kernel
             .threads
@@ -13940,16 +14401,43 @@ fn track_popup_menu_ex_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     }
-    if let Some(framebuffer) = framebuffer {
+    let initial_hilite = popup_menu_initial_key_index(&kernel.resources, menu);
+    let _ = kernel.resources.set_menu_hilite_index(menu, initial_hilite);
+    let mut framebuffer = framebuffer;
+    if let Some(framebuffer) = framebuffer.as_mut() {
         render_popup_menu_framebuffer(
-            framebuffer,
-            kernel.resources.menu(menu).unwrap(),
+            *framebuffer,
+            &kernel.resources,
+            menu,
             raw_i32_arg(args, 2),
             raw_i32_arg(args, 3),
         );
     }
     kernel.threads.set_last_error(thread_id, 0);
-    let selection = kernel.resources.popup_menu_command_selection(menu);
+    let cursor = kernel.gwe.get_cursor_pos();
+    let modal_input = popup_menu_modal_input_selection(
+        kernel,
+        thread_id,
+        hwnd,
+        menu,
+        flags,
+        raw_i32_arg(args, 2),
+        raw_i32_arg(args, 3),
+        &mut framebuffer,
+    );
+    let cancelled = matches!(modal_input, Some(PopupMenuModalInput::Cancelled));
+    let selection = match modal_input {
+        Some(PopupMenuModalInput::Selected(selection)) => Some(selection),
+        Some(PopupMenuModalInput::Cancelled) => None,
+        None => popup_menu_pointer_selection(
+            &kernel.resources,
+            menu,
+            raw_i32_arg(args, 2),
+            raw_i32_arg(args, 3),
+            cursor,
+        )
+        .or_else(|| kernel.resources.popup_menu_command_selection(menu)),
+    };
     let command = selection
         .as_ref()
         .map(|selection| selection.command)
@@ -13959,6 +14447,9 @@ fn track_popup_menu_ex_raw<M: CoredllGuestMemory>(
         .map(|selection| selection.submenus.as_slice())
         .unwrap_or(&[]);
     notify_popup_menu_owner(kernel, hwnd, menu, flags, submenus);
+    if cancelled {
+        return 0;
+    }
     if flags & TPM_RETURNCMD != 0 {
         command
     } else {
@@ -14023,16 +14514,726 @@ fn notify_popup_menu_command(kernel: &mut CeKernel, hwnd: u32, flags: u32, comma
     let _ = kernel.send_message_w(hwnd, crate::ce::gwe::WM_COMMAND, command, 0);
 }
 
+enum PopupMenuModalInput {
+    Selected(PopupMenuCommandSelection),
+    Cancelled,
+}
+
+struct PopupMenuModalMenuState {
+    menu: u32,
+    popup_x: i32,
+    popup_y: i32,
+    current: Option<usize>,
+}
+
+const POPUP_MENU_ITEM_HEIGHT: i32 = 18;
+const POPUP_MENU_BORDER: i32 = 2;
+const POPUP_MENU_VERTICAL_PADDING: i32 = POPUP_MENU_BORDER * 2;
+
+fn popup_menu_modal_input_selection(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    hwnd: u32,
+    menu: u32,
+    flags: u32,
+    popup_x: i32,
+    popup_y: i32,
+    framebuffer: &mut Option<&mut dyn Framebuffer>,
+) -> Option<PopupMenuModalInput> {
+    const VK_RETURN: u32 = 0x0d;
+    const VK_ESCAPE: u32 = 0x1b;
+    const VK_LEFT: u32 = 0x25;
+    const VK_UP: u32 = 0x26;
+    const VK_RIGHT: u32 = 0x27;
+    const VK_DOWN: u32 = 0x28;
+
+    if hwnd == 0 {
+        return None;
+    }
+
+    let mut stack = vec![PopupMenuModalMenuState {
+        menu,
+        popup_x,
+        popup_y,
+        current: popup_menu_initial_key_index(&kernel.resources, menu),
+    }];
+    let initial_current = stack[0].current;
+    popup_menu_set_current_index(
+        kernel,
+        menu,
+        &mut stack[0].current,
+        initial_current,
+        framebuffer,
+        popup_x,
+        popup_y,
+    );
+    let mouse_message_max = if flags & TPM_RIGHTBUTTON != 0 {
+        crate::ce::gwe::WM_RBUTTONUP
+    } else {
+        crate::ce::gwe::WM_LBUTTONUP
+    };
+    let modal_message_min = crate::ce::gwe::WM_PAINT;
+    loop {
+        let Some(message) = kernel.gwe.peek_message_filtered(
+            thread_id,
+            None,
+            modal_message_min,
+            mouse_message_max,
+            PeekFlags::NO_REMOVE,
+        ) else {
+            return None;
+        };
+        if message.hwnd != hwnd {
+            let Some(message) = kernel.gwe.peek_message_filtered(
+                thread_id,
+                None,
+                modal_message_min,
+                mouse_message_max,
+                PeekFlags::REMOVE,
+            ) else {
+                continue;
+            };
+            kernel.dispatch_message_w_for_thread(thread_id, message);
+            continue;
+        }
+        match message.msg {
+            crate::ce::gwe::WM_CANCELMODE => {
+                let _ = kernel.gwe.peek_message_filtered(
+                    thread_id,
+                    None,
+                    modal_message_min,
+                    mouse_message_max,
+                    PeekFlags::REMOVE,
+                );
+            }
+            crate::ce::gwe::WM_KEYDOWN
+                if matches!(
+                    message.wparam,
+                    VK_LEFT | VK_UP | VK_RIGHT | VK_DOWN | VK_RETURN | VK_ESCAPE
+                ) =>
+            {
+                let _ = kernel.gwe.peek_message_filtered(
+                    thread_id,
+                    None,
+                    modal_message_min,
+                    mouse_message_max,
+                    PeekFlags::REMOVE,
+                );
+            }
+            crate::ce::gwe::WM_CHAR => {
+                let _ = kernel.gwe.peek_message_filtered(
+                    thread_id,
+                    None,
+                    modal_message_min,
+                    mouse_message_max,
+                    PeekFlags::REMOVE,
+                );
+            }
+            crate::ce::gwe::WM_LBUTTONDOWN
+            | crate::ce::gwe::WM_LBUTTONUP
+            | crate::ce::gwe::WM_MOUSEMOVE
+            | crate::ce::gwe::WM_RBUTTONDOWN
+            | crate::ce::gwe::WM_RBUTTONUP => {
+                let _ = kernel.gwe.peek_message_filtered(
+                    thread_id,
+                    None,
+                    modal_message_min,
+                    mouse_message_max,
+                    PeekFlags::REMOVE,
+                );
+            }
+            _ => {
+                let Some(message) = kernel.gwe.peek_message_filtered(
+                    thread_id,
+                    None,
+                    modal_message_min,
+                    mouse_message_max,
+                    PeekFlags::REMOVE,
+                ) else {
+                    continue;
+                };
+                kernel.dispatch_message_w_for_thread(thread_id, message);
+                continue;
+            }
+        }
+        match (message.msg, message.wparam) {
+            (crate::ce::gwe::WM_CANCELMODE, _) => return Some(PopupMenuModalInput::Cancelled),
+            (crate::ce::gwe::WM_MOUSEMOVE, _) => {
+                let point = popup_menu_lparam_point(message.lparam);
+                if let Some((level_index, item_index)) =
+                    popup_menu_modal_pointer_index(&kernel.resources, &stack, point)
+                {
+                    popup_menu_modal_truncate_stack(
+                        kernel,
+                        &mut stack,
+                        level_index + 1,
+                        framebuffer,
+                        popup_x,
+                        popup_y,
+                    );
+                    let active = stack.last_mut().unwrap();
+                    popup_menu_set_current_index(
+                        kernel,
+                        active.menu,
+                        &mut active.current,
+                        Some(item_index),
+                        framebuffer,
+                        popup_x,
+                        popup_y,
+                    );
+                }
+            }
+            (crate::ce::gwe::WM_LBUTTONDOWN | crate::ce::gwe::WM_RBUTTONDOWN, _) => {
+                let point = popup_menu_lparam_point(message.lparam);
+                if let Some((level_index, item_index)) =
+                    popup_menu_modal_pointer_index(&kernel.resources, &stack, point)
+                {
+                    popup_menu_modal_truncate_stack(
+                        kernel,
+                        &mut stack,
+                        level_index + 1,
+                        framebuffer,
+                        popup_x,
+                        popup_y,
+                    );
+                    let active = stack.last_mut().unwrap();
+                    popup_menu_set_current_index(
+                        kernel,
+                        active.menu,
+                        &mut active.current,
+                        Some(item_index),
+                        framebuffer,
+                        popup_x,
+                        popup_y,
+                    );
+                }
+            }
+            (crate::ce::gwe::WM_LBUTTONUP | crate::ce::gwe::WM_RBUTTONUP, _) => {
+                let point = popup_menu_lparam_point(message.lparam);
+                if let Some((level_index, item_index)) =
+                    popup_menu_modal_pointer_index(&kernel.resources, &stack, point)
+                {
+                    popup_menu_modal_truncate_stack(
+                        kernel,
+                        &mut stack,
+                        level_index + 1,
+                        framebuffer,
+                        popup_x,
+                        popup_y,
+                    );
+                    let active = stack.last_mut().unwrap();
+                    popup_menu_set_current_index(
+                        kernel,
+                        active.menu,
+                        &mut active.current,
+                        Some(item_index),
+                        framebuffer,
+                        popup_x,
+                        popup_y,
+                    );
+                }
+                if let Some(selection) =
+                    popup_menu_pointer_selection(&kernel.resources, menu, popup_x, popup_y, point)
+                {
+                    return Some(PopupMenuModalInput::Selected(selection));
+                }
+                return Some(PopupMenuModalInput::Cancelled);
+            }
+            (crate::ce::gwe::WM_CHAR, VK_RETURN) => {
+                let active = stack.last().unwrap();
+                if let Some(index) = active.current {
+                    if let Some(selection) =
+                        popup_menu_modal_key_index_selection(&kernel.resources, &stack, index)
+                    {
+                        return Some(PopupMenuModalInput::Selected(selection));
+                    }
+                }
+                return None;
+            }
+            (crate::ce::gwe::WM_CHAR, VK_ESCAPE) => {
+                if popup_menu_modal_close_submenu(kernel, &mut stack, framebuffer, popup_x, popup_y)
+                {
+                    continue;
+                }
+                return Some(PopupMenuModalInput::Cancelled);
+            }
+            (crate::ce::gwe::WM_CHAR, ch) => {
+                let active_menu = stack.last().unwrap().menu;
+                if let Some(index) = popup_menu_mnemonic_index(&kernel.resources, active_menu, ch) {
+                    let active = stack.last_mut().unwrap();
+                    popup_menu_set_current_index(
+                        kernel,
+                        active.menu,
+                        &mut active.current,
+                        Some(index),
+                        framebuffer,
+                        popup_x,
+                        popup_y,
+                    );
+                    if let Some(selection) =
+                        popup_menu_modal_key_index_selection(&kernel.resources, &stack, index)
+                    {
+                        return Some(PopupMenuModalInput::Selected(selection));
+                    }
+                }
+            }
+            (crate::ce::gwe::WM_KEYDOWN, VK_UP) => {
+                let active = stack.last_mut().unwrap();
+                let next = popup_menu_relative_key_index(
+                    &kernel.resources,
+                    active.menu,
+                    active.current,
+                    -1,
+                )
+                .or(active.current);
+                popup_menu_set_current_index(
+                    kernel,
+                    active.menu,
+                    &mut active.current,
+                    next,
+                    framebuffer,
+                    popup_x,
+                    popup_y,
+                );
+            }
+            (crate::ce::gwe::WM_KEYDOWN, VK_DOWN) => {
+                let active = stack.last_mut().unwrap();
+                let next = popup_menu_relative_key_index(
+                    &kernel.resources,
+                    active.menu,
+                    active.current,
+                    1,
+                )
+                .or(active.current);
+                popup_menu_set_current_index(
+                    kernel,
+                    active.menu,
+                    &mut active.current,
+                    next,
+                    framebuffer,
+                    popup_x,
+                    popup_y,
+                );
+            }
+            (crate::ce::gwe::WM_KEYDOWN, VK_RIGHT) => {
+                if popup_menu_modal_open_submenu(kernel, &mut stack, framebuffer, popup_x, popup_y)
+                {
+                    continue;
+                }
+            }
+            (crate::ce::gwe::WM_KEYDOWN, VK_LEFT) => {
+                popup_menu_modal_close_submenu(kernel, &mut stack, framebuffer, popup_x, popup_y);
+            }
+            (crate::ce::gwe::WM_KEYDOWN, VK_RETURN) => {
+                let active = stack.last().unwrap();
+                if let Some(index) = active.current {
+                    if let Some(selection) =
+                        popup_menu_modal_key_index_selection(&kernel.resources, &stack, index)
+                    {
+                        return Some(PopupMenuModalInput::Selected(selection));
+                    }
+                }
+                return None;
+            }
+            (crate::ce::gwe::WM_KEYDOWN, VK_ESCAPE) => {
+                if popup_menu_modal_close_submenu(kernel, &mut stack, framebuffer, popup_x, popup_y)
+                {
+                    continue;
+                }
+                return Some(PopupMenuModalInput::Cancelled);
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn popup_menu_modal_pointer_index(
+    resources: &ResourceSystem,
+    stack: &[PopupMenuModalMenuState],
+    point: Point,
+) -> Option<(usize, usize)> {
+    for (level_index, level) in stack.iter().enumerate().rev() {
+        if let Some(item_index) =
+            popup_menu_pointer_index(resources, level.menu, level.popup_x, level.popup_y, point)
+        {
+            return Some((level_index, item_index));
+        }
+    }
+    None
+}
+
+fn popup_menu_modal_key_index_selection(
+    resources: &ResourceSystem,
+    stack: &[PopupMenuModalMenuState],
+    index: usize,
+) -> Option<PopupMenuCommandSelection> {
+    let active = stack.last()?;
+    let mut selection = popup_menu_key_index_selection(resources, active.menu, index)?;
+    for level in stack.iter().skip(1).rev() {
+        selection.submenus.insert(0, level.menu);
+    }
+    Some(selection)
+}
+
+fn popup_menu_modal_open_submenu(
+    kernel: &mut CeKernel,
+    stack: &mut Vec<PopupMenuModalMenuState>,
+    framebuffer: &mut Option<&mut dyn Framebuffer>,
+    root_x: i32,
+    root_y: i32,
+) -> bool {
+    let Some(active) = stack.last() else {
+        return false;
+    };
+    let Some(index) = active.current else {
+        return false;
+    };
+    let Some(menu_object) = kernel.resources.menu(active.menu) else {
+        return false;
+    };
+    let Some(item) = menu_object.items.get(index) else {
+        return false;
+    };
+    if !popup_menu_pointer_item_is_enabled(item) || item.submenu == 0 {
+        return false;
+    }
+    let submenu = item.submenu;
+    let child_x = active.popup_x + menu_popup_width(menu_object) - POPUP_MENU_BORDER;
+    let child_y = active.popup_y + POPUP_MENU_BORDER + (index as i32) * POPUP_MENU_ITEM_HEIGHT;
+    let child_current = popup_menu_initial_key_index(&kernel.resources, submenu);
+    stack.push(PopupMenuModalMenuState {
+        menu: submenu,
+        popup_x: child_x,
+        popup_y: child_y,
+        current: child_current,
+    });
+    let child = stack.last_mut().unwrap();
+    popup_menu_set_current_index(
+        kernel,
+        child.menu,
+        &mut child.current,
+        child_current,
+        framebuffer,
+        root_x,
+        root_y,
+    );
+    true
+}
+
+fn popup_menu_modal_truncate_stack(
+    kernel: &mut CeKernel,
+    stack: &mut Vec<PopupMenuModalMenuState>,
+    keep_len: usize,
+    framebuffer: &mut Option<&mut dyn Framebuffer>,
+    root_x: i32,
+    root_y: i32,
+) {
+    let keep_len = keep_len.max(1).min(stack.len());
+    if keep_len == stack.len() {
+        return;
+    }
+    for closed in stack.drain(keep_len..) {
+        let _ = kernel.resources.set_menu_hilite_index(closed.menu, None);
+    }
+    if let Some(framebuffer) = framebuffer.as_mut() {
+        render_popup_menu_framebuffer(
+            *framebuffer,
+            &kernel.resources,
+            stack[0].menu,
+            root_x,
+            root_y,
+        );
+    }
+}
+
+fn popup_menu_modal_close_submenu(
+    kernel: &mut CeKernel,
+    stack: &mut Vec<PopupMenuModalMenuState>,
+    framebuffer: &mut Option<&mut dyn Framebuffer>,
+    root_x: i32,
+    root_y: i32,
+) -> bool {
+    if stack.len() <= 1 {
+        return false;
+    }
+    popup_menu_modal_truncate_stack(kernel, stack, stack.len() - 1, framebuffer, root_x, root_y);
+    true
+}
+
+fn popup_menu_set_current_index(
+    kernel: &mut CeKernel,
+    menu: u32,
+    current: &mut Option<usize>,
+    next: Option<usize>,
+    framebuffer: &mut Option<&mut dyn Framebuffer>,
+    popup_x: i32,
+    popup_y: i32,
+) {
+    *current = next;
+    if kernel.resources.set_menu_hilite_index(menu, *current) {
+        if let Some(framebuffer) = framebuffer.as_mut() {
+            render_popup_menu_framebuffer(*framebuffer, &kernel.resources, menu, popup_x, popup_y);
+        }
+    }
+}
+
+fn popup_menu_lparam_point(lparam: u32) -> Point {
+    Point {
+        x: (lparam & 0xffff) as i16 as i32,
+        y: ((lparam >> 16) & 0xffff) as i16 as i32,
+    }
+}
+
+fn popup_menu_initial_key_index(resources: &ResourceSystem, menu: u32) -> Option<usize> {
+    let menu_object = resources.menu(menu)?;
+    menu_object
+        .items
+        .iter()
+        .position(|item| {
+            popup_menu_pointer_item_is_enabled(item)
+                && item.state & crate::ce::resource::MFS_DEFAULT != 0
+        })
+        .or_else(|| {
+            menu_object
+                .items
+                .iter()
+                .position(popup_menu_pointer_item_is_enabled)
+        })
+}
+
+fn popup_menu_relative_key_index(
+    resources: &ResourceSystem,
+    menu: u32,
+    current: Option<usize>,
+    direction: i32,
+) -> Option<usize> {
+    let menu_object = resources.menu(menu)?;
+    let len = menu_object.items.len();
+    if len == 0 {
+        return None;
+    }
+    let start = current.unwrap_or_else(|| if direction < 0 { 0 } else { len - 1 });
+    for offset in 1..=len {
+        let index = if direction < 0 {
+            (start + len - offset) % len
+        } else {
+            (start + offset) % len
+        };
+        if menu_object
+            .items
+            .get(index)
+            .is_some_and(popup_menu_pointer_item_is_enabled)
+        {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn popup_menu_key_index_selection(
+    resources: &ResourceSystem,
+    menu: u32,
+    index: usize,
+) -> Option<PopupMenuCommandSelection> {
+    let item = resources.menu(menu)?.items.get(index)?;
+    if !popup_menu_pointer_item_is_enabled(item) {
+        return None;
+    }
+    if popup_menu_pointer_item_is_command(item) {
+        return Some(PopupMenuCommandSelection {
+            command: item.id,
+            submenus: Vec::new(),
+        });
+    }
+    if item.submenu != 0 {
+        let mut selection = resources.popup_menu_command_selection(item.submenu)?;
+        selection.submenus.insert(0, item.submenu);
+        return Some(selection);
+    }
+    None
+}
+
+fn popup_menu_mnemonic_index(resources: &ResourceSystem, menu: u32, ch: u32) -> Option<usize> {
+    let needle = popup_menu_fold_ascii_char(ch)?;
+    resources
+        .menu(menu)?
+        .items
+        .iter()
+        .enumerate()
+        .find(|(_, item)| {
+            popup_menu_pointer_item_is_enabled(item)
+                && item.text.as_deref().and_then(popup_menu_text_mnemonic) == Some(needle)
+        })
+        .map(|(index, _)| index)
+        .or_else(|| {
+            resources
+                .menu(menu)?
+                .items
+                .iter()
+                .enumerate()
+                .find_map(|(index, item)| {
+                    if !popup_menu_pointer_item_is_enabled(item) {
+                        return None;
+                    }
+                    let first = item
+                        .text
+                        .as_deref()?
+                        .chars()
+                        .filter(|ch| *ch != '&')
+                        .find_map(|ch| popup_menu_fold_ascii_char(ch as u32))?;
+                    (first == needle).then_some(index)
+                })
+        })
+}
+
+fn popup_menu_text_mnemonic(text: &str) -> Option<char> {
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '&' {
+            continue;
+        }
+        match chars.peek().copied() {
+            Some('&') => {
+                let _ = chars.next();
+            }
+            Some(next) => return popup_menu_fold_ascii_char(next as u32),
+            None => return None,
+        }
+    }
+    None
+}
+
+fn popup_menu_fold_ascii_char(ch: u32) -> Option<char> {
+    let byte = u8::try_from(ch).ok()?;
+    if !byte.is_ascii_alphanumeric() {
+        return None;
+    }
+    Some(byte.to_ascii_lowercase() as char)
+}
+
+fn popup_menu_pointer_index(
+    resources: &ResourceSystem,
+    menu: u32,
+    popup_x: i32,
+    popup_y: i32,
+    cursor: Point,
+) -> Option<usize> {
+    let menu_object = resources.menu(menu)?;
+    if menu_object.items.is_empty() {
+        return None;
+    }
+    let width = menu_popup_width(menu_object);
+    let row_left = popup_x + POPUP_MENU_BORDER;
+    let row_top = popup_y + POPUP_MENU_BORDER;
+    let row_right = popup_x + width - POPUP_MENU_BORDER;
+    let row_bottom =
+        row_top + (menu_object.items.len() as i32).saturating_mul(POPUP_MENU_ITEM_HEIGHT);
+    if cursor.x < row_left || cursor.x >= row_right || cursor.y < row_top || cursor.y >= row_bottom
+    {
+        return None;
+    }
+    let index = ((cursor.y - row_top) / POPUP_MENU_ITEM_HEIGHT) as usize;
+    menu_object
+        .items
+        .get(index)
+        .is_some_and(popup_menu_pointer_item_is_enabled)
+        .then_some(index)
+}
+
+fn popup_menu_pointer_selection(
+    resources: &ResourceSystem,
+    menu: u32,
+    popup_x: i32,
+    popup_y: i32,
+    cursor: Point,
+) -> Option<PopupMenuCommandSelection> {
+    let mut visited = BTreeSet::new();
+    popup_menu_pointer_selection_inner(resources, menu, popup_x, popup_y, cursor, &mut visited)
+}
+
+fn popup_menu_pointer_selection_inner(
+    resources: &ResourceSystem,
+    menu: u32,
+    popup_x: i32,
+    popup_y: i32,
+    cursor: Point,
+    visited: &mut BTreeSet<u32>,
+) -> Option<PopupMenuCommandSelection> {
+    if !visited.insert(menu) {
+        return None;
+    }
+    if let Some(index) = popup_menu_pointer_index(resources, menu, popup_x, popup_y, cursor) {
+        return popup_menu_key_index_selection(resources, menu, index);
+    }
+    let (submenu, submenu_x, submenu_y) =
+        popup_menu_highlighted_submenu_popup(resources, menu, popup_x, popup_y)?;
+    let mut selection = popup_menu_pointer_selection_inner(
+        resources, submenu, submenu_x, submenu_y, cursor, visited,
+    )?;
+    selection.submenus.insert(0, submenu);
+    Some(selection)
+}
+
+fn popup_menu_highlighted_submenu_popup(
+    resources: &ResourceSystem,
+    menu: u32,
+    popup_x: i32,
+    popup_y: i32,
+) -> Option<(u32, i32, i32)> {
+    let menu_object = resources.menu(menu)?;
+    let width = menu_popup_width(menu_object);
+    menu_object
+        .items
+        .iter()
+        .enumerate()
+        .find_map(|(index, item)| {
+            let highlighted = item.state & crate::ce::resource::MF_HILITE != 0;
+            let enabled = popup_menu_pointer_item_is_enabled(item);
+            (highlighted && enabled && item.submenu != 0).then_some((
+                item.submenu,
+                popup_x + width - POPUP_MENU_BORDER,
+                popup_y + POPUP_MENU_BORDER + (index as i32) * POPUP_MENU_ITEM_HEIGHT,
+            ))
+        })
+}
+
+fn popup_menu_pointer_item_is_enabled(item: &MenuItem) -> bool {
+    item.item_type & crate::ce::resource::MF_SEPARATOR == 0
+        && item.state & (crate::ce::resource::MF_DISABLED | crate::ce::resource::MF_GRAYED) == 0
+}
+
+fn popup_menu_pointer_item_is_command(item: &MenuItem) -> bool {
+    item.submenu == 0 && item.id != u32::MAX
+}
+
 fn render_popup_menu_framebuffer(
     framebuffer: &mut dyn Framebuffer,
-    menu: &crate::ce::resource::MenuObject,
+    resources: &ResourceSystem,
+    menu: u32,
     x: i32,
     y: i32,
 ) {
-    let item_height = 18;
+    let mut visited = BTreeSet::new();
+    render_popup_menu_framebuffer_inner(framebuffer, resources, menu, x, y, &mut visited);
+}
+
+fn render_popup_menu_framebuffer_inner(
+    framebuffer: &mut dyn Framebuffer,
+    resources: &ResourceSystem,
+    menu: u32,
+    x: i32,
+    y: i32,
+    visited: &mut BTreeSet<u32>,
+) {
+    if !visited.insert(menu) {
+        return;
+    }
+    let Some(menu) = resources.menu(menu) else {
+        return;
+    };
     let item_count = menu.items.len().max(1) as i32;
     let width = menu_popup_width(menu);
-    let height = item_count * item_height + 4;
+    let height = item_count * POPUP_MENU_ITEM_HEIGHT + POPUP_MENU_VERTICAL_PADDING;
     let outer = Rect::from_origin_size(x, y, width, height);
     fill_framebuffer_screen_rect(framebuffer, outer, rgb(0x00, 0x00, 0x00));
     fill_framebuffer_screen_rect(
@@ -14041,21 +15242,29 @@ fn render_popup_menu_framebuffer(
         rgb(0xf0, 0xf0, 0xf0),
     );
     for (index, item) in menu.items.iter().enumerate() {
-        let item_top = y + 2 + (index as i32) * item_height;
-        let item_rect = Rect::from_origin_size(x + 2, item_top, width - 4, item_height);
+        let item_top = y + POPUP_MENU_BORDER + (index as i32) * POPUP_MENU_ITEM_HEIGHT;
+        let item_rect = Rect::from_origin_size(
+            x + POPUP_MENU_BORDER,
+            item_top,
+            width - POPUP_MENU_VERTICAL_PADDING,
+            POPUP_MENU_ITEM_HEIGHT,
+        );
         let disabled =
             item.state & (crate::ce::resource::MF_DISABLED | crate::ce::resource::MF_GRAYED) != 0;
         let default = item.state & crate::ce::resource::MFS_DEFAULT != 0;
+        let highlighted = item.state & crate::ce::resource::MF_HILITE != 0 && !disabled;
         let separator = item.item_type & crate::ce::resource::MF_SEPARATOR != 0;
         let checked = item.state & crate::ce::resource::MF_CHECKED != 0;
         let has_submenu = item.submenu != 0;
-        if default {
+        if highlighted {
+            fill_framebuffer_screen_rect(framebuffer, item_rect, rgb(0x33, 0x99, 0xff));
+        } else if default {
             fill_framebuffer_screen_rect(framebuffer, item_rect, rgb(0xd8, 0xe8, 0xff));
         }
         if separator {
             fill_framebuffer_screen_rect(
                 framebuffer,
-                Rect::from_origin_size(x + 8, item_top + item_height / 2, width - 16, 1),
+                Rect::from_origin_size(x + 8, item_top + POPUP_MENU_ITEM_HEIGHT / 2, width - 16, 1),
                 rgb(0x80, 0x80, 0x80),
             );
             continue;
@@ -14069,6 +15278,8 @@ fn render_popup_menu_framebuffer(
         }
         let text_color = if disabled {
             rgb(0x80, 0x80, 0x80)
+        } else if highlighted {
+            rgb(0xff, 0xff, 0xff)
         } else {
             rgb(0x00, 0x00, 0x00)
         };
@@ -14094,6 +15305,16 @@ fn render_popup_menu_framebuffer(
                 Rect::from_origin_size(x + width - 10, item_top + 10, 2, 2),
                 text_color,
             );
+            if highlighted {
+                render_popup_menu_framebuffer_inner(
+                    framebuffer,
+                    resources,
+                    item.submenu,
+                    x + width - POPUP_MENU_BORDER,
+                    item_top,
+                    visited,
+                );
+            }
         }
     }
 }
@@ -14529,7 +15750,8 @@ fn accelerator_entry_matches(
     let matches_key = if entry.flags & ACCEL_FVIRTKEY != 0 {
         entry.key == key
     } else {
-        ascii_accel_key(entry.key) == ascii_accel_key(key)
+        let translated = translate_virtual_key_to_char(kernel, message.wparam) as u16;
+        translated != 0 && ascii_accel_key(entry.key) == ascii_accel_key(translated)
     };
     if !matches_key {
         return false;
@@ -14580,7 +15802,7 @@ fn normalized_module(kernel: &CeKernel, module: u32) -> u32 {
 
 fn load_bitmap_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
-    memory: &M,
+    memory: &mut M,
     thread_id: u32,
     module: u32,
     name: u32,
@@ -14590,7 +15812,7 @@ fn load_bitmap_w_raw<M: CoredllGuestMemory>(
 
 fn load_image_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
-    memory: &M,
+    memory: &mut M,
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
@@ -14641,8 +15863,110 @@ fn load_icon_w_raw(kernel: &mut CeKernel, thread_id: u32, module: u32, name: u32
     )
 }
 
+fn create_icon_indirect_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    icon_info_ptr: u32,
+) -> u32 {
+    if icon_info_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(is_icon) = read_guest_u32(kernel, memory, thread_id, icon_info_ptr) else {
+        return 0;
+    };
+    let Some(x_hotspot) = read_guest_u32(kernel, memory, thread_id, icon_info_ptr + 4) else {
+        return 0;
+    };
+    let Some(y_hotspot) = read_guest_u32(kernel, memory, thread_id, icon_info_ptr + 8) else {
+        return 0;
+    };
+    let Some(mask_bitmap) = read_guest_u32(kernel, memory, thread_id, icon_info_ptr + 12) else {
+        return 0;
+    };
+    let Some(color_bitmap) = read_guest_u32(kernel, memory, thread_id, icon_info_ptr + 16) else {
+        return 0;
+    };
+    match kernel.resources.create_icon(
+        is_icon != 0,
+        x_hotspot,
+        y_hotspot,
+        mask_bitmap,
+        color_bitmap,
+    ) {
+        Some(icon) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            icon
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            0
+        }
+    }
+}
+
+fn extract_icon_ex_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let file_ptr = raw_arg(args, 0);
+    let icon_index = raw_i32_arg(args, 1);
+    let large_out = raw_arg(args, 2);
+    let small_out = raw_arg(args, 3);
+    let icon_count = raw_arg(args, 4);
+    let Some(path) = read_guest_wide_arg(memory, file_ptr).map(|path| path.replace('/', "\\"))
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let Ok(attributes) = kernel.file_attributes_w(&path) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+        return 0;
+    };
+    if icon_index == -1 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return 1;
+    }
+    if icon_index < 0 || icon_index > 0 || icon_count == 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return 0;
+    }
+    let class = shell_file_class(kernel, &path, attributes.attributes);
+    let icon = shell_file_icon(kernel, &path, attributes.attributes, &class).handle;
+    if large_out != 0 && !write_guest_u32(kernel, memory, thread_id, large_out, icon) {
+        return 0;
+    }
+    if small_out != 0 && !write_guest_u32(kernel, memory, thread_id, small_out, icon) {
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    1
+}
+
 fn destroy_icon_raw(kernel: &mut CeKernel, thread_id: u32, icon: u32) -> bool {
-    if icon == 0 {
+    if let Some(object) = kernel.resources.icon(icon) {
+        if object.is_icon {
+            let _ = kernel.resources.delete_icon(icon);
+            kernel.threads.set_last_error(thread_id, 0);
+            return true;
+        }
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    if !is_icon_handle(kernel, icon) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -14650,6 +15974,70 @@ fn destroy_icon_raw(kernel: &mut CeKernel, thread_id: u32, icon: u32) -> bool {
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+fn draw_icon_ex_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let hdc = raw_arg(args, 0);
+    let x = raw_i32_arg(args, 1);
+    let y = raw_i32_arg(args, 2);
+    let icon = raw_arg(args, 3);
+    let width = raw_i32_arg(args, 4);
+    let height = raw_i32_arg(args, 5);
+    if !is_valid_hdc(kernel, hdc) || !is_icon_handle(kernel, icon) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    }
+    let width = if width > 0 { width } else { 32 };
+    let height = if height > 0 { height } else { 32 };
+    if width <= 0 || height <= 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let flags = ((icon >> SHELL_ICON_OVERLAY_SHIFT) & 0x0f) << 8;
+    let draw = ImageListDraw {
+        image_list: SHELL_SYSTEM_IMAGE_LIST_HANDLE,
+        index: (icon & 0xffff) as i32,
+        hdc,
+        x,
+        y,
+        width,
+        height,
+        flags,
+        overlay_image: None,
+    };
+    if !render_image_list_draw_bitmap(kernel, memory, draw) {
+        render_image_list_draw_framebuffer(kernel, memory, framebuffer, draw);
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn is_icon_handle(kernel: &CeKernel, icon: u32) -> bool {
+    if icon == 0 {
+        return false;
+    }
+    if let Some(entry) = kernel.resources.resource_entry(icon) {
+        return entry.kind == ResourceId::Integer(RT_GROUP_ICON as u16);
+    }
+    if kernel
+        .resources
+        .icon(icon)
+        .is_some_and(|object| object.is_icon)
+    {
+        return true;
+    }
+    let without_overlay = icon & 0x00ff_ffff;
+    without_overlay & 0xffff_0000 == 0x000b_0000 && without_overlay & 0x0000_ffff >= 0x8000
 }
 
 fn image_list_create_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
@@ -14689,7 +16077,7 @@ fn image_list_destroy_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) ->
 
 fn image_list_load_image_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
-    memory: &M,
+    memory: &mut M,
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
@@ -14738,7 +16126,7 @@ fn image_list_load_image_raw<M: CoredllGuestMemory>(
     };
     if kernel
         .resources
-        .add_image_list_image(list, bitmap, mask)
+        .add_masked_image_list_image(list, bitmap, mask)
         .is_none()
     {
         kernel.resources.destroy_image_list(list);
@@ -14756,6 +16144,27 @@ fn image_list_add_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> i3
     let bitmap = raw_arg(args, 1);
     let mask = raw_arg(args, 2);
     match kernel.resources.add_image_list_image(handle, bitmap, mask) {
+        Some(index) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            index
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            -1
+        }
+    }
+}
+
+fn image_list_add_masked_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> i32 {
+    let handle = raw_arg(args, 0);
+    let bitmap = raw_arg(args, 1);
+    let transparent_color = raw_arg(args, 2);
+    match kernel
+        .resources
+        .add_masked_image_list_image(handle, bitmap, transparent_color)
+    {
         Some(index) => {
             kernel.threads.set_last_error(thread_id, 0);
             index
@@ -15069,8 +16478,9 @@ fn image_list_get_bk_color_raw(kernel: &mut CeKernel, thread_id: u32, handle: u3
     }
 }
 
-fn image_list_draw_raw(
+fn image_list_draw_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
+    memory: &mut M,
     framebuffer: Option<&mut dyn Framebuffer>,
     thread_id: u32,
     args: &[u32],
@@ -15104,13 +16514,16 @@ fn image_list_draw_raw(
     };
     let rendered = record_image_list_draw(kernel, thread_id, draw);
     if rendered {
-        render_image_list_draw_framebuffer(kernel, framebuffer, draw);
+        if !render_image_list_draw_bitmap(kernel, memory, draw) {
+            render_image_list_draw_framebuffer(kernel, memory, framebuffer, draw);
+        }
     }
     rendered
 }
 
-fn image_list_draw_ex_raw(
+fn image_list_draw_ex_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
+    memory: &mut M,
     framebuffer: Option<&mut dyn Framebuffer>,
     thread_id: u32,
     args: &[u32],
@@ -15142,14 +16555,16 @@ fn image_list_draw_ex_raw(
     };
     let rendered = record_image_list_draw(kernel, thread_id, draw);
     if rendered {
-        render_image_list_draw_framebuffer(kernel, framebuffer, draw);
+        if !render_image_list_draw_bitmap(kernel, memory, draw) {
+            render_image_list_draw_framebuffer(kernel, memory, framebuffer, draw);
+        }
     }
     rendered
 }
 
 fn image_list_draw_indirect_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
-    memory: &M,
+    memory: &mut M,
     framebuffer: Option<&mut dyn Framebuffer>,
     thread_id: u32,
     draw_ptr: u32,
@@ -15206,13 +16621,16 @@ fn image_list_draw_indirect_raw<M: CoredllGuestMemory>(
     };
     let rendered = record_image_list_draw(kernel, thread_id, draw);
     if rendered {
-        render_image_list_draw_framebuffer(kernel, framebuffer, draw);
+        if !render_image_list_draw_bitmap(kernel, memory, draw) {
+            render_image_list_draw_framebuffer(kernel, memory, framebuffer, draw);
+        }
     }
     rendered
 }
 
-fn render_image_list_draw_framebuffer(
+fn render_image_list_draw_framebuffer<M: CoredllGuestMemory>(
     kernel: &CeKernel,
+    memory: &M,
     framebuffer: Option<&mut dyn Framebuffer>,
     draw: ImageListDraw,
 ) {
@@ -15239,10 +16657,134 @@ fn render_image_list_draw_framebuffer(
     if width <= 0 || height <= 0 {
         return;
     }
-    let rect = Rect::from_origin_size(draw.x, draw.y, width, height);
-    fill_framebuffer_rect_for_hdc(kernel, framebuffer, draw.hdc, rect, rgb(0x00, 0x00, 0x00));
-    if width <= 2 || height <= 2 {
+    if render_image_list_bitmap_framebuffer(kernel, memory, &mut *framebuffer, draw, width, height)
+    {
         return;
+    }
+    let Some(pseudo) = pseudo_image_list_draw(draw, width, height) else {
+        return;
+    };
+    fill_framebuffer_rect_for_hdc(
+        kernel,
+        framebuffer,
+        draw.hdc,
+        pseudo.border,
+        pseudo.border_color,
+    );
+    if let Some(body) = pseudo.body {
+        fill_framebuffer_rect_for_hdc(kernel, framebuffer, draw.hdc, body.rect, body.color);
+    }
+    if let Some(overlay) = pseudo.overlay_outer {
+        fill_framebuffer_rect_for_hdc(kernel, framebuffer, draw.hdc, overlay.rect, overlay.color);
+    }
+    if let Some(overlay) = pseudo.overlay_inner {
+        fill_framebuffer_rect_for_hdc(kernel, framebuffer, draw.hdc, overlay.rect, overlay.color);
+    }
+}
+
+fn render_image_list_draw_bitmap<M: CoredllGuestMemory>(
+    kernel: &CeKernel,
+    memory: &mut M,
+    draw: ImageListDraw,
+) -> bool {
+    if !kernel.resources.is_memory_dc(draw.hdc) {
+        return false;
+    }
+    let (default_width, default_height) = if draw.image_list == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
+        (SHELL_SYSTEM_IMAGE_LIST_CX, SHELL_SYSTEM_IMAGE_LIST_CY)
+    } else if let Some(list) = kernel.resources.image_list(draw.image_list) {
+        (list.width, list.height)
+    } else {
+        return true;
+    };
+    let width = if draw.width > 0 {
+        draw.width
+    } else {
+        default_width
+    };
+    let height = if draw.height > 0 {
+        draw.height
+    } else {
+        default_height
+    };
+    if width <= 0 || height <= 0 {
+        return true;
+    }
+    if render_image_list_bitmap_hdc(kernel, memory, draw, width, height) {
+        return true;
+    }
+    let Some(pseudo) = pseudo_image_list_draw(draw, width, height) else {
+        return true;
+    };
+    let _ = fill_bitmap_rect_for_hdc(
+        kernel,
+        memory,
+        draw.hdc,
+        pseudo.border,
+        BrushPaint::Solid(pseudo.border_color),
+    );
+    if let Some(body) = pseudo.body {
+        let _ = fill_bitmap_rect_for_hdc(
+            kernel,
+            memory,
+            draw.hdc,
+            body.rect,
+            BrushPaint::Solid(body.color),
+        );
+    }
+    if let Some(overlay) = pseudo.overlay_outer {
+        let _ = fill_bitmap_rect_for_hdc(
+            kernel,
+            memory,
+            draw.hdc,
+            overlay.rect,
+            BrushPaint::Solid(overlay.color),
+        );
+    }
+    if let Some(overlay) = pseudo.overlay_inner {
+        let _ = fill_bitmap_rect_for_hdc(
+            kernel,
+            memory,
+            draw.hdc,
+            overlay.rect,
+            BrushPaint::Solid(overlay.color),
+        );
+    }
+    true
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PseudoImageListFill {
+    rect: Rect,
+    color: u32,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PseudoImageListDraw {
+    border: Rect,
+    border_color: u32,
+    body: Option<PseudoImageListFill>,
+    overlay_outer: Option<PseudoImageListFill>,
+    overlay_inner: Option<PseudoImageListFill>,
+}
+
+fn pseudo_image_list_draw(
+    draw: ImageListDraw,
+    width: i32,
+    height: i32,
+) -> Option<PseudoImageListDraw> {
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    let mut pseudo = PseudoImageListDraw {
+        border: Rect::from_origin_size(draw.x, draw.y, width, height),
+        border_color: rgb(0x00, 0x00, 0x00),
+        body: None,
+        overlay_outer: None,
+        overlay_inner: None,
+    };
+    if width <= 2 || height <= 2 {
+        return Some(pseudo);
     }
     let seed = draw
         .index
@@ -15255,33 +16797,260 @@ fn render_image_list_draw_framebuffer(
         0x50 + ((seed >> 4) & 0x7f),
         0x60 + ((seed >> 8) & 0x7f),
     );
-    fill_framebuffer_rect_for_hdc(
-        kernel,
-        framebuffer,
-        draw.hdc,
-        Rect::from_origin_size(draw.x + 1, draw.y + 1, width - 2, height - 2),
-        body,
-    );
+    pseudo.body = Some(PseudoImageListFill {
+        rect: Rect::from_origin_size(draw.x + 1, draw.y + 1, width - 2, height - 2),
+        color: body,
+    });
     let overlay = draw
         .overlay_image
         .map(|overlay| overlay.saturating_add(1) as u32)
         .unwrap_or((draw.flags >> 8) & 0x0f);
     if overlay != 0 && width >= 6 && height >= 6 {
-        fill_framebuffer_rect_for_hdc(
+        pseudo.overlay_outer = Some(PseudoImageListFill {
+            rect: Rect::from_origin_size(draw.x + width - 5, draw.y + height - 5, 4, 4),
+            color: rgb(0xff, 0xff, 0xff),
+        });
+        pseudo.overlay_inner = Some(PseudoImageListFill {
+            rect: Rect::from_origin_size(draw.x + width - 4, draw.y + height - 4, 2, 2),
+            color: rgb(0x00, 0x80, 0x00),
+        });
+    }
+    Some(pseudo)
+}
+
+fn render_image_list_bitmap_framebuffer<M: CoredllGuestMemory>(
+    kernel: &CeKernel,
+    memory: &M,
+    framebuffer: &mut dyn Framebuffer,
+    draw: ImageListDraw,
+    width: i32,
+    height: i32,
+) -> bool {
+    if draw.image_list == SHELL_SYSTEM_IMAGE_LIST_HANDLE || draw.index < 0 {
+        return false;
+    }
+    let Some(list) = kernel.resources.image_list(draw.image_list) else {
+        return false;
+    };
+    let Some(image) = list.images.get(draw.index as usize) else {
+        return false;
+    };
+    if !render_image_list_bitmap_entry_framebuffer(
+        kernel,
+        memory,
+        framebuffer,
+        draw.hdc,
+        draw.x,
+        draw.y,
+        width,
+        height,
+        list.width.max(1),
+        list.height.max(1),
+        image,
+    ) {
+        return false;
+    }
+
+    let overlay_index = draw.overlay_image.or_else(|| {
+        let overlay = (draw.flags & 0x0000_0f00) >> 8;
+        if overlay == 0 {
+            None
+        } else {
+            list.overlays.get(&overlay).copied()
+        }
+    });
+    if let Some(overlay_index) = overlay_index
+        && let Some(overlay) = list.images.get(overlay_index as usize)
+    {
+        let _ = render_image_list_bitmap_entry_framebuffer(
             kernel,
+            memory,
             framebuffer,
             draw.hdc,
-            Rect::from_origin_size(draw.x + width - 5, draw.y + height - 5, 4, 4),
-            rgb(0xff, 0xff, 0xff),
-        );
-        fill_framebuffer_rect_for_hdc(
-            kernel,
-            framebuffer,
-            draw.hdc,
-            Rect::from_origin_size(draw.x + width - 4, draw.y + height - 4, 2, 2),
-            rgb(0x00, 0x80, 0x00),
+            draw.x,
+            draw.y,
+            width,
+            height,
+            list.width.max(1),
+            list.height.max(1),
+            overlay,
         );
     }
+    true
+}
+
+fn render_image_list_bitmap_hdc<M: CoredllGuestMemory>(
+    kernel: &CeKernel,
+    memory: &mut M,
+    draw: ImageListDraw,
+    width: i32,
+    height: i32,
+) -> bool {
+    if draw.image_list == SHELL_SYSTEM_IMAGE_LIST_HANDLE || draw.index < 0 {
+        return false;
+    }
+    let Some(list) = kernel.resources.image_list(draw.image_list) else {
+        return false;
+    };
+    let Some(image) = list.images.get(draw.index as usize) else {
+        return false;
+    };
+    if !render_image_list_bitmap_entry_hdc(
+        kernel,
+        memory,
+        draw.hdc,
+        draw.x,
+        draw.y,
+        width,
+        height,
+        list.width.max(1),
+        list.height.max(1),
+        image,
+    ) {
+        return false;
+    }
+
+    let overlay_index = draw.overlay_image.or_else(|| {
+        let overlay = (draw.flags & 0x0000_0f00) >> 8;
+        if overlay == 0 {
+            None
+        } else {
+            list.overlays.get(&overlay).copied()
+        }
+    });
+    if let Some(overlay_index) = overlay_index
+        && let Some(overlay) = list.images.get(overlay_index as usize)
+    {
+        let _ = render_image_list_bitmap_entry_hdc(
+            kernel,
+            memory,
+            draw.hdc,
+            draw.x,
+            draw.y,
+            width,
+            height,
+            list.width.max(1),
+            list.height.max(1),
+            overlay,
+        );
+    }
+    true
+}
+
+fn render_image_list_bitmap_entry_framebuffer<M: CoredllGuestMemory>(
+    kernel: &CeKernel,
+    memory: &M,
+    framebuffer: &mut dyn Framebuffer,
+    hdc: u32,
+    dst_x: i32,
+    dst_y: i32,
+    dst_width: i32,
+    dst_height: i32,
+    src_width: i32,
+    src_height: i32,
+    image: &crate::ce::resource::ImageListImage,
+) -> bool {
+    if image.bitmap == 0 {
+        return false;
+    }
+    let Some(bitmap) = kernel.resources.bitmap(image.bitmap) else {
+        return false;
+    };
+    let Some(bitmap_bytes) = read_bitmap_object_bytes(memory, bitmap) else {
+        return false;
+    };
+    let mask_bitmap_bytes = if image.transparent_color.is_none() && image.mask != 0 {
+        kernel
+            .resources
+            .bitmap(image.mask)
+            .and_then(|mask| read_bitmap_object_bytes(memory, mask).map(|bytes| (mask, bytes)))
+    } else {
+        None
+    };
+    draw_bitmap_bytes_to_framebuffer(
+        kernel,
+        framebuffer,
+        hdc,
+        dst_x,
+        dst_y,
+        dst_width,
+        dst_height,
+        image.source_x,
+        image.source_y,
+        src_width,
+        src_height,
+        bitmap,
+        &bitmap_bytes,
+        mask_bitmap_bytes
+            .as_ref()
+            .map(|(mask, bytes)| (*mask, bytes.as_slice())),
+        image.transparent_color.map(colorref_rgb),
+    );
+    true
+}
+
+fn render_image_list_bitmap_entry_hdc<M: CoredllGuestMemory>(
+    kernel: &CeKernel,
+    memory: &mut M,
+    hdc: u32,
+    dst_x: i32,
+    dst_y: i32,
+    dst_width: i32,
+    dst_height: i32,
+    src_width: i32,
+    src_height: i32,
+    image: &crate::ce::resource::ImageListImage,
+) -> bool {
+    if image.bitmap == 0 {
+        return false;
+    }
+    let Some(src_bitmap) = kernel.resources.bitmap(image.bitmap) else {
+        return false;
+    };
+    let Some(src_bytes) = read_bitmap_object_bytes(memory, src_bitmap) else {
+        return false;
+    };
+    let Some(dst_bitmap) = selected_bitmap_object(kernel, hdc) else {
+        return true;
+    };
+    let dst_rect = Rect {
+        left: dst_x,
+        top: dst_y,
+        right: dst_x.saturating_add(dst_width),
+        bottom: dst_y.saturating_add(dst_height),
+    };
+    for clip in hdc_clip_rects(kernel, hdc, dst_rect, dst_bitmap.width, dst_bitmap.height) {
+        draw_bitmap_bytes_to_bitmap(
+            memory,
+            &dst_bitmap,
+            dst_x,
+            dst_y,
+            dst_width,
+            dst_height,
+            image.source_x,
+            image.source_y,
+            src_width,
+            src_height,
+            src_bitmap,
+            &src_bytes,
+            image.transparent_color.map(colorref_rgb),
+            clip,
+        );
+    }
+    true
+}
+
+fn read_bitmap_object_bytes<M: CoredllGuestMemory>(
+    memory: &M,
+    bitmap: &crate::ce::resource::BitmapObject,
+) -> Option<Vec<u8>> {
+    if bitmap.bits_ptr == 0 || bitmap.width <= 0 || bitmap.height <= 0 || bitmap.width_bytes <= 0 {
+        return None;
+    }
+    let byte_count = bitmap.width_bytes.saturating_mul(bitmap.height) as u32;
+    let mut bytes = vec![0; byte_count as usize];
+    memory.read_bytes(bitmap.bits_ptr, &mut bytes).ok()?;
+    Some(bytes)
 }
 
 fn image_list_copy_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
@@ -15661,7 +17430,7 @@ fn load_stock_or_resource_image(
 
 fn load_bitmap_resource<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
-    memory: &M,
+    memory: &mut M,
     thread_id: u32,
     module: u32,
     name: u32,
@@ -15696,12 +17465,12 @@ fn load_bitmap_resource<M: CoredllGuestMemory>(
     let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, data_ptr, size) else {
         return 0;
     };
-    create_bitmap_from_dib_bytes(kernel, thread_id, &bytes, data_ptr)
+    create_bitmap_from_dib_bytes(kernel, memory, thread_id, &bytes)
 }
 
 fn load_bitmap_file<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
-    memory: &M,
+    memory: &mut M,
     thread_id: u32,
     name_ptr: u32,
 ) -> u32 {
@@ -15717,30 +17486,98 @@ fn load_bitmap_file<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
         return 0;
     };
-    create_bitmap_from_file_bytes(kernel, thread_id, &bytes)
+    create_bitmap_from_file_bytes(kernel, memory, thread_id, &bytes)
 }
 
-fn create_bitmap_from_file_bytes(kernel: &mut CeKernel, thread_id: u32, bytes: &[u8]) -> u32 {
+fn create_bitmap_from_file_bytes<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    bytes: &[u8],
+) -> u32 {
     if bytes.len() < 14 || &bytes[0..2] != b"BM" {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
-    if bytes.len() <= 14 {
+    let Some(bits_offset) = read_le_u32(bytes, 10) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if bytes.len() <= 14 || bits_offset < 14 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
-    create_bitmap_from_dib_bytes(kernel, thread_id, &bytes[14..], 0)
+    let dib = &bytes[14..];
+    let Some(header) = parse_dib_header(dib) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    if header.width == 0 || header.height == 0 || header.planes != 1 || header.bits_pixel == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(byte_count) = bitmap_byte_count(header.width, header.height, header.bits_pixel) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let bits_offset = bits_offset as usize;
+    let byte_count_usize = byte_count as usize;
+    if bits_offset
+        .checked_add(byte_count_usize)
+        .map_or(true, |end| end > bytes.len())
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(bits_ptr) =
+        kernel
+            .memory
+            .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, byte_count)
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+        return 0;
+    };
+    if !write_guest_bytes(
+        kernel,
+        memory,
+        thread_id,
+        bits_ptr,
+        &bytes[bits_offset..bits_offset + byte_count_usize],
+    ) {
+        let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, bits_ptr);
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    kernel.resources.create_owned_bitmap(
+        header.width,
+        header.height,
+        header.planes,
+        header.bits_pixel,
+        bits_ptr,
+    )
 }
 
-fn create_bitmap_from_dib_bytes(
+fn create_bitmap_from_dib_bytes<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
+    memory: &mut M,
     thread_id: u32,
     bytes: &[u8],
-    bits_base: u32,
 ) -> u32 {
     let Some(header) = parse_dib_header(bytes) else {
         kernel
@@ -15748,14 +17585,97 @@ fn create_bitmap_from_dib_bytes(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     };
+    if header.width == 0 || header.height == 0 || header.planes != 1 || header.bits_pixel == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(header_size) = read_le_u32(bytes, 0) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let compression = if header_size >= 40 {
+        let Some(compression) = read_le_u32(bytes, 16) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return 0;
+        };
+        compression
+    } else {
+        BI_RGB
+    };
+    let Some(rgb_masks) =
+        dib_rgb_masks_from_bytes(bytes, header_size, compression, header.bits_pixel)
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let color_table =
+        read_dib_color_table_from_bytes(bytes, header_size, compression, header.bits_pixel);
+    let Some(bits_offset) = dib_bits_offset(bytes, header_size, compression, header.bits_pixel)
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let Some(byte_count) = bitmap_byte_count(header.width, header.height, header.bits_pixel) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let byte_count_usize = byte_count as usize;
+    if bits_offset
+        .checked_add(byte_count_usize)
+        .map_or(true, |end| end > bytes.len())
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Some(bits_ptr) =
+        kernel
+            .memory
+            .heap_alloc(PROCESS_HEAP_HANDLE, HEAP_ZERO_MEMORY, byte_count)
+    else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_NOT_ENOUGH_MEMORY);
+        return 0;
+    };
+    if !write_guest_bytes(
+        kernel,
+        memory,
+        thread_id,
+        bits_ptr,
+        &bytes[bits_offset..bits_offset + byte_count_usize],
+    ) {
+        let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, bits_ptr);
+        return 0;
+    }
     kernel.threads.set_last_error(thread_id, 0);
-    kernel.resources.create_bitmap(
+    let bitmap = kernel.resources.create_owned_bitmap_with_masks(
         header.width,
         header.height,
         header.planes,
         header.bits_pixel,
-        bits_base,
-    )
+        bits_ptr,
+        rgb_masks,
+    );
+    if !color_table.is_empty()
+        && let Some(object) = kernel.resources.bitmap_mut(bitmap)
+    {
+        object.color_table = color_table;
+    }
+    bitmap
 }
 
 fn create_bitmap_raw(
@@ -15819,6 +17739,107 @@ fn bitmap_byte_count(width: i32, height: i32, bits_pixel: u16) -> Option<u32> {
         .checked_mul(4)?;
     let bytes = row_bytes.checked_mul(height)?;
     (bytes <= u64::from(u32::MAX)).then_some(bytes as u32)
+}
+
+fn dib_bits_offset(
+    bytes: &[u8],
+    header_size: u32,
+    compression: u32,
+    bits_pixel: u16,
+) -> Option<usize> {
+    let header_size = header_size as usize;
+    if bytes.len() < header_size {
+        return None;
+    }
+    let mask_bytes = if compression == BI_BITFIELDS && header_size == 40 {
+        12usize
+    } else {
+        0
+    };
+    let color_entries = dib_color_entry_count(bytes, header_size as u32, bits_pixel)?;
+    let color_entry_bytes = if header_size == 12 { 3usize } else { 4 };
+    header_size
+        .checked_add(mask_bytes)?
+        .checked_add(color_entries.checked_mul(color_entry_bytes)?)
+}
+
+fn dib_color_entry_count(bytes: &[u8], header_size: u32, bits_pixel: u16) -> Option<usize> {
+    if !matches!(bits_pixel, 1 | 4 | 8) {
+        return Some(0);
+    }
+    let max_entries = 1usize.checked_shl(u32::from(bits_pixel))?;
+    if header_size >= 40 {
+        let used_entries = read_le_u32(bytes, 32)
+            .and_then(|count| (count != 0).then_some(count as usize))
+            .unwrap_or(max_entries)
+            .min(max_entries);
+        Some(used_entries)
+    } else {
+        Some(max_entries)
+    }
+}
+
+fn dib_rgb_masks_from_bytes(
+    bytes: &[u8],
+    header_size: u32,
+    compression: u32,
+    bits_pixel: u16,
+) -> Option<Option<[u32; 3]>> {
+    match compression {
+        BI_RGB => Some(None),
+        BI_BITFIELDS if matches!(bits_pixel, 16 | 32) => {
+            let mask_offset = if header_size >= 52 {
+                40usize
+            } else {
+                header_size as usize
+            };
+            let mask_bytes = bytes.get(mask_offset..mask_offset.checked_add(12)?)?;
+            Some(Some([
+                read_le_u32(mask_bytes, 0)?,
+                read_le_u32(mask_bytes, 4)?,
+                read_le_u32(mask_bytes, 8)?,
+            ]))
+        }
+        _ => None,
+    }
+}
+
+fn read_dib_color_table_from_bytes(
+    bytes: &[u8],
+    header_size: u32,
+    compression: u32,
+    bits_pixel: u16,
+) -> Vec<[u8; 4]> {
+    let Some(used_entries) = dib_color_entry_count(bytes, header_size, bits_pixel) else {
+        return Vec::new();
+    };
+    if used_entries == 0 {
+        return Vec::new();
+    }
+    let table_offset = if header_size == 12 {
+        12usize
+    } else if compression == BI_BITFIELDS && header_size == 40 {
+        52usize
+    } else {
+        header_size as usize
+    };
+    let bytes_per_entry = if header_size == 12 { 3usize } else { 4 };
+    let Some(table_bytes) = used_entries.checked_mul(bytes_per_entry) else {
+        return default_indexed_color_table(bits_pixel);
+    };
+    let Some(table) = bytes.get(table_offset..table_offset.saturating_add(table_bytes)) else {
+        return default_indexed_color_table(bits_pixel);
+    };
+    let mut entries = Vec::with_capacity(used_entries);
+    for entry in table.chunks_exact(bytes_per_entry) {
+        entries.push([
+            entry[0],
+            entry[1],
+            entry[2],
+            if bytes_per_entry == 4 { entry[3] } else { 0 },
+        ]);
+    }
+    entries
 }
 
 fn dib_rgb_masks<M: CoredllGuestMemory>(
@@ -16201,6 +18222,246 @@ fn set_keyboard_target_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> 
         .unwrap_or(0);
     kernel.threads.set_last_error(thread_id, 0);
     previous
+}
+
+fn get_keyboard_layout_list_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let capacity = raw_i32_arg(args, 0);
+    let list_ptr = raw_arg(args, 1);
+    let layouts = kernel.gwe.keyboard_layout_list();
+    if capacity <= 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return layouts.len() as u32;
+    }
+    if list_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let count = layouts.len().min(capacity as usize);
+    for (index, hkl) in layouts.iter().copied().take(count).enumerate() {
+        if !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            list_ptr.wrapping_add((index as u32) * 4),
+            hkl,
+        ) {
+            return 0;
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    count as u32
+}
+
+fn get_keyboard_layout_name_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    buffer: u32,
+) -> bool {
+    let name = kernel.gwe.keyboard_layout_name().to_owned();
+    if write_wide_result(kernel, memory, thread_id, buffer, 9, &name) == 0 {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn load_keyboard_layout_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let Some(name) = read_guest_wide_arg(memory, raw_arg(args, 0)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    let Some(_) = kernel.gwe.set_keyboard_layout_from_name(&name) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    kernel.gwe.keyboard_layout()
+}
+
+fn activate_keyboard_layout_raw(kernel: &mut CeKernel, thread_id: u32, hkl: u32) -> u32 {
+    match kernel.gwe.activate_keyboard_layout(hkl) {
+        Some(previous) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            previous
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            0
+        }
+    }
+}
+
+fn imm_get_context_raw(kernel: &mut CeKernel, thread_id: u32, hwnd: u32) -> u32 {
+    if hwnd == 0 || !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return 0;
+    }
+    let himc = kernel.gwe.get_ime_context(hwnd).unwrap_or(0);
+    kernel.threads.set_last_error(thread_id, 0);
+    himc
+}
+
+fn imm_destroy_context_raw(kernel: &mut CeKernel, thread_id: u32, himc: u32) -> bool {
+    let ok = kernel.gwe.destroy_ime_context(himc);
+    kernel
+        .threads
+        .set_last_error(thread_id, if ok { 0 } else { ERROR_INVALID_HANDLE });
+    ok
+}
+
+fn imm_release_context_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let hwnd = raw_arg(args, 0);
+    let himc = raw_arg(args, 1);
+    let ok = hwnd != 0 && himc != 0 && kernel.gwe.release_ime_context(hwnd, himc);
+    kernel
+        .threads
+        .set_last_error(thread_id, if ok { 0 } else { ERROR_INVALID_HANDLE });
+    ok
+}
+
+fn imm_associate_context_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
+    match kernel
+        .gwe
+        .associate_ime_context(raw_arg(args, 0), raw_arg(args, 1))
+    {
+        Some(previous) => {
+            kernel.threads.set_last_error(thread_id, 0);
+            previous
+        }
+        None => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            0
+        }
+    }
+}
+
+fn imm_get_open_status_raw(kernel: &mut CeKernel, thread_id: u32, himc: u32) -> bool {
+    let Some(context) = kernel.gwe.ime_context(himc) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    kernel.threads.set_last_error(thread_id, 0);
+    context.open
+}
+
+fn imm_set_open_status_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let ok = kernel
+        .gwe
+        .set_ime_open_status(raw_arg(args, 0), raw_arg(args, 1) != 0);
+    kernel
+        .threads
+        .set_last_error(thread_id, if ok { 0 } else { ERROR_INVALID_HANDLE });
+    ok
+}
+
+fn imm_get_conversion_status_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let Some(context) = kernel.gwe.ime_context(raw_arg(args, 0)) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return false;
+    };
+    let conversion_ptr = raw_arg(args, 1);
+    let sentence_ptr = raw_arg(args, 2);
+    if conversion_ptr != 0
+        && !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            conversion_ptr,
+            context.conversion_status,
+        )
+    {
+        return false;
+    }
+    if sentence_ptr != 0
+        && !write_guest_u32(
+            kernel,
+            memory,
+            thread_id,
+            sentence_ptr,
+            context.sentence_status,
+        )
+    {
+        return false;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn imm_set_conversion_status_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+    let ok =
+        kernel
+            .gwe
+            .set_ime_conversion_status(raw_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2));
+    kernel
+        .threads
+        .set_last_error(thread_id, if ok { 0 } else { ERROR_INVALID_HANDLE });
+    ok
+}
+
+fn imm_get_composition_string_w_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
+    if kernel.gwe.ime_context(raw_arg(args, 0)).is_none() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return u32::MAX;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    0
+}
+
+fn imm_get_ime_file_name_w_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let buffer = raw_arg(args, 1);
+    let capacity = raw_arg(args, 2);
+    if buffer != 0 && capacity != 0 && !write_guest_u16(kernel, memory, thread_id, buffer, 0) {
+        return 0;
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    0
+}
+
+fn imm_notify_ime_raw(kernel: &mut CeKernel, thread_id: u32, himc: u32) -> bool {
+    let ok = kernel.gwe.ime_context(himc).is_some();
+    kernel
+        .threads
+        .set_last_error(thread_id, if ok { 0 } else { ERROR_INVALID_HANDLE });
+    ok
 }
 
 fn map_single_point<M: CoredllGuestMemory>(
@@ -17932,6 +20193,7 @@ fn stretch_blt_raw<M: CoredllGuestMemory>(
                     &src_bitmap,
                     &src_bytes,
                     None,
+                    None,
                 );
             }
         }
@@ -18051,6 +20313,7 @@ fn draw_dib_to_framebuffer<M: CoredllGuestMemory>(
         &bitmap,
         &bitmap_bytes,
         None,
+        None,
     );
 }
 
@@ -18139,6 +20402,7 @@ fn draw_bitmap_bytes_to_framebuffer(
     src_height: i32,
     bitmap: &crate::ce::resource::BitmapObject,
     bitmap_bytes: &[u8],
+    mask_bitmap: Option<(&crate::ce::resource::BitmapObject, &[u8])>,
     transparent_rgb: Option<[u8; 3]>,
 ) {
     if dst_width == 0 || dst_height == 0 || src_width == 0 || src_height == 0 {
@@ -18182,6 +20446,12 @@ fn draw_bitmap_bytes_to_framebuffer(
                 let Some(rgb) = bitmap_pixel_rgb(bitmap, bitmap_bytes, source_x, source_y) else {
                     continue;
                 };
+                if let Some((mask, mask_bytes)) = mask_bitmap
+                    && let Some(mask_rgb) = bitmap_pixel_rgb(mask, mask_bytes, source_x, source_y)
+                    && mask_rgb != [0, 0, 0]
+                {
+                    continue;
+                }
                 if let Some(transparent) = transparent_rgb
                     && rgb == transparent
                 {
@@ -18713,6 +20983,7 @@ fn transparent_image_raw<M: CoredllGuestMemory>(
                     src_height,
                     &src_bitmap,
                     &bitmap_bytes,
+                    None,
                     Some(colorref_rgb(transparent_color)),
                 );
             }
@@ -20363,6 +22634,16 @@ fn hdc_to_hwnd(hdc: u32) -> Option<u32> {
     (hdc & 0xff00_0000 == 0x0200_0000).then_some(hdc & 0x00ff_ffff)
 }
 
+fn is_valid_hdc(kernel: &CeKernel, hdc: u32) -> bool {
+    if kernel.resources.is_memory_dc(hdc) {
+        return true;
+    }
+    let Some(hwnd) = hdc_to_hwnd(hdc) else {
+        return false;
+    };
+    hwnd == kernel.gwe.get_desktop_window() || kernel.gwe.is_window(hwnd)
+}
+
 fn normalize_rect(rect: Rect) -> Rect {
     Rect {
         left: rect.left.min(rect.right),
@@ -20662,6 +22943,7 @@ fn send_message_timeout_raw<M: CoredllGuestMemory>(
             return 0;
         };
         kernel.gwe.set_sent_message_result_ptr(send_id, result_ptr);
+        kernel.gwe.set_sent_message_timeout_flags(send_id, flags);
         if timeout_ms == 0 {
             let expired = kernel.expire_timed_out_send_messages();
             if expired.contains(&send_id) {
@@ -20724,8 +23006,13 @@ fn translate_message_raw<M: CoredllGuestMemory>(
 
 fn translate_virtual_key_to_char(kernel: &CeKernel, vkey: u32) -> u32 {
     let shift = kernel.gwe.get_key_state(crate::ce::gwe::VK_SHIFT) & 0x8000_0000 != 0;
+    let control = kernel.gwe.get_key_state(crate::ce::gwe::VK_CONTROL) & 0x8000_0000 != 0;
     let caps = kernel.gwe.get_key_state(crate::ce::gwe::VK_CAPITAL) & 0x0001 != 0;
+    if control {
+        return translate_control_key(vkey);
+    }
     match vkey {
+        0x08 | 0x09 | 0x0d | 0x1b => vkey,
         0x30..=0x39 => translate_digit_key(vkey, shift),
         0x41..=0x5a => {
             if shift ^ caps {
@@ -20734,6 +23021,12 @@ fn translate_virtual_key_to_char(kernel: &CeKernel, vkey: u32) -> u32 {
                 vkey + 0x20
             }
         }
+        0x60..=0x69 => vkey - 0x60 + u32::from(b'0'),
+        0x6a => u32::from(b'*'),
+        0x6b => u32::from(b'+'),
+        0x6d => u32::from(b'-'),
+        0x6e => u32::from(b'.'),
+        0x6f => u32::from(b'/'),
         0x61..=0x7a => {
             if shift ^ caps {
                 vkey - 0x20
@@ -20742,7 +23035,40 @@ fn translate_virtual_key_to_char(kernel: &CeKernel, vkey: u32) -> u32 {
             }
         }
         0x20 => 0x20,
+        0xba => translate_pair_key(b';', b':', shift),
+        0xbb => translate_pair_key(b'=', b'+', shift),
+        0xbc => translate_pair_key(b',', b'<', shift),
+        0xbd => translate_pair_key(b'-', b'_', shift),
+        0xbe => translate_pair_key(b'.', b'>', shift),
+        0xbf => translate_pair_key(b'/', b'?', shift),
+        0xc0 => translate_pair_key(b'`', b'~', shift),
+        0xdb => translate_pair_key(b'[', b'{', shift),
+        0xdc => translate_pair_key(b'\\', b'|', shift),
+        0xdd => translate_pair_key(b']', b'}', shift),
+        0xde => translate_pair_key(b'\'', b'"', shift),
         _ => 0,
+    }
+}
+
+fn translate_control_key(vkey: u32) -> u32 {
+    match vkey {
+        0x41..=0x5a => vkey - 0x40,
+        0x61..=0x7a => vkey - 0x60,
+        0xdb => 0x1b,
+        0xdc => 0x1c,
+        0xdd => 0x1d,
+        0xde => 0x1e,
+        0xbd => 0x1f,
+        0x08 | 0x09 | 0x0d | 0x1b => vkey,
+        _ => 0,
+    }
+}
+
+fn translate_pair_key(base: u8, shifted: u8, shift: bool) -> u32 {
+    if shift {
+        u32::from(shifted)
+    } else {
+        u32::from(base)
     }
 }
 

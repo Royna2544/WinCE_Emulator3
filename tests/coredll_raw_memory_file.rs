@@ -3893,6 +3893,19 @@ fn coredll_raw_change_notification_handles_signal_and_rearm() -> Result<()> {
             &mut kernel,
             &mut memory,
             thread_id,
+            ORD_WRITE_FILE,
+            [file, write_buffer, 8, count_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_CLOSE_HANDLE,
             [file],
         ),

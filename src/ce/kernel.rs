@@ -3706,6 +3706,33 @@ impl CeKernel {
             Some(format!("reason={reason}/targets={targets:?}")),
         );
         self.clear_destroyed_window_focus_and_activation(hwnd);
+        if let Some(owner) = self
+            .gwe
+            .clipboard_render_all_owner()
+            .filter(|owner| targets.contains(owner))
+        {
+            let target_thread = self
+                .gwe
+                .window_thread_process_id(owner)
+                .map(|(thread, _)| thread)
+                .unwrap_or(0);
+            let mut message = Message::new(
+                owner,
+                crate::ce::gwe::WM_RENDERALLFORMATS,
+                0,
+                0,
+                self.timers.tick_count(),
+            );
+            message.source = crate::ce::gwe::MSGSRC_SOFTWARE_SEND;
+            let result = self.send_message_w(owner, message.msg, message.wparam, message.lparam);
+            self.record_message_op(
+                "send_message",
+                target_thread,
+                &message,
+                result,
+                Some("clipboard_render_all".to_owned()),
+            );
+        }
         let doomed_send_ids = self.gwe.sent_message_ids_for_windows(&targets);
         for target in targets.iter().rev().copied() {
             if self
@@ -4543,12 +4570,8 @@ impl CeKernel {
             {
                 continue;
             }
-            notification.pending.extend(file_change_records_for_event(
-                event_id,
-                notification,
-                path1,
-                path2,
-            ));
+            let records = file_change_records_for_event(event_id, notification, path1, path2);
+            append_file_change_records(&mut notification.pending, records);
             notification.signaled = true;
             handles.push(handle);
         }
@@ -4778,6 +4801,18 @@ fn file_change_records_for_event(
             })
             .collect(),
         _ => Vec::new(),
+    }
+}
+
+fn append_file_change_records(
+    pending: &mut Vec<FileChangeRecord>,
+    records: impl IntoIterator<Item = FileChangeRecord>,
+) {
+    for record in records {
+        if pending.last() == Some(&record) {
+            continue;
+        }
+        pending.push(record);
     }
 }
 
