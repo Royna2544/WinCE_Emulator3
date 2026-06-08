@@ -98,6 +98,10 @@ pub struct UnicornMips {
     #[cfg(feature = "unicorn")]
     blocked_guest_thread: Option<BlockedGuestThread>,
     #[cfg(feature = "unicorn")]
+    blocked_modal_message_box: Option<BlockedModalMessageBox>,
+    #[cfg(feature = "unicorn")]
+    blocked_popup_menu_modal: Option<BlockedPopupMenuModal>,
+    #[cfg(feature = "unicorn")]
     blocked_wait_threads: Vec<BlockedWaitThread>,
     #[cfg(feature = "unicorn")]
     suspended_guest_thread: Option<SuspendedGuestThread>,
@@ -141,6 +145,10 @@ struct UnicornRunStateHandles<'a> {
     create_window_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<CreateWindowReturn>>>,
     pending_wndproc_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
     blocked_guest_thread: &'a std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
+    blocked_modal_message_box:
+        &'a std::rc::Rc<std::cell::RefCell<Option<BlockedModalMessageBox>>>,
+    blocked_popup_menu_modal:
+        &'a std::rc::Rc<std::cell::RefCell<Option<BlockedPopupMenuModal>>>,
     blocked_wait_threads: &'a std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     suspended_guest_thread: &'a std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     suspended_guest_thread_queue:
@@ -295,6 +303,7 @@ struct CreateWindowReturn {
     hwnd: u32,
     wndproc: u32,
     lparam: u32,
+    dw_style: u32,
     class_name: Option<String>,
 }
 
@@ -453,6 +462,28 @@ struct BlockedGuestThread {
     hwnd: Option<u32>,
     min_msg: u32,
     max_msg: u32,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone)]
+struct BlockedModalMessageBox {
+    wait_id: u64,
+    thread_id: u32,
+    thread_handle: u32,
+    regs: MipsGuestContext,
+    return_pc: u32,
+    modal_state: crate::ce::coredll::MessageBoxModalState,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone)]
+struct BlockedPopupMenuModal {
+    wait_id: u64,
+    thread_id: u32,
+    thread_handle: u32,
+    regs: MipsGuestContext,
+    return_pc: u32,
+    modal_state: crate::ce::coredll::PopupMenuModalState,
 }
 
 #[cfg(feature = "unicorn")]
@@ -659,6 +690,10 @@ impl UnicornMips {
             #[cfg(feature = "unicorn")]
             blocked_guest_thread: None,
             #[cfg(feature = "unicorn")]
+            blocked_modal_message_box: None,
+            #[cfg(feature = "unicorn")]
+            blocked_popup_menu_modal: None,
+            #[cfg(feature = "unicorn")]
             blocked_wait_threads: Vec::new(),
             #[cfg(feature = "unicorn")]
             suspended_guest_thread: None,
@@ -831,6 +866,8 @@ impl UnicornMips {
             .drain(..)
             .collect();
         self.blocked_guest_thread = state.blocked_guest_thread.borrow_mut().take();
+        self.blocked_modal_message_box = state.blocked_modal_message_box.borrow_mut().take();
+        self.blocked_popup_menu_modal = state.blocked_popup_menu_modal.borrow_mut().take();
         self.blocked_wait_threads = state.blocked_wait_threads.borrow_mut().drain(..).collect();
         self.suspended_guest_thread = state.suspended_guest_thread.borrow_mut().take();
         self.suspended_guest_thread_queue = state
@@ -1113,6 +1150,10 @@ impl UnicornMips {
                 pending_wndproc_returns: std::mem::take(&mut self.pending_wndproc_returns),
                 #[cfg(feature = "unicorn")]
                 blocked_guest_thread: self.blocked_guest_thread.take(),
+                #[cfg(feature = "unicorn")]
+                blocked_modal_message_box: self.blocked_modal_message_box.take(),
+                #[cfg(feature = "unicorn")]
+                blocked_popup_menu_modal: self.blocked_popup_menu_modal.take(),
                 #[cfg(feature = "unicorn")]
                 blocked_wait_threads: std::mem::take(&mut self.blocked_wait_threads),
                 #[cfg(feature = "unicorn")]
@@ -2091,6 +2132,12 @@ impl UnicornMips {
         let pending_dll_lifecycle_returns_hook = Rc::clone(&pending_dll_lifecycle_returns);
         let blocked_guest_thread = Rc::new(RefCell::new(self.blocked_guest_thread.take()));
         let blocked_guest_thread_hook = Rc::clone(&blocked_guest_thread);
+        let blocked_modal_message_box =
+            Rc::new(RefCell::new(self.blocked_modal_message_box.take()));
+        let blocked_modal_message_box_hook = Rc::clone(&blocked_modal_message_box);
+        let blocked_popup_menu_modal =
+            Rc::new(RefCell::new(self.blocked_popup_menu_modal.take()));
+        let blocked_popup_menu_modal_hook = Rc::clone(&blocked_popup_menu_modal);
         let blocked_wait_threads =
             Rc::new(RefCell::new(std::mem::take(&mut self.blocked_wait_threads)));
         let blocked_wait_threads_hook = Rc::clone(&blocked_wait_threads);
@@ -2118,6 +2165,8 @@ impl UnicornMips {
             create_window_returns: &create_window_returns,
             pending_wndproc_returns: &pending_wndproc_returns,
             blocked_guest_thread: &blocked_guest_thread,
+            blocked_modal_message_box: &blocked_modal_message_box,
+            blocked_popup_menu_modal: &blocked_popup_menu_modal,
             blocked_wait_threads: &blocked_wait_threads,
             suspended_guest_thread: &suspended_guest_thread,
             suspended_guest_thread_queue: &suspended_guest_thread_queue,
@@ -2149,6 +2198,30 @@ impl UnicornMips {
                 &running_guest_thread,
                 None,
                 false,
+            ) || try_resume_blocked_modal_message_box(
+                kernel,
+                &mut uc,
+                active_thread_id,
+                &current_thread_id,
+                &blocked_modal_message_box,
+                &blocked_get_message,
+                &suspended_guest_thread,
+                Some(&suspended_guest_thread_queue),
+                &running_guest_thread,
+                None,
+                false,
+            ) || try_resume_blocked_popup_menu_modal(
+                kernel,
+                &mut uc,
+                active_thread_id,
+                &current_thread_id,
+                &blocked_popup_menu_modal,
+                &blocked_get_message,
+                &suspended_guest_thread,
+                Some(&suspended_guest_thread_queue),
+                &running_guest_thread,
+                None,
+                false,
             ) {
                 start_pc = read_mips_reg(&uc, RegisterMIPS::PC);
             }
@@ -2166,6 +2239,9 @@ impl UnicornMips {
         let running_guest_thread_timeslice_hook = Rc::clone(&running_guest_thread);
         let blocked_wait_threads_timeslice_hook = Rc::clone(&blocked_wait_threads);
         let blocked_guest_thread_timeslice_hook = Rc::clone(&blocked_guest_thread);
+        let blocked_modal_message_box_timeslice_hook = Rc::clone(&blocked_modal_message_box);
+        let blocked_popup_menu_modal_timeslice_hook = Rc::clone(&blocked_popup_menu_modal);
+        let blocked_get_message_timeslice_hook = Rc::clone(&blocked_get_message);
         let pending_wndproc_returns_timeslice_hook = Rc::clone(&pending_wndproc_returns);
         let pending_qsort_returns_timeslice_hook = Rc::clone(&pending_qsort_returns);
         let pending_dll_lifecycle_returns_timeslice_hook =
@@ -2218,6 +2294,36 @@ impl UnicornMips {
                 active_thread_id,
                 &current_thread_id_timeslice_hook,
                 &blocked_guest_thread_timeslice_hook,
+                &suspended_guest_thread_timeslice_hook,
+                Some(&suspended_guest_thread_queue_timeslice_hook),
+                &running_guest_thread_timeslice_hook,
+                Some(pc),
+                true,
+            ) {
+                return;
+            }
+            if try_resume_blocked_modal_message_box(
+                unsafe { &mut *kernel_ptr },
+                uc,
+                active_thread_id,
+                &current_thread_id_timeslice_hook,
+                &blocked_modal_message_box_timeslice_hook,
+                &blocked_get_message_timeslice_hook,
+                &suspended_guest_thread_timeslice_hook,
+                Some(&suspended_guest_thread_queue_timeslice_hook),
+                &running_guest_thread_timeslice_hook,
+                Some(pc),
+                true,
+            ) {
+                return;
+            }
+            if try_resume_blocked_popup_menu_modal(
+                unsafe { &mut *kernel_ptr },
+                uc,
+                active_thread_id,
+                &current_thread_id_timeslice_hook,
+                &blocked_popup_menu_modal_timeslice_hook,
+                &blocked_get_message_timeslice_hook,
                 &suspended_guest_thread_timeslice_hook,
                 Some(&suspended_guest_thread_queue_timeslice_hook),
                 &running_guest_thread_timeslice_hook,
@@ -2504,7 +2610,15 @@ impl UnicornMips {
                             .iter()
                             .position(|blocked| blocked.wait_id == restore.wait_id)
                         else {
-                            let _ = uc.emu_stop();
+                            // Sender already unblocked (timed out or terminated) before wndproc returned.
+                            // Receiver continues normally in its own context.
+                            let writes = [
+                                uc.reg_write(RegisterMIPS::PC, u64::from(callout.return_pc)),
+                                uc.reg_write(RegisterMIPS::RA, u64::from(callout.return_pc)),
+                            ];
+                            if writes.into_iter().any(|write| write.is_err()) {
+                                let _ = uc.emu_stop();
+                            }
                             return;
                         };
                         let blocked = blocked_wait_threads_hook.borrow_mut().remove(index);
@@ -2833,6 +2947,38 @@ impl UnicornMips {
                         host_wall_clock_started,
                         host_wall_clock_limit,
                         live_pump,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_block_for_message_box_modal_wait(
+                        unsafe { &mut *kernel_ptr },
+                        uc,
+                        Some(unsafe { &mut *framebuffer_ptr }),
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        active_thread_id,
+                        &blocked_modal_message_box_hook,
+                        &blocked_get_message_hook,
+                        &running_guest_thread_hook,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_block_for_popup_menu_modal_wait(
+                        unsafe { &mut *kernel_ptr },
+                        uc,
+                        Some(unsafe { &mut *framebuffer_ptr }),
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        active_thread_id,
+                        &blocked_popup_menu_modal_hook,
+                        &blocked_get_message_hook,
+                        &running_guest_thread_hook,
                     )
                 }) {
                     return;
@@ -3818,6 +3964,10 @@ impl super::cpu::CpuBackend for UnicornMips {
             pending_create_window_returns: Vec::new(),
             pending_wndproc_returns: Vec::new(),
             blocked_guest_thread: None,
+            #[cfg(feature = "unicorn")]
+            blocked_modal_message_box: None,
+            #[cfg(feature = "unicorn")]
+            blocked_popup_menu_modal: None,
             blocked_wait_threads: Vec::new(),
             suspended_guest_thread: None,
             suspended_guest_thread_queue: VecDeque::new(),
@@ -7284,6 +7434,435 @@ fn try_block_empty_get_message<D>(
 }
 
 #[cfg(feature = "unicorn")]
+#[allow(clippy::too_many_arguments)]
+fn try_block_for_message_box_modal_wait<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    framebuffer: Option<&mut dyn crate::ce::framebuffer::Framebuffer>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    thread_id: u32,
+    blocked_modal: &std::rc::Rc<std::cell::RefCell<Option<BlockedModalMessageBox>>>,
+    blocked_get_message: &std::rc::Rc<std::cell::RefCell<Option<UnicornBlockedGetMessage>>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_MESSAGE_BOX_W)
+    {
+        return false;
+    }
+
+    // Re-entry: blocked_modal is set from a prior call that didn't get a result yet.
+    if let Some(modal) = blocked_modal.borrow().clone() {
+        kernel.pump_timers_to_gwe(modal.thread_id);
+        if let Some(result) = modal.modal_state.try_queued_result(kernel, modal.thread_id) {
+            let _ = kernel.remove_blocked_waiter(modal.wait_id);
+            modal.modal_state.teardown(kernel, modal.thread_id, result);
+            kernel.threads.set_last_error(modal.thread_id, 0);
+            *blocked_modal.borrow_mut() = None;
+            *blocked_get_message.borrow_mut() = None;
+            let mut regs = modal.regs;
+            regs.set_v0(result);
+            restore_mips_gprs(uc, &regs);
+            let writes = [
+                uc.reg_write(RegisterMIPS::V0, u64::from(result)),
+                uc.reg_write(RegisterMIPS::PC, u64::from(modal.return_pc)),
+                uc.reg_write(RegisterMIPS::RA, u64::from(modal.return_pc)),
+            ];
+            if writes.into_iter().any(|w| w.is_err()) {
+                let _ = uc.emu_stop();
+            }
+        } else {
+            *blocked_get_message.borrow_mut() = Some(unicorn_blocked_get_message_snapshot(
+                kernel,
+                modal.thread_id,
+                Some(modal.modal_state.dialog_hwnd()),
+                crate::ce::gwe::WM_PAINT,
+                crate::ce::gwe::WM_LBUTTONUP,
+            ));
+            let _ = uc.emu_stop();
+        }
+        return true;
+    }
+
+    // First entry: prepare the dialog window.
+    let memory = UnicornGuestMemory { uc };
+    let state = match crate::ce::coredll::message_box_w_prepare(
+        kernel,
+        &memory,
+        framebuffer,
+        thread_id,
+        args,
+    ) {
+        Err(result) => {
+            let _ = memory.uc.reg_write(RegisterMIPS::V0, u64::from(result));
+            return true;
+        }
+        Ok(state) => state,
+    };
+
+    // Drain any already-queued input synchronously.
+    if let Some(result) = state.try_queued_result(kernel, thread_id) {
+        state.teardown(kernel, thread_id, result);
+        kernel.threads.set_last_error(thread_id, 0);
+        let _ = memory.uc.reg_write(RegisterMIPS::V0, u64::from(result));
+        return true;
+    }
+
+    // No result yet — register a ModalMessageBox waiter and park.
+    let thread_handle = running_thread
+        .borrow()
+        .and_then(|(id, handle)| (id == thread_id).then_some(handle))
+        .unwrap_or(crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE);
+    let wait_id = kernel.register_blocked_waiter(
+        thread_id,
+        thread_handle,
+        Vec::new(),
+        crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox,
+        kernel.timers.tick_count(),
+        crate::ce::timer::INFINITE,
+    );
+    let dialog_hwnd = state.dialog_hwnd();
+    *blocked_modal.borrow_mut() = Some(BlockedModalMessageBox {
+        wait_id,
+        thread_id,
+        thread_handle,
+        regs: capture_mips_gprs(memory.uc),
+        return_pc: read_mips_reg(memory.uc, RegisterMIPS::RA),
+        modal_state: state,
+    });
+    *blocked_get_message.borrow_mut() = Some(unicorn_blocked_get_message_snapshot(
+        kernel,
+        thread_id,
+        Some(dialog_hwnd),
+        crate::ce::gwe::WM_PAINT,
+        crate::ce::gwe::WM_LBUTTONUP,
+    ));
+    let _ = memory.uc.emu_stop();
+    true
+}
+
+#[cfg(feature = "unicorn")]
+#[allow(clippy::too_many_arguments)]
+fn try_resume_blocked_modal_message_box<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    active_thread_id: u32,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    blocked_modal: &std::rc::Rc<std::cell::RefCell<Option<BlockedModalMessageBox>>>,
+    blocked_get_message: &std::rc::Rc<std::cell::RefCell<Option<UnicornBlockedGetMessage>>>,
+    suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    suspended_queue: Option<&SuspendedGuestThreadQueue>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+    active_pc: Option<u32>,
+    save_active_context: bool,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    let Some(modal) = blocked_modal.borrow().clone() else {
+        return false;
+    };
+    if active_thread_id == modal.thread_id {
+        return false;
+    }
+    kernel.pump_timers_to_gwe(modal.thread_id);
+    let Some(result) = modal.modal_state.try_queued_result(kernel, modal.thread_id) else {
+        return false;
+    };
+    let _ = kernel.remove_blocked_waiter(modal.wait_id);
+    modal.modal_state.teardown(kernel, modal.thread_id, result);
+    kernel.threads.set_last_error(modal.thread_id, 0);
+    *blocked_modal.borrow_mut() = None;
+    *blocked_get_message.borrow_mut() = None;
+
+    if save_active_context {
+        let mut current = SuspendedGuestThread {
+            thread_id: active_thread_id,
+            thread_handle: running_thread
+                .borrow()
+                .and_then(|(id, handle)| (id == active_thread_id).then_some(handle)),
+            regs: capture_mips_gprs(uc),
+            pc: active_pc.unwrap_or_else(|| read_mips_reg(uc, RegisterMIPS::RA)),
+        };
+        current.regs.set_v0(read_mips_reg(uc, RegisterMIPS::V0));
+        if !push_suspended_guest_thread(suspended_thread, suspended_queue, current) {
+            return false;
+        }
+    } else {
+        remove_suspended_guest_threads_for_thread(
+            suspended_thread,
+            suspended_queue,
+            active_thread_id,
+        );
+    }
+    remove_suspended_guest_threads_for_thread(suspended_thread, suspended_queue, modal.thread_id);
+
+    let mut regs = modal.regs;
+    regs.set_v0(result);
+    restore_mips_gprs(uc, &regs);
+    let writes = [
+        uc.reg_write(RegisterMIPS::V0, u64::from(result)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(modal.return_pc)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(modal.return_pc)),
+    ];
+    if writes.into_iter().any(|w| w.is_err()) {
+        let _ = uc.emu_stop();
+        return true;
+    }
+    *current_thread_id.borrow_mut() = modal.thread_id;
+    let _ = update_user_kdata_current_ids(uc, modal.thread_id, kernel.current_process_id());
+    *running_thread.borrow_mut() = Some((modal.thread_id, modal.thread_handle));
+    true
+}
+
+#[cfg(feature = "unicorn")]
+#[allow(clippy::too_many_arguments)]
+fn try_block_for_popup_menu_modal_wait<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    framebuffer: Option<&mut dyn crate::ce::framebuffer::Framebuffer>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    thread_id: u32,
+    blocked_popup: &std::rc::Rc<std::cell::RefCell<Option<BlockedPopupMenuModal>>>,
+    blocked_get_message: &std::rc::Rc<std::cell::RefCell<Option<UnicornBlockedGetMessage>>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_TRACK_POPUP_MENU_EX)
+    {
+        return false;
+    }
+
+    // Re-entry: a prior call parked here waiting for input.
+    // The framebuffer is passed to poll_once so that hover rendering works on re-entry.
+    if let Some(BlockedPopupMenuModal {
+        wait_id,
+        thread_id: modal_thread_id,
+        thread_handle,
+        regs,
+        return_pc,
+        modal_state,
+    }) = blocked_popup.borrow_mut().take()
+    {
+        kernel.pump_timers_to_gwe(modal_thread_id);
+        let mut fb = framebuffer;
+        match modal_state.poll_once(kernel, modal_thread_id, &mut fb) {
+            Ok(v0) => {
+                let _ = kernel.remove_blocked_waiter(wait_id);
+                *blocked_popup.borrow_mut() = None;
+                *blocked_get_message.borrow_mut() = None;
+                let mut regs = regs;
+                regs.set_v0(v0);
+                restore_mips_gprs(uc, &regs);
+                let writes = [
+                    uc.reg_write(RegisterMIPS::V0, u64::from(v0)),
+                    uc.reg_write(RegisterMIPS::PC, u64::from(return_pc)),
+                    uc.reg_write(RegisterMIPS::RA, u64::from(return_pc)),
+                ];
+                if writes.into_iter().any(|w| w.is_err()) {
+                    let _ = uc.emu_stop();
+                }
+            }
+            Err(state) => {
+                let owner_hwnd = state.owner_hwnd();
+                let mouse_message_max = state.mouse_message_max;
+                *blocked_popup.borrow_mut() = Some(BlockedPopupMenuModal {
+                    wait_id,
+                    thread_id: modal_thread_id,
+                    thread_handle,
+                    regs,
+                    return_pc,
+                    modal_state: state,
+                });
+                *blocked_get_message.borrow_mut() = Some(unicorn_blocked_get_message_snapshot(
+                    kernel,
+                    modal_thread_id,
+                    Some(owner_hwnd),
+                    crate::ce::gwe::WM_PAINT,
+                    mouse_message_max,
+                ));
+                let _ = uc.emu_stop();
+            }
+        }
+        return true;
+    }
+
+    // First entry: prepare the popup menu modal state.
+    // The framebuffer is consumed by track_popup_menu_ex_prepare for initial rendering.
+    let memory = UnicornGuestMemory { uc };
+    let state = match crate::ce::coredll::track_popup_menu_ex_prepare(
+        kernel,
+        &memory,
+        framebuffer,
+        thread_id,
+        args,
+    ) {
+        Err(v0) => {
+            let _ = memory.uc.reg_write(RegisterMIPS::V0, u64::from(v0));
+            return true;
+        }
+        Ok(state) => state,
+    };
+
+    // Try synchronous drain. No framebuffer: menu was just rendered by prepare.
+    let mouse_message_max = state.mouse_message_max;
+    match state.poll_once(kernel, thread_id, &mut None) {
+        Ok(v0) => {
+            let _ = memory.uc.reg_write(RegisterMIPS::V0, u64::from(v0));
+            return true;
+        }
+        Err(state) => {
+            // No result yet — register a PopupMenuModal waiter and park.
+            let owner_hwnd = state.owner_hwnd();
+            let thread_handle = running_thread
+                .borrow()
+                .and_then(|(id, handle)| (id == thread_id).then_some(handle))
+                .unwrap_or(crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE);
+            let wait_id = kernel.register_blocked_waiter(
+                thread_id,
+                thread_handle,
+                Vec::new(),
+                crate::ce::scheduler::SchedulerBlockedWaitKind::PopupMenuModal {
+                    mouse_message_max,
+                },
+                kernel.timers.tick_count(),
+                crate::ce::timer::INFINITE,
+            );
+            *blocked_popup.borrow_mut() = Some(BlockedPopupMenuModal {
+                wait_id,
+                thread_id,
+                thread_handle,
+                regs: capture_mips_gprs(memory.uc),
+                return_pc: read_mips_reg(memory.uc, RegisterMIPS::RA),
+                modal_state: state,
+            });
+            *blocked_get_message.borrow_mut() = Some(unicorn_blocked_get_message_snapshot(
+                kernel,
+                thread_id,
+                Some(owner_hwnd),
+                crate::ce::gwe::WM_PAINT,
+                mouse_message_max,
+            ));
+            let _ = memory.uc.emu_stop();
+        }
+    }
+    true
+}
+
+#[cfg(feature = "unicorn")]
+#[allow(clippy::too_many_arguments)]
+fn try_resume_blocked_popup_menu_modal<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    active_thread_id: u32,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    blocked_popup: &std::rc::Rc<std::cell::RefCell<Option<BlockedPopupMenuModal>>>,
+    blocked_get_message: &std::rc::Rc<std::cell::RefCell<Option<UnicornBlockedGetMessage>>>,
+    suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    suspended_queue: Option<&SuspendedGuestThreadQueue>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+    active_pc: Option<u32>,
+    save_active_context: bool,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    let Some(BlockedPopupMenuModal {
+        wait_id,
+        thread_id: modal_thread_id,
+        thread_handle,
+        regs,
+        return_pc,
+        modal_state,
+    }) = blocked_popup.borrow_mut().take()
+    else {
+        return false;
+    };
+    if active_thread_id == modal_thread_id {
+        *blocked_popup.borrow_mut() = Some(BlockedPopupMenuModal {
+            wait_id,
+            thread_id: modal_thread_id,
+            thread_handle,
+            regs,
+            return_pc,
+            modal_state,
+        });
+        return false;
+    }
+    kernel.pump_timers_to_gwe(modal_thread_id);
+    // No framebuffer here: rendering happens on next re-entry to the import trap handler.
+    let mut fb: Option<&mut dyn crate::ce::framebuffer::Framebuffer> = None;
+    match modal_state.poll_once(kernel, modal_thread_id, &mut fb) {
+        Err(state) => {
+            *blocked_popup.borrow_mut() = Some(BlockedPopupMenuModal {
+                wait_id,
+                thread_id: modal_thread_id,
+                thread_handle,
+                regs,
+                return_pc,
+                modal_state: state,
+            });
+            false
+        }
+        Ok(v0) => {
+            let _ = kernel.remove_blocked_waiter(wait_id);
+            *blocked_popup.borrow_mut() = None;
+            *blocked_get_message.borrow_mut() = None;
+
+            if save_active_context {
+                let mut current = SuspendedGuestThread {
+                    thread_id: active_thread_id,
+                    thread_handle: running_thread
+                        .borrow()
+                        .and_then(|(id, handle)| (id == active_thread_id).then_some(handle)),
+                    regs: capture_mips_gprs(uc),
+                    pc: active_pc.unwrap_or_else(|| read_mips_reg(uc, RegisterMIPS::RA)),
+                };
+                current.regs.set_v0(read_mips_reg(uc, RegisterMIPS::V0));
+                if !push_suspended_guest_thread(suspended_thread, suspended_queue, current) {
+                    return false;
+                }
+            } else {
+                remove_suspended_guest_threads_for_thread(
+                    suspended_thread,
+                    suspended_queue,
+                    active_thread_id,
+                );
+            }
+            remove_suspended_guest_threads_for_thread(
+                suspended_thread,
+                suspended_queue,
+                modal_thread_id,
+            );
+
+            let mut regs = regs;
+            regs.set_v0(v0);
+            restore_mips_gprs(uc, &regs);
+            let writes = [
+                uc.reg_write(RegisterMIPS::V0, u64::from(v0)),
+                uc.reg_write(RegisterMIPS::PC, u64::from(return_pc)),
+                uc.reg_write(RegisterMIPS::RA, u64::from(return_pc)),
+            ];
+            if writes.into_iter().any(|w| w.is_err()) {
+                let _ = uc.emu_stop();
+                return true;
+            }
+            *current_thread_id.borrow_mut() = modal_thread_id;
+            let _ =
+                update_user_kdata_current_ids(uc, modal_thread_id, kernel.current_process_id());
+            *running_thread.borrow_mut() = Some((modal_thread_id, thread_handle));
+            true
+        }
+    }
+}
+
+#[cfg(feature = "unicorn")]
 fn unicorn_blocked_get_message_snapshot(
     kernel: &CeKernel,
     thread_id: u32,
@@ -7393,6 +7972,10 @@ fn unicorn_blocked_wait_kind_name(
         }
         crate::ce::scheduler::SchedulerBlockedWaitKind::WinsockRead { .. } => "winsock_read",
         crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { .. } => "send_message",
+        crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox => "modal_message_box",
+        crate::ce::scheduler::SchedulerBlockedWaitKind::PopupMenuModal { .. } => {
+            "popup_menu_modal"
+        }
     }
 }
 
@@ -10248,6 +10831,7 @@ fn complete_blocked_send_message<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
 ) -> u32 {
+    const ERROR_TIMEOUT: u32 = 1460;
     let BlockedWaitKind::SendMessage {
         send_id,
         result_ptr,
@@ -10256,11 +10840,20 @@ fn complete_blocked_send_message<D>(
     else {
         return 0;
     };
+    let timed_out = kernel
+        .gwe
+        .sent_message(send_id)
+        .is_some_and(|sent| sent.flags & crate::ce::gwe::SMF_TIMEOUT != 0);
     let result = kernel
         .take_completed_send_message_result(send_id)
         .unwrap_or(0);
     if let Some(result_ptr) = result_ptr {
         let _ = uc.mem_write(u64::from(result_ptr), &result.to_le_bytes());
+    }
+    if timed_out {
+        kernel
+            .threads
+            .set_last_error(blocked.thread_id, ERROR_TIMEOUT);
     }
     result
 }
@@ -10414,6 +11007,22 @@ fn scheduler_blocked_msg_wait_has_input(
                 kernel.gwe.has_new_queue_input(blocked.thread_id, wake_mask)
             }
         }
+        crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox => kernel
+            .gwe
+            .has_message_filtered(
+                blocked.thread_id,
+                None,
+                crate::ce::gwe::WM_PAINT,
+                crate::ce::gwe::WM_LBUTTONUP,
+            ),
+        crate::ce::scheduler::SchedulerBlockedWaitKind::PopupMenuModal {
+            mouse_message_max,
+        } => kernel.gwe.has_message_filtered(
+            blocked.thread_id,
+            None,
+            crate::ce::gwe::WM_PAINT,
+            mouse_message_max,
+        ),
     }
 }
 
@@ -20753,6 +21362,7 @@ fn try_enter_create_window_create_callout<D>(
         hwnd,
         wndproc,
         lparam: create_struct,
+        dw_style: args.get(3).copied().unwrap_or(0),
         class_name: Some(class_name),
     };
     if write_create_window_wndproc_call_registers(uc, &callout) {
@@ -20819,7 +21429,15 @@ fn handle_create_window_return_stub<D>(
         let _ = kernel.destroy_window_with_reason(callout.hwnd, "CreateWindowExW/WM_CREATE failed");
         return_create_window_result(uc, callout.return_pc, 0)
     } else {
-        return_create_window_result(uc, callout.return_pc, callout.hwnd)
+        let ret = return_create_window_result(uc, callout.return_pc, callout.hwnd);
+        // CE's CreateWindowEx calls ShowWindow(SW_SHOW) after WM_CREATE for WS_VISIBLE windows,
+        // which activates top-level windows via SetActiveWindow.
+        if callout.dw_style & crate::ce::gwe::WS_VISIBLE != 0
+            && callout.dw_style & crate::ce::gwe::WS_CHILD == 0
+        {
+            let _ = kernel.activate_window(Some(callout.hwnd));
+        }
+        ret
     }
 }
 
@@ -23439,6 +24057,7 @@ mod unicorn_tests {
             hwnd,
             wndproc,
             lparam,
+            dw_style: 0,
             class_name: Some("CREATE_OK".to_owned()),
         }]));
         let returns = Rc::new(RefCell::new(Vec::new()));
@@ -23463,6 +24082,7 @@ mod unicorn_tests {
             hwnd: failed,
             wndproc,
             lparam,
+            dw_style: 0,
             class_name: Some("CREATE_FAIL".to_owned()),
         }]));
         uc.reg_write(RegisterMIPS::V0, u64::from(u32::MAX)).unwrap();

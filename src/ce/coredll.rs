@@ -73,6 +73,7 @@ const CTYPE_ALPHA: u32 = 0x0100;
 const SPI_GETWORKAREA: u32 = 0x0030;
 const SPI_GETPLATFORMTYPE: u32 = 0x0101;
 const SPI_GETOEMINFO: u32 = 0x0102;
+const SPIF_SENDCHANGE: u32 = 0x0002;
 const SYSTEM_PARAMETERS_INFO_REGISTRY_PATH: &str = r"HKLM\System\Emulator\SystemParametersInfo";
 const SHELL_FOLDERS_REGISTRY_PATH: &str = r"HKLM\System\Explorer\Shell Folders";
 const IOCTL_HAL_GET_DEVICEID: u32 = 0x0101_207c;
@@ -123,6 +124,7 @@ const ERROR_MOD_NOT_FOUND_LOCAL: u32 = 126;
 const ERROR_INSUFFICIENT_BUFFER_LOCAL: u32 = 122;
 const ERROR_FILENAME_EXCED_RANGE_LOCAL: u32 = 206;
 const ERROR_INVALID_FLAGS_LOCAL: u32 = 1004;
+const ERROR_TIMEOUT_LOCAL: u32 = 1460;
 const MAX_PATH_CHARS: usize = 260;
 const MAX_SHORTCUT_TARGET_CHARS: usize = MAX_PATH_CHARS - 2;
 const CSIDL_FLAG_CREATE: u32 = 0x0000_8000;
@@ -1525,6 +1527,21 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_GET_SYSTEM_TIME | ORD_GET_LOCAL_TIME => {
             write_current_system_time(kernel, memory, thread_id, raw_arg(args, 0));
             Some(CoredllValue::U32(0))
+        }
+        ORD_SET_SYSTEM_TIME | ORD_SET_LOCAL_TIME => {
+            kernel.send_notify_message_w(
+                thread_id,
+                crate::ce::gwe::HWND_BROADCAST,
+                crate::ce::gwe::WM_TIMECHANGE,
+                0,
+                0,
+            );
+            Some(CoredllValue::Bool(true))
+        }
+        ORD_CHANGE_DISPLAY_SETTINGS_EX => {
+            Some(CoredllValue::U32(change_display_settings_ex_raw(
+                kernel, memory, thread_id, args,
+            )))
         }
         ORD_GET_SYSTEM_TIME_AS_FILE_TIME => {
             write_current_file_time(kernel, memory, thread_id, raw_arg(args, 0));
@@ -2949,6 +2966,17 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             raw_arg(args, 0),
         ))),
+        ORD_REMOVE_FONT_RESOURCE_W => {
+            // Broadcast WM_FONTCHANGE regardless of whether the font was actually loaded.
+            kernel.send_notify_message_w(
+                thread_id,
+                crate::ce::gwe::HWND_BROADCAST,
+                crate::ce::gwe::WM_FONTCHANGE,
+                0,
+                0,
+            );
+            Some(CoredllValue::Bool(true))
+        }
         ORD_CREATE_FONT_INDIRECT_W => Some(CoredllValue::Handle(create_font_indirect_w_raw(
             kernel,
             memory,
@@ -3503,10 +3531,10 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.gwe.get_foreground_keyboard_target().unwrap_or(0),
         )),
         ORD_SET_CAPTURE => Some(CoredllValue::Handle(
-            kernel.gwe.set_capture(raw_arg(args, 0)).unwrap_or(0),
+            kernel.set_capture(raw_arg(args, 0)).unwrap_or(0),
         )),
         ORD_GET_CAPTURE => Some(CoredllValue::Handle(kernel.gwe.get_capture().unwrap_or(0))),
-        ORD_RELEASE_CAPTURE => Some(CoredllValue::Bool(kernel.gwe.release_capture())),
+        ORD_RELEASE_CAPTURE => Some(CoredllValue::Bool(kernel.release_capture())),
         ORD_SET_WINDOW_TEXT_W => Some(CoredllValue::Bool(set_window_text_w_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -5507,6 +5535,72 @@ fn convert_ascii_wide_case(unit: u16, mode: WideCaseMode) -> u16 {
     }
 }
 
+// DEVMODEW field offsets used by ChangeDisplaySettingsEx
+const DEVMODEW_FIELDS_OFFSET: u32 = 72;
+const DEVMODEW_BITSPERPEL_OFFSET: u32 = 168;
+const DEVMODEW_PELSWIDTH_OFFSET: u32 = 172;
+const DEVMODEW_PELSHEIGHT_OFFSET: u32 = 176;
+const DM_BITSPERPEL: u32 = 0x0004_0000;
+const DM_PELSWIDTH: u32 = 0x0008_0000;
+const DM_PELSHEIGHT: u32 = 0x0010_0000;
+const CDS_TEST: u32 = 0x0000_0002;
+const DISP_CHANGE_SUCCESSFUL: u32 = 0;
+
+fn change_display_settings_ex_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    // args: lpszDeviceName, lpDevMode, hwnd (unused in CE), dwflags, lParam
+    let lp_dev_mode = raw_arg(args, 1);
+    let dw_flags = raw_arg(args, 3);
+
+    // CDS_TEST: validate only, do not apply or broadcast.
+    if dw_flags & CDS_TEST != 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return DISP_CHANGE_SUCCESSFUL;
+    }
+
+    // Read display size/depth from DEVMODE if provided; fall back to current screen metrics.
+    let screen_w = kernel.gwe.system_metric(crate::ce::gwe::SM_CXSCREEN) as u32;
+    let screen_h = kernel.gwe.system_metric(crate::ce::gwe::SM_CYSCREEN) as u32;
+    let (bpp, cx, cy) = if lp_dev_mode != 0 {
+        let fields = memory.read_u32(lp_dev_mode + DEVMODEW_FIELDS_OFFSET).unwrap_or(0);
+        let bpp = if fields & DM_BITSPERPEL != 0 {
+            memory.read_u32(lp_dev_mode + DEVMODEW_BITSPERPEL_OFFSET).unwrap_or(16)
+        } else {
+            16
+        };
+        let cx = if fields & DM_PELSWIDTH != 0 {
+            memory.read_u32(lp_dev_mode + DEVMODEW_PELSWIDTH_OFFSET).unwrap_or(screen_w)
+        } else {
+            screen_w
+        };
+        let cy = if fields & DM_PELSHEIGHT != 0 {
+            memory.read_u32(lp_dev_mode + DEVMODEW_PELSHEIGHT_OFFSET).unwrap_or(screen_h)
+        } else {
+            screen_h
+        };
+        (bpp, cx, cy)
+    } else {
+        (16, screen_w, screen_h)
+    };
+
+    // Broadcast WM_DISPLAYCHANGE: wparam = bits-per-pixel, lparam = MAKELPARAM(cx, cy)
+    let lparam = ((cy & 0xffff) << 16) | (cx & 0xffff);
+    kernel.send_notify_message_w(
+        thread_id,
+        crate::ce::gwe::HWND_BROADCAST,
+        crate::ce::gwe::WM_DISPLAYCHANGE,
+        bpp,
+        lparam,
+    );
+
+    kernel.threads.set_last_error(thread_id, 0);
+    DISP_CHANGE_SUCCESSFUL
+}
+
 fn system_parameters_info_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -5516,6 +5610,7 @@ fn system_parameters_info_w_raw<M: CoredllGuestMemory>(
     let action = raw_arg(args, 0);
     let ui_param = raw_arg(args, 1);
     let pv_param = raw_arg(args, 2);
+    let f_win_ini = raw_arg(args, 3);
     let ok = match action {
         SPI_GETWORKAREA => {
             if pv_param == 0 {
@@ -5550,6 +5645,15 @@ fn system_parameters_info_w_raw<M: CoredllGuestMemory>(
     kernel
         .threads
         .set_last_error(thread_id, if ok { 0 } else { ERROR_INVALID_PARAMETER });
+    if ok && (f_win_ini & SPIF_SENDCHANGE) != 0 {
+        kernel.send_notify_message_w(
+            thread_id,
+            crate::ce::gwe::HWND_BROADCAST,
+            crate::ce::gwe::WM_SETTINGCHANGE,
+            action,
+            0,
+        );
+    }
     ok
 }
 
@@ -6473,12 +6577,34 @@ fn message_box_w_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
+    let state = match message_box_w_prepare(kernel, memory, framebuffer, thread_id, args) {
+        Err(result) => return result,
+        Ok(state) => state,
+    };
+    let result = state
+        .try_queued_result(kernel, thread_id)
+        .unwrap_or_else(|| state.default_result());
+    state.teardown(kernel, thread_id, result);
+    kernel.threads.set_last_error(thread_id, 0);
+    result
+}
+
+/// Validate args, disable owner, create the dialog window, and optionally render.
+/// Returns `Err(result)` on invalid args (caller should set V0 and return immediately).
+/// Returns `Ok(state)` with the live dialog ready for the modal loop.
+pub(crate) fn message_box_w_prepare<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> std::result::Result<MessageBoxModalState, u32> {
     let owner_hwnd = raw_arg(args, 0);
     if owner_hwnd != 0 && !kernel.gwe.is_window(owner_hwnd) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
-        return 0;
+        return Err(0);
     }
     let text_ptr = raw_arg(args, 1);
     let caption_ptr = raw_arg(args, 2);
@@ -6486,20 +6612,20 @@ fn message_box_w_raw<M: CoredllGuestMemory>(
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-        return 0;
+        return Err(0);
     };
     let Some(caption) = read_message_box_string(memory, caption_ptr) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-        return 0;
+        return Err(0);
     };
     let style = raw_arg(args, 3);
     let Some(selection) = message_box_selection(style) else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-        return 0;
+        return Err(0);
     };
     let owner_was_enabled = if owner_hwnd == 0 {
         None
@@ -6526,39 +6652,78 @@ fn message_box_w_raw<M: CoredllGuestMemory>(
     } else {
         false
     };
-    let result = message_box_modal_input_result(kernel, thread_id, &window_state, &selection)
-        .unwrap_or(selection.result);
-    let _ = kernel.end_dialog(thread_id, window_state.dialog_hwnd, result);
-    let _ = kernel.destroy_window_with_reason(window_state.dialog_hwnd, "MessageBoxW");
-    if let Some(was_enabled) = owner_was_enabled {
-        let _ = kernel.enable_window(owner_hwnd, was_enabled);
-    }
-    kernel.shell.record_message_box(MessageBoxRecord {
-        thread_id,
+    Ok(MessageBoxModalState {
+        window_state,
+        selection,
         owner_hwnd,
-        dialog_hwnd: window_state.dialog_hwnd,
-        text_hwnd: window_state.text_hwnd,
+        owner_was_enabled,
         text,
         caption,
         style,
-        buttons: selection.buttons,
-        button_hwnds: window_state.button_hwnds,
-        button_layout: selection.button_layout,
-        default_button_index: selection.default_button_index,
-        icon: selection.icon,
-        result,
-        owner_was_enabled,
         rendered,
-    });
-    kernel.threads.set_last_error(thread_id, 0);
-    result
+    })
+}
+
+/// Carries live dialog state during a modal `MessageBoxW` wait.
+#[derive(Debug, Clone)]
+pub(crate) struct MessageBoxModalState {
+    window_state: MessageBoxWindowState,
+    selection: MessageBoxSelection,
+    owner_hwnd: u32,
+    owner_was_enabled: Option<bool>,
+    text: String,
+    caption: String,
+    style: u32,
+    rendered: bool,
+}
+
+impl MessageBoxModalState {
+    pub(crate) fn dialog_hwnd(&self) -> u32 {
+        self.window_state.dialog_hwnd
+    }
+
+    pub(crate) fn default_result(&self) -> u32 {
+        self.selection.result
+    }
+
+    /// Drain any already-queued modal messages; returns `Some(result)` if the dialog
+    /// was dismissed, `None` if more input is still needed.
+    pub(crate) fn try_queued_result(&self, kernel: &mut CeKernel, thread_id: u32) -> Option<u32> {
+        message_box_modal_input_result(kernel, thread_id, &self.window_state, &self.selection)
+    }
+
+    /// End the dialog, destroy its window, re-enable the owner, and record to shell.
+    pub(crate) fn teardown(self, kernel: &mut CeKernel, thread_id: u32, result: u32) {
+        let _ = kernel.end_dialog(thread_id, self.window_state.dialog_hwnd, result);
+        let _ = kernel.destroy_window_with_reason(self.window_state.dialog_hwnd, "MessageBoxW");
+        if let Some(was_enabled) = self.owner_was_enabled {
+            let _ = kernel.enable_window(self.owner_hwnd, was_enabled);
+        }
+        kernel.shell.record_message_box(MessageBoxRecord {
+            thread_id,
+            owner_hwnd: self.owner_hwnd,
+            dialog_hwnd: self.window_state.dialog_hwnd,
+            text_hwnd: self.window_state.text_hwnd,
+            text: self.text,
+            caption: self.caption,
+            style: self.style,
+            buttons: self.selection.buttons,
+            button_hwnds: self.window_state.button_hwnds,
+            button_layout: self.selection.button_layout,
+            default_button_index: self.selection.default_button_index,
+            icon: self.selection.icon,
+            result,
+            owner_was_enabled: self.owner_was_enabled,
+            rendered: self.rendered,
+        });
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct MessageBoxWindowState {
-    dialog_hwnd: u32,
-    text_hwnd: u32,
-    button_hwnds: Vec<u32>,
+pub(crate) struct MessageBoxWindowState {
+    pub(crate) dialog_hwnd: u32,
+    pub(crate) text_hwnd: u32,
+    pub(crate) button_hwnds: Vec<u32>,
 }
 
 fn create_message_box_window(
@@ -6968,12 +7133,12 @@ fn read_message_box_string<M: CoredllGuestMemory>(memory: &M, ptr: u32) -> Optio
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct MessageBoxSelection {
-    buttons: Vec<u32>,
-    button_layout: Vec<MessageBoxButton>,
-    default_button_index: usize,
-    icon: Option<MessageBoxIcon>,
-    result: u32,
+pub(crate) struct MessageBoxSelection {
+    pub(crate) buttons: Vec<u32>,
+    pub(crate) button_layout: Vec<MessageBoxButton>,
+    pub(crate) default_button_index: usize,
+    pub(crate) icon: Option<MessageBoxIcon>,
+    pub(crate) result: u32,
 }
 
 fn message_box_selection(style: u32) -> Option<MessageBoxSelection> {
@@ -7267,6 +7432,7 @@ fn visible_caret_dirty_rect(kernel: &CeKernel) -> Option<CaretDirtyRect> {
     let caret = kernel.gwe.caret()?;
     if caret.show_count < 0
         || !kernel.gwe.caret_system_enabled()
+        || !kernel.gwe.caret_blink_visible()
         || !kernel.gwe.is_window_visible(caret.hwnd)
     {
         return None;
@@ -11347,6 +11513,16 @@ fn check_radio_button_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -
 
 const BM_GETCHECK: u32 = 0x00f0;
 const BM_SETCHECK: u32 = 0x00f1;
+const WM_CTLCOLORMSGBOX: u32 = 0x0132;
+const WM_CTLCOLOREDIT: u32 = 0x0133;
+const WM_CTLCOLORLISTBOX: u32 = 0x0134;
+const WM_CTLCOLORBTN: u32 = 0x0135;
+const WM_CTLCOLORDLG: u32 = 0x0136;
+const WM_CTLCOLORSCROLLBAR: u32 = 0x0137;
+const WM_CTLCOLORSTATIC: u32 = 0x0138;
+const COLOR_SCROLLBAR: u32 = 0;
+const COLOR_WINDOW: u32 = 5;
+const COLOR_BTNFACE: u32 = 15;
 
 fn send_message_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
@@ -11399,6 +11575,7 @@ fn send_message_w_raw<M: CoredllGuestMemory>(
                     .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
                 return 0;
             }
+            kernel.gwe.invalidate_window(hwnd, None, true);
             kernel.threads.set_last_error(thread_id, 0);
             1
         }
@@ -11420,6 +11597,43 @@ fn send_message_w_raw<M: CoredllGuestMemory>(
             };
             kernel.threads.set_last_error(thread_id, 0);
             length as u32
+        }
+        WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
+            kernel.threads.set_last_error(thread_id, 0);
+            get_sys_color_brush(COLOR_WINDOW)
+        }
+        WM_CTLCOLORBTN | WM_CTLCOLORDLG | WM_CTLCOLORSTATIC | WM_CTLCOLORMSGBOX => {
+            kernel.threads.set_last_error(thread_id, 0);
+            get_sys_color_brush(COLOR_BTNFACE)
+        }
+        WM_CTLCOLORSCROLLBAR => {
+            kernel.threads.set_last_error(thread_id, 0);
+            get_sys_color_brush(COLOR_SCROLLBAR)
+        }
+        crate::ce::gwe::WM_GETMINMAXINFO => {
+            // Fill MINMAXINFO pointed to by lparam with screen dimensions.
+            // MINMAXINFO layout (each POINT is 2 × i32 LE):
+            //   +0x00 ptReserved  (leave as-is)
+            //   +0x08 ptMaxSize   ← (screen_w, screen_h)
+            //   +0x10 ptMaxPosition ← (0, 0)
+            //   +0x18 ptMinTrackSize ← (0, 0)
+            //   +0x20 ptMaxTrackSize ← (screen_w, screen_h)
+            if lparam != 0 {
+                let screen_w =
+                    kernel.gwe.system_metric(crate::ce::gwe::SM_CXSCREEN) as u32;
+                let screen_h =
+                    kernel.gwe.system_metric(crate::ce::gwe::SM_CYSCREEN) as u32;
+                let _ = memory.write_u32(lparam.wrapping_add(0x08), screen_w);
+                let _ = memory.write_u32(lparam.wrapping_add(0x0c), screen_h);
+                let _ = memory.write_u32(lparam.wrapping_add(0x10), 0);
+                let _ = memory.write_u32(lparam.wrapping_add(0x14), 0);
+                let _ = memory.write_u32(lparam.wrapping_add(0x18), 0);
+                let _ = memory.write_u32(lparam.wrapping_add(0x1c), 0);
+                let _ = memory.write_u32(lparam.wrapping_add(0x20), screen_w);
+                let _ = memory.write_u32(lparam.wrapping_add(0x24), screen_h);
+            }
+            kernel.threads.set_last_error(thread_id, 0);
+            0
         }
         _ => {
             if let Some(result) = kernel.send_message_w(hwnd, msg, wparam, lparam) {
@@ -14519,11 +14733,13 @@ fn notify_popup_menu_command(kernel: &mut CeKernel, hwnd: u32, flags: u32, comma
     let _ = kernel.send_message_w(hwnd, crate::ce::gwe::WM_COMMAND, command, 0);
 }
 
+#[derive(Debug, Clone)]
 enum PopupMenuModalInput {
     Selected(PopupMenuCommandSelection),
     Cancelled,
 }
 
+#[derive(Debug, Clone)]
 struct PopupMenuModalMenuState {
     menu: u32,
     popup_x: i32,
@@ -14531,31 +14747,116 @@ struct PopupMenuModalMenuState {
     current: Option<usize>,
 }
 
-const POPUP_MENU_ITEM_HEIGHT: i32 = 18;
-const POPUP_MENU_BORDER: i32 = 2;
-const POPUP_MENU_VERTICAL_PADDING: i32 = POPUP_MENU_BORDER * 2;
-
-fn popup_menu_modal_input_selection(
-    kernel: &mut CeKernel,
-    thread_id: u32,
+#[derive(Debug, Clone)]
+pub(crate) struct PopupMenuModalState {
     hwnd: u32,
     menu: u32,
     flags: u32,
     popup_x: i32,
     popup_y: i32,
-    framebuffer: &mut Option<&mut dyn Framebuffer>,
-) -> Option<PopupMenuModalInput> {
-    const VK_RETURN: u32 = 0x0d;
-    const VK_ESCAPE: u32 = 0x1b;
-    const VK_LEFT: u32 = 0x25;
-    const VK_UP: u32 = 0x26;
-    const VK_RIGHT: u32 = 0x27;
-    const VK_DOWN: u32 = 0x28;
+    pub(crate) mouse_message_max: u32,
+    cursor: Point,
+    stack: Vec<PopupMenuModalMenuState>,
+}
 
-    if hwnd == 0 {
-        return None;
+pub(crate) fn track_popup_menu_ex_prepare<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> std::result::Result<PopupMenuModalState, u32> {
+    let menu = raw_arg(args, 0);
+    if kernel.resources.menu(menu).is_none() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return Err(0);
     }
-
+    let hwnd = raw_arg(args, 4);
+    if hwnd != 0 && !kernel.gwe.is_window(hwnd) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_WINDOW_HANDLE);
+        return Err(0);
+    }
+    let lptpm = raw_arg(args, 5);
+    let exclude_rect = if lptpm == 0 {
+        None
+    } else {
+        let Some(cb_size) = read_guest_u32(kernel, memory, thread_id, lptpm) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return Err(0);
+        };
+        if cb_size < TPMPARAMS_SIZE {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return Err(0);
+        }
+        let Some(rect) = read_guest_rect(kernel, memory, thread_id, lptpm.wrapping_add(4)) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return Err(0);
+        };
+        Some([rect.left, rect.top, rect.right, rect.bottom])
+    };
+    let flags = raw_arg(args, 1);
+    let popup_x = raw_i32_arg(args, 2);
+    let popup_y = raw_i32_arg(args, 3);
+    let tracking = PopupMenuTracking {
+        menu,
+        flags,
+        x: popup_x,
+        y: popup_y,
+        hwnd,
+        exclude_rect,
+    };
+    if !kernel.resources.track_popup_menu(tracking) {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return Err(0);
+    }
+    let initial_hilite = popup_menu_initial_key_index(&kernel.resources, menu);
+    let _ = kernel.resources.set_menu_hilite_index(menu, initial_hilite);
+    let mut framebuffer = framebuffer;
+    if let Some(framebuffer) = framebuffer.as_mut() {
+        render_popup_menu_framebuffer(*framebuffer, &kernel.resources, menu, popup_x, popup_y);
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    let cursor = kernel.gwe.get_cursor_pos();
+    let mouse_message_max = if flags & TPM_RIGHTBUTTON != 0 {
+        crate::ce::gwe::WM_RBUTTONUP
+    } else {
+        crate::ce::gwe::WM_LBUTTONUP
+    };
+    if hwnd == 0 {
+        let selection = popup_menu_pointer_selection(
+            &kernel.resources,
+            menu,
+            popup_x,
+            popup_y,
+            cursor,
+        )
+        .or_else(|| kernel.resources.popup_menu_command_selection(menu));
+        let command = selection.as_ref().map(|s| s.command).unwrap_or(0);
+        let submenus = selection
+            .as_ref()
+            .map(|s| s.submenus.as_slice())
+            .unwrap_or(&[]);
+        notify_popup_menu_owner(kernel, hwnd, menu, flags, submenus);
+        let result = if flags & TPM_RETURNCMD != 0 {
+            command
+        } else {
+            notify_popup_menu_command(kernel, hwnd, flags, command);
+            1
+        };
+        return Err(result);
+    }
     let mut stack = vec![PopupMenuModalMenuState {
         menu,
         popup_x,
@@ -14568,15 +14869,95 @@ fn popup_menu_modal_input_selection(
         menu,
         &mut stack[0].current,
         initial_current,
-        framebuffer,
+        &mut framebuffer,
         popup_x,
         popup_y,
     );
-    let mouse_message_max = if flags & TPM_RIGHTBUTTON != 0 {
-        crate::ce::gwe::WM_RBUTTONUP
-    } else {
-        crate::ce::gwe::WM_LBUTTONUP
-    };
+    Ok(PopupMenuModalState {
+        hwnd,
+        menu,
+        flags,
+        popup_x,
+        popup_y,
+        mouse_message_max,
+        cursor,
+        stack,
+    })
+}
+
+impl PopupMenuModalState {
+    pub(crate) fn owner_hwnd(&self) -> u32 {
+        self.hwnd
+    }
+
+    pub(crate) fn poll_once(
+        mut self,
+        kernel: &mut CeKernel,
+        thread_id: u32,
+        framebuffer: &mut Option<&mut dyn Framebuffer>,
+    ) -> std::result::Result<u32, Self> {
+        match popup_menu_modal_input_loop(
+            kernel,
+            thread_id,
+            self.hwnd,
+            self.menu,
+            self.popup_x,
+            self.popup_y,
+            self.mouse_message_max,
+            framebuffer,
+            &mut self.stack,
+        ) {
+            Some(input) => Ok(self.finalize(kernel, input)),
+            None => Err(self),
+        }
+    }
+
+    fn finalize(self, kernel: &mut CeKernel, input: PopupMenuModalInput) -> u32 {
+        let cancelled = matches!(input, PopupMenuModalInput::Cancelled);
+        let selection = match input {
+            PopupMenuModalInput::Selected(sel) => Some(sel),
+            PopupMenuModalInput::Cancelled => None,
+        };
+        let command = selection.as_ref().map(|s| s.command).unwrap_or(0);
+        let submenus = selection
+            .as_ref()
+            .map(|s| s.submenus.as_slice())
+            .unwrap_or(&[]);
+        notify_popup_menu_owner(kernel, self.hwnd, self.menu, self.flags, submenus);
+        if cancelled {
+            return 0;
+        }
+        if self.flags & TPM_RETURNCMD != 0 {
+            command
+        } else {
+            notify_popup_menu_command(kernel, self.hwnd, self.flags, command);
+            1
+        }
+    }
+}
+
+const POPUP_MENU_ITEM_HEIGHT: i32 = 18;
+const POPUP_MENU_BORDER: i32 = 2;
+const POPUP_MENU_VERTICAL_PADDING: i32 = POPUP_MENU_BORDER * 2;
+
+fn popup_menu_modal_input_loop(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    hwnd: u32,
+    menu: u32,
+    popup_x: i32,
+    popup_y: i32,
+    mouse_message_max: u32,
+    framebuffer: &mut Option<&mut dyn Framebuffer>,
+    mut stack: &mut Vec<PopupMenuModalMenuState>,
+) -> Option<PopupMenuModalInput> {
+    const VK_RETURN: u32 = 0x0d;
+    const VK_ESCAPE: u32 = 0x1b;
+    const VK_LEFT: u32 = 0x25;
+    const VK_UP: u32 = 0x26;
+    const VK_RIGHT: u32 = 0x27;
+    const VK_DOWN: u32 = 0x28;
+
     let modal_message_min = crate::ce::gwe::WM_PAINT;
     loop {
         let Some(message) = kernel.gwe.peek_message_filtered(
@@ -14850,6 +15231,53 @@ fn popup_menu_modal_input_selection(
             _ => unreachable!(),
         }
     }
+}
+
+fn popup_menu_modal_input_selection(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    hwnd: u32,
+    menu: u32,
+    flags: u32,
+    popup_x: i32,
+    popup_y: i32,
+    framebuffer: &mut Option<&mut dyn Framebuffer>,
+) -> Option<PopupMenuModalInput> {
+    if hwnd == 0 {
+        return None;
+    }
+    let mut stack = vec![PopupMenuModalMenuState {
+        menu,
+        popup_x,
+        popup_y,
+        current: popup_menu_initial_key_index(&kernel.resources, menu),
+    }];
+    let initial_current = stack[0].current;
+    popup_menu_set_current_index(
+        kernel,
+        menu,
+        &mut stack[0].current,
+        initial_current,
+        framebuffer,
+        popup_x,
+        popup_y,
+    );
+    let mouse_message_max = if flags & TPM_RIGHTBUTTON != 0 {
+        crate::ce::gwe::WM_RBUTTONUP
+    } else {
+        crate::ce::gwe::WM_LBUTTONUP
+    };
+    popup_menu_modal_input_loop(
+        kernel,
+        thread_id,
+        hwnd,
+        menu,
+        popup_x,
+        popup_y,
+        mouse_message_max,
+        framebuffer,
+        &mut stack,
+    )
 }
 
 fn popup_menu_modal_pointer_index(
@@ -15715,9 +16143,16 @@ fn translate_accelerator_w_raw<M: CoredllGuestMemory>(
     let Some(message) = read_guest_message(kernel, memory, thread_id, msg_ptr) else {
         return 0;
     };
+    let is_char_msg = matches!(
+        message.msg,
+        crate::ce::gwe::WM_CHAR | crate::ce::gwe::WM_SYSCHAR
+    );
     if !matches!(
         message.msg,
-        crate::ce::gwe::WM_KEYDOWN | crate::ce::gwe::WM_SYSKEYDOWN
+        crate::ce::gwe::WM_KEYDOWN
+            | crate::ce::gwe::WM_SYSKEYDOWN
+            | crate::ce::gwe::WM_CHAR
+            | crate::ce::gwe::WM_SYSCHAR
     ) {
         kernel.threads.set_last_error(thread_id, 0);
         return 0;
@@ -15725,7 +16160,7 @@ fn translate_accelerator_w_raw<M: CoredllGuestMemory>(
     let Some(entry) = accel_table
         .entries
         .iter()
-        .find(|entry| accelerator_entry_matches(kernel, &message, entry))
+        .find(|entry| accelerator_entry_matches_with_char_msg(kernel, &message, entry, is_char_msg))
     else {
         kernel.threads.set_last_error(thread_id, 0);
         return 0;
@@ -15739,7 +16174,7 @@ fn translate_accelerator_w_raw<M: CoredllGuestMemory>(
         thread_id,
         target,
         crate::ce::gwe::WM_COMMAND,
-        u32::from(entry.command),
+        (u32::from(entry.command) & 0xffff) | (1 << 16), // HIWORD=1: accelerator notification
         0,
     );
     kernel.threads.set_last_error(thread_id, 0);
@@ -15751,12 +16186,31 @@ fn accelerator_entry_matches(
     message: &Message,
     entry: &AcceleratorEntry,
 ) -> bool {
+    accelerator_entry_matches_with_char_msg(kernel, message, entry, false)
+}
+
+fn accelerator_entry_matches_with_char_msg(
+    kernel: &CeKernel,
+    message: &Message,
+    entry: &AcceleratorEntry,
+    is_char_msg: bool,
+) -> bool {
     let key = message.wparam as u16;
     let matches_key = if entry.flags & ACCEL_FVIRTKEY != 0 {
+        // FVIRTKEY entries only match WM_KEYDOWN/WM_SYSKEYDOWN, not WM_CHAR/WM_SYSCHAR.
+        if is_char_msg {
+            return false;
+        }
         entry.key == key
     } else {
-        let translated = translate_virtual_key_to_char(kernel, message.wparam) as u16;
-        translated != 0 && ascii_accel_key(entry.key) == ascii_accel_key(translated)
+        // Character entries: for WM_CHAR/WM_SYSCHAR, wparam is the char directly.
+        // For WM_KEYDOWN, translate the VK first.
+        let char_key = if is_char_msg {
+            key
+        } else {
+            translate_virtual_key_to_char(kernel, message.wparam) as u16
+        };
+        char_key != 0 && ascii_accel_key(entry.key) == ascii_accel_key(char_key)
     };
     if !matches_key {
         return false;
@@ -15764,7 +16218,10 @@ fn accelerator_entry_matches(
     let shift = kernel.gwe.get_key_state(crate::ce::gwe::VK_SHIFT) & 0x8000 != 0;
     let control = kernel.gwe.get_key_state(crate::ce::gwe::VK_CONTROL) & 0x8000 != 0;
     let alt = (kernel.gwe.get_key_state(crate::ce::gwe::VK_MENU) & 0x8000 != 0)
-        || message.msg == crate::ce::gwe::WM_SYSKEYDOWN;
+        || matches!(
+            message.msg,
+            crate::ce::gwe::WM_SYSKEYDOWN | crate::ce::gwe::WM_SYSCHAR
+        );
     (entry.flags & ACCEL_FSHIFT != 0) == shift
         && (entry.flags & ACCEL_FCONTROL != 0) == control
         && (entry.flags & ACCEL_FALT != 0) == alt
@@ -18304,6 +18761,18 @@ fn activate_keyboard_layout_raw(kernel: &mut CeKernel, thread_id: u32, hkl: u32)
     match kernel.gwe.activate_keyboard_layout(hkl) {
         Some(previous) => {
             kernel.threads.set_last_error(thread_id, 0);
+            // Post WM_INPUTLANGCHANGE to the focused window's thread (if any).
+            // wparam = charset (1 = DEFAULT_CHARSET), lparam = new HKL handle.
+            if let Some(focus) = kernel.gwe.get_focus() {
+                const DEFAULT_CHARSET: u32 = 1;
+                kernel.post_message_w_for_thread(
+                    thread_id,
+                    focus,
+                    crate::ce::gwe::WM_INPUTLANGCHANGE,
+                    DEFAULT_CHARSET,
+                    hkl,
+                );
+            }
             previous
         }
         None => {
@@ -19208,6 +19677,13 @@ fn add_font_resource_w_raw<M: CoredllGuestMemory>(
     match kernel.read_guest_file(&path) {
         Ok(_) => {
             kernel.threads.set_last_error(thread_id, 0);
+            kernel.send_notify_message_w(
+                thread_id,
+                crate::ce::gwe::HWND_BROADCAST,
+                crate::ce::gwe::WM_FONTCHANGE,
+                0,
+                0,
+            );
             1
         }
         Err(_) => {
@@ -22960,6 +23436,19 @@ fn send_message_timeout_raw<M: CoredllGuestMemory>(
         return 0;
     };
     if target_thread != thread_id {
+        const CE_HUNG_THRESHOLD_MS: u32 = 5000;
+        if flags & SMTO_ABORTIFHUNG != 0
+            && kernel.gwe.is_thread_hung(
+                target_thread,
+                kernel.timers.tick_count(),
+                CE_HUNG_THRESHOLD_MS,
+            )
+        {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_TIMEOUT_LOCAL);
+            return 0;
+        }
         let Some(send_id) = kernel.begin_cross_thread_send_message_w(
             thread_id,
             hwnd,
@@ -23058,13 +23547,8 @@ fn translate_virtual_key_to_char(kernel: &CeKernel, vkey: u32) -> u32 {
         0x6d => u32::from(b'-'),
         0x6e => u32::from(b'.'),
         0x6f => u32::from(b'/'),
-        0x61..=0x7a => {
-            if shift ^ caps {
-                vkey - 0x20
-            } else {
-                vkey
-            }
-        }
+        0x6c => 0,         // VK_SEPARATOR: produces no character
+        0x70..=0x87 => 0, // VK_F1..VK_F24: function keys produce no character
         0x20 => 0x20,
         0xba => translate_pair_key(b';', b':', shift),
         0xbb => translate_pair_key(b'=', b'+', shift),

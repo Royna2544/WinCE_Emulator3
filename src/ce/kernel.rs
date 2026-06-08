@@ -14,8 +14,8 @@ use crate::{
             MessagePointerPayload, PeekFlags, Point, Rect, SMF_NULL, SWP_HIDEWINDOW,
             SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
             ShellNotificationMessage, WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE,
-            WM_ENABLE, WM_FILECHANGEINFO, WM_KILLFOCUS, WM_MOVE, WM_NOTIFY, WM_SETFOCUS,
-            WM_SHOWWINDOW, WM_SIZE, WM_WINDOWPOSCHANGED, WindowPos,
+            WM_CAPTURECHANGED, WM_ENABLE, WM_FILECHANGEINFO, WM_KILLFOCUS, WM_MOVE, WM_NOTIFY,
+            WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WM_WINDOWPOSCHANGED, WindowPos,
         },
         memory::{MemorySystem, PROCESS_HEAP_HANDLE},
         object::{
@@ -291,6 +291,9 @@ const SHCNE_MKDIR: u32 = 0x0000_0008;
 const SHCNE_RMDIR: u32 = 0x0000_0010;
 const SHCNE_DRIVEREMOVED: u32 = 0x0000_0080;
 const SHCNE_DRIVEADD: u32 = 0x0000_0100;
+const WM_DEVICECHANGE: u32 = 0x0219;
+const DBT_DEVICEARRIVAL: u32 = 0x8000;
+const DBT_DEVICEREMOVECOMPLETE: u32 = 0x8004;
 const SHCNE_ATTRIBUTES: u32 = 0x0000_0800;
 const SHCNE_UPDATEITEM: u32 = 0x0000_2000;
 const SHCNF_IDLIST: u32 = 0x0000_0000;
@@ -889,12 +892,16 @@ impl CeKernel {
         self.files.mount_guest_root(guest_root, host_root);
         self.post_shell_file_change_notifications(SHCNE_DRIVEADD, Some(guest_root), None);
         self.signal_file_change_notifications(SHCNE_DRIVEADD, Some(guest_root), None);
+        // Broadcast WM_DEVICECHANGE(DBT_DEVICEARRIVAL) to all top-level windows.
+        self.send_notify_message_w(0, crate::ce::gwe::HWND_BROADCAST, WM_DEVICECHANGE, DBT_DEVICEARRIVAL, 0);
     }
 
     pub fn unmount_guest_root(&mut self, guest_root: &str) -> bool {
         if self.files.unmount_guest_root(guest_root).is_some() {
             self.post_shell_file_change_notifications(SHCNE_DRIVEREMOVED, Some(guest_root), None);
             self.signal_file_change_notifications(SHCNE_DRIVEREMOVED, Some(guest_root), None);
+            // Broadcast WM_DEVICECHANGE(DBT_DEVICEREMOVECOMPLETE) to all top-level windows.
+            self.send_notify_message_w(0, crate::ce::gwe::HWND_BROADCAST, WM_DEVICECHANGE, DBT_DEVICEREMOVECOMPLETE, 0);
             true
         } else {
             false
@@ -3024,6 +3031,15 @@ impl CeKernel {
         }
         let previous = self.gwe.set_focus(hwnd);
         if previous != hwnd {
+            // Focus edge: reset caret blink phase when caret's owner loses/gains focus.
+            if let Some(caret) = self.gwe.caret() {
+                let caret_hwnd = caret.hwnd;
+                if previous == Some(caret_hwnd) {
+                    self.gwe.reset_caret_on_focus_lost();
+                } else if hwnd == Some(caret_hwnd) {
+                    self.gwe.reset_caret_on_focus_gained();
+                }
+            }
             if let Some(previous_hwnd) = previous {
                 self.post_window_message(previous_hwnd, WM_KILLFOCUS, hwnd.unwrap_or(0), 0);
             }
@@ -3054,6 +3070,25 @@ impl CeKernel {
             }
         }
         previous
+    }
+
+    pub fn set_capture(&mut self, hwnd: u32) -> Option<u32> {
+        let previous = self.gwe.set_capture(hwnd);
+        if previous != Some(hwnd) {
+            if let Some(old_hwnd) = previous {
+                self.post_window_message(old_hwnd, WM_CAPTURECHANGED, 0, hwnd);
+            }
+        }
+        previous
+    }
+
+    pub fn release_capture(&mut self) -> bool {
+        let previous = self.gwe.get_capture();
+        self.gwe.release_capture();
+        if let Some(old_hwnd) = previous {
+            self.post_window_message(old_hwnd, WM_CAPTURECHANGED, 0, 0);
+        }
+        true
     }
 
     pub(crate) fn clear_focus_and_activation_within(&mut self, hwnd: u32) {
@@ -3100,12 +3135,17 @@ impl CeKernel {
         max_msg: u32,
     ) -> Option<Message> {
         self.expire_timed_out_send_messages();
+        if self.gwe.advance_caret_blink(self.timers.tick_count()) {
+            self.gwe.invalidate_caret_rect();
+        }
         self.drain_remote_input_to_thread_window(thread_id, hwnd);
         if let Some(message) = self
             .gwe
             .get_message_filtered(thread_id, hwnd, min_msg, max_msg)
         {
             self.clear_timer_message_pending(thread_id, &message);
+            self.gwe
+                .record_thread_dispatched(thread_id, self.timers.tick_count());
             self.record_message_op(
                 "get_message",
                 thread_id,
@@ -3121,6 +3161,8 @@ impl CeKernel {
             .get_message_filtered(thread_id, hwnd, min_msg, max_msg);
         if let Some(message) = message.as_ref() {
             self.clear_timer_message_pending(thread_id, message);
+            self.gwe
+                .record_thread_dispatched(thread_id, self.timers.tick_count());
             self.record_message_op(
                 "get_message",
                 thread_id,
@@ -3143,6 +3185,8 @@ impl CeKernel {
             .gwe
             .get_message_filtered(thread_id, hwnd, min_msg, max_msg)?;
         self.clear_timer_message_pending(thread_id, &message);
+        self.gwe
+            .record_thread_dispatched(thread_id, self.timers.tick_count());
         self.record_message_op(
             "get_message",
             thread_id,
@@ -3164,6 +3208,8 @@ impl CeKernel {
         let message = self
             .gwe
             .take_sent_message_filtered(thread_id, hwnd, min_msg, max_msg)?;
+        self.gwe
+            .record_thread_dispatched(thread_id, self.timers.tick_count());
         self.record_message_op(
             "dispatch_sent_message",
             thread_id,
@@ -3183,6 +3229,10 @@ impl CeKernel {
         flags: PeekFlags,
     ) -> Option<Message> {
         self.expire_timed_out_send_messages();
+        // Advance the caret blink timer unconditionally (GWES-internal, not WM_TIMER-priority).
+        if self.gwe.advance_caret_blink(self.timers.tick_count()) {
+            self.gwe.invalidate_caret_rect();
+        }
         self.drain_remote_input_to_thread_window(thread_id, hwnd);
         if let Some(message) = self
             .gwe
@@ -3190,6 +3240,8 @@ impl CeKernel {
         {
             if flags.contains(PeekFlags::REMOVE) {
                 self.clear_timer_message_pending(thread_id, &message);
+                self.gwe
+                    .record_thread_dispatched(thread_id, self.timers.tick_count());
             }
             let op = if flags.contains(PeekFlags::REMOVE) {
                 "peek_message_remove"
@@ -3212,6 +3264,8 @@ impl CeKernel {
         if let Some(message) = message.as_ref() {
             if flags.contains(PeekFlags::REMOVE) {
                 self.clear_timer_message_pending(thread_id, message);
+                self.gwe
+                    .record_thread_dispatched(thread_id, self.timers.tick_count());
             }
             let op = if flags.contains(PeekFlags::REMOVE) {
                 "peek_message_remove"
@@ -3608,6 +3662,27 @@ impl CeKernel {
         self.gwe.begin_send_message(target_thread);
         let result = self.gwe.send_message(hwnd, msg, wparam, lparam);
         self.gwe.end_send_message(target_thread);
+        if msg == crate::ce::gwe::WM_ACTIVATE && wparam != crate::ce::gwe::WA_INACTIVE {
+            let _ = self.set_focus(Some(hwnd));
+        }
+        if msg == crate::ce::gwe::WM_NEXTDLGCTL {
+            // CE DefWindowProcW WM_NEXTDLGCTL: lparam bit 0 selects mode.
+            // lparam & 1 → wparam is the HWND to focus directly.
+            // lparam & 1 == 0 → navigate: wparam=0 forward, wparam!=0 backward.
+            let new_focus = if lparam & 1 != 0 {
+                self.gwe.is_window(wparam).then_some(wparam)
+            } else {
+                let current = self.gwe.get_focus().unwrap_or(hwnd);
+                self.gwe.get_next_dlg_tab_item(hwnd, current, wparam != 0)
+            };
+            if let Some(next) = new_focus {
+                let _ = self.set_focus(Some(next));
+                if self.gwe.is_push_button(next) {
+                    let id = self.gwe.get_dlg_ctrl_id(next).unwrap_or(0);
+                    let _ = self.send_message_w(hwnd, crate::ce::gwe::DM_SETDEFID, id, 0);
+                }
+            }
+        }
         result
     }
 
@@ -3782,16 +3857,18 @@ impl CeKernel {
         lparam: u32,
     ) -> bool {
         if hwnd == HWND_BROADCAST {
-            let targets: Vec<(u32, u32)> = self
-                .gwe
-                .windows_snapshot()
+            // CE broadcasts in top-to-bottom Z-order. Build the target list from the
+            // Z-order snapshot so the ordering is deterministic and matches CE behaviour.
+            let z_order = self.gwe.z_order_snapshot();
+            let targets: Vec<(u32, u32)> = z_order
                 .into_iter()
-                .filter(|window| {
-                    !window.destroyed
-                        && window.parent.is_none()
-                        && window.hwnd != crate::ce::gwe::DESKTOP_HWND
+                .filter(|candidate| *candidate != crate::ce::gwe::DESKTOP_HWND)
+                .filter_map(|candidate| {
+                    self.gwe
+                        .window(candidate)
+                        .filter(|window| !window.destroyed && window.parent.is_none())
+                        .map(|window| (candidate, window.thread_id))
                 })
-                .map(|window| (window.hwnd, window.thread_id))
                 .collect();
             let mut delivered = false;
             let time_ms = self.timers.tick_count();
@@ -5007,6 +5084,7 @@ mod tests {
         assert_eq!(kernel.set_focus(Some(child)), None);
         assert_eq!(kernel.gwe.get_message(thread_id).unwrap().msg, WM_ACTIVATE);
         assert_eq!(kernel.gwe.get_message(thread_id).unwrap().msg, WM_SETFOCUS);
+        // active = child after set_focus(child); set_active_window returns the previous active.
         assert_eq!(kernel.gwe.set_active_window(Some(child)), Some(child));
 
         kernel.clear_destroyed_window_focus_and_activation(child);

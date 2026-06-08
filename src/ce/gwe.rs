@@ -13,11 +13,17 @@ pub const WM_CREATE: u32 = 0x0001;
 pub const WM_DESTROY: u32 = 0x0002;
 pub const WM_MOVE: u32 = 0x0003;
 pub const WM_SIZE: u32 = 0x0005;
+pub const WM_GETMINMAXINFO: u32 = 0x0024;
+pub const WM_DISPLAYCHANGE: u32 = 0x007e;
 pub const WM_PAINT: u32 = 0x000f;
+pub const WM_SETREDRAW: u32 = 0x000b;
 pub const WM_CLOSE: u32 = 0x0010;
 pub const WM_QUIT: u32 = 0x0012;
 pub const WM_ERASEBKGND: u32 = 0x0014;
 pub const WM_SHOWWINDOW: u32 = 0x0018;
+pub const WM_SETTINGCHANGE: u32 = 0x001a;
+pub const WM_FONTCHANGE: u32 = 0x001d;
+pub const WM_TIMECHANGE: u32 = 0x001e;
 pub const WM_CANCELMODE: u32 = 0x001f;
 pub const WM_SETCURSOR: u32 = 0x0020;
 pub const WM_WINDOWPOSCHANGED: u32 = 0x0047;
@@ -27,29 +33,44 @@ pub const WM_SETFOCUS: u32 = 0x0007;
 pub const WM_KILLFOCUS: u32 = 0x0008;
 pub const WM_ENABLE: u32 = 0x000a;
 pub const WM_NCCREATE: u32 = 0x0081;
+pub const WM_NCACTIVATE: u32 = 0x0086;
 pub const WM_GETDLGCODE: u32 = 0x0087;
 pub const WM_NCHITTEST: u32 = 0x0084;
 pub const WM_SETTEXT: u32 = 0x000c;
 pub const WM_GETTEXT: u32 = 0x000d;
 pub const WM_GETTEXTLENGTH: u32 = 0x000e;
 pub const WM_MOUSEACTIVATE: u32 = 0x0021;
+pub const WM_NEXTDLGCTL: u32 = 0x0028;
 pub const WM_KEYDOWN: u32 = 0x0100;
 pub const WM_KEYUP: u32 = 0x0101;
 pub const WM_CHAR: u32 = 0x0102;
 pub const WM_SYSKEYDOWN: u32 = 0x0104;
 pub const WM_SYSKEYUP: u32 = 0x0105;
 pub const WM_SYSCHAR: u32 = 0x0106;
+pub const WM_SETFONT: u32 = 0x0030;
+pub const WM_GETFONT: u32 = 0x0031;
+pub const WM_COMPAREITEM: u32 = 0x0039;
+pub const WM_DRAWITEM: u32 = 0x002b;
+pub const WM_MEASUREITEM: u32 = 0x002c;
+pub const WM_DELETEITEM: u32 = 0x002d;
+pub const WM_INPUTLANGCHANGE: u32 = 0x0051;
 pub const WM_COMMAND: u32 = 0x0111;
 pub const WM_SYSCOMMAND: u32 = 0x0112;
 pub const WM_TIMER: u32 = 0x0113;
+pub const WM_HSCROLL: u32 = 0x0114;
+pub const WM_VSCROLL: u32 = 0x0115;
 pub const WM_INITMENUPOPUP: u32 = 0x0117;
 pub const WM_MOUSEMOVE: u32 = 0x0200;
 pub const WM_LBUTTONDOWN: u32 = 0x0201;
 pub const WM_LBUTTONUP: u32 = 0x0202;
+pub const WM_LBUTTONDBLCLK: u32 = 0x0203;
 pub const WM_RBUTTONDOWN: u32 = 0x0204;
 pub const WM_RBUTTONUP: u32 = 0x0205;
+pub const WM_RBUTTONDBLCLK: u32 = 0x0206;
+pub const WM_MOUSEWHEEL: u32 = 0x020a;
 pub const WM_ENTERMENULOOP: u32 = 0x0211;
 pub const WM_EXITMENULOOP: u32 = 0x0212;
+pub const WM_CAPTURECHANGED: u32 = 0x0215;
 pub const WM_RENDERFORMAT: u32 = 0x0305;
 pub const WM_RENDERALLFORMATS: u32 = 0x0306;
 pub const WM_DESTROYCLIPBOARD: u32 = 0x0307;
@@ -80,6 +101,8 @@ pub const VK_SHIFT: u32 = 0x10;
 pub const VK_CONTROL: u32 = 0x11;
 pub const VK_MENU: u32 = 0x12;
 pub const VK_CAPITAL: u32 = 0x14;
+pub const VK_NUMLOCK: u32 = 0x90;
+pub const VK_SCROLL: u32 = 0x91;
 pub const VK_LSHIFT: u32 = 0xa0;
 pub const VK_RSHIFT: u32 = 0xa1;
 pub const VK_LCONTROL: u32 = 0xa2;
@@ -123,6 +146,11 @@ pub const QS_SENDMESSAGE: u32 = 0x0040;
 pub const HWND_BROADCAST: u32 = 0x0000_ffff;
 pub const HTNOWHERE: u32 = 0;
 pub const HTCLIENT: u32 = 1;
+pub const HTCAPTION: u32 = 2;
+pub const HTSYSMENU: u32 = 3;
+pub const HTCLOSE: u32 = 20;
+pub const WM_NCLBUTTONDOWN: u32 = 0x00a1;
+pub const WM_NCLBUTTONDBLCLK: u32 = 0x00a3;
 pub const HTLEFT: u32 = 10;
 pub const HTRIGHT: u32 = 11;
 pub const HTTOP: u32 = 12;
@@ -131,8 +159,15 @@ pub const HTTOPRIGHT: u32 = 14;
 pub const HTBOTTOM: u32 = 15;
 pub const HTBOTTOMLEFT: u32 = 16;
 pub const HTBOTTOMRIGHT: u32 = 17;
+pub const WM_CHARTOITEM: u32 = 0x002f;
+pub const WM_VKEYTOITEM: u32 = 0x002e;
+pub const WM_MENUCHAR: u32 = 0x0120;
+pub const WM_CONTEXTMENU: u32 = 0x007b;
 pub const MA_ACTIVATE: u32 = 1;
 pub const SC_CLOSE: u32 = 0xf060;
+pub const SC_KEYMENU: u32 = 0xf100;
+const VK_F4: u32 = 0x73;
+const VK_F10: u32 = 0x79;
 pub const DESKTOP_HWND: u32 = 0x0001_0000;
 pub const WNDCLASSW_SIZE: usize = 40;
 pub const DEFAULT_WNDPROC: u32 = 0xffff_fffc;
@@ -185,6 +220,7 @@ pub const WS_GROUP: u32 = 0x0002_0000;
 pub const WS_TABSTOP: u32 = 0x0001_0000;
 pub const WA_INACTIVE: u32 = 0;
 pub const WA_ACTIVE: u32 = 1;
+pub const WA_CLICKACTIVE: u32 = 2;
 
 pub const SM_CXSCREEN: u32 = 0;
 pub const SM_CYSCREEN: u32 = 1;
@@ -571,12 +607,14 @@ pub struct Window {
     pub ex_style: u32,
     pub wndproc: u32,
     pub user_data: u32,
+    pub font: u32,
     pub extra_longs: Vec<u32>,
     pub rect: Rect,
     pub client_rect: Rect,
     pub update_pending: bool,
     pub erase_pending: bool,
     pub update_rect: Rect,
+    pub redraw_suspended: bool,
     pub pending_move: bool,
     pub pending_size: bool,
     pub being_destroyed: bool,
@@ -696,6 +734,7 @@ pub struct Gwe {
     last_message_source_by_thread: BTreeMap<u32, u32>,
     last_message_pos_by_thread: BTreeMap<u32, u32>,
     ready_timestamp_by_thread: BTreeMap<u32, u32>,
+    last_dispatch_ms_by_thread: BTreeMap<u32, u32>,
     changed_queue_status_by_thread: BTreeMap<u32, u32>,
     quit_by_thread: BTreeMap<u32, QuitState>,
     key_state: [u16; 256],
@@ -712,6 +751,8 @@ pub struct Gwe {
     caret: Option<CaretState>,
     caret_blink_time_ms: u32,
     caret_system_enabled: bool,
+    caret_blink_visible: bool,
+    caret_next_blink_ms: u32,
     next_lifecycle_message_order: u64,
     stats: GweStats,
 }
@@ -737,12 +778,14 @@ impl Default for Gwe {
                 ex_style: 0,
                 wndproc: 0,
                 user_data: 0,
+                font: 0,
                 extra_longs: Vec::new(),
                 rect: Rect::from_origin_size(0, 0, 800, 480),
                 client_rect: Rect::from_origin_size(0, 0, 800, 480),
                 update_pending: false,
                 erase_pending: false,
                 update_rect: Rect::default(),
+                redraw_suspended: false,
                 pending_move: false,
                 pending_size: false,
                 being_destroyed: false,
@@ -781,6 +824,7 @@ impl Default for Gwe {
             last_message_source_by_thread: BTreeMap::new(),
             last_message_pos_by_thread: BTreeMap::new(),
             ready_timestamp_by_thread: BTreeMap::new(),
+            last_dispatch_ms_by_thread: BTreeMap::new(),
             changed_queue_status_by_thread: BTreeMap::new(),
             quit_by_thread: BTreeMap::new(),
             key_state: [0; 256],
@@ -797,6 +841,8 @@ impl Default for Gwe {
             caret: None,
             caret_blink_time_ms: 500,
             caret_system_enabled: true,
+            caret_blink_visible: true,
+            caret_next_blink_ms: 0,
             next_lifecycle_message_order: 1,
             stats: GweStats::default(),
         }
@@ -919,12 +965,14 @@ impl Gwe {
                 ex_style,
                 wndproc,
                 user_data: 0,
+                font: 0,
                 extra_longs: vec![0; extra_longs],
                 rect,
                 client_rect: rect,
                 update_pending: visible,
                 erase_pending: visible,
                 update_rect,
+                redraw_suspended: false,
                 pending_move: false,
                 pending_size: false,
                 being_destroyed: false,
@@ -1233,6 +1281,9 @@ impl Gwe {
             return false;
         }
         caret.show_count = caret.show_count.saturating_sub(1);
+        if caret.show_count < 0 {
+            self.caret_next_blink_ms = 0;
+        }
         true
     }
 
@@ -1243,8 +1294,70 @@ impl Gwe {
         if hwnd != 0 && caret.hwnd != hwnd {
             return false;
         }
+        let was_hidden = caret.show_count < 0;
         caret.show_count = caret.show_count.saturating_add(1);
+        if was_hidden && caret.show_count >= 0 {
+            // Reset to visible blink phase when caret first becomes shown.
+            self.caret_blink_visible = true;
+            self.caret_next_blink_ms = 0; // initialized on first advance_caret_blink call
+        }
         true
+    }
+
+    pub fn caret_blink_visible(&self) -> bool {
+        self.caret_blink_visible
+    }
+
+    /// Advance the caret blink timer. Returns true if the blink phase changed
+    /// (caller should invalidate the caret owner window).
+    pub fn advance_caret_blink(&mut self, now_ms: u32) -> bool {
+        let (show_count, caret_hwnd) = match &self.caret {
+            Some(c) => (c.show_count, c.hwnd),
+            None => return false,
+        };
+        // CE GWES: blink only advances while the caret's owner window has focus.
+        if show_count < 0
+            || !self.caret_system_enabled
+            || self.caret_blink_time_ms == 0
+            || self.focus != Some(caret_hwnd)
+        {
+            return false;
+        }
+        if self.caret_next_blink_ms == 0 {
+            // First pump after ShowCaret: schedule the first blink.
+            self.caret_next_blink_ms = now_ms.saturating_add(self.caret_blink_time_ms);
+            return false;
+        }
+        if now_ms < self.caret_next_blink_ms {
+            return false;
+        }
+        self.caret_blink_visible = !self.caret_blink_visible;
+        self.caret_next_blink_ms = now_ms.saturating_add(self.caret_blink_time_ms);
+        true
+    }
+
+    /// Invalidate the caret owner window's caret rect (client coordinates).
+    pub fn invalidate_caret_rect(&mut self) {
+        let Some(caret) = &self.caret else { return; };
+        let hwnd = caret.hwnd;
+        let width = caret.width.max(1);
+        let height = caret.height.max(1);
+        let rect = Rect::from_origin_size(caret.position.x, caret.position.y, width, height);
+        let _ = self.invalidate_window(hwnd, Some(rect), false);
+    }
+
+    /// Hide caret blink phase when its owner window loses focus (CE GWES focus edge).
+    pub fn reset_caret_on_focus_lost(&mut self) {
+        self.caret_blink_visible = false;
+        self.caret_next_blink_ms = 0;
+        self.invalidate_caret_rect();
+    }
+
+    /// Restore caret blink phase when its owner window gains focus (CE GWES focus edge).
+    pub fn reset_caret_on_focus_gained(&mut self) {
+        self.caret_blink_visible = true;
+        self.caret_next_blink_ms = 0;
+        self.invalidate_caret_rect();
     }
 
     pub fn set_caret_pos(&mut self, x: i32, y: i32) -> bool {
@@ -1467,12 +1580,34 @@ impl Gwe {
         previous
     }
 
-    pub fn invalidate_window(&mut self, hwnd: u32, rect: Option<Rect>, erase: bool) -> bool {
+    pub fn set_redraw(&mut self, hwnd: u32, enable: bool) -> bool {
         let Some(window) = self.windows.get_mut(&hwnd) else {
             return false;
         };
         if window.destroyed {
             return false;
+        }
+        window.redraw_suspended = !enable;
+        if enable {
+            let full_client = window.client_rect.zero_origin();
+            window.update_rect = full_client;
+            window.update_pending = true;
+            window.erase_pending = true;
+            let thread_id = window.thread_id;
+            let _ = window;
+            if self.is_window_visible(hwnd) {
+                self.mark_queue_status_changed(thread_id, QS_PAINT);
+            }
+        }
+        true
+    }
+
+    pub fn invalidate_window(&mut self, hwnd: u32, rect: Option<Rect>, erase: bool) -> bool {
+        let Some(window) = self.windows.get_mut(&hwnd) else {
+            return false;
+        };
+        if window.destroyed || window.redraw_suspended {
+            return !window.destroyed;
         }
         let full_client = window.client_rect.zero_origin();
         let Some(rect) = rect
@@ -1731,6 +1866,17 @@ impl Gwe {
             current = self.windows.get(&hwnd).and_then(|window| window.parent);
         }
         false
+    }
+
+    pub fn top_level_ancestor(&self, hwnd: u32) -> Option<u32> {
+        let mut current = hwnd;
+        loop {
+            let window = self.windows.get(&current).filter(|w| !w.destroyed)?;
+            match window.parent {
+                Some(parent) if self.is_window(parent) => current = parent,
+                _ => return Some(current),
+            }
+        }
     }
 
     pub fn get_dlg_item(&self, parent: u32, id: u32) -> Option<u32> {
@@ -2185,6 +2331,16 @@ impl Gwe {
         (cursor != 0).then_some(cursor)
     }
 
+    pub fn window_class_hbr_background(&self, hwnd: u32) -> u32 {
+        self.windows
+            .get(&hwnd)
+            .and_then(|window| self.class_info(&window.class_name))
+            .map(|wc| {
+                u32::from_le_bytes([wc.bytes[28], wc.bytes[29], wc.bytes[30], wc.bytes[31]])
+            })
+            .unwrap_or(0)
+    }
+
     pub fn get_active_window(&self) -> Option<u32> {
         if let Some(hwnd) = self
             .active_window
@@ -2571,6 +2727,9 @@ impl Gwe {
             return None;
         }
         match msg {
+            WM_SETREDRAW => {
+                self.set_redraw(hwnd, wparam != 0);
+            }
             WM_CLOSE => {
                 let _ = self.send_message(hwnd, WM_DESTROY, 0, 0);
                 self.destroy_window(hwnd, 0);
@@ -2605,6 +2764,72 @@ impl Gwe {
                 }
             }
             WM_MOUSEACTIVATE => return Some(MA_ACTIVATE),
+            WM_NCACTIVATE => return Some(1),
+            WM_NCLBUTTONDOWN | WM_NCLBUTTONDBLCLK => {
+                let hit = wparam;
+                if hit == HTCLOSE || (msg == WM_NCLBUTTONDBLCLK && hit == HTSYSMENU) {
+                    let _ = self.send_message(hwnd, WM_SYSCOMMAND, SC_CLOSE, lparam);
+                }
+            }
+            WM_RBUTTONUP | WM_RBUTTONDBLCLK => {
+                // Convert client coords to screen coords and send WM_CONTEXTMENU
+                let client_pt = Point {
+                    x: lparam as u16 as i16 as i32,
+                    y: (lparam >> 16) as u16 as i16 as i32,
+                };
+                let screen_lparam = if let Some(sp) = self.client_to_screen(hwnd, client_pt) {
+                    (sp.y as u16 as u32) << 16 | (sp.x as u16 as u32)
+                } else {
+                    lparam
+                };
+                let _ = self.send_message(hwnd, WM_CONTEXTMENU, hwnd, screen_lparam);
+            }
+            WM_SYSKEYDOWN if wparam == VK_F4 => {
+                let _ = self.send_message(hwnd, WM_SYSCOMMAND, SC_CLOSE, 0);
+            }
+            WM_SYSKEYDOWN if wparam == VK_F10 => {
+                let _ = self.send_message(hwnd, WM_SYSCOMMAND, SC_KEYMENU, VK_F10);
+            }
+            WM_SYSKEYDOWN if (0x30..=0x39).contains(&wparam) || (0x41..=0x5a).contains(&wparam) => {
+                // Alt+letter or Alt+digit → SC_KEYMENU activates a menu mnemonic.
+                let _ = self.send_message(hwnd, WM_SYSCOMMAND, SC_KEYMENU, wparam);
+            }
+            WM_SYSKEYUP if wparam == VK_MENU => {
+                // ALT released alone (not combined with another key) → SC_KEYMENU
+                let _ = self.send_message(hwnd, WM_SYSCOMMAND, SC_KEYMENU, 0);
+            }
+            WM_CONTEXTMENU | WM_MOUSEWHEEL => {
+                // Forward to parent if one exists
+                if let Some(parent) = self.get_parent(hwnd).filter(|p| self.is_window(*p)) {
+                    let fwd_wparam = if msg == WM_CONTEXTMENU { hwnd } else { wparam };
+                    let _ = self.send_message(parent, msg, fwd_wparam, lparam);
+                }
+            }
+            WM_ERASEBKGND => {
+                // CE DefWindowProcW: return 1 (erased) if the class has a background brush,
+                // 0 if hbrBackground is NULL. Actual pixel fill requires GDI and is deferred.
+                let hbr = self.window_class_hbr_background(hwnd);
+                return Some(if hbr != 0 { 1 } else { 0 });
+            }
+            WM_SETFONT => {
+                if let Some(window) = self.windows.get_mut(&hwnd) {
+                    window.font = wparam;
+                }
+            }
+            WM_GETFONT => {
+                let font = self.windows.get(&hwnd).map_or(0, |w| w.font);
+                return Some(font);
+            }
+            WM_HSCROLL | WM_VSCROLL | WM_DRAWITEM | WM_MEASUREITEM | WM_DELETEITEM
+            | WM_COMPAREITEM => {
+                if let Some(parent) = self.get_parent(hwnd).filter(|p| self.is_window(*p)) {
+                    let _ = self.send_message(parent, msg, wparam, lparam);
+                }
+            }
+            WM_GETTEXTLENGTH => {
+                return Some(self.get_window_text_length(hwnd).unwrap_or(0) as u32);
+            }
+            WM_NCCREATE => return Some(1),
             WM_GETDLGCODE => return Some(self.window_dialog_code(hwnd)),
             DM_GETDEFID => return Some(self.dialog_default_id_result(hwnd)),
             DM_SETDEFID => {
@@ -2772,7 +2997,7 @@ impl Gwe {
             return;
         };
         let was_down = *state & 0x8000 != 0;
-        if virtual_key == VK_CAPITAL && !was_down {
+        if matches!(virtual_key, VK_CAPITAL | VK_NUMLOCK | VK_SCROLL) && !was_down {
             *state ^= 0x0001;
         }
         *state |= 0x8000;
@@ -3211,6 +3436,17 @@ impl Gwe {
             .get(&thread_id)
             .copied()
             .unwrap_or(0)
+    }
+
+    pub fn record_thread_dispatched(&mut self, thread_id: u32, time_ms: u32) {
+        self.last_dispatch_ms_by_thread.insert(thread_id, time_ms);
+    }
+
+    pub fn is_thread_hung(&self, thread_id: u32, current_ms: u32, threshold_ms: u32) -> bool {
+        match self.last_dispatch_ms_by_thread.get(&thread_id) {
+            Some(&last) => current_ms.saturating_sub(last) >= threshold_ms,
+            None => false,
+        }
     }
 
     pub fn get_message_queue_ready_time_stamp(&self, thread_id: u32, hwnd: u32) -> u32 {
@@ -4037,8 +4273,9 @@ impl Message {
 pub fn default_send_message_result(msg: u32, _wparam: u32, _lparam: u32) -> u32 {
     match msg {
         WM_NULL => 0,
-        WM_GETTEXTLENGTH => 0,
-        WM_ERASEBKGND => 1,
+        // DefWindowProc returns -1 for list-box character/key routing messages,
+        // telling the list box to perform its default action.
+        WM_CHARTOITEM | WM_VKEYTOITEM => u32::MAX,
         _ => 0,
     }
 }
@@ -5239,5 +5476,31 @@ mod tests {
             gwe.update_rect(background).unwrap().rect,
             Rect::from_origin_size(20, 30, 64, 48)
         );
+    }
+
+    #[test]
+    fn send_message_gettextlength_returns_title_utf16_length() {
+        let mut gwe = Gwe::default();
+        let hwnd = gwe.create_window(1, "STATIC", "hello");
+        assert_eq!(gwe.send_message(hwnd, WM_GETTEXTLENGTH, 0, 0), Some(5));
+
+        // Empty title returns 0.
+        let hwnd2 = gwe.create_window(1, "STATIC", "");
+        assert_eq!(gwe.send_message(hwnd2, WM_GETTEXTLENGTH, 0, 0), Some(0));
+    }
+
+    #[test]
+    fn send_message_nccreate_returns_true() {
+        let mut gwe = Gwe::default();
+        let hwnd = gwe.create_window(1, "STATIC", "");
+        assert_eq!(gwe.send_message(hwnd, WM_NCCREATE, 0, 0), Some(1));
+    }
+
+    #[test]
+    fn send_message_menuchar_returns_mnc_ignore() {
+        let mut gwe = Gwe::default();
+        let hwnd = gwe.create_window(1, "STATIC", "");
+        // CE DefWindowProcW returns 0 (MNC_IGNORE) for unrecognized menu keys.
+        assert_eq!(gwe.send_message(hwnd, WM_MENUCHAR, 0, 0), Some(0));
     }
 }

@@ -83,6 +83,10 @@ pub enum SchedulerBlockedWaitKind {
     SendMessage {
         send_id: u64,
     },
+    ModalMessageBox,
+    PopupMenuModal {
+        mouse_message_max: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -184,7 +188,10 @@ impl Scheduler {
         }
         if matches!(
             wait.kind,
-            SchedulerBlockedWaitKind::GetMessage { .. } | SchedulerBlockedWaitKind::MsgWait { .. }
+            SchedulerBlockedWaitKind::GetMessage { .. }
+                | SchedulerBlockedWaitKind::MsgWait { .. }
+                | SchedulerBlockedWaitKind::ModalMessageBox
+                | SchedulerBlockedWaitKind::PopupMenuModal { .. }
         ) {
             self.message_wait_queues
                 .entry(wait.thread_id)

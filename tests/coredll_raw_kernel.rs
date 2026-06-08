@@ -6935,6 +6935,68 @@ fn sh_change_notify_i_posts_filechangeinfo_for_matching_file_operations() -> Res
 }
 
 #[test]
+fn mount_unmount_broadcasts_wm_devicechange_to_top_level_windows() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let msg_ptr = 0x1_0000u32;
+    memory.map_words(msg_ptr, 7);
+    const WM_DEVICECHANGE: u32 = 0x0219;
+    const DBT_DEVICEARRIVAL: u32 = 0x8000;
+    const DBT_DEVICEREMOVECOMPLETE: u32 = 0x8004;
+
+    let hwnd = kernel.create_window_ex_w(thread_id, "DEVCHG", "", None, 0, 0, 0);
+
+    let root = unique_test_root("wm_devicechange_mount");
+    let sdmmc = root.join("SDMMC");
+    fs::create_dir_all(&sdmmc).unwrap();
+
+    // Mount broadcasts WM_DEVICECHANGE(DBT_DEVICEARRIVAL) to the top-level window.
+    kernel.mount_guest_root(r"\SDMMC Disk", &sdmmc);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PEEK_MESSAGE_W,
+            [msg_ptr, hwnd, WM_DEVICECHANGE, WM_DEVICECHANGE, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    // MSG layout: hwnd@0, msg@4, wparam@8, lparam@12
+    assert_eq!(memory.read_u32(msg_ptr + 0)?, hwnd);
+    assert_eq!(memory.read_u32(msg_ptr + 4)?, WM_DEVICECHANGE);
+    assert_eq!(memory.read_u32(msg_ptr + 8)?, DBT_DEVICEARRIVAL);
+
+    // Unmount broadcasts WM_DEVICECHANGE(DBT_DEVICEREMOVECOMPLETE).
+    assert!(kernel.unmount_guest_root(r"\SDMMC Disk"));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PEEK_MESSAGE_W,
+            [msg_ptr, hwnd, WM_DEVICECHANGE, WM_DEVICECHANGE, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(msg_ptr + 0)?, hwnd);
+    assert_eq!(memory.read_u32(msg_ptr + 4)?, WM_DEVICECHANGE);
+    assert_eq!(memory.read_u32(msg_ptr + 8)?, DBT_DEVICEREMOVECOMPLETE);
+
+    let _ = fs::remove_dir_all(&root);
+    Ok(())
+}
+
+#[test]
 fn shell_window_destroy_removes_notify_icon_and_notification_state() -> Result<()> {
     const NIM_ADD: u32 = 0;
     const NIF_MESSAGE: u32 = 0x0000_0001;

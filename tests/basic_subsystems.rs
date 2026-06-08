@@ -9,8 +9,8 @@ use wince_emulation_v3::{
         gwe::{
             GWL_USERDATA, MSGSRC_HARDWARE_KEYBOARD, MSGSRC_SOFTWARE_SEND, QS_POSTMESSAGE,
             QS_SENDMESSAGE, QS_TIMER, Rect, SMF_TIMEOUT, WA_ACTIVE, WM_ACTIVATE, WM_CHAR,
-            WM_ERASEBKGND, WM_KILLFOCUS, WM_QUIT, WM_SETFOCUS, WM_TIMER, WM_USER, WS_CHILD,
-            WS_POPUP, WS_VISIBLE,
+            WM_ERASEBKGND, WM_KILLFOCUS, WM_QUIT, WM_SETFOCUS, WM_TIMER, WM_USER, WNDCLASSW_SIZE,
+            WS_CHILD, WS_POPUP, WS_VISIBLE,
         },
         kernel::{
             CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
@@ -690,6 +690,20 @@ fn message_and_timer_transitions_queue_scheduler_msg_wait_candidates() -> Result
                         kernel.gwe.has_new_queue_input(blocked.thread_id, wake_mask)
                     }
                 }
+                SchedulerBlockedWaitKind::ModalMessageBox => kernel.gwe.has_message_filtered(
+                    blocked.thread_id,
+                    None,
+                    wince_emulation_v3::ce::gwe::WM_PAINT,
+                    wince_emulation_v3::ce::gwe::WM_LBUTTONUP,
+                ),
+                SchedulerBlockedWaitKind::PopupMenuModal { mouse_message_max } => {
+                    kernel.gwe.has_message_filtered(
+                        blocked.thread_id,
+                        None,
+                        wince_emulation_v3::ce::gwe::WM_PAINT,
+                        mouse_message_max,
+                    )
+                }
             },
         )
     };
@@ -929,6 +943,9 @@ fn send_message_transitions_queue_scheduler_reply_wait_candidates() -> Result<()
 
     let completion_sender = 60;
     let completion_receiver = 61;
+    let mut completion_class = [0u8; WNDCLASSW_SIZE];
+    completion_class[28..32].copy_from_slice(&0x000b_4005_u32.to_le_bytes());
+    kernel.gwe.register_class("SendCompleteWake", completion_class);
     let completion_hwnd = kernel
         .gwe
         .create_window(completion_receiver, "SendCompleteWake", "send");
@@ -1034,6 +1051,9 @@ fn reply_message_wakes_sender_waiter_before_receiver_dispatch_returns() -> Resul
 
     let sender_thread = 66;
     let receiver_thread = 67;
+    let mut reply_wake_class = [0u8; WNDCLASSW_SIZE];
+    reply_wake_class[28..32].copy_from_slice(&0x000b_4005_u32.to_le_bytes());
+    kernel.gwe.register_class("ReplyWake", reply_wake_class);
     let hwnd = kernel
         .gwe
         .create_window(receiver_thread, "ReplyWake", "send");
@@ -1210,6 +1230,8 @@ fn remote_serial_injection_queues_scheduler_serial_read_candidates() -> Result<(
             SchedulerBlockedWaitKind::SendMessage { send_id } => {
                 kernel.sent_message_result_ready(send_id)
             }
+            SchedulerBlockedWaitKind::ModalMessageBox => false,
+            SchedulerBlockedWaitKind::PopupMenuModal { .. } => false,
         }),
         Some(serial_wait)
     );
@@ -1288,6 +1310,8 @@ fn remote_serial_injection_queues_scheduler_comm_event_candidates() -> Result<()
             SchedulerBlockedWaitKind::SendMessage { send_id } => {
                 kernel.sent_message_result_ready(send_id)
             }
+            SchedulerBlockedWaitKind::ModalMessageBox => false,
+            SchedulerBlockedWaitKind::PopupMenuModal { .. } => false,
         }),
         Some(comm_wait)
     );
