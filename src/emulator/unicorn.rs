@@ -7,17 +7,27 @@ use crate::{
     emulator::{
         dll_search::{emulator_provided_import_module, normalize_module_name, resolve_dll_path},
         imports::{
-            DYNAMIC_COREDLL_PROC_TRAP_BASE, ExternalImportTable, IMPORT_TRAP_BASE,
+            ExternalImportTable, IMPORT_TRAP_BASE,
             IMPORT_TRAP_PAGE_SIZE, ImportTrap, ImportTrapTable, import_trap_code_page,
-            parse_forwarder_target, patch_external_imports, patch_pe_coredll_imports,
-            patch_pe_imports,
+            parse_forwarder_target, patch_pe_imports,
         },
         memory::{MemoryMap, MemoryPerms},
+        pe_loader::{
+            MappedBlob, MappedResource, MappedResourceString, PeLoadResult,
+            GUEST_HEAP_ARENA_BASE, GUEST_HEAP_ARENA_SIZE,
+            RESERVED_IMPORT_TRAP_STUB_BYTES,
+            SYS_HANDLE_CURRENT_PROCESS, SYS_HANDLE_CURRENT_THREAD,
+            align_up_4k, choose_dll_load_base, loaded_module_info,
+            range_contains, ranges_overlap,
+            refresh_import_trap_page_blob, user_kdata_handle_address,
+        },
         types::*,
     },
     error::{Error, Result},
     pe::PeImage,
 };
+#[cfg(all(test, feature = "unicorn"))]
+use crate::emulator::pe_loader::{GUEST_STACK_MIN_RESERVE, USER_KDATA_PAGE_BASE, user_kdata_page};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
@@ -25,6 +35,31 @@ use std::{
 };
 #[cfg(feature = "unicorn")]
 use unicorn_engine::RegisterMIPS;
+#[cfg(feature = "unicorn")]
+use super::cpu_mips::{
+    MipsGuestContext, MipsTrampolineJump, MipsTrampolinePatchResult, LiveTrampolineState,
+    MIPS_JMPBUF_RETURN_PC_SLOT, MIPS_JMPBUF_SP_SLOT, MIPS_JMPBUF_FP_SLOT,
+    MIPS_JMPBUF_RA_SLOT, MIPS_JMPBUF_GP_SLOT, MIPS_JMPBUF_S0_SLOT,
+    patch_mips_unicorn_trampolines,
+    decode_trampoline_sentinel_target, is_patched_trampoline_jump, target_in_ranges,
+    read_mips_reg, read_mips_import_args, read_mips_gpr, write_mips_gpr, mips_gpr_name,
+    capture_mips_gprs, restore_mips_gprs,
+    is_mips_delay_slot_pc,
+    mips_trampoline_origin_for_pc, decode_old_mips_kernel_call,
+    decode_addiu_zero, decode_jalr_register, decode_indirect_call_register,
+    decode_jr_register, decode_direct_jump_target, is_trampoline_sentinel_first_word,
+    trampoline_stub_by_origin,
+};
+#[cfg(all(test, feature = "unicorn"))]
+use super::cpu_mips::{
+    MipsBranchLikely, MipsBranch,
+    decode_mips_branch_likely, decode_mips_normal_branch,
+    jal_stub_words, branch_likely_stub_words, normal_branch_stub_words,
+    encode_mips_lui, encode_mips_ori, encode_mips_jr,
+    is_mips_control_transfer_instruction,
+    mips_halfword_jump_table_ranges, mips_byte_jump_table_ranges,
+    mips_patch_rva_overlaps_data_ranges,
+};
 
 const MAX_EMPTY_QUEUE_TIMER_FAST_FORWARD_MS: u32 = 100;
 
@@ -179,21 +214,10 @@ fn unicorn_window_snapshot(window: crate::ce::gwe::Window) -> UnicornWindowSnaps
     }
 }
 
-const USER_KDATA_PAGE_BASE: u32 = 0x0000_5000;
-const USER_KDATA_PAGE_SIZE: u32 = 0x0000_1000;
-const USER_KDATA_BASE: u32 = 0x0000_5800;
-const USER_KDATA_SYSHANDLE_OFFSET: u32 = 0x0000_0004;
-const SYS_HANDLE_CURRENT_THREAD: usize = 1;
-const SYS_HANDLE_CURRENT_PROCESS: usize = 2;
 const MAIN_GUEST_THREAD_ID: u32 = 1;
-const GUEST_STACK_MIN_RESERVE: u32 = 0x0040_0000;
 #[cfg(feature = "unicorn")]
 const GUEST_THREAD_STACK_SLOT_SIZE: u32 = 0x0002_0000;
-const GUEST_HEAP_ARENA_BASE: u32 = 0x3000_0000;
-const GUEST_HEAP_ARENA_SIZE: u32 = 0x0100_0000;
 const GUEST_HEAP_SPILLOVER_GRANULARITY: u32 = 0x0010_0000;
-#[cfg(feature = "unicorn")]
-const EXTERNAL_TRAMPOLINE_BASE: u32 = 0x7000_0000;
 #[cfg(feature = "unicorn")]
 const UNICORN_TRACE_LIMIT: usize = 256;
 #[cfg(all(feature = "unicorn", feature = "trace"))]
@@ -235,8 +259,6 @@ const UNICORN_CODE_TRACE_SAMPLE_INTERVAL: u32 = 64;
 #[cfg(feature = "unicorn")]
 const UNICORN_BLOCK_TRACE_SAMPLE_INTERVAL: u32 = 16;
 #[cfg(feature = "unicorn")]
-const MIPS_JUMP_TABLE_SELECTOR_SEARCH_BACK: u32 = 512;
-#[cfg(feature = "unicorn")]
 const IMPORT_TRAP_ARG_COUNT: usize = 12;
 #[cfg(feature = "unicorn")]
 const THREAD_EXIT_STUB_ADDR: u32 =
@@ -256,15 +278,10 @@ const QSORT_RETURN_STUB_ADDR: u32 =
 #[cfg(feature = "unicorn")]
 const DLL_LIFECYCLE_RETURN_STUB_ADDR: u32 =
     QSORT_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
-const RESERVED_IMPORT_TRAP_STUB_BYTES: u32 = crate::emulator::imports::IMPORT_TRAP_STRIDE * 6;
 #[cfg(feature = "unicorn")]
 const CREATESTRUCTW_SIZE: u32 = 48;
 #[cfg(feature = "unicorn")]
 const WM_INITDIALOG: u32 = 0x0110;
-#[cfg(feature = "unicorn")]
-const IMAGE_SCN_MEM_EXECUTE: u32 = 0x2000_0000;
-#[cfg(feature = "unicorn")]
-const MIPS_NOP: u32 = 0x0000_0000;
 #[cfg(feature = "unicorn")]
 const WNDPROC_CALL_FRAME_BYTES: u32 = 0x20;
 #[cfg(feature = "unicorn")]
@@ -362,30 +379,6 @@ struct DestroyWndProcCallout {
     hwnd: u32,
     wndproc: u32,
     class_name: Option<String>,
-}
-
-#[cfg(feature = "unicorn")]
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct MipsGuestContext {
-    regs: [u32; 32],
-    hi: u32,
-    lo: u32,
-}
-
-#[cfg(feature = "unicorn")]
-impl MipsGuestContext {
-    #[cfg_attr(not(test), allow(dead_code))]
-    fn zero() -> Self {
-        Self {
-            regs: [0; 32],
-            hi: 0,
-            lo: 0,
-        }
-    }
-
-    fn set_v0(&mut self, value: u32) {
-        self.regs[2] = value;
-    }
 }
 
 #[cfg(feature = "unicorn")]
@@ -584,31 +577,6 @@ type SuspendedGuestThreadSlot = std::rc::Rc<std::cell::RefCell<Option<SuspendedG
 type SuspendedGuestThreadQueue =
     std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<SuspendedGuestThread>>>;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct MappedResourceString {
-    module: u32,
-    id: u32,
-    text: String,
-    data_ptr: Option<u32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct MappedResource {
-    module: u32,
-    name: u32,
-    name_string: Option<String>,
-    kind: u32,
-    data_ptr: u32,
-    size: u32,
-}
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-struct MappedBlob {
-    name: String,
-    base: u32,
-    bytes: Vec<u8>,
-}
 
 const HEAP_SPILLOVER_BLOB_NAME: &str = "ram:heap-spillover";
 
@@ -1246,243 +1214,32 @@ impl UnicornMips {
     }
 
     pub fn load_pe_image_with_dlls(&mut self, image: &PeImage, dlls: &[PeImage]) -> Result<()> {
-        let mut external = ExternalImportTable::default();
-        let mut loaded_dlls = Vec::new();
-        let mut next_dll_base = 0x6000_0000u32;
-        let mut next_trap_base = IMPORT_TRAP_BASE;
-        let mut image_occupancy = image.mapped_image()?;
-        #[cfg(feature = "unicorn")]
-        let mut trampoline_blobs: Vec<(String, u32, Vec<u8>)> = Vec::new();
-        #[cfg(feature = "unicorn")]
-        let mut next_trampoline_base = EXTERNAL_TRAMPOLINE_BASE;
-        #[cfg(feature = "unicorn")]
-        {
-            let _ = patch_mips_unicorn_trampolines(
-                image,
-                image.image_base(),
-                &mut image_occupancy,
-                None,
-            )?;
-        }
-        let image_mapped_size = align_up_4k(image_occupancy.len() as u32)?;
-        let mut occupied_image_ranges = vec![(image.image_base(), image_mapped_size)];
-        self.loaded_modules.clear();
-
-        for dll in dlls {
-            let dll_size = align_up_4k(dll.optional_header.size_of_image)?;
-            let mut load_base = choose_dll_load_base(
-                dll.image_base(),
-                dll_size,
-                &occupied_image_ranges,
-                &mut next_dll_base,
-            )?;
-            let (mapped, traps, trampoline_patch, mapped_size) = loop {
-                let mut mapped = dll.mapped_image_at(load_base)?;
-                let traps = patch_pe_coredll_imports(
-                    dll,
-                    &mut mapped,
-                    &crate::ce::coredll::CoredllExportTable::default(),
-                    next_trap_base,
-                )?;
-                #[cfg(feature = "unicorn")]
-                let trampoline_patch = {
-                    let trampoline_base = allocate_relocated_dll_base(
-                        0x0010_0000,
-                        &occupied_image_ranges,
-                        &mut next_trampoline_base,
-                    )?;
-                    Some(patch_mips_unicorn_trampolines(
-                        dll,
-                        load_base,
-                        &mut mapped,
-                        Some(trampoline_base),
-                    )?)
-                };
-                #[cfg(not(feature = "unicorn"))]
-                let trampoline_patch: Option<MipsTrampolinePatchResult> = None;
-                let mapped_size = align_up_4k(mapped.len() as u32)?;
-                if !range_overlaps_any(load_base, mapped_size, &occupied_image_ranges) {
-                    break (mapped, traps, trampoline_patch, mapped_size);
-                }
-                load_base = allocate_relocated_dll_base(
-                    mapped_size,
-                    &occupied_image_ranges,
-                    &mut next_dll_base,
-                )?;
-            };
-            occupied_image_ranges.push((load_base, mapped_size));
-            next_trap_base = advance_trap_base(next_trap_base, traps.len())?;
-            self.import_traps.merge(traps);
-            external.add_pe_image(module_file_name(&dll.path), dll, load_base);
-            #[cfg(not(feature = "unicorn"))]
-            let _ = trampoline_patch;
-            #[cfg(feature = "unicorn")]
-            if let Some(mut trampoline_patch) = trampoline_patch {
-                if let Some(range) = trampoline_patch.range {
-                    self.trampoline_ranges.push(range);
-                    if let Some(bytes) = trampoline_patch.external_mapped.take() {
-                        occupied_image_ranges.push((range.0, range.1));
-                        trampoline_blobs.push((format!("trampoline:{}", dll.path), range.0, bytes));
-                    }
-                }
-                self.trampoline_jumps.extend(trampoline_patch.jumps);
-            }
-            self.loaded_modules
-                .push(loaded_module_info(dll, load_base)?);
-            loaded_dlls.push((dll.path.clone(), load_base, mapped));
-        }
-        for (path, _load_base, mapped) in &mut loaded_dlls {
-            if let Some(dll) = dlls.iter().find(|dll| dll.path == *path) {
-                patch_external_imports(mapped, &dll.imports, &external)?;
-            }
-        }
-
-        let mut mapped = image.mapped_image()?;
-        let traps = patch_pe_imports(
-            image,
-            &mut mapped,
-            &crate::ce::coredll::CoredllExportTable::default(),
-            next_trap_base,
-            &external,
-        )?;
-        #[cfg(feature = "unicorn")]
-        {
-            let trampoline_patch =
-                patch_mips_unicorn_trampolines(image, image.image_base(), &mut mapped, None)?;
-            if let Some(range) = trampoline_patch.range {
-                self.trampoline_ranges.push(range);
-            }
-            self.trampoline_jumps.extend(trampoline_patch.jumps);
-        }
-        self.map_region(
-            image.image_base(),
-            align_up_4k(mapped.len() as u32)?,
-            MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC,
-            "pe-image",
-        )?;
-        for (path, load_base, mapped) in &loaded_dlls {
-            self.map_region(
-                *load_base,
-                align_up_4k(mapped.len() as u32)?,
-                MemoryPerms::READ | MemoryPerms::WRITE | MemoryPerms::EXEC,
-                &format!("dll:{path}"),
-            )?;
-        }
-        #[cfg(feature = "unicorn")]
-        for (name, base, mapped) in &trampoline_blobs {
-            self.map_region(
-                *base,
-                align_up_4k(mapped.len() as u32)?,
-                MemoryPerms::READ | MemoryPerms::EXEC,
-                name,
-            )?;
-        }
-        if !self
-            .memory
-            .contains_range(IMPORT_TRAP_BASE, IMPORT_TRAP_PAGE_SIZE)
-        {
-            self.map_region(
-                IMPORT_TRAP_BASE,
-                IMPORT_TRAP_PAGE_SIZE,
-                MemoryPerms::READ | MemoryPerms::EXEC,
-                "ce-import-traps",
-            )?;
-        }
-        if !self
-            .memory
-            .contains_range(USER_KDATA_PAGE_BASE, USER_KDATA_PAGE_SIZE)
-        {
-            self.map_region(
-                USER_KDATA_PAGE_BASE,
-                USER_KDATA_PAGE_SIZE,
-                MemoryPerms::READ | MemoryPerms::WRITE,
-                "ce-user-kdata",
-            )?;
-        }
-        if !self
-            .memory
-            .contains_range(GUEST_HEAP_ARENA_BASE, GUEST_HEAP_ARENA_SIZE)
-        {
-            self.map_region(
-                GUEST_HEAP_ARENA_BASE,
-                GUEST_HEAP_ARENA_SIZE,
-                MemoryPerms::READ | MemoryPerms::WRITE,
-                "ce-heap-arena",
-            )?;
-        }
-        let stack_size = align_up_4k(
-            image
-                .optional_header
-                .size_of_stack_reserve
-                .max(GUEST_STACK_MIN_RESERVE),
-        )?;
-        let stack_top = IMPORT_TRAP_BASE
-            .checked_sub(0x10000)
-            .ok_or_else(|| Error::InvalidArgument("guest stack top underflow".to_owned()))?;
-        let stack_base = stack_top
-            .checked_sub(stack_size)
-            .ok_or_else(|| Error::InvalidArgument("guest stack base underflow".to_owned()))?;
-        self.map_region(
-            stack_base,
-            stack_size,
-            MemoryPerms::READ | MemoryPerms::WRITE,
-            "guest-stack",
-        )?;
-        self.stack_top = Some(stack_top);
-        self.entry = Some(image.entry_point_va());
-        self.entry_image_base = Some(image.image_base());
-        self.register_image_resource_strings(image, image.image_base())?;
-        self.import_traps.merge(traps);
-        self.mapped_blobs.push(MappedBlob {
-            name: format!("image:{}", image.path),
-            base: image.image_base(),
-            bytes: mapped,
-        });
-        for (path, load_base, mapped) in loaded_dlls {
-            if let Some(dll) = dlls.iter().find(|dll| dll.path == path) {
-                self.register_image_resource_strings(dll, load_base)?;
-            }
-            self.mapped_blobs.push(MappedBlob {
-                name: format!("dll:{path}"),
-                base: load_base,
-                bytes: mapped,
-            });
-        }
-        #[cfg(feature = "unicorn")]
-        for (name, base, mapped) in trampoline_blobs {
-            self.mapped_blobs.push(MappedBlob {
-                name,
-                base,
-                bytes: mapped,
-            });
-        }
-        self.mapped_blobs.push(MappedBlob {
-            name: "user-kdata".to_owned(),
-            base: USER_KDATA_PAGE_BASE,
-            bytes: user_kdata_page(),
-        });
-        refresh_import_trap_page_blob(&mut self.mapped_blobs, &self.import_traps);
-        Ok(())
+        let result = super::pe_loader::load_pe_image_with_dlls(image, dlls)?;
+        self.apply_pe_load_result(result)
     }
 
-    fn register_image_resource_strings(&mut self, image: &PeImage, load_base: u32) -> Result<()> {
-        for string in image.resource_strings()? {
-            self.resource_strings.push(MappedResourceString {
-                module: load_base,
-                id: string.id,
-                text: string.text,
-                data_ptr: Some(load_base.wrapping_add(string.data_rva)),
-            });
+    fn apply_pe_load_result(&mut self, result: PeLoadResult) -> Result<()> {
+        self.loaded_modules.clear();
+        for (base, size, perms, name) in result.memory_regions {
+            self.map_region(base, size, perms, &name)?;
         }
-        for resource in image.resource_data_entries()? {
-            self.resources.push(MappedResource {
-                module: load_base,
-                name: resource.name,
-                name_string: resource.name_string,
-                kind: resource.kind,
-                data_ptr: load_base.wrapping_add(resource.data_rva),
-                size: resource.size,
-            });
+        for (base, size, perms, name) in result.shared_memory_regions {
+            if !self.memory.contains_range(base, size) {
+                self.map_region(base, size, perms, &name)?;
+            }
+        }
+        self.entry = Some(result.entry);
+        self.entry_image_base = Some(result.entry_image_base);
+        self.stack_top = Some(result.stack_top);
+        self.import_traps.merge(result.import_traps);
+        self.mapped_blobs.extend(result.mapped_blobs);
+        self.loaded_modules = result.loaded_modules;
+        self.resource_strings.extend(result.resource_strings);
+        self.resources.extend(result.resources);
+        #[cfg(feature = "unicorn")]
+        {
+            self.trampoline_ranges.extend(result.trampoline_ranges);
+            self.trampoline_jumps.extend(result.trampoline_jumps);
         }
         Ok(())
     }
@@ -1635,6 +1392,7 @@ impl UnicornMips {
             unicorn_const::{Arch, HookType, Mode},
         };
 
+        // ── Unicorn engine init + memory mapping ─────────────────────────────────
         let framebuffer_info = framebuffer.info();
         tracing::debug!(
             target: "ce.framebuffer",
@@ -1685,6 +1443,7 @@ impl UnicornMips {
             kernel.current_process_id(),
         )?;
 
+        // ── Shared hook state (Rc<RefCell<_>> handles moved into closures) ────────
         let indirect_call_probe = Rc::new(RefCell::new(None));
         let indirect_call_probe_hook = Rc::clone(&indirect_call_probe);
         let last_code = Rc::new(RefCell::new(Vec::<UnicornLastCode>::new()));
@@ -1786,6 +1545,7 @@ impl UnicornMips {
         let blocked_get_message_live_hook = Rc::clone(&blocked_get_message);
         let cross_process_send_yield = Rc::new(RefCell::new(None::<UnicornCrossProcessSendYield>));
         let cross_process_send_yield_hook = Rc::clone(&cross_process_send_yield);
+        // ── Code hook: per-instruction trampoline dispatch, call tracing, indirect-call probe ──
         if !fast_start_enabled {
             uc.add_code_hook(1, 0, move |uc, address, _size| {
             let pc = address as u32;
@@ -2062,6 +1822,7 @@ impl UnicornMips {
             })
             .map_err(|err| Error::Backend(format!("install indirect-call probe: {err:?}")))?;
         } else {
+            // ── Fast-start code hooks: sparse per-site and per-trampoline-range hooks ──
             let fast_mapped_code = Rc::new(MappedCodeIndex::new(self.mapped_blobs.clone()));
             let fast_trampoline_ranges = Rc::new(self.trampoline_ranges.clone());
             let fast_trampoline_stub_by_origin = Rc::new(trampoline_stub_by_origin.clone());
@@ -2252,6 +2013,7 @@ impl UnicornMips {
             }
         }
 
+        // ── Block trace hook (full_trace only) ───────────────────────────────────
         let last_blocks = Rc::new(RefCell::new(Vec::<UnicornLastBlock>::new()));
         if full_trace_enabled {
             let last_blocks_hook = Rc::clone(&last_blocks);
@@ -2279,6 +2041,7 @@ impl UnicornMips {
             .map_err(|err| Error::Backend(format!("install block trace hook: {err:?}")))?;
         }
 
+        // ── Scheduler + wndproc + thread shared state ─────────────────────────────
         let blocked_get_message_hook = Rc::clone(&blocked_get_message);
         let last_imports = Rc::new(RefCell::new(Vec::<UnicornLastImport>::new()));
         let last_imports_hook = Rc::clone(&last_imports);
@@ -2390,6 +2153,7 @@ impl UnicornMips {
                 start_pc = read_mips_reg(&uc, RegisterMIPS::PC);
             }
         }
+        // ── Scheduler timeslice hook: context-switch at safe MIPS branch boundaries ──
         let scheduler_timeslice_counter = Rc::new(Cell::new(0u32));
         let scheduler_timeslice_counter_hook = Rc::clone(&scheduler_timeslice_counter);
         let scheduler_timeslice_pending = Rc::new(Cell::new(false));
@@ -2426,7 +2190,7 @@ impl UnicornMips {
                     .borrow()
                     .is_empty()
                 || is_control_transfer_target(previous_pc, pc)
-                || is_mips_delay_slot_pc(uc, previous_pc, pc));
+                || is_mips_delay_slot_pc(|addr| read_unicorn_u32(uc, addr), previous_pc, pc));
             if !scheduler_timeslice_consume_if_safe(
                 &scheduler_timeslice_pending_hook,
                 safe_to_attempt,
@@ -2485,6 +2249,7 @@ impl UnicornMips {
             })
             .map_err(|err| Error::Backend(format!("install guest entry trace hook: {err:?}")))?;
         }
+        // ── Import trap hook: CE API dispatch (all PCs in the import trap page) ──
         let import_traps_live = Rc::new(RefCell::new(self.import_traps.clone()));
         let traps = Rc::clone(&import_traps_live);
         let stack_top = self.stack_top.unwrap_or(0);
@@ -3017,7 +2782,7 @@ impl UnicornMips {
                         );
                     }
                 }
-                let args = read_mips_import_args(uc);
+                let args = read_mips_import_args(uc, IMPORT_TRAP_ARG_COUNT);
                 #[cfg(feature = "trace")]
                 if inavi_slot_trace_enabled
                     && let (Some(trap), Some(watched_slot)) =
@@ -3654,6 +3419,7 @@ impl UnicornMips {
         )
         .map_err(|err| Error::Backend(format!("install import hook: {err:?}")))?;
 
+        // ── Thread-exit stub hook: stops emulation when the thread-exit trampoline fires ──
         let thread_exit_reached = Rc::new(RefCell::new(false));
         let thread_exit_reached_hook = Rc::clone(&thread_exit_reached);
         uc.add_code_hook(
@@ -3666,6 +3432,7 @@ impl UnicornMips {
         )
         .map_err(|err| Error::Backend(format!("install thread-exit hook: {err:?}")))?;
 
+        // ── Memory fault hook + optional iNavi/render-map trace watch hooks ────────
         let memory_fault = Rc::new(RefCell::new(None));
         let memory_fault_hook = Rc::clone(&memory_fault);
         #[cfg(feature = "trace")]
@@ -3762,6 +3529,7 @@ impl UnicornMips {
         )
         .map_err(|err| Error::Backend(format!("install memory fault hook: {err:?}")))?;
 
+        // ── Interrupt + invalid-instruction probes ────────────────────────────────
         let interrupt_probe = Rc::new(RefCell::new(None));
         let interrupt_probe_hook = Rc::clone(&interrupt_probe);
         let interrupt_last_code_probe = Rc::clone(&last_code_probe);
@@ -3793,6 +3561,7 @@ impl UnicornMips {
         })
         .map_err(|err| Error::Backend(format!("install invalid-instruction probe: {err:?}")))?;
 
+        // ── Run ───────────────────────────────────────────────────────────────────
         let native_timeout_us = limits.wall_clock_limit_ms.saturating_mul(1_000);
         let result = uc.emu_start(
             u64::from(start_pc),
@@ -3815,6 +3584,7 @@ impl UnicornMips {
                 elapsed_ms: host_wall_clock_started.elapsed().as_millis() as u64,
             });
         }
+        // ── Post-run: sync state, capture debug snapshot ──────────────────────────
         self.import_traps = import_traps_live.borrow().clone();
         let snapshot_pc = read_mips_reg(&uc, RegisterMIPS::PC);
         let snapshot_ra = read_mips_reg(&uc, RegisterMIPS::RA);
@@ -3896,6 +3666,7 @@ impl UnicornMips {
             Some(thread_state),
             *thread_exit_reached.borrow(),
         );
+        // ── Error handling + persist run state ────────────────────────────────────
         if snapshot.host_wall_clock_stop.is_some() {
             self.last_wall_clock_debug = Some(snapshot.clone());
         }
@@ -4167,24 +3938,6 @@ impl super::cpu::CpuBackend for UnicornMips {
     }
 }
 
-fn ranges_overlap(lhs_base: u32, lhs_size: u32, rhs_base: u32, rhs_size: u32) -> bool {
-    let lhs_end = lhs_base.saturating_add(lhs_size);
-    let rhs_end = rhs_base.saturating_add(rhs_size);
-    lhs_base < rhs_end && rhs_base < lhs_end
-}
-
-fn range_contains(outer_base: u32, outer_size: u32, inner_base: u32, inner_size: u32) -> bool {
-    let outer_end = outer_base.saturating_add(outer_size);
-    let inner_end = inner_base.saturating_add(inner_size);
-    outer_base <= inner_base && inner_end <= outer_end
-}
-
-fn range_overlaps_any(base: u32, size: u32, ranges: &[(u32, u32)]) -> bool {
-    ranges
-        .iter()
-        .any(|(other_base, other_size)| ranges_overlap(base, size, *other_base, *other_size))
-}
-
 fn ensure_mapped_ram_blob(
     mapped_blobs: &mut Vec<MappedBlob>,
     name: &str,
@@ -4322,108 +4075,6 @@ fn map_persisted_ram_blob_pages<D>(
     Ok(())
 }
 
-fn choose_dll_load_base(
-    preferred_base: u32,
-    image_size: u32,
-    occupied_ranges: &[(u32, u32)],
-    next_dll_base: &mut u32,
-) -> Result<u32> {
-    if !range_overlaps_any(preferred_base, image_size, occupied_ranges) {
-        return Ok(preferred_base);
-    }
-
-    allocate_relocated_dll_base(image_size, occupied_ranges, next_dll_base)
-}
-
-fn allocate_relocated_dll_base(
-    image_size: u32,
-    occupied_ranges: &[(u32, u32)],
-    next_dll_base: &mut u32,
-) -> Result<u32> {
-    let mut candidate = align_up_4k(*next_dll_base)?;
-    while range_overlaps_any(candidate, image_size, occupied_ranges) {
-        candidate = candidate
-            .checked_add(image_size)
-            .and_then(|base| base.checked_add(0x0010_0000))
-            .ok_or_else(|| Error::InvalidArgument("DLL load base overflow".to_owned()))?;
-        candidate = align_up_4k(candidate)?;
-    }
-    *next_dll_base = candidate
-        .checked_add(image_size)
-        .and_then(|base| base.checked_add(0x0010_0000))
-        .ok_or_else(|| Error::InvalidArgument("DLL load base overflow".to_owned()))?;
-    Ok(candidate)
-}
-
-fn module_file_name(path: &str) -> &str {
-    path.rsplit(['/', '\\']).next().unwrap_or(path)
-}
-
-fn loaded_module_info(image: &PeImage, load_base: u32) -> Result<LoadedPeModuleInfo> {
-    let mut exports_by_name = HashMap::new();
-    let mut exports_by_ordinal = HashMap::new();
-    let mut forwarders_by_name = HashMap::new();
-    let mut forwarders_by_ordinal = HashMap::new();
-    if let Some(exports) = image.exports.as_ref() {
-        for export in &exports.functions {
-            if export.rva == 0 {
-                continue;
-            }
-            if let Some(forwarder) = export.forwarder.as_ref() {
-                forwarders_by_ordinal.insert(export.ordinal, forwarder.clone());
-                if let Some(name) = export.name.as_deref() {
-                    forwarders_by_name.insert(
-                        crate::ce::kernel::normalize_symbol_name(name),
-                        forwarder.clone(),
-                    );
-                }
-            } else {
-                let va = load_base.wrapping_add(export.rva);
-                exports_by_ordinal.insert(export.ordinal, va);
-                if let Some(name) = export.name.as_deref() {
-                    exports_by_name.insert(crate::ce::kernel::normalize_symbol_name(name), va);
-                }
-            }
-        }
-    }
-    Ok(LoadedPeModuleInfo {
-        name: module_file_name(&image.path).to_owned(),
-        base: load_base,
-        guest_path: None,
-        host_path: Some(std::path::PathBuf::from(&image.path)),
-        image_size: image.optional_header.size_of_image,
-        entry_point: load_base.wrapping_add(image.optional_header.address_of_entry_point),
-        dependencies: image
-            .imports
-            .iter()
-            .map(|descriptor| descriptor.module_name.clone())
-            .collect(),
-        tls_callbacks: image.tls_callback_vas(load_base)?,
-        load_flags: 0,
-        dynamic: false,
-        exports_by_name,
-        exports_by_ordinal,
-        forwarders_by_name,
-        forwarders_by_ordinal,
-    })
-}
-
-fn user_kdata_page() -> Vec<u8> {
-    let mut page = vec![0; USER_KDATA_PAGE_SIZE as usize];
-    write_user_kdata_handle(&mut page, SYS_HANDLE_CURRENT_THREAD, 1);
-    write_user_kdata_handle(&mut page, SYS_HANDLE_CURRENT_PROCESS, 1);
-    page
-}
-
-fn user_kdata_handle_address(index: usize) -> u32 {
-    USER_KDATA_BASE + USER_KDATA_SYSHANDLE_OFFSET + index as u32 * 4
-}
-
-fn write_user_kdata_handle(page: &mut [u8], index: usize, value: u32) {
-    let offset = user_kdata_handle_address(index).saturating_sub(USER_KDATA_PAGE_BASE) as usize;
-    page[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-}
-
 #[cfg(feature = "unicorn")]
 fn update_user_kdata_current_ids<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
@@ -4443,445 +4094,6 @@ fn update_user_kdata_current_ids<D>(
     Ok(())
 }
 
-#[cfg(feature = "unicorn")]
-fn patch_mips_unicorn_trampolines(
-    image: &PeImage,
-    load_base: u32,
-    mapped: &mut Vec<u8>,
-    external_stub_base: Option<u32>,
-) -> Result<MipsTrampolinePatchResult> {
-    let mut patches = Vec::new();
-    for section in &image.sections {
-        if section.characteristics & IMAGE_SCN_MEM_EXECUTE == 0 {
-            continue;
-        }
-        let section_size = section.virtual_size.max(section.size_of_raw_data);
-        let start = section.virtual_address;
-        let Some(end) = start.checked_add(section_size) else {
-            return Err(Error::InvalidArgument(format!(
-                "{} section {} overflows",
-                image.path, section.name
-            )));
-        };
-        let mut jump_table_data_ranges =
-            mips_halfword_jump_table_ranges(mapped, load_base, start, end, &image.path)?;
-        jump_table_data_ranges.extend(mips_byte_jump_table_ranges(
-            mapped,
-            load_base,
-            start,
-            end,
-            &image.path,
-        )?);
-        let mut rva = start;
-        while rva.checked_add(8).is_some_and(|next| next <= end) {
-            if mips_patch_rva_overlaps_data_ranges(rva, &jump_table_data_ranges) {
-                rva = rva
-                    .checked_add(4)
-                    .ok_or_else(|| Error::InvalidArgument("section scan overflow".to_owned()))?;
-                continue;
-            }
-            let instruction = read_mapped_word(mapped, rva, &image.path)?;
-            let delay_slot = read_mapped_word(mapped, rva + 4, &image.path)?;
-            if let Some(branch) = decode_mips_branch_likely(instruction) {
-                let pc = load_base.wrapping_add(rva);
-                patches.push(MipsUnicornPatch {
-                    rva,
-                    pc,
-                    kind: MipsUnicornPatchKind::BranchLikely { branch, delay_slot },
-                });
-            } else if let Some(branch) = decode_mips_normal_branch(instruction) {
-                let pc = load_base.wrapping_add(rva);
-                if delay_slot == MIPS_NOP && pc.wrapping_add(branch.target) == pc.wrapping_add(8) {
-                    write_mapped_word(mapped, rva, MIPS_NOP, &image.path)?;
-                } else if delay_slot != MIPS_NOP || is_unconditional_taken_branch(branch) {
-                    patches.push(MipsUnicornPatch {
-                        rva,
-                        pc,
-                        kind: MipsUnicornPatchKind::Branch { branch, delay_slot },
-                    });
-                }
-            } else if let Some(target) =
-                decode_mips_jal_target(load_base.wrapping_add(rva), instruction)
-            {
-                let pc = load_base.wrapping_add(rva);
-                patches.push(MipsUnicornPatch {
-                    rva,
-                    pc,
-                    kind: MipsUnicornPatchKind::Jal { target, delay_slot },
-                });
-            }
-            rva = rva
-                .checked_add(4)
-                .ok_or_else(|| Error::InvalidArgument("section scan overflow".to_owned()))?;
-        }
-    }
-
-    if patches.is_empty() {
-        return Ok(MipsTrampolinePatchResult::default());
-    }
-
-    let aligned_len = align_up_4k(mapped.len() as u32)? as usize;
-    let mut stub_bytes = Vec::new();
-    if external_stub_base.is_none() && mapped.len() < aligned_len {
-        mapped.resize(aligned_len, 0);
-    }
-    let mut stub_rva = if external_stub_base.is_some() {
-        0
-    } else {
-        aligned_len as u32
-    };
-    let mut trampoline_jumps = Vec::with_capacity(patches.len());
-    for patch in patches {
-        let stub_pc = external_stub_base
-            .unwrap_or(load_base)
-            .wrapping_add(stub_rva);
-        let stub_words = match patch.kind {
-            MipsUnicornPatchKind::BranchLikely { branch, delay_slot } => {
-                branch_likely_stub_words(patch.pc, branch, delay_slot, stub_pc)?
-            }
-            MipsUnicornPatchKind::Branch { branch, delay_slot } => {
-                normal_branch_stub_words(patch.pc, branch, delay_slot, stub_pc)?
-            }
-            MipsUnicornPatchKind::Jal { target, delay_slot } => {
-                jal_stub_words(patch.pc, target, delay_slot, stub_pc)?
-            }
-        };
-        write_mapped_word(
-            mapped,
-            patch.rva,
-            encode_mips_lui(26, stub_pc >> 16),
-            &image.path,
-        )?;
-        write_mapped_word(
-            mapped,
-            patch.rva + 4,
-            encode_mips_ori(26, 26, stub_pc & 0xffff),
-            &image.path,
-        )?;
-        let stub_offset = if external_stub_base.is_some() {
-            stub_rva as usize
-        } else {
-            stub_rva as usize
-        };
-        let stub_end = stub_offset
-            .checked_add(stub_words.len() * 4)
-            .ok_or_else(|| Error::InvalidArgument("branch-likely stub overflow".to_owned()))?;
-        trampoline_jumps.push(MipsTrampolineJump {
-            origin: patch.pc,
-            stub: stub_pc,
-            byte_len: (stub_words.len() * 4) as u32,
-        });
-        let target_bytes = if external_stub_base.is_some() {
-            &mut stub_bytes
-        } else {
-            &mut *mapped
-        };
-        if target_bytes.len() < stub_end {
-            target_bytes.resize(stub_end, 0);
-        }
-        for (index, word) in stub_words.into_iter().enumerate() {
-            let offset = stub_offset + index * 4;
-            target_bytes[offset..offset + 4].copy_from_slice(&word.to_le_bytes());
-        }
-        stub_rva = stub_rva
-            .checked_add((stub_end - stub_offset) as u32)
-            .ok_or_else(|| Error::InvalidArgument("branch-likely stub RVA overflow".to_owned()))?;
-    }
-    let (range_base, range_size, external_mapped) = if let Some(stub_base) = external_stub_base {
-        let final_len = align_up_4k(stub_rva)? as usize;
-        if stub_bytes.len() < final_len {
-            stub_bytes.resize(final_len, 0);
-        }
-        (stub_base, final_len as u32, Some(stub_bytes))
-    } else {
-        let final_len = align_up_4k(stub_rva)? as usize;
-        if mapped.len() < final_len {
-            mapped.resize(final_len, 0);
-        }
-        let range_base = load_base.wrapping_add(aligned_len as u32);
-        let range_size = final_len
-            .checked_sub(aligned_len)
-            .and_then(|size| u32::try_from(size).ok())
-            .ok_or_else(|| Error::InvalidArgument("branch trampoline range overflow".to_owned()))?;
-        (range_base, range_size, None)
-    };
-    Ok(MipsTrampolinePatchResult {
-        range: Some((range_base, range_size)),
-        jumps: trampoline_jumps,
-        external_mapped,
-    })
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct MipsTrampolinePatchResult {
-    range: Option<(u32, u32)>,
-    jumps: Vec<MipsTrampolineJump>,
-    external_mapped: Option<Vec<u8>>,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct MipsTrampolineJump {
-    origin: u32,
-    stub: u32,
-    byte_len: u32,
-}
-
-#[cfg(feature = "unicorn")]
-#[derive(Debug, Clone)]
-struct LiveTrampolineState {
-    ranges: Vec<(u32, u32)>,
-    jumps: Vec<MipsTrampolineJump>,
-    pages: HashSet<u32>,
-    stub_by_origin: HashMap<u32, u32>,
-    origin_by_stub: HashMap<u32, u32>,
-}
-
-#[cfg(feature = "unicorn")]
-impl LiveTrampolineState {
-    fn new(ranges: Vec<(u32, u32)>, jumps: Vec<MipsTrampolineJump>) -> Self {
-        let pages = trampoline_pages_for_ranges(&ranges);
-        let stub_by_origin = trampoline_stub_by_origin(&jumps);
-        let origin_by_stub = trampoline_origin_by_stub(&jumps);
-        Self {
-            ranges,
-            jumps,
-            pages,
-            stub_by_origin,
-            origin_by_stub,
-        }
-    }
-
-    fn extend(&mut self, patch: &MipsTrampolinePatchResult) {
-        if let Some(range) = patch.range {
-            self.ranges.push(range);
-        }
-        self.jumps.extend(patch.jumps.iter().copied());
-        self.pages = trampoline_pages_for_ranges(&self.ranges);
-        self.stub_by_origin = trampoline_stub_by_origin(&self.jumps);
-        self.origin_by_stub = trampoline_origin_by_stub(&self.jumps);
-    }
-
-    fn target_in_pages(&self, target: u32) -> bool {
-        target_in_trampoline_pages(target, &self.pages)
-    }
-
-    fn target_in_ranges(&self, target: u32) -> bool {
-        target_in_ranges(target, &self.ranges)
-    }
-
-    fn stub_for_origin(&self, origin: u32) -> Option<u32> {
-        self.stub_by_origin.get(&origin).copied()
-    }
-
-    fn origin_for_stub(&self, stub: u32) -> Option<u32> {
-        self.origin_by_stub.get(&stub).copied()
-    }
-
-    fn origin_for_pc(&self, pc: u32) -> Option<u32> {
-        self.jumps.iter().find_map(|trampoline| {
-            trampoline
-                .stub
-                .checked_add(trampoline.byte_len)
-                .filter(|end| pc >= trampoline.stub && pc < *end)
-                .map(|_| trampoline.origin)
-        })
-    }
-}
-
-#[cfg(feature = "unicorn")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct MipsUnicornPatch {
-    rva: u32,
-    pc: u32,
-    kind: MipsUnicornPatchKind,
-}
-
-#[cfg(feature = "unicorn")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MipsUnicornPatchKind {
-    BranchLikely {
-        branch: MipsBranchLikely,
-        delay_slot: u32,
-    },
-    Branch {
-        branch: MipsBranchLikely,
-        delay_slot: u32,
-    },
-    Jal {
-        target: u32,
-        delay_slot: u32,
-    },
-}
-
-#[cfg(feature = "unicorn")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct MipsBranchLikely {
-    rs: u32,
-    rt: u32,
-    target: u32,
-    inverse_branch: MipsBranch,
-    link: bool,
-}
-
-#[cfg(feature = "unicorn")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MipsBranch {
-    Beq,
-    Bne,
-    Blez,
-    Bgtz,
-    Bltz,
-    Bgez,
-}
-
-#[cfg(feature = "unicorn")]
-fn decode_mips_branch_likely(instruction: u32) -> Option<MipsBranchLikely> {
-    let opcode = instruction >> 26;
-    let rs = (instruction >> 21) & 0x1f;
-    let rt = (instruction >> 16) & 0x1f;
-    let imm = instruction as u16 as i16 as i32;
-    let target = (4i32.wrapping_add(imm.wrapping_shl(2))) as u32;
-    let relative_target = |pc: u32| pc.wrapping_add(target);
-
-    let inverse_branch = match opcode {
-        0x14 => MipsBranch::Bne,
-        0x15 => MipsBranch::Beq,
-        0x16 => MipsBranch::Bgtz,
-        0x17 => MipsBranch::Blez,
-        0x01 => match rt {
-            0x02 => MipsBranch::Bgez,
-            0x03 => MipsBranch::Bltz,
-            0x12 => MipsBranch::Bgez,
-            0x13 => MipsBranch::Bltz,
-            _ => return None,
-        },
-        _ => return None,
-    };
-    let link = opcode == 0x01 && matches!(rt, 0x12 | 0x13);
-    Some(MipsBranchLikely {
-        rs,
-        rt,
-        target: relative_target(0),
-        inverse_branch,
-        link,
-    })
-}
-
-#[cfg(feature = "unicorn")]
-fn decode_mips_normal_branch(instruction: u32) -> Option<MipsBranchLikely> {
-    let opcode = instruction >> 26;
-    let rs = (instruction >> 21) & 0x1f;
-    let rt = (instruction >> 16) & 0x1f;
-    let imm = instruction as u16 as i16 as i32;
-    let target = (4i32.wrapping_add(imm.wrapping_shl(2))) as u32;
-
-    let inverse_branch = match opcode {
-        0x04 => MipsBranch::Bne,
-        0x05 => MipsBranch::Beq,
-        0x06 => MipsBranch::Bgtz,
-        0x07 => MipsBranch::Blez,
-        0x01 => match rt {
-            0x00 => MipsBranch::Bgez,
-            0x01 => MipsBranch::Bltz,
-            _ => return None,
-        },
-        _ => return None,
-    };
-    Some(MipsBranchLikely {
-        rs,
-        rt,
-        target,
-        inverse_branch,
-        link: false,
-    })
-}
-
-#[cfg(feature = "unicorn")]
-fn is_unconditional_taken_branch(branch: MipsBranchLikely) -> bool {
-    branch.rs == 0 && branch.rt == 0 && branch.inverse_branch == MipsBranch::Bne
-}
-
-#[cfg(feature = "unicorn")]
-fn decode_mips_jal_target(pc: u32, instruction: u32) -> Option<u32> {
-    let opcode = instruction >> 26;
-    if opcode != 0x03 {
-        return None;
-    }
-    let index = instruction & 0x03ff_ffff;
-    Some((pc.wrapping_add(4) & 0xf000_0000) | (index << 2))
-}
-
-#[cfg(feature = "unicorn")]
-fn decode_trampoline_sentinel_target(instruction: u32, next_instruction: u32) -> Option<u32> {
-    let opcode = instruction >> 26;
-    let rt = (instruction >> 16) & 0x1f;
-    if opcode != 0x0f || rt != 26 {
-        return None;
-    }
-    let next_opcode = next_instruction >> 26;
-    let next_rs = (next_instruction >> 21) & 0x1f;
-    let next_rt = (next_instruction >> 16) & 0x1f;
-    if next_opcode != 0x0d || next_rs != 26 || next_rt != 26 {
-        return None;
-    }
-    Some(((instruction & 0xffff) << 16) | (next_instruction & 0xffff))
-}
-
-#[cfg(feature = "unicorn")]
-fn is_patched_trampoline_jump(
-    instruction: u32,
-    next_instruction: u32,
-    target: u32,
-    trampoline_ranges: &[(u32, u32)],
-) -> bool {
-    let opcode = instruction >> 26;
-    opcode == 0x02 && next_instruction == MIPS_NOP && target_in_ranges(target, trampoline_ranges)
-}
-
-#[cfg(feature = "unicorn")]
-fn target_in_ranges(target: u32, ranges: &[(u32, u32)]) -> bool {
-    ranges.iter().any(|(base, size)| {
-        let end = base.saturating_add(*size);
-        target >= *base && target < end
-    })
-}
-
-#[cfg(feature = "unicorn")]
-fn trampoline_pages_for_ranges(ranges: &[(u32, u32)]) -> HashSet<u32> {
-    let mut pages = HashSet::new();
-    for (base, size) in ranges {
-        if *size == 0 {
-            continue;
-        }
-        let first_page = base >> 12;
-        let last_page = base.saturating_add(size.saturating_sub(1)) >> 12;
-        for page in first_page..=last_page {
-            pages.insert(page);
-        }
-    }
-    pages
-}
-
-#[cfg(feature = "unicorn")]
-fn target_in_trampoline_pages(target: u32, pages: &HashSet<u32>) -> bool {
-    pages.contains(&(target >> 12))
-}
-
-#[cfg(feature = "unicorn")]
-fn trampoline_stub_by_origin(jumps: &[MipsTrampolineJump]) -> HashMap<u32, u32> {
-    jumps
-        .iter()
-        .map(|jump| (jump.origin, jump.stub))
-        .collect::<HashMap<_, _>>()
-}
-
-#[cfg(feature = "unicorn")]
-fn trampoline_origin_by_stub(jumps: &[MipsTrampolineJump]) -> HashMap<u32, u32> {
-    jumps
-        .iter()
-        .map(|jump| (jump.stub, jump.origin))
-        .collect::<HashMap<_, _>>()
-}
 
 #[cfg(feature = "unicorn")]
 fn fast_start_indirect_transfer_sites(blobs: &[MappedBlob]) -> Vec<u32> {
@@ -4913,530 +4125,6 @@ fn fast_start_indirect_transfer_sites(blobs: &[MappedBlob]) -> Vec<u32> {
     sites
 }
 
-#[cfg(feature = "unicorn")]
-fn mips_halfword_jump_table_ranges(
-    mapped: &[u8],
-    load_base: u32,
-    start: u32,
-    end: u32,
-    path: &str,
-) -> Result<Vec<(u32, u32)>> {
-    let mut ranges = Vec::new();
-    let mut rva = start;
-    while rva.checked_add(32).is_some_and(|next| next <= end) {
-        let Some(range) =
-            decode_mips_halfword_jump_table_range(mapped, load_base, start, end, rva, path)?
-        else {
-            rva = rva
-                .checked_add(4)
-                .ok_or_else(|| Error::InvalidArgument("section scan overflow".to_owned()))?;
-            continue;
-        };
-        ranges.push(range);
-        rva = rva
-            .checked_add(4)
-            .ok_or_else(|| Error::InvalidArgument("section scan overflow".to_owned()))?;
-    }
-    Ok(ranges)
-}
-
-#[cfg(feature = "unicorn")]
-fn mips_byte_jump_table_ranges(
-    mapped: &[u8],
-    load_base: u32,
-    start: u32,
-    end: u32,
-    path: &str,
-) -> Result<Vec<(u32, u32)>> {
-    let mut ranges = Vec::new();
-    let mut rva = start;
-    while rva.checked_add(28).is_some_and(|next| next <= end) {
-        let Some(range) =
-            decode_mips_byte_jump_table_range(mapped, load_base, start, end, rva, path)?
-        else {
-            rva = rva
-                .checked_add(4)
-                .ok_or_else(|| Error::InvalidArgument("section scan overflow".to_owned()))?;
-            continue;
-        };
-        ranges.push(range);
-        rva = rva
-            .checked_add(4)
-            .ok_or_else(|| Error::InvalidArgument("section scan overflow".to_owned()))?;
-    }
-    Ok(ranges)
-}
-
-#[cfg(feature = "unicorn")]
-fn decode_mips_halfword_jump_table_range(
-    mapped: &[u8],
-    load_base: u32,
-    section_start: u32,
-    section_end: u32,
-    rva: u32,
-    path: &str,
-) -> Result<Option<(u32, u32)>> {
-    let lui = read_mapped_word(mapped, rva, path)?;
-    let addiu = read_mapped_word(mapped, rva + 4, path)?;
-    let sll = read_mapped_word(mapped, rva + 8, path)?;
-    let addu_index = read_mapped_word(mapped, rva + 12, path)?;
-    let lh = read_mapped_word(mapped, rva + 16, path)?;
-    let addu_target = read_mapped_word(mapped, rva + 20, path)?;
-    let jr = read_mapped_word(mapped, rva + 24, path)?;
-    let delay_slot = read_mapped_word(mapped, rva + 28, path)?;
-
-    let Some(base_register) = decode_mips_lui_rt(lui) else {
-        return Ok(None);
-    };
-    if !is_mips_addiu_same_register(addiu, base_register) {
-        return Ok(None);
-    }
-    let Some((index_register, selector_register)) = decode_mips_sll_by_one(sll) else {
-        return Ok(None);
-    };
-    if !is_mips_addu(addu_index, index_register, index_register, base_register) {
-        return Ok(None);
-    }
-    if !is_mips_lh_same_register(lh, index_register) {
-        return Ok(None);
-    }
-    if !is_mips_addu(addu_target, base_register, base_register, index_register) {
-        return Ok(None);
-    }
-    if !is_mips_jr(jr, base_register) || delay_slot != MIPS_NOP {
-        return Ok(None);
-    }
-
-    let table_pc = ((lui & 0xffff) << 16).wrapping_add(addiu as u16 as i16 as i32 as u32);
-    let Some(table_rva) = table_pc.checked_sub(load_base) else {
-        return Ok(None);
-    };
-    if table_rva != rva + 32 || table_rva >= section_end {
-        return Ok(None);
-    }
-    let Some(entry_count) = find_mips_halfword_jump_table_entry_count(
-        mapped,
-        section_start,
-        rva,
-        selector_register,
-        path,
-    )?
-    else {
-        return Ok(None);
-    };
-    let byte_len = entry_count.saturating_mul(2);
-    if byte_len == 0 {
-        return Ok(None);
-    }
-    let Some(table_end) = table_rva.checked_add(byte_len) else {
-        return Ok(None);
-    };
-    if table_end > section_end {
-        return Ok(None);
-    }
-    Ok(Some((table_rva, byte_len)))
-}
-
-#[cfg(feature = "unicorn")]
-fn decode_mips_byte_jump_table_range(
-    mapped: &[u8],
-    load_base: u32,
-    section_start: u32,
-    section_end: u32,
-    rva: u32,
-    path: &str,
-) -> Result<Option<(u32, u32)>> {
-    let lui = read_mapped_word(mapped, rva, path)?;
-    let addiu = read_mapped_word(mapped, rva + 4, path)?;
-    let addu_index = read_mapped_word(mapped, rva + 8, path)?;
-    let lb = read_mapped_word(mapped, rva + 12, path)?;
-    let addu_target = read_mapped_word(mapped, rva + 16, path)?;
-    let jr = read_mapped_word(mapped, rva + 20, path)?;
-    let delay_slot = read_mapped_word(mapped, rva + 24, path)?;
-
-    let Some(base_register) = decode_mips_lui_rt(lui) else {
-        return Ok(None);
-    };
-    if !is_mips_addiu_same_register(addiu, base_register) {
-        return Ok(None);
-    }
-    let Some((index_register, selector_register)) =
-        decode_mips_addu_with_base(addu_index, base_register)
-    else {
-        return Ok(None);
-    };
-    if !is_mips_lb_same_register(lb, index_register) {
-        return Ok(None);
-    }
-    if !is_mips_addu(addu_target, base_register, base_register, index_register) {
-        return Ok(None);
-    }
-    if !is_mips_jr(jr, base_register) || delay_slot != MIPS_NOP {
-        return Ok(None);
-    }
-
-    let table_pc = ((lui & 0xffff) << 16).wrapping_add(addiu as u16 as i16 as i32 as u32);
-    let Some(table_rva) = table_pc.checked_sub(load_base) else {
-        return Ok(None);
-    };
-    if table_rva != rva + 28 || table_rva >= section_end {
-        return Ok(None);
-    }
-    let Some(entry_count) =
-        find_mips_jump_table_entry_count(mapped, section_start, rva, selector_register, path)?
-    else {
-        return Ok(None);
-    };
-    if entry_count == 0 {
-        return Ok(None);
-    }
-    let Some(table_end) = table_rva.checked_add(entry_count) else {
-        return Ok(None);
-    };
-    if table_end > section_end {
-        return Ok(None);
-    }
-    Ok(Some((table_rva, entry_count)))
-}
-
-#[cfg(feature = "unicorn")]
-fn find_mips_halfword_jump_table_entry_count(
-    mapped: &[u8],
-    section_start: u32,
-    setup_rva: u32,
-    selector_register: u32,
-    path: &str,
-) -> Result<Option<u32>> {
-    find_mips_jump_table_entry_count(mapped, section_start, setup_rva, selector_register, path)
-}
-
-#[cfg(feature = "unicorn")]
-fn find_mips_jump_table_entry_count(
-    mapped: &[u8],
-    section_start: u32,
-    setup_rva: u32,
-    selector_register: u32,
-    path: &str,
-) -> Result<Option<u32>> {
-    let search_start = setup_rva
-        .saturating_sub(MIPS_JUMP_TABLE_SELECTOR_SEARCH_BACK)
-        .max(section_start);
-    let mut cursor = setup_rva;
-    while cursor >= search_start + 4 {
-        cursor -= 4;
-        let instruction = read_mapped_word(mapped, cursor, path)?;
-        if instruction >> 26 == 0x0b
-            && ((instruction >> 21) & 0x1f) == selector_register
-            && (instruction & 0xffff) != 0
-        {
-            return Ok(Some(instruction & 0xffff));
-        }
-    }
-    Ok(None)
-}
-
-#[cfg(feature = "unicorn")]
-fn mips_patch_rva_overlaps_data_ranges(rva: u32, ranges: &[(u32, u32)]) -> bool {
-    ranges.iter().any(|(start, len)| {
-        let end = start.saturating_add(*len);
-        rva < end && rva.saturating_add(8) > *start
-    })
-}
-
-#[cfg(feature = "unicorn")]
-fn decode_mips_lui_rt(instruction: u32) -> Option<u32> {
-    (instruction >> 26 == 0x0f).then_some((instruction >> 16) & 0x1f)
-}
-
-#[cfg(feature = "unicorn")]
-fn is_mips_addiu_same_register(instruction: u32, register: u32) -> bool {
-    instruction >> 26 == 0x09
-        && ((instruction >> 21) & 0x1f) == register
-        && ((instruction >> 16) & 0x1f) == register
-}
-
-#[cfg(feature = "unicorn")]
-fn decode_mips_sll_by_one(instruction: u32) -> Option<(u32, u32)> {
-    let opcode = instruction >> 26;
-    let rs = (instruction >> 21) & 0x1f;
-    let rt = (instruction >> 16) & 0x1f;
-    let rd = (instruction >> 11) & 0x1f;
-    let shamt = (instruction >> 6) & 0x1f;
-    let funct = instruction & 0x3f;
-    (opcode == 0 && rs == 0 && shamt == 1 && funct == 0).then_some((rd, rt))
-}
-
-#[cfg(feature = "unicorn")]
-fn decode_mips_addu_with_base(instruction: u32, base_register: u32) -> Option<(u32, u32)> {
-    if instruction >> 26 != 0 || (instruction & 0x3f) != 0x21 {
-        return None;
-    }
-    let rs = (instruction >> 21) & 0x1f;
-    let rt = (instruction >> 16) & 0x1f;
-    let rd = (instruction >> 11) & 0x1f;
-    if rt == base_register {
-        Some((rd, rs))
-    } else if rs == base_register {
-        Some((rd, rt))
-    } else {
-        None
-    }
-}
-
-#[cfg(feature = "unicorn")]
-fn is_mips_addu(instruction: u32, rd: u32, rs: u32, rt: u32) -> bool {
-    instruction >> 26 == 0
-        && ((instruction >> 21) & 0x1f) == rs
-        && ((instruction >> 16) & 0x1f) == rt
-        && ((instruction >> 11) & 0x1f) == rd
-        && (instruction & 0x3f) == 0x21
-}
-
-#[cfg(feature = "unicorn")]
-fn is_mips_lh_same_register(instruction: u32, register: u32) -> bool {
-    instruction >> 26 == 0x21
-        && ((instruction >> 21) & 0x1f) == register
-        && ((instruction >> 16) & 0x1f) == register
-        && (instruction & 0xffff) == 0
-}
-
-#[cfg(feature = "unicorn")]
-fn is_mips_lb_same_register(instruction: u32, register: u32) -> bool {
-    instruction >> 26 == 0x20
-        && ((instruction >> 21) & 0x1f) == register
-        && ((instruction >> 16) & 0x1f) == register
-        && (instruction & 0xffff) == 0
-}
-
-#[cfg(feature = "unicorn")]
-fn is_mips_jr(instruction: u32, register: u32) -> bool {
-    instruction >> 26 == 0
-        && ((instruction >> 21) & 0x1f) == register
-        && (instruction & 0x001f_ffff) == 0x08
-}
-
-#[cfg(feature = "unicorn")]
-fn jal_stub_words(pc: u32, target: u32, delay_slot: u32, stub_pc: u32) -> Result<Vec<u32>> {
-    let link_address = pc.wrapping_add(8);
-    let mut words = vec![
-        encode_mips_lui(31, link_address >> 16),
-        encode_mips_ori(31, 31, link_address & 0xffff),
-        delay_slot,
-    ];
-    append_mips_jump_sequence(&mut words, stub_pc.wrapping_add(12), target)?;
-    Ok(words)
-}
-
-#[cfg(feature = "unicorn")]
-fn branch_likely_stub_words(
-    pc: u32,
-    mut branch: MipsBranchLikely,
-    delay_slot: u32,
-    stub_pc: u32,
-) -> Result<Vec<u32>> {
-    branch.target = pc.wrapping_add(branch.target);
-    let fallthrough = pc.wrapping_add(8);
-    let prefix_len = if branch.link { 4 } else { 2 };
-    let true_jump_pc = stub_pc.wrapping_add((prefix_len + 1) * 4);
-    let true_jump_len = mips_jump_sequence_len(true_jump_pc, branch.target)?;
-    let false_path_pc = stub_pc.wrapping_add((prefix_len + 1 + true_jump_len as u32) * 4);
-
-    let mut words = vec![
-        encode_mips_cond_branch(
-            branch.inverse_branch,
-            branch.rs,
-            branch.rt,
-            stub_pc,
-            false_path_pc,
-        )?,
-        MIPS_NOP,
-    ];
-    if branch.link {
-        let link_address = pc.wrapping_add(8);
-        words.push(encode_mips_lui(31, link_address >> 16));
-        words.push(encode_mips_ori(31, 31, link_address & 0xffff));
-    }
-    words.push(delay_slot);
-    append_mips_jump_sequence(&mut words, true_jump_pc, branch.target)?;
-    append_mips_jump_sequence(&mut words, false_path_pc, fallthrough)?;
-    Ok(words)
-}
-
-#[cfg(feature = "unicorn")]
-fn normal_branch_stub_words(
-    pc: u32,
-    mut branch: MipsBranchLikely,
-    delay_slot: u32,
-    stub_pc: u32,
-) -> Result<Vec<u32>> {
-    branch.target = pc.wrapping_add(branch.target);
-    let fallthrough = pc.wrapping_add(8);
-    let true_jump_pc = stub_pc.wrapping_add(12);
-    let true_jump_len = mips_jump_sequence_len(true_jump_pc, branch.target)?;
-    let false_path_pc = stub_pc.wrapping_add((3 + true_jump_len as u32) * 4);
-
-    let mut words = vec![
-        encode_mips_cond_branch(
-            branch.inverse_branch,
-            branch.rs,
-            branch.rt,
-            stub_pc,
-            false_path_pc,
-        )?,
-        MIPS_NOP,
-        delay_slot,
-    ];
-    append_mips_jump_sequence(&mut words, true_jump_pc, branch.target)?;
-    words.push(delay_slot);
-    append_mips_jump_sequence(&mut words, false_path_pc.wrapping_add(4), fallthrough)?;
-    Ok(words)
-}
-
-#[cfg(feature = "unicorn")]
-fn encode_mips_cond_branch(
-    branch: MipsBranch,
-    rs: u32,
-    rt: u32,
-    pc: u32,
-    target: u32,
-) -> Result<u32> {
-    let offset = branch_offset(pc, target)?;
-    let instruction = match branch {
-        MipsBranch::Beq => (0x04 << 26) | (rs << 21) | (rt << 16),
-        MipsBranch::Bne => (0x05 << 26) | (rs << 21) | (rt << 16),
-        MipsBranch::Blez => (0x06 << 26) | (rs << 21),
-        MipsBranch::Bgtz => (0x07 << 26) | (rs << 21),
-        MipsBranch::Bltz => (0x01 << 26) | (rs << 21),
-        MipsBranch::Bgez => (0x01 << 26) | (rs << 21) | (0x01 << 16),
-    };
-    Ok(instruction | u32::from(offset as u16))
-}
-
-#[cfg(feature = "unicorn")]
-fn branch_offset(pc: u32, target: u32) -> Result<i16> {
-    let delta = target as i64 - pc.wrapping_add(4) as i64;
-    if delta % 4 != 0 {
-        return Err(Error::InvalidArgument(format!(
-            "unaligned MIPS branch target 0x{target:08x}"
-        )));
-    }
-    let offset = delta / 4;
-    i16::try_from(offset).map_err(|_| {
-        Error::InvalidArgument(format!(
-            "MIPS branch target 0x{target:08x} is out of trampoline range from 0x{pc:08x}"
-        ))
-    })
-}
-
-#[cfg(feature = "unicorn")]
-fn encode_mips_jump(pc: u32, target: u32) -> Result<u32> {
-    if pc.wrapping_add(4) & 0xf000_0000 != target & 0xf000_0000 {
-        return Err(Error::InvalidArgument(format!(
-            "MIPS jump target 0x{target:08x} is outside direct jump region from 0x{pc:08x}"
-        )));
-    }
-    Ok((0x02 << 26) | ((target >> 2) & 0x03ff_ffff))
-}
-
-#[cfg(feature = "unicorn")]
-fn mips_jump_sequence_len(pc: u32, target: u32) -> Result<usize> {
-    if pc.wrapping_add(4) & 0xf000_0000 == target & 0xf000_0000 {
-        Ok(2)
-    } else {
-        Ok(4)
-    }
-}
-
-#[cfg(feature = "unicorn")]
-fn append_mips_jump_sequence(words: &mut Vec<u32>, pc: u32, target: u32) -> Result<()> {
-    if mips_jump_sequence_len(pc, target)? == 2 {
-        words.push(encode_mips_jump(pc, target)?);
-        words.push(MIPS_NOP);
-    } else {
-        words.push(encode_mips_lui(26, target >> 16));
-        words.push(encode_mips_ori(26, 26, target & 0xffff));
-        words.push(encode_mips_jr(26));
-        words.push(MIPS_NOP);
-    }
-    Ok(())
-}
-
-#[cfg(feature = "unicorn")]
-fn encode_mips_lui(rt: u32, imm: u32) -> u32 {
-    (0x0f << 26) | (rt << 16) | (imm & 0xffff)
-}
-
-#[cfg(feature = "unicorn")]
-fn encode_mips_ori(rt: u32, rs: u32, imm: u32) -> u32 {
-    (0x0d << 26) | (rs << 21) | (rt << 16) | (imm & 0xffff)
-}
-
-#[cfg(feature = "unicorn")]
-fn encode_mips_jr(rs: u32) -> u32 {
-    (rs << 21) | 0x08
-}
-
-#[cfg(feature = "unicorn")]
-fn read_mapped_word(mapped: &[u8], rva: u32, path: &str) -> Result<u32> {
-    let offset = rva as usize;
-    let end = offset
-        .checked_add(4)
-        .ok_or_else(|| Error::InvalidArgument(format!("{path} mapped read overflows")))?;
-    let bytes = mapped.get(offset..end).ok_or_else(|| {
-        Error::InvalidArgument(format!(
-            "{path} mapped read RVA 0x{rva:08x} is outside image"
-        ))
-    })?;
-    Ok(u32::from_le_bytes(bytes.try_into().unwrap()))
-}
-
-#[cfg(feature = "unicorn")]
-fn write_mapped_word(mapped: &mut [u8], rva: u32, value: u32, path: &str) -> Result<()> {
-    let offset = rva as usize;
-    let end = offset
-        .checked_add(4)
-        .ok_or_else(|| Error::InvalidArgument(format!("{path} mapped write overflows")))?;
-    let bytes = mapped.get_mut(offset..end).ok_or_else(|| {
-        Error::InvalidArgument(format!(
-            "{path} mapped write RVA 0x{rva:08x} is outside image"
-        ))
-    })?;
-    bytes.copy_from_slice(&value.to_le_bytes());
-    Ok(())
-}
-
-fn advance_trap_base(current: u32, trap_count: usize) -> Result<u32> {
-    let bytes = u32::try_from(trap_count)
-        .ok()
-        .and_then(|count| count.checked_mul(crate::emulator::imports::IMPORT_TRAP_STRIDE))
-        .ok_or_else(|| Error::InvalidArgument("import trap count overflow".to_owned()))?;
-    let next = current
-        .checked_add(bytes)
-        .ok_or_else(|| Error::InvalidArgument("import trap base overflow".to_owned()))?;
-    if next >= DYNAMIC_COREDLL_PROC_TRAP_BASE.saturating_sub(RESERVED_IMPORT_TRAP_STUB_BYTES) {
-        return Err(Error::InvalidArgument(
-            "import trap page is full".to_owned(),
-        ));
-    }
-    Ok(next)
-}
-
-fn refresh_import_trap_page_blob(mapped_blobs: &mut Vec<MappedBlob>, traps: &ImportTrapTable) {
-    let trap_page = import_trap_code_page(traps);
-    if let Some(blob) = mapped_blobs
-        .iter_mut()
-        .find(|blob| blob.name == "ce-import-traps")
-    {
-        blob.base = IMPORT_TRAP_BASE;
-        blob.bytes = trap_page;
-    } else {
-        mapped_blobs.push(MappedBlob {
-            name: "ce-import-traps".to_owned(),
-            base: IMPORT_TRAP_BASE,
-            bytes: trap_page,
-        });
-    }
-}
 
 #[cfg(feature = "unicorn")]
 const RUNTIME_DLL_LOAD_BASE: u32 = 0x1000_0000;
@@ -7946,12 +6634,6 @@ fn write_call_target_import(
     Ok(())
 }
 
-fn align_up_4k(size: u32) -> Result<u32> {
-    size.checked_add(0xfff)
-        .map(|size| size & !0xfff)
-        .ok_or_else(|| Error::InvalidArgument("mapping size overflow".to_owned()))
-}
-
 #[cfg(feature = "unicorn")]
 fn unicorn_perms(perms: MemoryPerms) -> unicorn_engine::unicorn_const::Prot {
     use unicorn_engine::unicorn_const::Prot;
@@ -7967,14 +6649,6 @@ fn unicorn_perms(perms: MemoryPerms) -> unicorn_engine::unicorn_const::Prot {
         out |= Prot::EXEC;
     }
     out
-}
-
-#[cfg(feature = "unicorn")]
-fn read_mips_reg<D>(
-    uc: &unicorn_engine::Unicorn<'_, D>,
-    register: unicorn_engine::RegisterMIPS,
-) -> u32 {
-    uc.reg_read(register).unwrap_or(0) as u32
 }
 
 #[cfg(feature = "unicorn")]
@@ -8013,53 +6687,11 @@ fn read_unicorn_code_u32<D>(
 }
 
 #[cfg(feature = "unicorn")]
-fn is_trampoline_sentinel_first_word(instruction: u32) -> bool {
-    let opcode = instruction >> 26;
-    let rt = (instruction >> 16) & 0x1f;
-    opcode == 0x0f && rt == 26
-}
-
-#[cfg(feature = "unicorn")]
-fn read_mips_import_args<D>(uc: &unicorn_engine::Unicorn<'_, D>) -> Vec<u32> {
-    let mut args = Vec::with_capacity(IMPORT_TRAP_ARG_COUNT);
-    args.extend([
-        read_mips_reg(uc, unicorn_engine::RegisterMIPS::A0),
-        read_mips_reg(uc, unicorn_engine::RegisterMIPS::A1),
-        read_mips_reg(uc, unicorn_engine::RegisterMIPS::A2),
-        read_mips_reg(uc, unicorn_engine::RegisterMIPS::A3),
-    ]);
-
-    let sp = read_mips_reg(uc, unicorn_engine::RegisterMIPS::SP);
-    for stack_index in 0..IMPORT_TRAP_ARG_COUNT.saturating_sub(4) {
-        let offset = 16 + (stack_index as u32 * 4);
-        let value = sp
-            .checked_add(offset)
-            .and_then(|addr| read_unicorn_u32(uc, addr))
-            .unwrap_or(0);
-        args.push(value);
-    }
-    args
-}
-
-#[cfg(feature = "unicorn")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SetjmpLongjmpTrapResult {
     result: u32,
     jumped: bool,
 }
-
-#[cfg(feature = "unicorn")]
-const MIPS_JMPBUF_RETURN_PC_SLOT: u32 = 0;
-#[cfg(feature = "unicorn")]
-const MIPS_JMPBUF_SP_SLOT: u32 = 1;
-#[cfg(feature = "unicorn")]
-const MIPS_JMPBUF_FP_SLOT: u32 = 2;
-#[cfg(feature = "unicorn")]
-const MIPS_JMPBUF_RA_SLOT: u32 = 3;
-#[cfg(feature = "unicorn")]
-const MIPS_JMPBUF_GP_SLOT: u32 = 4;
-#[cfg(feature = "unicorn")]
-const MIPS_JMPBUF_S0_SLOT: u32 = 5;
 
 #[cfg(feature = "unicorn")]
 fn try_handle_setjmp_longjmp<D>(
@@ -11492,35 +10124,6 @@ fn scheduler_timeslice_consume_if_safe(
     true
 }
 
-#[cfg(feature = "unicorn")]
-fn is_mips_delay_slot_pc<D>(
-    uc: &unicorn_engine::Unicorn<'_, D>,
-    previous_pc: Option<u32>,
-    pc: u32,
-) -> bool {
-    let Some(previous_pc) = previous_pc else {
-        return false;
-    };
-    if previous_pc.wrapping_add(4) != pc {
-        return false;
-    }
-    read_unicorn_u32(uc, previous_pc).is_some_and(is_mips_control_transfer_instruction)
-}
-
-#[cfg(feature = "unicorn")]
-fn is_mips_control_transfer_instruction(instruction: u32) -> bool {
-    let opcode = instruction >> 26;
-    match opcode {
-        0x00 => matches!(instruction & 0x3f, 0x08 | 0x09),
-        0x01 => matches!(
-            (instruction >> 16) & 0x1f,
-            0x00 | 0x01 | 0x02 | 0x03 | 0x10 | 0x11 | 0x12 | 0x13
-        ),
-        0x02 | 0x03 | 0x04 | 0x05 | 0x06 | 0x07 | 0x14 | 0x15 | 0x16 | 0x17 => true,
-        0x10..=0x13 => ((instruction >> 21) & 0x1f) == 0x08,
-        _ => false,
-    }
-}
 
 #[cfg(feature = "unicorn")]
 fn remove_stale_blocked_waits_for_thread(
@@ -17819,18 +16422,6 @@ mod guest_thread_stack_tests {
     }
 }
 
-#[cfg(feature = "unicorn")]
-fn capture_mips_gprs<D>(uc: &unicorn_engine::Unicorn<'_, D>) -> MipsGuestContext {
-    let mut regs = [0; 32];
-    for register in 1..32 {
-        regs[register as usize] = read_mips_gpr(uc, register).unwrap_or(0);
-    }
-    MipsGuestContext {
-        regs,
-        hi: uc.reg_read(RegisterMIPS::HI).unwrap_or(0) as u32,
-        lo: uc.reg_read(RegisterMIPS::LO).unwrap_or(0) as u32,
-    }
-}
 
 #[cfg(feature = "unicorn")]
 fn capture_saved_cpu_context<D>(uc: &unicorn_engine::Unicorn<'_, D>) -> SavedCpuContext {
@@ -17840,14 +16431,6 @@ fn capture_saved_cpu_context<D>(uc: &unicorn_engine::Unicorn<'_, D>) -> SavedCpu
     }
 }
 
-#[cfg(feature = "unicorn")]
-fn restore_mips_gprs<D>(uc: &mut unicorn_engine::Unicorn<'_, D>, context: &MipsGuestContext) {
-    for register in 1..32 {
-        let _ = write_mips_gpr(uc, register, context.regs[register as usize]);
-    }
-    let _ = uc.reg_write(RegisterMIPS::HI, u64::from(context.hi));
-    let _ = uc.reg_write(RegisterMIPS::LO, u64::from(context.lo));
-}
 
 #[cfg(feature = "unicorn")]
 fn record_message_import<D>(
@@ -19909,7 +18492,7 @@ fn push_inavi_slot_trace<D>(
     milestones.push(trace);
 }
 
-#[cfg(feature = "unicorn")]
+#[cfg(all(feature = "unicorn", feature = "trace"))]
 fn memory_ranges_overlap(left_addr: u32, left_len: u32, right_addr: u32, right_len: u32) -> bool {
     let left_end = left_addr.saturating_add(left_len);
     let right_end = right_addr.saturating_add(right_len);
@@ -24547,14 +23130,6 @@ fn annotate_call_import_targets(calls: &mut [UnicornLastCall], traps: &ImportTra
     }
 }
 
-#[cfg(feature = "unicorn")]
-fn mips_trampoline_origin_for_pc(pc: u32, trampoline_jumps: &[MipsTrampolineJump]) -> Option<u32> {
-    trampoline_jumps.iter().find_map(|trampoline| {
-        let end = trampoline.stub.checked_add(trampoline.byte_len)?;
-        (pc >= trampoline.stub && pc < end).then_some(trampoline.origin)
-    })
-}
-
 fn import_count_snapshot(
     counts: &std::collections::BTreeMap<UnicornImportCountKey, UnicornImportStats>,
 ) -> Vec<UnicornImportCount> {
@@ -24585,97 +23160,6 @@ fn import_count_snapshot(
 }
 
 #[cfg(feature = "unicorn")]
-fn decode_addiu_zero(instruction: u32) -> Option<(u32, u32)> {
-    let opcode = instruction >> 26;
-    let rs = (instruction >> 21) & 0x1f;
-    if opcode != 0x09 || rs != 0 {
-        return None;
-    }
-    let rt = (instruction >> 16) & 0x1f;
-    let imm = instruction as u16 as i16 as i32 as u32;
-    Some((rt, imm))
-}
-
-#[cfg(feature = "unicorn")]
-fn decode_jalr_register(instruction: u32) -> Option<u32> {
-    let opcode = instruction >> 26;
-    let function = instruction & 0x3f;
-    if opcode != 0 || function != 0x09 {
-        return None;
-    }
-    Some((instruction >> 21) & 0x1f)
-}
-
-#[cfg(feature = "unicorn")]
-fn decode_indirect_call_register(instruction: u32) -> Option<u32> {
-    let opcode = instruction >> 26;
-    let function = instruction & 0x3f;
-    if opcode != 0 || (function != 0x08 && function != 0x09) {
-        return None;
-    }
-    Some((instruction >> 21) & 0x1f)
-}
-
-#[cfg(feature = "unicorn")]
-fn decode_jr_register(instruction: u32) -> Option<u32> {
-    let opcode = instruction >> 26;
-    let function = instruction & 0x3f;
-    if opcode != 0 || function != 0x08 {
-        return None;
-    }
-    Some((instruction >> 21) & 0x1f)
-}
-
-#[cfg(feature = "unicorn")]
-fn decode_direct_jump_target(pc: u32, instruction: u32) -> Option<u32> {
-    let opcode = instruction >> 26;
-    if opcode != 0x02 && opcode != 0x03 {
-        return None;
-    }
-    let index = instruction & 0x03ff_ffff;
-    Some((pc.wrapping_add(4) & 0xf000_0000) | (index << 2))
-}
-
-#[cfg(feature = "unicorn")]
-fn read_mips_gpr<D>(uc: &unicorn_engine::Unicorn<'_, D>, register: u32) -> Option<u32> {
-    use unicorn_engine::RegisterMIPS;
-
-    match register {
-        0 => Some(0),
-        1 => Some(read_mips_reg(uc, RegisterMIPS::AT)),
-        2 => Some(read_mips_reg(uc, RegisterMIPS::V0)),
-        3 => Some(read_mips_reg(uc, RegisterMIPS::V1)),
-        4 => Some(read_mips_reg(uc, RegisterMIPS::A0)),
-        5 => Some(read_mips_reg(uc, RegisterMIPS::A1)),
-        6 => Some(read_mips_reg(uc, RegisterMIPS::A2)),
-        7 => Some(read_mips_reg(uc, RegisterMIPS::A3)),
-        8 => Some(read_mips_reg(uc, RegisterMIPS::T0)),
-        9 => Some(read_mips_reg(uc, RegisterMIPS::T1)),
-        10 => Some(read_mips_reg(uc, RegisterMIPS::T2)),
-        11 => Some(read_mips_reg(uc, RegisterMIPS::T3)),
-        12 => Some(read_mips_reg(uc, RegisterMIPS::T4)),
-        13 => Some(read_mips_reg(uc, RegisterMIPS::T5)),
-        14 => Some(read_mips_reg(uc, RegisterMIPS::T6)),
-        15 => Some(read_mips_reg(uc, RegisterMIPS::T7)),
-        16 => Some(read_mips_reg(uc, RegisterMIPS::S0)),
-        17 => Some(read_mips_reg(uc, RegisterMIPS::S1)),
-        18 => Some(read_mips_reg(uc, RegisterMIPS::S2)),
-        19 => Some(read_mips_reg(uc, RegisterMIPS::S3)),
-        20 => Some(read_mips_reg(uc, RegisterMIPS::S4)),
-        21 => Some(read_mips_reg(uc, RegisterMIPS::S5)),
-        22 => Some(read_mips_reg(uc, RegisterMIPS::S6)),
-        23 => Some(read_mips_reg(uc, RegisterMIPS::S7)),
-        24 => Some(read_mips_reg(uc, RegisterMIPS::T8)),
-        25 => Some(read_mips_reg(uc, RegisterMIPS::T9)),
-        28 => Some(read_mips_reg(uc, RegisterMIPS::GP)),
-        29 => Some(read_mips_reg(uc, RegisterMIPS::SP)),
-        30 => Some(read_mips_reg(uc, RegisterMIPS::FP)),
-        31 => Some(read_mips_reg(uc, RegisterMIPS::RA)),
-        _ => None,
-    }
-}
-
-#[cfg(feature = "unicorn")]
 fn read_unicorn_stack_words<D>(
     uc: &unicorn_engine::Unicorn<'_, D>,
     sp: u32,
@@ -24692,111 +23176,6 @@ fn read_unicorn_stack_words<D>(
         offset = offset.saturating_add(4);
     }
     words
-}
-
-#[cfg(feature = "unicorn")]
-fn write_mips_gpr<D>(
-    uc: &mut unicorn_engine::Unicorn<'_, D>,
-    register: u32,
-    value: u32,
-) -> Option<()> {
-    use unicorn_engine::RegisterMIPS;
-
-    let register = match register {
-        0 => return Some(()),
-        1 => RegisterMIPS::AT,
-        2 => RegisterMIPS::V0,
-        3 => RegisterMIPS::V1,
-        4 => RegisterMIPS::A0,
-        5 => RegisterMIPS::A1,
-        6 => RegisterMIPS::A2,
-        7 => RegisterMIPS::A3,
-        8 => RegisterMIPS::T0,
-        9 => RegisterMIPS::T1,
-        10 => RegisterMIPS::T2,
-        11 => RegisterMIPS::T3,
-        12 => RegisterMIPS::T4,
-        13 => RegisterMIPS::T5,
-        14 => RegisterMIPS::T6,
-        15 => RegisterMIPS::T7,
-        16 => RegisterMIPS::S0,
-        17 => RegisterMIPS::S1,
-        18 => RegisterMIPS::S2,
-        19 => RegisterMIPS::S3,
-        20 => RegisterMIPS::S4,
-        21 => RegisterMIPS::S5,
-        22 => RegisterMIPS::S6,
-        23 => RegisterMIPS::S7,
-        24 => RegisterMIPS::T8,
-        25 => RegisterMIPS::T9,
-        28 => RegisterMIPS::GP,
-        29 => RegisterMIPS::SP,
-        30 => RegisterMIPS::FP,
-        31 => RegisterMIPS::RA,
-        _ => return None,
-    };
-    uc.reg_write(register, u64::from(value)).ok()
-}
-
-#[cfg(feature = "unicorn")]
-fn mips_gpr_name(register: u32) -> &'static str {
-    match register {
-        0 => "zero",
-        1 => "at",
-        2 => "v0",
-        3 => "v1",
-        4 => "a0",
-        5 => "a1",
-        6 => "a2",
-        7 => "a3",
-        8 => "t0",
-        9 => "t1",
-        10 => "t2",
-        11 => "t3",
-        12 => "t4",
-        13 => "t5",
-        14 => "t6",
-        15 => "t7",
-        16 => "s0",
-        17 => "s1",
-        18 => "s2",
-        19 => "s3",
-        20 => "s4",
-        21 => "s5",
-        22 => "s6",
-        23 => "s7",
-        24 => "t8",
-        25 => "t9",
-        26 => "k0",
-        27 => "k1",
-        28 => "gp",
-        29 => "sp",
-        30 => "fp",
-        31 => "ra",
-        _ => "?",
-    }
-}
-
-#[cfg(feature = "unicorn")]
-fn decode_old_mips_kernel_call(target: u32) -> Option<(u32, u32)> {
-    const OLD_FIRST_METHOD: u32 = 0xffff_fc02;
-    const API_CALL_SCALE: u32 = 4;
-    const API_SET_SHIFT: u32 = 8;
-    const CURRENT_PROCESS_API_SET: u32 = 2;
-    const PROC_TERMINATE_METHOD: u32 = 2;
-
-    if target > OLD_FIRST_METHOD {
-        return None;
-    }
-    let delta = OLD_FIRST_METHOD.wrapping_sub(target);
-    if delta % API_CALL_SCALE != 0 {
-        return None;
-    }
-    let encoded = delta / API_CALL_SCALE;
-    let api_set = encoded >> API_SET_SHIFT;
-    let method = encoded & ((1 << API_SET_SHIFT) - 1);
-    (api_set == CURRENT_PROCESS_API_SET && method == PROC_TERMINATE_METHOD)
-        .then_some((api_set, method))
 }
 
 #[cfg(feature = "unicorn")]

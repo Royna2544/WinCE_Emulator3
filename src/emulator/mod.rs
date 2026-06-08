@@ -2,7 +2,14 @@ pub mod cpu;
 pub mod dll_search;
 pub mod imports;
 pub mod memory;
+pub mod pe_loader;
 pub mod types;
+#[cfg(feature = "unicorn")]
+pub mod arch;
+#[cfg(feature = "unicorn")]
+pub mod cpu_mips;
+#[cfg(feature = "unicorn")]
+pub mod cpu_arm;
 #[cfg(feature = "unicorn")]
 pub mod unicorn;
 #[cfg(not(feature = "unicorn"))]

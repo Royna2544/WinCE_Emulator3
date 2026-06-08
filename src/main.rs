@@ -17,6 +17,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+
+#[allow(unused_imports)]
 use wince_emulation_v3::emulator::cpu::CpuBackend as _;
 use wince_emulation_v3::{
     Result,
