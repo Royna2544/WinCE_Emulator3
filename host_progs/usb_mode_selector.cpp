@@ -86,6 +86,12 @@ static void RefreshCurrentLabel() {
     SetWindowTextW(g_lbl_current, buf);
 }
 
+static void ShowRegError(LPCWSTR op, LONG err) {
+    WCHAR buf[128];
+    wsprintfW(buf, L"%s failed (error %ld).", op, err);
+    MessageBoxW(g_main, buf, L"USB Mode Selector", MB_OK | MB_ICONERROR);
+}
+
 static void OnApply() {
     UsbMode selected = GetSelectedMode();
     if (selected == g_current) {
@@ -99,9 +105,15 @@ static void OnApply() {
 
     if (selected == MODE_NONE) {
         err = RegOpenKeyExW(HKEY_LOCAL_MACHINE, REG_KEY, 0, 0, &key);
-        if (err == ERROR_SUCCESS) {
-            RegDeleteValueW(key, REG_VAL);
-            RegCloseKey(key);
+        if (err != ERROR_SUCCESS) {
+            ShowRegError(L"RegOpenKeyEx", err);
+            return;
+        }
+        err = RegDeleteValueW(key, REG_VAL);
+        RegCloseKey(key);
+        if (err != ERROR_SUCCESS) {
+            ShowRegError(L"RegDeleteValue", err);
+            return;
         }
     } else {
         err = RegOpenKeyExW(HKEY_LOCAL_MACHINE, REG_KEY, 0, 0, &key);
@@ -109,12 +121,18 @@ static void OnApply() {
             DWORD disp;
             err = RegCreateKeyExW(HKEY_LOCAL_MACHINE, REG_KEY, 0, NULL, 0,
                                   0, NULL, &key, &disp);
+            if (err != ERROR_SUCCESS) {
+                ShowRegError(L"RegCreateKeyEx", err);
+                return;
+            }
         }
-        if (err == ERROR_SUCCESS) {
-            LPCWSTR val = ModeRegStr(selected);
-            DWORD len = ((DWORD)lstrlenW(val) + 1) * sizeof(WCHAR);
-            RegSetValueExW(key, REG_VAL, 0, REG_SZ, (const BYTE *)val, len);
-            RegCloseKey(key);
+        LPCWSTR val = ModeRegStr(selected);
+        DWORD len = ((DWORD)lstrlenW(val) + 1) * sizeof(WCHAR);
+        err = RegSetValueExW(key, REG_VAL, 0, REG_SZ, (const BYTE *)val, len);
+        RegCloseKey(key);
+        if (err != ERROR_SUCCESS) {
+            ShowRegError(L"RegSetValueEx", err);
+            return;
         }
     }
 
