@@ -4572,8 +4572,10 @@ impl CeKernel {
             }
             let records = file_change_records_for_event(event_id, notification, path1, path2);
             append_file_change_records(&mut notification.pending, records);
-            notification.signaled = true;
-            handles.push(handle);
+            notification.signaled = !notification.pending.is_empty();
+            if notification.signaled {
+                handles.push(handle);
+            }
         }
         for handle in &handles {
             self.queue_object_wake_candidates(*handle);
@@ -4812,8 +4814,56 @@ fn append_file_change_records(
         if pending.last() == Some(&record) {
             continue;
         }
+        if coalesce_file_change_record(pending, &record) {
+            continue;
+        }
         pending.push(record);
     }
+}
+
+fn coalesce_file_change_record(
+    pending: &mut Vec<FileChangeRecord>,
+    record: &FileChangeRecord,
+) -> bool {
+    match record.action {
+        FILE_ACTION_REMOVED => coalesce_removed_file_change_record(pending, record),
+        FILE_ACTION_MODIFIED => pending
+            .iter()
+            .rev()
+            .take_while(|queued| queued.path.eq_ignore_ascii_case(&record.path))
+            .any(|queued| queued.action == FILE_ACTION_REMOVED),
+        _ => false,
+    }
+}
+
+fn coalesce_removed_file_change_record(
+    pending: &mut Vec<FileChangeRecord>,
+    record: &FileChangeRecord,
+) -> bool {
+    let mut index = pending.len();
+    let mut saw_prior_for_path = false;
+    while index > 0 {
+        index -= 1;
+        if !pending[index].path.eq_ignore_ascii_case(&record.path) {
+            if saw_prior_for_path {
+                break;
+            }
+            continue;
+        }
+        saw_prior_for_path = true;
+        match pending[index].action {
+            FILE_ACTION_ADDED => {
+                pending.remove(index);
+                return true;
+            }
+            FILE_ACTION_MODIFIED => {
+                pending.remove(index);
+            }
+            FILE_ACTION_REMOVED => return true,
+            _ => break,
+        }
+    }
+    false
 }
 
 fn file_change_relative_path(watch_path: &str, path: &str) -> String {

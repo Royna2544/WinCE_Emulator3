@@ -3093,6 +3093,19 @@ impl Gwe {
         self.sent_messages.remove(&id)?.result
     }
 
+    pub fn completed_sent_message_result_writes(&self) -> Vec<(u64, u32, u32)> {
+        self.sent_messages
+            .iter()
+            .filter_map(|(id, sent)| {
+                (sent.flags & SMF_RESULT_READY != 0).then_some((
+                    *id,
+                    sent.result_ptr?,
+                    sent.result?,
+                ))
+            })
+            .collect()
+    }
+
     pub fn sent_message(&self, id: u64) -> Option<&SentMessage> {
         self.sent_messages.get(&id)
     }

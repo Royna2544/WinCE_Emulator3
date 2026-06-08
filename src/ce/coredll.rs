@@ -2859,7 +2859,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_CREATE_WINDOW_EX_W => Some(CoredllValue::Handle(create_window_ex_w_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_DESTROY_WINDOW => Some(CoredllValue::Bool(kernel.destroy_window(raw_arg(args, 0)))),
+        ORD_DESTROY_WINDOW => Some(CoredllValue::Bool(destroy_window_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 0),
+        ))),
         ORD_SHOW_WINDOW => Some(CoredllValue::Bool(show_window_raw(kernel, thread_id, args))),
         ORD_UPDATE_WINDOW => Some(CoredllValue::Bool(kernel.update_window(raw_arg(args, 0)))),
         ORD_INVALIDATE_RECT => Some(CoredllValue::Bool(invalidate_rect_raw(
@@ -22880,6 +22885,32 @@ fn dispatch_message_w_raw<M: CoredllGuestMemory>(
         write_completed_send_message_timeout_result(kernel, memory, thread_id, send_id);
     }
     result
+}
+
+fn destroy_window_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    hwnd: u32,
+) -> bool {
+    let destroyed = kernel.destroy_window(hwnd);
+    if destroyed {
+        write_completed_send_message_timeout_results(kernel, memory, thread_id);
+    }
+    destroyed
+}
+
+fn write_completed_send_message_timeout_results<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+) -> bool {
+    let writes = kernel.gwe.completed_sent_message_result_writes();
+    let mut ok = true;
+    for (_, result_ptr, result) in writes {
+        ok &= write_guest_u32(kernel, memory, thread_id, result_ptr, result);
+    }
+    ok
 }
 
 fn write_completed_send_message_timeout_result<M: CoredllGuestMemory>(

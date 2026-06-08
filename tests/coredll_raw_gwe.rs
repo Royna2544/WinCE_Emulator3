@@ -9794,6 +9794,71 @@ fn coredll_raw_send_message_timeout_nonzero_cross_thread_queues_transaction() ->
 }
 
 #[test]
+fn coredll_raw_send_message_timeout_writes_zero_result_when_target_destroyed() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let sender_thread = 52;
+    let receiver_thread = 53;
+    let result_ptr = 0xb2c0;
+    memory.map_words(result_ptr, 1);
+    memory.write_u32(result_ptr, 0xfeed_cafe)?;
+
+    let hwnd = kernel.create_window_ex_w(
+        receiver_thread,
+        "SYNC_SEND_TIMEOUT_DESTROYED",
+        "",
+        None,
+        0,
+        0,
+        0,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            sender_thread,
+            ORD_SEND_MESSAGE_TIMEOUT,
+            [hwnd, WM_USER + 60, 0x60, 0x61, 0, 250, result_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(result_ptr)?, 0xfeed_cafe);
+    let sent = kernel.gwe.sent_message(1).expect("queued timeout send");
+    assert_eq!(sent.result_ptr, Some(result_ptr));
+    assert_eq!(sent.receiver_thread_id, receiver_thread);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            receiver_thread,
+            ORD_DESTROY_WINDOW,
+            [hwnd],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(result_ptr)?, 0);
+    assert_eq!(kernel.take_completed_send_message_result(1), Some(0));
+    assert_eq!(
+        kernel
+            .gwe
+            .stats()
+            .send_transaction_receiver_terminated_count,
+        1
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_send_notify_broadcast_uses_notify_send_for_live_top_level_windows() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;

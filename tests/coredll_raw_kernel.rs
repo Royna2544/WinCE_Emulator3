@@ -13,10 +13,10 @@ use wince_emulation_v3::{
             ORD_EMPTY_CLIPBOARD, ORD_ENUM_CLIPBOARD_FORMATS, ORD_EVENT_MODIFY,
             ORD_EXTRACT_ICON_EX_W, ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY,
             ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC,
-            ORD_GET_CLIPBOARD_FORMAT_NAME_W,
-            ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK, ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS,
-            ORD_GET_DC, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR,
-            ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W, ORD_GET_OPEN_CLIPBOARD_WINDOW,
+            ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK,
+            ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_EXIT_CODE_PROCESS,
+            ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
+            ORD_GET_MODULE_HANDLE_W, ORD_GET_OPEN_CLIPBOARD_WINDOW,
             ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
             ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID,
             ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_TIME,
@@ -3811,7 +3811,10 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
             ..
         }
     ));
-    assert_eq!(memory.read_u32(large_icon_ptr)?, shell_pseudo_icon_handle(2));
+    assert_eq!(
+        memory.read_u32(large_icon_ptr)?,
+        shell_pseudo_icon_handle(2)
+    );
 
     memory.write_wide_z(path_ptr, r"\Docs\viewer.lnk");
     memory.write_u32(info_ptr + SHFILEINFO_HICON_OFFSET, 0)?;

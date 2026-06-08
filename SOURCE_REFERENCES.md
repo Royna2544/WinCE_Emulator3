@@ -203,7 +203,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     records through `CeGetFileNotificationInfo` using the standard
     `FILE_NOTIFY_INFORMATION` layout, including recursive directory-create,
     rename old/new, and directory-removal records, coalesces consecutive
-    duplicate action/name records, and rearms/closes them through
+    duplicate action/name records plus transient create/delete and
+    modified/delete churn, and rearms/closes them through
     `FindNextChangeNotification`/`FindCloseChangeNotification`.
     `PRIVATE\WINCEOS\COREOS\STORAGE\NOTIFY\fsnotify.cpp` `NotifyReset` drains
     only the records that fit the caller buffer, sets `ERROR_MORE_DATA` after a
@@ -215,9 +216,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `mounttable.cpp` also calls `NotifyPathChange` with `FILE_ACTION_ADDED` or
     `FILE_ACTION_REMOVED` for visible mount folders on the root notification
     handle; v3 mirrors that for root-directory waiters when guest roots are
-    mounted or unmounted. Full FSDMGR volume-handle ownership, deeper
-    non-identical coalescing details, and broader mounted edge behavior remain
-    queued.
+    mounted or unmounted. Full FSDMGR volume-handle ownership and broader
+    mounted edge behavior remain queued.
 
 - Shell popup-menu APIs:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`,
@@ -605,6 +605,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     deterministic pseudo-icon into attached window framebuffers and selected
     memory DIBs, sharing the same placeholder rendering model as shell
     image-list pseudo slots.
+    Raw `ExtractIconExW` now supports `nIconIndex == -1` count probes and
+    index-zero extraction for existing shell paths by writing the same
+    synthetic large/small `HICON` values that `SHGetFileInfo` would select,
+    including CE shortcut overlays. Missing paths fail with
+    `ERROR_FILE_NOT_FOUND`; actual DLL/icon-resource bitmap extraction remains
+    queued.
     Full icon resource bitmap extraction remains queued.
   - `shellapi.h` defines `SHELLEXECUTEINFO`, `SEE_MASK_NOCLOSEPROCESS`,
     `nShow`, `hInstApp`, and `hProcess`. v3's raw `ShellExecuteEx` now
@@ -1322,7 +1328,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     send-reply wake candidates once the `WndProcResult` state is ready.
     `cmsgque.h` documents `smfResultReady` as the reply event for a sent
     message, and v3 now preserves that result if the receiver later unwinds
-    from dispatch. Unicorn raw `SendMessageW`/`SendMessageTimeoutW` now uses
+    from dispatch; the raw `DestroyWindow` path also flushes a receiver-
+    terminated zero result into a pending `SendMessageTimeout` caller's
+    `lpdwResult`. Unicorn raw `SendMessageW`/`SendMessageTimeoutW` now uses
     that transaction state for same-process cross-thread guest WNDPROCs: the
     receiver thread becomes the active CE thread for the guest WNDPROC callout,
     the sender MIPS context is parked in a scheduler-backed `SendMessage`
@@ -1330,7 +1338,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     blocked record after the result is captured, and the result flows back to
     the sender and optional timeout result pointer. Reentrant cross-thread
     scheduling, a public raw `ReplyMessage` export if the target import table
-    exposes one, and richer destroyed-target edge behavior remain open.
+    exposes one, and broader nested destroyed-target edge behavior remain open.
   - CE SDK headers define `CREATESTRUCTW` as
     `lpCreateParams`, `hInstance`, `hMenu`, `hwndParent`, `cy`, `cx`, `y`, `x`,
     `style`, `lpszName`, `lpszClass`, and `dwExStyle`, and define
