@@ -833,6 +833,94 @@ impl HostFileSystem {
         Ok(self.open_file(id)?.file_len)
     }
 
+    /// Truncates or extends the file to the current file-pointer position,
+    /// filling any extension with zeros.  Returns `false` if the file is not
+    /// open for writing.
+    pub fn set_end_of_file(&mut self, id: u32) -> Result<bool> {
+        let file = self.open_file_mut(id)?;
+        if !file.writable {
+            return Ok(false);
+        }
+        let new_len = file.cursor;
+        match &mut file.backing {
+            FileBacking::Memory(data) => {
+                data.resize(new_len, 0);
+            }
+            FileBacking::HostFile(f) => {
+                f.set_len(new_len as u64).map_err(|source| Error::Io {
+                    path: file.host_path.clone(),
+                    source,
+                })?;
+            }
+        }
+        file.file_len = new_len;
+        file.read_cache.clear();
+        file.read_cache_start = 0;
+        file.dirty = true;
+        Ok(true)
+    }
+
+    /// Returns the host file attributes (FILE_ATTRIBUTE_*) for the file
+    /// backing the given open file id.
+    pub fn file_attributes_by_id(&self, id: u32) -> Result<u32> {
+        let file = self.open_file(id)?;
+        let host = &file.host_path;
+        let meta = host.metadata().map_err(|source| Error::Io {
+            path: host.clone(),
+            source,
+        })?;
+        let mut attr = FILE_ATTRIBUTE_ARCHIVE;
+        if meta.permissions().readonly() {
+            attr |= FILE_ATTRIBUTE_READONLY;
+        }
+        Ok(attr)
+    }
+
+    /// Returns (creation_time, last_access_time, last_write_time) as Windows
+    /// FILETIME values (100-ns intervals since 1601-01-01).  Falls back to
+    /// zero for timestamps the host OS does not provide.
+    pub fn file_times_by_id(&self, id: u32) -> Result<(u64, u64, u64)> {
+        let file = self.open_file(id)?;
+        let meta = file.host_path.metadata().map_err(|source| Error::Io {
+            path: file.host_path.clone(),
+            source,
+        })?;
+        const EPOCH_DIFF_100NS: u64 = 116_444_736_000_000_000;
+        let system_time_to_filetime = |st: std::time::SystemTime| -> u64 {
+            match st.duration_since(std::time::UNIX_EPOCH) {
+                Ok(d) => {
+                    let secs = d.as_secs();
+                    let nanos = d.subsec_nanos() as u64;
+                    EPOCH_DIFF_100NS
+                        .saturating_add(secs.saturating_mul(10_000_000))
+                        .saturating_add(nanos / 100)
+                }
+                Err(_) => 0,
+            }
+        };
+        let write_time = meta
+            .modified()
+            .map(system_time_to_filetime)
+            .unwrap_or(0);
+        let access_time = meta
+            .accessed()
+            .map(system_time_to_filetime)
+            .unwrap_or(write_time);
+        let create_time = {
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::MetadataExt;
+                let ft = meta.creation_time();
+                ft
+            }
+            #[cfg(not(windows))]
+            {
+                0u64
+            }
+        };
+        Ok((create_time, access_time, write_time))
+    }
+
     pub fn flush(&mut self, id: u32) -> Result<()> {
         let file = self.open_file_mut(id)?;
         if file.dirty {

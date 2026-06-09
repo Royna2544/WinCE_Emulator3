@@ -19957,8 +19957,29 @@ fn try_enter_send_message_callout<D>(
                 target_process_id,
                 "SendMessage guest wndproc not entered"
             );
+            return false;
         }
-        return false;
+        // Non-guest wndproc (DEFAULT_WNDPROC or null): dispatch synchronously.
+        // These are kernel-owned windows backed by pure host Rust code; no MIPS
+        // execution is needed and the dispatch is safe from any thread context.
+        let result = kernel
+            .send_message_w(hwnd, msg, wparam, lparam)
+            .unwrap_or(0);
+        if let Some(ptr) = result_ptr {
+            let _ = uc.mem_write(u64::from(ptr), &result.to_le_bytes());
+        }
+        kernel.threads.set_last_error(active_thread_id, 0);
+        let _ = uc.reg_write(RegisterMIPS::V0, u64::from(result));
+        tracing::debug!(
+            target: "ce.gwe",
+            source,
+            hwnd = format_args!("0x{hwnd:08x}"),
+            class = class_name.as_str(),
+            msg = format_args!("0x{msg:08x}"),
+            result,
+            "SendMessage non-guest wndproc dispatched directly"
+        );
+        return true;
     }
 
     tracing::debug!(

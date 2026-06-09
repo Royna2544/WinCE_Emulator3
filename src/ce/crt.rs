@@ -313,6 +313,25 @@ pub(crate) fn wcsicmp_raw<M: CoredllGuestMemory>(memory: &M, left: u32, right: u
     0
 }
 
+pub(crate) fn wcscmp_raw<M: CoredllGuestMemory>(memory: &M, left: u32, right: u32) -> i32 {
+    if left == 0 || right == 0 {
+        return if left == right { 0 } else if left == 0 { -1 } else { 1 };
+    }
+    for index in 0..0x8000u32 {
+        let left_addr = left.wrapping_add(index * 2);
+        let right_addr = right.wrapping_add(index * 2);
+        let Ok(lu) = memory.read_u16(left_addr) else { return -1; };
+        let Ok(ru) = memory.read_u16(right_addr) else { return 1; };
+        if lu != ru {
+            return i32::from(lu).saturating_sub(i32::from(ru));
+        }
+        if lu == 0 {
+            return 0;
+        }
+    }
+    0
+}
+
 pub(crate) fn wtol_raw<M: CoredllGuestMemory>(memory: &M, text_ptr: u32) -> i32 {
     let Some(text) = read_wide_z(memory, text_ptr, 128) else {
         return 0;

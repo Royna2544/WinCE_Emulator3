@@ -47,6 +47,14 @@ pub const WM_CHAR: u32 = 0x0102;
 pub const WM_SYSKEYDOWN: u32 = 0x0104;
 pub const WM_SYSKEYUP: u32 = 0x0105;
 pub const WM_SYSCHAR: u32 = 0x0106;
+pub const WM_IME_STARTCOMPOSITION: u32 = 0x010d;
+pub const WM_IME_ENDCOMPOSITION: u32 = 0x010e;
+pub const WM_IME_COMPOSITION: u32 = 0x010f;
+pub const GCS_COMPSTR: u32 = 0x0008;
+pub const GCS_RESULTSTR: u32 = 0x0800;
+pub const WM_IME_NOTIFY: u32 = 0x0282;
+pub const IMN_SETOPENSTATUS: u32 = 0x0008;
+pub const VK_HANGUL: u32 = 0x15;
 pub const WM_SETFONT: u32 = 0x0030;
 pub const WM_GETFONT: u32 = 0x0031;
 pub const WM_COMPAREITEM: u32 = 0x0039;
@@ -87,6 +95,7 @@ pub const BS_CHECKBOX: u32 = 0x0002;
 pub const BS_RADIOBUTTON: u32 = 0x0004;
 pub const BS_AUTORADIOBUTTON: u32 = 0x0009;
 pub const BS_TYPEMASK: u32 = 0x000f;
+pub const DLGC_WANTARROWS: u32 = 0x0001;
 pub const DLGC_WANTTAB: u32 = 0x0002;
 pub const DLGC_WANTALLKEYS: u32 = 0x0004;
 pub const DLGC_HASSETSEL: u32 = 0x0008;
@@ -573,6 +582,10 @@ fn bounding_region_rect(rects: &[Rect]) -> Rect {
         .unwrap_or_default()
 }
 
+pub fn bounding_region_rect_pub(rects: &[Rect]) -> Rect {
+    bounding_region_rect(rects)
+}
+
 fn normalize_keyboard_layout_name(name: &str) -> Option<String> {
     let trimmed = name.trim();
     if trimmed.len() > 8 || trimmed.is_empty() {
@@ -588,6 +601,15 @@ fn normalize_keyboard_layout_name(name: &str) -> Option<String> {
 pub struct Point {
     pub x: i32,
     pub y: i32,
+}
+
+/// Per-axis scroll bar state stored with each window.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ScrollState {
+    pub min: i32,
+    pub max: i32,
+    pub page: u32,
+    pub pos: i32,
 }
 
 #[derive(Debug, Clone)]
@@ -623,6 +645,9 @@ pub struct Window {
     pub nc_destroy_message_sent: bool,
     pub destroy_message_order: Option<u64>,
     pub nc_destroy_message_order: Option<u64>,
+    pub hscroll: ScrollState,
+    pub vscroll: ScrollState,
+    pub props: BTreeMap<String, u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -697,12 +722,13 @@ pub struct CaretState {
     pub show_count: i32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImeContextState {
     pub hwnd: Option<u32>,
     pub open: bool,
     pub conversion_status: u32,
     pub sentence_status: u32,
+    pub composition_string: Vec<u16>,
 }
 
 #[derive(Debug, Clone)]
@@ -755,6 +781,11 @@ pub struct Gwe {
     caret_next_blink_ms: u32,
     next_lifecycle_message_order: u64,
     stats: GweStats,
+    // Global atom table (maps lowercase name → atom value in 0xC001..0xFFFF range).
+    global_atoms: BTreeMap<String, u16>,
+    next_global_atom: u16,
+    // Per-window property lists (hwnd → (name_or_atom → value)).
+    window_props: BTreeMap<u32, BTreeMap<String, u32>>,
 }
 
 impl Default for Gwe {
@@ -794,6 +825,9 @@ impl Default for Gwe {
                 nc_destroy_message_sent: false,
                 destroy_message_order: None,
                 nc_destroy_message_order: None,
+                hscroll: ScrollState::default(),
+                vscroll: ScrollState::default(),
+                props: BTreeMap::new(),
             },
         );
         Self {
@@ -845,6 +879,9 @@ impl Default for Gwe {
             caret_next_blink_ms: 0,
             next_lifecycle_message_order: 1,
             stats: GweStats::default(),
+            global_atoms: BTreeMap::new(),
+            next_global_atom: 0xc001,
+            window_props: BTreeMap::new(),
         }
     }
 }
@@ -981,6 +1018,9 @@ impl Gwe {
                 nc_destroy_message_sent: false,
                 destroy_message_order: None,
                 nc_destroy_message_order: None,
+                hscroll: ScrollState::default(),
+                vscroll: ScrollState::default(),
+                props: BTreeMap::new(),
             },
         );
         if parent.is_none() {
@@ -992,6 +1032,52 @@ impl Gwe {
             self.mark_queue_status_changed(thread_id, QS_PAINT);
         }
         hwnd
+    }
+
+    // Global atom table operations.
+    pub fn global_add_atom(&mut self, name: &str) -> u16 {
+        let key = name.to_ascii_lowercase();
+        if let Some(&atom) = self.global_atoms.get(&key) {
+            return atom;
+        }
+        let atom = self.next_global_atom;
+        self.next_global_atom = self.next_global_atom.wrapping_add(1).max(0xc001);
+        self.global_atoms.insert(key, atom);
+        atom
+    }
+
+    pub fn global_find_atom(&self, name: &str) -> u16 {
+        let key = name.to_ascii_lowercase();
+        self.global_atoms.get(&key).copied().unwrap_or(0)
+    }
+
+    pub fn global_delete_atom(&mut self, atom: u16) -> u16 {
+        self.global_atoms.retain(|_, &mut v| v != atom);
+        0 // success: return 0
+    }
+
+    // Window property operations.
+    pub fn set_prop(&mut self, hwnd: u32, name: &str, value: u32) -> bool {
+        self.window_props
+            .entry(hwnd)
+            .or_default()
+            .insert(name.to_ascii_lowercase(), value);
+        true
+    }
+
+    pub fn get_prop(&self, hwnd: u32, name: &str) -> u32 {
+        self.window_props
+            .get(&hwnd)
+            .and_then(|m| m.get(&name.to_ascii_lowercase()))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub fn remove_prop(&mut self, hwnd: u32, name: &str) -> u32 {
+        self.window_props
+            .get_mut(&hwnd)
+            .and_then(|m| m.remove(&name.to_ascii_lowercase()))
+            .unwrap_or(0)
     }
 
     pub fn register_class(&mut self, name_or_atom: &str, bytes: [u8; WNDCLASSW_SIZE]) -> u16 {
@@ -1013,6 +1099,16 @@ impl Gwe {
         );
         self.class_names_by_atom.insert(atom, name);
         atom
+    }
+
+    pub fn unregister_class(&mut self, name_or_atom: &str) -> bool {
+        let name = normalize_class_name(name_or_atom);
+        if let Some(class) = self.classes_by_name.remove(&name) {
+            self.class_names_by_atom.remove(&class.atom);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn register_window_message(&mut self, name: &str) -> Option<u32> {
@@ -1376,6 +1472,39 @@ impl Gwe {
         self.caret
     }
 
+    /// Return the caret screen rect (x, y, w, h) when the caret is currently
+    /// visible (shown, system-enabled, blink-on, and its owner window visible).
+    /// Returns None when the caret should not be drawn on the frame.
+    pub fn visible_caret_screen_rect(&self) -> Option<(u32, u32, u32, u32)> {
+        let caret = self.caret?;
+        if caret.show_count < 0
+            || !self.caret_system_enabled
+            || !self.caret_blink_visible
+            || !self.is_window_visible(caret.hwnd)
+        {
+            return None;
+        }
+        let width = caret.width.max(1);
+        let height = caret.height.max(1);
+        let client_bounds = self.get_client_rect(caret.hwnd)?;
+        let client_rect =
+            Rect::from_origin_size(caret.position.x, caret.position.y, width, height)
+                .intersect(client_bounds)?;
+        let screen_origin = self.client_to_screen(
+            caret.hwnd,
+            Point {
+                x: client_rect.left,
+                y: client_rect.top,
+            },
+        )?;
+        let w = client_rect.width().max(0) as u32;
+        let h = client_rect.height().max(0) as u32;
+        if w == 0 || h == 0 {
+            return None;
+        }
+        Some((screen_origin.x.max(0) as u32, screen_origin.y.max(0) as u32, w, h))
+    }
+
     pub fn set_caret_blink_time(&mut self, milliseconds: u32) -> bool {
         if milliseconds == 0 {
             return false;
@@ -1435,6 +1564,14 @@ impl Gwe {
             normalize_class_name(name_or_atom)
         };
         self.classes_by_name.get(&name)
+    }
+
+    pub fn registered_class(&self, class_name: &str) -> Option<&WindowClass> {
+        self.classes_by_name.get(class_name)
+    }
+
+    pub fn registered_class_mut(&mut self, class_name: &str) -> Option<&mut WindowClass> {
+        self.classes_by_name.get_mut(class_name)
     }
 
     pub fn resolve_class_name(&self, name_or_atom: &str) -> String {
@@ -1879,6 +2016,29 @@ impl Gwe {
         }
     }
 
+    /// Returns a reference to the horizontal or vertical scroll state for a window.
+    /// `bar`: SB_HORZ = 0, SB_VERT = 1, SB_CTL = 2.
+    pub fn get_scroll_state(&self, hwnd: u32, bar: u32) -> Option<&ScrollState> {
+        let window = self.windows.get(&hwnd).filter(|w| !w.destroyed)?;
+        match bar {
+            0 => Some(&window.hscroll),
+            1 => Some(&window.vscroll),
+            2 => Some(&window.hscroll), // SB_CTL: the control itself is the scrollbar
+            _ => None,
+        }
+    }
+
+    /// Returns a mutable reference to the horizontal or vertical scroll state for a window.
+    pub fn get_scroll_state_mut(&mut self, hwnd: u32, bar: u32) -> Option<&mut ScrollState> {
+        let window = self.windows.get_mut(&hwnd).filter(|w| !w.destroyed)?;
+        match bar {
+            0 => Some(&mut window.hscroll),
+            1 => Some(&mut window.vscroll),
+            2 => Some(&mut window.hscroll),
+            _ => None,
+        }
+    }
+
     pub fn get_dlg_item(&self, parent: u32, id: u32) -> Option<u32> {
         self.windows
             .values()
@@ -2222,10 +2382,43 @@ impl Gwe {
         Some(previous)
     }
 
-    pub fn ime_context(&self, himc: u32) -> Option<ImeContextState> {
-        self.ime_contexts.get(&himc).copied()
+    pub fn ime_context(&self, himc: u32) -> Option<&ImeContextState> {
+        self.ime_contexts.get(&himc)
     }
 
+    /// Returns true when the window has an explicitly associated HIMC that is in
+    /// the open (composing) state.  Does NOT auto-create an HIMC the way
+    /// `get_ime_context` does, so it is safe to call during `TranslateMessage`
+    /// without side-effects.
+    pub fn is_ime_open_for_window(&self, hwnd: u32) -> bool {
+        let Some(window) = self.windows.get(&hwnd).filter(|w| !w.destroyed) else {
+            return false;
+        };
+        if !self.ime_enabled_for_thread(window.thread_id) {
+            return false;
+        }
+        self.ime_context_by_window
+            .get(&hwnd)
+            .and_then(|himc| self.ime_contexts.get(himc))
+            .is_some_and(|ctx| ctx.open)
+    }
+
+    /// Update the composition string for a given HIMC and return the associated
+    /// window so the caller can send WM_IME_COMPOSITION to it.
+    pub fn set_ime_composition_string(
+        &mut self,
+        himc: u32,
+        composition: Vec<u16>,
+    ) -> Option<u32> {
+        let context = self.ime_contexts.get_mut(&himc)?;
+        context.composition_string = composition;
+        context.hwnd
+    }
+
+    /// Sets the open status for the given HIMC.  Returns `true` on success
+    /// (HIMC known) or `false` if the HIMC is unknown.  After a successful
+    /// call the caller should post `WM_IME_NOTIFY(IMN_SETOPENSTATUS)` to the
+    /// window returned by `ime_context(himc).and_then(|c| c.hwnd)`.
     pub fn set_ime_open_status(&mut self, himc: u32, open: bool) -> bool {
         let Some(context) = self.ime_contexts.get_mut(&himc) else {
             return false;
@@ -2286,6 +2479,7 @@ impl Gwe {
                 open: false,
                 conversion_status: 0,
                 sentence_status: 0,
+                composition_string: Vec::new(),
             },
         );
         himc
@@ -2922,6 +3116,7 @@ impl Gwe {
     }
 
     fn window_dialog_code(&self, hwnd: u32) -> u32 {
+        const ES_MULTILINE: u32 = 0x0004;
         let Some(window) = self.windows.get(&hwnd).filter(|window| !window.destroyed) else {
             return 0;
         };
@@ -2939,7 +3134,21 @@ impl Gwe {
             return DLGC_STATIC;
         }
         if window.class_name.eq_ignore_ascii_case("edit") {
-            return DLGC_HASSETSEL | DLGC_WANTCHARS;
+            // Multiline edits also capture Tab; single-line edits let dialog handle Tab.
+            let mut code = DLGC_WANTCHARS | DLGC_HASSETSEL | DLGC_WANTARROWS;
+            if window.style & ES_MULTILINE != 0 {
+                code |= DLGC_WANTTAB;
+            }
+            return code;
+        }
+        if window.class_name.eq_ignore_ascii_case("combobox") {
+            return DLGC_WANTCHARS | DLGC_WANTARROWS;
+        }
+        if window.class_name.eq_ignore_ascii_case("listbox") {
+            return DLGC_WANTARROWS | DLGC_WANTCHARS;
+        }
+        if window.class_name.eq_ignore_ascii_case("scrollbar") {
+            return DLGC_WANTARROWS;
         }
         default_send_message_result(WM_GETDLGCODE, 0, 0)
     }
@@ -4028,6 +4237,18 @@ impl Gwe {
             .collect()
     }
 
+    pub fn find_dialog_mnemonic_child(&self, dialog: u32, mnemonic: char) -> Option<u32> {
+        let mnemonic_lower = mnemonic.to_ascii_lowercase();
+        let children = self.dialog_child_candidates(dialog, 0);
+        children.into_iter().find(|hwnd| {
+            self.windows.get(hwnd).is_some_and(|window| {
+                title_mnemonic(&window.title)
+                    .map(|c| c.to_ascii_lowercase())
+                    == Some(mnemonic_lower)
+            })
+        })
+    }
+
     fn next_dialog_candidate(
         &self,
         candidates: &[u32],
@@ -4387,6 +4608,22 @@ fn window_long_slot_mut(window: &mut Window, index: i32) -> Option<&mut u32> {
         _ if index >= 0 && index % 4 == 0 => window.extra_longs.get_mut((index / 4) as usize),
         _ => None,
     }
+}
+
+pub fn title_mnemonic(title: &str) -> Option<char> {
+    let mut chars = title.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '&' {
+            match chars.peek() {
+                Some(&'&') => {
+                    chars.next(); // skip escaped &&
+                }
+                Some(&next) => return Some(next),
+                None => {}
+            }
+        }
+    }
+    None
 }
 
 fn window_extra_long_count(class: &WindowClass) -> usize {

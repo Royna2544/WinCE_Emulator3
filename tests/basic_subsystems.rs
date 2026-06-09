@@ -6229,14 +6229,17 @@ fn gwe_send_message_wm_close_wm_getdlgcode_dm_defid_and_message_pos_after_get_me
     );
     assert_eq!(gwe.send_message(static_w, WM_GETDLGCODE, 0, 0), Some(DLGC_STATIC));
 
-    // WM_GETDLGCODE for "edit" → DLGC_HASSETSEL | DLGC_WANTCHARS.
+    // WM_GETDLGCODE for "edit" → DLGC_HASSETSEL | DLGC_WANTCHARS | DLGC_WANTARROWS.
     let edit_w = gwe.create_window_ex_with_rect(
         1, "edit", "Ed", Some(dlg), 4, WS_VISIBLE | WS_CHILD, 0, btn_rect,
     );
-    assert_eq!(
-        gwe.send_message(edit_w, WM_GETDLGCODE, 0, 0),
-        Some(DLGC_HASSETSEL | DLGC_WANTCHARS),
-    );
+    {
+        use wince_emulation_v3::ce::gwe::DLGC_WANTARROWS;
+        assert_eq!(
+            gwe.send_message(edit_w, WM_GETDLGCODE, 0, 0),
+            Some(DLGC_HASSETSEL | DLGC_WANTCHARS | DLGC_WANTARROWS),
+        );
+    }
 
     // DM_GETDEFID with no DEFPUSHBUTTON → 0.
     let dlg2 = gwe.create_window_ex_with_rect(2, "dialog", "Dlg2", None, 0, WS_VISIBLE, 0, big);

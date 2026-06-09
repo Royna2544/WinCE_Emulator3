@@ -96,7 +96,7 @@ use wince_emulation_v3::{
             BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, BS_RADIOBUTTON,
             DC_HASDEFID, DEFAULT_KEYBOARD_LAYOUT_HKL,
             DEFAULT_KEYBOARD_LAYOUT_NAME, DLGC_BUTTON, DLGC_DEFPUSHBUTTON, DLGC_HASSETSEL,
-            DLGC_RADIOBUTTON, DLGC_STATIC, DLGC_UNDEFPUSHBUTTON, DLGC_WANTCHARS,
+            DLGC_RADIOBUTTON, DLGC_STATIC, DLGC_UNDEFPUSHBUTTON, DLGC_WANTARROWS, DLGC_WANTCHARS,
             DM_GETDEFID, DM_SETDEFID, GW_CHILD, GW_HWNDFIRST, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER,
             GWL_STYLE, GWL_USERDATA, HTCAPTION, HTCLIENT, HTCLOSE, HTNOWHERE, HTSYSMENU, HTTOPLEFT,
             HWND_BROADCAST, KEY_SHIFT_ANY_SHIFT_FLAG,
@@ -19913,7 +19913,7 @@ fn coredll_raw_def_window_proc_getdlgcode_for_radio_edit_static() -> Result<()> 
             if c == (DLGC_BUTTON | DLGC_RADIOBUTTON)
     ), "BS_AUTORADIOBUTTON must return DLGC_BUTTON | DLGC_RADIOBUTTON");
 
-    // Edit control → DLGC_HASSETSEL | DLGC_WANTCHARS.
+    // Edit control (single-line) → DLGC_HASSETSEL | DLGC_WANTCHARS | DLGC_WANTARROWS.
     let edit = kernel.create_window_ex_w(
         thread_id, "edit", "", Some(dialog), 3,
         WS_VISIBLE | WS_CHILD | WS_TABSTOP, 0,
@@ -19924,8 +19924,8 @@ fn coredll_raw_def_window_proc_getdlgcode_for_radio_edit_static() -> Result<()> 
             ORD_DEF_WINDOW_PROC_W, [edit, WM_GETDLGCODE, 0, 0],
         ),
         CoredllDispatch::Returned { value: CoredllValue::U32(c), .. }
-            if c == (DLGC_HASSETSEL | DLGC_WANTCHARS)
-    ), "edit class must return DLGC_HASSETSEL | DLGC_WANTCHARS");
+            if c == (DLGC_HASSETSEL | DLGC_WANTCHARS | DLGC_WANTARROWS)
+    ), "edit class must return DLGC_HASSETSEL | DLGC_WANTCHARS | DLGC_WANTARROWS");
 
     // Static control → DLGC_STATIC.
     let stat = kernel.create_window_ex_w(

@@ -364,6 +364,9 @@ pub struct DcState {
     pub text_color: u32,
     pub text_align: u32,
     pub rop2: i32,
+    pub stretch_blt_mode: i32,
+    pub text_char_extra: i32,
+    pub layout: u32,
 }
 
 impl Default for DcState {
@@ -382,6 +385,9 @@ impl Default for DcState {
             text_color: 0,
             text_align: 0,
             rop2: 13,
+            stretch_blt_mode: 1, // BLACKONWHITE
+            text_char_extra: 0,
+            layout: 0, // left-to-right
         }
     }
 }
@@ -406,6 +412,7 @@ pub struct ResourceSystem {
     palettes: BTreeMap<u32, PaletteObject>,
     memory_dcs: BTreeSet<u32>,
     dc_states: BTreeMap<u32, DcState>,
+    dc_save_stacks: BTreeMap<u32, Vec<DcState>>,
     dc_clips: BTreeMap<u32, u32>,
     last_popup_tracking: Option<PopupMenuTracking>,
     popup_notifications: Vec<PopupMenuNotification>,
@@ -433,6 +440,7 @@ impl Default for ResourceSystem {
             palettes: BTreeMap::new(),
             memory_dcs: BTreeSet::new(),
             dc_states: BTreeMap::new(),
+            dc_save_stacks: BTreeMap::new(),
             dc_clips: BTreeMap::new(),
             last_popup_tracking: None,
             popup_notifications: Vec::new(),
@@ -624,8 +632,9 @@ impl ResourceSystem {
         mask_bitmap: u32,
         color_bitmap: u32,
     ) -> Option<u32> {
-        if !self.bitmaps.contains_key(&mask_bitmap)
+        if (mask_bitmap != 0 && !self.bitmaps.contains_key(&mask_bitmap))
             || (color_bitmap != 0 && !self.bitmaps.contains_key(&color_bitmap))
+            || (mask_bitmap == 0 && color_bitmap == 0)
         {
             return None;
         }
@@ -746,6 +755,19 @@ impl ResourceSystem {
         region.rect = bounding_region_rect(&rects);
         region.rects = rects;
         true
+    }
+
+    pub fn offset_region(&mut self, handle: u32, dx: i32, dy: i32) -> Option<bool> {
+        let region = self.regions.get_mut(&handle)?;
+        let shifted: Vec<Rect> = region.rects.iter().map(|r| r.offset(dx, dy)).collect();
+        let bounding = if shifted.is_empty() {
+            Rect::default()
+        } else {
+            crate::ce::gwe::bounding_region_rect_pub(&shifted)
+        };
+        region.rects = shifted;
+        region.rect = bounding;
+        Some(!region.rects.is_empty())
     }
 
     pub fn delete_region(&mut self, handle: u32) -> bool {
@@ -1835,6 +1857,61 @@ impl ResourceSystem {
         }
     }
 
+    pub fn get_current_object(&self, hdc: u32, obj_type: u32) -> u32 {
+        self.dc_states
+            .get(&hdc)
+            .map(|s| match obj_type {
+                1 => s.selected_pen,    // OBJ_PEN
+                2 => s.selected_brush,  // OBJ_BRUSH
+                6 => s.selected_font,   // OBJ_FONT
+                7 => s.selected_bitmap, // OBJ_BITMAP
+                _ => 0,
+            })
+            .unwrap_or(0)
+    }
+
+    pub fn stretch_blt_mode(&self, hdc: u32) -> i32 {
+        self.dc_states.get(&hdc).map(|s| s.stretch_blt_mode).unwrap_or(1)
+    }
+
+    pub fn set_stretch_blt_mode(&mut self, hdc: u32, mode: i32) -> i32 {
+        if let Some(s) = self.dc_states.get_mut(&hdc) {
+            let old = s.stretch_blt_mode;
+            s.stretch_blt_mode = mode;
+            old
+        } else {
+            0
+        }
+    }
+
+    pub fn text_char_extra(&self, hdc: u32) -> i32 {
+        self.dc_states.get(&hdc).map(|s| s.text_char_extra).unwrap_or(0)
+    }
+
+    pub fn set_text_char_extra(&mut self, hdc: u32, extra: i32) -> i32 {
+        if let Some(s) = self.dc_states.get_mut(&hdc) {
+            let old = s.text_char_extra;
+            s.text_char_extra = extra;
+            old
+        } else {
+            0
+        }
+    }
+
+    pub fn layout(&self, hdc: u32) -> u32 {
+        self.dc_states.get(&hdc).map(|s| s.layout).unwrap_or(0)
+    }
+
+    pub fn set_layout(&mut self, hdc: u32, layout: u32) -> u32 {
+        if let Some(s) = self.dc_states.get_mut(&hdc) {
+            let old = s.layout;
+            s.layout = layout;
+            old
+        } else {
+            0xffff_ffff // GDI_ERROR
+        }
+    }
+
     pub fn selected_bitmap(&self, hdc: u32) -> Option<u32> {
         self.dc_states
             .get(&hdc)
@@ -1959,6 +2036,57 @@ impl ResourceSystem {
         let previous = state.rop2;
         state.rop2 = rop2;
         Some(previous)
+    }
+
+    pub fn get_dc_bk_color(&self, hdc: u32) -> Option<u32> {
+        if hdc == 0 {
+            return None;
+        }
+        Some(self.dc_states.get(&hdc).map(|s| s.bk_color).unwrap_or(0x00ff_ffff))
+    }
+
+    pub fn get_dc_bk_mode(&self, hdc: u32) -> Option<i32> {
+        if hdc == 0 {
+            return None;
+        }
+        Some(self.dc_states.get(&hdc).map(|s| s.bk_mode).unwrap_or(2))
+    }
+
+    /// Push the current DC state onto the per-DC save stack.
+    /// Returns the new save level (1-based) or 0 on failure.
+    pub fn save_dc(&mut self, hdc: u32) -> i32 {
+        if hdc == 0 {
+            return 0;
+        }
+        let current = self.dc_states.entry(hdc).or_default().clone();
+        let stack = self.dc_save_stacks.entry(hdc).or_default();
+        stack.push(current);
+        stack.len() as i32
+    }
+
+    /// Pop DC state from the save stack.  `level` is the 1-based save level
+    /// returned by `save_dc`, or 0 / negative to pop one level.
+    /// Returns true on success.
+    pub fn restore_dc(&mut self, hdc: u32, level: i32) -> bool {
+        if hdc == 0 {
+            return false;
+        }
+        let stack = match self.dc_save_stacks.get_mut(&hdc) {
+            Some(s) if !s.is_empty() => s,
+            _ => return false,
+        };
+        let target_len = if level <= 0 {
+            stack.len().saturating_sub((-level + 1) as usize)
+        } else {
+            (level as usize).saturating_sub(1)
+        };
+        if target_len >= stack.len() {
+            return false;
+        }
+        stack.truncate(target_len + 1);
+        let saved = stack.pop().unwrap();
+        self.dc_states.insert(hdc, saved);
+        true
     }
 
     pub fn delete_gdi_object(&mut self, handle: u32) -> bool {

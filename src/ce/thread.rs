@@ -39,6 +39,10 @@ impl ThreadSystem {
         thread_id
     }
 
+    pub fn is_primary_thread(&self, thread_id: u32) -> bool {
+        thread_id == 2
+    }
+
     pub fn get_last_error(&self, thread_id: u32) -> u32 {
         self.last_error_by_thread
             .get(&thread_id)

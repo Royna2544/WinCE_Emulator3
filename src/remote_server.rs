@@ -269,7 +269,22 @@ impl RemoteServer {
     }
 
     pub fn publish_framebuffer(&self, framebuffer: &dyn Framebuffer) {
-        let image = framebuffer_to_rgb(framebuffer);
+        self.publish_framebuffer_with_caret(framebuffer, None);
+    }
+
+    /// Publish the framebuffer and overlay the caret XOR rectangle on top.
+    /// `caret` is (screen_x, screen_y, width, height) in framebuffer coordinates.
+    /// The caret is drawn by inverting (XOR with 0xFF) all three RGB channels of
+    /// each pixel in the rectangle, matching CE GWES caret rendering semantics.
+    pub fn publish_framebuffer_with_caret(
+        &self,
+        framebuffer: &dyn Framebuffer,
+        caret: Option<(u32, u32, u32, u32)>,
+    ) {
+        let mut image = framebuffer_to_rgb(framebuffer);
+        if let Some((cx, cy, cw, ch)) = caret {
+            overlay_caret_xor(&mut image, cx, cy, cw, ch);
+        }
         *self
             .state
             .latest_framebuffer
@@ -1396,6 +1411,25 @@ fn framebuffer_to_rgb(framebuffer: &dyn Framebuffer) -> RemoteFramebufferImage {
         width: info.width,
         height: info.height,
         rgb,
+    }
+}
+
+/// XOR-invert the RGB pixels inside the caret rectangle on a composed frame.
+/// CE GWES draws the caret by XOR-ing a solid rectangle against the surface,
+/// which is equivalent to inverting all three channels of each covered pixel.
+fn overlay_caret_xor(image: &mut RemoteFramebufferImage, cx: u32, cy: u32, cw: u32, ch: u32) {
+    let x0 = cx.min(image.width) as usize;
+    let y0 = cy.min(image.height) as usize;
+    let x1 = (cx.saturating_add(cw)).min(image.width) as usize;
+    let y1 = (cy.saturating_add(ch)).min(image.height) as usize;
+    let stride = image.width as usize * 3;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let base = y * stride + x * 3;
+            image.rgb[base] ^= 0xff;
+            image.rgb[base + 1] ^= 0xff;
+            image.rgb[base + 2] ^= 0xff;
+        }
     }
 }
 

@@ -90,6 +90,7 @@ pub struct CeKernel {
     process_module_path: String,
     process_module_host_path: Option<PathBuf>,
     process_command_line: String,
+    command_line_guest_ptr: u32,
     process_current_directory: Option<String>,
     process_show_cmd: u32,
     current_process_id: u32,
@@ -100,6 +101,7 @@ pub struct CeKernel {
     pending_process_launches: Vec<PendingProcessLaunch>,
     next_process_id: u32,
     loaded_modules: BTreeMap<String, LoadedModule>,
+    next_font_mem_resource_handle: u32,
     crt_rand_state: u32,
     crt_strtok_next_by_thread: BTreeMap<u32, u32>,
     recent_file_ops: Vec<FileTraceRecord>,
@@ -381,6 +383,7 @@ impl CeKernel {
             process_module_path: "\\FakeCE\\process.exe".to_owned(),
             process_module_host_path: None,
             process_command_line: String::new(),
+            command_line_guest_ptr: 0,
             process_current_directory: None,
             process_show_cmd: SW_SHOWNORMAL,
             current_process_id: 1,
@@ -391,6 +394,7 @@ impl CeKernel {
             pending_process_launches: Vec::new(),
             next_process_id: 0x42,
             loaded_modules: BTreeMap::new(),
+            next_font_mem_resource_handle: 0x5f00_0001,
             crt_rand_state: 1,
             crt_strtok_next_by_thread: BTreeMap::new(),
             recent_file_ops: Vec::new(),
@@ -620,6 +624,20 @@ impl CeKernel {
             .cloned()
     }
 
+    pub fn font_mem_resource_pseudo_handle(&mut self) -> u32 {
+        let handle = self.next_font_mem_resource_handle;
+        self.next_font_mem_resource_handle = self.next_font_mem_resource_handle.wrapping_add(1);
+        handle
+    }
+
+    pub fn loaded_module_for_address(&self, addr: u32) -> Option<&LoadedModule> {
+        self.loaded_modules.values().find(|m| {
+            !m.unload_pending
+                && addr >= m.base
+                && addr < m.base.saturating_add(m.image_size)
+        })
+    }
+
     pub fn resolve_loaded_module_proc_by_name(&self, module: u32, name: &str) -> Option<u32> {
         let symbol = normalize_symbol_name(name);
         self.loaded_modules
@@ -659,10 +677,22 @@ impl CeKernel {
 
     pub fn set_process_command_line(&mut self, command_line: impl Into<String>) {
         self.process_command_line = command_line.into();
+        self.command_line_guest_ptr = 0; // invalidate cached guest pointer
     }
 
     pub fn process_command_line(&self) -> &str {
         &self.process_command_line
+    }
+
+    /// Return (or lazily allocate) the guest-side command-line wide-string pointer.
+    /// Allocates a LMEM block just large enough to hold the null-terminated UTF-16
+    /// command line on first call.  Returns 0 only when the memory system is full.
+    pub fn command_line_guest_ptr(&mut self) -> u32 {
+        self.command_line_guest_ptr
+    }
+
+    pub fn set_command_line_guest_ptr(&mut self, ptr: u32) {
+        self.command_line_guest_ptr = ptr;
     }
 
     pub fn set_process_current_directory(&mut self, directory: Option<String>) {
@@ -1625,6 +1655,28 @@ impl CeKernel {
             return Err(crate::error::Error::InvalidHandle(handle));
         };
         self.files.file_size(file.file_id)
+    }
+
+    pub fn set_end_of_file(&mut self, handle: u32) -> Result<bool> {
+        let KernelObject::File(file) = self.handles.get(handle)? else {
+            return Err(crate::error::Error::InvalidHandle(handle));
+        };
+        self.files.set_end_of_file(file.file_id)
+    }
+
+    pub fn file_attributes_by_handle(&self, handle: u32) -> Result<u32> {
+        let KernelObject::File(file) = self.handles.get(handle)? else {
+            return Err(crate::error::Error::InvalidHandle(handle));
+        };
+        self.files.file_attributes_by_id(file.file_id)
+    }
+
+    /// Returns (creation_time, last_access_time, last_write_time) as Windows FILETIME values.
+    pub fn get_file_time(&self, handle: u32) -> Result<(u64, u64, u64)> {
+        let KernelObject::File(file) = self.handles.get(handle)? else {
+            return Err(crate::error::Error::InvalidHandle(handle));
+        };
+        self.files.file_times_by_id(file.file_id)
     }
 
     pub fn file_position(&self, handle: u32) -> Result<usize> {

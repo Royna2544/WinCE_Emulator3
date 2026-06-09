@@ -9,16 +9,17 @@ use wince_emulation_v3::{
             CoredllValue, EventModifyAction,
         },
         coredll_ordinals::{
-            ORD_ATOF, ORD_CLOSE_HANDLE, ORD_CREATE_APISET, ORD_CREATE_FILE_FOR_MAPPING_W,
-            ORD_CREATE_FILE_W, ORD_CREATE_WINDOW_EX_W, ORD_D_TO_LL, ORD_D_TO_ULL,
+            ORD_ATOF, ORD_CLOSE_HANDLE, ORD_CREATE_APISET, ORD_CREATE_FILE_W,
+            ORD_CREATE_WINDOW_EX_W, ORD_D_TO_LL, ORD_D_TO_ULL,
             ORD_DISPATCH_MESSAGE_W, ORD_DPCMP, ORD_DPMUL, ORD_DPTOFP, ORD_DPTOLI, ORD_EVENT_MODIFY,
             ORD_F_TO_LL, ORD_F_TO_ULL, ORD_FMODF, ORD_FPCMP, ORD_FPMUL, ORD_FPTODP, ORD_FPTOUL,
-            ORD_GED, ORD_GES, ORD_GET_MESSAGE_W, ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_HYPOT,
+            ORD_GED, ORD_GES, ORD_GET_MESSAGE_W,
+            ORD_GET_SYSTEM_TIME_AS_FILE_TIME, ORD_HYPOT,
             ORD_INITIALIZE_CRITICAL_SECTION, ORD_ISWCTYPE, ORD_LITODP, ORD_LITOFP, ORD_LL_DIV,
             ORD_LOAD_LIBRARY_W, ORD_LONGJMP, ORD_LTD, ORD_NES, ORD_POST_MESSAGE_W, ORD_POW,
             ORD_REG_OPEN_KEY_EX_W, ORD_REGISTER_GESTURE, ORD_SETJMP, ORD_SHELL_EXECUTE_EX,
-            ORD_SLEEP, ORD_SQRT, ORD_ULTODP, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WRITE_FILE,
-            current_static_export_count, lookup,
+            ORD_SLEEP, ORD_SQRT, ORD_ULTODP, ORD_WAIT_FOR_SINGLE_OBJECT,
+            ORD_WRITE_FILE, current_static_export_count, lookup,
         },
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::WM_USER,
@@ -805,7 +806,7 @@ fn raw_stub_audit_keeps_import_trap_context() -> Result<()> {
             trap_pc: Some(0x7fff_4000),
             caller_module: Some("dll:mfcce400.dll".to_owned()),
         },
-        ORD_CREATE_FILE_FOR_MAPPING_W,
+        31, // "memchr" — CRT export without ORD_* constant; always stubbed
         [0, 0, 0, 0, 0],
     );
 
@@ -815,20 +816,20 @@ fn raw_stub_audit_keeps_import_trap_context() -> Result<()> {
             CoredllDispatch::Stubbed {
                 ref export,
                 ref stub,
-            } if export.name == "CreateFileForMappingW"
-                && stub.audit == CoredllStubAuditClassification::MustImplement
+            } if export.name == "memchr"
+                && stub.audit == CoredllStubAuditClassification::SafeFailure
                 && stub.context == Some(CoredllRawContext {
                     thread_id: 7,
                     caller_pc: Some(0x0040_1234),
                     trap_pc: Some(0x7fff_4000),
                     caller_module: Some("dll:mfcce400.dll".to_owned()),
                 })
-                && stub.last_error == Some(ERROR_NOT_SUPPORTED)
-                && stub.return_value == u32::MAX
+                && stub.last_error == None
+                && stub.return_value == 0
         ),
         "{dispatch:?}"
     );
-    assert_eq!(kernel.threads.get_last_error(7), ERROR_NOT_SUPPORTED);
+    assert_eq!(kernel.threads.get_last_error(7), 0);
 
     let load_stub = table.dispatch_untyped_ordinal(ORD_LOAD_LIBRARY_W);
     assert!(
