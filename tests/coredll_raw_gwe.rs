@@ -22660,3 +22660,54 @@ fn coredll_raw_translate_accelerator_wm_keydown_uses_active_layout() -> Result<(
 
     Ok(())
 }
+
+#[test]
+fn coredll_raw_translate_message_syskeydown_uses_active_layout() -> Result<()> {
+    // WM_SYSKEYDOWN (Alt+key) on a Western layout must translate VK using the
+    // layout-specific table and post WM_SYSCHAR with the layout character, not
+    // the US-layout character.
+    // AZERTY (0x040C): Alt+VK_Z (0x5A) → WM_SYSCHAR('w', 0x77).
+    // US layout: Alt+VK_Z → WM_SYSCHAR('z', 0x7A).
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 45_u32;
+    let msg_ptr = 0x2_1000_u32;
+    memory.map_words(msg_ptr, 7);
+    let hwnd = kernel.create_window_ex_w(thread_id, "SYSKEYDOWN_LAYOUT", "", None, 0, 0, 0);
+
+    // Set Alt down (required for WM_SYSKEYDOWN).
+    kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYDOWN, VK_MENU, 0);
+
+    // --- US layout (default): Alt+VK_Z → WM_SYSCHAR('z', 0x7A).
+    write_raw_message(&mut memory, msg_ptr, hwnd, WM_SYSKEYDOWN, 0x5A, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_TRANSLATE_MESSAGE, [msg_ptr],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ), "US layout: WM_SYSKEYDOWN VK_Z should produce WM_SYSCHAR");
+    let syschar = kernel
+        .gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_SYSCHAR, WM_SYSCHAR, PeekFlags::REMOVE)
+        .expect("US Alt+VK_Z should post WM_SYSCHAR");
+    assert_eq!(syschar.wparam, 0x7A, "US Alt+VK_Z → WM_SYSCHAR('z', 0x7A)");
+
+    // --- AZERTY (0x040C): Alt+VK_Z → AZERTY maps Z key to 'w' → WM_SYSCHAR('w', 0x77).
+    kernel.gwe.activate_keyboard_layout(0x040C);
+    write_raw_message(&mut memory, msg_ptr, hwnd, WM_SYSKEYDOWN, 0x5A, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_TRANSLATE_MESSAGE, [msg_ptr],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ), "AZERTY: WM_SYSKEYDOWN VK_Z should produce WM_SYSCHAR");
+    let syschar = kernel
+        .gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_SYSCHAR, WM_SYSCHAR, PeekFlags::REMOVE)
+        .expect("AZERTY Alt+VK_Z should post WM_SYSCHAR");
+    assert_eq!(syschar.wparam, 0x77, "AZERTY Alt+VK_Z → WM_SYSCHAR('w', 0x77)");
+
+    Ok(())
+}

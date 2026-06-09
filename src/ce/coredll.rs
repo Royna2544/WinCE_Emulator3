@@ -32227,6 +32227,26 @@ fn translate_message_raw<M: CoredllGuestMemory>(
         // ch == 0 from western table: fall through to standard US translation.
     }
 
+    // WM_SYSKEYDOWN on a Western layout: translate VK→char using the layout table
+    // (no dead-key state machine for Alt+key sequences) and post WM_SYSCHAR.
+    if is_western_layout && message.msg == crate::ce::gwe::WM_SYSKEYDOWN {
+        let shift = kernel.gwe.get_key_state(crate::ce::gwe::VK_SHIFT) & 0x8000_0000 != 0;
+        let caps = kernel.gwe.get_key_state(crate::ce::gwe::VK_CAPITAL) & 0x0001 != 0;
+        let (ch, _is_dead) = translate_vk_for_western_layout(layout, message.wparam, shift, caps);
+        if ch != 0 {
+            let _ = kernel.post_message_w_for_thread(
+                thread_id,
+                message.hwnd,
+                crate::ce::gwe::WM_SYSCHAR,
+                ch,
+                message.lparam,
+            );
+            kernel.threads.set_last_error(thread_id, 0);
+            return true;
+        }
+        // ch == 0 from western table: fall through to standard US translation.
+    }
+
     let char_code = translate_virtual_key_to_char(kernel, message.wparam);
     if char_code == 0 {
         kernel.threads.set_last_error(thread_id, 0);
