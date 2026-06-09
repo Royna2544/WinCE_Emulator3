@@ -851,7 +851,10 @@ impl CeKernel {
     }
 
     fn destroy_process_windows(&mut self, process_id: u32, thread_id: u32) {
-        self.gwe.terminate_sent_messages_from_sender(thread_id);
+        self.gwe.terminate_sent_messages_from_process(process_id);
+        if thread_id != 0 {
+            self.gwe.terminate_sent_messages_from_sender(thread_id);
+        }
         let hwnds = self
             .gwe
             .windows_snapshot()
@@ -3780,7 +3783,9 @@ impl CeKernel {
             flags,
             timeout_ms,
         );
-        if send_id.is_some() {
+        if let Some(id) = send_id {
+            self.gwe
+                .set_sent_message_sender_process(id, self.current_process_id);
             self.record_message_trace(MessageTraceRecord {
                 op: "queue_send_message",
                 thread_id: target_thread,

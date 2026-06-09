@@ -17316,6 +17316,80 @@ mod guest_thread_stack_tests {
 
         Ok(())
     }
+
+    #[test]
+    fn parent_blocking_send_cleaned_up_on_process_exit() -> Result<()> {
+        // Verify: when parent process exits while holding a blocking cross-thread
+        // SendMessageW to a child window, terminate_process must remove that
+        // pending sent message from the child thread's queue (or mark it
+        // SMF_SENDER_TERMINATED if already active), so the child is not stuck
+        // with an orphaned send whose sender is gone.
+        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let mut kernel = CeKernel::boot(config);
+
+        let parent_process_id = kernel.current_process_id();
+        let parent_thread = 9;
+
+        let launch = kernel.queue_process_launch(
+            Some("\\SDMMC Disk\\INavi\\iSearch.exe".to_owned()),
+            Some(String::new()),
+        );
+        let child_process_id = launch.process_id;
+        let child_thread = launch.thread_id;
+        let _ = kernel.take_pending_process_launches();
+
+        // Create child window under child process context.
+        let parent_state = kernel.current_process_state();
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: child_process_id,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        let child_hwnd =
+            kernel.create_window_ex_w(child_thread, "ISEARCH_WNDCLASS", "iSearch", None, 0, 0, 0);
+        kernel.set_current_process_state(parent_state);
+        assert_ne!(child_hwnd, 0);
+
+        // Parent thread 9 queues a BLOCKING cross-thread send to child's window.
+        // begin_cross_thread_send_message_w records current_process_id as sender.
+        let send_id = kernel
+            .begin_cross_thread_send_message_w(
+                parent_thread,
+                child_hwnd,
+                crate::ce::gwe::WM_USER + 0x99,
+                1,
+                2,
+                None,
+            )
+            .expect("send should queue");
+
+        // Before exit: child thread has a pending sent message.
+        assert!(kernel.thread_has_pending_sent_message(child_thread));
+
+        // Verify the sent message carries the parent's process ID.
+        assert_eq!(
+            kernel.gwe.sent_message(send_id).and_then(|s| s.sender_process_id),
+            Some(parent_process_id),
+        );
+
+        // Parent exits. terminate_sent_messages_from_process should remove the
+        // queued (not-yet-active) sent message for the parent's process_id.
+        assert!(kernel.terminate_process(
+            crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+            0
+        ));
+
+        // Sent message must be gone from the child's queue.
+        assert!(!kernel.thread_has_pending_sent_message(child_thread));
+
+        // The SentMessage record itself must also be removed.
+        assert!(kernel.gwe.sent_message(send_id).is_none());
+
+        // Child's window must still exist (only parent's windows are destroyed).
+        assert!(kernel.gwe.window(child_hwnd).is_some_and(|w| !w.destroyed));
+
+        Ok(())
+    }
 }
 
 

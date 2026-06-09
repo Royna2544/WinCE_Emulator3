@@ -60,7 +60,8 @@ use wince_emulation_v3::{
             ORD_IMM_SET_CONVERSION_STATUS, ORD_IMM_SET_OPEN_STATUS, ORD_IN_SEND_MESSAGE,
             ORD_INFLATE_RECT, ORD_INSERT_MENU_W, ORD_INTERSECT_RECT, ORD_INVALIDATE_RECT,
             ORD_IS_CHILD, ORD_IS_DIALOG_MESSAGE_W, ORD_IS_RECT_EMPTY, ORD_IS_WINDOW,
-            ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE, ORD_KEYBD_EVENT, ORD_KILL_TIMER,
+            ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE, ORD_KEYBD_EVENT, ORD_KEYBD_VKEY_TO_UNICODE,
+            ORD_KILL_TIMER,
             ORD_LINE_TO, ORD_LOAD_CURSOR_W, ORD_LOAD_ICON_W, ORD_LOAD_KEYBOARD_LAYOUT_W,
             ORD_LOAD_ACCELERATORS_W, ORD_LOAD_BITMAP_W, ORD_LOAD_MENU_W,
             ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_MAP_DIALOG_RECT, ORD_MAP_WINDOW_POINTS,
@@ -22496,6 +22497,59 @@ fn coredll_raw_translate_message_western_layout_dead_keys() -> Result<()> {
         .peek_message_filtered(thread_id, Some(hwnd), WM_CHAR, WM_CHAR, PeekFlags::REMOVE)
         .expect("dead ^ + space should post WM_CHAR(^)");
     assert_eq!(space_result.wparam, 0x5e, "dead ^ + space → literal '^'");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_keybd_vkey_to_unicode_honors_active_layout() -> Result<()> {
+    // Verify that KeybdVKeyToUnicode uses the active keyboard layout for OEM keys.
+    // VK_OEM_4 (0xDB):
+    //   - US layout (0x0409): '[' (0x5B), not a dead key.
+    //   - AZERTY (0x040C): '^' (0x5E), dead key.
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 42;
+    let buf_ptr: u32 = 0x1_0000;  // WCHAR output — must be halfword-mapped
+    let flags_ptr: u32 = 0x1_0004; // u32 flags output — word-mapped
+    memory.map_halfwords(buf_ptr, 1);
+    memory.map_words(flags_ptr, 1);
+
+    // args: vk=0xDB, scan=0, key_state_ptr=0, buf_ptr, buf_size=1, flags_ptr
+    let call = |kernel: &mut CeKernel, memory: &mut TestGuestMemory| {
+        table.dispatch_raw_ordinal_with_memory(
+            kernel,
+            memory,
+            thread_id,
+            ORD_KEYBD_VKEY_TO_UNICODE,
+            [0xDB_u32, 0, 0, buf_ptr, 1, flags_ptr],
+        )
+    };
+
+    // --- US layout (default, 0x0409) → '[' (0x5B), flags = 0 ---
+    let result = call(&mut kernel, &mut memory);
+    assert!(
+        matches!(result, CoredllDispatch::Returned { value: CoredllValue::U32(1), .. }),
+        "US layout: should return 1 char written"
+    );
+    let char_us = memory.read_u16(buf_ptr)?;
+    assert_eq!(char_us, 0x5B, "US VK_OEM_4 → '[' (0x5B)");
+    let flags_us = memory.read_u32(flags_ptr)?;
+    assert_eq!(flags_us, 0, "US '[' is not a dead key");
+
+    // --- AZERTY (0x040C) → '^' (0x5E), flags = 1 (dead key) ---
+    kernel.gwe.activate_keyboard_layout(0x040C);
+    let result = call(&mut kernel, &mut memory);
+    assert!(
+        matches!(result, CoredllDispatch::Returned { value: CoredllValue::U32(1), .. }),
+        "AZERTY layout: should return 1 char written"
+    );
+    let char_azerty = memory.read_u16(buf_ptr)?;
+    assert_eq!(char_azerty, 0x5E, "AZERTY VK_OEM_4 → '^' (0x5E)");
+    let flags_azerty = memory.read_u32(flags_ptr)?;
+    assert_eq!(flags_azerty, 1, "AZERTY '^' is a dead key (bit 0 set)");
 
     Ok(())
 }

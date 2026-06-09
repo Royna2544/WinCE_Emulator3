@@ -326,6 +326,7 @@ pub enum MessagePointerPayload {
 pub struct SentMessage {
     pub id: u64,
     pub sender_thread_id: Option<u32>,
+    pub sender_process_id: Option<u32>,
     pub receiver_thread_id: u32,
     pub message: Message,
     pub flags: u32,
@@ -2949,6 +2950,7 @@ impl Gwe {
             SentMessage {
                 id,
                 sender_thread_id,
+                sender_process_id: None,
                 receiver_thread_id: window.thread_id,
                 message,
                 flags,
@@ -3693,6 +3695,45 @@ impl Gwe {
                 if let Some(sent) = self.sent_messages.get_mut(id) {
                     sent.flags |= SMF_SENDER_TERMINATED;
                     sent.sender_thread_id = None;
+                }
+            } else {
+                self.sent_messages.remove(id);
+            }
+        }
+        for queue in self.sent_queues.values_mut() {
+            queue.retain(|id| !sent_ids.contains(id) || active_ids.contains(id));
+        }
+        sent_ids
+    }
+
+    pub fn set_sent_message_sender_process(&mut self, send_id: u64, process_id: u32) {
+        if let Some(sent) = self.sent_messages.get_mut(&send_id) {
+            sent.sender_process_id = Some(process_id);
+        }
+    }
+
+    pub fn terminate_sent_messages_from_process(&mut self, sender_process_id: u32) -> Vec<u64> {
+        let sent_ids = self
+            .sent_messages
+            .iter()
+            .filter(|(_, sent)| sent.sender_process_id == Some(sender_process_id))
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>();
+        if sent_ids.is_empty() {
+            return sent_ids;
+        }
+
+        let active_ids = self
+            .active_sent_stack_by_thread
+            .values()
+            .flat_map(|stack| stack.iter().copied())
+            .collect::<std::collections::BTreeSet<_>>();
+        for id in &sent_ids {
+            if active_ids.contains(id) {
+                if let Some(sent) = self.sent_messages.get_mut(id) {
+                    sent.flags |= SMF_SENDER_TERMINATED;
+                    sent.sender_thread_id = None;
+                    sent.sender_process_id = None;
                 }
             } else {
                 self.sent_messages.remove(id);

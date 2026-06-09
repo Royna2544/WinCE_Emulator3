@@ -32337,10 +32337,24 @@ fn keybd_vkey_to_unicode_raw<M: CoredllGuestMemory>(
         )
     };
 
-    let char_code = if control {
-        translate_control_key(vk)
+    // For Western European layouts, use the layout-specific table so OEM keys
+    // produce the correct characters (e.g. VK_OEM_4 → '^' on AZERTY, '[' on US).
+    let layout = kernel.gwe.keyboard_layout();
+    let layout_lang = layout & 0xFFFF;
+    let is_western_layout = matches!(layout_lang, 0x040C | 0x0407 | 0x040A | 0x0C0A);
+
+    let (char_code, is_dead) = if control {
+        (translate_control_key(vk), false)
+    } else if is_western_layout {
+        let (ch, dead) = translate_vk_for_western_layout(layout, vk, shift, caps);
+        if ch != 0 {
+            (ch, dead)
+        } else {
+            // Fall back to US table for any VK not covered by the western table.
+            (translate_virtual_key_to_char_with_state(vk, shift, caps), false)
+        }
     } else {
-        translate_virtual_key_to_char_with_state(vk, shift, caps)
+        (translate_virtual_key_to_char_with_state(vk, shift, caps), false)
     };
 
     if char_code == 0 {
@@ -32353,6 +32367,8 @@ fn keybd_vkey_to_unicode_raw<M: CoredllGuestMemory>(
     }
 
     // Write the Unicode character (WCHAR) to the output buffer.
+    // Dead-key chars are returned as a single WCHAR; callers that need to
+    // distinguish can inspect the flags word (non-zero → dead key).
     let wchar = char_code as u16;
     if !write_guest_u16(kernel, memory, thread_id, buf_ptr, wchar) {
         kernel
@@ -32361,7 +32377,9 @@ fn keybd_vkey_to_unicode_raw<M: CoredllGuestMemory>(
         return 0_u32.wrapping_neg();
     }
     if flags_ptr != 0 {
-        let _ = write_guest_u32(kernel, memory, thread_id, flags_ptr, 0);
+        // Bit 0 set → dead key character (CE keyboard PDD convention).
+        let flags_val: u32 = if is_dead { 1 } else { 0 };
+        let _ = write_guest_u32(kernel, memory, thread_id, flags_ptr, flags_val);
     }
     kernel.threads.set_last_error(thread_id, 0);
     1 // one character written
