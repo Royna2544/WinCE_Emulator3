@@ -6758,6 +6758,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::U32(0))
         }
         ORD_MAP_VIRTUAL_KEY_W => Some(CoredllValue::U32(map_virtual_key_w_raw(
+            kernel,
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
@@ -21731,6 +21732,14 @@ fn accelerator_entry_matches_with_char_msg(
     is_char_msg: bool,
 ) -> bool {
     let key = message.wparam as u16;
+    let shift = kernel.gwe.get_key_state(crate::ce::gwe::VK_SHIFT) & 0x8000 != 0;
+    let control = kernel.gwe.get_key_state(crate::ce::gwe::VK_CONTROL) & 0x8000 != 0;
+    let caps = kernel.gwe.get_key_state(crate::ce::gwe::VK_CAPITAL) & 0x0001 != 0;
+    let alt = (kernel.gwe.get_key_state(crate::ce::gwe::VK_MENU) & 0x8000 != 0)
+        || matches!(
+            message.msg,
+            crate::ce::gwe::WM_SYSKEYDOWN | crate::ce::gwe::WM_SYSCHAR
+        );
     let matches_key = if entry.flags & ACCEL_FVIRTKEY != 0 {
         // FVIRTKEY entries only match WM_KEYDOWN/WM_SYSKEYDOWN, not WM_CHAR/WM_SYSCHAR.
         if is_char_msg {
@@ -21739,24 +21748,28 @@ fn accelerator_entry_matches_with_char_msg(
         entry.key == key
     } else {
         // Character entries: for WM_CHAR/WM_SYSCHAR, wparam is the char directly.
-        // For WM_KEYDOWN, translate the VK first.
+        // For WM_KEYDOWN, translate the VK via the active keyboard layout.
         let char_key = if is_char_msg {
             key
         } else {
-            translate_virtual_key_to_char(kernel, message.wparam) as u16
+            let layout = kernel.gwe.keyboard_layout();
+            let layout_lang = layout & 0xFFFF;
+            if matches!(layout_lang, 0x040C | 0x0407 | 0x040A | 0x0C0A) {
+                let (ch, _) = translate_vk_for_western_layout(layout, message.wparam, shift, caps);
+                if ch != 0 {
+                    ch as u16
+                } else {
+                    translate_virtual_key_to_char(kernel, message.wparam) as u16
+                }
+            } else {
+                translate_virtual_key_to_char(kernel, message.wparam) as u16
+            }
         };
         char_key != 0 && ascii_accel_key(entry.key) == ascii_accel_key(char_key)
     };
     if !matches_key {
         return false;
     }
-    let shift = kernel.gwe.get_key_state(crate::ce::gwe::VK_SHIFT) & 0x8000 != 0;
-    let control = kernel.gwe.get_key_state(crate::ce::gwe::VK_CONTROL) & 0x8000 != 0;
-    let alt = (kernel.gwe.get_key_state(crate::ce::gwe::VK_MENU) & 0x8000 != 0)
-        || matches!(
-            message.msg,
-            crate::ce::gwe::WM_SYSKEYDOWN | crate::ce::gwe::WM_SYSCHAR
-        );
     (entry.flags & ACCEL_FSHIFT != 0) == shift
         && (entry.flags & ACCEL_FCONTROL != 0) == control
         && (entry.flags & ACCEL_FALT != 0) == alt
@@ -32420,17 +32433,30 @@ fn translate_virtual_key_to_char_with_state(vkey: u32, shift: bool, caps: bool) 
     }
 }
 
-fn map_virtual_key_w_raw(code: u32, map_type: u32) -> u32 {
+fn map_virtual_key_w_raw(kernel: &CeKernel, code: u32, map_type: u32) -> u32 {
     const MAPVK_VK_TO_VSC: u32 = 0;
     const MAPVK_VSC_TO_VK: u32 = 1;
     const MAPVK_VK_TO_CHAR: u32 = 2;
     const MAPVK_VSC_TO_VK_EX: u32 = 3;
     match map_type {
-        MAPVK_VK_TO_CHAR => vkey_to_unshifted_char(code),
+        MAPVK_VK_TO_CHAR => vkey_to_unshifted_char_for_layout(kernel, code),
         MAPVK_VK_TO_VSC => vkey_to_scan_code(code),
         MAPVK_VSC_TO_VK | MAPVK_VSC_TO_VK_EX => scan_code_to_vkey(code, map_type == MAPVK_VSC_TO_VK_EX),
         _ => 0,
     }
+}
+
+fn vkey_to_unshifted_char_for_layout(kernel: &CeKernel, vkey: u32) -> u32 {
+    let layout = kernel.gwe.keyboard_layout();
+    let layout_lang = layout & 0xFFFF;
+    if matches!(layout_lang, 0x040C | 0x0407 | 0x040A | 0x0C0A) {
+        let (ch, is_dead) = translate_vk_for_western_layout(layout, vkey, false, false);
+        if ch != 0 {
+            // Bit 31 set when the key is a dead-key character (CE/Windows convention).
+            return if is_dead { ch | 0x8000_0000 } else { ch };
+        }
+    }
+    vkey_to_unshifted_char(vkey)
 }
 
 fn vkey_to_unshifted_char(vkey: u32) -> u32 {

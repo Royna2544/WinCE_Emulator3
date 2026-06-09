@@ -64,7 +64,8 @@ use wince_emulation_v3::{
             ORD_KILL_TIMER,
             ORD_LINE_TO, ORD_LOAD_CURSOR_W, ORD_LOAD_ICON_W, ORD_LOAD_KEYBOARD_LAYOUT_W,
             ORD_LOAD_ACCELERATORS_W, ORD_LOAD_BITMAP_W, ORD_LOAD_MENU_W,
-            ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_MAP_DIALOG_RECT, ORD_MAP_WINDOW_POINTS,
+            ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_MAP_DIALOG_RECT, ORD_MAP_VIRTUAL_KEY_W,
+            ORD_MAP_WINDOW_POINTS,
             ORD_MESSAGE_BOX_W, ORD_MOVE_TO_EX, ORD_MOVE_WINDOW,
             ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_OFFSET_RECT, ORD_PAT_BLT, ORD_PEEK_MESSAGE_W,
             ORD_POLYGON, ORD_POLYLINE, ORD_POST_KEYBD_MESSAGE, ORD_POST_MESSAGE_W,
@@ -22550,6 +22551,112 @@ fn coredll_raw_keybd_vkey_to_unicode_honors_active_layout() -> Result<()> {
     assert_eq!(char_azerty, 0x5E, "AZERTY VK_OEM_4 → '^' (0x5E)");
     let flags_azerty = memory.read_u32(flags_ptr)?;
     assert_eq!(flags_azerty, 1, "AZERTY '^' is a dead key (bit 0 set)");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_map_virtual_key_vk_to_char_honors_active_layout() -> Result<()> {
+    // MapVirtualKeyW(MAPVK_VK_TO_CHAR=2) must use the active keyboard layout.
+    // VK_OEM_4 (0xDB):
+    //   - US layout (0x0409): '[' (0x5B), not dead → returns 0x5B.
+    //   - AZERTY (0x040C): '^' (0x5E), dead key  → returns 0x8000005E (bit 31 set).
+    //   - QWERTZ (0x0407): VK_OEM_3 (0xC0) unshifted → '^' dead → 0x8000005E.
+    const MAPVK_VK_TO_CHAR: u32 = 2;
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 43;
+
+    let mvk = |kernel: &mut CeKernel, memory: &mut TestGuestMemory, vk: u32| {
+        table.dispatch_raw_ordinal_with_memory(
+            kernel,
+            memory,
+            thread_id,
+            ORD_MAP_VIRTUAL_KEY_W,
+            [vk, MAPVK_VK_TO_CHAR],
+        )
+    };
+
+    // US layout (default 0x0409): VK_OEM_4 → '[' (0x5B).
+    assert!(matches!(
+        mvk(&mut kernel, &mut memory, 0xDB),
+        CoredllDispatch::Returned { value: CoredllValue::U32(0x5B), .. }
+    ), "US VK_OEM_4 MAPVK_VK_TO_CHAR → 0x5B");
+
+    // AZERTY (0x040C): VK_OEM_4 → '^' dead key → 0x8000005E.
+    kernel.gwe.activate_keyboard_layout(0x040C);
+    assert!(matches!(
+        mvk(&mut kernel, &mut memory, 0xDB),
+        CoredllDispatch::Returned { value: CoredllValue::U32(0x8000_005E), .. }
+    ), "AZERTY VK_OEM_4 MAPVK_VK_TO_CHAR → 0x8000005E (dead '^')");
+
+    // AZERTY: letter VK 'A' (0x41) → 'q' (AZERTY remaps A key to q).
+    assert!(matches!(
+        mvk(&mut kernel, &mut memory, 0x41),
+        CoredllDispatch::Returned { value: CoredllValue::U32(0x71), .. }
+    ), "AZERTY VK_A MAPVK_VK_TO_CHAR → 'q' (0x71)");
+
+    // QWERTZ (0x0407): VK_OEM_3 (0xC0) → '^' dead key → 0x8000005E.
+    kernel.gwe.activate_keyboard_layout(0x0407);
+    assert!(matches!(
+        mvk(&mut kernel, &mut memory, 0xC0),
+        CoredllDispatch::Returned { value: CoredllValue::U32(0x8000_005E), .. }
+    ), "QWERTZ VK_OEM_3 MAPVK_VK_TO_CHAR → 0x8000005E (dead '^')");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_translate_accelerator_wm_keydown_uses_active_layout() -> Result<()> {
+    // Non-FVIRTKEY character accelerators matched against WM_KEYDOWN must use the
+    // active keyboard layout to translate VK → char before comparing.
+    // AZERTY: VK_Z (0x5A) → 'w' (AZERTY remaps Z key to w/W).
+    // US layout: VK_Z → 'z', so a 'w' accelerator should NOT fire.
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 44_u32;
+    let msg_ptr = 0x1_9000_u32;
+    memory.map_words(msg_ptr, 7);
+    let hwnd = kernel.create_window_ex_w(thread_id, "ACCEL_LAYOUT", "", None, 0, 0, 0);
+
+    // Accelerator table: single non-FVIRTKEY entry for 'w' (0x77).
+    let accel = kernel.resources.create_accelerator(
+        0,
+        ResourceId::Integer(900),
+        None,
+        vec![AcceleratorEntry { flags: 0, key: u16::from(b'w'), command: 9001 }],
+    );
+
+    // --- US layout (default): VK_Z → 'z', NOT 'w' → no match.
+    write_raw_message(&mut memory, msg_ptr, hwnd, WM_KEYDOWN, 0x5A, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_TRANSLATE_ACCELERATOR_W,
+            [hwnd, accel, msg_ptr],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }
+    ), "US layout: VK_Z should not match 'w' char accelerator");
+
+    // --- AZERTY (0x040C): VK_Z → 'w' → matches char accel 9001.
+    kernel.gwe.activate_keyboard_layout(0x040C);
+    write_raw_message(&mut memory, msg_ptr, hwnd, WM_KEYDOWN, 0x5A, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_TRANSLATE_ACCELERATOR_W,
+            [hwnd, accel, msg_ptr],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(1), .. }
+    ), "AZERTY: VK_Z WM_KEYDOWN should match 'w' char accelerator");
+    let cmd = kernel
+        .gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_COMMAND, WM_COMMAND, PeekFlags::REMOVE)
+        .expect("AZERTY VK_Z → 'w' should post WM_COMMAND 9001");
+    assert_eq!(cmd.wparam & 0xFFFF, 9001, "command ID should be 9001");
+    assert_eq!(cmd.wparam >> 16, 1, "HIWORD should be 1 (accelerator notification)");
 
     Ok(())
 }
