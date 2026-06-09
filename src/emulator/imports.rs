@@ -1327,4 +1327,110 @@ mod tests {
             ImportModuleKind::Ole
         );
     }
+
+    #[test]
+    fn external_table_resolves_multi_level_forwarding_chain() {
+        // A.Foo → B.Bar → C.Baz → 0x7fff_1000 (three-level chain)
+        let mut external = ExternalImportTable::default();
+        external.add_module_exports("c.dll", 0x7fff_0000, [("Baz".to_owned(), 0x7fff_1000)], []);
+        external.modules.insert(
+            normalize_module("b.dll"),
+            ExternalImportModule {
+                module_name: "b.dll".to_owned(),
+                image_base: 0x7ffe_0000,
+                by_name: BTreeMap::from([(
+                    normalize_symbol("Bar"),
+                    ExternalImportTarget::Forwarder("c.Baz".to_owned()),
+                )]),
+                by_ordinal: BTreeMap::new(),
+            },
+        );
+        external.modules.insert(
+            normalize_module("a.dll"),
+            ExternalImportModule {
+                module_name: "a.dll".to_owned(),
+                image_base: 0x7ffd_0000,
+                by_name: BTreeMap::from([(
+                    normalize_symbol("Foo"),
+                    ExternalImportTarget::Forwarder("b.Bar".to_owned()),
+                )]),
+                by_ordinal: BTreeMap::new(),
+            },
+        );
+
+        assert_eq!(
+            external.resolve("a.dll", &ImportBy::Name { hint: 0, name: "Foo".to_owned() }),
+            Some(0x7fff_1000),
+            "three-level forward chain must resolve to final address"
+        );
+    }
+
+    #[test]
+    fn external_table_cycle_detection_returns_none() {
+        // A.Foo → B.Bar → A.Foo (circular)
+        let mut external = ExternalImportTable::default();
+        external.modules.insert(
+            normalize_module("a.dll"),
+            ExternalImportModule {
+                module_name: "a.dll".to_owned(),
+                image_base: 0x6000_0000,
+                by_name: BTreeMap::from([(
+                    normalize_symbol("Foo"),
+                    ExternalImportTarget::Forwarder("b.Bar".to_owned()),
+                )]),
+                by_ordinal: BTreeMap::new(),
+            },
+        );
+        external.modules.insert(
+            normalize_module("b.dll"),
+            ExternalImportModule {
+                module_name: "b.dll".to_owned(),
+                image_base: 0x6001_0000,
+                by_name: BTreeMap::from([(
+                    normalize_symbol("Bar"),
+                    ExternalImportTarget::Forwarder("a.Foo".to_owned()),
+                )]),
+                by_ordinal: BTreeMap::new(),
+            },
+        );
+
+        assert_eq!(
+            external.resolve("a.dll", &ImportBy::Name { hint: 0, name: "Foo".to_owned() }),
+            None,
+            "circular forward chain must return None instead of looping"
+        );
+    }
+
+    #[test]
+    fn parse_forwarder_target_handles_name_and_ordinal_forms() {
+        // Normal name form: last dot separates module from symbol.
+        assert_eq!(
+            parse_forwarder_target("MSVCRT.printf"),
+            Some(("MSVCRT".to_owned(), ImportBy::Name { hint: 0, name: "printf".to_owned() }))
+        );
+
+        // Ordinal form: symbol starting with '#' parses as ordinal.
+        assert_eq!(
+            parse_forwarder_target("NTDLL.#42"),
+            Some(("NTDLL".to_owned(), ImportBy::Ordinal(42)))
+        );
+
+        // Multi-dot path: rsplit_once on the LAST dot.
+        assert_eq!(
+            parse_forwarder_target("A.B.C"),
+            Some(("A.B".to_owned(), ImportBy::Name { hint: 0, name: "C".to_owned() }))
+        );
+
+        // Empty module (no dot) → None.
+        assert_eq!(parse_forwarder_target("NoDotsHere"), None);
+
+        // Empty module name after split (dot at start) → None.
+        assert_eq!(parse_forwarder_target(".printf"), None);
+
+        // Empty symbol name after split (dot at end) → None.
+        assert_eq!(parse_forwarder_target("MSVCRT."), None);
+
+        // '#' ordinal that is not a valid u16 → None.
+        assert_eq!(parse_forwarder_target("FOO.#99999"), None);
+    }
 }

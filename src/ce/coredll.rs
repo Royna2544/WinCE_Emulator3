@@ -6666,6 +6666,7 @@ pub(crate) fn message_box_w_prepare<M: CoredllGuestMemory>(
 
 /// Carries live dialog state during a modal `MessageBoxW` wait.
 #[derive(Debug, Clone)]
+#[cfg_attr(not(feature = "unicorn"), allow(dead_code))]
 pub(crate) struct MessageBoxModalState {
     window_state: MessageBoxWindowState,
     selection: MessageBoxSelection,
@@ -6677,6 +6678,7 @@ pub(crate) struct MessageBoxModalState {
     rendered: bool,
 }
 
+#[cfg_attr(not(feature = "unicorn"), allow(dead_code))]
 impl MessageBoxModalState {
     pub(crate) fn dialog_hwnd(&self) -> u32 {
         self.window_state.dialog_hwnd
@@ -14748,6 +14750,7 @@ struct PopupMenuModalMenuState {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(not(feature = "unicorn"), allow(dead_code))]
 pub(crate) struct PopupMenuModalState {
     hwnd: u32,
     menu: u32,
@@ -14759,6 +14762,7 @@ pub(crate) struct PopupMenuModalState {
     stack: Vec<PopupMenuModalMenuState>,
 }
 
+#[cfg_attr(not(feature = "unicorn"), allow(dead_code))]
 pub(crate) fn track_popup_menu_ex_prepare<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &M,
@@ -14885,6 +14889,7 @@ pub(crate) fn track_popup_menu_ex_prepare<M: CoredllGuestMemory>(
     })
 }
 
+#[cfg_attr(not(feature = "unicorn"), allow(dead_code))]
 impl PopupMenuModalState {
     pub(crate) fn owner_hwnd(&self) -> u32 {
         self.hwnd
@@ -16179,14 +16184,6 @@ fn translate_accelerator_w_raw<M: CoredllGuestMemory>(
     );
     kernel.threads.set_last_error(thread_id, 0);
     1
-}
-
-fn accelerator_entry_matches(
-    kernel: &CeKernel,
-    message: &Message,
-    entry: &AcceleratorEntry,
-) -> bool {
-    accelerator_entry_matches_with_char_msg(kernel, message, entry, false)
 }
 
 fn accelerator_entry_matches_with_char_msg(

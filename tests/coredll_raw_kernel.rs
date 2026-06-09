@@ -3125,6 +3125,141 @@ fn shell_execute_ex_reports_precise_missing_exe_and_no_association_errors() -> R
 }
 
 #[test]
+fn shell_execute_ex_verb_print_falls_back_to_open_when_print_not_registered() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("shell_execute_ex_verb_fallback");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("Windows")).unwrap();
+    fs::create_dir_all(root.join("Docs")).unwrap();
+    fs::write(root.join("Windows").join("viewer.exe"), b"fake exe").unwrap();
+    fs::write(root.join("Docs").join("report.txt"), b"text").unwrap();
+    kernel.set_file_root(&root);
+    kernel
+        .registry
+        .set_value(r"HKCR\.txt", "", RegistryValue::string("txtfile"));
+    kernel.registry.set_value(
+        r"HKCR\txtfile\Shell\Open\Command",
+        "",
+        RegistryValue::string(r#""\Windows\viewer.exe" "%1""#),
+    );
+    // No Print command registered for txtfile — should fall back to Open.
+
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 47_u32;
+    let info = 0x2_7000;
+    let file_ptr = 0x2_7100;
+    let verb_ptr = 0x2_7200;
+    memory.map_words(info, 16);
+    memory.map_halfwords(file_ptr, 120);
+    memory.map_halfwords(verb_ptr, 20);
+    memory.write_word(info, 60);
+    memory.write_word(info + 12, verb_ptr);
+    memory.write_word(info + 16, file_ptr);
+    memory.write_wide_z(verb_ptr, "print");
+    memory.write_wide_z(file_ptr, r"\Docs\report.txt");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_EXECUTE_EX,
+            [info],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let launches = kernel.take_pending_process_launches();
+    assert_eq!(launches.len(), 1);
+    assert_eq!(
+        launches[0].application.as_deref(),
+        Some(r"\Windows\viewer.exe"),
+        "print verb with no Print command must fall back to Open"
+    );
+    assert_eq!(
+        launches[0].command_line.as_deref(),
+        Some(r#""\Windows\viewer.exe" "\Docs\report.txt""#)
+    );
+
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn shell_execute_ex_verb_print_uses_print_command_when_registered() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("shell_execute_ex_verb_print");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("Windows")).unwrap();
+    fs::create_dir_all(root.join("Docs")).unwrap();
+    fs::write(root.join("Windows").join("viewer.exe"), b"fake exe").unwrap();
+    fs::write(root.join("Windows").join("printer.exe"), b"fake printer").unwrap();
+    fs::write(root.join("Docs").join("report.txt"), b"text").unwrap();
+    kernel.set_file_root(&root);
+    kernel
+        .registry
+        .set_value(r"HKCR\.txt", "", RegistryValue::string("txtfile"));
+    kernel.registry.set_value(
+        r"HKCR\txtfile\Shell\Open\Command",
+        "",
+        RegistryValue::string(r#""\Windows\viewer.exe" "%1""#),
+    );
+    kernel.registry.set_value(
+        r"HKCR\txtfile\Shell\Print\Command",
+        "",
+        RegistryValue::string(r#""\Windows\printer.exe" /p "%1""#),
+    );
+
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 48_u32;
+    let info = 0x2_8000;
+    let file_ptr = 0x2_8100;
+    let verb_ptr = 0x2_8200;
+    memory.map_words(info, 16);
+    memory.map_halfwords(file_ptr, 120);
+    memory.map_halfwords(verb_ptr, 20);
+    memory.write_word(info, 60);
+    memory.write_word(info + 12, verb_ptr);
+    memory.write_word(info + 16, file_ptr);
+    memory.write_wide_z(verb_ptr, "print");
+    memory.write_wide_z(file_ptr, r"\Docs\report.txt");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_EXECUTE_EX,
+            [info],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let launches = kernel.take_pending_process_launches();
+    assert_eq!(launches.len(), 1);
+    assert_eq!(
+        launches[0].application.as_deref(),
+        Some(r"\Windows\printer.exe"),
+        "print verb must use Print command when registered"
+    );
+    assert_eq!(
+        launches[0].command_line.as_deref(),
+        Some(r#""\Windows\printer.exe" /p "\Docs\report.txt""#)
+    );
+
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_create_process_preserves_current_directory() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;

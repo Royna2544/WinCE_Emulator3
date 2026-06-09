@@ -16,7 +16,8 @@ use wince_emulation_v3::{
             ORD_FIND_FIRST_CHANGE_NOTIFICATION_W, ORD_FIND_FIRST_FILE_W,
             ORD_FIND_NEXT_CHANGE_NOTIFICATION, ORD_FIND_NEXT_FILE_W, ORD_FLUSH_FILE_BUFFERS,
             ORD_FLUSH_INSTRUCTION_CACHE, ORD_FLUSH_VIEW_OF_FILE, ORD_FOPEN, ORD_FREAD, ORD_FREE,
-            ORD_FSEEK, ORD_FTELL, ORD_GET_DISK_FREE_SPACE_EX_W, ORD_GET_FILE_ATTRIBUTES_W,
+            ORD_FSEEK, ORD_FTELL, ORD_GET_DISK_FREE_SPACE_EX_W, ORD_GET_FILE_ATTRIBUTES_EX_W,
+            ORD_GET_FILE_ATTRIBUTES_W,
             ORD_GET_FILE_SIZE, ORD_GET_MODULE_FILE_NAME_W, ORD_GET_PROCESS_HEAP, ORD_HEAP_ALLOC,
             ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_SIZE, ORD_IS_BAD_READ_PTR,
             ORD_IS_BAD_WRITE_PTR, ORD_IS_VALID_LOCALE, ORD_LOCAL_ALLOC, ORD_LOCAL_FREE,
@@ -24,10 +25,11 @@ use wince_emulation_v3::{
             ORD_MEMCPY, ORD_MEMMOVE, ORD_MEMSET, ORD_MOVE_FILE_W, ORD_MSIZE,
             ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_OPERATOR_DELETE, ORD_OPERATOR_DELETE_ARRAY,
             ORD_OPERATOR_NEW, ORD_OPERATOR_NEW_ARRAY, ORD_RAND, ORD_READ_FILE, ORD_REALLOC,
-            ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_VALUE_W,
-            ORD_REG_ENUM_VALUE_W, ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W,
+            ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_KEY_W,
+            ORD_REG_DELETE_VALUE_W, ORD_REG_ENUM_KEY_EX_W, ORD_REG_ENUM_VALUE_W,
+            ORD_REG_QUERY_INFO_KEY_W, ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W,
             ORD_REMOVE_DIRECTORY_W, ORD_SECURITY_GEN_COOKIE, ORD_SECURITY_GEN_COOKIE2,
-            ORD_SET_FILE_POINTER, ORD_SNPRINTF, ORD_SNWPRINTF, ORD_SPRINTF, ORD_SRAND, ORD_STRCAT,
+            ORD_SET_FILE_ATTRIBUTES_W, ORD_SET_FILE_POINTER, ORD_SNPRINTF, ORD_SNWPRINTF, ORD_SPRINTF, ORD_SRAND, ORD_STRCAT,
             ORD_STRCPY, ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W, ORD_STRING_CCH_LENGTH_W,
             ORD_STRTOK, ORD_STRTOUL, ORD_STRUPR, ORD_SWPRINTF, ORD_TOLOWER, ORD_TOUPPER,
             ORD_UNMAP_VIEW_OF_FILE, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSNPRINTF,
@@ -36,15 +38,19 @@ use wince_emulation_v3::{
             ORD_WCSNICMP, ORD_WCSPBRK, ORD_WCSRCHR, ORD_WCSSTR, ORD_WCSTOUL, ORD_WFOPEN,
             ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
         },
-        file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
+        file::{
+            CREATE_ALWAYS, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_HIDDEN, GENERIC_READ,
+            GENERIC_WRITE, OPEN_EXISTING,
+        },
         kernel::CeKernel,
         memory::{HEAP_NO_SERIALIZE, HEAP_ZERO_MEMORY, LMEM_ZEROINIT, MEM_COMMIT, MEM_RELEASE},
         registry::{
-            ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HKEY_CURRENT_USER, REG_DWORD,
+            ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HKEY_CURRENT_USER,
+            HKEY_LOCAL_MACHINE, REG_DWORD,
         },
         thread::{
-            ERROR_ACCESS_DENIED, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER,
-            ERROR_NO_MORE_FILES, ERROR_NOT_SUPPORTED,
+            ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE,
+            ERROR_INVALID_PARAMETER, ERROR_NO_MORE_FILES, ERROR_NOT_SUPPORTED,
         },
         timer::{WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
@@ -5308,6 +5314,215 @@ fn coredll_raw_write_file_on_readonly_handle_reports_access_denied() -> Result<(
     assert_eq!(
         fs::read(sdmmc_root.join("config.bin")).unwrap(),
         b"unchanged"
+    );
+    fs::remove_dir_all(root).unwrap();
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_registry_subkey_create_enum_query_and_delete() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11_u32;
+
+    let parent_ptr = 0x2_0000_u32;
+    let sub_alpha_ptr = 0x2_0100_u32;
+    let sub_beta_ptr = 0x2_0200_u32;
+    let hkey_ptr = 0x2_0300_u32;
+    let name_buf = 0x2_0400_u32;
+    let name_len_ptr = 0x2_0500_u32;
+    let info_buf = 0x2_0600_u32;
+    memory.write_wide_z(parent_ptr, "Software\\RegSubkeyTest");
+    memory.write_wide_z(sub_alpha_ptr, "Alpha");
+    memory.write_wide_z(sub_beta_ptr, "Beta");
+    memory.map_words(hkey_ptr, 1);
+    memory.map_halfwords(name_buf, 32);
+    memory.map_words(name_len_ptr, 1);
+    memory.map_words(info_buf, 6);
+
+    let open_key = |memory: &mut TestGuestMemory, kernel: &mut CeKernel, root: u32, subkey_ptr: u32, hkey_out: u32| {
+        table.dispatch_raw_ordinal_with_memory(
+            kernel, memory, thread_id, ORD_REG_CREATE_KEY_EX_W,
+            [root, subkey_ptr, 0, 0, 0, 0, 0, hkey_out, 0],
+        )
+    };
+
+    let parent_ret = open_key(&mut memory, &mut kernel, HKEY_LOCAL_MACHINE, parent_ptr, hkey_ptr);
+    assert!(matches!(parent_ret,
+        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_SUCCESS
+    ), "opening parent key must succeed");
+    let parent_key = memory.read_u32(hkey_ptr)?;
+
+    let _ = open_key(&mut memory, &mut kernel, parent_key, sub_alpha_ptr, hkey_ptr);
+    let alpha_key = memory.read_u32(hkey_ptr)?;
+    let _ = open_key(&mut memory, &mut kernel, parent_key, sub_beta_ptr, hkey_ptr);
+    let beta_key = memory.read_u32(hkey_ptr)?;
+
+    let subkeys_ptr = info_buf;
+    let max_sub_ptr = info_buf + 4;
+    let values_ptr = info_buf + 8;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_REG_QUERY_INFO_KEY_W,
+            [parent_key, 0, 0, 0, subkeys_ptr, max_sub_ptr, 0, values_ptr, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_SUCCESS
+    ), "RegQueryInfoKeyW must succeed");
+    assert_eq!(memory.read_u32(subkeys_ptr)?, 2, "parent must have 2 subkeys");
+    assert_eq!(memory.read_u32(values_ptr)?, 0, "parent must have 0 values");
+    assert_eq!(memory.read_u32(max_sub_ptr)?, 5, "max subkey chars must be 5 (len of \"Alpha\")");
+
+    memory.write_word(name_len_ptr, 32);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_REG_ENUM_KEY_EX_W,
+            [parent_key, 0, name_buf, name_len_ptr, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_SUCCESS
+    ), "RegEnumKeyExW index 0 must succeed");
+    let name0 = memory.read_wide_z(name_buf, 32);
+    assert!(name0 == "alpha" || name0 == "beta", "first subkey must be alpha or beta (lowercase), got {name0:?}");
+
+    memory.write_word(name_len_ptr, 32);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_REG_ENUM_KEY_EX_W,
+            [parent_key, 1, name_buf, name_len_ptr, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_SUCCESS
+    ), "RegEnumKeyExW index 1 must succeed");
+    let name1 = memory.read_wide_z(name_buf, 32);
+    assert!(name1 == "alpha" || name1 == "beta");
+    assert_ne!(name0, name1, "two subkey names must differ");
+
+    memory.write_word(name_len_ptr, 32);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_REG_ENUM_KEY_EX_W,
+            [parent_key, 2, name_buf, name_len_ptr, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_NO_MORE_ITEMS
+    ), "RegEnumKeyExW past the last subkey must return ERROR_NO_MORE_ITEMS");
+
+    memory.write_word(name_len_ptr, 3);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_REG_ENUM_KEY_EX_W,
+            [parent_key, 0, name_buf, name_len_ptr, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_MORE_DATA
+    ), "RegEnumKeyExW with undersized buffer must return ERROR_MORE_DATA");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_REG_DELETE_KEY_W,
+            [parent_key, sub_alpha_ptr],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_SUCCESS
+    ), "RegDeleteKeyW must succeed");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_REG_QUERY_INFO_KEY_W,
+            [parent_key, 0, 0, 0, subkeys_ptr, max_sub_ptr, 0, values_ptr, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_SUCCESS
+    ));
+    assert_eq!(memory.read_u32(subkeys_ptr)?, 1, "parent must have 1 subkey after deletion");
+
+    table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id, ORD_REG_CLOSE_KEY, [alpha_key]);
+    table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id, ORD_REG_CLOSE_KEY, [beta_key]);
+    table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id, ORD_REG_CLOSE_KEY, [parent_key]);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_get_file_attributes_ex_w_reads_attribute_data() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("get_file_attr_ex");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    kernel.files.mount_guest_root("\\TestVol", &root);
+    fs::write(root.join("sample.dat"), b"hello world").unwrap();
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11_u32;
+
+    let path_ptr = 0x2_0000_u32;
+    let miss_ptr = 0x2_0100_u32;
+    let attr_buf = 0x2_0200_u32;
+    memory.write_wide_z(path_ptr, r"\TestVol\sample.dat");
+    memory.write_wide_z(miss_ptr, r"\TestVol\nosuchfile.dat");
+    memory.map_words(attr_buf, 9);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_GET_FILE_ATTRIBUTES_EX_W, [path_ptr, 0, attr_buf],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ), "GetFileAttributesExW must succeed for an existing file");
+    assert_eq!(
+        memory.read_u32(attr_buf)?,
+        FILE_ATTRIBUTE_ARCHIVE,
+        "newly created file must have FILE_ATTRIBUTE_ARCHIVE"
+    );
+    assert_eq!(
+        memory.read_u32(attr_buf + 32)?,
+        11,
+        "nFileSizeLow must equal the file content byte count"
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_GET_FILE_ATTRIBUTES_EX_W, [path_ptr, 1, attr_buf],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
+    ), "GetFileAttributesExW must reject info_level != 0");
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_PARAMETER);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_GET_FILE_ATTRIBUTES_EX_W, [miss_ptr, 0, attr_buf],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
+    ), "GetFileAttributesExW must fail for a missing file");
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_FILE_NOT_FOUND);
+
+    use wince_emulation_v3::ce::file::FILE_ATTRIBUTE_READONLY;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_SET_FILE_ATTRIBUTES_W, [path_ptr, FILE_ATTRIBUTE_READONLY],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ), "SetFileAttributesW must succeed");
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_GET_FILE_ATTRIBUTES_EX_W, [path_ptr, 0, attr_buf],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+    assert_eq!(
+        memory.read_u32(attr_buf)? & FILE_ATTRIBUTE_READONLY,
+        FILE_ATTRIBUTE_READONLY,
+        "FILE_ATTRIBUTE_READONLY must be set after SetFileAttributesW"
+    );
+
+    // Restore writable so the temp dir cleanup succeeds
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_SET_FILE_ATTRIBUTES_W, [path_ptr, FILE_ATTRIBUTE_ARCHIVE],
     );
     fs::remove_dir_all(root).unwrap();
     Ok(())

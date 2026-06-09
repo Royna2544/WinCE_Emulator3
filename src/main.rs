@@ -1756,12 +1756,12 @@ impl DesktopRuntime {
         Ok(())
     }
 
-    fn show_stopped_message(&mut self, message: &str) -> Result<()> {
+    fn show_stopped_message(&mut self, _message: &str) -> Result<()> {
         match self {
             Self::Virtual(_) => {}
             #[cfg(all(windows, feature = "win32-desktop"))]
             Self::Host(desktop) => {
-                desktop.presenter_mut().show_stopped_message(message)?;
+                desktop.presenter_mut().show_stopped_message(_message)?;
             }
         }
         Ok(())

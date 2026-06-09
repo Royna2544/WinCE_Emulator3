@@ -7,7 +7,8 @@ use wince_emulation_v3::{
         coredll_ordinals::{
             ORD_ACTIVATE_KEYBOARD_LAYOUT, ORD_ADD_FONT_RESOURCE_W, ORD_ADJUST_WINDOW_RECT_EX,
             ORD_APPEND_MENU_W, ORD_BEGIN_PAINT, ORD_BIT_BLT, ORD_BRING_WINDOW_TO_TOP,
-            ORD_CHECK_MENU_ITEM, ORD_CHECK_MENU_RADIO_ITEM, ORD_CHILD_WINDOW_FROM_POINT,
+            ORD_CHECK_MENU_ITEM, ORD_CHECK_MENU_RADIO_ITEM, ORD_CHECK_RADIO_BUTTON,
+            ORD_CHILD_WINDOW_FROM_POINT,
             ORD_CLIENT_TO_SCREEN, ORD_COMBINE_RGN, ORD_COPY_RECT, ORD_CREATE_CARET,
             ORD_CREATE_COMPATIBLE_BITMAP, ORD_CREATE_COMPATIBLE_DC,
             ORD_CREATE_DIALOG_INDIRECT_PARAM_W, ORD_CREATE_DIBSECTION, ORD_CREATE_FONT_INDIRECT_W,
@@ -17,12 +18,13 @@ use wince_emulation_v3::{
             ORD_DEF_WINDOW_PROC_W, ORD_DELETE_OBJECT, ORD_DESTROY_CARET, ORD_DESTROY_ICON,
             ORD_DESTROY_WINDOW, ORD_DISABLE_CARET_SYSTEM_WIDE, ORD_DISPATCH_MESSAGE_W,
             ORD_DRAW_ICON_EX, ORD_DRAW_MENU_BAR, ORD_ENABLE_CARET_SYSTEM_WIDE,
-            ORD_ENABLE_MENU_ITEM, ORD_ENABLE_WINDOW, ORD_END_PAINT, ORD_EQUAL_RECT,
+            ORD_ENABLE_MENU_ITEM, ORD_ENABLE_WINDOW, ORD_END_DIALOG, ORD_END_PAINT, ORD_EQUAL_RECT,
             ORD_EXT_TEXT_OUT_W, ORD_FILL_RECT, ORD_FIND_RESOURCE_W, ORD_FIND_WINDOW_W,
             ORD_GET_ACTIVE_WINDOW, ORD_GET_ASSOCIATED_MENU, ORD_GET_ASYNC_KEY_STATE,
             ORD_GET_ASYNC_SHIFT_FLAGS, ORD_GET_CAPTURE, ORD_GET_CARET_BLINK_TIME,
             ORD_GET_CARET_POS, ORD_GET_CLASS_INFO_W, ORD_GET_CLASS_NAME_W, ORD_GET_CLIENT_RECT,
-            ORD_GET_CURSOR, ORD_GET_CURSOR_POS, ORD_GET_DC, ORD_GET_DEVICE_CAPS,
+            ORD_GET_CURSOR, ORD_GET_CURSOR_POS, ORD_GET_DC, ORD_GET_DESKTOP_WINDOW,
+            ORD_GET_DEVICE_CAPS,
             ORD_GET_DIALOG_BASE_UNITS, ORD_GET_DIBCOLOR_TABLE, ORD_GET_DLG_CTRL_ID,
             ORD_GET_DLG_ITEM, ORD_GET_DLG_ITEM_INT, ORD_GET_DLG_ITEM_TEXT_W, ORD_GET_FOCUS,
             ORD_GET_FOREGROUND_KEYBOARD_LAYOUT_HANDLE, ORD_GET_FOREGROUND_KEYBOARD_TARGET,
@@ -36,7 +38,8 @@ use wince_emulation_v3::{
             ORD_GET_SUB_MENU, ORD_GET_SYS_COLOR, ORD_GET_SYS_COLOR_BRUSH, ORD_GET_SYSTEM_INFO,
             ORD_GET_SYSTEM_METRICS, ORD_GET_SYSTEM_PALETTE_ENTRIES, ORD_GET_TEXT_ALIGN,
             ORD_GET_TEXT_COLOR, ORD_GET_TEXT_EXTENT_EX_POINT_W, ORD_GET_TEXT_FACE_W,
-            ORD_GET_TEXT_METRICS_W, ORD_GET_UPDATE_RECT, ORD_GET_UPDATE_RGN, ORD_GET_WINDOW,
+            ORD_GET_TEXT_METRICS_W, ORD_GET_UPDATE_RECT, ORD_GET_UPDATE_RGN, ORD_GET_VERSION_EX_W,
+            ORD_GET_WINDOW,
             ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_RGN,
             ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W, ORD_GET_WINDOW_THREAD_PROCESS_ID,
             ORD_GLOBAL_MEMORY_STATUS, ORD_HIDE_CARET, ORD_IMM_ASSOCIATE_CONTEXT,
@@ -55,7 +58,8 @@ use wince_emulation_v3::{
             ORD_POLYGON, ORD_POLYLINE, ORD_POST_KEYBD_MESSAGE, ORD_POST_MESSAGE_W,
             ORD_POST_QUIT_MESSAGE, ORD_POST_THREAD_MESSAGE_W, ORD_PT_IN_RECT, ORD_PT_IN_REGION,
             ORD_REALIZE_PALETTE, ORD_RECT_IN_REGION, ORD_REDRAW_WINDOW, ORD_REGISTER_CLASS_W,
-            ORD_REGISTER_GESTURE, ORD_RELEASE_CAPTURE, ORD_RELEASE_DC, ORD_RELEASE_MUTEX,
+            ORD_REGISTER_GESTURE, ORD_REGISTER_WINDOW_MESSAGE_W, ORD_RELEASE_CAPTURE,
+            ORD_RELEASE_DC, ORD_RELEASE_MUTEX,
             ORD_REMOVE_MENU, ORD_ROUND_RECT, ORD_SCREEN_TO_CLIENT, ORD_SELECT_CLIP_RGN,
             ORD_SELECT_OBJECT, ORD_SELECT_PALETTE, ORD_SEND_DLG_ITEM_MESSAGE_W,
             ORD_SEND_MESSAGE_TIMEOUT, ORD_SEND_MESSAGE_W, ORD_SEND_NOTIFY_MESSAGE_W,
@@ -77,10 +81,12 @@ use wince_emulation_v3::{
         },
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat, VirtualFramebuffer},
         gwe::{
-            BS_DEFPUSHBUTTON, BS_PUSHBUTTON, DC_HASDEFID, DEFAULT_KEYBOARD_LAYOUT_HKL,
-            DEFAULT_KEYBOARD_LAYOUT_NAME, DLGC_BUTTON, DLGC_DEFPUSHBUTTON, DLGC_UNDEFPUSHBUTTON,
+            BS_AUTORADIOBUTTON, BS_DEFPUSHBUTTON, BS_PUSHBUTTON, BS_RADIOBUTTON,
+            DC_HASDEFID, DEFAULT_KEYBOARD_LAYOUT_HKL,
+            DEFAULT_KEYBOARD_LAYOUT_NAME, DLGC_BUTTON, DLGC_DEFPUSHBUTTON, DLGC_HASSETSEL,
+            DLGC_RADIOBUTTON, DLGC_STATIC, DLGC_UNDEFPUSHBUTTON, DLGC_WANTCHARS,
             DM_GETDEFID, DM_SETDEFID, GW_CHILD, GW_HWNDFIRST, GW_HWNDNEXT, GW_HWNDPREV, GW_OWNER,
-            GWL_USERDATA, HTCAPTION, HTCLIENT, HTCLOSE, HTNOWHERE, HTSYSMENU, HTTOPLEFT,
+            GWL_STYLE, GWL_USERDATA, HTCAPTION, HTCLIENT, HTCLOSE, HTNOWHERE, HTSYSMENU, HTTOPLEFT,
             HWND_BROADCAST, KEY_SHIFT_ANY_SHIFT_FLAG,
             KEY_STATE_DOWN_FLAG, KEY_STATE_GET_ASYNC_DOWN_FLAG, KEY_STATE_PREV_DOWN_FLAG,
             MA_ACTIVATE, MSGSRC_HARDWARE_KEYBOARD, MSGSRC_SOFTWARE_POST, MSGSRC_SOFTWARE_SEND,
@@ -96,7 +102,7 @@ use wince_emulation_v3::{
             WM_EXITMENULOOP, WM_GETDLGCODE, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENUPOPUP,
             WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
             WM_MENUCHAR, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-            WM_MOVE, WM_NCACTIVATE, WM_NCDESTROY, WM_NCHITTEST,
+            WM_MOVE, WM_NCACTIVATE, WM_NCCREATE, WM_NCDESTROY, WM_NCHITTEST,
             WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN,
             WM_RBUTTONDBLCLK, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETREDRAW,
             WM_COMPAREITEM, WM_DELETEITEM, WM_DISPLAYCHANGE, WM_DRAWITEM, WM_FONTCHANGE,
@@ -5891,6 +5897,66 @@ fn coredll_raw_is_dialog_message_tabs_to_next_dialog_item() -> Result<()> {
             ..
         } if state & 0x8000 == 0
     ));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_is_dialog_message_tab_skips_disabled_and_invisible_controls() -> Result<()> {
+    // Tab navigation must skip controls that are disabled or invisible,
+    // matching CE IsDialogMessage behavior.
+    const VK_TAB: u32 = 0x09;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let msg_ptr = 0x3600;
+    memory.map_words(msg_ptr, 7);
+
+    let dialog = kernel.create_window_ex_w_with_rect(
+        thread_id, "DIALOG", "dlg", None, 1, WS_VISIBLE, 0,
+        Rect::from_origin_size(0, 0, 200, 120),
+    );
+    let first = kernel.create_window_ex_w_with_rect(
+        thread_id, "BUTTON", "a", Some(dialog), 20,
+        WS_VISIBLE | WS_CHILD | WS_TABSTOP, 0,
+        Rect::from_origin_size(0, 0, 20, 20),
+    );
+    // Second tab stop is disabled — tab should skip it.
+    let _disabled = kernel.create_window_ex_w_with_rect(
+        thread_id, "BUTTON", "b", Some(dialog), 21,
+        WS_VISIBLE | WS_CHILD | WS_TABSTOP | WS_DISABLED, 0,
+        Rect::from_origin_size(20, 0, 20, 20),
+    );
+    // Third tab stop is invisible — tab should also skip it.
+    let _invisible = kernel.create_window_ex_w_with_rect(
+        thread_id, "BUTTON", "c", Some(dialog), 22,
+        WS_CHILD | WS_TABSTOP, 0,
+        Rect::from_origin_size(40, 0, 20, 20),
+    );
+    let last = kernel.create_window_ex_w_with_rect(
+        thread_id, "BUTTON", "d", Some(dialog), 23,
+        WS_VISIBLE | WS_CHILD | WS_TABSTOP, 0,
+        Rect::from_origin_size(60, 0, 20, 20),
+    );
+
+    let _ = kernel.set_focus(Some(first));
+    write_raw_message(&mut memory, msg_ptr, first, WM_KEYDOWN, VK_TAB, 0)?;
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_IS_DIALOG_MESSAGE_W, [dialog, msg_ptr],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+    assert_eq!(
+        kernel.gwe.get_focus(),
+        Some(last),
+        "tab from first must skip disabled and invisible controls to reach last"
+    );
 
     Ok(())
 }
@@ -18018,6 +18084,28 @@ fn coredll_raw_def_window_proc_nclbuttondown_htclose_sends_syscommand_close() ->
     );
     assert!(kernel.gwe.is_window(hwnd3), "HTCAPTION click should NOT destroy the window");
 
+    // WM_NCLBUTTONDBLCLK on HTCLOSE also closes (both HTCLOSE dblclk and single are close triggers)
+    let hwnd4 = kernel.create_window_ex_w(thread_id, "NCTEST4", "", None, 0, 0, 0);
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_DEF_WINDOW_PROC_W,
+        [hwnd4, WM_NCLBUTTONDBLCLK, HTCLOSE, 0],
+    );
+    assert!(!kernel.gwe.is_window(hwnd4), "HTCLOSE dblclk should also destroy the window");
+
+    // WM_NCLBUTTONDOWN on HTSYSMENU should NOT destroy (only dblclk on HTSYSMENU closes)
+    let hwnd5 = kernel.create_window_ex_w(thread_id, "NCTEST5", "", None, 0, 0, 0);
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_DEF_WINDOW_PROC_W,
+        [hwnd5, WM_NCLBUTTONDOWN, HTSYSMENU, 0],
+    );
+    assert!(kernel.gwe.is_window(hwnd5), "HTSYSMENU single-click should NOT destroy the window");
+
     Ok(())
 }
 
@@ -19250,6 +19338,39 @@ fn coredll_raw_def_window_proc_syskeydown_digit_sends_keymenu() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_def_window_proc_nccreate_returns_true() -> Result<()> {
+    // CE DefWindowProcW must return TRUE (1) for WM_NCCREATE so window creation
+    // continues.  The raw ordinal path goes through send_message_w_raw → gwe::send_message.
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 102_u32;
+
+    let hwnd = kernel.create_window_ex_w(thread_id, "NCCREATETEST", "", None, 0, 0, 0);
+
+    let result = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_DEF_WINDOW_PROC_W,
+        [hwnd, WM_NCCREATE, 0, 0],
+    );
+    assert!(
+        matches!(
+            result,
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(1),
+                ..
+            }
+        ),
+        "DefWindowProcW(WM_NCCREATE) must return TRUE (1)"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_change_display_settings_ex_broadcasts_wm_displaychange() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
@@ -19564,6 +19685,649 @@ fn coredll_raw_send_notify_broadcast_delivers_in_z_order() -> Result<()> {
     let second = kernel.gwe.sent_message(2).expect("second queued notify");
     assert_eq!(first.message.hwnd, hwnd_b, "Z-order front window should be notified first");
     assert_eq!(second.message.hwnd, hwnd_a, "Z-order back window should be notified second");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_set_window_long_style_syncs_visible_and_enabled_state() -> Result<()> {
+    // SetWindowLong(GWL_STYLE, ...) must update IsWindowVisible and IsWindowEnabled
+    // to match the new WS_VISIBLE and WS_DISABLED bits in CE.
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 111_u32;
+
+    let hwnd = kernel.create_window_ex_w(thread_id, "STYLESET", "", None, 0, 0, 0);
+
+    // Window starts invisible (WS_VISIBLE not set).
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
+            ORD_IS_WINDOW_VISIBLE, [hwnd]),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
+    ));
+
+    // SetWindowLong(GWL_STYLE) adding WS_VISIBLE should make IsWindowVisible return true.
+    let prev_style = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_GET_WINDOW_LONG_W, [hwnd, GWL_STYLE as u32],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::U32(s), .. } => s,
+        other => panic!("unexpected: {other:?}"),
+    };
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_SET_WINDOW_LONG_W, [hwnd, GWL_STYLE as u32, prev_style | WS_VISIBLE],
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
+            ORD_IS_WINDOW_VISIBLE, [hwnd]),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ), "GWL_STYLE with WS_VISIBLE must make IsWindowVisible true");
+
+    // SetWindowLong(GWL_STYLE) adding WS_DISABLED should make IsWindowEnabled return false.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
+            ORD_IS_WINDOW_ENABLED, [hwnd]),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ), "window starts enabled");
+    let cur_style = prev_style | WS_VISIBLE;
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_SET_WINDOW_LONG_W, [hwnd, GWL_STYLE as u32, cur_style | WS_DISABLED],
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
+            ORD_IS_WINDOW_ENABLED, [hwnd]),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
+    ), "GWL_STYLE with WS_DISABLED must make IsWindowEnabled false");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_def_window_proc_nextdlgctl_to_non_pushbutton_preserves_defid() -> Result<()> {
+    // WM_NEXTDLGCTL moving focus to a non-pushbutton must NOT send DM_SETDEFID,
+    // so the existing default button remains the dialog default.
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 112_u32;
+
+    let dialog = kernel.create_window_ex_w(thread_id, "NEXTDLG_NB_DLG", "", None, 0, WS_VISIBLE, 0);
+    let btn_default = kernel.create_window_ex_w(
+        thread_id, "button", "OK", Some(dialog), 10,
+        WS_VISIBLE | WS_CHILD | WS_TABSTOP | BS_DEFPUSHBUTTON, 0,
+    );
+    let edit_ctrl = kernel.create_window_ex_w(
+        thread_id, "edit", "", Some(dialog), 20,
+        WS_VISIBLE | WS_CHILD | WS_TABSTOP, 0,
+    );
+
+    let _ = kernel.set_focus(Some(btn_default));
+
+    // Confirm DM_GETDEFID reports btn_default (id=10) as the dialog default.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_DEF_WINDOW_PROC_W, [dialog, DM_GETDEFID, 0, 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. }
+            if v == (DC_HASDEFID << 16) | 10
+    ), "DM_GETDEFID must report btn_default (id 10) initially");
+
+    // WM_NEXTDLGCTL(wparam=edit_ctrl, lparam=1) → direct focus to the edit control.
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_DEF_WINDOW_PROC_W, [dialog, WM_NEXTDLGCTL, edit_ctrl, 1],
+    );
+    assert_eq!(kernel.gwe.get_focus(), Some(edit_ctrl), "focus must move to edit_ctrl");
+
+    // DM_GETDEFID must still return id=10 — edit is not a pushbutton so DM_SETDEFID was not called.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_DEF_WINDOW_PROC_W, [dialog, DM_GETDEFID, 0, 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. }
+            if v == (DC_HASDEFID << 16) | 10
+    ), "default button must remain id=10 after focusing a non-pushbutton control");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_def_window_proc_settext_triggers_invalidate() -> Result<()> {
+    // WM_SETTEXT in DefWindowProcW must call InvalidateRect so the window
+    // title area is repainted (update_pending becomes true).
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 113_u32;
+    let text_ptr = 0x1_0000_u32;
+    let rect_ptr = 0x1_0200_u32;
+    memory.map_words(rect_ptr, 4);
+
+    let hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id, "SETTEXTWIN", "old title", None, 0, WS_VISIBLE, 0,
+        Rect::from_origin_size(0, 0, 200, 100),
+    );
+
+    // Write new title text.
+    memory.write_wide_z(text_ptr, "new title");
+
+    // Clear any initial update rect (WS_VISIBLE windows start with update_pending=true).
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_VALIDATE_RECT, [hwnd, 0],
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_GET_UPDATE_RECT, [hwnd, 0, 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
+    ), "no update rect before WM_SETTEXT");
+
+    // Send WM_SETTEXT → title changes and window is invalidated.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_DEF_WINDOW_PROC_W, [hwnd, WM_SETTEXT, 0, text_ptr],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(1), .. }
+    ), "WM_SETTEXT must return 1 (TRUE)");
+
+    // GetUpdateRect must now report a pending update.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_GET_UPDATE_RECT, [hwnd, 0, 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ), "WM_SETTEXT must invalidate the window so GetUpdateRect returns true");
+
+    // Title must have changed.
+    assert_eq!(
+        kernel.gwe.get_window_text(hwnd, 64).as_deref(),
+        Some("new title"),
+        "window title must be updated by WM_SETTEXT"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_def_window_proc_getdlgcode_for_radio_edit_static() -> Result<()> {
+    // WM_GETDLGCODE must return the correct code for radiobutton, edit, and
+    // static class controls, matching CE window_dialog_code() behavior.
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 114_u32;
+
+    let dialog = kernel.create_window_ex_w(thread_id, "DLGCODE_DLG", "", None, 0, WS_VISIBLE, 0);
+
+    // Radio button → DLGC_BUTTON | DLGC_RADIOBUTTON.
+    let radio = kernel.create_window_ex_w(
+        thread_id, "button", "radio", Some(dialog), 1,
+        WS_VISIBLE | WS_CHILD | WS_TABSTOP | BS_RADIOBUTTON, 0,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_DEF_WINDOW_PROC_W, [radio, WM_GETDLGCODE, 0, 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(c), .. }
+            if c == (DLGC_BUTTON | DLGC_RADIOBUTTON)
+    ), "BS_RADIOBUTTON must return DLGC_BUTTON | DLGC_RADIOBUTTON");
+
+    // Auto-radio button → same DLGC_BUTTON | DLGC_RADIOBUTTON.
+    let autoradio = kernel.create_window_ex_w(
+        thread_id, "button", "aradio", Some(dialog), 2,
+        WS_VISIBLE | WS_CHILD | WS_TABSTOP | BS_AUTORADIOBUTTON, 0,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_DEF_WINDOW_PROC_W, [autoradio, WM_GETDLGCODE, 0, 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(c), .. }
+            if c == (DLGC_BUTTON | DLGC_RADIOBUTTON)
+    ), "BS_AUTORADIOBUTTON must return DLGC_BUTTON | DLGC_RADIOBUTTON");
+
+    // Edit control → DLGC_HASSETSEL | DLGC_WANTCHARS.
+    let edit = kernel.create_window_ex_w(
+        thread_id, "edit", "", Some(dialog), 3,
+        WS_VISIBLE | WS_CHILD | WS_TABSTOP, 0,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_DEF_WINDOW_PROC_W, [edit, WM_GETDLGCODE, 0, 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(c), .. }
+            if c == (DLGC_HASSETSEL | DLGC_WANTCHARS)
+    ), "edit class must return DLGC_HASSETSEL | DLGC_WANTCHARS");
+
+    // Static control → DLGC_STATIC.
+    let stat = kernel.create_window_ex_w(
+        thread_id, "static", "label", Some(dialog), 4,
+        WS_VISIBLE | WS_CHILD, 0,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_DEF_WINDOW_PROC_W, [stat, WM_GETDLGCODE, 0, 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(c), .. }
+            if c == DLGC_STATIC
+    ), "static class must return DLGC_STATIC");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_def_window_proc_paint_validates_update_region() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 120_u32;
+
+    let hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id, "PAINTVAL", "", None, 0, WS_VISIBLE, 0,
+        Rect::from_origin_size(0, 0, 100, 100),
+    );
+    // Clear the initial WS_VISIBLE update-pending flag first.
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_VALIDATE_RECT, [hwnd, 0],
+    );
+    // Invalidate the window so it has a pending update region.
+    assert!(kernel.gwe.invalidate_window(hwnd, None, true));
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id,
+                ORD_GET_UPDATE_RECT, [hwnd, 0, 0],
+            ),
+            CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+        ),
+        "GetUpdateRect must return true after InvalidateRect"
+    );
+
+    // DefWindowProcW(WM_PAINT) must validate the update region and return 0.
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id,
+                ORD_DEF_WINDOW_PROC_W, [hwnd, WM_PAINT, 0, 0],
+            ),
+            CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }
+        ),
+        "DefWindowProcW(WM_PAINT) must return 0"
+    );
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id,
+                ORD_GET_UPDATE_RECT, [hwnd, 0, 0],
+            ),
+            CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
+        ),
+        "DefWindowProcW(WM_PAINT) must clear the update region"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_def_window_proc_getdlgcode_for_pushbutton_variants() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 119_u32;
+
+    let dialog = kernel.create_window_ex_w(thread_id, "PBCODE_DLG", "", None, 0, WS_VISIBLE, 0);
+
+    // BS_PUSHBUTTON → DLGC_BUTTON | DLGC_UNDEFPUSHBUTTON.
+    let push = kernel.create_window_ex_w(
+        thread_id, "button", "push", Some(dialog), 1,
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, 0,
+    );
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id,
+                ORD_DEF_WINDOW_PROC_W, [push, WM_GETDLGCODE, 0, 0],
+            ),
+            CoredllDispatch::Returned { value: CoredllValue::U32(c), .. }
+                if c == (DLGC_BUTTON | DLGC_UNDEFPUSHBUTTON)
+        ),
+        "BS_PUSHBUTTON must return DLGC_BUTTON | DLGC_UNDEFPUSHBUTTON"
+    );
+
+    // BS_DEFPUSHBUTTON → DLGC_BUTTON | DLGC_DEFPUSHBUTTON.
+    let defpush = kernel.create_window_ex_w(
+        thread_id, "button", "defpush", Some(dialog), 2,
+        WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON, 0,
+    );
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id,
+                ORD_DEF_WINDOW_PROC_W, [defpush, WM_GETDLGCODE, 0, 0],
+            ),
+            CoredllDispatch::Returned { value: CoredllValue::U32(c), .. }
+                if c == (DLGC_BUTTON | DLGC_DEFPUSHBUTTON)
+        ),
+        "BS_DEFPUSHBUTTON must return DLGC_BUTTON | DLGC_DEFPUSHBUTTON"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_check_radio_button_sets_exclusive_check_state() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 118_u32;
+
+    let dialog = kernel.create_window_ex_w(thread_id, "RB_DLG", "", None, 0, WS_VISIBLE, 0);
+    let _ = kernel.create_window_ex_w(
+        thread_id, "button", "r1", Some(dialog), 10,
+        WS_VISIBLE | WS_CHILD | BS_RADIOBUTTON, 0,
+    );
+    let _ = kernel.create_window_ex_w(
+        thread_id, "button", "r2", Some(dialog), 11,
+        WS_VISIBLE | WS_CHILD | BS_RADIOBUTTON, 0,
+    );
+    let _ = kernel.create_window_ex_w(
+        thread_id, "button", "r3", Some(dialog), 12,
+        WS_VISIBLE | WS_CHILD | BS_RADIOBUTTON, 0,
+    );
+
+    // CheckRadioButton(dialog, first=10, last=12, check=11) → exactly id=11 checked.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_CHECK_RADIO_BUTTON, [dialog, 10, 12, 11],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ), "CheckRadioButton must return true for valid args");
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(
+        kernel.gwe.is_dlg_button_checked(dialog, 10),
+        Some(0),
+        "id=10 must be unchecked"
+    );
+    assert_eq!(
+        kernel.gwe.is_dlg_button_checked(dialog, 11),
+        Some(1),
+        "id=11 must be checked"
+    );
+    assert_eq!(
+        kernel.gwe.is_dlg_button_checked(dialog, 12),
+        Some(0),
+        "id=12 must be unchecked"
+    );
+
+    // check out of range → false + ERROR_INVALID_PARAMETER.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_CHECK_RADIO_BUTTON, [dialog, 10, 12, 9],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
+    ), "CheckRadioButton must return false when check id is outside [first, last]");
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_PARAMETER);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_end_dialog_stores_result_and_rejects_invalid_hwnd() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 117_u32;
+
+    let hwnd = kernel.create_window_ex_w(thread_id, "ED_DLG", "", None, 0, WS_VISIBLE, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_END_DIALOG, [hwnd, 42],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ), "EndDialog on a live window must return true");
+    assert_eq!(
+        kernel.gwe.dialog_result(hwnd),
+        Some(42),
+        "EndDialog must record the result code in dialog_results"
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    // Calling EndDialog on a non-existent HWND must fail with ERROR_INVALID_WINDOW_HANDLE.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_END_DIALOG, [0xdead_beef, 99],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
+    ), "EndDialog on an invalid HWND must return false");
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_WINDOW_HANDLE,
+        "EndDialog failure must set ERROR_INVALID_WINDOW_HANDLE"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_is_dialog_message_vk_return_is_consumed_by_dialog() -> Result<()> {
+    const VK_RETURN: u32 = 0x0d;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 115_u32;
+    let msg_ptr = 0x3540_u32;
+    memory.map_words(msg_ptr, 7);
+
+    let dialog = kernel.create_window_ex_w(thread_id, "RET_DLG", "", None, 0, WS_VISIBLE, 0);
+    let ok_btn = kernel.create_window_ex_w(
+        thread_id, "button", "OK", Some(dialog), 1,
+        WS_VISIBLE | WS_CHILD | WS_TABSTOP | BS_DEFPUSHBUTTON, 0,
+    );
+    let _ = kernel.set_focus(Some(ok_btn));
+
+    write_raw_message(&mut memory, msg_ptr, ok_btn, WM_KEYDOWN, VK_RETURN, 0)?;
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id,
+                ORD_IS_DIALOG_MESSAGE_W, [dialog, msg_ptr],
+            ),
+            CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+        ),
+        "IsDialogMessageW must consume VK_RETURN and return true"
+    );
+    assert!(kernel.gwe.is_window(dialog), "dialog must still exist after VK_RETURN handling");
+    assert_eq!(kernel.gwe.get_focus(), Some(ok_btn), "focus must be unchanged after VK_RETURN");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_is_dialog_message_vk_escape_is_consumed_by_dialog() -> Result<()> {
+    const VK_ESCAPE: u32 = 0x1b;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 116_u32;
+    let msg_ptr = 0x3540_u32;
+    memory.map_words(msg_ptr, 7);
+
+    let dialog = kernel.create_window_ex_w(thread_id, "ESC_DLG", "", None, 0, WS_VISIBLE, 0);
+    let cancel_btn = kernel.create_window_ex_w(
+        thread_id, "button", "Cancel", Some(dialog), 2,
+        WS_VISIBLE | WS_CHILD | WS_TABSTOP | BS_PUSHBUTTON, 0,
+    );
+    let _ = kernel.set_focus(Some(cancel_btn));
+
+    write_raw_message(&mut memory, msg_ptr, cancel_btn, WM_KEYDOWN, VK_ESCAPE, 0)?;
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id,
+                ORD_IS_DIALOG_MESSAGE_W, [dialog, msg_ptr],
+            ),
+            CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+        ),
+        "IsDialogMessageW must consume VK_ESCAPE and return true"
+    );
+    assert!(kernel.gwe.is_window(dialog), "dialog must still exist after VK_ESCAPE handling");
+    assert_eq!(
+        kernel.gwe.get_focus(),
+        Some(cancel_btn),
+        "focus must be unchanged after VK_ESCAPE"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_get_version_ex_w_fills_ce_os_info() -> Result<()> {
+    const VER_PLATFORM_WIN32_CE: u32 = 3;
+    const OSVERSIONINFOW_SIZE: u32 = 276; // 20 header + 128 wide chars
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 121_u32;
+    let info_ptr = 0x3000_0000_u32;
+    memory.write_word(info_ptr, OSVERSIONINFOW_SIZE);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_GET_VERSION_EX_W, [info_ptr],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ), "GetVersionExW must return true for a valid buffer");
+    assert_eq!(memory.read_u32(info_ptr + 4)?, 4, "dwMajorVersion must be 4");
+    assert_eq!(memory.read_u32(info_ptr + 8)?, 20, "dwMinorVersion must be 20");
+    assert_eq!(memory.read_u32(info_ptr + 12)?, 0, "dwBuildNumber must be 0");
+    assert_eq!(
+        memory.read_u32(info_ptr + 16)?,
+        VER_PLATFORM_WIN32_CE,
+        "dwPlatformId must be VER_PLATFORM_WIN32_CE"
+    );
+    assert_eq!(
+        memory.read_u16(info_ptr + 20)?,
+        0,
+        "szCSDVersion must begin with a null terminator"
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_GET_VERSION_EX_W, [0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
+    ), "GetVersionExW must reject a null pointer");
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_PARAMETER);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_register_window_message_returns_consistent_atom() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 122_u32;
+    let name_a_ptr = 0x3000_0000_u32;
+    let name_b_ptr = 0x3000_0200_u32;
+    memory.write_wide_z(name_a_ptr, "GWE_TEST_CUSTOMMSG_A");
+    memory.write_wide_z(name_b_ptr, "GWE_TEST_CUSTOMMSG_B");
+
+    let id_a1 = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_REGISTER_WINDOW_MESSAGE_W, [name_a_ptr],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } => v,
+        other => panic!("expected U32 from RegisterWindowMessageW: {other:?}"),
+    };
+    assert!(
+        (0xC000..=0xFFFF).contains(&id_a1),
+        "registered message must be in [0xC000, 0xFFFF], got 0x{id_a1:04x}"
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    let id_a2 = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_REGISTER_WINDOW_MESSAGE_W, [name_a_ptr],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } => v,
+        other => panic!("expected U32: {other:?}"),
+    };
+    assert_eq!(id_a2, id_a1, "re-registering the same name must return the same atom");
+
+    let id_b = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_REGISTER_WINDOW_MESSAGE_W, [name_b_ptr],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } => v,
+        other => panic!("expected U32: {other:?}"),
+    };
+    assert!((0xC000..=0xFFFF).contains(&id_b));
+    assert_ne!(id_b, id_a1, "different names must produce different atoms");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_REGISTER_WINDOW_MESSAGE_W, [0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }
+    ), "null name pointer must return 0");
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_PARAMETER);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_get_desktop_window_returns_fixed_handle() -> Result<()> {
+    const DESKTOP_HWND: u32 = 0x0001_0000;
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 123_u32;
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_GET_DESKTOP_WINDOW, [] as [u32; 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Handle(DESKTOP_HWND), .. }
+    ), "GetDesktopWindow must return the fixed DESKTOP_HWND value");
 
     Ok(())
 }
