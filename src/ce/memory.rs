@@ -542,4 +542,76 @@ mod tests {
         assert!(memory.contains_allocated_range(virtual_ptr, 0x1234));
         assert!(!memory.contains_allocated_range(virtual_ptr.wrapping_sub(1), 2));
     }
+
+    #[test]
+    fn virtual_alloc_rejects_zero_size_and_missing_type_flags() {
+        let mut memory = MemorySystem::default();
+
+        // size=0 → None regardless of type flags
+        assert!(memory.virtual_alloc(0, 0, MEM_COMMIT | MEM_RESERVE, 4).is_none());
+
+        // allocation_type=0 → None regardless of size
+        assert!(memory.virtual_alloc(0, 0x1000, 0, 4).is_none());
+    }
+
+    #[test]
+    fn virtual_free_release_requires_size_zero_and_valid_base() {
+        let mut memory = MemorySystem::default();
+        let base = memory.virtual_alloc(0, 0x1000, MEM_COMMIT | MEM_RESERVE, 4).unwrap();
+
+        // MEM_RELEASE with size!=0 → false
+        assert!(!memory.virtual_free(base, 1, MEM_RELEASE));
+
+        // MEM_RELEASE with correct size=0 on valid base → true
+        assert!(memory.virtual_free(base, 0, MEM_RELEASE));
+
+        // repeated release on now-freed base → false
+        assert!(!memory.virtual_free(base, 0, MEM_RELEASE));
+    }
+
+    #[test]
+    fn virtual_free_decommit_succeeds_for_valid_range_and_unknown_type_fails() {
+        let mut memory = MemorySystem::default();
+        // Allocate exactly one VIRTUAL_ALIGN-sized region (0x1_0000 bytes).
+        let base = memory.virtual_alloc(0, VIRTUAL_ALIGN, MEM_COMMIT | MEM_RESERVE, 4).unwrap();
+
+        // MEM_DECOMMIT with size within allocation → true
+        assert!(memory.virtual_free(base, VIRTUAL_ALIGN / 2, MEM_DECOMMIT));
+
+        // MEM_DECOMMIT with size exceeding aligned allocation size → false
+        assert!(!memory.virtual_free(base, VIRTUAL_ALIGN + 1, MEM_DECOMMIT));
+
+        // unknown free_type → false
+        assert!(!memory.virtual_free(base, 0, 0xdead));
+    }
+
+    #[test]
+    fn local_re_alloc_grows_in_place_when_no_later_allocation_blocks() {
+        let mut memory = MemorySystem::default();
+        let ptr = memory.local_alloc(0, 16).unwrap();
+
+        let grown = memory.local_re_alloc(ptr, 64, 0).unwrap();
+
+        // With no subsequent allocation, the realloc may or may not move,
+        // but the new size must be at least 64.
+        assert_eq!(memory.local_size(grown), Some(64));
+    }
+
+    #[test]
+    fn heap_range_status_distinguishes_requested_actual_and_outside() {
+        let mut memory = MemorySystem::default();
+        // 8-byte allocation: actual_size = align_up(8, 16) = 16, requested_size = 8.
+        let ptr = memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, 8).unwrap();
+
+        // Within requested range → Some(true).
+        assert_eq!(memory.heap_range_status(ptr, 8), Some(true));
+        assert_eq!(memory.heap_range_status(ptr, 1), Some(true));
+
+        // Past requested size but within actual allocation → Some(false).
+        assert_eq!(memory.heap_range_status(ptr, 9), Some(false));
+
+        // Completely outside (past actual end, and before ptr) → None.
+        assert_eq!(memory.heap_range_status(ptr + 16, 1), None);
+        assert_eq!(memory.heap_range_status(ptr - 1, 1), None);
+    }
 }

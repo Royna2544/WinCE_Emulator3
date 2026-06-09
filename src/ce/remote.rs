@@ -743,4 +743,63 @@ mod tests {
         assert_eq!(response["paused"], true);
         assert!(remote.paused());
     }
+
+    #[test]
+    fn enqueue_key_accepts_down_and_up_and_rejects_invalid() {
+        let mut remote = CeRemote::default();
+
+        // "down" enqueues WM_KEYDOWN
+        assert!(remote.enqueue_key("down", 0x26).is_ok());
+        assert_eq!(remote.key_event_count(), 1);
+        let events = remote.drain_key_events();
+        assert_eq!(events[0].message, WM_KEYDOWN);
+        assert_eq!(events[0].vk, 0x26);
+
+        // "up" enqueues WM_KEYUP
+        assert!(remote.enqueue_key("up", 0x41).is_ok());
+        let events = remote.drain_key_events();
+        assert_eq!(events[0].message, WM_KEYUP);
+        assert_eq!(events[0].vk, 0x41);
+
+        // invalid phase → error, nothing enqueued
+        assert!(remote.enqueue_key("held", 0x41).is_err());
+        assert_eq!(remote.key_event_count(), 0);
+
+        // vk=0 → error (out of 1..=0xff range)
+        assert!(remote.enqueue_key("down", 0).is_err());
+        // vk=0x100 → error
+        assert!(remote.enqueue_key("down", 0x100).is_err());
+        assert_eq!(remote.key_event_count(), 0);
+    }
+
+    #[test]
+    fn enqueue_touch_move_produces_single_mousemove_event() {
+        let mut remote = CeRemote::default();
+        remote.set_framebuffer_size(800, 480);
+
+        assert!(remote.enqueue_touch("move", 100, 200).is_ok());
+        assert_eq!(remote.touch_event_count(), 1);
+        let events = remote.drain_touch_events();
+        assert_eq!(events[0].message, WM_MOUSEMOVE);
+    }
+
+    #[test]
+    fn normalize_nmea_sentence_strips_existing_newlines_and_appends_crlf() {
+        // already has \r\n → strip and re-add
+        assert_eq!(normalize_nmea_sentence("$GPRMC,data*XX\r\n"), "$GPRMC,data*XX\r\n");
+        // only \n → strip and add \r\n
+        assert_eq!(normalize_nmea_sentence("$GPRMC,data*XX\n"), "$GPRMC,data*XX\r\n");
+        // no trailing whitespace → just add \r\n
+        assert_eq!(normalize_nmea_sentence("$GPRMC,data*XX"), "$GPRMC,data*XX\r\n");
+    }
+
+    #[test]
+    fn nmea_checksum_line_formats_xor_checksum_correctly() {
+        // XOR of "GPRMC" = 'G'^'P'^'R'^'M'^'C' = 0x47^0x50^0x52^0x4d^0x43
+        let expected_cs: u8 = b'G' ^ b'P' ^ b'R' ^ b'M' ^ b'C';
+        let line = nmea_checksum_line("GPRMC");
+        assert!(line.starts_with('$'));
+        assert!(line.ends_with("\r\n"));
+        assert!(line.contains(&format!("*{expected_cs:02X}")));
+    }
 }

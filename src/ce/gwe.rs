@@ -5503,4 +5503,50 @@ mod tests {
         // CE DefWindowProcW returns 0 (MNC_IGNORE) for unrecognized menu keys.
         assert_eq!(gwe.send_message(hwnd, WM_MENUCHAR, 0, 0), Some(0));
     }
+
+    #[test]
+    fn canonicalize_region_rects_merges_bands_and_coalesces_vertically() {
+        // Empty input → empty output.
+        assert_eq!(canonicalize_region_rects(vec![]), vec![]);
+
+        // Single rect passes through (normalized).
+        let single = Rect { left: 5, top: 3, right: 10, bottom: 8 };
+        assert_eq!(canonicalize_region_rects(vec![single]), vec![single]);
+
+        // Unnormalized (inverted) rect is normalized.
+        assert_eq!(
+            canonicalize_region_rects(vec![Rect { left: 10, top: 8, right: 5, bottom: 3 }]),
+            vec![single]
+        );
+
+        // Empty rect is filtered out; real rect survives alone.
+        let real = Rect { left: 0, top: 0, right: 10, bottom: 10 };
+        let empty_rect = Rect { left: 5, top: 5, right: 5, bottom: 10 };
+        assert_eq!(canonicalize_region_rects(vec![empty_rect, real]), vec![real]);
+
+        // Two vertically adjacent rects with the same horizontal span are merged into one.
+        let top_half = Rect { left: 0, top: 0, right: 10, bottom: 5 };
+        let bot_half = Rect { left: 0, top: 5, right: 10, bottom: 10 };
+        assert_eq!(
+            canonicalize_region_rects(vec![top_half, bot_half]),
+            vec![real]
+        );
+
+        // Two overlapping rects produce three bands — no vertical merge because
+        // band [0,3] and band [3,5] have different widths.
+        let r1 = Rect { left: 0, top: 0, right: 10, bottom: 5 };
+        let r2 = Rect { left: 3, top: 3, right: 15, bottom: 8 };
+        // y-edges: 0, 3, 5, 8
+        // band [0,3]: only r1 spans → Rect{0,0,10,3}
+        // band [3,5]: both span, merged → Rect{0,3,15,5}
+        // band [5,8]: only r2 spans → Rect{3,5,15,8}
+        assert_eq!(
+            canonicalize_region_rects(vec![r1, r2]),
+            vec![
+                Rect { left: 0, top: 0, right: 10, bottom: 3 },
+                Rect { left: 0, top: 3, right: 15, bottom: 5 },
+                Rect { left: 3, top: 5, right: 15, bottom: 8 },
+            ]
+        );
+    }
 }

@@ -35,7 +35,8 @@ use wince_emulation_v3::{
             ORD_FCLOSE, ORD_FEOF, ORD_FGETS, ORD_FIND_CLOSE, ORD_FIND_CLOSE_CHANGE_NOTIFICATION,
             ORD_FIND_FIRST_CHANGE_NOTIFICATION_W, ORD_FIND_FIRST_FILE_W,
             ORD_FIND_NEXT_CHANGE_NOTIFICATION, ORD_FIND_NEXT_FILE_W, ORD_FLUSH_FILE_BUFFERS,
-            ORD_FLUSH_INSTRUCTION_CACHE, ORD_FLUSH_VIEW_OF_FILE, ORD_FOPEN, ORD_FREAD, ORD_FREE,
+            ORD_FLUSH_INSTRUCTION_CACHE, ORD_FLUSH_VIEW_OF_FILE, ORD_FLUSH_VIEW_OF_FILE_MAYBE,
+            ORD_FOPEN, ORD_FREAD, ORD_FREE,
             ORD_FSEEK, ORD_FTELL, ORD_GET_DISK_FREE_SPACE_EX_W, ORD_GET_FILE_ATTRIBUTES_EX_W,
             ORD_GET_FILE_ATTRIBUTES_W,
             ORD_GET_FILE_SIZE, ORD_GET_MODULE_FILE_NAME_W, ORD_GET_PROCESS_HEAP, ORD_HEAP_ALLOC,
@@ -6873,6 +6874,84 @@ fn coredll_raw_crt_atof_iswctype_ll_div_sqrt_pow_and_tls_call() -> Result<()> {
         ),
         CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
     ), "GET_VERSION_EX must return true");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_flush_view_of_file_maybe_aliases_flush_view_of_file() -> Result<()> {
+    const INVALID_HANDLE_VALUE: u32 = 0xffff_ffff;
+    const PAGE_READWRITE: u32 = 0x04;
+    const FILE_MAP_ALL_ACCESS: u32 = 0x000f_001f;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+
+    let mapping = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_MAPPING_W,
+        [INVALID_HANDLE_VALUE, 0, PAGE_READWRITE, 0, 4096, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("expected handle: {other:?}"),
+    };
+
+    let view = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_MAP_VIEW_OF_FILE,
+        [mapping, FILE_MAP_ALL_ACCESS, 0, 0, 4096],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(base),
+            ..
+        } => base,
+        other => panic!("expected base: {other:?}"),
+    };
+    assert_ne!(view, 0);
+    memory.map_bytes(view, 4096);
+    memory.write_bytes(view, b"maybe-flush");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FLUSH_VIEW_OF_FILE_MAYBE,
+            [view, 11],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FLUSH_VIEW_OF_FILE_MAYBE,
+            [0xDEAD_0000, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
 
     Ok(())
 }
