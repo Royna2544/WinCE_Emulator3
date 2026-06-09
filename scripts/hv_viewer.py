@@ -56,6 +56,13 @@ JSON_TYPE_NAMES = {
     7: "REG_MULTI_SZ",
 }
 
+REG_NONE      = 0
+REG_SZ        = 1
+REG_EXPAND_SZ = 2
+REG_BINARY    = 3
+REG_DWORD     = 4
+REG_MULTI_SZ  = 7
+
 ROOT_ALIASES = {
     "HKCR": "hkcr",
     "HKEY_CLASSES_ROOT": "hkcr",
@@ -125,11 +132,15 @@ class HiveValue:
 @dataclass
 class HiveKey:
     name: str
-    offset: int
-    parent_offset: int
+    offset: int          # CEDB: abs file offset of key record; regf: cell offset
+    parent_offset: int   # CEDB: parent OID; regf: parent cell offset
     last_write: Optional[datetime]
     values: List[HiveValue] = field(default_factory=list)
     children: List["HiveKey"] = field(default_factory=list)
+    # CEDB write-support (populated by parser; 0 for root / untracked)
+    ce_oid: int = field(default=0, repr=False)
+    ce_last_child_oid: int = field(default=0, repr=False)
+    ce_last_value_oid: int = field(default=0, repr=False)
 
 
 class RegistryHive:
@@ -139,6 +150,7 @@ class RegistryHive:
         with open(path, "rb") as f:
             self.data = bytearray(f.read())
         self.dirty = False
+        self._ce_max_oid = 0
         self.format_name = "unknown"
         self.root_offset = 0
         self.hbins_size = 0
@@ -320,11 +332,21 @@ class RegistryHive:
                 value_records[oid] = record
 
         assigned_children = set()
+        # Track max OID for new-record allocation
         for record in records:
-            if record["kind"] != "key":
-                continue
+            oid = int(record["oid"]) & 0x0FFFFFFF
+            if oid > self._ce_max_oid:
+                self._ce_max_oid = oid
+
+        # Use key_records (one entry per OID, last-write-wins) so that duplicate
+        # physical copies of the same record — left by CE CEDB journaling — do not
+        # cause children or values to be appended multiple times.
+        for record in key_records.values():
             oid = int(record["oid"])
             key = keys[oid]
+            key.ce_oid = oid
+            key.ce_last_child_oid = int(record["last_child_oid"]) & 0x0FFFFFFF
+            key.ce_last_value_oid = int(record["last_value_oid"]) & 0x0FFFFFFF
             for child_oid in reversed(self._walk_ce_record_chain(int(record["last_child_oid"]), key_records)):
                 child = keys.get(child_oid)
                 if child is None or child is key:
@@ -333,25 +355,24 @@ class RegistryHive:
                 key.children.append(child)
                 assigned_children.add(child_oid)
 
-        for record in records:
-            if record["kind"] == "key":
-                key = keys.get(int(record["oid"]))
-                if key is None:
-                    continue
-                for value_oid in reversed(
-                    self._walk_ce_record_chain(int(record["last_value_oid"]), value_records)
-                ):
-                    value_record = value_records[value_oid]
-                    key.values.append(
-                        HiveValue(
-                            name=str(value_record["name"]) or "(Default)",
-                            value_type=int(value_record["value_type"]),
-                            data=bytes(value_record["data"]),
-                            file_offset=int(value_record["offset"]),
-                            ce_name_chars=int(value_record["name_chars"]),
-                            ce_total_size=int(value_record["total_size"]),
-                        )
+        for record in key_records.values():
+            key = keys.get(int(record["oid"]))
+            if key is None:
+                continue
+            for value_oid in reversed(
+                self._walk_ce_record_chain(int(record["last_value_oid"]), value_records)
+            ):
+                value_record = value_records[value_oid]
+                key.values.append(
+                    HiveValue(
+                        name=str(value_record["name"]) or "(Default)",
+                        value_type=int(value_record["value_type"]),
+                        data=bytes(value_record["data"]),
+                        file_offset=int(value_record["offset"]),
+                        ce_name_chars=int(value_record["name_chars"]),
+                        ce_total_size=int(value_record["total_size"]),
                     )
+                )
 
         for oid, key in keys.items():
             if oid not in assigned_children:
@@ -557,6 +578,170 @@ class RegistryHive:
         self.path = dest
         self.dirty = False
 
+    # ------------------------------------------------------------------
+    # CE CEDB structural edit: add / delete keys and values
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _ce_ref(oid: int) -> int:
+        """Pack a non-null OID as a chain reference (0x20000000 flag observed in all hives)."""
+        return (0x20000000 | (oid & 0x0FFFFFFF)) if oid else 0
+
+    def _ce_alloc_oid(self) -> int:
+        self._ce_max_oid += 1
+        return self._ce_max_oid
+
+    def _ce_append(self, record: bytes) -> int:
+        """Append record bytes to self.data, update hbins_size header, return new record offset."""
+        offset = len(self.data)
+        self.data.extend(record)
+        struct.pack_into("<I", self.data, 0x20, len(self.data))
+        return offset
+
+    def _build_ce_key_record(self, oid: int, prev_oid: int, name: str) -> bytes:
+        name_enc = name.encode("utf-16le")
+        nc = len(name)
+        total = align4(0x1C + len(name_enc))
+        length = align4(0x10 + len(name_enc))
+        rec = bytearray(total)
+        struct.pack_into("<I", rec, 0x00, 0xC0000000 | length)
+        struct.pack_into("<I", rec, 0x04, 0)
+        struct.pack_into("<I", rec, 0x08, oid)
+        struct.pack_into("<I", rec, 0x0C, self._ce_ref(prev_oid))
+        struct.pack_into("<I", rec, 0x10, 0)  # last_child_oid (empty)
+        struct.pack_into("<I", rec, 0x14, 0)  # last_value_oid (empty)
+        struct.pack_into("<I", rec, 0x18, nc)
+        rec[0x1C:0x1C + len(name_enc)] = name_enc
+        return bytes(rec)
+
+    def _build_ce_value_record(
+        self, oid: int, prev_oid: int, name: str, vtype: int, data: bytes
+    ) -> bytes:
+        if name == "(Default)":
+            name = ""
+        name_enc = name.encode("utf-16le")
+        nc = len(name)
+        total = align4(0x16 + len(name_enc) + len(data))
+        length = align4(0x0C + len(name_enc) + len(data))
+        rec = bytearray(total)
+        struct.pack_into("<I", rec, 0x00, 0xD0000000 | length)
+        struct.pack_into("<I", rec, 0x04, 0)
+        struct.pack_into("<I", rec, 0x08, oid)
+        struct.pack_into("<I", rec, 0x0C, self._ce_ref(prev_oid))
+        struct.pack_into("<H", rec, 0x10, vtype)
+        struct.pack_into("<H", rec, 0x12, len(data))
+        struct.pack_into("<H", rec, 0x14, nc)
+        rec[0x16:0x16 + len(name_enc)] = name_enc
+        rec[0x16 + len(name_enc):0x16 + len(name_enc) + len(data)] = data
+        return bytes(rec)
+
+    def add_ce_key(self, parent_key: HiveKey, name: str) -> HiveKey:
+        """Append a new child key under parent_key."""
+        if self.format_name != "ce_cedb":
+            raise ValueError("add_ce_key only supported for CE CEDB hives")
+        oid = self._ce_alloc_oid()
+        prev_oid = parent_key.ce_last_child_oid
+        record = self._build_ce_key_record(oid, prev_oid, name)
+        new_offset = self._ce_append(record)
+        # Update parent's last_child_oid (only if parent has a real file record)
+        if parent_key.offset > 0:
+            struct.pack_into("<I", self.data, parent_key.offset + 0x10, self._ce_ref(oid))
+        parent_key.ce_last_child_oid = oid
+        new_key = HiveKey(
+            name=name,
+            offset=new_offset,
+            parent_offset=parent_key.ce_oid,
+            last_write=None,
+            ce_oid=oid,
+            ce_last_child_oid=0,
+            ce_last_value_oid=0,
+        )
+        parent_key.children.append(new_key)
+        parent_key.children.sort(key=lambda c: c.name.lower())
+        self.dirty = True
+        return new_key
+
+    def add_ce_value(
+        self, parent_key: HiveKey, name: str, vtype: int, data: bytes
+    ) -> HiveValue:
+        """Append a new value under parent_key."""
+        if self.format_name != "ce_cedb":
+            raise ValueError("add_ce_value only supported for CE CEDB hives")
+        if parent_key.offset == 0:
+            raise ValueError("cannot add values directly to the synthetic root key")
+        oid = self._ce_alloc_oid()
+        prev_oid = parent_key.ce_last_value_oid
+        display_name = name if name else "(Default)"
+        record = self._build_ce_value_record(oid, prev_oid, name, vtype, data)
+        new_offset = self._ce_append(record)
+        nc = len(name) if name else 0
+        total = len(record)
+        struct.pack_into("<I", self.data, parent_key.offset + 0x14, self._ce_ref(oid))
+        parent_key.ce_last_value_oid = oid
+        new_value = HiveValue(
+            name=display_name,
+            value_type=vtype,
+            data=bytes(data),
+            file_offset=new_offset,
+            ce_name_chars=nc,
+            ce_total_size=total,
+        )
+        parent_key.values.append(new_value)
+        parent_key.values.sort(key=lambda v: v.name.lower())
+        self.dirty = True
+        return new_value
+
+    def delete_ce_value(self, parent_key: HiveKey, value: HiveValue) -> None:
+        """Remove value from parent_key, patching the OID chain and zeroing the record."""
+        if self.format_name != "ce_cedb":
+            raise ValueError("delete_ce_value only supported for CE CEDB hives")
+        val_oid = struct.unpack_from("<I", self.data, value.file_offset + 0x08)[0] & 0x0FFFFFFF
+        val_prev = struct.unpack_from("<I", self.data, value.file_offset + 0x0C)[0]
+        if parent_key.ce_last_value_oid == val_oid:
+            struct.pack_into("<I", self.data, parent_key.offset + 0x14, val_prev)
+            parent_key.ce_last_value_oid = val_prev & 0x0FFFFFFF
+        else:
+            for sib in parent_key.values:
+                if sib is value or sib.file_offset < 0:
+                    continue
+                sib_prev_raw = struct.unpack_from("<I", self.data, sib.file_offset + 0x0C)[0]
+                if (sib_prev_raw & 0x0FFFFFFF) == val_oid:
+                    struct.pack_into("<I", self.data, sib.file_offset + 0x0C, val_prev)
+                    break
+        self.data[value.file_offset:value.file_offset + value.ce_total_size] = (
+            b"\x00" * value.ce_total_size
+        )
+        parent_key.values.remove(value)
+        self.dirty = True
+
+    def delete_ce_key(self, key: HiveKey, parent_key: HiveKey) -> None:
+        """Recursively delete key and all descendants, patching parent chain."""
+        if self.format_name != "ce_cedb":
+            raise ValueError("delete_ce_key only supported for CE CEDB hives")
+        for child in list(key.children):
+            self.delete_ce_key(child, key)
+        for value in list(key.values):
+            self.delete_ce_value(key, value)
+        key_oid = struct.unpack_from("<I", self.data, key.offset + 0x08)[0] & 0x0FFFFFFF
+        key_prev = struct.unpack_from("<I", self.data, key.offset + 0x0C)[0]
+        if parent_key.ce_last_child_oid == key_oid:
+            if parent_key.offset > 0:
+                struct.pack_into("<I", self.data, parent_key.offset + 0x10, key_prev)
+            parent_key.ce_last_child_oid = key_prev & 0x0FFFFFFF
+        else:
+            for sib in parent_key.children:
+                if sib is key or sib.offset <= 0:
+                    continue
+                sib_prev_raw = struct.unpack_from("<I", self.data, sib.offset + 0x0C)[0]
+                if (sib_prev_raw & 0x0FFFFFFF) == key_oid:
+                    struct.pack_into("<I", self.data, sib.offset + 0x0C, key_prev)
+                    break
+        nc = struct.unpack_from("<I", self.data, key.offset + 0x18)[0]
+        key_total = align4(0x1C + nc * 2)
+        self.data[key.offset:key.offset + key_total] = b"\x00" * key_total
+        parent_key.children.remove(key)
+        self.dirty = True
+
     def iter_keys(self) -> Iterable[Tuple[str, HiveKey]]:
         stack: List[Tuple[str, HiveKey]] = [(self.root.name.lower(), self.root)]
         while stack:
@@ -737,6 +922,8 @@ class HiveViewer:
         self.status_var = self.tk.StringVar(value="")
         status = self.ttk.Label(outer, textvariable=self.status_var, anchor="w")
         status.pack(fill="x", padx=6, pady=(4, 6))
+
+        self._bind_context_menus()
 
     def _populate_tree(self) -> None:
         self.tree.delete(*self.tree.get_children())
@@ -1016,6 +1203,246 @@ class HiveViewer:
         except Exception as exc:
             from tkinter import messagebox
             messagebox.showerror("Save error", str(exc), parent=self.root)
+
+    # ------------------------------------------------------------------
+    # Context menus: key tree (left pane) and values pane (right pane)
+    # ------------------------------------------------------------------
+
+    def _bind_context_menus(self) -> None:
+        self.tree.bind("<Button-3>", self._tree_context_menu)
+        self.tree.bind("<Delete>", self._on_delete_key_press)
+        self.values.bind("<Button-3>", self._values_context_menu)
+        self.values.bind("<Delete>", self._on_delete_value_press)
+
+    def _tree_context_menu(self, event: object) -> None:
+        tk = self.tk
+        iid = self.tree.identify_row(event.y)
+        if iid:
+            self.tree.selection_set(iid)
+        key = self.item_to_key.get(iid) if iid else None
+
+        menu = tk.Menu(self.root, tearoff=False)
+        new_sub = tk.Menu(menu, tearoff=False)
+        new_sub.add_command(label="Key", command=lambda: self._new_key(iid, key))
+        new_sub.add_separator()
+        new_sub.add_command(label="String Value",     command=lambda: self._new_value(key, REG_SZ,        b"\x00\x00"))
+        new_sub.add_command(label="DWORD Value",      command=lambda: self._new_value(key, REG_DWORD,     b"\x00\x00\x00\x00"))
+        new_sub.add_command(label="Binary Value",     command=lambda: self._new_value(key, REG_BINARY,    b""))
+        new_sub.add_command(label="Multi-String Value", command=lambda: self._new_value(key, REG_MULTI_SZ, b"\x00\x00\x00\x00"))
+        menu.add_cascade(label="New", menu=new_sub)
+        menu.add_separator()
+        menu.add_command(
+            label="Delete Key",
+            command=lambda: self._do_delete_key(iid, key),
+            state="normal" if (key and key is not self.hive.root) else "disabled",
+        )
+        menu.post(event.x_root, event.y_root)
+
+    def _values_context_menu(self, event: object) -> None:
+        tk = self.tk
+        sel_tree = self.tree.selection()
+        key = self.item_to_key.get(sel_tree[0]) if sel_tree else None
+        iid = self.values.identify_row(event.y)
+        if iid:
+            self.values.selection_set(iid)
+        value = self.item_to_value.get(iid) if iid else None
+
+        menu = tk.Menu(self.root, tearoff=False)
+        new_sub = tk.Menu(menu, tearoff=False)
+        new_sub.add_command(label="String Value",     command=lambda: self._new_value(key, REG_SZ,        b"\x00\x00"))
+        new_sub.add_command(label="DWORD Value",      command=lambda: self._new_value(key, REG_DWORD,     b"\x00\x00\x00\x00"))
+        new_sub.add_command(label="Binary Value",     command=lambda: self._new_value(key, REG_BINARY,    b""))
+        new_sub.add_command(label="Multi-String Value", command=lambda: self._new_value(key, REG_MULTI_SZ, b"\x00\x00\x00\x00"))
+        menu.add_cascade(label="New", menu=new_sub)
+        menu.add_separator()
+        menu.add_command(
+            label="Delete Value",
+            command=lambda: self._do_delete_value(iid, key, value),
+            state="normal" if value is not None else "disabled",
+        )
+        if value is not None:
+            menu.add_command(label="Modify...", command=lambda: self._edit_value(value, iid))
+        menu.post(event.x_root, event.y_root)
+
+    def _on_delete_key_press(self, _event: object) -> None:
+        sel = self.tree.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        key = self.item_to_key.get(iid)
+        if key and key is not self.hive.root:
+            self._do_delete_key(iid, key)
+
+    def _on_delete_value_press(self, _event: object) -> None:
+        sel = self.values.selection()
+        if not sel:
+            return
+        iid = sel[0]
+        value = self.item_to_value.get(iid)
+        sel_tree = self.tree.selection()
+        key = self.item_to_key.get(sel_tree[0]) if sel_tree else None
+        if value is not None and key is not None:
+            self._do_delete_value(iid, key, value)
+
+    # ------------------------------------------------------------------
+    # New-key / new-value dialogs
+    # ------------------------------------------------------------------
+
+    def _new_key(self, parent_item: str, parent_key: Optional[HiveKey]) -> None:
+        if self.hive.format_name != "ce_cedb":
+            self._show_ce_only()
+            return
+        if parent_key is None:
+            return
+        name = self._ask_name("New Key", "Key name:")
+        if name is None:
+            return
+        try:
+            new_key = self.hive.add_ce_key(parent_key, name)
+        except Exception as exc:
+            from tkinter import messagebox
+            messagebox.showerror("Error", str(exc), parent=self.root)
+            return
+        new_item = self.tree.insert(parent_item, "end", text=name, open=False)
+        self.item_to_key[new_item] = new_key
+        self.tree.see(new_item)
+        self.tree.selection_set(new_item)
+        self._show_key(new_key)
+        self._update_dirty_title()
+
+    def _new_value(self, key: Optional[HiveKey], vtype: int, default_data: bytes) -> None:
+        if self.hive.format_name != "ce_cedb":
+            self._show_ce_only()
+            return
+        if key is None or key is self.hive.root:
+            from tkinter import messagebox
+            messagebox.showwarning("No key selected", "Select a key first.", parent=self.root)
+            return
+        name = self._ask_name("New Value", "Value name:")
+        if name is None:
+            return
+        try:
+            new_val = self.hive.add_ce_value(key, name, vtype, default_data)
+        except Exception as exc:
+            from tkinter import messagebox
+            messagebox.showerror("Error", str(exc), parent=self.root)
+            return
+        iid = self.values.insert("", "end", values=(new_val.name, new_val.type_name, new_val.display_data()))
+        self.item_to_value[iid] = new_val
+        self.values.selection_set(iid)
+        self._update_dirty_title()
+        self._edit_value(new_val, iid)
+
+    def _do_delete_key(self, iid: str, key: HiveKey) -> None:
+        if self.hive.format_name != "ce_cedb":
+            self._show_ce_only()
+            return
+        from tkinter import messagebox
+        if not messagebox.askyesno(
+            "Delete Key",
+            f"Delete '{key.name}' and all its subkeys and values?",
+            parent=self.root,
+        ):
+            return
+        parent_item = self.tree.parent(iid)
+        parent_key = self.item_to_key.get(parent_item)
+        if parent_key is None:
+            return
+        try:
+            self.hive.delete_ce_key(key, parent_key)
+        except Exception as exc:
+            messagebox.showerror("Error", str(exc), parent=self.root)
+            return
+        self._remove_tree_item(iid)
+        if parent_item:
+            self.tree.selection_set(parent_item)
+            self._show_key(parent_key)
+        self._update_dirty_title()
+
+    def _do_delete_value(self, iid: str, key: HiveKey, value: HiveValue) -> None:
+        if self.hive.format_name != "ce_cedb":
+            self._show_ce_only()
+            return
+        from tkinter import messagebox
+        if not messagebox.askyesno(
+            "Delete Value",
+            f"Delete value '{value.name}'?",
+            parent=self.root,
+        ):
+            return
+        try:
+            self.hive.delete_ce_value(key, value)
+        except Exception as exc:
+            messagebox.showerror("Error", str(exc), parent=self.root)
+            return
+        self.values.delete(iid)
+        del self.item_to_value[iid]
+        sel_tree = self.tree.selection()
+        if sel_tree:
+            k = self.item_to_key.get(sel_tree[0])
+            if k:
+                self._refresh_status(k)
+        self._update_dirty_title()
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _ask_name(self, title: str, prompt: str) -> Optional[str]:
+        tk = self.tk
+        ttk = self.ttk
+        result: list = [None]
+        dlg = tk.Toplevel(self.root)
+        dlg.title(title)
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.grab_set()
+        ttk.Label(dlg, text=prompt).grid(row=0, column=0, padx=10, pady=(12, 4), sticky="w")
+        var = tk.StringVar()
+        entry = ttk.Entry(dlg, textvariable=var, width=40)
+        entry.grid(row=1, column=0, columnspan=2, padx=10, pady=(0, 8), sticky="ew")
+        entry.focus()
+
+        def ok(_e=None):
+            v = var.get().strip()
+            if v:
+                result[0] = v
+                dlg.destroy()
+
+        def cancel(_e=None):
+            dlg.destroy()
+
+        btn_frame = ttk.Frame(dlg)
+        btn_frame.grid(row=2, column=0, columnspan=2, pady=(0, 10))
+        ttk.Button(btn_frame, text="OK", command=ok, width=10).pack(side="left", padx=6)
+        ttk.Button(btn_frame, text="Cancel", command=cancel, width=10).pack(side="left", padx=6)
+        entry.bind("<Return>", ok)
+        dlg.bind("<Escape>", cancel)
+        dlg.wait_window()
+        return result[0]
+
+    def _show_ce_only(self) -> None:
+        from tkinter import messagebox
+        messagebox.showinfo(
+            "CE only",
+            "Add/delete operations are only supported for CE CEDB hives.",
+            parent=self.root,
+        )
+
+    def _remove_tree_item(self, iid: str) -> None:
+        for child in self.tree.get_children(iid):
+            self._remove_tree_item(child)
+        if iid in self.item_to_key:
+            del self.item_to_key[iid]
+        self.tree.delete(iid)
+
+    def _refresh_status(self, key: HiveKey) -> None:
+        path = self._selected_path()
+        timestamp = key.last_write.isoformat() if key.last_write else "unknown time"
+        self.status_var.set(
+            f"{path}    {len(key.children)} subkeys, {len(key.values)} values, "
+            f"cell 0x{key.offset:x}, last write {timestamp}"
+        )
 
     def _on_close(self) -> None:
         if self.hive.dirty:
