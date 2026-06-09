@@ -77,6 +77,12 @@ class HiveValue:
     name: str
     value_type: int
     data: bytes
+    # Write-support metadata populated by the parser; -1/0 means "not tracked".
+    file_offset: int = field(default=-1, repr=False)      # abs byte offset of record/cell payload
+    ce_name_chars: int = field(default=0, repr=False)     # CEDB: UTF-16 name char count
+    ce_total_size: int = field(default=0, repr=False)     # CEDB: aligned record size in file
+    regf_inline: bool = field(default=False, repr=False)  # regf: data packed into vk.DataOffset
+    regf_data_payload: int = field(default=-1, repr=False)# regf: abs offset of data cell payload
 
     @property
     def type_name(self) -> str:
@@ -131,7 +137,8 @@ class RegistryHive:
         self.path = path
         self.root_name = normalize_root(root_name)
         with open(path, "rb") as f:
-            self.data = f.read()
+            self.data = bytearray(f.read())
+        self.dirty = False
         self.format_name = "unknown"
         self.root_offset = 0
         self.hbins_size = 0
@@ -240,14 +247,24 @@ class RegistryHive:
         name = decode_name(name_raw, compressed=bool(flags & 0x01)) if name_len else "(Default)"
 
         data_len = raw_data_len & 0x7FFFFFFF
-        if raw_data_len & 0x80000000:
+        inline = bool(raw_data_len & 0x80000000)
+        if inline:
             data = struct.pack("<I", data_offset)[:data_len]
+            data_cell_payload = -1
         elif data_len == 0 or data_offset == 0xFFFFFFFF:
             data = b""
+            data_cell_payload = -1
         else:
-            data_payload = self._cell_payload_offset(data_offset)
-            data = self._bytes(data_payload, data_len)
-        return HiveValue(name=name, value_type=value_type, data=data)
+            data_cell_payload = self._cell_payload_offset(data_offset)
+            data = self._bytes(data_cell_payload, data_len)
+        return HiveValue(
+            name=name,
+            value_type=value_type,
+            data=data,
+            file_offset=payload,
+            regf_inline=inline,
+            regf_data_payload=data_cell_payload,
+        )
 
     def _parse_subkey_index(self, cell_offset: int) -> List[int]:
         payload = self._cell_payload_offset(cell_offset)
@@ -330,6 +347,9 @@ class RegistryHive:
                             name=str(value_record["name"]) or "(Default)",
                             value_type=int(value_record["value_type"]),
                             data=bytes(value_record["data"]),
+                            file_offset=int(value_record["offset"]),
+                            ce_name_chars=int(value_record["name_chars"]),
+                            ce_total_size=int(value_record["total_size"]),
                         )
                     )
 
@@ -445,6 +465,7 @@ class RegistryHive:
             "prev_oid": self._u32(offset + 0x0C) & 0x0FFFFFFF,
             "value_type": value_type,
             "name": name,
+            "name_chars": name_chars,
             "data": self._bytes(value_offset, data_len),
         }
 
@@ -453,6 +474,88 @@ class RegistryHive:
         key.values.sort(key=lambda value: value.name.lower())
         for child in key.children:
             self._sort_tree(child)
+
+    # ------------------------------------------------------------------
+    # Write support
+    # ------------------------------------------------------------------
+
+    def write_value(self, value: HiveValue, new_data: bytes, new_type: int) -> None:
+        """Patch *value* in-place in self.data, then mark the hive dirty.
+
+        For CE CEDB: new data must fit within the original aligned record block
+        (same align4 total_size as before).  For regf: non-inline cells must
+        not exceed the original data cell size; inline cells are limited to 4 B.
+        """
+        if self.format_name == "ce_cedb":
+            self._write_cedb_value(value, new_data, new_type)
+        elif self.format_name == "regf":
+            self._write_regf_value(value, new_data, new_type)
+        else:
+            raise ValueError(f"write not supported for format {self.format_name!r}")
+        value.value_type = new_type
+        value.data = bytes(new_data)
+        self.dirty = True
+
+    def _write_cedb_value(self, value: HiveValue, new_data: bytes, new_type: int) -> None:
+        if value.file_offset < 0:
+            raise ValueError("value has no tracked file offset")
+        overhead = 0x16 + value.ce_name_chars * 2
+        capacity = value.ce_total_size - overhead
+        if capacity <= 0:
+            raise ValueError("value record has no data capacity")
+        if len(new_data) > capacity:
+            raise ValueError(f"new data {len(new_data)} B exceeds in-place capacity {capacity} B")
+        new_total = align4(overhead + len(new_data))
+        if new_total != value.ce_total_size:
+            raise ValueError(
+                f"new data length would change the record block size "
+                f"(align4({overhead}+{len(new_data)})={new_total} != {value.ce_total_size}); "
+                f"acceptable lengths: {capacity - 3}–{capacity} bytes"
+            )
+        data_abs = value.file_offset + overhead
+        struct.pack_into("<H", self.data, value.file_offset + 0x10, new_type)
+        struct.pack_into("<H", self.data, value.file_offset + 0x12, len(new_data))
+        self.data[data_abs:data_abs + capacity] = b"\x00" * capacity
+        self.data[data_abs:data_abs + len(new_data)] = new_data
+
+    def _write_regf_value(self, value: HiveValue, new_data: bytes, new_type: int) -> None:
+        if value.file_offset < 0:
+            raise ValueError("value has no tracked file offset")
+        vk = value.file_offset
+        old_raw = struct.unpack_from("<I", self.data, vk + 0x04)[0]
+        old_data_len = old_raw & 0x7FFFFFFF
+        if value.regf_inline:
+            if len(new_data) > 4:
+                raise ValueError("inline regf value limited to 4 bytes")
+            packed = int.from_bytes(new_data.ljust(4, b"\x00"), "little")
+            struct.pack_into("<I", self.data, vk + 0x08, packed)
+            struct.pack_into("<I", self.data, vk + 0x04, 0x80000000 | len(new_data))
+        else:
+            if len(new_data) > old_data_len:
+                raise ValueError(
+                    f"new data {len(new_data)} B exceeds data cell capacity {old_data_len} B"
+                )
+            if value.regf_data_payload < 0:
+                raise ValueError("non-inline value has no data cell payload offset")
+            self.data[value.regf_data_payload:value.regf_data_payload + old_data_len] = (
+                new_data + b"\x00" * (old_data_len - len(new_data))
+            )
+            struct.pack_into("<I", self.data, vk + 0x04, len(new_data))
+        struct.pack_into("<I", self.data, vk + 0x0C, new_type)
+        self._update_regf_checksum()
+
+    def _update_regf_checksum(self) -> None:
+        checksum = 0
+        for i in range(0, 0x1FC, 4):
+            checksum ^= struct.unpack_from("<I", self.data, i)[0]
+        struct.pack_into("<I", self.data, 0x1FC, checksum)
+
+    def save(self, path: Optional[str] = None) -> None:
+        dest = path or self.path
+        with open(dest, "wb") as f:
+            f.write(self.data)
+        self.path = dest
+        self.dirty = False
 
     def iter_keys(self) -> Iterable[Tuple[str, HiveKey]]:
         stack: List[Tuple[str, HiveKey]] = [(self.root.name.lower(), self.root)]
@@ -565,6 +668,7 @@ class HiveViewer:
         self.filedialog = filedialog
         self.hive = hive
         self.item_to_key: Dict[str, HiveKey] = {}
+        self.item_to_value: Dict[str, HiveValue] = {}
 
         self.root = tk.Tk()
         self.root.title(f"Registry Hive Viewer - {os.path.basename(hive.path)}")
@@ -576,6 +680,7 @@ class HiveViewer:
         self._populate_tree()
 
     def run(self) -> None:
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.mainloop()
 
     def _build_menu(self) -> None:
@@ -584,9 +689,13 @@ class HiveViewer:
         file_menu.add_command(label="Open Hive...", command=self._open_hive)
         file_menu.add_command(label="Export JSON...", command=self._export_json)
         file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.root.destroy)
+        file_menu.add_command(label="Save", command=self._save, accelerator="Ctrl+S")
+        file_menu.add_command(label="Save As...", command=self._save_as)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self._on_close)
         menu.add_cascade(label="File", menu=file_menu)
         self.root.config(menu=menu)
+        self.root.bind("<Control-s>", lambda _e: self._save())
 
     def _build_body(self) -> None:
         outer = self.ttk.Frame(self.root)
@@ -623,6 +732,7 @@ class HiveViewer:
         self.values.configure(yscrollcommand=value_scroll.set)
         self.values.pack(side="left", fill="both", expand=True)
         value_scroll.pack(side="right", fill="y")
+        self.values.bind("<Double-1>", self._on_value_double_click)
 
         self.status_var = self.tk.StringVar(value="")
         status = self.ttk.Label(outer, textvariable=self.status_var, anchor="w")
@@ -654,8 +764,10 @@ class HiveViewer:
 
     def _show_key(self, key: HiveKey) -> None:
         self.values.delete(*self.values.get_children())
+        self.item_to_value.clear()
         for value in key.values:
-            self.values.insert("", "end", values=(value.name, value.type_name, value.display_data()))
+            iid = self.values.insert("", "end", values=(value.name, value.type_name, value.display_data()))
+            self.item_to_value[iid] = value
         path = self._selected_path()
         self.path_var.set(path)
         timestamp = key.last_write.isoformat() if key.last_write else "unknown time"
@@ -703,6 +815,219 @@ class HiveViewer:
             json.dump(self.hive.to_regs_json(), f, indent=2, ensure_ascii=False)
             f.write("\n")
         self.status_var.set(f"Exported {path}")
+
+    # ------------------------------------------------------------------
+    # Write support
+    # ------------------------------------------------------------------
+
+    def _on_value_double_click(self, _event: object) -> None:
+        sel = self.values.selection()
+        if not sel:
+            return
+        value = self.item_to_value.get(sel[0])
+        if value is not None:
+            self._edit_value(value, sel[0])
+
+    def _edit_value(self, value: HiveValue, item_id: str) -> None:
+        if value.file_offset < 0:
+            from tkinter import messagebox
+            messagebox.showwarning(
+                "Read-only",
+                "This value has no tracked file offset and cannot be edited.",
+                parent=self.root,
+            )
+            return
+
+        tk = self.tk
+        ttk = self.ttk
+
+        dlg = tk.Toplevel(self.root)
+        dlg.title(f"Edit Value: {value.name}")
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        ttk.Label(dlg, text=f"Name:  {value.name}", anchor="w").grid(
+            row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(10, 2)
+        )
+        ttk.Label(dlg, text=f"Type:  {value.type_name}", anchor="w").grid(
+            row=1, column=0, columnspan=2, sticky="w", padx=10, pady=2
+        )
+
+        if self.hive.format_name == "ce_cedb":
+            overhead = 0x16 + value.ce_name_chars * 2
+            capacity = value.ce_total_size - overhead
+            cap_label = f"Capacity: {capacity} bytes  (need align4({overhead}+len)=={value.ce_total_size})"
+        else:
+            capacity = None
+            cap_label = ""
+        if cap_label:
+            ttk.Label(dlg, text=cap_label, foreground="gray", anchor="w").grid(
+                row=2, column=0, columnspan=2, sticky="w", padx=10, pady=2
+            )
+
+        frame = ttk.LabelFrame(dlg, text="Data")
+        frame.grid(row=3, column=0, columnspan=2, padx=10, pady=6, sticky="ew")
+        dlg.columnconfigure(0, weight=1)
+
+        get_data = None  # populated below per-type
+
+        if value.value_type == 4 and len(value.data) >= 4:  # REG_DWORD
+            val_int = struct.unpack_from("<I", value.data)[0]
+            hex_var = tk.StringVar(value=f"0x{val_int:08x}")
+            dec_var = tk.StringVar(value=str(val_int))
+
+            ttk.Label(frame, text="Hex:").grid(row=0, column=0, padx=6, pady=4, sticky="e")
+            hex_entry = ttk.Entry(frame, textvariable=hex_var, width=16)
+            hex_entry.grid(row=0, column=1, padx=6, pady=4)
+            ttk.Label(frame, text="Dec:").grid(row=1, column=0, padx=6, pady=4, sticky="e")
+            dec_entry = ttk.Entry(frame, textvariable=dec_var, width=16)
+            dec_entry.grid(row=1, column=1, padx=6, pady=4)
+
+            _updating = [False]
+
+            def on_hex(*_):
+                if _updating[0]:
+                    return
+                try:
+                    s = hex_var.get().strip()
+                    v = int(s, 16) if s.lower().startswith("0x") else int(s, 16)
+                    _updating[0] = True
+                    dec_var.set(str(v & 0xFFFFFFFF))
+                    _updating[0] = False
+                except ValueError:
+                    pass
+
+            def on_dec(*_):
+                if _updating[0]:
+                    return
+                try:
+                    v = int(dec_var.get().strip())
+                    _updating[0] = True
+                    hex_var.set(f"0x{v & 0xFFFFFFFF:08x}")
+                    _updating[0] = False
+                except ValueError:
+                    pass
+
+            hex_var.trace_add("write", on_hex)
+            dec_var.trace_add("write", on_dec)
+            hex_entry.focus_set()
+            hex_entry.selection_range(0, "end")
+
+            def get_data():  # type: ignore[misc]
+                try:
+                    s = hex_var.get().strip()
+                    v = int(s, 16) if s.lower().startswith("0x") else int(s, 10)
+                    return struct.pack("<I", v & 0xFFFFFFFF), 4
+                except ValueError:
+                    return None, None
+
+        elif value.value_type in (1, 2):  # REG_SZ / REG_EXPAND_SZ
+            text = decode_utf16z(value.data)
+            text_var = tk.StringVar(value=text)
+            entry = ttk.Entry(frame, textvariable=text_var, width=52)
+            entry.pack(fill="x", padx=6, pady=6)
+            entry.focus_set()
+            entry.selection_range(0, "end")
+
+            vtype = value.value_type
+
+            def get_data():  # type: ignore[misc]
+                encoded = (text_var.get() + "\x00").encode("utf-16le")
+                return encoded, vtype
+
+        elif value.value_type == 7:  # REG_MULTI_SZ
+            items = decode_multi_sz(value.data)
+            text_box = tk.Text(frame, height=5, width=52, font=("Courier New", 10))
+            text_box.insert("1.0", "\n".join(items))
+            text_box.pack(fill="both", expand=True, padx=6, pady=6)
+            text_box.focus_set()
+
+            def get_data():  # type: ignore[misc]
+                lines = text_box.get("1.0", "end-1c").split("\n")
+                encoded = ("\x00".join(lines) + "\x00\x00").encode("utf-16le")
+                return encoded, 7
+
+        else:  # REG_BINARY and everything else: hex editor
+            hex_text = " ".join(f"{b:02x}" for b in value.data)
+            text_box = tk.Text(frame, height=4, width=52, font=("Courier New", 10))
+            text_box.insert("1.0", hex_text)
+            text_box.pack(fill="both", expand=True, padx=6, pady=6)
+            text_box.focus_set()
+
+            vtype = value.value_type
+
+            def get_data():  # type: ignore[misc]
+                try:
+                    raw = bytes.fromhex(text_box.get("1.0", "end-1c").strip().replace(" ", ""))
+                    return raw, vtype
+                except ValueError:
+                    return None, None
+
+        btn_frame = ttk.Frame(dlg)
+        btn_frame.grid(row=4, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="e")
+
+        def on_ok() -> None:
+            new_data, new_type = get_data()  # type: ignore[misc]
+            if new_data is None:
+                from tkinter import messagebox
+                messagebox.showerror("Invalid data", "Could not parse the entered data.", parent=dlg)
+                return
+            try:
+                self.hive.write_value(value, new_data, new_type)
+            except ValueError as exc:
+                from tkinter import messagebox
+                messagebox.showerror("Write error", str(exc), parent=dlg)
+                return
+            self.values.item(item_id, values=(value.name, value.type_name, value.display_data()))
+            self._update_dirty_title()
+            dlg.destroy()
+
+        ttk.Button(btn_frame, text="OK", command=on_ok, width=8).pack(side="right", padx=(4, 0))
+        ttk.Button(btn_frame, text="Cancel", command=dlg.destroy, width=8).pack(side="right")
+        dlg.bind("<Return>", lambda _e: on_ok())
+        dlg.bind("<Escape>", lambda _e: dlg.destroy())
+
+    def _update_dirty_title(self) -> None:
+        marker = " *" if self.hive.dirty else ""
+        self.root.title(f"Registry Hive Viewer - {os.path.basename(self.hive.path)}{marker}")
+
+    def _save(self) -> None:
+        try:
+            self.hive.save()
+            self._update_dirty_title()
+            self.status_var.set(f"Saved {self.hive.path}")
+        except Exception as exc:
+            from tkinter import messagebox
+            messagebox.showerror("Save error", str(exc), parent=self.root)
+
+    def _save_as(self) -> None:
+        path = self.filedialog.asksaveasfilename(
+            title="Save hive as",
+            defaultextension=".hv",
+            filetypes=(("Registry hives", "*.hv *.dat *.*"), ("All files", "*.*")),
+        )
+        if not path:
+            return
+        try:
+            self.hive.save(path)
+            self._update_dirty_title()
+            self.status_var.set(f"Saved {path}")
+        except Exception as exc:
+            from tkinter import messagebox
+            messagebox.showerror("Save error", str(exc), parent=self.root)
+
+    def _on_close(self) -> None:
+        if self.hive.dirty:
+            from tkinter import messagebox
+            choice = messagebox.askyesnocancel(
+                "Unsaved changes", "Save changes before closing?", parent=self.root
+            )
+            if choice is None:
+                return
+            if choice:
+                self._save()
+        self.root.destroy()
 
 
 def summarize_hive(hive: RegistryHive) -> str:
