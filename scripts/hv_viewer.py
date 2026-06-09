@@ -1310,7 +1310,7 @@ class HiveViewer:
         self._show_key(new_key)
         self._update_dirty_title()
 
-    def _new_value(self, key: Optional[HiveKey], vtype: int, default_data: bytes) -> None:
+    def _new_value(self, key: Optional[HiveKey], vtype: int, _unused_default: bytes = b"") -> None:
         if self.hive.format_name != "ce_cedb":
             self._show_ce_only()
             return
@@ -1318,11 +1318,12 @@ class HiveViewer:
             from tkinter import messagebox
             messagebox.showwarning("No key selected", "Select a key first.", parent=self.root)
             return
-        name = self._ask_name("New Value", "Value name:")
-        if name is None:
+        result = self._new_value_dialog(vtype)
+        if result is None:
             return
+        name, final_data, final_type = result
         try:
-            new_val = self.hive.add_ce_value(key, name, vtype, default_data)
+            new_val = self.hive.add_ce_value(key, name, final_type, final_data)
         except Exception as exc:
             from tkinter import messagebox
             messagebox.showerror("Error", str(exc), parent=self.root)
@@ -1331,7 +1332,134 @@ class HiveViewer:
         self.item_to_value[iid] = new_val
         self.values.selection_set(iid)
         self._update_dirty_title()
-        self._edit_value(new_val, iid)
+
+    def _new_value_dialog(self, vtype: int) -> Optional[Tuple[str, bytes, int]]:
+        """Single dialog: name + initial data for a new registry value.
+        Returns (name, data_bytes, vtype) or None if cancelled."""
+        tk = self.tk
+        ttk = self.ttk
+        result: list = [None]
+
+        type_name = REG_TYPES.get(vtype, f"REG_UNKNOWN_{vtype}")
+        dlg = tk.Toplevel(self.root)
+        dlg.title(f"New {type_name} Value")
+        dlg.resizable(False, False)
+        dlg.transient(self.root)
+        dlg.grab_set()
+
+        ttk.Label(dlg, text=f"Type:  {type_name}", anchor="w").grid(
+            row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(10, 2)
+        )
+        ttk.Label(dlg, text="Name:", anchor="w").grid(row=1, column=0, sticky="w", padx=10, pady=2)
+        name_var = tk.StringVar()
+        name_entry = ttk.Entry(dlg, textvariable=name_var, width=40)
+        name_entry.grid(row=1, column=1, padx=10, pady=2, sticky="ew")
+        name_entry.focus()
+
+        frame = ttk.LabelFrame(dlg, text="Initial Data")
+        frame.grid(row=2, column=0, columnspan=2, padx=10, pady=6, sticky="ew")
+        dlg.columnconfigure(1, weight=1)
+
+        get_data_fn = None
+
+        if vtype == REG_DWORD:
+            hex_var = tk.StringVar(value="0x00000000")
+            dec_var = tk.StringVar(value="0")
+            ttk.Label(frame, text="Hex:").grid(row=0, column=0, padx=6, pady=4, sticky="e")
+            hex_entry = ttk.Entry(frame, textvariable=hex_var, width=16)
+            hex_entry.grid(row=0, column=1, padx=6, pady=4)
+            ttk.Label(frame, text="Dec:").grid(row=1, column=0, padx=6, pady=4, sticky="e")
+            dec_entry = ttk.Entry(frame, textvariable=dec_var, width=16)
+            dec_entry.grid(row=1, column=1, padx=6, pady=4)
+            _upd = [False]
+
+            def on_hex_chg(*_):
+                if _upd[0]:
+                    return
+                try:
+                    s = hex_var.get().strip()
+                    v = int(s, 16)
+                    _upd[0] = True; dec_var.set(str(v & 0xFFFFFFFF)); _upd[0] = False
+                except ValueError:
+                    pass
+
+            def on_dec_chg(*_):
+                if _upd[0]:
+                    return
+                try:
+                    v = int(dec_var.get().strip())
+                    _upd[0] = True; hex_var.set(f"0x{v & 0xFFFFFFFF:08x}"); _upd[0] = False
+                except ValueError:
+                    pass
+
+            hex_var.trace_add("write", on_hex_chg)
+            dec_var.trace_add("write", on_dec_chg)
+
+            def get_data_fn():  # type: ignore[misc]
+                try:
+                    s = hex_var.get().strip()
+                    v = int(s, 16) if s.lower().startswith("0x") else int(s, 10)
+                    return struct.pack("<I", v & 0xFFFFFFFF), REG_DWORD
+                except ValueError:
+                    return None, None
+
+        elif vtype in (REG_SZ, REG_EXPAND_SZ):
+            text_var = tk.StringVar()
+            entry = ttk.Entry(frame, textvariable=text_var, width=48)
+            entry.pack(fill="x", padx=6, pady=6)
+
+            def get_data_fn():  # type: ignore[misc]
+                encoded = (text_var.get() + "\x00").encode("utf-16le")
+                return encoded, vtype
+
+        elif vtype == REG_MULTI_SZ:
+            text_box = tk.Text(frame, height=5, width=48, font=("Courier New", 10))
+            text_box.pack(fill="both", expand=True, padx=6, pady=6)
+            ttk.Label(frame, text="(one string per line)", foreground="gray").pack(anchor="w", padx=6)
+
+            def get_data_fn():  # type: ignore[misc]
+                lines = text_box.get("1.0", "end-1c").split("\n")
+                encoded = ("\x00".join(lines) + "\x00\x00").encode("utf-16le")
+                return encoded, REG_MULTI_SZ
+
+        else:  # REG_BINARY and others
+            text_box = tk.Text(frame, height=4, width=48, font=("Courier New", 10))
+            text_box.pack(fill="both", expand=True, padx=6, pady=6)
+            ttk.Label(frame, text="(hex bytes, space-separated)", foreground="gray").pack(anchor="w", padx=6)
+
+            def get_data_fn():  # type: ignore[misc]
+                try:
+                    raw = bytes.fromhex(text_box.get("1.0", "end-1c").strip().replace(" ", ""))
+                    return raw, vtype
+                except ValueError:
+                    return None, None
+
+        btn_frame = ttk.Frame(dlg)
+        btn_frame.grid(row=3, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="e")
+
+        def ok(_e=None):
+            nm = name_var.get().strip()
+            if not nm:
+                from tkinter import messagebox
+                messagebox.showwarning("Name required", "Enter a value name.", parent=dlg)
+                return
+            data, dtype = get_data_fn()  # type: ignore[misc]
+            if data is None:
+                from tkinter import messagebox
+                messagebox.showerror("Invalid data", "Could not parse the entered data.", parent=dlg)
+                return
+            result[0] = (nm, data, dtype)
+            dlg.destroy()
+
+        def cancel(_e=None):
+            dlg.destroy()
+
+        ttk.Button(btn_frame, text="OK", command=ok, width=10).pack(side="left", padx=6)
+        ttk.Button(btn_frame, text="Cancel", command=cancel, width=10).pack(side="left", padx=6)
+        name_entry.bind("<Return>", lambda _e: frame.focus())
+        dlg.bind("<Escape>", cancel)
+        dlg.wait_window()
+        return result[0]
 
     def _do_delete_key(self, iid: str, key: HiveKey) -> None:
         if self.hive.format_name != "ce_cedb":
