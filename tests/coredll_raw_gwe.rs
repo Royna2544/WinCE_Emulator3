@@ -7,6 +7,7 @@ use wince_emulation_v3::{
         coredll_ordinals::{
             ORD_ACTIVATE_KEYBOARD_LAYOUT, ORD_ADD_FONT_RESOURCE_W, ORD_ADJUST_WINDOW_RECT_EX,
             ORD_APPEND_MENU_W, ORD_BEGIN_PAINT, ORD_BIT_BLT, ORD_BRING_WINDOW_TO_TOP,
+            ORD_CREATE_BITMAP, ORD_CREATE_PEN, ORD_CREATE_RECT_RGN_INDIRECT,
             ORD_CHECK_MENU_ITEM, ORD_CHECK_MENU_RADIO_ITEM, ORD_CHECK_RADIO_BUTTON,
             ORD_CHILD_WINDOW_FROM_POINT,
             ORD_CLIENT_TO_SCREEN, ORD_COMBINE_RGN, ORD_COPY_RECT, ORD_CREATE_CARET,
@@ -15,12 +16,18 @@ use wince_emulation_v3::{
             ORD_CREATE_ICON_INDIRECT, ORD_CREATE_MENU, ORD_CREATE_MUTEX_W, ORD_CREATE_PALETTE,
             ORD_CREATE_PATTERN_BRUSH, ORD_CREATE_PEN_INDIRECT, ORD_CREATE_POPUP_MENU,
             ORD_CREATE_RECT_RGN, ORD_CREATE_SOLID_BRUSH, ORD_CREATE_WINDOW_EX_W,
-            ORD_DEF_WINDOW_PROC_W, ORD_DELETE_OBJECT, ORD_DESTROY_CARET, ORD_DESTROY_ICON,
+            ORD_DEF_DLG_PROC_W, ORD_DEF_WINDOW_PROC_W, ORD_DELETE_DC, ORD_DELETE_MENU,
+            ORD_DELETE_OBJECT, ORD_DESTROY_ACCELERATOR_TABLE, ORD_DESTROY_CARET,
+            ORD_DIALOG_BOX_INDIRECT_PARAM_W, ORD_DESTROY_ICON, ORD_DESTROY_MENU,
             ORD_DESTROY_WINDOW, ORD_DISABLE_CARET_SYSTEM_WIDE, ORD_DISPATCH_MESSAGE_W,
-            ORD_DRAW_ICON_EX, ORD_DRAW_MENU_BAR, ORD_ENABLE_CARET_SYSTEM_WIDE,
+            ORD_DRAW_ICON_EX, ORD_DRAW_MENU_BAR, ORD_DRAW_TEXT_W,
+            ORD_ELLIPSE, ORD_ENABLE_CARET_SYSTEM_WIDE,
             ORD_ENABLE_MENU_ITEM, ORD_ENABLE_WINDOW, ORD_END_DIALOG, ORD_END_PAINT, ORD_EQUAL_RECT,
-            ORD_EXT_TEXT_OUT_W, ORD_FILL_RECT, ORD_FIND_RESOURCE_W, ORD_FIND_WINDOW_W,
+            ORD_EXT_TEXT_OUT_W, ORD_FILL_RECT, ORD_FIND_RESOURCE, ORD_FIND_RESOURCE_W,
+            ORD_FIND_WINDOW_W,
             ORD_GET_ACTIVE_WINDOW, ORD_GET_ASSOCIATED_MENU, ORD_GET_ASYNC_KEY_STATE,
+            ORD_GET_CLIP_BOX, ORD_GET_OBJECT_W, ORD_GET_PIXEL,
+            ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_INDIRECT,
             ORD_GET_ASYNC_SHIFT_FLAGS, ORD_GET_CAPTURE, ORD_GET_CARET_BLINK_TIME,
             ORD_GET_CARET_POS, ORD_GET_CLASS_INFO_W, ORD_GET_CLASS_NAME_W, ORD_GET_CLIENT_RECT,
             ORD_GET_CURSOR, ORD_GET_CURSOR_POS, ORD_GET_DC, ORD_GET_DESKTOP_WINDOW,
@@ -41,7 +48,8 @@ use wince_emulation_v3::{
             ORD_GET_TEXT_METRICS_W, ORD_GET_UPDATE_RECT, ORD_GET_UPDATE_RGN, ORD_GET_VERSION_EX_W,
             ORD_GET_WINDOW,
             ORD_GET_WINDOW_LONG_W, ORD_GET_WINDOW_RECT, ORD_GET_WINDOW_RGN,
-            ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W, ORD_GET_WINDOW_THREAD_PROCESS_ID,
+            ORD_GET_WINDOW_TEXT_LENGTH_W, ORD_GET_WINDOW_TEXT_W, ORD_GET_WINDOW_TEXT_WDIRECT,
+            ORD_GET_WINDOW_THREAD_PROCESS_ID,
             ORD_GLOBAL_MEMORY_STATUS, ORD_HIDE_CARET, ORD_IMM_ASSOCIATE_CONTEXT,
             ORD_IMM_CREATE_CONTEXT, ORD_IMM_DESTROY_CONTEXT, ORD_IMM_DISABLE_IME,
             ORD_IMM_ENABLE_IME, ORD_IMM_GET_COMPOSITION_STRING_W, ORD_IMM_GET_CONTEXT,
@@ -52,24 +60,28 @@ use wince_emulation_v3::{
             ORD_IS_CHILD, ORD_IS_DIALOG_MESSAGE_W, ORD_IS_RECT_EMPTY, ORD_IS_WINDOW,
             ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE, ORD_KEYBD_EVENT, ORD_KILL_TIMER,
             ORD_LINE_TO, ORD_LOAD_CURSOR_W, ORD_LOAD_ICON_W, ORD_LOAD_KEYBOARD_LAYOUT_W,
+            ORD_LOAD_ACCELERATORS_W, ORD_LOAD_BITMAP_W, ORD_LOAD_MENU_W,
             ORD_LOAD_RESOURCE, ORD_LOAD_STRING_W, ORD_MAP_DIALOG_RECT, ORD_MAP_WINDOW_POINTS,
             ORD_MESSAGE_BOX_W, ORD_MOVE_TO_EX, ORD_MOVE_WINDOW,
             ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_OFFSET_RECT, ORD_PAT_BLT, ORD_PEEK_MESSAGE_W,
             ORD_POLYGON, ORD_POLYLINE, ORD_POST_KEYBD_MESSAGE, ORD_POST_MESSAGE_W,
             ORD_POST_QUIT_MESSAGE, ORD_POST_THREAD_MESSAGE_W, ORD_PT_IN_RECT, ORD_PT_IN_REGION,
-            ORD_REALIZE_PALETTE, ORD_RECT_IN_REGION, ORD_REDRAW_WINDOW, ORD_REGISTER_CLASS_W,
+            ORD_REALIZE_PALETTE, ORD_RECT_IN_REGION, ORD_RECTANGLE, ORD_REDRAW_WINDOW,
+            ORD_REGISTER_CLASS_W,
             ORD_REGISTER_GESTURE, ORD_REGISTER_WINDOW_MESSAGE_W, ORD_RELEASE_CAPTURE,
             ORD_RELEASE_DC, ORD_RELEASE_MUTEX,
             ORD_REMOVE_MENU, ORD_ROUND_RECT, ORD_SCREEN_TO_CLIENT, ORD_SELECT_CLIP_RGN,
             ORD_SELECT_OBJECT, ORD_SELECT_PALETTE, ORD_SEND_DLG_ITEM_MESSAGE_W,
             ORD_SEND_MESSAGE_TIMEOUT, ORD_SEND_MESSAGE_W, ORD_SEND_NOTIFY_MESSAGE_W,
-            ORD_SET_ACTIVE_WINDOW, ORD_SET_ASSOCIATED_MENU, ORD_SET_BK_COLOR, ORD_SET_BRUSH_ORG_EX,
+            ORD_SET_ACTIVE_WINDOW, ORD_SET_ASSOCIATED_MENU, ORD_SET_BK_COLOR, ORD_SET_BK_MODE,
+            ORD_SET_BITMAP_BITS, ORD_SET_BRUSH_ORG_EX,
             ORD_SET_CAPTURE, ORD_SET_CARET_BLINK_TIME, ORD_SET_CARET_POS, ORD_SET_CURSOR,
             ORD_SET_DIBCOLOR_TABLE, ORD_SET_DIBITS_TO_DEVICE, ORD_SET_DLG_ITEM_INT,
             ORD_SET_DLG_ITEM_TEXT_W, ORD_SET_FOCUS, ORD_SET_FOREGROUND_WINDOW,
             ORD_SET_KEYBOARD_TARGET, ORD_SET_MENU, ORD_SET_MENU_ITEM_INFO_W,
             ORD_SET_PALETTE_ENTRIES, ORD_SET_PARENT, ORD_SET_RECT, ORD_SET_RECT_EMPTY,
-            ORD_SET_ROP2, ORD_SET_TEXT_ALIGN, ORD_SET_TEXT_COLOR, ORD_SET_TIMER,
+            ORD_SET_RECT_RGN, ORD_SET_ROP2, ORD_SET_SYS_COLORS,
+            ORD_SET_TEXT_ALIGN, ORD_SET_TEXT_COLOR, ORD_SET_TIMER,
             ORD_CHANGE_DISPLAY_SETTINGS_EX,
             ORD_REMOVE_FONT_RESOURCE_W,
             ORD_SET_LOCAL_TIME, ORD_SET_SYSTEM_TIME,
@@ -121,6 +133,7 @@ use wince_emulation_v3::{
         thread::{
             ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE,
             ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE,
+            ERROR_RESOURCE_NAME_NOT_FOUND,
         },
     },
     config::RuntimeConfig,
@@ -20328,6 +20341,896 @@ fn coredll_raw_get_desktop_window_returns_fixed_handle() -> Result<()> {
         ),
         CoredllDispatch::Returned { value: CoredllValue::Handle(DESKTOP_HWND), .. }
     ), "GetDesktopWindow must return the fixed DESKTOP_HWND value");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_def_dlg_proc_w_always_returns_zero() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 124_u32;
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_DEF_DLG_PROC_W, [0xDEAD, 0x0001, 0, 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }
+    ), "DefDlgProcW must return 0 for all inputs");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_dialog_box_indirect_param_w_creates_window_and_rejects_null_params() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 125_u32;
+
+    let template = 0x3600_u32;
+    let dlgproc = 0x1234_5678_u32;
+    memory.write_word(template, WS_POPUP | WS_VISIBLE);
+    memory.write_word(template + 4, 0);
+    memory.write_halfword(template + 8, 0);
+    memory.write_halfword(template + 10, 4);
+    memory.write_halfword(template + 12, 8);
+    memory.write_halfword(template + 14, 120);
+    memory.write_halfword(template + 16, 64);
+    memory.write_halfword(template + 18, 0);
+    memory.write_halfword(template + 20, 0);
+    memory.write_halfword(template + 22, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_DIALOG_BOX_INDIRECT_PARAM_W, [0, 0, 0, dlgproc, 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Handle(0), .. }
+    ), "DialogBoxIndirectParamW must return null for a null template");
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_PARAMETER);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_DIALOG_BOX_INDIRECT_PARAM_W, [0, template, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Handle(0), .. }
+    ), "DialogBoxIndirectParamW must return null for a null dlgproc");
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_PARAMETER);
+
+    let dialog = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_DIALOG_BOX_INDIRECT_PARAM_W, [0, template, 0, dlgproc, 0],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        other => panic!("DialogBoxIndirectParamW did not return an HWND: {other:?}"),
+    };
+    assert_ne!(dialog, 0, "DialogBoxIndirectParamW must create a window for a valid template");
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(
+        kernel.gwe.get_window_long(dialog, wince_emulation_v3::ce::gwe::GWL_WNDPROC),
+        Some(dlgproc)
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_get_window_text_wdirect_returns_same_text_as_get_window_text_w() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 126_u32;
+
+    let hwnd = kernel.create_window_ex_w(thread_id, "STATIC", "Hello CE", None, 1, WS_VISIBLE, 0);
+    let buf_ptr = 0x3000_0000_u32;
+    memory.map_halfwords(buf_ptr, 12);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_GET_WINDOW_TEXT_WDIRECT, [hwnd, buf_ptr, 12],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(8), .. }
+    ), "GetWindowTextWDirect must return char count");
+    assert_eq!(memory.read_wide_z(buf_ptr, 12), "Hello CE", "GetWindowTextWDirect must fill the buffer with the window title");
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_GET_WINDOW_TEXT_WDIRECT, [0xDEAD_BEEF, buf_ptr, 12],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }
+    ), "GetWindowTextWDirect must return 0 for an invalid HWND");
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_HANDLE);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_destroy_menu_delete_menu_complete_lifecycle() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 127_u32;
+    const MF_BYPOSITION: u32 = 0x0000_0400;
+    let text_ptr = 0x3000_0000_u32;
+    memory.map_halfwords(text_ptr, 16);
+    memory.write_wide_z(text_ptr, "Item");
+
+    // Create a menu and append one item
+    let menu = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_CREATE_MENU, [],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        other => panic!("CreateMenu failed: {other:?}"),
+    };
+    assert_ne!(menu, 0);
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_APPEND_MENU_W, [menu, 0, 1001, text_ptr],
+    );
+
+    // DELETE_MENU: remove item at position 0 by position
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_DELETE_MENU, [menu, 0, MF_BYPOSITION],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ), "DeleteMenu must return true for valid menu+item");
+
+    // DELETE_MENU: invalid menu handle → false + ERROR_INVALID_HANDLE
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_DELETE_MENU, [0xDEAD_BEEFu32, 0, MF_BYPOSITION],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
+    ), "DeleteMenu must return false for invalid menu");
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_HANDLE);
+
+    // DESTROY_MENU: destroy the menu
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_DESTROY_MENU, [menu],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ), "DestroyMenu must return true for valid menu");
+
+    // DESTROY_MENU: invalid handle → false + ERROR_INVALID_HANDLE
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_DESTROY_MENU, [0xDEAD_BEEFu32],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
+    ), "DestroyMenu must return false for invalid handle");
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_HANDLE);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_load_menu_w_and_load_accelerators_w_return_zero_without_module() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 128_u32;
+
+    // LOAD_MENU_W with no loaded module → 0 + ERROR_RESOURCE_NAME_NOT_FOUND
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_LOAD_MENU_W, [0u32, 1],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Handle(0), .. }
+    ), "LoadMenuW without resources must return 0");
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_RESOURCE_NAME_NOT_FOUND);
+
+    // LOAD_ACCELERATORS_W with no loaded module → 0 + ERROR_RESOURCE_NAME_NOT_FOUND
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_LOAD_ACCELERATORS_W, [0u32, 1],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Handle(0), .. }
+    ), "LoadAcceleratorsW without resources must return 0");
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_RESOURCE_NAME_NOT_FOUND);
+
+    // DESTROY_ACCELERATOR_TABLE: invalid handle → false + ERROR_INVALID_HANDLE
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_DESTROY_ACCELERATOR_TABLE, [0xDEAD_BEEFu32],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
+    ), "DestroyAcceleratorTable must return false for invalid handle");
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_HANDLE);
+
+    // FIND_RESOURCE (without _W) with no module → 0 (same impl as FIND_RESOURCE_W)
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_FIND_RESOURCE, [0u32, 1, 4],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Handle(0), .. }
+    ), "FindResource without a loaded module must return 0");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_gdi_set_sys_colors_always_returns_true() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 129_u32;
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_SYS_COLORS,
+            [0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_gdi_ellipse_and_rectangle_validate_hdc() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 130_u32;
+
+    let dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        _ => panic!("CREATE_COMPATIBLE_DC failed"),
+    };
+    assert_ne!(dc, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ELLIPSE,
+            [0, 0, 0, 10, 10],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ), "ELLIPSE with hdc=0 must return false");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ELLIPSE,
+            [dc, 0, 0, 10, 10],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ), "ELLIPSE with valid hdc must return true");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_RECTANGLE,
+            [0, 0, 0, 10, 10],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ), "RECTANGLE with hdc=0 must return false");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_RECTANGLE,
+            [dc, 0, 0, 10, 10],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ), "RECTANGLE with valid hdc must return true");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_gdi_get_pixel_and_delete_dc_lifecycle() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 131_u32;
+
+    let dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        _ => panic!("CREATE_COMPATIBLE_DC failed"),
+    };
+    assert_ne!(dc, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_PIXEL,
+            [0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0xFFFF_FFFF),
+            ..
+        }
+    ), "GET_PIXEL with hdc=0 must return CLR_INVALID");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_PIXEL,
+            [dc, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ), "GET_PIXEL with valid dc must return 0 (black)");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DELETE_DC,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ), "DELETE_DC with hdc=0 must return false");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DELETE_DC,
+            [dc],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ), "DELETE_DC with valid dc must return true");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_gdi_set_bk_mode_returns_previous_mode() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 132_u32;
+
+    let dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        _ => panic!("CREATE_COMPATIBLE_DC failed"),
+    };
+    assert_ne!(dc, 0);
+
+    // Default mode is OPAQUE=2; setting to TRANSPARENT=1 must return previous OPAQUE=2.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_BK_MODE,
+            [dc, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(2),
+            ..
+        }
+    ), "SET_BK_MODE must return previous mode OPAQUE=2");
+
+    // Now mode is TRANSPARENT=1; setting to OPAQUE=2 must return previous TRANSPARENT=1.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_BK_MODE,
+            [dc, 2],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ), "SET_BK_MODE must return previous mode TRANSPARENT=1");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_gdi_get_clip_box_returns_region_status() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 133_u32;
+    let rect_ptr = 0x1_0000_u32;
+    memory.map_words(rect_ptr, 4);
+
+    let dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        _ => panic!("CREATE_COMPATIBLE_DC failed"),
+    };
+    assert_ne!(dc, 0);
+
+    // No clip region set → falls back to default 800×480 → non-empty → SIMPLEREGION=2.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_CLIP_BOX,
+            [dc, rect_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(2),
+            ..
+        }
+    ), "GET_CLIP_BOX must return SIMPLEREGION=2 for default 800x480 fallback");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_gdi_create_pen_always_returns_handle() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 134_u32;
+
+    let pen = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_PEN,
+        [0, 1, 0xFF_0000],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("CREATE_PEN returned unexpected: {other:?}"),
+    };
+    assert_ne!(pen, 0, "CREATE_PEN must return non-zero handle");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_gdi_create_bitmap_and_get_object_w() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 135_u32;
+    let out_ptr = 0x1_0000_u32;
+    memory.map_words(out_ptr, 8);
+    // GET_OBJECT_W writes u16 planes/bits_pixel at offsets 16 and 18.
+    memory.map_halfwords(out_ptr + 16, 2);
+
+    // Invalid params: width=0 → ERROR_INVALID_PARAMETER.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CREATE_BITMAP,
+            [0_u32, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ), "CREATE_BITMAP with zero dims must return 0");
+
+    // Valid params.
+    let bitmap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_BITMAP,
+        [2_u32, 2, 1, 16, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("CREATE_BITMAP returned unexpected: {other:?}"),
+    };
+    assert_ne!(bitmap, 0, "CREATE_BITMAP must return non-zero handle");
+
+    // GET_OBJECT_W on bitmap must write 24 bytes and return 24.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_OBJECT_W,
+            [bitmap, 24, out_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(24),
+            ..
+        }
+    ), "GET_OBJECT_W on bitmap must return 24");
+
+    // Create a pen and verify GET_OBJECT_W returns 0 for it (pens unsupported).
+    let pen = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_PEN,
+        [0, 1, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("CREATE_PEN returned unexpected: {other:?}"),
+    };
+    assert_ne!(pen, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_OBJECT_W,
+            [pen, 24, out_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ), "GET_OBJECT_W on pen must return 0 (pens not supported)");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_gdi_create_rect_rgn_indirect_and_set_rect_rgn() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 136_u32;
+    let rect_ptr = 0x1_0000_u32;
+    memory.map_words(rect_ptr, 4);
+
+    // Write a rect {left=0,top=0,right=10,bottom=10} at rect_ptr.
+    memory.write_word(rect_ptr, 0);
+    memory.write_word(rect_ptr + 4, 0);
+    memory.write_word(rect_ptr + 8, 10);
+    memory.write_word(rect_ptr + 12, 10);
+
+    let rgn = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_RECT_RGN_INDIRECT,
+        [rect_ptr],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("CREATE_RECT_RGN_INDIRECT returned unexpected: {other:?}"),
+    };
+    assert_ne!(rgn, 0, "CREATE_RECT_RGN_INDIRECT must return non-zero handle");
+
+    // SET_RECT_RGN on valid region must return true.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_RECT_RGN,
+            [rgn, 5, 5, 20, 20],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ), "SET_RECT_RGN on valid region must return true");
+
+    // SET_RECT_RGN on invalid handle must return false.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_RECT_RGN,
+            [0xDEAD_BEEF, 0, 0, 10, 10],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ), "SET_RECT_RGN on invalid handle must return false");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_gdi_set_bitmap_bits_validates_params() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 137_u32;
+
+    // SET_BITMAP_BITS with bitmap=0 must return 0+ERROR_INVALID_PARAMETER.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SET_BITMAP_BITS,
+            [0, 4, 0x1_0000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ), "SET_BITMAP_BITS with bitmap=0 must return 0");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_gdi_load_bitmap_w_returns_zero_without_module() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 138_u32;
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_BITMAP_W,
+            [0, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ), "LOAD_BITMAP_W without module must return 0");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_gdi_draw_text_w_validates_params_and_count() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 139_u32;
+
+    let dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        _ => panic!("CREATE_COMPATIBLE_DC failed"),
+    };
+    assert_ne!(dc, 0);
+
+    // hdc=0 must return 0+ERROR_INVALID_PARAMETER.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_TEXT_W,
+            [0, 0x1_0000, 5, 0x1_0100],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ), "DRAW_TEXT_W with hdc=0 must return 0");
+
+    // Prepare text "Hello" (5 UTF-16 code units) and rect.
+    let text_ptr = 0x2_0000_u32;
+    let rect_ptr = 0x2_0100_u32;
+    // Write L"Hello\0" as wide string.
+    memory.write_wide_z(text_ptr, "Hello");
+    // Write a rect {left=0,top=0,right=100,bottom=20}.
+    memory.map_words(rect_ptr, 4);
+    memory.write_word(rect_ptr, 0);
+    memory.write_word(rect_ptr + 4, 0);
+    memory.write_word(rect_ptr + 8, 100);
+    memory.write_word(rect_ptr + 12, 20);
+
+    // count=5 → returns max(5,1)=5.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_TEXT_W,
+            [dc, text_ptr, 5_u32, rect_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(5),
+            ..
+        }
+    ), "DRAW_TEXT_W with count=5 must return 5");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_image_list_draw_validates_handle_and_hdc() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 140_u32;
+
+    // IMAGE_LIST_DRAW with invalid handle must return false+ERROR_INVALID_HANDLE.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW,
+            [0xDEAD_0001, 0, 0x1_0000, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ), "IMAGE_LIST_DRAW with invalid handle must return false");
+
+    // SHELL_SYSTEM_IMAGE_LIST_HANDLE=0x000b_f000; hdc=0 → false+ERROR_INVALID_PARAMETER.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW,
+            [0x000b_f000, 0, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ), "IMAGE_LIST_DRAW with hdc=0 must return false");
+
+    // SHELL_SYSTEM_IMAGE_LIST_HANDLE with valid hdc and index=0 must return true.
+    let dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        _ => panic!("CREATE_COMPATIBLE_DC failed"),
+    };
+    assert_ne!(dc, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW,
+            [0x000b_f000, 0, dc, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ), "IMAGE_LIST_DRAW with SHELL handle and valid hdc must return true");
+
+    // IMAGE_LIST_DRAW_INDIRECT with draw_ptr=0 must return false+ERROR_INVALID_PARAMETER.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_INDIRECT,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ), "IMAGE_LIST_DRAW_INDIRECT with null draw_ptr must return false");
 
     Ok(())
 }

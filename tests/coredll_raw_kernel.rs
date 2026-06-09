@@ -36,6 +36,7 @@ use wince_emulation_v3::{
             ORD_IMAGE_LIST_SET_OVERLAY_IMAGE, ORD_INITIALIZE_CRITICAL_SECTION,
             ORD_INPUT_DEBUG_CHAR_W, ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_IS_CLIPBOARD_FORMAT_AVAILABLE, ORD_KERNEL_IO_CONTROL,
+            ORD_DELETE_CRITICAL_SECTION, ORD_ENTER_CRITICAL_SECTION,
             ORD_LEAVE_CRITICAL_SECTION, ORD_LOAD_IMAGE_W, ORD_LOAD_LIBRARY_EX_W,
             ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS, ORD_MESSAGE_BOX_W, ORD_MOVE_FILE_W,
             ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_OPEN_CLIPBOARD,
@@ -9956,6 +9957,55 @@ fn coredll_raw_comm_state_mask_wait_and_purge_are_stateful() -> Result<()> {
         }
     ));
     assert_eq!(kernel.comm_queue_lengths(com)?, (0, 0));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_enter_and_delete_critical_section_complete_lifecycle() -> Result<()> {
+    const CS_LOCK_COUNT_OFFSET: u32 = 0;
+    const CS_OWNER_THREAD_OFFSET: u32 = 4;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7_u32;
+    let cs_ptr = 0x2500_u32;
+    memory.map_words(cs_ptr, 5);
+
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_INITIALIZE_CRITICAL_SECTION, [cs_ptr]);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_ENTER_CRITICAL_SECTION, [cs_ptr]),
+        CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }
+    ), "EnterCriticalSection must return 0");
+    assert_eq!(memory.read_u32(cs_ptr + CS_LOCK_COUNT_OFFSET)?, 1, "lock count must be 1 after first enter");
+    assert_eq!(memory.read_u32(cs_ptr + CS_OWNER_THREAD_OFFSET)?, thread_id, "owner must be the current thread");
+
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_ENTER_CRITICAL_SECTION, [cs_ptr]);
+    assert_eq!(memory.read_u32(cs_ptr + CS_LOCK_COUNT_OFFSET)?, 2, "lock count must be 2 after re-entrant enter");
+
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_LEAVE_CRITICAL_SECTION, [cs_ptr]);
+    assert_eq!(memory.read_u32(cs_ptr + CS_LOCK_COUNT_OFFSET)?, 1, "lock count must drop to 1 after first leave");
+    assert_eq!(memory.read_u32(cs_ptr + CS_OWNER_THREAD_OFFSET)?, thread_id, "owner must still be set after first leave");
+
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_LEAVE_CRITICAL_SECTION, [cs_ptr]);
+    assert_eq!(memory.read_u32(cs_ptr + CS_OWNER_THREAD_OFFSET)?, 0, "owner must be cleared after final leave");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_DELETE_CRITICAL_SECTION, [cs_ptr]),
+        CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }
+    ), "DeleteCriticalSection must return 0");
+    for word_index in 0..5_u32 {
+        assert_eq!(memory.read_u32(cs_ptr + word_index * 4)?, 0, "DeleteCriticalSection must zero all CS fields");
+    }
 
     Ok(())
 }
