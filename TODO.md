@@ -1,85 +1,7 @@
 # TODO
 
-## Artifact Note
-
-- `target\` was cleared on 2026-06-04 to recover disk space. Any existing
-  `target\...` names in this ledger are historical evidence labels, not
-  guaranteed local files. Use fresh virtual-desktop probe prefixes for new
-  validation artifacts.
-- Mounted iNavi probes should use dumped runtime DLLs from
-  `D:\INAVI_Emulator\DUMPPLZ\Windows`; SDK DLL/library paths are now evidence
-  or fallback, not the primary DLL source.
-
 ## Current Slice
 
-- Startup/progress scheduler fix is now in the current worktree: expired
-  parked sleep/finite waits are considered ready, while idle parked
-  `GetMessageW` waiters no longer run just because they are parked. Keep the
-  focused scheduler tests passing and commit this separately from diagnostics.
-  Fresh host validation `target\host_livecheck2.png` proves the host presenter
-  can reach the actual map again; the next route-search slice should be a
-  tap-driven trace from that visible map/bottom-bar state, not another early
-  splash/frontier tap.
-- Host utility follow-up: the `host_progs` sources for `cmd`, `snip`,
-  `taskmgr`, and `easy_iNavi` now compile with eVC4 MIPSII into
-  `target\host_progs\build_check`. When the main emulator tree is buildable
-  again, rerun `cargo test --test host_progs`; the attempted run in this slice
-  was blocked before the source test by the pre-existing
-  `src\emulator\unicorn.rs` compile errors in the inherited worktree. If these
-  tools are needed on a mounted image, copy the freshly built EXEs from
-  `target\host_progs\build_check` into the desired CE-visible folder.
-- Queued runtime loader gaps from `PLAN.MD`: extend forwarded-export/
-  no-resolve/resource fixture variants when real dumped DLL traces demand more
-  cases. Runtime normal/no-resolve DLL loads now patch inline MIPS Unicorn
-  trampolines and update live full-hook trampoline state; add fast-start
-  dynamic-hook variants only if trace evidence shows runtime DLL code executing
-  under `WINCE_EMU_FAST_START`. Runtime loader audit counters are now visible
-  in debug summaries and monitor `loader` output. Raw/non-Unicorn
-  `LoadLibraryExW` supported-flag reuse is aligned for already registered
-  modules; real raw DLL byte mapping remains an explicit failure because that
-  path has no Unicorn memory context.
-- CE fidelity catch-up next slice: finish the runtime guest DLL loader at the
-  Unicorn import-trap boundary. The kernel-side module manager/refcount shape
-  now exists and the shared CE-aware DLL search order is implemented for
-  startup preload, child-process preload, and future runtime loads. The
-  remaining blocker is completing the Unicorn-owned runtime mapper:
-  `LoadLibraryW/LoadLibraryExW(flags=0)` now synchronously maps dumped MIPS
-  DLLs from `D:\INAVI_Emulator\DUMPPLZ\Windows`, relocates them, recursively
-  loads non-emulator dependencies, patches imports, rewrites the live trap
-  page, registers resources/exports, records dynamic module refcounts, parses
-  TLS callback addresses into module metadata, and invokes guest
-  TLS callbacks and `DllMain(DLL_PROCESS_ATTACH)` before returning from normal
-  loads. Final dynamic `FreeLibrary` now enters guest TLS callbacks and then
-  `DllMain(DLL_PROCESS_DETACH)` before marking the module unload-pending; the
-  direct runtime guest-DLL fixture proves no detach on a refcount decrement and
-  one detach on final release, while the TLS fixture proves the
-  TLS-before-DllMain attach/detach order word `0x01020304`. Runtime forwarder
-  metadata/resolution is now implemented for normal-code DLLs: forwarder
-  strings are retained, resolved through already-loaded modules or CE
-  search/load of forwarded-to guest DLLs, and patched into `GetProcAddress`
-  and IAT import paths. Runtime no-resolve mapping is now implemented for
-  `LoadLibraryExW(DONT_RESOLVE_DLL_REFERENCES)`: the module maps and exposes
-  ordinary exports without dependency loading, import patching, TLS callbacks,
-  `DllMain`, or final detach callouts. The direct, dependent, TLS,
-  forwarded-export, no-resolve, and datafile-resource runtime guest-DLL
-  fixtures now pass with eVC-built MIPS bytes. Runtime
-  `LoadLibraryExW(LOAD_LIBRARY_AS_DATAFILE)` now maps the module as a
-  resource-only/no-resolve image, exposes `FindResourceW`/`LoadResource`/
-  `LoadStringW` immediately through `kernel.resources`, and hides code exports
-  from `GetProcAddress`. Runtime executable DLL mapping now runs the MIPS
-  trampoline patcher before map/write and keeps the live full-code-hook
-  trampoline state current. Runtime loader audit counters now cover load
-  attempts, successful maps, dependency loads, export lookups/misses, forwarded
-  exports, TLS callbacks, `DllMain` attach/detach calls, and loud failures.
-  Keep
-  `C:\WINCE600` as the behavior reference and update `PLAN.MD` after each port.
-- COREDLL fallback audit follow-up: stubs now carry audit classification plus
-  raw import-trap context with thread id, caller PC, trap PC, and caller module
-  for mapped EXE/DLL callsites. Must-implement fallbacks now write
-  `ERROR_NOT_SUPPORTED` to the caller thread and force failure-shaped return
-  values for critical loader/process/shell/UI APIs. Next, replace the
-  remaining must-implement stubs with real subsystem behavior and add any
-  non-mapped callsite attribution that mounted traces prove necessary.
 - Attachment fidelity queue merged into `PLAN.MD`: align raw/non-Unicorn
   `LoadLibraryW` with runtime behavior or explicit failure; keep
   emulator-provided core DLL classification audited; make must-implement stub
@@ -148,12 +70,6 @@
   chrome state. Continue by chasing the later guest show/update sequence for
   those existing child controls; do not revisit `DeviceParser.exe` unless a
   fresh trace again records `CreateProcessChildError`.
-- Bounded virtual trace caveat: `target\route_deviceexit_long1_*` still does
-  not reach the later route chrome reveal after 34 one-second slices. It is
-  useful evidence for the clean child-exit path and the hidden-preload state,
-  but the practical route-search drive should use the live host path that has
-  already reached real map/modal UI, not early taps against this partial
-  header/map frame.
 - Route-search visibility frontier update: `target\route_showcmd2_messages.txt`
   proves the `afxwnd42u` route/chrome children are hidden by guest
   `ShowWindow(cmd=0/SW_HIDE)` immediately after creation; the bounded run does
@@ -229,29 +145,17 @@
   windows visible. Do not force visibility or hardcode iNavi UI state.
 - Live virtual/remote process rotation is fixed/watch. Keep the
   `should_rotate_parked_process(... live_pump && wall_stop ...)` behavior so
-  remote virtual runs schedule parked children like host runs. The validation
-  artifacts are `target\route_chrome_block_v1_processes.txt` versus
-  `target\route_chrome_rotate_v1_processes.txt`: the latter repeatedly cycles
-  `iNavi.exe`, `happyway_win.exe`, and `iSearch.exe`. The route chrome still
-  does not appear, so the next blocker is not "children never run" but resource
-  throughput/hidden-child show sequencing.
+  remote virtual runs schedule parked children like host runs. Continue with
+  resource throughput/hidden-child show sequencing.
 - Startup profiling follow-up: the per-page Unicorn heap-spillover map churn is
   fixed/watch. Keep `map_guest_range` span batching only on heap spillover and
   keep virtual allocations page-granular unless `reclaim_stale_virtual_memory_pages`
-  is made span-aware. Fresh reference artifacts are
-  `target\grouped_map_final_60s_summary.txt`,
-  `target\grouped_map_final_60s.png`, and
-  `target\grouped_map_final_flame.svg`: release virtual startup completes in
-  16.85 s wall time, with `map_kernel_memory_allocations` down from 33.91% to
-  1.16% and `map_heap_spillover` down from 33.91% to 0.17%. Next useful speed
-  work should chase the remaining CE scheduler/display/app-flow frontier,
-  `map_persisted_ram_blob_pages`, hook overhead, and process handoff behavior;
-  do not reopen file preload/reopen or per-page heap mapping unless fresh
-  traces regress those counters.
-- Remote live-pump follow-up: `target\remote_liveslice_fix1_*` closes the
-  early remote `FETCH_UNMAPPED pc=0x0000353c` regression caused by using a
-  50 ms wall slice as an implicit wait-hook policy. Continue mounted launches
-  with `--remote-server 192.168.0.39:8765`; remote/host live runs now use the
+  is made span-aware. Next useful speed work should chase the remaining CE
+  scheduler/display/app-flow frontier, `map_persisted_ram_blob_pages`, hook
+  overhead, and process handoff behavior; do not reopen file preload/reopen or
+  per-page heap mapping unless fresh flame evidence regresses those counters.
+- Remote live-pump follow-up: continue mounted launches with
+  `--remote-server 192.168.0.39:8765`; remote/host live runs now use the
   explicit `UnicornRunLimits.live_pump` flag to avoid host sleeps in wait
   hooks, while the remote service slice is 1000 ms. If remote responsiveness
   still feels bad, tune the service cadence separately from wait semantics and
@@ -264,12 +168,8 @@
   spend the next slice on remote touch delivery unless new traces show queued
   touches are not reaching GWE.
 - Startup profiling follow-up: persisted-RAM page-by-page remapping is now
-  fixed/watch. Keep the contiguous-span remap path validated by
-  `persisted_ram_blob_remap_groups_unmapped_spans`; post-fix
-  `target\route_search_host_90s_postspan_flame.svg` no longer shows
-  `map_persisted_ram_blob_pages` / `uc_mem_map` as a top block and advances
-  farther through the mounted host startup slice. Next useful speed work should
-  profile the now-visible TCG/code-generation and hook paths
+  fixed/watch. Next useful speed work should profile the now-visible
+  TCG/code-generation and hook paths
   (`uc_emu_start`, `tcg_cpu_exec`, `tb_find`, `tb_gen_code_mipsel`,
   import/code hooks) and only then consider longer-lived Unicorn instances.
   Do not reopen host-file preload/reopen or per-page persisted-RAM remap unless
@@ -279,9 +179,7 @@
   experiment. Evidence in `target\stuck_process_processes.txt` shows
   `happyway_win.exe` parked as process 67/thread 3, while the parent later
   queues a cross-process `SendMessageW` to HWND `0x0002000c` and keeps working
-  through resource/allocator code. The failed experiment proved that simply
-  yielding after `CreateProcessW` and round-robining parked child CPUs can
-  enter child code but breaks bounded validation. The next implementation
+  through resource/allocator code. The next implementation
   should make cross-process `SendMessageW` and process waits scheduler-owned:
   register the sender wait, activate the parked receiver process/thread with
   the correct process address space, return through the sender context when
@@ -302,13 +200,6 @@
   reveal the chrome. Do not treat this as a dead host window, black-screen
   presenter issue, map DB preload, or stale hidden-layer leak unless fresh
   evidence regresses those closed paths.
-- Fast-start follow-up: `WINCE_EMU_FAST_START` is still not production-ready.
-  It no longer immediately exits via `ce-import-traps+0xfff0` after generated
-  trampoline-origin `lui/ori` handling was added, but sparse hooks and
-  instruction slices do not yet outperform the normal global-hook path. Keep it
-  disabled for mounted host validation until it can reach at least the current
-  partial-map frame faster than the normal path and still honor host input,
-  remote input, wall stops, import traps, and scheduler wakes.
 - Route-search process/GWE handoff is now the active blocker. Continue from
   `target\route_drive_procfix1_*`: `wcstoul @1083` is fixed and
   `CreateProcessW` children that park without an encoded CE exit now remain
@@ -328,25 +219,17 @@
   mounted run continues to use `--remote-server 192.168.0.39:8765`. DUMPPLZ
   has no direct MultiTBT launcher reference, so do not auto-start or hardcode
   `MultiTBT.exe`: `..\wince_emulator_v2` only proves the harness-launched path
-  was viable. The old companion startup crash is fixed: loaded DLL images now
-  get a second external PE import pass so MFC's late `commctrl.dll` ordinal
-  imports resolve, and `AddFontResourceW` now succeeds against mounted font
-  files. Next route-search validation should include the companion and compare
-  against the current no-companion route probe, but treat any failure to affect
-  route search as the real CE-like process/mapping/window IPC gap. v3 external
-  companions still do not share v2's window registry/message broker or CE named
-  mapping state, so continue with the MappingSystem/process-handle manager work
-  rather than app-specific shortcuts.
-- Startup profiling follow-up: Windows-sudo flamegraphs
-  `target\startup_flame_virtual_sudo1.svg` through
-  `target\startup_flame_virtual_sudo3.svg` confirm the mounted virtual startup
-  path is no longer dominated by huge file preload, host-file reopen, import
-  name lookup, or per-import trap/string/argument cloning. Continue from the
-  final frontier at `COREDLL.dll@496` (`Sleep`) with bounded file counters and
-  post-map scheduler state. Next useful speed work should measure/attack
-  remaining generic costs: Unicorn code-hook/timeslice overhead, raw COREDLL
-  dispatch frequency, `combine_rgn_raw`, streamed `read_file_into`, guest
-  memcpy, and scheduler/device waits. Do not reintroduce app-specific fast
+  was viable. v3 external companions still do not share v2's window
+  registry/message broker or CE named mapping state, so continue with the
+  MappingSystem/process-handle manager work rather than app-specific shortcuts.
+- Startup profiling follow-up: Windows-sudo flamegraphs confirm the mounted
+  virtual startup path is no longer dominated by huge file preload, host-file
+  reopen, import name lookup, or per-import trap/string/argument cloning.
+  Continue from the final frontier at `COREDLL.dll@496` (`Sleep`) with bounded
+  file counters and post-map scheduler state. Next useful speed work should
+  measure/attack remaining generic costs: Unicorn code-hook/timeslice overhead,
+  raw COREDLL dispatch frequency, `combine_rgn_raw`, streamed `read_file_into`,
+  guest memcpy, and scheduler/device waits. Do not reintroduce app-specific fast
   paths or fake UI progress.
 - Current menu/action frontier: top-right `메뉴` taps are delivered through
   `GetMessageW` to HWND `0x00020004`, and the remote input bridge now gives
@@ -382,41 +265,20 @@
   beyond search, and should trace exact input targets if a visible control
   fails to react. Do not reopen `_hypot`, safety dismissal, stale framebuffer,
   or route-modal X unless fresh evidence regresses them.
-- Safety-dismiss stale-frame follow-up is closed for the generic GWE exposure
-  case. `target\gwe_exposure_host2_after_tap.png` proves the safety notice is
-  gone after the accepted OK tap; the apparent "fullscreen dismiss not
-  happening" was stale pixels because v3 did not invalidate windows exposed by
-  destroy/hide paths. Continue from the real modal/ANR/device continuation
-  after the route/current-location dialog, using host mode and exact
-  `messages` traces for whichever control is unresponsive. Do not revisit
-  safety-window hit-testing or presenter framebuffer push unless a fresh run
-  again shows a live safety HWND or stale exposed pixels after this fix.
 - Immediate live-host follow-up: no-wall Win32-host launches now drain remote
   REST controls and host input from the live Unicorn tick even when no
-  `--cpu-wall-clock-limit-ms` is set. `target\live_host_after_drain_fix.png`
-  proves a mounted no-wall launch with `--remote-server 192.168.0.39:8765`
-  accepts the safety OK tap and reaches the real map UI while staying
-  responsive and memory bounded. Continue from the post-map responsiveness and
-  device/scheduler frontier: if a specific map control feels dead, run a fresh
-  no-wall or bounded host trace with `messages`, deliver the exact tap, and
-  inspect the guest handler/timer/device continuation after the delivered
-  `WM_LBUTTONDOWN/UP`. Do not revisit black framebuffer, safety-screen REST
-  delivery, or multi-GB file/RSS theories unless fresh evidence regresses them.
-- Bounded validation follow-up: host `--cpu-wall-clock-limit-ms` now uses a
-  total run-loop budget. Use this for short probes without accidentally
-  continuing past the requested wall bound into the singleton/exit path.
-  `target\bounded_total_45s_*` is the current clean bounded evidence label.
-- Remote-server singleton follow-up: safety-screen REST delivery is now closed
-  for both bounded and no-wall host runs. The duplicate `iNavi` mutex plus
-  self `FindWindowW("iNavi")` singleton/exit trace should be treated as a
-  separate startup/teardown frontier only if it reproduces in a fresh no-wall
-  run after real map progress. Today’s bounded overrun showed that the old
-  validation harness could continue past its requested wall budget and then
-  manufacture a misleading second `main_init`/singleton abort. If a fresh
-  no-wall run reaches the same branch without a harness wall-stop, investigate
-  first mutex/window lifetime, CE visibility/top-level matching, and MFC
-  startup re-entry. Do not weaken named mutex semantics or hardcode iNavi
-  controls.
+  `--cpu-wall-clock-limit-ms` is set. Continue from the post-map
+  responsiveness and device/scheduler frontier: if a specific map control feels
+  dead, run a fresh no-wall or bounded host trace with `messages`, deliver the
+  exact tap, and inspect the guest handler/timer/device continuation after the
+  delivered `WM_LBUTTONDOWN/UP`. Do not revisit black framebuffer, safety-screen
+  REST delivery, or multi-GB file/RSS theories unless fresh evidence regresses
+  them.
+- Remote-server singleton follow-up: if a fresh no-wall run reaches the
+  `CreateMutexW("iNavi")` → `ERROR_ALREADY_EXISTS` → `FindWindowW` → exit
+  branch without a harness wall-stop, investigate mutex/window lifetime, CE
+  visibility/top-level matching, and MFC startup re-entry first. Do not weaken
+  named mutex semantics or hardcode iNavi controls.
 - Scheduler bridge follow-up after the MsgWait no-peer fix: over-budget
   `MsgWaitForMultipleObjectsEx` now parks the current thread as a
   scheduler-owned blocked wait and stops Unicorn instead of falling through raw
@@ -427,16 +289,14 @@
   when no runnable peer exists. `WaitForMultipleObjects` and
   `MsgWaitForMultipleObjectsEx` also now hand off to already-ready blocked
   waiters after parking the current thread, instead of stopping behind an empty
-  suspended slot. Empty serial `ReadFile` and `WaitCommEvent` now use that same
-  ready-waiter handoff before self-timeout/stop. Continue converging the
-  remaining wait/send/timer/device handoff paths onto the saved-context FIFO
-  run-queue model so signaled waiters are not stranded behind a single
-  suspended slot. Fresh short validation
-  `target\sched_serial_handoff_virtual_60s_*` reaches a real populated map
-  framebuffer with bounded memory/file I/O but stops in guest image code before
-  registered scheduler waiters appear, so the next proof run should be a
-  longer host/manual or trace-selector probe aimed at the later post-map ANR
-  frontier.
+  suspended slot. Continue converging the remaining wait/send/timer/device
+  handoff paths onto the saved-context FIFO run-queue model so signaled waiters
+  are not stranded behind a single suspended slot. The new
+  `messages` trace selector now preserves kernel-level GWE post/target/delivery
+  records. Next manual-host debugging should use the same trace on the exact
+  control/area that feels unresponsive; if messages are delivered, continue
+  into guest handler/device/timer behavior instead of adding app-specific hit
+  targets.
 - Current host/manual ANR slice after timer coalescing: continue from
   `target\host_timer_pending_300s_*`,
   `target\host_windows_220s_*`, and
@@ -453,12 +313,6 @@
   state that leads to the warning and encoded terminate path. Do not treat this
   as a presenter, framebuffer, timer-flood, hidden-layer, or file-I/O problem
   unless fresh evidence regresses those closed paths.
-- Host/manual input follow-up: `target\remote_ok_trace_*` and
-  `target\live_host_after_drain_fix.png` supersede the older safety-screen
-  ambiguity. Safety OK now advances to the map through real `WM_LBUTTONDOWN/UP`
-  delivery. Future manual probes should target the exact post-map control that
-  feels unresponsive and then chase the guest MFC handler, timer, serial/Deneb,
-  or scheduler continuation after delivery.
 - Current host/manual ANR slice: continue from
   `target\host_getmsg_sendwake_300s_*`. The pending synchronous-send deadlock
   from `target\host_handoff_300s_*` is closed: the blocked-current
@@ -478,22 +332,12 @@
   MFS1 semantics, and exact delivered host-touch continuation. Do not revisit
   the closed hidden-layer leak, file-I/O/RSS growth, or pending-send deadlock
   unless fresh evidence regresses them.
-- Host live-input follow-up: after the live Win32 input bridge, use
-  `target\host_live_input_300s_*` or a fresh host run to click the exact
-  unresponsive UI region while `--tracefile messages` is enabled. Input should
-  now be polled during Unicorn execution, not only after an outer run stop. If
-  the trace records `remote_touch_target` and matching `get_message`, continue
-  into the guest handler/timer/device continuation; if it records
-  `remote_touch_drop`, fix generic GWE active/capture/hit-test routing. The
-  validation run did not record manual touch/key events, so it proves the code
-  path builds and stays bounded, not that the particular UI action succeeds.
 - Current host/manual post-map slice: continue from
   `target\host_sleep_getmsg_180s_*`. The fixed-interval timeslice now retries
   a pending scheduler slice after unsafe MIPS branch/trampoline/import samples,
   and current `Sleep` now yields to a ready blocked `GetMessageW` waiter when
-  main has queued posted/sent traffic. The previous `target\host_blockctx_180s_*`
-  thread-5 image-code frontier moved into worker sleep handoff states. The
-  latest wall snapshot is still a bounded-run ANR shape, not a crash:
+  main has queued posted/sent traffic. The latest wall snapshot is still a
+  bounded-run ANR shape, not a crash:
   `pc=COREDLL.dll@496`, `ra=image:iNavi.exe+0xd69c0`, current thread 8 has a
   long `Sleep(15001)`, main thread 1 is parked in `GetMessageW`, threads 5/6/9
   have shorter sleeps, COM7 reads are empty, and Deneb/device plus map/search
@@ -516,43 +360,10 @@
   and message/device traces for evidence. Do not bypass the warning, fake GPS
   state, fabricate Deneb calibration files, or patch iNavi-specific pixels.
 - Current host/manual slice: the hidden/pre-rendered UI layer leak is fixed by
-  committed CE visible-client-region clipping (`8fa8c9f`). The live host
-  presenter now shows the corrected z-order/hide-show behavior, and the Win32
-  host window itself stays responsive during the long post-map MFC loop because
-  window ownership/pumping moved to a dedicated GUI thread. Continue
+  committed CE visible-client-region clipping (`8fa8c9f`). Continue
   investigating any remaining "ANR" report as guest post-map
   scheduler/device/app responsiveness, not as a rendering leak, host window
-  pump freeze, or a basic input-drop bug. The
-  immediate duplicate-wait/worker-freeze shape is fixed: fresh
-  `target\anr_wait_cleanup_host_*` no longer lists main thread `1` as both
-  `sleep` and `get_message`, and `target\anr_worker_resume_virtual_*` proves
-  an empty UI `GetMessageW` now lets finite worker waits mature/resume instead
-  of stopping the whole run. That probe reaches the full 60 s wall budget in
-  guest image code with `send:168 done:167`. Follow-up host evidence
-  `target\host_anr_pc0_*` did not reproduce the earlier `pc=0` return, and the
-  conservative Unicorn suspended-peer time-slice in `target\host_timeslice_*`
-  moved visible host execution to more real GDI/map work without fixing the
-  ANR completely. The time-slice can now also preempt the active context into
-  the suspended slot for a ready blocked waiter when that does not overwrite an
-  existing suspended peer. Next ANR work should validate this in a fresh host
-  run, then grow the full CE run queue/ready-waiter model if signaled waiters
-  remain parked with more than one saved runnable context. Also inspect the
-  remaining in-flight send and any exact host click that still feels dead.
-  Fresh `target\host_ready_preempt_*` evidence exposed multiple simultaneous
-  thread-1 `GetMessageW` waiters after the ready-preemption slice; the
-  per-`GetMessageW` stale waiter is now cleared before a new empty-queue
-  registration, and `target\host_getmsg_cleanup_*` confirms thread 1 no longer
-  has duplicate `get_message` blocked waits. Continue from the remaining clean
-  frontier: one main `GetMessageW`, worker sleeps/kernel waits, active timer
-  `0x11d5`, and the app-owned legacy terminate path after the bounded host run.
-  The scheduler bridge now has a FIFO saved-context overflow queue for
-  time-slice/ready-waiter preemption when the primary suspended slot is already
-  occupied. Valid finite current-thread `WaitForMultipleObjects` waits with no
-  ready handles now complete as CE `WAIT_TIMEOUT` when the timeout fits the
-  host run budget, so the next scheduler work should route the remaining
-  over-budget waits and guest-thread handoff paths through the queued
-  runnable-context model, then validate whether worker sleeps/kernel waits at
-  the clean frontier are still stranded.
+  pump freeze, or a basic input-drop bug.
   The new
   `messages` trace selector now preserves kernel-level GWE post/target/delivery
   records, including public `PostMessageW`/thread/broadcast posts,
@@ -565,28 +376,22 @@
   `0`). Next manual-host debugging should use the same trace on the exact
   control/area that feels unresponsive; if messages are delivered, continue
   into guest handler/device/timer behavior instead of adding app-specific hit
-  targets. Fresh virtual evidence
-  `target\public_message_trace_{summary,messages,counts}.txt` also showed
-  queued worker-thread sends to the main HWND and timer `4565`; the newer
-  worker-resume probe proves those sends can now churn for the full wall budget,
-  so continue from the one pending send instead of the earlier idle stop.
+  targets.
 - Current GDI map-fidelity slice: continue from `target\gdi_exttext_virtual.*`.
   The huge black base-layer gap is now fixed generically by honoring
   `ExtTextOutW(ETO_OPAQUE)` as a CE GDI background-rectangle fill with the
   selected DC `bk_color`. The mounted framebuffer now has a real light
-  land/background layer (`map_crop` pure black down from `47.2826%` to
-  `0.0131%`, center black down to `0.0000%`) while preserving bounded
-  memory/file I/O. ROP2 pen drawing is also modeled and tested, and the latest
-  clip-region slice `target\gdi_clip_regions_virtual.*` now preserves
-  `CombineRgn(RGN_DIFF)` holes for memory/display `FillRect`, `Polygon`,
-  `Polyline`, `BitBlt`, `StretchBlt`, and `TransparentImage`; that closes a
-  real generic CE clipping bug but the mounted frame still shows road/building
-  styling problems. Next GDI work should inspect concrete trace evidence for
-  missing road/building primitives: line joins/caps, pen style, polygon fill
-  mode, brush/palette/DIB color-table differences, ROP3/non-SRCCOPY blits, or
-  any unimplemented CE GDI calls that appear in the mounted render/counts
-  traces. Keep tracing generic GDI paths rather than guessing colors or
-  special-casing iNavi pixels.
+  land/background layer while preserving bounded memory/file I/O. ROP2 pen
+  drawing is also modeled and tested, and the latest clip-region slice
+  `target\gdi_clip_regions_virtual.*` now preserves `CombineRgn(RGN_DIFF)`
+  holes for memory/display `FillRect`, `Polygon`, `Polyline`, `BitBlt`,
+  `StretchBlt`, and `TransparentImage`; that closes a real generic CE clipping
+  bug but the mounted frame still shows road/building styling problems. Next GDI
+  work should inspect concrete trace evidence for missing road/building
+  primitives: line joins/caps, pen style, polygon fill mode, brush/palette/DIB
+  color-table differences, ROP3/non-SRCCOPY blits, or any unimplemented CE GDI
+  calls that appear in the mounted render/counts traces. Keep tracing generic
+  GDI paths rather than guessing colors or special-casing iNavi pixels.
 - Continue from `target\wcspbrk_long_virtual_*`. The hardcoded late dialog
   replay and aux alias mutation hooks are gone, and raw `wcspbrk`/COREDLL
   ordinal 68 is now implemented. The longer mounted run proves the previous
@@ -645,174 +450,58 @@
   wait release, Sleep-to-ready-waiter handoff, and a tiny host throttle for
   accelerated finite current-thread waits. Stale saved waits for a thread are
   now purged before that thread registers a new Sleep/Wait context; the 60 s
-  run has only the COM serial read plus one main-thread sleep active instead
-  of duplicate main wait records. It reaches guest image code for the full
-  wall budget with a populated framebuffer and front visible `TGNaviDlg`
-  HWND `0x00020080`, but still has no iNavi display/controller/render
-  milestones. Next work should trace the post-startup GWE/GDI/resource path
-  after `TGNaviDlg` creation and visible-window settling, not file I/O or raw
-  wait hot loops.
-- Continue extending scheduler-backed waits beyond the raw timer-wake slice.
-  `MsgWaitForMultipleObjectsEx` raw dispatch now waits through a due CE timer
-  inside the requested timeout, and the Unicorn raw-import bridge can complete
-  current-thread timer wakes/timeouts that fit the host run budget without
-  registering a blocked waiter. The broader scheduler/thread/window goal still
-  needs the full Unicorn blocked-wait path to own waits that cannot complete
-  inside the active run budget, plus object, send-message, serial/audio/
-  process, and message-input resumes consistently. Keep using `C:\WINCE600`
-  scheduler/GWE sources as authority.
-- Host input while parked on raw `GetMessageW` is no longer a blind spot:
-  the host run loop now drains newly polled input into the blocked CE
-  thread/window and relies on the scheduler message-wake path to resume the
-  syscall. Keep using this for manual `--desktop host` interaction checks, but
-  do not treat it as the post-splash progression fix. The mounted release
-  virtual probe still parks at `COREDLL.dll@861 blocked_get_message`; the next
-  real UI slice remains scheduler/GWE/resource progression after that valid
-  idle point.
-- Host Win32 presenter is now a usable output boundary for mounted probes:
-  live guest framebuffer writes present during long Unicorn runs, `WM_PAINT`
-  redraws the last frame, the visible client area is 800x480, and the title
-  includes the launched host image path. Closing the host window intentionally
-  terminates the emulator process immediately, so close-driven manual runs do
-  not guarantee final tracefile/framebuffer artifact writes. Continue using
-  `--desktop host` for visual checks when human feedback is useful, and
-  `--desktop virtual` for deterministic artifact probes. If NVIDIA Image
-  Scaling is added, do it as a real host-presenter scaler mode backed by the
-  NIS SDK/shader or a clearly sourced compatible implementation; do not label
-  ordinary bilinear/stretch presentation as NIS.
-- Continue from the latest region/worker-stack mounted frontier in
-  `target\thread_stack_region_virtual_150s_*`. Complex GDI regions now remain
-  rect-list backed through `CombineRgn(RGN_DIFF)`, point/rect queries,
-  clipping, `SetWindowRgn`, and `GetWindowRgn`; `SetWindowRgn` also respects
-  the redraw flag. The first follow-up run moved past the old post-splash
-  idle point and exposed a worker-thread stack write below the mapped stack.
-  The stack reserve is now 4 MiB with 128 KiB worker slots, and the full
-  150 s virtual/tap probe no longer crashes. This is current real progress:
-  the app creates/resumes 10 threads, opens 883 host files, performs 79,768
-  bounded host reads for only about 5.2 MiB, reaches `BitBlt=103`,
-  `Polygon=1023`, `Polyline=415`, `CreateDIBSection=385`, first audio,
-  Winsock, and serial/COM imports, and reads many
-  `SDMMC Disk\mapdata\point\...` files. The framebuffer is still the real
-  iNavi SE splash/art frame, but render traces now show later map/UI drawing
-  into memory DCs. The next UI slice should trace the generic presentation
-  path from those memory-DC map/UI surfaces to a display HDC or a visibility/
-  paint state that should trigger that copy. Do not force pixels, resurrect
-  hidden children, or special-case iNavi state.
+  run has only the COM serial read plus one main-thread sleep active. Next work
+  should trace the post-startup GWE/GDI/resource path after `TGNaviDlg`
+  creation and visible-window settling, not file I/O or raw wait hot loops.
 - Continue from the process-clean mounted frontier in
   `target\process_lifetime_virtual_150s_*`. The current generic child-launch
   path now resolves all three iNavi companion process launches through the CE
   mount table and runs them to exit code `0`; `happyway_win.exe` no longer
   fails DLL layout on `AuthLibrary.dll`, and its top-level HWND is marked
   `dead=true` after child exit instead of remaining a live parent-dispatched
-  WNDPROC. The process trace selector is `tracefile processes PATH`. The run
-  still ends at `COREDLL.dll@861 blocked_get_message` with stable file/RSS
-  counters and a real splash framebuffer. The next UI slice should compare the
-  post-child window/message/render state against the previous hidden-strip
-  frontier: the active hidden pending-update child is now `0x00020070`
-  (`rect=0,426-800,480`, `update=0,0-800,54`) after extra child work, while
-  the child-owned `happyway_win` top-level `0x0002000c` is dead and absent from
-  z-order. Do not resurrect child windows or force hidden paints; continue
-  with CE process/window lifetime and GWE presentation semantics.
+  WNDPROC. The run still ends at `COREDLL.dll@861 blocked_get_message` with
+  stable file/RSS counters and a real splash framebuffer. The next UI slice
+  should compare the post-child window/message/render state against the
+  previous hidden-strip frontier: the active hidden pending-update child is now
+  `0x00020070` (`rect=0,426-800,480`, `update=0,0-800,54`) after extra child
+  work, while the child-owned `happyway_win` top-level `0x0002000c` is dead and
+  absent from z-order. Do not resurrect child windows or force hidden paints;
+  continue with CE process/window lifetime and GWE presentation semantics.
 - File mapping single-view aliasing is no longer the active current-gap
   suspect. v3 now stores per-mapping `FileMappingView` records, maps distinct
   bases, flushes guest bytes into shared backing, refreshes sibling views on
-  flush, and removes/releases views on `UnmapViewOfFile`. The mounted
-  `target\mapping_views_virtual_150s_*` probe proves this changed real iNavi
-  state (`virtual_live=2/131072B` after the app's `UnmapViewOfFile`) while
-  preserving stable file/RSS counters, but it did not advance the visible UI.
-  Remaining mapping work is broader CE fidelity: immediate cross-view write
-  coherence without `FlushViewOfFile`, page-protection/access validation,
-  richer file-backed lifetime/flush semantics, and a dedicated
-  `MappingSystem` manager as the catch-up plan grows.
+  flush, and removes/releases views on `UnmapViewOfFile`. Remaining mapping
+  work is broader CE fidelity: immediate cross-view write coherence without
+  `FlushViewOfFile`, page-protection/access validation, richer file-backed
+  lifetime/flush semantics, and a dedicated `MappingSystem` manager.
 - Continue from the cleaner tap/input frontier in
   `target\touch_focus_virtual_150s_*`. New top-level windows are now placed at
   the front of z-order, so the full-screen popup HWND `0x00020008` receives the
   mounted tap instead of older top-level HWND `0x00020004`; remote mouse-down
   now also produces the normal focus/activation transition before
-  `WM_LBUTTONDOWN`. The run still parks at `COREDLL.dll@861
-  blocked_get_message`, memory/file-I/O remains stable, and the known hidden
-  child `0x0002006c` still owns the later pending `800x54` update while hidden.
-  Do not treat the old tap-to-`0x20004` path as progress. The next slice should
-  trace the generic GWE/GDI/resource path that should either show that child or
-  copy the guest-composed offscreen surface to a display HDC.
-- Continue from the new mounted iNavi first-present frontier. The latest
-  virtual probes `target\update_erase_virtual_*`,
-  `target\timer_cap_startup_tap_virtual_20s_*`,
-  `target\unicorn_realtime_timer_virtual_30s_*`, and
-  `target\hide_update_clear_virtual_20s_*`, with follow-up timer-scope probe
-  `target\timer_scope_virtual_30s_*` and TimerProc bridge probe
-  `target\timer_callback_virtual_30s_*`, plus the latest direct-UpdateWindow
-  effective-visibility probe
-  `target\update_effective_visibility_virtual_150s_*` and the
-  show/hide-only `SetWindowPos` payload probe
-  `target\setwindowpos_showhide_virtual_150s_*`, prove guest GDI now presents
-  a real 800x480 memory surface to a window HDC:
+  `WM_LBUTTONDOWN`. Do not treat the old tap-to-`0x20004` path as progress. The
+  next slice should trace the generic GWE/GDI/resource path that should either
+  show that child or copy the guest-composed offscreen surface to a display HDC.
+- Continue from the new mounted iNavi first-present frontier. Virtual probes
+  `target\update_erase_virtual_*` through `target\setwindowpos_showhide_virtual_150s_*`
+  prove guest GDI now presents a real 800x480 memory surface to a window HDC:
   `BitBlt(dst=0x02020008, dst_memdc=false, dst_hwnd=0x00020008,
   src=0x000a0044, src_memdc=true)`. The framebuffer dump is fully populated
-  (`575800` nonzero pixels in the latest run) and
-  `target\update_erase_virtual.png` shows the real iNavi SE splash/art frame.
-  The raw `GetMessageW` bridge now lets short <=100 ms GUI timers fire, and
-  the initial guest thread now registers scheduler-owned `GetMessageW` waits
-  instead of a diagnostic-only stop. Long future timers are no longer
-  fast-forwarded in a tight loop, and they can now mature inside the same live
-  Unicorn run when the host wall-clock budget allows it. The latest
-  30 s virtual/tap probe delivered two real no-HWND `WM_TIMER` 1000 messages
-  (`time_ms` about `21829` and `29329`) before parking on the next 7.5 s
-  period outside the run budget with `sched=wait:3/0/3`, `wake=2`, and
-  `msgcand=2`. The latest GWE
-  cleanup also clears stale create-time update state when MFC immediately
-  hides visible zero-size `AfxWnd42u` children; hidden controls in
-  `target\hide_update_clear_virtual_20s_windows.txt` now mostly report
-  `upd=false` rather than stale full-screen dirty rectangles. The remaining
-  blocker is no longer first pixels, memory-DC-to-screen presentation,
-  diagnostic-only timer wait ownership, or hidden-child stale paint state. It
-  is now the real post-splash MFC/resource progression after valid timer
-  wakes. Next steps: trace what the app does on the first two real
+  (`575800` nonzero pixels) and shows the real iNavi SE splash/art frame.
+  The remaining blocker is the real post-splash MFC/resource progression after
+  valid timer wakes. Continue by tracing what the app does on the first two real
   no-HWND `WM_TIMER` deliveries, correlate that with the `resource_59718` /
   mode-47 table replay evidence, and decide whether the next fidelity slice is
   another GWE message ordering/detail gap, resource/module state behavior, or
   broader scheduler thread-state ownership. Do not force hidden child paints
-  or app-specific state. The newer 150 s virtual/tap probe
-  `target\writefile_lasterror_virtual_150s_*` confirms this as real UI
-  progress: the framebuffer contains the iNavi SE splash art, not a black
-  screen or fake host paint. The next presentation frontier is why later
-  offscreen DIB/StretchBlt/BitBlt composition into an 800x54 memory surface is
-  not copied to a display HDC, and why invalidation is landing on hidden or
-  effectively invisible child HWND `0x0002006c`. Direct raw/kernel
-  `UpdateWindow` now uses effective `IsWindowVisible` ancestry, so forcing
-  `WM_PAINT` into that hidden child is closed as an invalid shortcut. Continue
-  by tracing the generic path that should show or present the composed
-  offscreen 800x54 surface: richer `WINDOWPOS`/`ShowWindow` state, MFC
-  idle/message ordering, resource replay, or screen-HDC blit ownership.
-  Basic show/hide/z-order-only `SetWindowPos`
-  `WM_WINDOWPOSCHANGED` payload delivery is now covered and did not by itself
-  move the frontier. The newest diagnostic trace
-  `target\windowpos_trace_decode_virtual_150s_*` decodes queued
-  `WM_WINDOWPOSCHANGED` payloads in-place; it confirms HWND `0x0002006c`
-  received a normal `WINDOWPOS` notification for `rect=0,0,800,480` with
-  `flags=0` before the run later parks with that child hidden and holding the
-  pending 800x54 update. Use this decoded message evidence for the next
-  show/idle/presentation slice instead of adding opaque pointer-only traces.
-  Direct `ShowWindow` visibility changes now queue `WM_SHOWWINDOW` and
-  `WM_WINDOWPOSCHANGED` even when the target is already effectively invisible
-  through a hidden parent; the mounted
-  `target\showwindow_direct_visibility_virtual_150s_*` probe confirms the
-  app-visible hide messages now carry flags `0x97`, including for
-  `0x0002006c`, but this did not move the final frontier. Continue with the
-  remaining generic presentation question: why the guest-composed 800x54
-  memory surface under hidden child `0x0002006c` is never shown or copied to a
-  display HDC. Changed `QS_PAINT` now follows effective visibility instead of
-  raw hidden invalidation. The follow-up
-  `target\hidden_paint_qs_virtual_150s_*` probe stayed at the same frontier but
-  exposed a stronger CE gap: hidden geometry changes were delivering immediate
-  `WM_MOVE`/`WM_SIZE` despite CE `window.hpp` documenting pending size/move
-  delivery until `ShowWindow`. v3 now defers those move/size messages for
-  direct-hidden windows; `target\hidden_sizemove_virtual_150s_*` and
-  `target\filtered_paint_visibility_virtual_150s_*` both keep the same
-  `COREDLL.dll@861 blocked_get_message` frontier while reducing message input
-  signals from `227` to `174`. Continue from the cleaner state by tracing why
-  the guest-composed 800x54 offscreen surface is never shown or copied to a
-  display HDC through normal GWE/GDI paths.
+  or app-specific state.
+  The next presentation frontier is why later offscreen DIB/StretchBlt/BitBlt
+  composition into an 800x54 memory surface is not copied to a display HDC, and
+  why invalidation is landing on hidden or effectively invisible child HWND
+  `0x0002006c`. Changed `QS_PAINT` now follows effective visibility. Hidden
+  geometry changes now defer `WM_MOVE`/`WM_SIZE` until `ShowWindow`. Continue
+  from the cleaner state by tracing why the guest-composed 800x54 offscreen
+  surface is never shown or copied to a display HDC through normal GWE/GDI paths.
 - Decide the safe host-write policy for mounted external dumps. The refreshed
   `target\createfile_access_virtual_150s_files.txt` proves iNavi opens
   `SDMMC Disk\iNaviData\config.bin` as `GENERIC_WRITE` + `OPEN_EXISTING`, but
@@ -898,93 +587,29 @@
     `ERROR_SIGNAL_REFUSED`, and `ResumeThread` decrements only nonzero counts
     while valid zero-count resumes return `0`.
     Unicorn parked waits now also cover the first
-    `WaitForMultipleObjects(FALSE)` bridge: the blocked record owns the full
-    handle list, wakes when any handle becomes ready, and returns
-    `WAIT_OBJECT_0 + index` through the raw import boundary. The first
-    `MsgWaitForMultipleObjectsEx` Unicorn bridge also parks raw imports after
-    handle validation and GWE queue-input checks, then resumes with either the
-    ready handle index, the message-input pseudo-index, or timeout. CE current
-    process/thread pseudo handles are now modeled from `kfuncs.h`
-    `SYS_HANDLE_BASE`/`SH_CURTHREAD`/`SH_CURPROC`: raw thread/process ID,
-    exit-code, thread-times, terminate-process, and wait paths accept the
-    pseudo current handles where CE does, and Unicorn initializes/refreshes the
-    KData current thread/process ID slots during guest thread, wait, and
-    `SendMessageW` context switches. Raw current-thread pseudo handle mutation
-    now also covers `SetThreadPriority`, `CeSetThreadPriority`,
-    `SuspendThread`, and `ResumeThread`; worker-thread objects are updated by
-    current thread id, while main-thread priority/suspend metadata is kept in
-    kernel state because v3 does not yet have a normal handle object for the
-    initial thread. Mutex ownership now tracks CE recursive lock counts:
-    initial-owner mutexes start owned with count `1`, owner waits recurse up to
-    `MUTEX_MAXLOCKCNT == 0x7fff`, releases unwind one count at a time, and raw
-    `ReleaseMutex` reports `ERROR_NOT_OWNER` for unowned/wrong-owner mutexes
-    while still using `ERROR_INVALID_HANDLE` for non-mutex handles.
-    The first scheduler-owned blocked-wait registry is also in place: parked
-    Unicorn single/multiple/msg waits register a wait id, waited handles, kind,
-    timeout, and FIFO sequence in `Scheduler`, with per-handle waiter queues
-    and scheduler-side ready selection. The first object-transition wake path
-    now feeds those queues: successful `SetEvent`, `ReleaseSemaphore`, and
-    final recursive `ReleaseMutex` enqueue registered wait ids as pending wake
-    candidates, and resume selection prefers those candidates while still
-    rechecking/acquiring the real object state in the wait path. Thread and
-    process handle exit transitions now use the same pending-wake path when
-    guest threads exit, child process launches complete, or raw
-    `TerminateProcess` marks a real process handle or the CE current-process
-    pseudo handle signaled. Message input has the first matching queue:
-    parked `MsgWaitForMultipleObjectsEx` waits register in a per-thread
-    message-wait queue, and posted/thread/broadcast/quit/sent messages, remote
-    input, and queued `WM_TIMER` posts enqueue those waits as pending
-    candidates while GWE still owns queue status consumption. Unicorn still
-    stores the saved MIPS context payload locally beside that wait id. Serial
-    reads now have the first matching scheduler hook as a device-wait slice:
-    parked raw Unicorn `ReadFile` on an empty serial handle can register a
-    `SerialRead` wait under the COM handle, remote NMEA/serial injection queues
-    serial-read wake candidates, and the resumed path streams the completed
-    read into the original guest buffer through `kernel.read_file_into`.
-    Matching remote serial bytes are drained into the target COM session just
-    before `ReadFile`/`ReadFileInto`, so the device-file path remains the data
-    owner rather than a special app branch. Parked Unicorn `GetMessageW`
-    calls now also register in the scheduler's message-wait queue with their
-    HWND/min/max filters; GWE message transitions enqueue them as pending wake
-    candidates, and resume rechecks immutable filtered queue readiness before
-    consuming the message and restoring the guest context. The initial guest
-    thread now participates in that path through CE's current-thread
-    pseudo-handle when no worker thread handle exists, so an idle main-thread
-    `GetMessageW` can advance to a due timer, post it to GWE, remove the
-    scheduler waiter, and return the `MSG` through the saved syscall ABI rather
-    than stopping with a diagnostic-only blocked snapshot. Raw no-HWND
-    `SetTimer` now records the current thread as timer owner, following
-    `GWE\INC\cmsgque.h` queue-owned timer entries, and expired no-HWND timers
-    post `WM_TIMER` to that owner thread instead of being dropped. CE timer
-    sleeps now advance virtual elapsed time rather than blocking host wall
-    time. Bounded
-    worker-thread `Sleep(ms)` calls now register timeout-only scheduler waits
-    and resume with a zero return after timeout expiry, using the CE
-    `NKSleep` bounded timeout shape (`ms + 1` below `0xfffffffe`);
-    `SleepTillTick` now uses the same bridge with a one-tick timeout.
-    `Sleep(0)` now records a scheduler yield and, in the current one-slot
-    Unicorn context model, swaps to a saved peer context when one exists
-    without pumping messages or waiting for a tick. `Sleep(INFINITE)` now
-    records the current-thread suspend count in raw dispatch and self-suspends
-    guest worker contexts with a saved CPU context that `ResumeThread` can
-    restore once the suspend count reaches zero.
+    `WaitForMultipleObjects(FALSE)` bridge, the first `MsgWaitForMultipleObjectsEx`
+    Unicorn bridge, CE current process/thread pseudo handles from `kfuncs.h`
+    `SYS_HANDLE_BASE`/`SH_CURTHREAD`/`SH_CURPROC`, mutex recursive lock counts,
+    and scheduler-owned blocked-wait registry with per-handle waiter queues.
+    Object-transition wakes, message-input wait queues, and serial-read device
+    waits are also covered. Parked Unicorn `GetMessageW` calls register in the
+    scheduler's message-wait queue. Bounded worker-thread `Sleep(ms)` calls
+    register timeout-only scheduler waits. `Sleep(0)` records a CE-style yield.
+    `Sleep(INFINITE)` self-suspends guest worker contexts.
   - Open gaps: full serial semantics beyond the first empty-read wake bridge,
     audio wake ownership, internal CE callback timers that bypass normal
-    queued `WM_TIMER`/`DispatchMessageW` delivery, bounded worker-thread sleeps, and main-thread
-    timer-expiry `GetMessageW` resumes, bounded idle
-    fast-forward policy for long periodic timer loops, full multi-thread run-queue ownership
-    beyond the one-slot `Sleep(0)`/`Sleep(INFINITE)` worker-context swaps,
-    pending PSL late-suspend, main-thread suspend blocking, long-sleep
-    chunking, fuller child-process
-    lifecycle scheduling beyond handle signaling, blocked
-    thread priority/fairness across all wait kinds beyond
-    the current Unicorn bridge, moving saved `GetMessageW`/wait MIPS contexts
-    out of the Unicorn bridge into scheduler-owned thread state, richer wake
-    reasons across serial/audio/process/GWE waits, priority
-    inheritance/boosting around mutex/critical-section ownership, pending
-    self-suspend/PSL late-suspend state, resume-to-run-queue wake ownership,
-    and fuller Unicorn thread context switching still need the next scheduler
-    port slices.
+    queued `WM_TIMER`/`DispatchMessageW` delivery, bounded worker-thread sleeps,
+    and main-thread timer-expiry `GetMessageW` resumes, bounded idle
+    fast-forward policy for long periodic timer loops, full multi-thread
+    run-queue ownership beyond the one-slot `Sleep(0)`/`Sleep(INFINITE)`
+    worker-context swaps, pending PSL late-suspend, main-thread suspend
+    blocking, long-sleep chunking, fuller child-process lifecycle scheduling
+    beyond handle signaling, blocked thread priority/fairness across all wait
+    kinds beyond the current Unicorn bridge, moving saved `GetMessageW`/wait
+    MIPS contexts out of the Unicorn bridge into scheduler-owned thread state,
+    richer wake reasons across serial/audio/process/GWE waits, priority
+    inheritance/boosting around mutex/critical-section ownership, and fuller
+    Unicorn thread context switching.
   - Fixture gates: keep existing wait/thread fixtures passing, including
     `tests/test_progs/163_mutex_recursive_ownership`,
     `tests/test_progs/164_object_transition_wake`,
@@ -995,23 +620,11 @@
     waveOut callback wakeups, child-process waits, and scheduler mini app.
   - Latest iNavi evidence: the old empty `GetMessageW @861`
     `blocked_get_message` frontier is cleared by thread-owned no-HWND timers.
-    The latest mounted virtual probe wrote `target\thread_timer_virtual_*`,
-    ran to the 120 s wall-clock limit at `pc=0x70028b7c`,
-    `ra=0x6002537c`, stayed memory-stable
-    (`heap_live=13697/13300954B`, `virtual_live=3/196608B`,
-    `host_open=665`, `host_read=80132/4053923B`, `mem_open=3`,
-    `max_read=685080`), and repeatedly delivered a thread `WM_TIMER`
-    (`hwnd=0`, `wparam=1000`). It still had no useful screen presentation:
-    milestones show memory-DC DIB/blit work and the framebuffer remains only
-    the 401-pixel red tap marker. Next immediate investigation should identify
-    the timer-id 1000 loop and the missing memory-DC-to-screen present path,
-    with extra `SetTimer`/`KillTimer` and GDI destination detail if needed.
-    The serial-read wake slice is currently covered by focused tests
-    (`scheduler_queues_serial_read_waiters_by_handle` and
-    `remote_serial_injection_queues_scheduler_serial_read_candidates`) rather
-    than by mounted iNavi evidence. This scheduler/loader/thread work is
-    foundational and should not be counted as UI success until the mounted run
-    advances through guest GDI/render paths.
+    The latest mounted virtual probe ran to the 120 s wall-clock limit,
+    repeatedly delivered a thread `WM_TIMER` (`hwnd=0`, `wparam=1000`), stayed
+    memory-stable, but still had no useful screen presentation. Next immediate
+    investigation should identify the timer-id 1000 loop and the missing
+    memory-DC-to-screen present path.
 
 - Runtime DLL loading / shimmed libraries:
   - Source refs: `D:\INAVI_Emulator\DUMPPLZ\Windows` for target runtime DLL
@@ -1019,20 +632,20 @@
     bytes; CE/MFC/SDK trees only as behavior evidence.
   - Current v3 status: COREDLL remains emulator-provided. OLE remains a
     shimmed launch-surface library. WINSOCK dispatch now goes through
-    `src/winsock.rs` and has a first direct-host TCP/UDP implementation for
-    the mounted app's classic WINSOCK imports. `commctrl.dll` is no longer
-    treated as emulator-provided; startup preloads it from the DLL search paths and
-    registered mapped-module exports are available to module APIs. Import
-    patching resolves loaded external exports before shim classification, so
-    search-path `commctrl.dll` import slots now patch directly to mapped DLL
-    exports rather than a common-controls trap. Startup now also preloads real
-    sibling DLLs from the main executable directory, skipping emulator-provided
-    modules and duplicate normalized module names. This currently covers the
-    mounted app's real `AuthLibrary.dll`, `TpSysAuth.dll`, `mMbcAuth.dll`,
-    `tpeg_if_dll.dll`, and `tw_tpeg_if_dll.dll` bytes without adding
-    file-name-specific behavior. The PE parser now tolerates real CE
-    mapped-image zero fill below `SizeOfImage`, so the dumped `commctrl.dll`
-    can be inspected and mapped.
+    `src/winsock.rs` and has a first direct-host TCP/UDP implementation.
+    `commctrl.dll` is no longer treated as emulator-provided; startup preloads
+    it from the DLL search paths. Import patching resolves loaded external
+    exports before shim classification. Startup also preloads real sibling DLLs
+    from the main executable directory. Runtime `LoadLibraryW/LoadLibraryExW`
+    now synchronously maps dumped MIPS DLLs, relocates them, recursively loads
+    non-emulator dependencies, patches imports, rewrites the live trap page,
+    registers resources/exports, records dynamic module refcounts, parses TLS
+    callback addresses, and invokes guest TLS callbacks and
+    `DllMain(DLL_PROCESS_ATTACH)` before returning. Final dynamic `FreeLibrary`
+    enters guest TLS callbacks and then `DllMain(DLL_PROCESS_DETACH)` before
+    marking the module unload-pending. Runtime forwarder resolution and
+    `LoadLibraryExW(DONT_RESOLVE_DLL_REFERENCES)` / `LOAD_LIBRARY_AS_DATAFILE`
+    modes are also covered.
   - Open gaps: runtime `LoadLibraryW` is not yet a general on-demand DLL
     mapper for arbitrary non-preloaded DLLs; sibling preload is a launch bridge
     and should graduate to CE-like on-demand module mapping. WINSOCK currently
@@ -1045,12 +658,10 @@
     add focused runtime `LoadLibraryW`/`GetProcAddress` fixtures before
     expanding on-demand DLL mapping.
   - Latest iNavi evidence: `target\inavi_trampoline_virtual_*` confirms the
-    sibling DLL path loads the real companion DLLs, reaches `strcat @1063`
-    through `AuthLibrary`, clears the old null auth-proc call, and runs to a
-    30 s wall-clock stop after the external trampoline pool was moved away from
-    CE virtual allocations. It remains memory-stable and reaches repeated
-    RSImage `CreateDIBSection` work, but still does not produce render
-    milestones or useful framebuffer output.
+    sibling DLL path loads the real companion DLLs and runs to a 30 s
+    wall-clock stop after the external trampoline pool was moved away from CE
+    virtual allocations. It reaches repeated RSImage `CreateDIBSection` work but
+    still does not produce render milestones or useful framebuffer output.
 
 - Window/GWE subsystem:
   - Source refs:
@@ -1065,153 +676,29 @@
     the behavior authority.
   - Current v3 status: raw class/HWND geometry, basic lifecycle messages,
     queue retrieval, guest WNDPROC callouts, subclass `CallWindowProcW`,
-    paint/update state, `BeginPaint`/`EndPaint`, and basic `SendMessageW`/
-    `DispatchMessageW` are present. `UpdateWindow` now preserves CE's
-    erase-before-paint update shape: when `erase_pending` is set, raw guest
-    callouts enter the guest WNDPROC with `WM_ERASEBKGND` first, clear only
-    the erase bit on nonzero return, then continue to `WM_PAINT`; the
-    kernel/default path mirrors the same ordering for non-guest/default
-    WNDPROCs. Raw `RedrawWindow`
-    now covers the first CE-backed paint slice: rectangle/region invalidation,
-    invalidation unioning, `RDW_VALIDATE`, `RDW_ALLCHILDREN`, erase state, and
-    `RDW_UPDATENOW` through the same synchronous paint path. Raw `GetUpdateRgn`
-    now copies pending paint bounds into an existing HRGN and returns CE-style
-    region status. Raw `GetWindowThreadProcessId` now returns stored HWND owner
-    thread/process metadata from the GWE window table. Raw `IsChild` now uses
-    recursive parent-chain checks over the virtual HWND tree. Raw
-    `SendNotifyMessageW` now executes same-thread notifications synchronously
-    but routes different-thread notifications through the receiver-side sent
-    queue without blocking the sender.
-    GWE now has a separate receiver-side sent-message queue; message retrieval
-    prefers it over posted messages, marks `InSendMessage`, and reports
-    `QS_SENDMESSAGE`/send source state. Sent messages now also carry
-    `SendMsgEntry_t`-style transaction state: sender/receiver thread ids,
-    flags, timeout metadata, active receiver stack, result-ready completion,
-    timeout expiry, and receiver-terminated completion when a target is
-    destroyed. Unicorn raw `SendMessageW`/`SendMessageTimeoutW` now enters a
-    same-process different-thread guest WNDPROC in the receiver context by
-    parking the sender MIPS registers/running-thread metadata in a scheduler
-    `SendMessage` blocked wait, activating the GWE sent transaction on the
-    receiver, and restoring the sender with the WNDPROC result after the
-    callout returns or the scheduler observes a ready send reply.
-    `GetQueueStatus` now tracks CE-style current and changed queue bits, and raw
-    `MsgWaitForMultipleObjectsEx` now wakes on newly changed queue input unless
-    `MWMO_INPUTAVAILABLE` requests wake-on-current queued input.
-    `PostQuitMessage` now records queue-owned quit state instead of an ordinary
-    posted `WM_QUIT`, so `GetMessageW`/`PeekMessageW` observe quit even through
-    nonmatching HWND/message filters. Raw `GetMessageWNoWait` now reaches the
-    same GWE queue retrieval path instead of default ordinal handling. GWE
-    focus/activation cleanup now also covers disabled or hidden focused/active
-    targets: `EnableWindow` disable transitions, `ShowWindow(SW_HIDE)`, and
-    `SetWindowPos(SWP_HIDEWINDOW)` clear descendant focus and explicit active
-    HWND state through queued `WM_KILLFOCUS`/`WM_ACTIVATE(WA_INACTIVE)`. Raw
-    `GetMessagePos` and `GetMessageQueueReadyTimeStamp` now use per-queue and
-    per-message metadata from the GWE model: mouse-message screen positions are
-    preserved separately from client `lParam`, and ready timestamps update when
-    posts, sends, or queue-owned quit state make a thread queue ready. Raw
-    `SetDlgItemInt`/`GetDlgItemInt`, `SetDlgItemTextW`/`GetDlgItemTextW`,
-    `GetDlgItem`, and `SendDlgItemMessageW` text-message forwarding now reach
-    the dialog child-window text model instead of generic ordinal/message
-    fallback. Raw `WindowFromPoint` and `ChildWindowFromPoint` now route
-    through GWE visible/enabled HWND hit testing instead of generic ordinal
-    fallback. Raw `GetDialogBaseUnits` and `MapDialogRect` now cover CE
-    dialog-unit mapping, and raw
-    `GetNextDlgTabItem`/`GetNextDlgGroupItem` now walk real dialog children
-    using visible/enabled state plus `WS_TABSTOP`/`WS_GROUP` boundaries. Raw
-    `IsDialogMessageW` now rejects unrelated HWNDs, dispatches dialog-owned
-    messages, consults `WM_GETDLGCODE`, moves TAB focus through the same
-    tab-order helper, uses `GetKeyState(VK_SHIFT)` for Shift+TAB reverse
-    traversal, routes Escape as `IDCANCEL`, and routes Return through a focused
-    pushbutton or the dialog's default pushbutton with `IDOK` fallback. GWE now
-    reports button `DLGC_DEFPUSHBUTTON`/`DLGC_UNDEFPUSHBUTTON` state, answers
-    `DM_GETDEFID`/`DM_SETDEFID` over child pushbutton styles, and has a first
-    queued-key `GetKeyState`/`GetAsyncKeyState`/`GetAsyncShiftFlags` model.
-    Raw `PostKeybdMessage` now posts hardware-sourced `WM_KEYDOWN`/`WM_KEYUP`
-    and optional character-buffer `WM_CHAR` messages through the same queue,
-    while raw `keybd_event` targets the explicit per-thread keyboard target
-    before falling back to the focused/active keyboard window. Raw
-    `SetKeyboardTarget`/`GetKeyboardTarget`/`GetForegroundKeyboardTarget` now
-    expose that queue target state. The
-    broader CE dialog/input manager remains incomplete: full `DLGC_WANT*` edge
-    cases, nested modal loops, default-button repaint/state details, richer
-    keyboard-layout/`KeybdVKeyToUnicode` behavior, toggle-key edge cases, and
-    full receiver-context guest dialog proc execution still need expansion as
-    fixtures/traces demand. Current fixture coverage includes passing
-    `052_modeless_dialog_isdialogmessage` and
-    `076_dialog_tab_enter_escape` plus `169_post_keybd_message` runs through
-    the ignored eVC MIPSII
-    `fixture_exes` harness.
-    Raw/kernel `DestroyWindow` now records and sends `WM_DESTROY` before final
-    GWE cleanup, and the default `WM_CLOSE` shortcut records the same destroy
-    observation before deleting HWND state. `WM_NCDESTROY` is now tracked when
-    actually delivered through raw `SendMessageW` or a Unicorn guest-WNDPROC
-    return, matching CE MFC's source-backed fake-NC-destroy path and CE fake
-    value `WM_APP - 1` instead of adding an OS-side synthetic send.
-    Raw/kernel parent `DestroyWindow` now sends `WM_DESTROY` to descendants
-    before the parent and before final GWE cleanup. Unicorn direct guest-WNDPROC
-    `DestroyWindow` now chains guest descendant `WM_DESTROY` callbacks
-    child-first before final root cleanup and keeps the subtree valid while it
-    is in the CE `fBeingDestroyed` phase so reentrant destroy calls do not
-    double-finalize HWND state.
-    Unicorn `CreateWindowExW` guest-WNDPROC callouts now honor `WM_CREATE`
-    failure returns by returning `NULL` and destroying the just-created virtual
-    HWND when guest code returns `-1`. A mounted probe showed that
-    unconditionally injecting `WM_NCCREATE` at this import boundary regresses
-    CE/MFC startup, so that behavior is not part of the current runtime path.
-    GWE now stores explicit active-window state separately from focus, and raw
-    `SetFocus`, `SetActiveWindow`, `SetForegroundWindow`, activating
-    `ShowWindow` commands, and `SetWindowPos` without `SWP_NOACTIVATE` queue
-    CE/MFC-visible `WM_ACTIVATE`, `WM_SETFOCUS`, and `WM_KILLFOCUS`
-    lifecycle messages. Raw `EnableWindow` now routes through the same kernel
-    lifecycle boundary, keeps the previous-enabled return contract, queues
-    `WM_CANCELMODE` before disabling and `WM_ENABLE` for real enabled-state
-    transitions, and leaves unchanged-state calls message-free. Raw
-    `BringWindowToTop` now reaches the virtual z-order model through the
-    kernel lifecycle boundary, moves the target to `HWND_TOP`, and activates
-    the top-level target. Raw `IsWindowEnabled`, dialog tab/group traversal,
-    and HWND point hit-testing now use effective enabled state through the
-    parent chain, while `EnableWindow` still mutates and reports only the
-    target HWND's direct enabled state. Raw `IsWindowVisible` and point
-    hit-testing likewise walk hidden ancestors, while show/hide APIs keep
-    direct visibility synchronized with `WS_VISIBLE`. Raw
-    `WM_WINDOWPOSCHANGED` messages now carry a stable guest `WINDOWPOS`
-    payload instead of `lParam = 0`; `GetMessageW`/`PeekMessageW` materialize
-    the SDK struct and `DispatchMessageW`/guest-WNDPROC return paths release
-    the registered heap payload after consumption. Raw `SetParent` now routes
-    through the kernel lifecycle boundary, rejects invalid handles and
-    descendant-parent cycles, preserves previous-parent returns, relinks the
-    HWND into the new parent's sibling z-order, and clears descendant focus/
-    explicit activation if the new ancestry makes the subtree effectively
-    hidden or disabled. Raw `CreateWindowExW` now distinguishes `WS_CHILD`
-    parent semantics from top-level owner semantics: non-child windows keep
-    screen-relative top-level geometry and report the supplied owner through
-    `GetWindow(GW_OWNER)`, while child windows use parent-relative geometry and
-    `GetParent`. Raw `GetUpdateRect`/`GetUpdateRgn` now honor `bErase=TRUE` by
-    sending `WM_ERASEBKGND` with the HWND paint HDC through the same window send
-    path and clearing only the pending erase bit, leaving the dirty update
-    bounds for paint. Raw top-level `CreateWindowExW` now attaches the `hMenu`
-    argument as HWND menu state while preserving the same argument as the child
-    control id under `WS_CHILD`, and raw `SetMenu`/`GetMenu`/`DrawMenuBar` now
-    reach that virtual window menu state without menu painting shortcuts.
-    Raw CE menu item APIs now keep ordered virtual `HMENU` entries:
-    `CreateMenu`, `CreatePopupMenu`, `AppendMenuW`, `InsertMenuW`,
-    `RemoveMenu`/`DeleteMenu`, `GetSubMenu`, `GetMenuItemInfoW`, and
-    `SetMenuItemInfoW` preserve command IDs, popup submenu handles, CE
-    type/state flags, checkmark bitmap handles, item data, and wide text
-    through `MENUITEMINFOW`. Raw `EnableMenuItem` and by-position
-    `CheckMenuItem` now update the same ordered state and preserve CE previous
-    state return values for MFC command UI updates. Raw
-    `SetAssociatedMenu`/`GetAssociatedMenu` now reach the same virtual HWND
-    menu association as `SetMenu`/`GetMenu`.
+    paint/update state, `BeginPaint`/`EndPaint`, `SendMessageW`/
+    `DispatchMessageW`, `UpdateWindow`, `RedrawWindow`, focus/activation, menus,
+    dialog APIs, and keyboard input primitives are present. Receiver-side
+    sent-message queues, scheduler-owned cross-thread `SendMessageW`, timer
+    identity by thread/hwnd/id, `PostQuitMessage` queue state, `GetQueueStatus`
+    changed-bit tracking, and `WM_WINDOWPOSCHANGED` SDK payloads are covered.
+    CE-shaped `WM_DESTROY`/`WM_NCDESTROY` ordering, `SetParent` lifecycle,
+    `CreateWindowExW` WS_CHILD vs owner split, menu item state/MENUITEMINFOW
+    round-trip, dialog navigation helpers, and queued `WM_SHOWWINDOW` /
+    `WM_WINDOWPOSCHANGED` for direct-hidden windows are covered.
   - Open gaps: update regions are still represented as one bounding rectangle,
     so partial `ValidateRect`/`RedrawWindow(RDW_VALIDATE)` subtracts the
     representable remainder but keeps a conservative bounding rectangle for
-    disjoint leftovers. Internal paint requests are represented as normal
-    pending update state, and full child clipping/z-order invalidation remains
-    for the later GWE/GDI pass. Menu item count/ID exports are not currently
-    wired because the parsed runtime ordinal surface has not exposed them yet;
+    disjoint leftovers. Menu item count/ID exports are not currently wired;
     popup tracking/display, menu command routing, accelerators, and menu
-    painting remain open.
+    painting remain open. Fuller `DLGC_WANT*` edge cases, nested modal loops,
+    default-button repaint/state details, richer keyboard-layout/
+    `KeybdVKeyToUnicode` behavior, toggle-key edge cases, and full
+    receiver-context guest dialog proc execution still need expansion.
+    Exact create/z-order side effects such as owner/topmost rules, deeper
+    activate/focus/enable edge cases, top-level owner activation, disabled-focus
+    transfer, no-activate show variants, richer hidden-window edge cases, and
+    destroyed-target behavior under synchronous sends remain open.
   - Port order:
     1. Paint/update correctness: keep `WM_PAINT` synthetic rather than posted,
        finish `UpdateWindow`/`RedrawWindow`/region invalidation semantics, and
@@ -1219,246 +706,33 @@
     2. Window creation/destruction lifecycle: complete create/show/size/move/
        activate/focus/enable/destroy ordering, `WM_NCCREATE`/`WM_CREATE`,
        `WM_DESTROY`/`WM_NCDESTROY`, parent/child invalidation, and z-order
-       effects. `WM_DESTROY` is now sent and recorded before raw/kernel
-       cleanup, delivered `WM_NCDESTROY` is now recorded, and raw/kernel
-       parent destroy sends descendant `WM_DESTROY` before parent cleanup.
-       Unicorn guest-WNDPROC destroy callouts now follow the same child-first
-       chain before final root cleanup. The first focus/activation slice now
-       covers explicit active-window state plus
-       `WM_ACTIVATE`/`WM_SETFOCUS`/`WM_KILLFOCUS` queueing, and the first
-       enable slice now covers `WM_CANCELMODE`/`WM_ENABLE` queueing plus CE
-       previous-state returns. Raw `BringWindowToTop` now covers the first
-       dedicated top-of-z-order activation path. Effective disabled-state
-       checks now walk ancestors for `IsWindowEnabled`, dialog traversal, and
-       hit-testing without sending child `WM_ENABLE`. `WM_WINDOWPOSCHANGED`
-       now carries the CE SDK `WINDOWPOS` payload through guest memory.
-       `SetParent` now covers previous-parent returns, invalid/cyclic parent
-       rejection, new-parent z-order insertion, and focus/activation cleanup
-       when reparenting under hidden/disabled ancestry.
-       Raw `CreateWindowExW` now splits `hWndParent` into child parent versus
-       top-level owner according to `WS_CHILD`, matching CE MFC
-       `AfxGetParentOwner` usage. Unicorn create callouts now abort
-       creation on guest `WM_CREATE == -1`; unconditional `WM_NCCREATE`
-       injection is a rejected false lead for this target/runtime path.
-       Top-level `hMenu` creation state and raw `SetMenu`/`GetMenu`/
-       `DrawMenuBar` now cover the first CE/MFC frame-menu attachment path
-       while child-window `hMenu` still behaves as the control id.
-       Remaining lifecycle work includes exact create/z-order side effects
-       such as owner/topmost rules, deeper activate/focus/enable edge cases
-       such as top-level owner activation, disabled-focus transfer,
-       no-activate show variants, richer hidden-window edge cases around
-       owner/popups, and destroyed-target behavior under synchronous sends.
-    3. Message queues and synchronous sends: replace same-thread-only shortcuts
-       with scheduler-owned sent queues, sender blocking, receiver-context
-       execution, `InSendMessage`, timeout, destroyed-target, and reentrant
-       send behavior. `SendNotifyMessageW` now has a CE-backed no-wait split:
-       same-thread targets run synchronously, cross-thread targets use the
-       receiver sent queue with `SMF_SENDER_NO_WAIT | SMF_NOTIFY_MESSAGE`
-       metadata, and broadcast targets are filtered to live application
-       top-level windows with the same direct/sent delivery split instead of
-       posted broadcast messages. Receiver-side sent-message retrieval/source/
-       depth state now exists and clears receiver send depth after dispatch.
-       Raw cross-thread `SendMessageW` now also
-       queues a sender/receiver sent transaction instead of executing the
-       receiver shortcut in the caller thread. `DefWindowProcW` remains direct
-       default processing, but now includes CE `WM_NCHITTEST` hit-test return
-       codes and `WM_SYSCOMMAND/SC_CLOSE`; continue with activation, cursor,
-       mouse, default-command, and remaining non-client behavior. Raw
-       `SendDlgItemMessageW` now follows the CE
-       SDK wrapper shape by using the same queueing send path for normal
-       messages after `GetDlgItem`. Sender-side transaction bookkeeping
-       now exists for blocking sends, and raw receiver `DispatchMessageW`
-       stores the WNDPROC result back into that transaction. Timeout expiry now
-       marks queued timed sends result-ready and removes them from receiver
-       retrieval; raw `SendMessageTimeout(..., timeout=0)` across threads now
-       creates and expires that transaction immediately instead of running the
-       receiver shortcut, while nonzero cross-thread timeout sends now queue a
-       timeout-flagged receiver-side transaction instead of fabricating caller
-       thread completion. Scheduler send-reply waiters are now keyed by
-       sent-message id and wake when the sent transaction completes, times out,
-       is receiver-terminated by target HWND destruction, or the receiver calls
-       the internal `ReplyMessage` path before dispatch unwinds. The first Unicorn
-       raw-send path now runs same-process cross-thread guest WNDPROCs in the
-       receiver context and restores the sender result. `GetQueueStatus`
-       changed-bit tracking and
-       `MsgWaitForMultipleObjectsEx` `MWMO_INPUTAVAILABLE` semantics now cover
-       the first CE queue-status slice, and the raw/Unicorn bridges now ignore
-       desktop-only flag bit `0x0001` instead of treating CE msg-waits as
-       unsupported wait-all requests. `PostQuitMessage` now uses
-       `msgqfGotWMQuitMessage`-style queue state and ignores caller filters
-       when delivering `WM_QUIT`. Raw `GetMessageWNoWait` now covers the
-       nonblocking get-message API path. Raw `GetMessagePos` and
-       `GetMessageQueueReadyTimeStamp` now cover the first CE
-       `PostedMsgQueueEntry_t.time`/`MousePosAtPost` and queue
-       `m_ReadyTimeStamp` metadata slice. Remaining work: parking/resume
-       across longer waits, reentrant cross-thread scheduling, nested modal
-       loop unwinding, a public raw `ReplyMessage` boundary if a real target
-       import/export path exposes it, richer queue-source/filter precision, and
-       complete destroyed-target behavior remain open.
-    4. Window data/class/dialog/control surface: class atoms/extra bytes,
-       `SetWindowLong`/`GetWindowLong`, owner thread/process queries, dialog
-       procs/results, child/descendant relationship queries, child lookup,
-       command routing, accelerator/menu state, and MFC attach/subclass paths.
-       `SetDlgItemInt`/`GetDlgItemInt` and `SetDlgItemTextW`/
-       `GetDlgItemTextW` now cover the first CE dialog item text paths, and
-       `SendDlgItemMessageW` now forwards `WM_SETTEXT`, `WM_GETTEXT`, and
-       `WM_GETTEXTLENGTH` through the same child-control message boundary.
-       HWND menu attachment now covers top-level `CreateWindowExW` menus plus
-       `SetMenu`/`GetMenu`/`DrawMenuBar` plus GWE
-       `SetAssociatedMenu`/`GetAssociatedMenu`. Ordered menu item state and
-       `MENUITEMINFOW` round-tripping now cover create/popup/append/insert/
-       remove/submenu/get/set info, plus enable/disable/check command-state
-       updates by position. Popup display/tracking, command routing, menu
-       painting, and any confirmed exported menu count/ID accessors remain
-       open.
-       `GetDialogBaseUnits`/`MapDialogRect` and
-       `GetNextDlgTabItem`/`GetNextDlgGroupItem` cover the first CE-backed
-       dialog layout/navigation slice. Fuller dialog default-proc,
-       modal-loop, command-routing, default button, and keyboard traversal
-       behavior remain open.
-    5. Input/focus/capture/hit testing: keyboard char translation, mouse
-       capture, coordinate mapping, modal blockers, active/foreground window
-       semantics, and queue-status/source bits. `WindowFromPoint` and
-       `ChildWindowFromPoint` now cover the first CE raw HWND hit-test entry
-       points; richer disabled-window, transparent/static-control, capture,
-       modal, and z-order edge cases remain open.
+       effects.
+    3. Message queues and synchronous sends: parking/resume across longer waits,
+       reentrant cross-thread scheduling, nested modal loop unwinding, a public
+       raw `ReplyMessage` boundary if a real target import/export path exposes
+       it, richer queue-source/filter precision, and complete destroyed-target
+       behavior.
+    4. Window data/class/dialog/control surface: popup display/tracking, command
+       routing, accelerators, menu painting, and any confirmed exported menu
+       count/ID accessors. Fuller dialog default-proc, modal-loop,
+       command-routing, default button, and keyboard traversal behavior.
+    5. Input/focus/capture/hit testing: richer disabled-window,
+       transparent/static-control, capture, modal, and z-order edge cases for
+       `WindowFromPoint`/`ChildWindowFromPoint`.
     6. GDI/DC integration: tie HWND update regions to HDC clipping, memory DCs,
        DIB/palette/text/region drawing, and framebuffer presentation without
        host-window shortcuts.
   - Fixture gates: prioritize existing window fixtures around paint/update,
     create/destroy order, cross-thread sends, dialogs, MFC lifecycle, menus,
     accelerators, hit testing, region clipping, and full UI stress.
-  - Latest iNavi evidence: the app now reaches real first-frame UI
-    presentation through guest GDI. The fresh
-    `target\update_erase_virtual_*` virtual probe records a real
-    memory-DC-to-window-HDC transfer
-    (`BitBlt(dst=0x02020008, dst_memdc=false, dst_hwnd=0x00020008,
-    src=0x000a0044, src_memdc=true, 800x480)`) and a fully populated
-    framebuffer (`384000` nonzero pixels). `target\update_erase_virtual.png`
-    shows the iNavi SE splash/art frame. The remaining window work should now
-    trace post-splash queue/timer/idle progression and hidden/visible update
-    semantics rather than faking pixels. The bounded
-    destroy-lifecycle probe wrote
-    `target\destroy_window_lifecycle_*` artifacts, reached RSImage DIB
-    creation by the 10 s wall stop, but still reported no render milestones and
-    an all-zero framebuffer body. The bounded `WM_NCDESTROY` lifecycle probe
-    wrote `target\nc_destroy_lifecycle_*` artifacts and likewise stopped at the
-    10 s resource/DIB frontier with no render milestones and an all-zero
-    framebuffer body. The bounded child-destroy probe wrote
-    `target\child_destroy_lifecycle_*` artifacts with the same no-render,
-    all-zero framebuffer result. The bounded guest-destroy-chain probe wrote
-    `target\guest_destroy_chain_*` artifacts, stopped at `pc=0x600c9aec` with
-    `host_read=4226/500100B` and `heap_live=5620/2459096B`, and still had no
-    render milestones or framebuffer pixels. The bounded sent-queue probe wrote
-    `target\sent_queue_*` artifacts, stopped at `pc=0x00b4bc1c` with
-    `host_read=4221/495853B` and `heap_live=5948/2767663B`, and likewise had
-    no render milestones or framebuffer pixels. The bounded
-    send-notify-sent-queue probe wrote `target\send_notify_sent_queue_*`
-    artifacts, stopped at `pc=0x00339d8c` with `host_read=4221/499832B` and
-    `heap_live=5948/2767663B`, and still had no render milestones or
-    framebuffer pixels. The bounded sync-send-transaction probe wrote
-    `target\sync_send_transaction_*` artifacts, stopped at `pc=0x00b4bc24`
-    with `host_read=4221/495853B` and `heap_live=5948/2767663B`, and likewise
-    had no render milestones or framebuffer pixels. The bounded
-    send-timeout-expiry probe wrote `target\send_timeout_expiry_*` artifacts,
-    stopped at `pc=0x00339c3c` with `host_read=4219/486039B` and
-    `heap_live=5948/2767663B`, and still had no render milestones or
-    framebuffer pixels. The bounded receiver-context-send probe wrote
-    `target\receiver_context_send_*` artifacts, stopped at `pc=0x00b4bc24`
-    with `host_read=4221/495853B` and `heap_live=5948/2767663B`, reached
-    real resource/DIB work, but still had no render milestones and an all-zero
-    framebuffer body. The bounded queue-status/MsgWait probe wrote
-    `target\queue_status_msgwait_*` artifacts, stopped at `pc=0x00339d84`
-    with `host_read=4221/495853B` and `heap_live=5948/2767663B`, and likewise
-    had no render milestones or framebuffer pixels. The bounded
-    post-quit-queue-state probe wrote `target\post_quit_queue_state_*`
-    artifacts, stopped at `pc=0x00339da0` with `host_read=4221/495853B` and
-    `heap_live=5948/2767663B`, and still had no render milestones or
-    framebuffer pixels. The bounded GetMessageWNoWait probe wrote
-    `target\get_message_nowait_*` artifacts, stopped at `pc=0x00339d88` with
-    `host_read=4221/499832B` and `heap_live=5948/2767663B`, and again had no
-    render milestones or framebuffer pixels. The bounded message-metadata
-    probe wrote `target\message_metadata_*` artifacts, stopped at
-    `pc=0x00895bfc` with `host_read=4225/486559B` and
-    `heap_live=5621/2459146B`, reached `mapinfo.bin`/`iNaviData` file
-    activity, but still had no render milestones and only one nonzero
-    framebuffer byte, so it is not UI progress. The bounded dialog-int probe
-    wrote `target\dialog_int_*` artifacts, stopped at `pc=0x00b4bc44` with
-    `host_read=4221/495853B` and `heap_live=5948/2767663B`, reached
-    RSImage/DIB resource work, and still had no render milestones or
-    framebuffer pixels. The bounded hit-test probe wrote
-    `target\window_from_point_*` artifacts, stopped at `pc=0x6002278c` with
-    `host_read=4225/486559B` and `heap_live=5624/2461398B`, reached later
-    map/device file activity, but still had no render milestones and only one
-    nonzero framebuffer byte. The bounded focus/activation probe wrote
-    `target\focus_activation_*`, stopped at `pc=0x0030f7e0` with
-    `heap_live=7295/21831892B` and `host_read=24819/1924419B`, and preserved
-    the same sparse 301-pixel red framebuffer line with no named render
-    milestone. The bounded enable-window probe wrote `target\enable_window_*`,
-    stopped at `pc=0x00339d9c` with `heap_live=7294/21830764B` and
-    `host_read=24620/1918582B`, and again preserved the 301-pixel red
-    framebuffer line with no named render milestone. The bounded
-    bring-window-top probe wrote `target\bring_window_top_*`, stopped at
-    `pc=0x0030f7c8` with `heap_live=7293/21820764B` and
-    `host_read=24620/1922561B`, and likewise preserved the 301-pixel red
-    framebuffer line with no named render milestone. A virtual-desktop rerun
-    wrote `target\virtual_after_bring_window_top_*`, stopped at
-    `pc=0x00343750` with `heap_live=7200/21843325B` and
-    `host_read=26122/1952147B`, preserved the same 301-pixel red line, and did
-    not show a host presenter window. Prefer `--desktop virtual` for future
-    bounded mounted probes unless host presentation/input behavior is the
-    thing being tested. The disabled-ancestor enabled-state probe wrote
-    `target\disabled_ancestor_virtual_*`, stopped at `pc=0x00339d90` with
-    `heap_live=7304/21886404B` and `host_read=25878/1940731B`, preserved the
-    same 301-pixel red line, and still had no render milestones. The
-    visibility/enabled effective-state probe wrote
-    `target\visibility_enabled_virtual_final_*`, stopped at `pc=0x00344780`
-    with `heap_live=7305/21887532B` and `host_read=26160/1961105B`, again kept
-    the same 301-pixel red line, and still had no render milestones. The
-    `WM_WINDOWPOSCHANGED` payload probe wrote `target\windowpos_virtual_*` and
-    `target\windowpos_virtual_60s_*`; the 60 s virtual run avoided the host
-    presenter window, reached RSImage `CreateDIBSection` work, stopped at
-    `pc=0x00073684` with `heap_live=6929/21276879B` and
-    `host_read=7839/1759291B`, and produced only a 101-pixel red line with no
-    render milestone. The follow-up focus/activation cleanup rerun wrote
-    `target\focus_activation_virtual_60s_*`, also in virtual desktop mode,
-    stopped at `pc=0x002036fc` with `heap_live=7089/21301763B`,
-    `host_read=7852/1765593B`, and the familiar 301-pixel red line from
-    `(0,160)` through `(300,160)`, again with no render milestone. The
-    `SetParent` lifecycle rerun wrote `target\set_parent_virtual_60s_*`,
-    stopped at `pc=0x000be6e4` with `heap_live=6921/21255717B`,
-    `host_read=4302/1718377B`, and only a 101-pixel red line from `(0,160)` to
-    `(100,160)`, also with no render milestone. The owner/child raw-create
-    rerun wrote `target\owner_child_virtual_60s_*`, stopped at
-    `pc=0x002a252c` with `heap_live=6940/21278707B`,
-    `host_read=7840/1760751B`, and the same 101-pixel red line with no render
-    milestone. The fresh `GetUpdateRect`/`GetUpdateRgn` erase-query probe used
-    `D:\INAVI_Emulator\DUMPPLZ\Windows` as the DLL source and wrote
-    `target\get_update_erase_virtual_60s_*`; it stopped at `pc=0x00a436e0`
-    with `heap_live=6930/21294161B`, `virtual_live=2/131072B`,
-    `host_open=92`, `host_read=4305/1769298B`, `mem_open=2`,
-    `max_read=497178`, no render milestones, and the same 101-pixel red line.
-    The dialog/control text-forwarding probe used the same dumped DLL source
-    and wrote `target\dialog_text_virtual_60s_*`; it stopped at
-    `pc=0x0001362c` with `heap_live=7041/21284917B`,
-    `virtual_live=3/196608B`, `host_open=113`,
-    `host_read=7843/1763759B`, `mem_open=2`, `max_read=497178`, no render
-    milestones, and the same 101-pixel red line. The create-failure contract
-    probe wrote `target\create_abort_virtual_60s_*`; it stopped at
-    `pc=0x001e5408` with `heap_live=6926/21256719B`, `host_open=91`,
-    `host_read=4304/1732170B`, `mem_open=2`, `max_read=497178`, no render
-    milestones, and the same 101-pixel red line. An earlier experimental
-    `WM_NCCREATE` injection probe wrote `target\nc_create_virtual_60s_*` and
-    regressed to an immediate empty-queue stop (`pc=0x7fff0b60`,
-    `heap_live=24/12914B`, `host_read=0/0B`), so do not count that path as
-    progress. The HWND menu-attachment probe wrote
-    `target\menu_attach_virtual_60s_*` using
-    `D:\INAVI_Emulator\DUMPPLZ\Windows`; it stopped at `pc=0x004d8ba8` with
-    `heap_live=6917/21255371B`, `host_open=91`,
-    `host_read=4302/1718377B`, `mem_open=2`, `max_read=497178`, no render
-    milestones, and the same 101-pixel red line.
-    Treat this as fidelity evidence and a possible performance/lifecycle
-    frontier, not useful UI progress.
+  - Latest iNavi evidence: the app now reaches real first-frame UI presentation
+    through guest GDI. `target\update_erase_virtual_*` records a real
+    memory-DC-to-window-HDC transfer and a fully populated framebuffer showing
+    the iNavi SE splash/art frame. The remaining window work should now trace
+    post-splash queue/timer/idle progression and hidden/visible update semantics.
+    The presentation frontier: why the guest-composed 800x54 offscreen surface
+    under hidden child `0x0002006c` is never shown or copied to a display HDC
+    through normal GWE/GDI paths.
 
 ## Immediate
 
@@ -1479,9 +753,7 @@
     `DIB_RGB_COLORS`, covering indexed `StretchDIBits`/`SetDIBitsToDevice`
     source pixels. DCs now seed CE stock/default selected objects from
     `wingdi.h` (`SYSTEM_FONT`, `WHITE_BRUSH`, `BLACK_PEN`,
-    `DEFAULT_PALETTE`, plus a restorable default bitmap), so the normal
-    `old = SelectObject(...); SelectObject(..., old)` path no longer gets a
-    zero previous object on newly created compatible DCs. Raw text/font query
+    `DEFAULT_PALETTE`, plus a restorable default bitmap). Raw text/font query
     coverage now stores selected LOGFONTW fields, reports deterministic
     CE-shaped `TEXTMETRICW`, `GetTextExtentExPointW` fit/dx/SIZE data,
     `GetTextFaceW`, `GetTextAlign`, and `GetTextColor` without host-font
@@ -1497,53 +769,30 @@
     cases, region clipping, glyph/text drawing, menu/accelerator, and MFC
     mini-app paint.
   - Latest iNavi evidence: mounted traces now reach paint, many DIBSections,
-    and the first real screen/window-HDC presentation. `target\update_erase_virtual_*`
-    records `BitBlt(dst=0x02020008, dst_memdc=false, dst_hwnd=0x00020008,
-    src=0x000a0044, src_memdc=true, 800x480)`, and the framebuffer dump is
-    fully populated. The display work should therefore target post-present
-    clipping/invalid-region behavior, text/font completeness, and sustaining
-    later UI updates, not the already-cleared first memory-DC-to-screen
-    transfer and not forced presentation. Earlier
-    `target\dib_colors_fresh_*` evidence confirms the app's 8 bpp RSImage
-    DIBSections now have parsed color tables (`colors=256` on the 800-wide
-    surfaces and populated partial tables on later resources), so indexed
-    palette ingestion is no longer the leading suspect. The follow-up
-    `target\text_metrics_virtual_60s_*` probe after the CE text/font query
-    slice preserved the same populated framebuffer and RSImage/DIB loop with
-    no named render milestone, so basic text metrics are also no longer the
-    leading suspect.
+    and the first real screen/window-HDC presentation. The display work should
+    target post-present clipping/invalid-region behavior, text/font
+    completeness, and sustaining later UI updates.
 
 - Continue from the latest stable host-mode UI frontier. Current
-  `--desktop host --tap 400,240` evidence no longer has the multi-GB RAM spike
-  and produces real but sparse framebuffer pixels through guest `Polyline`
-  (`target\startup_flamegraph_after_heap_chunk.ppm`: 401 red pixels from
-  `(0,160)..(400,160)` in the profiled run). Flamegraph-driven startup fixes
-  removed per-import COREDLL export-table rebuilding, replaced hot trampoline
-  scans with lookup maps/page sets, indexed mapped code by page for the global
+  `--desktop host --tap 400,240` evidence produces real but sparse framebuffer
+  pixels through guest `Polyline`. Flamegraph-driven startup fixes removed
+  per-import COREDLL export-table rebuilding, replaced hot trampoline scans
+  with lookup maps/page sets, indexed mapped code by page for the global
   Unicorn hook, generation-gated kernel memory mapping, and now map heap
   spillover in 1 MiB chunks instead of one page at a time. A current 60 s
   host/tap run reaches `pc=0x00b55150`, `ra=0x0030f384`, `ReadFile=33759`,
   and `CreateDIBSection=190`; the admin flamegraph runs farther and hits the
   next real guest/UI fault at `pc=0x0026f7e4` (`render_map_pointer_deref`),
-  `addr=0x0000005c`, with `ReadFile=61825` and `CreateDIBSection=317`. Next
-  File I/O is no longer the bulk-RAM bottleneck: existing host files stay
-  host-backed even when opened writable, `ReadFile` streams from the stored
-  handle with bounded small-read caching, and existing host files requested
-  read/write now fall back to read-only live host handles when Windows denies
-  write access. The latest virtual probe,
-  `target\file_rw_fallback_virtual_60s_*`, eliminates the previous
-  `Access is denied` failures for `SDMMC Disk\mapdata\SearchDB\*.db` and
-  advances to `pc=0x003426d0`, `ra=0x002fd5e8`, with
-  `host_open=235` and `host_read=38930/2229372B`, but still no render
-  milestones and only red tap pixels. Next work should debug the null/invalid
-  render-map object path around
+  `addr=0x0000005c`. File I/O is no longer the bulk-RAM bottleneck. The latest
+  virtual probe, `target\file_rw_fallback_virtual_60s_*`, advances to
+  `pc=0x003426d0`, `ra=0x002fd5e8`, with `host_open=235` and
+  `host_read=38930/2229372B`, but still no render milestones. Next work should
+  debug the null/invalid render-map object path around
   `0x0026f7c0..0x0026f7e4` using real guest state and existing probes. Also
   keep the new trampoline/virtual-allocation layout covered: the external
   Unicorn trampoline pool now starts at `0x70000000` instead of colliding with
-  the CE virtual-allocation base `0x50000000`, and
-  `target\inavi_trampoline_virtual_*` verifies the previous
-  `WRITE_PROT addr=0x50000000` stop no longer reproduces. Do not fake-present
-  DIBSections just because their bits are populated.
+  the CE virtual-allocation base `0x50000000`. Do not fake-present DIBSections
+  just because their bits are populated.
 - Keep the new direct-DIB framebuffer path honest. `StretchDIBits` and
   `SetDIBitsToDevice` now draw `SRCCOPY` `DIB_RGB_COLORS` BITMAPINFO data in
   focused tests, but real iNavi traces have not reached those ordinals yet.
@@ -1605,9 +854,8 @@
   fallback, returns heap-backed `RegisterGesture @2724` state, and writes
   `GetSystemTime @25`. With sampled Unicorn code tracing and mapped-code
   instruction reads, a 90,000 ms mounted no-tap run now returns in roughly 27 s
-  at an idle `GetMessageW @861` `blocked_get_message` snapshot instead of
-  timing out in app-side date/geometry logic. The visible top-level
-  `wce_solution_inavi` HWND is `800x480`, and the `Afx:10000:b:0:40000006:0`
+  at an idle `GetMessageW @861` `blocked_get_message` snapshot. The visible
+  top-level `wce_solution_inavi` HWND is `800x480`, and the `Afx:10000:b:0:40000006:0`
   child HWND exists, but the framebuffer dump is still all zero. Use the idle
   frontier to keep probing WNDPROC/paint/GDI behavior before expecting guest
   drawing.
@@ -1617,14 +865,13 @@
   `InputDebugCharW @595`, and the previous trampoline corruption of the iNavi
   halfword jump table at `0x000ebbf0`. The `ADBSetAccountProperties @1943`
   frontier now returns `FALSE`/`ERROR_NOT_SUPPORTED` and the app proceeds to an
-  encoded `TerminateProcess` exit (`caller=0x0048fa90`, process `0x42`,
-  `exit_code=0`). The framebuffer dump `target\inavi-release-adb1943.ppm` is
-  still all zero. WNDPROC return trampoline-origin tracing now decodes the
-  shutdown path as `0x56d0` entering `0x0004390c`, then an app-side `0x5236`
-  send at `0x00043e30`/`0x00043e38`; the main `wce_solution_inavi` WNDPROC maps
-  that to `WM_CLOSE`. Disassemble the branch path through `0x0004390c` and
-  determine which preceding CE/MFC resource, window, or service result is
-  causing the app to shut down before useful drawing.
+  encoded `TerminateProcess` exit. The framebuffer dump is still all zero.
+  WNDPROC return trampoline-origin tracing decodes the shutdown path as `0x56d0`
+  entering `0x0004390c`, then an app-side `0x5236` send at
+  `0x00043e30`/`0x00043e38`; the main `wce_solution_inavi` WNDPROC maps that to
+  `WM_CLOSE`. Disassemble the branch path through `0x0004390c` and determine
+  which preceding CE/MFC resource, window, or service result is causing the app
+  to shut down before useful drawing.
 - Replace launch-stub behavior for WINSOCK and OLE imports with real
   subsystem-backed implementations as import traces demand. WINSOCK already
   routes through `src/winsock.rs` and has a direct-host socket table; add any
@@ -1633,32 +880,27 @@
   MFC and `commctrl.dll` on the loaded DLL path only; do not add emulator MFC
   or common-controls stubs.
 - Continue burning down COREDLL ordinals subsystem by subsystem, replacing
-  stubbed ordinal plan entries with CE/MFC/SDK-referenced semantics. Next
-  likely tranche: `BitBlt`, `PatBlt`, `StretchDIBits`, `SetDIBitsToDevice`,
-  basic shape/text drawing, and memory-DC bitmap surfaces into or through the
-  virtual framebuffer; PE-backed resource icon/bitmap loading beyond the
-  string-resource path,
-  COM/OLE API dispatch when ole32 imports are connected, more GWE menu/dialog/
-  control raw pointer marshalling, broader file attributes/directory metadata,
-  and timer/system-time structs.
+  stubbed ordinal plan entries with CE/MFC/SDK-referenced semantics. All
+  COREDLL_EXPORTS table entries are now dispatched. Next tranche: `BitBlt`,
+  `PatBlt`, `StretchDIBits`, `SetDIBitsToDevice`, basic shape/text drawing, and
+  memory-DC bitmap surfaces into or through the virtual framebuffer; PE-backed
+  resource icon/bitmap loading beyond the string-resource path, COM/OLE API
+  dispatch when ole32 imports are connected, more GWE menu/dialog/control raw
+  pointer marshalling, broader file attributes/directory metadata, and
+  timer/system-time structs.
 - Continue tracing after CE `CreateWindowExW` now delivers the source-backed
   create-time `WM_CREATE` callout and CE `CallWindowProcW` enters guest
   window-procedure targets. The latest bounded snapshot still reaches SDK MFC
   default/idle handling and then an empty-queue `GetMessageW` diagnostic; the
   former ordinal-1036 `longjmp`/`pc=0` crash is no longer the current stop.
   Raw `GetWindow` sibling/child traversal is now connected for the observed
-  MFC `GetWindow @251` calls. Virtual show/move/size lifecycle messages are
-  queued for raw `ShowWindow`, `SetWindowPos`, `MoveWindow`, and visible
-  top-level `CreateWindowExW`; the mounted bounded rerun confirmed
-  `\SDMMC Disk\iNaviData` succeeds and creates `WCE_Solution_iNavi` plus an
-  MFC child window. The latest rerun gets past the previous
+  MFC `GetWindow @251` calls. The latest rerun gets past the previous
   `GetPaletteEntries` trap, SDK CRT ordinal normalization bug, and
   `RegisterGesture @2724` pointer-return path, and `GetSystemTime @25`; the
   current wall-clock-bounded post-time run names the next frontier as repeated
   startup CRT/import activity before visible drawing. Continue replacing raw
-  COREDLL/GDI/DC
-  behavior with CE-referenced semantics that advance the path toward target
-  framebuffer drawing.
+  COREDLL/GDI/DC behavior with CE-referenced semantics that advance the path
+  toward target framebuffer drawing.
 - Use the new guest-WNDPROC return ring to compare creation-time sequencing
   against CE/MFC expectations. The latest diagnostic shows create/show/size/
   paint/idle messages returning `0`, `WM_PAINT` not reaching `BeginPaint`, MFC
@@ -1768,17 +1010,9 @@
   button visibility or route-search state.
 - Extend the new Rust remote server beyond the now v2-aligned REST/WebSocket
   surface with external-client/watch validation as the app frontier advances.
-  The mounted validation `target\remote_ws_validation_parallel_*` bound the
-  required `--remote-server 192.168.0.39:8765`, served REST status/logs,
-  answered control-WS `{"type":"status"}` and `{"type":"logs"}`, and accepted
-  audio-WS with PCM metadata while the guest stopped at the known
-  `GetMessageW @861` frontier. Keep proving remote touch/GPS input through the
-  same scheduler/GWE paths as host input, and capture mounted audio binary PCM
-  once the real app emits wave data during a live remote run. The visible host
-  presenter probe `target\host_presenter_once_*` confirms REST/control-WS
-  status/logs and audio-WS metadata with one queued audio chunk visible in
-  status, but a late-joining audio WS client did not receive a binary frame
-  within 3 s.
+  Keep proving remote touch/GPS input through the same scheduler/GWE paths as
+  host input, and capture mounted audio binary PCM once the real app emits wave
+  data during a live remote run.
 - Add ordinal/decorated-name evidence from the Windows CE 4.2 Mipsii SDK import
   libraries, alongside the source references already recorded.
 - Persist host-backed registry writes separately from the source dump.
