@@ -367,7 +367,11 @@ pub struct DcState {
     pub stretch_blt_mode: i32,
     pub text_char_extra: i32,
     pub layout: u32,
+    pub poly_fill_mode: i32,
 }
+
+pub const POLY_FILL_ALTERNATE: i32 = 1;
+pub const POLY_FILL_WINDING: i32 = 2;
 
 impl Default for DcState {
     fn default() -> Self {
@@ -388,6 +392,7 @@ impl Default for DcState {
             stretch_blt_mode: 1, // BLACKONWHITE
             text_char_extra: 0,
             layout: 0, // left-to-right
+            poly_fill_mode: POLY_FILL_ALTERNATE,
         }
     }
 }

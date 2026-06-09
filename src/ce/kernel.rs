@@ -104,6 +104,7 @@ pub struct CeKernel {
     next_font_mem_resource_handle: u32,
     crt_rand_state: u32,
     crt_strtok_next_by_thread: BTreeMap<u32, u32>,
+    crt_wcstok_next_by_thread: BTreeMap<u32, u32>,
     recent_file_ops: Vec<FileTraceRecord>,
     recent_file_open_ops: Vec<FileTraceRecord>,
     recent_process_ops: Vec<ProcessTraceRecord>,
@@ -397,6 +398,7 @@ impl CeKernel {
             next_font_mem_resource_handle: 0x5f00_0001,
             crt_rand_state: 1,
             crt_strtok_next_by_thread: BTreeMap::new(),
+            crt_wcstok_next_by_thread: BTreeMap::new(),
             recent_file_ops: Vec::new(),
             recent_file_open_ops: Vec::new(),
             recent_process_ops: Vec::new(),
@@ -475,6 +477,21 @@ impl CeKernel {
             self.crt_strtok_next_by_thread.remove(&thread_id);
         } else {
             self.crt_strtok_next_by_thread.insert(thread_id, ptr);
+        }
+    }
+
+    pub fn crt_wcstok_next(&self, thread_id: u32) -> u32 {
+        self.crt_wcstok_next_by_thread
+            .get(&thread_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    pub fn crt_set_wcstok_next(&mut self, thread_id: u32, ptr: u32) {
+        if ptr == 0 {
+            self.crt_wcstok_next_by_thread.remove(&thread_id);
+        } else {
+            self.crt_wcstok_next_by_thread.insert(thread_id, ptr);
         }
     }
 

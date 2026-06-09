@@ -806,7 +806,7 @@ fn raw_stub_audit_keeps_import_trap_context() -> Result<()> {
             trap_pc: Some(0x7fff_4000),
             caller_module: Some("dll:mfcce400.dll".to_owned()),
         },
-        31, // "memchr" — CRT export without ORD_* constant; always stubbed
+        1016, // "_fpieee_flt" — CRT export without ORD_* constant; always stubbed
         [0, 0, 0, 0, 0],
     );
 
@@ -816,7 +816,7 @@ fn raw_stub_audit_keeps_import_trap_context() -> Result<()> {
             CoredllDispatch::Stubbed {
                 ref export,
                 ref stub,
-            } if export.name == "memchr"
+            } if export.name == "_fpieee_flt"
                 && stub.audit == CoredllStubAuditClassification::SafeFailure
                 && stub.context == Some(CoredllRawContext {
                     thread_id: 7,

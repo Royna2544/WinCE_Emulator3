@@ -44,12 +44,15 @@ pub const WM_NEXTDLGCTL: u32 = 0x0028;
 pub const WM_KEYDOWN: u32 = 0x0100;
 pub const WM_KEYUP: u32 = 0x0101;
 pub const WM_CHAR: u32 = 0x0102;
+pub const WM_DEADCHAR: u32 = 0x0103;
 pub const WM_SYSKEYDOWN: u32 = 0x0104;
 pub const WM_SYSKEYUP: u32 = 0x0105;
 pub const WM_SYSCHAR: u32 = 0x0106;
+pub const WM_SYSDEADCHAR: u32 = 0x0107;
 pub const WM_IME_STARTCOMPOSITION: u32 = 0x010d;
 pub const WM_IME_ENDCOMPOSITION: u32 = 0x010e;
 pub const WM_IME_COMPOSITION: u32 = 0x010f;
+pub const WM_IME_CHAR: u32 = 0x0286;
 pub const GCS_COMPSTR: u32 = 0x0008;
 pub const GCS_RESULTSTR: u32 = 0x0800;
 pub const WM_IME_NOTIFY: u32 = 0x0282;
@@ -635,7 +638,7 @@ pub struct Window {
     pub client_rect: Rect,
     pub update_pending: bool,
     pub erase_pending: bool,
-    pub update_rect: Rect,
+    pub update_rects: Vec<Rect>,
     pub redraw_suspended: bool,
     pub pending_move: bool,
     pub pending_size: bool,
@@ -729,6 +732,7 @@ pub struct ImeContextState {
     pub conversion_status: u32,
     pub sentence_status: u32,
     pub composition_string: Vec<u16>,
+    pub hangul: crate::ce::hangul::HangulComposeState,
 }
 
 #[derive(Debug, Clone)]
@@ -779,6 +783,12 @@ pub struct Gwe {
     caret_system_enabled: bool,
     caret_blink_visible: bool,
     caret_next_blink_ms: u32,
+    /// True when the caret XOR has been applied to the framebuffer pixels.
+    /// Used by the caret renderer to avoid double-XOR and to restore on repaint.
+    caret_drawn_in_framebuffer: bool,
+    /// Pending dead-key character (e.g. '^', '`', '´'). Set when TranslateMessage
+    /// encounters a dead key and cleared on the next key translation.
+    dead_key: Option<u32>,
     next_lifecycle_message_order: u64,
     stats: GweStats,
     // Global atom table (maps lowercase name → atom value in 0xC001..0xFFFF range).
@@ -815,7 +825,7 @@ impl Default for Gwe {
                 client_rect: Rect::from_origin_size(0, 0, 800, 480),
                 update_pending: false,
                 erase_pending: false,
-                update_rect: Rect::default(),
+                update_rects: Vec::new(),
                 redraw_suspended: false,
                 pending_move: false,
                 pending_size: false,
@@ -877,6 +887,8 @@ impl Default for Gwe {
             caret_system_enabled: true,
             caret_blink_visible: true,
             caret_next_blink_ms: 0,
+            caret_drawn_in_framebuffer: false,
+            dead_key: None,
             next_lifecycle_message_order: 1,
             stats: GweStats::default(),
             global_atoms: BTreeMap::new(),
@@ -983,7 +995,7 @@ impl Gwe {
         self.next_hwnd += 4;
         let visible = style & WS_VISIBLE != 0;
         let enabled = style & WS_DISABLED == 0;
-        let update_rect = rect.zero_origin();
+        let initial_rects = if visible { vec![rect.zero_origin()] } else { Vec::new() };
         self.windows.insert(
             hwnd,
             Window {
@@ -1008,7 +1020,7 @@ impl Gwe {
                 client_rect: rect,
                 update_pending: visible,
                 erase_pending: visible,
-                update_rect,
+                update_rects: initial_rects,
                 redraw_suspended: false,
                 pending_move: false,
                 pending_size: false,
@@ -1529,6 +1541,14 @@ impl Gwe {
         self.caret_system_enabled
     }
 
+    pub fn caret_drawn_in_framebuffer(&self) -> bool {
+        self.caret_drawn_in_framebuffer
+    }
+
+    pub fn set_caret_drawn_in_framebuffer(&mut self, drawn: bool) {
+        self.caret_drawn_in_framebuffer = drawn;
+    }
+
     pub fn register_gesture(
         &mut self,
         id: u32,
@@ -1702,7 +1722,8 @@ impl Gwe {
         if visible && !previous {
             window.update_pending = true;
             window.erase_pending = true;
-            window.update_rect = window.client_rect.zero_origin();
+            let full = window.client_rect.zero_origin();
+            window.update_rects = vec![full];
             let thread_id = window.thread_id;
             let _ = window;
             if self.is_window_visible(hwnd) {
@@ -1727,7 +1748,7 @@ impl Gwe {
         window.redraw_suspended = !enable;
         if enable {
             let full_client = window.client_rect.zero_origin();
-            window.update_rect = full_client;
+            window.update_rects = vec![full_client];
             window.update_pending = true;
             window.erase_pending = true;
             let thread_id = window.thread_id;
@@ -1754,11 +1775,10 @@ impl Gwe {
         else {
             return true;
         };
-        window.update_rect = if window.update_pending {
-            window.update_rect.union(rect)
-        } else {
-            rect
-        };
+        if !window.update_pending {
+            window.update_rects.clear();
+        }
+        window.update_rects.push(rect);
         window.update_pending = true;
         window.erase_pending |= erase;
         let thread_id = window.thread_id;
@@ -1778,7 +1798,7 @@ impl Gwe {
         }
         window.update_pending = false;
         window.erase_pending = false;
-        window.update_rect = Rect::default();
+        window.update_rects.clear();
         true
     }
 
@@ -1792,7 +1812,7 @@ impl Gwe {
         let Some(rect) = rect else {
             window.update_pending = false;
             window.erase_pending = false;
-            window.update_rect = Rect::default();
+            window.update_rects.clear();
             return true;
         };
         if !window.update_pending {
@@ -1804,23 +1824,32 @@ impl Gwe {
         else {
             return true;
         };
-        match window.update_rect.subtract_bounding(rect) {
-            Some(remaining) => {
-                window.update_rect = remaining;
-            }
-            None => {
-                window.update_pending = false;
-                window.erase_pending = false;
-                window.update_rect = Rect::default();
-            }
+        let remaining: Vec<Rect> = window
+            .update_rects
+            .iter()
+            .flat_map(|r| r.subtract(rect))
+            .collect();
+        if remaining.is_empty() {
+            window.update_pending = false;
+            window.erase_pending = false;
         }
+        window.update_rects = remaining;
         true
     }
 
     pub fn update_rect(&self, hwnd: u32) -> Option<PaintUpdate> {
         let window = self.windows.get(&hwnd)?;
-        (!window.destroyed && window.update_pending).then_some(PaintUpdate {
-            rect: window.update_rect,
+        if window.destroyed || !window.update_pending {
+            return None;
+        }
+        let bounding = window
+            .update_rects
+            .iter()
+            .copied()
+            .reduce(Rect::union)
+            .unwrap_or_default();
+        Some(PaintUpdate {
+            rect: bounding,
             erase: window.erase_pending,
         })
     }
@@ -1865,22 +1894,22 @@ impl Gwe {
         if !window.update_pending {
             return;
         }
-        let Some(rect) = window
-            .update_rect
-            .intersect(window.client_rect.zero_origin())
-        else {
+        let client = window.client_rect.zero_origin();
+        window.update_rects = window
+            .update_rects
+            .iter()
+            .filter_map(|r| r.intersect(client))
+            .collect();
+        if window.update_rects.is_empty() {
             window.update_pending = false;
             window.erase_pending = false;
-            window.update_rect = Rect::default();
-            return;
-        };
-        window.update_rect = rect;
+        }
     }
 
     fn clear_window_update(window: &mut Window) {
         window.update_pending = false;
         window.erase_pending = false;
-        window.update_rect = Rect::default();
+        window.update_rects.clear();
     }
 
     fn invalidate_visible_windows_in_screen_rect(
@@ -1920,12 +1949,18 @@ impl Gwe {
         if window.destroyed {
             return None;
         }
+        let bounding = if window.update_pending {
+            window
+                .update_rects
+                .iter()
+                .copied()
+                .reduce(Rect::union)
+                .unwrap_or_else(|| window.client_rect.zero_origin())
+        } else {
+            window.client_rect.zero_origin()
+        };
         let update = PaintUpdate {
-            rect: if window.update_pending {
-                window.update_rect
-            } else {
-                window.client_rect.zero_origin()
-            },
+            rect: bounding,
             erase: window.erase_pending,
         };
         self.validate_window(hwnd);
@@ -2316,6 +2351,18 @@ impl Gwe {
         [self.keyboard_layout]
     }
 
+    pub fn set_dead_key(&mut self, ch: u32) {
+        self.dead_key = Some(ch);
+    }
+
+    pub fn take_dead_key(&mut self) -> Option<u32> {
+        self.dead_key.take()
+    }
+
+    pub fn dead_key(&self) -> Option<u32> {
+        self.dead_key
+    }
+
     pub fn set_ime_enabled_for_thread(&mut self, thread_id: u32, enabled: bool) {
         if enabled {
             self.ime_disabled_threads.remove(&thread_id);
@@ -2403,6 +2450,60 @@ impl Gwe {
             .is_some_and(|ctx| ctx.open)
     }
 
+    /// Process one Hangul Jamo through the HIMC composition engine.
+    /// Returns `(window_hwnd, actions)` so the caller can post WM_IME_* messages.
+    pub fn process_hangul_ime_jamo(
+        &mut self,
+        himc: u32,
+        jamo: crate::ce::hangul::HangulJamo,
+    ) -> Option<(u32, Vec<crate::ce::hangul::HangulImeAction>)> {
+        let context = self.ime_contexts.get_mut(&himc)?;
+        let hwnd = context.hwnd?;
+        let actions = crate::ce::hangul::process_hangul_jamo(&mut context.hangul, jamo);
+        // Sync composition_string from the new state.
+        context.composition_string = context
+            .hangul
+            .current_char()
+            .map(|ch| vec![ch])
+            .unwrap_or_default();
+        Some((hwnd, actions))
+    }
+
+    /// Commit the current Hangul composition and return `(window_hwnd, actions)`.
+    pub fn commit_hangul_ime(
+        &mut self,
+        himc: u32,
+    ) -> Option<(u32, Vec<crate::ce::hangul::HangulImeAction>)> {
+        let context = self.ime_contexts.get_mut(&himc)?;
+        let hwnd = context.hwnd?;
+        let actions = crate::ce::hangul::commit_composition(&mut context.hangul);
+        context.composition_string.clear();
+        Some((hwnd, actions))
+    }
+
+    /// Handle backspace on the current Hangul composition.
+    pub fn backspace_hangul_ime(
+        &mut self,
+        himc: u32,
+    ) -> Option<(u32, Vec<crate::ce::hangul::HangulImeAction>)> {
+        let context = self.ime_contexts.get_mut(&himc)?;
+        let hwnd = context.hwnd?;
+        let actions = crate::ce::hangul::backspace_composition(&mut context.hangul);
+        context.composition_string = context
+            .hangul
+            .current_char()
+            .map(|ch| vec![ch])
+            .unwrap_or_default();
+        Some((hwnd, actions))
+    }
+
+    /// Whether the HIMC has an active Hangul composition in progress.
+    pub fn hangul_composition_active(&self, himc: u32) -> bool {
+        self.ime_contexts
+            .get(&himc)
+            .is_some_and(|ctx| ctx.hangul.is_active())
+    }
+
     /// Update the composition string for a given HIMC and return the associated
     /// window so the caller can send WM_IME_COMPOSITION to it.
     pub fn set_ime_composition_string(
@@ -2480,6 +2581,7 @@ impl Gwe {
                 conversion_status: 0,
                 sentence_status: 0,
                 composition_string: Vec::new(),
+                hangul: Default::default(),
             },
         );
         himc
@@ -2649,7 +2751,8 @@ impl Gwe {
             window.style |= WS_VISIBLE;
             window.update_pending = true;
             window.erase_pending = true;
-            window.update_rect = window.client_rect.zero_origin();
+            let full = window.client_rect.zero_origin();
+            window.update_rects = vec![full];
             paint_changed_thread = Some(window.thread_id);
         }
         if flags & SWP_HIDEWINDOW != 0 {
@@ -3000,8 +3103,9 @@ impl Gwe {
                 }
             }
             WM_ERASEBKGND => {
-                // CE DefWindowProcW: return 1 (erased) if the class has a background brush,
-                // 0 if hbrBackground is NULL. Actual pixel fill requires GDI and is deferred.
+                // CE DefWindowProcW: 1 if background brush present, 0 if NULL.
+                // Actual pixel fill is intercepted in coredll ORD_DEF_WINDOW_PROC_W before
+                // this path, so this fallback only fires for non-coredll send paths.
                 let hbr = self.window_class_hbr_background(hwnd);
                 return Some(if hbr != 0 { 1 } else { 0 });
             }
@@ -5540,6 +5644,44 @@ mod tests {
         );
 
         assert!(gwe.validate_window_rect(hwnd, None));
+        assert!(gwe.update_rect(hwnd).is_none());
+    }
+
+    #[test]
+    fn validate_rect_only_removes_validated_sub_region_from_disjoint_invalids() {
+        // Two disjoint invalidated strips. Validating only the first should leave
+        // the second still pending; bounding box should shrink to the second strip.
+        let mut gwe = Gwe::default();
+        let hwnd = gwe.create_window_ex_with_rect(
+            1,
+            "STATIC",
+            "title",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 100, 80),
+        );
+        assert!(gwe.validate_window(hwnd));
+        // Invalidate top strip.
+        assert!(gwe.invalidate_window(hwnd, Some(Rect::from_origin_size(0, 0, 100, 20)), false));
+        // Invalidate bottom strip.
+        assert!(gwe.invalidate_window(hwnd, Some(Rect::from_origin_size(0, 60, 100, 20)), false));
+        // Bounding box covers both strips.
+        assert_eq!(
+            gwe.update_rect(hwnd).unwrap().rect,
+            Rect::from_origin_size(0, 0, 100, 80),
+        );
+        // Validate only the top strip.
+        assert!(gwe.validate_window_rect(hwnd, Some(Rect::from_origin_size(0, 0, 100, 20))));
+        // Only the bottom strip remains; bounding box = bottom strip only.
+        assert_eq!(
+            gwe.update_rect(hwnd).unwrap().rect,
+            Rect::from_origin_size(0, 60, 100, 20),
+        );
+        // Validate the bottom strip.
+        assert!(gwe.validate_window_rect(hwnd, Some(Rect::from_origin_size(0, 60, 100, 20))));
+        // No more pending update.
         assert!(gwe.update_rect(hwnd).is_none());
     }
 

@@ -217,7 +217,7 @@ fn unicorn_window_snapshot(window: crate::ce::gwe::Window) -> UnicornWindowSnaps
         pending_size: window.pending_size,
         rect: window.rect,
         client_rect: window.client_rect,
-        update_rect: window.update_rect,
+        update_rect: window.update_rects.iter().copied().reduce(crate::ce::gwe::Rect::union).unwrap_or_default(),
         wndproc: window.wndproc,
     }
 }
@@ -298,7 +298,11 @@ const CURRENT_WAIT_HOST_THROTTLE_MS: u64 = 1;
 const REALTIME_WAIT_THROTTLE_ENV: &str = "WINCE_EMU_REALTIME_WAITS";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum CreateWindowPhase { NcCreate, Create }
+
+#[derive(Debug, Clone)]
 struct CreateWindowReturn {
+    phase: CreateWindowPhase,
     return_pc: u32,
     hwnd: u32,
     wndproc: u32,
@@ -9975,6 +9979,8 @@ fn winsock_read_import_name(name: Option<&str>) -> Option<&'static str> {
         Some("recvfrom")
     } else if name.eq_ignore_ascii_case("select") {
         Some("select")
+    } else if name.eq_ignore_ascii_case("connect") || name.eq_ignore_ascii_case("WSAConnect") {
+        Some("connect")
     } else {
         None
     }
@@ -10000,6 +10006,34 @@ fn winsock_read_wait_plan<D>(
             WinsockReadyKind::Read,
             1,
             0,
+            0,
+        ))
+    } else if name == "connect" {
+        if crate::winsock::socket_nonblocking(socket) {
+            return None;
+        }
+        if !crate::winsock::socket_connect_wait_candidate(socket) {
+            return None;
+        }
+        let name_ptr = args.get(1).copied().unwrap_or(0);
+        let name_len = args.get(2).copied().unwrap_or(0);
+        if name_ptr == 0 || name_len < 16 {
+            return None;
+        }
+        let mut bytes = vec![0u8; 16];
+        if uc.mem_read(u64::from(name_ptr), &mut bytes).is_err() {
+            return None;
+        }
+        if !crate::winsock::socket_begin_tcp_connect(socket, &bytes) {
+            return None;
+        }
+        Some((
+            socket,
+            vec![socket],
+            crate::ce::timer::INFINITE,
+            WinsockReadyKind::Write,
+            0,
+            1,
             0,
         ))
     } else if name == "select" {
@@ -13378,6 +13412,118 @@ mod wait_scheduler_tests {
                 0
             );
         }
+    }
+
+    #[test]
+    fn winsock_blocking_connect_parks_until_tcp_connect_completes_and_replays_import() {
+        let _winsock_guard = reset_winsock_for_scheduler_test();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = crate::ce::kernel::CeKernel::boot(config);
+        let mut uc = unicorn_engine::Unicorn::new(
+            unicorn_engine::Arch::MIPS,
+            unicorn_engine::Mode::MIPS32 | unicorn_engine::Mode::LITTLE_ENDIAN,
+        )
+        .unwrap();
+        let base = 0x3017_0000u32;
+        uc.mem_map(base.into(), 0x10000, unicorn_engine::Prot::ALL)
+            .unwrap();
+        let sockaddr = base + 0x1000;
+        let thread_id = 17u32;
+        let thread_handle = 0x1717u32;
+        let return_pc = 0x0041_7000u32;
+
+        let socket = {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            memory.write_u16(sockaddr, 2).unwrap();
+            let port_bytes = port.to_be_bytes();
+            memory.write_u8(sockaddr + 2, port_bytes[0]).unwrap();
+            memory.write_u8(sockaddr + 3, port_bytes[1]).unwrap();
+            memory
+                .write_bytes(sockaddr + 4, &Ipv4Addr::LOCALHOST.octets())
+                .unwrap();
+            memory.fill_bytes(sockaddr + 8, 0, 8).unwrap();
+            let socket = crate::winsock::dispatch_import(
+                &mut kernel,
+                thread_id,
+                None,
+                Some("socket"),
+                &mut memory,
+                &[2, 1, 0],
+            );
+            assert_ne!(socket, crate::winsock::INVALID_SOCKET);
+            socket
+        };
+        assert!(crate::winsock::socket_connect_wait_candidate(socket));
+
+        uc.reg_write(unicorn_engine::RegisterMIPS::RA, u64::from(return_pc))
+            .unwrap();
+        let blocked_waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let pending_returns = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let current_thread_id = std::rc::Rc::new(std::cell::RefCell::new(thread_id));
+        let suspended_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let running_thread =
+            std::rc::Rc::new(std::cell::RefCell::new(Some((thread_id, thread_handle))));
+
+        assert!(super::try_block_winsock_read(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Winsock,
+            None,
+            Some("connect"),
+            &[socket, sockaddr, 16],
+            thread_id,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+        ));
+        assert_eq!(*running_thread.borrow(), None);
+        let blocked = blocked_waits.borrow()[0].clone();
+        assert_eq!(blocked.thread_id, thread_id);
+        assert_eq!(blocked.thread_handle, thread_handle);
+        assert_eq!(blocked.wait_handles, vec![socket]);
+        assert!(matches!(
+            blocked.kind,
+            BlockedWaitKind::WinsockRead {
+                socket: actual_socket,
+                name: Some("connect"),
+                ..
+            } if actual_socket == socket
+        ));
+        let scheduler_wait = kernel.blocked_waiter(blocked.wait_id).unwrap();
+        assert!(!scheduler_blocked_wait_is_ready(scheduler_wait, &kernel));
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !crate::winsock::socket_write_ready(socket) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(crate::winsock::socket_write_ready(socket));
+        let scheduler_wait = kernel.blocked_waiter(blocked.wait_id).unwrap();
+        assert!(scheduler_blocked_wait_is_ready(scheduler_wait, &kernel));
+        assert_eq!(
+            complete_blocked_winsock_read(&blocked, &mut kernel, &mut uc),
+            0
+        );
+        let _ = kernel.remove_blocked_waiter(blocked.wait_id);
+        {
+            let mut memory = super::UnicornGuestMemory { uc: &mut uc };
+            assert_eq!(
+                crate::winsock::dispatch_import(
+                    &mut kernel,
+                    thread_id,
+                    None,
+                    Some("closesocket"),
+                    &mut memory,
+                    &[socket],
+                ),
+                0
+            );
+        }
+        drop(listener);
     }
 
     #[test]
@@ -17029,6 +17175,147 @@ mod guest_thread_stack_tests {
 
         Ok(())
     }
+
+    #[test]
+    fn parent_exits_and_child_window_pump_stays_alive() -> Result<()> {
+        // Verify: when the parent process exits after queuing a SendNotifyMessage
+        // to a child's window, the scheduler hands execution to the child and the
+        // child's GWE window + pending sent message are preserved.
+        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let mut kernel = CeKernel::boot(config);
+
+        // Parent is process 1, thread 9 (matches iNavi.exe route-search scenario).
+        let parent_process_id = kernel.current_process_id();
+        let parent_thread = 9;
+        kernel.set_process_module_path("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned());
+        kernel.set_process_module_host_path(std::path::PathBuf::from(
+            r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe",
+        ));
+
+        // Queue a child process launch (gets process ID 2, thread 3).
+        let launch = kernel.queue_process_launch(
+            Some("\\SDMMC Disk\\INavi\\iSearch.exe".to_owned()),
+            Some(String::new()),
+        );
+        let child_process_id = launch.process_id;
+        let child_thread = launch.thread_id;
+        let _ = kernel.take_pending_process_launches();
+
+        // Child owns a window on its thread. Create it while the kernel sees
+        // the child's process context so the window carries child_process_id and
+        // is NOT destroyed when the parent exits.
+        let parent_state = kernel.current_process_state();
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: child_process_id,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        let child_hwnd =
+            kernel.create_window_ex_w(child_thread, "ISEARCH_WNDCLASS", "iSearch", None, 0, 0, 0);
+        kernel.set_current_process_state(parent_state);
+        assert_ne!(child_hwnd, 0);
+
+        // Parent (thread 9) sends a notify-style message to child's window before
+        // exiting. This queues a sent message in the child thread's sent queue
+        // without the parent blocking on a reply.
+        assert!(kernel.send_notify_message_w(
+            parent_thread,
+            child_hwnd,
+            crate::ce::gwe::WM_USER + 0x401,
+            14,
+            0
+        ));
+
+        // Child CPU is parked and blocked in GetMessageW.
+        let wait_id = kernel.register_blocked_waiter(
+            child_thread,
+            launch.thread_handle,
+            Vec::new(),
+            crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            },
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        let mut child_cpu = UnicornMips::new()?;
+        child_cpu.set_initial_thread_id(child_thread);
+        child_cpu.current_thread_id = child_thread;
+        child_cpu.blocked_guest_thread = Some(BlockedGuestThread {
+            wait_id,
+            thread_id: child_thread,
+            thread_handle: launch.thread_handle,
+            regs: MipsGuestContext::zero(),
+            return_pc: 0x0800_1000,
+            msg_ptr: 0x3000_0200,
+            hwnd: None,
+            min_msg: 0,
+            max_msg: 0,
+        });
+
+        let mut scheduler = UnicornMips::new()?;
+        scheduler.set_initial_thread_id(parent_thread);
+        scheduler.parked_child_processes.push_back(ParkedProcess {
+            application: launch.application.clone(),
+            process_handle: Some(launch.process_handle),
+            thread_handle: Some(launch.thread_handle),
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: child_process_id,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: child_thread,
+            cpu: Box::new(child_cpu),
+            blocked_send_id: None,
+            module_base: 0x0800_0000,
+            module_path: "\\SDMMC Disk\\INavi\\iSearch.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(
+                r"D:\INAVI_Emulator\INAVI\INavi\iSearch.exe",
+            ),
+            command_line: String::new(),
+            current_directory: None,
+        });
+
+        // The child has ready receiver work (pending sent message in its queue).
+        assert!(scheduler.has_ready_parked_wait_unblock(&kernel));
+
+        // Parent exits — destroys its own windows and marks process exited.
+        // The child's window and the queued sent message must survive.
+        assert!(kernel.terminate_process(
+            crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
+            0
+        ));
+        assert_ne!(
+            kernel.current_process_state().exit_code,
+            crate::ce::kernel::STILL_ACTIVE
+        );
+        assert_eq!(kernel.current_process_id(), parent_process_id);
+
+        // Scheduler hands execution to the child.
+        assert!(scheduler.switch_to_next_parked_child_process(&mut kernel));
+        assert!(!scheduler.has_parked_child_processes());
+        assert_eq!(kernel.current_process_id(), child_process_id);
+        assert_eq!(
+            kernel.process_exit_code_for_handle(launch.process_handle),
+            Some(crate::ce::kernel::STILL_ACTIVE)
+        );
+
+        // Child's GWE window is preserved across the handoff.
+        assert!(kernel.gwe.window(child_hwnd).is_some_and(|w| !w.destroyed));
+
+        // Pending sent message (from parent thread 9) is still in the child
+        // thread's queue — the child can service it in its next GetMessageW.
+        assert!(kernel.thread_has_pending_sent_message(child_thread));
+
+        // The scheduler recognises the child's GetMessageW wait as ready.
+        let child_wait = kernel
+            .blocked_waiter(wait_id)
+            .expect("child wait still registered");
+        assert!(scheduler_blocked_msg_wait_has_input(child_wait, &kernel));
+
+        Ok(())
+    }
 }
 
 
@@ -19869,13 +20156,15 @@ fn try_enter_send_message_callout<D>(
                 .iter()
                 .any(|process| process.process_state.process_id == target_process_id)
         {
+            let timeout_ms =
+                is_send_message_timeout.then(|| args.get(5).copied().unwrap_or(0));
             let Some(send_id) = kernel.begin_cross_thread_send_message_w(
                 active_thread_id,
                 hwnd,
                 msg,
                 wparam,
                 lparam,
-                None,
+                timeout_ms,
             ) else {
                 return false;
             };
@@ -19887,6 +20176,7 @@ fn try_enter_send_message_callout<D>(
                 active_thread_id,
             );
             let wait_started_ms = kernel.timers.tick_count();
+            let timeout_for_wait = timeout_ms.unwrap_or(crate::ce::timer::INFINITE);
             let kind = BlockedWaitKind::SendMessage {
                 send_id,
                 receiver_thread_id: target_thread_id,
@@ -19899,7 +20189,7 @@ fn try_enter_send_message_callout<D>(
                 Vec::new(),
                 scheduler_blocked_wait_kind(kind),
                 wait_started_ms,
-                crate::ce::timer::INFINITE,
+                timeout_for_wait,
             );
             blocked_waits.borrow_mut().push(BlockedWaitThread {
                 wait_id,
@@ -19908,7 +20198,7 @@ fn try_enter_send_message_callout<D>(
                 wait_handles: Vec::new(),
                 kind,
                 wait_started_ms,
-                timeout_ms: crate::ce::timer::INFINITE,
+                timeout_ms: timeout_for_wait,
                 regs: sender_regs,
                 return_pc,
             });
@@ -21375,10 +21665,11 @@ fn try_enter_create_window_create_callout<D>(
         class = class_name.as_str(),
         wndproc = format_args!("0x{wndproc:08x}"),
         return_pc = format_args!("0x{return_pc:08x}"),
-        "CreateWindowExW guest WM_CREATE callout"
+        "CreateWindowExW guest WM_NCCREATE+WM_CREATE callout"
     );
 
     let callout = CreateWindowReturn {
+        phase: CreateWindowPhase::NcCreate,
         return_pc,
         hwnd,
         wndproc,
@@ -21430,35 +21721,73 @@ fn handle_create_window_return_stub<D>(
         return Err(());
     };
     let result = read_mips_reg(uc, RegisterMIPS::V0);
-    record_wndproc_return(
-        last_wndproc_returns,
-        UnicornWndProcReturn {
-            source: "CreateWindowExW/WM_CREATE",
-            hwnd: callout.hwnd,
-            msg: crate::ce::gwe::WM_CREATE,
-            wparam: 0,
-            lparam: callout.lparam,
-            wndproc: callout.wndproc,
-            return_pc: callout.return_pc,
-            return_pc_trampoline_origin: None,
-            result,
-            class_name: callout.class_name.clone(),
-        },
-    );
 
-    if result == u32::MAX {
-        let _ = kernel.destroy_window_with_reason(callout.hwnd, "CreateWindowExW/WM_CREATE failed");
-        return_create_window_result(uc, callout.return_pc, 0)
-    } else {
-        let ret = return_create_window_result(uc, callout.return_pc, callout.hwnd);
-        // CE's CreateWindowEx calls ShowWindow(SW_SHOW) after WM_CREATE for WS_VISIBLE windows,
-        // which activates top-level windows via SetActiveWindow.
-        if callout.dw_style & crate::ce::gwe::WS_VISIBLE != 0
-            && callout.dw_style & crate::ce::gwe::WS_CHILD == 0
-        {
-            let _ = kernel.activate_window(Some(callout.hwnd));
+    match callout.phase {
+        CreateWindowPhase::NcCreate => {
+            record_wndproc_return(
+                last_wndproc_returns,
+                UnicornWndProcReturn {
+                    source: "CreateWindowExW/WM_NCCREATE",
+                    hwnd: callout.hwnd,
+                    msg: crate::ce::gwe::WM_NCCREATE,
+                    wparam: 0,
+                    lparam: callout.lparam,
+                    wndproc: callout.wndproc,
+                    return_pc: callout.return_pc,
+                    return_pc_trampoline_origin: None,
+                    result,
+                    class_name: callout.class_name.clone(),
+                },
+            );
+            if result == 0 {
+                // WM_NCCREATE returned FALSE: abort window creation.
+                let _ = kernel.destroy_window_with_reason(callout.hwnd, "CreateWindowExW/WM_NCCREATE failed");
+                return_create_window_result(uc, callout.return_pc, 0)
+            } else {
+                // Proceed to WM_CREATE.
+                let next = CreateWindowReturn {
+                    phase: CreateWindowPhase::Create,
+                    ..callout
+                };
+                if write_create_window_wndproc_call_registers(uc, &next) {
+                    pending_returns.borrow_mut().push(next);
+                    Ok(())
+                } else {
+                    Err(())
+                }
+            }
         }
-        ret
+        CreateWindowPhase::Create => {
+            record_wndproc_return(
+                last_wndproc_returns,
+                UnicornWndProcReturn {
+                    source: "CreateWindowExW/WM_CREATE",
+                    hwnd: callout.hwnd,
+                    msg: crate::ce::gwe::WM_CREATE,
+                    wparam: 0,
+                    lparam: callout.lparam,
+                    wndproc: callout.wndproc,
+                    return_pc: callout.return_pc,
+                    return_pc_trampoline_origin: None,
+                    result,
+                    class_name: callout.class_name.clone(),
+                },
+            );
+            if result == u32::MAX {
+                let _ = kernel.destroy_window_with_reason(callout.hwnd, "CreateWindowExW/WM_CREATE failed");
+                return_create_window_result(uc, callout.return_pc, 0)
+            } else {
+                let ret = return_create_window_result(uc, callout.return_pc, callout.hwnd);
+                // CE's CreateWindowEx calls ShowWindow(SW_SHOW) after WM_CREATE for WS_VISIBLE windows,
+                // which activates top-level windows via SetActiveWindow.
+                if callout.dw_style & crate::ce::gwe::WS_VISIBLE != 0
+                    && callout.dw_style & crate::ce::gwe::WS_CHILD == 0
+                {
+                    let _ = kernel.activate_window(Some(callout.hwnd));
+                }
+                ret
+            }
+        }
     }
 }
 
@@ -21488,10 +21817,13 @@ fn write_create_window_wndproc_call_registers<D>(
     callout: &CreateWindowReturn,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
-
+    let msg = match callout.phase {
+        CreateWindowPhase::NcCreate => crate::ce::gwe::WM_NCCREATE,
+        CreateWindowPhase::Create => crate::ce::gwe::WM_CREATE,
+    };
     let writes = [
         uc.reg_write(RegisterMIPS::A0, u64::from(callout.hwnd)),
-        uc.reg_write(RegisterMIPS::A1, u64::from(crate::ce::gwe::WM_CREATE)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(msg)),
         uc.reg_write(RegisterMIPS::A2, 0),
         uc.reg_write(RegisterMIPS::A3, u64::from(callout.lparam)),
         uc.reg_write(RegisterMIPS::RA, u64::from(CREATE_WINDOW_RETURN_STUB_ADDR)),
@@ -22281,7 +22613,7 @@ fn import_detail_after_return<D>(
             let style = window.map(|window| window.style).unwrap_or(0);
             let update_pending = window.is_some_and(|window| window.update_pending);
             let update_rect = window
-                .map(|window| window.update_rect)
+                .and_then(|w| w.update_rects.iter().copied().reduce(crate::ce::gwe::Rect::union))
                 .unwrap_or(crate::ce::gwe::Rect::default());
             let last_error = kernel.threads.get_last_error(thread_id);
             Some(format!(
@@ -22589,7 +22921,7 @@ fn import_detail_after_return<D>(
             let style = window.map(|window| window.style).unwrap_or(0);
             let update_pending = window.is_some_and(|window| window.update_pending);
             let update_rect = window
-                .map(|window| window.update_rect)
+                .and_then(|w| w.update_rects.iter().copied().reduce(crate::ce::gwe::Rect::union))
                 .unwrap_or(crate::ce::gwe::Rect::default());
             let paint_rect = read_paint_struct_rect(uc, paint_ptr);
             let erase = read_unicorn_u32(uc, paint_ptr.wrapping_add(4)).unwrap_or(0);
@@ -24074,6 +24406,7 @@ mod unicorn_tests {
         kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, wndproc);
         let lparam = 0x3000_0100;
         let pending = Rc::new(RefCell::new(vec![super::CreateWindowReturn {
+            phase: super::CreateWindowPhase::Create,
             return_pc,
             hwnd,
             wndproc,
@@ -24099,6 +24432,7 @@ mod unicorn_tests {
         let failed = kernel.create_window_ex_w(thread_id, "CREATE_FAIL", "", None, 0, 0, 0);
         kernel.gwe.set_window_long(failed, GWL_WNDPROC, wndproc);
         let pending = Rc::new(RefCell::new(vec![super::CreateWindowReturn {
+            phase: super::CreateWindowPhase::Create,
             return_pc,
             hwnd: failed,
             wndproc,
@@ -24115,6 +24449,86 @@ mod unicorn_tests {
         assert!(!kernel.gwe.is_window(failed));
         assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 0);
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
+    }
+
+    #[test]
+    fn create_window_nccreate_false_destroys_window_and_returns_null() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let thread_id = 9;
+        let return_pc = 0x0040_2000;
+        let wndproc = 0x0001_3570;
+        let hwnd = kernel.create_window_ex_w(thread_id, "NCCREATE_FAIL", "", None, 0, 0, 0);
+        kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, wndproc);
+        let lparam = 0x3000_0100;
+        let pending = Rc::new(RefCell::new(vec![super::CreateWindowReturn {
+            phase: super::CreateWindowPhase::NcCreate,
+            return_pc,
+            hwnd,
+            wndproc,
+            lparam,
+            dw_style: 0,
+            class_name: Some("NCCREATE_FAIL".to_owned()),
+        }]));
+        let returns = Rc::new(RefCell::new(Vec::new()));
+
+        // WM_NCCREATE returns 0 (FALSE) — window creation must be aborted.
+        uc.reg_write(RegisterMIPS::V0, 0).unwrap();
+        assert!(
+            super::handle_create_window_return_stub(&mut kernel, &mut uc, &pending, &returns)
+                .is_ok()
+        );
+        assert!(pending.borrow().is_empty());
+        assert!(!kernel.gwe.is_window(hwnd));
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 0);
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, return_pc);
+        assert_eq!(returns.borrow().len(), 1);
+        assert_eq!(returns.borrow()[0].source, "CreateWindowExW/WM_NCCREATE");
+        assert_eq!(returns.borrow()[0].msg, crate::ce::gwe::WM_NCCREATE);
+    }
+
+    #[test]
+    fn create_window_nccreate_true_proceeds_to_wm_create() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let thread_id = 9;
+        let return_pc = 0x0040_2000;
+        let wndproc = 0x0001_3570;
+        let hwnd = kernel.create_window_ex_w(thread_id, "NCCREATE_OK", "", None, 0, 0, 0);
+        kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, wndproc);
+        let lparam = 0x3000_0100;
+        let pending = Rc::new(RefCell::new(vec![super::CreateWindowReturn {
+            phase: super::CreateWindowPhase::NcCreate,
+            return_pc,
+            hwnd,
+            wndproc,
+            lparam,
+            dw_style: 0,
+            class_name: Some("NCCREATE_OK".to_owned()),
+        }]));
+        let returns = Rc::new(RefCell::new(Vec::new()));
+
+        // WM_NCCREATE returns 1 (TRUE) — must push WM_CREATE callout.
+        uc.reg_write(RegisterMIPS::V0, 1).unwrap();
+        assert!(
+            super::handle_create_window_return_stub(&mut kernel, &mut uc, &pending, &returns)
+                .is_ok()
+        );
+        // WM_NCCREATE recorded in returns.
+        assert_eq!(returns.borrow().len(), 1);
+        assert_eq!(returns.borrow()[0].source, "CreateWindowExW/WM_NCCREATE");
+        // A WM_CREATE callout must have been pushed.
+        assert_eq!(pending.borrow().len(), 1);
+        assert_eq!(pending.borrow()[0].phase, super::CreateWindowPhase::Create);
+        assert_eq!(pending.borrow()[0].hwnd, hwnd);
+        assert_eq!(pending.borrow()[0].wndproc, wndproc);
+        // PC must point at wndproc (ready to run WM_CREATE).
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, wndproc);
+        assert_eq!(uc.reg_read(RegisterMIPS::A1).unwrap() as u32, crate::ce::gwe::WM_CREATE);
+        // Window must still exist.
+        assert!(kernel.gwe.is_window(hwnd));
     }
 
     #[test]

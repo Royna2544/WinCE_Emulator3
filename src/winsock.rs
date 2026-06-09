@@ -10,7 +10,7 @@ use std::{
         Ipv4Addr, Shutdown, SocketAddr, SocketAddrV4, TcpListener, TcpStream, ToSocketAddrs,
         UdpSocket,
     },
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     time::Duration,
 };
 
@@ -58,6 +58,7 @@ const WSAEFAULT: u32 = 10014;
 const WSAEINVAL: u32 = 10022;
 const WSAEMFILE: u32 = 10024;
 const WSAEWOULDBLOCK: u32 = 10035;
+const WSAETIMEDOUT: u32 = 10060;
 const WSAENOPROTOOPT: u32 = 10042;
 const WSAEADDRINUSE: u32 = 10048;
 const WSAECONNRESET: u32 = 10054;
@@ -268,6 +269,7 @@ enum HostSocket {
         protocol: u32,
         nonblocking: bool,
     },
+    TcpConnecting(Arc<Mutex<Option<std::result::Result<TcpStream, u32>>>>),
     TcpStream(TcpStream),
     TcpListener {
         listener: TcpListener,
@@ -367,6 +369,69 @@ pub fn socket_write_wait_candidate(socket: u32) -> bool {
         .ok()
         .and_then(|state| state.sockets.get(&socket).map(host_socket_can_write_wait))
         .unwrap_or(false)
+}
+
+pub fn socket_connect_wait_candidate(socket: u32) -> bool {
+    state()
+        .lock()
+        .ok()
+        .and_then(|state| {
+            state.sockets.get(&socket).map(|s| {
+                matches!(
+                    s,
+                    HostSocket::Pending {
+                        family: AF_INET,
+                        socket_type: SOCK_STREAM,
+                        nonblocking: false,
+                        ..
+                    }
+                )
+            })
+        })
+        .unwrap_or(false)
+}
+
+pub fn socket_begin_tcp_connect(socket: u32, name_bytes: &[u8]) -> bool {
+    if name_bytes.len() < 16 {
+        return false;
+    }
+    let family = u16::from_le_bytes([name_bytes[0], name_bytes[1]]);
+    if family as u32 != AF_INET {
+        return false;
+    }
+    let port = u16::from_be_bytes([name_bytes[2], name_bytes[3]]);
+    let ip = Ipv4Addr::new(name_bytes[4], name_bytes[5], name_bytes[6], name_bytes[7]);
+    let host_addr = guest_to_host_addr(SocketAddrV4::new(ip, port));
+
+    let mut state = match state().lock() {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let options = state.options.get(&socket).copied().unwrap_or_default();
+    match state.sockets.get(&socket) {
+        Some(HostSocket::Pending {
+            family: AF_INET,
+            socket_type: SOCK_STREAM,
+            nonblocking: false,
+            ..
+        }) => {}
+        _ => return false,
+    }
+    let result: Arc<Mutex<Option<std::result::Result<TcpStream, u32>>>> = Arc::new(Mutex::new(None));
+    *state.sockets.get_mut(&socket).unwrap() = HostSocket::TcpConnecting(result.clone());
+    drop(state);
+    std::thread::spawn(move || {
+        let r = TcpStream::connect_timeout(&host_addr, Duration::from_secs(30))
+            .map(|stream| {
+                configure_stream(&stream, options);
+                stream
+            })
+            .map_err(|e| io_to_wsa_error(&e));
+        if let Ok(mut lock) = result.lock() {
+            *lock = Some(r);
+        }
+    });
+    true
 }
 
 pub fn socket_except_wait_candidate(socket: u32) -> bool {
@@ -532,6 +597,16 @@ fn connect_raw<M: CoredllGuestMemory>(
                     }
                 }
                 Err(error) => Err(io_to_wsa_error(&error)),
+            }
+        }
+        HostSocket::TcpConnecting(arc) => {
+            match arc.lock().ok().and_then(|mut lock| lock.take()) {
+                Some(Ok(stream)) => {
+                    *entry = HostSocket::TcpStream(stream);
+                    Ok(())
+                }
+                Some(Err(error)) => Err(error),
+                None => Err(WSAETIMEDOUT),
             }
         }
         HostSocket::TcpStream(_) | HostSocket::Udp(_) => Ok(()),
@@ -1300,7 +1375,7 @@ fn host_socket_read_ready(socket: &HostSocket, options: SocketOptions) -> bool {
         }
         HostSocket::Udp(udp) => udp_socket_read_ready(udp, options),
         HostSocket::TcpListener { pending, .. } => !pending.is_empty(),
-        HostSocket::Pending { .. } => false,
+        HostSocket::Pending { .. } | HostSocket::TcpConnecting(_) => false,
     }
 }
 
@@ -1316,6 +1391,7 @@ fn host_socket_can_write_wait(socket: &HostSocket) -> bool {
         socket,
         HostSocket::TcpStream(_)
             | HostSocket::Udp(_)
+            | HostSocket::TcpConnecting(_)
             | HostSocket::Pending {
                 family: AF_INET,
                 socket_type: SOCK_STREAM,
@@ -1389,7 +1465,14 @@ fn udp_socket_read_ready(udp: &UdpSocket, options: SocketOptions) -> bool {
 }
 
 fn host_socket_write_ready(socket: &HostSocket) -> bool {
-    matches!(socket, HostSocket::TcpStream(_) | HostSocket::Udp(_))
+    match socket {
+        HostSocket::TcpStream(_) | HostSocket::Udp(_) => true,
+        HostSocket::TcpConnecting(arc) => arc
+            .lock()
+            .ok()
+            .is_some_and(|lock| lock.is_some()),
+        _ => false,
+    }
 }
 
 fn host_socket_take_error(socket: &HostSocket) -> Option<u32> {
@@ -1397,7 +1480,7 @@ fn host_socket_take_error(socket: &HostSocket) -> Option<u32> {
         HostSocket::TcpStream(stream) => stream.take_error().ok().flatten(),
         HostSocket::TcpListener { listener, .. } => listener.take_error().ok().flatten(),
         HostSocket::Udp(udp) => udp.take_error().ok().flatten(),
-        HostSocket::Pending { .. } => None,
+        HostSocket::Pending { .. } | HostSocket::TcpConnecting(_) => None,
     }?;
     Some(io_to_wsa_error(&error))
 }
@@ -1549,6 +1632,7 @@ fn read_guest_c_string<M: CoredllGuestMemory>(
 fn apply_socket_options(socket: &mut HostSocket, options: SocketOptions) {
     match socket {
         HostSocket::Pending { nonblocking, .. } => *nonblocking = options.nonblocking,
+        HostSocket::TcpConnecting(_) => {}
         HostSocket::TcpStream(stream) => configure_stream(stream, options),
         HostSocket::TcpListener { listener, .. } => {
             let _ = listener.set_nonblocking(options.nonblocking);

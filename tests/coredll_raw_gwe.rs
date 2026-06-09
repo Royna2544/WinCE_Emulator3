@@ -20,11 +20,13 @@ use wince_emulation_v3::{
             ORD_DELETE_OBJECT, ORD_DESTROY_ACCELERATOR_TABLE, ORD_DESTROY_CARET,
             ORD_DIALOG_BOX_INDIRECT_PARAM_W, ORD_DESTROY_ICON, ORD_DESTROY_MENU,
             ORD_DESTROY_WINDOW, ORD_DISABLE_CARET_SYSTEM_WIDE, ORD_DISPATCH_MESSAGE_W,
+            ORD_DRAW_FRAME_CONTROL,
             ORD_DRAW_ICON_EX, ORD_DRAW_MENU_BAR, ORD_DRAW_TEXT_W,
             ORD_ELLIPSE, ORD_ENABLE_CARET_SYSTEM_WIDE,
             ORD_ENABLE_MENU_ITEM, ORD_ENABLE_WINDOW, ORD_END_DIALOG, ORD_END_PAINT, ORD_EQUAL_RECT,
             ORD_EXT_TEXT_OUT_W, ORD_FILL_RECT, ORD_FIND_RESOURCE, ORD_FIND_RESOURCE_W,
             ORD_FIND_WINDOW_W,
+            ORD_GRADIENT_FILL,
             ORD_GET_ACTIVE_WINDOW, ORD_GET_ASSOCIATED_MENU, ORD_GET_ASYNC_KEY_STATE,
             ORD_GET_CLIP_BOX, ORD_GET_OBJECT_W, ORD_GET_PIXEL,
             ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_INDIRECT,
@@ -101,11 +103,11 @@ use wince_emulation_v3::{
             GWL_STYLE, GWL_USERDATA, HTCAPTION, HTCLIENT, HTCLOSE, HTNOWHERE, HTSYSMENU, HTTOPLEFT,
             HWND_BROADCAST, KEY_SHIFT_ANY_SHIFT_FLAG,
             KEY_STATE_DOWN_FLAG, KEY_STATE_GET_ASYNC_DOWN_FLAG, KEY_STATE_PREV_DOWN_FLAG,
-            MA_ACTIVATE, MSGSRC_HARDWARE_KEYBOARD, MSGSRC_SOFTWARE_POST, MSGSRC_SOFTWARE_SEND,
+            GCS_COMPSTR, GCS_RESULTSTR, MA_ACTIVATE, MSGSRC_HARDWARE_KEYBOARD, MSGSRC_SOFTWARE_POST, MSGSRC_SOFTWARE_SEND,
             Message, PeekFlags, Point, QS_PAINT, QS_POSTMESSAGE, QS_SENDMESSAGE, QS_TIMER, Rect,
             SC_CLOSE, SM_CXBORDER, SM_CXSCREEN, SM_CYSCREEN, SMF_NOTIFY_MESSAGE,
             SMF_SENDER_NO_WAIT, SMF_TIMEOUT, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE,
-            SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, VK_CAPITAL, VK_CONTROL, VK_LCONTROL,
+            SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, VK_CAPITAL, VK_CONTROL, VK_HANGUL, VK_LCONTROL,
             VK_LSHIFT, VK_MENU, VK_NUMLOCK, VK_SCROLL, VK_SHIFT, WA_ACTIVE, WA_CLICKACTIVE,
             WA_INACTIVE, WM_ACTIVATE,
             WM_CANCELMODE, WM_CAPTURECHANGED, WM_CHAR, WM_CHARTOITEM, WM_CLOSE, WM_COMMAND,
@@ -122,6 +124,7 @@ use wince_emulation_v3::{
             WM_INPUTLANGCHANGE,
             WM_MEASUREITEM, WM_NEXTDLGCTL, WM_SETFONT, WM_SETTEXT, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE,
             WM_TIMECHANGE, WM_VSCROLL,
+            WM_DEADCHAR, WM_IME_CHAR, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION,
             WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WM_USER, WM_VKEYTOITEM,
             WM_WINDOWPOSCHANGED,
             WNDCLASSW_SIZE,
@@ -2012,7 +2015,9 @@ fn coredll_raw_polygon_fills_selected_memory_dib_with_selected_brush() -> Result
 }
 
 #[test]
-fn coredll_raw_polygon_uses_winding_fill_for_repeated_edges() -> Result<()> {
+fn coredll_raw_polygon_alternate_fill_skips_doubly_traced_interior() -> Result<()> {
+    // ALTERNATE (even-odd) fill is the CE default. A square traced twice produces
+    // an even number of crossings at interior points, so the interior is NOT filled.
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
     let mut kernel = CeKernel::boot(config);
@@ -2091,8 +2096,88 @@ fn coredll_raw_polygon_uses_winding_fill_for_repeated_edges() -> Result<()> {
         }
     ));
 
+    // Even number of edge crossings at every interior point → not filled.
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 2, 2), 0x0000);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 5, 4), 0x0000);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 0), 0x0000);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_polygon_alternate_fill_fills_simple_convex_polygon() -> Result<()> {
+    // ALTERNATE fill covers the interior of a simple convex polygon.
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 8, 6);
+    let points_ptr = 0x1_0200;
+    let points = [(1, 1), (6, 1), (6, 5), (1, 5)];
+    memory.map_bytes(points_ptr, (points.len() * 8) as u32);
+    for (index, (x, y)) in points.into_iter().enumerate() {
+        memory.write_point(points_ptr + index as u32 * 8, x, y);
+    }
+    let blue_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_SOLID_BRUSH,
+        [0x00ff_0000],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateSolidBrush did not return a brush: {other:?}"),
+    };
+    let null_pen = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_STOCK_OBJECT,
+        [8],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetStockObject(NULL_PEN): {other:?}"),
+    };
+    for object in [blue_brush, null_pen] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SELECT_OBJECT,
+                [mem_dc, object],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(handle),
+                ..
+            } if handle != 0
+        ));
+    }
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_POLYGON,
+            [mem_dc, points_ptr, points.len() as u32],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    // Interior pixels are filled with blue (0x001f in RGB565).
     assert_eq!(rgb565_at(&memory, bits_ptr, stride, 2, 2), 0x001f);
     assert_eq!(rgb565_at(&memory, bits_ptr, stride, 5, 4), 0x001f);
+    // Outside the polygon is untouched.
     assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 0), 0x0000);
 
     Ok(())
@@ -13430,6 +13515,114 @@ fn coredll_raw_translate_message_uses_shift_caps_and_syschar() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_translate_message_hangul_ime_composes_syllables() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 37;
+    let msg_ptr = 0x1_8000;
+    memory.map_words(msg_ptr, 7);
+
+    // Default keyboard layout is 0x0412 (Korean).
+    assert_eq!(kernel.gwe.keyboard_layout(), 0x0412);
+
+    let hwnd = kernel.create_window_ex_w(thread_id, "IME_TEST", "", None, 0, 0, 0);
+
+    let himc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMM_GET_CONTEXT,
+        [hwnd],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        other => panic!("unexpected ImmGetContext result: {other:?}"),
+    };
+    assert_ne!(himc, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_IMM_SET_OPEN_STATUS, [himc, 1],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+
+    // R (0x52) → ㄱ = Consonant(0): empty state → StartComposition + UpdateComposition(compat ㄱ=0x3131)
+    write_raw_message(&mut memory, msg_ptr, hwnd, WM_KEYDOWN, 0x52, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_TRANSLATE_MESSAGE, [msg_ptr],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+    kernel.gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_IME_STARTCOMPOSITION, WM_IME_STARTCOMPOSITION, PeekFlags::REMOVE)
+        .expect("R should post WM_IME_STARTCOMPOSITION");
+    let m = kernel.gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_IME_COMPOSITION, WM_IME_COMPOSITION, PeekFlags::REMOVE)
+        .expect("R should post WM_IME_COMPOSITION(ㄱ compat)");
+    assert_eq!(m.wparam, 0x3131, "R: WM_IME_COMPOSITION wparam should be compat ㄱ");
+    assert_eq!(m.lparam, GCS_COMPSTR, "R: WM_IME_COMPOSITION lparam should be GCS_COMPSTR");
+
+    // K (0x4B) → ㅏ = Vowel(0): ㄱ + ㅏ → 가 (0xAC00)
+    write_raw_message(&mut memory, msg_ptr, hwnd, WM_KEYDOWN, 0x4B, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_TRANSLATE_MESSAGE, [msg_ptr],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+    let m = kernel.gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_IME_COMPOSITION, WM_IME_COMPOSITION, PeekFlags::REMOVE)
+        .expect("K after R should post WM_IME_COMPOSITION(가)");
+    assert_eq!(m.wparam, 0xAC00, "K after R: should compose 가");
+    assert_eq!(m.lparam, GCS_COMPSTR);
+
+    // S (0x53) → ㄴ = Consonant(2), INITIAL_TO_FINAL[2]=4: 가 + final 4 → 간 (0xAC04)
+    write_raw_message(&mut memory, msg_ptr, hwnd, WM_KEYDOWN, 0x53, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_TRANSLATE_MESSAGE, [msg_ptr],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+    let m = kernel.gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_IME_COMPOSITION, WM_IME_COMPOSITION, PeekFlags::REMOVE)
+        .expect("S after RK should post WM_IME_COMPOSITION(간)");
+    assert_eq!(m.wparam, 0xAC04, "S after RK: should compose 간 = 0xAC00 + 4");
+    assert_eq!(m.lparam, GCS_COMPSTR);
+
+    // K (0x4B) again → ㅏ splits ㄴ from 간:
+    //   CommitChar(가=0xAC00) → WM_IME_CHAR + WM_IME_ENDCOMPOSITION
+    //   then StartComposition + UpdateComposition(나=0xB098)
+    write_raw_message(&mut memory, msg_ptr, hwnd, WM_KEYDOWN, 0x4B, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_TRANSLATE_MESSAGE, [msg_ptr],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+    let m = kernel.gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_IME_CHAR, WM_IME_CHAR, PeekFlags::REMOVE)
+        .expect("K after RKS should commit 가 via WM_IME_CHAR");
+    assert_eq!(m.wparam, 0xAC00, "committed char should be 가");
+    kernel.gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_IME_ENDCOMPOSITION, WM_IME_ENDCOMPOSITION, PeekFlags::REMOVE)
+        .expect("K after RKS should post WM_IME_ENDCOMPOSITION");
+    kernel.gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_IME_STARTCOMPOSITION, WM_IME_STARTCOMPOSITION, PeekFlags::REMOVE)
+        .expect("K after RKS should start new composition");
+    let m = kernel.gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_IME_COMPOSITION, WM_IME_COMPOSITION, PeekFlags::REMOVE)
+        .expect("K after RKS should post WM_IME_COMPOSITION(나)");
+    // 나 = ㄴ(initial 2) + ㅏ(vowel 0) = 0xAC00 + 2*21*28 = 0xAC00 + 1176 = 0xB098
+    assert_eq!(m.wparam, 0xB098, "new composition should be 나");
+    assert_eq!(m.lparam, GCS_COMPSTR);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_keyboard_layout_and_imm_context_are_stateful() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
@@ -19606,6 +19799,231 @@ fn coredll_raw_caret_hides_on_focus_change() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn coredll_raw_show_caret_xors_pixels_into_framebuffer() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let mut framebuffer = VirtualFramebuffer::new(50, 40, PixelFormat::Rgb565)?;
+    // Fill framebuffer with white (0xFFFF in RGB565).
+    framebuffer.pixels_mut().fill(0xff);
+    let _ = framebuffer.take_dirty_rects();
+    let thread_id = 106_u32;
+
+    let hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id, "CARET_XOR_WND", "", None, 0, WS_VISIBLE, 0,
+        Rect::from_origin_size(5, 6, 30, 25),
+    );
+    assert!(kernel.gwe.validate_window_rect(hwnd, None));
+
+    // Create a 2x4 caret at client position (3, 2).
+    table.dispatch_raw_ordinal_with_framebuffer(
+        &mut kernel, &mut memory, Some(&mut framebuffer), thread_id,
+        ORD_CREATE_CARET, [hwnd, 0, 2, 4],
+    );
+    table.dispatch_raw_ordinal_with_framebuffer(
+        &mut kernel, &mut memory, Some(&mut framebuffer), thread_id,
+        ORD_SET_CARET_POS, [3, 2],
+    );
+    // Before ShowCaret: framebuffer still all white.
+    assert!(framebuffer.pixels().iter().all(|b| *b == 0xff), "no pixels changed before ShowCaret");
+
+    // ShowCaret → should XOR-draw the caret into the framebuffer.
+    table.dispatch_raw_ordinal_with_framebuffer(
+        &mut kernel, &mut memory, Some(&mut framebuffer), thread_id,
+        ORD_SHOW_CARET, [hwnd],
+    );
+    assert!(kernel.gwe.caret_drawn_in_framebuffer(), "caret should be marked drawn after ShowCaret");
+
+    // Caret screen position: window at (5,6) + client (3,2) = screen (8,8), size 2x4.
+    // XOR of 0xFFFF = 0x0000. Check two bytes per pixel.
+    let stride = framebuffer.stride();
+    let bpp = PixelFormat::Rgb565.bytes_per_pixel();
+    let pixels = framebuffer.pixels();
+    for row in 8..12_usize {
+        for col in 8..10_usize {
+            let off = row * stride + col * bpp;
+            assert_eq!(
+                &pixels[off..off + bpp], &[0x00, 0x00],
+                "caret pixel at ({col},{row}) should be 0x0000 after ShowCaret"
+            );
+        }
+    }
+    // Pixel just outside caret rect (col 10, row 8) should still be white.
+    let outside_off = 8 * stride + 10 * bpp;
+    assert_eq!(&pixels[outside_off..outside_off + bpp], &[0xff, 0xff]);
+
+    // HideCaret → should XOR-erase the caret (restore white pixels).
+    table.dispatch_raw_ordinal_with_framebuffer(
+        &mut kernel, &mut memory, Some(&mut framebuffer), thread_id,
+        ORD_HIDE_CARET, [hwnd],
+    );
+    assert!(!kernel.gwe.caret_drawn_in_framebuffer(), "caret should not be drawn after HideCaret");
+    let pixels = framebuffer.pixels();
+    for row in 8..12_usize {
+        for col in 8..10_usize {
+            let off = row * stride + col * bpp;
+            assert_eq!(
+                &pixels[off..off + bpp], &[0xff, 0xff],
+                "caret pixel at ({col},{row}) should be restored after HideCaret"
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_begin_paint_erases_caret_end_paint_restores() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let mut framebuffer = VirtualFramebuffer::new(50, 40, PixelFormat::Rgb565)?;
+    framebuffer.pixels_mut().fill(0xff);
+    let _ = framebuffer.take_dirty_rects();
+    let thread_id = 107_u32;
+    let paint_struct_ptr = 0x4000_u32;
+    memory.map_words(paint_struct_ptr, 16);
+
+    let hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id, "CARET_PAINT_WND", "", None, 0, WS_VISIBLE, 0,
+        Rect::from_origin_size(0, 0, 50, 40),
+    );
+    assert!(kernel.gwe.validate_window_rect(hwnd, None));
+
+    // Create/show caret at client (4, 3), 2x4.
+    table.dispatch_raw_ordinal_with_framebuffer(
+        &mut kernel, &mut memory, Some(&mut framebuffer), thread_id,
+        ORD_CREATE_CARET, [hwnd, 0, 2, 4],
+    );
+    table.dispatch_raw_ordinal_with_framebuffer(
+        &mut kernel, &mut memory, Some(&mut framebuffer), thread_id,
+        ORD_SET_CARET_POS, [4, 3],
+    );
+    table.dispatch_raw_ordinal_with_framebuffer(
+        &mut kernel, &mut memory, Some(&mut framebuffer), thread_id,
+        ORD_SHOW_CARET, [hwnd],
+    );
+    assert!(kernel.gwe.caret_drawn_in_framebuffer());
+    // Caret should be XOR'd at screen (4,3), size 2x4 → pixels are 0x0000.
+    let stride = framebuffer.stride();
+    let bpp = PixelFormat::Rgb565.bytes_per_pixel();
+    {
+        let off = 3 * stride + 4 * bpp;
+        assert_eq!(&framebuffer.pixels()[off..off + bpp], &[0x00, 0x00]);
+    }
+
+    // BeginPaint → CE GWES erases caret so app sees clean pixels.
+    table.dispatch_raw_ordinal_with_framebuffer(
+        &mut kernel, &mut memory, Some(&mut framebuffer), thread_id,
+        ORD_BEGIN_PAINT, [hwnd, paint_struct_ptr],
+    );
+    assert!(!kernel.gwe.caret_drawn_in_framebuffer(), "BeginPaint should erase caret from framebuffer");
+    {
+        let off = 3 * stride + 4 * bpp;
+        assert_eq!(
+            &framebuffer.pixels()[off..off + bpp], &[0xff, 0xff],
+            "pixels should be restored to background after BeginPaint"
+        );
+    }
+
+    // EndPaint → CE GWES restores caret after app has painted.
+    table.dispatch_raw_ordinal_with_framebuffer(
+        &mut kernel, &mut memory, Some(&mut framebuffer), thread_id,
+        ORD_END_PAINT, [hwnd, paint_struct_ptr],
+    );
+    assert!(kernel.gwe.caret_drawn_in_framebuffer(), "EndPaint should re-draw caret into framebuffer");
+    {
+        let off = 3 * stride + 4 * bpp;
+        assert_eq!(
+            &framebuffer.pixels()[off..off + bpp], &[0x00, 0x00],
+            "caret should be re-drawn (XOR) after EndPaint"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_caret_blink_xors_framebuffer_via_peek_message() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let mut framebuffer = VirtualFramebuffer::new(50, 40, PixelFormat::Rgb565)?;
+    framebuffer.pixels_mut().fill(0xff);
+    let _ = framebuffer.take_dirty_rects();
+    let thread_id = 108_u32;
+    let msg_ptr = 0xf100_u32;
+    memory.map_words(msg_ptr, 7);
+
+    let hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id, "CARET_BLINK_XOR_WND", "", None, 0, WS_VISIBLE, 0,
+        Rect::from_origin_size(0, 0, 50, 40),
+    );
+    assert!(kernel.gwe.validate_window_rect(hwnd, None));
+    let _ = kernel.set_focus(Some(hwnd));
+
+    // Create/show caret at (2,2), 2x2.
+    table.dispatch_raw_ordinal_with_framebuffer(
+        &mut kernel, &mut memory, Some(&mut framebuffer), thread_id,
+        ORD_CREATE_CARET, [hwnd, 0, 2, 2],
+    );
+    table.dispatch_raw_ordinal_with_framebuffer(
+        &mut kernel, &mut memory, Some(&mut framebuffer), thread_id,
+        ORD_SET_CARET_POS, [2, 2],
+    );
+    table.dispatch_raw_ordinal_with_framebuffer(
+        &mut kernel, &mut memory, Some(&mut framebuffer), thread_id,
+        ORD_SHOW_CARET, [hwnd],
+    );
+    assert!(kernel.gwe.caret_drawn_in_framebuffer());
+
+    // Schedule blink phase: first PeekMessage sets caret_next_blink_ms.
+    table.dispatch_raw_ordinal_with_framebuffer(
+        &mut kernel, &mut memory, Some(&mut framebuffer), thread_id,
+        ORD_PEEK_MESSAGE_W,
+        [msg_ptr, 0u32, 0u32, 0u32, PeekFlags::NO_REMOVE.bits()],
+    );
+    assert!(kernel.gwe.caret_drawn_in_framebuffer(), "caret still drawn before first blink");
+
+    // Advance time past blink interval → next PeekMessage should toggle caret off.
+    kernel.timers.sleep_ms(600);
+    table.dispatch_raw_ordinal_with_framebuffer(
+        &mut kernel, &mut memory, Some(&mut framebuffer), thread_id,
+        ORD_PEEK_MESSAGE_W,
+        [msg_ptr, 0u32, 0u32, 0u32, PeekFlags::NO_REMOVE.bits()],
+    );
+    assert!(!kernel.gwe.caret_blink_visible(), "caret blink should be off after interval");
+    assert!(!kernel.gwe.caret_drawn_in_framebuffer(), "caret should be erased from framebuffer on blink-off");
+
+    let stride = framebuffer.stride();
+    let bpp = PixelFormat::Rgb565.bytes_per_pixel();
+    let off = 2 * stride + 2 * bpp;
+    assert_eq!(
+        &framebuffer.pixels()[off..off + bpp], &[0xff, 0xff],
+        "caret pixels restored to background after blink-off"
+    );
+
+    // Advance another blink interval → caret toggles back on.
+    kernel.timers.sleep_ms(600);
+    table.dispatch_raw_ordinal_with_framebuffer(
+        &mut kernel, &mut memory, Some(&mut framebuffer), thread_id,
+        ORD_PEEK_MESSAGE_W,
+        [msg_ptr, 0u32, 0u32, 0u32, PeekFlags::NO_REMOVE.bits()],
+    );
+    assert!(kernel.gwe.caret_blink_visible(), "caret blink should be on after second interval");
+    assert!(kernel.gwe.caret_drawn_in_framebuffer(), "caret should be re-drawn in framebuffer on blink-on");
+    assert_eq!(
+        &framebuffer.pixels()[off..off + bpp], &[0x00, 0x00],
+        "caret pixels XOR'd back after blink-on"
+    );
+
+    Ok(())
+}
+
 fn assert_next_message(
     table: &CoredllExportTable,
     kernel: &mut CeKernel,
@@ -21255,4 +21673,829 @@ fn write_raw_message(
 
 fn make_test_lparam(x: i32, y: i32) -> u32 {
     ((y as u16 as u32) << 16) | (x as u16 as u32)
+}
+
+#[test]
+fn coredll_raw_gradient_fill_rect_h_blends_colors_horizontally() -> Result<()> {
+    // GradientFill with GRADIENT_FILL_RECT_H (mode=0) blends from left-vertex
+    // color to right-vertex color horizontally across the rectangle.
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    // 10-wide, 2-tall bitmap.
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 10, 2);
+
+    // Vertex array (2 TRIVERTEX structs, each 16 bytes):
+    //   v0: (0,0)  r=0xFF00, g=0x0000, b=0x0000  → pure red
+    //   v1: (10,2) r=0x0000, g=0x0000, b=0xFF00  → pure blue
+    let vertex_ptr = 0x1_0200u32;
+    memory.map_bytes(vertex_ptr, 32);
+    // v0: x=0,y=0, R=0xFF00, G=0, B=0, A=0  (COLOR16 is LE: 0xFF00 → [0x00, 0xFF])
+    memory.write_bytes(vertex_ptr, &[
+        0,0,0,0,  0,0,0,0,  0x00,0xFF, 0,0, 0,0, 0,0
+    ]);
+    // v1: x=10,y=2, R=0, G=0, B=0xFF00, A=0
+    memory.write_bytes(vertex_ptr + 16, &[
+        10,0,0,0, 2,0,0,0,  0,0, 0,0, 0x00,0xFF, 0,0
+    ]);
+
+    // Mesh array (1 GRADIENT_RECT: UpperLeft=0, LowerRight=1)
+    let mesh_ptr = 0x1_0300u32;
+    memory.map_bytes(mesh_ptr, 8);
+    memory.write_bytes(mesh_ptr, &[0,0,0,0, 1,0,0,0]);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_GRADIENT_FILL,
+            // hdc, pVertex, nVertex=2, pMesh, nMesh=1, mode=0 (RECT_H)
+            [mem_dc, vertex_ptr, 2, mesh_ptr, 1, 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+
+    // Left column (x=0): should be pure red.  In RGB565: R=31 << 11 = 0xF800.
+    // Center (x=5): should be roughly mid-blend (r~128, b~128).
+    // Right column (x=9): should be pure blue. In RGB565: B=31 = 0x001F.
+    let left_px = rgb565_at(&memory, bits_ptr, stride, 0, 0);
+    let mid_px = rgb565_at(&memory, bits_ptr, stride, 5, 0);
+    let right_px = rgb565_at(&memory, bits_ptr, stride, 9, 0);
+    // Left pixel (x=0, t=0): red-only; no blue component.
+    assert_eq!(left_px & 0x001f, 0, "left pixel should have no blue");
+    assert!(left_px & 0xf800 > 0, "left pixel should have red");
+    // Right pixel (x=9, t=0.9): predominantly blue with little red; blue > red.
+    assert!((right_px & 0x001f) > (right_px >> 11), "right pixel: blue > red in 5-bit");
+    // Middle pixel (x=5, t=0.5): both red and blue present.
+    assert!(mid_px & 0xf800 > 0, "mid pixel should have some red");
+    assert!(mid_px & 0x001f > 0, "mid pixel should have some blue");
+
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_gradient_fill_rect_v_blends_colors_vertically() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 2, 10);
+
+    // v0: (0,0) pure red; v1: (2,10) pure blue; mode=1 (RECT_V)
+    // COLOR16 0xFF00 as little-endian bytes is [0x00, 0xFF]
+    let vertex_ptr = 0x1_0200u32;
+    memory.map_bytes(vertex_ptr, 32);
+    memory.write_bytes(vertex_ptr, &[
+        0,0,0,0, 0,0,0,0, 0x00,0xFF, 0,0, 0,0, 0,0
+    ]);
+    memory.write_bytes(vertex_ptr + 16, &[
+        2,0,0,0, 10,0,0,0, 0,0, 0,0, 0x00,0xFF, 0,0
+    ]);
+    let mesh_ptr = 0x1_0300u32;
+    memory.map_bytes(mesh_ptr, 8);
+    memory.write_bytes(mesh_ptr, &[0,0,0,0, 1,0,0,0]);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_GRADIENT_FILL,
+            [mem_dc, vertex_ptr, 2, mesh_ptr, 1, 1],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+
+    let top_px = rgb565_at(&memory, bits_ptr, stride, 0, 0);
+    let bot_px = rgb565_at(&memory, bits_ptr, stride, 0, 9);
+    // Top row (y=0, t=0): pure red, no blue.
+    assert_eq!(top_px & 0x001f, 0, "top row: no blue");
+    assert!(top_px & 0xf800 > 0, "top row: has red");
+    // Bottom row (y=9, t=0.9): predominantly blue; blue > red in 5-bit channels.
+    assert!((bot_px & 0x001f) > (bot_px >> 11), "bottom row: blue > red in 5-bit");
+    Ok(())
+}
+
+// ─── GDI Ellipse / RoundRect / pen-style tests ───────────────────────────────
+
+#[test]
+fn coredll_raw_ellipse_fills_interior_and_leaves_corners() -> Result<()> {
+    // An Ellipse inscribed in a 10×10 bitmap should fill central pixels
+    // and leave the four literal corners empty.
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 10, 10);
+
+    let blue_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_CREATE_SOLID_BRUSH, [0x00ff_0000],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        other => panic!("{other:?}"),
+    };
+    let null_pen = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_GET_STOCK_OBJECT, [8],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        other => panic!("{other:?}"),
+    };
+    for obj in [blue_brush, null_pen] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id, ORD_SELECT_OBJECT, [mem_dc, obj],
+            ),
+            CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } if h != 0
+        ));
+    }
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ELLIPSE,
+            // Ellipse inscribed in [0,0)–[10,10)
+            [mem_dc, 0u32, 0u32, 10u32, 10u32],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+
+    // Centre pixel must be filled (blue = 0x001f in RGB565).
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 5, 5), 0x001f,
+        "centre should be filled");
+    // The four literal pixel-corners of the bounding box must be untouched.
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 0), 0x0000,
+        "top-left corner should be empty");
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 9, 0), 0x0000,
+        "top-right corner should be empty");
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 9), 0x0000,
+        "bottom-left corner should be empty");
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 9, 9), 0x0000,
+        "bottom-right corner should be empty");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_ellipse_degenerate_zero_size_succeeds() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (mem_dc, _bits_ptr, _stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 4, 4);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_ELLIPSE,
+            [mem_dc, 2u32, 2u32, 2u32, 4u32],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_round_rect_fills_interior_with_rounded_corners() -> Result<()> {
+    // RoundRect(0,0,10,10, 4,4) — corner radius 2×2.
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 10, 10);
+
+    let blue_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_CREATE_SOLID_BRUSH, [0x00ff_0000],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        other => panic!("{other:?}"),
+    };
+    let null_pen = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_GET_STOCK_OBJECT, [8],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        other => panic!("{other:?}"),
+    };
+    for obj in [blue_brush, null_pen] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id, ORD_SELECT_OBJECT, [mem_dc, obj],
+            ),
+            CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } if h != 0
+        ));
+    }
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_ROUND_RECT,
+            [mem_dc, 0u32, 0u32, 10u32, 10u32, 4u32, 4u32],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+
+    // Central pixels must be filled.
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 5, 5), 0x001f,
+        "centre should be filled");
+    // Edge pixels inside rounded bounds — middle rows should be fully filled.
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 5), 0x001f,
+        "left-middle edge should be filled");
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 9, 5), 0x001f,
+        "right-middle edge should be filled");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_round_rect_zero_rounding_falls_back_to_rectangle() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 6, 6);
+
+    let blue_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_CREATE_SOLID_BRUSH, [0x00ff_0000],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        other => panic!("{other:?}"),
+    };
+    let null_pen = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_GET_STOCK_OBJECT, [8],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        other => panic!("{other:?}"),
+    };
+    for obj in [blue_brush, null_pen] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id, ORD_SELECT_OBJECT, [mem_dc, obj],
+            ),
+            CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } if h != 0
+        ));
+    }
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_ROUND_RECT,
+            // ew=0 → degenerate, acts like Rectangle
+            [mem_dc, 1u32, 1u32, 5u32, 5u32, 0u32, 0u32],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+
+    // All pixels inside the rectangle must be filled.
+    for y in 1u32..5 {
+        for x in 1u32..5 {
+            assert_eq!(rgb565_at(&memory, bits_ptr, stride, x, y), 0x001f,
+                "pixel ({x},{y}) inside rectangle should be filled");
+        }
+    }
+    // Corners outside the rectangle remain empty.
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 0), 0x0000);
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 5, 5), 0x0000);
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_pen_dot_style_draws_alternating_pixels() -> Result<()> {
+    // PS_DOT (style=2) draws 1 on, 1 off. A 6-pixel horizontal line should
+    // have pixels at offsets 0, 2, 4 filled and 1, 3, 5 empty.
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 8, 4);
+
+    // PS_DOT = 2, width = 1, color = blue
+    let dot_pen = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_CREATE_PEN,
+        [2u32, 1u32, 0x00ff_0000u32],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        other => panic!("{other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_SELECT_OBJECT, [mem_dc, dot_pen],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } if h != 0
+    ));
+
+    // MoveToEx(hdc, 1, 2, NULL)
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_MOVE_TO_EX, [mem_dc, 1u32, 2u32, 0u32],
+    );
+    // LineTo(hdc, 7, 2) — draws 6 pixels at y=2, x=1..6
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_LINE_TO, [mem_dc, 7u32, 2u32],
+    );
+
+    // style_state advances per pixel drawn:
+    // state 0 → on (x=1), state 1 → off (x=2), state 2 → on (x=3), …
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 1, 2), 0x001f, "x=1 on");
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 2, 2), 0x0000, "x=2 off");
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 3, 2), 0x001f, "x=3 on");
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 4, 2), 0x0000, "x=4 off");
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 5, 2), 0x001f, "x=5 on");
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 6, 2), 0x0000, "x=6 off");
+
+    Ok(())
+}
+
+// DrawFrameControl RGB565 color values derived from get_sys_color() and rgb():
+// COLOR_BTNHIGHLIGHT (20) = rgb(0xff,0xff,0xff): R=31, G=63, B=31 → 0xFFFF
+// COLOR_BTNSHADOW    (16) = rgb(0x80,0x80,0x80): R=16, G=32, B=16 → 0x8410
+// dark_shadow             = rgb(0x40,0x40,0x40): R=8,  G=16, B=8  → 0x4208
+// COLOR_BTNFACE      (15) = rgb(0xc0,0xc0,0xc0): R=24, G=48, B=24 → 0xC618
+// COLOR_WINDOW        (5) = rgb(0xff,0xff,0xff) → 0xFFFF
+// COLOR_WINDOWTEXT    (8) = rgb(0,0,0) → 0x0000
+
+#[test]
+fn coredll_raw_draw_frame_control_push_button_draws_raised_edge_and_face() -> Result<()> {
+    // DFC_BUTTON=4, DFCS_BUTTONPUSH=0x0010: normal (not pushed) raised edge
+    const DFC_BUTTON: u32 = 4;
+    const DFCS_BUTTONPUSH: u32 = 0x0010;
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 16, 16);
+
+    let rect_ptr = 0x1_0200;
+    memory.map_words(rect_ptr, 4);
+    memory.write_word(rect_ptr,      0); // left
+    memory.write_word(rect_ptr + 4,  0); // top
+    memory.write_word(rect_ptr + 8,  16); // right
+    memory.write_word(rect_ptr + 12, 16); // bottom
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_DRAW_FRAME_CONTROL,
+            [mem_dc, rect_ptr, DFC_BUTTON, DFCS_BUTTONPUSH],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+
+    // Outer TL = hilight (0xFFFF), outer BR = dark-shadow (0x4208)
+    // Top-left corner gets tl_out (hilight)
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 0), 0xFFFF, "top-left outer = hilight");
+    // Bottom row (y=15) overwrites left col at x=0 with br_out
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 15), 0x4208, "bottom-left outer = dk_shadow");
+    // Right-top corner: right col overwrites top row → br_out
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 15, 0), 0x4208, "top-right outer = dk_shadow");
+    // Interior face (center pixel away from all borders)
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 8, 8), 0xC618, "interior = btnface");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_draw_frame_control_push_button_pushed_draws_sunken_edge() -> Result<()> {
+    // DFCS_BUTTONPUSH | DFCS_PUSHED: sunken state
+    const DFC_BUTTON: u32 = 4;
+    const DFCS_BUTTONPUSH: u32 = 0x0010;
+    const DFCS_PUSHED: u32 = 0x0200;
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 16, 16);
+
+    let rect_ptr = 0x1_0200;
+    memory.map_words(rect_ptr, 4);
+    memory.write_word(rect_ptr,      0);
+    memory.write_word(rect_ptr + 4,  0);
+    memory.write_word(rect_ptr + 8,  16);
+    memory.write_word(rect_ptr + 12, 16);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_DRAW_FRAME_CONTROL,
+            [mem_dc, rect_ptr, DFC_BUTTON, DFCS_BUTTONPUSH | DFCS_PUSHED],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+
+    // Pushed: tl_out = dk_shadow (0x4208), br_out = hilight (0xFFFF)
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 0), 0x4208, "top-left outer = dk_shadow");
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 15, 15), 0xFFFF, "bottom-right outer = hilight");
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 8, 8), 0xC618, "interior = btnface");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_draw_frame_control_checkbox_draws_sunken_frame_and_white_interior() -> Result<()> {
+    // DFC_BUTTON + DFCS_BUTTONCHECK (0x0000) — unchecked
+    const DFC_BUTTON: u32 = 4;
+    const DFCS_BUTTONCHECK: u32 = 0x0000;
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 16, 16);
+
+    let rect_ptr = 0x1_0200;
+    memory.map_words(rect_ptr, 4);
+    memory.write_word(rect_ptr,      0);
+    memory.write_word(rect_ptr + 4,  0);
+    memory.write_word(rect_ptr + 8,  16);
+    memory.write_word(rect_ptr + 12, 16);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_DRAW_FRAME_CONTROL,
+            [mem_dc, rect_ptr, DFC_BUTTON, DFCS_BUTTONCHECK],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+
+    // Checkbox: outer TL = shadow (0x8410), outer BR = hilight (0xFFFF)
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 0), 0x8410, "top-left = shadow");
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 15, 15), 0xFFFF, "bottom-right = hilight");
+    // Interior (inside the 2-pixel border) = white (COLOR_WINDOW = 0xFFFF)
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 8, 8), 0xFFFF, "interior = white");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_draw_frame_control_checkbox_checked_draws_checkmark_pixels() -> Result<()> {
+    // DFCS_BUTTONCHECK | DFCS_CHECKED: checkmark should write dark pixels
+    const DFC_BUTTON: u32 = 4;
+    const DFCS_BUTTONCHECK: u32 = 0x0000;
+    const DFCS_CHECKED: u32 = 0x0400;
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    // Use a 20x20 bitmap so the checkmark has enough room to produce pixels
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 20, 20);
+
+    let rect_ptr = 0x1_0200;
+    memory.map_words(rect_ptr, 4);
+    memory.write_word(rect_ptr,      0);
+    memory.write_word(rect_ptr + 4,  0);
+    memory.write_word(rect_ptr + 8,  20);
+    memory.write_word(rect_ptr + 12, 20);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_DRAW_FRAME_CONTROL,
+            [mem_dc, rect_ptr, DFC_BUTTON, DFCS_BUTTONCHECK | DFCS_CHECKED],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+
+    // The checkmark is drawn in the inner area (l+2..r-2, t+2..b-2) = (2..18, 2..18)
+    // Corner is approximately at (inner_left + iw*3/8, inner_top + ih*7/8)
+    // iw = 16, ih = 16: corner ≈ (2+6, 2+14) = (8, 16)
+    // At least some pixel in the lower-left to upper-right area should be dark (0x0000)
+    // Check the corner of the tick (near center-bottom)
+    let tick_corner_x = 2 + 16 * 3 / 8; // = 8
+    let tick_corner_y = 2 + 16 * 7 / 8; // = 16
+    assert_eq!(
+        rgb565_at(&memory, bits_ptr, stride, tick_corner_x, tick_corner_y),
+        0x0000, // COLOR_WINDOWTEXT = black
+        "checkmark corner pixel should be dark"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_draw_frame_control_radio_button_unchecked_has_white_center() -> Result<()> {
+    // DFC_BUTTON + DFCS_BUTTONRADIO (0x0004): unchecked — center should be white
+    const DFC_BUTTON: u32 = 4;
+    const DFCS_BUTTONRADIO: u32 = 0x0004;
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 16, 16);
+
+    let rect_ptr = 0x1_0200;
+    memory.map_words(rect_ptr, 4);
+    memory.write_word(rect_ptr,      0);
+    memory.write_word(rect_ptr + 4,  0);
+    memory.write_word(rect_ptr + 8,  16);
+    memory.write_word(rect_ptr + 12, 16);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_DRAW_FRAME_CONTROL,
+            [mem_dc, rect_ptr, DFC_BUTTON, DFCS_BUTTONRADIO],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+
+    // The center of the 16x16 ellipse should be white (no dot when unchecked)
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 8, 8), 0xFFFF, "unchecked radio center = white");
+    // Corners (outside the ellipse) should remain unset (zero — the DIB was zeroed)
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 0), 0x0000, "outside ellipse = black (zero)");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_draw_frame_control_radio_button_checked_draws_center_dot() -> Result<()> {
+    // DFCS_BUTTONRADIO | DFCS_CHECKED: center dot should be dark
+    const DFC_BUTTON: u32 = 4;
+    const DFCS_BUTTONRADIO: u32 = 0x0004;
+    const DFCS_CHECKED: u32 = 0x0400;
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 16, 16);
+
+    let rect_ptr = 0x1_0200;
+    memory.map_words(rect_ptr, 4);
+    memory.write_word(rect_ptr,      0);
+    memory.write_word(rect_ptr + 4,  0);
+    memory.write_word(rect_ptr + 8,  16);
+    memory.write_word(rect_ptr + 12, 16);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_DRAW_FRAME_CONTROL,
+            [mem_dc, rect_ptr, DFC_BUTTON, DFCS_BUTTONRADIO | DFCS_CHECKED],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+
+    // Center dot spans (w*3/8..w*5/8, h*3/8..h*5/8) = (6..10, 6..10)
+    // An ellipse inscribed in that region — center (8,8) should be in the dot
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 8, 8), 0x0000, "checked radio center = dark");
+    // The ring just outside the dot area (say x=4, y=8) should be white (interior, no dot)
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 4, 8), 0xFFFF, "radio ring interior = white");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_def_window_proc_erasebkgnd_fills_client_with_class_brush() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+
+    // Create a solid blue brush — COLORREF 0x00FF0000 = R=0x00,G=0x00,B=0xFF (blue)
+    let blue_brush = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_CREATE_SOLID_BRUSH,
+        [0x00ff_0000u32],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        other => panic!("{other:?}"),
+    };
+
+    // Register a window class with the blue brush as hbrBackground
+    let mut raw_class = [0u8; WNDCLASSW_SIZE];
+    raw_class[28..32].copy_from_slice(&blue_brush.to_le_bytes());
+    kernel.gwe.register_class("ERASE_FILL_TEST", raw_class);
+
+    // Create a 10x8 window so it has a non-empty client rect
+    let hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id, "ERASE_FILL_TEST", "", None, 0, 0, 0,
+        Rect::from_origin_size(0, 0, 10, 8),
+    );
+
+    // Create a 10x8 memory DC
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 10, 8);
+
+    // DefWindowProcW(hwnd, WM_ERASEBKGND, mem_dc, 0) should fill client area
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_DEF_WINDOW_PROC_W,
+            [hwnd, WM_ERASEBKGND, mem_dc, 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(1), .. } // 1 = background erased
+    ));
+
+    // Blue RGB565: R=0, G=0, B=31 → 0x001F
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 0, 0), 0x001F, "top-left = blue");
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 9, 7), 0x001F, "bottom-right = blue");
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 5, 4), 0x001F, "center = blue");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_def_window_proc_erasebkgnd_null_brush_returns_zero() -> Result<()> {
+    // Window class with hbrBackground=0 → DefWindowProcW(WM_ERASEBKGND) returns 0
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+
+    let raw_class = [0u8; WNDCLASSW_SIZE]; // hbrBackground = 0
+    kernel.gwe.register_class("ERASE_NULL_TEST", raw_class);
+    let hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id, "ERASE_NULL_TEST", "", None, 0, 0, 0,
+        Rect::from_origin_size(0, 0, 10, 8),
+    );
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 10, 8);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_DEF_WINDOW_PROC_W,
+            [hwnd, WM_ERASEBKGND, mem_dc, 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(0), .. } // 0 = not erased
+    ));
+    // Bitmap should remain untouched (all zeros)
+    assert_eq!(rgb565_at(&memory, bits_ptr, stride, 5, 4), 0x0000, "no fill when no brush");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_translate_message_western_layout_dead_keys() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 41;
+    let msg_ptr = 0x2_0000;
+    memory.map_words(msg_ptr, 7);
+    let hwnd = kernel.create_window_ex_w(thread_id, "DEADKEY_OWNER", "", None, 0, 0, 0);
+
+    // Switch to German QWERTZ (0x0407) layout.
+    kernel.gwe.activate_keyboard_layout(0x0407);
+
+    let translate = |kernel: &mut CeKernel,
+                     memory: &mut TestGuestMemory,
+                     vkey: u32,
+                     shift: bool|
+     -> CoredllDispatch {
+        if shift {
+            kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYDOWN, VK_LSHIFT, 0);
+        }
+        write_raw_message(memory, msg_ptr, hwnd, WM_KEYDOWN, vkey, vkey + 0x100).unwrap();
+        let r = table.dispatch_raw_ordinal_with_memory(
+            kernel,
+            memory,
+            thread_id,
+            ORD_TRANSLATE_MESSAGE,
+            [msg_ptr],
+        );
+        if shift {
+            kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYUP, VK_LSHIFT, 0);
+        }
+        r
+    };
+
+    // --- German QWERTZ dead circumflex (VK_OEM_3 = 0xC0 unshifted → '^') ---
+    // Press ^: should post WM_DEADCHAR and store the pending dead key.
+    assert!(matches!(
+        translate(&mut kernel, &mut memory, 0xc0, false),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+    let deadchar_msg = kernel
+        .gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_DEADCHAR, WM_DEADCHAR, PeekFlags::REMOVE)
+        .expect("dead circumflex should post WM_DEADCHAR");
+    assert_eq!(deadchar_msg.wparam, 0x5e, "dead char should be '^'");
+    assert!(kernel.gwe.dead_key().is_some(), "dead key should be pending");
+
+    // Press 'e' (VK 0x45): dead circumflex + 'e' → 'ê' (0x00EA).
+    assert!(matches!(
+        translate(&mut kernel, &mut memory, 0x45, false),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+    assert!(kernel.gwe.dead_key().is_none(), "dead key should be cleared after composition");
+    let char_msg = kernel
+        .gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_CHAR, WM_CHAR, PeekFlags::REMOVE)
+        .expect("^ + e should post WM_CHAR(ê)");
+    assert_eq!(char_msg.wparam, 0x00ea, "circumflex + e → ê");
+
+    // --- German QWERTZ dead acute (VK_OEM_PLUS = 0xBB unshifted → '´') ---
+    assert!(matches!(
+        translate(&mut kernel, &mut memory, 0xbb, false),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+    let _ = kernel
+        .gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_DEADCHAR, WM_DEADCHAR, PeekFlags::REMOVE)
+        .expect("dead acute should post WM_DEADCHAR");
+
+    // Press 'u' → 'ú' (0x00FA).
+    assert!(matches!(
+        translate(&mut kernel, &mut memory, 0x55, false),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+    let char_msg = kernel
+        .gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_CHAR, WM_CHAR, PeekFlags::REMOVE)
+        .expect("´ + u should post WM_CHAR(ú)");
+    assert_eq!(char_msg.wparam, 0x00fa, "acute + u → ú");
+
+    // --- No composition: dead grave + 'z' → literal ` then z ---
+    // Dead grave via VK_OEM_PLUS shifted (0xBB + shift → '`')
+    assert!(matches!(
+        translate(&mut kernel, &mut memory, 0xbb, true),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+    let _ = kernel
+        .gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_DEADCHAR, WM_DEADCHAR, PeekFlags::REMOVE)
+        .expect("dead grave should post WM_DEADCHAR");
+
+    // Press 'z' on QWERTZ → 'y' character (0x79). Dead grave + 'y' has no composition.
+    assert!(matches!(
+        translate(&mut kernel, &mut memory, 0x5a, false),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+    let dead_literal = kernel
+        .gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_CHAR, WM_CHAR, PeekFlags::REMOVE)
+        .expect("no-compose: should post WM_CHAR(grave)");
+    assert_eq!(dead_literal.wparam, 0x60, "no-compose: literal grave first");
+    let base_char = kernel
+        .gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_CHAR, WM_CHAR, PeekFlags::REMOVE)
+        .expect("no-compose: should post WM_CHAR(y)");
+    assert_eq!(base_char.wparam, 0x79, "no-compose: base char 'y' after dead grave");
+
+    // --- French AZERTY (0x040C): dead diaeresis (VK_OEM_4 = 0xDB + shift → '¨') ---
+    kernel.gwe.activate_keyboard_layout(0x040C);
+    assert!(matches!(
+        translate(&mut kernel, &mut memory, 0xdb, true),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+    let _ = kernel
+        .gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_DEADCHAR, WM_DEADCHAR, PeekFlags::REMOVE)
+        .expect("dead diaeresis should post WM_DEADCHAR");
+
+    // Press 'o' on AZERTY → 'o' (VK_O = 0x4F). Dead diaeresis + 'o' → 'ö' (0x00F6).
+    assert!(matches!(
+        translate(&mut kernel, &mut memory, 0x4f, false),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+    let char_msg = kernel
+        .gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_CHAR, WM_CHAR, PeekFlags::REMOVE)
+        .expect("¨ + o should post WM_CHAR(ö)");
+    assert_eq!(char_msg.wparam, 0x00f6, "diaeresis + o → ö");
+
+    // --- Space after dead key emits the dead char literally ---
+    assert!(matches!(
+        translate(&mut kernel, &mut memory, 0xdb, false),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+    let _ = kernel
+        .gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_DEADCHAR, WM_DEADCHAR, PeekFlags::REMOVE)
+        .expect("dead circumflex should post WM_DEADCHAR");
+    // Press space: ^ + space → literal '^'
+    assert!(matches!(
+        translate(&mut kernel, &mut memory, 0x20, false),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+    let space_result = kernel
+        .gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_CHAR, WM_CHAR, PeekFlags::REMOVE)
+        .expect("dead ^ + space should post WM_CHAR(^)");
+    assert_eq!(space_result.wparam, 0x5e, "dead ^ + space → literal '^'");
+
+    Ok(())
 }

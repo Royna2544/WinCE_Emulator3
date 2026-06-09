@@ -9,6 +9,7 @@ pub mod devices;
 pub mod file;
 pub mod framebuffer;
 pub mod gwe;
+pub mod hangul;
 pub mod kernel;
 pub mod memory;
 pub mod object;

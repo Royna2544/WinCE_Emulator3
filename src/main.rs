@@ -795,8 +795,7 @@ fn publish_remote_endpoint(
     if let Some(server) = server {
         server.publish_status(&kernel.remote_status());
         server.publish_recent_logs(kernel.remote.recent_log_lines(4096));
-        let caret = kernel.gwe.visible_caret_screen_rect();
-        server.publish_framebuffer_with_caret(framebuffer, caret);
+        server.publish_framebuffer(framebuffer);
         if let Some(snapshot) = snapshot {
             server.publish_debug_text(
                 "summary",

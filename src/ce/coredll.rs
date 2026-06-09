@@ -5142,18 +5142,33 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 2) != 0,
         ))),
-        ORD_BEGIN_PAINT => Some(CoredllValue::Handle(begin_paint_raw(
-            kernel,
-            memory,
-            thread_id,
-            raw_arg(args, 0),
-            raw_arg(args, 1),
-        ))),
-        ORD_END_PAINT => Some(CoredllValue::Bool(end_paint_raw(
-            kernel,
-            thread_id,
-            raw_arg(args, 0),
-        ))),
+        ORD_BEGIN_PAINT => {
+            // CE GWES erases the caret before painting so the app sees clean pixels.
+            if kernel.gwe.caret_drawn_in_framebuffer() {
+                let old_caret = visible_caret_dirty_rect(kernel);
+                if let Some(fb) = framebuffer {
+                    sync_caret_framebuffer(kernel, fb, old_caret, None);
+                }
+            }
+            Some(CoredllValue::Handle(begin_paint_raw(
+                kernel,
+                memory,
+                thread_id,
+                raw_arg(args, 0),
+                raw_arg(args, 1),
+            )))
+        }
+        ORD_END_PAINT => {
+            let result = end_paint_raw(kernel, thread_id, raw_arg(args, 0));
+            // CE GWES re-draws the caret after painting.
+            if !kernel.gwe.caret_drawn_in_framebuffer() {
+                if let Some(fb) = framebuffer {
+                    let new_caret = visible_caret_dirty_rect(kernel);
+                    sync_caret_framebuffer(kernel, fb, None, new_caret);
+                }
+            }
+            Some(CoredllValue::Bool(result))
+        }
         ORD_GET_SCROLL_INFO => Some(CoredllValue::Bool(get_scroll_info_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -5530,12 +5545,13 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
-        ORD_INVERT_RECT => {
-            // InvertRect(hdc, lprc) — XOR-invert pixels in rect.
-            // No per-pixel XOR support without bitmap DC; return TRUE as safe stub.
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
-        }
+        ORD_INVERT_RECT => Some(CoredllValue::Bool(invert_rect_raw(
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            args,
+        ))),
         ORD_BIT_BLT => Some(CoredllValue::Bool(bit_blt_raw(
             kernel,
             memory,
@@ -5550,32 +5566,20 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             thread_id,
             args,
         ))),
-        ORD_ALPHA_BLEND => {
-            // AlphaBlend: blend source DC into destination DC with per-pixel alpha.
-            // We don't track per-pixel alpha compositing in the current framebuffer model;
-            // fall back to a plain BitBlt (ignores alpha channel) so content appears.
-            Some(CoredllValue::Bool(bit_blt_raw(
-                kernel,
-                memory,
-                framebuffer,
-                thread_id,
-                // AlphaBlend(hdcDst,xDst,yDst,wDst,hDst,hdcSrc,xSrc,ySrc,wSrc,hSrc,bf)
-                // BitBlt needs (hdcDst,xDst,yDst,wDst,hDst,hdcSrc,xSrc,ySrc,rop)
-                // Pass the first 8 args unchanged and add SRCCOPY rop.
-                &{
-                    let mut a = [0u32; 9];
-                    for (i, v) in args.iter().take(8).enumerate() { a[i] = *v; }
-                    a[8] = 0x00cc0020; // SRCCOPY
-                    a
-                },
-            )))
-        }
-        ORD_GRADIENT_FILL => {
-            // GradientFill: gradient fill of triangles or rectangles.
-            // Not supported in current framebuffer model; return TRUE as a no-op.
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(true))
-        }
+        ORD_ALPHA_BLEND => Some(CoredllValue::Bool(alpha_blend_raw(
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            args,
+        ))),
+        ORD_GRADIENT_FILL => Some(CoredllValue::Bool(gradient_fill_raw(
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            args,
+        ))),
         ORD_START_DOC_W | ORD_START_PAGE | ORD_END_PAGE | ORD_END_DOC | ORD_ABORT_DOC | ORD_SET_ABORT_PROC => {
             // Printer/spooler APIs: not supported on CE emulator targets.
             kernel
@@ -5683,9 +5687,20 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_i32_arg(args, 2),
         ))),
-        ORD_ROUND_RECT | ORD_ELLIPSE => {
-            Some(CoredllValue::Bool(gdi_shape_raw(kernel, thread_id, args)))
-        }
+        ORD_ELLIPSE => Some(CoredllValue::Bool(ellipse_raw(
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            args,
+        ))),
+        ORD_ROUND_RECT => Some(CoredllValue::Bool(round_rect_raw(
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            args,
+        ))),
         ORD_MOVE_TO_EX => Some(CoredllValue::Bool(move_to_ex_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -5743,18 +5758,27 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_i32_arg(args, 2),
             raw_arg(args, 3),
         ))),
-        ORD_DRAW_EDGE => {
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(raw_arg(args, 0) != 0))
-        }
-        ORD_DRAW_FOCUS_RECT => {
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(raw_arg(args, 0) != 0))
-        }
-        ORD_DRAW_FRAME_CONTROL => {
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(raw_arg(args, 0) != 0))
-        }
+        ORD_DRAW_EDGE => Some(CoredllValue::Bool(draw_edge_raw(
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            args,
+        ))),
+        ORD_DRAW_FOCUS_RECT => Some(CoredllValue::Bool(draw_focus_rect_raw(
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            args,
+        ))),
+        ORD_DRAW_FRAME_CONTROL => Some(CoredllValue::Bool(draw_frame_control_raw(
+            kernel,
+            memory,
+            framebuffer,
+            thread_id,
+            args,
+        ))),
         ORD_EXT_TEXT_OUT_W => Some(CoredllValue::Bool(ext_text_out_w_raw(
             kernel,
             memory,
@@ -6025,7 +6049,9 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
             raw_arg(args, 1),
         ))),
-        ORD_DEF_DLG_PROC_W => Some(CoredllValue::U32(0)),
+        ORD_DEF_DLG_PROC_W => Some(CoredllValue::U32(send_message_w_raw(
+            kernel, memory, thread_id, args, false,
+        ))),
         ORD_SET_DLG_ITEM_TEXT_W => Some(CoredllValue::Bool(set_dlg_item_text_w_raw(
             kernel, memory, thread_id, args,
         ))),
@@ -6499,12 +6525,17 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 1),
             raw_arg(args, 2),
         ))),
-        ORD_GET_MESSAGE_W => Some(CoredllValue::Bool(get_message_w_raw(
-            kernel, memory, thread_id, args,
-        ))),
-        ORD_GET_MESSAGE_WNO_WAIT => Some(CoredllValue::Bool(get_message_w_raw(
-            kernel, memory, thread_id, args,
-        ))),
+        ORD_GET_MESSAGE_W | ORD_GET_MESSAGE_WNO_WAIT => {
+            let old_caret = visible_caret_dirty_rect(kernel);
+            let result = get_message_w_raw(kernel, memory, thread_id, args);
+            let new_caret = visible_caret_dirty_rect(kernel);
+            if old_caret != new_caret {
+                if let Some(fb) = framebuffer {
+                    sync_caret_framebuffer(kernel, fb, old_caret, new_caret);
+                }
+            }
+            Some(CoredllValue::Bool(result))
+        }
         ORD_GET_MESSAGE_POS => Some(CoredllValue::U32(kernel.gwe.get_message_pos(thread_id))),
         ORD_GET_KEY_STATE => Some(CoredllValue::U32(
             kernel.gwe.get_key_state(raw_arg(args, 0)),
@@ -6770,9 +6801,17 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
         }
-        ORD_PEEK_MESSAGE_W => Some(CoredllValue::Bool(peek_message_w_raw(
-            kernel, memory, thread_id, args,
-        ))),
+        ORD_PEEK_MESSAGE_W => {
+            let old_caret = visible_caret_dirty_rect(kernel);
+            let result = peek_message_w_raw(kernel, memory, thread_id, args);
+            let new_caret = visible_caret_dirty_rect(kernel);
+            if old_caret != new_caret {
+                if let Some(fb) = framebuffer {
+                    sync_caret_framebuffer(kernel, fb, old_caret, new_caret);
+                }
+            }
+            Some(CoredllValue::Bool(result))
+        }
         ORD_POST_MESSAGE_W => Some(CoredllValue::Bool(kernel.post_message_w_for_thread(
             thread_id,
             raw_arg(args, 0),
@@ -6793,9 +6832,18 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_SEND_MESSAGE_W => Some(CoredllValue::U32(send_message_w_raw(
             kernel, memory, thread_id, args, true,
         ))),
-        ORD_DEF_WINDOW_PROC_W => Some(CoredllValue::U32(send_message_w_raw(
-            kernel, memory, thread_id, args, false,
-        ))),
+        ORD_DEF_WINDOW_PROC_W => {
+            let msg = raw_arg(args, 1);
+            if msg == crate::ce::gwe::WM_ERASEBKGND {
+                Some(CoredllValue::U32(def_window_proc_erasebkgnd_raw(
+                    kernel, memory, framebuffer, thread_id, args,
+                )))
+            } else {
+                Some(CoredllValue::U32(send_message_w_raw(
+                    kernel, memory, thread_id, args, false,
+                )))
+            }
+        }
         ORD_CALL_WINDOW_PROC_W => {
             // CallWindowProcW(lpPrevWndFunc, hWnd, Msg, wParam, lParam)
             // Calls a window procedure directly. Since our dispatch is based on hwnd, we ignore
@@ -7682,6 +7730,721 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
                 .math
                 .eval(CeMathCall::DoubleToFloat(raw_f64_pair(args, 0, 1))),
         )),
+
+        // ---- CRT narrow string ----
+        ORD_MEMCHR => {
+            let ptr = raw_arg(args, 0);
+            let ch = raw_arg(args, 1);
+            let n = raw_arg(args, 2);
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::memchr_raw(memory, ptr, ch, n)))
+        }
+        ORD_STRLEN => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::strlen_raw(memory, raw_arg(args, 0))))
+        }
+        ORD_STRCMP => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::strcmp_raw(memory, raw_arg(args, 0), raw_arg(args, 1)) as u32))
+        }
+        ORD_STRCHR => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::strchr_raw(memory, raw_arg(args, 0), raw_arg(args, 1))))
+        }
+        ORD_STRCSPN => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::strcspn_raw(memory, raw_arg(args, 0), raw_arg(args, 1))))
+        }
+        ORD_STRNCMP => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::strncmp_raw(memory, raw_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2)) as u32))
+        }
+        ORD_STRNCPY => Some(CoredllValue::U32(crt::strncpy_raw(
+            kernel, memory, thread_id,
+            raw_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2),
+        ))),
+        ORD_STRSTR => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::strstr_raw(memory, raw_arg(args, 0), raw_arg(args, 1))))
+        }
+        ORD_STRNCAT => Some(CoredllValue::U32(crt::strncat_raw(
+            kernel, memory, thread_id,
+            raw_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2),
+        ))),
+        ORD_STRSPN => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::strspn_raw(memory, raw_arg(args, 0), raw_arg(args, 1))))
+        }
+        ORD_STRPBRK => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::strpbrk_raw(memory, raw_arg(args, 0), raw_arg(args, 1))))
+        }
+        ORD_STRRCHR => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::strrchr_raw(memory, raw_arg(args, 0), raw_arg(args, 1))))
+        }
+        ORD_STRDUP => Some(CoredllValue::U32(crt::strdup_raw(
+            kernel, memory, thread_id, raw_arg(args, 0),
+        ))),
+        ORD_STRICMP => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::stricmp_raw(memory, raw_arg(args, 0), raw_arg(args, 1)) as u32))
+        }
+        ORD_STRNICMP => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::strnicmp_raw(memory, raw_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2)) as u32))
+        }
+        ORD_STRNSET => Some(CoredllValue::U32(crt::strnset_raw(
+            kernel, memory, thread_id,
+            raw_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2),
+        ))),
+        ORD_STRREV => Some(CoredllValue::U32(crt::strrev_raw(
+            kernel, memory, thread_id, raw_arg(args, 0),
+        ))),
+        ORD_STRSET => Some(CoredllValue::U32(crt::strset_raw(
+            kernel, memory, thread_id, raw_arg(args, 0), raw_arg(args, 1),
+        ))),
+        ORD_STRLWR => Some(CoredllValue::U32(crt::strlwr_raw(
+            kernel, memory, thread_id, raw_arg(args, 0),
+        ))),
+        ORD_STRTOL => Some(CoredllValue::U32(crt::strtol_raw(
+            kernel, memory, thread_id,
+            raw_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2),
+        ) as u32)),
+        ORD_STRTOD => Some(CoredllValue::CeMath(CeMathValue::F64(crt::strtod_raw(
+            kernel, memory, thread_id,
+            raw_arg(args, 0), raw_arg(args, 1),
+        )))),
+        ORD_ATOL => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::atol_raw(memory, raw_arg(args, 0)) as u32))
+        }
+        ORD_ATOI64 => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::CeMath(CeMathValue::I64(crt::atoi64_raw(memory, raw_arg(args, 0)))))
+        }
+        ORD_ITOA => Some(CoredllValue::U32(crt::itoa_raw(
+            kernel, memory, thread_id,
+            raw_i32_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2),
+        ))),
+        ORD_ITOW => Some(CoredllValue::U32(crt::itow_raw(
+            kernel, memory, thread_id,
+            raw_i32_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2),
+        ))),
+        ORD_LTOA => Some(CoredllValue::U32(crt::ltoa_raw(
+            kernel, memory, thread_id,
+            raw_i32_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2),
+        ))),
+        ORD_LTOW => Some(CoredllValue::U32(crt::ltow_raw(
+            kernel, memory, thread_id,
+            raw_i32_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2),
+        ))),
+        ORD_ULTOA => Some(CoredllValue::U32(crt::ultoa_raw(
+            kernel, memory, thread_id,
+            raw_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2),
+        ))),
+        ORD_ULTOW => Some(CoredllValue::U32(crt::ultow_raw(
+            kernel, memory, thread_id,
+            raw_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2),
+        ))),
+        ORD_MEMCCPY => {
+            // _memccpy(dest, src, ch, n): copy bytes from src to dest, stop after first ch or n bytes
+            let dest = raw_arg(args, 0);
+            let src = raw_arg(args, 1);
+            let ch = raw_arg(args, 2) as u8;
+            let n = raw_arg(args, 3);
+            if dest == 0 || src == 0 {
+                kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return Some(CoredllValue::U32(0));
+            }
+            let mut result = 0u32;
+            for i in 0..n {
+                let Ok(b) = memory.read_u8(src.wrapping_add(i)) else { break; };
+                if !write_guest_bytes(kernel, memory, thread_id, dest.wrapping_add(i), &[b]) {
+                    return Some(CoredllValue::U32(0));
+                }
+                if b == ch {
+                    result = dest.wrapping_add(i).wrapping_add(1);
+                    break;
+                }
+            }
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(result))
+        }
+        ORD_MEMICMP => {
+            let n = raw_arg(args, 2);
+            let mut result = 0i32;
+            for i in 0..n {
+                let Ok(la) = memory.read_u8(raw_arg(args, 0).wrapping_add(i)) else { result = -1; break; };
+                let Ok(lb) = memory.read_u8(raw_arg(args, 1).wrapping_add(i)) else { result = 1; break; };
+                let la_f = if la.is_ascii_uppercase() { la + 0x20 } else { la };
+                let lb_f = if lb.is_ascii_uppercase() { lb + 0x20 } else { lb };
+                if la_f != lb_f { result = i32::from(la_f) - i32::from(lb_f); break; }
+            }
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(result as u32))
+        }
+        ORD_SWAB => {
+            // _swab(src, dest, n): copy n bytes swapping adjacent pairs
+            let src = raw_arg(args, 0);
+            let dest = raw_arg(args, 1);
+            let n = raw_arg(args, 2) & !1; // round down to even
+            for i in (0..n).step_by(2) {
+                let Ok(a) = memory.read_u8(src.wrapping_add(i)) else { break; };
+                let Ok(b) = memory.read_u8(src.wrapping_add(i + 1)) else { break; };
+                let _ = write_guest_bytes(kernel, memory, thread_id, dest.wrapping_add(i), &[b]);
+                let _ = write_guest_bytes(kernel, memory, thread_id, dest.wrapping_add(i + 1), &[a]);
+            }
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_ISCTYPE => {
+            // _isctype(c, mask): return non-zero if c has one of the character class bits in mask
+            let c = raw_arg(args, 0) as u8;
+            let mask = raw_arg(args, 1);
+            let flags: u32 = {
+                let mut f = 0u32;
+                if c.is_ascii_uppercase()    { f |= 0x0001; } // _UPPER
+                if c.is_ascii_lowercase()    { f |= 0x0002; } // _LOWER
+                if c.is_ascii_digit()        { f |= 0x0004; } // _DIGIT
+                if c == b' ' || (0x09..=0x0d).contains(&c) { f |= 0x0008; } // _SPACE
+                if b"!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~".contains(&c) { f |= 0x0010; } // _PUNCT
+                if c.is_ascii_graphic() || c == b' ' { f |= 0x0020; } // _BLANK / printable
+                if c.is_ascii_hexdigit()     { f |= 0x0040; } // _HEX
+                if c.is_ascii()              { f |= 0x0080; } // _ALPHA (ascii)
+                if c.is_ascii_alphabetic()   { f |= 0x0100; } // _ALPHA strict
+                f
+            };
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(flags & mask))
+        }
+        ORD_CALLOC => Some(CoredllValue::U32(crt::calloc_raw(
+            kernel, memory, thread_id,
+            raw_arg(args, 0), raw_arg(args, 1),
+        ))),
+
+        // ---- CRT wide string extras ----
+        ORD_WCSCAT => Some(CoredllValue::U32(crt::wcscat_raw(
+            kernel, memory, thread_id, raw_arg(args, 0), raw_arg(args, 1),
+        ))),
+        ORD_WCSCMP => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::wcscmp_raw(memory, raw_arg(args, 0), raw_arg(args, 1)) as u32))
+        }
+        ORD_WCSCSPN => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::wcscspn_raw(memory, raw_arg(args, 0), raw_arg(args, 1))))
+        }
+        ORD_WCSNCAT => Some(CoredllValue::U32(crt::wcsncat_raw(
+            kernel, memory, thread_id,
+            raw_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2),
+        ))),
+        ORD_WCSNSET => Some(CoredllValue::U32(crt::wcsnset_raw(
+            kernel, memory, thread_id,
+            raw_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2),
+        ))),
+        ORD_WCSREV => Some(CoredllValue::U32(crt::wcsrev_raw(
+            kernel, memory, thread_id, raw_arg(args, 0),
+        ))),
+        ORD_WCSSET => Some(CoredllValue::U32(crt::wcsset_raw(
+            kernel, memory, thread_id, raw_arg(args, 0), raw_arg(args, 1),
+        ))),
+        ORD_WCSSPN => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::wcsspn_raw(memory, raw_arg(args, 0), raw_arg(args, 1))))
+        }
+        ORD_WCSTOK => Some(CoredllValue::U32(crt::wcstok_raw(
+            kernel, memory, thread_id, raw_arg(args, 0), raw_arg(args, 1),
+        ))),
+        ORD_WTOLL => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::CeMath(CeMathValue::I64(crt::wtoll_raw(memory, raw_arg(args, 0)))))
+        }
+        ORD_TOWLOWER => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::towlower_raw(raw_arg(args, 0))))
+        }
+        ORD_TOWUPPER => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::towupper_raw(raw_arg(args, 0))))
+        }
+        ORD_WCSLWR => Some(CoredllValue::U32(crt::wcslwr_raw(
+            kernel, memory, thread_id, raw_arg(args, 0),
+        ))),
+        ORD_WCSUPR => Some(CoredllValue::U32(crt::wcsupr_raw(
+            kernel, memory, thread_id, raw_arg(args, 0),
+        ))),
+        ORD_WCSTOL => Some(CoredllValue::U32(crt::wcstol_raw(
+            kernel, memory, thread_id,
+            raw_arg(args, 0), raw_arg(args, 1), raw_arg(args, 2),
+        ) as u32)),
+        ORD_WCSTOD => Some(CoredllValue::CeMath(CeMathValue::F64(crt::wcstod_raw(
+            kernel, memory, thread_id,
+            raw_arg(args, 0), raw_arg(args, 1),
+        )))),
+
+        // ---- Bit / integer ops ----
+        ORD_ROTL => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::rotl32(raw_arg(args, 0), raw_arg(args, 1))))
+        }
+        ORD_ROTR => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::rotr32(raw_arg(args, 0), raw_arg(args, 1))))
+        }
+        ORD_LROTL => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::lrotl(raw_arg(args, 0), raw_arg(args, 1))))
+        }
+        ORD_LROTR => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::lrotr(raw_arg(args, 0), raw_arg(args, 1))))
+        }
+        ORD_BYTESWAP_USHORT => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::byteswap_ushort(raw_arg(args, 0))))
+        }
+        ORD_BYTESWAP_ULONG => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::byteswap_ulong(raw_arg(args, 0))))
+        }
+        ORD_BYTESWAP_UINT64 => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::CeMath(CeMathValue::U64(crt::byteswap_uint64_raw(raw_u64_pair(args, 0, 1)))))
+        }
+        ORD_COUNT_LEADING_ZEROS => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::count_leading_zeros(raw_arg(args, 0))))
+        }
+        ORD_COUNT_LEADING_ZEROS64 => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::count_leading_zeros64(raw_u64_pair(args, 0, 1))))
+        }
+        ORD_COUNT_LEADING_ONES => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::count_leading_ones(raw_arg(args, 0))))
+        }
+        ORD_COUNT_LEADING_ONES64 => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::count_leading_ones64(raw_u64_pair(args, 0, 1))))
+        }
+        ORD_COUNT_LEADING_SIGNS => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::count_leading_signs(raw_i32_arg(args, 0))))
+        }
+        ORD_COUNT_LEADING_SIGNS64 => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::count_leading_signs64(raw_i64_pair(args, 0, 1))))
+        }
+        ORD_COUNT_ONE_BITS => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::count_one_bits(raw_arg(args, 0))))
+        }
+        ORD_COUNT_ONE_BITS64 => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::count_one_bits64(raw_u64_pair(args, 0, 1))))
+        }
+        ORD_MUL_HIGH => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::mul_high(raw_i32_arg(args, 0), raw_i32_arg(args, 1)) as u32))
+        }
+        ORD_MUL_UNSIGNED_HIGH => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::mul_unsigned_high(raw_arg(args, 0), raw_arg(args, 1))))
+        }
+        ORD_ROTL64 => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::CeMath(CeMathValue::U64(crt::rotl64(raw_u64_pair(args, 0, 1), u64::from(raw_arg(args, 2))))))
+        }
+        ORD_ROTR64 => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::CeMath(CeMathValue::U64(crt::rotr64(raw_u64_pair(args, 0, 1), u64::from(raw_arg(args, 2))))))
+        }
+        ORD_ABS64 => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::CeMath(CeMathValue::I64(crt::abs64(raw_i64_pair(args, 0, 1)))))
+        }
+
+        // ---- Float math extras ----
+        ORD_CEILF => Some(CoredllValue::CeMath(CeMathValue::F32(raw_f32_arg(args, 0).ceil()))),
+        ORD_FABSF => Some(CoredllValue::CeMath(CeMathValue::F32(raw_f32_arg(args, 0).abs()))),
+        ORD_FLOORF => Some(CoredllValue::CeMath(CeMathValue::F32(raw_f32_arg(args, 0).floor()))),
+        ORD_SQRTF => Some(CoredllValue::CeMath(CeMathValue::F32(raw_f32_arg(args, 0).sqrt()))),
+        ORD_FINITE => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(u32::from(crt::finite_raw(raw_f64_pair(args, 0, 1)))))
+        }
+        ORD_ISNAN => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(u32::from(crt::isnan_raw(raw_f64_pair(args, 0, 1)))))
+        }
+        ORD_ISNANF => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(u32::from(crt::isnanf_raw(raw_f32_arg(args, 0)))))
+        }
+        ORD_ISUNORDERED => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(u32::from(crt::isunordered_raw(raw_f64_pair(args, 0, 1), raw_f64_pair(args, 2, 3)))))
+        }
+        ORD_ISUNORDEREDF => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(u32::from(crt::isunorderedf_raw(raw_f32_arg(args, 0), raw_f32_arg(args, 1)))))
+        }
+        ORD_FRND => Some(CoredllValue::CeMath(CeMathValue::F64(crt::frnd_raw(raw_f64_pair(args, 0, 1))))),
+        ORD_FPCLASS => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(crt::fpclass_raw(raw_f64_pair(args, 0, 1)) as u32))
+        }
+        ORD_COPYSIGN => Some(CoredllValue::CeMath(CeMathValue::F64(
+            crt::copysign_raw(raw_f64_pair(args, 0, 1), raw_f64_pair(args, 2, 3)),
+        ))),
+        ORD_CHGSIGN => Some(CoredllValue::CeMath(CeMathValue::F64(crt::chgsign_raw(raw_f64_pair(args, 0, 1))))),
+        ORD_LOGB => Some(CoredllValue::CeMath(CeMathValue::F64(crt::logb_raw(raw_f64_pair(args, 0, 1))))),
+        ORD_SCALB => Some(CoredllValue::CeMath(CeMathValue::F64(
+            crt::scalb_raw(raw_f64_pair(args, 0, 1), raw_f64_pair(args, 2, 3)),
+        ))),
+        ORD_NEXTAFTER => Some(CoredllValue::CeMath(CeMathValue::F64(
+            crt::nextafter_raw(raw_f64_pair(args, 0, 1), raw_f64_pair(args, 2, 3)),
+        ))),
+        ORD_DIFFTIME => {
+            // difftime(time1, time0) = time1 - time0 as f64
+            let t1 = raw_arg(args, 0) as f64;
+            let t0 = raw_arg(args, 1) as f64;
+            Some(CoredllValue::CeMath(CeMathValue::F64(t1 - t0)))
+        }
+        ORD_CABS => {
+            // _cabs({re, im}) where re and im are doubles: sqrt(re^2+im^2)
+            let re = raw_f64_pair(args, 0, 1);
+            let im = raw_f64_pair(args, 2, 3);
+            Some(CoredllValue::CeMath(CeMathValue::F64((re * re + im * im).sqrt())))
+        }
+        ORD_J0 | ORD_J1 | ORD_Y0 | ORD_Y1 => {
+            // Bessel functions - return NaN as unsupported
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::CeMath(CeMathValue::F64(f64::NAN)))
+        }
+        ORD_JN | ORD_YN => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::CeMath(CeMathValue::F64(f64::NAN)))
+        }
+        ORD_ECVT | ORD_FCVT | ORD_GCVT => {
+            // Float-to-string conversions: write empty string to dest, return 0
+            let dest = raw_arg(args, 2);
+            if dest != 0 {
+                let _ = write_guest_bytes(kernel, memory, thread_id, dest, &[0]);
+            }
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(dest))
+        }
+        ORD_ATODBL => {
+            // _atodbl(result_ptr, str_ptr): write f64 to *result, return 0
+            let result_ptr = raw_arg(args, 0);
+            let str_ptr = raw_arg(args, 1);
+            if result_ptr != 0 && str_ptr != 0 {
+                let v = crt::atof_raw(memory, str_ptr);
+                let bytes = v.to_le_bytes();
+                let _ = write_guest_bytes(kernel, memory, thread_id, result_ptr, &bytes);
+            }
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_ATOFLT => {
+            // _atoflt(result_ptr, str_ptr): write f32 to *result, return 0
+            let result_ptr = raw_arg(args, 0);
+            let str_ptr = raw_arg(args, 1);
+            if result_ptr != 0 && str_ptr != 0 {
+                let v = crt::atof_raw(memory, str_ptr) as f32;
+                let bytes = v.to_le_bytes();
+                let _ = write_guest_bytes(kernel, memory, thread_id, result_ptr, &bytes);
+            }
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_CLEARFP | ORD_FPRESET => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_CONTROLFP => {
+            // _controlfp(new, mask): returns current FP control word (stub: 0x9001f = default)
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0x9001f))
+        }
+        ORD_STATUSFP => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_LD12TOD | ORD_LD12TOF | ORD_STRGTOLD12 => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_FSQRT => Some(CoredllValue::CeMath(CeMathValue::F64(raw_f64_pair(args, 0, 1).sqrt()))),
+
+        // ---- MIPS 64-bit helpers ----
+        ORD_LL_BIT_EXTRACT => {
+            let val = raw_i64_pair(args, 0, 1);
+            let from = raw_arg(args, 2);
+            let len = raw_arg(args, 3);
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::CeMath(CeMathValue::I64(crt::ll_bit_extract(val, from, len))))
+        }
+        ORD_LL_BIT_INSERT => {
+            let target = raw_i64_pair(args, 0, 1);
+            let from = raw_arg(args, 2);
+            let len = raw_arg(args, 3);
+            let val = raw_i64_pair(args, 4, 5);
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::CeMath(CeMathValue::I64(crt::ll_bit_insert(target, from, len, val))))
+        }
+        ORD_LL_TO_F => {
+            let val = raw_i64_pair(args, 0, 1);
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::CeMath(CeMathValue::F32(crt::ll_to_f(val))))
+        }
+        ORD_LL_TO_D => {
+            let val = raw_i64_pair(args, 0, 1);
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::CeMath(CeMathValue::F64(crt::ll_to_d(val))))
+        }
+        ORD_ULL_BIT_EXTRACT => {
+            let val = raw_u64_pair(args, 0, 1);
+            let from = raw_arg(args, 2);
+            let len = raw_arg(args, 3);
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::CeMath(CeMathValue::U64(crt::ull_bit_extract(val, from, len))))
+        }
+        ORD_ULL_BIT_INSERT => {
+            let target = raw_u64_pair(args, 0, 1);
+            let from = raw_arg(args, 2);
+            let len = raw_arg(args, 3);
+            let val = raw_u64_pair(args, 4, 5);
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::CeMath(CeMathValue::U64(crt::ull_bit_insert(target, from, len, val))))
+        }
+        ORD_ULL_TO_F => {
+            let val = raw_u64_pair(args, 0, 1);
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::CeMath(CeMathValue::F32(crt::ull_to_f(val))))
+        }
+        ORD_ULL_TO_D => {
+            let val = raw_u64_pair(args, 0, 1);
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::CeMath(CeMathValue::F64(crt::ull_to_d(val))))
+        }
+
+        // ---- Stub / low-priority ----
+        ORD_SYSTEM_STARTED => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_CLOSE_ALL_DEVICE_HANDLES | ORD_CREATE_DEVICE_HANDLE => {
+            kernel.threads.set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_THGROW | ORD_THREAD_ATTACH_ALL_DLLS | ORD_THREAD_DETACH_ALL_DLLS
+        | ORD_PROCESS_DETACH_ALL_DLLS | ORD_CLOSE_PROC_OE => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_TAKE_CRIT_SEC | ORD_LEAVE_CRIT_SEC | ORD_CREATE_CRIT => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_OTHER_THREADS_RUNNING => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(1))
+        }
+        ORD_NK_TERMINATE_THREAD => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_PURECALL | ORD_FLTUSED => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_SSCANF | ORD_SCANF | ORD_FSCANF | ORD_SWSCANF | ORD_WSCANF | ORD_FWSCANF => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_VPRINTF | ORD_VFPRINTF | ORD_VWPRINTF | ORD_VFWPRINTF => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_FPRINTF | ORD_WPRINTF | ORD_FWPRINTF => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_GETCHAR | ORD_GETWCHAR => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(u32::MAX)) // EOF
+        }
+        ORD_PUTCHAR | ORD_PUTWCHAR => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(raw_arg(args, 0)))
+        }
+        ORD_GETS | ORD_GETWS => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0)) // EOF / null
+        }
+        ORD_PUTS => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_PUTWS => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_FGETC | ORD_FGETWC => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(u32::MAX)) // EOF
+        }
+        ORD_FPUTC => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(raw_arg(args, 0)))
+        }
+        ORD_FPUTWC => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(raw_arg(args, 0)))
+        }
+        ORD_FPUTS | ORD_FPUTWS => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_UNGETC | ORD_UNGETWC => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(raw_arg(args, 0)))
+        }
+        ORD_FGETWS => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_WFDOPEN | ORD_WFREOPEN => {
+            kernel.threads.set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_FCLOSEALL | ORD_FLUSHALL => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_FILENO => {
+            // _fileno: return stream handle as-is
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(raw_arg(args, 0)))
+        }
+        ORD_CLEARERR => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_FGETPOS => {
+            // fgetpos(stream, pos_ptr): write current position to *pos_ptr
+            let stream = raw_arg(args, 0);
+            let pos_ptr = raw_arg(args, 1);
+            match kernel.file_position(stream) {
+                Ok(pos) if pos_ptr != 0 => {
+                    let bytes = (pos as u64).to_le_bytes();
+                    let _ = write_guest_bytes(kernel, memory, thread_id, pos_ptr, &bytes);
+                    kernel.threads.set_last_error(thread_id, 0);
+                    Some(CoredllValue::U32(0))
+                }
+                _ => {
+                    kernel.threads.set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                    Some(CoredllValue::U32(u32::MAX))
+                }
+            }
+        }
+        ORD_FSETPOS => {
+            // fsetpos(stream, pos_ptr): seek to position stored at *pos_ptr
+            let stream = raw_arg(args, 0);
+            let pos_ptr = raw_arg(args, 1);
+            if pos_ptr == 0 {
+                kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return Some(CoredllValue::U32(u32::MAX));
+            }
+            let pos = memory.read_u32(pos_ptr).unwrap_or(0);
+            match kernel.set_file_pointer(stream, i64::from(pos), 0) {
+                Ok(_) => {
+                    kernel.threads.set_last_error(thread_id, 0);
+                    Some(CoredllValue::U32(0))
+                }
+                Err(_) => {
+                    kernel.threads.set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                    Some(CoredllValue::U32(u32::MAX))
+                }
+            }
+        }
+        ORD_SETVBUF | ORD_SETMODE => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_INITSTDIOLIB | ORD_GETSTDFILEX | ORD_HUGE => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_GET_CRT_STORAGE_EX | ORD_GET_PRIVATE_CALLBACKS => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_QUERY_NEW_HANDLER | ORD_SET_NEW_HANDLER | ORD_SET_NEW_HANDLER2
+        | ORD_SET_NEW_MODE | ORD_QUERY_NEW_MODE => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_OPERATOR_NEW_NOTHROW => {
+            // operator new(size_t, nothrow_t): same as malloc, never throws
+            let size = raw_arg(args, 0);
+            let ptr = crt::malloc_raw(kernel, thread_id, size);
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(ptr))
+        }
+        ORD_OPERATOR_DELETE_NOTHROW => {
+            // operator delete(void*, nothrow_t): same as free
+            crt::free_raw(kernel, raw_arg(args, 0));
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_CXX_FRAME_HANDLER | ORD_CXX_THROW_EXCEPTION => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_SET_TERMINATE | ORD_SET_UNEXPECTED | ORD_SET_INCONSISTENCY => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_STD_TERMINATE | ORD_STD_UNEXPECTED | ORD_STD_INCONSISTENCY => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_XCPT_FILTER => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_NOTHROW_OBJ | ORD_STD_XLEN | ORD_STD_XRAN | ORD_STD_NOMEMORY => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_INT_CREATE_EVENT_W => {
+            let manual_reset = raw_arg(args, 1);
+            let initial_state = raw_arg(args, 2);
+            let name_ptr = raw_arg(args, 3);
+            let event_name = if name_ptr != 0 { read_guest_wide_arg(memory, name_ptr) } else { None };
+            let handle = kernel.create_event_w(event_name, manual_reset != 0, initial_state != 0);
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::Handle(handle))
+        }
+        ORD_INT_CLOSE_HANDLE => {
+            let handle = raw_arg(args, 0);
+            let _ = kernel.close_handle(handle);
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_RTLCHECKSTACK | ORD_C_SPECIFIC_HANDLER => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_SET_WDEVICE_POWER_HANDLER => {
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
+
         _ => None,
     }
 }
@@ -10709,12 +11472,7 @@ fn dirty_caret_rects(
         dirty_caret_rect(kernel, rect);
     }
     if let Some(framebuffer) = framebuffer {
-        if let Some(rect) = old_rect {
-            mark_framebuffer_screen_rect(framebuffer, rect.screen_rect);
-        }
-        if let Some(rect) = new_rect.filter(|rect| Some(*rect) != old_rect) {
-            mark_framebuffer_screen_rect(framebuffer, rect.screen_rect);
-        }
+        sync_caret_framebuffer(kernel, framebuffer, old_rect, new_rect);
     }
 }
 
@@ -10733,6 +11491,51 @@ fn mark_framebuffer_screen_rect(framebuffer: &mut dyn Framebuffer, rect: Rect) {
     let bottom = rect.bottom.max(0).min(info.height as i32) as u32;
     if right > left && bottom > top {
         framebuffer.mark_dirty(FramebufferRect::new(left, top, right - left, bottom - top));
+    }
+}
+
+/// XOR all pixel bytes in a screen rect, inverting all channels (CE GWES caret XOR semantics).
+fn xor_caret_in_framebuffer(framebuffer: &mut dyn Framebuffer, screen_rect: Rect) {
+    let info = framebuffer.info();
+    let rect = screen_rect.normalized();
+    let x0 = rect.left.max(0) as usize;
+    let y0 = rect.top.max(0) as usize;
+    let x1 = (rect.right as usize).min(info.width as usize);
+    let y1 = (rect.bottom as usize).min(info.height as usize);
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    let bpp = info.format.bytes_per_pixel();
+    let pixels = framebuffer.pixels_mut();
+    for y in y0..y1 {
+        let row_start = y * info.stride + x0 * bpp;
+        let row_end = y * info.stride + x1 * bpp;
+        for b in pixels[row_start..row_end].iter_mut() {
+            *b ^= 0xff;
+        }
+    }
+}
+
+/// Apply caret XOR to the framebuffer: erase old drawn position, draw new visible position.
+/// Maintains `kernel.gwe.caret_drawn_in_framebuffer` state.
+fn sync_caret_framebuffer(
+    kernel: &mut CeKernel,
+    framebuffer: &mut dyn Framebuffer,
+    old_rect: Option<CaretDirtyRect>,
+    new_rect: Option<CaretDirtyRect>,
+) {
+    let was_drawn = kernel.gwe.caret_drawn_in_framebuffer();
+    if was_drawn {
+        if let Some(rect) = old_rect {
+            xor_caret_in_framebuffer(framebuffer, rect.screen_rect);
+            mark_framebuffer_screen_rect(framebuffer, rect.screen_rect);
+        }
+        kernel.gwe.set_caret_drawn_in_framebuffer(false);
+    }
+    if let Some(rect) = new_rect {
+        xor_caret_in_framebuffer(framebuffer, rect.screen_rect);
+        mark_framebuffer_screen_rect(framebuffer, rect.screen_rect);
+        kernel.gwe.set_caret_drawn_in_framebuffer(true);
     }
 }
 
@@ -25080,8 +25883,13 @@ fn get_update_rgn_raw(
         return ERROR_REGION;
     }
     let update = kernel.gwe.update_rect(hwnd);
-    let rect = update.map(|update| update.rect).unwrap_or_default();
-    if !kernel.resources.set_region(region, rect) {
+    let update_rects: Vec<crate::ce::gwe::Rect> = kernel
+        .gwe
+        .window(hwnd)
+        .filter(|_| update.is_some())
+        .map(|w| w.update_rects.clone())
+        .unwrap_or_default();
+    if !kernel.resources.set_region_rects(region, update_rects) {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
@@ -25097,7 +25905,11 @@ fn get_update_rgn_raw(
         }
     }
     kernel.threads.set_last_error(thread_id, 0);
-    region_status(rect)
+    kernel
+        .resources
+        .region(region)
+        .map(region_status_object)
+        .unwrap_or(NULLREGION)
 }
 
 fn get_window_thread_process_id_raw<M: CoredllGuestMemory>(
@@ -26060,6 +26872,516 @@ fn get_rop2_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32) -> u32 {
     state.rop2 as u32
 }
 
+// DrawEdge flag constants (from wingdi.h / winuser.h)
+const BDR_RAISEDOUTER: u32 = 0x0001;
+const BDR_SUNKENOUTER: u32 = 0x0002;
+const BDR_RAISEDINNER: u32 = 0x0004;
+const BDR_SUNKENINNER: u32 = 0x0008;
+const BF_LEFT: u32 = 0x0001;
+const BF_TOP: u32 = 0x0002;
+const BF_RIGHT: u32 = 0x0004;
+const BF_BOTTOM: u32 = 0x0008;
+const BF_DIAGONAL: u32 = 0x0010;
+const BF_MIDDLE: u32 = 0x0800;
+const BF_ADJUST: u32 = 0x2000;
+const BF_FLAT: u32 = 0x4000;
+const BF_MONO: u32 = 0x8000;
+const BF_RECT: u32 = BF_LEFT | BF_TOP | BF_RIGHT | BF_BOTTOM;
+
+// DrawFrameControl type constants (wingdi.h)
+const DFC_CAPTION: u32 = 1;
+const DFC_MENU: u32 = 2;
+const DFC_SCROLL: u32 = 3;
+const DFC_BUTTON: u32 = 4;
+
+// DrawFrameControl state constants for DFC_BUTTON
+const DFCS_BUTTONCHECK: u32 = 0x0000;
+const DFCS_BUTTONRADIOIMAGE: u32 = 0x0001;
+const DFCS_BUTTONRADIOMASK: u32 = 0x0002;
+const DFCS_BUTTONRADIO: u32 = 0x0004;
+const DFCS_BUTTON3STATE: u32 = 0x0008;
+const DFCS_BUTTONPUSH: u32 = 0x0010;
+const DFCS_INACTIVE: u32 = 0x0100;
+const DFCS_PUSHED: u32 = 0x0200;
+const DFCS_CHECKED: u32 = 0x0400;
+const DFCS_ADJUSTRECT: u32 = 0x2000;
+
+fn draw_edge_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    // DrawEdge(hdc, lprc, edge, grfFlags)
+    let hdc = raw_arg(args, 0);
+    let rect_ptr = raw_arg(args, 1);
+    let edge = raw_arg(args, 2);
+    let flags = raw_arg(args, 3);
+    if hdc == 0 || rect_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
+        return false;
+    };
+    if flags & BF_DIAGONAL != 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+    let (light, shadow, dark_shadow) = if flags & BF_MONO != 0 {
+        (rgb(0xff, 0xff, 0xff), rgb(0, 0, 0), rgb(0, 0, 0))
+    } else if flags & BF_FLAT != 0 {
+        (rgb(0xd4, 0xd0, 0xc8), rgb(0xd4, 0xd0, 0xc8), rgb(0x80, 0x80, 0x80))
+    } else {
+        (rgb(0xff, 0xff, 0xff), rgb(0x80, 0x80, 0x80), rgb(0x40, 0x40, 0x40))
+    };
+    let outer_tl = if edge & BDR_RAISEDOUTER != 0 {
+        light
+    } else if edge & BDR_SUNKENOUTER != 0 {
+        dark_shadow
+    } else {
+        0
+    };
+    let outer_br = if edge & BDR_RAISEDOUTER != 0 {
+        dark_shadow
+    } else if edge & BDR_SUNKENOUTER != 0 {
+        light
+    } else {
+        0
+    };
+    let inner_tl = if edge & BDR_RAISEDINNER != 0 {
+        light
+    } else if edge & BDR_SUNKENINNER != 0 {
+        shadow
+    } else {
+        0
+    };
+    let inner_br = if edge & BDR_RAISEDINNER != 0 {
+        shadow
+    } else if edge & BDR_SUNKENINNER != 0 {
+        light
+    } else {
+        0
+    };
+    // Collect (rect, color) pairs to draw in order.
+    let l = rect.left;
+    let t = rect.top;
+    let r = rect.right;
+    let b = rect.bottom;
+    let bf_top = flags & BF_TOP != 0;
+    let bf_left = flags & BF_LEFT != 0;
+    let bf_bottom = flags & BF_BOTTOM != 0;
+    let bf_right = flags & BF_RIGHT != 0;
+    let mut rects: Vec<(Rect, u32)> = Vec::new();
+    // Outer border
+    if bf_top && outer_tl != 0 { rects.push((Rect { left: l, top: t, right: r, bottom: t + 1 }, outer_tl)); }
+    if bf_left && outer_tl != 0 { rects.push((Rect { left: l, top: t, right: l + 1, bottom: b }, outer_tl)); }
+    if bf_bottom && outer_br != 0 { rects.push((Rect { left: l, top: b - 1, right: r, bottom: b }, outer_br)); }
+    if bf_right && outer_br != 0 { rects.push((Rect { left: r - 1, top: t, right: r, bottom: b }, outer_br)); }
+    // Inner border
+    let (il, it, ir, ib) = (l + 1, t + 1, r - 1, b - 1);
+    if ir > il && ib > it {
+        if bf_top && inner_tl != 0 { rects.push((Rect { left: il, top: it, right: ir, bottom: it + 1 }, inner_tl)); }
+        if bf_left && inner_tl != 0 { rects.push((Rect { left: il, top: it, right: il + 1, bottom: ib }, inner_tl)); }
+        if bf_bottom && inner_br != 0 { rects.push((Rect { left: il, top: ib - 1, right: ir, bottom: ib }, inner_br)); }
+        if bf_right && inner_br != 0 { rects.push((Rect { left: ir - 1, top: it, right: ir, bottom: ib }, inner_br)); }
+    }
+    // Middle fill
+    if flags & BF_MIDDLE != 0 {
+        let (ml, mt, mr, mb) = (l + 2, t + 2, r - 2, b - 2);
+        if mr > ml && mb > mt {
+            let face = if flags & BF_MONO != 0 { rgb(0, 0, 0) } else { rgb(0xd4, 0xd0, 0xc8) };
+            rects.push((Rect { left: ml, top: mt, right: mr, bottom: mb }, face));
+        }
+    }
+    // Draw all collected rects — bitmap DC only, no framebuffer needed.
+    let is_memdc = kernel.resources.is_memory_dc(hdc);
+    if is_memdc {
+        for (dr, color) in rects {
+            fill_bitmap_rect_for_hdc(kernel, memory, hdc, dr, BrushPaint::Solid(color));
+        }
+    } else if let Some(fb) = framebuffer {
+        for (dr, color) in rects {
+            fill_framebuffer_rect_for_hdc(kernel, fb, hdc, dr, color);
+        }
+    }
+    // Update rect if BF_ADJUST.
+    if flags & BF_ADJUST != 0 {
+        let new_rect = Rect {
+            left: (l + 2).min(r),
+            top: (t + 2).min(b),
+            right: (r - 2).max(l),
+            bottom: (b - 2).max(t),
+        };
+        write_guest_rect(kernel, memory, thread_id, rect_ptr, new_rect);
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn draw_focus_rect_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    _framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    // DrawFocusRect(hdc, lprc): draws a dotted focus rectangle using XOR.
+    let hdc = raw_arg(args, 0);
+    let rect_ptr = raw_arg(args, 1);
+    if hdc == 0 || rect_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
+        return false;
+    };
+    if !kernel.resources.is_memory_dc(hdc) {
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+    let Some(dst_bmp) = selected_bitmap_object(kernel, hdc) else {
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    };
+    if dst_bmp.bits_ptr == 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+    // Draw dotted perimeter: XOR pixels at every other position on each side.
+    let dot_color = [0xff, 0xff, 0xff]; // white XOR pattern (CE uses XOR with white)
+    let draw_dot = |memory: &mut M, x: i32, y: i32, parity: i32| {
+        if parity % 2 == 0 {
+            if let Some(d) = bitmap_pixel_rgb_from_memory(memory, &dst_bmp, x, y) {
+                let _ = write_bitmap_pixel_rgb(
+                    memory,
+                    &dst_bmp,
+                    x,
+                    y,
+                    [d[0] ^ dot_color[0], d[1] ^ dot_color[1], d[2] ^ dot_color[2]],
+                );
+            }
+        }
+    };
+    // Top edge
+    for x in rect.left..rect.right {
+        draw_dot(memory, x, rect.top, x - rect.left);
+    }
+    // Bottom edge
+    for x in rect.left..rect.right {
+        draw_dot(memory, x, rect.bottom - 1, x - rect.left);
+    }
+    // Left edge (excluding corners)
+    for y in rect.top + 1..rect.bottom - 1 {
+        draw_dot(memory, rect.left, y, y - rect.top);
+    }
+    // Right edge (excluding corners)
+    for y in rect.top + 1..rect.bottom - 1 {
+        draw_dot(memory, rect.right - 1, y, y - rect.top);
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn def_window_proc_erasebkgnd_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    // DefWindowProcW(hwnd, WM_ERASEBKGND, hdc, 0)
+    // Fill the client area with the class background brush; return 1 if painted, 0 if none.
+    let hwnd = raw_arg(args, 0);
+    let hdc = raw_arg(args, 2); // wParam = paint DC
+    let hbr = kernel.gwe.window_class_hbr_background(hwnd);
+    if hbr == 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return 0;
+    }
+    let client_rect = kernel
+        .gwe
+        .get_client_rect(hwnd)
+        .unwrap_or(crate::ce::gwe::Rect { left: 0, top: 0, right: 0, bottom: 0 });
+    if client_rect.right > client_rect.left && client_rect.bottom > client_rect.top {
+        if let Some(paint) = brush_paint(kernel, hbr) {
+            if !fill_bitmap_rect_for_hdc(kernel, memory, hdc, client_rect, paint.clone()) {
+                if let BrushPaint::Solid(color) = paint {
+                    if let Some(fb) = framebuffer {
+                        fill_framebuffer_rect_for_hdc(kernel, fb, hdc, client_rect, color);
+                    }
+                }
+            }
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    1
+}
+
+fn draw_thick_line_in_bitmap<M: CoredllGuestMemory>(
+    memory: &mut M,
+    bitmap: &crate::ce::resource::BitmapObject,
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
+    thickness: i32,
+    color: [u8; 3],
+) {
+    let dx = (x1 - x0).abs();
+    let dy = (y1 - y0).abs();
+    let sx = if x0 < x1 { 1i32 } else { -1i32 };
+    let sy = if y0 < y1 { 1i32 } else { -1i32 };
+    let mut err = dx - dy;
+    let mut x = x0;
+    let mut y = y0;
+    let half = (thickness - 1) / 2;
+    loop {
+        for ty in -half..=half {
+            for tx in -half..=half {
+                let _ = write_bitmap_pixel_rgb(memory, bitmap, x + tx, y + ty, color);
+            }
+        }
+        if x == x1 && y == y1 {
+            break;
+        }
+        let e2 = 2 * err;
+        if e2 > -dy {
+            err -= dy;
+            x += sx;
+        }
+        if e2 < dx {
+            err += dx;
+            y += sy;
+        }
+    }
+}
+
+fn draw_checkmark_in_bitmap<M: CoredllGuestMemory>(
+    memory: &mut M,
+    bitmap: &crate::ce::resource::BitmapObject,
+    inner: Rect,
+    color: [u8; 3],
+) {
+    let iw = inner.right - inner.left;
+    let ih = inner.bottom - inner.top;
+    if iw <= 0 || ih <= 0 {
+        return;
+    }
+    // Tick: left stroke descends, right stroke ascends from corner
+    let x0 = inner.left + iw / 6;
+    let y0 = inner.top + ih / 2;
+    let xm = inner.left + iw * 3 / 8;
+    let ym = inner.top + ih * 7 / 8;
+    let x1 = inner.left + iw * 5 / 6;
+    let y1 = inner.top + ih / 8;
+    let thick = (iw.min(ih) / 5).max(1);
+    draw_thick_line_in_bitmap(memory, bitmap, x0, y0, xm, ym, thick, color);
+    draw_thick_line_in_bitmap(memory, bitmap, xm, ym, x1, y1, thick, color);
+}
+
+fn draw_frame_control_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    // DrawFrameControl(hdc, lprc, uType, uState)
+    let hdc = raw_arg(args, 0);
+    let rect_ptr = raw_arg(args, 1);
+    let typ = raw_arg(args, 2);
+    let state = raw_arg(args, 3);
+    if hdc == 0 || rect_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
+        return false;
+    };
+    if rect.right <= rect.left || rect.bottom <= rect.top {
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+    let is_pushed = state & DFCS_PUSHED != 0;
+    let is_checked = state & DFCS_CHECKED != 0;
+    let is_inactive = state & DFCS_INACTIVE != 0;
+    let adjust_rect = state & DFCS_ADJUSTRECT != 0;
+    let color_text = if is_inactive {
+        get_sys_color(17) // COLOR_GRAYTEXT
+    } else {
+        get_sys_color(8) // COLOR_WINDOWTEXT
+    };
+    let color_face = get_sys_color(15);    // COLOR_BTNFACE
+    let color_hilight = get_sys_color(20); // COLOR_BTNHIGHLIGHT
+    let color_shadow = get_sys_color(16);  // COLOR_BTNSHADOW
+    let color_dk_shadow = rgb(0x40, 0x40, 0x40);
+    let color_window = get_sys_color(5);   // COLOR_WINDOW
+    let l = rect.left;
+    let t = rect.top;
+    let r = rect.right;
+    let b = rect.bottom;
+
+    let mut fill_rects: Vec<(Rect, u32)> = Vec::new();
+
+    let btn_type = state & 0x001f;
+    match typ {
+        DFC_BUTTON => {
+            if btn_type == DFCS_BUTTONPUSH {
+                let (tl_out, br_out, tl_in, br_in) = if is_pushed {
+                    (color_dk_shadow, color_hilight, color_shadow, color_hilight)
+                } else {
+                    (color_hilight, color_dk_shadow, color_hilight, color_shadow)
+                };
+                fill_rects.push((Rect { left: l, top: t, right: r, bottom: t + 1 }, tl_out));
+                fill_rects.push((Rect { left: l, top: t, right: l + 1, bottom: b }, tl_out));
+                fill_rects.push((Rect { left: l, top: b - 1, right: r, bottom: b }, br_out));
+                fill_rects.push((Rect { left: r - 1, top: t, right: r, bottom: b }, br_out));
+                if r > l + 2 && b > t + 2 {
+                    fill_rects.push((Rect { left: l+1, top: t+1, right: r-1, bottom: t+2 }, tl_in));
+                    fill_rects.push((Rect { left: l+1, top: t+1, right: l+2, bottom: b-1 }, tl_in));
+                    fill_rects.push((Rect { left: l+1, top: b-2, right: r-1, bottom: b-1 }, br_in));
+                    fill_rects.push((Rect { left: r-2, top: t+1, right: r-1, bottom: b-1 }, br_in));
+                }
+                if r > l + 4 && b > t + 4 {
+                    fill_rects.push((Rect { left: l+2, top: t+2, right: r-2, bottom: b-2 }, color_face));
+                }
+            } else if btn_type == DFCS_BUTTONCHECK || btn_type == DFCS_BUTTON3STATE {
+                // Sunken checkbox frame
+                fill_rects.push((Rect { left: l, top: t, right: r, bottom: t + 1 }, color_shadow));
+                fill_rects.push((Rect { left: l, top: t, right: l + 1, bottom: b }, color_shadow));
+                fill_rects.push((Rect { left: l, top: b - 1, right: r, bottom: b }, color_hilight));
+                fill_rects.push((Rect { left: r - 1, top: t, right: r, bottom: b }, color_hilight));
+                if r > l + 2 && b > t + 2 {
+                    fill_rects.push((Rect { left: l+1, top: t+1, right: r-1, bottom: t+2 }, color_dk_shadow));
+                    fill_rects.push((Rect { left: l+1, top: t+1, right: l+2, bottom: b-1 }, color_dk_shadow));
+                    fill_rects.push((Rect { left: l+1, top: b-2, right: r-1, bottom: b-1 }, color_face));
+                    fill_rects.push((Rect { left: r-2, top: t+1, right: r-1, bottom: b-1 }, color_face));
+                }
+                if r > l + 4 && b > t + 4 {
+                    fill_rects.push((Rect { left: l+2, top: t+2, right: r-2, bottom: b-2 }, color_window));
+                }
+            }
+            // DFCS_BUTTONRADIO / DFCS_BUTTONRADIOIMAGE / DFCS_BUTTONRADIOMASK:
+            // handled below with ellipse spans after rect fills
+        }
+        DFC_CAPTION | DFC_SCROLL | DFC_MENU => {
+            let (tl, br) = if is_pushed {
+                (color_shadow, color_hilight)
+            } else {
+                (color_hilight, color_shadow)
+            };
+            fill_rects.push((Rect { left: l, top: t, right: r, bottom: t + 1 }, tl));
+            fill_rects.push((Rect { left: l, top: t, right: l + 1, bottom: b }, tl));
+            fill_rects.push((Rect { left: l, top: b - 1, right: r, bottom: b }, br));
+            fill_rects.push((Rect { left: r - 1, top: t, right: r, bottom: b }, br));
+            if r > l + 2 && b > t + 2 {
+                fill_rects.push((Rect { left: l + 1, top: t + 1, right: r - 1, bottom: b - 1 }, color_face));
+            }
+        }
+        _ => {}
+    }
+
+    let is_memdc = kernel.resources.is_memory_dc(hdc);
+    if is_memdc {
+        for (dr, color) in &fill_rects {
+            fill_bitmap_rect_for_hdc(kernel, memory, hdc, *dr, BrushPaint::Solid(*color));
+        }
+        // Pixel-level drawing for checkbox/radio — requires bitmap handle
+        if let Some(bitmap) = selected_bitmap_object(kernel, hdc) {
+            if typ == DFC_BUTTON {
+                if btn_type == DFCS_BUTTONCHECK || btn_type == DFCS_BUTTON3STATE {
+                    if is_checked {
+                        let inner = Rect { left: l + 2, top: t + 2, right: r - 2, bottom: b - 2 };
+                        draw_checkmark_in_bitmap(memory, &bitmap, inner, colorref_rgb(color_text));
+                    }
+                } else if btn_type == DFCS_BUTTONRADIO
+                    || btn_type == DFCS_BUTTONRADIOIMAGE
+                    || btn_type == DFCS_BUTTONRADIOMASK
+                {
+                    let outer_spans = ellipse_fill_spans(rect);
+                    let bw = ((r - l).min(b - t) / 10).max(1);
+                    let inner_r = Rect { left: l + bw, top: t + bw, right: r - bw, bottom: b - bw };
+                    let fill_color = colorref_rgb(color_window);
+                    let border_color = colorref_rgb(color_shadow);
+                    // Fill full ellipse white first
+                    for &(ey, xs, xe) in &outer_spans {
+                        for x in xs..xe {
+                            let _ = write_bitmap_pixel_rgb(memory, &bitmap, x, ey, fill_color);
+                        }
+                    }
+                    // Overdraw border ring: outer minus inner spans
+                    if inner_r.right > inner_r.left && inner_r.bottom > inner_r.top {
+                        let inner_spans = ellipse_fill_spans(inner_r);
+                        for &(ey, oxs, oxe) in &outer_spans {
+                            let (ixs, ixe) = inner_spans
+                                .iter()
+                                .find(|&&(iy, _, _)| iy == ey)
+                                .map(|&(_, xs, xe)| (xs, xe))
+                                .unwrap_or((oxs, oxs)); // no inner span → full row is border
+                            for x in oxs..ixs.min(oxe) {
+                                let _ = write_bitmap_pixel_rgb(memory, &bitmap, x, ey, border_color);
+                            }
+                            for x in ixe.max(oxs)..oxe {
+                                let _ = write_bitmap_pixel_rgb(memory, &bitmap, x, ey, border_color);
+                            }
+                        }
+                    } else {
+                        for &(ey, xs, xe) in &outer_spans {
+                            for x in xs..xe {
+                                let _ = write_bitmap_pixel_rgb(memory, &bitmap, x, ey, border_color);
+                            }
+                        }
+                    }
+                    // Center dot if checked
+                    if is_checked {
+                        let w = r - l;
+                        let h = b - t;
+                        let dot = Rect {
+                            left:   l + w * 3 / 8,
+                            top:    t + h * 3 / 8,
+                            right:  l + w * 5 / 8,
+                            bottom: t + h * 5 / 8,
+                        };
+                        if dot.right > dot.left && dot.bottom > dot.top {
+                            let dot_color = colorref_rgb(color_text);
+                            for &(ey, xs, xe) in &ellipse_fill_spans(dot) {
+                                for x in xs..xe {
+                                    let _ = write_bitmap_pixel_rgb(memory, &bitmap, x, ey, dot_color);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else if let Some(fb) = framebuffer {
+        for (dr, color) in &fill_rects {
+            fill_framebuffer_rect_for_hdc(kernel, fb, hdc, *dr, *color);
+        }
+    }
+
+    if adjust_rect && typ == DFC_BUTTON && btn_type == DFCS_BUTTONPUSH {
+        let new_rect = Rect {
+            left:   (l + 2).min(r),
+            top:    (t + 2).min(b),
+            right:  (r - 2).max(l),
+            bottom: (b - 2).max(t),
+        };
+        write_guest_rect(kernel, memory, thread_id, rect_ptr, new_rect);
+    }
+
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
 fn fill_rect_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -26320,7 +27642,11 @@ fn selected_brush_paint(kernel: &CeKernel, hdc: u32) -> Option<BrushPaint> {
 
 const PS_SOLID: u32 = 0;
 const PS_DASH: u32 = 1;
+const PS_DOT: u32 = 2;
+const PS_DASHDOT: u32 = 3;
+const PS_DASHDOTDOT: u32 = 4;
 const PS_NULL: u32 = 5;
+const PS_INSIDEFRAME: u32 = 6;
 
 fn pen_colorref(kernel: &CeKernel, pen: u32) -> Option<u32> {
     if Some(pen) == stock_object_handle(6) {
@@ -26368,9 +27694,20 @@ fn selected_pen_model(kernel: &CeKernel, hdc: u32) -> Option<PenModel> {
 }
 
 fn pen_style_draws_pixel(style: u32, style_state: usize) -> bool {
+    // CE GDI patterns (approximate): dash=8on/4off, dot=1on/1off,
+    // dashdot=8on/4off/1on/4off, dashdotdot=8on/4off/1on/4off/1on/4off
     match style {
         PS_NULL => false,
         PS_DASH => (style_state % 12) < 8,
+        PS_DOT => (style_state % 2) < 1,
+        PS_DASHDOT => {
+            let s = style_state % 17;
+            s < 8 || s == 12
+        }
+        PS_DASHDOTDOT => {
+            let s = style_state % 22;
+            s < 8 || s == 12 || s == 14
+        }
         _ => true,
     }
 }
@@ -26455,6 +27792,155 @@ fn clip_rects_to_region(rect: Rect, region_rects: &[Rect]) -> Vec<Rect> {
         .collect()
 }
 
+fn alpha_blend_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    mut framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    // AlphaBlend(hdcDst,xDst,yDst,wDst,hDst,hdcSrc,xSrc,ySrc,wSrc,hSrc,blendfunction)
+    // BLENDFUNCTION packed as u32: byte0=BlendOp, byte1=BlendFlags,
+    //   byte2=SourceConstantAlpha, byte3=AlphaFormat(AC_SRC_ALPHA=1)
+    let dst_hdc = raw_arg(args, 0);
+    let dst_x = raw_i32_arg(args, 1);
+    let dst_y = raw_i32_arg(args, 2);
+    let dst_width = raw_i32_arg(args, 3);
+    let dst_height = raw_i32_arg(args, 4);
+    let src_hdc = raw_arg(args, 5);
+    let src_x = raw_i32_arg(args, 6);
+    let src_y = raw_i32_arg(args, 7);
+    let src_width = raw_i32_arg(args, 8);
+    let src_height = raw_i32_arg(args, 9);
+    let blend_fn = raw_arg(args, 10);
+    let const_alpha = ((blend_fn >> 16) & 0xff) as u8;
+    let per_pixel_alpha = ((blend_fn >> 24) & 0xff) != 0; // AC_SRC_ALPHA=1
+    if dst_hdc == 0
+        || src_hdc == 0
+        || dst_width <= 0
+        || dst_height <= 0
+        || src_width <= 0
+        || src_height <= 0
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    // Only handle memory-DC src; fall back to plain copy for screen src.
+    if kernel.resources.is_memory_dc(src_hdc)
+        && let Some(src_bmp_h) = kernel.resources.selected_bitmap(src_hdc)
+        && let Some(src_bmp) = kernel.resources.bitmap(src_bmp_h).cloned()
+        && src_bmp.bits_ptr != 0
+        && src_bmp.width > 0
+        && src_bmp.height > 0
+        && src_bmp.width_bytes > 0
+    {
+        let byte_count = src_bmp.width_bytes.saturating_mul(src_bmp.height) as u32;
+        let src_bytes =
+            read_guest_bytes(kernel, memory, thread_id, src_bmp.bits_ptr, byte_count);
+        if let Some(src_bytes) = src_bytes {
+            if kernel.resources.is_memory_dc(dst_hdc)
+                && let Some(dst_bmp_h) = kernel.resources.selected_bitmap(dst_hdc)
+                && let Some(dst_bmp) = kernel.resources.bitmap(dst_bmp_h).cloned()
+                && dst_bmp.bits_ptr != 0
+                && dst_bmp.width > 0
+                && dst_bmp.height > 0
+                && dst_bmp.width_bytes > 0
+            {
+                let dst_rect = Rect {
+                    left: dst_x,
+                    top: dst_y,
+                    right: dst_x.saturating_add(dst_width),
+                    bottom: dst_y.saturating_add(dst_height),
+                };
+                let dst_w_abs = dst_width.abs().max(1);
+                let dst_h_abs = dst_height.abs().max(1);
+                let src_w_abs = src_width.abs().max(1);
+                let src_h_abs = src_height.abs().max(1);
+                for clip in
+                    hdc_clip_rects(kernel, dst_hdc, dst_rect, dst_bmp.width, dst_bmp.height)
+                {
+                    for y in clip.top..clip.bottom {
+                        for x in clip.left..clip.right {
+                            let sx =
+                                src_x + ((x - dst_x) * src_w_abs / dst_w_abs);
+                            let sy =
+                                src_y + ((y - dst_y) * src_h_abs / dst_h_abs);
+                            let Some(s) = bitmap_pixel_rgb(&src_bmp, &src_bytes, sx, sy) else {
+                                continue;
+                            };
+                            let alpha = if per_pixel_alpha {
+                                // read alpha from 32-bit source bitmap (byte index 3 = A)
+                                alpha_from_src_bitmap(&src_bmp, &src_bytes, sx, sy)
+                                    .map(|a| a as u16 * const_alpha as u16 / 255)
+                                    .unwrap_or(const_alpha as u16) as u8
+                            } else {
+                                const_alpha
+                            };
+                            if alpha == 0 {
+                                continue;
+                            }
+                            if alpha == 255 {
+                                let _ = write_bitmap_pixel_rgb(memory, &dst_bmp, x, y, s);
+                            } else {
+                                let d = bitmap_pixel_rgb_from_memory(memory, &dst_bmp, x, y)
+                                    .unwrap_or([0, 0, 0]);
+                                let inv = 255u16 - alpha as u16;
+                                let result = [
+                                    ((s[0] as u16 * alpha as u16 + d[0] as u16 * inv) / 255) as u8,
+                                    ((s[1] as u16 * alpha as u16 + d[1] as u16 * inv) / 255) as u8,
+                                    ((s[2] as u16 * alpha as u16 + d[2] as u16 * inv) / 255) as u8,
+                                ];
+                                let _ = write_bitmap_pixel_rgb(memory, &dst_bmp, x, y, result);
+                            }
+                        }
+                    }
+                }
+            } else if let Some(fb) = framebuffer.as_deref_mut() {
+                // Fallback: blit to framebuffer without alpha (opaque copy).
+                blit_selected_bitmap_to_framebuffer(
+                    kernel,
+                    memory,
+                    thread_id,
+                    fb,
+                    dst_hdc,
+                    dst_x,
+                    dst_y,
+                    dst_width,
+                    dst_height,
+                    src_bmp_h,
+                    src_x,
+                    src_y,
+                );
+            }
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn alpha_from_src_bitmap(
+    bitmap: &crate::ce::resource::BitmapObject,
+    bytes: &[u8],
+    x: i32,
+    y: i32,
+) -> Option<u8> {
+    if bitmap.bits_pixel != 32 || x < 0 || y < 0 || x >= bitmap.width || y >= bitmap.height {
+        return None;
+    }
+    let row = if bitmap.top_down {
+        y
+    } else {
+        bitmap.height - 1 - y
+    } as usize;
+    let x = x as usize;
+    let row_start = row.checked_mul(bitmap.width_bytes as usize)?;
+    let offset = row_start.checked_add(x.checked_mul(4)?)?;
+    // 32-bit CE bitmap layout: [B, G, R, A] or just [B,G,R,0xff]
+    bytes.get(offset + 3).copied()
+}
+
 fn bit_blt_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -26535,6 +28021,81 @@ fn bit_blt_raw<M: CoredllGuestMemory>(
                     src_x,
                     src_y,
                 );
+            }
+        }
+    } else if matches!(rop, SRCPAINT | SRCAND | SRCINVERT)
+        && kernel.resources.is_memory_dc(src)
+        && let Some(src_bmp_h) = kernel.resources.selected_bitmap(src)
+        && let Some(src_bmp) = kernel.resources.bitmap(src_bmp_h).cloned()
+        && src_bmp.bits_ptr != 0
+        && src_bmp.width > 0
+        && src_bmp.height > 0
+        && src_bmp.width_bytes > 0
+        && kernel.resources.is_memory_dc(dst)
+        && let Some(dst_bmp_h) = kernel.resources.selected_bitmap(dst)
+        && let Some(dst_bmp) = kernel.resources.bitmap(dst_bmp_h).cloned()
+        && dst_bmp.bits_ptr != 0
+        && dst_bmp.width > 0
+        && dst_bmp.height > 0
+        && dst_bmp.width_bytes > 0
+    {
+        let byte_count = src_bmp.width_bytes.saturating_mul(src_bmp.height) as u32;
+        if let Some(src_bytes) =
+            read_guest_bytes(kernel, memory, thread_id, src_bmp.bits_ptr, byte_count)
+        {
+            let dst_rect = Rect {
+                left: dst_x,
+                top: dst_y,
+                right: dst_x.saturating_add(width),
+                bottom: dst_y.saturating_add(height),
+            };
+            for clip in hdc_clip_rects(kernel, dst, dst_rect, dst_bmp.width, dst_bmp.height) {
+                for y in clip.top..clip.bottom {
+                    for x in clip.left..clip.right {
+                        let sx = src_x + (x - dst_x);
+                        let sy = src_y + (y - dst_y);
+                        let Some(s) = bitmap_pixel_rgb(&src_bmp, &src_bytes, sx, sy) else {
+                            continue;
+                        };
+                        let Some(d) =
+                            bitmap_pixel_rgb_from_memory(memory, &dst_bmp, x, y)
+                        else {
+                            continue;
+                        };
+                        let result = match rop {
+                            SRCPAINT => [s[0] | d[0], s[1] | d[1], s[2] | d[2]],
+                            SRCAND => [s[0] & d[0], s[1] & d[1], s[2] & d[2]],
+                            _ => [s[0] ^ d[0], s[1] ^ d[1], s[2] ^ d[2]], // SRCINVERT
+                        };
+                        let _ = write_bitmap_pixel_rgb(memory, &dst_bmp, x, y, result);
+                    }
+                }
+            }
+        }
+    } else if rop == DSTINVERT
+        && kernel.resources.is_memory_dc(dst)
+        && let Some(dst_bmp_h) = kernel.resources.selected_bitmap(dst)
+        && let Some(dst_bmp) = kernel.resources.bitmap(dst_bmp_h).cloned()
+        && dst_bmp.bits_ptr != 0
+        && dst_bmp.width > 0
+        && dst_bmp.height > 0
+        && dst_bmp.width_bytes > 0
+    {
+        let dst_rect = Rect {
+            left: dst_x,
+            top: dst_y,
+            right: dst_x.saturating_add(width),
+            bottom: dst_y.saturating_add(height),
+        };
+        for clip in hdc_clip_rects(kernel, dst, dst_rect, dst_bmp.width, dst_bmp.height) {
+            for y in clip.top..clip.bottom {
+                for x in clip.left..clip.right {
+                    let Some(d) = bitmap_pixel_rgb_from_memory(memory, &dst_bmp, x, y) else {
+                        continue;
+                    };
+                    let _ =
+                        write_bitmap_pixel_rgb(memory, &dst_bmp, x, y, [!d[0], !d[1], !d[2]]);
+                }
             }
         }
     }
@@ -27291,6 +28852,50 @@ fn rgb_to_masks(
     )
 }
 
+fn invert_rect_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    _framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let hdc = raw_arg(args, 0);
+    let rect_ptr = raw_arg(args, 1);
+    if hdc == 0 || rect_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Some(rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
+        return false;
+    };
+    if !kernel.resources.is_memory_dc(hdc) {
+        kernel.threads.set_last_error(thread_id, 0);
+        return true; // no-op for screen DCs in current model
+    }
+    let Some(dst_bmp) = selected_bitmap_object(kernel, hdc) else {
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    };
+    if dst_bmp.bits_ptr == 0 || dst_bmp.width <= 0 || dst_bmp.height <= 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+    for clip in hdc_clip_rects(kernel, hdc, rect, dst_bmp.width, dst_bmp.height) {
+        for y in clip.top..clip.bottom {
+            for x in clip.left..clip.right {
+                let Some(d) = bitmap_pixel_rgb_from_memory(memory, &dst_bmp, x, y) else {
+                    continue;
+                };
+                let _ = write_bitmap_pixel_rgb(memory, &dst_bmp, x, y, [!d[0], !d[1], !d[2]]);
+            }
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
 fn pat_blt_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -27328,6 +28933,43 @@ fn pat_blt_raw<M: CoredllGuestMemory>(
             && let Some(framebuffer) = framebuffer
         {
             fill_framebuffer_rect_for_hdc(kernel, framebuffer, dst, rect, color);
+        }
+    } else if matches!(rop, PATINVERT | DSTINVERT)
+        && kernel.resources.is_memory_dc(dst)
+        && let Some(dst_bmp_h) = kernel.resources.selected_bitmap(dst)
+        && let Some(dst_bmp) = kernel.resources.bitmap(dst_bmp_h).cloned()
+        && dst_bmp.bits_ptr != 0
+        && dst_bmp.width > 0
+        && dst_bmp.height > 0
+        && dst_bmp.width_bytes > 0
+    {
+        let pat_rgb = if rop == PATINVERT {
+            selected_brush_paint(kernel, dst)
+                .and_then(|p| if let BrushPaint::Solid(c) = p { Some(colorref_rgb(c)) } else { None })
+                .unwrap_or([0, 0, 0])
+        } else {
+            [0, 0, 0] // unused for DSTINVERT
+        };
+        let rect = Rect {
+            left: x,
+            top: y,
+            right: x.saturating_add(width),
+            bottom: y.saturating_add(height),
+        };
+        for clip in hdc_clip_rects(kernel, dst, rect, dst_bmp.width, dst_bmp.height) {
+            for py in clip.top..clip.bottom {
+                for px in clip.left..clip.right {
+                    let Some(d) = bitmap_pixel_rgb_from_memory(memory, &dst_bmp, px, py) else {
+                        continue;
+                    };
+                    let result = if rop == PATINVERT {
+                        [pat_rgb[0] ^ d[0], pat_rgb[1] ^ d[1], pat_rgb[2] ^ d[2]]
+                    } else {
+                        [!d[0], !d[1], !d[2]]
+                    };
+                    let _ = write_bitmap_pixel_rgb(memory, &dst_bmp, px, py, result);
+                }
+            }
         }
     }
     kernel.threads.set_last_error(thread_id, 0);
@@ -27868,14 +29510,14 @@ fn polygon_raw<M: CoredllGuestMemory>(
                 if !clips.is_empty() {
                     let paint = selected_brush_paint(kernel, hdc);
                     let pen = selected_pen_model(kernel, hdc);
-                    let origin = kernel
+                    let (origin, fill_mode) = kernel
                         .resources
                         .dc_state(hdc)
-                        .map(|state| state.brush_origin)
-                        .unwrap_or(Point { x: 0, y: 0 });
+                        .map(|state| (state.brush_origin, state.poly_fill_mode))
+                        .unwrap_or((Point { x: 0, y: 0 }, crate::ce::resource::POLY_FILL_ALTERNATE));
                     for clip in clips {
                         if let Some(paint) = paint.clone() {
-                            fill_bitmap_polygon(memory, &bitmap, &points, clip, paint, origin);
+                            fill_bitmap_polygon(memory, &bitmap, &points, clip, paint, origin, fill_mode);
                         }
                         if let Some(pen) = pen {
                             draw_closed_bitmap_polyline(memory, &bitmap, &points, clip, pen);
@@ -27884,8 +29526,13 @@ fn polygon_raw<M: CoredllGuestMemory>(
                 }
             }
         } else if let Some(framebuffer) = framebuffer {
+            let fill_mode = kernel
+                .resources
+                .dc_state(hdc)
+                .map(|state| state.poly_fill_mode)
+                .unwrap_or(crate::ce::resource::POLY_FILL_ALTERNATE);
             if let Some(BrushPaint::Solid(color)) = selected_brush_paint(kernel, hdc) {
-                fill_framebuffer_polygon_for_hdc(kernel, framebuffer, hdc, &points, color);
+                fill_framebuffer_polygon_for_hdc(kernel, framebuffer, hdc, &points, color, fill_mode);
             }
             if let Some(pen) = selected_pen_model(kernel, hdc) {
                 let mut closed = points.clone();
@@ -27955,6 +29602,748 @@ fn rectangle_raw<M: CoredllGuestMemory>(
             && let Some(framebuffer) = framebuffer.as_deref_mut()
         {
             draw_polyline_for_hdc(kernel, framebuffer, hdc, &points, pen);
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn gradient_fill_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    mut framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    // GradientFill(hdc, pVertex, nVertex, pMesh, nMesh, ulMode)
+    let hdc = raw_arg(args, 0);
+    let vertex_ptr = raw_arg(args, 1);
+    let n_vertex = raw_arg(args, 2) as usize;
+    let mesh_ptr = raw_arg(args, 3);
+    let n_mesh = raw_arg(args, 4) as usize;
+    let mode = raw_arg(args, 5);
+
+    const GRADIENT_FILL_RECT_H: u32 = 0x00;
+    const GRADIENT_FILL_RECT_V: u32 = 0x01;
+
+    if hdc == 0 || vertex_ptr == 0 || mesh_ptr == 0 || n_vertex == 0 || n_mesh == 0 {
+        kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+
+    // TRIVERTEX: x(4), y(4), Red(2), Green(2), Blue(2), Alpha(2) = 16 bytes each
+    const TRIVERTEX_SIZE: u32 = 16;
+    // GRADIENT_RECT: UpperLeft(4), LowerRight(4) = 8 bytes each
+    const GRADIENT_RECT_SIZE: u32 = 8;
+
+    if mode != GRADIENT_FILL_RECT_H && mode != GRADIENT_FILL_RECT_V {
+        // Triangles: no-op for now.
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+
+    // Read all vertex data.
+    struct TriVertex { x: i32, y: i32, r: u16, g: u16, b: u16 }
+    let mut vertices = Vec::with_capacity(n_vertex);
+    for i in 0..n_vertex {
+        let base = vertex_ptr + i as u32 * TRIVERTEX_SIZE;
+        let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, base, TRIVERTEX_SIZE) else {
+            return false;
+        };
+        let x = i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        let y = i32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+        let r = u16::from_le_bytes([bytes[8], bytes[9]]);
+        let g = u16::from_le_bytes([bytes[10], bytes[11]]);
+        let b = u16::from_le_bytes([bytes[12], bytes[13]]);
+        vertices.push(TriVertex { x, y, r, g, b });
+    }
+
+    // Process each GRADIENT_RECT mesh entry.
+    for i in 0..n_mesh {
+        let base = mesh_ptr + i as u32 * GRADIENT_RECT_SIZE;
+        let Some(bytes) = read_guest_bytes(kernel, memory, thread_id, base, GRADIENT_RECT_SIZE) else {
+            return false;
+        };
+        let ul = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+        let lr = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]) as usize;
+        let (Some(tl), Some(br)) = (vertices.get(ul), vertices.get(lr)) else {
+            kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return false;
+        };
+
+        let rect = normalize_rect(Rect { left: tl.x, top: tl.y, right: br.x, bottom: br.y });
+        if rect.right <= rect.left || rect.bottom <= rect.top {
+            continue;
+        }
+
+        // COLOR16 values are in the range 0x0000–0xFF00; extract 8-bit components.
+        let r0 = (tl.r >> 8) as u8;
+        let g0 = (tl.g >> 8) as u8;
+        let b0 = (tl.b >> 8) as u8;
+        let r1 = (br.r >> 8) as u8;
+        let g1 = (br.g >> 8) as u8;
+        let b1 = (br.b >> 8) as u8;
+
+        if kernel.resources.is_memory_dc(hdc) {
+            if let Some(bitmap) = selected_bitmap_object(kernel, hdc) {
+                let clips = hdc_clip_rects(kernel, hdc, rect, bitmap.width, bitmap.height);
+                for clip in clips {
+                    let span = if mode == GRADIENT_FILL_RECT_H {
+                        rect.right - rect.left
+                    } else {
+                        rect.bottom - rect.top
+                    };
+                    if span <= 0 { continue; }
+                    for y in clip.top..clip.bottom {
+                        for x in clip.left..clip.right {
+                            let t = if mode == GRADIENT_FILL_RECT_H {
+                                (x - rect.left) as f32 / span as f32
+                            } else {
+                                (y - rect.top) as f32 / span as f32
+                            };
+                            let t = t.clamp(0.0, 1.0);
+                            let r = (r0 as f32 + (r1 as f32 - r0 as f32) * t) as u8;
+                            let g = (g0 as f32 + (g1 as f32 - g0 as f32) * t) as u8;
+                            let b = (b0 as f32 + (b1 as f32 - b0 as f32) * t) as u8;
+                            let _ = write_bitmap_pixel_rgb(memory, &bitmap, x, y, [r, g, b]);
+                        }
+                    }
+                }
+            }
+        } else if let Some(framebuffer) = framebuffer.as_deref_mut() {
+            let Some((client_origin, clips)) =
+                hdc_framebuffer_client_clip_rects(kernel, hdc, rect) else {
+                continue;
+            };
+            let info = framebuffer.info();
+            let bytes_per_pixel = info.format.bytes_per_pixel();
+            let span = if mode == GRADIENT_FILL_RECT_H {
+                rect.right - rect.left
+            } else {
+                rect.bottom - rect.top
+            };
+            if span <= 0 { continue; }
+            for clip in &clips {
+                let screen_clip = clip.offset(client_origin.x, client_origin.y);
+                let screen_rect = rect.offset(client_origin.x, client_origin.y);
+                let y_lo = screen_rect.top.max(screen_clip.top).max(0) as usize;
+                let y_hi = screen_rect.bottom.min(screen_clip.bottom).min(info.height as i32) as usize;
+                let x_lo = screen_rect.left.max(screen_clip.left).max(0) as usize;
+                let x_hi = screen_rect.right.min(screen_clip.right).min(info.width as i32) as usize;
+                if y_hi <= y_lo || x_hi <= x_lo { continue; }
+                let pixels = framebuffer.pixels_mut();
+                for y in y_lo..y_hi {
+                    for x in x_lo..x_hi {
+                        let t = if mode == GRADIENT_FILL_RECT_H {
+                            (x as i32 - screen_rect.left) as f32 / span as f32
+                        } else {
+                            (y as i32 - screen_rect.top) as f32 / span as f32
+                        };
+                        let t = t.clamp(0.0, 1.0);
+                        let r = (r0 as f32 + (r1 as f32 - r0 as f32) * t) as u8;
+                        let g = (g0 as f32 + (g1 as f32 - g0 as f32) * t) as u8;
+                        let b = (b0 as f32 + (b1 as f32 - b0 as f32) * t) as u8;
+                        let pixel = pixel_bytes_for_rgb(info.format, [r, g, b]);
+                        let off = y * info.stride + x * bytes_per_pixel;
+                        pixels[off..off + bytes_per_pixel].copy_from_slice(&pixel[..bytes_per_pixel]);
+                    }
+                }
+                framebuffer.mark_dirty(FramebufferRect::new(
+                    x_lo as u32, y_lo as u32,
+                    (x_hi - x_lo) as u32, (y_hi - y_lo) as u32,
+                ));
+            }
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn ellipse_fill_spans(rect: Rect) -> Vec<(i32, i32, i32)> {
+    // Scan-line fill for ellipse inscribed in rect.
+    // Returns (y, x_start_inclusive, x_end_exclusive) spans.
+    let width = rect.right - rect.left;
+    let height = rect.bottom - rect.top;
+    if width <= 0 || height <= 0 {
+        return Vec::new();
+    }
+    let cx = (rect.left + rect.right) as f64 / 2.0;
+    let cy = (rect.top + rect.bottom) as f64 / 2.0;
+    let a = width as f64 / 2.0;
+    let b = height as f64 / 2.0;
+    let mut spans = Vec::new();
+    for y in rect.top..rect.bottom {
+        let dy = (y as f64 + 0.5) - cy;
+        let ratio = dy / b;
+        if ratio.abs() >= 1.0 {
+            continue;
+        }
+        let x_half = a * (1.0 - ratio * ratio).sqrt();
+        let x_start = (cx - x_half).ceil() as i32;
+        let x_end = (cx + x_half).ceil() as i32;
+        if x_end > x_start {
+            spans.push((y, x_start, x_end));
+        }
+    }
+    spans
+}
+
+fn draw_ellipse_outline_bitmap<M: CoredllGuestMemory>(
+    memory: &mut M,
+    bitmap: &crate::ce::resource::BitmapObject,
+    rect: Rect,
+    clip: Rect,
+    pen: PenModel,
+) {
+    // Midpoint ellipse algorithm tracing the 1-pixel-wide boundary,
+    // width-extended by pen.width.
+    let width = rect.right - rect.left;
+    let height = rect.bottom - rect.top;
+    if width <= 0 || height <= 0 {
+        return;
+    }
+    let cx = (rect.left + rect.right - 1) as f64 / 2.0;
+    let cy = (rect.top + rect.bottom - 1) as f64 / 2.0;
+    let a = width as f64 / 2.0;
+    let b = height as f64 / 2.0;
+    let rgb = colorref_rgb(pen.colorref);
+    let pw = pen.width.max(1);
+    let low = (pw - 1) / 2;
+    let high = pw / 2;
+
+    // Parametric scan: for each y, compute the boundary x positions.
+    // Top and bottom border rows.
+    let mut last_x_half = -1.0f64;
+    for y in rect.top..rect.bottom {
+        let dy = (y as f64 + 0.5) - cy - 0.5;
+        let ratio = dy / b;
+        if ratio.abs() > 1.0 {
+            continue;
+        }
+        let x_half = a * (1.0 - ratio * ratio).sqrt();
+        let x_left = (cx - x_half).round() as i32;
+        let x_right = (cx + x_half).round() as i32;
+
+        // Draw vertical side pixels (boundary pixels on left/right columns).
+        let left_changed = (x_left as f64 - (cx - last_x_half).round()).abs() >= 0.5;
+        let right_changed = (x_right as f64 - (cx + last_x_half).round()).abs() >= 0.5;
+        if last_x_half < 0.0 || left_changed || right_changed || y == rect.bottom - 1 {
+            // Left boundary column
+            for dy2 in -low..=high {
+                for dx2 in -low..=high {
+                    let px = x_left + dx2;
+                    let py = y + dy2;
+                    if px >= clip.left && px < clip.right && py >= clip.top && py < clip.bottom {
+                        let dst = bitmap_pixel_rgb_from_memory(memory, bitmap, px, py).unwrap_or([0, 0, 0]);
+                        let _ = write_bitmap_pixel_rgb(memory, bitmap, px, py, apply_rop2_rgb(pen.rop2, rgb, dst));
+                    }
+                }
+            }
+            // Right boundary column (only if different from left)
+            if x_right != x_left {
+                for dy2 in -low..=high {
+                    for dx2 in -low..=high {
+                        let px = x_right + dx2;
+                        let py = y + dy2;
+                        if px >= clip.left && px < clip.right && py >= clip.top && py < clip.bottom {
+                            let dst = bitmap_pixel_rgb_from_memory(memory, bitmap, px, py).unwrap_or([0, 0, 0]);
+                            let _ = write_bitmap_pixel_rgb(memory, bitmap, px, py, apply_rop2_rgb(pen.rop2, rgb, dst));
+                        }
+                    }
+                }
+            }
+        }
+        last_x_half = x_half;
+    }
+    // Top and bottom horizontal boundary rows.
+    for (y, x_start, x_end) in &[
+        (rect.top, (cx - a).ceil() as i32, (cx + a).ceil() as i32),
+        (rect.bottom - 1, (cx - a).ceil() as i32, (cx + a).ceil() as i32),
+    ] {
+        for x in *x_start..*x_end {
+            for dy2 in -low..=high {
+                for dx2 in -low..=high {
+                    let px = x + dx2;
+                    let py = y + dy2;
+                    if px >= clip.left && px < clip.right && py >= clip.top && py < clip.bottom {
+                        let dst = bitmap_pixel_rgb_from_memory(memory, bitmap, px, py).unwrap_or([0, 0, 0]);
+                        let _ = write_bitmap_pixel_rgb(memory, bitmap, px, py, apply_rop2_rgb(pen.rop2, rgb, dst));
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn ellipse_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    mut framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let hdc = raw_arg(args, 0);
+    if hdc == 0 {
+        kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let rect = Rect {
+        left: raw_i32_arg(args, 1),
+        top: raw_i32_arg(args, 2),
+        right: raw_i32_arg(args, 3),
+        bottom: raw_i32_arg(args, 4),
+    };
+    let rect = normalize_rect(rect);
+    if rect.right <= rect.left || rect.bottom <= rect.top {
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+    let spans = ellipse_fill_spans(rect);
+    if kernel.resources.is_memory_dc(hdc) {
+        if let Some(bitmap) = selected_bitmap_object(kernel, hdc) {
+            let clips = hdc_clip_rects(
+                kernel,
+                hdc,
+                rect,
+                bitmap.width,
+                bitmap.height,
+            );
+            if !clips.is_empty() {
+                let paint = selected_brush_paint(kernel, hdc);
+                let pen = selected_pen_model(kernel, hdc);
+                let brush_origin = kernel
+                    .resources
+                    .dc_state(hdc)
+                    .map(|state| state.brush_origin)
+                    .unwrap_or(Point { x: 0, y: 0 });
+                let pattern = paint.as_ref().and_then(|p| match p {
+                    BrushPaint::Pattern(pat) => {
+                        bitmap_pattern_bytes(memory, pat).map(|bytes| (pat.clone(), bytes))
+                    }
+                    _ => None,
+                });
+                for clip in &clips {
+                    let clip = *clip;
+                    // Fill interior spans
+                    if let Some(paint) = paint.as_ref() {
+                        for &(y, x_start, x_end) in &spans {
+                            let x_start = x_start.max(clip.left);
+                            let x_end = x_end.min(clip.right);
+                            if x_end <= x_start {
+                                continue;
+                            }
+                            for x in x_start..x_end {
+                                let rgb = match paint {
+                                    BrushPaint::Solid(colorref) => colorref_rgb(*colorref),
+                                    BrushPaint::Pattern(_) => {
+                                        if let Some((pat, bytes)) = pattern.as_ref() {
+                                            pattern_pixel_rgb(pat, bytes, x, y, brush_origin)
+                                                .unwrap_or([0, 0, 0])
+                                        } else {
+                                            continue;
+                                        }
+                                    }
+                                };
+                                let _ = write_bitmap_pixel_rgb(memory, &bitmap, x, y, rgb);
+                            }
+                        }
+                    }
+                    // Draw outline
+                    if let Some(pen) = pen {
+                        if pen.style != PS_NULL {
+                            draw_ellipse_outline_bitmap(memory, &bitmap, rect, clip, pen);
+                        }
+                    }
+                }
+            }
+        }
+    } else if let Some(framebuffer) = framebuffer.as_deref_mut() {
+        let Some((client_origin, clips)) =
+            hdc_framebuffer_client_clip_rects(kernel, hdc, rect) else {
+            kernel.threads.set_last_error(thread_id, 0);
+            return true;
+        };
+        // Fill: draw each span as a horizontal rect in the framebuffer
+        if let Some(BrushPaint::Solid(colorref)) = selected_brush_paint(kernel, hdc) {
+            let rgb = colorref_rgb(colorref);
+            let pixel = {
+                let info = framebuffer.info();
+                pixel_bytes_for_rgb(info.format, rgb)
+            };
+            let info = framebuffer.info();
+            let bytes_per_pixel = info.format.bytes_per_pixel();
+            for &(y, x_start, x_end) in &spans {
+                let screen_y = y + client_origin.y;
+                if screen_y < 0 || screen_y >= info.height as i32 {
+                    continue;
+                }
+                for clip in &clips {
+                    let screen_clip = clip.offset(client_origin.x, client_origin.y);
+                    let x_lo = (x_start + client_origin.x).max(screen_clip.left).max(0) as usize;
+                    let x_hi = (x_end + client_origin.x)
+                        .min(screen_clip.right)
+                        .min(info.width as i32) as usize;
+                    if x_hi <= x_lo {
+                        continue;
+                    }
+                    let row_off = screen_y as usize * info.stride;
+                    let pixels = framebuffer.pixels_mut();
+                    for x in x_lo..x_hi {
+                        let off = row_off + x * bytes_per_pixel;
+                        pixels[off..off + bytes_per_pixel]
+                            .copy_from_slice(&pixel[..bytes_per_pixel]);
+                    }
+                    framebuffer.mark_dirty(FramebufferRect::new(
+                        x_lo as u32,
+                        screen_y as u32,
+                        (x_hi - x_lo) as u32,
+                        1,
+                    ));
+                }
+            }
+        }
+        // Pen outline: draw via parametric approach on framebuffer
+        if let Some(pen) = selected_pen_model(kernel, hdc) {
+            if pen.style != PS_NULL {
+                let pen_rgb = colorref_rgb(pen.colorref);
+                let pw = pen.width.max(1);
+                let low = (pw - 1) / 2;
+                let high = pw / 2;
+                let screen_rect = rect.offset(client_origin.x, client_origin.y);
+                let a = (screen_rect.right - screen_rect.left) as f64 / 2.0;
+                let b = (screen_rect.bottom - screen_rect.top) as f64 / 2.0;
+                let cx = (screen_rect.left + screen_rect.right) as f64 / 2.0;
+                let cy = (screen_rect.top + screen_rect.bottom) as f64 / 2.0;
+                let info = framebuffer.info();
+                let bytes_per_pixel = info.format.bytes_per_pixel();
+                let pixel = pixel_bytes_for_rgb(info.format, pen_rgb);
+                let mut last_x_left = i32::MAX;
+                let mut last_x_right = i32::MIN;
+                for sy in screen_rect.top..screen_rect.bottom {
+                    let dy = (sy as f64 + 0.5) - cy;
+                    let ratio = dy / b;
+                    if ratio.abs() > 1.0 {
+                        continue;
+                    }
+                    let x_half = a * (1.0 - ratio * ratio).sqrt();
+                    let x_left = (cx - x_half).round() as i32;
+                    let x_right = (cx + x_half).round() as i32;
+                    let draw = sy == screen_rect.top
+                        || sy == screen_rect.bottom - 1
+                        || x_left != last_x_left
+                        || x_right != last_x_right;
+                    if !draw {
+                        continue;
+                    }
+                    last_x_left = x_left;
+                    last_x_right = x_right;
+                    for &sx in &[x_left, x_right] {
+                        for clip in &clips {
+                            let screen_clip = clip.offset(client_origin.x, client_origin.y);
+                            for dpy in -low..=high {
+                                for dpx in -low..=high {
+                                    let px = sx + dpx;
+                                    let py = sy + dpy;
+                                    if px >= screen_clip.left
+                                        && px < screen_clip.right
+                                        && py >= screen_clip.top
+                                        && py < screen_clip.bottom
+                                        && px >= 0
+                                        && px < info.width as i32
+                                        && py >= 0
+                                        && py < info.height as i32
+                                    {
+                                        let off =
+                                            py as usize * info.stride + px as usize * bytes_per_pixel;
+                                        let pixels = framebuffer.pixels_mut();
+                                        let dst = framebuffer_pixel_rgb(
+                                            info.format,
+                                            &pixels[off..off + bytes_per_pixel],
+                                        );
+                                        let out_rgb = apply_rop2_rgb(pen.rop2, pen_rgb, dst);
+                                        let out = pixel_bytes_for_rgb(info.format, out_rgb);
+                                        pixels[off..off + bytes_per_pixel]
+                                            .copy_from_slice(&out[..bytes_per_pixel]);
+                                        framebuffer.mark_dirty(FramebufferRect::new(
+                                            px as u32,
+                                            py as u32,
+                                            1,
+                                            1,
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // Top/bottom horizontal arcs
+                for sy in [screen_rect.top, screen_rect.bottom - 1] {
+                    let dy = (sy as f64 + 0.5) - cy;
+                    let ratio = dy / b;
+                    if ratio.abs() > 1.0 {
+                        continue;
+                    }
+                    let x_half = a * (1.0 - ratio * ratio).sqrt();
+                    let x_start = (cx - x_half).round() as i32;
+                    let x_end = (cx + x_half).round() as i32;
+                    for sx in x_start..=x_end {
+                        for clip in &clips {
+                            let screen_clip = clip.offset(client_origin.x, client_origin.y);
+                            for dpy in -low..=high {
+                                for dpx in -low..=high {
+                                    let px = sx + dpx;
+                                    let py = sy + dpy;
+                                    if px >= screen_clip.left
+                                        && px < screen_clip.right
+                                        && py >= screen_clip.top
+                                        && py < screen_clip.bottom
+                                        && px >= 0
+                                        && px < info.width as i32
+                                        && py >= 0
+                                        && py < info.height as i32
+                                    {
+                                        let off =
+                                            py as usize * info.stride + px as usize * bytes_per_pixel;
+                                        let pixels = framebuffer.pixels_mut();
+                                        pixels[off..off + bytes_per_pixel]
+                                            .copy_from_slice(&pixel[..bytes_per_pixel]);
+                                        framebuffer.mark_dirty(FramebufferRect::new(
+                                            px as u32,
+                                            py as u32,
+                                            1,
+                                            1,
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn round_rect_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    mut framebuffer: Option<&mut dyn Framebuffer>,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let hdc = raw_arg(args, 0);
+    if hdc == 0 {
+        kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let rect = normalize_rect(Rect {
+        left: raw_i32_arg(args, 1),
+        top: raw_i32_arg(args, 2),
+        right: raw_i32_arg(args, 3),
+        bottom: raw_i32_arg(args, 4),
+    });
+    let ew = raw_i32_arg(args, 5).max(0).min(rect.right - rect.left);
+    let eh = raw_i32_arg(args, 6).max(0).min(rect.bottom - rect.top);
+
+    if rect.right <= rect.left || rect.bottom <= rect.top {
+        kernel.threads.set_last_error(thread_id, 0);
+        return true;
+    }
+
+    // Degenerate cases: no rounding → Rectangle; full rounding → Ellipse.
+    if ew == 0 || eh == 0 {
+        let new_args = [
+            hdc,
+            rect.left as u32,
+            rect.top as u32,
+            rect.right as u32,
+            rect.bottom as u32,
+        ];
+        return rectangle_raw(kernel, memory, framebuffer, thread_id, &new_args);
+    }
+
+    // Corner ellipse half-dimensions.
+    let rx = (ew / 2).max(1);
+    let ry = (eh / 2).max(1);
+
+    // Build scan-line spans for the RoundRect interior.
+    // The rounded rect consists of:
+    //   - A central vertical band (full width, middle rows)
+    //   - Top/bottom bands with corner cutouts replaced by ellipse arcs
+    let inner_top = rect.top + ry;
+    let inner_bottom = rect.bottom - ry;
+    let inner_left = rect.left + rx;
+    let inner_right = rect.right - rx;
+
+    let mut spans: Vec<(i32, i32, i32)> = Vec::new();
+
+    // Middle rows: full width.
+    for y in inner_top..inner_bottom {
+        spans.push((y, rect.left, rect.right));
+    }
+
+    // Top/bottom corner rows with ellipse edges.
+    let cx_left = inner_left as f64;
+    let cx_right = inner_right as f64;
+    let cy_top = inner_top as f64;
+    let cy_bottom = inner_bottom as f64;
+
+    for y in rect.top..inner_top {
+        let dy = (y as f64 + 0.5) - cy_top;
+        let ratio = dy / ry as f64;
+        if ratio.abs() > 1.0 {
+            continue;
+        }
+        let x_half = rx as f64 * (1.0 - ratio * ratio).sqrt();
+        let x_start = (cx_left - x_half).ceil() as i32;
+        let x_end = (cx_right + x_half).ceil() as i32;
+        spans.push((y, x_start, x_end));
+    }
+
+    for y in inner_bottom..rect.bottom {
+        let dy = (y as f64 + 0.5) - cy_bottom;
+        let ratio = dy / ry as f64;
+        if ratio.abs() > 1.0 {
+            continue;
+        }
+        let x_half = rx as f64 * (1.0 - ratio * ratio).sqrt();
+        let x_start = (cx_left - x_half).ceil() as i32;
+        let x_end = (cx_right + x_half).ceil() as i32;
+        spans.push((y, x_start, x_end));
+    }
+
+    if kernel.resources.is_memory_dc(hdc) {
+        if let Some(bitmap) = selected_bitmap_object(kernel, hdc) {
+            let clips = hdc_clip_rects(kernel, hdc, rect, bitmap.width, bitmap.height);
+            if !clips.is_empty() {
+                let paint = selected_brush_paint(kernel, hdc);
+                let pen = selected_pen_model(kernel, hdc);
+                let brush_origin = kernel
+                    .resources
+                    .dc_state(hdc)
+                    .map(|state| state.brush_origin)
+                    .unwrap_or(Point { x: 0, y: 0 });
+                let pattern = paint.as_ref().and_then(|p| match p {
+                    BrushPaint::Pattern(pat) => {
+                        bitmap_pattern_bytes(memory, pat).map(|bytes| (pat.clone(), bytes))
+                    }
+                    _ => None,
+                });
+                for clip in &clips {
+                    let clip = *clip;
+                    if let Some(paint) = paint.as_ref() {
+                        for &(y, x_start, x_end) in &spans {
+                            let x_start = x_start.max(clip.left);
+                            let x_end = x_end.min(clip.right);
+                            if x_end <= x_start {
+                                continue;
+                            }
+                            for x in x_start..x_end {
+                                let rgb = match paint {
+                                    BrushPaint::Solid(colorref) => colorref_rgb(*colorref),
+                                    BrushPaint::Pattern(_) => {
+                                        if let Some((pat, bytes)) = pattern.as_ref() {
+                                            pattern_pixel_rgb(pat, bytes, x, y, brush_origin)
+                                                .unwrap_or([0, 0, 0])
+                                        } else {
+                                            continue;
+                                        }
+                                    }
+                                };
+                                let _ = write_bitmap_pixel_rgb(memory, &bitmap, x, y, rgb);
+                            }
+                        }
+                    }
+                    // Pen outline: draw boundary of each span row.
+                    if let Some(pen) = pen {
+                        if pen.style != PS_NULL {
+                            let rgb = colorref_rgb(pen.colorref);
+                            let pw = pen.width.max(1);
+                            let low = (pw - 1) / 2;
+                            let high = pw / 2;
+                            for &(y, x_start, x_end) in &spans {
+                                let prev_x_start = spans.iter().find(|&&(py, _, _)| py == y - 1).map(|&(_, xs, _)| xs).unwrap_or(x_start);
+                                let prev_x_end = spans.iter().find(|&&(py, _, _)| py == y - 1).map(|&(_, _, xe)| xe).unwrap_or(x_end);
+                                let next_x_start = spans.iter().find(|&&(py, _, _)| py == y + 1).map(|&(_, xs, _)| xs).unwrap_or(x_start);
+                                let next_x_end = spans.iter().find(|&&(py, _, _)| py == y + 1).map(|&(_, _, xe)| xe).unwrap_or(x_end);
+                                // Left and right boundary pixels
+                                for &bx in &[x_start, x_end - 1] {
+                                    for dy2 in -low..=high {
+                                        for dx2 in -low..=high {
+                                            let px = bx + dx2;
+                                            let py = y + dy2;
+                                            if px >= clip.left && px < clip.right && py >= clip.top && py < clip.bottom {
+                                                let dst = bitmap_pixel_rgb_from_memory(memory, &bitmap, px, py).unwrap_or([0, 0, 0]);
+                                                let _ = write_bitmap_pixel_rgb(memory, &bitmap, px, py, apply_rop2_rgb(pen.rop2, rgb, dst));
+                                            }
+                                        }
+                                    }
+                                }
+                                // Top/bottom boundary rows
+                                let is_top = y == rect.top || x_start != prev_x_start || x_end != prev_x_end;
+                                let is_bottom = y == rect.bottom - 1 || x_start != next_x_start || x_end != next_x_end;
+                                if is_top || is_bottom {
+                                    for bx in x_start..x_end {
+                                        for dy2 in -low..=high {
+                                            for dx2 in -low..=high {
+                                                let px = bx + dx2;
+                                                let py = y + dy2;
+                                                if px >= clip.left && px < clip.right && py >= clip.top && py < clip.bottom {
+                                                    let dst = bitmap_pixel_rgb_from_memory(memory, &bitmap, px, py).unwrap_or([0, 0, 0]);
+                                                    let _ = write_bitmap_pixel_rgb(memory, &bitmap, px, py, apply_rop2_rgb(pen.rop2, rgb, dst));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else if let Some(framebuffer) = framebuffer.as_deref_mut() {
+        let Some((client_origin, clips)) =
+            hdc_framebuffer_client_clip_rects(kernel, hdc, rect) else {
+            kernel.threads.set_last_error(thread_id, 0);
+            return true;
+        };
+        if let Some(BrushPaint::Solid(colorref)) = selected_brush_paint(kernel, hdc) {
+            let rgb = colorref_rgb(colorref);
+            let info = framebuffer.info();
+            let bytes_per_pixel = info.format.bytes_per_pixel();
+            let pixel = pixel_bytes_for_rgb(info.format, rgb);
+            for &(y, x_start, x_end) in &spans {
+                let screen_y = y + client_origin.y;
+                if screen_y < 0 || screen_y >= info.height as i32 {
+                    continue;
+                }
+                for clip in &clips {
+                    let screen_clip = clip.offset(client_origin.x, client_origin.y);
+                    let x_lo = (x_start + client_origin.x).max(screen_clip.left).max(0) as usize;
+                    let x_hi = (x_end + client_origin.x)
+                        .min(screen_clip.right)
+                        .min(info.width as i32) as usize;
+                    if x_hi <= x_lo {
+                        continue;
+                    }
+                    let row_off = screen_y as usize * info.stride;
+                    let pixels = framebuffer.pixels_mut();
+                    for x in x_lo..x_hi {
+                        let off = row_off + x * bytes_per_pixel;
+                        pixels[off..off + bytes_per_pixel]
+                            .copy_from_slice(&pixel[..bytes_per_pixel]);
+                    }
+                    framebuffer.mark_dirty(FramebufferRect::new(
+                        x_lo as u32,
+                        screen_y as u32,
+                        (x_hi - x_lo) as u32,
+                        1,
+                    ));
+                }
+            }
         }
     }
     kernel.threads.set_last_error(thread_id, 0);
@@ -28178,6 +30567,7 @@ fn fill_bitmap_polygon<M: CoredllGuestMemory>(
     clip: Rect,
     paint: BrushPaint,
     origin: Point,
+    fill_mode: i32,
 ) {
     let pattern = match &paint {
         BrushPaint::Solid(_) => None,
@@ -28192,7 +30582,7 @@ fn fill_bitmap_polygon<M: CoredllGuestMemory>(
     if solid.is_none() && pattern.is_none() {
         return;
     }
-    for (y, x_start, x_end) in polygon_spans(points, clip) {
+    for (y, x_start, x_end) in polygon_spans(points, clip, fill_mode) {
         for x in x_start..x_end {
             let rgb = if let Some(rgb) = solid {
                 rgb
@@ -28212,6 +30602,7 @@ fn fill_framebuffer_polygon_for_hdc(
     hdc: u32,
     points: &[Point],
     colorref: u32,
+    fill_mode: i32,
 ) {
     let Some((client_origin, clips)) = hdc_framebuffer_client_clip_rects(
         kernel,
@@ -28238,7 +30629,7 @@ fn fill_framebuffer_polygon_for_hdc(
     let mut dirty: Option<Rect> = None;
     for clip in clips {
         let clip = clip.offset(client_origin.x, client_origin.y);
-        for (y, x_start, x_end) in polygon_spans(&screen_points, clip) {
+        for (y, x_start, x_end) in polygon_spans(&screen_points, clip, fill_mode) {
             if y < 0 || y >= info.height as i32 {
                 continue;
             }
@@ -28273,7 +30664,12 @@ fn fill_framebuffer_polygon_for_hdc(
     }
 }
 
-fn polygon_spans(points: &[Point], clip: Rect) -> Vec<(i32, i32, i32)> {
+fn polygon_spans(
+    points: &[Point],
+    clip: Rect,
+    fill_mode: i32,
+) -> Vec<(i32, i32, i32)> {
+    use crate::ce::resource::{POLY_FILL_ALTERNATE, POLY_FILL_WINDING};
     if points.len() < 3 || is_rect_empty_value(clip) {
         return Vec::new();
     }
@@ -28304,47 +30700,55 @@ fn polygon_spans(points: &[Point], clip: Rect) -> Vec<(i32, i32, i32)> {
             if (ay <= scan_y && scan_y < by) || (by <= scan_y && scan_y < ay) {
                 let t = (scan_y - ay) / (by - ay);
                 let x = f64::from(a.x) + t * f64::from(b.x - a.x);
-                let direction = if b.y > a.y { 1 } else { -1 };
+                let direction = if b.y > a.y { 1i32 } else { -1i32 };
                 edges.push((x, direction));
             }
         }
         edges.sort_by(|(a, _), (b, _)| a.total_cmp(b));
-        let mut index = 0;
-        while index < edges.len() {
-            let x_left = edges[index].0;
-            let mut winding = edges[index].1;
-            index += 1;
-            while index < edges.len() && winding != 0 {
-                winding += edges[index].1;
+        if fill_mode == POLY_FILL_WINDING {
+            // Nonzero winding rule: fill between edges where winding transitions through 0.
+            let mut index = 0;
+            while index < edges.len() {
+                let x_left = edges[index].0;
+                let mut winding = edges[index].1;
                 index += 1;
+                while index < edges.len() && winding != 0 {
+                    winding += edges[index].1;
+                    index += 1;
+                }
+                if winding != 0 {
+                    break;
+                }
+                let Some((x_right, _)) = edges.get(index.saturating_sub(1)).copied() else {
+                    break;
+                };
+                let x_start = (x_left - 0.5).ceil() as i32;
+                let x_end = (x_right - 0.5).ceil() as i32;
+                let x_start = x_start.max(clip.left);
+                let x_end = x_end.min(clip.right);
+                if x_end > x_start {
+                    spans.push((y, x_start, x_end));
+                }
             }
-            if winding != 0 {
-                break;
-            }
-            let Some((x_right, _)) = edges.get(index.saturating_sub(1)).copied() else {
-                break;
-            };
-            let x_start = (x_left - 0.5).ceil() as i32;
-            let x_end = (x_right - 0.5).ceil() as i32;
-            let x_start = x_start.max(clip.left);
-            let x_end = x_end.min(clip.right);
-            if x_end > x_start {
-                spans.push((y, x_start, x_end));
+        } else {
+            // ALTERNATE (even-odd) rule: fill between odd/even edge pairs.
+            let _ = POLY_FILL_ALTERNATE;
+            let mut index = 0;
+            while index + 1 < edges.len() {
+                let x_left = edges[index].0;
+                let x_right = edges[index + 1].0;
+                index += 2;
+                let x_start = (x_left - 0.5).ceil() as i32;
+                let x_end = (x_right - 0.5).ceil() as i32;
+                let x_start = x_start.max(clip.left);
+                let x_end = x_end.min(clip.right);
+                if x_end > x_start {
+                    spans.push((y, x_start, x_end));
+                }
             }
         }
     }
     spans
-}
-
-fn gdi_shape_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
-    if raw_arg(args, 0) == 0 {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-        return false;
-    }
-    kernel.threads.set_last_error(thread_id, 0);
-    true
 }
 
 fn move_to_ex_raw<M: CoredllGuestMemory>(
@@ -29612,13 +32016,18 @@ fn translate_message_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return false;
     }
-    // VK_HANGUL (0x15): toggle IME open status and post IMN_SETOPENSTATUS.
-    // The key itself produces no WM_CHAR; return TRUE so the caller knows it
-    // was consumed.
+    // VK_HANGUL (0x15): toggle IME open status, commit any pending composition,
+    // and post IMN_SETOPENSTATUS.
     if message.wparam == crate::ce::gwe::VK_HANGUL
         && message.msg == crate::ce::gwe::WM_KEYDOWN
     {
         if let Some(himc) = kernel.gwe.get_ime_context(message.hwnd) {
+            // Commit any active composition before toggling.
+            if kernel.gwe.hangul_composition_active(himc) {
+                if let Some((hwnd, actions)) = kernel.gwe.commit_hangul_ime(himc) {
+                    deliver_hangul_ime_actions(kernel, thread_id, hwnd, message.lparam, &actions);
+                }
+            }
             let currently_open = kernel.gwe.ime_context(himc).is_some_and(|c| c.open);
             kernel.gwe.set_ime_open_status(himc, !currently_open);
             let hwnd = kernel.gwe.ime_context(himc).and_then(|c| c.hwnd).unwrap_or(0);
@@ -29635,27 +32044,180 @@ fn translate_message_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return true;
     }
+
+    // Korean IME composition path: WM_KEYDOWN when the Korean keyboard layout
+    // (0x0412) is active and the window's IME context is open.
+    if message.msg == crate::ce::gwe::WM_KEYDOWN
+        && kernel.gwe.keyboard_layout() == 0x0412
+        && kernel.gwe.is_ime_open_for_window(message.hwnd)
+    {
+        let shift = kernel.gwe.get_key_state(crate::ce::gwe::VK_SHIFT) & 0x8000_0000 != 0;
+        let vk = message.wparam;
+
+        // VK_BACK (0x08): undo the last Jamo in the composition.
+        if vk == 0x08 {
+            if let Some(himc) = kernel.gwe.get_ime_context(message.hwnd) {
+                if kernel.gwe.hangul_composition_active(himc) {
+                    if let Some((hwnd, actions)) = kernel.gwe.backspace_hangul_ime(himc) {
+                        deliver_hangul_ime_actions(
+                            kernel,
+                            thread_id,
+                            hwnd,
+                            message.lparam,
+                            &actions,
+                        );
+                    }
+                    kernel.threads.set_last_error(thread_id, 0);
+                    return true;
+                }
+            }
+            // No active composition — fall through to post WM_CHAR(BS) normally.
+        }
+
+        // Commit-and-pass-through keys: Tab, Return, Escape.
+        if matches!(vk, 0x09 | 0x0d | 0x1b) {
+            if let Some(himc) = kernel.gwe.get_ime_context(message.hwnd) {
+                if kernel.gwe.hangul_composition_active(himc) {
+                    if let Some((hwnd, actions)) = kernel.gwe.commit_hangul_ime(himc) {
+                        deliver_hangul_ime_actions(
+                            kernel,
+                            thread_id,
+                            hwnd,
+                            message.lparam,
+                            &actions,
+                        );
+                    }
+                }
+            }
+            // Fall through: still post WM_CHAR for the key.
+        }
+
+        // Try to map the VK to a Hangul Jamo.
+        if let Some(jamo) = crate::ce::hangul::vk_to_hangul_jamo(vk, shift) {
+            if let Some(himc) = kernel.gwe.get_ime_context(message.hwnd) {
+                if let Some((hwnd, actions)) =
+                    kernel.gwe.process_hangul_ime_jamo(himc, jamo)
+                {
+                    deliver_hangul_ime_actions(kernel, thread_id, hwnd, message.lparam, &actions);
+                }
+            }
+            kernel.threads.set_last_error(thread_id, 0);
+            return true; // key consumed by IME
+        }
+
+        // Non-Jamo key while IME is open: commit any pending composition, then
+        // fall through to normal WM_CHAR translation for non-Hangul characters.
+        if let Some(himc) = kernel.gwe.get_ime_context(message.hwnd) {
+            if kernel.gwe.hangul_composition_active(himc) {
+                if let Some((hwnd, actions)) = kernel.gwe.commit_hangul_ime(himc) {
+                    deliver_hangul_ime_actions(
+                        kernel,
+                        thread_id,
+                        hwnd,
+                        message.lparam,
+                        &actions,
+                    );
+                }
+            }
+        }
+        // Fall through to normal character translation below.
+    }
+
+    // Western European layout dead-key state machine.
+    // Active for layouts 0x040C (French), 0x0407 (German), 0x040A/0x0C0A (Spanish).
+    let layout = kernel.gwe.keyboard_layout();
+    let layout_lang = layout & 0xFFFF;
+    let is_western_layout = matches!(layout_lang, 0x040C | 0x0407 | 0x040A | 0x0C0A);
+
+    if is_western_layout && message.msg == crate::ce::gwe::WM_KEYDOWN {
+        let shift = kernel.gwe.get_key_state(crate::ce::gwe::VK_SHIFT) & 0x8000_0000 != 0;
+        let caps = kernel.gwe.get_key_state(crate::ce::gwe::VK_CAPITAL) & 0x0001 != 0;
+        let (ch, is_dead) = translate_vk_for_western_layout(layout, message.wparam, shift, caps);
+
+        if let Some(pending_dead) = kernel.gwe.take_dead_key() {
+            if ch != 0 {
+                // Attempt to compose dead + base. If current key is a dead key itself,
+                // first emit the pending dead char literally, then record the new dead key.
+                if is_dead {
+                    // Pending dead + new dead key: emit pending dead as literal WM_CHAR,
+                    // then store the new dead key.
+                    let _ = kernel.post_message_w_for_thread(
+                        thread_id,
+                        message.hwnd,
+                        crate::ce::gwe::WM_CHAR,
+                        pending_dead,
+                        message.lparam,
+                    );
+                    kernel.gwe.set_dead_key(ch);
+                    let _ = kernel.post_message_w_for_thread(
+                        thread_id,
+                        message.hwnd,
+                        crate::ce::gwe::WM_DEADCHAR,
+                        ch,
+                        message.lparam,
+                    );
+                } else if let Some(composed) = compose_dead_key(pending_dead, ch) {
+                    // Composed form: emit single WM_CHAR with the combined character.
+                    let _ = kernel.post_message_w_for_thread(
+                        thread_id,
+                        message.hwnd,
+                        crate::ce::gwe::WM_CHAR,
+                        composed,
+                        message.lparam,
+                    );
+                } else {
+                    // No composed form: emit dead char literally, then the base char.
+                    let _ = kernel.post_message_w_for_thread(
+                        thread_id,
+                        message.hwnd,
+                        crate::ce::gwe::WM_CHAR,
+                        pending_dead,
+                        message.lparam,
+                    );
+                    let _ = kernel.post_message_w_for_thread(
+                        thread_id,
+                        message.hwnd,
+                        crate::ce::gwe::WM_CHAR,
+                        ch,
+                        message.lparam,
+                    );
+                }
+                kernel.threads.set_last_error(thread_id, 0);
+                return true;
+            }
+            // ch == 0 (non-character key): restore the pending dead key untouched.
+            kernel.gwe.set_dead_key(pending_dead);
+        } else if is_dead && ch != 0 {
+            // No pending dead key, current key is a dead key: store it and post WM_DEADCHAR.
+            kernel.gwe.set_dead_key(ch);
+            let _ = kernel.post_message_w_for_thread(
+                thread_id,
+                message.hwnd,
+                crate::ce::gwe::WM_DEADCHAR,
+                ch,
+                message.lparam,
+            );
+            kernel.threads.set_last_error(thread_id, 0);
+            return true;
+        } else if ch != 0 {
+            // Normal character in a Western layout — emit it and we're done.
+            let _ = kernel.post_message_w_for_thread(
+                thread_id,
+                message.hwnd,
+                crate::ce::gwe::WM_CHAR,
+                ch,
+                message.lparam,
+            );
+            kernel.threads.set_last_error(thread_id, 0);
+            return true;
+        }
+        // ch == 0 from western table: fall through to standard US translation.
+    }
+
     let char_code = translate_virtual_key_to_char(kernel, message.wparam);
     if char_code == 0 {
         kernel.threads.set_last_error(thread_id, 0);
         return false;
-    }
-    // IME composition handoff: when the receiving window has an open IME
-    // context, printable characters (non-control, non-BS/Tab/Return/Escape)
-    // are consumed by the IME composition engine rather than posted as WM_CHAR.
-    // The app's IME message handler produces WM_IME_CHAR / WM_IME_COMPOSITION
-    // in their place; TranslateMessage returns TRUE to signal the key was
-    // handled without posting a WM_CHAR itself.
-    let is_control_key = matches!(
-        message.wparam,
-        0x08 | 0x09 | 0x0d | 0x1b // BS, Tab, Return, Escape pass through IME
-    );
-    if !is_control_key
-        && message.msg == crate::ce::gwe::WM_KEYDOWN
-        && kernel.gwe.is_ime_open_for_window(message.hwnd)
-    {
-        kernel.threads.set_last_error(thread_id, 0);
-        return true;
     }
     let translated_msg = if message.msg == crate::ce::gwe::WM_SYSKEYDOWN {
         crate::ce::gwe::WM_SYSCHAR
@@ -29671,6 +32233,64 @@ fn translate_message_raw<M: CoredllGuestMemory>(
     );
     kernel.threads.set_last_error(thread_id, 0);
     posted
+}
+
+/// Post WM_IME_* messages corresponding to a slice of Hangul IME actions.
+fn deliver_hangul_ime_actions(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    hwnd: u32,
+    key_lparam: u32,
+    actions: &[crate::ce::hangul::HangulImeAction],
+) {
+    use crate::ce::hangul::HangulImeAction;
+    for action in actions {
+        match *action {
+            HangulImeAction::StartComposition => {
+                let _ = kernel.post_message_w_for_thread(
+                    thread_id,
+                    hwnd,
+                    crate::ce::gwe::WM_IME_STARTCOMPOSITION,
+                    0,
+                    0,
+                );
+            }
+            HangulImeAction::UpdateComposition(ch) => {
+                let _ = kernel.post_message_w_for_thread(
+                    thread_id,
+                    hwnd,
+                    crate::ce::gwe::WM_IME_COMPOSITION,
+                    u32::from(ch),
+                    crate::ce::gwe::GCS_COMPSTR,
+                );
+            }
+            HangulImeAction::CommitChar(ch) => {
+                let _ = kernel.post_message_w_for_thread(
+                    thread_id,
+                    hwnd,
+                    crate::ce::gwe::WM_IME_CHAR,
+                    u32::from(ch),
+                    key_lparam,
+                );
+                let _ = kernel.post_message_w_for_thread(
+                    thread_id,
+                    hwnd,
+                    crate::ce::gwe::WM_IME_ENDCOMPOSITION,
+                    0,
+                    0,
+                );
+            }
+            HangulImeAction::EndCompositionOnly => {
+                let _ = kernel.post_message_w_for_thread(
+                    thread_id,
+                    hwnd,
+                    crate::ce::gwe::WM_IME_ENDCOMPOSITION,
+                    0,
+                    0,
+                );
+            }
+        }
+    }
 }
 
 fn keybd_vkey_to_unicode_raw<M: CoredllGuestMemory>(
@@ -30114,6 +32734,298 @@ fn translate_digit_key(vkey: u32, shift: bool) -> u32 {
         0x38 => b'*' as u32,
         0x39 => b'(' as u32,
         _ => 0,
+    }
+}
+
+/// Translate a VK code for a Western European keyboard layout.
+/// Returns `(char_code, is_dead)`. `char_code == 0` means no character.
+/// `is_dead == true` means the char is a dead-key diacritic.
+/// Used for layouts 0x040C (French AZERTY), 0x0407 (German QWERTZ),
+/// 0x040A / 0x0C0A (Spanish).
+fn translate_vk_for_western_layout(
+    layout: u32,
+    vkey: u32,
+    shift: bool,
+    caps: bool,
+) -> (u32, bool) {
+    let lang = layout & 0xFFFF;
+    match lang {
+        // French AZERTY (040C)
+        0x040C => translate_vk_azerty(vkey, shift, caps),
+        // German QWERTZ (0407)
+        0x0407 => translate_vk_qwertz(vkey, shift, caps),
+        // Spanish (040A, 0C0A)
+        0x040A | 0x0C0A => translate_vk_spanish(vkey, shift, caps),
+        _ => (0, false),
+    }
+}
+
+fn translate_vk_azerty(vkey: u32, shift: bool, caps: bool) -> (u32, bool) {
+    // French AZERTY layout VK→char table (VK codes are physical QWERTY positions).
+    // Dead keys: VK_OEM_4 (0xDB) unshifted → dead circumflex '^',
+    //            VK_OEM_4 (0xDB) shifted   → dead diaeresis '¨'.
+    // Reference: standard Windows AZERTY (kbdfr.dll) layout.
+    let letter = |lower: u8, upper: u8| -> (u32, bool) {
+        let ch = if shift ^ caps { upper } else { lower };
+        (u32::from(ch), false)
+    };
+    match vkey {
+        // Letter row remapping (AZERTY vs QWERTY)
+        0x41 => letter(b'q', b'Q'), // A key → q/Q
+        0x5a => letter(b'w', b'W'), // Z key → w/W
+        0x57 => letter(b'z', b'Z'), // W key → z/Z
+        0x51 => letter(b'a', b'A'), // Q key → a/A
+        // Remaining letters same physical position as QWERTY
+        // Excludes: A=0x41, Q=0x51, W=0x57, Z=0x5A (remapped above),
+        //           M=0x4D (at AZERTY ',' position, handled below).
+        0x42..=0x4c | 0x4e..=0x50 | 0x52..=0x56 | 0x58..=0x59 => {
+            let base = if shift ^ caps { vkey } else { vkey + 0x20 };
+            (base, false)
+        }
+        0x4d => (if shift { 0x3f } else { 0x2c }, false), // M key → ,/?
+        // Digit row: unshifted produce special chars; shifted produce digit
+        0x31 => (if shift { 0x31 } else { 0x26 }, false), // 1 / &
+        0x32 => (if shift { 0x32 } else { 0x00e9 }, false), // 2 / é
+        0x33 => (if shift { 0x33 } else { 0x22 }, false), // 3 / "
+        0x34 => (if shift { 0x34 } else { 0x27 }, false), // 4 / '
+        0x35 => (if shift { 0x35 } else { 0x28 }, false), // 5 / (
+        0x36 => (if shift { 0x36 } else { 0x2d }, false), // 6 / -
+        0x37 => (if shift { 0x37 } else { 0x00e8 }, false), // 7 / è
+        0x38 => (if shift { 0x38 } else { 0x5f }, false), // 8 / _
+        0x39 => (if shift { 0x39 } else { 0x00e7 }, false), // 9 / ç
+        0x30 => (if shift { 0x30 } else { 0x00e0 }, false), // 0 / à
+        // OEM keys
+        0xbd => (if shift { 0x00b0 } else { 0x29 }, false), // ° / )
+        0xbb => (if shift { 0x2b } else { 0x3d }, false), // + / =
+        0xdb => {
+            // VK_OEM_4: dead circumflex (unshifted) / dead diaeresis (shifted)
+            if shift {
+                (0x00a8, true) // dead diaeresis ¨
+            } else {
+                (0x5e, true) // dead circumflex ^
+            }
+        }
+        0xdd => (if shift { 0x00a3 } else { 0x24 }, false), // £ / $
+        0xba => letter(b'm', b'M'), // VK_OEM_1 (;) → m/M on AZERTY
+        0xde => (if shift { 0x25 } else { 0x00f9 }, false), // % / ù
+        0xdc => (if shift { 0x00b5 } else { 0x2a }, false), // µ / *
+        0xe2 => (if shift { 0x3e } else { 0x3c }, false), // > / <
+        0xbc => (if shift { 0x2e } else { 0x3b }, false), // . / ;
+        0xbe => (if shift { 0x2f } else { 0x3a }, false), // / / :
+        0xbf => (if shift { 0x00a7 } else { 0x21 }, false), // § / !
+        0xc0 => (if shift { 0x7e } else { 0x60 }, false), // ~ / `
+        // Special keys
+        0x08 | 0x09 | 0x0d | 0x1b | 0x20 => (vkey, false),
+        0x60..=0x69 => (vkey - 0x60 + 0x30, false),
+        0x6a => (0x2a, false), // *
+        0x6b => (0x2b, false), // +
+        0x6d => (0x2d, false), // -
+        0x6e => (0x2e, false), // .
+        0x6f => (0x2f, false), // /
+        _ => (0, false),
+    }
+}
+
+fn translate_vk_qwertz(vkey: u32, shift: bool, caps: bool) -> (u32, bool) {
+    // German QWERTZ layout.
+    // Dead keys:
+    //   VK_OEM_3 (0xC0, backtick position) unshifted → dead circumflex '^'
+    //   VK_OEM_PLUS (0xBB, = position)    unshifted → dead acute '´'
+    //   VK_OEM_PLUS (0xBB)                shifted   → dead grave '`'
+    // Reference: standard Windows QWERTZ (kbdgr.dll) layout.
+    let letter = |lower: u8, upper: u8| -> (u32, bool) {
+        let ch = if shift ^ caps { upper } else { lower };
+        (u32::from(ch), false)
+    };
+    match vkey {
+        // Y↔Z swap
+        0x59 => letter(b'z', b'Z'),
+        0x5a => letter(b'y', b'Y'),
+        // Other letters (A..X) — same as QWERTY (Y=0x59 and Z=0x5A are swapped above)
+        0x41..=0x58 => {
+            let base = if shift ^ caps { vkey } else { vkey + 0x20 };
+            (base, false)
+        }
+        // Digit row
+        0x31 => (if shift { 0x21 } else { 0x31 }, false), // ! / 1
+        0x32 => (if shift { 0x22 } else { 0x32 }, false), // " / 2
+        0x33 => (if shift { 0x00a7 } else { 0x33 }, false), // § / 3
+        0x34 => (if shift { 0x24 } else { 0x34 }, false), // $ / 4
+        0x35 => (if shift { 0x25 } else { 0x35 }, false), // % / 5
+        0x36 => (if shift { 0x26 } else { 0x36 }, false), // & / 6
+        0x37 => (if shift { 0x2f } else { 0x37 }, false), // / / 7
+        0x38 => (if shift { 0x28 } else { 0x38 }, false), // ( / 8
+        0x39 => (if shift { 0x29 } else { 0x39 }, false), // ) / 9
+        0x30 => (if shift { 0x3d } else { 0x30 }, false), // = / 0
+        // OEM keys
+        0xbd => (if shift { 0x3f } else { 0x00df }, false), // ß / ?
+        0xbb => {
+            // VK_OEM_PLUS: dead acute (unshifted) / dead grave (shifted)
+            if shift {
+                (0x60, true) // dead grave `
+            } else {
+                (0x00b4, true) // dead acute ´
+            }
+        }
+        0xdb => (if shift { 0x00dc } else { 0x00fc }, false), // ü/Ü
+        0xdd => (if shift { 0x2a } else { 0x2b }, false), // * / +
+        0xba => (if shift { 0x00d6 } else { 0x00f6 }, false), // ö/Ö
+        0xde => (if shift { 0x00c4 } else { 0x00e4 }, false), // ä/Ä
+        0xdc => (if shift { 0x27 } else { 0x23 }, false), // ' / #
+        0xc0 => (0x5e, true), // dead circumflex ^
+        0xe2 => (if shift { 0x3e } else { 0x3c }, false), // > / <
+        0xbc => (if shift { 0x3b } else { 0x2c }, false), // ; / ,
+        0xbe => (if shift { 0x3a } else { 0x2e }, false), // : / .
+        0xbf => (if shift { 0x5f } else { 0x2d }, false), // _ / -
+        // Special keys
+        0x08 | 0x09 | 0x0d | 0x1b | 0x20 => (vkey, false),
+        0x60..=0x69 => (vkey - 0x60 + 0x30, false),
+        0x6a => (0x2a, false), // *
+        0x6b => (0x2b, false), // +
+        0x6d => (0x2d, false), // -
+        0x6e => (0x2e, false), // .
+        0x6f => (0x2f, false), // /
+        _ => (0, false),
+    }
+}
+
+fn translate_vk_spanish(vkey: u32, shift: bool, caps: bool) -> (u32, bool) {
+    // Spanish (Spain) keyboard layout.
+    // Dead keys:
+    //   VK_OEM_4 (0xDB) unshifted → dead grave '`'
+    //   VK_OEM_4 (0xDB) shifted   → dead circumflex '^'
+    //   VK_OEM_PLUS (0xBB, = position) unshifted → dead acute '´'
+    // Reference: standard Windows Spanish layout (kbdsp.dll).
+    let _ = caps; // Spanish letters follow caps-lock the same as QWERTY
+    match vkey {
+        // Letters same as US
+        0x41..=0x5a => {
+            let base = if shift ^ caps { vkey } else { vkey + 0x20 };
+            (base, false)
+        }
+        // Digit row: shifted produces Spanish special characters
+        0x30 => (if shift { 0x3d } else { 0x30 }, false), // = / 0
+        0x31 => (if shift { 0x21 } else { 0x31 }, false), // ! / 1
+        0x32 => (if shift { 0x22 } else { 0x32 }, false), // " / 2
+        0x33 => (if shift { 0x00b7 } else { 0x33 }, false), // · / 3
+        0x34 => (if shift { 0x24 } else { 0x34 }, false), // $ / 4
+        0x35 => (if shift { 0x25 } else { 0x35 }, false), // % / 5
+        0x36 => (if shift { 0x26 } else { 0x36 }, false), // & / 6
+        0x37 => (if shift { 0x2f } else { 0x37 }, false), // / / 7
+        0x38 => (if shift { 0x28 } else { 0x38 }, false), // ( / 8
+        0x39 => (if shift { 0x29 } else { 0x39 }, false), // ) / 9
+        // OEM keys
+        0xbd => (if shift { 0x3f } else { 0x27 }, false), // ? / '
+        0xbb => (0x00b4, true), // dead acute ´ (both shift states)
+        0xdb => {
+            if shift {
+                (0x5e, true) // dead circumflex ^
+            } else {
+                (0x60, true) // dead grave `
+            }
+        }
+        0xdd => (if shift { 0x2a } else { 0x2b }, false), // * / +
+        0xba => (if shift { 0x3a } else { 0x3b }, false), // : / ;
+        0xde => (if shift { 0x22 } else { 0x00ba }, false), // " / º
+        0xdc => (if shift { 0x00aa } else { 0x00ba }, false),
+        0xc0 => (if shift { 0x00d1 } else { 0x00f1 }, false), // Ñ / ñ
+        0xe2 => (if shift { 0x3e } else { 0x3c }, false), // > / <
+        0xbc => (if shift { 0x3b } else { 0x2c }, false), // ; / ,
+        0xbe => (if shift { 0x3a } else { 0x2e }, false), // : / .
+        0xbf => (if shift { 0x5f } else { 0x2d }, false), // _ / -
+        // Special keys
+        0x08 | 0x09 | 0x0d | 0x1b | 0x20 => (vkey, false),
+        0x60..=0x69 => (vkey - 0x60 + 0x30, false),
+        0x6a => (0x2a, false), // *
+        0x6b => (0x2b, false), // +
+        0x6d => (0x2d, false), // -
+        0x6e => (0x2e, false), // .
+        0x6f => (0x2f, false), // /
+        _ => (0, false),
+    }
+}
+
+/// Look up the composed character for a dead-key + base-character pair.
+/// Returns `Some(composed)` if a Unicode precomposed form exists,
+/// `None` if there is no composed form (caller should emit dead+base separately).
+fn compose_dead_key(dead: u32, base: u32) -> Option<u32> {
+    // Standard Unicode precomposed forms for the five common diacritics.
+    match dead {
+        // Dead circumflex ^ (0x5E)
+        0x5e => match base {
+            0x61 => Some(0x00e2), // a → â
+            0x65 => Some(0x00ea), // e → ê
+            0x69 => Some(0x00ee), // i → î
+            0x6f => Some(0x00f4), // o → ô
+            0x75 => Some(0x00fb), // u → û
+            0x41 => Some(0x00c2), // A → Â
+            0x45 => Some(0x00ca), // E → Ê
+            0x49 => Some(0x00ce), // I → Î
+            0x4f => Some(0x00d4), // O → Ô
+            0x55 => Some(0x00db), // U → Û
+            0x20 => Some(0x005e), // space → literal ^
+            _ => None,
+        },
+        // Dead grave ` (0x60)
+        0x60 => match base {
+            0x61 => Some(0x00e0), // a → à
+            0x65 => Some(0x00e8), // e → è
+            0x69 => Some(0x00ec), // i → ì
+            0x6f => Some(0x00f2), // o → ò
+            0x75 => Some(0x00f9), // u → ù
+            0x41 => Some(0x00c0), // A → À
+            0x45 => Some(0x00c8), // E → È
+            0x49 => Some(0x00cc), // I → Ì
+            0x4f => Some(0x00d2), // O → Ò
+            0x55 => Some(0x00d9), // U → Ù
+            0x20 => Some(0x0060), // space → literal `
+            _ => None,
+        },
+        // Dead acute ´ (U+00B4)
+        0x00b4 => match base {
+            0x61 => Some(0x00e1), // a → á
+            0x65 => Some(0x00e9), // e → é
+            0x69 => Some(0x00ed), // i → í
+            0x6f => Some(0x00f3), // o → ó
+            0x75 => Some(0x00fa), // u → ú
+            0x79 => Some(0x00fd), // y → ý
+            0x41 => Some(0x00c1), // A → Á
+            0x45 => Some(0x00c9), // E → É
+            0x49 => Some(0x00cd), // I → Í
+            0x4f => Some(0x00d3), // O → Ó
+            0x55 => Some(0x00da), // U → Ú
+            0x59 => Some(0x00dd), // Y → Ý
+            0x20 => Some(0x00b4), // space → literal ´
+            _ => None,
+        },
+        // Dead tilde ~ (0x7E)
+        0x7e => match base {
+            0x61 => Some(0x00e3), // a → ã
+            0x6f => Some(0x00f5), // o → õ
+            0x6e => Some(0x00f1), // n → ñ
+            0x41 => Some(0x00c3), // A → Ã
+            0x4f => Some(0x00d5), // O → Õ
+            0x4e => Some(0x00d1), // N → Ñ
+            0x20 => Some(0x007e), // space → literal ~
+            _ => None,
+        },
+        // Dead diaeresis ¨ (U+00A8)
+        0x00a8 => match base {
+            0x61 => Some(0x00e4), // a → ä
+            0x65 => Some(0x00eb), // e → ë
+            0x69 => Some(0x00ef), // i → ï
+            0x6f => Some(0x00f6), // o → ö
+            0x75 => Some(0x00fc), // u → ü
+            0x79 => Some(0x00ff), // y → ÿ
+            0x41 => Some(0x00c4), // A → Ä
+            0x45 => Some(0x00cb), // E → Ë
+            0x49 => Some(0x00cf), // I → Ï
+            0x4f => Some(0x00d6), // O → Ö
+            0x55 => Some(0x00dc), // U → Ü
+            0x20 => Some(0x00a8), // space → literal ¨
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -31165,7 +34077,12 @@ const DIB_PAL_COLORS: u32 = 1;
 const BLACKNESS: u32 = 0x0000_0042;
 const WHITENESS: u32 = 0x00ff_0062;
 const SRCCOPY: u32 = 0x00cc_0020;
+const SRCPAINT: u32 = 0x00ee_0086;
+const SRCAND: u32 = 0x0088_00c6;
+const SRCINVERT: u32 = 0x0066_0046;
+const DSTINVERT: u32 = 0x0055_0009;
 const PATCOPY: u32 = 0x00f0_0021;
+const PATINVERT: u32 = 0x005a_0049;
 const R2_BLACK: i32 = 1;
 const R2_NOTMERGEPEN: i32 = 2;
 const R2_MASKNOTPEN: i32 = 3;

@@ -18,10 +18,16 @@
   above the raw clipboard store and `GetClipboardDataAlloc` local-handle copy
   path, rendered caret blink/focus invalidation above the raw caret store, and
   focus/capture integration. Also complete
-  cross-thread `SendMessageTimeout` so it waits until reply or timeout, writes
-  the result pointer, handles receiver/sender destruction, and performs
-  CE-required reentrant dispatch while waiting. The raw boundary now rejects
-  non-CE `fuFlags` instead of queuing unsupported desktop-style variants.
+  cross-thread `SendMessageTimeout` waits until reply or timeout and writes the
+  result pointer; cross-process `SendMessageTimeout` to parked children now
+  also honors the caller's timeout rather than waiting forever (`INFINITE`).
+  Korean 2-bul Hangul IME composition (hangul.rs) is now backed and tested;
+  dead-key support for Western layouts (AZERTY 0x040C, QWERTZ 0x0407, Spanish
+  0x040A/0x0C0A) is now implemented: `Gwe::dead_key` state machine posts
+  `WM_DEADCHAR` on first press and `WM_CHAR(composed)` or
+  `WM_CHAR(dead)+WM_CHAR(base)` on the follow-up key; Unicode precomposed-form
+  table covers circumflex/grave/acute/tilde/diaeresis; `SMTO_BLOCK` reentrant
+  dispatch while waiting remains open.
 - Shell fidelity follow-up: `ShellExecuteEx` now handles the basic CE launch
   chain through shortcuts, registry associations, `CreateProcessW` queuing,
   `SEE_MASK_NOCLOSEPROCESS` hProcess output, and `nShow` propagation into child
@@ -59,9 +65,9 @@
   behavior registry-backed and generic; do not fake route UI.
 - Winsock fidelity follow-up: guest-visible local names now use the isolated
   `10.0.0.1`/`10.0.0.2` model while host sockets remain the transport. Blocking
-  `connect`, `accept`, `recv`, `recvfrom`, and `select` still need to park
-  through the scheduler instead of returning `WSAEWOULDBLOCK`/short host
-  timeout behavior.
+  `accept`, `recv`, `recvfrom`, and `select` park through the scheduler; blocking
+  `connect` on TCP streams now parks via `TcpConnecting` background-thread state.
+  Blocking UDP/unconnected path edge cases remain if discovered.
 - Route-search child-startup blocker closed/watch: `target\route_deviceexit1_*`
   confirms the old MIPS CE `TerminateProcess` thunk in `DeviceParser.exe`
   decodes through the interrupt/zero-PC path and the child exits cleanly. The
@@ -386,9 +392,11 @@
   `target\gdi_clip_regions_virtual.*` now preserves `CombineRgn(RGN_DIFF)`
   holes for memory/display `FillRect`, `Polygon`, `Polyline`, `BitBlt`,
   `StretchBlt`, and `TransparentImage`; that closes a real generic CE clipping
-  bug but the mounted frame still shows road/building styling problems. Next GDI
-  work should inspect concrete trace evidence for missing road/building
-  primitives: line joins/caps, pen style, polygon fill mode, brush/palette/DIB
+  bug but the mounted frame still shows road/building styling problems.
+  `DcState.poly_fill_mode` now defaults to `ALTERNATE` (even-odd) matching
+  the CE `Polygon` default; the old winding-rule default was incorrect.
+  Next GDI work should inspect concrete trace evidence for missing road/building
+  primitives: line joins/caps, pen style, brush/palette/DIB
   color-table differences, ROP3/non-SRCCOPY blits, or any unimplemented CE GDI
   calls that appear in the mounted render/counts traces. Keep tracing generic
   GDI paths rather than guessing colors or special-casing iNavi pixels.
@@ -686,10 +694,10 @@
     `CreateWindowExW` WS_CHILD vs owner split, menu item state/MENUITEMINFOW
     round-trip, dialog navigation helpers, and queued `WM_SHOWWINDOW` /
     `WM_WINDOWPOSCHANGED` for direct-hidden windows are covered.
-  - Open gaps: update regions are still represented as one bounding rectangle,
-    so partial `ValidateRect`/`RedrawWindow(RDW_VALIDATE)` subtracts the
-    representable remainder but keeps a conservative bounding rectangle for
-    disjoint leftovers. Menu item count/ID exports are not currently wired;
+  - Open gaps: update regions now use `Vec<Rect>` with proper subtraction so
+    disjoint invalids survive partial `ValidateRect`; `GetUpdateRgn` now
+    returns a `COMPLEXREGION` when multiple sub-rects remain.  Menu item
+    count/ID exports are not currently wired;
     popup tracking/display, menu command routing, accelerators, and menu
     painting remain open. Fuller `DLGC_WANT*` edge cases, nested modal loops,
     default-button repaint/state details, richer keyboard-layout/
