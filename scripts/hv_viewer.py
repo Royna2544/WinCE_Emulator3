@@ -151,6 +151,9 @@ class RegistryHive:
             self.data = bytearray(f.read())
         self.dirty = False
         self._ce_max_oid = 0
+        self._undo_stack: List[bytearray] = []
+        self._redo_stack: List[bytearray] = []
+        self._data_at_save: bytearray = bytearray(self.data)
         self.format_name = "unknown"
         self.root_offset = 0
         self.hbins_size = 0
@@ -577,6 +580,43 @@ class RegistryHive:
             f.write(self.data)
         self.path = dest
         self.dirty = False
+        self._data_at_save = bytearray(self.data)
+
+    def push_undo(self) -> None:
+        """Snapshot current data before a mutation. Clears the redo stack."""
+        if len(self._undo_stack) >= 50:
+            self._undo_stack.pop(0)
+        self._undo_stack.append(bytearray(self.data))
+        self._redo_stack.clear()
+
+    def undo(self) -> bool:
+        if not self._undo_stack:
+            return False
+        self._redo_stack.append(bytearray(self.data))
+        self.data = self._undo_stack.pop()
+        self._reload()
+        return True
+
+    def redo(self) -> bool:
+        if not self._redo_stack:
+            return False
+        self._undo_stack.append(bytearray(self.data))
+        self.data = self._redo_stack.pop()
+        self._reload()
+        return True
+
+    def _reload(self) -> None:
+        """Re-derive the in-memory tree from self.data after undo/redo."""
+        if self.format_name == "ce_cedb":
+            self._ce_max_oid = 0
+            self._key_cache.clear()
+            self.root = self._parse_ce_cedb_hive()
+        elif self.format_name == "regf":
+            self._key_cache.clear()
+            self._parse_header()
+            self.root = self._parse_key(self.root_offset, [])
+            self.root.name = self.root_name
+        self.dirty = self.data != self._data_at_save
 
     # ------------------------------------------------------------------
     # CE CEDB structural edit: add / delete keys and values
@@ -639,6 +679,8 @@ class RegistryHive:
         """Append a new child key under parent_key."""
         if self.format_name != "ce_cedb":
             raise ValueError("add_ce_key only supported for CE CEDB hives")
+        if any(c.name.lower() == name.lower() for c in parent_key.children):
+            raise ValueError(f"Key '{name}' already exists under '{parent_key.name}'")
         oid = self._ce_alloc_oid()
         prev_oid = parent_key.ce_last_child_oid
         record = self._build_ce_key_record(oid, prev_oid, name)
@@ -669,9 +711,11 @@ class RegistryHive:
             raise ValueError("add_ce_value only supported for CE CEDB hives")
         if parent_key.offset == 0:
             raise ValueError("cannot add values directly to the synthetic root key")
+        display_name = name if name else "(Default)"
+        if any(v.name.lower() == display_name.lower() for v in parent_key.values):
+            raise ValueError(f"Value '{display_name}' already exists under '{parent_key.name}'")
         oid = self._ce_alloc_oid()
         prev_oid = parent_key.ce_last_value_oid
-        display_name = name if name else "(Default)"
         record = self._build_ce_value_record(oid, prev_oid, name, vtype, data)
         new_offset = self._ce_append(record)
         nc = len(name) if name else 0
@@ -870,6 +914,7 @@ class HiveViewer:
 
     def _build_menu(self) -> None:
         menu = self.tk.Menu(self.root)
+
         file_menu = self.tk.Menu(menu, tearoff=False)
         file_menu.add_command(label="Open Hive...", command=self._open_hive)
         file_menu.add_command(label="Export JSON...", command=self._export_json)
@@ -879,8 +924,16 @@ class HiveViewer:
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self._on_close)
         menu.add_cascade(label="File", menu=file_menu)
+
+        edit_menu = self.tk.Menu(menu, tearoff=False)
+        edit_menu.add_command(label="Undo", command=self._undo, accelerator="Ctrl+Z")
+        edit_menu.add_command(label="Redo", command=self._redo, accelerator="Ctrl+Y")
+        menu.add_cascade(label="Edit", menu=edit_menu)
+
         self.root.config(menu=menu)
         self.root.bind("<Control-s>", lambda _e: self._save())
+        self.root.bind("<Control-z>", lambda _e: self._undo())
+        self.root.bind("<Control-y>", lambda _e: self._redo())
 
     def _build_body(self) -> None:
         outer = self.ttk.Frame(self.root)
@@ -1160,9 +1213,11 @@ class HiveViewer:
                 from tkinter import messagebox
                 messagebox.showerror("Invalid data", "Could not parse the entered data.", parent=dlg)
                 return
+            self.hive.push_undo()
             try:
                 self.hive.write_value(value, new_data, new_type)
             except ValueError as exc:
+                self.hive._undo_stack.pop()  # roll back the snapshot we just pushed
                 from tkinter import messagebox
                 messagebox.showerror("Write error", str(exc), parent=dlg)
                 return
@@ -1178,6 +1233,44 @@ class HiveViewer:
     def _update_dirty_title(self) -> None:
         marker = " *" if self.hive.dirty else ""
         self.root.title(f"Registry Hive Viewer - {os.path.basename(self.hive.path)}{marker}")
+
+    def _undo(self) -> None:
+        saved_path = self._selected_path()
+        if not self.hive.undo():
+            return
+        self._populate_tree()
+        self._try_restore_path(saved_path)
+        self._update_dirty_title()
+
+    def _redo(self) -> None:
+        saved_path = self._selected_path()
+        if not self.hive.redo():
+            return
+        self._populate_tree()
+        self._try_restore_path(saved_path)
+        self._update_dirty_title()
+
+    def _try_restore_path(self, path: str) -> None:
+        """After a full tree rebuild, try to re-select the same registry path."""
+        if not path:
+            return
+        parts = [p for p in path.split("\\") if p]
+        item = ""
+        for part in parts:
+            found = None
+            for child in self.tree.get_children(item):
+                if self.tree.item(child, "text").lower() == part.lower():
+                    found = child
+                    break
+            if found is None:
+                break
+            item = found
+        if item:
+            self.tree.see(item)
+            self.tree.selection_set(item)
+            key = self.item_to_key.get(item)
+            if key:
+                self._show_key(key)
 
     def _save(self) -> None:
         try:
@@ -1297,14 +1390,19 @@ class HiveViewer:
         name = self._ask_name("New Key", "Key name:")
         if name is None:
             return
+        self.hive.push_undo()
         try:
             new_key = self.hive.add_ce_key(parent_key, name)
         except Exception as exc:
+            self.hive._undo_stack.pop()
             from tkinter import messagebox
             messagebox.showerror("Error", str(exc), parent=self.root)
             return
         new_item = self.tree.insert(parent_item, "end", text=name, open=False)
         self.item_to_key[new_item] = new_key
+        # Move to alphabetically correct position
+        sorted_idx = next(i for i, c in enumerate(parent_key.children) if c is new_key)
+        self.tree.move(new_item, parent_item, sorted_idx)
         self.tree.see(new_item)
         self.tree.selection_set(new_item)
         self._show_key(new_key)
@@ -1322,15 +1420,21 @@ class HiveViewer:
         if result is None:
             return
         name, final_data, final_type = result
+        self.hive.push_undo()
         try:
             new_val = self.hive.add_ce_value(key, name, final_type, final_data)
         except Exception as exc:
+            self.hive._undo_stack.pop()
             from tkinter import messagebox
             messagebox.showerror("Error", str(exc), parent=self.root)
             return
-        iid = self.values.insert("", "end", values=(new_val.name, new_val.type_name, new_val.display_data()))
-        self.item_to_value[iid] = new_val
-        self.values.selection_set(iid)
+        # Rebuild values pane so order matches the sorted data model
+        self._show_key(key)
+        for iid, v in self.item_to_value.items():
+            if v is new_val:
+                self.values.selection_set(iid)
+                self.values.see(iid)
+                break
         self._update_dirty_title()
 
     def _new_value_dialog(self, vtype: int) -> Optional[Tuple[str, bytes, int]]:
@@ -1476,9 +1580,11 @@ class HiveViewer:
         parent_key = self.item_to_key.get(parent_item)
         if parent_key is None:
             return
+        self.hive.push_undo()
         try:
             self.hive.delete_ce_key(key, parent_key)
         except Exception as exc:
+            self.hive._undo_stack.pop()
             messagebox.showerror("Error", str(exc), parent=self.root)
             return
         self._remove_tree_item(iid)
@@ -1498,9 +1604,11 @@ class HiveViewer:
             parent=self.root,
         ):
             return
+        self.hive.push_undo()
         try:
             self.hive.delete_ce_value(key, value)
         except Exception as exc:
+            self.hive._undo_stack.pop()
             messagebox.showerror("Error", str(exc), parent=self.root)
             return
         self.values.delete(iid)
