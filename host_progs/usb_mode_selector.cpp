@@ -110,6 +110,7 @@ static void OnApply() {
             return;
         }
         err = RegDeleteValueW(key, REG_VAL);
+        RegFlushKey(key);
         RegCloseKey(key);
         if (err != ERROR_SUCCESS) {
             ShowRegError(L"RegDeleteValue", err);
@@ -129,6 +130,7 @@ static void OnApply() {
         LPCWSTR val = ModeRegStr(selected);
         DWORD len = ((DWORD)lstrlenW(val) + 1) * sizeof(WCHAR);
         err = RegSetValueExW(key, REG_VAL, 0, REG_SZ, (const BYTE *)val, len);
+        RegFlushKey(key);
         RegCloseKey(key);
         if (err != ERROR_SUCCESS) {
             ShowRegError(L"RegSetValueEx", err);
