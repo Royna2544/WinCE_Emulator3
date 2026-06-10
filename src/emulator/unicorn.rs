@@ -21234,6 +21234,15 @@ fn default_window_proc_result(
             );
         }
     }
+    // DefWindowProc non-client return contract (mirrors `Gwe::send_message`): these
+    // must report success/handled or window creation and activation break. In
+    // particular `WM_NCCREATE` must return TRUE or `CreateWindowEx` aborts the
+    // window, which previously stalled MFC apps that chain to `DefWindowProcW`.
+    match msg {
+        crate::ce::gwe::WM_NCCREATE | crate::ce::gwe::WM_NCACTIVATE => return 1,
+        crate::ce::gwe::WM_MOUSEACTIVATE => return crate::ce::gwe::MA_ACTIVATE,
+        _ => {}
+    }
     crate::ce::gwe::default_send_message_result(msg, wparam, lparam)
 }
 
@@ -25544,6 +25553,54 @@ mod unicorn_tests {
         assert_eq!(uc.reg_read(RegisterMIPS::A1).unwrap() as u32, crate::ce::gwe::WM_CREATE);
         // Window must still exist.
         assert!(kernel.gwe.is_window(hwnd));
+    }
+
+    #[test]
+    fn default_window_proc_returns_true_for_nc_create_and_activation() {
+        // Regression: the raw DefWindowProcW path used to fall through to
+        // default_send_message_result, returning 0 for WM_NCCREATE. MFC apps chain
+        // their WM_NCCREATE to DefWindowProcW, so a 0 return aborted CreateWindowEx
+        // and stalled the whole app. DefWindowProc must report these as handled.
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let thread_id = 7;
+        let hwnd = kernel.create_window_ex_w(thread_id, "DEFPROC", "", None, 0, 0, 0);
+
+        assert_eq!(
+            super::default_window_proc_result(
+                &mut kernel.gwe,
+                hwnd,
+                crate::ce::gwe::WM_NCCREATE,
+                0,
+                0,
+            ),
+            1
+        );
+        assert_eq!(
+            super::default_window_proc_result(
+                &mut kernel.gwe,
+                hwnd,
+                crate::ce::gwe::WM_NCACTIVATE,
+                0,
+                0,
+            ),
+            1
+        );
+        assert_eq!(
+            super::default_window_proc_result(
+                &mut kernel.gwe,
+                hwnd,
+                crate::ce::gwe::WM_MOUSEACTIVATE,
+                0,
+                0,
+            ),
+            crate::ce::gwe::MA_ACTIVATE
+        );
+        // Unhandled messages still fall through to the default (0).
+        assert_eq!(
+            super::default_window_proc_result(&mut kernel.gwe, hwnd, crate::ce::gwe::WM_NULL, 0, 0),
+            0
+        );
     }
 
     #[test]
