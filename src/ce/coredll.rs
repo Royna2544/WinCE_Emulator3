@@ -24965,65 +24965,162 @@ fn get_object_w_raw<M: CoredllGuestMemory>(
     byte_count: i32,
     out_ptr: u32,
 ) -> u32 {
+    // BITMAP: bmType(i32)+bmWidth(i32)+bmHeight(i32)+bmWidthBytes(i32)+bmPlanes(u16)+bmBitsPixel(u16)+bmBits(u32)
     const BITMAP_SIZE: u32 = 24;
-    if out_ptr == 0 || byte_count < BITMAP_SIZE as i32 {
+    // LOGPEN: lopnStyle(u32)+lopnWidth.x(i32)+lopnWidth.y(i32)+lopnColor(u32)
+    const LOGPEN_SIZE: u32 = 16;
+    // LOGBRUSH: lbStyle(u32)+lbColor(u32)+lbHatch(i32)
+    const LOGBRUSH_SIZE: u32 = 12;
+    // LOGFONTW: 5*i32 + 8*u8 + lfFaceName[32]*u16
+    const LOGFONTW_SIZE: u32 = 92;
+    // HPALETTE -> WORD count of entries
+    const PALETTE_SIZE: u32 = 2;
+
+    // gdi_object_kind returns &'static str — no borrow held after this line
+    let kind = kernel.resources.gdi_object_kind(handle);
+    let required: u32 = match kind {
+        "bitmap" => BITMAP_SIZE,
+        "pen" => LOGPEN_SIZE,
+        "brush" => LOGBRUSH_SIZE,
+        "font" => LOGFONTW_SIZE,
+        "palette" => PALETTE_SIZE,
+        _ => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+            return 0;
+        }
+    };
+
+    // CE spec: out_ptr == 0 → return required buffer size without writing
+    if out_ptr == 0 {
+        return required;
+    }
+    if byte_count < required as i32 {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INSUFFICIENT_BUFFER);
         return 0;
     }
-    let Some(bitmap) = kernel.resources.bitmap(handle).cloned() else {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
-        return 0;
+
+    let bytes: Vec<u8> = match kind {
+        "bitmap" => {
+            let Some(bmp) = kernel.resources.bitmap(handle).cloned() else {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+                return 0;
+            };
+            let mut b = Vec::with_capacity(BITMAP_SIZE as usize);
+            b.extend_from_slice(&0i32.to_le_bytes()); // bmType
+            b.extend_from_slice(&bmp.width.to_le_bytes());
+            b.extend_from_slice(&bmp.height.to_le_bytes());
+            b.extend_from_slice(&bmp.width_bytes.to_le_bytes());
+            b.extend_from_slice(&bmp.planes.to_le_bytes());
+            b.extend_from_slice(&bmp.bits_pixel.to_le_bytes());
+            b.extend_from_slice(&bmp.bits_ptr.to_le_bytes());
+            b
+        }
+        "pen" => {
+            let (style, width, color) = if let Some(pen) = kernel.resources.pen(handle).cloned() {
+                (pen.style, pen.width, pen.color)
+            } else {
+                // Stock pen: derive from handle index
+                match handle & 0xff {
+                    6 => (0u32, 1i32, 0x00ff_ffff_u32), // WHITE_PEN: PS_SOLID, w=1, white
+                    7 => (0u32, 1i32, 0u32),             // BLACK_PEN: PS_SOLID, w=1, black
+                    8 => (5u32, 0i32, 0u32),             // NULL_PEN: PS_NULL, w=0
+                    _ => (0u32, 1i32, 0u32),             // DC_PEN and unknown: PS_SOLID, black
+                }
+            };
+            let mut b = Vec::with_capacity(LOGPEN_SIZE as usize);
+            b.extend_from_slice(&style.to_le_bytes());
+            b.extend_from_slice(&width.to_le_bytes()); // lopnWidth.x
+            b.extend_from_slice(&0i32.to_le_bytes()); // lopnWidth.y (ignored by CE)
+            b.extend_from_slice(&color.to_le_bytes());
+            b
+        }
+        "brush" => {
+            let (style, color, hatch) =
+                if let Some(brush) = kernel.resources.brush(handle).cloned() {
+                    if let Some(bmp) = brush.pattern_bitmap {
+                        (3u32, 0u32, bmp as i32) // BS_PATTERN
+                    } else {
+                        (0u32, brush.color, 0i32) // BS_SOLID
+                    }
+                } else {
+                    // Stock brush: derive from handle index
+                    match handle & 0xff {
+                        0 => (0u32, 0x00ff_ffff_u32, 0i32), // WHITE_BRUSH
+                        1 => (0u32, 0x00c0_c0c0_u32, 0i32), // LTGRAY_BRUSH
+                        2 => (0u32, 0x0080_8080_u32, 0i32), // GRAY_BRUSH
+                        3 => (0u32, 0x0040_4040_u32, 0i32), // DKGRAY_BRUSH
+                        4 => (0u32, 0u32, 0i32),             // BLACK_BRUSH
+                        5 => (1u32, 0u32, 0i32),             // NULL_BRUSH: BS_HOLLOW
+                        _ => (0u32, 0u32, 0i32),             // DC_BRUSH and unknown: solid black
+                    }
+                };
+            let mut b = Vec::with_capacity(LOGBRUSH_SIZE as usize);
+            b.extend_from_slice(&style.to_le_bytes());
+            b.extend_from_slice(&color.to_le_bytes());
+            b.extend_from_slice(&hatch.to_le_bytes());
+            b
+        }
+        "font" => {
+            let (height, width, weight, italic, underline, strikeout, charset, pitch_family, face) =
+                if let Some(font) = kernel.resources.font(handle).cloned() {
+                    (
+                        font.height,
+                        font.width,
+                        font.weight,
+                        font.italic as u8,
+                        font.underline as u8,
+                        font.strikeout as u8,
+                        font.charset,
+                        font.pitch_and_family,
+                        font.face_name,
+                    )
+                } else {
+                    // SYSTEM_FONT stock object — CE default system font
+                    (-12i32, 0i32, 400i32, 0u8, 0u8, 0u8, 0u8, 0u8, "System".to_string())
+                };
+            let mut b = Vec::with_capacity(LOGFONTW_SIZE as usize);
+            b.extend_from_slice(&height.to_le_bytes());
+            b.extend_from_slice(&width.to_le_bytes());
+            b.extend_from_slice(&0i32.to_le_bytes()); // lfEscapement
+            b.extend_from_slice(&0i32.to_le_bytes()); // lfOrientation
+            b.extend_from_slice(&weight.to_le_bytes());
+            b.push(italic);
+            b.push(underline);
+            b.push(strikeout);
+            b.push(charset);
+            b.push(0); // lfOutPrecision
+            b.push(0); // lfClipPrecision
+            b.push(0); // lfQuality
+            b.push(pitch_family);
+            // lfFaceName[LF_FACESIZE=32]: null-terminated UTF-16LE, 64 bytes
+            let mut face_bytes = [0u8; 64];
+            for (i, ch) in face.encode_utf16().take(31).enumerate() {
+                face_bytes[i * 2] = ch as u8;
+                face_bytes[i * 2 + 1] = (ch >> 8) as u8;
+            }
+            b.extend_from_slice(&face_bytes);
+            b
+        }
+        "palette" => {
+            let count = kernel
+                .resources
+                .palette(handle)
+                .map_or(0u16, |p| p.entries.len() as u16);
+            count.to_le_bytes().to_vec()
+        }
+        _ => unreachable!(),
     };
-    let ok = write_guest_i32(kernel, memory, thread_id, out_ptr, 0)
-        && write_guest_i32(
-            kernel,
-            memory,
-            thread_id,
-            out_ptr.wrapping_add(4),
-            bitmap.width,
-        )
-        && write_guest_i32(
-            kernel,
-            memory,
-            thread_id,
-            out_ptr.wrapping_add(8),
-            bitmap.height,
-        )
-        && write_guest_i32(
-            kernel,
-            memory,
-            thread_id,
-            out_ptr.wrapping_add(12),
-            bitmap.width_bytes,
-        )
-        && write_guest_u16(
-            kernel,
-            memory,
-            thread_id,
-            out_ptr.wrapping_add(16),
-            bitmap.planes,
-        )
-        && write_guest_u16(
-            kernel,
-            memory,
-            thread_id,
-            out_ptr.wrapping_add(18),
-            bitmap.bits_pixel,
-        )
-        && write_guest_u32(
-            kernel,
-            memory,
-            thread_id,
-            out_ptr.wrapping_add(20),
-            bitmap.bits_ptr,
-        );
+
+    let ok = write_guest_bytes(kernel, memory, thread_id, out_ptr, &bytes);
     if ok {
         kernel.threads.set_last_error(thread_id, 0);
-        BITMAP_SIZE
+        required
     } else {
         0
     }

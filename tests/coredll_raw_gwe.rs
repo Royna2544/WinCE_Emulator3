@@ -22177,9 +22177,8 @@ fn coredll_raw_gdi_create_bitmap_and_get_object_w() -> Result<()> {
     let mut memory = TestGuestMemory::default();
     let thread_id = 135_u32;
     let out_ptr = 0x1_0000_u32;
-    memory.map_words(out_ptr, 8);
-    // GET_OBJECT_W writes u16 planes/bits_pixel at offsets 16 and 18.
-    memory.map_halfwords(out_ptr + 16, 2);
+    // map_bytes so write_guest_bytes (byte-by-byte) can write BITMAP, LOGPEN, etc.
+    memory.map_bytes(out_ptr, 96);
 
     // Invalid params: width=0 → ERROR_INVALID_PARAMETER.
     assert!(matches!(
@@ -22227,7 +22226,7 @@ fn coredll_raw_gdi_create_bitmap_and_get_object_w() -> Result<()> {
         }
     ), "GET_OBJECT_W on bitmap must return 24");
 
-    // Create a pen and verify GET_OBJECT_W returns 0 for it (pens unsupported).
+    // Create a pen and verify GET_OBJECT_W returns LOGPEN size (16 bytes).
     let pen = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
@@ -22252,10 +22251,10 @@ fn coredll_raw_gdi_create_bitmap_and_get_object_w() -> Result<()> {
             [pen, 24, out_ptr],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::U32(0),
+            value: CoredllValue::U32(16),
             ..
         }
-    ), "GET_OBJECT_W on pen must return 0 (pens not supported)");
+    ), "GET_OBJECT_W on pen must return LOGPEN size (16)");
 
     Ok(())
 }
