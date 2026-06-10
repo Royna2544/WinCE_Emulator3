@@ -31814,7 +31814,7 @@ fn get_message_w_raw<M: CoredllGuestMemory>(
     args: &[u32],
 ) -> bool {
     let msg_ptr = raw_arg(args, 0);
-    let hwnd = (raw_arg(args, 1) != 0).then_some(raw_arg(args, 1));
+    let hwnd = parse_get_message_hwnd_filter(raw_arg(args, 1));
     let min_msg = raw_arg(args, 2);
     let max_msg = raw_arg(args, 3);
     let Some(message) = kernel.get_message_w_filtered(thread_id, hwnd, min_msg, max_msg) else {
@@ -31833,7 +31833,7 @@ fn peek_message_w_raw<M: CoredllGuestMemory>(
     args: &[u32],
 ) -> bool {
     let msg_ptr = raw_arg(args, 0);
-    let hwnd = (raw_arg(args, 1) != 0).then_some(raw_arg(args, 1));
+    let hwnd = parse_get_message_hwnd_filter(raw_arg(args, 1));
     let min_msg = raw_arg(args, 2);
     let max_msg = raw_arg(args, 3);
     let flags = PeekFlags::from_bits_truncate(raw_arg(args, 4));
@@ -31842,6 +31842,18 @@ fn peek_message_w_raw<M: CoredllGuestMemory>(
         return false;
     };
     write_guest_message(kernel, memory, thread_id, msg_ptr, &message)
+}
+
+/// Convert a GetMessageW/PeekMessageW hWnd argument to an hwnd filter:
+/// - 0x0000_0000 (NULL): None → all messages for the calling thread
+/// - 0xFFFF_FFFF (-1):   Some(0) → thread messages only (PostThreadMessage, hwnd==0)
+/// - other non-zero:     Some(hwnd) → messages for that specific window
+fn parse_get_message_hwnd_filter(hwnd_raw: u32) -> Option<u32> {
+    match hwnd_raw {
+        0 => None,
+        0xFFFF_FFFF => Some(0),
+        hwnd => Some(hwnd),
+    }
 }
 
 fn dispatch_message_w_raw<M: CoredllGuestMemory>(
