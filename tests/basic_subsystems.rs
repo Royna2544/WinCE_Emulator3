@@ -6680,7 +6680,7 @@ fn remote_ceremote_paused_key_serial_nmea_location_imu_audio_and_log_lines() {
 #[test]
 fn scheduler_serial_sendreply_waiter_ids_queue_candidates_and_timed_out() {
     use wince_emulation_v3::ce::scheduler::{
-        Scheduler, SchedulerBlockedWait, SchedulerBlockedWaitKind, blocked_wait_timed_out,
+        Scheduler, SchedulerBlockedWaitKind, blocked_wait_timed_out,
     };
     use wince_emulation_v3::ce::timer::INFINITE;
 
@@ -6750,12 +6750,12 @@ fn scheduler_serial_sendreply_waiter_ids_queue_candidates_and_timed_out() {
 
     // queue_all_serial_read_wake_candidates / queue_all_serial_event_wake_candidates.
     let mut sched2 = Scheduler::default();
-    let a = sched2.register_blocked_wait(
+    let _a = sched2.register_blocked_wait(
         10, 0x110, vec![],
         SchedulerBlockedWaitKind::SerialRead { handle: 0xA0 },
         0, INFINITE,
     );
-    let b = sched2.register_blocked_wait(
+    let _b = sched2.register_blocked_wait(
         11, 0x111, vec![],
         SchedulerBlockedWaitKind::SerialRead { handle: 0xB0 },
         0, INFINITE,
@@ -6763,7 +6763,7 @@ fn scheduler_serial_sendreply_waiter_ids_queue_candidates_and_timed_out() {
     let n = sched2.queue_all_serial_read_wake_candidates();
     assert_eq!(n, 2);
 
-    let c = sched2.register_blocked_wait(
+    let _c = sched2.register_blocked_wait(
         12, 0x112, vec![],
         SchedulerBlockedWaitKind::SerialCommEvent { handle: 0xC0 },
         0, INFINITE,
@@ -6914,8 +6914,8 @@ fn cemath_export_name_all_variants_and_gwe_get_window_text_length() {
 #[test]
 fn filesystem_disk_space_volume_info_object_store_and_file_ops() -> Result<()> {
     use wince_emulation_v3::ce::file::{
-        CREATE_ALWAYS, DiskSpace, FILE_ATTRIBUTE_READONLY, GENERIC_READ, GENERIC_WRITE,
-        OPEN_EXISTING, VolumeInfo,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_READONLY, GENERIC_READ, GENERIC_WRITE,
+        OPEN_EXISTING,
     };
 
     let root = unique_test_root("filesystem_disk_space_volume_info");
@@ -7033,7 +7033,6 @@ fn filesystem_disk_space_volume_info_object_store_and_file_ops() -> Result<()> {
 #[test]
 fn kernel_loaded_module_snapshots_gwe_stats_recent_file_open_ops_lifecycle_trace_and_process_launch_variants() {
     use wince_emulation_v3::ce::gwe::GweStats;
-    use wince_emulation_v3::ce::kernel::{LoadedModuleExportSnapshot, LoadedModuleSnapshot};
 
     let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
     let mut kernel = CeKernel::boot(config);
@@ -7112,7 +7111,7 @@ fn kernel_loaded_module_snapshots_gwe_stats_recent_file_open_ops_lifecycle_trace
 #[test]
 fn kernel_file_pointer_size_position_flush_find_first_next_close_and_change_notification() -> Result<()> {
     use wince_emulation_v3::ce::file::{
-        CREATE_ALWAYS, FILE_ATTRIBUTE_DIRECTORY, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_DIRECTORY, GENERIC_READ, GENERIC_WRITE,
     };
 
     let root = unique_test_root("file_pointer_find_notification");
@@ -7763,7 +7762,7 @@ fn kernel_get_message_peek_message_erase_background_update_window() {
 fn memory_local_re_alloc_detail_and_heap_re_alloc_detail_reallocation_fields() {
     use wince_emulation_v3::ce::memory::{
         HEAP_REALLOC_IN_PLACE_ONLY, HEAP_ZERO_MEMORY,
-        LMEM_MODIFY, LMEM_ZEROINIT, PROCESS_HEAP_HANDLE, MemorySystem,
+        LMEM_MODIFY, LMEM_ZEROINIT, MemorySystem,
     };
 
     let mut mem = MemorySystem::default();

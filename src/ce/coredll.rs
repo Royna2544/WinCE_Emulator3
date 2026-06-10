@@ -2258,17 +2258,8 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(false))
         }
-        ORD_IS_BAD_READ_PTR | ORD_IS_BAD_PTR => {
-            // IsBadReadPtr(lp, ucb) / IsBadPtr(lp, ucb) — TRUE if range is not readable.
-            let lp = raw_arg(args, 0);
-            let ucb = raw_arg(args, 1);
-            let is_bad =
-                lp == 0 || (ucb != 0 && !kernel.memory.contains_allocated_range(lp, ucb));
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::Bool(is_bad))
-        }
-        ORD_IS_BAD_WRITE_PTR => {
-            // IsBadWritePtr(lp, ucb) — TRUE if range is not writable.
+        ORD_IS_BAD_PTR => {
+            // IsBadPtr(lp, ucb) — TRUE if range is not accessible (legacy CE ordinal).
             let lp = raw_arg(args, 0);
             let ucb = raw_arg(args, 1);
             let is_bad =
@@ -4407,9 +4398,6 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_STRING_CCH_COPY_NEX_W | ORD_STRING_CB_COPY_NEX_W => {
             Some(CoredllValue::U32(strsafe_copy_n_w_raw(kernel, memory, thread_id, args, true)))
         }
-        ORD_STRING_CCH_CAT_W | ORD_STRING_CB_CAT_W => {
-            Some(CoredllValue::U32(strsafe_cat_w_raw(kernel, memory, thread_id, args, false)))
-        }
         ORD_STRING_CCH_CAT_EX_W | ORD_STRING_CB_CAT_EX_W => {
             Some(CoredllValue::U32(strsafe_cat_w_raw(kernel, memory, thread_id, args, true)))
         }
@@ -4419,8 +4407,8 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_STRING_CCH_CAT_NEX_W | ORD_STRING_CB_CAT_NEX_W => {
             Some(CoredllValue::U32(strsafe_cat_n_w_raw(kernel, memory, thread_id, args, true)))
         }
-        ORD_STRING_CCH_LENGTH_W | ORD_STRING_CB_LENGTH_W => {
-            Some(CoredllValue::U32(strsafe_length_w_raw(kernel, memory, thread_id, args)))
+        ORD_STRING_CB_LENGTH_W => {
+            Some(CoredllValue::U32(strsafe_cb_length_w_raw(kernel, memory, thread_id, args)))
         }
         ORD_STRING_CCH_PRINTF_W | ORD_STRING_CB_PRINTF_W
         | ORD_STRING_CCH_PRINTF_EX_W | ORD_STRING_CB_PRINTF_EX_W
@@ -13277,8 +13265,7 @@ fn unicode_ctype2(u: u16) -> u16 {
             C2_NOTAPPLICABLE
         }
         0x0009 | 0x000B | 0x001F => C2_SEGMENTSEPARATOR,
-        0x000A | 0x000C | 0x001C..=0x001E => C2_BLOCKSEPARATOR,
-        0x000D | 0x001D => C2_BLOCKSEPARATOR,
+        0x000A | 0x000C | 0x000D | 0x001C..=0x001E => C2_BLOCKSEPARATOR,
         0x0020 | 0x00A0 => C2_WHITESPACE,
         0x0021..=0x0022 | 0x0026..=0x002A | 0x003B..=0x0040 | 0x005B..=0x0060
         | 0x007B..=0x007E => C2_OTHERNEUTRAL,
@@ -22047,7 +22034,6 @@ fn extract_pe_icon<M: CoredllGuestMemory>(
         let entry_off = 6 + i * 14;
         let entry = group_bytes.get(entry_off..entry_off + 14)?;
         let width = entry[0] as i32;
-        let height = entry[1] as i32;
         let bit_count = read_le_u16(entry, 6)? as i32;
         let id = read_le_u16(entry, 12)?;
         // Score: prefer 32x32 and 32bpp; fall back to largest available
@@ -24426,17 +24412,19 @@ fn strsafe_cat_n_w_raw<M: CoredllGuestMemory>(
     }
 }
 
-fn strsafe_length_w_raw<M: CoredllGuestMemory>(
+fn strsafe_cb_length_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel, memory: &mut M, thread_id: u32,
     args: &[u32],
 ) -> u32 {
-    // StringCchLengthW(psz, cchMax, pcchLength) or StringCbLengthW(psz, cbMax, pcbLength)
+    // StringCbLengthW(psz, cbMax, pcbLength) — cbMax is in bytes; output *pcbLength in bytes.
     let ptr = raw_arg(args, 0);
-    let max = raw_arg(args, 1);
+    let cb_max = raw_arg(args, 1);
     let out = raw_arg(args, 2);
     if ptr == 0 { return STRSAFE_E_INVALID_PARAMETER; }
-    let len = read_guest_wcs_bounded(memory, ptr, max).len() as u32;
-    if out != 0 { write_guest_u32(kernel, memory, thread_id, out, len); }
+    let cch_max = cb_max / 2;
+    let len_chars = read_guest_wcs_bounded(memory, ptr, cch_max).len() as u32;
+    let len_bytes = len_chars * 2;
+    if out != 0 { write_guest_u32(kernel, memory, thread_id, out, len_bytes); }
     0 // S_OK
 }
 

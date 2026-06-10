@@ -6647,7 +6647,7 @@ fn coredll_raw_mips_soft_float_extended_arithmetic_and_conversions() -> Result<(
     ), "DPTOFP 3.0f64 must return F32(3.0)");
 
     // LITOFP: -3i32 → F32(-3.0)
-    let expected_litofp = (-3.0_f32);
+    let expected_litofp = -3.0_f32;
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel, &mut memory, thread_id, ORD_LITOFP,
