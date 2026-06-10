@@ -11711,6 +11711,11 @@ fn get_clipboard_data_raw(kernel: &mut CeKernel, thread_id: u32, format: u32) ->
     }
 }
 
+#[cfg(feature = "unicorn")]
+pub(crate) fn request_delayed_clipboard_render_pub(kernel: &mut CeKernel, format: u32) -> bool {
+    request_delayed_clipboard_render(kernel, format)
+}
+
 fn request_delayed_clipboard_render(kernel: &mut CeKernel, format: u32) -> bool {
     let Some(owner) = kernel.gwe.begin_clipboard_render(format) else {
         return false;

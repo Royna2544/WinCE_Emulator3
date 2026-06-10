@@ -104,6 +104,8 @@ pub struct UnicornMips {
     #[cfg(feature = "unicorn")]
     blocked_send_message_timeout: Option<BlockedSendMessageTimeout>,
     #[cfg(feature = "unicorn")]
+    blocked_clipboard_data: Option<BlockedClipboardData>,
+    #[cfg(feature = "unicorn")]
     blocked_wait_threads: Vec<BlockedWaitThread>,
     #[cfg(feature = "unicorn")]
     suspended_guest_thread: Option<SuspendedGuestThread>,
@@ -153,6 +155,8 @@ struct UnicornRunStateHandles<'a> {
         &'a std::rc::Rc<std::cell::RefCell<Option<BlockedPopupMenuModal>>>,
     blocked_send_message_timeout:
         &'a std::rc::Rc<std::cell::RefCell<Option<BlockedSendMessageTimeout>>>,
+    blocked_clipboard_data:
+        &'a std::rc::Rc<std::cell::RefCell<Option<BlockedClipboardData>>>,
     blocked_wait_threads: &'a std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     suspended_guest_thread: &'a std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     suspended_guest_thread_queue:
@@ -503,6 +507,19 @@ struct BlockedSendMessageTimeout {
     regs: MipsGuestContext,
     return_pc: u32,
     block_state: crate::ce::coredll::SendMessageTimeoutBlockState,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone)]
+struct BlockedClipboardData {
+    wait_id: u64,
+    thread_id: u32,
+    thread_handle: u32,
+    format: u32,
+    regs: MipsGuestContext,
+    return_pc: u32,
+    wait_started_ms: u32,
+    timeout_ms: u32,
 }
 
 #[cfg(feature = "unicorn")]
@@ -889,6 +906,7 @@ impl UnicornMips {
         self.blocked_popup_menu_modal = state.blocked_popup_menu_modal.borrow_mut().take();
         self.blocked_send_message_timeout =
             state.blocked_send_message_timeout.borrow_mut().take();
+        self.blocked_clipboard_data = state.blocked_clipboard_data.borrow_mut().take();
         self.blocked_wait_threads = state.blocked_wait_threads.borrow_mut().drain(..).collect();
         self.suspended_guest_thread = state.suspended_guest_thread.borrow_mut().take();
         self.suspended_guest_thread_queue = state
@@ -2162,6 +2180,9 @@ impl UnicornMips {
         let blocked_send_message_timeout =
             Rc::new(RefCell::new(self.blocked_send_message_timeout.take()));
         let blocked_send_message_timeout_hook = Rc::clone(&blocked_send_message_timeout);
+        let blocked_clipboard_data =
+            Rc::new(RefCell::new(self.blocked_clipboard_data.take()));
+        let blocked_clipboard_data_hook = Rc::clone(&blocked_clipboard_data);
         let blocked_wait_threads =
             Rc::new(RefCell::new(std::mem::take(&mut self.blocked_wait_threads)));
         let blocked_wait_threads_hook = Rc::clone(&blocked_wait_threads);
@@ -2192,6 +2213,7 @@ impl UnicornMips {
             blocked_modal_message_box: &blocked_modal_message_box,
             blocked_popup_menu_modal: &blocked_popup_menu_modal,
             blocked_send_message_timeout: &blocked_send_message_timeout,
+            blocked_clipboard_data: &blocked_clipboard_data,
             blocked_wait_threads: &blocked_wait_threads,
             suspended_guest_thread: &suspended_guest_thread,
             suspended_guest_thread_queue: &suspended_guest_thread_queue,
@@ -2258,6 +2280,17 @@ impl UnicornMips {
                 &running_guest_thread,
                 None,
                 false,
+            ) || try_resume_blocked_clipboard_data(
+                kernel,
+                &mut uc,
+                active_thread_id,
+                &current_thread_id,
+                &blocked_clipboard_data,
+                &suspended_guest_thread,
+                Some(&suspended_guest_thread_queue),
+                &running_guest_thread,
+                None,
+                false,
             ) {
                 start_pc = read_mips_reg(&uc, RegisterMIPS::PC);
             }
@@ -2279,6 +2312,7 @@ impl UnicornMips {
         let blocked_popup_menu_modal_timeslice_hook = Rc::clone(&blocked_popup_menu_modal);
         let blocked_send_message_timeout_timeslice_hook =
             Rc::clone(&blocked_send_message_timeout);
+        let blocked_clipboard_data_timeslice_hook = Rc::clone(&blocked_clipboard_data);
         let blocked_get_message_timeslice_hook = Rc::clone(&blocked_get_message);
         let pending_wndproc_returns_timeslice_hook = Rc::clone(&pending_wndproc_returns);
         let pending_qsort_returns_timeslice_hook = Rc::clone(&pending_qsort_returns);
@@ -2376,6 +2410,20 @@ impl UnicornMips {
                 active_thread_id,
                 &current_thread_id_timeslice_hook,
                 &blocked_send_message_timeout_timeslice_hook,
+                &suspended_guest_thread_timeslice_hook,
+                Some(&suspended_guest_thread_queue_timeslice_hook),
+                &running_guest_thread_timeslice_hook,
+                Some(pc),
+                true,
+            ) {
+                return;
+            }
+            if try_resume_blocked_clipboard_data(
+                unsafe { &mut *kernel_ptr },
+                uc,
+                active_thread_id,
+                &current_thread_id_timeslice_hook,
+                &blocked_clipboard_data_timeslice_hook,
                 &suspended_guest_thread_timeslice_hook,
                 Some(&suspended_guest_thread_queue_timeslice_hook),
                 &running_guest_thread_timeslice_hook,
@@ -3044,6 +3092,20 @@ impl UnicornMips {
                         &args,
                         active_thread_id,
                         &blocked_send_message_timeout_hook,
+                        &running_guest_thread_hook,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_block_for_clipboard_data_wait(
+                        unsafe { &mut *kernel_ptr },
+                        uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        active_thread_id,
+                        &blocked_clipboard_data_hook,
                         &running_guest_thread_hook,
                     )
                 }) {
@@ -8125,6 +8187,211 @@ fn try_resume_blocked_send_message_timeout<D>(
     true
 }
 
+const CLIPBOARD_RENDER_TIMEOUT_MS: u32 = 5000;
+
+#[cfg(feature = "unicorn")]
+#[allow(clippy::too_many_arguments)]
+fn try_block_for_clipboard_data_wait<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    thread_id: u32,
+    blocked_cbd: &std::rc::Rc<std::cell::RefCell<Option<BlockedClipboardData>>>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_GET_CLIPBOARD_DATA)
+    {
+        return false;
+    }
+
+    let format = args.first().copied().unwrap_or(0);
+    if format == 0 {
+        return false;
+    }
+
+    // Re-entry: the blocked thread re-ran at this ordinal — check if render is done.
+    if let Some(blocked) = blocked_cbd.borrow().clone() {
+        if blocked.thread_id != thread_id || blocked.format != format {
+            return false;
+        }
+        let now_ms = kernel.timers.tick_count();
+        let timed_out = now_ms.wrapping_sub(blocked.wait_started_ms) >= blocked.timeout_ms;
+        let render_ready = kernel
+            .gwe
+            .get_clipboard_data(format)
+            .is_some_and(|h| h != 0);
+        if !render_ready && !timed_out {
+            let _ = uc.emu_stop();
+            return true;
+        }
+        let _ = kernel.remove_blocked_waiter(blocked.wait_id);
+        *blocked_cbd.borrow_mut() = None;
+        let handle = if render_ready {
+            kernel.gwe.get_clipboard_data(format).unwrap_or(0)
+        } else {
+            0
+        };
+        kernel.threads.set_last_error(blocked.thread_id, 0);
+        let mut regs = blocked.regs;
+        regs.set_v0(handle);
+        restore_mips_gprs(uc, &regs);
+        let _ = uc.reg_write(RegisterMIPS::V0, u64::from(handle));
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(blocked.return_pc));
+        let _ = uc.reg_write(RegisterMIPS::RA, u64::from(blocked.return_pc));
+        return true;
+    }
+
+    // First entry: detect cross-thread delayed clipboard render.
+    match kernel.gwe.get_clipboard_data(format) {
+        None | Some(0) => {}
+        _ => return false, // already rendered or not available — let raw handle it
+    }
+
+    // Determine owner window: either a fresh delayed render or one already in progress.
+    let owner_hwnd = kernel
+        .gwe
+        .clipboard_delayed_render_owner(format)
+        .or_else(|| {
+            // render_window set means WM_RENDERFORMAT was already queued by someone.
+            if kernel.gwe.get_clipboard_data(format) == Some(0) {
+                kernel.gwe.clipboard_render_window()
+            } else {
+                None
+            }
+        });
+    let Some(owner_hwnd) = owner_hwnd else {
+        return false;
+    };
+    let Some((owner_thread, _)) = kernel.gwe.window_thread_process_id(owner_hwnd) else {
+        return false;
+    };
+    if owner_thread == thread_id {
+        return false; // same-thread render: let the raw function dispatch inline
+    }
+
+    // Cross-thread: queue WM_RENDERFORMAT if not already in progress.
+    if kernel.gwe.clipboard_delayed_render_owner(format).is_some() {
+        crate::ce::coredll::request_delayed_clipboard_render_pub(kernel, format);
+    }
+
+    let thread_handle = running_thread
+        .borrow()
+        .and_then(|(id, handle)| (id == thread_id).then_some(handle))
+        .unwrap_or(crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE);
+    let now_ms = kernel.timers.tick_count();
+    let wait_id = kernel.register_blocked_waiter(
+        thread_id,
+        thread_handle,
+        Vec::new(),
+        crate::ce::scheduler::SchedulerBlockedWaitKind::ClipboardRender { format },
+        now_ms,
+        CLIPBOARD_RENDER_TIMEOUT_MS,
+    );
+    kernel.threads.set_last_error(thread_id, 0);
+    *blocked_cbd.borrow_mut() = Some(BlockedClipboardData {
+        wait_id,
+        thread_id,
+        thread_handle,
+        format,
+        regs: capture_mips_gprs(uc),
+        return_pc: read_mips_reg(uc, RegisterMIPS::RA),
+        wait_started_ms: now_ms,
+        timeout_ms: CLIPBOARD_RENDER_TIMEOUT_MS,
+    });
+    let _ = uc.emu_stop();
+    true
+}
+
+#[cfg(feature = "unicorn")]
+#[allow(clippy::too_many_arguments)]
+fn try_resume_blocked_clipboard_data<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    active_thread_id: u32,
+    current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
+    blocked_cbd: &std::rc::Rc<std::cell::RefCell<Option<BlockedClipboardData>>>,
+    suspended_thread: &std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
+    suspended_queue: Option<&SuspendedGuestThreadQueue>,
+    running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
+    active_pc: Option<u32>,
+    save_active_context: bool,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    let Some(blocked) = blocked_cbd.borrow().clone() else {
+        return false;
+    };
+    if active_thread_id == blocked.thread_id {
+        return false;
+    }
+    let now_ms = kernel.timers.tick_count();
+    let timed_out = now_ms.wrapping_sub(blocked.wait_started_ms) >= blocked.timeout_ms;
+    let render_ready = kernel
+        .gwe
+        .get_clipboard_data(blocked.format)
+        .is_some_and(|h| h != 0);
+    if !render_ready && !timed_out {
+        return false;
+    }
+    let _ = kernel.remove_blocked_waiter(blocked.wait_id);
+    *blocked_cbd.borrow_mut() = None;
+
+    let handle = if render_ready {
+        kernel.gwe.get_clipboard_data(blocked.format).unwrap_or(0)
+    } else {
+        0
+    };
+    kernel.threads.set_last_error(blocked.thread_id, 0);
+
+    if save_active_context {
+        let mut current = SuspendedGuestThread {
+            thread_id: active_thread_id,
+            thread_handle: running_thread
+                .borrow()
+                .and_then(|(id, handle)| (id == active_thread_id).then_some(handle)),
+            regs: capture_mips_gprs(uc),
+            pc: active_pc.unwrap_or_else(|| read_mips_reg(uc, RegisterMIPS::RA)),
+        };
+        current.regs.set_v0(read_mips_reg(uc, RegisterMIPS::V0));
+        if !push_suspended_guest_thread(suspended_thread, suspended_queue, current) {
+            return false;
+        }
+    } else {
+        remove_suspended_guest_threads_for_thread(
+            suspended_thread,
+            suspended_queue,
+            active_thread_id,
+        );
+    }
+    remove_suspended_guest_threads_for_thread(
+        suspended_thread,
+        suspended_queue,
+        blocked.thread_id,
+    );
+
+    let mut regs = blocked.regs;
+    regs.set_v0(handle);
+    restore_mips_gprs(uc, &regs);
+    let writes = [
+        uc.reg_write(RegisterMIPS::V0, u64::from(handle)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(blocked.return_pc)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(blocked.return_pc)),
+    ];
+    if writes.into_iter().any(|w| w.is_err()) {
+        let _ = uc.emu_stop();
+        return true;
+    }
+    *current_thread_id.borrow_mut() = blocked.thread_id;
+    let _ = update_user_kdata_current_ids(uc, blocked.thread_id, kernel.current_process_id());
+    *running_thread.borrow_mut() = Some((blocked.thread_id, blocked.thread_handle));
+    true
+}
+
 #[cfg(feature = "unicorn")]
 fn unicorn_blocked_get_message_snapshot(
     kernel: &CeKernel,
@@ -11363,6 +11630,9 @@ fn scheduler_blocked_wait_is_ready(
             ),
             crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { send_id } => {
                 kernel.sent_message_result_ready(send_id)
+            }
+            crate::ce::scheduler::SchedulerBlockedWaitKind::ClipboardRender { format } => {
+                kernel.gwe.get_clipboard_data(format).is_some_and(|h| h != 0)
             }
             _ => false,
         }

@@ -765,6 +765,9 @@ fn message_and_timer_transitions_queue_scheduler_msg_wait_candidates() -> Result
                         mouse_message_max,
                     )
                 }
+                SchedulerBlockedWaitKind::ClipboardRender { format } => {
+                    kernel.gwe.get_clipboard_data(format).is_some_and(|h| h != 0)
+                }
             },
         )
     };
@@ -1293,6 +1296,7 @@ fn remote_serial_injection_queues_scheduler_serial_read_candidates() -> Result<(
             }
             SchedulerBlockedWaitKind::ModalMessageBox => false,
             SchedulerBlockedWaitKind::PopupMenuModal { .. } => false,
+            SchedulerBlockedWaitKind::ClipboardRender { .. } => false,
         }),
         Some(serial_wait)
     );
@@ -1373,6 +1377,7 @@ fn remote_serial_injection_queues_scheduler_comm_event_candidates() -> Result<()
             }
             SchedulerBlockedWaitKind::ModalMessageBox => false,
             SchedulerBlockedWaitKind::PopupMenuModal { .. } => false,
+            SchedulerBlockedWaitKind::ClipboardRender { .. } => false,
         }),
         Some(comm_wait)
     );

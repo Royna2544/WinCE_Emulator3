@@ -1259,6 +1259,10 @@ impl Gwe {
         Some(owner)
     }
 
+    pub fn clipboard_render_window(&self) -> Option<u32> {
+        self.clipboard.render_window
+    }
+
     pub fn clipboard_render_all_owner(&self) -> Option<u32> {
         let owner = self.clipboard.owner?;
         if !self.is_window(owner) {

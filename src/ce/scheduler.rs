@@ -87,6 +87,9 @@ pub enum SchedulerBlockedWaitKind {
     PopupMenuModal {
         mouse_message_max: u32,
     },
+    ClipboardRender {
+        format: u32,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
