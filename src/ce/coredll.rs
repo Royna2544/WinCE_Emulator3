@@ -16485,6 +16485,18 @@ fn create_window_ex_w_raw<M: CoredllGuestMemory>(
     if hwnd != 0 && menu != 0 {
         let _ = kernel.gwe.set_menu(hwnd, menu);
     }
+    // CE: post WM_PARENTNOTIFY(WM_CREATE) to parent unless WS_EX_NOPARENTNOTIFY.
+    if hwnd != 0 {
+        let notify = kernel.gwe.window(hwnd).and_then(|w| {
+            w.parent
+                .filter(|_| w.ex_style & crate::ce::gwe::WS_EX_NOPARENTNOTIFY == 0)
+                .map(|p| (p, w.id))
+        });
+        if let Some((parent_hwnd, child_id)) = notify {
+            let wparam = (child_id << 16) | crate::ce::gwe::WM_CREATE;
+            kernel.post_message_w(parent_hwnd, crate::ce::gwe::WM_PARENTNOTIFY, wparam, hwnd);
+        }
+    }
     hwnd
 }
 
@@ -32892,6 +32904,16 @@ fn destroy_window_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     hwnd: u32,
 ) -> bool {
+    // CE: post WM_PARENTNOTIFY(WM_DESTROY) to parent before destroying.
+    let notify = kernel.gwe.window(hwnd).and_then(|w| {
+        w.parent
+            .filter(|_| w.ex_style & crate::ce::gwe::WS_EX_NOPARENTNOTIFY == 0)
+            .map(|p| (p, w.id))
+    });
+    if let Some((parent_hwnd, child_id)) = notify {
+        let wparam = (child_id << 16) | crate::ce::gwe::WM_DESTROY;
+        kernel.post_message_w(parent_hwnd, crate::ce::gwe::WM_PARENTNOTIFY, wparam, hwnd);
+    }
     let destroyed = kernel.destroy_window(hwnd);
     if destroyed {
         write_completed_send_message_timeout_results(kernel, memory, thread_id);

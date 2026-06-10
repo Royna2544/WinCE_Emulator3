@@ -114,7 +114,7 @@ use wince_emulation_v3::{
             VK_LSHIFT, VK_MENU, VK_NUMLOCK, VK_SCROLL, VK_SHIFT, WA_ACTIVE, WA_CLICKACTIVE,
             WA_INACTIVE, WM_ACTIVATE,
             WM_CANCELMODE, WM_CAPTURECHANGED, WM_CHAR, WM_CHARTOITEM, WM_CLOSE, WM_COMMAND,
-            WM_CONTEXTMENU, WM_DESTROY,
+            WM_CONTEXTMENU, WM_CREATE, WM_DESTROY,
             WM_ENABLE, WM_ENTERMENULOOP, WM_ERASEBKGND,
             WM_EXITMENULOOP, WM_GETDLGCODE, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENU, WM_INITMENUPOPUP,
             WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
@@ -125,14 +125,14 @@ use wince_emulation_v3::{
             WM_COMPAREITEM, WM_DELETEITEM, WM_DISPLAYCHANGE, WM_DRAWITEM, WM_FONTCHANGE,
             WM_GETFONT, WM_GETMINMAXINFO, WM_HSCROLL,
             WM_INPUTLANGCHANGE,
-            WM_MEASUREITEM, WM_NEXTDLGCTL, WM_SETFONT, WM_SETICON, WM_GETICON, WM_SETTEXT, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE,
+            WM_MEASUREITEM, WM_NEXTDLGCTL, WM_PARENTNOTIFY, WM_SETFONT, WM_SETICON, WM_GETICON, WM_SETTEXT, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE,
             ICON_SMALL, ICON_BIG,
             WM_TIMECHANGE, WM_VSCROLL,
             WM_DEADCHAR, WM_IME_CHAR, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION,
             WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WM_USER, WM_VKEYTOITEM,
             WM_WINDOWPOSCHANGED,
             WNDCLASSW_SIZE,
-            WS_CHILD, WS_DISABLED, WS_GROUP, WS_POPUP, WS_TABSTOP, WS_VISIBLE,
+            WS_CHILD, WS_DISABLED, WS_EX_NOPARENTNOTIFY, WS_GROUP, WS_POPUP, WS_TABSTOP, WS_VISIBLE,
         },
         kernel::CeKernel,
         memory::PROCESS_HEAP_HANDLE,
@@ -23203,6 +23203,99 @@ fn coredll_raw_gwe_def_window_proc_enable_invalidates_window() -> Result<()> {
 
     assert!(kernel.gwe.window(hwnd).map_or(false, |w| w.update_pending),
         "WM_ENABLE in DefWindowProcW must mark window as needing repaint");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_gwe_wm_parentnotify_on_create_and_destroy() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 1;
+
+    // Write class name and title to guest memory.
+    let class_ptr = 0x8000u32;
+    let title_ptr = 0x8040u32;
+    memory.write_wide_z(class_ptr, "TESTCHILD");
+    memory.write_wide_z(title_ptr, "child");
+
+    // Create parent via raw kernel call (no WM_PARENTNOTIFY for top-level).
+    let parent = kernel.create_window_ex_w(thread_id, "PARENT", "parent", None, 0, 0, 0);
+    assert_ne!(parent, 0);
+    assert!(kernel.gwe.get_message(thread_id).is_none(),
+        "No WM_PARENTNOTIFY for top-level window creation");
+
+    // Create child via coredll ORD_CREATE_WINDOW_EX_W → posts WM_PARENTNOTIFY(WM_CREATE).
+    let child_id: u32 = 42;
+    let child = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_CREATE_WINDOW_EX_W,
+        [0u32, class_ptr, title_ptr, WS_CHILD, 0, 0, 100, 80, parent, child_id, 0, 0],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(hwnd), .. } => hwnd,
+        other => panic!("CreateWindowExW failed: {other:?}"),
+    };
+    assert_ne!(child, 0);
+
+    let msg = kernel.gwe.get_message(thread_id)
+        .expect("WM_PARENTNOTIFY(WM_CREATE) must be posted to parent");
+    assert_eq!(msg.hwnd, parent, "WM_PARENTNOTIFY delivered to parent hwnd");
+    assert_eq!(msg.msg, WM_PARENTNOTIFY);
+    assert_eq!(msg.wparam & 0xffff, WM_CREATE, "Low word of wparam is WM_CREATE");
+    assert_eq!(msg.wparam >> 16, child_id, "High word of wparam is child control id");
+    assert_eq!(msg.lparam, child, "lparam is child hwnd");
+    assert!(kernel.gwe.get_message(thread_id).is_none(), "No extra messages after create notify");
+
+    // Destroy child via coredll ORD_DESTROY_WINDOW → posts WM_PARENTNOTIFY(WM_DESTROY).
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_DESTROY_WINDOW, [child],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+
+    let destroy_msg = kernel.gwe.get_message(thread_id)
+        .expect("WM_PARENTNOTIFY(WM_DESTROY) must be posted to parent");
+    assert_eq!(destroy_msg.hwnd, parent);
+    assert_eq!(destroy_msg.msg, WM_PARENTNOTIFY);
+    assert_eq!(destroy_msg.wparam & 0xffff, WM_DESTROY, "Low word of wparam is WM_DESTROY");
+    assert_eq!(destroy_msg.wparam >> 16, child_id, "High word of wparam is child control id");
+    assert_eq!(destroy_msg.lparam, child, "lparam is child hwnd");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_gwe_wm_parentnotify_suppressed_by_noparentnotify() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 1;
+
+    let class_ptr = 0x8000u32;
+    let title_ptr = 0x8040u32;
+    memory.write_wide_z(class_ptr, "QUIETCHILD");
+    memory.write_wide_z(title_ptr, "quiet");
+
+    let parent = kernel.create_window_ex_w(thread_id, "PARENT", "parent", None, 0, 0, 0);
+    assert_ne!(parent, 0);
+
+    // Child created with WS_EX_NOPARENTNOTIFY must NOT post WM_PARENTNOTIFY.
+    let child = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_CREATE_WINDOW_EX_W,
+        [WS_EX_NOPARENTNOTIFY, class_ptr, title_ptr, WS_CHILD, 0, 0, 50, 50, parent, 7u32, 0, 0],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(hwnd), .. } => hwnd,
+        other => panic!("CreateWindowExW failed: {other:?}"),
+    };
+    assert_ne!(child, 0);
+    assert!(kernel.gwe.get_message(thread_id).is_none(),
+        "WS_EX_NOPARENTNOTIFY must suppress WM_PARENTNOTIFY");
 
     Ok(())
 }
