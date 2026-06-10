@@ -23307,6 +23307,14 @@ fn render_image_list_bitmap_entry_hdc<M: CoredllGuestMemory>(
     let Some(src_bytes) = read_bitmap_object_bytes(memory, src_bitmap) else {
         return false;
     };
+    let mask_bitmap_bytes = if image.transparent_color.is_none() && image.mask != 0 {
+        kernel
+            .resources
+            .bitmap(image.mask)
+            .and_then(|mask| read_bitmap_object_bytes(memory, mask).map(|bytes| (mask, bytes)))
+    } else {
+        None
+    };
     let Some(dst_bitmap) = selected_bitmap_object(kernel, hdc) else {
         return true;
     };
@@ -23330,6 +23338,9 @@ fn render_image_list_bitmap_entry_hdc<M: CoredllGuestMemory>(
             src_height,
             src_bitmap,
             &src_bytes,
+            mask_bitmap_bytes
+                .as_ref()
+                .map(|(mask, bytes)| (*mask, bytes.as_slice())),
             image.transparent_color.map(colorref_rgb),
             clip,
         );
@@ -28157,6 +28168,7 @@ fn bit_blt_raw<M: CoredllGuestMemory>(
                         &src_bitmap,
                         &src_bytes,
                         None,
+                        None,
                         clip,
                     );
                 }
@@ -28326,6 +28338,7 @@ fn stretch_blt_raw<M: CoredllGuestMemory>(
                         src_height,
                         &src_bitmap,
                         &src_bytes,
+                        None,
                         None,
                         clip,
                     );
@@ -28639,6 +28652,7 @@ fn draw_bitmap_bytes_to_bitmap<M: CoredllGuestMemory>(
     src_height: i32,
     src: &crate::ce::resource::BitmapObject,
     src_bytes: &[u8],
+    mask_bitmap: Option<(&crate::ce::resource::BitmapObject, &[u8])>,
     transparent_rgb: Option<[u8; 3]>,
     clip: Rect,
 ) {
@@ -28684,6 +28698,12 @@ fn draw_bitmap_bytes_to_bitmap<M: CoredllGuestMemory>(
             let Some(rgb) = bitmap_pixel_rgb(src, src_bytes, source_x, source_y) else {
                 continue;
             };
+            if let Some((mask, mask_bytes)) = mask_bitmap
+                && let Some(mask_rgb) = bitmap_pixel_rgb(mask, mask_bytes, source_x, source_y)
+                && mask_rgb != [0, 0, 0]
+            {
+                continue;
+            }
             if let Some(transparent) = transparent_rgb
                 && rgb == transparent
             {
@@ -29198,6 +29218,7 @@ fn transparent_image_raw<M: CoredllGuestMemory>(
                         src_height,
                         &src_bitmap,
                         &bitmap_bytes,
+                        None,
                         Some(colorref_rgb(transparent_color)),
                         clip,
                     );
