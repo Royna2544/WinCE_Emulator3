@@ -1928,6 +1928,8 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             memory,
             thread_id,
             raw_arg(args, 0),
+            raw_arg(args, 1),
+            raw_arg(args, 2) != 0,
         ))),
         ORD_COPY_RECT => Some(CoredllValue::Bool(copy_rect_raw(
             kernel,
@@ -9768,10 +9770,47 @@ fn adjust_window_rect_ex_raw<M: CoredllGuestMemory>(
     memory: &mut M,
     thread_id: u32,
     rect_ptr: u32,
+    style: u32,
+    has_menu: bool,
 ) -> bool {
-    let Some(rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
+    const WS_BORDER: u32 = 0x0080_0000;
+    const WS_DLGFRAME: u32 = 0x0040_0000;
+    const WS_CAPTION: u32 = WS_BORDER | WS_DLGFRAME;
+    const WS_THICKFRAME: u32 = 0x0004_0000;
+
+    let Some(mut rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
         return false;
     };
+    // Per CE window.cpp: inflate by border/frame thickness, then push top for caption/menu.
+    if style & WS_THICKFRAME != 0 {
+        let dx = kernel.gwe.system_metric(crate::ce::gwe::SM_CXDLGFRAME);
+        let dy = kernel.gwe.system_metric(crate::ce::gwe::SM_CYDLGFRAME);
+        rect.left -= dx;
+        rect.top -= dy;
+        rect.right += dx;
+        rect.bottom += dy;
+    } else if style & WS_DLGFRAME != 0 {
+        let dx = kernel.gwe.system_metric(crate::ce::gwe::SM_CXDLGFRAME);
+        let dy = kernel.gwe.system_metric(crate::ce::gwe::SM_CYDLGFRAME);
+        rect.left -= dx;
+        rect.top -= dy;
+        rect.right += dx;
+        rect.bottom += dy;
+    } else if style & WS_BORDER != 0 {
+        let dx = kernel.gwe.system_metric(crate::ce::gwe::SM_CXBORDER);
+        let dy = kernel.gwe.system_metric(crate::ce::gwe::SM_CYBORDER);
+        rect.left -= dx;
+        rect.top -= dy;
+        rect.right += dx;
+        rect.bottom += dy;
+    }
+    if style & WS_CAPTION == WS_CAPTION {
+        rect.top -= kernel.gwe.system_metric(crate::ce::gwe::SM_CYCAPTION);
+    }
+    if has_menu {
+        rect.top -= kernel.gwe.system_metric(crate::ce::gwe::SM_CYMENU);
+    }
+    kernel.threads.set_last_error(thread_id, 0);
     set_rect_raw(kernel, memory, thread_id, rect_ptr, rect)
 }
 

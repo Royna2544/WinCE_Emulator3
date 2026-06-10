@@ -24049,3 +24049,69 @@ fn coredll_raw_get_device_caps_returns_ce_display_capabilities() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn coredll_raw_adjust_window_rect_ex_expands_by_nonclient_area() -> Result<()> {
+    // CE AdjustWindowRectEx expands a client rect to include the NC area.
+    // WS_CAPTION = WS_BORDER|WS_DLGFRAME → 3px border + 24px caption at top.
+    // WS_BORDER only → 1px border. WS_THICKFRAME → 3px border (same as WS_DLGFRAME).
+    const WS_CAPTION: u32 = 0x00C0_0000;
+    const WS_BORDER: u32 = 0x0080_0000;
+    const WS_THICKFRAME: u32 = 0x0004_0000;
+    const NO_MENU: u32 = 0;
+    const HAS_MENU: u32 = 1;
+
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let table = CoredllExportTable::default();
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 3;
+    let rect_ptr: u32 = 0x2000;
+    memory.map_words(rect_ptr, 4);
+
+    let dispatch_rect = |memory: &mut TestGuestMemory, kernel: &mut CeKernel, style: u32, menu: u32, l: i32, t: i32, r: i32, b: i32| {
+        memory.write_u32(rect_ptr, l as u32).unwrap();
+        memory.write_u32(rect_ptr + 4, t as u32).unwrap();
+        memory.write_u32(rect_ptr + 8, r as u32).unwrap();
+        memory.write_u32(rect_ptr + 12, b as u32).unwrap();
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(kernel, memory, thread_id, ORD_ADJUST_WINDOW_RECT_EX, [rect_ptr, style, menu, 0u32]),
+            CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+        )
+    };
+
+    // WS_CAPTION (WS_BORDER | WS_DLGFRAME): 3px border each side, 24px caption at top.
+    // Input rect (10, 50, 210, 250) → left-=3, top-=3-24=27, right+=3, bottom+=3
+    assert!(dispatch_rect(&mut memory, &mut kernel, WS_CAPTION, NO_MENU, 10, 50, 210, 250));
+    assert_eq!(memory.read_u32(rect_ptr)? as i32, 10 - 3, "WS_CAPTION: left expands by 3");
+    assert_eq!(memory.read_u32(rect_ptr + 4)? as i32, 50 - 3 - 24, "WS_CAPTION: top expands by 3+24");
+    assert_eq!(memory.read_u32(rect_ptr + 8)? as i32, 210 + 3, "WS_CAPTION: right expands by 3");
+    assert_eq!(memory.read_u32(rect_ptr + 12)? as i32, 250 + 3, "WS_CAPTION: bottom expands by 3");
+
+    // WS_BORDER only: 1px each side.
+    assert!(dispatch_rect(&mut memory, &mut kernel, WS_BORDER, NO_MENU, 10, 50, 210, 250));
+    assert_eq!(memory.read_u32(rect_ptr)? as i32, 10 - 1, "WS_BORDER: left expands by 1");
+    assert_eq!(memory.read_u32(rect_ptr + 4)? as i32, 50 - 1, "WS_BORDER: top expands by 1");
+    assert_eq!(memory.read_u32(rect_ptr + 8)? as i32, 210 + 1, "WS_BORDER: right expands by 1");
+    assert_eq!(memory.read_u32(rect_ptr + 12)? as i32, 250 + 1, "WS_BORDER: bottom expands by 1");
+
+    // WS_THICKFRAME: 3px (SM_CXDLGFRAME) each side.
+    assert!(dispatch_rect(&mut memory, &mut kernel, WS_THICKFRAME, NO_MENU, 10, 50, 210, 250));
+    assert_eq!(memory.read_u32(rect_ptr)? as i32, 10 - 3, "WS_THICKFRAME: left expands by 3");
+    assert_eq!(memory.read_u32(rect_ptr + 4)? as i32, 50 - 3, "WS_THICKFRAME: top expands by 3");
+    assert_eq!(memory.read_u32(rect_ptr + 8)? as i32, 210 + 3, "WS_THICKFRAME: right expands by 3");
+    assert_eq!(memory.read_u32(rect_ptr + 12)? as i32, 250 + 3, "WS_THICKFRAME: bottom expands by 3");
+
+    // No style (WS_POPUP/WS_CHILD): no NC area, rect unchanged.
+    assert!(dispatch_rect(&mut memory, &mut kernel, 0, NO_MENU, 10, 50, 210, 250));
+    assert_eq!(memory.read_u32(rect_ptr)? as i32, 10, "no style: rect unchanged");
+    assert_eq!(memory.read_u32(rect_ptr + 4)? as i32, 50, "no style: rect unchanged");
+    assert_eq!(memory.read_u32(rect_ptr + 8)? as i32, 210, "no style: rect unchanged");
+    assert_eq!(memory.read_u32(rect_ptr + 12)? as i32, 250, "no style: rect unchanged");
+
+    // WS_CAPTION with menu: top also subtracts SM_CYMENU (24).
+    assert!(dispatch_rect(&mut memory, &mut kernel, WS_CAPTION, HAS_MENU, 10, 100, 210, 300));
+    assert_eq!(memory.read_u32(rect_ptr + 4)? as i32, 100 - 3 - 24 - 24, "WS_CAPTION+menu: top -=3+24+24");
+
+    Ok(())
+}
