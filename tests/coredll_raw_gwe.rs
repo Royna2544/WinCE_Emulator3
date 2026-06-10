@@ -123,7 +123,7 @@ use wince_emulation_v3::{
             WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN,
             WM_RBUTTONDBLCLK, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETREDRAW,
             WM_COMPAREITEM, WM_DELETEITEM, WM_DISPLAYCHANGE, WM_DRAWITEM, WM_FONTCHANGE,
-            WM_GETFONT, WM_GETMINMAXINFO, WM_HSCROLL,
+            WM_GETFONT, WM_GETMINMAXINFO, WM_HELP, WM_HSCROLL,
             WM_INPUTLANGCHANGE,
             WM_MEASUREITEM, WM_NEXTDLGCTL, WM_PARENTNOTIFY, WM_SETFONT, WM_SETICON, WM_GETICON, WM_SETTEXT, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE,
             ICON_SMALL, ICON_BIG,
@@ -23368,6 +23368,96 @@ fn coredll_raw_gwe_wm_parentnotify_suppressed_by_noparentnotify() -> Result<()> 
     assert_ne!(child, 0);
     assert!(kernel.gwe.get_message(thread_id).is_none(),
         "WS_EX_NOPARENTNOTIFY must suppress WM_PARENTNOTIFY");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_def_window_proc_cancelmode_releases_capture() -> Result<()> {
+    // CE DefWindowProcW: WM_CANCELMODE should release mouse capture if the receiving
+    // window currently holds it, posting WM_CAPTURECHANGED to itself.
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 1;
+    let msg_ptr = 0x9000u32;
+    memory.map_words(msg_ptr, 7);
+
+    let hwnd = kernel.create_window_ex_w(thread_id, "CAPTUREWIN", "", None, 0, 0, 0);
+    assert_ne!(hwnd, 0);
+
+    // Set capture on the window.
+    let _ = kernel.set_capture(hwnd);
+    assert_eq!(kernel.gwe.get_capture(), Some(hwnd), "capture should be set before WM_CANCELMODE");
+
+    // DefWindowProcW WM_CANCELMODE: capture window should release capture.
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_DEF_WINDOW_PROC_W,
+        [hwnd, WM_CANCELMODE, 0u32, 0u32],
+    );
+
+    assert_eq!(kernel.gwe.get_capture(), None, "WM_CANCELMODE in DefWindowProcW must release capture");
+
+    // WM_CAPTURECHANGED must have been posted to the old capture window.
+    let msg = kernel.gwe.peek_message_filtered(
+        thread_id, Some(hwnd), WM_CAPTURECHANGED, WM_CAPTURECHANGED, PeekFlags::REMOVE,
+    );
+    assert!(msg.is_some(), "WM_CAPTURECHANGED must be posted after WM_CANCELMODE releases capture");
+
+    // WM_CANCELMODE on a non-capture window should be a no-op (no crash, no spurious release).
+    let other = kernel.create_window_ex_w(thread_id, "OTHER", "", None, 0, 0, 0);
+    let _ = kernel.set_capture(hwnd);
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_DEF_WINDOW_PROC_W,
+        [other, WM_CANCELMODE, 0u32, 0u32],
+    );
+    assert_eq!(kernel.gwe.get_capture(), Some(hwnd),
+        "WM_CANCELMODE on non-capture window must not release capture held by another window");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_def_window_proc_help_forwards_to_parent() -> Result<()> {
+    // CE DefWindowProcW: WM_HELP is forwarded to the parent window (like WM_CONTEXTMENU).
+    // Both the forwarding call and the no-parent case must not crash.
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 2;
+    let msg_ptr = 0x9200u32;
+    memory.map_words(msg_ptr, 7);
+
+    let parent = kernel.create_window_ex_w(thread_id, "HELPPARENT", "", None, 0, 0, 0);
+    let child = kernel.create_window_ex_w(thread_id, "HELPCHILD", "", Some(parent), 0, 0, 0);
+
+    // DefWindowProcW on child with WM_HELP must forward to parent without crashing.
+    let result = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_DEF_WINDOW_PROC_W,
+        [child, WM_HELP, 0u32, 0u32],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } => v,
+        other => panic!("DefWindowProcW WM_HELP on child failed: {other:?}"),
+    };
+    assert_eq!(result, 0, "WM_HELP forwarded to parent with no WM_HELP handler returns 0");
+    assert!(kernel.gwe.is_window(parent), "parent must survive WM_HELP forwarding");
+    assert!(kernel.gwe.is_window(child), "child must survive WM_HELP forwarding");
+
+    // Top-level window with no parent: WM_HELP must not crash and returns 0.
+    let result = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_DEF_WINDOW_PROC_W,
+        [parent, WM_HELP, 0u32, 0u32],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } => v,
+        other => panic!("DefWindowProcW WM_HELP on top-level failed: {other:?}"),
+    };
+    assert_eq!(result, 0, "WM_HELP on top-level window with no parent returns 0");
 
     Ok(())
 }

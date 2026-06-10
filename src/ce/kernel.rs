@@ -3740,6 +3740,12 @@ impl CeKernel {
         if msg == crate::ce::gwe::WM_ACTIVATE && wparam != crate::ce::gwe::WA_INACTIVE {
             let _ = self.set_focus(Some(hwnd));
         }
+        if msg == crate::ce::gwe::WM_CANCELMODE {
+            // CE DefWindowProcW: release mouse capture when the window that holds it gets WM_CANCELMODE.
+            if self.gwe.get_capture() == Some(hwnd) {
+                self.release_capture();
+            }
+        }
         if msg == crate::ce::gwe::WM_NEXTDLGCTL {
             // CE DefWindowProcW WM_NEXTDLGCTL: lparam bit 0 selects mode.
             // lparam & 1 → wparam is the HWND to focus directly.

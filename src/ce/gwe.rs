@@ -45,6 +45,7 @@ pub const WM_SETTEXT: u32 = 0x000c;
 pub const WM_GETTEXT: u32 = 0x000d;
 pub const WM_GETTEXTLENGTH: u32 = 0x000e;
 pub const WM_MOUSEACTIVATE: u32 = 0x0021;
+pub const WM_HELP: u32 = 0x0053;
 pub const WM_NEXTDLGCTL: u32 = 0x0028;
 pub const WM_KEYDOWN: u32 = 0x0100;
 pub const WM_KEYUP: u32 = 0x0101;
@@ -3128,7 +3129,7 @@ impl Gwe {
                 // ALT released alone (not combined with another key) → SC_KEYMENU
                 let _ = self.send_message(hwnd, WM_SYSCOMMAND, SC_KEYMENU, 0);
             }
-            WM_CONTEXTMENU | WM_MOUSEWHEEL => {
+            WM_CONTEXTMENU | WM_MOUSEWHEEL | WM_HELP => {
                 // Forward to parent if one exists
                 if let Some(parent) = self.get_parent(hwnd).filter(|p| self.is_window(*p)) {
                     let fwd_wparam = if msg == WM_CONTEXTMENU { hwnd } else { wparam };
