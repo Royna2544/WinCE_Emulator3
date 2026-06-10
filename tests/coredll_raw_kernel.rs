@@ -8293,6 +8293,120 @@ fn message_box_w_uses_queued_modal_key_and_button_input() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn message_box_w_tab_navigation_changes_activated_button() -> Result<()> {
+    // The CE dialog manager focuses the default button and lets Tab/Shift+Tab and
+    // arrow keys move focus between the box's buttons; a following Enter or Space
+    // activates the navigated button rather than the original default.
+    const MB_YESNOCANCEL: u32 = 0x0000_0003;
+    const MB_DEFBUTTON2: u32 = 0x0000_0100;
+    const IDCANCEL: u32 = 2;
+    const IDYES: u32 = 6;
+    const VK_TAB: u32 = 0x09;
+    const VK_RETURN: u32 = 0x0d;
+    const VK_SPACE: u32 = 0x20;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 53;
+    let hwnd = kernel.create_window_ex_w(thread_id, "MSGBOX_TAB_OWNER", "", None, 0, 0, 0);
+    let text = 0x3007_0000;
+    let caption = 0x3007_1000;
+    memory.write_wide_z(text, "Pick a route");
+    memory.write_wide_z(caption, "iNavi");
+
+    // First box: focus starts on the default No button (index 1). Tab forward twice
+    // (No -> Cancel -> wraps to Yes) then Enter activates the focused Yes button.
+    let tab_dialog_hwnd = hwnd + 4;
+    kernel.gwe.post_message(
+        thread_id,
+        Message::new(tab_dialog_hwnd, WM_KEYDOWN, VK_TAB, 0, 10),
+    );
+    kernel.gwe.post_message(
+        thread_id,
+        Message::new(tab_dialog_hwnd, WM_KEYDOWN, VK_TAB, 0, 11),
+    );
+    kernel.gwe.post_message(
+        thread_id,
+        Message::new(tab_dialog_hwnd, WM_KEYDOWN, VK_RETURN, 0, 12),
+    );
+    let result = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_MESSAGE_BOX_W,
+        [hwnd, text, caption, MB_YESNOCANCEL | MB_DEFBUTTON2],
+    );
+    assert!(matches!(
+        result,
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(IDYES),
+            ..
+        }
+    ));
+    let record = kernel.shell.last_message_box().expect("tab-return record");
+    assert_eq!(record.dialog_hwnd, tab_dialog_hwnd);
+    assert_eq!(record.result, IDYES);
+    assert_eq!(kernel.gwe.dialog_result(record.dialog_hwnd), Some(IDYES));
+    assert!(
+        kernel
+            .gwe
+            .peek_message_filtered(
+                thread_id,
+                Some(tab_dialog_hwnd),
+                WM_KEYDOWN,
+                WM_KEYDOWN,
+                PeekFlags::NO_REMOVE
+            )
+            .is_none()
+    );
+
+    // Second box: Tab forward once (No -> Cancel) then Space activates the Cancel button.
+    let space_dialog_hwnd = hwnd + 24;
+    kernel.gwe.post_message(
+        thread_id,
+        Message::new(space_dialog_hwnd, WM_KEYDOWN, VK_TAB, 0, 20),
+    );
+    kernel.gwe.post_message(
+        thread_id,
+        Message::new(space_dialog_hwnd, WM_KEYDOWN, VK_SPACE, 0, 21),
+    );
+    let result = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_MESSAGE_BOX_W,
+        [hwnd, text, caption, MB_YESNOCANCEL | MB_DEFBUTTON2],
+    );
+    assert!(matches!(
+        result,
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(IDCANCEL),
+            ..
+        }
+    ));
+    let record = kernel.shell.last_message_box().expect("tab-space record");
+    assert_eq!(record.dialog_hwnd, space_dialog_hwnd);
+    assert_eq!(record.result, IDCANCEL);
+    assert_eq!(kernel.gwe.dialog_result(record.dialog_hwnd), Some(IDCANCEL));
+    assert!(
+        kernel
+            .gwe
+            .peek_message_filtered(
+                thread_id,
+                Some(space_dialog_hwnd),
+                WM_KEYDOWN,
+                WM_KEYDOWN,
+                PeekFlags::NO_REMOVE
+            )
+            .is_none()
+    );
+
+    Ok(())
+}
+
 fn make_lparam(x: i32, y: i32) -> u32 {
     ((y as u16 as u32) << 16) | (x as u16 as u32)
 }

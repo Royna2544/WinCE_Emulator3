@@ -10661,6 +10661,15 @@ pub(crate) fn message_box_w_prepare<M: CoredllGuestMemory>(
     }
     let window_state =
         create_message_box_window(kernel, thread_id, owner_hwnd, &caption, &text, &selection);
+    // CE's dialog manager focuses the default button when the box appears, so the
+    // initial keyboard target is the button Enter/Space will activate.
+    if let Some(default_button) = window_state
+        .button_hwnds
+        .get(selection.default_button_index)
+        .copied()
+    {
+        let _ = kernel.set_focus(Some(default_button));
+    }
     let rendered = if let Some(framebuffer) = framebuffer {
         render_message_box_framebuffer(framebuffer, &caption, &text, &selection);
         true
@@ -10833,6 +10842,8 @@ fn message_box_modal_input_result(
             }
             if message.msg == crate::ce::gwe::WM_PAINT {
                 kernel.dispatch_message_w_for_thread(thread_id, message);
+            } else {
+                message_box_handle_navigation(kernel, window_state, &message);
             }
         } else {
             kernel.dispatch_message_w_for_thread(thread_id, message);
@@ -10855,6 +10866,7 @@ fn message_box_message_result(
 ) -> Option<u32> {
     const VK_RETURN: u32 = 0x0d;
     const VK_ESCAPE: u32 = 0x1b;
+    const VK_SPACE: u32 = 0x20;
 
     match message.msg {
         crate::ce::gwe::WM_COMMAND => {
@@ -10874,20 +10886,15 @@ fn message_box_message_result(
             ))
         }
         crate::ce::gwe::WM_KEYDOWN if message.wparam == VK_RETURN => {
-            let (command, _) = kernel.gwe.dialog_return_command(
-                window_state.dialog_hwnd,
-                message.hwnd,
-                selection.result,
-            );
-            Some(command)
+            Some(message_box_return_command(kernel, window_state, selection))
         }
         crate::ce::gwe::WM_CHAR if message.wparam == VK_RETURN => {
-            let (command, _) = kernel.gwe.dialog_return_command(
-                window_state.dialog_hwnd,
-                message.hwnd,
-                selection.result,
-            );
-            Some(command)
+            Some(message_box_return_command(kernel, window_state, selection))
+        }
+        // Space activates the focused button, matching the CE dialog manager
+        // (`DLGC_BUTTON` controls treat space like a click).
+        crate::ce::gwe::WM_KEYDOWN if message.wparam == VK_SPACE => {
+            message_box_focused_button_command(kernel, window_state, selection)
         }
         crate::ce::gwe::WM_KEYDOWN if message.wparam == VK_ESCAPE => Some(
             message_box_cancel_or_default_result(kernel, window_state, selection),
@@ -10913,6 +10920,70 @@ fn message_box_message_result(
             None
         }
         _ => None,
+    }
+}
+
+/// Resolves the command Enter should pick: the focused pushbutton when one of the
+/// box's buttons holds focus, otherwise the dialog's current default button.
+fn message_box_return_command(
+    kernel: &CeKernel,
+    window_state: &MessageBoxWindowState,
+    selection: &MessageBoxSelection,
+) -> u32 {
+    let source = kernel
+        .gwe
+        .get_focus()
+        .filter(|hwnd| message_box_message_targets_window(window_state, *hwnd))
+        .unwrap_or(window_state.dialog_hwnd);
+    let (command, _) =
+        kernel
+            .gwe
+            .dialog_return_command(window_state.dialog_hwnd, source, selection.result);
+    command
+}
+
+/// Resolves the command Space should pick: only fires when a box button is focused.
+fn message_box_focused_button_command(
+    kernel: &CeKernel,
+    window_state: &MessageBoxWindowState,
+    selection: &MessageBoxSelection,
+) -> Option<u32> {
+    let focus = kernel.gwe.get_focus()?;
+    message_box_direct_button_command(kernel, window_state, selection, focus)
+}
+
+/// Moves focus between the box's buttons for Tab/Shift+Tab and arrow keys, matching
+/// the CE dialog manager so a following Enter/Space activates the navigated button.
+fn message_box_handle_navigation(
+    kernel: &mut CeKernel,
+    window_state: &MessageBoxWindowState,
+    message: &Message,
+) {
+    const VK_TAB: u32 = 0x09;
+    const VK_LEFT: u32 = 0x25;
+    const VK_UP: u32 = 0x26;
+    const VK_RIGHT: u32 = 0x27;
+    const VK_DOWN: u32 = 0x28;
+
+    if message.msg != crate::ce::gwe::WM_KEYDOWN {
+        return;
+    }
+    let previous = match message.wparam {
+        VK_TAB => kernel.gwe.get_key_state(crate::ce::gwe::VK_SHIFT) & 0x8000 != 0,
+        VK_LEFT | VK_UP => true,
+        VK_RIGHT | VK_DOWN => false,
+        _ => return,
+    };
+    let current = kernel
+        .gwe
+        .get_focus()
+        .filter(|hwnd| message_box_message_targets_window(window_state, *hwnd))
+        .unwrap_or(window_state.dialog_hwnd);
+    if let Some(next) = kernel
+        .gwe
+        .get_next_dlg_tab_item(window_state.dialog_hwnd, current, previous)
+    {
+        let _ = kernel.set_focus(Some(next));
     }
 }
 
