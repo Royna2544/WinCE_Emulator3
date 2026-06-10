@@ -4200,6 +4200,8 @@ impl super::cpu::CpuBackend for UnicornMips {
             current_thread_id: MAIN_GUEST_THREAD_ID,
             pending_guest_thread_returns: Vec::new(),
             pending_qsort_returns: Vec::new(),
+            pending_enum_windows_returns: Vec::new(),
+            pending_enum_display_monitors_returns: Vec::new(),
             pending_dll_lifecycle_returns: Vec::new(),
             pending_create_window_returns: Vec::new(),
             pending_wndproc_returns: Vec::new(),
