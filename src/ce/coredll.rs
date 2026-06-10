@@ -71,6 +71,12 @@ const CTYPE_BLANK: u32 = 0x0040;
 const CTYPE_HEX: u32 = 0x0080;
 const CTYPE_ALPHA: u32 = 0x0100;
 const SPI_GETWORKAREA: u32 = 0x0030;
+const SPI_GETSCREENORIENTATION: u32 = 0x00C8;
+const SPI_SETSCREENORIENTATION: u32 = 0x00C9;
+const SPI_GETUIEFFECTS: u32 = 0x103E;
+const SPI_SETUIEFFECTS: u32 = 0x103F;
+const SPI_GETFONTSMOOTHING: u32 = 0x004A;
+const SPI_SETFONTSMOOTHING: u32 = 0x004B;
 const SPI_GETPLATFORMTYPE: u32 = 0x0101;
 const SPI_GETOEMINFO: u32 = 0x0102;
 const SPIF_SENDCHANGE: u32 = 0x0002;
@@ -9585,6 +9591,27 @@ fn system_parameters_info_w_raw<M: CoredllGuestMemory>(
                     .unwrap_or_else(|| "WinCE Emulator".to_owned());
             write_system_parameter_info_string(kernel, memory, thread_id, pv_param, ui_param, &text)
         }
+        // CE screen orientation: always report default (0 = DMDO_DEFAULT, landscape).
+        // CE does not support runtime software rotation in the emulator.
+        SPI_GETSCREENORIENTATION => {
+            if pv_param == 0 {
+                false
+            } else {
+                write_guest_u32(kernel, memory, thread_id, pv_param, 0)
+            }
+        }
+        // Setting orientation is a no-op in the emulator (no display rotation).
+        SPI_SETSCREENORIENTATION => true,
+        // UI effects (animations, shadows, etc.) are disabled on CE for performance.
+        SPI_GETUIEFFECTS | SPI_GETFONTSMOOTHING => {
+            if pv_param == 0 {
+                false
+            } else {
+                write_guest_u32(kernel, memory, thread_id, pv_param, 0)
+            }
+        }
+        // Setting these is accepted as a no-op.
+        SPI_SETUIEFFECTS | SPI_SETFONTSMOOTHING => true,
         _ => true,
     };
     kernel

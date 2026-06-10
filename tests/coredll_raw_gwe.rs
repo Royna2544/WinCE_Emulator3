@@ -862,6 +862,125 @@ fn coredll_raw_system_parameters_info_returns_ce_strings_and_work_area() -> Resu
 }
 
 #[test]
+fn coredll_raw_system_parameters_info_screen_orientation_and_ui_effects() -> Result<()> {
+    const SPI_GETSCREENORIENTATION: u32 = 0x00C8;
+    const SPI_SETSCREENORIENTATION: u32 = 0x00C9;
+    const SPI_GETUIEFFECTS: u32 = 0x103E;
+    const SPI_SETUIEFFECTS: u32 = 0x103F;
+    const SPI_GETFONTSMOOTHING: u32 = 0x004A;
+    const SPI_SETFONTSMOOTHING: u32 = 0x004B;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let value_ptr = 0x2000_u32;
+    memory.map_words(value_ptr, 1);
+
+    // SPI_GETSCREENORIENTATION writes DMDO_DEFAULT (0) to pv_param.
+    memory.write_word(value_ptr, 0xDEAD_BEEF);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SYSTEM_PARAMETERS_INFO_W,
+            [SPI_GETSCREENORIENTATION, 0, value_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(value_ptr)?, 0, "orientation should be DMDO_DEFAULT");
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    // SPI_SETSCREENORIENTATION succeeds as no-op.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SYSTEM_PARAMETERS_INFO_W,
+            [SPI_SETSCREENORIENTATION, 1, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    // SPI_GETUIEFFECTS writes FALSE (0) on CE (effects disabled for performance).
+    memory.write_word(value_ptr, 1);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SYSTEM_PARAMETERS_INFO_W,
+            [SPI_GETUIEFFECTS, 0, value_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(value_ptr)?, 0, "UI effects should be disabled");
+
+    // SPI_SETUIEFFECTS succeeds as no-op.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SYSTEM_PARAMETERS_INFO_W,
+            [SPI_SETUIEFFECTS, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    // SPI_GETFONTSMOOTHING writes FALSE (0) on CE.
+    memory.write_word(value_ptr, 1);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SYSTEM_PARAMETERS_INFO_W,
+            [SPI_GETFONTSMOOTHING, 0, value_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(value_ptr)?, 0, "font smoothing should be disabled");
+
+    // SPI_SETFONTSMOOTHING succeeds as no-op.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SYSTEM_PARAMETERS_INFO_W,
+            [SPI_SETFONTSMOOTHING, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_fill_rect_paints_attached_framebuffer() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
