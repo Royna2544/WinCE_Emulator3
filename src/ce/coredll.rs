@@ -21124,8 +21124,33 @@ fn popup_menu_modal_open_submenu(
         return false;
     }
     let submenu = item.submenu;
-    let child_x = active.popup_x + menu_popup_width(menu_object) - POPUP_MENU_BORDER;
-    let child_y = active.popup_y + POPUP_MENU_BORDER + (index as i32) * POPUP_MENU_ITEM_HEIGHT;
+    let parent_x = active.popup_x;
+    let parent_y = active.popup_y;
+    let parent_width = menu_popup_width(menu_object);
+    let screen_w = kernel.gwe.system_metric(crate::ce::gwe::SM_CXSCREEN);
+    let screen_h = kernel.gwe.system_metric(crate::ce::gwe::SM_CYSCREEN);
+    let (child_width, child_height) = kernel
+        .resources
+        .menu(submenu)
+        .map(|m| {
+            let w = menu_popup_width(m);
+            let h = (m.items.len() as i32).max(1) * POPUP_MENU_ITEM_HEIGHT
+                + POPUP_MENU_VERTICAL_PADDING;
+            (w, h)
+        })
+        .unwrap_or((parent_width, POPUP_MENU_ITEM_HEIGHT + POPUP_MENU_VERTICAL_PADDING));
+    let right_x = parent_x + parent_width - POPUP_MENU_BORDER;
+    let child_x = if right_x + child_width > screen_w {
+        parent_x - child_width + POPUP_MENU_BORDER
+    } else {
+        right_x
+    };
+    let raw_child_y = parent_y + POPUP_MENU_BORDER + (index as i32) * POPUP_MENU_ITEM_HEIGHT;
+    let child_y = if raw_child_y + child_height > screen_h {
+        (screen_h - child_height).max(0)
+    } else {
+        raw_child_y
+    };
     let child_current = popup_menu_initial_key_index(&kernel.resources, submenu);
     stack.push(PopupMenuModalMenuState {
         menu: submenu,
@@ -21576,12 +21601,35 @@ fn render_popup_menu_framebuffer_inner(
                 text_color,
             );
             if highlighted {
+                let screen_w = framebuffer.width() as i32;
+                let screen_h = framebuffer.height() as i32;
+                let (child_x, child_y) =
+                    if let Some(child_menu) = resources.menu(item.submenu) {
+                        let child_w = menu_popup_width(child_menu);
+                        let child_h = (child_menu.items.len() as i32).max(1)
+                            * POPUP_MENU_ITEM_HEIGHT
+                            + POPUP_MENU_VERTICAL_PADDING;
+                        let right_x = x + width - POPUP_MENU_BORDER;
+                        let cx = if right_x + child_w > screen_w {
+                            x - child_w + POPUP_MENU_BORDER
+                        } else {
+                            right_x
+                        };
+                        let cy = if item_top + child_h > screen_h {
+                            (screen_h - child_h).max(0)
+                        } else {
+                            item_top
+                        };
+                        (cx, cy)
+                    } else {
+                        (x + width - POPUP_MENU_BORDER, item_top)
+                    };
                 render_popup_menu_framebuffer_inner(
                     framebuffer,
                     resources,
                     item.submenu,
-                    x + width - POPUP_MENU_BORDER,
-                    item_top,
+                    child_x,
+                    child_y,
                     visited,
                 );
             }

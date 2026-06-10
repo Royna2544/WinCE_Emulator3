@@ -13590,6 +13590,109 @@ fn coredll_raw_track_popup_menu_tap_opens_submenu_before_selecting() -> Result<(
 }
 
 #[test]
+fn coredll_raw_track_popup_menu_submenu_flips_left_near_right_edge() -> Result<()> {
+    // When a submenu would extend past the right screen edge, CE positions the
+    // child pane to the LEFT of the parent instead of the right.
+    // Default screen width is 800.  Parent placed at x=720 with width=90:
+    //   right_x = 720 + 90 - 2 = 808 > 800, so child must flip to x = 720 - 90 + 2 = 632.
+    const TPM_RETURNCMD: u32 = 0x0100;
+    const MF_POPUP: u32 = 0x0010;
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 42;
+    let more_text = 0x1_7c00;
+    let quit_text = 0x1_7c80;
+    let save_text = 0x1_7d00;
+    let load_text = 0x1_7d80;
+    memory.map_halfwords(more_text, 16);
+    memory.map_halfwords(quit_text, 16);
+    memory.map_halfwords(save_text, 16);
+    memory.map_halfwords(load_text, 16);
+    memory.write_wide_z(more_text, "More");
+    memory.write_wide_z(quit_text, "Quit");
+    memory.write_wide_z(save_text, "Save");
+    memory.write_wide_z(load_text, "Load");
+
+    let hwnd = kernel.create_window_ex_w(thread_id, "EDGE_OWNER", "", None, 0, 0, 0);
+    let parent = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_POPUP_MENU,
+        [],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreatePopupMenu did not return a handle: {other:?}"),
+    };
+    let child = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_POPUP_MENU,
+        [],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreatePopupMenu did not return a handle: {other:?}"),
+    };
+    // Child: row 0 = 903 ("Save"), row 1 = 904 ("Load").
+    // Parent: row 0 = submenu "More" → child, row 1 = 905 ("Quit").
+    for args in [
+        [child, 0, 903, save_text],
+        [child, 0, 904, load_text],
+        [parent, MF_POPUP, child, more_text],
+        [parent, 0, 905, quit_text],
+    ] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_APPEND_MENU_W,
+                args,
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+    }
+
+    // Parent at (720, 100), width=90.  Parent row 0 (submenu "More") spans
+    // y in [102, 120), x in [722, 808).  Hit at (750, 110).
+    // Child would be at x = 720 + 90 - 2 = 808 > 800, so it flips to
+    // x = 720 - 90 + 2 = 632. Child row 1 ("Load") spans y in [122, 140),
+    // x in [634, 720). Hit at (670, 130).
+    let parent_row0 = (110_u32 << 16) | 750;
+    let child_row1 = (130_u32 << 16) | 670;
+    // Tap-down opens child pane; tap-up keeps it open; tap in child selects 904.
+    assert!(kernel.post_message_w_for_thread(thread_id, hwnd, WM_LBUTTONDOWN, 1, parent_row0));
+    assert!(kernel.post_message_w_for_thread(thread_id, hwnd, WM_LBUTTONUP, 0, parent_row0));
+    assert!(kernel.post_message_w_for_thread(thread_id, hwnd, WM_LBUTTONUP, 0, child_row1));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRACK_POPUP_MENU_EX,
+            [parent, TPM_RETURNCMD, 720, 100, hwnd, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(904),
+            ..
+        }
+    ));
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_translate_message_uses_shift_caps_and_syschar() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
