@@ -288,6 +288,8 @@ pub struct ImageListDraw {
     pub height: i32,
     pub flags: u32,
     pub overlay_image: Option<i32>,
+    /// Foreground (blend) color as COLORREF (CLR_DEFAULT = 0xFF000000, CLR_NONE = 0xFFFFFFFF).
+    pub rgb_fg: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

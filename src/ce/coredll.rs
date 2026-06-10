@@ -193,6 +193,7 @@ const SHELL_SYSTEM_IMAGE_LIST_COUNT: u32 = 8192;
 const SHELL_SYSTEM_IMAGE_LIST_CX: i32 = 16;
 const SHELL_SYSTEM_IMAGE_LIST_CY: i32 = 16;
 const CLR_NONE: u32 = 0xffff_ffff;
+const CLR_DEFAULT: u32 = 0xff00_0000;
 const NOTIFYICONDATA_MIN_SIZE_W: u32 = 24;
 const NOTIFYICONDATA_TIP_OFFSET: u32 = 24;
 const NOTIFYICONDATA_TIP_CHARS: usize = 64;
@@ -22290,11 +22291,11 @@ fn draw_icon_ex_raw<M: CoredllGuestMemory>(
         };
         if let Some(fb) = framebuffer {
             render_image_list_bitmap_entry_framebuffer(
-                kernel, memory, fb, hdc, x, y, width, height, width, height, &image,
+                kernel, memory, fb, hdc, x, y, width, height, width, height, &image, None,
             );
         } else {
             render_image_list_bitmap_entry_hdc(
-                kernel, memory, hdc, x, y, width, height, width, height, &image,
+                kernel, memory, hdc, x, y, width, height, width, height, &image, None,
             );
         }
         kernel.threads.set_last_error(thread_id, 0);
@@ -22311,6 +22312,7 @@ fn draw_icon_ex_raw<M: CoredllGuestMemory>(
         height,
         flags,
         overlay_image: None,
+        rgb_fg: CLR_DEFAULT,
     };
     if !render_image_list_draw_bitmap(kernel, memory, draw) {
         render_image_list_draw_framebuffer(kernel, memory, framebuffer, draw);
@@ -22808,6 +22810,7 @@ fn image_list_draw_raw<M: CoredllGuestMemory>(
         height,
         flags,
         overlay_image: None,
+        rgb_fg: CLR_DEFAULT,
     };
     let rendered = record_image_list_draw(kernel, thread_id, draw);
     if rendered {
@@ -22833,6 +22836,7 @@ fn image_list_draw_ex_raw<M: CoredllGuestMemory>(
     let width = raw_i32_arg(args, 5);
     let height = raw_i32_arg(args, 6);
     let rgb_bk = raw_arg(args, 7);
+    let rgb_fg = raw_arg(args, 8);
     let raw_flags = raw_arg(args, 9);
     const ILD_TRANSPARENT: u32 = 0x0001;
     let flags = if rgb_bk == CLR_NONE {
@@ -22856,6 +22860,7 @@ fn image_list_draw_ex_raw<M: CoredllGuestMemory>(
         height,
         flags,
         overlay_image: None,
+        rgb_fg,
     };
     let rendered = record_image_list_draw(kernel, thread_id, draw);
     if rendered {
@@ -22917,6 +22922,11 @@ fn image_list_draw_indirect_raw<M: CoredllGuestMemory>(
     } else {
         CLR_NONE
     };
+    let rgb_fg = if size >= 48 {
+        read_guest_u32(kernel, memory, thread_id, draw_ptr.wrapping_add(44)).unwrap_or(CLR_DEFAULT)
+    } else {
+        CLR_DEFAULT
+    };
     let raw_flags = if size >= 52 {
         read_guest_u32(kernel, memory, thread_id, draw_ptr.wrapping_add(48)).unwrap_or(0)
     } else {
@@ -22937,6 +22947,7 @@ fn image_list_draw_indirect_raw<M: CoredllGuestMemory>(
         height,
         flags,
         overlay_image: None,
+        rgb_fg,
     };
     let rendered = record_image_list_draw(kernel, thread_id, draw);
     if rendered {
@@ -23177,6 +23188,7 @@ fn render_image_list_bitmap_framebuffer<M: CoredllGuestMemory>(
     };
     let src_width = list.width.max(1);
     let src_height = list.height.max(1);
+    let blend = ild_blend_color(draw_flags, draw.rgb_fg);
     if !render_image_list_bitmap_entry_framebuffer(
         kernel,
         memory,
@@ -23189,6 +23201,7 @@ fn render_image_list_bitmap_framebuffer<M: CoredllGuestMemory>(
         src_width,
         src_height,
         &effective_image,
+        blend,
     ) {
         return false;
     }
@@ -23219,6 +23232,7 @@ fn render_image_list_bitmap_framebuffer<M: CoredllGuestMemory>(
                 src_width,
                 src_height,
                 &overlay,
+                None, // overlay not blended
             );
         }
     }
@@ -23262,6 +23276,7 @@ fn render_image_list_bitmap_hdc<M: CoredllGuestMemory>(
     };
     let src_width = list.width.max(1);
     let src_height = list.height.max(1);
+    let blend = ild_blend_color(draw_flags, draw.rgb_fg);
     if !render_image_list_bitmap_entry_hdc(
         kernel,
         memory,
@@ -23273,6 +23288,7 @@ fn render_image_list_bitmap_hdc<M: CoredllGuestMemory>(
         src_width,
         src_height,
         &effective_image,
+        blend,
     ) {
         return false;
     }
@@ -23301,6 +23317,7 @@ fn render_image_list_bitmap_hdc<M: CoredllGuestMemory>(
                 src_width,
                 src_height,
                 &overlay,
+                None, // overlay not blended
             );
         }
     }
@@ -23319,6 +23336,7 @@ fn render_image_list_bitmap_entry_framebuffer<M: CoredllGuestMemory>(
     src_width: i32,
     src_height: i32,
     image: &crate::ce::resource::ImageListImage,
+    blend: Option<([u8; 3], u8)>,
 ) -> bool {
     if image.bitmap == 0 {
         return false;
@@ -23355,6 +23373,7 @@ fn render_image_list_bitmap_entry_framebuffer<M: CoredllGuestMemory>(
             .as_ref()
             .map(|(mask, bytes)| (*mask, bytes.as_slice())),
         image.transparent_color.map(colorref_rgb),
+        blend,
     );
     true
 }
@@ -23370,6 +23389,7 @@ fn render_image_list_bitmap_entry_hdc<M: CoredllGuestMemory>(
     src_width: i32,
     src_height: i32,
     image: &crate::ce::resource::ImageListImage,
+    blend: Option<([u8; 3], u8)>,
 ) -> bool {
     if image.bitmap == 0 {
         return false;
@@ -23415,6 +23435,7 @@ fn render_image_list_bitmap_entry_hdc<M: CoredllGuestMemory>(
                 .as_ref()
                 .map(|(mask, bytes)| (*mask, bytes.as_slice())),
             image.transparent_color.map(colorref_rgb),
+            blend,
             clip,
         );
     }
@@ -28242,6 +28263,7 @@ fn bit_blt_raw<M: CoredllGuestMemory>(
                         &src_bytes,
                         None,
                         None,
+                        None,
                         clip,
                     );
                 }
@@ -28413,6 +28435,7 @@ fn stretch_blt_raw<M: CoredllGuestMemory>(
                         &src_bytes,
                         None,
                         None,
+                        None,
                         clip,
                     );
                 }
@@ -28431,6 +28454,7 @@ fn stretch_blt_raw<M: CoredllGuestMemory>(
                     src_height,
                     &src_bitmap,
                     &src_bytes,
+                    None,
                     None,
                     None,
                 );
@@ -28553,6 +28577,7 @@ fn draw_dib_to_framebuffer<M: CoredllGuestMemory>(
         &bitmap_bytes,
         None,
         None,
+        None,
     );
 }
 
@@ -28627,6 +28652,46 @@ fn read_dib_source<M: CoredllGuestMemory>(
     ))
 }
 
+/// Compute ILD_BLEND color from draw flags and rgbFg per CE imagelist.cpp.
+/// Returns (highlight_rgb, alpha) where alpha=128 for BLEND50, 64 for BLEND25.
+/// CLR_DEFAULT (0xFF000000) or 0 resolves to COLOR_HIGHLIGHT.
+/// CLR_NONE (destination blend) is not supported and returns None.
+fn ild_blend_color(draw_flags: u32, rgb_fg: u32) -> Option<([u8; 3], u8)> {
+    const ILD_BLEND25: u32 = 0x0002;
+    const ILD_BLEND50: u32 = 0x0004;
+    const ILD_BLENDMASK: u32 = 0x0006;
+    let alpha = match draw_flags & ILD_BLENDMASK {
+        ILD_BLEND50 => 128u8,
+        ILD_BLEND25 => 64u8,
+        _ => return None,
+    };
+    if rgb_fg == CLR_NONE {
+        return None; // destination blend not implemented
+    }
+    let color = if rgb_fg == CLR_DEFAULT || rgb_fg == 0 {
+        [0x00, 0x00, 0x80] // COLOR_HIGHLIGHT (index 13 in our sys color table)
+    } else {
+        colorref_rgb(rgb_fg)
+    };
+    Some((color, alpha))
+}
+
+/// Apply ILD_BLEND50/ILD_BLEND25 color blending per CE imagelist.cpp Blend16Helper.
+/// blend: (highlight_rgb, alpha) where alpha=128 for 50%, alpha=64 for 25%.
+/// new_channel = (src * (256 - alpha) + highlight * alpha) / 256
+fn apply_ild_blend(rgb: [u8; 3], blend: Option<([u8; 3], u8)>) -> [u8; 3] {
+    let Some((highlight, alpha)) = blend else {
+        return rgb;
+    };
+    let inv = u32::from(255u8 - alpha) + 1; // 256 - alpha
+    let a = u32::from(alpha);
+    [
+        (((u32::from(rgb[0]) * inv) + (u32::from(highlight[0]) * a)) >> 8) as u8,
+        (((u32::from(rgb[1]) * inv) + (u32::from(highlight[1]) * a)) >> 8) as u8,
+        (((u32::from(rgb[2]) * inv) + (u32::from(highlight[2]) * a)) >> 8) as u8,
+    ]
+}
+
 fn draw_bitmap_bytes_to_framebuffer(
     kernel: &CeKernel,
     framebuffer: &mut dyn Framebuffer,
@@ -28643,6 +28708,7 @@ fn draw_bitmap_bytes_to_framebuffer(
     bitmap_bytes: &[u8],
     mask_bitmap: Option<(&crate::ce::resource::BitmapObject, &[u8])>,
     transparent_rgb: Option<[u8; 3]>,
+    blend: Option<([u8; 3], u8)>,
 ) {
     if dst_width == 0 || dst_height == 0 || src_width == 0 || src_height == 0 {
         return;
@@ -28696,7 +28762,8 @@ fn draw_bitmap_bytes_to_framebuffer(
                 {
                     continue;
                 }
-                let pixel = pixel_bytes_for_rgb(info.format, rgb);
+                let blended = apply_ild_blend(rgb, blend);
+                let pixel = pixel_bytes_for_rgb(info.format, blended);
                 let offset =
                     (screen_y as usize * dst_stride) + (screen_x as usize * bytes_per_pixel);
                 framebuffer.pixels_mut()[offset..offset + bytes_per_pixel]
@@ -28727,6 +28794,7 @@ fn draw_bitmap_bytes_to_bitmap<M: CoredllGuestMemory>(
     src_bytes: &[u8],
     mask_bitmap: Option<(&crate::ce::resource::BitmapObject, &[u8])>,
     transparent_rgb: Option<[u8; 3]>,
+    blend: Option<([u8; 3], u8)>,
     clip: Rect,
 ) {
     if dst.bits_ptr == 0
@@ -28782,7 +28850,7 @@ fn draw_bitmap_bytes_to_bitmap<M: CoredllGuestMemory>(
             {
                 continue;
             }
-            let _ = write_bitmap_pixel_rgb(memory, dst, x, y, rgb);
+            let _ = write_bitmap_pixel_rgb(memory, dst, x, y, apply_ild_blend(rgb, blend));
         }
     }
 }
@@ -29293,6 +29361,7 @@ fn transparent_image_raw<M: CoredllGuestMemory>(
                         &bitmap_bytes,
                         None,
                         Some(colorref_rgb(transparent_color)),
+                        None,
                         clip,
                     );
                 }
@@ -29313,6 +29382,7 @@ fn transparent_image_raw<M: CoredllGuestMemory>(
                     &bitmap_bytes,
                     None,
                     Some(colorref_rgb(transparent_color)),
+                    None,
                 );
             }
         }
