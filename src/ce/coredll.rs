@@ -20565,7 +20565,10 @@ fn popup_menu_modal_input_loop(
             }
         }
         match (message.msg, message.wparam) {
-            (crate::ce::gwe::WM_CANCELMODE, _) => return Some(PopupMenuModalInput::Cancelled),
+            (crate::ce::gwe::WM_CANCELMODE, _) => {
+                popup_menu_post_menu_select(kernel, thread_id, hwnd, menu, None);
+                return Some(PopupMenuModalInput::Cancelled);
+            }
             (crate::ce::gwe::WM_MOUSEMOVE, _) => {
                 let point = popup_menu_lparam_point(message.lparam);
                 if let Some((level_index, item_index)) =
@@ -20588,6 +20591,14 @@ fn popup_menu_modal_input_loop(
                         framebuffer,
                         popup_x,
                         popup_y,
+                    );
+                    let active = stack.last().unwrap();
+                    popup_menu_post_menu_select(
+                        kernel,
+                        thread_id,
+                        hwnd,
+                        active.menu,
+                        active.current,
                     );
                 }
             }
@@ -20613,6 +20624,14 @@ fn popup_menu_modal_input_loop(
                         framebuffer,
                         popup_x,
                         popup_y,
+                    );
+                    let active = stack.last().unwrap();
+                    popup_menu_post_menu_select(
+                        kernel,
+                        thread_id,
+                        hwnd,
+                        active.menu,
+                        active.current,
                     );
                 }
             }
@@ -20645,6 +20664,7 @@ fn popup_menu_modal_input_loop(
                 {
                     return Some(PopupMenuModalInput::Selected(selection));
                 }
+                popup_menu_post_menu_select(kernel, thread_id, hwnd, menu, None);
                 return Some(PopupMenuModalInput::Cancelled);
             }
             (crate::ce::gwe::WM_CHAR, VK_RETURN) => {
@@ -20663,6 +20683,7 @@ fn popup_menu_modal_input_loop(
                 {
                     continue;
                 }
+                popup_menu_post_menu_select(kernel, thread_id, hwnd, menu, None);
                 return Some(PopupMenuModalInput::Cancelled);
             }
             (crate::ce::gwe::WM_CHAR, ch) => {
@@ -20677,6 +20698,13 @@ fn popup_menu_modal_input_loop(
                         framebuffer,
                         popup_x,
                         popup_y,
+                    );
+                    popup_menu_post_menu_select(
+                        kernel,
+                        thread_id,
+                        hwnd,
+                        active_menu,
+                        Some(index),
                     );
                     if let Some(selection) =
                         popup_menu_modal_key_index_selection(&kernel.resources, &stack, index)
@@ -20703,6 +20731,8 @@ fn popup_menu_modal_input_loop(
                     popup_x,
                     popup_y,
                 );
+                let active = stack.last().unwrap();
+                popup_menu_post_menu_select(kernel, thread_id, hwnd, active.menu, active.current);
             }
             (crate::ce::gwe::WM_KEYDOWN, VK_DOWN) => {
                 let active = stack.last_mut().unwrap();
@@ -20722,6 +20752,8 @@ fn popup_menu_modal_input_loop(
                     popup_x,
                     popup_y,
                 );
+                let active = stack.last().unwrap();
+                popup_menu_post_menu_select(kernel, thread_id, hwnd, active.menu, active.current);
             }
             (crate::ce::gwe::WM_KEYDOWN, VK_RIGHT) => {
                 if popup_menu_modal_open_submenu(kernel, &mut stack, framebuffer, popup_x, popup_y)
@@ -20748,6 +20780,7 @@ fn popup_menu_modal_input_loop(
                 {
                     continue;
                 }
+                popup_menu_post_menu_select(kernel, thread_id, hwnd, menu, None);
                 return Some(PopupMenuModalInput::Cancelled);
             }
             _ => unreachable!(),
@@ -20930,6 +20963,50 @@ fn popup_menu_set_current_index(
             render_popup_menu_framebuffer(*framebuffer, &kernel.resources, menu, popup_x, popup_y);
         }
     }
+}
+
+/// Send WM_MENUSELECT to the popup owner when the highlighted item changes.
+/// CE GWES sends this on every keyboard/mouse selection change during modal menu tracking.
+/// - `item_index` = Some(i) → item i is now highlighted
+/// - `item_index` = None  → menu dismissed; sends HIWORD=0xFFFF, lparam=0 (CE close shape)
+fn popup_menu_post_menu_select(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    owner_hwnd: u32,
+    menu: u32,
+    item_index: Option<usize>,
+) {
+    if owner_hwnd == 0 {
+        return;
+    }
+    let (wparam, lparam) = match item_index.and_then(|i| kernel.resources.menu(menu)?.items.get(i)) {
+        Some(item) => {
+            let mut flags = crate::ce::resource::MF_HILITE;
+            flags |= item.state
+                & (crate::ce::resource::MF_GRAYED
+                    | crate::ce::resource::MF_DISABLED
+                    | crate::ce::resource::MF_CHECKED);
+            let is_popup = item.submenu != 0;
+            let is_sep = item.id == u32::MAX;
+            if is_popup {
+                flags |= crate::ce::resource::MF_POPUP;
+            }
+            if is_sep {
+                flags |= crate::ce::resource::MF_SEPARATOR;
+            }
+            let id_or_submenu = if is_popup { item.submenu } else { item.id };
+            (((flags & 0xffff) << 16) | (id_or_submenu & 0xffff), menu)
+        }
+        // No item found (None index or out-of-bounds): menu dismissed.
+        None => (0xFFFF_0000, 0),
+    };
+    let _ = kernel.post_message_w_for_thread(
+        thread_id,
+        owner_hwnd,
+        crate::ce::gwe::WM_MENUSELECT,
+        wparam,
+        lparam,
+    );
 }
 
 fn popup_menu_lparam_point(lparam: u32) -> Point {
