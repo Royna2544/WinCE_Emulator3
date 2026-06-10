@@ -98,6 +98,8 @@ pub struct UnicornMips {
     #[cfg(feature = "unicorn")]
     pending_com_notification_returns: Vec<PendingComNotificationReturn>,
     #[cfg(feature = "unicorn")]
+    pending_dsa_enum_returns: Vec<PendingDsaEnumReturn>,
+    #[cfg(feature = "unicorn")]
     pending_dll_lifecycle_returns: Vec<PendingDllLifecycleReturn>,
     #[cfg(feature = "unicorn")]
     pending_create_window_returns: Vec<CreateWindowReturn>,
@@ -160,6 +162,8 @@ struct UnicornRunStateHandles<'a> {
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingDpaEnumReturn>>>,
     pending_com_notification_returns:
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingComNotificationReturn>>>,
+    pending_dsa_enum_returns:
+        &'a std::rc::Rc<std::cell::RefCell<Vec<PendingDsaEnumReturn>>>,
     pending_dll_lifecycle_returns:
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingDllLifecycleReturn>>>,
     create_window_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<CreateWindowReturn>>>,
@@ -322,6 +326,9 @@ const DPA_ENUM_RETURN_STUB_ADDR: u32 =
 #[cfg(feature = "unicorn")]
 const COM_NOTIFICATION_RETURN_STUB_ADDR: u32 =
     DPA_ENUM_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
+#[cfg(feature = "unicorn")]
+const DSA_ENUM_RETURN_STUB_ADDR: u32 =
+    COM_NOTIFICATION_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
 #[cfg(feature = "unicorn")]
 const CREATESTRUCTW_SIZE: u32 = 48;
 #[cfg(feature = "unicorn")]
@@ -505,6 +512,20 @@ struct PendingComNotificationReturn {
     caller_regs: MipsGuestContext,
     /// Guest heap pointer to free after the COM method returns (used for OnLinkSelected link string).
     heap_ptr_to_free: Option<u32>,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingDsaEnumReturn {
+    return_pc: u32,
+    return_sp: u32,
+    caller_regs: MipsGuestContext,
+    hdsa: u32,
+    callback: u32,
+    pdata: u32,
+    /// Pre-computed item addresses: hdsa.pData + i * cbItem for each remaining item.
+    remaining: Vec<u32>,
+    is_destroy: bool,
 }
 
 #[cfg(feature = "unicorn")]
@@ -797,6 +818,8 @@ impl UnicornMips {
             #[cfg(feature = "unicorn")]
             pending_com_notification_returns: Vec::new(),
             #[cfg(feature = "unicorn")]
+            pending_dsa_enum_returns: Vec::new(),
+            #[cfg(feature = "unicorn")]
             pending_dll_lifecycle_returns: Vec::new(),
             #[cfg(feature = "unicorn")]
             pending_create_window_returns: Vec::new(),
@@ -989,6 +1012,11 @@ impl UnicornMips {
             .collect();
         self.pending_com_notification_returns = state
             .pending_com_notification_returns
+            .borrow_mut()
+            .drain(..)
+            .collect();
+        self.pending_dsa_enum_returns = state
+            .pending_dsa_enum_returns
             .borrow_mut()
             .drain(..)
             .collect();
@@ -1294,6 +1322,8 @@ impl UnicornMips {
                 pending_com_notification_returns: std::mem::take(
                     &mut self.pending_com_notification_returns,
                 ),
+                #[cfg(feature = "unicorn")]
+                pending_dsa_enum_returns: std::mem::take(&mut self.pending_dsa_enum_returns),
                 #[cfg(feature = "unicorn")]
                 pending_dll_lifecycle_returns: std::mem::take(
                     &mut self.pending_dll_lifecycle_returns,
@@ -2302,6 +2332,9 @@ impl UnicornMips {
             &mut self.pending_com_notification_returns,
         )));
         let pending_com_notification_returns_hook = Rc::clone(&pending_com_notification_returns);
+        let pending_dsa_enum_returns =
+            Rc::new(RefCell::new(std::mem::take(&mut self.pending_dsa_enum_returns)));
+        let pending_dsa_enum_returns_hook = Rc::clone(&pending_dsa_enum_returns);
         let pending_dll_lifecycle_returns = Rc::new(RefCell::new(std::mem::take(
             &mut self.pending_dll_lifecycle_returns,
         )));
@@ -2347,6 +2380,7 @@ impl UnicornMips {
             pending_enum_display_monitors_returns: &pending_enum_display_monitors_returns,
             pending_dpa_enum_returns: &pending_dpa_enum_returns,
             pending_com_notification_returns: &pending_com_notification_returns,
+            pending_dsa_enum_returns: &pending_dsa_enum_returns,
             pending_dll_lifecycle_returns: &pending_dll_lifecycle_returns,
             create_window_returns: &create_window_returns,
             pending_wndproc_returns: &pending_wndproc_returns,
@@ -2941,6 +2975,14 @@ impl UnicornMips {
                         unsafe { &mut *kernel_ptr },
                         uc,
                         &pending_com_notification_returns_hook,
+                    );
+                    return;
+                }
+                if address == DSA_ENUM_RETURN_STUB_ADDR {
+                    handle_dsa_enum_return_stub(
+                        unsafe { &mut *kernel_ptr },
+                        uc,
+                        &pending_dsa_enum_returns_hook,
                     );
                     return;
                 }
@@ -3651,6 +3693,18 @@ impl UnicornMips {
                 }) {
                     return;
                 }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_enter_dsa_enum_callout(
+                        unsafe { &*kernel_ptr },
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        &pending_dsa_enum_returns_hook,
+                    )
+                }) {
+                    return;
+                }
                 if let Some(result) = trap.as_ref().and_then(|trap| {
                     try_handle_runtime_loader_import(
                         memory.uc,
@@ -4300,6 +4354,7 @@ impl super::cpu::CpuBackend for UnicornMips {
             pending_enum_display_monitors_returns: Vec::new(),
             pending_dpa_enum_returns: Vec::new(),
             pending_com_notification_returns: Vec::new(),
+            pending_dsa_enum_returns: Vec::new(),
             pending_dll_lifecycle_returns: Vec::new(),
             pending_create_window_returns: Vec::new(),
             pending_wndproc_returns: Vec::new(),
@@ -22440,6 +22495,196 @@ fn handle_dpa_enum_return_stub<D>(
         uc.reg_write(RegisterMIPS::A0, u64::from(next_item)),
         uc.reg_write(RegisterMIPS::A1, u64::from(pdata)),
         uc.reg_write(RegisterMIPS::RA, u64::from(DPA_ENUM_RETURN_STUB_ADDR)),
+        uc.reg_write(RegisterMIPS::T9, u64::from(call_callback)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(call_callback)),
+    ]
+    .into_iter()
+    .all(|r| r.is_ok());
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_dsa_enum_callout<D>(
+    kernel: &CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingDsaEnumReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    let is_destroy = match ordinal {
+        Some(o) if o == crate::ce::coredll_ordinals::ORD_DSA_DESTROY_CALLBACK
+            && module_kind == crate::emulator::imports::ImportModuleKind::Coredll =>
+        {
+            true
+        }
+        Some(o) if o == crate::ce::coredll_ordinals::ORD_DSA_ENUM_CALLBACK
+            && module_kind == crate::emulator::imports::ImportModuleKind::Coredll =>
+        {
+            false
+        }
+        _ => return false,
+    };
+
+    let hdsa = args.first().copied().unwrap_or(0);
+    let callback = args.get(1).copied().unwrap_or(0);
+    let pdata = args.get(2).copied().unwrap_or(0);
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+
+    if hdsa == 0 {
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        return true;
+    }
+
+    if !is_guest_wndproc(callback) {
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        return true;
+    }
+
+    // Read DSA fields: cpItems (+0), pData (+4), cbItem (+20).
+    let mut cp_bytes = [0u8; 4];
+    let mut pdata_bytes = [0u8; 4];
+    let mut cb_bytes = [0u8; 4];
+    if uc.mem_read(u64::from(hdsa), &mut cp_bytes).is_err()
+        || uc.mem_read(u64::from(hdsa + 4), &mut pdata_bytes).is_err()
+        || uc.mem_read(u64::from(hdsa + 20), &mut cb_bytes).is_err()
+    {
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        return true;
+    }
+    let cp_items = i32::from_le_bytes(cp_bytes) as usize;
+    let dsa_pdata = u32::from_le_bytes(pdata_bytes);
+    let cb_item = u32::from_le_bytes(cb_bytes);
+
+    if cp_items == 0 || dsa_pdata == 0 || cb_item == 0 {
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        return true;
+    }
+
+    // Pre-compute item addresses: dsa_pdata + i * cb_item.
+    let item_addrs: Vec<u32> = (0..cp_items as u32)
+        .map(|i| dsa_pdata.wrapping_add(i.wrapping_mul(cb_item)))
+        .collect();
+
+    if item_addrs.is_empty() {
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        return true;
+    }
+
+    let caller_regs = capture_mips_gprs(uc);
+    let return_sp = read_mips_reg(uc, RegisterMIPS::SP);
+    let mut remaining = item_addrs;
+    let first_item = remaining.remove(0);
+    let call_sp = return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
+    let call_callback = normalize_ce_process_slot_callback(uc, callback);
+
+    tracing::debug!(
+        target: "ce.dsa",
+        hdsa = format_args!("0x{hdsa:08x}"),
+        callback = format_args!("0x{callback:08x}"),
+        pdata = format_args!("0x{pdata:08x}"),
+        is_destroy,
+        total = remaining.len() + 1,
+        "DSA_EnumCallback/DSA_DestroyCallback guest callback callout"
+    );
+
+    let ok = [
+        uc.reg_write(RegisterMIPS::SP, u64::from(call_sp)),
+        uc.reg_write(RegisterMIPS::A0, u64::from(first_item)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(pdata)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(DSA_ENUM_RETURN_STUB_ADDR)),
+        uc.reg_write(RegisterMIPS::T9, u64::from(call_callback)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(call_callback)),
+    ]
+    .into_iter()
+    .all(|r| r.is_ok());
+
+    if !ok {
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        return true;
+    }
+
+    pending_returns.borrow_mut().push(PendingDsaEnumReturn {
+        return_pc,
+        return_sp,
+        caller_regs,
+        hdsa,
+        callback,
+        pdata,
+        remaining,
+        is_destroy,
+    });
+    true
+}
+
+#[cfg(feature = "unicorn")]
+fn handle_dsa_enum_return_stub<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingDsaEnumReturn>>>,
+) {
+    use unicorn_engine::RegisterMIPS;
+
+    let callback_result = read_mips_reg(uc, RegisterMIPS::V0);
+    let mut pending = pending_returns.borrow_mut();
+    let Some(state) = pending.last_mut() else {
+        return;
+    };
+
+    // DSA_EnumCallback stops if callback returns FALSE; DSA_DestroyCallback ignores return value.
+    let stop = !state.is_destroy && callback_result == 0;
+
+    if stop || state.remaining.is_empty() {
+        let state = pending.pop().unwrap();
+        if state.is_destroy && !stop {
+            // All items iterated; free pData buffer then the DSA struct itself.
+            let mut hheap_bytes = [0u8; 4];
+            let mut pdata_bytes = [0u8; 4];
+            let hheap = if uc
+                .mem_read(u64::from(state.hdsa + 8), &mut hheap_bytes)
+                .is_ok()
+            {
+                u32::from_le_bytes(hheap_bytes)
+            } else {
+                0
+            };
+            let dsa_pdata = if uc
+                .mem_read(u64::from(state.hdsa + 4), &mut pdata_bytes)
+                .is_ok()
+            {
+                u32::from_le_bytes(pdata_bytes)
+            } else {
+                0
+            };
+            if hheap != 0 {
+                if dsa_pdata != 0 {
+                    kernel.memory.heap_free(hheap, 0, dsa_pdata);
+                }
+                kernel.memory.heap_free(hheap, 0, state.hdsa);
+            }
+        }
+        restore_mips_gprs(uc, &state.caller_regs);
+        let _ = uc.reg_write(RegisterMIPS::SP, u64::from(state.return_sp));
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(state.return_pc));
+        let _ = uc.reg_write(RegisterMIPS::RA, u64::from(state.return_pc));
+        return;
+    }
+
+    // More items: invoke callback for the next item address.
+    let next_item = state.remaining.remove(0);
+    let pdata = state.pdata;
+    let callback = state.callback;
+    let return_sp = state.return_sp;
+    drop(pending);
+
+    let call_sp = return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
+    let call_callback = normalize_ce_process_slot_callback(uc, callback);
+    let _ = [
+        uc.reg_write(RegisterMIPS::SP, u64::from(call_sp)),
+        uc.reg_write(RegisterMIPS::A0, u64::from(next_item)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(pdata)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(DSA_ENUM_RETURN_STUB_ADDR)),
         uc.reg_write(RegisterMIPS::T9, u64::from(call_callback)),
         uc.reg_write(RegisterMIPS::PC, u64::from(call_callback)),
     ]

@@ -141,6 +141,20 @@ and isolated guest networking.
   terminated zero result and flushes it to `lpdwResult`, and sender termination
   removes undelivered sends or marks active sends with `SMF_SENDER_TERMINATED`
   before receiver unwind.
+- Implement DPA/DSA container Unicorn callback dispatch: `DPA_EnumCallback` and
+  `DPA_DestroyCallback` iterate DPA pointer arrays calling each guest callback
+  with the stored pointer value and pData; `DSA_EnumCallback` and
+  `DSA_DestroyCallback` iterate DSA struct arrays calling each guest callback
+  with a pointer into the DSA's `pData` buffer at `i * cbItem` and pData.
+  Both Enum variants stop on FALSE return; both Destroy variants ignore the
+  return value and then free the array/struct memory. Each pair shares a
+  dedicated return stub address so nested calls stack cleanly. DPA_Clone,
+  DSA_Clone, and DSA_SetRange are implemented in the raw dispatch path.
+  `IShellNotificationCallback` COM vtable dispatch now fires for stored
+  notification records via `try_dispatch_com_notification_callout` reading the
+  vtable from the registered COM pointer and dispatching OnShow/OnCommandSelected/
+  OnLinkSelected/OnDismiss with correct MIPS register layout; OnLinkSelected
+  link strings are heap-allocated in guest memory and freed after the method returns.
 - Replace direct-only WINSOCK with a CE-facing isolated NAT model: gateway
   `10.0.0.1`, guest IP `10.0.0.2`, host sockets as the transport boundary, and
   blocking waits owned by the scheduler. Socket-handle waiters can now be

@@ -7465,7 +7465,14 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_DSA_SET_RANGE => Some(CoredllValue::Bool(dsa_set_range_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_DSA_SORT | ORD_DSA_SEARCH | ORD_DSA_DESTROY_CALLBACK | ORD_DSA_ENUM_CALLBACK => {
+        ORD_DSA_ENUM_CALLBACK | ORD_DSA_DESTROY_CALLBACK => {
+            // Handled by Unicorn try_enter_dsa_enum_callout; stub as fail for non-Unicorn path.
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+            Some(CoredllValue::U32(0))
+        }
+        ORD_DSA_SORT | ORD_DSA_SEARCH => {
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
@@ -37008,24 +37015,28 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "GetWindowAutoGesture",
     "SetDialogAutoScrollBar",
     "SetWindowPosOnRotate",
-    // DPA container (core ops plus clone)
+    // DPA container (core ops plus clone and Unicorn enum/destroy callbacks)
     "DPA_Create",
     "DPA_CreateEx",
     "DPA_Clone",
     "DPA_DeleteAllPtrs",
     "DPA_DeletePtr",
     "DPA_Destroy",
+    "DPA_DestroyCallback",
+    "DPA_EnumCallback",
     "DPA_GetPtr",
     "DPA_GetPtrIndex",
     "DPA_Grow",
     "DPA_InsertPtr",
     "DPA_SetPtr",
-    // DSA container (core ops plus clone and set-range)
+    // DSA container (core ops plus clone, set-range, and Unicorn enum/destroy callbacks)
     "DSA_Create",
     "DSA_Clone",
     "DSA_DeleteAllItems",
     "DSA_DeleteItem",
     "DSA_Destroy",
+    "DSA_DestroyCallback",
+    "DSA_EnumCallback",
     "DSA_GetItem",
     "DSA_GetItemPtr",
     "DSA_Grow",
