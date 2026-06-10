@@ -4740,28 +4740,32 @@ impl CeKernel {
     fn signal_file_change_notifications_for_removed_mount(&mut self, volume_root: &str) {
         let volume_root = normalize_shell_change_path(volume_root);
         let volume_prefix = format!("{volume_root}\\");
+        let prefix_len = volume_prefix.len();
         let mut handles = Vec::new();
         for (handle, object) in self.handles.iter_mut() {
             let KernelObject::FileChangeNotification(notification) = object else {
                 continue;
             };
             let watch = normalize_shell_change_path(&notification.watch_path);
-            // Skip handles already covered by the SHCNE_DRIVEREMOVED signal call
-            // (those that watch the volume root itself with the dir-change filter).
-            if watch.eq_ignore_ascii_case(&volume_root) {
-                continue;
-            }
-            // Signal handles watching subpaths of the removed volume.
-            let prefix_len = volume_prefix.len();
-            let is_under_volume = watch
+            // Signal handles whose watch path is the volume root or any subpath of it.
+            // append_file_change_records deduplicates consecutive same records, so handles
+            // already signaled by the SHCNE_DRIVEREMOVED call won't accumulate duplicates.
+            let (matches, relative_path) = if watch.eq_ignore_ascii_case(&volume_root) {
+                (true, String::new())
+            } else if watch
                 .get(..prefix_len)
-                .is_some_and(|head| head.eq_ignore_ascii_case(&volume_prefix));
-            if !is_under_volume {
+                .is_some_and(|head| head.eq_ignore_ascii_case(&volume_prefix))
+            {
+                (true, watch[prefix_len..].to_owned())
+            } else {
+                (false, String::new())
+            };
+            if !matches {
                 continue;
             }
             let record = FileChangeRecord {
                 action: FILE_ACTION_REMOVED,
-                path: watch[volume_prefix.len()..].to_owned(),
+                path: relative_path,
             };
             append_file_change_records(&mut notification.pending, std::iter::once(record));
             notification.signaled = !notification.pending.is_empty();
