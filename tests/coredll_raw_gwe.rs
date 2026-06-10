@@ -23,7 +23,8 @@ use wince_emulation_v3::{
             ORD_DRAW_FRAME_CONTROL,
             ORD_DRAW_ICON_EX, ORD_DRAW_MENU_BAR, ORD_DRAW_TEXT_W,
             ORD_ELLIPSE, ORD_ENABLE_CARET_SYSTEM_WIDE,
-            ORD_ENABLE_MENU_ITEM, ORD_ENABLE_WINDOW, ORD_END_DIALOG, ORD_END_PAINT, ORD_EQUAL_RECT,
+            ORD_ENABLE_MENU_ITEM, ORD_ENABLE_WINDOW, ORD_END_DIALOG, ORD_END_PAINT, ORD_ENUM_WINDOWS,
+            ORD_EQUAL_RECT,
             ORD_EXT_TEXT_OUT_W, ORD_FILL_RECT, ORD_FIND_RESOURCE, ORD_FIND_RESOURCE_W,
             ORD_FIND_WINDOW_W,
             ORD_GRADIENT_FILL,
@@ -22923,6 +22924,43 @@ fn coredll_raw_translate_message_syskeydown_uses_active_layout() -> Result<()> {
         .peek_message_filtered(thread_id, Some(hwnd), WM_SYSCHAR, WM_SYSCHAR, PeekFlags::REMOVE)
         .expect("AZERTY Alt+VK_Z should post WM_SYSCHAR");
     assert_eq!(syschar.wparam, 0x77, "AZERTY Alt+VK_Z → WM_SYSCHAR('w', 0x77)");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_enum_windows_raw_path_returns_true() -> Result<()> {
+    // Raw (non-Unicorn) EnumWindows: cannot invoke guest callbacks without Unicorn,
+    // so the raw path performs an empty enumeration and always returns TRUE.
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 1;
+
+    // With no windows: returns TRUE.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_ENUM_WINDOWS, [0u32, 0u32],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ), "EnumWindows with no windows returns TRUE");
+
+    // Create a visible top-level window using the kernel helper.
+    let hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id, "EnumTest", "Test Window", None, 0, WS_VISIBLE, 0,
+        Rect::from_origin_size(0, 0, 100, 100),
+    );
+    assert_ne!(hwnd, 0);
+
+    // With a window present, raw path still returns TRUE (callback is not invoked without Unicorn).
+    // A fake guest pointer 0xDEAD_0001 represents what a real Unicorn-path callback would look like.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_ENUM_WINDOWS, [0xDEAD_0001u32, 0xABCDu32],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ), "EnumWindows in raw path returns TRUE without invoking callback");
 
     Ok(())
 }

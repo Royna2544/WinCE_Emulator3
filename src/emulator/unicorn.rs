@@ -90,6 +90,8 @@ pub struct UnicornMips {
     #[cfg(feature = "unicorn")]
     pending_qsort_returns: Vec<PendingQsortReturn>,
     #[cfg(feature = "unicorn")]
+    pending_enum_windows_returns: Vec<PendingEnumWindowsReturn>,
+    #[cfg(feature = "unicorn")]
     pending_dll_lifecycle_returns: Vec<PendingDllLifecycleReturn>,
     #[cfg(feature = "unicorn")]
     pending_create_window_returns: Vec<CreateWindowReturn>,
@@ -144,6 +146,8 @@ struct UnicornRunStateHandles<'a> {
     pending_guest_thread_returns:
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
     pending_qsort_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<PendingQsortReturn>>>,
+    pending_enum_windows_returns:
+        &'a std::rc::Rc<std::cell::RefCell<Vec<PendingEnumWindowsReturn>>>,
     pending_dll_lifecycle_returns:
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingDllLifecycleReturn>>>,
     create_window_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<CreateWindowReturn>>>,
@@ -295,6 +299,9 @@ const QSORT_RETURN_STUB_ADDR: u32 =
 const DLL_LIFECYCLE_RETURN_STUB_ADDR: u32 =
     QSORT_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
 #[cfg(feature = "unicorn")]
+const ENUM_WINDOWS_RETURN_STUB_ADDR: u32 =
+    DLL_LIFECYCLE_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
+#[cfg(feature = "unicorn")]
 const CREATESTRUCTW_SIZE: u32 = 48;
 #[cfg(feature = "unicorn")]
 const WM_INITDIALOG: u32 = 0x0110;
@@ -435,6 +442,17 @@ struct PendingQsortPartition {
     i: u32,
     j: u32,
     pivot_addr: u32,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingEnumWindowsReturn {
+    return_pc: u32,
+    return_sp: u32,
+    caller_regs: MipsGuestContext,
+    callback: u32,
+    lparam: u32,
+    remaining: Vec<u32>,
 }
 
 #[cfg(feature = "unicorn")]
@@ -719,6 +737,8 @@ impl UnicornMips {
             #[cfg(feature = "unicorn")]
             pending_qsort_returns: Vec::new(),
             #[cfg(feature = "unicorn")]
+            pending_enum_windows_returns: Vec::new(),
+            #[cfg(feature = "unicorn")]
             pending_dll_lifecycle_returns: Vec::new(),
             #[cfg(feature = "unicorn")]
             pending_create_window_returns: Vec::new(),
@@ -894,6 +914,11 @@ impl UnicornMips {
             .drain(..)
             .collect();
         self.pending_qsort_returns = state.pending_qsort_returns.borrow_mut().drain(..).collect();
+        self.pending_enum_windows_returns = state
+            .pending_enum_windows_returns
+            .borrow_mut()
+            .drain(..)
+            .collect();
         self.pending_dll_lifecycle_returns = state
             .pending_dll_lifecycle_returns
             .borrow_mut()
@@ -1182,6 +1207,10 @@ impl UnicornMips {
                 ),
                 #[cfg(feature = "unicorn")]
                 pending_qsort_returns: std::mem::take(&mut self.pending_qsort_returns),
+                #[cfg(feature = "unicorn")]
+                pending_enum_windows_returns: std::mem::take(
+                    &mut self.pending_enum_windows_returns,
+                ),
                 #[cfg(feature = "unicorn")]
                 pending_dll_lifecycle_returns: std::mem::take(
                     &mut self.pending_dll_lifecycle_returns,
@@ -2174,6 +2203,10 @@ impl UnicornMips {
             &mut self.pending_qsort_returns,
         )));
         let pending_qsort_returns_hook = Rc::clone(&pending_qsort_returns);
+        let pending_enum_windows_returns = Rc::new(RefCell::new(std::mem::take(
+            &mut self.pending_enum_windows_returns,
+        )));
+        let pending_enum_windows_returns_hook = Rc::clone(&pending_enum_windows_returns);
         let pending_dll_lifecycle_returns = Rc::new(RefCell::new(std::mem::take(
             &mut self.pending_dll_lifecycle_returns,
         )));
@@ -2215,6 +2248,7 @@ impl UnicornMips {
             current_thread_id: &current_thread_id,
             pending_guest_thread_returns: &pending_guest_thread_returns,
             pending_qsort_returns: &pending_qsort_returns,
+            pending_enum_windows_returns: &pending_enum_windows_returns,
             pending_dll_lifecycle_returns: &pending_dll_lifecycle_returns,
             create_window_returns: &create_window_returns,
             pending_wndproc_returns: &pending_wndproc_returns,
@@ -2779,6 +2813,12 @@ impl UnicornMips {
                 }
                 if address == QSORT_RETURN_STUB_ADDR {
                     if !handle_qsort_return_stub(uc, &pending_qsort_returns_hook) {
+                        let _ = uc.emu_stop();
+                    }
+                    return;
+                }
+                if address == ENUM_WINDOWS_RETURN_STUB_ADDR {
+                    if !handle_enum_windows_return_stub(uc, &pending_enum_windows_returns_hook) {
                         let _ = uc.emu_stop();
                     }
                     return;
@@ -3448,6 +3488,18 @@ impl UnicornMips {
                         trap.ordinal,
                         &args,
                         &pending_qsort_returns_hook,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_enter_enum_windows_callout(
+                        unsafe { &*kernel_ptr },
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        &pending_enum_windows_returns_hook,
                     )
                 }) {
                     return;
@@ -21610,6 +21662,154 @@ fn handle_qsort_return_stub<D>(
         }
         QsortStep::Failed => false,
     }
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_enum_windows_callout<D>(
+    kernel: &CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingEnumWindowsReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_ENUM_WINDOWS)
+    {
+        return false;
+    }
+    let callback = args.first().copied().unwrap_or(0);
+    let lparam = args.get(1).copied().unwrap_or(0);
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+
+    if !is_guest_wndproc(callback) {
+        let _ = uc.reg_write(RegisterMIPS::V0, 1);
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        return true;
+    }
+
+    let z_order = kernel.gwe.z_order_snapshot();
+    let hwnds: Vec<u32> = z_order
+        .into_iter()
+        .filter(|hwnd| *hwnd != crate::ce::gwe::DESKTOP_HWND)
+        .filter(|hwnd| {
+            kernel
+                .gwe
+                .window(*hwnd)
+                .is_some_and(|w| !w.destroyed && w.parent.is_none())
+        })
+        .collect();
+
+    if hwnds.is_empty() {
+        let _ = uc.reg_write(RegisterMIPS::V0, 1);
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        return true;
+    }
+
+    let caller_regs = capture_mips_gprs(uc);
+    let return_sp = read_mips_reg(uc, RegisterMIPS::SP);
+    let mut remaining = hwnds;
+    let first_hwnd = remaining.remove(0);
+    let call_sp = return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
+    let call_callback = normalize_ce_process_slot_callback(uc, callback);
+
+    tracing::debug!(
+        target: "ce.gwe",
+        callback = format_args!("0x{callback:08x}"),
+        lparam = format_args!("0x{lparam:08x}"),
+        first_hwnd = format_args!("0x{first_hwnd:08x}"),
+        total = remaining.len() + 1,
+        "EnumWindows guest callback callout"
+    );
+
+    let ok = [
+        uc.reg_write(RegisterMIPS::SP, u64::from(call_sp)),
+        uc.reg_write(RegisterMIPS::A0, u64::from(first_hwnd)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(lparam)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(ENUM_WINDOWS_RETURN_STUB_ADDR)),
+        uc.reg_write(RegisterMIPS::T9, u64::from(call_callback)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(call_callback)),
+    ]
+    .into_iter()
+    .all(|r| r.is_ok());
+
+    if !ok {
+        return false;
+    }
+
+    pending_returns.borrow_mut().push(PendingEnumWindowsReturn {
+        return_pc,
+        return_sp,
+        caller_regs,
+        callback,
+        lparam,
+        remaining,
+    });
+    true
+}
+
+#[cfg(feature = "unicorn")]
+fn handle_enum_windows_return_stub<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingEnumWindowsReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    let callback_result = read_mips_reg(uc, RegisterMIPS::V0);
+    let mut pending = pending_returns.borrow_mut();
+    let Some(state) = pending.last_mut() else {
+        return false;
+    };
+
+    if callback_result == 0 {
+        // Callback returned FALSE: EnumWindows stops and returns FALSE.
+        let state = pending.pop().unwrap();
+        restore_mips_gprs(uc, &state.caller_regs);
+        return [
+            uc.reg_write(RegisterMIPS::SP, u64::from(state.return_sp)),
+            uc.reg_write(RegisterMIPS::V0, 0),
+            uc.reg_write(RegisterMIPS::PC, u64::from(state.return_pc)),
+            uc.reg_write(RegisterMIPS::RA, u64::from(state.return_pc)),
+        ]
+        .into_iter()
+        .all(|r| r.is_ok());
+    }
+
+    if state.remaining.is_empty() {
+        // All windows enumerated; EnumWindows returns TRUE.
+        let state = pending.pop().unwrap();
+        restore_mips_gprs(uc, &state.caller_regs);
+        return [
+            uc.reg_write(RegisterMIPS::SP, u64::from(state.return_sp)),
+            uc.reg_write(RegisterMIPS::V0, 1),
+            uc.reg_write(RegisterMIPS::PC, u64::from(state.return_pc)),
+            uc.reg_write(RegisterMIPS::RA, u64::from(state.return_pc)),
+        ]
+        .into_iter()
+        .all(|r| r.is_ok());
+    }
+
+    // More windows: invoke callback for the next hwnd.
+    let next_hwnd = state.remaining.remove(0);
+    let lparam = state.lparam;
+    let callback = state.callback;
+    let return_sp = state.return_sp;
+    drop(pending);
+
+    let call_sp = return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
+    let call_callback = normalize_ce_process_slot_callback(uc, callback);
+    [
+        uc.reg_write(RegisterMIPS::SP, u64::from(call_sp)),
+        uc.reg_write(RegisterMIPS::A0, u64::from(next_hwnd)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(lparam)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(ENUM_WINDOWS_RETURN_STUB_ADDR)),
+        uc.reg_write(RegisterMIPS::T9, u64::from(call_callback)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(call_callback)),
+    ]
+    .into_iter()
+    .all(|r| r.is_ok())
 }
 
 #[cfg(feature = "unicorn")]
