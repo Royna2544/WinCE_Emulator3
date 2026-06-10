@@ -13748,7 +13748,7 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef; 27] = &[
     },
 ];
 
-pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 9] = &[
+pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 20] = &[
     CoredllOrdinalDef {
         name: "GetSystemTimeAsFileTime",
         ordinal: ORD_GET_SYSTEM_TIME_AS_FILE_TIME,
@@ -13784,6 +13784,50 @@ pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 9] = &[
     CoredllOrdinalDef {
         name: "CeGetVolumeInfoW",
         ordinal: ORD_CE_GET_VOLUME_INFO_W,
+    },
+    CoredllOrdinalDef {
+        name: "RegistryGetDword",
+        ordinal: ORD_REGISTRY_GET_DWORD,
+    },
+    CoredllOrdinalDef {
+        name: "RegistryGetString",
+        ordinal: ORD_REGISTRY_GET_STRING,
+    },
+    CoredllOrdinalDef {
+        name: "RegistrySetDword",
+        ordinal: ORD_REGISTRY_SET_DWORD,
+    },
+    CoredllOrdinalDef {
+        name: "RegistrySetString",
+        ordinal: ORD_REGISTRY_SET_STRING,
+    },
+    CoredllOrdinalDef {
+        name: "RegistryDeleteValue",
+        ordinal: ORD_REGISTRY_DELETE_VALUE,
+    },
+    CoredllOrdinalDef {
+        name: "RegistryTestExchangeDword",
+        ordinal: ORD_REGISTRY_TEST_EXCHANGE_DWORD,
+    },
+    CoredllOrdinalDef {
+        name: "RegistryNotifyWindow",
+        ordinal: ORD_REGISTRY_NOTIFY_WINDOW,
+    },
+    CoredllOrdinalDef {
+        name: "RegistryNotifyMsgQueue",
+        ordinal: ORD_REGISTRY_NOTIFY_MSG_QUEUE,
+    },
+    CoredllOrdinalDef {
+        name: "WaitForAPIReady",
+        ordinal: ORD_WAIT_FOR_APIREADY,
+    },
+    CoredllOrdinalDef {
+        name: "EnableGestures",
+        ordinal: ORD_ENABLE_GESTURES,
+    },
+    CoredllOrdinalDef {
+        name: "DisableGestures",
+        ordinal: ORD_DISABLE_GESTURES,
     },
 ];
 

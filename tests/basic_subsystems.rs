@@ -19,6 +19,9 @@ use wince_emulation_v3::{
             SM_CXEDGE, SM_CYEDGE, SM_MOUSEPRESENT, SM_CMONITORS, SM_SAMEDISPLAYFORMAT,
             SM_DEBUG, SM_CXFULLSCREEN, SM_CYFULLSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
             SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+            SM_SWAPBUTTON, SM_CXFRAME, SM_CYFRAME, SM_CXMINTRACK, SM_CYMINTRACK,
+            SM_MENUDROPALIGNMENT, SM_PENWINDOWS, SM_DBCSENABLED, SM_CMOUSEBUTTONS,
+            SM_CYSMCAPTION, SM_CXSMSIZE, SM_CYSMSIZE, SM_CXMENUSIZE, SM_CYMENUSIZE,
         },
         kernel::{
             CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
@@ -2805,6 +2808,27 @@ fn gwe_system_metric_returns_ce_standard_values() {
     assert_eq!(gwe.system_metric(SM_CMONITORS), 1);
     assert_eq!(gwe.system_metric(SM_SAMEDISPLAYFORMAT), 1);
     assert_eq!(gwe.system_metric(SM_DEBUG), 0);
+    // CE size-frame metrics alias to dialog-frame (3px — no thick vs. dialog distinction in CE).
+    assert_eq!(gwe.system_metric(SM_CXFRAME), 3);
+    assert_eq!(gwe.system_metric(SM_CYFRAME), 3);
+    // Minimum tracking size.
+    assert_eq!(gwe.system_metric(SM_CXMINTRACK), 20);
+    assert_eq!(gwe.system_metric(SM_CYMINTRACK), 20);
+    // CE touch-device characteristics.
+    assert_eq!(gwe.system_metric(SM_SWAPBUTTON), 0);
+    assert_eq!(gwe.system_metric(SM_CMOUSEBUTTONS), 1);
+    assert_eq!(gwe.system_metric(SM_PENWINDOWS), 0);
+    // CE Korean locale: double-byte enabled.
+    assert_eq!(gwe.system_metric(SM_DBCSENABLED), 1);
+    // Menu alignment (0 = left).
+    assert_eq!(gwe.system_metric(SM_MENUDROPALIGNMENT), 0);
+    // Small caption same height as regular caption on CE.
+    assert_eq!(gwe.system_metric(SM_CYSMCAPTION), 24);
+    // Small button and menu button sizes.
+    assert_eq!(gwe.system_metric(SM_CXSMSIZE), 13);
+    assert_eq!(gwe.system_metric(SM_CYSMSIZE), 13);
+    assert_eq!(gwe.system_metric(SM_CXMENUSIZE), 24);
+    assert_eq!(gwe.system_metric(SM_CYMENUSIZE), 24);
     // Unknown index falls through to 0.
     assert_eq!(gwe.system_metric(9999), 0);
 }

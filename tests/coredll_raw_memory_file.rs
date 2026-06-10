@@ -54,6 +54,8 @@ use wince_emulation_v3::{
             ORD_REG_DELETE_VALUE_W, ORD_REG_ENUM_KEY_EX_W, ORD_REG_ENUM_VALUE_W,
             ORD_REG_OPEN_KEY_EX_W, ORD_REG_QUERY_INFO_KEY_W, ORD_REG_QUERY_VALUE_EX_W,
             ORD_REG_SET_VALUE_EX_W,
+            ORD_REGISTRY_GET_DWORD, ORD_REGISTRY_GET_STRING, ORD_REGISTRY_SET_DWORD,
+            ORD_REGISTRY_SET_STRING, ORD_REGISTRY_DELETE_VALUE, ORD_REGISTRY_TEST_EXCHANGE_DWORD,
             ORD_REMOTE_LOCAL_ALLOC, ORD_REMOTE_LOCAL_FREE, ORD_REMOTE_LOCAL_SIZE,
             ORD_REMOVE_DIRECTORY_W, ORD_SECURITY_GEN_COOKIE, ORD_SECURITY_GEN_COOKIE2,
             ORD_SET_COMM_BREAK, ORD_SET_FILE_ATTRIBUTES_W, ORD_SET_FILE_POINTER, ORD_SET_FILE_TIME,
@@ -7044,6 +7046,145 @@ fn coredll_raw_flush_view_of_file_maybe_aliases_flush_view_of_file() -> Result<(
         kernel.threads.get_last_error(thread_id),
         ERROR_INVALID_PARAMETER
     );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_registry_convenience_apis_get_set_delete_and_exchange() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 22_u32;
+
+    let key_path_ptr = 0x3_0000_u32;
+    let value_name_ptr = 0x3_0100_u32;
+    let value_str_ptr = 0x3_0200_u32;
+    let out32_ptr = 0x3_0300_u32;
+    let out_str_ptr = 0x3_0400_u32;
+    let old_ptr = 0x3_0500_u32;
+
+    memory.write_wide_z(key_path_ptr, "Software\\CEConv");
+    memory.write_wide_z(value_name_ptr, "Count");
+    memory.write_word(out32_ptr, 0);
+
+    // RegistrySetDword creates the key and sets a DWORD value.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_REGISTRY_SET_DWORD,
+            [HKEY_LOCAL_MACHINE, key_path_ptr, value_name_ptr, 42],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
+    ));
+
+    // RegistryGetDword reads back the value written above.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_REGISTRY_GET_DWORD,
+            [HKEY_LOCAL_MACHINE, key_path_ptr, value_name_ptr, out32_ptr],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
+    ));
+    assert_eq!(memory.read_u32(out32_ptr)?, 42, "RegistryGetDword must return the stored value");
+
+    // RegistrySetString writes a string value.
+    let str_name_ptr = 0x3_0600_u32;
+    memory.write_wide_z(str_name_ptr, "Label");
+    memory.write_wide_z(value_str_ptr, "hello");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_REGISTRY_SET_STRING,
+            [HKEY_LOCAL_MACHINE, key_path_ptr, str_name_ptr, value_str_ptr],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
+    ));
+
+    // RegistryGetString reads back the string value (capacity = 32 chars).
+    memory.map_bytes(out_str_ptr, 64);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_REGISTRY_GET_STRING,
+            [HKEY_LOCAL_MACHINE, key_path_ptr, str_name_ptr, out_str_ptr, 32],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
+    ));
+    // Verify the UTF-16 string starts with 'h' (0x68 0x00).
+    let first_two = memory.read_bytes(out_str_ptr, 2);
+    assert_eq!(first_two, [b'h', 0], "RegistryGetString must return the stored string");
+
+    // RegistryDeleteValue removes the DWORD value; subsequent get must fail.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_REGISTRY_DELETE_VALUE,
+            [HKEY_LOCAL_MACHINE, key_path_ptr, value_name_ptr],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
+    ));
+    assert!(!matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_REGISTRY_GET_DWORD,
+            [HKEY_LOCAL_MACHINE, key_path_ptr, value_name_ptr, out32_ptr],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
+    ), "RegistryGetDword on deleted value must not return ERROR_SUCCESS");
+
+    // RegistryTestExchangeDword: set to 10, then test-and-exchange with matching value.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_REGISTRY_SET_DWORD,
+            [HKEY_LOCAL_MACHINE, key_path_ptr, value_name_ptr, 10],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
+    ));
+    memory.write_word(old_ptr, 0xFFFF_FFFF);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_REGISTRY_TEST_EXCHANGE_DWORD,
+            [HKEY_LOCAL_MACHINE, key_path_ptr, value_name_ptr, 10, 99, old_ptr],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
+    ));
+    // Old value written out must be 10.
+    assert_eq!(memory.read_u32(old_ptr)?, 10, "RegistryTestExchangeDword must write the old value");
+    // New value is 99 (exchange happened because old == test).
+    memory.write_word(out32_ptr, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_REGISTRY_GET_DWORD,
+            [HKEY_LOCAL_MACHINE, key_path_ptr, value_name_ptr, out32_ptr],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
+    ));
+    assert_eq!(memory.read_u32(out32_ptr)?, 99, "RegistryTestExchangeDword must write new value when test matches");
+
+    // Test-and-exchange with non-matching test value must leave value unchanged.
+    memory.write_word(old_ptr, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id,
+            ORD_REGISTRY_TEST_EXCHANGE_DWORD,
+            [HKEY_LOCAL_MACHINE, key_path_ptr, value_name_ptr, 0, 77, old_ptr],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
+    ));
+    assert_eq!(memory.read_u32(old_ptr)?, 99, "RegistryTestExchangeDword must report current value even when test fails");
+    memory.write_word(out32_ptr, 0);
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_REGISTRY_GET_DWORD,
+        [HKEY_LOCAL_MACHINE, key_path_ptr, value_name_ptr, out32_ptr],
+    );
+    assert_eq!(memory.read_u32(out32_ptr)?, 99, "value must remain 99 when test value did not match");
 
     Ok(())
 }

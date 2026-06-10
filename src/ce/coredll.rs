@@ -2511,6 +2511,12 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
+        ORD_WAIT_FOR_APIREADY => {
+            // WaitForAPIReady(dwAPISetKey, dwMilliseconds) — all CE API sets are always ready
+            // in the emulator; return WAIT_OBJECT_0 immediately.
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::U32(0))
+        }
         ORD_GET_APIADDRESS => {
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Handle(0))
@@ -3380,6 +3386,38 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0)) // ERROR_SUCCESS
         }
+        ORD_REGISTRY_NOTIFY_WINDOW | ORD_REGISTRY_NOTIFY_MSG_QUEUE => {
+            // RegistryNotifyWindow/RegistryNotifyMsgQueue — CE registry-change notification;
+            // the emulator registry never changes asynchronously, so succeed as a no-op and
+            // leave *phEvent (arg 6) unchanged so callers that check it don't fault.
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::Bool(true))
+        }
+        ORD_REGISTRY_CLOSE_NOTIFICATION
+        | ORD_REGISTRY_STOP_NOTIFICATION
+        | ORD_REGISTRY_BATCH_NOTIFICATION => {
+            // CE registry notification lifecycle; no-op since we never issue real notifications.
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::Bool(true))
+        }
+        ORD_REGISTRY_GET_DWORD => Some(CoredllValue::U32(registry_get_dword_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_REGISTRY_GET_STRING => Some(CoredllValue::U32(registry_get_string_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_REGISTRY_SET_DWORD => Some(CoredllValue::U32(registry_set_dword_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_REGISTRY_SET_STRING => Some(CoredllValue::U32(registry_set_string_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_REGISTRY_DELETE_VALUE => Some(CoredllValue::U32(registry_delete_value_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_REGISTRY_TEST_EXCHANGE_DWORD => Some(CoredllValue::U32(
+            registry_test_exchange_dword_raw(kernel, memory, thread_id, args),
+        )),
         ORD_REG_OPEN_PROCESS_KEY => {
             // RegOpenProcessKey(hProcess, dwIndex, samDesired, phKey) — not supported.
             kernel.threads.set_last_error(thread_id, ERROR_NOT_SUPPORTED);
@@ -6840,6 +6878,17 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_POST_QUIT_MESSAGE => {
             kernel.post_quit_message(thread_id, raw_arg(args, 0));
             Some(CoredllValue::U32(0))
+        }
+        ORD_ENABLE_GESTURES | ORD_DISABLE_GESTURES | ORD_SET_WINDOW_AUTO_GESTURE => {
+            // CE touch gesture control APIs. The emulator has no gesture engine, so accept any
+            // call silently and return success.
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::Bool(true))
+        }
+        ORD_SET_DIALOG_AUTO_SCROLL_BAR | ORD_SET_WINDOW_POS_ON_ROTATE => {
+            // CE-specific dialog/window helpers with no meaningful emulator effect.
+            kernel.threads.set_last_error(thread_id, 0);
+            Some(CoredllValue::Bool(true))
         }
         ORD_SEND_MESSAGE_W => Some(CoredllValue::U32(send_message_w_raw(
             kernel, memory, thread_id, args, true,
@@ -14319,6 +14368,240 @@ fn reg_delete_value_w_raw<M: CoredllGuestMemory>(
     kernel
         .registry
         .reg_delete_value_w(raw_arg(args, 0), value_name.as_deref())
+}
+
+fn registry_get_dword_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    // RegistryGetDword(hKeyRoot, pszKeyPath, pszValueName, pdwValue)
+    let root = raw_arg(args, 0);
+    let Some(key_path) = read_optional_guest_wide_arg(memory, raw_arg(args, 1)) else {
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    };
+    let Some(value_name) = read_optional_guest_wide_arg(memory, raw_arg(args, 2)) else {
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    };
+    let out_ptr = raw_arg(args, 3);
+    let open = kernel.registry.reg_open_key_exw(root, key_path.as_deref(), 0, 0);
+    if open.status != crate::ce::registry::ERROR_SUCCESS {
+        return open.status;
+    }
+    let hkey = open.hkey.unwrap();
+    let result = kernel
+        .registry
+        .reg_query_value_exw(hkey, value_name.as_deref(), Some(4));
+    let status = if result.status == crate::ce::registry::ERROR_SUCCESS {
+        if let Some(data) = result.data {
+            if data.len() >= 4 && out_ptr != 0 {
+                let dword = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+                if !write_guest_u32(kernel, memory, thread_id, out_ptr, dword) {
+                    kernel.registry.reg_close_key(hkey);
+                    return crate::ce::registry::ERROR_INVALID_PARAMETER;
+                }
+                crate::ce::registry::ERROR_SUCCESS
+            } else {
+                crate::ce::registry::ERROR_INVALID_PARAMETER
+            }
+        } else {
+            crate::ce::registry::ERROR_INVALID_PARAMETER
+        }
+    } else {
+        result.status
+    };
+    kernel.registry.reg_close_key(hkey);
+    status
+}
+
+fn registry_get_string_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    // RegistryGetString(hKeyRoot, pszKeyPath, pszValueName, pszValue, cchValue)
+    let root = raw_arg(args, 0);
+    let Some(key_path) = read_optional_guest_wide_arg(memory, raw_arg(args, 1)) else {
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    };
+    let Some(value_name) = read_optional_guest_wide_arg(memory, raw_arg(args, 2)) else {
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    };
+    let out_ptr = raw_arg(args, 3);
+    let out_cch = raw_arg(args, 4) as usize;
+    let open = kernel.registry.reg_open_key_exw(root, key_path.as_deref(), 0, 0);
+    if open.status != crate::ce::registry::ERROR_SUCCESS {
+        return open.status;
+    }
+    let hkey = open.hkey.unwrap();
+    let byte_cap = out_cch.saturating_mul(2);
+    let result = kernel
+        .registry
+        .reg_query_value_exw(hkey, value_name.as_deref(), Some(byte_cap));
+    let status = if result.status == crate::ce::registry::ERROR_SUCCESS {
+        if let Some(data) = result.data {
+            if out_ptr != 0 && !write_guest_bytes(kernel, memory, thread_id, out_ptr, &data) {
+                crate::ce::registry::ERROR_INVALID_PARAMETER
+            } else {
+                crate::ce::registry::ERROR_SUCCESS
+            }
+        } else {
+            crate::ce::registry::ERROR_INVALID_PARAMETER
+        }
+    } else {
+        result.status
+    };
+    kernel.registry.reg_close_key(hkey);
+    status
+}
+
+fn registry_set_dword_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    // RegistrySetDword(hKeyRoot, pszKeyPath, pszValueName, dwValue)
+    let root = raw_arg(args, 0);
+    let Some(key_path) = read_optional_guest_wide_arg(memory, raw_arg(args, 1)) else {
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    };
+    let Some(value_name) = read_optional_guest_wide_arg(memory, raw_arg(args, 2)) else {
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    };
+    let dword = raw_arg(args, 3);
+    let create = kernel.registry.reg_create_key_exw(root, key_path.as_deref());
+    if create.status != crate::ce::registry::ERROR_SUCCESS {
+        return create.status;
+    }
+    let hkey = create.hkey.unwrap();
+    let status = kernel.registry.reg_set_value_exw(
+        hkey,
+        value_name.as_deref(),
+        crate::ce::registry::REG_DWORD,
+        &dword.to_le_bytes(),
+    );
+    kernel.registry.reg_close_key(hkey);
+    status
+}
+
+fn registry_set_string_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    // RegistrySetString(hKeyRoot, pszKeyPath, pszValueName, pszValue)
+    let root = raw_arg(args, 0);
+    let Some(key_path) = read_optional_guest_wide_arg(memory, raw_arg(args, 1)) else {
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    };
+    let Some(value_name) = read_optional_guest_wide_arg(memory, raw_arg(args, 2)) else {
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    };
+    let Some(value_str) = read_optional_guest_wide_arg(memory, raw_arg(args, 3)) else {
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    };
+    let create = kernel.registry.reg_create_key_exw(root, key_path.as_deref());
+    if create.status != crate::ce::registry::ERROR_SUCCESS {
+        return create.status;
+    }
+    let hkey = create.hkey.unwrap();
+    let value_bytes = value_str
+        .as_deref()
+        .unwrap_or("")
+        .encode_utf16()
+        .chain(std::iter::once(0u16))
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<u8>>();
+    let status = kernel.registry.reg_set_value_exw(
+        hkey,
+        value_name.as_deref(),
+        crate::ce::registry::REG_SZ,
+        &value_bytes,
+    );
+    kernel.registry.reg_close_key(hkey);
+    status
+}
+
+fn registry_delete_value_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    // RegistryDeleteValue(hKeyRoot, pszKeyPath, pszValueName)
+    let root = raw_arg(args, 0);
+    let Some(key_path) = read_optional_guest_wide_arg(memory, raw_arg(args, 1)) else {
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    };
+    let Some(value_name) = read_optional_guest_wide_arg(memory, raw_arg(args, 2)) else {
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    };
+    let open = kernel.registry.reg_open_key_exw(root, key_path.as_deref(), 0, 0);
+    if open.status != crate::ce::registry::ERROR_SUCCESS {
+        return open.status;
+    }
+    let hkey = open.hkey.unwrap();
+    let status = kernel
+        .registry
+        .reg_delete_value_w(hkey, value_name.as_deref());
+    kernel.registry.reg_close_key(hkey);
+    status
+}
+
+fn registry_test_exchange_dword_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    // RegistryTestExchangeDword(hKeyRoot, pszKeyPath, pszValueName, dwTestValue, dwNewValue, pdwOldValue)
+    let root = raw_arg(args, 0);
+    let Some(key_path) = read_optional_guest_wide_arg(memory, raw_arg(args, 1)) else {
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    };
+    let Some(value_name) = read_optional_guest_wide_arg(memory, raw_arg(args, 2)) else {
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    };
+    let test_value = raw_arg(args, 3);
+    let new_value = raw_arg(args, 4);
+    let old_ptr = raw_arg(args, 5);
+    let create = kernel.registry.reg_create_key_exw(root, key_path.as_deref());
+    if create.status != crate::ce::registry::ERROR_SUCCESS {
+        return create.status;
+    }
+    let hkey = create.hkey.unwrap();
+    let query = kernel
+        .registry
+        .reg_query_value_exw(hkey, value_name.as_deref(), Some(4));
+    let old_dword = if query.status == crate::ce::registry::ERROR_SUCCESS {
+        query
+            .data
+            .as_deref()
+            .and_then(|d| d.get(..4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])))
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    if old_ptr != 0 && !write_guest_u32(kernel, memory, thread_id, old_ptr, old_dword) {
+        kernel.registry.reg_close_key(hkey);
+        return crate::ce::registry::ERROR_INVALID_PARAMETER;
+    }
+    let status = if old_dword == test_value {
+        kernel.registry.reg_set_value_exw(
+            hkey,
+            value_name.as_deref(),
+            crate::ce::registry::REG_DWORD,
+            &new_value.to_le_bytes(),
+        )
+    } else {
+        crate::ce::registry::ERROR_SUCCESS
+    };
+    kernel.registry.reg_close_key(hkey);
+    status
 }
 
 fn write_win32_find_data_w<M: CoredllGuestMemory>(
