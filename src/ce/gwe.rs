@@ -4319,7 +4319,7 @@ impl Gwe {
             .unwrap_or_default()
     }
 
-    fn desktop_rect(&self) -> Rect {
+    pub fn desktop_rect(&self) -> Rect {
         self.windows
             .get(&DESKTOP_HWND)
             .map(|window| window.client_rect)

@@ -23338,19 +23338,31 @@ fn render_image_list_bitmap_entry_framebuffer<M: CoredllGuestMemory>(
     image: &crate::ce::resource::ImageListImage,
     blend: Option<([u8; 3], u8)>,
 ) -> bool {
-    if image.bitmap == 0 {
+    // Resolve the bitmap: prefer image.bitmap, fall back to icon color_bitmap.
+    let (bitmap_handle, mask_handle) = if image.bitmap != 0 {
+        (image.bitmap, image.mask)
+    } else if image.icon != 0 {
+        let Some(icon) = kernel.resources.icon(image.icon) else {
+            return false;
+        };
+        if icon.color_bitmap == 0 {
+            return false;
+        }
+        (icon.color_bitmap, icon.mask_bitmap)
+    } else {
         return false;
-    }
-    let Some(bitmap) = kernel.resources.bitmap(image.bitmap) else {
+    };
+    let Some(bitmap) = kernel.resources.bitmap(bitmap_handle) else {
         return false;
     };
     let Some(bitmap_bytes) = read_bitmap_object_bytes(memory, bitmap) else {
         return false;
     };
-    let mask_bitmap_bytes = if image.transparent_color.is_none() && image.mask != 0 {
+    let effective_mask = if image.bitmap != 0 { image.mask } else { mask_handle };
+    let mask_bitmap_bytes = if image.transparent_color.is_none() && effective_mask != 0 {
         kernel
             .resources
-            .bitmap(image.mask)
+            .bitmap(effective_mask)
             .and_then(|mask| read_bitmap_object_bytes(memory, mask).map(|bytes| (mask, bytes)))
     } else {
         None
@@ -23391,19 +23403,30 @@ fn render_image_list_bitmap_entry_hdc<M: CoredllGuestMemory>(
     image: &crate::ce::resource::ImageListImage,
     blend: Option<([u8; 3], u8)>,
 ) -> bool {
-    if image.bitmap == 0 {
+    let (bitmap_handle, mask_handle) = if image.bitmap != 0 {
+        (image.bitmap, image.mask)
+    } else if image.icon != 0 {
+        let Some(icon) = kernel.resources.icon(image.icon) else {
+            return false;
+        };
+        if icon.color_bitmap == 0 {
+            return false;
+        }
+        (icon.color_bitmap, icon.mask_bitmap)
+    } else {
         return false;
-    }
-    let Some(src_bitmap) = kernel.resources.bitmap(image.bitmap) else {
+    };
+    let Some(src_bitmap) = kernel.resources.bitmap(bitmap_handle) else {
         return false;
     };
     let Some(src_bytes) = read_bitmap_object_bytes(memory, src_bitmap) else {
         return false;
     };
-    let mask_bitmap_bytes = if image.transparent_color.is_none() && image.mask != 0 {
+    let effective_mask = if image.bitmap != 0 { image.mask } else { mask_handle };
+    let mask_bitmap_bytes = if image.transparent_color.is_none() && effective_mask != 0 {
         kernel
             .resources
-            .bitmap(image.mask)
+            .bitmap(effective_mask)
             .and_then(|mask| read_bitmap_object_bytes(memory, mask).map(|bytes| (mask, bytes)))
     } else {
         None
@@ -32338,10 +32361,11 @@ pub(crate) struct SendMessageTimeoutBlockState {
     pub start_ms: u32,
 }
 
-/// Called by Unicorn to set up a cross-thread SMTO_BLOCK send and return the
-/// tracking state.  Returns `None` if the call doesn't meet the blocking
-/// criteria (same-thread, missing SMTO_BLOCK, invalid flags, hung-abort).
-/// The caller is responsible for parking the Unicorn thread and polling
+/// Called by Unicorn to set up a cross-thread SendMessageTimeout send and
+/// return the tracking state.  Returns `None` if the call doesn't meet the
+/// blocking criteria (same-thread, invalid flags, hung-abort).  Covers both
+/// SMTO_BLOCK and SMTO_NORMAL cross-thread sends — the caller parks the
+/// Unicorn thread and polls
 /// `kernel.gwe.sent_message_result_ready(state.send_id)` on each re-entry.
 #[cfg_attr(not(feature = "unicorn"), allow(dead_code))]
 pub(crate) fn send_message_timeout_block_prepare(
@@ -32356,7 +32380,7 @@ pub(crate) fn send_message_timeout_block_prepare(
     let flags = raw_arg(args, 4);
     let timeout_ms = raw_arg(args, 5);
     let result_ptr = raw_arg(args, 6);
-    if flags & !SMTO_SUPPORTED_CE_FLAGS != 0 || flags & SMTO_BLOCK == 0 {
+    if flags & !SMTO_SUPPORTED_CE_FLAGS != 0 {
         return None;
     }
     let target_thread = kernel

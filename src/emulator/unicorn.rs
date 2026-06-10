@@ -92,6 +92,8 @@ pub struct UnicornMips {
     #[cfg(feature = "unicorn")]
     pending_enum_windows_returns: Vec<PendingEnumWindowsReturn>,
     #[cfg(feature = "unicorn")]
+    pending_enum_display_monitors_returns: Vec<PendingEnumDisplayMonitorsReturn>,
+    #[cfg(feature = "unicorn")]
     pending_dll_lifecycle_returns: Vec<PendingDllLifecycleReturn>,
     #[cfg(feature = "unicorn")]
     pending_create_window_returns: Vec<CreateWindowReturn>,
@@ -148,6 +150,8 @@ struct UnicornRunStateHandles<'a> {
     pending_qsort_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<PendingQsortReturn>>>,
     pending_enum_windows_returns:
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingEnumWindowsReturn>>>,
+    pending_enum_display_monitors_returns:
+        &'a std::rc::Rc<std::cell::RefCell<Vec<PendingEnumDisplayMonitorsReturn>>>,
     pending_dll_lifecycle_returns:
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingDllLifecycleReturn>>>,
     create_window_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<CreateWindowReturn>>>,
@@ -302,6 +306,9 @@ const DLL_LIFECYCLE_RETURN_STUB_ADDR: u32 =
 const ENUM_WINDOWS_RETURN_STUB_ADDR: u32 =
     DLL_LIFECYCLE_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
 #[cfg(feature = "unicorn")]
+const ENUM_DISPLAY_MONITORS_RETURN_STUB_ADDR: u32 =
+    ENUM_WINDOWS_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
+#[cfg(feature = "unicorn")]
 const CREATESTRUCTW_SIZE: u32 = 48;
 #[cfg(feature = "unicorn")]
 const WM_INITDIALOG: u32 = 0x0110;
@@ -453,6 +460,14 @@ struct PendingEnumWindowsReturn {
     callback: u32,
     lparam: u32,
     remaining: Vec<u32>,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingEnumDisplayMonitorsReturn {
+    return_pc: u32,
+    return_sp: u32,
+    caller_regs: MipsGuestContext,
 }
 
 #[cfg(feature = "unicorn")]
@@ -739,6 +754,8 @@ impl UnicornMips {
             #[cfg(feature = "unicorn")]
             pending_enum_windows_returns: Vec::new(),
             #[cfg(feature = "unicorn")]
+            pending_enum_display_monitors_returns: Vec::new(),
+            #[cfg(feature = "unicorn")]
             pending_dll_lifecycle_returns: Vec::new(),
             #[cfg(feature = "unicorn")]
             pending_create_window_returns: Vec::new(),
@@ -916,6 +933,11 @@ impl UnicornMips {
         self.pending_qsort_returns = state.pending_qsort_returns.borrow_mut().drain(..).collect();
         self.pending_enum_windows_returns = state
             .pending_enum_windows_returns
+            .borrow_mut()
+            .drain(..)
+            .collect();
+        self.pending_enum_display_monitors_returns = state
+            .pending_enum_display_monitors_returns
             .borrow_mut()
             .drain(..)
             .collect();
@@ -1210,6 +1232,10 @@ impl UnicornMips {
                 #[cfg(feature = "unicorn")]
                 pending_enum_windows_returns: std::mem::take(
                     &mut self.pending_enum_windows_returns,
+                ),
+                #[cfg(feature = "unicorn")]
+                pending_enum_display_monitors_returns: std::mem::take(
+                    &mut self.pending_enum_display_monitors_returns,
                 ),
                 #[cfg(feature = "unicorn")]
                 pending_dll_lifecycle_returns: std::mem::take(
@@ -2207,6 +2233,11 @@ impl UnicornMips {
             &mut self.pending_enum_windows_returns,
         )));
         let pending_enum_windows_returns_hook = Rc::clone(&pending_enum_windows_returns);
+        let pending_enum_display_monitors_returns = Rc::new(RefCell::new(std::mem::take(
+            &mut self.pending_enum_display_monitors_returns,
+        )));
+        let pending_enum_display_monitors_returns_hook =
+            Rc::clone(&pending_enum_display_monitors_returns);
         let pending_dll_lifecycle_returns = Rc::new(RefCell::new(std::mem::take(
             &mut self.pending_dll_lifecycle_returns,
         )));
@@ -2249,6 +2280,7 @@ impl UnicornMips {
             pending_guest_thread_returns: &pending_guest_thread_returns,
             pending_qsort_returns: &pending_qsort_returns,
             pending_enum_windows_returns: &pending_enum_windows_returns,
+            pending_enum_display_monitors_returns: &pending_enum_display_monitors_returns,
             pending_dll_lifecycle_returns: &pending_dll_lifecycle_returns,
             create_window_returns: &create_window_returns,
             pending_wndproc_returns: &pending_wndproc_returns,
@@ -2821,6 +2853,13 @@ impl UnicornMips {
                     if !handle_enum_windows_return_stub(uc, &pending_enum_windows_returns_hook) {
                         let _ = uc.emu_stop();
                     }
+                    return;
+                }
+                if address == ENUM_DISPLAY_MONITORS_RETURN_STUB_ADDR {
+                    handle_enum_display_monitors_return_stub(
+                        uc,
+                        &pending_enum_display_monitors_returns_hook,
+                    );
                     return;
                 }
                 if address == GUEST_THREAD_RETURN_STUB_ADDR {
@@ -3500,6 +3539,18 @@ impl UnicornMips {
                         trap.ordinal,
                         &args,
                         &pending_enum_windows_returns_hook,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_enter_enum_display_monitors_callout(
+                        unsafe { &*kernel_ptr },
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        &pending_enum_display_monitors_returns_hook,
                     )
                 }) {
                     return;
@@ -21810,6 +21861,118 @@ fn handle_enum_windows_return_stub<D>(
     ]
     .into_iter()
     .all(|r| r.is_ok())
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_enum_display_monitors_callout<D>(
+    kernel: &CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    pending_returns: &std::rc::Rc<
+        std::cell::RefCell<Vec<PendingEnumDisplayMonitorsReturn>>,
+    >,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_ENUM_DISPLAY_MONITORS)
+    {
+        return false;
+    }
+
+    // EnumDisplayMonitors(hdc, lprcClip, lpfnEnum, dwData)
+    let callback = args.get(2).copied().unwrap_or(0);
+    let dw_data = args.get(3).copied().unwrap_or(0);
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+
+    if !is_guest_wndproc(callback) {
+        // Null or non-guest callback: CE returns TRUE (no monitors enumerated).
+        let _ = uc.reg_write(RegisterMIPS::V0, 1);
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        return true;
+    }
+
+    let caller_regs = capture_mips_gprs(uc);
+    let return_sp = read_mips_reg(uc, RegisterMIPS::SP);
+    let call_sp = return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
+
+    // Write the screen RECT (16 bytes) onto the guest stack at call_sp.
+    let desktop = kernel.gwe.desktop_rect();
+    let rect_bytes = [
+        (desktop.left as u32).to_le_bytes(),
+        (desktop.top as u32).to_le_bytes(),
+        (desktop.right as u32).to_le_bytes(),
+        (desktop.bottom as u32).to_le_bytes(),
+    ]
+    .concat();
+    if uc.mem_write(u64::from(call_sp), &rect_bytes).is_err() {
+        return false;
+    }
+
+    let call_callback = normalize_ce_process_slot_callback(uc, callback);
+
+    tracing::debug!(
+        target: "ce.gwe",
+        callback = format_args!("0x{callback:08x}"),
+        dw_data = format_args!("0x{dw_data:08x}"),
+        desktop = ?desktop,
+        "EnumDisplayMonitors guest callback callout"
+    );
+
+    let ok = [
+        uc.reg_write(RegisterMIPS::SP, u64::from(call_sp)),
+        // CE: hMonitor = NULL, hdcMonitor = NULL, lprcMonitor = &rect on stack, lParam = dwData
+        uc.reg_write(RegisterMIPS::A0, 0),
+        uc.reg_write(RegisterMIPS::A1, 0),
+        uc.reg_write(RegisterMIPS::A2, u64::from(call_sp)),
+        uc.reg_write(RegisterMIPS::A3, u64::from(dw_data)),
+        uc.reg_write(
+            RegisterMIPS::RA,
+            u64::from(ENUM_DISPLAY_MONITORS_RETURN_STUB_ADDR),
+        ),
+        uc.reg_write(RegisterMIPS::T9, u64::from(call_callback)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(call_callback)),
+    ]
+    .into_iter()
+    .all(|r| r.is_ok());
+
+    if !ok {
+        return false;
+    }
+
+    pending_returns
+        .borrow_mut()
+        .push(PendingEnumDisplayMonitorsReturn {
+            return_pc,
+            return_sp,
+            caller_regs,
+        });
+    true
+}
+
+#[cfg(feature = "unicorn")]
+fn handle_enum_display_monitors_return_stub<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    pending_returns: &std::rc::Rc<
+        std::cell::RefCell<Vec<PendingEnumDisplayMonitorsReturn>>,
+    >,
+) {
+    use unicorn_engine::RegisterMIPS;
+
+    let callback_result = read_mips_reg(uc, RegisterMIPS::V0);
+    let mut pending = pending_returns.borrow_mut();
+    let Some(state) = pending.pop() else {
+        return;
+    };
+
+    // CE has exactly one monitor; EnumDisplayMonitors returns the callback's return value.
+    restore_mips_gprs(uc, &state.caller_regs);
+    let _ = uc.reg_write(RegisterMIPS::SP, u64::from(state.return_sp));
+    let _ = uc.reg_write(RegisterMIPS::V0, u64::from(callback_result));
+    let _ = uc.reg_write(RegisterMIPS::PC, u64::from(state.return_pc));
+    let _ = uc.reg_write(RegisterMIPS::RA, u64::from(state.return_pc));
 }
 
 #[cfg(feature = "unicorn")]
