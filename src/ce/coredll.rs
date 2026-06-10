@@ -20141,6 +20141,7 @@ fn track_popup_menu_ex_raw<M: CoredllGuestMemory>(
     }
     let initial_hilite = popup_menu_initial_key_index(&kernel.resources, menu);
     let _ = kernel.resources.set_menu_hilite_index(menu, initial_hilite);
+    notify_popup_menu_pre_loop(kernel, hwnd, menu, flags);
     let mut framebuffer = framebuffer;
     if let Some(framebuffer) = framebuffer.as_mut() {
         render_popup_menu_framebuffer(
@@ -20194,6 +20195,26 @@ fn track_popup_menu_ex_raw<M: CoredllGuestMemory>(
         notify_popup_menu_command(kernel, hwnd, flags, command);
         1
     }
+}
+
+fn notify_popup_menu_pre_loop(
+    kernel: &mut CeKernel,
+    hwnd: u32,
+    menu: u32,
+    flags: u32,
+) {
+    if hwnd == 0 || flags & TPM_NONOTIFY != 0 {
+        return;
+    }
+    kernel
+        .resources
+        .record_popup_notification(PopupMenuNotification {
+            hwnd,
+            msg: crate::ce::gwe::WM_INITMENU,
+            wparam: menu,
+            lparam: 0,
+        });
+    let _ = kernel.send_message_w(hwnd, crate::ce::gwe::WM_INITMENU, menu, 0);
 }
 
 fn notify_popup_menu_owner(
@@ -20344,6 +20365,7 @@ pub(crate) fn track_popup_menu_ex_prepare<M: CoredllGuestMemory>(
     }
     let initial_hilite = popup_menu_initial_key_index(&kernel.resources, menu);
     let _ = kernel.resources.set_menu_hilite_index(menu, initial_hilite);
+    notify_popup_menu_pre_loop(kernel, hwnd, menu, flags);
     let mut framebuffer = framebuffer;
     if let Some(framebuffer) = framebuffer.as_mut() {
         render_popup_menu_framebuffer(*framebuffer, &kernel.resources, menu, popup_x, popup_y);
@@ -20423,6 +20445,7 @@ impl PopupMenuModalState {
             thread_id,
             self.hwnd,
             self.menu,
+            self.flags,
             self.popup_x,
             self.popup_y,
             self.mouse_message_max,
@@ -20467,6 +20490,7 @@ fn popup_menu_modal_input_loop(
     thread_id: u32,
     hwnd: u32,
     menu: u32,
+    _flags: u32,
     popup_x: i32,
     popup_y: i32,
     mouse_message_max: u32,
@@ -20827,6 +20851,7 @@ fn popup_menu_modal_input_selection(
         thread_id,
         hwnd,
         menu,
+        flags,
         popup_x,
         popup_y,
         mouse_message_max,

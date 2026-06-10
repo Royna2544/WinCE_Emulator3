@@ -115,7 +115,7 @@ use wince_emulation_v3::{
             WM_CANCELMODE, WM_CAPTURECHANGED, WM_CHAR, WM_CHARTOITEM, WM_CLOSE, WM_COMMAND,
             WM_CONTEXTMENU, WM_DESTROY,
             WM_ENABLE, WM_ENTERMENULOOP, WM_ERASEBKGND,
-            WM_EXITMENULOOP, WM_GETDLGCODE, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENUPOPUP,
+            WM_EXITMENULOOP, WM_GETDLGCODE, WM_GETTEXT, WM_GETTEXTLENGTH, WM_INITMENU, WM_INITMENUPOPUP,
             WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
             WM_MENUCHAR, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
             WM_MOVE, WM_NCACTIVATE, WM_NCCREATE, WM_NCDESTROY, WM_NCHITTEST,
@@ -11425,6 +11425,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, popup, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, popup, 0),
             (hwnd, WM_EXITMENULOOP, 1, 0),
@@ -11563,7 +11564,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
         vec![2]
     );
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 7);
+    assert_eq!(notifications.len(), 9);
     assert_eq!(
         notifications
             .iter()
@@ -11575,9 +11576,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, popup, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, popup, 0),
             (hwnd, WM_EXITMENULOOP, 1, 0),
+            (hwnd, WM_INITMENU, popup, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, popup, 0),
             (hwnd, WM_EXITMENULOOP, 1, 0),
@@ -11605,7 +11608,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
         .expect("return-command tracking should still be recorded");
     assert_eq!(tracking.flags, TPM_RETURNCMD);
     assert_eq!(tracking.exclude_rect, None);
-    assert_eq!(kernel.resources.popup_notifications().len(), 10);
+    assert_eq!(kernel.resources.popup_notifications().len(), 13);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -11626,7 +11629,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
         .last_popup_tracking()
         .expect("nonotify tracking should still be recorded");
     assert_eq!(tracking.flags, TPM_NONOTIFY);
-    assert_eq!(kernel.resources.popup_notifications().len(), 10);
+    assert_eq!(kernel.resources.popup_notifications().len(), 13);
 
     let disabled_only_popup = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
@@ -11672,7 +11675,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ..
         }
     ));
-    assert_eq!(kernel.resources.popup_notifications().len(), 13);
+    assert_eq!(kernel.resources.popup_notifications().len(), 17);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -11687,7 +11690,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
         }
     ));
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 16);
+    assert_eq!(notifications.len(), 21);
     assert!(
         !notifications
             .iter()
@@ -11791,11 +11794,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
         }
     ));
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 20);
+    assert_eq!(notifications.len(), 26);
     assert_eq!(
         notifications
             .iter()
-            .skip(16)
+            .skip(21)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -11804,6 +11807,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, submenu_parent, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, submenu_parent, 0),
             (hwnd, WM_INITMENUPOPUP, submenu_child, 1),
@@ -11824,11 +11828,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
         }
     ));
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 25);
+    assert_eq!(notifications.len(), 32);
     assert_eq!(
         notifications
             .iter()
-            .skip(20)
+            .skip(26)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -11837,6 +11841,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, submenu_parent, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, submenu_parent, 0),
             (hwnd, WM_INITMENUPOPUP, submenu_child, 1),
@@ -11877,11 +11882,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             .is_none()
     );
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 29);
+    assert_eq!(notifications.len(), 37);
     assert_eq!(
         notifications
             .iter()
-            .skip(25)
+            .skip(32)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -11890,6 +11895,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, submenu_parent, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, submenu_parent, 0),
             (hwnd, WM_INITMENUPOPUP, submenu_child, 1),
@@ -11912,11 +11918,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
         }
     ));
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 32);
+    assert_eq!(notifications.len(), 41);
     assert_eq!(
         notifications
             .iter()
-            .skip(29)
+            .skip(37)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -11925,6 +11931,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, popup, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, popup, 0),
             (hwnd, WM_EXITMENULOOP, 1, 0),
@@ -11959,11 +11966,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             .is_none()
     );
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 35);
+    assert_eq!(notifications.len(), 45);
     assert_eq!(
         notifications
             .iter()
-            .skip(32)
+            .skip(41)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -11972,6 +11979,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, popup, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, popup, 0),
             (hwnd, WM_EXITMENULOOP, 1, 0),
@@ -11994,11 +12002,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
         }
     ));
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 39);
+    assert_eq!(notifications.len(), 50);
     assert_eq!(
         notifications
             .iter()
-            .skip(35)
+            .skip(45)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -12007,6 +12015,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, popup, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, popup, 0),
             (hwnd, WM_EXITMENULOOP, 1, 0),
@@ -12029,11 +12038,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
         }
     ));
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 42);
+    assert_eq!(notifications.len(), 54);
     assert_eq!(
         notifications
             .iter()
-            .skip(39)
+            .skip(50)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -12042,6 +12051,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, popup, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, popup, 0),
             (hwnd, WM_EXITMENULOOP, 1, 0),
@@ -12077,11 +12087,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             .is_none()
     );
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 45);
+    assert_eq!(notifications.len(), 58);
     assert_eq!(
         notifications
             .iter()
-            .skip(42)
+            .skip(54)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -12090,6 +12100,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, popup, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, popup, 0),
             (hwnd, WM_EXITMENULOOP, 1, 0),
@@ -12123,11 +12134,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             .is_none()
     );
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 48);
+    assert_eq!(notifications.len(), 62);
     assert_eq!(
         notifications
             .iter()
-            .skip(45)
+            .skip(58)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -12136,6 +12147,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, popup, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, popup, 0),
             (hwnd, WM_EXITMENULOOP, 1, 0),
@@ -12171,11 +12183,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             .is_none()
     );
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 51);
+    assert_eq!(notifications.len(), 66);
     assert_eq!(
         notifications
             .iter()
-            .skip(48)
+            .skip(62)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -12184,6 +12196,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, popup, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, popup, 0),
             (hwnd, WM_EXITMENULOOP, 1, 0),
@@ -12225,11 +12238,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             .is_none()
     );
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 54);
+    assert_eq!(notifications.len(), 70);
     assert_eq!(
         notifications
             .iter()
-            .skip(51)
+            .skip(66)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -12238,6 +12251,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, popup, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, popup, 0),
             (hwnd, WM_EXITMENULOOP, 1, 0),
@@ -12284,11 +12298,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             .is_none()
     );
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 57);
+    assert_eq!(notifications.len(), 74);
     assert_eq!(
         notifications
             .iter()
-            .skip(54)
+            .skip(70)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -12297,6 +12311,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, popup, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, popup, 0),
             (hwnd, WM_EXITMENULOOP, 1, 0),
@@ -12342,11 +12357,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             .is_none()
     );
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 60);
+    assert_eq!(notifications.len(), 78);
     assert_eq!(
         notifications
             .iter()
-            .skip(57)
+            .skip(74)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -12355,6 +12370,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, popup, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, popup, 0),
             (hwnd, WM_EXITMENULOOP, 1, 0),
@@ -12399,11 +12415,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
         }
     ));
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 64);
+    assert_eq!(notifications.len(), 83);
     assert_eq!(
         notifications
             .iter()
-            .skip(60)
+            .skip(78)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -12412,6 +12428,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, submenu_parent, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, submenu_parent, 0),
             (hwnd, WM_INITMENUPOPUP, submenu_child, 1),
@@ -12460,11 +12477,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
         vec![1]
     );
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 68);
+    assert_eq!(notifications.len(), 88);
     assert_eq!(
         notifications
             .iter()
-            .skip(64)
+            .skip(83)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -12473,6 +12490,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, submenu_parent, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, submenu_parent, 0),
             (hwnd, WM_INITMENUPOPUP, submenu_child, 1),
@@ -12521,11 +12539,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
         0
     );
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 72);
+    assert_eq!(notifications.len(), 93);
     assert_eq!(
         notifications
             .iter()
-            .skip(68)
+            .skip(88)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -12534,6 +12552,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, submenu_parent, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, submenu_parent, 0),
             (hwnd, WM_INITMENUPOPUP, submenu_child, 1),
@@ -12588,11 +12607,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
         0
     );
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 75);
+    assert_eq!(notifications.len(), 97);
     assert_eq!(
         notifications
             .iter()
-            .skip(72)
+            .skip(93)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -12601,6 +12620,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, submenu_parent, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, submenu_parent, 0),
             (hwnd, WM_EXITMENULOOP, 1, 0),
@@ -12636,11 +12656,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
         0
     );
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 79);
+    assert_eq!(notifications.len(), 102);
     assert_eq!(
         notifications
             .iter()
-            .skip(75)
+            .skip(97)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -12649,6 +12669,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, submenu_parent, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, submenu_parent, 0),
             (hwnd, WM_INITMENUPOPUP, submenu_child, 1),
@@ -12685,11 +12706,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
         0
     );
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 83);
+    assert_eq!(notifications.len(), 107);
     assert_eq!(
         notifications
             .iter()
-            .skip(79)
+            .skip(102)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -12698,6 +12719,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, submenu_parent, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, submenu_parent, 0),
             (hwnd, WM_INITMENUPOPUP, submenu_child, 1),
@@ -12865,11 +12887,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
         vec![1]
     );
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 88);
+    assert_eq!(notifications.len(), 113);
     assert_eq!(
         notifications
             .iter()
-            .skip(83)
+            .skip(107)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -12878,6 +12900,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, deep_parent, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, deep_parent, 0),
             (hwnd, WM_INITMENUPOPUP, deep_child, 1),
@@ -12917,11 +12940,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
         0
     );
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 93);
+    assert_eq!(notifications.len(), 119);
     assert_eq!(
         notifications
             .iter()
-            .skip(88)
+            .skip(113)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -12930,6 +12953,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, deep_parent, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, deep_parent, 0),
             (hwnd, WM_INITMENUPOPUP, deep_child, 1),
@@ -12986,11 +13010,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
         "popup modal pump should dispatch unrelated same-thread WM_CLOSE before owner selection"
     );
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 96);
+    assert_eq!(notifications.len(), 123);
     assert_eq!(
         notifications
             .iter()
-            .skip(93)
+            .skip(119)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -12999,6 +13023,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, modal_pump_popup, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, modal_pump_popup, 0),
             (hwnd, WM_EXITMENULOOP, 1, 0),
@@ -13056,11 +13081,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
     );
     assert_eq!(kernel.take_completed_send_message_result(send_id), Some(0));
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 99);
+    assert_eq!(notifications.len(), 127);
     assert_eq!(
         notifications
             .iter()
-            .skip(96)
+            .skip(123)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -13069,6 +13094,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, modal_sent_popup, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, modal_sent_popup, 0),
             (hwnd, WM_EXITMENULOOP, 1, 0),
@@ -13142,11 +13168,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             .is_none()
     );
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 102);
+    assert_eq!(notifications.len(), 131);
     assert_eq!(
         notifications
             .iter()
-            .skip(99)
+            .skip(127)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -13155,6 +13181,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (hwnd, WM_INITMENU, modal_owner_popup, 0),
             (hwnd, WM_ENTERMENULOOP, 1, 0),
             (hwnd, WM_INITMENUPOPUP, modal_owner_popup, 0),
             (hwnd, WM_EXITMENULOOP, 1, 0),
@@ -13224,11 +13251,11 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
         "popup modal pump should dispatch generated owner WM_PAINT before default selection"
     );
     let notifications = kernel.resources.popup_notifications();
-    assert_eq!(notifications.len(), 105);
+    assert_eq!(notifications.len(), 135);
     assert_eq!(
         notifications
             .iter()
-            .skip(102)
+            .skip(131)
             .map(|notification| (
                 notification.hwnd,
                 notification.msg,
@@ -13237,6 +13264,7 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
             ))
             .collect::<Vec<_>>(),
         vec![
+            (modal_paint_owner, WM_INITMENU, modal_paint_popup, 0),
             (modal_paint_owner, WM_ENTERMENULOOP, 1, 0),
             (modal_paint_owner, WM_INITMENUPOPUP, modal_paint_popup, 0),
             (modal_paint_owner, WM_EXITMENULOOP, 1, 0),
