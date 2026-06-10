@@ -23173,3 +23173,36 @@ fn coredll_raw_gwe_wm_seticon_and_geticon() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn coredll_raw_gwe_def_window_proc_enable_invalidates_window() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 1;
+
+    let hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id, "TestClass", "Enable Test", None, 0, WS_VISIBLE, 0,
+        Rect::from_origin_size(0, 0, 100, 100),
+    );
+    assert_ne!(hwnd, 0);
+
+    // Drain the initial paint update.
+    kernel.gwe.validate_window(hwnd);
+    assert!(!kernel.gwe.window(hwnd).map_or(false, |w| w.update_pending),
+        "No pending update after validate");
+
+    // DefWindowProcW(hwnd, WM_ENABLE, 1, 0) must invalidate the window.
+    let result = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_DEF_WINDOW_PROC_W, [hwnd, WM_ENABLE, 1u32, 0u32],
+    );
+    assert!(matches!(result, CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }),
+        "DefWindowProcW(WM_ENABLE) returns 0");
+
+    assert!(kernel.gwe.window(hwnd).map_or(false, |w| w.update_pending),
+        "WM_ENABLE in DefWindowProcW must mark window as needing repaint");
+
+    Ok(())
+}

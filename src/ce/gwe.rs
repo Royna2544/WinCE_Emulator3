@@ -3067,6 +3067,10 @@ impl Gwe {
             WM_PAINT => {
                 self.validate_window(hwnd);
             }
+            WM_ENABLE => {
+                // CE DefWindowProcW: invalidate so the window repaints its enabled/disabled state.
+                self.invalidate_window(hwnd, None, false);
+            }
             WM_NCHITTEST => {
                 let window = self.windows.get(&hwnd)?;
                 return Some(default_window_hit_test(
