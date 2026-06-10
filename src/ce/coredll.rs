@@ -84,7 +84,9 @@ const SYSTEM_PARAMETERS_INFO_REGISTRY_PATH: &str = r"HKLM\System\Emulator\System
 const SHELL_FOLDERS_REGISTRY_PATH: &str = r"HKLM\System\Explorer\Shell Folders";
 const IOCTL_HAL_GET_DEVICEID: u32 = 0x0101_207c;
 const ERROR_PATH_NOT_FOUND: u32 = 3;
+const FSCTL_REFRESH_VOLUME: u32 = 0x0009_007c;
 const FSCTL_GET_VOLUME_INFO: u32 = 0x0009_0080;
+const FSCTL_FLUSH_BUFFERS: u32 = 0x0009_0084;
 const CE_VOLUME_INFO_LEVEL_STANDARD: u32 = 0;
 const CE_VOLUME_INFO_SIZE: u32 = 144;
 const CE_VOLUME_INFO_NAME_CHARS: usize = 32;
@@ -8729,37 +8731,49 @@ fn fs_io_control_volume_info_raw<M: CoredllGuestMemory>(
     out_size: u32,
     bytes_returned_ptr: u32,
 ) -> bool {
-    if ioctl != FSCTL_GET_VOLUME_INFO {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-        return false;
+    match ioctl {
+        FSCTL_REFRESH_VOLUME | FSCTL_FLUSH_BUFFERS => {
+            // The host-backed filesystem has no dirty page cache to flush and no
+            // FAT/directory tables to reload, so these are no-ops on our runtime.
+            // CE RAMFS/object-store handles them the same way.
+            write_optional_count(kernel, memory, thread_id, bytes_returned_ptr, 0);
+            kernel.threads.set_last_error(thread_id, 0);
+            true
+        }
+        FSCTL_GET_VOLUME_INFO => {
+            if in_ptr == 0
+                || in_size != 4
+                || out_ptr == 0
+                || out_size != CE_VOLUME_INFO_SIZE
+                || memory.read_u32(in_ptr).ok() != Some(CE_VOLUME_INFO_LEVEL_STANDARD)
+            {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return false;
+            }
+            let info = kernel.files.volume_info_for_path(root_path);
+            if !write_ce_volume_info(kernel, memory, thread_id, out_ptr, &info)
+                || !write_optional_count(
+                    kernel,
+                    memory,
+                    thread_id,
+                    bytes_returned_ptr,
+                    CE_VOLUME_INFO_SIZE,
+                )
+            {
+                return false;
+            }
+            kernel.threads.set_last_error(thread_id, 0);
+            true
+        }
+        _ => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+            false
+        }
     }
-    if in_ptr == 0
-        || in_size != 4
-        || out_ptr == 0
-        || out_size != CE_VOLUME_INFO_SIZE
-        || memory.read_u32(in_ptr).ok() != Some(CE_VOLUME_INFO_LEVEL_STANDARD)
-    {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
-        return false;
-    }
-    let info = kernel.files.volume_info_for_path(root_path);
-    if !write_ce_volume_info(kernel, memory, thread_id, out_ptr, &info)
-        || !write_optional_count(
-            kernel,
-            memory,
-            thread_id,
-            bytes_returned_ptr,
-            CE_VOLUME_INFO_SIZE,
-        )
-    {
-        return false;
-    }
-    kernel.threads.set_last_error(thread_id, 0);
-    true
 }
 
 fn write_ce_volume_info<M: CoredllGuestMemory>(

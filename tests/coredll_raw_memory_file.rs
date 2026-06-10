@@ -3501,6 +3501,98 @@ fn coredll_raw_memory_and_file_ordinals_use_virtual_ce_heap_and_guest_buffers() 
 }
 
 #[test]
+fn coredll_raw_fs_io_control_refresh_and_flush_are_no_ops() -> Result<()> {
+    const FSCTL_REFRESH_VOLUME: u32 = 0x0009_007c;
+    const FSCTL_FLUSH_BUFFERS: u32 = 0x0009_0084;
+    const ERROR_NOT_SUPPORTED: u32 = 50;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("fs_io_control_refresh_flush");
+    fs::create_dir_all(&root).unwrap();
+    kernel.files.mount_guest_root("\\SDMMC Disk", &root);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 7;
+    let bytes_returned_ptr = 0x1_8000u32;
+    memory.map_words(bytes_returned_ptr, 1);
+
+    // FSCTL_REFRESH_VOLUME via CeFsIoControlW: no-op, returns true, bytes_returned = 0
+    let path_ptr = 0x1_8100u32;
+    memory.map_bytes(path_ptr, 32);
+    memory.write_wide_z(path_ptr, "\\SDMMC Disk");
+    memory.write_word(bytes_returned_ptr, 0xDEAD_BEEF);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_FS_IO_CONTROL_W,
+            [path_ptr, FSCTL_REFRESH_VOLUME, 0, 0, 0, 0, bytes_returned_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_u32(bytes_returned_ptr)?, 0);
+
+    // FSCTL_FLUSH_BUFFERS via CeFsIoControlW: no-op, returns true
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_FS_IO_CONTROL_W,
+            [path_ptr, FSCTL_FLUSH_BUFFERS, 0, 0, 0, 0, bytes_returned_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    // FSCTL_REFRESH_VOLUME via AFS_FsIoControlW (object store path): no-op too
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_AFS_FS_IO_CONTROL_W,
+            [0, 0, FSCTL_REFRESH_VOLUME, 0, 0, 0, 0, bytes_returned_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    // Unknown FSCTL returns false and ERROR_NOT_SUPPORTED
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_CE_FS_IO_CONTROL_W,
+            [path_ptr, 0x0009_0099, 0, 0, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_NOT_SUPPORTED
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_copy_file_w_copies_between_ce_paths() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
