@@ -160,7 +160,14 @@ and isolated guest networking.
   comparator receives the item pointer values (not DPA slot addresses) and
   `lParam` as A2. `DSA_Sort(hdsa, pfnCmp, lParam)` routes through the same
   machinery with `deref_args=false` so the comparator receives item struct
-  addresses from `pData + i * cbItem`; both return TRUE. `GetVersionExW`
+  addresses from `pData + i * cbItem`; both return TRUE.
+  `DPA_Search(hdpa, pFind, iStart, pfnCmp, lParam, options)` and
+  `DSA_Search(hdsa, pFind, iStart, pfnCmp, lParam, options)` are now
+  handled via `DPA_SEARCH_RETURN_STUB_ADDR` callbacks: `DPAS_SORTED` uses
+  binary search narrowing `lo`/`hi` each step; without `DPAS_SORTED` a
+  linear scan advances from `iStart`. Both return the found index or −1;
+  `DPAS_INSERTBEFORE`/`DPAS_INSERTAFTER` returns insertion point `lo`
+  instead of −1 when not found in a sorted array. `GetVersionExW`
   (`write_os_version_info_w`) now returns `dwMajorVersion=6, dwMinorVersion=0`
   matching CE 6.0 (`bldver.h`: `CE_MAJOR_VER=0x0006`); previously returned 4/20
   (CE 4.20). `GetSystemInfo` (`write_system_info`) now writes
