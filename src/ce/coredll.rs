@@ -18608,6 +18608,16 @@ fn sh_get_file_info_w_raw<M: CoredllGuestMemory>(
     };
     let class = shell_file_class(kernel, &path, attributes);
     let icon = shell_file_icon(kernel, &path, attributes, &class);
+    // For EXE/DLL files with SHGFI_ICON, try to extract a real icon from PE resources.
+    // Fall back to the synthetic shell icon handle if extraction fails.
+    let pe_icon_handle = if !system_image_list_probe
+        && flags & SHGFI_ICON != 0
+        && (is_executable_shell_path(&path) || path.to_ascii_lowercase().ends_with(".dll"))
+    {
+        extract_pe_icon(kernel, memory, thread_id, &path, 0)
+    } else {
+        None
+    };
     if flags & SHGFI_SYSICONINDEX != 0 {
         kernel.resources.create_shell_system_image_list(
             SHELL_SYSTEM_IMAGE_LIST_HANDLE,
@@ -18654,7 +18664,7 @@ fn sh_get_file_info_w_raw<M: CoredllGuestMemory>(
             memory,
             thread_id,
             info_ptr + SHFILEINFO_HICON_OFFSET,
-            icon.handle,
+            pe_icon_handle.unwrap_or(icon.handle),
         )
     {
         return 0;

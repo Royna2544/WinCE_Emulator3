@@ -731,6 +731,10 @@ impl UnicornMips {
             #[cfg(feature = "unicorn")]
             blocked_popup_menu_modal: None,
             #[cfg(feature = "unicorn")]
+            blocked_send_message_timeout: None,
+            #[cfg(feature = "unicorn")]
+            blocked_clipboard_data: None,
+            #[cfg(feature = "unicorn")]
             blocked_wait_threads: Vec::new(),
             #[cfg(feature = "unicorn")]
             suspended_guest_thread: None,
@@ -1194,6 +1198,10 @@ impl UnicornMips {
                 blocked_modal_message_box: self.blocked_modal_message_box.take(),
                 #[cfg(feature = "unicorn")]
                 blocked_popup_menu_modal: self.blocked_popup_menu_modal.take(),
+                #[cfg(feature = "unicorn")]
+                blocked_send_message_timeout: self.blocked_send_message_timeout.take(),
+                #[cfg(feature = "unicorn")]
+                blocked_clipboard_data: self.blocked_clipboard_data.take(),
                 #[cfg(feature = "unicorn")]
                 blocked_wait_threads: std::mem::take(&mut self.blocked_wait_threads),
                 #[cfg(feature = "unicorn")]
@@ -4097,6 +4105,8 @@ impl super::cpu::CpuBackend for UnicornMips {
             blocked_modal_message_box: None,
             #[cfg(feature = "unicorn")]
             blocked_popup_menu_modal: None,
+            blocked_send_message_timeout: None,
+            blocked_clipboard_data: None,
             blocked_wait_threads: Vec::new(),
             suspended_guest_thread: None,
             suspended_guest_thread_queue: VecDeque::new(),
@@ -8539,6 +8549,9 @@ fn unicorn_blocked_wait_kind_name(
         crate::ce::scheduler::SchedulerBlockedWaitKind::PopupMenuModal { .. } => {
             "popup_menu_modal"
         }
+        crate::ce::scheduler::SchedulerBlockedWaitKind::ClipboardRender { .. } => {
+            "clipboard_render"
+        }
     }
 }
 
@@ -11582,7 +11595,8 @@ fn scheduler_blocked_msg_wait_has_input(
         | crate::ce::scheduler::SchedulerBlockedWaitKind::SerialRead { .. }
         | crate::ce::scheduler::SchedulerBlockedWaitKind::SerialCommEvent { .. }
         | crate::ce::scheduler::SchedulerBlockedWaitKind::WinsockRead { .. }
-        | crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { .. } => false,
+        | crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { .. }
+        | crate::ce::scheduler::SchedulerBlockedWaitKind::ClipboardRender { .. } => false,
         crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
             hwnd,
             min_msg,
