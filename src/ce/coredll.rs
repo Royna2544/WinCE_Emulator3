@@ -7422,12 +7422,19 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_DPA_CLONE => Some(CoredllValue::Handle(dpa_clone_raw(
             kernel, memory, thread_id, args,
         ))),
-        ORD_DPA_SORT | ORD_DPA_SEARCH => {
-            // DPA_Sort/DPA_Search handled by Unicorn try_enter_dpa_sort_callout; stub in raw path.
+        ORD_DPA_SORT => {
+            // Handled by Unicorn try_enter_dpa_sort_callout; stub in raw path.
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
             Some(CoredllValue::U32(0))
+        }
+        ORD_DPA_SEARCH => {
+            // Handled by Unicorn try_enter_dpa_search_callout; stub in raw path.
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
+            Some(CoredllValue::U32(0xffff_ffff)) // -1 (not found)
         }
         ORD_DPA_DESTROY_CALLBACK | ORD_DPA_ENUM_CALLBACK => {
             // Handled by Unicorn try_enter_dpa_enum_callout; stub as fail for non-Unicorn path.
@@ -7490,10 +7497,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::U32(0))
         }
         ORD_DSA_SEARCH => {
+            // Handled by Unicorn try_enter_dpa_search_callout (shared); stub in raw path.
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::U32(0))
+            Some(CoredllValue::U32(0xffff_ffff)) // -1 (not found)
         }
         ORD_WAVE_OUT_GET_NUM_DEVS => Some(CoredllValue::U32(kernel.audio.wave_out_get_num_devs())),
         ORD_WAVE_OUT_OPEN => Some(CoredllValue::MmResult(wave_out_open_raw(
