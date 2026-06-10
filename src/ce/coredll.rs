@@ -20679,6 +20679,8 @@ fn popup_menu_modal_input_loop(
                         popup_x,
                         popup_y,
                     );
+                    // In tap-only mode, pressing on a submenu parent opens the child pane.
+                    popup_menu_modal_open_submenu(kernel, &mut stack, framebuffer, popup_x, popup_y);
                     let active = stack.last().unwrap();
                     popup_menu_post_menu_select(
                         kernel,
@@ -20712,14 +20714,27 @@ fn popup_menu_modal_input_loop(
                         popup_x,
                         popup_y,
                     );
+                    // On button-up, try to open a submenu if the item is a submenu parent.
+                    // This keeps the modal loop running so the user taps a command inside
+                    // the child pane rather than immediately selecting the submenu default.
+                    if popup_menu_modal_open_submenu(kernel, &mut stack, framebuffer, popup_x, popup_y) {
+                        let active = stack.last().unwrap();
+                        popup_menu_post_menu_select(
+                            kernel,
+                            thread_id,
+                            hwnd,
+                            active.menu,
+                            active.current,
+                        );
+                    } else if let Some(selection) =
+                        popup_menu_modal_key_index_selection(&kernel.resources, &stack, item_index)
+                    {
+                        return Some(PopupMenuModalInput::Selected(selection));
+                    }
+                } else {
+                    popup_menu_post_menu_select(kernel, thread_id, hwnd, menu, None);
+                    return Some(PopupMenuModalInput::Cancelled);
                 }
-                if let Some(selection) =
-                    popup_menu_pointer_selection(&kernel.resources, menu, popup_x, popup_y, point)
-                {
-                    return Some(PopupMenuModalInput::Selected(selection));
-                }
-                popup_menu_post_menu_select(kernel, thread_id, hwnd, menu, None);
-                return Some(PopupMenuModalInput::Cancelled);
             }
             (crate::ce::gwe::WM_CHAR, VK_RETURN) => {
                 let active = stack.last().unwrap();

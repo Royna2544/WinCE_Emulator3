@@ -13474,6 +13474,122 @@ fn coredll_raw_track_popup_menu_records_attempt_and_returns_default_command() ->
 }
 
 #[test]
+fn coredll_raw_track_popup_menu_tap_opens_submenu_before_selecting() -> Result<()> {
+    // CE touch devices use tap-only menus: tapping a submenu parent must open the
+    // child pane rather than immediately picking the child's default command. The
+    // command is only returned once the user taps an item inside the child pane.
+    const TPM_RETURNCMD: u32 = 0x0100;
+    const MF_POPUP: u32 = 0x0010;
+    const MFS_DEFAULT: u32 = 0x1000;
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 41;
+    let more_text = 0x1_7c00;
+    let quit_text = 0x1_7c80;
+    let save_text = 0x1_7d00;
+    let load_text = 0x1_7d80;
+    memory.map_halfwords(more_text, 16);
+    memory.map_halfwords(quit_text, 16);
+    memory.map_halfwords(save_text, 16);
+    memory.map_halfwords(load_text, 16);
+    memory.write_wide_z(more_text, "More");
+    memory.write_wide_z(quit_text, "Quit");
+    memory.write_wide_z(save_text, "Save");
+    memory.write_wide_z(load_text, "Load");
+
+    let hwnd = kernel.create_window_ex_w(thread_id, "TAP_OWNER", "", None, 0, 0, 0);
+    let parent = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_POPUP_MENU,
+        [],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreatePopupMenu did not return a handle: {other:?}"),
+    };
+    let child = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_POPUP_MENU,
+        [],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreatePopupMenu did not return a handle: {other:?}"),
+    };
+    // Child pane: row 0 = 903 ("Save", the implicit default), row 1 = 904 ("Load").
+    for args in [
+        [child, 0, 903, save_text],
+        [child, 0, 904, load_text],
+        [parent, MF_POPUP | MFS_DEFAULT, child, more_text],
+        [parent, 0, 905, quit_text],
+    ] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_APPEND_MENU_W,
+                args,
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+    }
+
+    // Parent is shown at (325, 205); width is clamped to 90 so the child pane opens
+    // to its right at x = 325 + 90 - 2 = 413. Parent row 0 spans y in [207, 225);
+    // child row 1 ("Load") spans y in [227, 245) starting at child_x + 2 = 415.
+    let parent_row0 = (212_u32 << 16) | 340;
+    let child_row1 = (233_u32 << 16) | 430;
+    // Tap-down on the submenu parent opens the child pane.
+    assert!(kernel.post_message_w_for_thread(thread_id, hwnd, WM_LBUTTONDOWN, 1, parent_row0));
+    // Tap-up still over the parent must NOT pick the child default (903); it keeps
+    // the child pane open instead.
+    assert!(kernel.post_message_w_for_thread(thread_id, hwnd, WM_LBUTTONUP, 0, parent_row0));
+    // Tapping "Load" inside the child pane finally selects command 904.
+    assert!(kernel.post_message_w_for_thread(thread_id, hwnd, WM_LBUTTONUP, 0, child_row1));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRACK_POPUP_MENU_EX,
+            [parent, TPM_RETURNCMD, 325, 205, hwnd, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(904),
+            ..
+        }
+    ));
+    assert!(
+        kernel
+            .gwe
+            .peek_message_filtered(
+                thread_id,
+                Some(hwnd),
+                WM_LBUTTONDOWN,
+                WM_LBUTTONUP,
+                PeekFlags::NO_REMOVE
+            )
+            .is_none()
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_translate_message_uses_shift_caps_and_syschar() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
