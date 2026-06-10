@@ -130,7 +130,7 @@ const ERROR_MOD_NOT_FOUND_LOCAL: u32 = 126;
 const ERROR_INSUFFICIENT_BUFFER_LOCAL: u32 = 122;
 const ERROR_FILENAME_EXCED_RANGE_LOCAL: u32 = 206;
 const ERROR_INVALID_FLAGS_LOCAL: u32 = 1004;
-const ERROR_TIMEOUT_LOCAL: u32 = 1460;
+pub(crate) const ERROR_TIMEOUT_LOCAL: u32 = 1460;
 const MAX_PATH_CHARS: usize = 260;
 const MAX_SHORTCUT_TARGET_CHARS: usize = MAX_PATH_CHARS - 2;
 const CSIDL_FLAG_CREATE: u32 = 0x0000_8000;
@@ -32140,6 +32140,76 @@ fn send_message_timeout_raw<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     result
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(not(feature = "unicorn"), allow(dead_code))]
+pub(crate) struct SendMessageTimeoutBlockState {
+    pub send_id: u64,
+    pub result_ptr: u32,
+    pub timeout_ms: u32,
+    pub start_ms: u32,
+}
+
+/// Called by Unicorn to set up a cross-thread SMTO_BLOCK send and return the
+/// tracking state.  Returns `None` if the call doesn't meet the blocking
+/// criteria (same-thread, missing SMTO_BLOCK, invalid flags, hung-abort).
+/// The caller is responsible for parking the Unicorn thread and polling
+/// `kernel.gwe.sent_message_result_ready(state.send_id)` on each re-entry.
+#[cfg_attr(not(feature = "unicorn"), allow(dead_code))]
+pub(crate) fn send_message_timeout_block_prepare(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    args: &[u32],
+) -> Option<SendMessageTimeoutBlockState> {
+    let hwnd = raw_arg(args, 0);
+    let msg = raw_arg(args, 1);
+    let wparam = raw_arg(args, 2);
+    let lparam = raw_arg(args, 3);
+    let flags = raw_arg(args, 4);
+    let timeout_ms = raw_arg(args, 5);
+    let result_ptr = raw_arg(args, 6);
+    if flags & !SMTO_SUPPORTED_CE_FLAGS != 0 || flags & SMTO_BLOCK == 0 {
+        return None;
+    }
+    let target_thread = kernel
+        .gwe
+        .window(hwnd)
+        .filter(|w| !w.destroyed)
+        .map(|w| w.thread_id)?;
+    if target_thread == thread_id {
+        return None;
+    }
+    const CE_HUNG_THRESHOLD_MS: u32 = 5000;
+    if flags & SMTO_ABORTIFHUNG != 0
+        && kernel.gwe.is_thread_hung(
+            target_thread,
+            kernel.timers.tick_count(),
+            CE_HUNG_THRESHOLD_MS,
+        )
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_TIMEOUT_LOCAL);
+        return None;
+    }
+    let send_id = kernel.begin_cross_thread_send_message_w(
+        thread_id,
+        hwnd,
+        msg,
+        wparam,
+        lparam,
+        Some(timeout_ms),
+    )?;
+    kernel.gwe.set_sent_message_result_ptr(send_id, result_ptr);
+    kernel.gwe.set_sent_message_timeout_flags(send_id, flags);
+    let start_ms = kernel.timers.tick_count();
+    Some(SendMessageTimeoutBlockState {
+        send_id,
+        result_ptr,
+        timeout_ms,
+        start_ms,
+    })
 }
 
 fn translate_message_raw<M: CoredllGuestMemory>(
