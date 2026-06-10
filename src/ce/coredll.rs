@@ -3255,7 +3255,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             // _setjmp(env) — CE CRT setjmp; fill env with zeros and return 0 (initial call).
             let env = raw_arg(args, 0);
             for i in 0..64u32 {
-                memory.write_u8(env + i, 0);
+                let _ = memory.write_u8(env + i, 0);
             }
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
@@ -3837,7 +3837,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             let buf_ptr = raw_arg(args, 1);
             for i in 0..len {
                 let byte = (crt::rand_raw(kernel, thread_id) & 0xff) as u8;
-                memory.write_u8(buf_ptr + i as u32, byte);
+                let _ = memory.write_u8(buf_ptr + i as u32, byte);
             }
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
@@ -3940,7 +3940,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             // A_SHAInit(context) — zero the context struct
             let ctx = raw_arg(args, 0);
             for i in 0..92u32 {
-                memory.write_u8(ctx + i, 0);
+                let _ = memory.write_u8(ctx + i, 0);
             }
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
@@ -3954,7 +3954,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             // A_SHAFinal(context, digest) — write 20-byte zero digest
             let digest = raw_arg(args, 1);
             for i in 0..20u32 {
-                memory.write_u8(digest + i, 0);
+                let _ = memory.write_u8(digest + i, 0);
             }
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
@@ -3963,7 +3963,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_MD5_INIT => {
             let ctx = raw_arg(args, 0);
             for i in 0..92u32 {
-                memory.write_u8(ctx + i, 0);
+                let _ = memory.write_u8(ctx + i, 0);
             }
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
@@ -3975,7 +3975,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_MD5_FINAL => {
             let digest = raw_arg(args, 1);
             for i in 0..16u32 {
-                memory.write_u8(digest + i, 0);
+                let _ = memory.write_u8(digest + i, 0);
             }
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::U32(0))
@@ -12724,7 +12724,6 @@ fn get_date_format_w_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
-    const DATE_SHORTDATE: u32 = 0x0001;
     const DATE_LONGDATE: u32 = 0x0002;
 
     let flags = raw_arg(args, 1);
@@ -13279,6 +13278,8 @@ fn unicode_ctype2(u: u16) -> u16 {
         0x0400..=0x04FF => C2_LEFTTORIGHT,
         0x0591..=0x05FF | 0x0610..=0x061A | 0x064B..=0x065E | 0x0670 | 0x06D6..=0x06E4
         | 0x06E7..=0x06E8 | 0x06EA..=0x06ED => C2_RIGHTTOLEFT,
+        // Arabic-Indic digits → C2_ARABICNUMBER (BiDi class AN)
+        0x0660..=0x0669 | 0x06F0..=0x06F9 => C2_ARABICNUMBER,
         0x0600..=0x06FF | 0x0750..=0x077F => C2_RIGHTTOLEFT,
         0xFF10..=0xFF19 => C2_EUROPENUMBER,
         0x1100..=0x11FF | 0x3040..=0x30FF | 0x4E00..=0x9FFF | 0xAC00..=0xD7A3 => {
@@ -26887,7 +26888,6 @@ const BF_MIDDLE: u32 = 0x0800;
 const BF_ADJUST: u32 = 0x2000;
 const BF_FLAT: u32 = 0x4000;
 const BF_MONO: u32 = 0x8000;
-const BF_RECT: u32 = BF_LEFT | BF_TOP | BF_RIGHT | BF_BOTTOM;
 
 // DrawFrameControl type constants (wingdi.h)
 const DFC_CAPTION: u32 = 1;
@@ -27647,7 +27647,6 @@ const PS_DOT: u32 = 2;
 const PS_DASHDOT: u32 = 3;
 const PS_DASHDOTDOT: u32 = 4;
 const PS_NULL: u32 = 5;
-const PS_INSIDEFRAME: u32 = 6;
 
 fn pen_colorref(kernel: &CeKernel, pen: u32) -> Option<u32> {
     if Some(pen) == stock_object_handle(6) {
