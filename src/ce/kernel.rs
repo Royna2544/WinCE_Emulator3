@@ -113,6 +113,79 @@ pub struct CeKernel {
     runtime_loader_stats: RuntimeLoaderStats,
     pulsed_wait_handles: BTreeMap<u64, u32>,
     comm_event_mask_changed_waits: BTreeSet<u64>,
+    font_families: Vec<CeFontFamily>,
+}
+
+/// Font family entry for CE system font enumeration (EnumFontFamiliesExW).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CeFontFamily {
+    /// Face name (UTF-8, max 31 chars when encoded to UTF-16).
+    pub face_name: String,
+    pub charset: u8,
+    pub pitch_and_family: u8,
+    pub is_truetype: bool,
+}
+
+fn ce_system_font_families() -> Vec<CeFontFamily> {
+    // CE 6.0 Korean device: gulim.ttc Korean faces + CE system Western faces.
+    const HANGUL: u8 = 129;
+    const ANSI: u8 = 0;
+    vec![
+        CeFontFamily {
+            face_name: "\u{AD74}\u{B9BC}".to_owned(),
+            charset: HANGUL,
+            pitch_and_family: 0x22,
+            is_truetype: true,
+        }, // 굴림
+        CeFontFamily {
+            face_name: "\u{AD74}\u{B9BC}\u{CC54}".to_owned(),
+            charset: HANGUL,
+            pitch_and_family: 0x31,
+            is_truetype: true,
+        }, // 굴림체
+        CeFontFamily {
+            face_name: "\u{B3CB}\u{C6C0}".to_owned(),
+            charset: HANGUL,
+            pitch_and_family: 0x22,
+            is_truetype: true,
+        }, // 돋움
+        CeFontFamily {
+            face_name: "\u{B3CB}\u{C6C0}\u{CC54}".to_owned(),
+            charset: HANGUL,
+            pitch_and_family: 0x31,
+            is_truetype: true,
+        }, // 돋움체
+        CeFontFamily {
+            face_name: "\u{BC14}\u{D0D5}".to_owned(),
+            charset: HANGUL,
+            pitch_and_family: 0x12,
+            is_truetype: true,
+        }, // 바탕
+        CeFontFamily {
+            face_name: "\u{BC14}\u{D0D5}\u{CC54}".to_owned(),
+            charset: HANGUL,
+            pitch_and_family: 0x11,
+            is_truetype: true,
+        }, // 바탕체
+        CeFontFamily {
+            face_name: "Tahoma".to_owned(),
+            charset: ANSI,
+            pitch_and_family: 0x22,
+            is_truetype: true,
+        },
+        CeFontFamily {
+            face_name: "Arial".to_owned(),
+            charset: ANSI,
+            pitch_and_family: 0x22,
+            is_truetype: true,
+        },
+        CeFontFamily {
+            face_name: "Courier New".to_owned(),
+            charset: ANSI,
+            pitch_and_family: 0x31,
+            is_truetype: true,
+        },
+    ]
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -407,6 +480,7 @@ impl CeKernel {
             runtime_loader_stats: RuntimeLoaderStats::default(),
             pulsed_wait_handles: BTreeMap::new(),
             comm_event_mask_changed_waits: BTreeSet::new(),
+            font_families: ce_system_font_families(),
         }
     }
 
@@ -641,6 +715,10 @@ impl CeKernel {
             .cloned()
     }
 
+    pub fn font_families(&self) -> &[CeFontFamily] {
+        &self.font_families
+    }
+
     pub fn font_mem_resource_pseudo_handle(&mut self) -> u32 {
         let handle = self.next_font_mem_resource_handle;
         self.next_font_mem_resource_handle = self.next_font_mem_resource_handle.wrapping_add(1);
@@ -649,9 +727,7 @@ impl CeKernel {
 
     pub fn loaded_module_for_address(&self, addr: u32) -> Option<&LoadedModule> {
         self.loaded_modules.values().find(|m| {
-            !m.unload_pending
-                && addr >= m.base
-                && addr < m.base.saturating_add(m.image_size)
+            !m.unload_pending && addr >= m.base && addr < m.base.saturating_add(m.image_size)
         })
     }
 
@@ -943,7 +1019,13 @@ impl CeKernel {
         self.post_shell_file_change_notifications(SHCNE_DRIVEADD, Some(guest_root), None);
         self.signal_file_change_notifications(SHCNE_DRIVEADD, Some(guest_root), None);
         // Broadcast WM_DEVICECHANGE(DBT_DEVICEARRIVAL) to all top-level windows.
-        self.send_notify_message_w(0, crate::ce::gwe::HWND_BROADCAST, WM_DEVICECHANGE, DBT_DEVICEARRIVAL, 0);
+        self.send_notify_message_w(
+            0,
+            crate::ce::gwe::HWND_BROADCAST,
+            WM_DEVICECHANGE,
+            DBT_DEVICEARRIVAL,
+            0,
+        );
     }
 
     pub fn unmount_guest_root(&mut self, guest_root: &str) -> bool {
@@ -954,7 +1036,13 @@ impl CeKernel {
             // (CE FSDMGR signals these regardless of their specific notify_filter).
             self.signal_file_change_notifications_for_removed_mount(guest_root);
             // Broadcast WM_DEVICECHANGE(DBT_DEVICEREMOVECOMPLETE) to all top-level windows.
-            self.send_notify_message_w(0, crate::ce::gwe::HWND_BROADCAST, WM_DEVICECHANGE, DBT_DEVICEREMOVECOMPLETE, 0);
+            self.send_notify_message_w(
+                0,
+                crate::ce::gwe::HWND_BROADCAST,
+                WM_DEVICECHANGE,
+                DBT_DEVICEREMOVECOMPLETE,
+                0,
+            );
             true
         } else {
             false

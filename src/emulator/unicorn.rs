@@ -1,3 +1,24 @@
+#[cfg(feature = "unicorn")]
+use super::cpu_mips::{
+    LiveTrampolineState, MIPS_JMPBUF_FP_SLOT, MIPS_JMPBUF_GP_SLOT, MIPS_JMPBUF_RA_SLOT,
+    MIPS_JMPBUF_RETURN_PC_SLOT, MIPS_JMPBUF_S0_SLOT, MIPS_JMPBUF_SP_SLOT, MipsGuestContext,
+    MipsTrampolineJump, MipsTrampolinePatchResult, capture_mips_gprs, decode_addiu_zero,
+    decode_direct_jump_target, decode_indirect_call_register, decode_jalr_register,
+    decode_jr_register, decode_old_mips_kernel_call, decode_trampoline_sentinel_target,
+    is_mips_delay_slot_pc, is_patched_trampoline_jump, is_trampoline_sentinel_first_word,
+    mips_gpr_name, mips_trampoline_origin_for_pc, patch_mips_unicorn_trampolines, read_mips_gpr,
+    read_mips_import_args, read_mips_reg, restore_mips_gprs, target_in_ranges,
+    trampoline_stub_by_origin, write_mips_gpr,
+};
+#[cfg(all(test, feature = "unicorn"))]
+use super::cpu_mips::{
+    MipsBranch, MipsBranchLikely, branch_likely_stub_words, decode_mips_branch_likely,
+    decode_mips_normal_branch, encode_mips_jr, encode_mips_lui, encode_mips_ori,
+    is_mips_control_transfer_instruction, jal_stub_words, mips_byte_jump_table_ranges,
+    mips_halfword_jump_table_ranges, mips_patch_rva_overlaps_data_ranges, normal_branch_stub_words,
+};
+#[cfg(all(test, feature = "unicorn"))]
+use crate::emulator::pe_loader::{GUEST_STACK_MIN_RESERVE, USER_KDATA_PAGE_BASE, user_kdata_page};
 use crate::{
     ce::{
         coredll::CoredllGuestMemory,
@@ -7,18 +28,15 @@ use crate::{
     emulator::{
         dll_search::{emulator_provided_import_module, normalize_module_name, resolve_dll_path},
         imports::{
-            ExternalImportTable, IMPORT_TRAP_BASE,
-            IMPORT_TRAP_PAGE_SIZE, ImportTrap, ImportTrapTable, import_trap_code_page,
-            parse_forwarder_target, patch_pe_imports,
+            ExternalImportTable, IMPORT_TRAP_BASE, IMPORT_TRAP_PAGE_SIZE, ImportTrap,
+            ImportTrapTable, import_trap_code_page, parse_forwarder_target, patch_pe_imports,
         },
         memory::{MemoryMap, MemoryPerms},
         pe_loader::{
-            MappedBlob, MappedResource, MappedResourceString, PeLoadResult,
-            GUEST_HEAP_ARENA_BASE, GUEST_HEAP_ARENA_SIZE,
-            RESERVED_IMPORT_TRAP_STUB_BYTES,
-            SYS_HANDLE_CURRENT_PROCESS, SYS_HANDLE_CURRENT_THREAD,
-            align_up_4k, choose_dll_load_base, loaded_module_info,
-            range_contains, ranges_overlap,
+            GUEST_HEAP_ARENA_BASE, GUEST_HEAP_ARENA_SIZE, MappedBlob, MappedResource,
+            MappedResourceString, PeLoadResult, RESERVED_IMPORT_TRAP_STUB_BYTES,
+            SYS_HANDLE_CURRENT_PROCESS, SYS_HANDLE_CURRENT_THREAD, align_up_4k,
+            choose_dll_load_base, loaded_module_info, range_contains, ranges_overlap,
             refresh_import_trap_page_blob, user_kdata_handle_address,
         },
         types::*,
@@ -26,8 +44,6 @@ use crate::{
     error::{Error, Result},
     pe::PeImage,
 };
-#[cfg(all(test, feature = "unicorn"))]
-use crate::emulator::pe_loader::{GUEST_STACK_MIN_RESERVE, USER_KDATA_PAGE_BASE, user_kdata_page};
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
@@ -35,31 +51,6 @@ use std::{
 };
 #[cfg(feature = "unicorn")]
 use unicorn_engine::RegisterMIPS;
-#[cfg(feature = "unicorn")]
-use super::cpu_mips::{
-    MipsGuestContext, MipsTrampolineJump, MipsTrampolinePatchResult, LiveTrampolineState,
-    MIPS_JMPBUF_RETURN_PC_SLOT, MIPS_JMPBUF_SP_SLOT, MIPS_JMPBUF_FP_SLOT,
-    MIPS_JMPBUF_RA_SLOT, MIPS_JMPBUF_GP_SLOT, MIPS_JMPBUF_S0_SLOT,
-    patch_mips_unicorn_trampolines,
-    decode_trampoline_sentinel_target, is_patched_trampoline_jump, target_in_ranges,
-    read_mips_reg, read_mips_import_args, read_mips_gpr, write_mips_gpr, mips_gpr_name,
-    capture_mips_gprs, restore_mips_gprs,
-    is_mips_delay_slot_pc,
-    mips_trampoline_origin_for_pc, decode_old_mips_kernel_call,
-    decode_addiu_zero, decode_jalr_register, decode_indirect_call_register,
-    decode_jr_register, decode_direct_jump_target, is_trampoline_sentinel_first_word,
-    trampoline_stub_by_origin,
-};
-#[cfg(all(test, feature = "unicorn"))]
-use super::cpu_mips::{
-    MipsBranchLikely, MipsBranch,
-    decode_mips_branch_likely, decode_mips_normal_branch,
-    jal_stub_words, branch_likely_stub_words, normal_branch_stub_words,
-    encode_mips_lui, encode_mips_ori, encode_mips_jr,
-    is_mips_control_transfer_instruction,
-    mips_halfword_jump_table_ranges, mips_byte_jump_table_ranges,
-    mips_patch_rva_overlaps_data_ranges,
-};
 
 const MAX_EMPTY_QUEUE_TIMER_FAST_FORWARD_MS: u32 = 100;
 
@@ -101,6 +92,8 @@ pub struct UnicornMips {
     pending_dsa_enum_returns: Vec<PendingDsaEnumReturn>,
     #[cfg(feature = "unicorn")]
     pending_dpa_search_returns: Vec<PendingDpaSearchReturn>,
+    #[cfg(feature = "unicorn")]
+    pending_enum_font_families_returns: Vec<PendingEnumFontFamiliesReturn>,
     #[cfg(feature = "unicorn")]
     pending_dll_lifecycle_returns: Vec<PendingDllLifecycleReturn>,
     #[cfg(feature = "unicorn")]
@@ -160,27 +153,23 @@ struct UnicornRunStateHandles<'a> {
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingEnumWindowsReturn>>>,
     pending_enum_display_monitors_returns:
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingEnumDisplayMonitorsReturn>>>,
-    pending_dpa_enum_returns:
-        &'a std::rc::Rc<std::cell::RefCell<Vec<PendingDpaEnumReturn>>>,
+    pending_dpa_enum_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<PendingDpaEnumReturn>>>,
     pending_com_notification_returns:
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingComNotificationReturn>>>,
-    pending_dsa_enum_returns:
-        &'a std::rc::Rc<std::cell::RefCell<Vec<PendingDsaEnumReturn>>>,
-    pending_dpa_search_returns:
-        &'a std::rc::Rc<std::cell::RefCell<Vec<PendingDpaSearchReturn>>>,
+    pending_dsa_enum_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<PendingDsaEnumReturn>>>,
+    pending_dpa_search_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<PendingDpaSearchReturn>>>,
+    pending_enum_font_families_returns:
+        &'a std::rc::Rc<std::cell::RefCell<Vec<PendingEnumFontFamiliesReturn>>>,
     pending_dll_lifecycle_returns:
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingDllLifecycleReturn>>>,
     create_window_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<CreateWindowReturn>>>,
     pending_wndproc_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<PendingWndProcReturn>>>,
     blocked_guest_thread: &'a std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
-    blocked_modal_message_box:
-        &'a std::rc::Rc<std::cell::RefCell<Option<BlockedModalMessageBox>>>,
-    blocked_popup_menu_modal:
-        &'a std::rc::Rc<std::cell::RefCell<Option<BlockedPopupMenuModal>>>,
+    blocked_modal_message_box: &'a std::rc::Rc<std::cell::RefCell<Option<BlockedModalMessageBox>>>,
+    blocked_popup_menu_modal: &'a std::rc::Rc<std::cell::RefCell<Option<BlockedPopupMenuModal>>>,
     blocked_send_message_timeout:
         &'a std::rc::Rc<std::cell::RefCell<Option<BlockedSendMessageTimeout>>>,
-    blocked_clipboard_data:
-        &'a std::rc::Rc<std::cell::RefCell<Option<BlockedClipboardData>>>,
+    blocked_clipboard_data: &'a std::rc::Rc<std::cell::RefCell<Option<BlockedClipboardData>>>,
     blocked_wait_threads: &'a std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
     suspended_guest_thread: &'a std::rc::Rc<std::cell::RefCell<Option<SuspendedGuestThread>>>,
     suspended_guest_thread_queue:
@@ -198,9 +187,6 @@ struct SavedCpuContext {
     pc: u32,
     regs: MipsGuestContext,
 }
-
-
-
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct UnicornImportCountKey {
@@ -249,7 +235,12 @@ fn unicorn_window_snapshot(window: crate::ce::gwe::Window) -> UnicornWindowSnaps
         pending_size: window.pending_size,
         rect: window.rect,
         client_rect: window.client_rect,
-        update_rect: window.update_rects.iter().copied().reduce(crate::ce::gwe::Rect::union).unwrap_or_default(),
+        update_rect: window
+            .update_rects
+            .iter()
+            .copied()
+            .reduce(crate::ce::gwe::Rect::union)
+            .unwrap_or_default(),
         wndproc: window.wndproc,
     }
 }
@@ -337,6 +328,9 @@ const DSA_ENUM_RETURN_STUB_ADDR: u32 =
 const DPA_SEARCH_RETURN_STUB_ADDR: u32 =
     DSA_ENUM_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
 #[cfg(feature = "unicorn")]
+const ENUM_FONT_FAMILIES_RETURN_STUB_ADDR: u32 =
+    DPA_SEARCH_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
+#[cfg(feature = "unicorn")]
 const CREATESTRUCTW_SIZE: u32 = 48;
 #[cfg(feature = "unicorn")]
 const WM_INITDIALOG: u32 = 0x0110;
@@ -348,7 +342,10 @@ const CURRENT_WAIT_HOST_THROTTLE_MS: u64 = 1;
 const REALTIME_WAIT_THROTTLE_ENV: &str = "WINCE_EMU_REALTIME_WAITS";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum CreateWindowPhase { NcCreate, Create }
+enum CreateWindowPhase {
+    NcCreate,
+    Create,
+}
 
 #[derive(Debug, Clone)]
 struct CreateWindowReturn {
@@ -567,6 +564,20 @@ struct PendingDpaSearchReturn {
 }
 
 #[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingEnumFontFamiliesReturn {
+    return_pc: u32,
+    return_sp: u32,
+    caller_regs: MipsGuestContext,
+    callback: u32,
+    lparam: u32,
+    /// Remaining font families to enumerate (front = next to call).
+    remaining: Vec<crate::ce::kernel::CeFontFamily>,
+    /// Stack address where ENUMLOGFONTEXW (348 B) and NEWTEXTMETRICEXW (100 B) are written.
+    struct_frame_sp: u32,
+}
+
+#[cfg(feature = "unicorn")]
 fn pop_pending_guest_thread_return_for_thread(
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingGuestThreadReturn>>>,
     thread_id: u32,
@@ -774,7 +785,6 @@ type SuspendedGuestThreadSlot = std::rc::Rc<std::cell::RefCell<Option<SuspendedG
 type SuspendedGuestThreadQueue =
     std::rc::Rc<std::cell::RefCell<std::collections::VecDeque<SuspendedGuestThread>>>;
 
-
 const HEAP_SPILLOVER_BLOB_NAME: &str = "ram:heap-spillover";
 
 #[cfg(feature = "unicorn")]
@@ -819,7 +829,6 @@ impl MappedCodeIndex {
     }
 }
 
-
 impl UnicornMips {
     pub fn new() -> Result<Self> {
         Ok(Self {
@@ -859,6 +868,8 @@ impl UnicornMips {
             pending_dsa_enum_returns: Vec::new(),
             #[cfg(feature = "unicorn")]
             pending_dpa_search_returns: Vec::new(),
+            #[cfg(feature = "unicorn")]
+            pending_enum_font_families_returns: Vec::new(),
             #[cfg(feature = "unicorn")]
             pending_dll_lifecycle_returns: Vec::new(),
             #[cfg(feature = "unicorn")]
@@ -1065,6 +1076,11 @@ impl UnicornMips {
             .borrow_mut()
             .drain(..)
             .collect();
+        self.pending_enum_font_families_returns = state
+            .pending_enum_font_families_returns
+            .borrow_mut()
+            .drain(..)
+            .collect();
         self.pending_dll_lifecycle_returns = state
             .pending_dll_lifecycle_returns
             .borrow_mut()
@@ -1080,8 +1096,7 @@ impl UnicornMips {
         self.blocked_guest_thread = state.blocked_guest_thread.borrow_mut().take();
         self.blocked_modal_message_box = state.blocked_modal_message_box.borrow_mut().take();
         self.blocked_popup_menu_modal = state.blocked_popup_menu_modal.borrow_mut().take();
-        self.blocked_send_message_timeout =
-            state.blocked_send_message_timeout.borrow_mut().take();
+        self.blocked_send_message_timeout = state.blocked_send_message_timeout.borrow_mut().take();
         self.blocked_clipboard_data = state.blocked_clipboard_data.borrow_mut().take();
         self.blocked_wait_threads = state.blocked_wait_threads.borrow_mut().drain(..).collect();
         self.suspended_guest_thread = state.suspended_guest_thread.borrow_mut().take();
@@ -1371,6 +1386,10 @@ impl UnicornMips {
                 pending_dsa_enum_returns: std::mem::take(&mut self.pending_dsa_enum_returns),
                 #[cfg(feature = "unicorn")]
                 pending_dpa_search_returns: std::mem::take(&mut self.pending_dpa_search_returns),
+                #[cfg(feature = "unicorn")]
+                pending_enum_font_families_returns: std::mem::take(
+                    &mut self.pending_enum_font_families_returns,
+                ),
                 #[cfg(feature = "unicorn")]
                 pending_dll_lifecycle_returns: std::mem::take(
                     &mut self.pending_dll_lifecycle_returns,
@@ -2372,19 +2391,27 @@ impl UnicornMips {
         )));
         let pending_enum_display_monitors_returns_hook =
             Rc::clone(&pending_enum_display_monitors_returns);
-        let pending_dpa_enum_returns =
-            Rc::new(RefCell::new(std::mem::take(&mut self.pending_dpa_enum_returns)));
+        let pending_dpa_enum_returns = Rc::new(RefCell::new(std::mem::take(
+            &mut self.pending_dpa_enum_returns,
+        )));
         let pending_dpa_enum_returns_hook = Rc::clone(&pending_dpa_enum_returns);
         let pending_com_notification_returns = Rc::new(RefCell::new(std::mem::take(
             &mut self.pending_com_notification_returns,
         )));
         let pending_com_notification_returns_hook = Rc::clone(&pending_com_notification_returns);
-        let pending_dsa_enum_returns =
-            Rc::new(RefCell::new(std::mem::take(&mut self.pending_dsa_enum_returns)));
+        let pending_dsa_enum_returns = Rc::new(RefCell::new(std::mem::take(
+            &mut self.pending_dsa_enum_returns,
+        )));
         let pending_dsa_enum_returns_hook = Rc::clone(&pending_dsa_enum_returns);
-        let pending_dpa_search_returns =
-            Rc::new(RefCell::new(std::mem::take(&mut self.pending_dpa_search_returns)));
+        let pending_dpa_search_returns = Rc::new(RefCell::new(std::mem::take(
+            &mut self.pending_dpa_search_returns,
+        )));
         let pending_dpa_search_returns_hook = Rc::clone(&pending_dpa_search_returns);
+        let pending_enum_font_families_returns = Rc::new(RefCell::new(std::mem::take(
+            &mut self.pending_enum_font_families_returns,
+        )));
+        let pending_enum_font_families_returns_hook =
+            Rc::clone(&pending_enum_font_families_returns);
         let pending_dll_lifecycle_returns = Rc::new(RefCell::new(std::mem::take(
             &mut self.pending_dll_lifecycle_returns,
         )));
@@ -2394,14 +2421,12 @@ impl UnicornMips {
         let blocked_modal_message_box =
             Rc::new(RefCell::new(self.blocked_modal_message_box.take()));
         let blocked_modal_message_box_hook = Rc::clone(&blocked_modal_message_box);
-        let blocked_popup_menu_modal =
-            Rc::new(RefCell::new(self.blocked_popup_menu_modal.take()));
+        let blocked_popup_menu_modal = Rc::new(RefCell::new(self.blocked_popup_menu_modal.take()));
         let blocked_popup_menu_modal_hook = Rc::clone(&blocked_popup_menu_modal);
         let blocked_send_message_timeout =
             Rc::new(RefCell::new(self.blocked_send_message_timeout.take()));
         let blocked_send_message_timeout_hook = Rc::clone(&blocked_send_message_timeout);
-        let blocked_clipboard_data =
-            Rc::new(RefCell::new(self.blocked_clipboard_data.take()));
+        let blocked_clipboard_data = Rc::new(RefCell::new(self.blocked_clipboard_data.take()));
         let blocked_clipboard_data_hook = Rc::clone(&blocked_clipboard_data);
         let blocked_wait_threads =
             Rc::new(RefCell::new(std::mem::take(&mut self.blocked_wait_threads)));
@@ -2432,6 +2457,7 @@ impl UnicornMips {
             pending_com_notification_returns: &pending_com_notification_returns,
             pending_dsa_enum_returns: &pending_dsa_enum_returns,
             pending_dpa_search_returns: &pending_dpa_search_returns,
+            pending_enum_font_families_returns: &pending_enum_font_families_returns,
             pending_dll_lifecycle_returns: &pending_dll_lifecycle_returns,
             create_window_returns: &create_window_returns,
             pending_wndproc_returns: &pending_wndproc_returns,
@@ -2536,8 +2562,7 @@ impl UnicornMips {
         let blocked_guest_thread_timeslice_hook = Rc::clone(&blocked_guest_thread);
         let blocked_modal_message_box_timeslice_hook = Rc::clone(&blocked_modal_message_box);
         let blocked_popup_menu_modal_timeslice_hook = Rc::clone(&blocked_popup_menu_modal);
-        let blocked_send_message_timeout_timeslice_hook =
-            Rc::clone(&blocked_send_message_timeout);
+        let blocked_send_message_timeout_timeslice_hook = Rc::clone(&blocked_send_message_timeout);
         let blocked_clipboard_data_timeslice_hook = Rc::clone(&blocked_clipboard_data);
         let blocked_get_message_timeslice_hook = Rc::clone(&blocked_get_message);
         let pending_wndproc_returns_timeslice_hook = Rc::clone(&pending_wndproc_returns);
@@ -3041,6 +3066,13 @@ impl UnicornMips {
                     handle_dpa_search_return_stub(
                         uc,
                         &pending_dpa_search_returns_hook,
+                    );
+                    return;
+                }
+                if address == ENUM_FONT_FAMILIES_RETURN_STUB_ADDR {
+                    handle_enum_font_families_return_stub(
+                        uc,
+                        &pending_enum_font_families_returns_hook,
                     );
                     return;
                 }
@@ -3749,6 +3781,18 @@ impl UnicornMips {
                     return;
                 }
                 if trap.as_ref().is_some_and(|trap| {
+                    try_enter_enum_font_families_callout(
+                        unsafe { &*kernel_ptr },
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        &pending_enum_font_families_returns_hook,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
                     try_enter_enum_windows_callout(
                         unsafe { &*kernel_ptr },
                         memory.uc,
@@ -4447,6 +4491,7 @@ impl super::cpu::CpuBackend for UnicornMips {
             pending_com_notification_returns: Vec::new(),
             pending_dsa_enum_returns: Vec::new(),
             pending_dpa_search_returns: Vec::new(),
+            pending_enum_font_families_returns: Vec::new(),
             pending_dll_lifecycle_returns: Vec::new(),
             pending_create_window_returns: Vec::new(),
             pending_wndproc_returns: Vec::new(),
@@ -4528,10 +4573,7 @@ impl super::cpu::CpuBackend for UnicornMips {
         self.switch_to_next_parked_child_process(kernel)
     }
 
-    fn rotate_to_next_parked_process(
-        &mut self,
-        kernel: &mut crate::ce::kernel::CeKernel,
-    ) -> bool {
+    fn rotate_to_next_parked_process(&mut self, kernel: &mut crate::ce::kernel::CeKernel) -> bool {
         self.rotate_to_next_parked_process(kernel)
     }
 
@@ -4733,7 +4775,6 @@ fn update_user_kdata_current_ids<D>(
     Ok(())
 }
 
-
 #[cfg(feature = "unicorn")]
 fn fast_start_indirect_transfer_sites(blobs: &[MappedBlob]) -> Vec<u32> {
     let mut sites = Vec::new();
@@ -4763,7 +4804,6 @@ fn fast_start_indirect_transfer_sites(blobs: &[MappedBlob]) -> Vec<u32> {
     sites.dedup();
     sites
 }
-
 
 #[cfg(feature = "unicorn")]
 const RUNTIME_DLL_LOAD_BASE: u32 = 0x1000_0000;
@@ -6520,8 +6560,6 @@ fn write_inavi_controller_traces(
     Ok(())
 }
 
-
-
 #[cfg(feature = "unicorn")]
 impl std::fmt::Display for UnicornDebugSnapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -7635,14 +7673,20 @@ fn try_dispatch_com_notification_callout<D>(
 
     // Read vtable pointer from *callback_ptr.
     let mut vtable_bytes = [0u8; 4];
-    if uc.mem_read(u64::from(cb.callback_ptr), &mut vtable_bytes).is_err() {
+    if uc
+        .mem_read(u64::from(cb.callback_ptr), &mut vtable_bytes)
+        .is_err()
+    {
         return false;
     }
     let vtable_ptr = u32::from_le_bytes(vtable_bytes);
 
     // Read method pointer from vtable at the recorded offset.
     let mut method_bytes = [0u8; 4];
-    if uc.mem_read(u64::from(vtable_ptr + cb.vtable_offset), &mut method_bytes).is_err() {
+    if uc
+        .mem_read(u64::from(vtable_ptr + cb.vtable_offset), &mut method_bytes)
+        .is_err()
+    {
         return false;
     }
     let method_ptr = u32::from_le_bytes(method_bytes);
@@ -7677,8 +7721,7 @@ fn try_dispatch_com_notification_callout<D>(
                 .heap_alloc(process_heap, 0, byte_len)
                 .unwrap_or(0);
             if link_ptr != 0 {
-                let bytes: Vec<u8> =
-                    utf16.iter().flat_map(|c| c.to_le_bytes()).collect();
+                let bytes: Vec<u8> = utf16.iter().flat_map(|c| c.to_le_bytes()).collect();
                 let _ = uc.mem_write(u64::from(link_ptr), &bytes);
             }
             (
@@ -7688,9 +7731,11 @@ fn try_dispatch_com_notification_callout<D>(
                 if link_ptr != 0 { Some(link_ptr) } else { None },
             )
         }
-        ShellNotificationCallbackArguments::OnDismiss { id, timed_out, lparam } => {
-            (*id, u32::from(*timed_out), *lparam, None)
-        }
+        ShellNotificationCallbackArguments::OnDismiss {
+            id,
+            timed_out,
+            lparam,
+        } => (*id, u32::from(*timed_out), *lparam, None),
     };
 
     tracing::debug!(
@@ -7707,7 +7752,10 @@ fn try_dispatch_com_notification_callout<D>(
         uc.reg_write(RegisterMIPS::A1, u64::from(a1)),
         uc.reg_write(RegisterMIPS::A2, u64::from(a2)),
         uc.reg_write(RegisterMIPS::A3, u64::from(a3)),
-        uc.reg_write(RegisterMIPS::RA, u64::from(COM_NOTIFICATION_RETURN_STUB_ADDR)),
+        uc.reg_write(
+            RegisterMIPS::RA,
+            u64::from(COM_NOTIFICATION_RETURN_STUB_ADDR),
+        ),
         uc.reg_write(RegisterMIPS::T9, u64::from(call_method)),
         uc.reg_write(RegisterMIPS::PC, u64::from(call_method)),
     ]
@@ -7722,12 +7770,14 @@ fn try_dispatch_com_notification_callout<D>(
         return false;
     }
 
-    pending_com_returns.borrow_mut().push(PendingComNotificationReturn {
-        return_pc: import_pc,
-        return_sp,
-        caller_regs,
-        heap_ptr_to_free,
-    });
+    pending_com_returns
+        .borrow_mut()
+        .push(PendingComNotificationReturn {
+            return_pc: import_pc,
+            return_sp,
+            caller_regs,
+            heap_ptr_to_free,
+        });
 
     true
 }
@@ -8480,8 +8530,7 @@ fn try_resume_blocked_popup_menu_modal<D>(
                 return true;
             }
             *current_thread_id.borrow_mut() = modal_thread_id;
-            let _ =
-                update_user_kdata_current_ids(uc, modal_thread_id, kernel.current_process_id());
+            let _ = update_user_kdata_current_ids(uc, modal_thread_id, kernel.current_process_id());
             *running_thread.borrow_mut() = Some((modal_thread_id, thread_handle));
             true
         }
@@ -8537,10 +8586,7 @@ fn try_block_for_send_message_timeout_wait<D>(
                 ) {
                     let bytes = result.to_le_bytes();
                     mem.copy_from_slice(&bytes);
-                    let _ = uc.mem_write(
-                        u64::from(blocked.block_state.result_ptr),
-                        &bytes,
-                    );
+                    let _ = uc.mem_write(u64::from(blocked.block_state.result_ptr), &bytes);
                 }
             }
             (1u32, 0u32)
@@ -8661,11 +8707,7 @@ fn try_resume_blocked_send_message_timeout<D>(
             active_thread_id,
         );
     }
-    remove_suspended_guest_threads_for_thread(
-        suspended_thread,
-        suspended_queue,
-        blocked.thread_id,
-    );
+    remove_suspended_guest_threads_for_thread(suspended_thread, suspended_queue, blocked.thread_id);
 
     let mut regs = blocked.regs;
     regs.set_v0(v0);
@@ -8898,11 +8940,7 @@ fn try_resume_blocked_clipboard_data<D>(
             active_thread_id,
         );
     }
-    remove_suspended_guest_threads_for_thread(
-        suspended_thread,
-        suspended_queue,
-        blocked.thread_id,
-    );
+    remove_suspended_guest_threads_for_thread(suspended_thread, suspended_queue, blocked.thread_id);
 
     let mut regs = blocked.regs;
     regs.set_v0(handle);
@@ -9033,9 +9071,7 @@ fn unicorn_blocked_wait_kind_name(
         crate::ce::scheduler::SchedulerBlockedWaitKind::WinsockRead { .. } => "winsock_read",
         crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { .. } => "send_message",
         crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox => "modal_message_box",
-        crate::ce::scheduler::SchedulerBlockedWaitKind::PopupMenuModal { .. } => {
-            "popup_menu_modal"
-        }
+        crate::ce::scheduler::SchedulerBlockedWaitKind::PopupMenuModal { .. } => "popup_menu_modal",
         crate::ce::scheduler::SchedulerBlockedWaitKind::ClipboardRender { .. } => {
             "clipboard_render"
         }
@@ -11800,7 +11836,6 @@ fn scheduler_timeslice_consume_if_safe(
     true
 }
 
-
 #[cfg(feature = "unicorn")]
 fn remove_stale_blocked_waits_for_thread(
     kernel: &mut CeKernel,
@@ -12101,22 +12136,22 @@ fn scheduler_blocked_msg_wait_has_input(
                 kernel.gwe.has_new_queue_input(blocked.thread_id, wake_mask)
             }
         }
-        crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox => kernel
-            .gwe
-            .has_message_filtered(
+        crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox => {
+            kernel.gwe.has_message_filtered(
                 blocked.thread_id,
                 None,
                 crate::ce::gwe::WM_PAINT,
                 crate::ce::gwe::WM_LBUTTONUP,
-            ),
-        crate::ce::scheduler::SchedulerBlockedWaitKind::PopupMenuModal {
-            mouse_message_max,
-        } => kernel.gwe.has_message_filtered(
-            blocked.thread_id,
-            None,
-            crate::ce::gwe::WM_PAINT,
-            mouse_message_max,
-        ),
+            )
+        }
+        crate::ce::scheduler::SchedulerBlockedWaitKind::PopupMenuModal { mouse_message_max } => {
+            kernel.gwe.has_message_filtered(
+                blocked.thread_id,
+                None,
+                crate::ce::gwe::WM_PAINT,
+                mouse_message_max,
+            )
+        }
     }
 }
 
@@ -12165,9 +12200,10 @@ fn scheduler_blocked_wait_is_ready(
             crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { send_id } => {
                 kernel.sent_message_result_ready(send_id)
             }
-            crate::ce::scheduler::SchedulerBlockedWaitKind::ClipboardRender { format } => {
-                kernel.gwe.get_clipboard_data(format).is_some_and(|h| h != 0)
-            }
+            crate::ce::scheduler::SchedulerBlockedWaitKind::ClipboardRender { format } => kernel
+                .gwe
+                .get_clipboard_data(format)
+                .is_some_and(|h| h != 0),
             _ => false,
         }
 }
@@ -18345,10 +18381,7 @@ mod guest_thread_stack_tests {
 
         // Parent exits — destroys its own windows and marks process exited.
         // The child's window and the queued sent message must survive.
-        assert!(kernel.terminate_process(
-            crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
-            0
-        ));
+        assert!(kernel.terminate_process(crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0));
         assert_ne!(
             kernel.current_process_state().exit_code,
             crate::ce::kernel::STILL_ACTIVE
@@ -18431,16 +18464,16 @@ mod guest_thread_stack_tests {
 
         // Verify the sent message carries the parent's process ID.
         assert_eq!(
-            kernel.gwe.sent_message(send_id).and_then(|s| s.sender_process_id),
+            kernel
+                .gwe
+                .sent_message(send_id)
+                .and_then(|s| s.sender_process_id),
             Some(parent_process_id),
         );
 
         // Parent exits. terminate_sent_messages_from_process should remove the
         // queued (not-yet-active) sent message for the parent's process_id.
-        assert!(kernel.terminate_process(
-            crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE,
-            0
-        ));
+        assert!(kernel.terminate_process(crate::ce::kernel::CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0));
 
         // Sent message must be gone from the child's queue.
         assert!(!kernel.thread_has_pending_sent_message(child_thread));
@@ -18455,7 +18488,6 @@ mod guest_thread_stack_tests {
     }
 }
 
-
 #[cfg(feature = "unicorn")]
 fn capture_saved_cpu_context<D>(uc: &unicorn_engine::Unicorn<'_, D>) -> SavedCpuContext {
     SavedCpuContext {
@@ -18463,7 +18495,6 @@ fn capture_saved_cpu_context<D>(uc: &unicorn_engine::Unicorn<'_, D>) -> SavedCpu
         regs: capture_mips_gprs(uc),
     }
 }
-
 
 #[cfg(feature = "unicorn")]
 fn record_message_import<D>(
@@ -21293,8 +21324,7 @@ fn try_enter_send_message_callout<D>(
                 .iter()
                 .any(|process| process.process_state.process_id == target_process_id)
         {
-            let timeout_ms =
-                is_send_message_timeout.then(|| args.get(5).copied().unwrap_or(0));
+            let timeout_ms = is_send_message_timeout.then(|| args.get(5).copied().unwrap_or(0));
             let Some(send_id) = kernel.begin_cross_thread_send_message_w(
                 active_thread_id,
                 hwnd,
@@ -22226,7 +22256,9 @@ fn try_enter_dsa_sort_callout<D>(
     let mut cbitem_bytes = [0u8; 4];
     if uc.mem_read(u64::from(hdsa), &mut cp_bytes).is_err()
         || uc.mem_read(u64::from(hdsa + 4), &mut pdata_bytes).is_err()
-        || uc.mem_read(u64::from(hdsa + 20), &mut cbitem_bytes).is_err()
+        || uc
+            .mem_read(u64::from(hdsa + 20), &mut cbitem_bytes)
+            .is_err()
     {
         let _ = uc.reg_write(RegisterMIPS::V0, 1);
         let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
@@ -22293,14 +22325,22 @@ fn try_enter_dpa_search_callout<D>(
     args: &[u32],
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingDpaSearchReturn>>>,
 ) -> bool {
-    use unicorn_engine::RegisterMIPS;
     use crate::ce::coredll_ordinals::{ORD_DPA_SEARCH, ORD_DSA_SEARCH};
+    use unicorn_engine::RegisterMIPS;
 
     let (is_dpa, is_dsa) = match ordinal {
-        Some(o) if o == ORD_DPA_SEARCH
-            && module_kind == crate::emulator::imports::ImportModuleKind::Coredll => (true, false),
-        Some(o) if o == ORD_DSA_SEARCH
-            && module_kind == crate::emulator::imports::ImportModuleKind::Coredll => (false, true),
+        Some(o)
+            if o == ORD_DPA_SEARCH
+                && module_kind == crate::emulator::imports::ImportModuleKind::Coredll =>
+        {
+            (true, false)
+        }
+        Some(o)
+            if o == ORD_DSA_SEARCH
+                && module_kind == crate::emulator::imports::ImportModuleKind::Coredll =>
+        {
+            (false, true)
+        }
         _ => return false,
     };
 
@@ -22361,7 +22401,11 @@ fn try_enter_dpa_search_callout<D>(
     }
 
     let is_sorted = (options & DPAS_SORTED) != 0;
-    let start = if i_start < 0 { 0u32 } else { (i_start as u32).min(count - 1) };
+    let start = if i_start < 0 {
+        0u32
+    } else {
+        (i_start as u32).min(count - 1)
+    };
     let (lo, hi, mid) = if is_sorted {
         (start, count - 1, (start + count - 1) / 2)
     } else {
@@ -22535,7 +22579,8 @@ fn handle_dpa_search_return_stub<D>(
     }
 
     // Invoke next comparison.
-    let (a1_val, ok) = dpa_search_item_arg(uc, state.base, state.mid, state.item_size, state.deref_item);
+    let (a1_val, ok) =
+        dpa_search_item_arg(uc, state.base, state.mid, state.item_size, state.deref_item);
     if !ok {
         let state = pending.pop().unwrap();
         restore_mips_gprs(uc, &state.caller_regs);
@@ -22560,6 +22605,335 @@ fn handle_dpa_search_return_stub<D>(
         uc.reg_write(RegisterMIPS::RA, u64::from(DPA_SEARCH_RETURN_STUB_ADDR)),
         uc.reg_write(RegisterMIPS::T9, u64::from(callback)),
         uc.reg_write(RegisterMIPS::PC, u64::from(callback)),
+    ]
+    .into_iter()
+    .all(|r| r.is_ok());
+}
+
+// EnumFontFamiliesExW frame: ENUMLOGFONTEXW (348 B) + NEWTEXTMETRICEXW (100 B) + call frame headroom.
+#[cfg(feature = "unicorn")]
+const ENUM_FONT_FAMILIES_FRAME_SIZE: u32 = 512;
+
+/// Write ENUMLOGFONTEXW (348 bytes) followed by NEWTEXTMETRICEXW (100 bytes) at `sp` in guest memory.
+#[cfg(feature = "unicorn")]
+fn write_enum_font_data<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    sp: u32,
+    family: &crate::ce::kernel::CeFontFamily,
+) -> bool {
+    const HANGUL_CHARSET: u8 = 129;
+    let mut buf = [0u8; 448]; // 348 + 100
+
+    // --- ENUMLOGFONTEXW at offset 0 ---
+    // LOGFONTW elfLogFont at offset 0 (92 bytes)
+    // lfHeight = -12 (char height; negative = char height, positive = cell height)
+    buf[0..4].copy_from_slice(&(-12i32).to_le_bytes());
+    // lfWidth=0, lfEscapement=0, lfOrientation=0 — all zero
+    // lfWeight = 400 (FW_NORMAL)
+    buf[16..20].copy_from_slice(&400i32.to_le_bytes());
+    // lfItalic/lfUnderline/lfStrikeOut = 0 (already zero)
+    // lfCharSet at offset 23
+    buf[23] = family.charset;
+    // lfOutPrecision = OUT_TT_PRECIS (4) at offset 24
+    buf[24] = 4;
+    // lfQuality = DEFAULT_QUALITY (0), lfPitchAndFamily at offset 27
+    buf[27] = family.pitch_and_family;
+    // lfFaceName[32] at offset 28 (64 bytes, UTF-16LE)
+    let face_utf16: Vec<u16> = family.face_name.encode_utf16().collect();
+    let copy_len = face_utf16.len().min(31);
+    for (i, c) in face_utf16[..copy_len].iter().enumerate() {
+        let off = 28 + i * 2;
+        buf[off..off + 2].copy_from_slice(&c.to_le_bytes());
+    }
+    // elfFullName[64] at offset 92 (128 bytes, UTF-16LE) — same as face_name
+    let copy_len = face_utf16.len().min(63);
+    for (i, c) in face_utf16[..copy_len].iter().enumerate() {
+        let off = 92 + i * 2;
+        buf[off..off + 2].copy_from_slice(&c.to_le_bytes());
+    }
+    // elfStyle[32] at offset 220 (64 bytes) — "Regular"
+    let style: Vec<u16> = "Regular".encode_utf16().collect();
+    for (i, c) in style.iter().enumerate() {
+        let off = 220 + i * 2;
+        buf[off..off + 2].copy_from_slice(&c.to_le_bytes());
+    }
+    // elfScript[32] at offset 284 (64 bytes) — "Korean" or "Western"
+    let script: &str = if family.charset == HANGUL_CHARSET {
+        "Korean"
+    } else {
+        "Western"
+    };
+    let script_u16: Vec<u16> = script.encode_utf16().collect();
+    for (i, c) in script_u16.iter().enumerate() {
+        let off = 284 + i * 2;
+        buf[off..off + 2].copy_from_slice(&c.to_le_bytes());
+    }
+
+    // --- NEWTEXTMETRICEXW at offset 348 ---
+    let ntm = 348usize;
+    // tmHeight=16, tmAscent=13, tmDescent=3, tmInternalLeading=1
+    buf[ntm..ntm + 4].copy_from_slice(&16i32.to_le_bytes());
+    buf[ntm + 4..ntm + 8].copy_from_slice(&13i32.to_le_bytes());
+    buf[ntm + 8..ntm + 12].copy_from_slice(&3i32.to_le_bytes());
+    buf[ntm + 12..ntm + 16].copy_from_slice(&1i32.to_le_bytes());
+    // tmExternalLeading=0
+    // tmAveCharWidth=8, tmMaxCharWidth=16
+    buf[ntm + 20..ntm + 24].copy_from_slice(&8i32.to_le_bytes());
+    buf[ntm + 24..ntm + 28].copy_from_slice(&16i32.to_le_bytes());
+    // tmWeight=400
+    buf[ntm + 28..ntm + 32].copy_from_slice(&400i32.to_le_bytes());
+    // tmDigitizedAspectX/Y=96
+    buf[ntm + 36..ntm + 40].copy_from_slice(&96i32.to_le_bytes());
+    buf[ntm + 40..ntm + 44].copy_from_slice(&96i32.to_le_bytes());
+    // tmFirstChar=0x0020, tmLastChar=0xFFFF, tmDefaultChar=0x003F, tmBreakChar=0x0020
+    buf[ntm + 44..ntm + 46].copy_from_slice(&0x0020u16.to_le_bytes());
+    buf[ntm + 46..ntm + 48].copy_from_slice(&0xFFFFu16.to_le_bytes());
+    buf[ntm + 48..ntm + 50].copy_from_slice(&0x003Fu16.to_le_bytes());
+    buf[ntm + 50..ntm + 52].copy_from_slice(&0x0020u16.to_le_bytes());
+    // tmPitchAndFamily at offset ntm+55, tmCharSet at ntm+56
+    buf[ntm + 55] = family.pitch_and_family;
+    buf[ntm + 56] = family.charset;
+    // ntmSizeEM=2048 at ntm+64, ntmCellHeight=16 at ntm+68, ntmAvgWidth=8 at ntm+72
+    buf[ntm + 64..ntm + 68].copy_from_slice(&2048u32.to_le_bytes());
+    buf[ntm + 68..ntm + 72].copy_from_slice(&16u32.to_le_bytes());
+    buf[ntm + 72..ntm + 76].copy_from_slice(&8u32.to_le_bytes());
+    // FONTSIGNATURE at ntm+76: fsUsb[4]+fsCsb[2]
+    // fsUsb[0]: Latin basic coverage
+    buf[ntm + 76..ntm + 80].copy_from_slice(&0x0000_0003u32.to_le_bytes());
+    // fsCsb[0]: CP1252 always, plus CP949 for Korean
+    let cscb0: u32 = if family.charset == HANGUL_CHARSET {
+        0x0008_0001
+    } else {
+        0x0000_0001
+    };
+    buf[ntm + 92..ntm + 96].copy_from_slice(&cscb0.to_le_bytes());
+
+    uc.mem_write(u64::from(sp), &buf).is_ok()
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_enum_font_families_callout<D>(
+    kernel: &CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingEnumFontFamiliesReturn>>>,
+) -> bool {
+    use crate::ce::coredll_ordinals::{
+        ORD_ENUM_FONT_FAMILIES_EX_W, ORD_ENUM_FONT_FAMILIES_W, ORD_ENUM_FONTS_W,
+    };
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll {
+        return false;
+    }
+    let is_ex = ordinal == Some(ORD_ENUM_FONT_FAMILIES_EX_W);
+    let is_basic =
+        matches!(ordinal, Some(o) if o == ORD_ENUM_FONTS_W || o == ORD_ENUM_FONT_FAMILIES_W);
+    if !is_ex && !is_basic {
+        return false;
+    }
+
+    // ExW: hdc(A0), lpLogfont*(A1), callback(A2), lParam(A3)
+    // Basic:hdc(A0), lpFaceName*(A1), callback(A2), lParam(A3)
+    let lp_filter = args.get(1).copied().unwrap_or(0);
+    let callback = args.get(2).copied().unwrap_or(0);
+    let lparam = args.get(3).copied().unwrap_or(0);
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+
+    if !is_guest_wndproc(callback) {
+        let _ = uc.reg_write(RegisterMIPS::V0, 1);
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        return true;
+    }
+
+    // Build face-name + charset filter.
+    const DEFAULT_CHARSET: u8 = 1;
+    let (filter_name, filter_charset) = if is_ex && lp_filter != 0 {
+        // Read LOGFONTW: lfCharSet at +23, lfFaceName[32] at +28 (64 bytes UTF-16LE)
+        let mut cs_byte = [0u8; 1];
+        let mut face_bytes = [0u8; 64];
+        let cs_ok = uc.mem_read(u64::from(lp_filter + 23), &mut cs_byte).is_ok();
+        let fn_ok = uc
+            .mem_read(u64::from(lp_filter + 28), &mut face_bytes)
+            .is_ok();
+        let charset = if cs_ok { cs_byte[0] } else { DEFAULT_CHARSET };
+        let name = if fn_ok {
+            // Decode UTF-16LE up to NUL
+            let words: Vec<u16> = face_bytes
+                .chunks_exact(2)
+                .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                .take_while(|&w| w != 0)
+                .collect();
+            String::from_utf16_lossy(&words).to_string()
+        } else {
+            String::new()
+        };
+        (name, charset)
+    } else if is_basic && lp_filter != 0 {
+        // lpFaceName is WCHAR* — read up to 32 chars
+        let mut face_bytes = [0u8; 64];
+        let name = if uc.mem_read(u64::from(lp_filter), &mut face_bytes).is_ok() {
+            let words: Vec<u16> = face_bytes
+                .chunks_exact(2)
+                .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                .take_while(|&w| w != 0)
+                .collect();
+            String::from_utf16_lossy(&words).to_string()
+        } else {
+            String::new()
+        };
+        (name, DEFAULT_CHARSET)
+    } else {
+        (String::new(), DEFAULT_CHARSET)
+    };
+
+    // Filter the CE system font families.
+    let fonts: Vec<_> = kernel
+        .font_families()
+        .iter()
+        .filter(|f| {
+            if !filter_name.is_empty() && filter_name != f.face_name {
+                return false;
+            }
+            if filter_charset != DEFAULT_CHARSET && filter_charset != f.charset {
+                return false;
+            }
+            true
+        })
+        .cloned()
+        .collect();
+
+    if fonts.is_empty() {
+        let _ = uc.reg_write(RegisterMIPS::V0, 1);
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        return true;
+    }
+
+    let caller_regs = capture_mips_gprs(uc);
+    let return_sp = read_mips_reg(uc, RegisterMIPS::SP);
+    let struct_frame_sp = return_sp.wrapping_sub(ENUM_FONT_FAMILIES_FRAME_SIZE);
+
+    let mut remaining = fonts;
+    let first = remaining.remove(0);
+
+    if !write_enum_font_data(uc, struct_frame_sp, &first) {
+        return false;
+    }
+
+    const TRUETYPE_FONTTYPE: u32 = 4;
+    let call_callback = normalize_ce_process_slot_callback(uc, callback);
+
+    tracing::debug!(
+        target: "ce.gwe",
+        callback = format_args!("0x{callback:08x}"),
+        face = %first.face_name,
+        remaining = remaining.len(),
+        "EnumFontFamiliesExW guest callback callout"
+    );
+
+    let ok = [
+        uc.reg_write(RegisterMIPS::SP, u64::from(struct_frame_sp)),
+        uc.reg_write(RegisterMIPS::A0, u64::from(struct_frame_sp)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(struct_frame_sp + 348)),
+        uc.reg_write(RegisterMIPS::A2, u64::from(TRUETYPE_FONTTYPE)),
+        uc.reg_write(RegisterMIPS::A3, u64::from(lparam)),
+        uc.reg_write(
+            RegisterMIPS::RA,
+            u64::from(ENUM_FONT_FAMILIES_RETURN_STUB_ADDR),
+        ),
+        uc.reg_write(RegisterMIPS::T9, u64::from(call_callback)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(call_callback)),
+    ]
+    .into_iter()
+    .all(|r| r.is_ok());
+
+    if !ok {
+        return false;
+    }
+
+    pending_returns
+        .borrow_mut()
+        .push(PendingEnumFontFamiliesReturn {
+            return_pc,
+            return_sp,
+            caller_regs,
+            callback,
+            lparam,
+            remaining,
+            struct_frame_sp,
+        });
+    true
+}
+
+#[cfg(feature = "unicorn")]
+fn handle_enum_font_families_return_stub<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingEnumFontFamiliesReturn>>>,
+) {
+    use unicorn_engine::RegisterMIPS;
+
+    let callback_result = read_mips_reg(uc, RegisterMIPS::V0);
+    let mut pending = pending_returns.borrow_mut();
+    let Some(state) = pending.last_mut() else {
+        return;
+    };
+
+    if callback_result == 0 {
+        // Callback returned 0 (stop); EnumFontFamiliesExW returns 0.
+        let state = pending.pop().unwrap();
+        restore_mips_gprs(uc, &state.caller_regs);
+        let _ = uc.reg_write(RegisterMIPS::SP, u64::from(state.return_sp));
+        let _ = uc.reg_write(RegisterMIPS::V0, 0u64);
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(state.return_pc));
+        let _ = uc.reg_write(RegisterMIPS::RA, u64::from(state.return_pc));
+        return;
+    }
+
+    if state.remaining.is_empty() {
+        // All fonts enumerated; return last callback result (non-zero).
+        let state = pending.pop().unwrap();
+        restore_mips_gprs(uc, &state.caller_regs);
+        let _ = uc.reg_write(RegisterMIPS::SP, u64::from(state.return_sp));
+        let _ = uc.reg_write(RegisterMIPS::V0, u64::from(callback_result));
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(state.return_pc));
+        let _ = uc.reg_write(RegisterMIPS::RA, u64::from(state.return_pc));
+        return;
+    }
+
+    let next = state.remaining.remove(0);
+    let struct_frame_sp = state.struct_frame_sp;
+    let callback = state.callback;
+    let lparam = state.lparam;
+    drop(pending);
+
+    if !write_enum_font_data(uc, struct_frame_sp, &next) {
+        // Memory write failed; return 1.
+        let mut pending = pending_returns.borrow_mut();
+        let state = pending.pop().unwrap();
+        restore_mips_gprs(uc, &state.caller_regs);
+        let _ = uc.reg_write(RegisterMIPS::SP, u64::from(state.return_sp));
+        let _ = uc.reg_write(RegisterMIPS::V0, 1u64);
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(state.return_pc));
+        let _ = uc.reg_write(RegisterMIPS::RA, u64::from(state.return_pc));
+        return;
+    }
+
+    const TRUETYPE_FONTTYPE: u32 = 4;
+    let call_callback = normalize_ce_process_slot_callback(uc, callback);
+    let _ = [
+        uc.reg_write(RegisterMIPS::SP, u64::from(struct_frame_sp)),
+        uc.reg_write(RegisterMIPS::A0, u64::from(struct_frame_sp)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(struct_frame_sp + 348)),
+        uc.reg_write(RegisterMIPS::A2, u64::from(TRUETYPE_FONTTYPE)),
+        uc.reg_write(RegisterMIPS::A3, u64::from(lparam)),
+        uc.reg_write(
+            RegisterMIPS::RA,
+            u64::from(ENUM_FONT_FAMILIES_RETURN_STUB_ADDR),
+        ),
+        uc.reg_write(RegisterMIPS::T9, u64::from(call_callback)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(call_callback)),
     ]
     .into_iter()
     .all(|r| r.is_ok());
@@ -22720,9 +23094,7 @@ fn try_enter_enum_display_monitors_callout<D>(
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
-    pending_returns: &std::rc::Rc<
-        std::cell::RefCell<Vec<PendingEnumDisplayMonitorsReturn>>,
-    >,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingEnumDisplayMonitorsReturn>>>,
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
@@ -22805,9 +23177,7 @@ fn try_enter_enum_display_monitors_callout<D>(
 #[cfg(feature = "unicorn")]
 fn handle_enum_display_monitors_return_stub<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
-    pending_returns: &std::rc::Rc<
-        std::cell::RefCell<Vec<PendingEnumDisplayMonitorsReturn>>,
-    >,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingEnumDisplayMonitorsReturn>>>,
 ) {
     use unicorn_engine::RegisterMIPS;
 
@@ -22863,13 +23233,15 @@ fn try_enter_dpa_enum_callout<D>(
     use unicorn_engine::RegisterMIPS;
 
     let is_destroy = match ordinal {
-        Some(o) if o == crate::ce::coredll_ordinals::ORD_DPA_DESTROY_CALLBACK
-            && module_kind == crate::emulator::imports::ImportModuleKind::Coredll =>
+        Some(o)
+            if o == crate::ce::coredll_ordinals::ORD_DPA_DESTROY_CALLBACK
+                && module_kind == crate::emulator::imports::ImportModuleKind::Coredll =>
         {
             true
         }
-        Some(o) if o == crate::ce::coredll_ordinals::ORD_DPA_ENUM_CALLBACK
-            && module_kind == crate::emulator::imports::ImportModuleKind::Coredll =>
+        Some(o)
+            if o == crate::ce::coredll_ordinals::ORD_DPA_ENUM_CALLBACK
+                && module_kind == crate::emulator::imports::ImportModuleKind::Coredll =>
         {
             false
         }
@@ -22896,9 +23268,7 @@ fn try_enter_dpa_enum_callout<D>(
     let mut cp_items_bytes = [0u8; 4];
     let mut pp_bytes = [0u8; 4];
     if uc.mem_read(u64::from(hdpa), &mut cp_items_bytes).is_err()
-        || uc
-            .mem_read(u64::from(hdpa + 4), &mut pp_bytes)
-            .is_err()
+        || uc.mem_read(u64::from(hdpa + 4), &mut pp_bytes).is_err()
     {
         let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
         return true;
@@ -23063,13 +23433,15 @@ fn try_enter_dsa_enum_callout<D>(
     use unicorn_engine::RegisterMIPS;
 
     let is_destroy = match ordinal {
-        Some(o) if o == crate::ce::coredll_ordinals::ORD_DSA_DESTROY_CALLBACK
-            && module_kind == crate::emulator::imports::ImportModuleKind::Coredll =>
+        Some(o)
+            if o == crate::ce::coredll_ordinals::ORD_DSA_DESTROY_CALLBACK
+                && module_kind == crate::emulator::imports::ImportModuleKind::Coredll =>
         {
             true
         }
-        Some(o) if o == crate::ce::coredll_ordinals::ORD_DSA_ENUM_CALLBACK
-            && module_kind == crate::emulator::imports::ImportModuleKind::Coredll =>
+        Some(o)
+            if o == crate::ce::coredll_ordinals::ORD_DSA_ENUM_CALLBACK
+                && module_kind == crate::emulator::imports::ImportModuleKind::Coredll =>
         {
             false
         }
@@ -23294,7 +23666,11 @@ fn enter_next_qsort_comparator<D>(
                         return QsortStep::Failed;
                     }
                 }
-                return if ok { QsortStep::ComparatorEntered } else { QsortStep::Failed };
+                return if ok {
+                    QsortStep::ComparatorEntered
+                } else {
+                    QsortStep::Failed
+                };
             }
 
             let partition = state.partition.take().unwrap();
@@ -24034,7 +24410,8 @@ fn handle_create_window_return_stub<D>(
             );
             if result == 0 {
                 // WM_NCCREATE returned FALSE: abort window creation.
-                let _ = kernel.destroy_window_with_reason(callout.hwnd, "CreateWindowExW/WM_NCCREATE failed");
+                let _ = kernel
+                    .destroy_window_with_reason(callout.hwnd, "CreateWindowExW/WM_NCCREATE failed");
                 return_create_window_result(uc, callout.return_pc, 0)
             } else {
                 // Proceed to WM_CREATE.
@@ -24067,7 +24444,8 @@ fn handle_create_window_return_stub<D>(
                 },
             );
             if result == u32::MAX {
-                let _ = kernel.destroy_window_with_reason(callout.hwnd, "CreateWindowExW/WM_CREATE failed");
+                let _ = kernel
+                    .destroy_window_with_reason(callout.hwnd, "CreateWindowExW/WM_CREATE failed");
                 return_create_window_result(uc, callout.return_pc, 0)
             } else {
                 let ret = return_create_window_result(uc, callout.return_pc, callout.hwnd);
@@ -24906,7 +25284,12 @@ fn import_detail_after_return<D>(
             let style = window.map(|window| window.style).unwrap_or(0);
             let update_pending = window.is_some_and(|window| window.update_pending);
             let update_rect = window
-                .and_then(|w| w.update_rects.iter().copied().reduce(crate::ce::gwe::Rect::union))
+                .and_then(|w| {
+                    w.update_rects
+                        .iter()
+                        .copied()
+                        .reduce(crate::ce::gwe::Rect::union)
+                })
                 .unwrap_or(crate::ce::gwe::Rect::default());
             let last_error = kernel.threads.get_last_error(thread_id);
             Some(format!(
@@ -25214,7 +25597,12 @@ fn import_detail_after_return<D>(
             let style = window.map(|window| window.style).unwrap_or(0);
             let update_pending = window.is_some_and(|window| window.update_pending);
             let update_rect = window
-                .and_then(|w| w.update_rects.iter().copied().reduce(crate::ce::gwe::Rect::union))
+                .and_then(|w| {
+                    w.update_rects
+                        .iter()
+                        .copied()
+                        .reduce(crate::ce::gwe::Rect::union)
+                })
                 .unwrap_or(crate::ce::gwe::Rect::default());
             let paint_rect = read_paint_struct_rect(uc, paint_ptr);
             let erase = read_unicorn_u32(uc, paint_ptr.wrapping_add(4)).unwrap_or(0);
@@ -26819,7 +27207,10 @@ mod unicorn_tests {
         assert_eq!(pending.borrow()[0].wndproc, wndproc);
         // PC must point at wndproc (ready to run WM_CREATE).
         assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, wndproc);
-        assert_eq!(uc.reg_read(RegisterMIPS::A1).unwrap() as u32, crate::ce::gwe::WM_CREATE);
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::A1).unwrap() as u32,
+            crate::ce::gwe::WM_CREATE
+        );
         // Window must still exist.
         assert!(kernel.gwe.is_window(hwnd));
     }
