@@ -10903,6 +10903,19 @@ fn message_box_message_result(
         crate::ce::gwe::WM_CHAR if message.wparam == VK_ESCAPE => Some(
             message_box_cancel_or_default_result(kernel, window_state, selection),
         ),
+        // Mnemonic accelerator: pressing a letter matching a button's &-marked character
+        // activates that button. CE dialog manager handles WM_CHAR in its modal pump.
+        crate::ce::gwe::WM_CHAR | crate::ce::gwe::WM_SYSCHAR => {
+            let ch = char::from_u32(message.wparam)?;
+            ch.is_ascii_alphabetic().then(|| {
+                let ch_lower = ch.to_ascii_lowercase();
+                selection
+                    .button_layout
+                    .iter()
+                    .find(|button| message_box_button_mnemonic(button.label) == ch_lower)
+                    .map(|button| button.id)
+            })?
+        }
         crate::ce::gwe::WM_LBUTTONDOWN => None,
         crate::ce::gwe::WM_LBUTTONUP => {
             if let Some(command) =
@@ -11204,12 +11217,30 @@ fn message_box_button_title(label: MessageBoxButtonLabel) -> &'static str {
     match label {
         MessageBoxButtonLabel::Ok => "OK",
         MessageBoxButtonLabel::Cancel => "Cancel",
-        MessageBoxButtonLabel::Abort => "Abort",
+        // CE ownerdrawlib (odlib.rc ALS_Button_Abort) displays "Quit", not "Abort"
+        MessageBoxButtonLabel::Abort => "Quit",
         MessageBoxButtonLabel::Retry => "Retry",
         MessageBoxButtonLabel::Ignore => "Ignore",
         MessageBoxButtonLabel::Yes => "Yes",
         MessageBoxButtonLabel::No => "No",
         MessageBoxButtonLabel::YesAll => "Yes to All",
+    }
+}
+
+/// Returns the CE ownerdrawlib mnemonic character for each standard button label
+/// (extracted from odlib.rc `&`-markers: e.g. "&OK"→'o', "Y&es to All"→'e').
+fn message_box_button_mnemonic(label: MessageBoxButtonLabel) -> char {
+    match label {
+        MessageBoxButtonLabel::Ok => 'o',
+        MessageBoxButtonLabel::Cancel => 'c',
+        // CE ownerdrawlib displays "&Quit", mnemonic is 'q'
+        MessageBoxButtonLabel::Abort => 'q',
+        MessageBoxButtonLabel::Retry => 'r',
+        MessageBoxButtonLabel::Ignore => 'i',
+        MessageBoxButtonLabel::Yes => 'y',
+        MessageBoxButtonLabel::No => 'n',
+        // CE ownerdrawlib: "Y&es to All" → mnemonic is 'e'
+        MessageBoxButtonLabel::YesAll => 'e',
     }
 }
 

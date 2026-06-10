@@ -8456,6 +8456,100 @@ fn message_box_w_tab_navigation_changes_activated_button() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn message_box_w_mnemonic_key_activates_matching_button() -> Result<()> {
+    // CE dialog manager: WM_CHAR with the mnemonic letter of a button activates it.
+    // Mnemonics from CE ownerdrawlib odlib.rc &-markers: OK→'o', Cancel→'c', Yes→'y',
+    // No→'n', Quit(Abort)→'q', Retry→'r', Ignore→'i', YesAll(Y&es to All)→'e'.
+    // WM_SYSCHAR (Alt+letter) is also accepted.
+    const MB_YESNOCANCEL: u32 = 0x0000_0003;
+    const MB_ABORTRETRYIGNORE: u32 = 0x0000_0002;
+    const IDABORT: u32 = 3;
+    const IDCANCEL: u32 = 2;
+    const IDNO: u32 = 7;
+    const WM_SYSCHAR: u32 = 0x0106;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 53;
+    let hwnd = kernel.create_window_ex_w(thread_id, "MSGBOX_MNEMONIC_OWNER", "", None, 0, 0, 0);
+    let text = 0x3007_0000;
+    let caption = 0x3007_1000;
+    memory.write_wide_z(text, "Question");
+    memory.write_wide_z(caption, "Test");
+
+    // First box (MB_YESNOCANCEL): WM_CHAR 'n' activates No (IDNO=7).
+    // Windows created: dialog (+4), static (+8), Yes (+12), No (+16), Cancel (+20).
+    let no_dialog_hwnd = hwnd + 4;
+    kernel.gwe.post_message(
+        thread_id,
+        Message::new(no_dialog_hwnd, WM_CHAR, 'n' as u32, 0, 10),
+    );
+    let result = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_MESSAGE_BOX_W,
+        [hwnd, text, caption, MB_YESNOCANCEL],
+    );
+    assert!(matches!(
+        result,
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(IDNO),
+            ..
+        }
+    ));
+
+    // Second box (MB_YESNOCANCEL): WM_SYSCHAR 'C' (uppercase) activates Cancel.
+    // Dialog at hwnd+24 (5 windows consumed per MB call).
+    let cancel_dialog_hwnd = hwnd + 24;
+    kernel.gwe.post_message(
+        thread_id,
+        Message::new(cancel_dialog_hwnd, WM_SYSCHAR, 'C' as u32, 0, 20),
+    );
+    let result = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_MESSAGE_BOX_W,
+        [hwnd, text, caption, MB_YESNOCANCEL],
+    );
+    assert!(matches!(
+        result,
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(IDCANCEL),
+            ..
+        }
+    ));
+
+    // Third box (MB_ABORTRETRYIGNORE): WM_CHAR 'q' activates Quit/Abort (IDABORT=3).
+    // CE ownerdrawlib displays Abort as "Quit" with mnemonic 'q'.
+    // Dialog at hwnd+44.
+    let abort_dialog_hwnd = hwnd + 44;
+    kernel.gwe.post_message(
+        thread_id,
+        Message::new(abort_dialog_hwnd, WM_CHAR, 'q' as u32, 0, 30),
+    );
+    let result = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_MESSAGE_BOX_W,
+        [hwnd, text, caption, MB_ABORTRETRYIGNORE],
+    );
+    assert!(matches!(
+        result,
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(IDABORT),
+            ..
+        }
+    ));
+
+    Ok(())
+}
+
 fn make_lparam(x: i32, y: i32) -> u32 {
     ((y as u16 as u32) << 16) | (x as u16 as u32)
 }
