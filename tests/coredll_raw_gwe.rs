@@ -125,7 +125,8 @@ use wince_emulation_v3::{
             WM_COMPAREITEM, WM_DELETEITEM, WM_DISPLAYCHANGE, WM_DRAWITEM, WM_FONTCHANGE,
             WM_GETFONT, WM_GETMINMAXINFO, WM_HSCROLL,
             WM_INPUTLANGCHANGE,
-            WM_MEASUREITEM, WM_NEXTDLGCTL, WM_SETFONT, WM_SETTEXT, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE,
+            WM_MEASUREITEM, WM_NEXTDLGCTL, WM_SETFONT, WM_SETICON, WM_GETICON, WM_SETTEXT, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE,
+            ICON_SMALL, ICON_BIG,
             WM_TIMECHANGE, WM_VSCROLL,
             WM_DEADCHAR, WM_IME_CHAR, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_STARTCOMPOSITION,
             WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WM_USER, WM_VKEYTOITEM,
@@ -23105,6 +23106,70 @@ fn coredll_raw_enum_windows_raw_path_returns_true() -> Result<()> {
         ),
         CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
     ), "EnumWindows in raw path returns TRUE without invoking callback");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_gwe_wm_seticon_and_geticon() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 1;
+
+    let hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id, "TestClass", "Icon Test", None, 0, WS_VISIBLE, 0,
+        Rect::from_origin_size(0, 0, 100, 100),
+    );
+    assert_ne!(hwnd, 0);
+
+    // WM_GETICON on a fresh window returns 0 (no icon set, no class icon).
+    let get_small = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_SEND_MESSAGE_W, [hwnd, WM_GETICON, ICON_SMALL, 0u32],
+    );
+    assert!(matches!(get_small, CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }),
+        "WM_GETICON ICON_SMALL on fresh window returns 0");
+
+    // WM_SETICON ICON_SMALL: returns previous (0), then stores 0xBEEF.
+    let set_small = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_SEND_MESSAGE_W, [hwnd, WM_SETICON, ICON_SMALL, 0xBEEFu32],
+    );
+    assert!(matches!(set_small, CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }),
+        "WM_SETICON ICON_SMALL returns previous icon (0)");
+
+    // WM_GETICON ICON_SMALL now returns 0xBEEF.
+    let get_small2 = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_SEND_MESSAGE_W, [hwnd, WM_GETICON, ICON_SMALL, 0u32],
+    );
+    assert!(matches!(get_small2, CoredllDispatch::Returned { value: CoredllValue::U32(0xBEEF), .. }),
+        "WM_GETICON ICON_SMALL returns stored icon 0xBEEF");
+
+    // WM_SETICON ICON_BIG: stores 0xCAFE, old value was 0.
+    let set_big = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_SEND_MESSAGE_W, [hwnd, WM_SETICON, ICON_BIG, 0xCAFEu32],
+    );
+    assert!(matches!(set_big, CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }),
+        "WM_SETICON ICON_BIG returns previous icon (0)");
+
+    // WM_GETICON ICON_BIG returns 0xCAFE; ICON_SMALL still 0xBEEF.
+    let get_big = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_SEND_MESSAGE_W, [hwnd, WM_GETICON, ICON_BIG, 0u32],
+    );
+    assert!(matches!(get_big, CoredllDispatch::Returned { value: CoredllValue::U32(0xCAFE), .. }),
+        "WM_GETICON ICON_BIG returns stored icon 0xCAFE");
+
+    let get_small3 = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id,
+        ORD_SEND_MESSAGE_W, [hwnd, WM_GETICON, ICON_SMALL, 0u32],
+    );
+    assert!(matches!(get_small3, CoredllDispatch::Returned { value: CoredllValue::U32(0xBEEF), .. }),
+        "WM_GETICON ICON_SMALL still returns 0xBEEF after ICON_BIG was set");
 
     Ok(())
 }

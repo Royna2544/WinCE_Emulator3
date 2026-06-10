@@ -15,6 +15,11 @@ pub const WM_MOVE: u32 = 0x0003;
 pub const WM_SIZE: u32 = 0x0005;
 pub const WM_GETMINMAXINFO: u32 = 0x0024;
 pub const WM_DISPLAYCHANGE: u32 = 0x007e;
+pub const WM_GETICON: u32 = 0x007f;
+pub const WM_SETICON: u32 = 0x0080;
+pub const ICON_SMALL: u32 = 0;
+pub const ICON_BIG: u32 = 1;
+pub const ICON_SMALL2: u32 = 2;
 pub const WM_PAINT: u32 = 0x000f;
 pub const WM_SETREDRAW: u32 = 0x000b;
 pub const WM_CLOSE: u32 = 0x0010;
@@ -636,6 +641,8 @@ pub struct Window {
     pub wndproc: u32,
     pub user_data: u32,
     pub font: u32,
+    pub icon_small: u32,
+    pub icon_big: u32,
     pub extra_longs: Vec<u32>,
     pub rect: Rect,
     pub client_rect: Rect,
@@ -823,6 +830,8 @@ impl Default for Gwe {
                 wndproc: 0,
                 user_data: 0,
                 font: 0,
+                icon_small: 0,
+                icon_big: 0,
                 extra_longs: Vec::new(),
                 rect: Rect::from_origin_size(0, 0, 800, 480),
                 client_rect: Rect::from_origin_size(0, 0, 800, 480),
@@ -1018,6 +1027,8 @@ impl Gwe {
                 wndproc,
                 user_data: 0,
                 font: 0,
+                icon_small: 0,
+                icon_big: 0,
                 extra_longs: vec![0; extra_longs],
                 rect,
                 client_rect: rect,
@@ -2622,6 +2633,14 @@ impl Gwe {
         self.cursor
     }
 
+    pub fn window_class_icon(&self, hwnd: u32) -> u32 {
+        self.windows
+            .get(&hwnd)
+            .and_then(|window| self.class_info(&window.class_name))
+            .map(|wc| u32::from_le_bytes([wc.bytes[20], wc.bytes[21], wc.bytes[22], wc.bytes[23]]))
+            .unwrap_or(0)
+    }
+
     pub fn window_class_cursor(&self, hwnd: u32) -> Option<u32> {
         let window = self.windows.get(&hwnd)?;
         let window_class = self.class_info(&window.class_name)?;
@@ -3116,6 +3135,26 @@ impl Gwe {
                 // this path, so this fallback only fires for non-coredll send paths.
                 let hbr = self.window_class_hbr_background(hwnd);
                 return Some(if hbr != 0 { 1 } else { 0 });
+            }
+            WM_SETICON => {
+                let prev = self.windows.get(&hwnd).map_or(0, |w| {
+                    if wparam == ICON_BIG { w.icon_big } else { w.icon_small }
+                });
+                if let Some(window) = self.windows.get_mut(&hwnd) {
+                    if wparam == ICON_BIG {
+                        window.icon_big = lparam;
+                    } else {
+                        window.icon_small = lparam;
+                    }
+                }
+                return Some(prev);
+            }
+            WM_GETICON => {
+                let stored = self.windows.get(&hwnd).map_or(0, |w| {
+                    if wparam == ICON_BIG { w.icon_big } else { w.icon_small }
+                });
+                let result = if stored != 0 { stored } else { self.window_class_icon(hwnd) };
+                return Some(result);
             }
             WM_SETFONT => {
                 if let Some(window) = self.windows.get_mut(&hwnd) {
