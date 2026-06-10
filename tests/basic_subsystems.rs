@@ -371,6 +371,51 @@ fn child_current_process_exit_state_does_not_signal_parent_pseudo_handle() -> Re
 }
 
 #[test]
+fn parent_exits_and_child_window_pump_stays_alive() -> Result<()> {
+    use wince_emulation_v3::ce::kernel::STILL_ACTIVE;
+
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+
+    let parent_thread_id: u32 = 1;
+    let parent_hwnd = kernel.create_window_ex_w(parent_thread_id, "PARENT_CLASS", "", None, 0, 0, 0);
+
+    // Spawn a child process.
+    let launch = kernel.queue_process_launch(Some("child.exe".to_owned()), None);
+    let child_thread_id = launch.thread_id;
+
+    // Create a window and post a message in the child process context.
+    let parent_state = kernel.current_process_state();
+    kernel.set_current_process_id(launch.process_id);
+    kernel.reset_current_process_exit_state();
+    let child_hwnd = kernel.create_window_ex_w(child_thread_id, "CHILD_CLASS", "", None, 0, 0, 0);
+    assert!(kernel.post_message_w(child_hwnd, WM_USER + 1, 11, 22));
+
+    // Restore parent context and terminate it.
+    kernel.set_current_process_state(parent_state);
+    assert!(kernel.terminate_process(CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0));
+
+    // Parent window is destroyed; child window survives.
+    assert!(!kernel.gwe.is_window(parent_hwnd), "parent window destroyed on exit");
+    assert!(kernel.gwe.is_window(child_hwnd), "child window survives parent exit");
+
+    // Child process handle remains STILL_ACTIVE — parent exit does not reap child.
+    assert_eq!(
+        kernel.process_exit_code_for_handle(launch.process_handle),
+        Some(STILL_ACTIVE)
+    );
+
+    // Child message queue is intact.
+    let msg = kernel
+        .gwe
+        .peek_message_filtered(child_thread_id, None, WM_USER + 1, WM_USER + 1, wince_emulation_v3::ce::gwe::PeekFlags::REMOVE);
+    assert!(msg.is_some(), "child message queue intact after parent exits");
+    assert_eq!(msg.unwrap().wparam, 11);
+
+    Ok(())
+}
+
+#[test]
 fn mutex_waits_track_recursive_owner_lock_count() -> Result<()> {
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
     let mut kernel = CeKernel::boot(config);
