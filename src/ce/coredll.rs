@@ -21838,13 +21838,21 @@ fn translate_accelerator_w_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return 0;
     }
-    kernel.post_message_w_for_thread(
-        thread_id,
+    // CE TranslateAcceleratorW uses SendMessage (not PostMessage) so WM_COMMAND is delivered
+    // via the sent-message queue, which GetMessage/PeekMessage services before posted messages.
+    let time_ms = kernel.timers.tick_count();
+    let wm_command = crate::ce::gwe::Message::new(
         target,
         crate::ce::gwe::WM_COMMAND,
         (u32::from(entry.command) & 0xffff) | (1 << 16), // HIWORD=1: accelerator notification
         0,
+        time_ms,
     );
+    if let Some((target_thread, _)) = kernel.gwe.window_thread_process_id(target) {
+        if kernel.gwe.queue_sent_message_for_window(target, wm_command) {
+            kernel.queue_message_wake_candidates(target_thread);
+        }
+    }
     kernel.threads.set_last_error(thread_id, 0);
     1
 }

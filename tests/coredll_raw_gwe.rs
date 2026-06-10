@@ -14335,6 +14335,74 @@ fn coredll_raw_translate_accelerator_honors_modifiers_and_syskey() -> Result<()>
 }
 
 #[test]
+fn coredll_raw_translate_accelerator_wm_command_is_sent_before_posted_messages() -> Result<()> {
+    // CE TranslateAcceleratorW dispatches WM_COMMAND via SendMessage (sent-message queue),
+    // so it is serviced by GetMessage before previously-queued posted messages.
+    const FVIRTKEY: u8 = 0x01;
+    const FCONTROL: u8 = 0x08;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 37;
+    let msg_ptr = 0x1_8000;
+    memory.map_words(msg_ptr, 7);
+    let hwnd = kernel.create_window_ex_w(thread_id, "ACCEL_PRIO_OWNER", "", None, 0, 0, 0);
+    let accel = kernel.resources.create_accelerator(
+        0,
+        ResourceId::Integer(800),
+        None,
+        vec![AcceleratorEntry {
+            flags: FVIRTKEY | FCONTROL,
+            key: u16::from(b'S'),
+            command: 9001,
+        }],
+    );
+
+    // Post a WM_USER to the queue BEFORE firing the accelerator.
+    assert!(kernel.post_message_w_for_thread(thread_id, hwnd, WM_USER + 10, 0xAA, 0xBB));
+
+    // Set Ctrl pressed, then fire the Ctrl+S accelerator.
+    assert!(kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYDOWN, VK_CONTROL, 0));
+    write_raw_message(&mut memory, msg_ptr, hwnd, WM_KEYDOWN, u32::from(b'S'), 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRANSLATE_ACCELERATOR_W,
+            [hwnd, accel, msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+
+    // GetMessage should service the sent WM_COMMAND before the posted WM_USER.
+    let first = kernel
+        .get_message_w_filtered(thread_id, None, 0, 0)
+        .expect("should have message");
+    assert_eq!(
+        first.msg, WM_COMMAND,
+        "accelerator WM_COMMAND (sent) must arrive before posted WM_USER"
+    );
+    assert_eq!(first.wparam, 9001 | (1 << 16), "HIWORD=1 accelerator notification");
+
+    let second = kernel
+        .get_message_w_filtered(thread_id, None, 0, 0)
+        .expect("should still have WM_USER");
+    assert_eq!(
+        second.msg,
+        WM_USER + 10,
+        "posted WM_USER should arrive after WM_COMMAND"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_set_parent_relinks_tree_and_clears_invalid_focus() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
