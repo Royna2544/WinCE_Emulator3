@@ -22909,8 +22909,23 @@ fn image_list_draw_indirect_raw<M: CoredllGuestMemory>(
     let Some(height) = read_guest_i32(kernel, memory, thread_id, draw_ptr.wrapping_add(28)) else {
         return false;
     };
-    let Some(flags) = read_guest_u32(kernel, memory, thread_id, draw_ptr.wrapping_add(36)) else {
-        return false;
+    // fStyle is at offset 48 (after xBitmap @32, yBitmap @36, rgbBk @40, rgbFg @44).
+    // rgbBk is at offset 40: CLR_NONE forces ILD_TRANSPARENT per CE imagelist.cpp.
+    const ILD_TRANSPARENT: u32 = 0x0001;
+    let rgb_bk = if size >= 44 {
+        read_guest_u32(kernel, memory, thread_id, draw_ptr.wrapping_add(40)).unwrap_or(CLR_NONE)
+    } else {
+        CLR_NONE
+    };
+    let raw_flags = if size >= 52 {
+        read_guest_u32(kernel, memory, thread_id, draw_ptr.wrapping_add(48)).unwrap_or(0)
+    } else {
+        0
+    };
+    let flags = if rgb_bk == CLR_NONE {
+        raw_flags | ILD_TRANSPARENT
+    } else {
+        raw_flags
     };
     let draw = ImageListDraw {
         image_list: handle,
