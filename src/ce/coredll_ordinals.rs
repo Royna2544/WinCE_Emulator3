@@ -13748,7 +13748,8 @@ pub const SDK_ORDINALS: &[CoredllOrdinalDef; 27] = &[
     },
 ];
 
-pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 20] = &[
+pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 84] = &[
+    // Originally registered
     CoredllOrdinalDef {
         name: "GetSystemTimeAsFileTime",
         ordinal: ORD_GET_SYSTEM_TIME_AS_FILE_TIME,
@@ -13828,6 +13829,275 @@ pub const SUPPLEMENTAL_ORDINALS: &[CoredllOrdinalDef; 20] = &[
     CoredllOrdinalDef {
         name: "DisableGestures",
         ordinal: ORD_DISABLE_GESTURES,
+    },
+    // Registry notification lifecycle (dispatched no-ops)
+    CoredllOrdinalDef {
+        name: "RegistryCloseNotification",
+        ordinal: ORD_REGISTRY_CLOSE_NOTIFICATION,
+    },
+    CoredllOrdinalDef {
+        name: "RegistryStopNotification",
+        ordinal: ORD_REGISTRY_STOP_NOTIFICATION,
+    },
+    CoredllOrdinalDef {
+        name: "RegistryBatchNotification",
+        ordinal: ORD_REGISTRY_BATCH_NOTIFICATION,
+    },
+    // Gesture/dialog CE-specific helpers (dispatched no-ops)
+    CoredllOrdinalDef {
+        name: "SetWindowAutoGesture",
+        ordinal: ORD_SET_WINDOW_AUTO_GESTURE,
+    },
+    CoredllOrdinalDef {
+        name: "GetWindowAutoGesture",
+        ordinal: ORD_GET_WINDOW_AUTO_GESTURE,
+    },
+    CoredllOrdinalDef {
+        name: "SetDialogAutoScrollBar",
+        ordinal: ORD_SET_DIALOG_AUTO_SCROLL_BAR,
+    },
+    CoredllOrdinalDef {
+        name: "SetWindowPosOnRotate",
+        ordinal: ORD_SET_WINDOW_POS_ON_ROTATE,
+    },
+    // DPA — Dynamic Pointer Array container
+    CoredllOrdinalDef {
+        name: "DPA_Create",
+        ordinal: ORD_DPA_CREATE,
+    },
+    CoredllOrdinalDef {
+        name: "DPA_CreateEx",
+        ordinal: ORD_DPA_CREATE_EX,
+    },
+    CoredllOrdinalDef {
+        name: "DPA_Clone",
+        ordinal: ORD_DPA_CLONE,
+    },
+    CoredllOrdinalDef {
+        name: "DPA_DeleteAllPtrs",
+        ordinal: ORD_DPA_DELETE_ALL_PTRS,
+    },
+    CoredllOrdinalDef {
+        name: "DPA_DeletePtr",
+        ordinal: ORD_DPA_DELETE_PTR,
+    },
+    CoredllOrdinalDef {
+        name: "DPA_Destroy",
+        ordinal: ORD_DPA_DESTROY,
+    },
+    CoredllOrdinalDef {
+        name: "DPA_DestroyCallback",
+        ordinal: ORD_DPA_DESTROY_CALLBACK,
+    },
+    CoredllOrdinalDef {
+        name: "DPA_EnumCallback",
+        ordinal: ORD_DPA_ENUM_CALLBACK,
+    },
+    CoredllOrdinalDef {
+        name: "DPA_GetPtr",
+        ordinal: ORD_DPA_GET_PTR,
+    },
+    CoredllOrdinalDef {
+        name: "DPA_GetPtrIndex",
+        ordinal: ORD_DPA_GET_PTR_INDEX,
+    },
+    CoredllOrdinalDef {
+        name: "DPA_Grow",
+        ordinal: ORD_DPA_GROW,
+    },
+    CoredllOrdinalDef {
+        name: "DPA_InsertPtr",
+        ordinal: ORD_DPA_INSERT_PTR,
+    },
+    CoredllOrdinalDef {
+        name: "DPA_Search",
+        ordinal: ORD_DPA_SEARCH,
+    },
+    CoredllOrdinalDef {
+        name: "DPA_SetPtr",
+        ordinal: ORD_DPA_SET_PTR,
+    },
+    CoredllOrdinalDef {
+        name: "DPA_Sort",
+        ordinal: ORD_DPA_SORT,
+    },
+    // DSA — Dynamic Structure Array container
+    CoredllOrdinalDef {
+        name: "DSA_Clone",
+        ordinal: ORD_DSA_CLONE,
+    },
+    CoredllOrdinalDef {
+        name: "DSA_Create",
+        ordinal: ORD_DSA_CREATE,
+    },
+    CoredllOrdinalDef {
+        name: "DSA_DeleteAllItems",
+        ordinal: ORD_DSA_DELETE_ALL_ITEMS,
+    },
+    CoredllOrdinalDef {
+        name: "DSA_DeleteItem",
+        ordinal: ORD_DSA_DELETE_ITEM,
+    },
+    CoredllOrdinalDef {
+        name: "DSA_Destroy",
+        ordinal: ORD_DSA_DESTROY,
+    },
+    CoredllOrdinalDef {
+        name: "DSA_DestroyCallback",
+        ordinal: ORD_DSA_DESTROY_CALLBACK,
+    },
+    CoredllOrdinalDef {
+        name: "DSA_EnumCallback",
+        ordinal: ORD_DSA_ENUM_CALLBACK,
+    },
+    CoredllOrdinalDef {
+        name: "DSA_GetItem",
+        ordinal: ORD_DSA_GET_ITEM,
+    },
+    CoredllOrdinalDef {
+        name: "DSA_GetItemPtr",
+        ordinal: ORD_DSA_GET_ITEM_PTR,
+    },
+    CoredllOrdinalDef {
+        name: "DSA_Grow",
+        ordinal: ORD_DSA_GROW,
+    },
+    CoredllOrdinalDef {
+        name: "DSA_InsertItem",
+        ordinal: ORD_DSA_INSERT_ITEM,
+    },
+    CoredllOrdinalDef {
+        name: "DSA_Search",
+        ordinal: ORD_DSA_SEARCH,
+    },
+    CoredllOrdinalDef {
+        name: "DSA_SetItem",
+        ordinal: ORD_DSA_SET_ITEM,
+    },
+    CoredllOrdinalDef {
+        name: "DSA_SetRange",
+        ordinal: ORD_DSA_SET_RANGE,
+    },
+    CoredllOrdinalDef {
+        name: "DSA_Sort",
+        ordinal: ORD_DSA_SORT,
+    },
+    // GWE internal — returns zero/false
+    CoredllOrdinalDef {
+        name: "GetGweApiSetTables",
+        ordinal: ORD_GET_GWE_API_SET_TABLES,
+    },
+    // String safe-copy helpers
+    CoredllOrdinalDef {
+        name: "StringCchCopyNExW",
+        ordinal: ORD_STRING_CCH_COPY_NEX_W,
+    },
+    CoredllOrdinalDef {
+        name: "StringCbCopyNExW",
+        ordinal: ORD_STRING_CB_COPY_NEX_W,
+    },
+    // GDI extras
+    CoredllOrdinalDef {
+        name: "GetIconInfo",
+        ordinal: ORD_GET_ICON_INFO,
+    },
+    CoredllOrdinalDef {
+        name: "AlphaBlend",
+        ordinal: ORD_ALPHA_BLEND,
+    },
+    CoredllOrdinalDef {
+        name: "GetStretchBltMode",
+        ordinal: ORD_GET_STRETCH_BLT_MODE,
+    },
+    CoredllOrdinalDef {
+        name: "SetStretchBltMode",
+        ordinal: ORD_SET_STRETCH_BLT_MODE,
+    },
+    CoredllOrdinalDef {
+        name: "GetLayout",
+        ordinal: ORD_GET_LAYOUT,
+    },
+    CoredllOrdinalDef {
+        name: "SetLayout",
+        ordinal: ORD_SET_LAYOUT,
+    },
+    CoredllOrdinalDef {
+        name: "AnimateRects",
+        ordinal: ORD_ANIMATE_RECTS,
+    },
+    CoredllOrdinalDef {
+        name: "GetTextCharacterExtra",
+        ordinal: ORD_GET_TEXT_CHARACTER_EXTRA,
+    },
+    CoredllOrdinalDef {
+        name: "SetTextCharacterExtra",
+        ordinal: ORD_SET_TEXT_CHARACTER_EXTRA,
+    },
+    // Font utilities
+    CoredllOrdinalDef {
+        name: "EnumFontFamiliesExW",
+        ordinal: ORD_ENUM_FONT_FAMILIES_EX_W,
+    },
+    CoredllOrdinalDef {
+        name: "GetNLSTables",
+        ordinal: ORD_GET_NLS_TABLES,
+    },
+    CoredllOrdinalDef {
+        name: "GetCharABCWidthsI",
+        ordinal: ORD_GET_CHAR_ABCWIDTHS_I,
+    },
+    CoredllOrdinalDef {
+        name: "GetFontData",
+        ordinal: ORD_GET_FONT_DATA,
+    },
+    CoredllOrdinalDef {
+        name: "GetOutlineTextMetricsW",
+        ordinal: ORD_GET_OUTLINE_TEXT_METRICS_W,
+    },
+    // Process/thread utilities
+    CoredllOrdinalDef {
+        name: "OpenThread",
+        ordinal: ORD_OPEN_THREAD,
+    },
+    CoredllOrdinalDef {
+        name: "GetProcessIdOfThread",
+        ordinal: ORD_GET_PROCESS_ID_OF_THREAD,
+    },
+    // Power management
+    CoredllOrdinalDef {
+        name: "GetSystemPowerStatusEx",
+        ordinal: ORD_GET_SYSTEM_POWER_STATUS_EX,
+    },
+    CoredllOrdinalDef {
+        name: "GetSystemPowerStatusEx2",
+        ordinal: ORD_GET_SYSTEM_POWER_STATUS_EX2,
+    },
+    // Language/locale utilities
+    CoredllOrdinalDef {
+        name: "GetSystemDefaultUILanguage",
+        ordinal: ORD_GET_SYSTEM_DEFAULT_UILANGUAGE,
+    },
+    CoredllOrdinalDef {
+        name: "GetUserDefaultUILanguage",
+        ordinal: ORD_GET_USER_DEFAULT_UILANGUAGE,
+    },
+    CoredllOrdinalDef {
+        name: "EnumUILanguagesW",
+        ordinal: ORD_ENUM_UILANGUAGES_W,
+    },
+    // Async I/O
+    CoredllOrdinalDef {
+        name: "GetOverlappedResult",
+        ordinal: ORD_GET_OVERLAPPED_RESULT,
+    },
+    // Memory tracing variants
+    CoredllOrdinalDef {
+        name: "LocalAllocTrace",
+        ordinal: ORD_LOCAL_ALLOC_TRACE,
+    },
+    CoredllOrdinalDef {
+        name: "HeapAllocTrace",
+        ordinal: ORD_HEAP_ALLOC_TRACE,
     },
 ];
 

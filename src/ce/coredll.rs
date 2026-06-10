@@ -36727,6 +36727,71 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "SetScrollRange",
     "ScrollWindowEx",
     "SetCursorPos",
+    // Registry notification lifecycle no-ops
+    "RegistryCloseNotification",
+    "RegistryStopNotification",
+    "RegistryBatchNotification",
+    // Gesture/dialog CE-specific no-ops
+    "SetWindowAutoGesture",
+    "GetWindowAutoGesture",
+    "SetDialogAutoScrollBar",
+    "SetWindowPosOnRotate",
+    // DPA container (core ops only; sort/search/callback stubs are not listed)
+    "DPA_Create",
+    "DPA_CreateEx",
+    "DPA_DeleteAllPtrs",
+    "DPA_DeletePtr",
+    "DPA_Destroy",
+    "DPA_GetPtr",
+    "DPA_GetPtrIndex",
+    "DPA_Grow",
+    "DPA_InsertPtr",
+    "DPA_SetPtr",
+    // DSA container (core ops only)
+    "DSA_Create",
+    "DSA_DeleteAllItems",
+    "DSA_DeleteItem",
+    "DSA_Destroy",
+    "DSA_GetItem",
+    "DSA_GetItemPtr",
+    "DSA_Grow",
+    "DSA_InsertItem",
+    "DSA_SetItem",
+    // GWE internal (returns zero/false, correct behavior)
+    "GetGweApiSetTables",
+    // String safe-copy helpers
+    "StringCchCopyNExW",
+    "StringCbCopyNExW",
+    // GDI extras
+    "GetIconInfo",
+    "AlphaBlend",
+    "GetStretchBltMode",
+    "SetStretchBltMode",
+    "GetLayout",
+    "SetLayout",
+    "AnimateRects",
+    "GetTextCharacterExtra",
+    "SetTextCharacterExtra",
+    // Font utilities
+    "EnumFontFamiliesExW",
+    "GetFontData",
+    "GetOutlineTextMetricsW",
+    "GetCharABCWidthsI",
+    // Process/thread utilities
+    "OpenThread",
+    "GetProcessIdOfThread",
+    // Power management
+    "GetSystemPowerStatusEx",
+    "GetSystemPowerStatusEx2",
+    // Language/locale utilities
+    "GetSystemDefaultUILanguage",
+    "GetUserDefaultUILanguage",
+    "EnumUILanguagesW",
+    // Async I/O
+    "GetOverlappedResult",
+    // Memory tracing variants (same impl as non-trace)
+    "LocalAllocTrace",
+    "HeapAllocTrace",
 ];
 
 const REGISTRY_PREFIXES: &[&str] = &[
