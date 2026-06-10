@@ -20485,6 +20485,10 @@ struct PopupMenuModalMenuState {
     current: Option<usize>,
 }
 
+/// Timer ID used for hover-open delays on non-tap-only devices.
+/// Fires once after `GetDoubleClickTime()` ms when the pointer rests on a submenu parent.
+const POPUP_HOVER_TIMER_ID: u32 = 0x4D454E55;
+
 #[derive(Debug, Clone)]
 #[cfg_attr(not(feature = "unicorn"), allow(dead_code))]
 pub(crate) struct PopupMenuModalState {
@@ -20496,6 +20500,9 @@ pub(crate) struct PopupMenuModalState {
     pub(crate) mouse_message_max: u32,
     cursor: Point,
     stack: Vec<PopupMenuModalMenuState>,
+    /// On non-tap-only devices the modal pump uses a hover timer to open submenus
+    /// instead of opening them immediately on button-down.
+    use_tap_only_ui: bool,
 }
 
 #[cfg_attr(not(feature = "unicorn"), allow(dead_code))]
@@ -20614,6 +20621,10 @@ pub(crate) fn track_popup_menu_ex_prepare<M: CoredllGuestMemory>(
         popup_x,
         popup_y,
     );
+    // Tap-only UI is active when no physical mouse is present (touch-screen-only CE devices).
+    // On tap-only devices button-down opens submenus immediately; on mouse devices a hover
+    // timer fires after GetDoubleClickTime() ms instead.
+    let use_tap_only_ui = kernel.gwe.system_metric(crate::ce::gwe::SM_MOUSEPRESENT) == 0;
     Ok(PopupMenuModalState {
         hwnd,
         menu,
@@ -20623,6 +20634,7 @@ pub(crate) fn track_popup_menu_ex_prepare<M: CoredllGuestMemory>(
         mouse_message_max,
         cursor,
         stack,
+        use_tap_only_ui,
     })
 }
 
@@ -20647,15 +20659,20 @@ impl PopupMenuModalState {
             self.popup_x,
             self.popup_y,
             self.mouse_message_max,
+            self.use_tap_only_ui,
             framebuffer,
             &mut self.stack,
         ) {
-            Some(input) => Ok(self.finalize(kernel, input)),
+            Some(input) => Ok(self.finalize(kernel, thread_id, input)),
             None => Err(self),
         }
     }
 
-    fn finalize(self, kernel: &mut CeKernel, input: PopupMenuModalInput) -> u32 {
+    fn finalize(self, kernel: &mut CeKernel, thread_id: u32, input: PopupMenuModalInput) -> u32 {
+        // Kill any pending hover timer on loop exit.
+        if !self.use_tap_only_ui {
+            kernel.kill_timer_for_thread(thread_id, Some(self.hwnd), POPUP_HOVER_TIMER_ID);
+        }
         let cancelled = matches!(input, PopupMenuModalInput::Cancelled);
         let selection = match input {
             PopupMenuModalInput::Selected(sel) => Some(sel),
@@ -20692,6 +20709,7 @@ fn popup_menu_modal_input_loop(
     popup_x: i32,
     popup_y: i32,
     mouse_message_max: u32,
+    use_tap_only_ui: bool,
     framebuffer: &mut Option<&mut dyn Framebuffer>,
     mut stack: &mut Vec<PopupMenuModalMenuState>,
 ) -> Option<PopupMenuModalInput> {
@@ -20772,6 +20790,16 @@ fn popup_menu_modal_input_loop(
                     PeekFlags::REMOVE,
                 );
             }
+            // Intercept our hover-open timer so it doesn't get dispatched to the wndproc.
+            crate::ce::gwe::WM_TIMER if message.wparam == POPUP_HOVER_TIMER_ID => {
+                let _ = kernel.gwe.peek_message_filtered(
+                    thread_id,
+                    None,
+                    modal_message_min,
+                    mouse_message_max,
+                    PeekFlags::REMOVE,
+                );
+            }
             _ => {
                 let Some(message) = kernel.gwe.peek_message_filtered(
                     thread_id,
@@ -20788,6 +20816,9 @@ fn popup_menu_modal_input_loop(
         }
         match (message.msg, message.wparam) {
             (crate::ce::gwe::WM_CANCELMODE, _) => {
+                if !use_tap_only_ui {
+                    kernel.kill_timer_for_thread(thread_id, Some(hwnd), POPUP_HOVER_TIMER_ID);
+                }
                 popup_menu_post_menu_select(kernel, thread_id, hwnd, menu, None);
                 return Some(PopupMenuModalInput::Cancelled);
             }
@@ -20805,6 +20836,7 @@ fn popup_menu_modal_input_loop(
                         popup_y,
                     );
                     let active = stack.last_mut().unwrap();
+                    let prev_current = active.current;
                     popup_menu_set_current_index(
                         kernel,
                         active.menu,
@@ -20814,6 +20846,27 @@ fn popup_menu_modal_input_loop(
                         popup_x,
                         popup_y,
                     );
+                    // On non-tap-only devices: when the pointer moves to a new row, manage
+                    // the hover timer.  Kill any existing timer first; restart it only if
+                    // the new row is a submenu parent — after GetDoubleClickTime() ms the
+                    // child pane opens automatically.
+                    if !use_tap_only_ui && prev_current != Some(item_index) {
+                        kernel.kill_timer_for_thread(thread_id, Some(hwnd), POPUP_HOVER_TIMER_ID);
+                        let active = stack.last().unwrap();
+                        let is_submenu_parent = kernel.resources.menu(active.menu)
+                            .and_then(|m| m.items.get(item_index))
+                            .map(|item| item.submenu != 0)
+                            .unwrap_or(false);
+                        if is_submenu_parent {
+                            kernel.set_timer_for_thread(
+                                thread_id,
+                                Some(hwnd),
+                                Some(POPUP_HOVER_TIMER_ID),
+                                500,
+                                None,
+                            );
+                        }
+                    }
                     let active = stack.last().unwrap();
                     popup_menu_post_menu_select(
                         kernel,
@@ -20829,6 +20882,10 @@ fn popup_menu_modal_input_loop(
                 if let Some((level_index, item_index)) =
                     popup_menu_modal_pointer_index(&kernel.resources, &stack, point)
                 {
+                    // Any button-down cancels the hover timer on both tap-only and mouse devices.
+                    if !use_tap_only_ui {
+                        kernel.kill_timer_for_thread(thread_id, Some(hwnd), POPUP_HOVER_TIMER_ID);
+                    }
                     popup_menu_modal_truncate_stack(
                         kernel,
                         &mut stack,
@@ -20847,8 +20904,11 @@ fn popup_menu_modal_input_loop(
                         popup_x,
                         popup_y,
                     );
-                    // In tap-only mode, pressing on a submenu parent opens the child pane.
-                    popup_menu_modal_open_submenu(kernel, &mut stack, framebuffer, popup_x, popup_y);
+                    if use_tap_only_ui {
+                        // On tap-only devices pressing on a submenu parent opens the child pane
+                        // immediately without waiting for a hover timer.
+                        popup_menu_modal_open_submenu(kernel, &mut stack, framebuffer, popup_x, popup_y);
+                    }
                     let active = stack.last().unwrap();
                     popup_menu_post_menu_select(
                         kernel,
@@ -20864,6 +20924,9 @@ fn popup_menu_modal_input_loop(
                 if let Some((level_index, item_index)) =
                     popup_menu_modal_pointer_index(&kernel.resources, &stack, point)
                 {
+                    if !use_tap_only_ui {
+                        kernel.kill_timer_for_thread(thread_id, Some(hwnd), POPUP_HOVER_TIMER_ID);
+                    }
                     popup_menu_modal_truncate_stack(
                         kernel,
                         &mut stack,
@@ -20900,8 +20963,28 @@ fn popup_menu_modal_input_loop(
                         return Some(PopupMenuModalInput::Selected(selection));
                     }
                 } else {
+                    if !use_tap_only_ui {
+                        kernel.kill_timer_for_thread(thread_id, Some(hwnd), POPUP_HOVER_TIMER_ID);
+                    }
                     popup_menu_post_menu_select(kernel, thread_id, hwnd, menu, None);
                     return Some(PopupMenuModalInput::Cancelled);
+                }
+            }
+            // Hover timer fired: open the submenu if the currently highlighted row is a
+            // submenu parent.  Kill the repeating timer first.
+            (crate::ce::gwe::WM_TIMER, POPUP_HOVER_TIMER_ID) => {
+                kernel.kill_timer_for_thread(thread_id, Some(hwnd), POPUP_HOVER_TIMER_ID);
+                if !use_tap_only_ui
+                    && popup_menu_modal_open_submenu(kernel, &mut stack, framebuffer, popup_x, popup_y)
+                {
+                    let active = stack.last().unwrap();
+                    popup_menu_post_menu_select(
+                        kernel,
+                        thread_id,
+                        hwnd,
+                        active.menu,
+                        active.current,
+                    );
                 }
             }
             (crate::ce::gwe::WM_CHAR, VK_RETURN) => {
@@ -21059,6 +21142,7 @@ fn popup_menu_modal_input_selection(
     } else {
         crate::ce::gwe::WM_LBUTTONUP
     };
+    let use_tap_only_ui = kernel.gwe.system_metric(crate::ce::gwe::SM_MOUSEPRESENT) == 0;
     popup_menu_modal_input_loop(
         kernel,
         thread_id,
@@ -21068,6 +21152,7 @@ fn popup_menu_modal_input_selection(
         popup_x,
         popup_y,
         mouse_message_max,
+        use_tap_only_ui,
         framebuffer,
         &mut stack,
     )

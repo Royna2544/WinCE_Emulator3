@@ -13693,6 +13693,127 @@ fn coredll_raw_track_popup_menu_submenu_flips_left_near_right_edge() -> Result<(
 }
 
 #[test]
+fn coredll_raw_track_popup_menu_hover_timer_opens_submenu_on_mouse_device() -> Result<()> {
+    // On non-tap-only devices (SM_MOUSEPRESENT != 0) moving the pointer over a
+    // submenu parent must NOT open the child pane immediately on button-down.
+    // Instead the pump sets a hover timer (POPUP_HOVER_TIMER_ID = 0x4D454E55);
+    // when that timer fires the child pane opens and the next button-up inside it
+    // selects the command.
+    //
+    // Default kernel returns SM_MOUSEPRESENT = 1, so use_tap_only_ui = false.
+    //
+    // Geometry: parent at (100, 100), width clamped to 90.
+    //   Parent row 0 (submenu): y in [102, 120), x in [102, 190).
+    //   Child opens at x = 100 + 90 - 2 = 188, popup_y = 100 + 2 + 0*18 = 102.
+    //   Child row 0 ("Save"): y in [104, 122), x in [190, 278).
+    //   Child row 1 ("Load"): y in [122, 140), x in [190, 278).
+    const TPM_RETURNCMD: u32 = 0x0100;
+    const MF_POPUP: u32 = 0x0010;
+    const WM_TIMER: u32 = 0x0113;
+    const POPUP_HOVER_TIMER_ID: u32 = 0x4D454E55;
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 43;
+    let more_text = 0x1_7c00;
+    let quit_text = 0x1_7c80;
+    let save_text = 0x1_7d00;
+    let load_text = 0x1_7d80;
+    memory.map_halfwords(more_text, 16);
+    memory.map_halfwords(quit_text, 16);
+    memory.map_halfwords(save_text, 16);
+    memory.map_halfwords(load_text, 16);
+    memory.write_wide_z(more_text, "More");
+    memory.write_wide_z(quit_text, "Quit");
+    memory.write_wide_z(save_text, "Save");
+    memory.write_wide_z(load_text, "Load");
+
+    let hwnd = kernel.create_window_ex_w(thread_id, "HOVER_OWNER", "", None, 0, 0, 0);
+    let parent = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_POPUP_MENU,
+        [],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreatePopupMenu did not return a handle: {other:?}"),
+    };
+    let child = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_POPUP_MENU,
+        [],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreatePopupMenu did not return a handle: {other:?}"),
+    };
+    // Child: row 0 = 903 ("Save"), row 1 = 904 ("Load").
+    // Parent: row 0 = submenu "More" → child, row 1 = 905 ("Quit").
+    for args in [
+        [child, 0, 903, save_text],
+        [child, 0, 904, load_text],
+        [parent, MF_POPUP, child, more_text],
+        [parent, 0, 905, quit_text],
+    ] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_APPEND_MENU_W,
+                args,
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+    }
+
+    // Step 1: Move pointer over the submenu parent row (y=110, x=150).
+    //   In mouse mode this does NOT open the child — it starts the hover timer.
+    let parent_row0_move = (110_u32 << 16) | 150;
+    // Step 2: Simulate the 500 ms hover timer firing by queuing a WM_TIMER with
+    //   POPUP_HOVER_TIMER_ID as wparam.  The pump intercepts this, kills the timer,
+    //   and opens the child pane.
+    let hover_timer_lparam = 0_u32;
+    // Step 3: Button-up on child row 1 ("Load") at (220, 130) selects command 904.
+    let child_row1_up = (130_u32 << 16) | 220;
+    assert!(kernel.post_message_w_for_thread(
+        thread_id, hwnd, WM_MOUSEMOVE, 0, parent_row0_move
+    ));
+    assert!(kernel.post_message_w_for_thread(
+        thread_id, hwnd, WM_TIMER, POPUP_HOVER_TIMER_ID, hover_timer_lparam
+    ));
+    assert!(kernel.post_message_w_for_thread(
+        thread_id, hwnd, WM_LBUTTONUP, 0, child_row1_up
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRACK_POPUP_MENU_EX,
+            [parent, TPM_RETURNCMD, 100, 100, hwnd, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(904),
+            ..
+        }
+    ));
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_translate_message_uses_shift_caps_and_syschar() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
