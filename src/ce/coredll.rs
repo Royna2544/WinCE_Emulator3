@@ -71,6 +71,9 @@ const CTYPE_BLANK: u32 = 0x0040;
 const CTYPE_HEX: u32 = 0x0080;
 const CTYPE_ALPHA: u32 = 0x0100;
 const SPI_GETWORKAREA: u32 = 0x0030;
+const SPI_GETWHEELSCROLLLINES: u32 = 0x0068;
+const SPI_SETWHEELSCROLLLINES: u32 = 0x0069;
+const SPI_GETDEFAULTINPUTLANG: u32 = 0x0059;
 const SPI_GETSCREENORIENTATION: u32 = 0x00C8;
 const SPI_SETSCREENORIENTATION: u32 = 0x00C9;
 const SPI_GETUIEFFECTS: u32 = 0x103E;
@@ -79,6 +82,12 @@ const SPI_GETFONTSMOOTHING: u32 = 0x004A;
 const SPI_SETFONTSMOOTHING: u32 = 0x004B;
 const SPI_GETPLATFORMTYPE: u32 = 0x0101;
 const SPI_GETOEMINFO: u32 = 0x0102;
+const SPI_GETPROJECTNAME: u32 = 0x0103;
+const SPI_GETPLATFORMNAME: u32 = 0x0104;
+const SPI_GETBOOTMENAME: u32 = 0x0105;
+const SPI_GETPLATFORMMANUFACTURER: u32 = 0x0106;
+const SPI_GETUUID: u32 = 0x0107;
+const SPI_GETGUIDPATTERN: u32 = 0x0108;
 const SPIF_SENDCHANGE: u32 = 0x0002;
 const SYSTEM_PARAMETERS_INFO_REGISTRY_PATH: &str = r"HKLM\System\Emulator\SystemParametersInfo";
 const SHELL_FOLDERS_REGISTRY_PATH: &str = r"HKLM\System\Explorer\Shell Folders";
@@ -9630,6 +9639,73 @@ fn system_parameters_info_w_raw<M: CoredllGuestMemory>(
         }
         // Setting these is accepted as a no-op.
         SPI_SETUIEFFECTS | SPI_SETFONTSMOOTHING => true,
+        // CE device identity strings from the OAL (IOCTL_HAL_GET_DEVICE_INFO).
+        // Default to generic CE 6.0 values; override via registry if needed.
+        SPI_GETPROJECTNAME => {
+            let text = system_parameter_info_config_string(
+                kernel,
+                action,
+                &["projectname", "project_name"],
+            )
+            .unwrap_or_else(|| "INAVI".to_owned());
+            write_system_parameter_info_string(kernel, memory, thread_id, pv_param, ui_param, &text)
+        }
+        SPI_GETPLATFORMNAME => {
+            let text = system_parameter_info_config_string(
+                kernel,
+                action,
+                &["platformname", "platform_name"],
+            )
+            .unwrap_or_else(|| "ARMV4I".to_owned());
+            write_system_parameter_info_string(kernel, memory, thread_id, pv_param, ui_param, &text)
+        }
+        SPI_GETBOOTMENAME => {
+            let text = system_parameter_info_config_string(
+                kernel,
+                action,
+                &["bootmename", "bootme_name"],
+            )
+            .unwrap_or_else(|| "CEDevice".to_owned());
+            write_system_parameter_info_string(kernel, memory, thread_id, pv_param, ui_param, &text)
+        }
+        SPI_GETPLATFORMMANUFACTURER => {
+            let text = system_parameter_info_config_string(
+                kernel,
+                action,
+                &["platformmanufacturer", "platform_manufacturer"],
+            )
+            .unwrap_or_else(|| "Microsoft".to_owned());
+            write_system_parameter_info_string(kernel, memory, thread_id, pv_param, ui_param, &text)
+        }
+        // SPI_GETUUID / SPI_GETGUIDPATTERN: pvParam is GUID* (16 bytes), uiParam is sizeof(GUID).
+        // Return an all-zero GUID; callers only need a unique-enough device identity.
+        SPI_GETUUID | SPI_GETGUIDPATTERN => {
+            if pv_param == 0 || ui_param < 16 {
+                false
+            } else {
+                write_guest_bytes(kernel, memory, thread_id, pv_param, &[0u8; 16])
+            }
+        }
+        // SPI_GETWHEELSCROLLLINES: pvParam is UINT* receiving lines-per-wheel-click (default 3).
+        SPI_GETWHEELSCROLLLINES => {
+            if pv_param == 0 {
+                false
+            } else {
+                write_guest_u32(kernel, memory, thread_id, pv_param, 3)
+            }
+        }
+        // SPI_SETWHEELSCROLLLINES: accepted as a no-op (emulator ignores scroll speed).
+        SPI_SETWHEELSCROLLLINES => true,
+        // SPI_GETDEFAULTINPUTLANG: pvParam is LPHKL receiving the default keyboard layout handle.
+        // Return the current active keyboard layout (same as GetKeyboardLayout(0)).
+        SPI_GETDEFAULTINPUTLANG => {
+            if pv_param == 0 {
+                false
+            } else {
+                let hkl = kernel.gwe.keyboard_layout();
+                write_guest_u32(kernel, memory, thread_id, pv_param, hkl)
+            }
+        }
         _ => true,
     };
     kernel

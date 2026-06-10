@@ -983,6 +983,179 @@ fn coredll_raw_system_parameters_info_screen_orientation_and_ui_effects() -> Res
 }
 
 #[test]
+fn coredll_raw_system_parameters_info_ce_device_identity_strings() -> Result<()> {
+    const SPI_GETPROJECTNAME: u32 = 0x0103;
+    const SPI_GETPLATFORMNAME: u32 = 0x0104;
+    const SPI_GETBOOTMENAME: u32 = 0x0105;
+    const SPI_GETPLATFORMMANUFACTURER: u32 = 0x0106;
+    const SPI_GETUUID: u32 = 0x0107;
+    const SPI_GETGUIDPATTERN: u32 = 0x0108;
+    const SPI_GETWHEELSCROLLLINES: u32 = 0x0068;
+    const SPI_SETWHEELSCROLLLINES: u32 = 0x0069;
+    const SPI_GETDEFAULTINPUTLANG: u32 = 0x0059;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+    let text = 0x3000_u32;
+    let value_ptr = 0x3400_u32;
+    let guid_ptr = 0x3800_u32;
+    memory.map_halfwords(text, 64);
+    memory.map_words(value_ptr, 1);
+    memory.map_bytes(guid_ptr, 16);
+
+    // SPI_GETPROJECTNAME returns the CE project name.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SYSTEM_PARAMETERS_INFO_W,
+            [SPI_GETPROJECTNAME, 64, text, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(text, 64), "INAVI");
+
+    // SPI_GETPLATFORMNAME returns the platform architecture identifier.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SYSTEM_PARAMETERS_INFO_W,
+            [SPI_GETPLATFORMNAME, 64, text, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(text, 64), "ARMV4I");
+
+    // SPI_GETBOOTMENAME returns the BOOTME protocol name.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SYSTEM_PARAMETERS_INFO_W,
+            [SPI_GETBOOTMENAME, 64, text, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(text, 64), "CEDevice");
+
+    // SPI_GETPLATFORMMANUFACTURER returns the OEM manufacturer name.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SYSTEM_PARAMETERS_INFO_W,
+            [SPI_GETPLATFORMMANUFACTURER, 64, text, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(text, 64), "Microsoft");
+
+    // SPI_GETUUID writes a 16-byte GUID to pvParam.
+    let zeros = vec![0u8; 16];
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SYSTEM_PARAMETERS_INFO_W,
+            [SPI_GETUUID, 16, guid_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_bytes(guid_ptr, 16), zeros);
+
+    // SPI_GETGUIDPATTERN writes a 16-byte GUID pattern to pvParam.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SYSTEM_PARAMETERS_INFO_W,
+            [SPI_GETGUIDPATTERN, 16, guid_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_bytes(guid_ptr, 16), zeros);
+
+    // SPI_GETWHEELSCROLLLINES writes the default lines-per-tick count (3).
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SYSTEM_PARAMETERS_INFO_W,
+            [SPI_GETWHEELSCROLLLINES, 0, value_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(value_ptr)?, 3);
+
+    // SPI_SETWHEELSCROLLLINES is accepted as a no-op.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SYSTEM_PARAMETERS_INFO_W,
+            [SPI_SETWHEELSCROLLLINES, 5, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    // SPI_GETDEFAULTINPUTLANG writes the active HKL (0x0409 US English by default).
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SYSTEM_PARAMETERS_INFO_W,
+            [SPI_GETDEFAULTINPUTLANG, 0, value_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let hkl = memory.read_u32(value_ptr)?;
+    assert_ne!(hkl, 0xDEAD_BEEF, "SPI_GETDEFAULTINPUTLANG should have written an HKL");
+
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_fill_rect_paints_attached_framebuffer() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
