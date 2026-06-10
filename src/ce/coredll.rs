@@ -22402,6 +22402,9 @@ fn draw_icon_ex_raw<M: CoredllGuestMemory>(
         flags,
         overlay_image: None,
         rgb_fg: CLR_DEFAULT,
+        rgb_bk: CLR_NONE,
+        x_bitmap: 0,
+        y_bitmap: 0,
     };
     if !render_image_list_draw_bitmap(kernel, memory, draw) {
         render_image_list_draw_framebuffer(kernel, memory, framebuffer, draw);
@@ -22900,6 +22903,9 @@ fn image_list_draw_raw<M: CoredllGuestMemory>(
         flags,
         overlay_image: None,
         rgb_fg: CLR_DEFAULT,
+        rgb_bk: CLR_NONE,
+        x_bitmap: 0,
+        y_bitmap: 0,
     };
     let rendered = record_image_list_draw(kernel, thread_id, draw);
     if rendered {
@@ -22950,6 +22956,9 @@ fn image_list_draw_ex_raw<M: CoredllGuestMemory>(
         flags,
         overlay_image: None,
         rgb_fg,
+        rgb_bk,
+        x_bitmap: 0,
+        y_bitmap: 0,
     };
     let rendered = record_image_list_draw(kernel, thread_id, draw);
     if rendered {
@@ -23003,9 +23012,21 @@ fn image_list_draw_indirect_raw<M: CoredllGuestMemory>(
     let Some(height) = read_guest_i32(kernel, memory, thread_id, draw_ptr.wrapping_add(28)) else {
         return false;
     };
-    // fStyle is at offset 48 (after xBitmap @32, yBitmap @36, rgbBk @40, rgbFg @44).
-    // rgbBk is at offset 40: CLR_NONE forces ILD_TRANSPARENT per CE imagelist.cpp.
+    // IMAGELISTDRAWPARAMS layout (all 4-byte fields):
+    //  @0  cbSize, @4 himl, @8 i, @12 hdcDst, @16 x, @20 y, @24 cx, @28 cy
+    //  @32 xBitmap, @36 yBitmap, @40 rgbBk, @44 rgbFg, @48 fStyle, @52 dwRop
+    // xBitmap/yBitmap are added to the image source rect per CE imagelist.cpp DrawIndirect.
     const ILD_TRANSPARENT: u32 = 0x0001;
+    let x_bitmap = if size >= 36 {
+        read_guest_i32(kernel, memory, thread_id, draw_ptr.wrapping_add(32)).unwrap_or(0)
+    } else {
+        0
+    };
+    let y_bitmap = if size >= 40 {
+        read_guest_i32(kernel, memory, thread_id, draw_ptr.wrapping_add(36)).unwrap_or(0)
+    } else {
+        0
+    };
     let rgb_bk = if size >= 44 {
         read_guest_u32(kernel, memory, thread_id, draw_ptr.wrapping_add(40)).unwrap_or(CLR_NONE)
     } else {
@@ -23037,6 +23058,9 @@ fn image_list_draw_indirect_raw<M: CoredllGuestMemory>(
         flags,
         overlay_image: None,
         rgb_fg,
+        rgb_bk,
+        x_bitmap,
+        y_bitmap,
     };
     let rendered = record_image_list_draw(kernel, thread_id, draw);
     if rendered {
@@ -23258,23 +23282,41 @@ fn render_image_list_bitmap_framebuffer<M: CoredllGuestMemory>(
         return false;
     };
     let draw_flags = draw.flags & 0x00ff;
+    const ILD_TRANSPARENT: u32 = 0x0001;
     // Apply ILD draw flags to the effective image: ILD_MASK draws only the mask
     // bitmap; ILD_IMAGE suppresses mask and transparent-color transparency.
+    // Also apply xBitmap/yBitmap source offsets from DrawIndirect.
     let effective_image = if draw_flags & ILD_MASK != 0 && image.mask != 0 {
         crate::ce::resource::ImageListImage {
             bitmap: image.mask,
             mask: 0,
+            source_x: image.source_x + draw.x_bitmap,
+            source_y: image.source_y + draw.y_bitmap,
             ..image.clone()
         }
     } else if draw_flags & ILD_IMAGE != 0 {
         crate::ce::resource::ImageListImage {
             mask: 0,
             transparent_color: None,
+            source_x: image.source_x + draw.x_bitmap,
+            source_y: image.source_y + draw.y_bitmap,
             ..image.clone()
         }
     } else {
-        image.clone()
+        crate::ce::resource::ImageListImage {
+            source_x: image.source_x + draw.x_bitmap,
+            source_y: image.source_y + draw.y_bitmap,
+            ..image.clone()
+        }
     };
+    // When ILD_TRANSPARENT is not set and a background color is specified, CE fills
+    // the transparent areas with rgb_bk (via ROP_PatMask on the mask + SRCCOPY).
+    // We approximate this by pre-filling the dest rect with rgb_bk so that pixels
+    // not overwritten by the image (transparent) show the background color.
+    if draw_flags & ILD_TRANSPARENT == 0 && draw.rgb_bk != CLR_NONE {
+        let dest_rect = Rect::from_origin_size(draw.x, draw.y, width, height);
+        fill_framebuffer_rect_for_hdc(kernel, framebuffer, draw.hdc, dest_rect, draw.rgb_bk);
+    }
     let src_width = list.width.max(1);
     let src_height = list.height.max(1);
     let blend = ild_blend_color(draw_flags, draw.rgb_fg);
@@ -23348,21 +23390,42 @@ fn render_image_list_bitmap_hdc<M: CoredllGuestMemory>(
         return false;
     };
     let draw_flags = draw.flags & 0x00ff;
+    const ILD_TRANSPARENT: u32 = 0x0001;
+    // Apply ILD draw flags and xBitmap/yBitmap source offsets from DrawIndirect.
     let effective_image = if draw_flags & ILD_MASK != 0 && image.mask != 0 {
         crate::ce::resource::ImageListImage {
             bitmap: image.mask,
             mask: 0,
+            source_x: image.source_x + draw.x_bitmap,
+            source_y: image.source_y + draw.y_bitmap,
             ..image.clone()
         }
     } else if draw_flags & ILD_IMAGE != 0 {
         crate::ce::resource::ImageListImage {
             mask: 0,
             transparent_color: None,
+            source_x: image.source_x + draw.x_bitmap,
+            source_y: image.source_y + draw.y_bitmap,
             ..image.clone()
         }
     } else {
-        image.clone()
+        crate::ce::resource::ImageListImage {
+            source_x: image.source_x + draw.x_bitmap,
+            source_y: image.source_y + draw.y_bitmap,
+            ..image.clone()
+        }
     };
+    // Pre-fill dest rect with rgb_bk so transparent pixels show the background color.
+    if draw_flags & ILD_TRANSPARENT == 0 && draw.rgb_bk != CLR_NONE {
+        let dest_rect = Rect::from_origin_size(draw.x, draw.y, width, height);
+        let _ = fill_bitmap_rect_for_hdc(
+            kernel,
+            memory,
+            draw.hdc,
+            dest_rect,
+            BrushPaint::Solid(draw.rgb_bk),
+        );
+    }
     let src_width = list.width.max(1);
     let src_height = list.height.max(1);
     let blend = ild_blend_color(draw_flags, draw.rgb_fg);

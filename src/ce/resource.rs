@@ -290,6 +290,14 @@ pub struct ImageListDraw {
     pub overlay_image: Option<i32>,
     /// Foreground (blend) color as COLORREF (CLR_DEFAULT = 0xFF000000, CLR_NONE = 0xFFFFFFFF).
     pub rgb_fg: u32,
+    /// Background color (COLORREF). CLR_NONE = transparent; CLR_DEFAULT = image list bk.
+    /// When ILD_TRANSPARENT is not set and this is not CLR_NONE, transparent pixels are
+    /// filled with this color instead of being skipped (matching CE DrawIndirect ROP_PatMask).
+    pub rgb_bk: u32,
+    /// Additional source bitmap x offset from IMAGELISTDRAWPARAMS.xBitmap.
+    pub x_bitmap: i32,
+    /// Additional source bitmap y offset from IMAGELISTDRAWPARAMS.yBitmap.
+    pub y_bitmap: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

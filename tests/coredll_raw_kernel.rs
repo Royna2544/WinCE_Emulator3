@@ -26,7 +26,8 @@ use wince_emulation_v3::{
             ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY, ORD_IMAGE_LIST_COPY_DITHER_IMAGE,
             ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAG_ENTER,
             ORD_IMAGE_LIST_DRAG_LEAVE, ORD_IMAGE_LIST_DRAG_MOVE, ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK,
-            ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG,
+            ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT, ORD_IMAGE_LIST_DUPLICATE,
+            ORD_IMAGE_LIST_END_DRAG,
             ORD_IMAGE_LIST_GET_BK_COLOR, ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON,
             ORD_IMAGE_LIST_GET_ICON_SIZE, ORD_IMAGE_LIST_GET_IMAGE_COUNT,
             ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_LOAD_IMAGE, ORD_IMAGE_LIST_MERGE,
@@ -5630,6 +5631,217 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     ));
     assert!(kernel.resources.image_list(image_list).is_none());
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<()> {
+    // IMAGELISTDRAWPARAMS layout (4 bytes each, 14 fields = 56 bytes):
+    // @0 cbSize @4 himl @8 i @12 hdcDst @16 x @20 y @24 cx @28 cy
+    // @32 xBitmap @36 yBitmap @40 rgbBk @44 rgbFg @48 fStyle @52 dwRop
+    const IMAGE_BITMAP: u32 = 0;
+    const LR_LOADFROMFILE: u32 = 0x0000_0010;
+    const ILC_COLOR16: u32 = 0x0010;
+    const ILC_MASK: u32 = 0x0001;
+    const CLR_NONE: u32 = 0xffff_ffff;
+    const CLR_DEFAULT: u32 = 0xff00_0000;
+    const IMLDP_WORDS: u32 = 14; // 56-byte struct / 4 = 14 words
+    const PARAMS_PTR: u32 = 0x3_0000;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("image_list_draw_indirect");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    // 2x1 BMP: pixel 0 = magenta (0xFF00FF), pixel 1 = green (0x00FF00).
+    fs::write(root.join("mg.bmp"), bmp_2x1_magenta_green_24bpp()).unwrap();
+    kernel.set_file_root(&root);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 45;
+
+    // --- xBitmap offset test ---
+    // Create a width=2 image list (each image is 2 pixels wide).
+    let il = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [2, 1, ILC_COLOR16, 1, 1],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        other => panic!("ImageList_Create failed: {other:?}"),
+    };
+
+    let path_ptr = 0x3_1000;
+    memory.map_halfwords(path_ptr, 64);
+    memory.write_wide_z(path_ptr, r"\mg.bmp");
+    // Load the 2x1 bitmap from file (cx=2, cy=1, no transparent mask).
+    let bmp_handle = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOAD_IMAGE_W,
+        [0, path_ptr, IMAGE_BITMAP, 2, 1, LR_LOADFROMFILE],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        other => panic!("LoadImage failed: {other:?}"),
+    };
+
+    // ImageList_Add: adds the bitmap as a single image at source_x=0.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [il, bmp_handle, 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }
+    ));
+
+    // Create 4x2 memory DC to draw into.
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 4, 2);
+
+    // Allocate IMAGELISTDRAWPARAMS in guest memory (14 words = 56 bytes).
+    memory.map_words(PARAMS_PTR, IMLDP_WORDS);
+
+    // Draw with xBitmap=0: reads from source_x=0 → magenta pixel blitted to dest (0,0).
+    memory.write_word(PARAMS_PTR, 56); // cbSize
+    memory.write_word(PARAMS_PTR + 4, il); // himl
+    memory.write_word(PARAMS_PTR + 8, 0); // i=0
+    memory.write_word(PARAMS_PTR + 12, mem_dc); // hdcDst
+    memory.write_word(PARAMS_PTR + 16, 0); // x=0
+    memory.write_word(PARAMS_PTR + 20, 0); // y=0
+    memory.write_word(PARAMS_PTR + 24, 1); // cx=1
+    memory.write_word(PARAMS_PTR + 28, 1); // cy=1
+    memory.write_word(PARAMS_PTR + 32, 0); // xBitmap=0
+    memory.write_word(PARAMS_PTR + 36, 0); // yBitmap=0
+    memory.write_word(PARAMS_PTR + 40, CLR_NONE); // rgbBk
+    memory.write_word(PARAMS_PTR + 44, CLR_DEFAULT); // rgbFg
+    memory.write_word(PARAMS_PTR + 48, 0); // fStyle
+    memory.write_word(PARAMS_PTR + 52, 0); // dwRop
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_INDIRECT,
+            [PARAMS_PTR],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+    let magenta_rgb565 = 0xF81F_u16;
+    let green_rgb565 = 0x07E0_u16;
+    assert_eq!(
+        rgb565_at(&memory, bits_ptr, stride, 0, 0),
+        magenta_rgb565,
+        "xBitmap=0 should draw magenta (first pixel of the 2x1 bitmap)"
+    );
+
+    // Draw with xBitmap=1: source_x shifts by 1 → green pixel blitted to dest (1,0).
+    memory.write_word(PARAMS_PTR + 16, 1); // x=1
+    memory.write_word(PARAMS_PTR + 32, 1); // xBitmap=1
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_INDIRECT,
+            [PARAMS_PTR],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, bits_ptr, stride, 1, 0),
+        green_rgb565,
+        "xBitmap=1 should draw green (second pixel of the 2x1 bitmap)"
+    );
+
+    // --- rgb_bk fill test ---
+    // Create a 1x1 image list with magenta as the transparent mask color.
+    let il2 = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [1, 1, ILC_COLOR16 | ILC_MASK, 1, 1],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        other => panic!("ImageList_Create #2 failed: {other:?}"),
+    };
+
+    // Load the 2x1 BMP at 1x1 crop to get just the magenta pixel.
+    let bmp_1x1_handle = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOAD_IMAGE_W,
+        [0, path_ptr, IMAGE_BITMAP, 1, 1, LR_LOADFROMFILE],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        other => panic!("LoadImage 1x1 failed: {other:?}"),
+    };
+    // ImageList_AddMasked with magenta (0x00FF00FF) → whole 1x1 image is transparent.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD_MASKED,
+            [il2, bmp_1x1_handle, 0x00ff_00ff],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }
+    ));
+    assert_eq!(
+        kernel.resources.image_list(il2).unwrap().images[0].transparent_color,
+        Some(0x00ff_00ff),
+        "image should carry the magenta transparent_color"
+    );
+
+    // Draw with rgb_bk=CLR_NONE (ILD_TRANSPARENT forced): transparent pixel stays 0.
+    memory.write_word(PARAMS_PTR + 4, il2); // himl=il2
+    memory.write_word(PARAMS_PTR + 16, 2); // x=2
+    memory.write_word(PARAMS_PTR + 24, 1); // cx=1
+    memory.write_word(PARAMS_PTR + 32, 0); // xBitmap=0
+    memory.write_word(PARAMS_PTR + 40, CLR_NONE); // rgbBk=CLR_NONE
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_INDIRECT,
+            [PARAMS_PTR],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, bits_ptr, stride, 2, 0),
+        0,
+        "rgb_bk=CLR_NONE: transparent draw should leave dest pixel untouched (no bg fill)"
+    );
+
+    // Draw with rgb_bk=green (0x0000FF00): transparent area should be filled with green.
+    memory.write_word(PARAMS_PTR + 16, 3); // x=3
+    memory.write_word(PARAMS_PTR + 40, 0x0000_ff00); // rgbBk=green
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_INDIRECT,
+            [PARAMS_PTR],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, bits_ptr, stride, 3, 0),
+        green_rgb565,
+        "rgb_bk=green: transparent area should be pre-filled with background color"
+    );
+
     let _ = fs::remove_dir_all(root);
     Ok(())
 }

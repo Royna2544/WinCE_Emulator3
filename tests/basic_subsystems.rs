@@ -8125,6 +8125,9 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
         flags: 0x0100, // overlay = 1
         overlay_image: None,
         rgb_fg: 0xff00_0000, // CLR_DEFAULT
+        rgb_bk: 0xffff_ffff, // CLR_NONE
+        x_bitmap: 0,
+        y_bitmap: 0,
     };
     assert_eq!(res.record_image_list_draw(draw.clone()), Some(true));
     let last_draw = res.image_list(ov_il).unwrap().last_draw.unwrap();
