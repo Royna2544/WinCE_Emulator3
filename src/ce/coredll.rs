@@ -123,6 +123,7 @@ const SHELLEXECUTEINFO_HINSTAPP_OFFSET: u32 = 32;
 const SHELLEXECUTEINFO_HPROCESS_OFFSET: u32 = 56;
 const SHELL_EXECUTE_SUCCESS: u32 = 33;
 const SE_ERR_FNF: u32 = 2;
+const SE_ERR_PNF: u32 = 3;
 const SE_ERR_NOASSOC: u32 = 31;
 const ERROR_BAD_FORMAT_LOCAL: u32 = 11;
 const ERROR_FILE_EXISTS_LOCAL: u32 = 80;
@@ -18814,6 +18815,7 @@ struct ShellLaunchCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ShellLaunchError {
     FileNotFound,
+    PathNotFound,
     NoAssociation,
 }
 
@@ -18887,9 +18889,10 @@ fn shell_execute_ex_w_raw<M: CoredllGuestMemory>(
     ) {
         Ok(launch) => launch,
         Err(error) => {
-            let hinst_app = match error {
-                ShellLaunchError::FileNotFound => SE_ERR_FNF,
-                ShellLaunchError::NoAssociation => SE_ERR_NOASSOC,
+            let (hinst_app, last_error) = match error {
+                ShellLaunchError::FileNotFound => (SE_ERR_FNF, ERROR_FILE_NOT_FOUND),
+                ShellLaunchError::PathNotFound => (SE_ERR_PNF, ERROR_PATH_NOT_FOUND),
+                ShellLaunchError::NoAssociation => (SE_ERR_NOASSOC, ERROR_FILE_NOT_FOUND),
             };
             let _ = write_optional_u32(
                 kernel,
@@ -18898,9 +18901,7 @@ fn shell_execute_ex_w_raw<M: CoredllGuestMemory>(
                 info_ptr.wrapping_add(SHELLEXECUTEINFO_HINSTAPP_OFFSET),
                 hinst_app,
             );
-            kernel
-                .threads
-                .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
+            kernel.threads.set_last_error(thread_id, last_error);
             return false;
         }
     };
@@ -19445,7 +19446,7 @@ fn resolve_shell_launch(
     };
     if is_executable_shell_path(&target) {
         if kernel.file_attributes_w(&target).is_err() {
-            return Err(ShellLaunchError::FileNotFound);
+            return Err(shell_missing_path_error(kernel, &target));
         }
         return Ok(ShellLaunchCommand {
             application: Some(target.clone()),
@@ -19455,15 +19456,10 @@ fn resolve_shell_launch(
         });
     }
     if kernel.file_attributes_w(&target).is_err() {
-        return Err(ShellLaunchError::FileNotFound);
+        return Err(shell_missing_path_error(kernel, &target));
     }
-    let command_template = shell_association_command(kernel, &target, verb).ok_or_else(|| {
-        if file_extension(&target).is_some() {
-            ShellLaunchError::NoAssociation
-        } else {
-            ShellLaunchError::NoAssociation
-        }
-    })?;
+    let command_template =
+        shell_association_command(kernel, &target, verb).ok_or(ShellLaunchError::NoAssociation)?;
     let command =
         expand_shell_command_template(&command_template, &target, launch_parameters.as_deref());
     let (application, command_line) = split_shell_command(&command);
@@ -19473,7 +19469,7 @@ fn resolve_shell_launch(
     if is_absolute_shell_path(application_path)
         && kernel.file_attributes_w(application_path).is_err()
     {
-        return Err(ShellLaunchError::FileNotFound);
+        return Err(shell_missing_path_error(kernel, application_path));
     }
     Ok(ShellLaunchCommand {
         application,
@@ -19481,6 +19477,34 @@ fn resolve_shell_launch(
         current_directory,
         hinst_app: SHELL_EXECUTE_SUCCESS,
     })
+}
+
+/// Distinguishes CE's `SE_ERR_PNF` (the containing directory is missing) from
+/// `SE_ERR_FNF` (the directory exists but the file does not), matching the
+/// documented `ShellExecute` error split.
+fn shell_missing_path_error(kernel: &CeKernel, path: &str) -> ShellLaunchError {
+    match shell_parent_directory(path) {
+        Some(parent) if !shell_directory_exists(kernel, &parent) => {
+            ShellLaunchError::PathNotFound
+        }
+        _ => ShellLaunchError::FileNotFound,
+    }
+}
+
+/// Returns the directory portion of a CE path, or `None` when the path has no
+/// parent directory beyond the root (where the root always exists).
+fn shell_parent_directory(path: &str) -> Option<String> {
+    let trimmed = path.trim_end_matches('\\');
+    let separator = trimmed.rfind('\\')?;
+    let parent = &trimmed[..separator];
+    // A leading-backslash path like "\file.exe" has the root as its parent.
+    (!parent.is_empty()).then(|| parent.to_owned())
+}
+
+fn shell_directory_exists(kernel: &CeKernel, directory: &str) -> bool {
+    kernel
+        .file_attributes_w(directory)
+        .is_ok_and(|data| data.attributes & FILE_ATTRIBUTE_DIRECTORY != 0)
 }
 
 fn normalize_shell_directory(directory: &str) -> Option<String> {

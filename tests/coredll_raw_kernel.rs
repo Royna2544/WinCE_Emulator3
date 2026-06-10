@@ -2948,7 +2948,9 @@ fn shell_execute_ex_resolves_generic_file_association_for_extensionless_document
 #[test]
 fn shell_execute_ex_reports_precise_missing_exe_and_no_association_errors() -> Result<()> {
     const SE_ERR_FNF: u32 = 2;
+    const SE_ERR_PNF: u32 = 3;
     const SE_ERR_NOASSOC: u32 = 31;
+    const ERROR_PATH_NOT_FOUND: u32 = 3;
 
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
@@ -3119,6 +3121,53 @@ fn shell_execute_ex_reports_precise_missing_exe_and_no_association_errors() -> R
     assert_eq!(
         kernel.threads.get_last_error(thread_id),
         ERROR_FILE_NOT_FOUND
+    );
+    assert!(kernel.take_pending_process_launches().is_empty());
+
+    // A file in a directory that does not exist is SE_ERR_PNF (path not found),
+    // distinct from SE_ERR_FNF for a missing file in an existing directory.
+    memory.write_word(info + 32, 0);
+    memory.write_wide_z(file_ptr, r"\NoSuchDir\missing.exe");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_EXECUTE_EX,
+            [info],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(info + 32)?, SE_ERR_PNF);
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_PATH_NOT_FOUND
+    );
+    assert!(kernel.take_pending_process_launches().is_empty());
+
+    // A document whose containing directory is missing reports PNF as well.
+    memory.write_word(info + 32, 0);
+    memory.write_wide_z(file_ptr, r"\NoSuchDir\route.nav");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_EXECUTE_EX,
+            [info],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(info + 32)?, SE_ERR_PNF);
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_PATH_NOT_FOUND
     );
     assert!(kernel.take_pending_process_launches().is_empty());
 
