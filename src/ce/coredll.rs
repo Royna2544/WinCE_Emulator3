@@ -23123,6 +23123,9 @@ fn render_image_list_bitmap_framebuffer<M: CoredllGuestMemory>(
     width: i32,
     height: i32,
 ) -> bool {
+    const ILD_MASK: u32 = 0x0010;
+    const ILD_IMAGE: u32 = 0x0020;
+
     if draw.image_list == SHELL_SYSTEM_IMAGE_LIST_HANDLE || draw.index < 0 {
         return false;
     }
@@ -23132,6 +23135,26 @@ fn render_image_list_bitmap_framebuffer<M: CoredllGuestMemory>(
     let Some(image) = list.images.get(draw.index as usize) else {
         return false;
     };
+    let draw_flags = draw.flags & 0x00ff;
+    // Apply ILD draw flags to the effective image: ILD_MASK draws only the mask
+    // bitmap; ILD_IMAGE suppresses mask and transparent-color transparency.
+    let effective_image = if draw_flags & ILD_MASK != 0 && image.mask != 0 {
+        crate::ce::resource::ImageListImage {
+            bitmap: image.mask,
+            mask: 0,
+            ..image.clone()
+        }
+    } else if draw_flags & ILD_IMAGE != 0 {
+        crate::ce::resource::ImageListImage {
+            mask: 0,
+            transparent_color: None,
+            ..image.clone()
+        }
+    } else {
+        image.clone()
+    };
+    let src_width = list.width.max(1);
+    let src_height = list.height.max(1);
     if !render_image_list_bitmap_entry_framebuffer(
         kernel,
         memory,
@@ -23141,37 +23164,41 @@ fn render_image_list_bitmap_framebuffer<M: CoredllGuestMemory>(
         draw.y,
         width,
         height,
-        list.width.max(1),
-        list.height.max(1),
-        image,
+        src_width,
+        src_height,
+        &effective_image,
     ) {
         return false;
     }
 
-    let overlay_index = draw.overlay_image.or_else(|| {
-        let overlay = (draw.flags & 0x0000_0f00) >> 8;
-        if overlay == 0 {
-            None
-        } else {
-            list.overlays.get(&overlay).copied()
+    // Overlay is drawn on top using its own image properties (not affected by ILD_MASK).
+    if draw_flags & ILD_MASK == 0 {
+        let overlay_index = draw.overlay_image.or_else(|| {
+            let overlay = (draw.flags & 0x0000_0f00) >> 8;
+            if overlay == 0 {
+                None
+            } else {
+                list.overlays.get(&overlay).copied()
+            }
+        });
+        if let Some(overlay_index) = overlay_index
+            && let Some(overlay) = list.images.get(overlay_index as usize)
+        {
+            let overlay = overlay.clone();
+            let _ = render_image_list_bitmap_entry_framebuffer(
+                kernel,
+                memory,
+                framebuffer,
+                draw.hdc,
+                draw.x,
+                draw.y,
+                width,
+                height,
+                src_width,
+                src_height,
+                &overlay,
+            );
         }
-    });
-    if let Some(overlay_index) = overlay_index
-        && let Some(overlay) = list.images.get(overlay_index as usize)
-    {
-        let _ = render_image_list_bitmap_entry_framebuffer(
-            kernel,
-            memory,
-            framebuffer,
-            draw.hdc,
-            draw.x,
-            draw.y,
-            width,
-            height,
-            list.width.max(1),
-            list.height.max(1),
-            overlay,
-        );
     }
     true
 }
@@ -23183,6 +23210,9 @@ fn render_image_list_bitmap_hdc<M: CoredllGuestMemory>(
     width: i32,
     height: i32,
 ) -> bool {
+    const ILD_MASK: u32 = 0x0010;
+    const ILD_IMAGE: u32 = 0x0020;
+
     if draw.image_list == SHELL_SYSTEM_IMAGE_LIST_HANDLE || draw.index < 0 {
         return false;
     }
@@ -23192,6 +23222,24 @@ fn render_image_list_bitmap_hdc<M: CoredllGuestMemory>(
     let Some(image) = list.images.get(draw.index as usize) else {
         return false;
     };
+    let draw_flags = draw.flags & 0x00ff;
+    let effective_image = if draw_flags & ILD_MASK != 0 && image.mask != 0 {
+        crate::ce::resource::ImageListImage {
+            bitmap: image.mask,
+            mask: 0,
+            ..image.clone()
+        }
+    } else if draw_flags & ILD_IMAGE != 0 {
+        crate::ce::resource::ImageListImage {
+            mask: 0,
+            transparent_color: None,
+            ..image.clone()
+        }
+    } else {
+        image.clone()
+    };
+    let src_width = list.width.max(1);
+    let src_height = list.height.max(1);
     if !render_image_list_bitmap_entry_hdc(
         kernel,
         memory,
@@ -23200,36 +23248,39 @@ fn render_image_list_bitmap_hdc<M: CoredllGuestMemory>(
         draw.y,
         width,
         height,
-        list.width.max(1),
-        list.height.max(1),
-        image,
+        src_width,
+        src_height,
+        &effective_image,
     ) {
         return false;
     }
 
-    let overlay_index = draw.overlay_image.or_else(|| {
-        let overlay = (draw.flags & 0x0000_0f00) >> 8;
-        if overlay == 0 {
-            None
-        } else {
-            list.overlays.get(&overlay).copied()
+    if draw_flags & ILD_MASK == 0 {
+        let overlay_index = draw.overlay_image.or_else(|| {
+            let overlay = (draw.flags & 0x0000_0f00) >> 8;
+            if overlay == 0 {
+                None
+            } else {
+                list.overlays.get(&overlay).copied()
+            }
+        });
+        if let Some(overlay_index) = overlay_index
+            && let Some(overlay) = list.images.get(overlay_index as usize)
+        {
+            let overlay = overlay.clone();
+            let _ = render_image_list_bitmap_entry_hdc(
+                kernel,
+                memory,
+                draw.hdc,
+                draw.x,
+                draw.y,
+                width,
+                height,
+                src_width,
+                src_height,
+                &overlay,
+            );
         }
-    });
-    if let Some(overlay_index) = overlay_index
-        && let Some(overlay) = list.images.get(overlay_index as usize)
-    {
-        let _ = render_image_list_bitmap_entry_hdc(
-            kernel,
-            memory,
-            draw.hdc,
-            draw.x,
-            draw.y,
-            width,
-            height,
-            list.width.max(1),
-            list.height.max(1),
-            overlay,
-        );
     }
     true
 }
