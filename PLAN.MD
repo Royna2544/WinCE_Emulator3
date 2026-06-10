@@ -343,6 +343,13 @@ focused fixtures plus mounted iNavi evidence:
   that live remote touch is routed via `ThreadHitTest` to the owner window
   instead of the stale active window, closing the remaining live input routing
   gap.
+  The modal pump now also implements CE's tap-only submenu UI: a button-down or
+  button-up on a submenu parent opens the child pane (tracked as stacked
+  `PopupMenuModalMenuState` levels with per-level hit testing and stack
+  truncation) and a command is only returned once the user taps an item inside
+  the child pane, instead of immediately following the hilite chain to the
+  submenu's default command. Remaining gaps are hover-open timers (the non-tap
+  `CMenu::s_fUseTapOnlyUI` path) and multi-level cascade geometry edge cases.
 - Continue real modal `MessageBoxW`: the raw path now validates owners, records
   text/caption/style, button IDs, CE owner-draw left/center/right button
   labels, default-button index, icon class, result, and owner enabled-state,
@@ -365,6 +372,12 @@ focused fixtures plus mounted iNavi evidence:
   button-down/release events land on the correct dialog buttons rather than the
   stale active window; the `blocked_get_message` snapshot carries the dialog
   hwnd in both first-entry and re-entry paths.
+  The dialog now starts with keyboard focus on the default button and the modal
+  pump runs CE dialog-manager keyboard navigation: Tab/Shift+Tab and arrow keys
+  move focus between the box's buttons, Space activates the focused button, and
+  Enter activates the focused (or default) button, so a navigated button becomes
+  the returned command. Remaining edge case is mnemonic accelerators for custom
+  (owner-supplied) button captions.
 - Extend file-change notification fidelity: shell `WM_FILECHANGEINFO` posting
   and the waitable `FindFirstChangeNotificationW` handle path now share the
   same CE filesystem mutation source, and `CeGetFileNotificationInfo` now
