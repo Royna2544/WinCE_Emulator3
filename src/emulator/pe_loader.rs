@@ -3,20 +3,20 @@
 
 use std::collections::HashMap;
 
+#[cfg(feature = "unicorn")]
+use crate::emulator::cpu_mips::{MipsTrampolineJump, patch_mips_unicorn_trampolines};
 use crate::{
     emulator::{
         imports::{
             DYNAMIC_COREDLL_PROC_TRAP_BASE, ExternalImportTable, IMPORT_TRAP_BASE,
-            IMPORT_TRAP_PAGE_SIZE, ImportTrapTable, import_trap_code_page,
-            patch_external_imports, patch_pe_coredll_imports, patch_pe_imports,
+            IMPORT_TRAP_PAGE_SIZE, ImportTrapTable, import_trap_code_page, patch_external_imports,
+            patch_pe_coredll_imports, patch_pe_imports,
         },
         memory::MemoryPerms,
     },
     error::{Error, Result},
     pe::PeImage,
 };
-#[cfg(feature = "unicorn")]
-use crate::emulator::cpu_mips::{MipsTrampolineJump, patch_mips_unicorn_trampolines};
 
 // ── Structs shared between loader and runtime ────────────────────────────────
 
@@ -118,12 +118,8 @@ pub(crate) fn load_pe_image_with_dlls(image: &PeImage, dlls: &[PeImage]) -> Resu
     let mut next_trampoline_base = EXTERNAL_TRAMPOLINE_BASE;
     #[cfg(feature = "unicorn")]
     {
-        let _ = patch_mips_unicorn_trampolines(
-            image,
-            image.image_base(),
-            &mut image_occupancy,
-            None,
-        )?;
+        let _ =
+            patch_mips_unicorn_trampolines(image, image.image_base(), &mut image_occupancy, None)?;
     }
     let image_mapped_size = align_up_4k(image_occupancy.len() as u32)?;
     let mut occupied_image_ranges = vec![(image.image_base(), image_mapped_size)];
@@ -184,16 +180,14 @@ pub(crate) fn load_pe_image_with_dlls(image: &PeImage, dlls: &[PeImage]) -> Resu
                 result.trampoline_ranges.push(range);
                 if let Some(bytes) = trampoline_patch.external_mapped.take() {
                     occupied_image_ranges.push((range.0, range.1));
-                    trampoline_blobs.push((
-                        format!("trampoline:{}", dll.path),
-                        range.0,
-                        bytes,
-                    ));
+                    trampoline_blobs.push((format!("trampoline:{}", dll.path), range.0, bytes));
                 }
             }
             result.trampoline_jumps.extend(trampoline_patch.jumps);
         }
-        result.loaded_modules.push(loaded_module_info(dll, load_base)?);
+        result
+            .loaded_modules
+            .push(loaded_module_info(dll, load_base)?);
         loaded_dlls.push((dll.path.clone(), load_base, mapped));
     }
 
@@ -342,12 +336,7 @@ pub(crate) fn align_up_4k(size: u32) -> Result<u32> {
         .ok_or_else(|| Error::InvalidArgument("mapping size overflow".to_owned()))
 }
 
-pub(crate) fn ranges_overlap(
-    lhs_base: u32,
-    lhs_size: u32,
-    rhs_base: u32,
-    rhs_size: u32,
-) -> bool {
+pub(crate) fn ranges_overlap(lhs_base: u32, lhs_size: u32, rhs_base: u32, rhs_size: u32) -> bool {
     let lhs_end = lhs_base.saturating_add(lhs_size);
     let rhs_end = rhs_base.saturating_add(rhs_size);
     lhs_base < rhs_end && rhs_base < lhs_end
@@ -438,8 +427,7 @@ pub(crate) fn loaded_module_info(
                 let va = load_base.wrapping_add(export.rva);
                 exports_by_ordinal.insert(export.ordinal, va);
                 if let Some(name) = export.name.as_deref() {
-                    exports_by_name
-                        .insert(crate::ce::kernel::normalize_symbol_name(name), va);
+                    exports_by_name.insert(crate::ce::kernel::normalize_symbol_name(name), va);
                 }
             }
         }

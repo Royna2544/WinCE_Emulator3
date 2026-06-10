@@ -17,32 +17,32 @@ pub enum HangulJamo {
 pub fn vk_to_hangul_jamo(vk: u32, shift: bool) -> Option<HangulJamo> {
     use HangulJamo::*;
     match vk {
-        0x51 => Some(Consonant(if shift { 8 } else { 7 })),  // Q: ㅃ/ㅂ
+        0x51 => Some(Consonant(if shift { 8 } else { 7 })), // Q: ㅃ/ㅂ
         0x57 => Some(Consonant(if shift { 13 } else { 12 })), // W: ㅉ/ㅈ
-        0x45 => Some(Consonant(if shift { 4 } else { 3 })),  // E: ㄸ/ㄷ
-        0x52 => Some(Consonant(if shift { 1 } else { 0 })),  // R: ㄲ/ㄱ
+        0x45 => Some(Consonant(if shift { 4 } else { 3 })), // E: ㄸ/ㄷ
+        0x52 => Some(Consonant(if shift { 1 } else { 0 })), // R: ㄲ/ㄱ
         0x54 => Some(Consonant(if shift { 10 } else { 9 })), // T: ㅆ/ㅅ
-        0x59 => Some(Vowel(12)),  // Y: ㅛ
-        0x55 => Some(Vowel(6)),   // U: ㅕ
-        0x49 => Some(Vowel(2)),   // I: ㅑ
-        0x4F => Some(Vowel(if shift { 3 } else { 1 })),  // O: ㅒ/ㅐ
-        0x50 => Some(Vowel(if shift { 7 } else { 5 })),  // P: ㅖ/ㅔ
-        0x41 => Some(Consonant(6)),   // A: ㅁ
-        0x53 => Some(Consonant(2)),   // S: ㄴ
-        0x44 => Some(Consonant(11)),  // D: ㅇ
-        0x46 => Some(Consonant(5)),   // F: ㄹ
-        0x47 => Some(Consonant(18)),  // G: ㅎ
-        0x48 => Some(Vowel(8)),   // H: ㅗ
-        0x4A => Some(Vowel(4)),   // J: ㅓ
-        0x4B => Some(Vowel(0)),   // K: ㅏ
-        0x4C => Some(Vowel(20)),  // L: ㅣ
-        0x5A => Some(Consonant(15)),  // Z: ㅋ
-        0x58 => Some(Consonant(16)),  // X: ㅌ
-        0x43 => Some(Consonant(14)),  // C: ㅊ
-        0x56 => Some(Consonant(17)),  // V: ㅍ
-        0x42 => Some(Vowel(17)),  // B: ㅠ
-        0x4E => Some(Vowel(13)),  // N: ㅜ
-        0x4D => Some(Vowel(18)),  // M: ㅡ
+        0x59 => Some(Vowel(12)),                            // Y: ㅛ
+        0x55 => Some(Vowel(6)),                             // U: ㅕ
+        0x49 => Some(Vowel(2)),                             // I: ㅑ
+        0x4F => Some(Vowel(if shift { 3 } else { 1 })),     // O: ㅒ/ㅐ
+        0x50 => Some(Vowel(if shift { 7 } else { 5 })),     // P: ㅖ/ㅔ
+        0x41 => Some(Consonant(6)),                         // A: ㅁ
+        0x53 => Some(Consonant(2)),                         // S: ㄴ
+        0x44 => Some(Consonant(11)),                        // D: ㅇ
+        0x46 => Some(Consonant(5)),                         // F: ㄹ
+        0x47 => Some(Consonant(18)),                        // G: ㅎ
+        0x48 => Some(Vowel(8)),                             // H: ㅗ
+        0x4A => Some(Vowel(4)),                             // J: ㅓ
+        0x4B => Some(Vowel(0)),                             // K: ㅏ
+        0x4C => Some(Vowel(20)),                            // L: ㅣ
+        0x5A => Some(Consonant(15)),                        // Z: ㅋ
+        0x58 => Some(Consonant(16)),                        // X: ㅌ
+        0x43 => Some(Consonant(14)),                        // C: ㅊ
+        0x56 => Some(Consonant(17)),                        // V: ㅍ
+        0x42 => Some(Vowel(17)),                            // B: ㅠ
+        0x4E => Some(Vowel(13)),                            // N: ㅜ
+        0x4D => Some(Vowel(18)),                            // M: ㅡ
         _ => None,
     }
 }
@@ -124,34 +124,34 @@ pub const INITIAL_TO_FINAL: [u8; 19] = [
 /// Compound finals (3, 5, 6, 9-15, 18) return 0; they are handled via
 /// `split_compound_final`.
 pub const FINAL_TO_INITIAL: [u8; 28] = [
-    0,   // 0: none
-    0,   // 1: ㄱ → initial 0
-    1,   // 2: ㄲ → initial 1
-    0,   // 3: ㄳ (compound — use split_compound_final)
-    2,   // 4: ㄴ → initial 2
-    0,   // 5: ㄵ (compound)
-    0,   // 6: ㄶ (compound)
-    3,   // 7: ㄷ → initial 3
-    5,   // 8: ㄹ → initial 5
-    0,   // 9: ㄺ (compound)
-    0,   // 10: ㄻ (compound)
-    0,   // 11: ㄼ (compound)
-    0,   // 12: ㄽ (compound)
-    0,   // 13: ㄾ (compound)
-    0,   // 14: ㄿ (compound)
-    0,   // 15: ㅀ (compound)
-    6,   // 16: ㅁ → initial 6
-    7,   // 17: ㅂ → initial 7
-    0,   // 18: ㅄ (compound)
-    9,   // 19: ㅅ → initial 9
-    10,  // 20: ㅆ → initial 10
-    11,  // 21: ㅇ → initial 11
-    12,  // 22: ㅈ → initial 12
-    14,  // 23: ㅊ → initial 14
-    15,  // 24: ㅋ → initial 15
-    16,  // 25: ㅌ → initial 16
-    17,  // 26: ㅍ → initial 17
-    18,  // 27: ㅎ → initial 18
+    0,  // 0: none
+    0,  // 1: ㄱ → initial 0
+    1,  // 2: ㄲ → initial 1
+    0,  // 3: ㄳ (compound — use split_compound_final)
+    2,  // 4: ㄴ → initial 2
+    0,  // 5: ㄵ (compound)
+    0,  // 6: ㄶ (compound)
+    3,  // 7: ㄷ → initial 3
+    5,  // 8: ㄹ → initial 5
+    0,  // 9: ㄺ (compound)
+    0,  // 10: ㄻ (compound)
+    0,  // 11: ㄼ (compound)
+    0,  // 12: ㄽ (compound)
+    0,  // 13: ㄾ (compound)
+    0,  // 14: ㄿ (compound)
+    0,  // 15: ㅀ (compound)
+    6,  // 16: ㅁ → initial 6
+    7,  // 17: ㅂ → initial 7
+    0,  // 18: ㅄ (compound)
+    9,  // 19: ㅅ → initial 9
+    10, // 20: ㅆ → initial 10
+    11, // 21: ㅇ → initial 11
+    12, // 22: ㅈ → initial 12
+    14, // 23: ㅊ → initial 14
+    15, // 24: ㅋ → initial 15
+    16, // 25: ㅌ → initial 16
+    17, // 26: ㅍ → initial 17
+    18, // 27: ㅎ → initial 18
 ];
 
 /// Attempt to combine two consonants into a compound final.
@@ -198,23 +198,20 @@ pub fn split_compound_final(f: u8) -> Option<(u8, u8)> {
 /// Try to combine two vowels into a compound vowel.
 pub fn compound_vowel(v1: u8, v2: u8) -> Option<u8> {
     match (v1, v2) {
-        (8, 0) => Some(9),   // ㅗ + ㅏ → ㅘ
-        (8, 1) => Some(10),  // ㅗ + ㅐ → ㅙ
-        (8, 20) => Some(11), // ㅗ + ㅣ → ㅚ
-        (13, 4) => Some(14), // ㅜ + ㅓ → ㅝ
-        (13, 5) => Some(15), // ㅜ + ㅔ → ㅞ
-        (13, 20) => Some(16),// ㅜ + ㅣ → ㅟ
-        (18, 20) => Some(19),// ㅡ + ㅣ → ㅢ
+        (8, 0) => Some(9),    // ㅗ + ㅏ → ㅘ
+        (8, 1) => Some(10),   // ㅗ + ㅐ → ㅙ
+        (8, 20) => Some(11),  // ㅗ + ㅣ → ㅚ
+        (13, 4) => Some(14),  // ㅜ + ㅓ → ㅝ
+        (13, 5) => Some(15),  // ㅜ + ㅔ → ㅞ
+        (13, 20) => Some(16), // ㅜ + ㅣ → ㅟ
+        (18, 20) => Some(19), // ㅡ + ㅣ → ㅢ
         _ => None,
     }
 }
 
 /// Build a Hangul syllable Unicode code point from initial/vowel/final indices.
 pub fn syllable_char(initial: u8, vowel: u8, final_: u8) -> u16 {
-    (0xAC00u32
-        + (initial as u32) * 21 * 28
-        + (vowel as u32) * 28
-        + (final_ as u32)) as u16
+    (0xAC00u32 + (initial as u32) * 21 * 28 + (vowel as u32) * 28 + (final_ as u32)) as u16
 }
 
 /// Actions produced by the state machine that the caller translates into
@@ -621,7 +618,7 @@ mod tests {
         let mut state = HangulComposeState::default();
         // Build 간 state
         process_hangul_jamo(&mut state, HangulJamo::Consonant(0)); // ㄱ
-        process_hangul_jamo(&mut state, HangulJamo::Vowel(0));     // ㅏ
+        process_hangul_jamo(&mut state, HangulJamo::Vowel(0)); // ㅏ
         process_hangul_jamo(&mut state, HangulJamo::Consonant(2)); // ㄴ as final (initial 2 → final 4)
         assert_eq!(state.final1, 4);
         // Backspace should remove the final
@@ -644,7 +641,7 @@ mod tests {
     fn commit_composition_returns_current_char() {
         let mut state = HangulComposeState::default();
         process_hangul_jamo(&mut state, HangulJamo::Consonant(0)); // ㄱ
-        process_hangul_jamo(&mut state, HangulJamo::Vowel(0));     // ㅏ
+        process_hangul_jamo(&mut state, HangulJamo::Vowel(0)); // ㅏ
         let actions = commit_composition(&mut state);
         assert_eq!(actions, vec![HangulImeAction::CommitChar(0xAC00)]); // 가
         assert!(!state.is_active());

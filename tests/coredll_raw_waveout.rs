@@ -6,12 +6,11 @@ use wince_emulation_v3::{
         coredll_ordinals::{
             ORD_WAVE_OUT_BREAK_LOOP, ORD_WAVE_OUT_CLOSE, ORD_WAVE_OUT_GET_DEV_CAPS,
             ORD_WAVE_OUT_GET_ERROR_TEXT, ORD_WAVE_OUT_GET_ID, ORD_WAVE_OUT_GET_NUM_DEVS,
-            ORD_WAVE_OUT_GET_PITCH, ORD_WAVE_OUT_GET_PLAYBACK_RATE,
-            ORD_WAVE_OUT_GET_POSITION, ORD_WAVE_OUT_GET_VOLUME, ORD_WAVE_OUT_MESSAGE,
-            ORD_WAVE_OUT_OPEN, ORD_WAVE_OUT_PAUSE, ORD_WAVE_OUT_PREPARE_HEADER,
-            ORD_WAVE_OUT_RESET, ORD_WAVE_OUT_RESTART, ORD_WAVE_OUT_SET_PITCH,
-            ORD_WAVE_OUT_SET_PLAYBACK_RATE, ORD_WAVE_OUT_SET_VOLUME, ORD_WAVE_OUT_UNPREPARE_HEADER,
-            ORD_WAVE_OUT_WRITE,
+            ORD_WAVE_OUT_GET_PITCH, ORD_WAVE_OUT_GET_PLAYBACK_RATE, ORD_WAVE_OUT_GET_POSITION,
+            ORD_WAVE_OUT_GET_VOLUME, ORD_WAVE_OUT_MESSAGE, ORD_WAVE_OUT_OPEN, ORD_WAVE_OUT_PAUSE,
+            ORD_WAVE_OUT_PREPARE_HEADER, ORD_WAVE_OUT_RESET, ORD_WAVE_OUT_RESTART,
+            ORD_WAVE_OUT_SET_PITCH, ORD_WAVE_OUT_SET_PLAYBACK_RATE, ORD_WAVE_OUT_SET_VOLUME,
+            ORD_WAVE_OUT_UNPREPARE_HEADER, ORD_WAVE_OUT_WRITE,
         },
         kernel::CeKernel,
     },
@@ -232,8 +231,8 @@ fn coredll_raw_waveout_ordinals_use_unplugged_audio_adapter() -> Result<()> {
 }
 
 #[test]
-fn coredll_raw_waveout_break_loop_message_get_dev_caps_get_error_text_get_id_reset_pitch(
-) -> Result<()> {
+fn coredll_raw_waveout_break_loop_message_get_dev_caps_get_error_text_get_id_reset_pitch()
+-> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
     let mut kernel = CeKernel::boot(config);

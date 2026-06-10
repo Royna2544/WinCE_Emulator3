@@ -315,13 +315,23 @@ pub(crate) fn wcsicmp_raw<M: CoredllGuestMemory>(memory: &M, left: u32, right: u
 
 pub(crate) fn wcscmp_raw<M: CoredllGuestMemory>(memory: &M, left: u32, right: u32) -> i32 {
     if left == 0 || right == 0 {
-        return if left == right { 0 } else if left == 0 { -1 } else { 1 };
+        return if left == right {
+            0
+        } else if left == 0 {
+            -1
+        } else {
+            1
+        };
     }
     for index in 0..0x8000u32 {
         let left_addr = left.wrapping_add(index * 2);
         let right_addr = right.wrapping_add(index * 2);
-        let Ok(lu) = memory.read_u16(left_addr) else { return -1; };
-        let Ok(ru) = memory.read_u16(right_addr) else { return 1; };
+        let Ok(lu) = memory.read_u16(left_addr) else {
+            return -1;
+        };
+        let Ok(ru) = memory.read_u16(right_addr) else {
+            return 1;
+        };
         if lu != ru {
             return i32::from(lu).saturating_sub(i32::from(ru));
         }
@@ -2145,44 +2155,80 @@ pub(crate) fn strlen_raw<M: CoredllGuestMemory>(memory: &M, ptr: u32) -> u32 {
         return 0;
     }
     for i in 0..0x8000u32 {
-        let Ok(b) = memory.read_u8(ptr.wrapping_add(i)) else { return i; };
-        if b == 0 { return i; }
+        let Ok(b) = memory.read_u8(ptr.wrapping_add(i)) else {
+            return i;
+        };
+        if b == 0 {
+            return i;
+        }
     }
     0x8000
 }
 
 pub(crate) fn strcmp_raw<M: CoredllGuestMemory>(memory: &M, a: u32, b: u32) -> i32 {
     if a == 0 || b == 0 {
-        return if a == b { 0 } else if a == 0 { -1 } else { 1 };
+        return if a == b {
+            0
+        } else if a == 0 {
+            -1
+        } else {
+            1
+        };
     }
     for i in 0..0x8000u32 {
-        let Ok(la) = memory.read_u8(a.wrapping_add(i)) else { return -1; };
-        let Ok(lb) = memory.read_u8(b.wrapping_add(i)) else { return 1; };
-        if la != lb { return i32::from(la) - i32::from(lb); }
-        if la == 0 { return 0; }
+        let Ok(la) = memory.read_u8(a.wrapping_add(i)) else {
+            return -1;
+        };
+        let Ok(lb) = memory.read_u8(b.wrapping_add(i)) else {
+            return 1;
+        };
+        if la != lb {
+            return i32::from(la) - i32::from(lb);
+        }
+        if la == 0 {
+            return 0;
+        }
     }
     0
 }
 
 pub(crate) fn strchr_raw<M: CoredllGuestMemory>(memory: &M, ptr: u32, ch: u32) -> u32 {
-    if ptr == 0 { return 0; }
+    if ptr == 0 {
+        return 0;
+    }
     let needle = ch as u8;
     for i in 0..0x8000u32 {
         let addr = ptr.wrapping_add(i);
-        let Ok(b) = memory.read_u8(addr) else { return 0; };
-        if b == needle { return addr; }
-        if b == 0 { return 0; }
+        let Ok(b) = memory.read_u8(addr) else {
+            return 0;
+        };
+        if b == needle {
+            return addr;
+        }
+        if b == 0 {
+            return 0;
+        }
     }
     0
 }
 
 pub(crate) fn strncmp_raw<M: CoredllGuestMemory>(memory: &M, a: u32, b: u32, n: u32) -> i32 {
-    if n == 0 { return 0; }
+    if n == 0 {
+        return 0;
+    }
     for i in 0..n.min(0x8000) {
-        let Ok(la) = memory.read_u8(a.wrapping_add(i)) else { return -1; };
-        let Ok(lb) = memory.read_u8(b.wrapping_add(i)) else { return 1; };
-        if la != lb { return i32::from(la) - i32::from(lb); }
-        if la == 0 { return 0; }
+        let Ok(la) = memory.read_u8(a.wrapping_add(i)) else {
+            return -1;
+        };
+        let Ok(lb) = memory.read_u8(b.wrapping_add(i)) else {
+            return 1;
+        };
+        if la != lb {
+            return i32::from(la) - i32::from(lb);
+        }
+        if la == 0 {
+            return 0;
+        }
     }
     0
 }
@@ -2195,9 +2241,13 @@ pub(crate) fn strncpy_raw<M: CoredllGuestMemory>(
     src: u32,
     n: u32,
 ) -> u32 {
-    if n == 0 { return dest; }
+    if n == 0 {
+        return dest;
+    }
     if dest == 0 || src == 0 {
-        kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
     let mut padding = false;
@@ -2206,10 +2256,14 @@ pub(crate) fn strncpy_raw<M: CoredllGuestMemory>(
             0u8
         } else {
             let Ok(b) = memory.read_u8(src.wrapping_add(i)) else {
-                kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
                 return 0;
             };
-            if b == 0 { padding = true; }
+            if b == 0 {
+                padding = true;
+            }
             b
         };
         if !write_guest_bytes(kernel, memory, thread_id, dest.wrapping_add(i), &[b]) {
@@ -2221,34 +2275,66 @@ pub(crate) fn strncpy_raw<M: CoredllGuestMemory>(
 }
 
 pub(crate) fn strstr_raw<M: CoredllGuestMemory>(memory: &M, haystack: u32, needle: u32) -> u32 {
-    if haystack == 0 || needle == 0 { return 0; }
-    let Ok(first) = memory.read_u8(needle) else { return 0; };
-    if first == 0 { return haystack; }
+    if haystack == 0 || needle == 0 {
+        return 0;
+    }
+    let Ok(first) = memory.read_u8(needle) else {
+        return 0;
+    };
+    if first == 0 {
+        return haystack;
+    }
     for hi in 0..0x8000u32 {
         let cand = haystack.wrapping_add(hi);
-        let Ok(hb) = memory.read_u8(cand) else { return 0; };
-        if hb == 0 { return 0; }
-        if hb != first { continue; }
+        let Ok(hb) = memory.read_u8(cand) else {
+            return 0;
+        };
+        if hb == 0 {
+            return 0;
+        }
+        if hb != first {
+            continue;
+        }
         for ni in 1..0x8000u32 {
-            let Ok(nb) = memory.read_u8(needle.wrapping_add(ni)) else { return 0; };
-            if nb == 0 { return cand; }
-            let Ok(hb2) = memory.read_u8(cand.wrapping_add(ni)) else { return 0; };
-            if hb2 != nb { break; }
+            let Ok(nb) = memory.read_u8(needle.wrapping_add(ni)) else {
+                return 0;
+            };
+            if nb == 0 {
+                return cand;
+            }
+            let Ok(hb2) = memory.read_u8(cand.wrapping_add(ni)) else {
+                return 0;
+            };
+            if hb2 != nb {
+                break;
+            }
         }
     }
     0
 }
 
 pub(crate) fn strcspn_raw<M: CoredllGuestMemory>(memory: &M, s: u32, reject: u32) -> u32 {
-    if s == 0 { return 0; }
+    if s == 0 {
+        return 0;
+    }
     for i in 0..0x8000u32 {
-        let Ok(b) = memory.read_u8(s.wrapping_add(i)) else { return i; };
-        if b == 0 { return i; }
+        let Ok(b) = memory.read_u8(s.wrapping_add(i)) else {
+            return i;
+        };
+        if b == 0 {
+            return i;
+        }
         if reject != 0 {
             for ri in 0..0x8000u32 {
-                let Ok(rb) = memory.read_u8(reject.wrapping_add(ri)) else { break; };
-                if rb == 0 { break; }
-                if rb == b { return i; }
+                let Ok(rb) = memory.read_u8(reject.wrapping_add(ri)) else {
+                    break;
+                };
+                if rb == 0 {
+                    break;
+                }
+                if rb == b {
+                    return i;
+                }
             }
         }
     }
@@ -2256,47 +2342,82 @@ pub(crate) fn strcspn_raw<M: CoredllGuestMemory>(memory: &M, s: u32, reject: u32
 }
 
 pub(crate) fn strspn_raw<M: CoredllGuestMemory>(memory: &M, s: u32, accept: u32) -> u32 {
-    if s == 0 { return 0; }
+    if s == 0 {
+        return 0;
+    }
     for i in 0..0x8000u32 {
-        let Ok(b) = memory.read_u8(s.wrapping_add(i)) else { return i; };
-        if b == 0 { return i; }
+        let Ok(b) = memory.read_u8(s.wrapping_add(i)) else {
+            return i;
+        };
+        if b == 0 {
+            return i;
+        }
         let mut found = false;
         if accept != 0 {
             for ai in 0..0x8000u32 {
-                let Ok(ab) = memory.read_u8(accept.wrapping_add(ai)) else { break; };
-                if ab == 0 { break; }
-                if ab == b { found = true; break; }
+                let Ok(ab) = memory.read_u8(accept.wrapping_add(ai)) else {
+                    break;
+                };
+                if ab == 0 {
+                    break;
+                }
+                if ab == b {
+                    found = true;
+                    break;
+                }
             }
         }
-        if !found { return i; }
+        if !found {
+            return i;
+        }
     }
     0x8000
 }
 
 pub(crate) fn strpbrk_raw<M: CoredllGuestMemory>(memory: &M, s: u32, accept: u32) -> u32 {
-    if s == 0 || accept == 0 { return 0; }
+    if s == 0 || accept == 0 {
+        return 0;
+    }
     for i in 0..0x8000u32 {
         let addr = s.wrapping_add(i);
-        let Ok(b) = memory.read_u8(addr) else { return 0; };
-        if b == 0 { return 0; }
+        let Ok(b) = memory.read_u8(addr) else {
+            return 0;
+        };
+        if b == 0 {
+            return 0;
+        }
         for ai in 0..0x8000u32 {
-            let Ok(ab) = memory.read_u8(accept.wrapping_add(ai)) else { break; };
-            if ab == 0 { break; }
-            if ab == b { return addr; }
+            let Ok(ab) = memory.read_u8(accept.wrapping_add(ai)) else {
+                break;
+            };
+            if ab == 0 {
+                break;
+            }
+            if ab == b {
+                return addr;
+            }
         }
     }
     0
 }
 
 pub(crate) fn strrchr_raw<M: CoredllGuestMemory>(memory: &M, s: u32, ch: u32) -> u32 {
-    if s == 0 { return 0; }
+    if s == 0 {
+        return 0;
+    }
     let needle = ch as u8;
     let mut last = 0u32;
     for i in 0..0x8000u32 {
         let addr = s.wrapping_add(i);
-        let Ok(b) = memory.read_u8(addr) else { return last; };
-        if b == needle { last = addr; }
-        if b == 0 { return last; }
+        let Ok(b) = memory.read_u8(addr) else {
+            return last;
+        };
+        if b == needle {
+            last = addr;
+        }
+        if b == 0 {
+            return last;
+        }
     }
     last
 }
@@ -2307,37 +2428,65 @@ pub(crate) fn strdup_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     s: u32,
 ) -> u32 {
-    if s == 0 { return 0; }
+    if s == 0 {
+        return 0;
+    }
     let len = strlen_raw(memory, s);
     let ptr = malloc_raw(kernel, thread_id, len.wrapping_add(1));
-    if ptr == 0 { return 0; }
+    if ptr == 0 {
+        return 0;
+    }
     strcpy_raw(kernel, memory, thread_id, ptr, s)
 }
 
 pub(crate) fn stricmp_raw<M: CoredllGuestMemory>(memory: &M, a: u32, b: u32) -> i32 {
     if a == 0 || b == 0 {
-        return if a == b { 0 } else if a == 0 { -1 } else { 1 };
+        return if a == b {
+            0
+        } else if a == 0 {
+            -1
+        } else {
+            1
+        };
     }
     for i in 0..0x8000u32 {
-        let Ok(la) = memory.read_u8(a.wrapping_add(i)) else { return -1; };
-        let Ok(lb) = memory.read_u8(b.wrapping_add(i)) else { return 1; };
+        let Ok(la) = memory.read_u8(a.wrapping_add(i)) else {
+            return -1;
+        };
+        let Ok(lb) = memory.read_u8(b.wrapping_add(i)) else {
+            return 1;
+        };
         let la_f = fold_ascii_narrow(la);
         let lb_f = fold_ascii_narrow(lb);
-        if la_f != lb_f { return i32::from(la_f) - i32::from(lb_f); }
-        if la == 0 { return 0; }
+        if la_f != lb_f {
+            return i32::from(la_f) - i32::from(lb_f);
+        }
+        if la == 0 {
+            return 0;
+        }
     }
     0
 }
 
 pub(crate) fn strnicmp_raw<M: CoredllGuestMemory>(memory: &M, a: u32, b: u32, n: u32) -> i32 {
-    if n == 0 { return 0; }
+    if n == 0 {
+        return 0;
+    }
     for i in 0..n.min(0x8000) {
-        let Ok(la) = memory.read_u8(a.wrapping_add(i)) else { return -1; };
-        let Ok(lb) = memory.read_u8(b.wrapping_add(i)) else { return 1; };
+        let Ok(la) = memory.read_u8(a.wrapping_add(i)) else {
+            return -1;
+        };
+        let Ok(lb) = memory.read_u8(b.wrapping_add(i)) else {
+            return 1;
+        };
         let la_f = fold_ascii_narrow(la);
         let lb_f = fold_ascii_narrow(lb);
-        if la_f != lb_f { return i32::from(la_f) - i32::from(lb_f); }
-        if la == 0 { return 0; }
+        if la_f != lb_f {
+            return i32::from(la_f) - i32::from(lb_f);
+        }
+        if la == 0 {
+            return 0;
+        }
     }
     0
 }
@@ -2350,13 +2499,21 @@ pub(crate) fn strnset_raw<M: CoredllGuestMemory>(
     ch: u32,
     n: u32,
 ) -> u32 {
-    if s == 0 { return 0; }
+    if s == 0 {
+        return 0;
+    }
     let fill = ch as u8;
     for i in 0..n {
         let addr = s.wrapping_add(i);
-        let Ok(b) = memory.read_u8(addr) else { break; };
-        if b == 0 { break; }
-        if !write_guest_bytes(kernel, memory, thread_id, addr, &[fill]) { return 0; }
+        let Ok(b) = memory.read_u8(addr) else {
+            break;
+        };
+        if b == 0 {
+            break;
+        }
+        if !write_guest_bytes(kernel, memory, thread_id, addr, &[fill]) {
+            return 0;
+        }
     }
     kernel.threads.set_last_error(thread_id, 0);
     s
@@ -2368,16 +2525,28 @@ pub(crate) fn strrev_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     s: u32,
 ) -> u32 {
-    if s == 0 { return 0; }
+    if s == 0 {
+        return 0;
+    }
     let len = strlen_raw(memory, s);
-    if len <= 1 { return s; }
+    if len <= 1 {
+        return s;
+    }
     let mut lo = 0u32;
     let mut hi = len - 1;
     while lo < hi {
-        let Ok(lb) = memory.read_u8(s.wrapping_add(lo)) else { return 0; };
-        let Ok(hb) = memory.read_u8(s.wrapping_add(hi)) else { return 0; };
-        if !write_guest_bytes(kernel, memory, thread_id, s.wrapping_add(lo), &[hb]) { return 0; }
-        if !write_guest_bytes(kernel, memory, thread_id, s.wrapping_add(hi), &[lb]) { return 0; }
+        let Ok(lb) = memory.read_u8(s.wrapping_add(lo)) else {
+            return 0;
+        };
+        let Ok(hb) = memory.read_u8(s.wrapping_add(hi)) else {
+            return 0;
+        };
+        if !write_guest_bytes(kernel, memory, thread_id, s.wrapping_add(lo), &[hb]) {
+            return 0;
+        }
+        if !write_guest_bytes(kernel, memory, thread_id, s.wrapping_add(hi), &[lb]) {
+            return 0;
+        }
         lo += 1;
         hi -= 1;
     }
@@ -2392,13 +2561,21 @@ pub(crate) fn strset_raw<M: CoredllGuestMemory>(
     s: u32,
     ch: u32,
 ) -> u32 {
-    if s == 0 { return 0; }
+    if s == 0 {
+        return 0;
+    }
     let fill = ch as u8;
     for i in 0..0x8000u32 {
         let addr = s.wrapping_add(i);
-        let Ok(b) = memory.read_u8(addr) else { break; };
-        if b == 0 { break; }
-        if !write_guest_bytes(kernel, memory, thread_id, addr, &[fill]) { return 0; }
+        let Ok(b) = memory.read_u8(addr) else {
+            break;
+        };
+        if b == 0 {
+            break;
+        }
+        if !write_guest_bytes(kernel, memory, thread_id, addr, &[fill]) {
+            return 0;
+        }
     }
     kernel.threads.set_last_error(thread_id, 0);
     s
@@ -2411,13 +2588,17 @@ pub(crate) fn strlwr_raw<M: CoredllGuestMemory>(
     s: u32,
 ) -> u32 {
     if s == 0 {
-        kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
     for i in 0..0x8000u32 {
         let addr = s.wrapping_add(i);
         let Ok(b) = memory.read_u8(addr) else {
-            kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
             return 0;
         };
         if b == 0 {
@@ -2430,7 +2611,9 @@ pub(crate) fn strlwr_raw<M: CoredllGuestMemory>(
             return 0;
         }
     }
-    kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
     0
 }
 
@@ -2443,7 +2626,9 @@ pub(crate) fn strncat_raw<M: CoredllGuestMemory>(
     n: u32,
 ) -> u32 {
     if dest == 0 {
-        kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
     let dest_len = strlen_raw(memory, dest);
@@ -2451,15 +2636,25 @@ pub(crate) fn strncat_raw<M: CoredllGuestMemory>(
     let mut written = 0u32;
     if src != 0 {
         for i in 0..n {
-            let Ok(b) = memory.read_u8(src.wrapping_add(i)) else { break; };
-            if b == 0 { break; }
+            let Ok(b) = memory.read_u8(src.wrapping_add(i)) else {
+                break;
+            };
+            if b == 0 {
+                break;
+            }
             if !write_guest_bytes(kernel, memory, thread_id, write_base.wrapping_add(i), &[b]) {
                 return 0;
             }
             written += 1;
         }
     }
-    if !write_guest_bytes(kernel, memory, thread_id, write_base.wrapping_add(written), &[0]) {
+    if !write_guest_bytes(
+        kernel,
+        memory,
+        thread_id,
+        write_base.wrapping_add(written),
+        &[0],
+    ) {
         return 0;
     }
     kernel.threads.set_last_error(thread_id, 0);
@@ -2475,11 +2670,15 @@ pub(crate) fn strtol_raw<M: CoredllGuestMemory>(
     base: u32,
 ) -> i32 {
     if text_ptr == 0 {
-        kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
     let Some(text) = read_narrow_z(memory, text_ptr, 4096) else {
-        kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     };
     let trimmed = text.trim_start();
@@ -2492,7 +2691,9 @@ pub(crate) fn strtol_raw<M: CoredllGuestMemory>(
     };
     let parsed = parse_unsigned_prefix(rest, base);
     if end_ptr != 0 {
-        let consumed = text.len() - trimmed.len() + usize::from(neg || trimmed.starts_with('+')) + parsed.consumed;
+        let consumed = text.len() - trimmed.len()
+            + usize::from(neg || trimmed.starts_with('+'))
+            + parsed.consumed;
         let _ = memory.write_u32(end_ptr, text_ptr.wrapping_add(consumed as u32));
     }
     kernel.threads.set_last_error(thread_id, 0);
@@ -2508,11 +2709,15 @@ pub(crate) fn strtod_raw<M: CoredllGuestMemory>(
     end_ptr: u32,
 ) -> f64 {
     if text_ptr == 0 {
-        kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0.0;
     }
     let Some(text) = read_narrow_z(memory, text_ptr, 4096) else {
-        kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0.0;
     };
     let value = parse_float_prefix(&text);
@@ -2529,7 +2734,9 @@ pub(crate) fn atol_raw<M: CoredllGuestMemory>(memory: &M, ptr: u32) -> i32 {
 }
 
 pub(crate) fn atoi64_raw<M: CoredllGuestMemory>(memory: &M, ptr: u32) -> i64 {
-    let Some(text) = read_narrow_z(memory, ptr, 128) else { return 0; };
+    let Some(text) = read_narrow_z(memory, ptr, 128) else {
+        return 0;
+    };
     parse_decimal_prefix_i64(text.trim_start())
 }
 
@@ -2541,13 +2748,17 @@ pub(crate) fn itoa_raw<M: CoredllGuestMemory>(
     buf: u32,
     radix: u32,
 ) -> u32 {
-    if buf == 0 { return 0; }
+    if buf == 0 {
+        return 0;
+    }
     let text = format_int_radix(value as u64, radix, true);
     let bytes: Vec<u8> = text.bytes().chain(std::iter::once(0)).collect();
     if write_guest_bytes(kernel, memory, thread_id, buf, &bytes) {
         kernel.threads.set_last_error(thread_id, 0);
         buf
-    } else { 0 }
+    } else {
+        0
+    }
 }
 
 pub(crate) fn ltoa_raw<M: CoredllGuestMemory>(
@@ -2569,13 +2780,17 @@ pub(crate) fn ultoa_raw<M: CoredllGuestMemory>(
     buf: u32,
     radix: u32,
 ) -> u32 {
-    if buf == 0 { return 0; }
+    if buf == 0 {
+        return 0;
+    }
     let text = format_int_radix(u64::from(value), radix, false);
     let bytes: Vec<u8> = text.bytes().chain(std::iter::once(0)).collect();
     if write_guest_bytes(kernel, memory, thread_id, buf, &bytes) {
         kernel.threads.set_last_error(thread_id, 0);
         buf
-    } else { 0 }
+    } else {
+        0
+    }
 }
 
 pub(crate) fn itow_raw<M: CoredllGuestMemory>(
@@ -2586,7 +2801,9 @@ pub(crate) fn itow_raw<M: CoredllGuestMemory>(
     buf: u32,
     radix: u32,
 ) -> u32 {
-    if buf == 0 { return 0; }
+    if buf == 0 {
+        return 0;
+    }
     let text = format_int_radix(value as u64, radix, true);
     write_wide_z_to_guest(kernel, memory, thread_id, buf, &text)
 }
@@ -2610,7 +2827,9 @@ pub(crate) fn ultow_raw<M: CoredllGuestMemory>(
     buf: u32,
     radix: u32,
 ) -> u32 {
-    if buf == 0 { return 0; }
+    if buf == 0 {
+        return 0;
+    }
     let text = format_int_radix(u64::from(value), radix, false);
     write_wide_z_to_guest(kernel, memory, thread_id, buf, &text)
 }
@@ -2619,8 +2838,12 @@ pub(crate) fn memchr_raw<M: CoredllGuestMemory>(memory: &M, ptr: u32, ch: u32, n
     let needle = ch as u8;
     for i in 0..n {
         let addr = ptr.wrapping_add(i);
-        let Ok(b) = memory.read_u8(addr) else { return 0; };
-        if b == needle { return addr; }
+        let Ok(b) = memory.read_u8(addr) else {
+            return 0;
+        };
+        if b == needle {
+            return addr;
+        }
     }
     0
 }
@@ -2639,7 +2862,9 @@ fn format_int_radix(value: u64, radix: u32, signed: bool) -> String {
 }
 
 fn format_unsigned_radix(mut v: u64, radix: u32) -> String {
-    if v == 0 { return "0".to_owned(); }
+    if v == 0 {
+        return "0".to_owned();
+    }
     let digits: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
     let mut buf = Vec::new();
     while v != 0 {
@@ -2658,7 +2883,9 @@ fn write_wide_z_to_guest<M: CoredllGuestMemory>(
 ) -> u32 {
     for (i, unit) in text.encode_utf16().chain(std::iter::once(0)).enumerate() {
         let addr = dest.wrapping_add(i as u32 * 2);
-        if !write_guest_u16(kernel, memory, thread_id, addr, unit) { return 0; }
+        if !write_guest_u16(kernel, memory, thread_id, addr, unit) {
+            return 0;
+        }
     }
     kernel.threads.set_last_error(thread_id, 0);
     dest
@@ -2668,17 +2895,29 @@ fn float_prefix_len(text: &str) -> usize {
     let text = text.trim_start();
     let bytes = text.as_bytes();
     let mut i = 0;
-    if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') { i += 1; }
-    while i < bytes.len() && bytes[i].is_ascii_digit() { i += 1; }
-    if i < bytes.len() && bytes[i] == b'.' { i += 1; }
-    while i < bytes.len() && bytes[i].is_ascii_digit() { i += 1; }
+    if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
+        i += 1;
+    }
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i < bytes.len() && bytes[i] == b'.' {
+        i += 1;
+    }
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
     if i < bytes.len() && (bytes[i] == b'e' || bytes[i] == b'E') {
         let j = i + 1;
         let mut k = j;
-        if k < bytes.len() && (bytes[k] == b'+' || bytes[k] == b'-') { k += 1; }
+        if k < bytes.len() && (bytes[k] == b'+' || bytes[k] == b'-') {
+            k += 1;
+        }
         if k < bytes.len() && bytes[k].is_ascii_digit() {
             i = k;
-            while i < bytes.len() && bytes[i].is_ascii_digit() { i += 1; }
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
         }
     }
     text.as_ptr() as usize - text.as_ptr() as usize + i
@@ -2694,7 +2933,9 @@ pub(crate) fn wcscat_raw<M: CoredllGuestMemory>(
     src: u32,
 ) -> u32 {
     if dest == 0 || src == 0 {
-        kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
     let dest_len = wcslen_raw(memory, dest);
@@ -2702,14 +2943,24 @@ pub(crate) fn wcscat_raw<M: CoredllGuestMemory>(
     let mut units = Vec::new();
     for i in 0..0x8000u32 {
         let Ok(u) = memory.read_u16(src.wrapping_add(i * 2)) else {
-            kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
             return 0;
         };
         units.push(u);
-        if u == 0 { break; }
+        if u == 0 {
+            break;
+        }
     }
     for (i, u) in units.iter().enumerate() {
-        if !write_guest_u16(kernel, memory, thread_id, write_base.wrapping_add(i as u32 * 2), *u) {
+        if !write_guest_u16(
+            kernel,
+            memory,
+            thread_id,
+            write_base.wrapping_add(i as u32 * 2),
+            *u,
+        ) {
             return 0;
         }
     }
@@ -2718,15 +2969,27 @@ pub(crate) fn wcscat_raw<M: CoredllGuestMemory>(
 }
 
 pub(crate) fn wcscspn_raw<M: CoredllGuestMemory>(memory: &M, s: u32, reject: u32) -> u32 {
-    if s == 0 { return 0; }
+    if s == 0 {
+        return 0;
+    }
     for i in 0..0x8000u32 {
-        let Ok(c) = memory.read_u16(s.wrapping_add(i * 2)) else { return i; };
-        if c == 0 { return i; }
+        let Ok(c) = memory.read_u16(s.wrapping_add(i * 2)) else {
+            return i;
+        };
+        if c == 0 {
+            return i;
+        }
         if reject != 0 {
             for ri in 0..0x8000u32 {
-                let Ok(rc) = memory.read_u16(reject.wrapping_add(ri * 2)) else { break; };
-                if rc == 0 { break; }
-                if rc == c { return i; }
+                let Ok(rc) = memory.read_u16(reject.wrapping_add(ri * 2)) else {
+                    break;
+                };
+                if rc == 0 {
+                    break;
+                }
+                if rc == c {
+                    return i;
+                }
             }
         }
     }
@@ -2734,19 +2997,34 @@ pub(crate) fn wcscspn_raw<M: CoredllGuestMemory>(memory: &M, s: u32, reject: u32
 }
 
 pub(crate) fn wcsspn_raw<M: CoredllGuestMemory>(memory: &M, s: u32, accept: u32) -> u32 {
-    if s == 0 { return 0; }
+    if s == 0 {
+        return 0;
+    }
     for i in 0..0x8000u32 {
-        let Ok(c) = memory.read_u16(s.wrapping_add(i * 2)) else { return i; };
-        if c == 0 { return i; }
+        let Ok(c) = memory.read_u16(s.wrapping_add(i * 2)) else {
+            return i;
+        };
+        if c == 0 {
+            return i;
+        }
         let mut found = false;
         if accept != 0 {
             for ai in 0..0x8000u32 {
-                let Ok(ac) = memory.read_u16(accept.wrapping_add(ai * 2)) else { break; };
-                if ac == 0 { break; }
-                if ac == c { found = true; break; }
+                let Ok(ac) = memory.read_u16(accept.wrapping_add(ai * 2)) else {
+                    break;
+                };
+                if ac == 0 {
+                    break;
+                }
+                if ac == c {
+                    found = true;
+                    break;
+                }
             }
         }
-        if !found { return i; }
+        if !found {
+            return i;
+        }
     }
     0x8000
 }
@@ -2760,7 +3038,9 @@ pub(crate) fn wcsncat_raw<M: CoredllGuestMemory>(
     n: u32,
 ) -> u32 {
     if dest == 0 {
-        kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
     let dest_len = wcslen_raw(memory, dest);
@@ -2768,15 +3048,25 @@ pub(crate) fn wcsncat_raw<M: CoredllGuestMemory>(
     let mut written = 0u32;
     if src != 0 {
         for i in 0..n {
-            let Ok(c) = memory.read_u16(src.wrapping_add(i * 2)) else { break; };
-            if c == 0 { break; }
+            let Ok(c) = memory.read_u16(src.wrapping_add(i * 2)) else {
+                break;
+            };
+            if c == 0 {
+                break;
+            }
             if !write_guest_u16(kernel, memory, thread_id, write_base.wrapping_add(i * 2), c) {
                 return 0;
             }
             written += 1;
         }
     }
-    if !write_guest_u16(kernel, memory, thread_id, write_base.wrapping_add(written * 2), 0) {
+    if !write_guest_u16(
+        kernel,
+        memory,
+        thread_id,
+        write_base.wrapping_add(written * 2),
+        0,
+    ) {
         return 0;
     }
     kernel.threads.set_last_error(thread_id, 0);
@@ -2791,13 +3081,21 @@ pub(crate) fn wcsnset_raw<M: CoredllGuestMemory>(
     ch: u32,
     n: u32,
 ) -> u32 {
-    if s == 0 { return 0; }
+    if s == 0 {
+        return 0;
+    }
     let fill = ch as u16;
     for i in 0..n {
         let addr = s.wrapping_add(i * 2);
-        let Ok(c) = memory.read_u16(addr) else { break; };
-        if c == 0 { break; }
-        if !write_guest_u16(kernel, memory, thread_id, addr, fill) { return 0; }
+        let Ok(c) = memory.read_u16(addr) else {
+            break;
+        };
+        if c == 0 {
+            break;
+        }
+        if !write_guest_u16(kernel, memory, thread_id, addr, fill) {
+            return 0;
+        }
     }
     kernel.threads.set_last_error(thread_id, 0);
     s
@@ -2809,16 +3107,28 @@ pub(crate) fn wcsrev_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     s: u32,
 ) -> u32 {
-    if s == 0 { return 0; }
+    if s == 0 {
+        return 0;
+    }
     let len = wcslen_raw(memory, s);
-    if len <= 1 { return s; }
+    if len <= 1 {
+        return s;
+    }
     let mut lo = 0u32;
     let mut hi = len - 1;
     while lo < hi {
-        let Ok(lc) = memory.read_u16(s.wrapping_add(lo * 2)) else { return 0; };
-        let Ok(hc) = memory.read_u16(s.wrapping_add(hi * 2)) else { return 0; };
-        if !write_guest_u16(kernel, memory, thread_id, s.wrapping_add(lo * 2), hc) { return 0; }
-        if !write_guest_u16(kernel, memory, thread_id, s.wrapping_add(hi * 2), lc) { return 0; }
+        let Ok(lc) = memory.read_u16(s.wrapping_add(lo * 2)) else {
+            return 0;
+        };
+        let Ok(hc) = memory.read_u16(s.wrapping_add(hi * 2)) else {
+            return 0;
+        };
+        if !write_guest_u16(kernel, memory, thread_id, s.wrapping_add(lo * 2), hc) {
+            return 0;
+        }
+        if !write_guest_u16(kernel, memory, thread_id, s.wrapping_add(hi * 2), lc) {
+            return 0;
+        }
         lo += 1;
         hi -= 1;
     }
@@ -2833,13 +3143,21 @@ pub(crate) fn wcsset_raw<M: CoredllGuestMemory>(
     s: u32,
     ch: u32,
 ) -> u32 {
-    if s == 0 { return 0; }
+    if s == 0 {
+        return 0;
+    }
     let fill = ch as u16;
     for i in 0..0x8000u32 {
         let addr = s.wrapping_add(i * 2);
-        let Ok(c) = memory.read_u16(addr) else { break; };
-        if c == 0 { break; }
-        if !write_guest_u16(kernel, memory, thread_id, addr, fill) { return 0; }
+        let Ok(c) = memory.read_u16(addr) else {
+            break;
+        };
+        if c == 0 {
+            break;
+        }
+        if !write_guest_u16(kernel, memory, thread_id, addr, fill) {
+            return 0;
+        }
     }
     kernel.threads.set_last_error(thread_id, 0);
     s
@@ -2853,7 +3171,9 @@ pub(crate) fn wcstok_raw<M: CoredllGuestMemory>(
     delimiters: u32,
 ) -> u32 {
     if delimiters == 0 {
-        kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
     let mut cursor = if string != 0 {
@@ -2875,7 +3195,9 @@ pub(crate) fn wcstok_raw<M: CoredllGuestMemory>(
             kernel.crt_set_wcstok_next(thread_id, 0);
             return 0;
         }
-        if !is_wide_delimiter(memory, delimiters, c) { break; }
+        if !is_wide_delimiter(memory, delimiters, c) {
+            break;
+        }
         cursor = cursor.wrapping_add(2);
     }
     let token = cursor;
@@ -2904,15 +3226,23 @@ pub(crate) fn wcstok_raw<M: CoredllGuestMemory>(
 
 fn is_wide_delimiter<M: CoredllGuestMemory>(memory: &M, delimiters: u32, c: u16) -> bool {
     for i in 0..0x100u32 {
-        let Ok(d) = memory.read_u16(delimiters.wrapping_add(i * 2)) else { return false; };
-        if d == 0 { return false; }
-        if d == c { return true; }
+        let Ok(d) = memory.read_u16(delimiters.wrapping_add(i * 2)) else {
+            return false;
+        };
+        if d == 0 {
+            return false;
+        }
+        if d == c {
+            return true;
+        }
     }
     false
 }
 
 pub(crate) fn wtoll_raw<M: CoredllGuestMemory>(memory: &M, ptr: u32) -> i64 {
-    let Some(text) = read_wide_z(memory, ptr, 128) else { return 0; };
+    let Some(text) = read_wide_z(memory, ptr, 128) else {
+        return 0;
+    };
     parse_decimal_prefix_i64(text.trim_start())
 }
 
@@ -2933,13 +3263,17 @@ pub(crate) fn wcslwr_raw<M: CoredllGuestMemory>(
     s: u32,
 ) -> u32 {
     if s == 0 {
-        kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
     for i in 0..0x8000u32 {
         let addr = s.wrapping_add(i * 2);
         let Ok(c) = memory.read_u16(addr) else {
-            kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
             return 0;
         };
         if c == 0 {
@@ -2947,9 +3281,13 @@ pub(crate) fn wcslwr_raw<M: CoredllGuestMemory>(
             return s;
         }
         let low = towlower_raw(u32::from(c)) as u16;
-        if low != c && !write_guest_u16(kernel, memory, thread_id, addr, low) { return 0; }
+        if low != c && !write_guest_u16(kernel, memory, thread_id, addr, low) {
+            return 0;
+        }
     }
-    kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
     0
 }
 
@@ -2960,13 +3298,17 @@ pub(crate) fn wcsupr_raw<M: CoredllGuestMemory>(
     s: u32,
 ) -> u32 {
     if s == 0 {
-        kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
     for i in 0..0x8000u32 {
         let addr = s.wrapping_add(i * 2);
         let Ok(c) = memory.read_u16(addr) else {
-            kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
             return 0;
         };
         if c == 0 {
@@ -2974,9 +3316,13 @@ pub(crate) fn wcsupr_raw<M: CoredllGuestMemory>(
             return s;
         }
         let up = towupper_raw(u32::from(c)) as u16;
-        if up != c && !write_guest_u16(kernel, memory, thread_id, addr, up) { return 0; }
+        if up != c && !write_guest_u16(kernel, memory, thread_id, addr, up) {
+            return 0;
+        }
     }
-    kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+    kernel
+        .threads
+        .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
     0
 }
 
@@ -2989,11 +3335,15 @@ pub(crate) fn wcstol_raw<M: CoredllGuestMemory>(
     base: u32,
 ) -> i32 {
     if text_ptr == 0 {
-        kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
     let Some(text) = read_wide_z(memory, text_ptr, 4096) else {
-        kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     };
     let trimmed = text.trim_start();
@@ -3012,7 +3362,11 @@ pub(crate) fn wcstol_raw<M: CoredllGuestMemory>(
         let _ = memory.write_u32(end_ptr, text_ptr.wrapping_add(skip as u32 * 2));
     }
     kernel.threads.set_last_error(thread_id, 0);
-    if neg { -(parsed.value as i32) } else { parsed.value as i32 }
+    if neg {
+        -(parsed.value as i32)
+    } else {
+        parsed.value as i32
+    }
 }
 
 pub(crate) fn wcstod_raw<M: CoredllGuestMemory>(
@@ -3023,11 +3377,15 @@ pub(crate) fn wcstod_raw<M: CoredllGuestMemory>(
     end_ptr: u32,
 ) -> f64 {
     if text_ptr == 0 {
-        kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0.0;
     }
     let Some(text) = read_wide_z(memory, text_ptr, 4096) else {
-        kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0.0;
     };
     let value = parse_float_prefix(&text);
@@ -3041,100 +3399,204 @@ pub(crate) fn wcstod_raw<M: CoredllGuestMemory>(
 
 // ---- bit / integer ops ----
 
-pub(crate) fn rotl32(v: u32, n: u32) -> u32 { v.rotate_left(n & 31) }
-pub(crate) fn rotr32(v: u32, n: u32) -> u32 { v.rotate_right(n & 31) }
-pub(crate) fn lrotl(v: u32, n: u32) -> u32 { v.rotate_left(n & 31) }
-pub(crate) fn lrotr(v: u32, n: u32) -> u32 { v.rotate_right(n & 31) }
-pub(crate) fn rotl64(v: u64, n: u64) -> u64 { v.rotate_left((n & 63) as u32) }
-pub(crate) fn rotr64(v: u64, n: u64) -> u64 { v.rotate_right((n & 63) as u32) }
-pub(crate) fn byteswap_ushort(v: u32) -> u32 { u32::from((v as u16).swap_bytes()) }
-pub(crate) fn byteswap_ulong(v: u32) -> u32 { v.swap_bytes() }
-pub(crate) fn byteswap_uint64_raw(v: u64) -> u64 { v.swap_bytes() }
+pub(crate) fn rotl32(v: u32, n: u32) -> u32 {
+    v.rotate_left(n & 31)
+}
+pub(crate) fn rotr32(v: u32, n: u32) -> u32 {
+    v.rotate_right(n & 31)
+}
+pub(crate) fn lrotl(v: u32, n: u32) -> u32 {
+    v.rotate_left(n & 31)
+}
+pub(crate) fn lrotr(v: u32, n: u32) -> u32 {
+    v.rotate_right(n & 31)
+}
+pub(crate) fn rotl64(v: u64, n: u64) -> u64 {
+    v.rotate_left((n & 63) as u32)
+}
+pub(crate) fn rotr64(v: u64, n: u64) -> u64 {
+    v.rotate_right((n & 63) as u32)
+}
+pub(crate) fn byteswap_ushort(v: u32) -> u32 {
+    u32::from((v as u16).swap_bytes())
+}
+pub(crate) fn byteswap_ulong(v: u32) -> u32 {
+    v.swap_bytes()
+}
+pub(crate) fn byteswap_uint64_raw(v: u64) -> u64 {
+    v.swap_bytes()
+}
 
-pub(crate) fn count_leading_zeros(v: u32) -> u32 { v.leading_zeros() }
-pub(crate) fn count_leading_zeros64(v: u64) -> u32 { v.leading_zeros() }
-pub(crate) fn count_leading_ones(v: u32) -> u32 { v.leading_ones() }
-pub(crate) fn count_leading_ones64(v: u64) -> u32 { v.leading_ones() }
+pub(crate) fn count_leading_zeros(v: u32) -> u32 {
+    v.leading_zeros()
+}
+pub(crate) fn count_leading_zeros64(v: u64) -> u32 {
+    v.leading_zeros()
+}
+pub(crate) fn count_leading_ones(v: u32) -> u32 {
+    v.leading_ones()
+}
+pub(crate) fn count_leading_ones64(v: u64) -> u32 {
+    v.leading_ones()
+}
 pub(crate) fn count_leading_signs(v: i32) -> u32 {
     // number of redundant sign bits = leading_zeros - 1 for negative, or leading_ones - 1 for positive
-    if v >= 0 { v.leading_zeros().saturating_sub(1) } else { v.leading_ones().saturating_sub(1) }
+    if v >= 0 {
+        v.leading_zeros().saturating_sub(1)
+    } else {
+        v.leading_ones().saturating_sub(1)
+    }
 }
 pub(crate) fn count_leading_signs64(v: i64) -> u32 {
-    if v >= 0 { v.leading_zeros().saturating_sub(1) } else { v.leading_ones().saturating_sub(1) }
+    if v >= 0 {
+        v.leading_zeros().saturating_sub(1)
+    } else {
+        v.leading_ones().saturating_sub(1)
+    }
 }
-pub(crate) fn count_one_bits(v: u32) -> u32 { v.count_ones() }
-pub(crate) fn count_one_bits64(v: u64) -> u32 { v.count_ones() }
+pub(crate) fn count_one_bits(v: u32) -> u32 {
+    v.count_ones()
+}
+pub(crate) fn count_one_bits64(v: u64) -> u32 {
+    v.count_ones()
+}
 pub(crate) fn mul_high(a: i32, b: i32) -> i32 {
     (((a as i64) * (b as i64)) >> 32) as i32
 }
 pub(crate) fn mul_unsigned_high(a: u32, b: u32) -> u32 {
     (((a as u64) * (b as u64)) >> 32) as u32
 }
-pub(crate) fn abs64(v: i64) -> i64 { v.saturating_abs() }
+pub(crate) fn abs64(v: i64) -> i64 {
+    v.saturating_abs()
+}
 
 // ---- float predicates / ops ----
 
-pub(crate) fn isnan_raw(f: f64) -> bool { f.is_nan() }
-pub(crate) fn isnanf_raw(f: f32) -> bool { f.is_nan() }
-pub(crate) fn isunordered_raw(a: f64, b: f64) -> bool { a.is_nan() || b.is_nan() }
-pub(crate) fn isunorderedf_raw(a: f32, b: f32) -> bool { a.is_nan() || b.is_nan() }
-pub(crate) fn finite_raw(f: f64) -> bool { f.is_finite() }
+pub(crate) fn isnan_raw(f: f64) -> bool {
+    f.is_nan()
+}
+pub(crate) fn isnanf_raw(f: f32) -> bool {
+    f.is_nan()
+}
+pub(crate) fn isunordered_raw(a: f64, b: f64) -> bool {
+    a.is_nan() || b.is_nan()
+}
+pub(crate) fn isunorderedf_raw(a: f32, b: f32) -> bool {
+    a.is_nan() || b.is_nan()
+}
+pub(crate) fn finite_raw(f: f64) -> bool {
+    f.is_finite()
+}
 pub(crate) fn fpclass_raw(f: f64) -> i32 {
     // _fpclass bit flags matching MSVC: 0x0001=neg inf, 0x0002=neg norm, 0x0004=neg denorm,
     // 0x0008=neg zero, 0x0010=pos zero, 0x0020=pos denorm, 0x0040=pos norm, 0x0080=pos inf,
     // 0x0100=nan (signaling), 0x0200=nan (quiet)
-    if f.is_nan() { return 0x0200; }
-    if f.is_infinite() { return if f < 0.0 { 0x0001 } else { 0x0080 }; }
-    if f == 0.0 { return if f.is_sign_negative() { 0x0008 } else { 0x0010 }; }
-    if f.is_subnormal() { return if f < 0.0 { 0x0004 } else { 0x0020 }; }
+    if f.is_nan() {
+        return 0x0200;
+    }
+    if f.is_infinite() {
+        return if f < 0.0 { 0x0001 } else { 0x0080 };
+    }
+    if f == 0.0 {
+        return if f.is_sign_negative() { 0x0008 } else { 0x0010 };
+    }
+    if f.is_subnormal() {
+        return if f < 0.0 { 0x0004 } else { 0x0020 };
+    }
     if f < 0.0 { 0x0002 } else { 0x0040 }
 }
-pub(crate) fn chgsign_raw(f: f64) -> f64 { -f }
-pub(crate) fn copysign_raw(x: f64, y: f64) -> f64 { x.copysign(y) }
-pub(crate) fn logb_raw(f: f64) -> f64 { f.abs().log2().floor() }
-pub(crate) fn scalb_raw(x: f64, y: f64) -> f64 { x * 2.0_f64.powf(y) }
+pub(crate) fn chgsign_raw(f: f64) -> f64 {
+    -f
+}
+pub(crate) fn copysign_raw(x: f64, y: f64) -> f64 {
+    x.copysign(y)
+}
+pub(crate) fn logb_raw(f: f64) -> f64 {
+    f.abs().log2().floor()
+}
+pub(crate) fn scalb_raw(x: f64, y: f64) -> f64 {
+    x * 2.0_f64.powf(y)
+}
 pub(crate) fn nextafter_raw(x: f64, y: f64) -> f64 {
-    if x == y { return y; }
-    if x.is_nan() || y.is_nan() { return f64::NAN; }
+    if x == y {
+        return y;
+    }
+    if x.is_nan() || y.is_nan() {
+        return f64::NAN;
+    }
     let bits = x.to_bits();
-    let next_bits = if (y > x) == (x >= 0.0) { bits.wrapping_add(1) } else { bits.wrapping_sub(1) };
+    let next_bits = if (y > x) == (x >= 0.0) {
+        bits.wrapping_add(1)
+    } else {
+        bits.wrapping_sub(1)
+    };
     f64::from_bits(next_bits)
 }
-pub(crate) fn frnd_raw(f: f64) -> f64 { f.round() }
+pub(crate) fn frnd_raw(f: f64) -> f64 {
+    f.round()
+}
 
 // ---- MIPS 64-bit helpers ----
 
 pub(crate) fn ll_bit_extract(val: i64, from: u32, len: u32) -> i64 {
-    if len == 0 || len > 64 { return 0; }
+    if len == 0 || len > 64 {
+        return 0;
+    }
     let shifted = val >> (from & 63);
-    if len == 64 { return shifted; }
+    if len == 64 {
+        return shifted;
+    }
     let mask = (1i64 << len).wrapping_sub(1);
     (shifted & mask) << (64 - len) >> (64 - len)
 }
 
 pub(crate) fn ll_bit_insert(target: i64, from: u32, len: u32, val: i64) -> i64 {
-    if len == 0 || len > 64 { return target; }
-    let mask = if len == 64 { !0i64 } else { ((1i64 << len).wrapping_sub(1)) << from };
+    if len == 0 || len > 64 {
+        return target;
+    }
+    let mask = if len == 64 {
+        !0i64
+    } else {
+        ((1i64 << len).wrapping_sub(1)) << from
+    };
     (target & !mask) | ((val << from) & mask)
 }
 
 pub(crate) fn ull_bit_extract(val: u64, from: u32, len: u32) -> u64 {
-    if len == 0 || len > 64 { return 0; }
+    if len == 0 || len > 64 {
+        return 0;
+    }
     let shifted = val >> (from & 63);
-    if len == 64 { return shifted; }
+    if len == 64 {
+        return shifted;
+    }
     shifted & ((1u64 << len).wrapping_sub(1))
 }
 
 pub(crate) fn ull_bit_insert(target: u64, from: u32, len: u32, val: u64) -> u64 {
-    if len == 0 || len > 64 { return target; }
-    let mask = if len == 64 { !0u64 } else { ((1u64 << len).wrapping_sub(1)) << from };
+    if len == 0 || len > 64 {
+        return target;
+    }
+    let mask = if len == 64 {
+        !0u64
+    } else {
+        ((1u64 << len).wrapping_sub(1)) << from
+    };
     (target & !mask) | ((val << from) & mask)
 }
 
-pub(crate) fn ll_to_f(val: i64) -> f32 { val as f32 }
-pub(crate) fn ll_to_d(val: i64) -> f64 { val as f64 }
-pub(crate) fn ull_to_f(val: u64) -> f32 { val as f32 }
-pub(crate) fn ull_to_d(val: u64) -> f64 { val as f64 }
+pub(crate) fn ll_to_f(val: i64) -> f32 {
+    val as f32
+}
+pub(crate) fn ll_to_d(val: i64) -> f64 {
+    val as f64
+}
+pub(crate) fn ull_to_f(val: u64) -> f32 {
+    val as f32
+}
+pub(crate) fn ull_to_d(val: u64) -> f64 {
+    val as f64
+}
 
 // ---- calloc ----
 
@@ -3146,10 +3608,14 @@ pub(crate) fn calloc_raw<M: CoredllGuestMemory>(
     size: u32,
 ) -> u32 {
     let Some(total) = num.checked_mul(size) else {
-        kernel.threads.set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     };
-    if total == 0 { return 0; }
+    if total == 0 {
+        return 0;
+    }
     let ptr = malloc_raw(kernel, thread_id, total);
     if ptr != 0 {
         let _ = memory.fill_bytes(ptr, 0, total);
@@ -3160,11 +3626,19 @@ pub(crate) fn calloc_raw<M: CoredllGuestMemory>(
 // ---- parse helpers ----
 
 fn parse_decimal_prefix_i64(s: &str) -> i64 {
-    let (neg, rest) = if s.starts_with('-') { (true, &s[1..]) }
-        else if s.starts_with('+') { (false, &s[1..]) }
-        else { (false, s) };
-    let val = rest.bytes().take_while(|b| b.is_ascii_digit())
-        .fold(0i64, |acc, b| acc.wrapping_mul(10).wrapping_add(i64::from(b - b'0')));
+    let (neg, rest) = if s.starts_with('-') {
+        (true, &s[1..])
+    } else if s.starts_with('+') {
+        (false, &s[1..])
+    } else {
+        (false, s)
+    };
+    let val = rest
+        .bytes()
+        .take_while(|b| b.is_ascii_digit())
+        .fold(0i64, |acc, b| {
+            acc.wrapping_mul(10).wrapping_add(i64::from(b - b'0'))
+        });
     if neg { val.wrapping_neg() } else { val }
 }
 

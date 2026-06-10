@@ -9,14 +9,14 @@ use wince_emulation_v3::{
             ORD_CLOSE_CLIPBOARD, ORD_CLOSE_HANDLE, ORD_COUNT_CLIPBOARD_FORMATS,
             ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIBSECTION, ORD_CREATE_DIRECTORY_W,
             ORD_CREATE_EVENT_W, ORD_CREATE_FILE_W, ORD_CREATE_PROCESS_W, ORD_CREATE_SEMAPHORE_W,
-            ORD_CREATE_THREAD, ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_DISPATCH_MESSAGE_W,
-            ORD_EMPTY_CLIPBOARD, ORD_ENUM_CLIPBOARD_FORMATS, ORD_EVENT_MODIFY,
-            ORD_EXTRACT_ICON_EX_W, ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY,
-            ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC,
-            ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK,
-            ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_EXIT_CODE_PROCESS,
-            ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
-            ORD_GET_MODULE_HANDLE_W, ORD_GET_OPEN_CLIPBOARD_WINDOW,
+            ORD_CREATE_THREAD, ORD_DELETE_CRITICAL_SECTION, ORD_DISABLE_THREAD_LIBRARY_CALLS,
+            ORD_DISPATCH_MESSAGE_W, ORD_EMPTY_CLIPBOARD, ORD_ENTER_CRITICAL_SECTION,
+            ORD_ENUM_CLIPBOARD_FORMATS, ORD_EVENT_MODIFY, ORD_EXTRACT_ICON_EX_W,
+            ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY, ORD_GET_CALLER_PROCESS_INDEX,
+            ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_GET_CLIPBOARD_FORMAT_NAME_W,
+            ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK, ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS,
+            ORD_GET_DC, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR,
+            ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W, ORD_GET_OPEN_CLIPBOARD_WINDOW,
             ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
             ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID,
             ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_TIME,
@@ -27,9 +27,8 @@ use wince_emulation_v3::{
             ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAG_ENTER,
             ORD_IMAGE_LIST_DRAG_LEAVE, ORD_IMAGE_LIST_DRAG_MOVE, ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK,
             ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT, ORD_IMAGE_LIST_DUPLICATE,
-            ORD_IMAGE_LIST_END_DRAG,
-            ORD_IMAGE_LIST_GET_BK_COLOR, ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON,
-            ORD_IMAGE_LIST_GET_ICON_SIZE, ORD_IMAGE_LIST_GET_IMAGE_COUNT,
+            ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_BK_COLOR, ORD_IMAGE_LIST_GET_DRAG_IMAGE,
+            ORD_IMAGE_LIST_GET_ICON, ORD_IMAGE_LIST_GET_ICON_SIZE, ORD_IMAGE_LIST_GET_IMAGE_COUNT,
             ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_LOAD_IMAGE, ORD_IMAGE_LIST_MERGE,
             ORD_IMAGE_LIST_REMOVE, ORD_IMAGE_LIST_REPLACE, ORD_IMAGE_LIST_REPLACE_ICON,
             ORD_IMAGE_LIST_SET_BK_COLOR, ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE,
@@ -37,7 +36,6 @@ use wince_emulation_v3::{
             ORD_IMAGE_LIST_SET_OVERLAY_IMAGE, ORD_INITIALIZE_CRITICAL_SECTION,
             ORD_INPUT_DEBUG_CHAR_W, ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_IS_CLIPBOARD_FORMAT_AVAILABLE, ORD_KERNEL_IO_CONTROL,
-            ORD_DELETE_CRITICAL_SECTION, ORD_ENTER_CRITICAL_SECTION,
             ORD_LEAVE_CRITICAL_SECTION, ORD_LOAD_IMAGE_W, ORD_LOAD_LIBRARY_EX_W,
             ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS, ORD_MESSAGE_BOX_W, ORD_MOVE_FILE_W,
             ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_OPEN_CLIPBOARD,
@@ -5898,7 +5896,10 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
         ORD_IMAGE_LIST_CREATE,
         [2, 1, ILC_COLOR16, 1, 1],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
         other => panic!("ImageList_Create failed: {other:?}"),
     };
 
@@ -5913,7 +5914,10 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
         ORD_LOAD_IMAGE_W,
         [0, path_ptr, IMAGE_BITMAP, 2, 1, LR_LOADFROMFILE],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
         other => panic!("LoadImage failed: {other:?}"),
     };
 
@@ -5926,7 +5930,10 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
             ORD_IMAGE_LIST_ADD,
             [il, bmp_handle, 0],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
     ));
 
     // Create 4x2 memory DC to draw into.
@@ -5959,7 +5966,10 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
             ORD_IMAGE_LIST_DRAW_INDIRECT,
             [PARAMS_PTR],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
     ));
     let magenta_rgb565 = 0xF81F_u16;
     let green_rgb565 = 0x07E0_u16;
@@ -5980,7 +5990,10 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
             ORD_IMAGE_LIST_DRAW_INDIRECT,
             [PARAMS_PTR],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
     ));
     assert_eq!(
         rgb565_at(&memory, bits_ptr, stride, 1, 0),
@@ -5997,7 +6010,10 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
         ORD_IMAGE_LIST_CREATE,
         [1, 1, ILC_COLOR16 | ILC_MASK, 1, 1],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
         other => panic!("ImageList_Create #2 failed: {other:?}"),
     };
 
@@ -6009,7 +6025,10 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
         ORD_LOAD_IMAGE_W,
         [0, path_ptr, IMAGE_BITMAP, 1, 1, LR_LOADFROMFILE],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
         other => panic!("LoadImage 1x1 failed: {other:?}"),
     };
     // ImageList_AddMasked with magenta (0x00FF00FF) → whole 1x1 image is transparent.
@@ -6021,7 +6040,10 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
             ORD_IMAGE_LIST_ADD_MASKED,
             [il2, bmp_1x1_handle, 0x00ff_00ff],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
     ));
     assert_eq!(
         kernel.resources.image_list(il2).unwrap().images[0].transparent_color,
@@ -6043,7 +6065,10 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
             ORD_IMAGE_LIST_DRAW_INDIRECT,
             [PARAMS_PTR],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
     ));
     assert_eq!(
         rgb565_at(&memory, bits_ptr, stride, 2, 0),
@@ -6062,7 +6087,10 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
             ORD_IMAGE_LIST_DRAW_INDIRECT,
             [PARAMS_PTR],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
     ));
     assert_eq!(
         rgb565_at(&memory, bits_ptr, stride, 3, 0),
@@ -10623,36 +10651,106 @@ fn coredll_raw_enter_and_delete_critical_section_complete_lifecycle() -> Result<
     memory.map_words(cs_ptr, 5);
 
     table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_INITIALIZE_CRITICAL_SECTION, [cs_ptr]);
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_INITIALIZE_CRITICAL_SECTION,
+        [cs_ptr],
+    );
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_ENTER_CRITICAL_SECTION, [cs_ptr]),
-        CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }
-    ), "EnterCriticalSection must return 0");
-    assert_eq!(memory.read_u32(cs_ptr + CS_LOCK_COUNT_OFFSET)?, 1, "lock count must be 1 after first enter");
-    assert_eq!(memory.read_u32(cs_ptr + CS_OWNER_THREAD_OFFSET)?, thread_id, "owner must be the current thread");
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_ENTER_CRITICAL_SECTION,
+                [cs_ptr]
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
+        ),
+        "EnterCriticalSection must return 0"
+    );
+    assert_eq!(
+        memory.read_u32(cs_ptr + CS_LOCK_COUNT_OFFSET)?,
+        1,
+        "lock count must be 1 after first enter"
+    );
+    assert_eq!(
+        memory.read_u32(cs_ptr + CS_OWNER_THREAD_OFFSET)?,
+        thread_id,
+        "owner must be the current thread"
+    );
 
     table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_ENTER_CRITICAL_SECTION, [cs_ptr]);
-    assert_eq!(memory.read_u32(cs_ptr + CS_LOCK_COUNT_OFFSET)?, 2, "lock count must be 2 after re-entrant enter");
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_ENTER_CRITICAL_SECTION,
+        [cs_ptr],
+    );
+    assert_eq!(
+        memory.read_u32(cs_ptr + CS_LOCK_COUNT_OFFSET)?,
+        2,
+        "lock count must be 2 after re-entrant enter"
+    );
 
     table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_LEAVE_CRITICAL_SECTION, [cs_ptr]);
-    assert_eq!(memory.read_u32(cs_ptr + CS_LOCK_COUNT_OFFSET)?, 1, "lock count must drop to 1 after first leave");
-    assert_eq!(memory.read_u32(cs_ptr + CS_OWNER_THREAD_OFFSET)?, thread_id, "owner must still be set after first leave");
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LEAVE_CRITICAL_SECTION,
+        [cs_ptr],
+    );
+    assert_eq!(
+        memory.read_u32(cs_ptr + CS_LOCK_COUNT_OFFSET)?,
+        1,
+        "lock count must drop to 1 after first leave"
+    );
+    assert_eq!(
+        memory.read_u32(cs_ptr + CS_OWNER_THREAD_OFFSET)?,
+        thread_id,
+        "owner must still be set after first leave"
+    );
 
     table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_LEAVE_CRITICAL_SECTION, [cs_ptr]);
-    assert_eq!(memory.read_u32(cs_ptr + CS_OWNER_THREAD_OFFSET)?, 0, "owner must be cleared after final leave");
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LEAVE_CRITICAL_SECTION,
+        [cs_ptr],
+    );
+    assert_eq!(
+        memory.read_u32(cs_ptr + CS_OWNER_THREAD_OFFSET)?,
+        0,
+        "owner must be cleared after final leave"
+    );
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_DELETE_CRITICAL_SECTION, [cs_ptr]),
-        CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }
-    ), "DeleteCriticalSection must return 0");
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_DELETE_CRITICAL_SECTION,
+                [cs_ptr]
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
+        ),
+        "DeleteCriticalSection must return 0"
+    );
     for word_index in 0..5_u32 {
-        assert_eq!(memory.read_u32(cs_ptr + word_index * 4)?, 0, "DeleteCriticalSection must zero all CS fields");
+        assert_eq!(
+            memory.read_u32(cs_ptr + word_index * 4)?,
+            0,
+            "DeleteCriticalSection must zero all CS fields"
+        );
     }
 
     Ok(())

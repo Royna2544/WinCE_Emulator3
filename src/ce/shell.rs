@@ -258,7 +258,9 @@ impl ShellSystem {
         self.notification_callbacks.iter()
     }
 
-    pub fn take_pending_notification_callback(&mut self) -> Option<ShellNotificationCallbackRecord> {
+    pub fn take_pending_notification_callback(
+        &mut self,
+    ) -> Option<ShellNotificationCallbackRecord> {
         if self.notification_callbacks.is_empty() {
             None
         } else {

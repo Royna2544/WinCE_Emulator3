@@ -13,7 +13,13 @@ pub trait CpuBackend: Clone + std::fmt::Debug {
         Self: Sized;
 
     fn set_dll_search_dirs(&mut self, dirs: Vec<std::path::PathBuf>);
-    fn map_region(&mut self, base: u32, size: u32, perms: crate::emulator::memory::MemoryPerms, name: &str) -> Result<()>;
+    fn map_region(
+        &mut self,
+        base: u32,
+        size: u32,
+        perms: crate::emulator::memory::MemoryPerms,
+        name: &str,
+    ) -> Result<()>;
 
     fn memory(&self) -> &MemoryMap;
     fn import_traps(&self) -> &ImportTrapTable;

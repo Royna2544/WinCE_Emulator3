@@ -812,7 +812,11 @@ pub struct UnicornMappedBlobRange {
     pub size: u32,
 }
 
-pub(super) fn format_address_with_region(label: &str, address: u32, region: Option<&str>) -> String {
+pub(super) fn format_address_with_region(
+    label: &str,
+    address: u32,
+    region: Option<&str>,
+) -> String {
     match region {
         Some(region) => format!("{label}=0x{address:08x}({region})"),
         None => format!("{label}=0x{address:08x}(unknown)"),

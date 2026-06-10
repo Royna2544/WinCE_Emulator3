@@ -5,79 +5,69 @@ use wince_emulation_v3::{
         cemath::CeMathValue,
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
-            ORD_ACOS, ORD_ASIN, ORD_ATAN, ORD_ATAN2, ORD_CEIL, ORD_COS, ORD_COSH, ORD_EXP,
-            ORD_FABS, ORD_FLOOR, ORD_FMOD, ORD_HYPOT, ORD_LOG, ORD_LOG10, ORD_SIN, ORD_SINH,
-            ORD_TAN, ORD_TANH,
-            ORD_LL_LSHIFT, ORD_LL_MUL, ORD_LL_REM, ORD_LL_RSHIFT,
-            ORD_ULL_DIV, ORD_ULL_REM, ORD_ULL_RSHIFT,
-            ORD_ATOF, ORD_DPADD, ORD_DPCMP, ORD_DPDIV, ORD_DPMUL, ORD_DPSUB, ORD_DPTOFP,
-            ORD_DPTOLI, ORD_DPTOUL, ORD_D_TO_ULL,
-            ORD_EQD, ORD_EQS, ORD_FERROR, ORD_FFLUSH, ORD_FMODF, ORD_FPADD, ORD_FPCMP,
-            ORD_FPDIV, ORD_FPMUL, ORD_FPSUB, ORD_FPTODP, ORD_FPTOLI, ORD_FPTOUL, ORD_FWRITE,
-            ORD_F_TO_LL, ORD_GES, ORD_GET_VERSION_EX, ORD_GTD, ORD_GTS, ORD_HEAP_VALIDATE,
-            ORD_ISWCTYPE, ORD_LED, ORD_LES, ORD_LITODP, ORD_LITOFP, ORD_LL_DIV, ORD_LTS,
-            ORD_NED, ORD_NES,
-            ORD_OPERATOR_DELETE_ARRAY_NOTHROW, ORD_OPERATOR_NEW_ARRAY_NOTHROW,
-            ORD_POW, ORD_PRINTF, ORD_REMOTE_HEAP_ALLOC, ORD_REMOTE_HEAP_FREE,
-            ORD_REMOTE_HEAP_RE_ALLOC, ORD_REMOTE_HEAP_SIZE, ORD_REMOTE_LOCAL_RE_ALLOC,
-            ORD_SQRT, ORD_TLS_CALL, ORD_ULTODP, ORD_ULTOFP,
-            ORD_DPA_CREATE, ORD_DPA_CLONE, ORD_DPA_INSERT_PTR, ORD_DPA_GET_PTR, ORD_DPA_DESTROY,
-            ORD_DSA_CREATE, ORD_DSA_CLONE, ORD_DSA_INSERT_ITEM, ORD_DSA_GET_ITEM_PTR,
-            ORD_DSA_SET_RANGE, ORD_DSA_DESTROY,
-            ORD_AFS_CREATE_DIRECTORY_W, ORD_AFS_CREATE_FILE_W, ORD_AFS_DELETE_FILE_W,
+            ORD_ACOS, ORD_AFS_CREATE_DIRECTORY_W, ORD_AFS_CREATE_FILE_W, ORD_AFS_DELETE_FILE_W,
             ORD_AFS_FIND_FIRST_CHANGE_NOTIFICATION_W, ORD_AFS_FIND_FIRST_FILE_W,
             ORD_AFS_FS_IO_CONTROL_W, ORD_AFS_GET_DISK_FREE_SPACE, ORD_AFS_GET_FILE_ATTRIBUTES_W,
             ORD_AFS_MOVE_FILE_W, ORD_AFS_PRESTO_CHANGO_FILE_NAME, ORD_AFS_REMOVE_DIRECTORY_W,
-            ORD_AFS_SET_FILE_ATTRIBUTES_W, ORD_ATOI, ORD_CE_FS_IO_CONTROL_W,
-            ORD_CE_GET_FILE_NOTIFICATION_INFO, ORD_CE_GET_VOLUME_INFO_W, ORD_CHAR_LOWER_BUFF_W,
-            ORD_CHAR_LOWER_W, ORD_CHAR_UPPER_BUFF_W,
-            ORD_CHAR_UPPER_W, ORD_CLEAR_COMM_BREAK, ORD_CLOSE_HANDLE, ORD_COPY_FILE_W,
-            ORD_CREATE_DIRECTORY_W,
-            ORD_CREATE_FILE_MAPPING_W, ORD_CREATE_FILE_W, ORD_DELETE_FILE_W, ORD_DEVICE_IO_CONTROL,
-            ORD_ESCAPE_COMM_FUNCTION, ORD_GET_COMM_MODEM_STATUS,
-            ORD_FCLOSE, ORD_FEOF, ORD_FGETS, ORD_FIND_CLOSE, ORD_FIND_CLOSE_CHANGE_NOTIFICATION,
-            ORD_FIND_FIRST_CHANGE_NOTIFICATION_W, ORD_FIND_FIRST_FILE_W,
-            ORD_FIND_NEXT_CHANGE_NOTIFICATION, ORD_FIND_NEXT_FILE_W, ORD_FLUSH_FILE_BUFFERS,
-            ORD_FLUSH_INSTRUCTION_CACHE, ORD_FLUSH_VIEW_OF_FILE, ORD_FLUSH_VIEW_OF_FILE_MAYBE,
-            ORD_FOPEN, ORD_FREAD, ORD_FREE,
-            ORD_FSEEK, ORD_FTELL, ORD_GET_DISK_FREE_SPACE_EX_W, ORD_GET_FILE_ATTRIBUTES_EX_W,
-            ORD_GET_FILE_ATTRIBUTES_W,
-            ORD_GET_FILE_SIZE, ORD_GET_MODULE_FILE_NAME_W, ORD_GET_PROCESS_HEAP, ORD_HEAP_ALLOC,
-            ORD_HEAP_CREATE, ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_RE_ALLOC, ORD_HEAP_SIZE,
-            ORD_INTERLOCKED_DECREMENT, ORD_INTERLOCKED_EXCHANGE, ORD_INTERLOCKED_TEST_EXCHANGE,
-            ORD_IS_BAD_READ_PTR,
-            ORD_IS_BAD_WRITE_PTR, ORD_IS_VALID_LOCALE, ORD_LOCAL_ALLOC,
+            ORD_AFS_SET_FILE_ATTRIBUTES_W, ORD_ASIN, ORD_ATAN, ORD_ATAN2, ORD_ATOF, ORD_ATOI,
+            ORD_CE_FS_IO_CONTROL_W, ORD_CE_GET_FILE_NOTIFICATION_INFO, ORD_CE_GET_VOLUME_INFO_W,
+            ORD_CEIL, ORD_CHAR_LOWER_BUFF_W, ORD_CHAR_LOWER_W, ORD_CHAR_UPPER_BUFF_W,
+            ORD_CHAR_UPPER_W, ORD_CLEAR_COMM_BREAK, ORD_CLOSE_HANDLE, ORD_COPY_FILE_W, ORD_COS,
+            ORD_COSH, ORD_CREATE_DIRECTORY_W, ORD_CREATE_FILE_MAPPING_W, ORD_CREATE_FILE_W,
+            ORD_D_TO_ULL, ORD_DELETE_FILE_W, ORD_DEVICE_IO_CONTROL, ORD_DPA_CLONE, ORD_DPA_CREATE,
+            ORD_DPA_DESTROY, ORD_DPA_GET_PTR, ORD_DPA_INSERT_PTR, ORD_DPADD, ORD_DPCMP, ORD_DPDIV,
+            ORD_DPMUL, ORD_DPSUB, ORD_DPTOFP, ORD_DPTOLI, ORD_DPTOUL, ORD_DSA_CLONE,
+            ORD_DSA_CREATE, ORD_DSA_DESTROY, ORD_DSA_GET_ITEM_PTR, ORD_DSA_INSERT_ITEM,
+            ORD_DSA_SET_RANGE, ORD_EQD, ORD_EQS, ORD_ESCAPE_COMM_FUNCTION, ORD_EXP, ORD_F_TO_LL,
+            ORD_FABS, ORD_FCLOSE, ORD_FEOF, ORD_FERROR, ORD_FFLUSH, ORD_FGETS, ORD_FIND_CLOSE,
+            ORD_FIND_CLOSE_CHANGE_NOTIFICATION, ORD_FIND_FIRST_CHANGE_NOTIFICATION_W,
+            ORD_FIND_FIRST_FILE_W, ORD_FIND_NEXT_CHANGE_NOTIFICATION, ORD_FIND_NEXT_FILE_W,
+            ORD_FLOOR, ORD_FLUSH_FILE_BUFFERS, ORD_FLUSH_INSTRUCTION_CACHE, ORD_FLUSH_VIEW_OF_FILE,
+            ORD_FLUSH_VIEW_OF_FILE_MAYBE, ORD_FMOD, ORD_FMODF, ORD_FOPEN, ORD_FPADD, ORD_FPCMP,
+            ORD_FPDIV, ORD_FPMUL, ORD_FPSUB, ORD_FPTODP, ORD_FPTOLI, ORD_FPTOUL, ORD_FREAD,
+            ORD_FREE, ORD_FSEEK, ORD_FTELL, ORD_FWRITE, ORD_GES, ORD_GET_COMM_MODEM_STATUS,
+            ORD_GET_DISK_FREE_SPACE_EX_W, ORD_GET_FILE_ATTRIBUTES_EX_W, ORD_GET_FILE_ATTRIBUTES_W,
+            ORD_GET_FILE_SIZE, ORD_GET_MODULE_FILE_NAME_W, ORD_GET_PROCESS_HEAP,
+            ORD_GET_VERSION_EX, ORD_GTD, ORD_GTS, ORD_HEAP_ALLOC, ORD_HEAP_CREATE,
+            ORD_HEAP_DESTROY, ORD_HEAP_FREE, ORD_HEAP_RE_ALLOC, ORD_HEAP_SIZE, ORD_HEAP_VALIDATE,
+            ORD_HYPOT, ORD_INTERLOCKED_DECREMENT, ORD_INTERLOCKED_EXCHANGE,
+            ORD_INTERLOCKED_TEST_EXCHANGE, ORD_IS_BAD_READ_PTR, ORD_IS_BAD_WRITE_PTR,
+            ORD_IS_VALID_LOCALE, ORD_ISWCTYPE, ORD_LED, ORD_LES, ORD_LITODP, ORD_LITOFP,
+            ORD_LL_DIV, ORD_LL_LSHIFT, ORD_LL_MUL, ORD_LL_REM, ORD_LL_RSHIFT, ORD_LOCAL_ALLOC,
             ORD_LOCAL_ALLOC_IN_PROCESS, ORD_LOCAL_FREE, ORD_LOCAL_FREE_IN_PROCESS,
-            ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_LOCAL_SIZE_IN_PROCESS, ORD_MALLOC,
-            ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP,
-            ORD_MEMCPY, ORD_MEMMOVE, ORD_MEMSET, ORD_MOVE_FILE_W, ORD_MSIZE,
-            ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_OPERATOR_DELETE, ORD_OPERATOR_DELETE_ARRAY,
-            ORD_OPERATOR_NEW, ORD_OPERATOR_NEW_ARRAY, ORD_RAND, ORD_READ_FILE, ORD_REALLOC,
-            ORD_REG_CLOSE_KEY, ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_KEY_W,
-            ORD_REG_DELETE_VALUE_W, ORD_REG_ENUM_KEY_EX_W, ORD_REG_ENUM_VALUE_W,
-            ORD_REG_OPEN_KEY_EX_W, ORD_REG_QUERY_INFO_KEY_W, ORD_REG_QUERY_VALUE_EX_W,
-            ORD_REG_SET_VALUE_EX_W,
-            ORD_REGISTRY_GET_DWORD, ORD_REGISTRY_GET_STRING, ORD_REGISTRY_SET_DWORD,
-            ORD_REGISTRY_SET_STRING, ORD_REGISTRY_DELETE_VALUE, ORD_REGISTRY_TEST_EXCHANGE_DWORD,
-            ORD_REMOTE_LOCAL_ALLOC, ORD_REMOTE_LOCAL_FREE, ORD_REMOTE_LOCAL_SIZE,
-            ORD_REMOVE_DIRECTORY_W, ORD_SECURITY_GEN_COOKIE, ORD_SECURITY_GEN_COOKIE2,
-            ORD_SET_COMM_BREAK, ORD_SET_FILE_ATTRIBUTES_W, ORD_SET_FILE_POINTER, ORD_SET_FILE_TIME,
-            ORD_SETUP_COMM, ORD_SNPRINTF, ORD_SNWPRINTF, ORD_SPRINTF, ORD_SRAND, ORD_STRCAT,
-            ORD_STRCPY, ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W, ORD_STRING_CCH_LENGTH_W,
-            ORD_STRTOK, ORD_STRTOUL, ORD_STRUPR, ORD_SWPRINTF, ORD_TOLOWER, ORD_TOUPPER,
-            ORD_UNMAP_VIEW_OF_FILE, ORD_VIRTUAL_ALLOC, ORD_VIRTUAL_FREE, ORD_VSNPRINTF,
-            ORD_VSNWPRINTF, ORD_VSPRINTF, ORD_VSWPRINTF, ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSCHR,
-            ORD_WCSCPY, ORD_WCSDUP, ORD_WCSICMP, ORD_WCSLEN, ORD_WCSNCMP, ORD_WCSNCPY,
-            ORD_WCSNICMP, ORD_WCSPBRK, ORD_WCSRCHR, ORD_WCSSTR, ORD_WCSTOUL, ORD_WFOPEN,
-            ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
-            ORD_SHLOAD_DIBITMAP,
+            ORD_LOCAL_RE_ALLOC, ORD_LOCAL_SIZE, ORD_LOCAL_SIZE_IN_PROCESS, ORD_LOG, ORD_LOG10,
+            ORD_LTS, ORD_MALLOC, ORD_MAP_VIEW_OF_FILE, ORD_MEMCMP, ORD_MEMCPY, ORD_MEMMOVE,
+            ORD_MEMSET, ORD_MOVE_FILE_W, ORD_MSIZE, ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_NED, ORD_NES,
+            ORD_OPERATOR_DELETE, ORD_OPERATOR_DELETE_ARRAY, ORD_OPERATOR_DELETE_ARRAY_NOTHROW,
+            ORD_OPERATOR_NEW, ORD_OPERATOR_NEW_ARRAY, ORD_OPERATOR_NEW_ARRAY_NOTHROW, ORD_POW,
+            ORD_PRINTF, ORD_RAND, ORD_READ_FILE, ORD_REALLOC, ORD_REG_CLOSE_KEY,
+            ORD_REG_CREATE_KEY_EX_W, ORD_REG_DELETE_KEY_W, ORD_REG_DELETE_VALUE_W,
+            ORD_REG_ENUM_KEY_EX_W, ORD_REG_ENUM_VALUE_W, ORD_REG_OPEN_KEY_EX_W,
+            ORD_REG_QUERY_INFO_KEY_W, ORD_REG_QUERY_VALUE_EX_W, ORD_REG_SET_VALUE_EX_W,
+            ORD_REGISTRY_DELETE_VALUE, ORD_REGISTRY_GET_DWORD, ORD_REGISTRY_GET_STRING,
+            ORD_REGISTRY_SET_DWORD, ORD_REGISTRY_SET_STRING, ORD_REGISTRY_TEST_EXCHANGE_DWORD,
+            ORD_REMOTE_HEAP_ALLOC, ORD_REMOTE_HEAP_FREE, ORD_REMOTE_HEAP_RE_ALLOC,
+            ORD_REMOTE_HEAP_SIZE, ORD_REMOTE_LOCAL_ALLOC, ORD_REMOTE_LOCAL_FREE,
+            ORD_REMOTE_LOCAL_RE_ALLOC, ORD_REMOTE_LOCAL_SIZE, ORD_REMOVE_DIRECTORY_W,
+            ORD_SECURITY_GEN_COOKIE, ORD_SECURITY_GEN_COOKIE2, ORD_SET_COMM_BREAK,
+            ORD_SET_FILE_ATTRIBUTES_W, ORD_SET_FILE_POINTER, ORD_SET_FILE_TIME, ORD_SETUP_COMM,
+            ORD_SHLOAD_DIBITMAP, ORD_SIN, ORD_SINH, ORD_SNPRINTF, ORD_SNWPRINTF, ORD_SPRINTF,
+            ORD_SQRT, ORD_SRAND, ORD_STRCAT, ORD_STRCPY, ORD_STRING_CB_CAT_W, ORD_STRING_CCH_CAT_W,
+            ORD_STRING_CCH_LENGTH_W, ORD_STRTOK, ORD_STRTOUL, ORD_STRUPR, ORD_SWPRINTF, ORD_TAN,
+            ORD_TANH, ORD_TLS_CALL, ORD_TOLOWER, ORD_TOUPPER, ORD_ULL_DIV, ORD_ULL_REM,
+            ORD_ULL_RSHIFT, ORD_ULTODP, ORD_ULTOFP, ORD_UNMAP_VIEW_OF_FILE, ORD_VIRTUAL_ALLOC,
+            ORD_VIRTUAL_FREE, ORD_VSNPRINTF, ORD_VSNWPRINTF, ORD_VSPRINTF, ORD_VSWPRINTF,
+            ORD_WAIT_FOR_SINGLE_OBJECT, ORD_WCSCHR, ORD_WCSCPY, ORD_WCSDUP, ORD_WCSICMP,
+            ORD_WCSLEN, ORD_WCSNCMP, ORD_WCSNCPY, ORD_WCSNICMP, ORD_WCSPBRK, ORD_WCSRCHR,
+            ORD_WCSSTR, ORD_WCSTOUL, ORD_WFOPEN, ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE,
+            ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
         },
-        file::{
-            CREATE_ALWAYS, FILE_ATTRIBUTE_ARCHIVE, GENERIC_READ,
-            GENERIC_WRITE, OPEN_EXISTING,
-        },
+        file::{CREATE_ALWAYS, FILE_ATTRIBUTE_ARCHIVE, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING},
         kernel::CeKernel,
-        memory::{HEAP_NO_SERIALIZE, HEAP_REALLOC_IN_PLACE_ONLY, HEAP_ZERO_MEMORY, LMEM_ZEROINIT, MEM_COMMIT, MEM_RELEASE},
+        memory::{
+            HEAP_NO_SERIALIZE, HEAP_REALLOC_IN_PLACE_ONLY, HEAP_ZERO_MEMORY, LMEM_ZEROINIT,
+            MEM_COMMIT, MEM_RELEASE,
+        },
         registry::{
             ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HKEY_CURRENT_USER,
             HKEY_LOCAL_MACHINE, REG_DWORD,
@@ -3534,7 +3524,16 @@ fn coredll_raw_fs_io_control_refresh_and_flush_are_no_ops() -> Result<()> {
             &mut memory,
             thread_id,
             ORD_CE_FS_IO_CONTROL_W,
-            [path_ptr, FSCTL_REFRESH_VOLUME, 0, 0, 0, 0, bytes_returned_ptr, 0],
+            [
+                path_ptr,
+                FSCTL_REFRESH_VOLUME,
+                0,
+                0,
+                0,
+                0,
+                bytes_returned_ptr,
+                0
+            ],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
@@ -3551,7 +3550,16 @@ fn coredll_raw_fs_io_control_refresh_and_flush_are_no_ops() -> Result<()> {
             &mut memory,
             thread_id,
             ORD_CE_FS_IO_CONTROL_W,
-            [path_ptr, FSCTL_FLUSH_BUFFERS, 0, 0, 0, 0, bytes_returned_ptr, 0],
+            [
+                path_ptr,
+                FSCTL_FLUSH_BUFFERS,
+                0,
+                0,
+                0,
+                0,
+                bytes_returned_ptr,
+                0
+            ],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
@@ -5468,20 +5476,42 @@ fn coredll_raw_registry_subkey_create_enum_query_and_delete() -> Result<()> {
     memory.map_words(name_len_ptr, 1);
     memory.map_words(info_buf, 6);
 
-    let open_key = |memory: &mut TestGuestMemory, kernel: &mut CeKernel, root: u32, subkey_ptr: u32, hkey_out: u32| {
+    let open_key = |memory: &mut TestGuestMemory,
+                    kernel: &mut CeKernel,
+                    root: u32,
+                    subkey_ptr: u32,
+                    hkey_out: u32| {
         table.dispatch_raw_ordinal_with_memory(
-            kernel, memory, thread_id, ORD_REG_CREATE_KEY_EX_W,
+            kernel,
+            memory,
+            thread_id,
+            ORD_REG_CREATE_KEY_EX_W,
             [root, subkey_ptr, 0, 0, 0, 0, 0, hkey_out, 0],
         )
     };
 
-    let parent_ret = open_key(&mut memory, &mut kernel, HKEY_LOCAL_MACHINE, parent_ptr, hkey_ptr);
-    assert!(matches!(parent_ret,
-        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_SUCCESS
-    ), "opening parent key must succeed");
+    let parent_ret = open_key(
+        &mut memory,
+        &mut kernel,
+        HKEY_LOCAL_MACHINE,
+        parent_ptr,
+        hkey_ptr,
+    );
+    assert!(
+        matches!(parent_ret,
+            CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_SUCCESS
+        ),
+        "opening parent key must succeed"
+    );
     let parent_key = memory.read_u32(hkey_ptr)?;
 
-    let _ = open_key(&mut memory, &mut kernel, parent_key, sub_alpha_ptr, hkey_ptr);
+    let _ = open_key(
+        &mut memory,
+        &mut kernel,
+        parent_key,
+        sub_alpha_ptr,
+        hkey_ptr,
+    );
     let alpha_key = memory.read_u32(hkey_ptr)?;
     let _ = open_key(&mut memory, &mut kernel, parent_key, sub_beta_ptr, hkey_ptr);
     let beta_key = memory.read_u32(hkey_ptr)?;
@@ -5489,65 +5519,94 @@ fn coredll_raw_registry_subkey_create_enum_query_and_delete() -> Result<()> {
     let subkeys_ptr = info_buf;
     let max_sub_ptr = info_buf + 4;
     let values_ptr = info_buf + 8;
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_REG_QUERY_INFO_KEY_W,
-            [parent_key, 0, 0, 0, subkeys_ptr, max_sub_ptr, 0, values_ptr, 0, 0, 0, 0],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id, ORD_REG_QUERY_INFO_KEY_W,
+                [parent_key, 0, 0, 0, subkeys_ptr, max_sub_ptr, 0, values_ptr, 0, 0, 0, 0],
+            ),
+            CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_SUCCESS
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_SUCCESS
-    ), "RegQueryInfoKeyW must succeed");
-    assert_eq!(memory.read_u32(subkeys_ptr)?, 2, "parent must have 2 subkeys");
+        "RegQueryInfoKeyW must succeed"
+    );
+    assert_eq!(
+        memory.read_u32(subkeys_ptr)?,
+        2,
+        "parent must have 2 subkeys"
+    );
     assert_eq!(memory.read_u32(values_ptr)?, 0, "parent must have 0 values");
-    assert_eq!(memory.read_u32(max_sub_ptr)?, 5, "max subkey chars must be 5 (len of \"Alpha\")");
+    assert_eq!(
+        memory.read_u32(max_sub_ptr)?,
+        5,
+        "max subkey chars must be 5 (len of \"Alpha\")"
+    );
 
     memory.write_word(name_len_ptr, 32);
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_REG_ENUM_KEY_EX_W,
-            [parent_key, 0, name_buf, name_len_ptr, 0, 0, 0, 0],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id, ORD_REG_ENUM_KEY_EX_W,
+                [parent_key, 0, name_buf, name_len_ptr, 0, 0, 0, 0],
+            ),
+            CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_SUCCESS
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_SUCCESS
-    ), "RegEnumKeyExW index 0 must succeed");
+        "RegEnumKeyExW index 0 must succeed"
+    );
     let name0 = memory.read_wide_z(name_buf, 32);
-    assert!(name0 == "alpha" || name0 == "beta", "first subkey must be alpha or beta (lowercase), got {name0:?}");
+    assert!(
+        name0 == "alpha" || name0 == "beta",
+        "first subkey must be alpha or beta (lowercase), got {name0:?}"
+    );
 
     memory.write_word(name_len_ptr, 32);
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_REG_ENUM_KEY_EX_W,
-            [parent_key, 1, name_buf, name_len_ptr, 0, 0, 0, 0],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id, ORD_REG_ENUM_KEY_EX_W,
+                [parent_key, 1, name_buf, name_len_ptr, 0, 0, 0, 0],
+            ),
+            CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_SUCCESS
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_SUCCESS
-    ), "RegEnumKeyExW index 1 must succeed");
+        "RegEnumKeyExW index 1 must succeed"
+    );
     let name1 = memory.read_wide_z(name_buf, 32);
     assert!(name1 == "alpha" || name1 == "beta");
     assert_ne!(name0, name1, "two subkey names must differ");
 
     memory.write_word(name_len_ptr, 32);
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_REG_ENUM_KEY_EX_W,
-            [parent_key, 2, name_buf, name_len_ptr, 0, 0, 0, 0],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id, ORD_REG_ENUM_KEY_EX_W,
+                [parent_key, 2, name_buf, name_len_ptr, 0, 0, 0, 0],
+            ),
+            CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_NO_MORE_ITEMS
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_NO_MORE_ITEMS
-    ), "RegEnumKeyExW past the last subkey must return ERROR_NO_MORE_ITEMS");
+        "RegEnumKeyExW past the last subkey must return ERROR_NO_MORE_ITEMS"
+    );
 
     memory.write_word(name_len_ptr, 3);
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_REG_ENUM_KEY_EX_W,
-            [parent_key, 0, name_buf, name_len_ptr, 0, 0, 0, 0],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id, ORD_REG_ENUM_KEY_EX_W,
+                [parent_key, 0, name_buf, name_len_ptr, 0, 0, 0, 0],
+            ),
+            CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_MORE_DATA
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_MORE_DATA
-    ), "RegEnumKeyExW with undersized buffer must return ERROR_MORE_DATA");
+        "RegEnumKeyExW with undersized buffer must return ERROR_MORE_DATA"
+    );
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_REG_DELETE_KEY_W,
-            [parent_key, sub_alpha_ptr],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id, ORD_REG_DELETE_KEY_W,
+                [parent_key, sub_alpha_ptr],
+            ),
+            CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_SUCCESS
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_SUCCESS
-    ), "RegDeleteKeyW must succeed");
+        "RegDeleteKeyW must succeed"
+    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -5556,11 +5615,33 @@ fn coredll_raw_registry_subkey_create_enum_query_and_delete() -> Result<()> {
         ),
         CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v == ERROR_SUCCESS
     ));
-    assert_eq!(memory.read_u32(subkeys_ptr)?, 1, "parent must have 1 subkey after deletion");
+    assert_eq!(
+        memory.read_u32(subkeys_ptr)?,
+        1,
+        "parent must have 1 subkey after deletion"
+    );
 
-    table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id, ORD_REG_CLOSE_KEY, [alpha_key]);
-    table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id, ORD_REG_CLOSE_KEY, [beta_key]);
-    table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id, ORD_REG_CLOSE_KEY, [parent_key]);
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_REG_CLOSE_KEY,
+        [alpha_key],
+    );
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_REG_CLOSE_KEY,
+        [beta_key],
+    );
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_REG_CLOSE_KEY,
+        [parent_key],
+    );
 
     Ok(())
 }
@@ -5585,13 +5666,22 @@ fn coredll_raw_get_file_attributes_ex_w_reads_attribute_data() -> Result<()> {
     memory.write_wide_z(miss_ptr, r"\TestVol\nosuchfile.dat");
     memory.map_words(attr_buf, 9);
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id,
-            ORD_GET_FILE_ATTRIBUTES_EX_W, [path_ptr, 0, attr_buf],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GET_FILE_ATTRIBUTES_EX_W,
+                [path_ptr, 0, attr_buf],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
-    ), "GetFileAttributesExW must succeed for an existing file");
+        "GetFileAttributesExW must succeed for an existing file"
+    );
     assert_eq!(
         memory.read_u32(attr_buf)?,
         FILE_ATTRIBUTE_ARCHIVE,
@@ -5604,40 +5694,79 @@ fn coredll_raw_get_file_attributes_ex_w_reads_attribute_data() -> Result<()> {
     );
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id,
-            ORD_GET_FILE_ATTRIBUTES_EX_W, [path_ptr, 1, attr_buf],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GET_FILE_ATTRIBUTES_EX_W,
+                [path_ptr, 1, attr_buf],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
-    ), "GetFileAttributesExW must reject info_level != 0");
-    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_PARAMETER);
+        "GetFileAttributesExW must reject info_level != 0"
+    );
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id,
-            ORD_GET_FILE_ATTRIBUTES_EX_W, [miss_ptr, 0, attr_buf],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GET_FILE_ATTRIBUTES_EX_W,
+                [miss_ptr, 0, attr_buf],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
-    ), "GetFileAttributesExW must fail for a missing file");
-    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_FILE_NOT_FOUND);
+        "GetFileAttributesExW must fail for a missing file"
+    );
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_FILE_NOT_FOUND
+    );
 
     use wince_emulation_v3::ce::file::FILE_ATTRIBUTE_READONLY;
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id,
-            ORD_SET_FILE_ATTRIBUTES_W, [path_ptr, FILE_ATTRIBUTE_READONLY],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SET_FILE_ATTRIBUTES_W,
+                [path_ptr, FILE_ATTRIBUTE_READONLY],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
-    ), "SetFileAttributesW must succeed");
+        "SetFileAttributesW must succeed"
+    );
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id,
-            ORD_GET_FILE_ATTRIBUTES_EX_W, [path_ptr, 0, attr_buf],
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_FILE_ATTRIBUTES_EX_W,
+            [path_ptr, 0, attr_buf],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
     ));
     assert_eq!(
         memory.read_u32(attr_buf)? & FILE_ATTRIBUTE_READONLY,
@@ -5647,8 +5776,11 @@ fn coredll_raw_get_file_attributes_ex_w_reads_attribute_data() -> Result<()> {
 
     // Restore writable so the temp dir cleanup succeeds
     table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id,
-        ORD_SET_FILE_ATTRIBUTES_W, [path_ptr, FILE_ATTRIBUTE_ARCHIVE],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SET_FILE_ATTRIBUTES_W,
+        [path_ptr, FILE_ATTRIBUTE_ARCHIVE],
     );
     fs::remove_dir_all(root).unwrap();
     Ok(())
@@ -5669,35 +5801,95 @@ fn coredll_raw_interlocked_operations_read_modify_write_guest_words() -> Result<
     memory.write_word(ptr_b, 100);
     memory.write_word(ptr_c, 5);
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-            ORD_INTERLOCKED_DECREMENT, [ptr_a]),
-        CoredllDispatch::Returned { value: CoredllValue::U32(9), .. }
-    ), "InterlockedDecrement must return the new (decremented) value");
-    assert_eq!(memory.read_u32(ptr_a)?, 9, "memory must hold the new value after decrement");
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_INTERLOCKED_DECREMENT,
+                [ptr_a]
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(9),
+                ..
+            }
+        ),
+        "InterlockedDecrement must return the new (decremented) value"
+    );
+    assert_eq!(
+        memory.read_u32(ptr_a)?,
+        9,
+        "memory must hold the new value after decrement"
+    );
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-            ORD_INTERLOCKED_EXCHANGE, [ptr_b, 42]),
-        CoredllDispatch::Returned { value: CoredllValue::U32(100), .. }
-    ), "InterlockedExchange must return the old value");
-    assert_eq!(memory.read_u32(ptr_b)?, 42, "memory must hold the exchanged value");
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_INTERLOCKED_EXCHANGE,
+                [ptr_b, 42]
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(100),
+                ..
+            }
+        ),
+        "InterlockedExchange must return the old value"
+    );
+    assert_eq!(
+        memory.read_u32(ptr_b)?,
+        42,
+        "memory must hold the exchanged value"
+    );
 
     // CE InterlockedTestExchange(lpTarget, oldValue=args[1], newValue=args[2]):
     // if *target == oldValue → store newValue, return old.
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-            ORD_INTERLOCKED_TEST_EXCHANGE, [ptr_c, 5, 99]),
-        CoredllDispatch::Returned { value: CoredllValue::U32(5), .. }
-    ), "InterlockedTestExchange must return old value when comparand matches");
-    assert_eq!(memory.read_u32(ptr_c)?, 99, "memory must hold exchange value after CAS success");
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_INTERLOCKED_TEST_EXCHANGE,
+                [ptr_c, 5, 99]
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(5),
+                ..
+            }
+        ),
+        "InterlockedTestExchange must return old value when comparand matches"
+    );
+    assert_eq!(
+        memory.read_u32(ptr_c)?,
+        99,
+        "memory must hold exchange value after CAS success"
+    );
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-            ORD_INTERLOCKED_TEST_EXCHANGE, [ptr_c, 5, 200]),
-        CoredllDispatch::Returned { value: CoredllValue::U32(99), .. }
-    ), "InterlockedTestExchange must return old value when comparand does not match");
-    assert_eq!(memory.read_u32(ptr_c)?, 99, "memory must be unchanged when CAS comparand does not match");
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_INTERLOCKED_TEST_EXCHANGE,
+                [ptr_c, 5, 200]
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(99),
+                ..
+            }
+        ),
+        "InterlockedTestExchange must return old value when comparand does not match"
+    );
+    assert_eq!(
+        memory.read_u32(ptr_c)?,
+        99,
+        "memory must be unchanged when CAS comparand does not match"
+    );
 
     Ok(())
 }
@@ -5713,28 +5905,72 @@ fn coredll_raw_char_case_buff_w_converts_ascii_wide_chars_in_place() -> Result<(
     let buf_ptr = 0x3000_0000_u32;
     memory.write_wide_z(buf_ptr, "Hello World");
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-            ORD_CHAR_LOWER_BUFF_W, [buf_ptr, 11]),
-        CoredllDispatch::Returned { value: CoredllValue::U32(11), .. }
-    ), "CharLowerBuffW must return the char count");
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_CHAR_LOWER_BUFF_W,
+                [buf_ptr, 11]
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(11),
+                ..
+            }
+        ),
+        "CharLowerBuffW must return the char count"
+    );
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
-    assert_eq!(memory.read_wide_z(buf_ptr, 12), "hello world", "buffer must be fully lowercased");
+    assert_eq!(
+        memory.read_wide_z(buf_ptr, 12),
+        "hello world",
+        "buffer must be fully lowercased"
+    );
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-            ORD_CHAR_UPPER_BUFF_W, [buf_ptr, 5]),
-        CoredllDispatch::Returned { value: CoredllValue::U32(5), .. }
-    ), "CharUpperBuffW must return the char count");
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_CHAR_UPPER_BUFF_W,
+                [buf_ptr, 5]
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(5),
+                ..
+            }
+        ),
+        "CharUpperBuffW must return the char count"
+    );
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
-    assert_eq!(memory.read_wide_z(buf_ptr, 12), "HELLO world", "only the first 5 chars must be uppercased");
+    assert_eq!(
+        memory.read_wide_z(buf_ptr, 12),
+        "HELLO world",
+        "only the first 5 chars must be uppercased"
+    );
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-            ORD_CHAR_LOWER_BUFF_W, [0, 5]),
-        CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }
-    ), "CharLowerBuffW must return 0 for a null pointer");
-    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_PARAMETER);
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_CHAR_LOWER_BUFF_W,
+                [0, 5]
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
+        ),
+        "CharLowerBuffW must return 0 for a null pointer"
+    );
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
 
     Ok(())
 }
@@ -5748,53 +5984,118 @@ fn coredll_raw_heap_re_alloc_shrinks_in_place_and_rejects_bad_params() -> Result
     let thread_id = 11_u32;
 
     let heap = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id,
-        ORD_HEAP_CREATE, [HEAP_NO_SERIALIZE, 0x1000, 0],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_HEAP_CREATE,
+        [HEAP_NO_SERIALIZE, 0x1000, 0],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
         other => panic!("HeapCreate failed: {other:?}"),
     };
 
     let ptr = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id,
-        ORD_HEAP_ALLOC, [heap, 0, 32],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_HEAP_ALLOC,
+        [heap, 0, 32],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(p), .. } => p,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(p),
+            ..
+        } => p,
         other => panic!("HeapAlloc failed: {other:?}"),
     };
     assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-            ORD_HEAP_SIZE, [heap, 0, ptr]),
-        CoredllDispatch::Returned { value: CoredllValue::U32(32), .. }
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_HEAP_SIZE,
+            [heap, 0, ptr]
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(32),
+            ..
+        }
     ));
 
     let ptr2 = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id,
-        ORD_HEAP_RE_ALLOC, [heap, 0, ptr, 16],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_HEAP_RE_ALLOC,
+        [heap, 0, ptr, 16],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(p), .. } => p,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(p),
+            ..
+        } => p,
         other => panic!("HeapReAlloc shrink failed: {other:?}"),
     };
     assert_eq!(ptr2, ptr, "shrink must keep the same pointer");
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-            ORD_HEAP_SIZE, [heap, 0, ptr2]),
-        CoredllDispatch::Returned { value: CoredllValue::U32(16), .. }
-    ), "HeapSize must reflect the shrunken allocation");
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_HEAP_SIZE,
+                [heap, 0, ptr2]
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(16),
+                ..
+            }
+        ),
+        "HeapSize must reflect the shrunken allocation"
+    );
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-            ORD_HEAP_RE_ALLOC, [heap, HEAP_REALLOC_IN_PLACE_ONLY, ptr2, 64]),
-        CoredllDispatch::Returned { value: CoredllValue::Handle(0), .. }
-    ), "HEAP_REALLOC_IN_PLACE_ONLY must fail when growth requires a move");
-    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_PARAMETER);
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_HEAP_RE_ALLOC,
+                [heap, HEAP_REALLOC_IN_PLACE_ONLY, ptr2, 64]
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(0),
+                ..
+            }
+        ),
+        "HEAP_REALLOC_IN_PLACE_ONLY must fail when growth requires a move"
+    );
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-            ORD_HEAP_RE_ALLOC, [0xDEAD_BEEF, 0, ptr2, 8]),
-        CoredllDispatch::Returned { value: CoredllValue::Handle(0), .. }
-    ), "HeapReAlloc with an invalid heap must return null");
-    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_PARAMETER);
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_HEAP_RE_ALLOC,
+                [0xDEAD_BEEF, 0, ptr2, 8]
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(0),
+                ..
+            }
+        ),
+        "HeapReAlloc with an invalid heap must return null"
+    );
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
 
     Ok(())
 }
@@ -5813,50 +6114,128 @@ fn coredll_raw_serial_comm_control_ordinals_accept_valid_device_handle() -> Resu
     memory.write_word(out_word, 0);
 
     let com = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id,
-        ORD_CREATE_FILE_W, [com_path, GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING, 0, 0],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_W,
+        [
+            com_path,
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            0,
+            OPEN_EXISTING,
+            0,
+            0,
+        ],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
         other => panic!("CreateFileW(COM1:) failed: {other:?}"),
     };
 
     for (name, ord) in [
-        ("SetupComm",        ORD_SETUP_COMM),
-        ("ClearCommBreak",   ORD_CLEAR_COMM_BREAK),
-        ("SetCommBreak",     ORD_SET_COMM_BREAK),
+        ("SetupComm", ORD_SETUP_COMM),
+        ("ClearCommBreak", ORD_CLEAR_COMM_BREAK),
+        ("SetCommBreak", ORD_SET_COMM_BREAK),
         ("EscapeCommFunction", ORD_ESCAPE_COMM_FUNCTION),
     ] {
-        assert!(matches!(
-            table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id, ord, [com]),
-            CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
-        ), "{name} must return true for a valid comm handle");
-        assert_eq!(kernel.threads.get_last_error(thread_id), 0, "{name} must clear last error");
+        assert!(
+            matches!(
+                table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    thread_id,
+                    ord,
+                    [com]
+                ),
+                CoredllDispatch::Returned {
+                    value: CoredllValue::Bool(true),
+                    ..
+                }
+            ),
+            "{name} must return true for a valid comm handle"
+        );
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            0,
+            "{name} must clear last error"
+        );
     }
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-            ORD_SETUP_COMM, [0xDEAD_BEEF]),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
-    ), "SetupComm must return false for an invalid handle");
-    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_HANDLE);
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SETUP_COMM,
+                [0xDEAD_BEEF]
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
+        ),
+        "SetupComm must return false for an invalid handle"
+    );
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-            ORD_GET_COMM_MODEM_STATUS, [com, out_word]),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
-    ), "GetCommModemStatus must return true for a valid handle");
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GET_COMM_MODEM_STATUS,
+                [com, out_word]
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ),
+        "GetCommModemStatus must return true for a valid handle"
+    );
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
-    assert_eq!(memory.read_u32(out_word)?, 0, "GetCommModemStatus must write 0 to out pointer");
+    assert_eq!(
+        memory.read_u32(out_word)?,
+        0,
+        "GetCommModemStatus must write 0 to out pointer"
+    );
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-            ORD_GET_COMM_MODEM_STATUS, [com, 0]),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
-    ), "GetCommModemStatus must return false for a null out pointer");
-    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_PARAMETER);
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GET_COMM_MODEM_STATUS,
+                [com, 0]
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
+        ),
+        "GetCommModemStatus must return false for a null out pointer"
+    );
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
 
-    table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-        ORD_CLOSE_HANDLE, [com]);
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CLOSE_HANDLE,
+        [com],
+    );
 
     Ok(())
 }
@@ -5877,35 +6256,80 @@ fn coredll_raw_set_file_time_validates_file_handle() -> Result<()> {
     memory.write_wide_z(path_ptr, "\\time_test.dat");
 
     let fh = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id,
-        ORD_CREATE_FILE_W, [path_ptr, GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING, 0, 0],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_FILE_W,
+        [
+            path_ptr,
+            GENERIC_READ | GENERIC_WRITE,
+            0,
+            0,
+            OPEN_EXISTING,
+            0,
+            0,
+        ],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
         other => panic!("CreateFileW failed: {other:?}"),
     };
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-            ORD_SET_FILE_TIME, [fh]),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
-    ), "SetFileTime must return true for a valid file handle");
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SET_FILE_TIME,
+                [fh]
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ),
+        "SetFileTime must return true for a valid file handle"
+    );
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-            ORD_SET_FILE_TIME, [0xDEAD_BEEF]),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
-    ), "SetFileTime must return false for an invalid handle");
-    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_INVALID_HANDLE);
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SET_FILE_TIME,
+                [0xDEAD_BEEF]
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
+        ),
+        "SetFileTime must return false for an invalid handle"
+    );
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
 
-    table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-        ORD_CLOSE_HANDLE, [fh]);
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CLOSE_HANDLE,
+        [fh],
+    );
     fs::remove_dir_all(root).unwrap();
     Ok(())
 }
 
 #[test]
-fn coredll_raw_local_alloc_in_process_and_remote_variants_delegate_to_same_allocator() -> Result<()> {
+fn coredll_raw_local_alloc_in_process_and_remote_variants_delegate_to_same_allocator() -> Result<()>
+{
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
     let mut kernel = CeKernel::boot(config);
@@ -5914,47 +6338,103 @@ fn coredll_raw_local_alloc_in_process_and_remote_variants_delegate_to_same_alloc
 
     // LocalAllocInProcess(flags, size) mirrors LocalAlloc — args[0]=flags, args[1]=size
     let ptr_inproc = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id,
-        ORD_LOCAL_ALLOC_IN_PROCESS, [LMEM_ZEROINIT, 24],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOCAL_ALLOC_IN_PROCESS,
+        [LMEM_ZEROINIT, 24],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(p), .. } => p,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(p),
+            ..
+        } => p,
         other => panic!("LocalAllocInProcess failed: {other:?}"),
     };
     assert_ne!(ptr_inproc, 0);
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-            ORD_LOCAL_SIZE_IN_PROCESS, [ptr_inproc]),
-        CoredllDispatch::Returned { value: CoredllValue::U32(24), .. }
-    ), "LocalSizeInProcess must return the allocated size");
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_LOCAL_SIZE_IN_PROCESS,
+                [ptr_inproc]
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(24),
+                ..
+            }
+        ),
+        "LocalSizeInProcess must return the allocated size"
+    );
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-            ORD_LOCAL_FREE_IN_PROCESS, [ptr_inproc]),
-        CoredllDispatch::Returned { value: CoredllValue::Handle(0), .. }
-    ), "LocalFreeInProcess must return null on success");
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_LOCAL_FREE_IN_PROCESS,
+                [ptr_inproc]
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(0),
+                ..
+            }
+        ),
+        "LocalFreeInProcess must return null on success"
+    );
 
     // RemoteLocalAlloc(process, flags, size) — args[0] is the remote process (ignored), args[1]=flags, args[2]=size
     let ptr_remote = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id,
-        ORD_REMOTE_LOCAL_ALLOC, [0xDEAD_0000, LMEM_ZEROINIT, 16],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_REMOTE_LOCAL_ALLOC,
+        [0xDEAD_0000, LMEM_ZEROINIT, 16],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(p), .. } => p,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(p),
+            ..
+        } => p,
         other => panic!("RemoteLocalAlloc failed: {other:?}"),
     };
     assert_ne!(ptr_remote, 0);
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-            ORD_REMOTE_LOCAL_SIZE, [0xDEAD_0000, ptr_remote]),
-        CoredllDispatch::Returned { value: CoredllValue::U32(16), .. }
-    ), "RemoteLocalSize must return the allocated size");
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_REMOTE_LOCAL_SIZE,
+                [0xDEAD_0000, ptr_remote]
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(16),
+                ..
+            }
+        ),
+        "RemoteLocalSize must return the allocated size"
+    );
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-            ORD_REMOTE_LOCAL_FREE, [0xDEAD_0000, ptr_remote]),
-        CoredllDispatch::Returned { value: CoredllValue::Handle(0), .. }
-    ), "RemoteLocalFree must return null on success");
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_REMOTE_LOCAL_FREE,
+                [0xDEAD_0000, ptr_remote]
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(0),
+                ..
+            }
+        ),
+        "RemoteLocalFree must return null on success"
+    );
 
     Ok(())
 }
@@ -5979,54 +6459,108 @@ fn coredll_raw_reg_open_key_ex_w_opens_existing_and_rejects_missing() -> Result<
     memory.write_word(create_hkey_ptr, 0);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id,
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_REG_CREATE_KEY_EX_W,
-            [HKEY_LOCAL_MACHINE, key_ptr, 0, 0, 0, 0, 0, create_hkey_ptr, 0],
+            [
+                HKEY_LOCAL_MACHINE,
+                key_ptr,
+                0,
+                0,
+                0,
+                0,
+                0,
+                create_hkey_ptr,
+                0
+            ],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
     ));
     let create_hkey = memory.read_u32(create_hkey_ptr)?;
-    table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-        ORD_REG_CLOSE_KEY, [create_hkey]);
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_REG_CLOSE_KEY,
+        [create_hkey],
+    );
 
     // RegOpenKeyExW on an existing key must return ERROR_SUCCESS and write a valid handle
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id,
-            ORD_REG_OPEN_KEY_EX_W,
-            [HKEY_LOCAL_MACHINE, key_ptr, 0, 0, hkey_ptr],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_REG_OPEN_KEY_EX_W,
+                [HKEY_LOCAL_MACHINE, key_ptr, 0, 0, hkey_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(ERROR_SUCCESS),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
-    ), "RegOpenKeyExW must return ERROR_SUCCESS for an existing key");
+        "RegOpenKeyExW must return ERROR_SUCCESS for an existing key"
+    );
     let opened_hkey = memory.read_u32(hkey_ptr)?;
     assert_ne!(opened_hkey, 0, "RegOpenKeyExW must write a valid handle");
-    table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-        ORD_REG_CLOSE_KEY, [opened_hkey]);
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_REG_CLOSE_KEY,
+        [opened_hkey],
+    );
 
     // RegOpenKeyExW on a missing key must not return ERROR_SUCCESS
-    assert!(!matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id,
-            ORD_REG_OPEN_KEY_EX_W,
-            [HKEY_LOCAL_MACHINE, miss_ptr, 0, 0, hkey_ptr],
+    assert!(
+        !matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_REG_OPEN_KEY_EX_W,
+                [HKEY_LOCAL_MACHINE, miss_ptr, 0, 0, hkey_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(ERROR_SUCCESS),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
-    ), "RegOpenKeyExW must not return ERROR_SUCCESS for a missing key");
+        "RegOpenKeyExW must not return ERROR_SUCCESS for a missing key"
+    );
 
     // RegOpenKeyExW with null subkey opens the root key itself
     memory.write_word(hkey_ptr, 0);
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id,
-            ORD_REG_OPEN_KEY_EX_W,
-            [HKEY_LOCAL_MACHINE, 0, 0, 0, hkey_ptr],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_REG_OPEN_KEY_EX_W,
+                [HKEY_LOCAL_MACHINE, 0, 0, 0, hkey_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(ERROR_SUCCESS),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
-    ), "RegOpenKeyExW with null subkey must open the root key");
+        "RegOpenKeyExW with null subkey must open the root key"
+    );
     let root_hkey = memory.read_u32(hkey_ptr)?;
     assert_ne!(root_hkey, 0);
-    table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-        ORD_REG_CLOSE_KEY, [root_hkey]);
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_REG_CLOSE_KEY,
+        [root_hkey],
+    );
 
     Ok(())
 }
@@ -6068,32 +6602,32 @@ fn coredll_raw_math_crt_ordinals_return_cemath_f64_values() -> Result<()> {
     }
 
     // Unary trig
-    check_f64!(ORD_ACOS,  f64_args(1.0),   0.0_f64);
-    check_f64!(ORD_ASIN,  f64_args(0.0),   0.0_f64);
-    check_f64!(ORD_ATAN,  f64_args(0.0),   0.0_f64);
-    check_f64!(ORD_COS,   f64_args(0.0),   1.0_f64);
-    check_f64!(ORD_SIN,   f64_args(0.0),   0.0_f64);
-    check_f64!(ORD_TAN,   f64_args(0.0),   0.0_f64);
+    check_f64!(ORD_ACOS, f64_args(1.0), 0.0_f64);
+    check_f64!(ORD_ASIN, f64_args(0.0), 0.0_f64);
+    check_f64!(ORD_ATAN, f64_args(0.0), 0.0_f64);
+    check_f64!(ORD_COS, f64_args(0.0), 1.0_f64);
+    check_f64!(ORD_SIN, f64_args(0.0), 0.0_f64);
+    check_f64!(ORD_TAN, f64_args(0.0), 0.0_f64);
 
     // Hyperbolic
-    check_f64!(ORD_COSH,  f64_args(0.0),   1.0_f64);
-    check_f64!(ORD_SINH,  f64_args(0.0),   0.0_f64);
-    check_f64!(ORD_TANH,  f64_args(0.0),   0.0_f64);
+    check_f64!(ORD_COSH, f64_args(0.0), 1.0_f64);
+    check_f64!(ORD_SINH, f64_args(0.0), 0.0_f64);
+    check_f64!(ORD_TANH, f64_args(0.0), 0.0_f64);
 
     // Rounding / magnitude
-    check_f64!(ORD_CEIL,  f64_args(1.2),   2.0_f64);
-    check_f64!(ORD_FLOOR, f64_args(1.7),   1.0_f64);
-    check_f64!(ORD_FABS,  f64_args(-5.0),  5.0_f64);
+    check_f64!(ORD_CEIL, f64_args(1.2), 2.0_f64);
+    check_f64!(ORD_FLOOR, f64_args(1.7), 1.0_f64);
+    check_f64!(ORD_FABS, f64_args(-5.0), 5.0_f64);
 
     // Exponential / logarithm
-    check_f64!(ORD_EXP,   f64_args(0.0),   1.0_f64);
-    check_f64!(ORD_LOG,   f64_args(1.0),   0.0_f64);
-    check_f64!(ORD_LOG10, f64_args(10.0),  1.0_f64);
+    check_f64!(ORD_EXP, f64_args(0.0), 1.0_f64);
+    check_f64!(ORD_LOG, f64_args(1.0), 0.0_f64);
+    check_f64!(ORD_LOG10, f64_args(10.0), 1.0_f64);
 
     // Binary
-    check_f64!(ORD_FMOD,  f64_bin_args(5.0, 3.0),  2.0_f64);
-    check_f64!(ORD_ATAN2, f64_bin_args(0.0, 1.0),  0.0_f64);
-    check_f64!(ORD_HYPOT, f64_bin_args(3.0, 4.0),  5.0_f64);
+    check_f64!(ORD_FMOD, f64_bin_args(5.0, 3.0), 2.0_f64);
+    check_f64!(ORD_ATAN2, f64_bin_args(0.0, 1.0), 0.0_f64);
+    check_f64!(ORD_HYPOT, f64_bin_args(3.0, 4.0), 5.0_f64);
 
     Ok(())
 }
@@ -6110,82 +6644,118 @@ fn coredll_raw_64bit_int_ordinals_return_cemath_i64_u64_values() -> Result<()> {
         let b = v as u64;
         [b as u32, (b >> 32) as u32]
     };
-    let u64_args = |v: u64| -> [u32; 2] {
-        [v as u32, (v >> 32) as u32]
-    };
+    let u64_args = |v: u64| -> [u32; 2] { [v as u32, (v >> 32) as u32] };
     let i64_bin_args = |a: i64, b: i64| -> [u32; 4] {
         let ab = a as u64;
         let bb = b as u64;
         [ab as u32, (ab >> 32) as u32, bb as u32, (bb >> 32) as u32]
     };
-    let u64_bin_args = |a: u64, b: u64| -> [u32; 4] {
-        [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32]
-    };
+    let u64_bin_args =
+        |a: u64, b: u64| -> [u32; 4] { [a as u32, (a >> 32) as u32, b as u32, (b >> 32) as u32] };
 
     // LL_MUL: signed 64-bit multiply
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_LL_MUL,
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LL_MUL,
             i64_bin_args(7, -6),
         ),
-        CoredllDispatch::Returned { value: CoredllValue::CeMath(CeMathValue::I64(-42)), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::I64(-42)),
+            ..
+        }
     ));
 
     // LL_REM: signed 64-bit remainder
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_LL_REM,
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LL_REM,
             i64_bin_args(-21, 8),
         ),
-        CoredllDispatch::Returned { value: CoredllValue::CeMath(CeMathValue::I64(-5)), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::I64(-5)),
+            ..
+        }
     ));
 
     // LL_LSHIFT: logical left shift
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_LL_LSHIFT,
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LL_LSHIFT,
             {
                 let [lo, hi] = i64_args(1);
                 [lo, hi, 10]
             },
         ),
-        CoredllDispatch::Returned { value: CoredllValue::CeMath(CeMathValue::I64(1024)), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::I64(1024)),
+            ..
+        }
     ));
 
     // LL_RSHIFT: arithmetic right shift
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_LL_RSHIFT,
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LL_RSHIFT,
             {
                 let [lo, hi] = i64_args(-1024);
                 [lo, hi, 3]
             },
         ),
-        CoredllDispatch::Returned { value: CoredllValue::CeMath(CeMathValue::I64(-128)), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::I64(-128)),
+            ..
+        }
     ));
 
     // ULL_DIV: unsigned 64-bit division
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_ULL_DIV,
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ULL_DIV,
             u64_bin_args(100, 7),
         ),
-        CoredllDispatch::Returned { value: CoredllValue::CeMath(CeMathValue::U64(14)), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::U64(14)),
+            ..
+        }
     ));
 
     // ULL_REM: unsigned 64-bit remainder
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_ULL_REM,
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ULL_REM,
             u64_bin_args(100, 7),
         ),
-        CoredllDispatch::Returned { value: CoredllValue::CeMath(CeMathValue::U64(2)), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::CeMath(CeMathValue::U64(2)),
+            ..
+        }
     ));
 
     // ULL_RSHIFT: logical right shift (no sign extension)
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_ULL_RSHIFT,
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_ULL_RSHIFT,
             {
                 let [lo, hi] = u64_args(0x8000_0000_0000_0000_u64);
                 [lo, hi, 1]
@@ -6276,79 +6846,145 @@ fn coredll_raw_mips_soft_float_ordinals_arithmetic_compare_convert() -> Result<(
     // LTS: 3.0 < 4.0 → true
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_LTS, [f32_a(), f32_b()],
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LTS,
+            [f32_a(), f32_b()],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
     ));
     // LES: 3.0 <= 3.0 → true
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_LES, [f32_a(), f32_a()],
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LES,
+            [f32_a(), f32_a()],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
     ));
     // EQS: 3.0 == 4.0 → false
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_EQS, [f32_a(), f32_b()],
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EQS,
+            [f32_a(), f32_b()],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
     ));
     // GTS: 4.0 > 3.0 → true
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_GTS, [f32_b(), f32_a()],
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GTS,
+            [f32_b(), f32_a()],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
     ));
 
     // --- Double comparisons (f64 args: [lhs_lo, lhs_hi, rhs_lo, rhs_hi]) ---
     // EQD: 2.0 == 2.0 → true
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_EQD, f64_bin(2.0, 2.0),
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EQD,
+            f64_bin(2.0, 2.0),
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
     ));
     // LED: 1.5 <= 2.0 → true
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_LED, f64_bin(1.5, 2.0),
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LED,
+            f64_bin(1.5, 2.0),
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
     ));
     // GTD: 3.0 > 2.5 → true
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_GTD, f64_bin(3.0, 2.5),
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GTD,
+            f64_bin(3.0, 2.5),
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
     ));
     // NED: 1.0 != 2.0 → true
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_NED, f64_bin(1.0, 2.0),
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_NED,
+            f64_bin(1.0, 2.0),
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
     ));
 
     // --- Conversions ---
     // FPTOLI: float to signed long (f32 → i32)
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_FPTOLI, [(-7.9_f32).to_bits()],
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_FPTOLI,
+            [(-7.9_f32).to_bits()],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::CeMath(CeMathValue::I32(-7)), ..
+            value: CoredllValue::CeMath(CeMathValue::I32(-7)),
+            ..
         }
     ));
     // DPTOUL: double to unsigned long (f64 → u32)
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_DPTOUL, f64_pair(42.9),
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DPTOUL,
+            f64_pair(42.9),
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::CeMath(CeMathValue::U32(42)), ..
+            value: CoredllValue::CeMath(CeMathValue::U32(42)),
+            ..
         }
     ));
     // ULTOFP: unsigned long to float (u32 → f32)
@@ -6396,78 +7032,163 @@ fn coredll_raw_crt_file_ordinals_printf_fwrite_fflush_ferror() -> Result<()> {
 
     // PRINTF always returns 0 (stub)
     assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_PRINTF, [],
-        ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }
+        table
+            .dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id, ORD_PRINTF, [],),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
     ));
 
     // Invalid stream → FERROR=1, FFLUSH=u32::MAX
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_FERROR, [0u32],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_FERROR,
+                [0u32],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(1),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(1), .. }
-    ), "ferror on invalid handle must return 1");
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_FFLUSH, [0u32],
+        "ferror on invalid handle must return 1"
+    );
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_FFLUSH,
+                [0u32],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(u32::MAX),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(u32::MAX), .. }
-    ), "fflush on invalid handle must return EOF");
+        "fflush on invalid handle must return EOF"
+    );
 
     // FWRITE null src → 0 (guard)
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_FWRITE, [0u32, 1, 1, 0],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_FWRITE,
+                [0u32, 1, 1, 0],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }
-    ), "fwrite with null src must return 0");
+        "fwrite with null src must return 0"
+    );
 
     // Open read stream — valid handle for FERROR/FFLUSH
     let read_stream = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_FOPEN, [path_r, mode_r],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_FOPEN,
+        [path_r, mode_r],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
         other => panic!("fopen(read) failed: {other:?}"),
     };
     assert_ne!(read_stream, 0);
 
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_FERROR, [read_stream],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_FERROR,
+                [read_stream],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }
-    ), "ferror on valid stream must return 0");
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_FFLUSH, [read_stream],
+        "ferror on valid stream must return 0"
+    );
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_FFLUSH,
+                [read_stream],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }
-    ), "fflush on valid stream must return 0");
+        "fflush on valid stream must return 0"
+    );
 
     // Open write stream — FWRITE succeeds
     let write_stream = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_FOPEN, [path_w, mode_w],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_FOPEN,
+        [path_w, mode_w],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
         other => panic!("fopen(write) failed: {other:?}"),
     };
     assert_ne!(write_stream, 0);
 
     // FWRITE(data_ptr, size=1, count=4, stream) → 4 items written
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_FWRITE,
-            [data_ptr, 1, 4, write_stream],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_FWRITE,
+                [data_ptr, 1, 4, write_stream],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(4),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(4), .. }
-    ), "fwrite must return item count written");
+        "fwrite must return item count written"
+    );
 
-    table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-        ORD_FCLOSE, [read_stream]);
-    table.dispatch_raw_ordinal_with_memory(&mut kernel, &mut memory, thread_id,
-        ORD_FCLOSE, [write_stream]);
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_FCLOSE,
+        [read_stream],
+    );
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_FCLOSE,
+        [write_stream],
+    );
 
     Ok(())
 }
@@ -6482,9 +7203,16 @@ fn coredll_raw_operator_new_delete_array_nothrow_delegate_to_allocator() -> Resu
 
     // OPERATOR_NEW_ARRAY_NOTHROW delegates to malloc_raw (same as operator new[])
     let ptr = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_OPERATOR_NEW_ARRAY_NOTHROW, [32u32],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_OPERATOR_NEW_ARRAY_NOTHROW,
+        [32u32],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
         other => panic!("operator new[] nothrow failed: {other:?}"),
     };
     assert_ne!(ptr, 0);
@@ -6492,9 +7220,16 @@ fn coredll_raw_operator_new_delete_array_nothrow_delegate_to_allocator() -> Resu
     // OPERATOR_DELETE_ARRAY_NOTHROW delegates to free_raw → returns U32(0)
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_OPERATOR_DELETE_ARRAY_NOTHROW, [ptr],
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_OPERATOR_DELETE_ARRAY_NOTHROW,
+            [ptr],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
     ));
 
     Ok(())
@@ -6509,90 +7244,166 @@ fn coredll_raw_heap_trace_validate_and_remote_heap_ordinals() -> Result<()> {
     let thread_id = 11;
 
     let heap = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_HEAP_CREATE, [HEAP_NO_SERIALIZE, 0, 0],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_HEAP_CREATE,
+        [HEAP_NO_SERIALIZE, 0, 0],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
         other => panic!("HeapCreate failed: {other:?}"),
     };
     assert_ne!(heap, 0);
 
     let ptr = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_HEAP_ALLOC,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_HEAP_ALLOC,
         [heap, HEAP_ZERO_MEMORY, 24],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
         other => panic!("HeapAlloc failed: {other:?}"),
     };
     assert_ne!(ptr, 0);
 
     let local_ptr = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_LOCAL_ALLOC, [LMEM_ZEROINIT, 16],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOCAL_ALLOC,
+        [LMEM_ZEROINIT, 16],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
         other => panic!("LocalAlloc failed: {other:?}"),
     };
     assert_ne!(local_ptr, 0);
 
     // HEAP_VALIDATE: valid heap + valid ptr → true
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_HEAP_VALIDATE, [heap, 0, ptr],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_HEAP_VALIDATE,
+                [heap, 0, ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
-    ), "HeapValidate on valid block must return true");
+        "HeapValidate on valid block must return true"
+    );
 
     // HEAP_VALIDATE: bad heap → false
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_HEAP_VALIDATE, [0xDEAD_BEEFu32, 0, ptr],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_HEAP_VALIDATE,
+                [0xDEAD_BEEFu32, 0, ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
-    ), "HeapValidate on invalid heap must return false");
+        "HeapValidate on invalid heap must return false"
+    );
 
     // REMOTE_HEAP_ALLOC: args[0]=ignored_process, rest same as heap_alloc
     let remote_ptr = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_REMOTE_HEAP_ALLOC,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_REMOTE_HEAP_ALLOC,
         [0xDEAD_0000, heap, HEAP_ZERO_MEMORY, 16],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
         other => panic!("RemoteHeapAlloc failed: {other:?}"),
     };
     assert_ne!(remote_ptr, 0);
 
     // REMOTE_HEAP_SIZE: args[0]=ignored, args[1]=heap, args[2]=flags, args[3]=ptr
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_REMOTE_HEAP_SIZE,
-            [0xDEAD_0000, heap, 0, remote_ptr],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_REMOTE_HEAP_SIZE,
+                [0xDEAD_0000, heap, 0, remote_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(16),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(16), .. }
-    ), "RemoteHeapSize must return 16");
+        "RemoteHeapSize must return 16"
+    );
 
     // REMOTE_HEAP_RE_ALLOC: grow the block
     let grown_ptr = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_REMOTE_HEAP_RE_ALLOC,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_REMOTE_HEAP_RE_ALLOC,
         [0xDEAD_0000, heap, 0, remote_ptr, 32],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
         other => panic!("RemoteHeapReAlloc failed: {other:?}"),
     };
     assert_ne!(grown_ptr, 0);
 
     // REMOTE_HEAP_FREE: args[0]=ignored, args[1]=heap, args[2]=flags, args[3]=ptr
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_REMOTE_HEAP_FREE,
-            [0xDEAD_0000, heap, 0, grown_ptr],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_REMOTE_HEAP_FREE,
+                [0xDEAD_0000, heap, 0, grown_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
-    ), "RemoteHeapFree must return true");
+        "RemoteHeapFree must return true"
+    );
 
     // REMOTE_LOCAL_RE_ALLOC: args[0]=ignored, args[1]=ptr, args[2]=bytes, args[3]=flags
     let re_local_ptr = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_REMOTE_LOCAL_RE_ALLOC,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_REMOTE_LOCAL_RE_ALLOC,
         [0xDEAD_0000, local_ptr, 32, 0],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
         other => panic!("RemoteLocalReAlloc failed: {other:?}"),
     };
     assert_ne!(re_local_ptr, 0);
@@ -6621,212 +7432,321 @@ fn coredll_raw_mips_soft_float_extended_arithmetic_and_conversions() -> Result<(
 
     // FPMUL: 3.0 * 4.0 = 12.0
     let expected_f32 = 12.0_f32;
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_FPMUL,
-            [f32_bits(3.0), f32_bits(4.0)],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id, ORD_FPMUL,
+                [f32_bits(3.0), f32_bits(4.0)],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::CeMath(CeMathValue::F32(v)), ..
+            } if v.to_bits() == expected_f32.to_bits()
         ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::CeMath(CeMathValue::F32(v)), ..
-        } if v.to_bits() == expected_f32.to_bits()
-    ), "FPMUL 3.0*4.0 must return F32(12.0)");
+        "FPMUL 3.0*4.0 must return F32(12.0)"
+    );
 
     // DPMUL: 2.5 * 4.0 = 10.0
     let expected_f64 = 10.0_f64;
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_DPMUL,
-            f64_bin(2.5, 4.0),
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id, ORD_DPMUL,
+                f64_bin(2.5, 4.0),
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::CeMath(CeMathValue::F64(v)), ..
+            } if v.to_bits() == expected_f64.to_bits()
         ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::CeMath(CeMathValue::F64(v)), ..
-        } if v.to_bits() == expected_f64.to_bits()
-    ), "DPMUL 2.5*4.0 must return F64(10.0)");
+        "DPMUL 2.5*4.0 must return F64(10.0)"
+    );
 
     // FPCMP: 3.0 vs 4.0 → -1 (less)
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_FPCMP,
-            [f32_bits(3.0), f32_bits(4.0)],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_FPCMP,
+                [f32_bits(3.0), f32_bits(4.0)],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::CeMath(CeMathValue::Cmp(-1)),
+                ..
+            }
         ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::CeMath(CeMathValue::Cmp(-1)), ..
-        }
-    ), "FPCMP 3.0<4.0 must return Cmp(-1)");
+        "FPCMP 3.0<4.0 must return Cmp(-1)"
+    );
 
     // FPCMP: 4.0 vs 3.0 → 1 (greater)
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_FPCMP,
-            [f32_bits(4.0), f32_bits(3.0)],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_FPCMP,
+                [f32_bits(4.0), f32_bits(3.0)],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::CeMath(CeMathValue::Cmp(1)),
+                ..
+            }
         ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::CeMath(CeMathValue::Cmp(1)), ..
-        }
-    ), "FPCMP 4.0>3.0 must return Cmp(1)");
+        "FPCMP 4.0>3.0 must return Cmp(1)"
+    );
 
     // DPCMP: 5.0 vs 5.0 → 0 (equal)
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_DPCMP,
-            f64_bin(5.0, 5.0),
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_DPCMP,
+                f64_bin(5.0, 5.0),
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::CeMath(CeMathValue::Cmp(0)),
+                ..
+            }
         ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::CeMath(CeMathValue::Cmp(0)), ..
-        }
-    ), "DPCMP 5.0==5.0 must return Cmp(0)");
+        "DPCMP 5.0==5.0 must return Cmp(0)"
+    );
 
     // FPTOUL: 3.7f32 → U32(3)
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_FPTOUL,
-            [f32_bits(3.7)],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_FPTOUL,
+                [f32_bits(3.7)],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::CeMath(CeMathValue::U32(3)),
+                ..
+            }
         ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::CeMath(CeMathValue::U32(3)), ..
-        }
-    ), "FPTOUL 3.7 must return U32(3)");
+        "FPTOUL 3.7 must return U32(3)"
+    );
 
     // DPTOLI: -5.9 → I32(-5)
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_DPTOLI,
-            f64_pair(-5.9),
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_DPTOLI,
+                f64_pair(-5.9),
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::CeMath(CeMathValue::I32(-5)),
+                ..
+            }
         ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::CeMath(CeMathValue::I32(-5)), ..
-        }
-    ), "DPTOLI -5.9 must return I32(-5)");
+        "DPTOLI -5.9 must return I32(-5)"
+    );
 
     // F_TO_LL: 5.0f32 → I64(5)
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_F_TO_LL,
-            [f32_bits(5.0)],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_F_TO_LL,
+                [f32_bits(5.0)],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::CeMath(CeMathValue::I64(5)),
+                ..
+            }
         ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::CeMath(CeMathValue::I64(5)), ..
-        }
-    ), "F_TO_LL 5.0 must return I64(5)");
+        "F_TO_LL 5.0 must return I64(5)"
+    );
 
     // D_TO_ULL: 10.0 → U64(10)
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_D_TO_ULL,
-            f64_pair(10.0),
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_D_TO_ULL,
+                f64_pair(10.0),
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::CeMath(CeMathValue::U64(10)),
+                ..
+            }
         ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::CeMath(CeMathValue::U64(10)), ..
-        }
-    ), "D_TO_ULL 10.0 must return U64(10)");
+        "D_TO_ULL 10.0 must return U64(10)"
+    );
 
     // FPTODP: 3.0f32 → F64(3.0)
     let expected_dp = 3.0_f64;
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_FPTODP,
-            [f32_bits(3.0)],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id, ORD_FPTODP,
+                [f32_bits(3.0)],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::CeMath(CeMathValue::F64(v)), ..
+            } if v.to_bits() == expected_dp.to_bits()
         ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::CeMath(CeMathValue::F64(v)), ..
-        } if v.to_bits() == expected_dp.to_bits()
-    ), "FPTODP 3.0f32 must return F64(3.0)");
+        "FPTODP 3.0f32 must return F64(3.0)"
+    );
 
     // DPTOFP: 3.0f64 → F32(3.0)
     let expected_fp = 3.0_f32;
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_DPTOFP,
-            f64_pair(3.0),
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id, ORD_DPTOFP,
+                f64_pair(3.0),
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::CeMath(CeMathValue::F32(v)), ..
+            } if v.to_bits() == expected_fp.to_bits()
         ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::CeMath(CeMathValue::F32(v)), ..
-        } if v.to_bits() == expected_fp.to_bits()
-    ), "DPTOFP 3.0f64 must return F32(3.0)");
+        "DPTOFP 3.0f64 must return F32(3.0)"
+    );
 
     // LITOFP: -3i32 → F32(-3.0)
     let expected_litofp = -3.0_f32;
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_LITOFP,
-            [(-3_i32) as u32],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id, ORD_LITOFP,
+                [(-3_i32) as u32],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::CeMath(CeMathValue::F32(v)), ..
+            } if v.to_bits() == expected_litofp.to_bits()
         ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::CeMath(CeMathValue::F32(v)), ..
-        } if v.to_bits() == expected_litofp.to_bits()
-    ), "LITOFP -3 must return F32(-3.0)");
+        "LITOFP -3 must return F32(-3.0)"
+    );
 
     // LITODP: 7i32 → F64(7.0)
     let expected_litodp = 7.0_f64;
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_LITODP,
-            [7_u32],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id, ORD_LITODP,
+                [7_u32],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::CeMath(CeMathValue::F64(v)), ..
+            } if v.to_bits() == expected_litodp.to_bits()
         ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::CeMath(CeMathValue::F64(v)), ..
-        } if v.to_bits() == expected_litodp.to_bits()
-    ), "LITODP 7 must return F64(7.0)");
+        "LITODP 7 must return F64(7.0)"
+    );
 
     // ULTODP: 200u32 → F64(200.0)
     let expected_ultodp = 200.0_f64;
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_ULTODP,
-            [200_u32],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id, ORD_ULTODP,
+                [200_u32],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::CeMath(CeMathValue::F64(v)), ..
+            } if v.to_bits() == expected_ultodp.to_bits()
         ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::CeMath(CeMathValue::F64(v)), ..
-        } if v.to_bits() == expected_ultodp.to_bits()
-    ), "ULTODP 200 must return F64(200.0)");
+        "ULTODP 200 must return F64(200.0)"
+    );
 
     // FMODF: 5.0 % 3.0 = 2.0
     let expected_fmodf = 2.0_f32;
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_FMODF,
-            [f32_bits(5.0), f32_bits(3.0)],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id, ORD_FMODF,
+                [f32_bits(5.0), f32_bits(3.0)],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::CeMath(CeMathValue::F32(v)), ..
+            } if v.to_bits() == expected_fmodf.to_bits()
         ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::CeMath(CeMathValue::F32(v)), ..
-        } if v.to_bits() == expected_fmodf.to_bits()
-    ), "FMODF 5.0%3.0 must return F32(2.0)");
+        "FMODF 5.0%3.0 must return F32(2.0)"
+    );
 
     // GES: 4.0 >= 3.0 → true
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_GES,
-            [f32_bits(4.0), f32_bits(3.0)],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GES,
+                [f32_bits(4.0), f32_bits(3.0)],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
-    ), "GES 4.0>=3.0 must return true");
+        "GES 4.0>=3.0 must return true"
+    );
 
     // GES: 3.0 >= 4.0 → false
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_GES,
-            [f32_bits(3.0), f32_bits(4.0)],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GES,
+                [f32_bits(3.0), f32_bits(4.0)],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
-    ), "GES 3.0>=4.0 must return false");
+        "GES 3.0>=4.0 must return false"
+    );
 
     // NES: 3.0 != 4.0 → true
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_NES,
-            [f32_bits(3.0), f32_bits(4.0)],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_NES,
+                [f32_bits(3.0), f32_bits(4.0)],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
-    ), "NES 3.0!=4.0 must return true");
+        "NES 3.0!=4.0 must return true"
+    );
 
     // NES: 3.0 != 3.0 → false
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_NES,
-            [f32_bits(3.0), f32_bits(3.0)],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_NES,
+                [f32_bits(3.0), f32_bits(3.0)],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
-    ), "NES 3.0!=3.0 must return false");
+        "NES 3.0!=3.0 must return false"
+    );
 
     Ok(())
 }
@@ -6859,119 +7779,181 @@ fn coredll_raw_crt_atof_iswctype_ll_div_sqrt_pow_and_tls_call() -> Result<()> {
     memory.map_bytes(text_ptr, 6);
     memory.write_bytes(text_ptr, b"3.14\0");
     let expected_atof = 3.14_f64;
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_ATOF,
-            [text_ptr],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id, ORD_ATOF,
+                [text_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::CeMath(CeMathValue::F64(v)), ..
+            } if v.to_bits() == expected_atof.to_bits()
         ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::CeMath(CeMathValue::F64(v)), ..
-        } if v.to_bits() == expected_atof.to_bits()
-    ), "ATOF \"3.14\" must return F64(3.14)");
+        "ATOF \"3.14\" must return F64(3.14)"
+    );
 
     // ISWCTYPE: 'A'=0x41 with CTYPE_UPPER(0x0001) → non-zero.
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_ISWCTYPE,
-            [b'A' as u32, 0x0001],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id, ORD_ISWCTYPE,
+                [b'A' as u32, 0x0001],
+            ),
+            CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v != 0
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v != 0
-    ), "ISWCTYPE 'A' with CTYPE_UPPER must return non-zero");
+        "ISWCTYPE 'A' with CTYPE_UPPER must return non-zero"
+    );
 
     // ISWCTYPE: 'a'=0x61 with CTYPE_UPPER(0x0001) → 0 (lowercase not uppercase).
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_ISWCTYPE,
-            [b'a' as u32, 0x0001],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_ISWCTYPE,
+                [b'a' as u32, 0x0001],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(0), .. }
-    ), "ISWCTYPE 'a' with CTYPE_UPPER must return 0");
+        "ISWCTYPE 'a' with CTYPE_UPPER must return 0"
+    );
 
     // ISWCTYPE: '5' with CTYPE_DIGIT(0x0004) → non-zero.
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_ISWCTYPE,
-            [b'5' as u32, 0x0004],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id, ORD_ISWCTYPE,
+                [b'5' as u32, 0x0004],
+            ),
+            CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v != 0
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } if v != 0
-    ), "ISWCTYPE '5' with CTYPE_DIGIT must return non-zero");
+        "ISWCTYPE '5' with CTYPE_DIGIT must return non-zero"
+    );
 
     // LL_DIV: 21 / 8 = 2 (truncated), quotient returned as I64.
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_LL_DIV,
-            i64_bin(21, 8),
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_LL_DIV,
+                i64_bin(21, 8),
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::CeMath(CeMathValue::I64(2)),
+                ..
+            }
         ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::CeMath(CeMathValue::I64(2)), ..
-        }
-    ), "LL_DIV 21/8 must return I64(2)");
+        "LL_DIV 21/8 must return I64(2)"
+    );
 
     // LL_DIV by zero → DivideByZero.
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_LL_DIV,
-            i64_bin(21, 0),
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_LL_DIV,
+                i64_bin(21, 0),
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::CeMath(CeMathValue::DivideByZero),
+                ..
+            }
         ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::CeMath(CeMathValue::DivideByZero), ..
-        }
-    ), "LL_DIV by zero must return DivideByZero");
+        "LL_DIV by zero must return DivideByZero"
+    );
 
     // SQRT: sqrt(9.0) = 3.0
     let expected_sqrt = 3.0_f64;
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_SQRT,
-            f64_pair(9.0),
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id, ORD_SQRT,
+                f64_pair(9.0),
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::CeMath(CeMathValue::F64(v)), ..
+            } if v.to_bits() == expected_sqrt.to_bits()
         ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::CeMath(CeMathValue::F64(v)), ..
-        } if v.to_bits() == expected_sqrt.to_bits()
-    ), "SQRT 9.0 must return F64(3.0)");
+        "SQRT 9.0 must return F64(3.0)"
+    );
 
     // POW: 2.0^8.0 = 256.0
     let expected_pow = 256.0_f64;
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_POW,
-            f64_bin(2.0, 8.0),
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel, &mut memory, thread_id, ORD_POW,
+                f64_bin(2.0, 8.0),
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::CeMath(CeMathValue::F64(v)), ..
+            } if v.to_bits() == expected_pow.to_bits()
         ),
-        CoredllDispatch::Returned {
-            value: CoredllValue::CeMath(CeMathValue::F64(v)), ..
-        } if v.to_bits() == expected_pow.to_bits()
-    ), "POW 2.0^8.0 must return F64(256.0)");
+        "POW 2.0^8.0 must return F64(256.0)"
+    );
 
     // TLS_CALL(ALLOC=0, slot=0) → first available slot (non-zero, >= 4).
     let tls_slot = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_TLS_CALL,
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_TLS_CALL,
         [0, 0],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::U32(s), .. } => s,
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(s),
+            ..
+        } => s,
         other => panic!("TLS_CALL alloc returned unexpected: {other:?}"),
     };
     assert_ne!(tls_slot, 0, "TLS_CALL alloc must return non-zero slot");
 
     // TLS_CALL(FREE=1, slot) → non-zero (true) on success.
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_TLS_CALL,
-            [1, tls_slot],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_TLS_CALL,
+                [1, tls_slot],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(1),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(1), .. }
-    ), "TLS_CALL free of allocated slot must return 1 (true)");
+        "TLS_CALL free of allocated slot must return 1 (true)"
+    );
 
     // GET_VERSION_EX (without W) same behavior as GET_VERSION_EX_W: writes struct, returns true.
     // Use test heap (0x3000_0000+) so both word and halfword writes auto-allocate.
     let ver_ptr = 0x3001_0000_u32;
     memory.write_word(ver_ptr, 276);
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_GET_VERSION_EX,
-            [ver_ptr],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_GET_VERSION_EX,
+                [ver_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
-    ), "GET_VERSION_EX must return true");
+        "GET_VERSION_EX must return true"
+    );
 
     Ok(())
 }
@@ -7076,23 +8058,37 @@ fn coredll_raw_registry_convenience_apis_get_set_delete_and_exchange() -> Result
     // RegistrySetDword creates the key and sets a DWORD value.
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id,
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_REGISTRY_SET_DWORD,
             [HKEY_LOCAL_MACHINE, key_path_ptr, value_name_ptr, 42],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
     ));
 
     // RegistryGetDword reads back the value written above.
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id,
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_REGISTRY_GET_DWORD,
             [HKEY_LOCAL_MACHINE, key_path_ptr, value_name_ptr, out32_ptr],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
     ));
-    assert_eq!(memory.read_u32(out32_ptr)?, 42, "RegistryGetDword must return the stored value");
+    assert_eq!(
+        memory.read_u32(out32_ptr)?,
+        42,
+        "RegistryGetDword must return the stored value"
+    );
 
     // RegistrySetString writes a string value.
     let str_name_ptr = 0x3_0600_u32;
@@ -7100,95 +8096,185 @@ fn coredll_raw_registry_convenience_apis_get_set_delete_and_exchange() -> Result
     memory.write_wide_z(value_str_ptr, "hello");
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id,
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_REGISTRY_SET_STRING,
-            [HKEY_LOCAL_MACHINE, key_path_ptr, str_name_ptr, value_str_ptr],
+            [
+                HKEY_LOCAL_MACHINE,
+                key_path_ptr,
+                str_name_ptr,
+                value_str_ptr
+            ],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
     ));
 
     // RegistryGetString reads back the string value (capacity = 32 chars).
     memory.map_bytes(out_str_ptr, 64);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id,
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_REGISTRY_GET_STRING,
-            [HKEY_LOCAL_MACHINE, key_path_ptr, str_name_ptr, out_str_ptr, 32],
+            [
+                HKEY_LOCAL_MACHINE,
+                key_path_ptr,
+                str_name_ptr,
+                out_str_ptr,
+                32
+            ],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
     ));
     // Verify the UTF-16 string starts with 'h' (0x68 0x00).
     let first_two = memory.read_bytes(out_str_ptr, 2);
-    assert_eq!(first_two, [b'h', 0], "RegistryGetString must return the stored string");
+    assert_eq!(
+        first_two,
+        [b'h', 0],
+        "RegistryGetString must return the stored string"
+    );
 
     // RegistryDeleteValue removes the DWORD value; subsequent get must fail.
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id,
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_REGISTRY_DELETE_VALUE,
             [HKEY_LOCAL_MACHINE, key_path_ptr, value_name_ptr],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
     ));
-    assert!(!matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id,
-            ORD_REGISTRY_GET_DWORD,
-            [HKEY_LOCAL_MACHINE, key_path_ptr, value_name_ptr, out32_ptr],
+    assert!(
+        !matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_REGISTRY_GET_DWORD,
+                [HKEY_LOCAL_MACHINE, key_path_ptr, value_name_ptr, out32_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(ERROR_SUCCESS),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
-    ), "RegistryGetDword on deleted value must not return ERROR_SUCCESS");
+        "RegistryGetDword on deleted value must not return ERROR_SUCCESS"
+    );
 
     // RegistryTestExchangeDword: set to 10, then test-and-exchange with matching value.
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id,
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_REGISTRY_SET_DWORD,
             [HKEY_LOCAL_MACHINE, key_path_ptr, value_name_ptr, 10],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
     ));
     memory.write_word(old_ptr, 0xFFFF_FFFF);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id,
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_REGISTRY_TEST_EXCHANGE_DWORD,
-            [HKEY_LOCAL_MACHINE, key_path_ptr, value_name_ptr, 10, 99, old_ptr],
+            [
+                HKEY_LOCAL_MACHINE,
+                key_path_ptr,
+                value_name_ptr,
+                10,
+                99,
+                old_ptr
+            ],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
     ));
     // Old value written out must be 10.
-    assert_eq!(memory.read_u32(old_ptr)?, 10, "RegistryTestExchangeDword must write the old value");
+    assert_eq!(
+        memory.read_u32(old_ptr)?,
+        10,
+        "RegistryTestExchangeDword must write the old value"
+    );
     // New value is 99 (exchange happened because old == test).
     memory.write_word(out32_ptr, 0);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id,
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_REGISTRY_GET_DWORD,
             [HKEY_LOCAL_MACHINE, key_path_ptr, value_name_ptr, out32_ptr],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
     ));
-    assert_eq!(memory.read_u32(out32_ptr)?, 99, "RegistryTestExchangeDword must write new value when test matches");
+    assert_eq!(
+        memory.read_u32(out32_ptr)?,
+        99,
+        "RegistryTestExchangeDword must write new value when test matches"
+    );
 
     // Test-and-exchange with non-matching test value must leave value unchanged.
     memory.write_word(old_ptr, 0);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id,
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_REGISTRY_TEST_EXCHANGE_DWORD,
-            [HKEY_LOCAL_MACHINE, key_path_ptr, value_name_ptr, 0, 77, old_ptr],
+            [
+                HKEY_LOCAL_MACHINE,
+                key_path_ptr,
+                value_name_ptr,
+                0,
+                77,
+                old_ptr
+            ],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::U32(ERROR_SUCCESS), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
     ));
-    assert_eq!(memory.read_u32(old_ptr)?, 99, "RegistryTestExchangeDword must report current value even when test fails");
+    assert_eq!(
+        memory.read_u32(old_ptr)?,
+        99,
+        "RegistryTestExchangeDword must report current value even when test fails"
+    );
     memory.write_word(out32_ptr, 0);
     table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id,
+        &mut kernel,
+        &mut memory,
+        thread_id,
         ORD_REGISTRY_GET_DWORD,
         [HKEY_LOCAL_MACHINE, key_path_ptr, value_name_ptr, out32_ptr],
     );
-    assert_eq!(memory.read_u32(out32_ptr)?, 99, "value must remain 99 when test value did not match");
+    assert_eq!(
+        memory.read_u32(out32_ptr)?,
+        99,
+        "value must remain 99 when test value did not match"
+    );
 
     Ok(())
 }
@@ -7203,9 +8289,16 @@ fn coredll_raw_dpa_clone_copies_all_ptrs_to_new_dpa() -> Result<()> {
 
     // Create source DPA with cp_grow=4.
     let hdpa = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_DPA_CREATE, [4],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_DPA_CREATE,
+        [4],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
         other => panic!("DPA_Create failed: {other:?}"),
     };
     assert_ne!(hdpa, 0);
@@ -7213,15 +8306,26 @@ fn coredll_raw_dpa_clone_copies_all_ptrs_to_new_dpa() -> Result<()> {
     // Insert three sentinel pointer values.
     for ptr in [0x1000_u32, 0x2000, 0x3000] {
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_DPA_INSERT_PTR, [hdpa, 0xffff_ffff, ptr],
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DPA_INSERT_PTR,
+            [hdpa, 0xffff_ffff, ptr],
         );
     }
 
     // DPA_Clone(hdpa, 0) — create a new DPA cloning all items.
     let hdpa2 = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_DPA_CLONE, [hdpa, 0],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_DPA_CLONE,
+        [hdpa, 0],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
         other => panic!("DPA_Clone returned unexpected: {other:?}"),
     };
     assert_ne!(hdpa2, 0);
@@ -7230,9 +8334,16 @@ fn coredll_raw_dpa_clone_copies_all_ptrs_to_new_dpa() -> Result<()> {
     // Verify all three pointers are present in the clone.
     for (i, expected) in [0x1000_u32, 0x2000, 0x3000].iter().enumerate() {
         let got = match table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_DPA_GET_PTR, [hdpa2, i as u32],
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DPA_GET_PTR,
+            [hdpa2, i as u32],
         ) {
-            CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(h),
+                ..
+            } => h,
             other => panic!("DPA_GetPtr({i}) unexpected: {other:?}"),
         };
         assert_eq!(got, *expected, "clone item {i} must match source");
@@ -7240,10 +8351,18 @@ fn coredll_raw_dpa_clone_copies_all_ptrs_to_new_dpa() -> Result<()> {
 
     // Clean up.
     table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_DPA_DESTROY, [hdpa],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_DPA_DESTROY,
+        [hdpa],
     );
     table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_DPA_DESTROY, [hdpa2],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_DPA_DESTROY,
+        [hdpa2],
     );
     Ok(())
 }
@@ -7258,9 +8377,16 @@ fn coredll_raw_dsa_clone_copies_all_items_to_new_dsa() -> Result<()> {
 
     // Create DSA: cb_item=4 bytes, cp_grow=4.
     let hdsa = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_DSA_CREATE, [4, 4],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_DSA_CREATE,
+        [4, 4],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
         other => panic!("DSA_Create failed: {other:?}"),
     };
     assert_ne!(hdsa, 0);
@@ -7271,15 +8397,26 @@ fn coredll_raw_dsa_clone_copies_all_items_to_new_dsa() -> Result<()> {
     for val in [0xAABB_u32, 0xCCDD, 0xEEFF] {
         memory.write_bytes(item_buf, &val.to_le_bytes());
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_DSA_INSERT_ITEM, [hdsa, 0xffff_ffff, item_buf],
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DSA_INSERT_ITEM,
+            [hdsa, 0xffff_ffff, item_buf],
         );
     }
 
     // DSA_Clone(hdsa, 0) — new DSA.
     let hdsa2 = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_DSA_CLONE, [hdsa, 0],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_DSA_CLONE,
+        [hdsa, 0],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
         other => panic!("DSA_Clone returned unexpected: {other:?}"),
     };
     assert_ne!(hdsa2, 0);
@@ -7288,22 +8425,40 @@ fn coredll_raw_dsa_clone_copies_all_items_to_new_dsa() -> Result<()> {
     // Verify items in the clone via read_bytes (item data lives in bytes map, not words).
     for (i, expected) in [0xAABB_u32, 0xCCDD, 0xEEFF].iter().enumerate() {
         let ptr = match table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_DSA_GET_ITEM_PTR, [hdsa2, i as u32],
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DSA_GET_ITEM_PTR,
+            [hdsa2, i as u32],
         ) {
-            CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(h),
+                ..
+            } => h,
             other => panic!("DSA_GetItemPtr({i}) unexpected: {other:?}"),
         };
         assert_ne!(ptr, 0);
         let raw = memory.read_bytes(ptr, 4);
         let got = u32::from_le_bytes(raw.try_into().unwrap());
-        assert_eq!(got, *expected, "clone item {i} must match source ({expected:#x} != {got:#x})");
+        assert_eq!(
+            got, *expected,
+            "clone item {i} must match source ({expected:#x} != {got:#x})"
+        );
     }
 
     table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_DSA_DESTROY, [hdsa],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_DSA_DESTROY,
+        [hdsa],
     );
     table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_DSA_DESTROY, [hdsa2],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_DSA_DESTROY,
+        [hdsa2],
     );
     Ok(())
 }
@@ -7318,9 +8473,16 @@ fn coredll_raw_dsa_set_range_overwrites_item_range() -> Result<()> {
 
     // Create DSA: 4-byte items.
     let hdsa = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_DSA_CREATE, [4, 4],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_DSA_CREATE,
+        [4, 4],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
         other => panic!("DSA_Create failed: {other:?}"),
     };
 
@@ -7329,7 +8491,11 @@ fn coredll_raw_dsa_set_range_overwrites_item_range() -> Result<()> {
     for val in [0x11_u32, 0x22, 0x33, 0x44] {
         memory.write_bytes(item_buf, &val.to_le_bytes());
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_DSA_INSERT_ITEM, [hdsa, 0xffff_ffff, item_buf],
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DSA_INSERT_ITEM,
+            [hdsa, 0xffff_ffff, item_buf],
         );
     }
 
@@ -7338,35 +8504,66 @@ fn coredll_raw_dsa_set_range_overwrites_item_range() -> Result<()> {
     memory.write_bytes(item_buf, &0xFFFF_u32.to_le_bytes());
     let ok = matches!(
         table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_DSA_SET_RANGE, [hdsa, 1, 2, item_buf],
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DSA_SET_RANGE,
+            [hdsa, 1, 2, item_buf],
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
     );
     assert!(ok, "DSA_SetRange must return TRUE");
 
     // items[0]=0x11, items[1]=0xFFFF, items[2]=0xFFFF, items[3]=0x44.
     for (i, expected) in [0x11_u32, 0xFFFF, 0xFFFF, 0x44].iter().enumerate() {
         let ptr = match table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_DSA_GET_ITEM_PTR, [hdsa, i as u32],
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DSA_GET_ITEM_PTR,
+            [hdsa, i as u32],
         ) {
-            CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(h),
+                ..
+            } => h,
             other => panic!("DSA_GetItemPtr({i}) unexpected: {other:?}"),
         };
         let raw = memory.read_bytes(ptr, 4);
         let got = u32::from_le_bytes(raw.try_into().unwrap());
-        assert_eq!(got, *expected, "item[{i}] expected {expected:#x} got {got:#x}");
+        assert_eq!(
+            got, *expected,
+            "item[{i}] expected {expected:#x} got {got:#x}"
+        );
     }
 
     // Out-of-range call must return FALSE.
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_DSA_SET_RANGE, [hdsa, 3, 2, item_buf],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_DSA_SET_RANGE,
+                [hdsa, 3, 2, item_buf],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
-    ), "DSA_SetRange past end must return FALSE");
+        "DSA_SetRange past end must return FALSE"
+    );
 
     table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_DSA_DESTROY, [hdsa],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_DSA_DESTROY,
+        [hdsa],
     );
     Ok(())
 }
@@ -7386,16 +8583,16 @@ fn coredll_raw_shload_dibitmap_loads_file_and_rejects_missing_path() -> Result<(
     bmp.extend_from_slice(&[0; 4]);
     bmp.extend_from_slice(&54u32.to_le_bytes()); // pixel offset
     bmp.extend_from_slice(&40u32.to_le_bytes()); // BITMAPINFOHEADER size
-    bmp.extend_from_slice(&1i32.to_le_bytes());  // width
-    bmp.extend_from_slice(&1i32.to_le_bytes());  // height
-    bmp.extend_from_slice(&1u16.to_le_bytes());  // planes
+    bmp.extend_from_slice(&1i32.to_le_bytes()); // width
+    bmp.extend_from_slice(&1i32.to_le_bytes()); // height
+    bmp.extend_from_slice(&1u16.to_le_bytes()); // planes
     bmp.extend_from_slice(&24u16.to_le_bytes()); // bpp
-    bmp.extend_from_slice(&0u32.to_le_bytes());  // compression
-    bmp.extend_from_slice(&4u32.to_le_bytes());  // image size
-    bmp.extend_from_slice(&0i32.to_le_bytes());  // x pixels/m
-    bmp.extend_from_slice(&0i32.to_le_bytes());  // y pixels/m
-    bmp.extend_from_slice(&0u32.to_le_bytes());  // colors used
-    bmp.extend_from_slice(&0u32.to_le_bytes());  // colors important
+    bmp.extend_from_slice(&0u32.to_le_bytes()); // compression
+    bmp.extend_from_slice(&4u32.to_le_bytes()); // image size
+    bmp.extend_from_slice(&0i32.to_le_bytes()); // x pixels/m
+    bmp.extend_from_slice(&0i32.to_le_bytes()); // y pixels/m
+    bmp.extend_from_slice(&0u32.to_le_bytes()); // colors used
+    bmp.extend_from_slice(&0u32.to_le_bytes()); // colors important
     bmp.extend_from_slice(&[0x33, 0x66, 0x99, 0x00]); // pixel data + padding
     std::fs::write(root.join("bg.bmp"), &bmp).unwrap();
     kernel.set_file_root(&root);
@@ -7407,21 +8604,44 @@ fn coredll_raw_shload_dibitmap_loads_file_and_rejects_missing_path() -> Result<(
     // Valid BMP path → non-zero HBITMAP.
     memory.write_wide_z(path_ptr, r"\bg.bmp");
     let hbm = match table.dispatch_raw_ordinal_with_memory(
-        &mut kernel, &mut memory, thread_id, ORD_SHLOAD_DIBITMAP, [path_ptr],
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SHLOAD_DIBITMAP,
+        [path_ptr],
     ) {
-        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
         other => panic!("SHLoadDIBitmap unexpected: {other:?}"),
     };
-    assert_ne!(hbm, 0, "SHLoadDIBitmap must return a valid HBITMAP for an existing BMP");
+    assert_ne!(
+        hbm, 0,
+        "SHLoadDIBitmap must return a valid HBITMAP for an existing BMP"
+    );
 
     // Missing path → 0.
     memory.write_wide_z(path_ptr, r"\missing.bmp");
-    assert!(matches!(
-        table.dispatch_raw_ordinal_with_memory(
-            &mut kernel, &mut memory, thread_id, ORD_SHLOAD_DIBITMAP, [path_ptr],
+    assert!(
+        matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_SHLOAD_DIBITMAP,
+                [path_ptr],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(0),
+                ..
+            }
         ),
-        CoredllDispatch::Returned { value: CoredllValue::Handle(0), .. }
-    ), "SHLoadDIBitmap with missing path must return 0");
-    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_FILE_NOT_FOUND);
+        "SHLoadDIBitmap with missing path must return 0"
+    );
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_FILE_NOT_FOUND
+    );
     Ok(())
 }

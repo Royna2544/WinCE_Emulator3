@@ -548,7 +548,11 @@ mod tests {
         let mut memory = MemorySystem::default();
 
         // size=0 → None regardless of type flags
-        assert!(memory.virtual_alloc(0, 0, MEM_COMMIT | MEM_RESERVE, 4).is_none());
+        assert!(
+            memory
+                .virtual_alloc(0, 0, MEM_COMMIT | MEM_RESERVE, 4)
+                .is_none()
+        );
 
         // allocation_type=0 → None regardless of size
         assert!(memory.virtual_alloc(0, 0x1000, 0, 4).is_none());
@@ -557,7 +561,9 @@ mod tests {
     #[test]
     fn virtual_free_release_requires_size_zero_and_valid_base() {
         let mut memory = MemorySystem::default();
-        let base = memory.virtual_alloc(0, 0x1000, MEM_COMMIT | MEM_RESERVE, 4).unwrap();
+        let base = memory
+            .virtual_alloc(0, 0x1000, MEM_COMMIT | MEM_RESERVE, 4)
+            .unwrap();
 
         // MEM_RELEASE with size!=0 → false
         assert!(!memory.virtual_free(base, 1, MEM_RELEASE));
@@ -573,7 +579,9 @@ mod tests {
     fn virtual_free_decommit_succeeds_for_valid_range_and_unknown_type_fails() {
         let mut memory = MemorySystem::default();
         // Allocate exactly one VIRTUAL_ALIGN-sized region (0x1_0000 bytes).
-        let base = memory.virtual_alloc(0, VIRTUAL_ALIGN, MEM_COMMIT | MEM_RESERVE, 4).unwrap();
+        let base = memory
+            .virtual_alloc(0, VIRTUAL_ALIGN, MEM_COMMIT | MEM_RESERVE, 4)
+            .unwrap();
 
         // MEM_DECOMMIT with size within allocation → true
         assert!(memory.virtual_free(base, VIRTUAL_ALIGN / 2, MEM_DECOMMIT));

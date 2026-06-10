@@ -1024,7 +1024,11 @@ impl Gwe {
         self.next_hwnd += 4;
         let visible = style & WS_VISIBLE != 0;
         let enabled = style & WS_DISABLED == 0;
-        let initial_rects = if visible { vec![rect.zero_origin()] } else { Vec::new() };
+        let initial_rects = if visible {
+            vec![rect.zero_origin()]
+        } else {
+            Vec::new()
+        };
         self.windows.insert(
             hwnd,
             Window {
@@ -1481,7 +1485,9 @@ impl Gwe {
 
     /// Invalidate the caret owner window's caret rect (client coordinates).
     pub fn invalidate_caret_rect(&mut self) {
-        let Some(caret) = &self.caret else { return; };
+        let Some(caret) = &self.caret else {
+            return;
+        };
         let hwnd = caret.hwnd;
         let width = caret.width.max(1);
         let height = caret.height.max(1);
@@ -1534,9 +1540,8 @@ impl Gwe {
         let width = caret.width.max(1);
         let height = caret.height.max(1);
         let client_bounds = self.get_client_rect(caret.hwnd)?;
-        let client_rect =
-            Rect::from_origin_size(caret.position.x, caret.position.y, width, height)
-                .intersect(client_bounds)?;
+        let client_rect = Rect::from_origin_size(caret.position.x, caret.position.y, width, height)
+            .intersect(client_bounds)?;
         let screen_origin = self.client_to_screen(
             caret.hwnd,
             Point {
@@ -1549,7 +1554,12 @@ impl Gwe {
         if w == 0 || h == 0 {
             return None;
         }
-        Some((screen_origin.x.max(0) as u32, screen_origin.y.max(0) as u32, w, h))
+        Some((
+            screen_origin.x.max(0) as u32,
+            screen_origin.y.max(0) as u32,
+            w,
+            h,
+        ))
     }
 
     pub fn set_caret_blink_time(&mut self, milliseconds: u32) -> bool {
@@ -2541,11 +2551,7 @@ impl Gwe {
 
     /// Update the composition string for a given HIMC and return the associated
     /// window so the caller can send WM_IME_COMPOSITION to it.
-    pub fn set_ime_composition_string(
-        &mut self,
-        himc: u32,
-        composition: Vec<u16>,
-    ) -> Option<u32> {
+    pub fn set_ime_composition_string(&mut self, himc: u32, composition: Vec<u16>) -> Option<u32> {
         let context = self.ime_contexts.get_mut(&himc)?;
         context.composition_string = composition;
         context.hwnd
@@ -2674,9 +2680,7 @@ impl Gwe {
         self.windows
             .get(&hwnd)
             .and_then(|window| self.class_info(&window.class_name))
-            .map(|wc| {
-                u32::from_le_bytes([wc.bytes[28], wc.bytes[29], wc.bytes[30], wc.bytes[31]])
-            })
+            .map(|wc| u32::from_le_bytes([wc.bytes[28], wc.bytes[29], wc.bytes[30], wc.bytes[31]]))
             .unwrap_or(0)
     }
 
@@ -3168,7 +3172,11 @@ impl Gwe {
             }
             WM_SETICON => {
                 let prev = self.windows.get(&hwnd).map_or(0, |w| {
-                    if wparam == ICON_BIG { w.icon_big } else { w.icon_small }
+                    if wparam == ICON_BIG {
+                        w.icon_big
+                    } else {
+                        w.icon_small
+                    }
                 });
                 if let Some(window) = self.windows.get_mut(&hwnd) {
                     if wparam == ICON_BIG {
@@ -3181,9 +3189,17 @@ impl Gwe {
             }
             WM_GETICON => {
                 let stored = self.windows.get(&hwnd).map_or(0, |w| {
-                    if wparam == ICON_BIG { w.icon_big } else { w.icon_small }
+                    if wparam == ICON_BIG {
+                        w.icon_big
+                    } else {
+                        w.icon_small
+                    }
                 });
-                let result = if stored != 0 { stored } else { self.window_class_icon(hwnd) };
+                let result = if stored != 0 {
+                    stored
+                } else {
+                    self.window_class_icon(hwnd)
+                };
                 return Some(result);
             }
             WM_SETFONT => {
@@ -4462,8 +4478,7 @@ impl Gwe {
         let children = self.dialog_child_candidates(dialog, 0);
         children.into_iter().find(|hwnd| {
             self.windows.get(hwnd).is_some_and(|window| {
-                title_mnemonic(&window.title)
-                    .map(|c| c.to_ascii_lowercase())
+                title_mnemonic(&window.title).map(|c| c.to_ascii_lowercase())
                     == Some(mnemonic_lower)
             })
         })
@@ -6005,23 +6020,56 @@ mod tests {
         assert_eq!(canonicalize_region_rects(vec![]), vec![]);
 
         // Single rect passes through (normalized).
-        let single = Rect { left: 5, top: 3, right: 10, bottom: 8 };
+        let single = Rect {
+            left: 5,
+            top: 3,
+            right: 10,
+            bottom: 8,
+        };
         assert_eq!(canonicalize_region_rects(vec![single]), vec![single]);
 
         // Unnormalized (inverted) rect is normalized.
         assert_eq!(
-            canonicalize_region_rects(vec![Rect { left: 10, top: 8, right: 5, bottom: 3 }]),
+            canonicalize_region_rects(vec![Rect {
+                left: 10,
+                top: 8,
+                right: 5,
+                bottom: 3
+            }]),
             vec![single]
         );
 
         // Empty rect is filtered out; real rect survives alone.
-        let real = Rect { left: 0, top: 0, right: 10, bottom: 10 };
-        let empty_rect = Rect { left: 5, top: 5, right: 5, bottom: 10 };
-        assert_eq!(canonicalize_region_rects(vec![empty_rect, real]), vec![real]);
+        let real = Rect {
+            left: 0,
+            top: 0,
+            right: 10,
+            bottom: 10,
+        };
+        let empty_rect = Rect {
+            left: 5,
+            top: 5,
+            right: 5,
+            bottom: 10,
+        };
+        assert_eq!(
+            canonicalize_region_rects(vec![empty_rect, real]),
+            vec![real]
+        );
 
         // Two vertically adjacent rects with the same horizontal span are merged into one.
-        let top_half = Rect { left: 0, top: 0, right: 10, bottom: 5 };
-        let bot_half = Rect { left: 0, top: 5, right: 10, bottom: 10 };
+        let top_half = Rect {
+            left: 0,
+            top: 0,
+            right: 10,
+            bottom: 5,
+        };
+        let bot_half = Rect {
+            left: 0,
+            top: 5,
+            right: 10,
+            bottom: 10,
+        };
         assert_eq!(
             canonicalize_region_rects(vec![top_half, bot_half]),
             vec![real]
@@ -6029,8 +6077,18 @@ mod tests {
 
         // Two overlapping rects produce three bands — no vertical merge because
         // band [0,3] and band [3,5] have different widths.
-        let r1 = Rect { left: 0, top: 0, right: 10, bottom: 5 };
-        let r2 = Rect { left: 3, top: 3, right: 15, bottom: 8 };
+        let r1 = Rect {
+            left: 0,
+            top: 0,
+            right: 10,
+            bottom: 5,
+        };
+        let r2 = Rect {
+            left: 3,
+            top: 3,
+            right: 15,
+            bottom: 8,
+        };
         // y-edges: 0, 3, 5, 8
         // band [0,3]: only r1 spans → Rect{0,0,10,3}
         // band [3,5]: both span, merged → Rect{0,3,15,5}
@@ -6038,9 +6096,24 @@ mod tests {
         assert_eq!(
             canonicalize_region_rects(vec![r1, r2]),
             vec![
-                Rect { left: 0, top: 0, right: 10, bottom: 3 },
-                Rect { left: 0, top: 3, right: 15, bottom: 5 },
-                Rect { left: 3, top: 5, right: 15, bottom: 8 },
+                Rect {
+                    left: 0,
+                    top: 0,
+                    right: 10,
+                    bottom: 3
+                },
+                Rect {
+                    left: 0,
+                    top: 3,
+                    right: 15,
+                    bottom: 5
+                },
+                Rect {
+                    left: 3,
+                    top: 5,
+                    right: 15,
+                    bottom: 8
+                },
             ]
         );
     }

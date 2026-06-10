@@ -898,10 +898,7 @@ impl HostFileSystem {
                 Err(_) => 0,
             }
         };
-        let write_time = meta
-            .modified()
-            .map(system_time_to_filetime)
-            .unwrap_or(0);
+        let write_time = meta.modified().map(system_time_to_filetime).unwrap_or(0);
         let access_time = meta
             .accessed()
             .map(system_time_to_filetime)

@@ -84,7 +84,13 @@ impl LiveTrampolineState {
         let pages = trampoline_pages_for_ranges(&ranges);
         let stub_by_origin = trampoline_stub_by_origin(&jumps);
         let origin_by_stub = trampoline_origin_by_stub(&jumps);
-        Self { ranges, jumps, pages, stub_by_origin, origin_by_stub }
+        Self {
+            ranges,
+            jumps,
+            pages,
+            stub_by_origin,
+            origin_by_stub,
+        }
     }
 
     pub fn extend(&mut self, patch: &MipsTrampolinePatchResult) {
@@ -133,9 +139,18 @@ pub(crate) struct MipsUnicornPatch {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MipsUnicornPatchKind {
-    BranchLikely { branch: MipsBranchLikely, delay_slot: u32 },
-    Branch { branch: MipsBranchLikely, delay_slot: u32 },
-    Jal { target: u32, delay_slot: u32 },
+    BranchLikely {
+        branch: MipsBranchLikely,
+        delay_slot: u32,
+    },
+    Branch {
+        branch: MipsBranchLikely,
+        delay_slot: u32,
+    },
+    Jal {
+        target: u32,
+        delay_slot: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,7 +196,11 @@ pub(crate) fn patch_mips_unicorn_trampolines(
         let mut jump_table_data_ranges =
             mips_halfword_jump_table_ranges(mapped, load_base, start, end, &image.path)?;
         jump_table_data_ranges.extend(mips_byte_jump_table_ranges(
-            mapped, load_base, start, end, &image.path,
+            mapped,
+            load_base,
+            start,
+            end,
+            &image.path,
         )?);
         let mut rva = start;
         while rva.checked_add(8).is_some_and(|next| next <= end) {
@@ -236,10 +255,16 @@ pub(crate) fn patch_mips_unicorn_trampolines(
     if external_stub_base.is_none() && mapped.len() < aligned_len {
         mapped.resize(aligned_len, 0);
     }
-    let mut stub_rva = if external_stub_base.is_some() { 0 } else { aligned_len as u32 };
+    let mut stub_rva = if external_stub_base.is_some() {
+        0
+    } else {
+        aligned_len as u32
+    };
     let mut trampoline_jumps = Vec::with_capacity(patches.len());
     for patch in patches {
-        let stub_pc = external_stub_base.unwrap_or(load_base).wrapping_add(stub_rva);
+        let stub_pc = external_stub_base
+            .unwrap_or(load_base)
+            .wrapping_add(stub_rva);
         let stub_words = match patch.kind {
             MipsUnicornPatchKind::BranchLikely { branch, delay_slot } => {
                 branch_likely_stub_words(patch.pc, branch, delay_slot, stub_pc)?
@@ -251,7 +276,12 @@ pub(crate) fn patch_mips_unicorn_trampolines(
                 jal_stub_words(patch.pc, target, delay_slot, stub_pc)?
             }
         };
-        write_mapped_word(mapped, patch.rva, encode_mips_lui(26, stub_pc >> 16), &image.path)?;
+        write_mapped_word(
+            mapped,
+            patch.rva,
+            encode_mips_lui(26, stub_pc >> 16),
+            &image.path,
+        )?;
         write_mapped_word(
             mapped,
             patch.rva + 4,
@@ -267,7 +297,11 @@ pub(crate) fn patch_mips_unicorn_trampolines(
             stub: stub_pc,
             byte_len: (stub_words.len() * 4) as u32,
         });
-        let target_bytes = if external_stub_base.is_some() { &mut stub_bytes } else { &mut *mapped };
+        let target_bytes = if external_stub_base.is_some() {
+            &mut stub_bytes
+        } else {
+            &mut *mapped
+        };
         if target_bytes.len() < stub_end {
             target_bytes.resize(stub_end, 0);
         }
@@ -328,7 +362,13 @@ pub(crate) fn decode_mips_branch_likely(instruction: u32) -> Option<MipsBranchLi
         _ => return None,
     };
     let link = opcode == 0x01 && matches!(rt, 0x12 | 0x13);
-    Some(MipsBranchLikely { rs, rt, target, inverse_branch, link })
+    Some(MipsBranchLikely {
+        rs,
+        rt,
+        target,
+        inverse_branch,
+        link,
+    })
 }
 
 pub(crate) fn decode_mips_normal_branch(instruction: u32) -> Option<MipsBranchLikely> {
@@ -350,7 +390,13 @@ pub(crate) fn decode_mips_normal_branch(instruction: u32) -> Option<MipsBranchLi
         },
         _ => return None,
     };
-    Some(MipsBranchLikely { rs, rt, target, inverse_branch, link: false })
+    Some(MipsBranchLikely {
+        rs,
+        rt,
+        target,
+        inverse_branch,
+        link: false,
+    })
 }
 
 pub(crate) fn is_unconditional_taken_branch(branch: MipsBranchLikely) -> bool {
@@ -499,32 +545,55 @@ fn decode_mips_halfword_jump_table_range(
     let jr = read_mapped_word(mapped, rva + 24, path)?;
     let delay_slot = read_mapped_word(mapped, rva + 28, path)?;
 
-    let Some(base_register) = decode_mips_lui_rt(lui) else { return Ok(None); };
-    if !is_mips_addiu_same_register(addiu, base_register) { return Ok(None); }
+    let Some(base_register) = decode_mips_lui_rt(lui) else {
+        return Ok(None);
+    };
+    if !is_mips_addiu_same_register(addiu, base_register) {
+        return Ok(None);
+    }
     let Some((index_register, selector_register)) = decode_mips_sll_by_one(sll) else {
         return Ok(None);
     };
     if !is_mips_addu(addu_index, index_register, index_register, base_register) {
         return Ok(None);
     }
-    if !is_mips_lh_same_register(lh, index_register) { return Ok(None); }
+    if !is_mips_lh_same_register(lh, index_register) {
+        return Ok(None);
+    }
     if !is_mips_addu(addu_target, base_register, base_register, index_register) {
         return Ok(None);
     }
-    if !is_mips_jr(jr, base_register) || delay_slot != MIPS_NOP { return Ok(None); }
+    if !is_mips_jr(jr, base_register) || delay_slot != MIPS_NOP {
+        return Ok(None);
+    }
 
     let table_pc = ((lui & 0xffff) << 16).wrapping_add(addiu as u16 as i16 as i32 as u32);
-    let Some(table_rva) = table_pc.checked_sub(load_base) else { return Ok(None); };
-    if table_rva != rva + 32 || table_rva >= section_end { return Ok(None); }
+    let Some(table_rva) = table_pc.checked_sub(load_base) else {
+        return Ok(None);
+    };
+    if table_rva != rva + 32 || table_rva >= section_end {
+        return Ok(None);
+    }
     let Some(entry_count) = find_mips_halfword_jump_table_entry_count(
-        mapped, section_start, rva, selector_register, path,
-    )? else {
+        mapped,
+        section_start,
+        rva,
+        selector_register,
+        path,
+    )?
+    else {
         return Ok(None);
     };
     let byte_len = entry_count.saturating_mul(2);
-    if byte_len == 0 { return Ok(None); }
-    let Some(table_end) = table_rva.checked_add(byte_len) else { return Ok(None); };
-    if table_end > section_end { return Ok(None); }
+    if byte_len == 0 {
+        return Ok(None);
+    }
+    let Some(table_end) = table_rva.checked_add(byte_len) else {
+        return Ok(None);
+    };
+    if table_end > section_end {
+        return Ok(None);
+    }
     Ok(Some((table_rva, byte_len)))
 }
 
@@ -544,30 +613,48 @@ fn decode_mips_byte_jump_table_range(
     let jr = read_mapped_word(mapped, rva + 20, path)?;
     let delay_slot = read_mapped_word(mapped, rva + 24, path)?;
 
-    let Some(base_register) = decode_mips_lui_rt(lui) else { return Ok(None); };
-    if !is_mips_addiu_same_register(addiu, base_register) { return Ok(None); }
+    let Some(base_register) = decode_mips_lui_rt(lui) else {
+        return Ok(None);
+    };
+    if !is_mips_addiu_same_register(addiu, base_register) {
+        return Ok(None);
+    }
     let Some((index_register, selector_register)) =
         decode_mips_addu_with_base(addu_index, base_register)
     else {
         return Ok(None);
     };
-    if !is_mips_lb_same_register(lb, index_register) { return Ok(None); }
+    if !is_mips_lb_same_register(lb, index_register) {
+        return Ok(None);
+    }
     if !is_mips_addu(addu_target, base_register, base_register, index_register) {
         return Ok(None);
     }
-    if !is_mips_jr(jr, base_register) || delay_slot != MIPS_NOP { return Ok(None); }
+    if !is_mips_jr(jr, base_register) || delay_slot != MIPS_NOP {
+        return Ok(None);
+    }
 
     let table_pc = ((lui & 0xffff) << 16).wrapping_add(addiu as u16 as i16 as i32 as u32);
-    let Some(table_rva) = table_pc.checked_sub(load_base) else { return Ok(None); };
-    if table_rva != rva + 28 || table_rva >= section_end { return Ok(None); }
+    let Some(table_rva) = table_pc.checked_sub(load_base) else {
+        return Ok(None);
+    };
+    if table_rva != rva + 28 || table_rva >= section_end {
+        return Ok(None);
+    }
     let Some(entry_count) =
         find_mips_jump_table_entry_count(mapped, section_start, rva, selector_register, path)?
     else {
         return Ok(None);
     };
-    if entry_count == 0 { return Ok(None); }
-    let Some(table_end) = table_rva.checked_add(entry_count) else { return Ok(None); };
-    if table_end > section_end { return Ok(None); }
+    if entry_count == 0 {
+        return Ok(None);
+    }
+    let Some(table_end) = table_rva.checked_add(entry_count) else {
+        return Ok(None);
+    };
+    if table_end > section_end {
+        return Ok(None);
+    }
     Ok(Some((table_rva, entry_count)))
 }
 
@@ -634,7 +721,10 @@ pub(crate) fn decode_mips_sll_by_one(instruction: u32) -> Option<(u32, u32)> {
     (opcode == 0 && rs == 0 && shamt == 1 && funct == 0).then_some((rd, rt))
 }
 
-pub(crate) fn decode_mips_addu_with_base(instruction: u32, base_register: u32) -> Option<(u32, u32)> {
+pub(crate) fn decode_mips_addu_with_base(
+    instruction: u32,
+    base_register: u32,
+) -> Option<(u32, u32)> {
     if instruction >> 26 != 0 || (instruction & 0x3f) != 0x21 {
         return None;
     }
@@ -680,7 +770,12 @@ pub(crate) fn is_mips_jr(instruction: u32, register: u32) -> bool {
 
 // ── stub generation ───────────────────────────────────────────────────────────
 
-pub(crate) fn jal_stub_words(pc: u32, target: u32, delay_slot: u32, stub_pc: u32) -> Result<Vec<u32>> {
+pub(crate) fn jal_stub_words(
+    pc: u32,
+    target: u32,
+    delay_slot: u32,
+    stub_pc: u32,
+) -> Result<Vec<u32>> {
     let link_address = pc.wrapping_add(8);
     let mut words = vec![
         encode_mips_lui(31, link_address >> 16),
@@ -705,7 +800,13 @@ pub(crate) fn branch_likely_stub_words(
     let false_path_pc = stub_pc.wrapping_add((prefix_len + 1 + true_jump_len as u32) * 4);
 
     let mut words = vec![
-        encode_mips_cond_branch(branch.inverse_branch, branch.rs, branch.rt, stub_pc, false_path_pc)?,
+        encode_mips_cond_branch(
+            branch.inverse_branch,
+            branch.rs,
+            branch.rt,
+            stub_pc,
+            false_path_pc,
+        )?,
         MIPS_NOP,
     ];
     if branch.link {
@@ -732,7 +833,13 @@ pub(crate) fn normal_branch_stub_words(
     let false_path_pc = stub_pc.wrapping_add((3 + true_jump_len as u32) * 4);
 
     let mut words = vec![
-        encode_mips_cond_branch(branch.inverse_branch, branch.rs, branch.rt, stub_pc, false_path_pc)?,
+        encode_mips_cond_branch(
+            branch.inverse_branch,
+            branch.rs,
+            branch.rt,
+            stub_pc,
+            false_path_pc,
+        )?,
         MIPS_NOP,
         delay_slot,
     ];
@@ -863,10 +970,15 @@ pub(crate) fn read_mips_import_args<D>(uc: &Unicorn<'_, D>, count: usize) -> Vec
     let sp = read_mips_reg(uc, RegisterMIPS::SP);
     for i in 0..count.saturating_sub(4) {
         let offset = 16 + i as u32 * 4;
-        let value = sp.checked_add(offset).and_then(|addr| {
-            let mut bytes = [0u8; 4];
-            uc.mem_read(u64::from(addr), &mut bytes).ok().map(|()| u32::from_le_bytes(bytes))
-        }).unwrap_or(0);
+        let value = sp
+            .checked_add(offset)
+            .and_then(|addr| {
+                let mut bytes = [0u8; 4];
+                uc.mem_read(u64::from(addr), &mut bytes)
+                    .ok()
+                    .map(|()| u32::from_le_bytes(bytes))
+            })
+            .unwrap_or(0);
         args.push(value);
     }
     args
@@ -1013,7 +1125,9 @@ pub(crate) fn is_mips_delay_slot_pc(
     previous_pc: Option<u32>,
     pc: u32,
 ) -> bool {
-    let Some(previous_pc) = previous_pc else { return false; };
+    let Some(previous_pc) = previous_pc else {
+        return false;
+    };
     if previous_pc.wrapping_add(4) != pc {
         return false;
     }
@@ -1162,7 +1276,9 @@ impl ArchHooks for MipsArch {
 
     fn is_delay_slot(pc: u32, read_u32: &dyn Fn(u32) -> Option<u32>) -> bool {
         // Check if pc-4 is a control-transfer instruction.
-        let Some(prev) = pc.checked_sub(4) else { return false; };
+        let Some(prev) = pc.checked_sub(4) else {
+            return false;
+        };
         read_u32(prev).is_some_and(is_mips_control_transfer_instruction)
     }
 

@@ -417,7 +417,8 @@ pub fn socket_begin_tcp_connect(socket: u32, name_bytes: &[u8]) -> bool {
         }) => {}
         _ => return false,
     }
-    let result: Arc<Mutex<Option<std::result::Result<TcpStream, u32>>>> = Arc::new(Mutex::new(None));
+    let result: Arc<Mutex<Option<std::result::Result<TcpStream, u32>>>> =
+        Arc::new(Mutex::new(None));
     *state.sockets.get_mut(&socket).unwrap() = HostSocket::TcpConnecting(result.clone());
     drop(state);
     std::thread::spawn(move || {
@@ -599,16 +600,14 @@ fn connect_raw<M: CoredllGuestMemory>(
                 Err(error) => Err(io_to_wsa_error(&error)),
             }
         }
-        HostSocket::TcpConnecting(arc) => {
-            match arc.lock().ok().and_then(|mut lock| lock.take()) {
-                Some(Ok(stream)) => {
-                    *entry = HostSocket::TcpStream(stream);
-                    Ok(())
-                }
-                Some(Err(error)) => Err(error),
-                None => Err(WSAETIMEDOUT),
+        HostSocket::TcpConnecting(arc) => match arc.lock().ok().and_then(|mut lock| lock.take()) {
+            Some(Ok(stream)) => {
+                *entry = HostSocket::TcpStream(stream);
+                Ok(())
             }
-        }
+            Some(Err(error)) => Err(error),
+            None => Err(WSAETIMEDOUT),
+        },
         HostSocket::TcpStream(_) | HostSocket::Udp(_) => Ok(()),
         _ => Err(WSAEOPNOTSUPP),
     };
@@ -1467,10 +1466,7 @@ fn udp_socket_read_ready(udp: &UdpSocket, options: SocketOptions) -> bool {
 fn host_socket_write_ready(socket: &HostSocket) -> bool {
     match socket {
         HostSocket::TcpStream(_) | HostSocket::Udp(_) => true,
-        HostSocket::TcpConnecting(arc) => arc
-            .lock()
-            .ok()
-            .is_some_and(|lock| lock.is_some()),
+        HostSocket::TcpConnecting(arc) => arc.lock().ok().is_some_and(|lock| lock.is_some()),
         _ => false,
     }
 }

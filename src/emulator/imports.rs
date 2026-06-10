@@ -1359,7 +1359,13 @@ mod tests {
         );
 
         assert_eq!(
-            external.resolve("a.dll", &ImportBy::Name { hint: 0, name: "Foo".to_owned() }),
+            external.resolve(
+                "a.dll",
+                &ImportBy::Name {
+                    hint: 0,
+                    name: "Foo".to_owned()
+                }
+            ),
             Some(0x7fff_1000),
             "three-level forward chain must resolve to final address"
         );
@@ -1395,7 +1401,13 @@ mod tests {
         );
 
         assert_eq!(
-            external.resolve("a.dll", &ImportBy::Name { hint: 0, name: "Foo".to_owned() }),
+            external.resolve(
+                "a.dll",
+                &ImportBy::Name {
+                    hint: 0,
+                    name: "Foo".to_owned()
+                }
+            ),
             None,
             "circular forward chain must return None instead of looping"
         );
@@ -1406,7 +1418,13 @@ mod tests {
         // Normal name form: last dot separates module from symbol.
         assert_eq!(
             parse_forwarder_target("MSVCRT.printf"),
-            Some(("MSVCRT".to_owned(), ImportBy::Name { hint: 0, name: "printf".to_owned() }))
+            Some((
+                "MSVCRT".to_owned(),
+                ImportBy::Name {
+                    hint: 0,
+                    name: "printf".to_owned()
+                }
+            ))
         );
 
         // Ordinal form: symbol starting with '#' parses as ordinal.
@@ -1418,7 +1436,13 @@ mod tests {
         // Multi-dot path: rsplit_once on the LAST dot.
         assert_eq!(
             parse_forwarder_target("A.B.C"),
-            Some(("A.B".to_owned(), ImportBy::Name { hint: 0, name: "C".to_owned() }))
+            Some((
+                "A.B".to_owned(),
+                ImportBy::Name {
+                    hint: 0,
+                    name: "C".to_owned()
+                }
+            ))
         );
 
         // Empty module (no dot) → None.

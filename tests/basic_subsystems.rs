@@ -9,19 +9,18 @@ use wince_emulation_v3::{
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         gwe::{
             GWL_USERDATA, MSGSRC_HARDWARE_KEYBOARD, MSGSRC_SOFTWARE_SEND, QS_POSTMESSAGE,
-            QS_SENDMESSAGE, QS_TIMER, Rect, SMF_TIMEOUT, WA_ACTIVE, WM_ACTIVATE, WM_CHAR,
-            WM_ERASEBKGND, WM_KILLFOCUS, WM_QUIT, WM_SETFOCUS, WM_TIMER, WM_USER, WNDCLASSW_SIZE,
-            WS_CHILD, WS_POPUP, WS_VISIBLE,
-            SM_CXSCREEN, SM_CYSCREEN, SM_CXVSCROLL, SM_CYVSCROLL, SM_CXHSCROLL, SM_CYHSCROLL,
-            SM_CYCAPTION, SM_CYMENU, SM_CXBORDER, SM_CYBORDER, SM_CXDLGFRAME, SM_CYDLGFRAME,
-            SM_CXICON, SM_CYICON, SM_CXCURSOR, SM_CYCURSOR, SM_CXSMICON, SM_CYSMICON,
-            SM_CXDOUBLECLK, SM_CYDOUBLECLK, SM_CXICONSPACING, SM_CYICONSPACING,
-            SM_CXEDGE, SM_CYEDGE, SM_MOUSEPRESENT, SM_CMONITORS, SM_SAMEDISPLAYFORMAT,
-            SM_DEBUG, SM_CXFULLSCREEN, SM_CYFULLSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-            SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
-            SM_SWAPBUTTON, SM_CXFRAME, SM_CYFRAME, SM_CXMINTRACK, SM_CYMINTRACK,
-            SM_MENUDROPALIGNMENT, SM_PENWINDOWS, SM_DBCSENABLED, SM_CMOUSEBUTTONS,
-            SM_CYSMCAPTION, SM_CXSMSIZE, SM_CYSMSIZE, SM_CXMENUSIZE, SM_CYMENUSIZE,
+            QS_SENDMESSAGE, QS_TIMER, Rect, SM_CMONITORS, SM_CMOUSEBUTTONS, SM_CXBORDER,
+            SM_CXCURSOR, SM_CXDLGFRAME, SM_CXDOUBLECLK, SM_CXEDGE, SM_CXFRAME, SM_CXFULLSCREEN,
+            SM_CXHSCROLL, SM_CXICON, SM_CXICONSPACING, SM_CXMENUSIZE, SM_CXMINTRACK, SM_CXSCREEN,
+            SM_CXSMICON, SM_CXSMSIZE, SM_CXVIRTUALSCREEN, SM_CXVSCROLL, SM_CYBORDER, SM_CYCAPTION,
+            SM_CYCURSOR, SM_CYDLGFRAME, SM_CYDOUBLECLK, SM_CYEDGE, SM_CYFRAME, SM_CYFULLSCREEN,
+            SM_CYHSCROLL, SM_CYICON, SM_CYICONSPACING, SM_CYMENU, SM_CYMENUSIZE, SM_CYMINTRACK,
+            SM_CYSCREEN, SM_CYSMCAPTION, SM_CYSMICON, SM_CYSMSIZE, SM_CYVIRTUALSCREEN,
+            SM_CYVSCROLL, SM_DBCSENABLED, SM_DEBUG, SM_MENUDROPALIGNMENT, SM_MOUSEPRESENT,
+            SM_PENWINDOWS, SM_SAMEDISPLAYFORMAT, SM_SWAPBUTTON, SM_XVIRTUALSCREEN,
+            SM_YVIRTUALSCREEN, SMF_TIMEOUT, WA_ACTIVE, WM_ACTIVATE, WM_CHAR, WM_ERASEBKGND,
+            WM_KILLFOCUS, WM_QUIT, WM_SETFOCUS, WM_TIMER, WM_USER, WNDCLASSW_SIZE, WS_CHILD,
+            WS_POPUP, WS_VISIBLE,
         },
         kernel::{
             CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
@@ -36,7 +35,9 @@ use wince_emulation_v3::{
         registry::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, HKEY_LOCAL_MACHINE, REG_SZ},
         remote::{WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP},
         scheduler::SchedulerBlockedWaitKind,
-        thread::{ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, TLS_MINIMUM_AVAILABLE, ThreadSystem},
+        thread::{
+            ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, TLS_MINIMUM_AVAILABLE, ThreadSystem,
+        },
         timer::{INFINITE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
     config::{MountConfig, ObjectStoreConfig, RuntimeConfig},
@@ -381,7 +382,8 @@ fn parent_exits_and_child_window_pump_stays_alive() -> Result<()> {
     let mut kernel = CeKernel::boot(config);
 
     let parent_thread_id: u32 = 1;
-    let parent_hwnd = kernel.create_window_ex_w(parent_thread_id, "PARENT_CLASS", "", None, 0, 0, 0);
+    let parent_hwnd =
+        kernel.create_window_ex_w(parent_thread_id, "PARENT_CLASS", "", None, 0, 0, 0);
 
     // Spawn a child process.
     let launch = kernel.queue_process_launch(Some("child.exe".to_owned()), None);
@@ -399,8 +401,14 @@ fn parent_exits_and_child_window_pump_stays_alive() -> Result<()> {
     assert!(kernel.terminate_process(CE_CURRENT_PROCESS_PSEUDO_HANDLE, 0));
 
     // Parent window is destroyed; child window survives.
-    assert!(!kernel.gwe.is_window(parent_hwnd), "parent window destroyed on exit");
-    assert!(kernel.gwe.is_window(child_hwnd), "child window survives parent exit");
+    assert!(
+        !kernel.gwe.is_window(parent_hwnd),
+        "parent window destroyed on exit"
+    );
+    assert!(
+        kernel.gwe.is_window(child_hwnd),
+        "child window survives parent exit"
+    );
 
     // Child process handle remains STILL_ACTIVE — parent exit does not reap child.
     assert_eq!(
@@ -409,10 +417,17 @@ fn parent_exits_and_child_window_pump_stays_alive() -> Result<()> {
     );
 
     // Child message queue is intact.
-    let msg = kernel
-        .gwe
-        .peek_message_filtered(child_thread_id, None, WM_USER + 1, WM_USER + 1, wince_emulation_v3::ce::gwe::PeekFlags::REMOVE);
-    assert!(msg.is_some(), "child message queue intact after parent exits");
+    let msg = kernel.gwe.peek_message_filtered(
+        child_thread_id,
+        None,
+        WM_USER + 1,
+        WM_USER + 1,
+        wince_emulation_v3::ce::gwe::PeekFlags::REMOVE,
+    );
+    assert!(
+        msg.is_some(),
+        "child message queue intact after parent exits"
+    );
     assert_eq!(msg.unwrap().wparam, 11);
 
     Ok(())
@@ -768,9 +783,10 @@ fn message_and_timer_transitions_queue_scheduler_msg_wait_candidates() -> Result
                         mouse_message_max,
                     )
                 }
-                SchedulerBlockedWaitKind::ClipboardRender { format } => {
-                    kernel.gwe.get_clipboard_data(format).is_some_and(|h| h != 0)
-                }
+                SchedulerBlockedWaitKind::ClipboardRender { format } => kernel
+                    .gwe
+                    .get_clipboard_data(format)
+                    .is_some_and(|h| h != 0),
             },
         )
     };
@@ -1012,7 +1028,9 @@ fn send_message_transitions_queue_scheduler_reply_wait_candidates() -> Result<()
     let completion_receiver = 61;
     let mut completion_class = [0u8; WNDCLASSW_SIZE];
     completion_class[28..32].copy_from_slice(&0x000b_4005_u32.to_le_bytes());
-    kernel.gwe.register_class("SendCompleteWake", completion_class);
+    kernel
+        .gwe
+        .register_class("SendCompleteWake", completion_class);
     let completion_hwnd = kernel
         .gwe
         .create_window(completion_receiver, "SendCompleteWake", "send");
@@ -2015,23 +2033,61 @@ fn get_message_hit_tests_remote_touch_to_visible_child() -> Result<()> {
 fn rect_geometry_subtract_intersect_union_and_point_containment() {
     use wince_emulation_v3::ce::gwe::{Point, Rect};
 
-    let r = Rect { left: 0, top: 0, right: 10, bottom: 10 };
-    let q = Rect { left: 5, top: 5, right: 15, bottom: 15 };
+    let r = Rect {
+        left: 0,
+        top: 0,
+        right: 10,
+        bottom: 10,
+    };
+    let q = Rect {
+        left: 5,
+        top: 5,
+        right: 15,
+        bottom: 15,
+    };
 
     // Intersect: overlapping rects return the overlap region.
-    let inter = r.intersect(q).expect("overlapping rects have an intersection");
-    assert_eq!(inter, Rect { left: 5, top: 5, right: 10, bottom: 10 });
+    let inter = r
+        .intersect(q)
+        .expect("overlapping rects have an intersection");
+    assert_eq!(
+        inter,
+        Rect {
+            left: 5,
+            top: 5,
+            right: 10,
+            bottom: 10
+        }
+    );
 
     // Intersect: non-overlapping rects return None.
-    let far = Rect { left: 20, top: 20, right: 30, bottom: 30 };
+    let far = Rect {
+        left: 20,
+        top: 20,
+        right: 30,
+        bottom: 30,
+    };
     assert!(r.intersect(far).is_none());
 
     // Union: bounding box of two non-overlapping rects.
     let u = r.union(far);
-    assert_eq!(u, Rect { left: 0, top: 0, right: 30, bottom: 30 });
+    assert_eq!(
+        u,
+        Rect {
+            left: 0,
+            top: 0,
+            right: 30,
+            bottom: 30
+        }
+    );
 
     // Union with empty rect returns the non-empty one.
-    let empty = Rect { left: 5, top: 5, right: 5, bottom: 5 };
+    let empty = Rect {
+        left: 5,
+        top: 5,
+        right: 5,
+        bottom: 5,
+    };
     assert_eq!(r.union(empty), r);
     assert_eq!(empty.union(r), r);
 
@@ -2040,12 +2096,29 @@ fn rect_geometry_subtract_intersect_union_and_point_containment() {
     parts.sort_by_key(|r| (r.top, r.left));
     assert_eq!(parts.len(), 2);
     // Top strip: (0,0,10,5)
-    assert!(parts.iter().any(|p| *p == Rect { left: 0, top: 0, right: 10, bottom: 5 }));
+    assert!(parts.iter().any(|p| *p
+        == Rect {
+            left: 0,
+            top: 0,
+            right: 10,
+            bottom: 5
+        }));
     // Left strip in the middle row: (0,5,5,10)
-    assert!(parts.iter().any(|p| *p == Rect { left: 0, top: 5, right: 5, bottom: 10 }));
+    assert!(parts.iter().any(|p| *p
+        == Rect {
+            left: 0,
+            top: 5,
+            right: 5,
+            bottom: 10
+        }));
 
     // subtract: other completely contains self → empty remainder.
-    let big = Rect { left: -5, top: -5, right: 20, bottom: 20 };
+    let big = Rect {
+        left: -5,
+        top: -5,
+        right: 20,
+        bottom: 20,
+    };
     assert!(r.subtract(big).is_empty());
 
     // subtract: no overlap → returns [self].
@@ -2087,21 +2160,55 @@ fn rect_helper_methods_from_origin_size_offset_zero_origin_width_height() {
 
     // zero_origin shifts the rect to origin while preserving size
     let z = r.zero_origin();
-    assert_eq!(z, Rect { left: 0, top: 0, right: 30, bottom: 40 });
+    assert_eq!(
+        z,
+        Rect {
+            left: 0,
+            top: 0,
+            right: 30,
+            bottom: 40
+        }
+    );
     assert_eq!(z.width(), r.width());
     assert_eq!(z.height(), r.height());
 
     // offset shifts all edges by (dx, dy)
     let shifted = r.offset(5, -10);
-    assert_eq!(shifted, Rect { left: 15, top: 10, right: 45, bottom: 50 });
+    assert_eq!(
+        shifted,
+        Rect {
+            left: 15,
+            top: 10,
+            right: 45,
+            bottom: 50
+        }
+    );
 
     // normalized: left<right, top<bottom stays the same
-    let already = Rect { left: 1, top: 2, right: 3, bottom: 4 };
+    let already = Rect {
+        left: 1,
+        top: 2,
+        right: 3,
+        bottom: 4,
+    };
     assert_eq!(already.normalized(), already);
 
     // normalized: inverted rect swaps edges
-    let inv = Rect { left: 5, top: 8, right: 2, bottom: 3 };
-    assert_eq!(inv.normalized(), Rect { left: 2, top: 3, right: 5, bottom: 8 });
+    let inv = Rect {
+        left: 5,
+        top: 8,
+        right: 2,
+        bottom: 3,
+    };
+    assert_eq!(
+        inv.normalized(),
+        Rect {
+            left: 2,
+            top: 3,
+            right: 5,
+            bottom: 8
+        }
+    );
 }
 
 #[test]
@@ -2111,17 +2218,26 @@ fn cemath_frexp_ldexp_modf_divzero_and_shifts() {
     // Frexp: 8.0 = 0.5 × 2^4
     assert_eq!(
         math.eval(CeMathCall::Frexp(8.0)),
-        CeMathValue::Frexp { fraction: 0.5, exp: 4 }
+        CeMathValue::Frexp {
+            fraction: 0.5,
+            exp: 4
+        }
     );
     // Frexp: 0.0 → fraction 0.0, exp 0
     assert_eq!(
         math.eval(CeMathCall::Frexp(0.0)),
-        CeMathValue::Frexp { fraction: 0.0, exp: 0 }
+        CeMathValue::Frexp {
+            fraction: 0.0,
+            exp: 0
+        }
     );
 
     // Ldexp: 0.75 × 2^3 = 6.0
     assert_eq!(
-        math.eval(CeMathCall::Ldexp { value: 0.75, exp: 3 }),
+        math.eval(CeMathCall::Ldexp {
+            value: 0.75,
+            exp: 3
+        }),
         CeMathValue::F64(6.0)
     );
 
@@ -2133,8 +2249,11 @@ fn cemath_frexp_ldexp_modf_divzero_and_shifts() {
     assert!((fraction - 0.7_f64).abs() < 1e-10);
 
     // Modf: negative value
-    let CeMathValue::Modf { integer: int_neg, fraction: frac_neg } =
-        math.eval(CeMathCall::Modf(-2.5)) else {
+    let CeMathValue::Modf {
+        integer: int_neg,
+        fraction: frac_neg,
+    } = math.eval(CeMathCall::Modf(-2.5))
+    else {
         panic!("expected Modf result");
     };
     assert_eq!(int_neg, -2.0_f64);
@@ -2142,7 +2261,10 @@ fn cemath_frexp_ldexp_modf_divzero_and_shifts() {
 
     // Divide-by-zero: Div denom=0
     assert_eq!(
-        math.eval(CeMathCall::Div { numer: 99, denom: 0 }),
+        math.eval(CeMathCall::Div {
+            numer: 99,
+            denom: 0
+        }),
         CeMathValue::DivideByZero
     );
     // Divide-by-zero: LlDiv rhs=0
@@ -2167,11 +2289,17 @@ fn cemath_frexp_ldexp_modf_divzero_and_shifts() {
         CeMathValue::I64(16)
     );
     assert_eq!(
-        math.eval(CeMathCall::LlRShift { value: -32, shift: 2 }),
+        math.eval(CeMathCall::LlRShift {
+            value: -32,
+            shift: 2
+        }),
         CeMathValue::I64(-8)
     );
     assert_eq!(
-        math.eval(CeMathCall::UllRShift { value: 64, shift: 3 }),
+        math.eval(CeMathCall::UllRShift {
+            value: 64,
+            shift: 3
+        }),
         CeMathValue::U64(8)
     );
 
@@ -2185,52 +2313,162 @@ fn cemath_unary_binary_conversion_and_float_arithmetic_ops() {
     let math = CeMath;
 
     // UnaryF64 sampling: Sqrt, Floor, Ceil, Fabs.
-    assert_eq!(math.eval(CeMathCall::UnaryF64 { op: CeMathUnaryF64::Sqrt, value: 4.0 }), CeMathValue::F64(2.0));
-    assert_eq!(math.eval(CeMathCall::UnaryF64 { op: CeMathUnaryF64::Floor, value: 3.7 }), CeMathValue::F64(3.0));
-    assert_eq!(math.eval(CeMathCall::UnaryF64 { op: CeMathUnaryF64::Ceil, value: 3.2 }), CeMathValue::F64(4.0));
-    assert_eq!(math.eval(CeMathCall::UnaryF64 { op: CeMathUnaryF64::Fabs, value: -5.0 }), CeMathValue::F64(5.0));
+    assert_eq!(
+        math.eval(CeMathCall::UnaryF64 {
+            op: CeMathUnaryF64::Sqrt,
+            value: 4.0
+        }),
+        CeMathValue::F64(2.0)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::UnaryF64 {
+            op: CeMathUnaryF64::Floor,
+            value: 3.7
+        }),
+        CeMathValue::F64(3.0)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::UnaryF64 {
+            op: CeMathUnaryF64::Ceil,
+            value: 3.2
+        }),
+        CeMathValue::F64(4.0)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::UnaryF64 {
+            op: CeMathUnaryF64::Fabs,
+            value: -5.0
+        }),
+        CeMathValue::F64(5.0)
+    );
 
     // BinaryF64: Atan2 and Fmod.
-    assert_eq!(math.eval(CeMathCall::BinaryF64 { op: CeMathBinaryF64::Atan2, lhs: 0.0, rhs: 1.0 }), CeMathValue::F64(0.0));
-    assert_eq!(math.eval(CeMathCall::BinaryF64 { op: CeMathBinaryF64::Fmod, lhs: 10.0, rhs: 3.0 }), CeMathValue::F64(1.0));
+    assert_eq!(
+        math.eval(CeMathCall::BinaryF64 {
+            op: CeMathBinaryF64::Atan2,
+            lhs: 0.0,
+            rhs: 1.0
+        }),
+        CeMathValue::F64(0.0)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::BinaryF64 {
+            op: CeMathBinaryF64::Fmod,
+            lhs: 10.0,
+            rhs: 3.0
+        }),
+        CeMathValue::F64(1.0)
+    );
 
     // Ldiv: normal case.
-    assert_eq!(math.eval(CeMathCall::Ldiv { numer: 17, denom: 5 }), CeMathValue::Div { quot: 3, rem: 2 });
+    assert_eq!(
+        math.eval(CeMathCall::Ldiv {
+            numer: 17,
+            denom: 5
+        }),
+        CeMathValue::Div { quot: 3, rem: 2 }
+    );
     // Ldiv: divide-by-zero.
-    assert_eq!(math.eval(CeMathCall::Ldiv { numer: 1, denom: 0 }), CeMathValue::DivideByZero);
+    assert_eq!(
+        math.eval(CeMathCall::Ldiv { numer: 1, denom: 0 }),
+        CeMathValue::DivideByZero
+    );
 
     // UllRem.
-    assert_eq!(math.eval(CeMathCall::UllRem { lhs: 10, rhs: 3 }), CeMathValue::U64(1));
+    assert_eq!(
+        math.eval(CeMathCall::UllRem { lhs: 10, rhs: 3 }),
+        CeMathValue::U64(1)
+    );
     // UllRem divide-by-zero.
-    assert_eq!(math.eval(CeMathCall::UllRem { lhs: 1, rhs: 0 }), CeMathValue::DivideByZero);
+    assert_eq!(
+        math.eval(CeMathCall::UllRem { lhs: 1, rhs: 0 }),
+        CeMathValue::DivideByZero
+    );
 
     // Float arithmetic helpers.
-    assert_eq!(math.eval(CeMathCall::FloatAdd { lhs: 1.0, rhs: 2.0 }), CeMathValue::F32(3.0));
-    assert_eq!(math.eval(CeMathCall::FloatSub { lhs: 5.0, rhs: 3.0 }), CeMathValue::F32(2.0));
-    assert_eq!(math.eval(CeMathCall::FloatMul { lhs: 2.0, rhs: 3.0 }), CeMathValue::F32(6.0));
-    assert_eq!(math.eval(CeMathCall::FloatDiv { lhs: 9.0, rhs: 3.0 }), CeMathValue::F32(3.0));
+    assert_eq!(
+        math.eval(CeMathCall::FloatAdd { lhs: 1.0, rhs: 2.0 }),
+        CeMathValue::F32(3.0)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::FloatSub { lhs: 5.0, rhs: 3.0 }),
+        CeMathValue::F32(2.0)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::FloatMul { lhs: 2.0, rhs: 3.0 }),
+        CeMathValue::F32(6.0)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::FloatDiv { lhs: 9.0, rhs: 3.0 }),
+        CeMathValue::F32(3.0)
+    );
 
     // Double arithmetic helpers.
-    assert_eq!(math.eval(CeMathCall::DoubleAdd { lhs: 1.0, rhs: 2.0 }), CeMathValue::F64(3.0));
-    assert_eq!(math.eval(CeMathCall::DoubleSub { lhs: 5.0, rhs: 3.0 }), CeMathValue::F64(2.0));
-    assert_eq!(math.eval(CeMathCall::DoubleMul { lhs: 2.0, rhs: 3.0 }), CeMathValue::F64(6.0));
-    assert_eq!(math.eval(CeMathCall::DoubleDiv { lhs: 9.0, rhs: 3.0 }), CeMathValue::F64(3.0));
+    assert_eq!(
+        math.eval(CeMathCall::DoubleAdd { lhs: 1.0, rhs: 2.0 }),
+        CeMathValue::F64(3.0)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::DoubleSub { lhs: 5.0, rhs: 3.0 }),
+        CeMathValue::F64(2.0)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::DoubleMul { lhs: 2.0, rhs: 3.0 }),
+        CeMathValue::F64(6.0)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::DoubleDiv { lhs: 9.0, rhs: 3.0 }),
+        CeMathValue::F64(3.0)
+    );
 
     // Type conversions.
-    assert_eq!(math.eval(CeMathCall::FloatToLong(3.7_f32)), CeMathValue::I32(3));
-    assert_eq!(math.eval(CeMathCall::DoubleToLong(4.9_f64)), CeMathValue::I32(4));
-    assert_eq!(math.eval(CeMathCall::FloatToUnsignedLong(5.1_f32)), CeMathValue::U32(5));
+    assert_eq!(
+        math.eval(CeMathCall::FloatToLong(3.7_f32)),
+        CeMathValue::I32(3)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::DoubleToLong(4.9_f64)),
+        CeMathValue::I32(4)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::FloatToUnsignedLong(5.1_f32)),
+        CeMathValue::U32(5)
+    );
     assert_eq!(math.eval(CeMathCall::LongToFloat(7)), CeMathValue::F32(7.0));
-    assert_eq!(math.eval(CeMathCall::LongToDouble(8)), CeMathValue::F64(8.0));
-    assert_eq!(math.eval(CeMathCall::UnsignedLongToFloat(10)), CeMathValue::F32(10.0));
-    assert_eq!(math.eval(CeMathCall::UnsignedLongToDouble(11)), CeMathValue::F64(11.0));
-    assert_eq!(math.eval(CeMathCall::FloatToDouble(1.5_f32)), CeMathValue::F64(1.5_f64));
-    assert_eq!(math.eval(CeMathCall::DoubleToFloat(2.5_f64)), CeMathValue::F32(2.5_f32));
+    assert_eq!(
+        math.eval(CeMathCall::LongToDouble(8)),
+        CeMathValue::F64(8.0)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::UnsignedLongToFloat(10)),
+        CeMathValue::F32(10.0)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::UnsignedLongToDouble(11)),
+        CeMathValue::F64(11.0)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::FloatToDouble(1.5_f32)),
+        CeMathValue::F64(1.5_f64)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::DoubleToFloat(2.5_f64)),
+        CeMathValue::F32(2.5_f32)
+    );
 
     // FloatCmp: -1, 0, 1.
-    assert_eq!(math.eval(CeMathCall::FloatCmp { lhs: 1.0, rhs: 2.0 }), CeMathValue::Cmp(-1));
-    assert_eq!(math.eval(CeMathCall::FloatCmp { lhs: 2.0, rhs: 2.0 }), CeMathValue::Cmp(0));
-    assert_eq!(math.eval(CeMathCall::FloatCmp { lhs: 3.0, rhs: 2.0 }), CeMathValue::Cmp(1));
+    assert_eq!(
+        math.eval(CeMathCall::FloatCmp { lhs: 1.0, rhs: 2.0 }),
+        CeMathValue::Cmp(-1)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::FloatCmp { lhs: 2.0, rhs: 2.0 }),
+        CeMathValue::Cmp(0)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::FloatCmp { lhs: 3.0, rhs: 2.0 }),
+        CeMathValue::Cmp(1)
+    );
 }
 
 #[test]
@@ -2238,16 +2476,28 @@ fn thread_priority_win32_to_ce_and_ce_to_win32_boundary_cases() {
     // Win32 priorities 0..MAX_WIN32_PRIORITY_LEVELS-1 map to CE range [248..255].
     let base = MAX_CE_PRIORITY_LEVELS - MAX_WIN32_PRIORITY_LEVELS as i32;
     assert_eq!(win32_thread_priority_to_ce(0), Some(base));
-    assert_eq!(win32_thread_priority_to_ce(MAX_WIN32_PRIORITY_LEVELS - 1), Some(255));
+    assert_eq!(
+        win32_thread_priority_to_ce(MAX_WIN32_PRIORITY_LEVELS - 1),
+        Some(255)
+    );
     assert_eq!(win32_thread_priority_to_ce(MAX_WIN32_PRIORITY_LEVELS), None);
 
     // CE priority in [base..255] maps back to the same Win32 priority.
     assert_eq!(ce_thread_priority_to_win32(base), Some(0));
-    assert_eq!(ce_thread_priority_to_win32(255), Some(MAX_WIN32_PRIORITY_LEVELS - 1));
+    assert_eq!(
+        ce_thread_priority_to_win32(255),
+        Some(MAX_WIN32_PRIORITY_LEVELS - 1)
+    );
 
     // CE priority below base (high-priority RT threads) → THREAD_PRIORITY_TIME_CRITICAL.
-    assert_eq!(ce_thread_priority_to_win32(0), Some(THREAD_PRIORITY_TIME_CRITICAL));
-    assert_eq!(ce_thread_priority_to_win32(base - 1), Some(THREAD_PRIORITY_TIME_CRITICAL));
+    assert_eq!(
+        ce_thread_priority_to_win32(0),
+        Some(THREAD_PRIORITY_TIME_CRITICAL)
+    );
+    assert_eq!(
+        ce_thread_priority_to_win32(base - 1),
+        Some(THREAD_PRIORITY_TIME_CRITICAL)
+    );
 
     // Out-of-range CE priority → None.
     assert_eq!(ce_thread_priority_to_win32(-1), None);
@@ -2306,7 +2556,9 @@ fn handle_table_describe_handle_formats_event_mutex_semaphore_and_invalid() {
     assert!(desc.contains("<unnamed>"), "got: {desc}");
     assert!(desc.contains("owner=none"), "got: {desc}");
 
-    let semaphore = table.create_semaphore(Some("sem".to_owned()), 3, 10).unwrap();
+    let semaphore = table
+        .create_semaphore(Some("sem".to_owned()), 3, 10)
+        .unwrap();
     let desc = table.describe_handle(semaphore);
     assert!(desc.contains("sem"), "got: {desc}");
     assert!(desc.contains("count=3"), "got: {desc}");
@@ -2386,17 +2638,28 @@ fn register_and_release_loaded_module_follows_pinned_dynamic_and_ref_count_paths
     let mut kernel = CeKernel::boot(config);
 
     // Register a pinned (dynamic=false) module.
-    kernel.register_loaded_module("pinned.dll", 0x1000_0000, Default::default(), Default::default());
+    kernel.register_loaded_module(
+        "pinned.dll",
+        0x1000_0000,
+        Default::default(),
+        Default::default(),
+    );
     let pinned_base = kernel.loaded_module_handle("pinned.dll").unwrap();
     assert_eq!(pinned_base, 0x1000_0000);
     assert!(kernel.is_loaded_module_handle(0x1000_0000));
 
     // Releasing a pinned module → Pinned; handle stays valid.
-    assert_eq!(kernel.release_loaded_module(0x1000_0000), FreeLibraryResult::Pinned);
+    assert_eq!(
+        kernel.release_loaded_module(0x1000_0000),
+        FreeLibraryResult::Pinned
+    );
     assert!(kernel.is_loaded_module_handle(0x1000_0000));
 
     // Releasing an unknown handle → InvalidHandle.
-    assert_eq!(kernel.release_loaded_module(0xDEAD_0000), FreeLibraryResult::InvalidHandle);
+    assert_eq!(
+        kernel.release_loaded_module(0xDEAD_0000),
+        FreeLibraryResult::InvalidHandle
+    );
 
     // Register a dynamic module with ref_count=2.
     kernel.register_loaded_module_with_metadata(
@@ -2404,7 +2667,11 @@ fn register_and_release_loaded_module_follows_pinned_dynamic_and_ref_count_paths
         0x2000_0000,
         Default::default(),
         Default::default(),
-        LoadedModuleMetadata { dynamic: true, ref_count: 2, ..Default::default() },
+        LoadedModuleMetadata {
+            dynamic: true,
+            ref_count: 2,
+            ..Default::default()
+        },
     );
 
     // First release: ref_count drops from 2 to 1 → StillReferenced.
@@ -2415,7 +2682,10 @@ fn register_and_release_loaded_module_follows_pinned_dynamic_and_ref_count_paths
     assert!(kernel.is_loaded_module_handle(0x2000_0000));
 
     // Second release: ref_count was 1 → UnloadPending.
-    assert_eq!(kernel.release_loaded_module(0x2000_0000), FreeLibraryResult::UnloadPending);
+    assert_eq!(
+        kernel.release_loaded_module(0x2000_0000),
+        FreeLibraryResult::UnloadPending
+    );
 
     // After UnloadPending the module is no longer visible.
     assert!(kernel.loaded_module_handle("dyn.dll").is_none());
@@ -2475,19 +2745,37 @@ fn resolve_loaded_module_proc_by_name_and_ordinal() {
     let base = kernel.loaded_module_handle("testlib.dll").unwrap();
 
     // Name lookup normalizes: "MyExport" → "myexport".
-    assert_eq!(kernel.resolve_loaded_module_proc_by_name(base, "MyExport"), Some(0xCAFE_0001));
+    assert_eq!(
+        kernel.resolve_loaded_module_proc_by_name(base, "MyExport"),
+        Some(0xCAFE_0001)
+    );
     // Decorated name normalizes: "_OtherExport@4" → "otherexport".
-    assert_eq!(kernel.resolve_loaded_module_proc_by_name(base, "_OtherExport@4"), Some(0xCAFE_0002));
+    assert_eq!(
+        kernel.resolve_loaded_module_proc_by_name(base, "_OtherExport@4"),
+        Some(0xCAFE_0002)
+    );
     // Unknown name → None.
-    assert_eq!(kernel.resolve_loaded_module_proc_by_name(base, "missing"), None);
+    assert_eq!(
+        kernel.resolve_loaded_module_proc_by_name(base, "missing"),
+        None
+    );
 
     // Ordinal lookup.
-    assert_eq!(kernel.resolve_loaded_module_proc_by_ordinal(base, 1), Some(0xCAFE_0001));
-    assert_eq!(kernel.resolve_loaded_module_proc_by_ordinal(base, 5), Some(0xCAFE_0005));
+    assert_eq!(
+        kernel.resolve_loaded_module_proc_by_ordinal(base, 1),
+        Some(0xCAFE_0001)
+    );
+    assert_eq!(
+        kernel.resolve_loaded_module_proc_by_ordinal(base, 5),
+        Some(0xCAFE_0005)
+    );
     assert_eq!(kernel.resolve_loaded_module_proc_by_ordinal(base, 99), None);
 
     // Invalid module handle → None.
-    assert_eq!(kernel.resolve_loaded_module_proc_by_name(0xDEAD, "MyExport"), None);
+    assert_eq!(
+        kernel.resolve_loaded_module_proc_by_name(0xDEAD, "MyExport"),
+        None
+    );
 }
 
 #[test]
@@ -2505,12 +2793,22 @@ fn registry_has_key_set_value_enum_subkeys_and_query_info() {
     assert!(kernel.registry.has_key(r"hklm\TEST\SubA"));
     assert!(!kernel.registry.has_key(r"hklm\TEST\SubC"));
 
-    kernel.registry.set_value(r"hklm\TEST\SubA", "Num", RegistryValue::dword(99));
-    kernel.registry.set_value(r"hklm\TEST\SubA", "Str", RegistryValue::string("hello"));
+    kernel
+        .registry
+        .set_value(r"hklm\TEST\SubA", "Num", RegistryValue::dword(99));
+    kernel
+        .registry
+        .set_value(r"hklm\TEST\SubA", "Str", RegistryValue::string("hello"));
 
-    let v = kernel.registry.query_value(r"hklm\TEST\SubA", "Num").unwrap();
+    let v = kernel
+        .registry
+        .query_value(r"hklm\TEST\SubA", "Num")
+        .unwrap();
     assert_eq!(v.as_dword(), Some(99));
-    let v = kernel.registry.query_value(r"hklm\TEST\SubA", "Str").unwrap();
+    let v = kernel
+        .registry
+        .query_value(r"hklm\TEST\SubA", "Str")
+        .unwrap();
     assert_eq!(v.as_str(), Some("hello"));
 
     // enum_subkeys returns only direct children; keys are normalized to lowercase.
@@ -2524,7 +2822,9 @@ fn registry_has_key_set_value_enum_subkeys_and_query_info() {
     assert_eq!(vals.len(), 2);
 
     // reg_query_info_key_w via an open handle.
-    let create = kernel.registry.reg_create_key_exw(HKEY_LOCAL_MACHINE, Some(r"TEST\SubA"));
+    let create = kernel
+        .registry
+        .reg_create_key_exw(HKEY_LOCAL_MACHINE, Some(r"TEST\SubA"));
     assert_eq!(create.status, ERROR_SUCCESS);
     let hkey = create.hkey.unwrap();
     let info = kernel.registry.reg_query_info_key_w(hkey);
@@ -2533,7 +2833,9 @@ fn registry_has_key_set_value_enum_subkeys_and_query_info() {
     assert_eq!(info.values, 2);
 
     // reg_enum_key_ex_w via the TEST key handle.
-    let create_test = kernel.registry.reg_create_key_exw(HKEY_LOCAL_MACHINE, Some("TEST"));
+    let create_test = kernel
+        .registry
+        .reg_create_key_exw(HKEY_LOCAL_MACHINE, Some("TEST"));
     let test_hkey = create_test.hkey.unwrap();
     let r0 = kernel.registry.reg_enum_key_ex_w(test_hkey, 0, None);
     assert_eq!(r0.status, ERROR_SUCCESS);
@@ -2555,7 +2857,10 @@ fn ce_sleep_request_boundary_cases_and_timer_performance_counter() {
     assert_eq!(ce_sleep_request(100), CeSleepRequest::Bounded(101));
     // At CE_SLEEP_LONG_BOUND (0xffff_fffe), adding 1 would overflow 0xffff_ffff = INFINITE,
     // so the implementation caps at CE_SLEEP_LONG_BOUND itself.
-    assert_eq!(ce_sleep_request(0xffff_fffe), CeSleepRequest::Bounded(0xffff_fffe));
+    assert_eq!(
+        ce_sleep_request(0xffff_fffe),
+        CeSleepRequest::Bounded(0xffff_fffe)
+    );
 
     // performance_frequency is always 1_000 (millisecond resolution).
     let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
@@ -2587,7 +2892,10 @@ fn com_initialize_rejects_apartment_mode_change_and_create_instance_validates_po
     // co_create_instance with null iid_ptr → E_POINTER.
     assert_eq!(kernel.com.co_create_instance(0x1000, 0), Err(E_POINTER));
     // co_create_instance for unregistered class → REGDB_E_CLASSNOTREG.
-    assert_eq!(kernel.com.co_create_instance(0x1000, 0x2000), Err(REGDB_E_CLASSNOTREG));
+    assert_eq!(
+        kernel.com.co_create_instance(0x1000, 0x2000),
+        Err(REGDB_E_CLASSNOTREG)
+    );
 }
 
 #[test]
@@ -2632,7 +2940,9 @@ fn gwe_find_window_matches_by_class_and_title_and_resolve_class_name_normalizes(
     assert_eq!(found, Some(hwnd));
 
     // find_window with both correct → finds it.
-    let found = kernel.gwe.find_window(Some("MyClass"), Some("My Window Title"));
+    let found = kernel
+        .gwe
+        .find_window(Some("MyClass"), Some("My Window Title"));
     assert_eq!(found, Some(hwnd));
 
     // find_window with wrong title → None.
@@ -2667,13 +2977,21 @@ fn gwe_keyboard_layout_ime_and_activate_layout() {
     assert_eq!(kernel.gwe.keyboard_layout(), 0x0409_0409);
 
     // set_keyboard_layout_from_name with valid 8-hex-digit string.
-    let prev2 = kernel.gwe.set_keyboard_layout_from_name("00000412").unwrap();
+    let prev2 = kernel
+        .gwe
+        .set_keyboard_layout_from_name("00000412")
+        .unwrap();
     assert_eq!(prev2, 0x0409_0409);
     assert_eq!(kernel.gwe.keyboard_layout(), 0x0000_0412);
     assert_eq!(kernel.gwe.keyboard_layout_name(), "00000412");
 
     // set_keyboard_layout_from_name with invalid string → None.
-    assert!(kernel.gwe.set_keyboard_layout_from_name("not-valid").is_none());
+    assert!(
+        kernel
+            .gwe
+            .set_keyboard_layout_from_name("not-valid")
+            .is_none()
+    );
 
     // ime_enabled_for_thread defaults to true; toggle to false then back.
     let tid = 99_u32;
@@ -2708,8 +3026,8 @@ fn stock_object_handle_returns_handle_for_valid_indices_and_none_for_invalid() {
     assert_eq!(stock_object_handle(19), Some(STOCK_BASE | 19));
 
     // Out-of-range gaps and beyond are None.
-    assert_eq!(stock_object_handle(9), None);   // gap between NULL_PEN and SYSTEM_FONT
-    assert_eq!(stock_object_handle(16), None);  // gap between DEFAULT_PALETTE and DC_BRUSH
+    assert_eq!(stock_object_handle(9), None); // gap between NULL_PEN and SYSTEM_FONT
+    assert_eq!(stock_object_handle(16), None); // gap between DEFAULT_PALETTE and DC_BRUSH
     assert_eq!(stock_object_handle(100), None);
 }
 
@@ -2721,7 +3039,10 @@ fn virtual_input_push_events_and_poll_and_virtual_presenter_counts() {
     input.push_touch_down(10, 20);
     input.push_touch_move(15, 25);
     input.push_touch_up(15, 25);
-    input.push_event(VirtualInputEvent::Key { virtual_key: 0x41, pressed: true });
+    input.push_event(VirtualInputEvent::Key {
+        virtual_key: 0x41,
+        pressed: true,
+    });
 
     use wince_emulation_v3::ce::desktop::Input as _;
     let events = input.poll_events().unwrap();
@@ -2729,7 +3050,13 @@ fn virtual_input_push_events_and_poll_and_virtual_presenter_counts() {
     assert_eq!(events[0], VirtualInputEvent::TouchDown { x: 10, y: 20 });
     assert_eq!(events[1], VirtualInputEvent::TouchMove { x: 15, y: 25 });
     assert_eq!(events[2], VirtualInputEvent::TouchUp { x: 15, y: 25 });
-    assert_eq!(events[3], VirtualInputEvent::Key { virtual_key: 0x41, pressed: true });
+    assert_eq!(
+        events[3],
+        VirtualInputEvent::Key {
+            virtual_key: 0x41,
+            pressed: true
+        }
+    );
 
     // After draining, queue is empty.
     let events2 = input.poll_events().unwrap();
@@ -2749,7 +3076,10 @@ fn winsock_network_mode_is_isolated_nat_with_ce_addresses() {
 
 #[test]
 fn object_store_config_and_mount_config_total_and_free_bytes_convert_mbytes() {
-    let store = ObjectStoreConfig { total_mbytes: 256, free_mbytes: 128 };
+    let store = ObjectStoreConfig {
+        total_mbytes: 256,
+        free_mbytes: 128,
+    };
     assert_eq!(store.total_bytes(), 256 * 1024 * 1024);
     assert_eq!(store.free_bytes(), 128 * 1024 * 1024);
 
@@ -2836,7 +3166,9 @@ fn gwe_system_metric_returns_ce_standard_values() {
 #[test]
 fn registry_delete_value_succeeds_and_returns_file_not_found_when_missing() {
     use std::collections::BTreeMap;
-    use wince_emulation_v3::ce::registry::{Registry, RegistryDump, ERROR_INVALID_HANDLE, REG_DWORD};
+    use wince_emulation_v3::ce::registry::{
+        ERROR_INVALID_HANDLE, REG_DWORD, Registry, RegistryDump,
+    };
 
     let mut reg = Registry::from_dump(RegistryDump {
         version: 0,
@@ -2855,31 +3187,53 @@ fn registry_delete_value_succeeds_and_returns_file_not_found_when_missing() {
     assert_eq!(reg.reg_delete_value_w(hkey, Some("val")), ERROR_SUCCESS);
 
     // Second delete of the same value — ERROR_FILE_NOT_FOUND.
-    assert_eq!(reg.reg_delete_value_w(hkey, Some("val")), ERROR_FILE_NOT_FOUND);
+    assert_eq!(
+        reg.reg_delete_value_w(hkey, Some("val")),
+        ERROR_FILE_NOT_FOUND
+    );
 
     // Delete on a bogus handle — ERROR_INVALID_HANDLE.
-    assert_eq!(reg.reg_delete_value_w(0xDEAD_BEEF, Some("val")), ERROR_INVALID_HANDLE);
+    assert_eq!(
+        reg.reg_delete_value_w(0xDEAD_BEEF, Some("val")),
+        ERROR_INVALID_HANDLE
+    );
 }
 
 #[test]
 fn registry_delete_key_removes_key_and_children_returns_file_not_found_when_missing() {
     use std::collections::BTreeMap;
-    use wince_emulation_v3::ce::registry::{Registry, RegistryDump, ERROR_INVALID_HANDLE};
+    use wince_emulation_v3::ce::registry::{ERROR_INVALID_HANDLE, Registry, RegistryDump};
 
-    let mut reg = Registry::from_dump(RegistryDump { version: 0, source: None, keys: BTreeMap::new() });
+    let mut reg = Registry::from_dump(RegistryDump {
+        version: 0,
+        source: None,
+        keys: BTreeMap::new(),
+    });
 
     // Create parent and child keys.
-    let parent = reg.reg_create_key_exw(HKEY_LOCAL_MACHINE, Some("Parent")).hkey.unwrap();
+    let parent = reg
+        .reg_create_key_exw(HKEY_LOCAL_MACHINE, Some("Parent"))
+        .hkey
+        .unwrap();
     let _child = reg.reg_create_key_exw(parent, Some("Child")).hkey.unwrap();
 
     // Delete "Parent" via HKLM relative path — deletes subtree.
-    assert_eq!(reg.reg_delete_key_w(HKEY_LOCAL_MACHINE, Some("Parent")), ERROR_SUCCESS);
+    assert_eq!(
+        reg.reg_delete_key_w(HKEY_LOCAL_MACHINE, Some("Parent")),
+        ERROR_SUCCESS
+    );
 
     // Second delete — key is gone.
-    assert_eq!(reg.reg_delete_key_w(HKEY_LOCAL_MACHINE, Some("Parent")), ERROR_FILE_NOT_FOUND);
+    assert_eq!(
+        reg.reg_delete_key_w(HKEY_LOCAL_MACHINE, Some("Parent")),
+        ERROR_FILE_NOT_FOUND
+    );
 
     // Invalid handle.
-    assert_eq!(reg.reg_delete_key_w(0xDEAD_BEEF, Some("any")), ERROR_INVALID_HANDLE);
+    assert_eq!(
+        reg.reg_delete_key_w(0xDEAD_BEEF, Some("any")),
+        ERROR_INVALID_HANDLE
+    );
 }
 
 #[test]
@@ -2891,59 +3245,170 @@ fn cemath_integer_longlong_and_shift_ops_all_variants() {
     // Abs / Labs — saturating_abs (i32::MIN stays i32::MIN due to saturation).
     assert_eq!(math.eval(CeMathCall::Abs(-7)), CeMathValue::I32(7));
     assert_eq!(math.eval(CeMathCall::Labs(5)), CeMathValue::I32(5));
-    assert_eq!(math.eval(CeMathCall::Abs(i32::MIN)), CeMathValue::I32(i32::MAX));
+    assert_eq!(
+        math.eval(CeMathCall::Abs(i32::MIN)),
+        CeMathValue::I32(i32::MAX)
+    );
 
     // Div — same as Ldiv; checked for zero denominator.
-    assert_eq!(math.eval(CeMathCall::Div { numer: 10, denom: 3 }), CeMathValue::Div { quot: 3, rem: 1 });
-    assert_eq!(math.eval(CeMathCall::Div { numer: 1, denom: 0 }), CeMathValue::DivideByZero);
+    assert_eq!(
+        math.eval(CeMathCall::Div {
+            numer: 10,
+            denom: 3
+        }),
+        CeMathValue::Div { quot: 3, rem: 1 }
+    );
+    assert_eq!(
+        math.eval(CeMathCall::Div { numer: 1, denom: 0 }),
+        CeMathValue::DivideByZero
+    );
 
     // BinaryF32::Fmod.
-    assert_eq!(math.eval(CeMathCall::BinaryF32 { op: CeMathBinaryF32::Fmod, lhs: 7.5, rhs: 2.0 }), CeMathValue::F32(7.5_f32 % 2.0_f32));
+    assert_eq!(
+        math.eval(CeMathCall::BinaryF32 {
+            op: CeMathBinaryF32::Fmod,
+            lhs: 7.5,
+            rhs: 2.0
+        }),
+        CeMathValue::F32(7.5_f32 % 2.0_f32)
+    );
 
     // BinaryF64 extra variants.
-    let hypot = math.eval(CeMathCall::BinaryF64 { op: CeMathBinaryF64::Hypot, lhs: 3.0, rhs: 4.0 });
+    let hypot = math.eval(CeMathCall::BinaryF64 {
+        op: CeMathBinaryF64::Hypot,
+        lhs: 3.0,
+        rhs: 4.0,
+    });
     assert_eq!(hypot, CeMathValue::F64(5.0));
-    let pow = math.eval(CeMathCall::BinaryF64 { op: CeMathBinaryF64::Pow, lhs: 2.0, rhs: 3.0 });
+    let pow = math.eval(CeMathCall::BinaryF64 {
+        op: CeMathBinaryF64::Pow,
+        lhs: 2.0,
+        rhs: 3.0,
+    });
     assert_eq!(pow, CeMathValue::F64(8.0));
 
     // Ldexp.
-    assert_eq!(math.eval(CeMathCall::Ldexp { value: 1.0, exp: 3 }), CeMathValue::F64(8.0));
+    assert_eq!(
+        math.eval(CeMathCall::Ldexp { value: 1.0, exp: 3 }),
+        CeMathValue::F64(8.0)
+    );
 
     // Modf.
-    assert_eq!(math.eval(CeMathCall::Modf(3.75)), CeMathValue::Modf { integer: 3.0, fraction: 0.75 });
+    assert_eq!(
+        math.eval(CeMathCall::Modf(3.75)),
+        CeMathValue::Modf {
+            integer: 3.0,
+            fraction: 0.75
+        }
+    );
 
     // Frexp: 8.0 = 0.5 * 2^4.
-    assert_eq!(math.eval(CeMathCall::Frexp(8.0)), CeMathValue::Frexp { fraction: 0.5, exp: 4 });
+    assert_eq!(
+        math.eval(CeMathCall::Frexp(8.0)),
+        CeMathValue::Frexp {
+            fraction: 0.5,
+            exp: 4
+        }
+    );
     // Frexp(0.0) special case.
-    assert_eq!(math.eval(CeMathCall::Frexp(0.0)), CeMathValue::Frexp { fraction: 0.0, exp: 0 });
+    assert_eq!(
+        math.eval(CeMathCall::Frexp(0.0)),
+        CeMathValue::Frexp {
+            fraction: 0.0,
+            exp: 0
+        }
+    );
 
     // 64-bit integer arithmetic.
-    assert_eq!(math.eval(CeMathCall::LlMul { lhs: 6, rhs: 7 }), CeMathValue::I64(42));
-    assert_eq!(math.eval(CeMathCall::LlDiv { lhs: 17, rhs: 5 }), CeMathValue::I64(3));
-    assert_eq!(math.eval(CeMathCall::LlRem { lhs: 17, rhs: 5 }), CeMathValue::I64(2));
-    assert_eq!(math.eval(CeMathCall::UllDiv { lhs: 20, rhs: 3 }), CeMathValue::U64(6));
-    assert_eq!(math.eval(CeMathCall::LlDiv { lhs: 1, rhs: 0 }), CeMathValue::DivideByZero);
-    assert_eq!(math.eval(CeMathCall::LlRem { lhs: 1, rhs: 0 }), CeMathValue::DivideByZero);
-    assert_eq!(math.eval(CeMathCall::UllDiv { lhs: 1, rhs: 0 }), CeMathValue::DivideByZero);
+    assert_eq!(
+        math.eval(CeMathCall::LlMul { lhs: 6, rhs: 7 }),
+        CeMathValue::I64(42)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::LlDiv { lhs: 17, rhs: 5 }),
+        CeMathValue::I64(3)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::LlRem { lhs: 17, rhs: 5 }),
+        CeMathValue::I64(2)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::UllDiv { lhs: 20, rhs: 3 }),
+        CeMathValue::U64(6)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::LlDiv { lhs: 1, rhs: 0 }),
+        CeMathValue::DivideByZero
+    );
+    assert_eq!(
+        math.eval(CeMathCall::LlRem { lhs: 1, rhs: 0 }),
+        CeMathValue::DivideByZero
+    );
+    assert_eq!(
+        math.eval(CeMathCall::UllDiv { lhs: 1, rhs: 0 }),
+        CeMathValue::DivideByZero
+    );
 
     // Shift operations.
-    assert_eq!(math.eval(CeMathCall::LlLShift { value: 1, shift: 3 }), CeMathValue::I64(8));
-    assert_eq!(math.eval(CeMathCall::LlRShift { value: 8, shift: 2 }), CeMathValue::I64(2));
-    assert_eq!(math.eval(CeMathCall::UllRShift { value: 16, shift: 2 }), CeMathValue::U64(4));
+    assert_eq!(
+        math.eval(CeMathCall::LlLShift { value: 1, shift: 3 }),
+        CeMathValue::I64(8)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::LlRShift { value: 8, shift: 2 }),
+        CeMathValue::I64(2)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::UllRShift {
+            value: 16,
+            shift: 2
+        }),
+        CeMathValue::U64(4)
+    );
     // Shift with value >= 64 is clamped to 63.
-    assert_eq!(math.eval(CeMathCall::LlLShift { value: 1, shift: 64 }), CeMathValue::I64(1_i64 << 63));
+    assert_eq!(
+        math.eval(CeMathCall::LlLShift {
+            value: 1,
+            shift: 64
+        }),
+        CeMathValue::I64(1_i64 << 63)
+    );
 
     // Float/double to 64-bit integer conversions.
-    assert_eq!(math.eval(CeMathCall::FloatToLongLong(3.9_f32)), CeMathValue::I64(3));
-    assert_eq!(math.eval(CeMathCall::DoubleToLongLong(4.9_f64)), CeMathValue::I64(4));
-    assert_eq!(math.eval(CeMathCall::FloatToUnsignedLongLong(5.1_f32)), CeMathValue::U64(5));
-    assert_eq!(math.eval(CeMathCall::DoubleToUnsignedLongLong(6.0_f64)), CeMathValue::U64(6));
-    assert_eq!(math.eval(CeMathCall::DoubleToUnsignedLong(7.9_f64)), CeMathValue::U32(7));
+    assert_eq!(
+        math.eval(CeMathCall::FloatToLongLong(3.9_f32)),
+        CeMathValue::I64(3)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::DoubleToLongLong(4.9_f64)),
+        CeMathValue::I64(4)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::FloatToUnsignedLongLong(5.1_f32)),
+        CeMathValue::U64(5)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::DoubleToUnsignedLongLong(6.0_f64)),
+        CeMathValue::U64(6)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::DoubleToUnsignedLong(7.9_f64)),
+        CeMathValue::U32(7)
+    );
 
     // DoubleCmp.
-    assert_eq!(math.eval(CeMathCall::DoubleCmp { lhs: 1.0, rhs: 2.0 }), CeMathValue::Cmp(-1));
-    assert_eq!(math.eval(CeMathCall::DoubleCmp { lhs: 2.0, rhs: 2.0 }), CeMathValue::Cmp(0));
-    assert_eq!(math.eval(CeMathCall::DoubleCmp { lhs: 3.0, rhs: 2.0 }), CeMathValue::Cmp(1));
+    assert_eq!(
+        math.eval(CeMathCall::DoubleCmp { lhs: 1.0, rhs: 2.0 }),
+        CeMathValue::Cmp(-1)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::DoubleCmp { lhs: 2.0, rhs: 2.0 }),
+        CeMathValue::Cmp(0)
+    );
+    assert_eq!(
+        math.eval(CeMathCall::DoubleCmp { lhs: 3.0, rhs: 2.0 }),
+        CeMathValue::Cmp(1)
+    );
 }
 
 #[test]
@@ -3047,8 +3512,14 @@ fn audio_volume_pitch_rate_position_and_complete_buffer_ops() {
     assert_eq!(audio.get_playback_rate(id), Ok(0x0003_0000));
 
     // Write two buffers, then complete them one at a time.
-    let buf1 = WaveBuffer { guest_ptr: 0x1000, len: 8 };
-    let buf2 = WaveBuffer { guest_ptr: 0x2000, len: 4 };
+    let buf1 = WaveBuffer {
+        guest_ptr: 0x1000,
+        len: 8,
+    };
+    let buf2 = WaveBuffer {
+        guest_ptr: 0x2000,
+        len: 4,
+    };
     assert_eq!(audio.wave_out_write(id, buf1.clone()), MMSYSERR_NOERROR);
     assert_eq!(audio.wave_out_write(id, buf2.clone()), MMSYSERR_NOERROR);
 
@@ -3059,8 +3530,8 @@ fn audio_volume_pitch_rate_position_and_complete_buffer_ops() {
     assert_eq!(audio.complete_next_buffer(id), Some(buf1));
     assert_eq!(audio.output(id).unwrap().state, WaveOutState::Playing); // still one pending
     assert_eq!(audio.complete_next_buffer(id), Some(buf2));
-    assert_eq!(audio.output(id).unwrap().state, WaveOutState::Open);   // queue drained
-    assert_eq!(audio.complete_next_buffer(id), None);                   // empty
+    assert_eq!(audio.output(id).unwrap().state, WaveOutState::Open); // queue drained
+    assert_eq!(audio.complete_next_buffer(id), None); // empty
 
     // Sink operations.
     assert!(!audio.has_sinks());
@@ -3078,7 +3549,7 @@ fn audio_volume_pitch_rate_position_and_complete_buffer_ops() {
 #[test]
 fn memory_system_allocation_accessors_and_generation_counters() {
     use wince_emulation_v3::ce::memory::{
-        MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PROCESS_HEAP_HANDLE, MemorySystem,
+        MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, MemorySystem, PROCESS_HEAP_HANDLE,
     };
 
     let mut mem = MemorySystem::default();
@@ -3108,7 +3579,9 @@ fn memory_system_allocation_accessors_and_generation_counters() {
     assert_eq!(mem.allocations().count(), 1);
 
     // Virtual allocation round-trip.
-    let vbase = mem.virtual_alloc(0, 0x1_0000, MEM_COMMIT | MEM_RESERVE, 4).unwrap();
+    let vbase = mem
+        .virtual_alloc(0, 0x1_0000, MEM_COMMIT | MEM_RESERVE, 4)
+        .unwrap();
     assert!(mem.virtual_generation() > vgen0);
 
     let valloc = mem.virtual_allocation(vbase).unwrap();
@@ -3123,7 +3596,10 @@ fn memory_system_allocation_accessors_and_generation_counters() {
     let vgen1 = mem.virtual_generation();
     assert!(mem.set_virtual_initial_bytes(vbase, vec![0xAA, 0xBB]));
     assert!(mem.virtual_generation() > vgen1);
-    assert_eq!(mem.virtual_allocation(vbase).unwrap().initial_bytes, vec![0xAA, 0xBB]);
+    assert_eq!(
+        mem.virtual_allocation(vbase).unwrap().initial_bytes,
+        vec![0xAA, 0xBB]
+    );
 
     // set_virtual_initial_bytes on a non-existent base returns false.
     assert!(!mem.set_virtual_initial_bytes(0xDEAD_0000, vec![]));
@@ -3184,7 +3660,11 @@ fn handle_table_event_open_file_mapping_views_thread_process_exit_and_set_reset_
     // Add a view manually via file_mapping_mut.
     {
         let mapping = table.file_mapping_mut(fm).unwrap();
-        mapping.views.push(FileMappingView { base: 0xA000_0000, size: 0x1000, offset: 0 });
+        mapping.views.push(FileMappingView {
+            base: 0xA000_0000,
+            size: 0x1000,
+            offset: 0,
+        });
     }
     assert!(table.has_file_mapping_view(0xA000_0000));
     assert!(!table.has_file_mapping_view(0xBEEF_0000));
@@ -3202,7 +3682,7 @@ fn handle_table_event_open_file_mapping_views_thread_process_exit_and_set_reset_
 
 #[test]
 fn thread_system_allocate_id_set_last_error_and_tls_call_alloc_free() {
-    use wince_emulation_v3::ce::thread::{ThreadSystem, TLS_MINIMUM_AVAILABLE, TLS_OUT_OF_INDEXES};
+    use wince_emulation_v3::ce::thread::{TLS_MINIMUM_AVAILABLE, TLS_OUT_OF_INDEXES, ThreadSystem};
 
     let mut threads = ThreadSystem::default();
 
@@ -3281,13 +3761,19 @@ fn kernel_runtime_loader_stats_and_process_metadata_getters_setters() {
     assert_eq!(kernel.process_module_base(), 0x0010_0000);
 
     kernel.set_process_module_path("\\SDMMC Disk\\INavi\\iNavi.exe");
-    assert_eq!(kernel.process_module_path(), "\\SDMMC Disk\\INavi\\iNavi.exe");
+    assert_eq!(
+        kernel.process_module_path(),
+        "\\SDMMC Disk\\INavi\\iNavi.exe"
+    );
 
     kernel.set_process_command_line("iNavi.exe /map");
     assert_eq!(kernel.process_command_line(), "iNavi.exe /map");
 
     kernel.set_process_current_directory(Some("\\SDMMC Disk\\INavi".to_owned()));
-    assert_eq!(kernel.process_current_directory(), Some("\\SDMMC Disk\\INavi"));
+    assert_eq!(
+        kernel.process_current_directory(),
+        Some("\\SDMMC Disk\\INavi")
+    );
     kernel.set_process_current_directory(None);
     assert_eq!(kernel.process_current_directory(), None);
 
@@ -3303,7 +3789,12 @@ fn gwe_window_rect_client_rect_screen_coords_class_name_and_stats() {
     use wince_emulation_v3::ce::gwe::{Gwe, Point};
 
     let mut gwe = Gwe::default();
-    let win_rect = Rect { left: 10, top: 20, right: 310, bottom: 220 };
+    let win_rect = Rect {
+        left: 10,
+        top: 20,
+        right: 310,
+        bottom: 220,
+    };
     let hwnd = gwe.create_window_ex_with_rect(5, "MyClass", "MyTitle", None, 0, 0, 0, win_rect);
 
     // get_class_name: class names are normalized to lowercase.
@@ -3348,7 +3839,12 @@ fn gwe_window_rect_client_rect_screen_coords_class_name_and_stats() {
 fn gwe_rect_geometric_operations() {
     use wince_emulation_v3::ce::gwe::{Point, Rect};
 
-    let r = Rect { left: 10, top: 20, right: 110, bottom: 70 };
+    let r = Rect {
+        left: 10,
+        top: 20,
+        right: 110,
+        bottom: 70,
+    };
     assert_eq!(r.width(), 100);
     assert_eq!(r.height(), 50);
     assert!(!r.is_empty());
@@ -3368,7 +3864,12 @@ fn gwe_rect_geometric_operations() {
     assert_eq!(z.height(), 50);
 
     // normalized: swaps when right < left or bottom < top.
-    let inv = Rect { left: 50, top: 40, right: 10, bottom: 20 };
+    let inv = Rect {
+        left: 50,
+        top: 40,
+        right: 10,
+        bottom: 20,
+    };
     let norm = inv.normalized();
     assert!(norm.left <= norm.right);
     assert!(norm.top <= norm.bottom);
@@ -3379,7 +3880,12 @@ fn gwe_rect_geometric_operations() {
     assert!(!r.contains_point(Point { x: 200, y: 40 }));
 
     // union: bounding box of two rects.
-    let r2 = Rect { left: 90, top: 60, right: 200, bottom: 100 };
+    let r2 = Rect {
+        left: 90,
+        top: 60,
+        right: 200,
+        bottom: 100,
+    };
     let u = r.union(r2);
     assert_eq!(u.left, 10);
     assert_eq!(u.top, 20);
@@ -3387,7 +3893,12 @@ fn gwe_rect_geometric_operations() {
     assert_eq!(u.bottom, 100);
 
     // intersect: overlapping rects.
-    let overlap = Rect { left: 50, top: 30, right: 150, bottom: 90 };
+    let overlap = Rect {
+        left: 50,
+        top: 30,
+        right: 150,
+        bottom: 90,
+    };
     let sect = r.intersect(overlap).unwrap();
     assert_eq!(sect.left, 50);
     assert_eq!(sect.top, 30);
@@ -3395,7 +3906,12 @@ fn gwe_rect_geometric_operations() {
     assert_eq!(sect.bottom, 70);
 
     // intersect: non-overlapping rects.
-    let far = Rect { left: 200, top: 200, right: 300, bottom: 300 };
+    let far = Rect {
+        left: 200,
+        top: 200,
+        right: 300,
+        bottom: 300,
+    };
     assert!(r.intersect(far).is_none());
 
     // subtract_bounding.
@@ -3404,7 +3920,12 @@ fn gwe_rect_geometric_operations() {
     // Subtracting a non-overlapping rect returns Some(r).
     assert_eq!(r.subtract_bounding(far), Some(r));
     // Subtracting a partial overlap returns the bounding box of remaining fragments.
-    let interior = Rect { left: 20, top: 25, right: 80, bottom: 60 };
+    let interior = Rect {
+        left: 20,
+        top: 25,
+        right: 80,
+        bottom: 60,
+    };
     let sub = r.subtract_bounding(interior).unwrap();
     assert!(!sub.is_empty());
 
@@ -3486,7 +4007,12 @@ fn gwe_window_text_visibility_enable_and_thread_hung_tracking() {
     use wince_emulation_v3::ce::gwe::{Gwe, Rect};
 
     let mut gwe = Gwe::default();
-    let rect = Rect { left: 0, top: 0, right: 100, bottom: 50 };
+    let rect = Rect {
+        left: 0,
+        top: 0,
+        right: 100,
+        bottom: 50,
+    };
     let hwnd = gwe.create_window_ex_with_rect(10, "cls", "Hello", None, 0, 0, 0, rect);
 
     // get_window_text / set_window_text.
@@ -3499,7 +4025,7 @@ fn gwe_window_text_visibility_enable_and_thread_hung_tracking() {
 
     // show_window / is_window_visible.
     // New window is not visible; show_window returns the PREVIOUS visible state.
-    assert!(!gwe.show_window(hwnd, true));  // previous was false → returns false
+    assert!(!gwe.show_window(hwnd, true)); // previous was false → returns false
     assert!(gwe.is_window_visible(hwnd));
     assert!(gwe.show_window(hwnd, false)); // previous was true → returns true
     assert!(!gwe.is_window_visible(hwnd));
@@ -3539,10 +4065,18 @@ fn gwe_get_queue_status_and_peek_queue_status() {
     assert_eq!(pstatus, 0);
 
     // Post a message to set the QS_POSTMESSAGE bit.
-    gwe.post_message(thread_id, Message {
-        hwnd: 0, msg: WM_USER, wparam: 0, lparam: 0,
-        time_ms: 0, source: 0, mouse_pos_at_post: None,
-    });
+    gwe.post_message(
+        thread_id,
+        Message {
+            hwnd: 0,
+            msg: WM_USER,
+            wparam: 0,
+            lparam: 0,
+            time_ms: 0,
+            source: 0,
+            mouse_pos_at_post: None,
+        },
+    );
 
     // peek_queue_status: bits appear in both high (changed since last clear) and low (current).
     let pstatus2 = gwe.peek_queue_status(thread_id, QS_POSTMESSAGE);
@@ -3558,16 +4092,16 @@ fn gwe_get_queue_status_and_peek_queue_status() {
 
     // After get_queue_status, changed bits cleared; current (high word) still set (message in queue).
     let after = gwe.get_queue_status(thread_id, QS_POSTMESSAGE);
-    assert_eq!(after & QS_POSTMESSAGE, 0);           // changed bits now clear
-    assert_ne!((after >> 16) & QS_POSTMESSAGE, 0);  // current bits still set
+    assert_eq!(after & QS_POSTMESSAGE, 0); // changed bits now clear
+    assert_ne!((after >> 16) & QS_POSTMESSAGE, 0); // current bits still set
 }
 
 #[test]
 fn shell_system_message_box_recent_docs_notify_icons_and_notifications() {
     use wince_emulation_v3::ce::shell::{
-        MessageBoxRecord, NotificationResult, NotifyIconData, NotifyIconOp, RecentDocumentRecord,
-        ShellChangeNotifyRegistration, ShellNotificationData, ShellSystem,
-        SHNP_ICONIC, SHNUM_ICON, SHNUM_TITLE, MAX_RECENT_DOCUMENTS,
+        MAX_RECENT_DOCUMENTS, MessageBoxRecord, NotificationResult, NotifyIconData, NotifyIconOp,
+        RecentDocumentRecord, SHNP_ICONIC, SHNUM_ICON, SHNUM_TITLE, ShellChangeNotifyRegistration,
+        ShellNotificationData, ShellSystem,
     };
 
     let mut shell = ShellSystem::default();
@@ -3607,7 +4141,10 @@ fn shell_system_message_box_recent_docs_notify_icons_and_notifications() {
     let docs: Vec<_> = shell.recent_documents().collect();
     assert_eq!(docs.len(), MAX_RECENT_DOCUMENTS); // capped at max
     // Most recent is first.
-    assert_eq!(docs[0].shortcut_path, format!("/lnk/{MAX_RECENT_DOCUMENTS}"));
+    assert_eq!(
+        docs[0].shortcut_path,
+        format!("/lnk/{MAX_RECENT_DOCUMENTS}")
+    );
 
     // recent_document_display_entries: uses display_name if set, else target_path.
     shell.clear_recent_documents();
@@ -3623,15 +4160,26 @@ fn shell_system_message_box_recent_docs_notify_icons_and_notifications() {
 
     // apply_notify_icon: Add / Modify / Delete.
     let icon_data = NotifyIconData {
-        hwnd: 10, id: 1, flags: 0, callback_message: 0,
-        icon: 0x100, tip: "tip".to_owned(), state: 0, state_mask: 0,
+        hwnd: 10,
+        id: 1,
+        flags: 0,
+        callback_message: 0,
+        icon: 0x100,
+        tip: "tip".to_owned(),
+        state: 0,
+        state_mask: 0,
     };
     assert!(shell.apply_notify_icon(NotifyIconOp::Add, icon_data.clone()));
     assert_eq!(shell.notify_icon(10, 1).unwrap().tip, "tip");
     // Modify non-existent fails.
-    assert!(!shell.apply_notify_icon(NotifyIconOp::Modify, NotifyIconData {
-        hwnd: 99, id: 1, ..icon_data.clone()
-    }));
+    assert!(!shell.apply_notify_icon(
+        NotifyIconOp::Modify,
+        NotifyIconData {
+            hwnd: 99,
+            id: 1,
+            ..icon_data.clone()
+        }
+    ));
     // Delete.
     assert!(shell.apply_notify_icon(NotifyIconOp::Delete, icon_data.clone()));
     assert!(shell.notify_icon(10, 1).is_none());
@@ -3646,7 +4194,11 @@ fn shell_system_message_box_recent_docs_notify_icons_and_notifications() {
 
     // register_change_notification / remove_change_notification / change_notification.
     shell.register_change_notification(ShellChangeNotifyRegistration {
-        hwnd: 5, event_mask: 0xFF, notify_flags: 0, watch_dir: None, recursive: false,
+        hwnd: 5,
+        event_mask: 0xFF,
+        notify_flags: 0,
+        watch_dir: None,
+        recursive: false,
     });
     assert!(shell.change_notification(5).is_some());
     assert_eq!(shell.change_notifications().count(), 1);
@@ -3662,19 +4214,42 @@ fn shell_system_message_box_recent_docs_notify_icons_and_notifications() {
     // add_notification / remove_notification / expire_notifications.
     let clsid = [1u8; 16];
     let data = ShellNotificationData {
-        id: 7, priority: SHNP_ICONIC, duration_cs: 100,
-        icon: 0, flags: 0, clsid,
-        hwnd_sink: 0, title: "title".to_owned(), html: String::new(), lparam: 0,
+        id: 7,
+        priority: SHNP_ICONIC,
+        duration_cs: 100,
+        icon: 0,
+        flags: 0,
+        clsid,
+        hwnd_sink: 0,
+        title: "title".to_owned(),
+        html: String::new(),
+        lparam: 0,
         callback_ptr: 0,
     };
-    assert_eq!(shell.add_notification(data.clone(), 0), NotificationResult::Success);
+    assert_eq!(
+        shell.add_notification(data.clone(), 0),
+        NotificationResult::Success
+    );
     assert!(shell.notification(clsid, 7).is_some());
     // Add with empty title+html fails.
-    let bad = ShellNotificationData { title: String::new(), html: String::new(), ..data.clone() };
-    assert_eq!(shell.add_notification(bad, 0), NotificationResult::InvalidParameter);
+    let bad = ShellNotificationData {
+        title: String::new(),
+        html: String::new(),
+        ..data.clone()
+    };
+    assert_eq!(
+        shell.add_notification(bad, 0),
+        NotificationResult::InvalidParameter
+    );
     // update_notification.
-    let update = ShellNotificationData { icon: 99, ..data.clone() };
-    assert_eq!(shell.update_notification(SHNUM_ICON | SHNUM_TITLE, update, 0), NotificationResult::Success);
+    let update = ShellNotificationData {
+        icon: 99,
+        ..data.clone()
+    };
+    assert_eq!(
+        shell.update_notification(SHNUM_ICON | SHNUM_TITLE, update, 0),
+        NotificationResult::Success
+    );
     // expire_notifications: duration 100 cs = 1000 ms; expires at ms = 0 + 1000 = 1000.
     let expired = shell.expire_notifications(999);
     assert_eq!(expired.len(), 0); // not yet expired
@@ -3682,7 +4257,10 @@ fn shell_system_message_box_recent_docs_notify_icons_and_notifications() {
     assert_eq!(expired.len(), 1); // now expired
     assert!(shell.notification(clsid, 7).is_none());
     // remove_notification on missing returns InvalidData.
-    assert_eq!(shell.remove_notification(clsid, 7), NotificationResult::InvalidData);
+    assert_eq!(
+        shell.remove_notification(clsid, 7),
+        NotificationResult::InvalidData
+    );
 }
 
 #[test]
@@ -3717,17 +4295,32 @@ fn resource_system_bitmap_region_resource_register_and_string() {
     assert!(res.delete_bitmap(bmp2));
 
     // create_region / region / set_region / delete_region.
-    let r = Rect { left: 0, top: 0, right: 100, bottom: 50 };
+    let r = Rect {
+        left: 0,
+        top: 0,
+        right: 100,
+        bottom: 50,
+    };
     let rh = res.create_region(r);
     assert_eq!(res.region(rh).unwrap().rect, r);
     // set_region to a new rect.
-    let r2 = Rect { left: 10, top: 10, right: 80, bottom: 40 };
+    let r2 = Rect {
+        left: 10,
+        top: 10,
+        right: 80,
+        bottom: 40,
+    };
     assert!(res.set_region(rh, r2));
     assert_eq!(res.region(rh).unwrap().rect, r2);
     // set_region on invalid handle fails.
     assert!(!res.set_region(0xDEAD, r2));
     // union_region_with_rect expands.
-    let ext = Rect { left: 0, top: 0, right: 200, bottom: 100 };
+    let ext = Rect {
+        left: 0,
+        top: 0,
+        right: 200,
+        bottom: 100,
+    };
     assert!(res.union_region_with_rect(rh, ext));
     assert!(res.region(rh).unwrap().rect.right >= 200);
     // delete_region.
@@ -3739,25 +4332,33 @@ fn resource_system_bitmap_region_resource_register_and_string() {
     let name = ResourceId::Integer(42);
     let kind = ResourceId::Integer(1);
     let rh2 = res.register(0x1000, name.clone(), kind.clone(), 0xABCD_0000, 512);
-    assert_eq!(res.find_resource(0x1000, name.clone(), kind.clone()), Some(rh2));
+    assert_eq!(
+        res.find_resource(0x1000, name.clone(), kind.clone()),
+        Some(rh2)
+    );
     assert_eq!(res.load_resource(rh2), Some(0xABCD_0000));
     assert_eq!(res.sizeof_resource(rh2), Some(512));
     assert_eq!(res.lock_resource(rh2), Some(0xABCD_0000));
     // Missing resource returns None.
-    assert!(res.find_resource(0x1000, ResourceId::Integer(99), kind).is_none());
+    assert!(
+        res.find_resource(0x1000, ResourceId::Integer(99), kind)
+            .is_none()
+    );
     assert!(res.load_resource(0xDEAD).is_none());
 
     // register_string / load_string.
     res.register_string(0x2000, 5, "Hello", None);
-    assert_eq!(res.load_string(0x2000, 5).map(|s| s.text.as_str()), Some("Hello"));
+    assert_eq!(
+        res.load_string(0x2000, 5).map(|s| s.text.as_str()),
+        Some("Hello")
+    );
     assert!(res.load_string(0x2000, 6).is_none()); // missing id
 }
 
 #[test]
 fn resource_system_menu_create_append_get_enable_check_radio_and_submenu() {
     use wince_emulation_v3::ce::resource::{
-        MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_SEPARATOR,
-        MenuItem, ResourceId, ResourceSystem,
+        MF_BYPOSITION, MF_CHECKED, MF_GRAYED, MF_SEPARATOR, MenuItem, ResourceId, ResourceSystem,
     };
 
     let mut res = ResourceSystem::default();
@@ -3770,18 +4371,45 @@ fn resource_system_menu_create_append_get_enable_check_radio_and_submenu() {
     assert!(res.menu(popup).unwrap().popup);
 
     // append_menu_item: adds items to the menu.
-    assert!(res.append_menu_item(mh, MenuItem {
-        id: 100, item_type: 0, state: 0, submenu: 0,
-        checked_bitmap: 0, unchecked_bitmap: 0, data: 0, text: Some("File".to_owned()),
-    }));
-    assert!(res.append_menu_item(mh, MenuItem {
-        id: 200, item_type: 0, state: 0, submenu: 0,
-        checked_bitmap: 0, unchecked_bitmap: 0, data: 0, text: Some("Edit".to_owned()),
-    }));
-    assert!(!res.append_menu_item(0xDEAD, MenuItem {
-        id: 1, item_type: 0, state: 0, submenu: 0,
-        checked_bitmap: 0, unchecked_bitmap: 0, data: 0, text: None,
-    })); // invalid handle
+    assert!(res.append_menu_item(
+        mh,
+        MenuItem {
+            id: 100,
+            item_type: 0,
+            state: 0,
+            submenu: 0,
+            checked_bitmap: 0,
+            unchecked_bitmap: 0,
+            data: 0,
+            text: Some("File".to_owned()),
+        }
+    ));
+    assert!(res.append_menu_item(
+        mh,
+        MenuItem {
+            id: 200,
+            item_type: 0,
+            state: 0,
+            submenu: 0,
+            checked_bitmap: 0,
+            unchecked_bitmap: 0,
+            data: 0,
+            text: Some("Edit".to_owned()),
+        }
+    ));
+    assert!(!res.append_menu_item(
+        0xDEAD,
+        MenuItem {
+            id: 1,
+            item_type: 0,
+            state: 0,
+            submenu: 0,
+            checked_bitmap: 0,
+            unchecked_bitmap: 0,
+            data: 0,
+            text: None,
+        }
+    )); // invalid handle
 
     // get_menu_item by position.
     let item = res.get_menu_item(mh, 0, true).unwrap();
@@ -3793,7 +4421,9 @@ fn resource_system_menu_create_append_get_enable_check_radio_and_submenu() {
     assert_eq!(item.text.as_deref(), Some("Edit"));
 
     // enable_menu_item: sets GRAYED state and returns previous.
-    let prev = res.enable_menu_item(mh, 0, MF_BYPOSITION | MF_GRAYED).unwrap();
+    let prev = res
+        .enable_menu_item(mh, 0, MF_BYPOSITION | MF_GRAYED)
+        .unwrap();
     assert_eq!(prev, 0); // was enabled (no disabled/grayed bits)
     let item = res.get_menu_item(mh, 0, true).unwrap();
     assert_ne!(item.state & MF_GRAYED, 0);
@@ -3809,10 +4439,21 @@ fn resource_system_menu_create_append_get_enable_check_radio_and_submenu() {
     assert_eq!(item.state & MF_CHECKED, 0);
 
     // insert_menu_item by position.
-    assert!(res.insert_menu_item(mh, 1, MF_BYPOSITION, MenuItem {
-        id: 150, item_type: MF_SEPARATOR, state: 0, submenu: 0,
-        checked_bitmap: 0, unchecked_bitmap: 0, data: 0, text: None,
-    }));
+    assert!(res.insert_menu_item(
+        mh,
+        1,
+        MF_BYPOSITION,
+        MenuItem {
+            id: 150,
+            item_type: MF_SEPARATOR,
+            state: 0,
+            submenu: 0,
+            checked_bitmap: 0,
+            unchecked_bitmap: 0,
+            data: 0,
+            text: None,
+        }
+    ));
     assert_eq!(res.menu(mh).unwrap().items.len(), 3);
     assert_eq!(res.get_menu_item(mh, 1, true).unwrap().id, 150);
 
@@ -3824,10 +4465,19 @@ fn resource_system_menu_create_append_get_enable_check_radio_and_submenu() {
     assert_eq!(item100.state & MF_CHECKED, 0);
 
     // get_sub_menu: submenu field in a popup item.
-    res.append_menu_item(mh, MenuItem {
-        id: u32::MAX, item_type: 0, state: 0, submenu: popup,
-        checked_bitmap: 0, unchecked_bitmap: 0, data: 0, text: Some("Sub".to_owned()),
-    });
+    res.append_menu_item(
+        mh,
+        MenuItem {
+            id: u32::MAX,
+            item_type: 0,
+            state: 0,
+            submenu: popup,
+            checked_bitmap: 0,
+            unchecked_bitmap: 0,
+            data: 0,
+            text: Some("Sub".to_owned()),
+        },
+    );
     let sub = res.get_sub_menu(mh, 3);
     assert_eq!(sub, Some(popup));
 }
@@ -3837,7 +4487,12 @@ fn gwe_focus_capture_active_cursor_set_window_pos_move_window_and_destroy() {
     use wince_emulation_v3::ce::gwe::{Gwe, Rect};
 
     let mut gwe = Gwe::default();
-    let rect = Rect { left: 10, top: 10, right: 110, bottom: 60 };
+    let rect = Rect {
+        left: 10,
+        top: 10,
+        right: 110,
+        bottom: 60,
+    };
     let hwnd1 = gwe.create_window_ex_with_rect(1, "cls1", "A", None, 0, 0, 0, rect);
     let hwnd2 = gwe.create_window_ex_with_rect(2, "cls2", "B", None, 0, 0, 0, rect);
 
@@ -3898,7 +4553,7 @@ fn gwe_focus_capture_active_cursor_set_window_pos_move_window_and_destroy() {
 #[test]
 fn kernel_crt_rand_strtok_process_state_pseudo_handles_and_process_launch() -> Result<()> {
     use wince_emulation_v3::ce::kernel::{
-        CeKernel, CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE,
+        CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
         CurrentProcessState, FileTraceRecord,
     };
 
@@ -3906,10 +4561,18 @@ fn kernel_crt_rand_strtok_process_state_pseudo_handles_and_process_launch() -> R
     let mut kernel = CeKernel::boot(config);
 
     // is_current_thread_pseudo_handle / is_current_process_pseudo_handle.
-    assert!(CeKernel::is_current_thread_pseudo_handle(CE_CURRENT_THREAD_PSEUDO_HANDLE));
-    assert!(!CeKernel::is_current_thread_pseudo_handle(CE_CURRENT_PROCESS_PSEUDO_HANDLE));
-    assert!(CeKernel::is_current_process_pseudo_handle(CE_CURRENT_PROCESS_PSEUDO_HANDLE));
-    assert!(!CeKernel::is_current_process_pseudo_handle(CE_CURRENT_THREAD_PSEUDO_HANDLE));
+    assert!(CeKernel::is_current_thread_pseudo_handle(
+        CE_CURRENT_THREAD_PSEUDO_HANDLE
+    ));
+    assert!(!CeKernel::is_current_thread_pseudo_handle(
+        CE_CURRENT_PROCESS_PSEUDO_HANDLE
+    ));
+    assert!(CeKernel::is_current_process_pseudo_handle(
+        CE_CURRENT_PROCESS_PSEUDO_HANDLE
+    ));
+    assert!(!CeKernel::is_current_process_pseudo_handle(
+        CE_CURRENT_THREAD_PSEUDO_HANDLE
+    ));
 
     // crt_srand / crt_rand: seeding changes output.
     kernel.crt_srand(1);
@@ -3931,7 +4594,11 @@ fn kernel_crt_rand_strtok_process_state_pseudo_handles_and_process_launch() -> R
 
     // current_process_state / set_current_process_state / reset_current_process_exit_state.
     let state = kernel.current_process_state();
-    let updated = CurrentProcessState { process_id: 99, exit_code: 42, signaled: true };
+    let updated = CurrentProcessState {
+        process_id: 99,
+        exit_code: 42,
+        signaled: true,
+    };
     kernel.set_current_process_state(updated);
     assert_eq!(kernel.current_process_state(), updated);
     kernel.reset_current_process_exit_state();
@@ -3979,9 +4646,7 @@ fn kernel_crt_rand_strtok_process_state_pseudo_handles_and_process_launch() -> R
 
 #[test]
 fn handle_table_thread_priority_process_state_wait_any_and_describe() {
-    use wince_emulation_v3::ce::object::{
-        HandleTable, WaitMultipleResult, MAX_CE_PRIORITY_LEVELS,
-    };
+    use wince_emulation_v3::ce::object::{HandleTable, MAX_CE_PRIORITY_LEVELS, WaitMultipleResult};
 
     let mut table = HandleTable::default();
 
@@ -4006,7 +4671,10 @@ fn handle_table_thread_priority_process_state_wait_any_and_describe() {
     assert_eq!(ok, Some(true));
     assert_eq!(table.thread_priority_by_id(10), Some(3));
     // Out of range returns Some(false).
-    assert_eq!(table.set_thread_priority_by_id(10, MAX_CE_PRIORITY_LEVELS), Some(false));
+    assert_eq!(
+        table.set_thread_priority_by_id(10, MAX_CE_PRIORITY_LEVELS),
+        Some(false)
+    );
     // Unknown thread_id returns None.
     assert_eq!(table.set_thread_priority_by_id(99, 0), None);
 
@@ -4024,17 +4692,26 @@ fn handle_table_thread_priority_process_state_wait_any_and_describe() {
     assert_eq!(table.process_exit_code(ph), Some(0));
 
     // is_wait_ready / wait_for_any_object.
-    let ev = table.create_event(None, false, false);  // manual-reset, not signaled
+    let ev = table.create_event(None, false, false); // manual-reset, not signaled
     // Event not signaled → wait_for_any_object returns Timeout.
-    assert_eq!(table.wait_for_any_object(&[ev], 1), WaitMultipleResult::Timeout);
+    assert_eq!(
+        table.wait_for_any_object(&[ev], 1),
+        WaitMultipleResult::Timeout
+    );
     // Signal the event.
     table.set_event(ev);
     assert_eq!(table.is_wait_ready(ev, 1), Some(true));
     // wait_for_any_object returns Object(0) — the first (and only) handle index.
-    assert_eq!(table.wait_for_any_object(&[ev], 1), WaitMultipleResult::Object(0));
+    assert_eq!(
+        table.wait_for_any_object(&[ev], 1),
+        WaitMultipleResult::Object(0)
+    );
 
     // wait_for_any_object with invalid handle returns Failed.
-    assert_eq!(table.wait_for_any_object(&[0xDEAD], 1), WaitMultipleResult::Failed);
+    assert_eq!(
+        table.wait_for_any_object(&[0xDEAD], 1),
+        WaitMultipleResult::Failed
+    );
 
     // describe_handle returns a non-empty string.
     let desc = table.describe_handle(ev);
@@ -4072,7 +4749,7 @@ fn com_system_initialize_uninitialize_register_class_create_instance_and_object(
 
     // register_class / co_create_instance.
     let clsid = 0x1000u32;
-    let iid   = 0x2000u32;
+    let iid = 0x2000u32;
     com.register_class(clsid, 0xABCD);
 
     // create instance: success returns a handle.
@@ -4090,7 +4767,10 @@ fn com_system_initialize_uninitialize_register_class_create_instance_and_object(
     // co_create_instance with iid=0 → E_POINTER.
     assert_eq!(com.co_create_instance(clsid, 0), Err(E_POINTER));
     // co_create_instance with unregistered clsid → REGDB_E_CLASSNOTREG.
-    assert_eq!(com.co_create_instance(0x9999, iid), Err(REGDB_E_CLASSNOTREG));
+    assert_eq!(
+        com.co_create_instance(0x9999, iid),
+        Err(REGDB_E_CLASSNOTREG)
+    );
 
     // object() on invalid handle returns None.
     assert!(com.object(0xDEAD).is_none());
@@ -4104,7 +4784,18 @@ fn resource_system_font_brush_pen_palette_dc_and_gdi_object_kind() {
     let mut res = ResourceSystem::default();
 
     // create_font / font.
-    let fh = res.create_font(0, -12, 0, 400, false, false, false, 0, 0, "Arial".to_owned());
+    let fh = res.create_font(
+        0,
+        -12,
+        0,
+        400,
+        false,
+        false,
+        false,
+        0,
+        0,
+        "Arial".to_owned(),
+    );
     let font = res.font(fh).unwrap();
     assert_eq!(font.height, -12);
     assert_eq!(font.face_name, "Arial");
@@ -4150,7 +4841,12 @@ fn resource_system_font_brush_pen_palette_dc_and_gdi_object_kind() {
     let _ = prev;
 
     // select_clip_region / clip_region.
-    let r = wince_emulation_v3::ce::gwe::Rect { left: 0, top: 0, right: 100, bottom: 50 };
+    let r = wince_emulation_v3::ce::gwe::Rect {
+        left: 0,
+        top: 0,
+        right: 100,
+        bottom: 50,
+    };
     let rh = res.create_region(r);
     res.select_clip_region(hdc, Some(rh));
     assert_eq!(res.clip_region(hdc), Some(rh));
@@ -4283,19 +4979,27 @@ fn scheduler_stats_record_wait_attempt_blocked_yield_and_wake() {
     assert_eq!(s.wait_failed_count, 0);
 
     // record_wait_attempt: each kind increments exactly one counter.
-    kernel.scheduler.record_wait_attempt(SchedulerWaitKind::Single, 1, 100);
+    kernel
+        .scheduler
+        .record_wait_attempt(SchedulerWaitKind::Single, 1, 100);
     assert_eq!(kernel.scheduler.stats().wait_single_count, 1);
 
-    kernel.scheduler.record_wait_attempt(SchedulerWaitKind::Multiple, 3, 200);
+    kernel
+        .scheduler
+        .record_wait_attempt(SchedulerWaitKind::Multiple, 3, 200);
     let s = kernel.scheduler.stats();
     assert_eq!(s.wait_multiple_count, 1);
     assert_eq!(s.max_wait_handles, 3);
     assert_eq!(s.max_timeout_ms, 200);
 
-    kernel.scheduler.record_wait_attempt(SchedulerWaitKind::MsgWait, 1, 50);
+    kernel
+        .scheduler
+        .record_wait_attempt(SchedulerWaitKind::MsgWait, 1, 50);
     assert_eq!(kernel.scheduler.stats().msg_wait_count, 1);
 
-    kernel.scheduler.record_wait_attempt(SchedulerWaitKind::Sleep, 0, 500);
+    kernel
+        .scheduler
+        .record_wait_attempt(SchedulerWaitKind::Sleep, 0, 500);
     assert_eq!(kernel.scheduler.stats().sleep_count, 1);
 
     // record_thread_yield: increments sleep_count AND yield_count.
@@ -4309,20 +5013,26 @@ fn scheduler_stats_record_wait_attempt_blocked_yield_and_wake() {
     assert_eq!(kernel.scheduler.stats().wait_block_count, 1);
 
     // record_wait_wake(ObjectSignaled): increments wait_wake_count and wait_acquired_count.
-    kernel.scheduler.record_wait_wake(SchedulerWakeReason::ObjectSignaled);
+    kernel
+        .scheduler
+        .record_wait_wake(SchedulerWakeReason::ObjectSignaled);
     let s = kernel.scheduler.stats();
     assert_eq!(s.wait_wake_count, 1);
     assert_eq!(s.wait_acquired_count, 1);
     assert_eq!(s.wait_timeout_count, 0);
 
     // record_wait_wake(Timeout): increments wait_wake_count and wait_timeout_count.
-    kernel.scheduler.record_wait_wake(SchedulerWakeReason::Timeout);
+    kernel
+        .scheduler
+        .record_wait_wake(SchedulerWakeReason::Timeout);
     let s = kernel.scheduler.stats();
     assert_eq!(s.wait_wake_count, 2);
     assert_eq!(s.wait_timeout_count, 1);
 
     // record_wait_wake(Failed): increments wait_wake_count and wait_failed_count.
-    kernel.scheduler.record_wait_wake(SchedulerWakeReason::Failed);
+    kernel
+        .scheduler
+        .record_wait_wake(SchedulerWakeReason::Failed);
     let s = kernel.scheduler.stats();
     assert_eq!(s.wait_wake_count, 3);
     assert_eq!(s.wait_failed_count, 1);
@@ -4333,8 +5043,14 @@ fn gwe_invalidate_begin_paint_update_rect_pending_size_move_and_set_redraw() {
     use wince_emulation_v3::ce::gwe::Gwe;
 
     let mut gwe = Gwe::default();
-    let rect = Rect { left: 0, top: 0, right: 200, bottom: 100 };
-    let hwnd = gwe.create_window_ex_with_rect(1, "TestClass", "TestWin", None, 0, WS_VISIBLE, 0, rect);
+    let rect = Rect {
+        left: 0,
+        top: 0,
+        right: 200,
+        bottom: 100,
+    };
+    let hwnd =
+        gwe.create_window_ex_with_rect(1, "TestClass", "TestWin", None, 0, WS_VISIBLE, 0, rect);
     // A newly visible window starts with update_pending=true; clear it before testing.
     gwe.validate_window(hwnd);
 
@@ -4342,14 +5058,24 @@ fn gwe_invalidate_begin_paint_update_rect_pending_size_move_and_set_redraw() {
     assert!(gwe.update_rect(hwnd).is_none());
 
     // invalidate_window marks the window dirty; update_rect returns Some.
-    let dirty_rect = Rect { left: 10, top: 10, right: 50, bottom: 40 };
+    let dirty_rect = Rect {
+        left: 10,
+        top: 10,
+        right: 50,
+        bottom: 40,
+    };
     assert!(gwe.invalidate_window(hwnd, Some(dirty_rect), true));
     let upd = gwe.update_rect(hwnd).unwrap();
     assert_eq!(upd.rect, dirty_rect);
     assert!(upd.erase);
 
     // invalidating again unions the rects.
-    let dirty2 = Rect { left: 60, top: 10, right: 100, bottom: 40 };
+    let dirty2 = Rect {
+        left: 60,
+        top: 10,
+        right: 100,
+        bottom: 40,
+    };
     assert!(gwe.invalidate_window(hwnd, Some(dirty2), false));
     let upd2 = gwe.update_rect(hwnd).unwrap();
     assert!(upd2.rect.right >= 100); // union extends to 100
@@ -4391,19 +5117,47 @@ fn gwe_invalidate_begin_paint_update_rect_pending_size_move_and_set_redraw() {
 
 #[test]
 fn gwe_window_hierarchy_get_parent_is_child_top_level_ancestor_dlg_item_and_dialog_ops() {
-    use wince_emulation_v3::ce::gwe::{Gwe, GW_CHILD, GW_OWNER};
+    use wince_emulation_v3::ce::gwe::{GW_CHILD, GW_OWNER, Gwe};
 
     let mut gwe = Gwe::default();
-    let big = Rect { left: 0, top: 0, right: 400, bottom: 300 };
-    let small = Rect { left: 10, top: 10, right: 100, bottom: 60 };
+    let big = Rect {
+        left: 0,
+        top: 0,
+        right: 400,
+        bottom: 300,
+    };
+    let small = Rect {
+        left: 10,
+        top: 10,
+        right: 100,
+        bottom: 60,
+    };
 
     // Create parent and child windows.
     let parent = gwe.create_window_ex_with_rect(1, "Parent", "Parent", None, 0, 0, 0, big);
     let child = gwe.create_window_ex_with_process_parent_owner_and_rect(
-        1, 1, "Child", "Child", Some(parent), Some(parent), WS_CHILD, 0, 0, small,
+        1,
+        1,
+        "Child",
+        "Child",
+        Some(parent),
+        Some(parent),
+        WS_CHILD,
+        0,
+        0,
+        small,
     );
     let grandchild = gwe.create_window_ex_with_process_parent_owner_and_rect(
-        1, 1, "Grandchild", "Grandchild", Some(child), Some(child), WS_CHILD, 0, 0, small,
+        1,
+        1,
+        "Grandchild",
+        "Grandchild",
+        Some(child),
+        Some(child),
+        WS_CHILD,
+        0,
+        0,
+        small,
     );
 
     // get_parent: child's parent is parent window.
@@ -4459,7 +5213,12 @@ fn gwe_window_hierarchy_get_parent_is_child_top_level_ancestor_dlg_item_and_dial
     assert!(!gwe.check_radio_button(parent, 10, 12, 20));
 
     // set_window_region / window_region.
-    let region_rect = Rect { left: 5, top: 5, right: 50, bottom: 50 };
+    let region_rect = Rect {
+        left: 5,
+        top: 5,
+        right: 50,
+        bottom: 50,
+    };
     assert!(gwe.set_window_region(parent, Some(region_rect)));
     assert_eq!(gwe.window_region(parent), Some(region_rect));
     // Clear window region.
@@ -4476,18 +5235,26 @@ fn gwe_window_hierarchy_get_parent_is_child_top_level_ancestor_dlg_item_and_dial
 
 #[test]
 fn resource_system_accelerator_popup_tracking_and_select_object() {
+    use wince_emulation_v3::ce::gwe::Point;
     use wince_emulation_v3::ce::resource::{
-        AcceleratorEntry, MenuItem, MF_BYPOSITION, MF_GRAYED, PopupMenuNotification,
+        AcceleratorEntry, MF_BYPOSITION, MF_GRAYED, MenuItem, PopupMenuNotification,
         PopupMenuTracking, ResourceId, ResourceSystem,
     };
-    use wince_emulation_v3::ce::gwe::Point;
 
     let mut res = ResourceSystem::default();
 
     // create_accelerator / accelerator / delete_accelerator.
     let entries = vec![
-        AcceleratorEntry { flags: 0x01, key: 0x41, command: 101 },
-        AcceleratorEntry { flags: 0x02, key: 0x42, command: 102 },
+        AcceleratorEntry {
+            flags: 0x01,
+            key: 0x41,
+            command: 101,
+        },
+        AcceleratorEntry {
+            flags: 0x02,
+            key: 0x42,
+            command: 102,
+        },
     ];
     let accel = res.create_accelerator(1, ResourceId::from_guest_arg(5), None, entries.clone());
     let obj = res.accelerator(accel).unwrap();
@@ -4502,7 +5269,10 @@ fn resource_system_accelerator_popup_tracking_and_select_object() {
     // track_popup_menu / last_popup_tracking.
     assert!(res.last_popup_tracking().is_none());
     let menu = res.create_popup_menu();
-    res.append_menu_item(menu, MenuItem::from_insert_flags(0, 77, Some("Item".to_owned())));
+    res.append_menu_item(
+        menu,
+        MenuItem::from_insert_flags(0, 77, Some("Item".to_owned())),
+    );
     let tracking = PopupMenuTracking {
         menu,
         flags: 0,
@@ -4515,7 +5285,10 @@ fn resource_system_accelerator_popup_tracking_and_select_object() {
     assert_eq!(res.last_popup_tracking().unwrap().x, 100);
     assert_eq!(res.last_popup_tracking().unwrap().menu, menu);
     // track_popup_menu on unknown menu returns false.
-    let bad_tracking = PopupMenuTracking { menu: 0xDEAD, ..tracking };
+    let bad_tracking = PopupMenuTracking {
+        menu: 0xDEAD,
+        ..tracking
+    };
     assert!(!res.track_popup_menu(bad_tracking));
 
     // popup_menu_command_selection: returns the first enabled command.
@@ -4532,7 +5305,12 @@ fn resource_system_accelerator_popup_tracking_and_select_object() {
 
     // record_popup_notification / popup_notifications.
     assert!(res.popup_notifications().is_empty());
-    res.record_popup_notification(PopupMenuNotification { hwnd: 0x1000, msg: 0x111, wparam: 1, lparam: 0 });
+    res.record_popup_notification(PopupMenuNotification {
+        hwnd: 0x1000,
+        msg: 0x111,
+        wparam: 1,
+        lparam: 0,
+    });
     assert_eq!(res.popup_notifications().len(), 1);
     assert_eq!(res.popup_notifications()[0].msg, 0x111);
 
@@ -4559,8 +5337,8 @@ fn resource_system_accelerator_popup_tracking_and_select_object() {
 
 #[test]
 fn resource_system_dc_palette_bk_mode_color_text_align_rop2_is_memory_and_delete_gdi() {
-    use wince_emulation_v3::ce::resource::ResourceSystem;
     use wince_emulation_v3::ce::gwe::Point;
+    use wince_emulation_v3::ce::resource::ResourceSystem;
 
     let mut res = ResourceSystem::default();
     let hdc = res.create_compatible_dc();
@@ -4607,7 +5385,10 @@ fn resource_system_dc_palette_bk_mode_color_text_align_rop2_is_memory_and_delete
     // set_brush_origin returns previous (0,0).
     let prev = res.set_brush_origin(hdc, Point { x: 3, y: 7 }).unwrap();
     assert_eq!(prev, Point { x: 0, y: 0 });
-    assert_eq!(res.dc_state(hdc).unwrap().brush_origin, Point { x: 3, y: 7 });
+    assert_eq!(
+        res.dc_state(hdc).unwrap().brush_origin,
+        Point { x: 3, y: 7 }
+    );
     assert!(res.set_brush_origin(0, Point { x: 0, y: 0 }).is_none());
 
     // realize_palette: valid DC returns Some(0); zero DC returns None.
@@ -4625,7 +5406,18 @@ fn resource_system_dc_palette_bk_mode_color_text_align_rop2_is_memory_and_delete
     assert!(res.select_palette(hdc, 0xDEAD).is_none());
 
     // delete_gdi_object: font, brush, pen, bitmap, region.
-    let font = res.create_font(0, -12, 0, 400, false, false, false, 0, 0, "Arial".to_owned());
+    let font = res.create_font(
+        0,
+        -12,
+        0,
+        400,
+        false,
+        false,
+        false,
+        0,
+        0,
+        "Arial".to_owned(),
+    );
     assert!(res.delete_gdi_object(font));
     assert!(res.font(font).is_none());
     assert!(!res.delete_gdi_object(font)); // already gone
@@ -4707,10 +5499,16 @@ fn resource_system_image_list_duplicate_replace_remove_copy_count_overlay_and_dr
     let src = res.create_image_list(16, 16, 0, 0, 0).unwrap();
     res.add_image_list_image(src, bmp, 0); // 3 images
     let dst = res.create_image_list(16, 16, 0, 0, 0).unwrap();
-    assert_eq!(res.copy_image_list_image(dst, -1, src, 0, false), Some(true));
+    assert_eq!(
+        res.copy_image_list_image(dst, -1, src, 0, false),
+        Some(true)
+    );
     assert_eq!(res.image_list_count(dst), Some(1));
     // Negative src_index always returns Some(false).
-    assert_eq!(res.copy_image_list_image(dst, -1, src, -1, false), Some(false));
+    assert_eq!(
+        res.copy_image_list_image(dst, -1, src, -1, false),
+        Some(false)
+    );
 
     // begin_image_list_drag / image_list_drag / move / drag_leave / end.
     assert!(res.image_list_drag().is_none());
@@ -4746,10 +5544,24 @@ fn gwe_keyboard_target_ime_context_associate_status_and_is_window_being_destroye
     use wince_emulation_v3::ce::gwe::Gwe;
 
     let mut gwe = Gwe::default();
-    let big = Rect { left: 0, top: 0, right: 400, bottom: 300 };
+    let big = Rect {
+        left: 0,
+        top: 0,
+        right: 400,
+        bottom: 300,
+    };
     let hwnd = gwe.create_window_ex_with_rect(1, "Win", "Win", None, 0, 0, 0, big);
     let child = gwe.create_window_ex_with_process_parent_owner_and_rect(
-        1, 1, "Child", "Child", Some(hwnd), None, 0, WS_CHILD, 0, big,
+        1,
+        1,
+        "Child",
+        "Child",
+        Some(hwnd),
+        None,
+        0,
+        WS_CHILD,
+        0,
+        big,
     );
 
     // set_keyboard_target / get_keyboard_target.
@@ -4854,10 +5666,13 @@ fn kernel_mount_guest_root_host_path_file_io_stats_and_map_window_points() {
     let host_root = std::path::PathBuf::from(".");
     kernel.mount_guest_root("\\Storage Card", host_root.clone());
     // host_path_for_guest resolves a guest path to host path.
-    let host = kernel.host_path_for_guest("\\Storage Card\\test.txt").unwrap();
+    let host = kernel
+        .host_path_for_guest("\\Storage Card\\test.txt")
+        .unwrap();
     assert!(host.to_string_lossy().contains("test.txt"));
     // host_path_to_guest_mount maps a host path back to the guest mount.
-    let guest_mount = kernel.host_path_to_guest_mount(&host_root.canonicalize().unwrap_or(host_root.clone()));
+    let guest_mount =
+        kernel.host_path_to_guest_mount(&host_root.canonicalize().unwrap_or(host_root.clone()));
     // May be Some or None depending on whether host_root could be resolved, so just verify no panic.
     let _ = guest_mount;
 
@@ -4872,8 +5687,18 @@ fn kernel_mount_guest_root_host_path_file_io_stats_and_map_window_points() {
 
     // map_window_points: translate points between two windows.
     let mut gwe = Gwe::default();
-    let rect_a = Rect { left: 100, top: 200, right: 400, bottom: 500 };
-    let rect_b = Rect { left: 50, top: 80, right: 300, bottom: 400 };
+    let rect_a = Rect {
+        left: 100,
+        top: 200,
+        right: 400,
+        bottom: 500,
+    };
+    let rect_b = Rect {
+        left: 50,
+        top: 80,
+        right: 300,
+        bottom: 400,
+    };
     let ha = gwe.create_window_ex_with_rect(1, "A", "A", None, 0, 0, 0, rect_a);
     let hb = gwe.create_window_ex_with_rect(1, "B", "B", None, 0, 0, 0, rect_b);
 
@@ -4901,14 +5726,38 @@ fn gwe_window_snapshot_z_order_from_point_descendants_broadcast_and_message_pos(
 
     let mut gwe = Gwe::default();
     // Create two visible top-level windows with distinct non-overlapping positions.
-    let rect_a = Rect { left: 0, top: 0, right: 100, bottom: 100 };
-    let rect_b = Rect { left: 200, top: 0, right: 400, bottom: 100 };
+    let rect_a = Rect {
+        left: 0,
+        top: 0,
+        right: 100,
+        bottom: 100,
+    };
+    let rect_b = Rect {
+        left: 200,
+        top: 0,
+        right: 400,
+        bottom: 100,
+    };
     let hwnd_a = gwe.create_window_ex_with_rect(1, "WinA", "WinA", None, 0, WS_VISIBLE, 0, rect_a);
     let hwnd_b = gwe.create_window_ex_with_rect(2, "WinB", "WinB", None, 0, WS_VISIBLE, 0, rect_b);
     // Child of A with its own position inside A.
-    let rect_child = Rect { left: 10, top: 10, right: 50, bottom: 50 };
+    let rect_child = Rect {
+        left: 10,
+        top: 10,
+        right: 50,
+        bottom: 50,
+    };
     let child_a = gwe.create_window_ex_with_process_parent_owner_and_rect(
-        1, 1, "ChildA", "ChildA", Some(hwnd_a), None, 0, WS_CHILD | WS_VISIBLE, 0, rect_child,
+        1,
+        1,
+        "ChildA",
+        "ChildA",
+        Some(hwnd_a),
+        None,
+        0,
+        WS_CHILD | WS_VISIBLE,
+        0,
+        rect_child,
     );
 
     // windows_snapshot: all windows including desktop.
@@ -4949,19 +5798,29 @@ fn gwe_window_snapshot_z_order_from_point_descendants_broadcast_and_message_pos(
     assert_eq!(gwe.get_message_pos(99), 0);
 
     // post_broadcast_message: posts to all top-level windows (returns true when any exist).
-    let before_a = gwe.queue_snapshot().into_iter().find(|(t, _)| *t == 1).map(|(_, q)| q.len()).unwrap_or(0);
+    let before_a = gwe
+        .queue_snapshot()
+        .into_iter()
+        .find(|(t, _)| *t == 1)
+        .map(|(_, q)| q.len())
+        .unwrap_or(0);
     let ok = gwe.post_broadcast_message(WM_USER, 1, 2, 0);
     assert!(ok); // at least one top-level window exists
     // After broadcast, thread 1's queue grew (hwnd_a received a message).
-    let after_a = gwe.queue_snapshot().into_iter().find(|(t, _)| *t == 1).map(|(_, q)| q.len()).unwrap_or(0);
+    let after_a = gwe
+        .queue_snapshot()
+        .into_iter()
+        .find(|(t, _)| *t == 1)
+        .map(|(_, q)| q.len())
+        .unwrap_or(0);
     assert!(after_a > before_a);
 }
 
 #[test]
 fn memory_system_local_alloc_heap_create_destroy_realloc_size_validate_and_range_queries() {
     use wince_emulation_v3::ce::memory::{
-        HEAP_NO_SERIALIZE, HEAP_REALLOC_IN_PLACE_ONLY, HEAP_ZERO_MEMORY,
-        LMEM_ZEROINIT, PROCESS_HEAP_HANDLE, MemorySystem,
+        HEAP_NO_SERIALIZE, HEAP_REALLOC_IN_PLACE_ONLY, HEAP_ZERO_MEMORY, LMEM_ZEROINIT,
+        MemorySystem, PROCESS_HEAP_HANDLE,
     };
 
     let mut mem = MemorySystem::default();
@@ -5025,16 +5884,21 @@ fn memory_system_local_alloc_heap_create_destroy_realloc_size_validate_and_range
 
     // heap_re_alloc with HEAP_REALLOC_IN_PLACE_ONLY when growth required → None.
     let p_inplace = mem.heap_alloc(h1, 0, 32).unwrap();
-    assert!(mem.heap_re_alloc(h1, HEAP_REALLOC_IN_PLACE_ONLY, p_inplace, 9999).is_none());
+    assert!(
+        mem.heap_re_alloc(h1, HEAP_REALLOC_IN_PLACE_ONLY, p_inplace, 9999)
+            .is_none()
+    );
 
     // heap_re_alloc with HEAP_ZERO_MEMORY: grows and zeroes new bytes.
-    let p_grow = mem.heap_re_alloc(h1, HEAP_ZERO_MEMORY, p_inplace, 64).unwrap();
+    let p_grow = mem
+        .heap_re_alloc(h1, HEAP_ZERO_MEMORY, p_inplace, 64)
+        .unwrap();
     assert!(p_grow != 0);
 
     // heap_free: correct heap succeeds; wrong heap fails.
     let p2 = mem.heap_alloc(h2, 0, 48).unwrap();
     assert!(!mem.heap_free(h1, 0, p2)); // wrong heap
-    assert!(mem.heap_free(h2, 0, p2));  // correct heap
+    assert!(mem.heap_free(h2, 0, p2)); // correct heap
     assert!(!mem.heap_free(h2, 0, p2)); // double-free
 
     // heap_destroy: cannot destroy the process heap.
@@ -5126,12 +5990,18 @@ fn handle_table_create_mutex_with_status_suspend_resume_by_id_and_file_mappings_
     );
 
     // suspend_thread_by_id on a handle (not by id) returns InvalidHandle for unknown handle.
-    assert_eq!(table.suspend_thread(0xDEAD_BEEF), ThreadSuspendResult::InvalidHandle);
+    assert_eq!(
+        table.suspend_thread(0xDEAD_BEEF),
+        ThreadSuspendResult::InvalidHandle
+    );
     // suspend_thread on a valid handle works too.
     assert_eq!(table.suspend_thread(th), ThreadSuspendResult::Previous(0));
 
     // resume_thread on an invalid handle → InvalidHandle.
-    assert_eq!(table.resume_thread(0xDEAD_BEEF), ThreadResumeResult::InvalidHandle);
+    assert_eq!(
+        table.resume_thread(0xDEAD_BEEF),
+        ThreadResumeResult::InvalidHandle
+    );
     // resume_thread on the valid handle that we just suspended → Previous(1).
     assert_eq!(table.resume_thread(th), ThreadResumeResult::Previous(1));
 
@@ -5141,7 +6011,11 @@ fn handle_table_create_mutex_with_status_suspend_resume_by_id_and_file_mappings_
     // Add a view to fm1 via file_mapping_mut.
     {
         let mapping = table.file_mapping_mut(fm1).unwrap();
-        mapping.views.push(FileMappingView { base: 0x5000_0000, size: 0x1000, offset: 0 });
+        mapping.views.push(FileMappingView {
+            base: 0x5000_0000,
+            size: 0x1000,
+            offset: 0,
+        });
     }
     // file_mappings_mut iterates all file-mapping objects.
     let names: Vec<_> = table.file_mappings_mut().map(|m| m.name.clone()).collect();
@@ -5149,7 +6023,11 @@ fn handle_table_create_mutex_with_status_suspend_resume_by_id_and_file_mappings_
     // file_mappings_mut lets us mutate — append a view to the unnamed mapping.
     for m in table.file_mappings_mut() {
         if m.name.is_none() {
-            m.views.push(FileMappingView { base: 0x6000_0000, size: 0x2000, offset: 0 });
+            m.views.push(FileMappingView {
+                base: 0x6000_0000,
+                size: 0x2000,
+                offset: 0,
+            });
         }
     }
     // file_mapping_by_view_mut: look up by view base.
@@ -5174,20 +6052,32 @@ fn handle_table_create_mutex_with_status_suspend_resume_by_id_and_file_mappings_
 #[test]
 fn shell_system_remove_window_state_and_remove_windows_state() {
     use wince_emulation_v3::ce::shell::{
-        NotifyIconData, NotifyIconOp, ShellChangeNotifyRegistration,
-        ShellNotificationData, ShellSystem, ShellWindowCleanup, SHNP_ICONIC,
+        NotifyIconData, NotifyIconOp, SHNP_ICONIC, ShellChangeNotifyRegistration,
+        ShellNotificationData, ShellSystem, ShellWindowCleanup,
     };
 
     let mut shell = ShellSystem::default();
 
     // Add two notify icons for hwnd=10.
     let icon_a = NotifyIconData {
-        hwnd: 10, id: 1, flags: 0, callback_message: 0,
-        icon: 0, tip: "icon_a".to_owned(), state: 0, state_mask: 0,
+        hwnd: 10,
+        id: 1,
+        flags: 0,
+        callback_message: 0,
+        icon: 0,
+        tip: "icon_a".to_owned(),
+        state: 0,
+        state_mask: 0,
     };
     let icon_b = NotifyIconData {
-        hwnd: 10, id: 2, flags: 0, callback_message: 0,
-        icon: 0, tip: "icon_b".to_owned(), state: 0, state_mask: 0,
+        hwnd: 10,
+        id: 2,
+        flags: 0,
+        callback_message: 0,
+        icon: 0,
+        tip: "icon_b".to_owned(),
+        state: 0,
+        state_mask: 0,
     };
     assert!(shell.apply_notify_icon(NotifyIconOp::Add, icon_a));
     assert!(shell.apply_notify_icon(NotifyIconOp::Add, icon_b));
@@ -5195,21 +6085,36 @@ fn shell_system_remove_window_state_and_remove_windows_state() {
     // Add a notification whose hwnd_sink is 10.
     let clsid: [u8; 16] = [2u8; 16];
     let notif = ShellNotificationData {
-        id: 1, priority: SHNP_ICONIC, duration_cs: 9999,
-        icon: 0, flags: 0, clsid,
-        hwnd_sink: 10, title: "t".to_owned(), html: String::new(), lparam: 0,
+        id: 1,
+        priority: SHNP_ICONIC,
+        duration_cs: 9999,
+        icon: 0,
+        flags: 0,
+        clsid,
+        hwnd_sink: 10,
+        title: "t".to_owned(),
+        html: String::new(),
+        lparam: 0,
         callback_ptr: 0,
     };
     let _ = shell.add_notification(notif, 0);
 
     // Register a change notification for hwnd=10.
     shell.register_change_notification(ShellChangeNotifyRegistration {
-        hwnd: 10, event_mask: 0xFF, notify_flags: 0, watch_dir: None, recursive: false,
+        hwnd: 10,
+        event_mask: 0xFF,
+        notify_flags: 0,
+        watch_dir: None,
+        recursive: false,
     });
 
     // Register a change notification for a different hwnd that should NOT be removed.
     shell.register_change_notification(ShellChangeNotifyRegistration {
-        hwnd: 99, event_mask: 0x01, notify_flags: 0, watch_dir: None, recursive: false,
+        hwnd: 99,
+        event_mask: 0x01,
+        notify_flags: 0,
+        watch_dir: None,
+        recursive: false,
     });
 
     // remove_window_state(10) clears all state associated with hwnd=10.
@@ -5232,12 +6137,24 @@ fn shell_system_remove_window_state_and_remove_windows_state() {
 
     // remove_windows_state: add icons for two hwnds and remove both at once.
     let icon_c = NotifyIconData {
-        hwnd: 20, id: 1, flags: 0, callback_message: 0,
-        icon: 0, tip: "c".to_owned(), state: 0, state_mask: 0,
+        hwnd: 20,
+        id: 1,
+        flags: 0,
+        callback_message: 0,
+        icon: 0,
+        tip: "c".to_owned(),
+        state: 0,
+        state_mask: 0,
     };
     let icon_d = NotifyIconData {
-        hwnd: 30, id: 1, flags: 0, callback_message: 0,
-        icon: 0, tip: "d".to_owned(), state: 0, state_mask: 0,
+        hwnd: 30,
+        id: 1,
+        flags: 0,
+        callback_message: 0,
+        icon: 0,
+        tip: "d".to_owned(),
+        state: 0,
+        state_mask: 0,
     };
     assert!(shell.apply_notify_icon(NotifyIconOp::Add, icon_c));
     assert!(shell.apply_notify_icon(NotifyIconOp::Add, icon_d));
@@ -5249,7 +6166,8 @@ fn shell_system_remove_window_state_and_remove_windows_state() {
 }
 
 #[test]
-fn resource_system_owned_bitmap_bitmap_mut_region_rects_palette_mut_shell_image_list_merge_and_dither() {
+fn resource_system_owned_bitmap_bitmap_mut_region_rects_palette_mut_shell_image_list_merge_and_dither()
+ {
     use wince_emulation_v3::ce::gwe::Rect;
     use wince_emulation_v3::ce::resource::ResourceSystem;
 
@@ -5281,11 +6199,26 @@ fn resource_system_owned_bitmap_bitmap_mut_region_rects_palette_mut_shell_image_
     assert!(res.bitmap_mut(0xDEAD).is_none());
 
     // set_region_rects: replace region with a multi-rect set.
-    let init = Rect { left: 0, top: 0, right: 100, bottom: 50 };
+    let init = Rect {
+        left: 0,
+        top: 0,
+        right: 100,
+        bottom: 50,
+    };
     let rh = res.create_region(init);
     let rects = vec![
-        Rect { left: 0, top: 0, right: 50, bottom: 25 },
-        Rect { left: 50, top: 0, right: 100, bottom: 25 },
+        Rect {
+            left: 0,
+            top: 0,
+            right: 50,
+            bottom: 25,
+        },
+        Rect {
+            left: 50,
+            top: 0,
+            right: 100,
+            bottom: 25,
+        },
     ];
     assert!(res.set_region_rects(rh, rects.clone()));
     let region = res.region(rh).unwrap();
@@ -5334,7 +6267,9 @@ fn resource_system_owned_bitmap_bitmap_mut_region_rects_palette_mut_shell_image_
     // add_masked_image_list_image: transparent_color stored on image.
     let bmp_strip = res.create_bitmap(32, 16, 1, 24, 0);
     let ilm = res.create_image_list(16, 16, 0, 4, 1).unwrap();
-    let idx = res.add_masked_image_list_image(ilm, bmp_strip, 0xFF00_FF00).unwrap();
+    let idx = res
+        .add_masked_image_list_image(ilm, bmp_strip, 0xFF00_FF00)
+        .unwrap();
     assert_eq!(idx, 0); // first image
     assert_eq!(res.image_list_count(ilm), Some(2)); // 32px / 16px = 2 images
     // transparent_color set when not 0xffffffff.
@@ -5350,13 +6285,22 @@ fn resource_system_owned_bitmap_bitmap_mut_region_rects_palette_mut_shell_image_
     assert_eq!(res.replace_image_list_image(ilm, 0, bmp_new, 0), Some(true));
     assert_eq!(res.image_list(ilm).unwrap().images[0].bitmap, bmp_new);
     // Negative index → Some(false).
-    assert_eq!(res.replace_image_list_image(ilm, -1, bmp_new, 0), Some(false));
+    assert_eq!(
+        res.replace_image_list_image(ilm, -1, bmp_new, 0),
+        Some(false)
+    );
     // Out-of-range index → Some(false).
-    assert_eq!(res.replace_image_list_image(ilm, 999, bmp_new, 0), Some(false));
+    assert_eq!(
+        res.replace_image_list_image(ilm, 999, bmp_new, 0),
+        Some(false)
+    );
     // bitmap=0 → Some(false).
     assert_eq!(res.replace_image_list_image(ilm, 0, 0, 0), Some(false));
     // Unknown handle → None.
-    assert!(res.replace_image_list_image(0xDEAD, 0, bmp_new, 0).is_none());
+    assert!(
+        res.replace_image_list_image(0xDEAD, 0, bmp_new, 0)
+            .is_none()
+    );
 
     // copy_dither_image_list_image: copies image and records dither info.
     let il_dst = res.create_image_list(16, 16, 0, 4, 1).unwrap();
@@ -5372,9 +6316,15 @@ fn resource_system_owned_bitmap_bitmap_mut_region_rects_palette_mut_shell_image_
     assert_eq!(last.src_index, 0);
     assert_eq!(last.flags, 0x01);
     // Negative dst_index → Some(false).
-    assert_eq!(res.copy_dither_image_list_image(il_dst, -1, 0, 0, ilm, 0, 0), Some(false));
+    assert_eq!(
+        res.copy_dither_image_list_image(il_dst, -1, 0, 0, ilm, 0, 0),
+        Some(false)
+    );
     // Negative src_index → Some(false).
-    assert_eq!(res.copy_dither_image_list_image(il_dst, 0, 0, 0, ilm, -1, 0), Some(false));
+    assert_eq!(
+        res.copy_dither_image_list_image(il_dst, 0, 0, 0, ilm, -1, 0),
+        Some(false)
+    );
 
     // set_image_list_drag_cursor: no active drag → Some(false).
     let il_cur = res.create_image_list(16, 16, 0, 4, 1).unwrap();
@@ -5459,7 +6409,12 @@ fn gwe_caret_gesture_set_parent_region_rects_next_dlg_tab_group_and_foreground_k
     };
 
     let mut gwe = Gwe::default();
-    let rect = Rect { left: 0, top: 0, right: 200, bottom: 100 };
+    let rect = Rect {
+        left: 0,
+        top: 0,
+        right: 200,
+        bottom: 100,
+    };
     let hwnd = gwe.create_window_ex_with_rect(1, "Cls", "Win", None, 0, WS_VISIBLE, 0, rect);
 
     // create_caret: fails for invalid hwnd.
@@ -5531,8 +6486,18 @@ fn gwe_caret_gesture_set_parent_region_rects_next_dlg_tab_group_and_foreground_k
 
     // set_window_region_rects: multi-rect region on a window (non-adjacent rows).
     let rects = vec![
-        Rect { left: 0, top: 0, right: 100, bottom: 30 },
-        Rect { left: 0, top: 40, right: 100, bottom: 70 },
+        Rect {
+            left: 0,
+            top: 0,
+            right: 100,
+            bottom: 30,
+        },
+        Rect {
+            left: 0,
+            top: 40,
+            right: 100,
+            bottom: 70,
+        },
     ];
     assert!(gwe.set_window_region_rects(hwnd, Some(rects.clone())));
     // window_region_rects returns the canonicalized rects; at least one rect.
@@ -5551,8 +6516,14 @@ fn gwe_caret_gesture_set_parent_region_rects_next_dlg_tab_group_and_foreground_k
     assert!(gwe.visible_client_rects(0xDEAD).is_empty());
 
     // set_parent: make hwnd a child of another top-level.
-    let parent_rect = Rect { left: 0, top: 0, right: 400, bottom: 300 };
-    let parent = gwe.create_window_ex_with_rect(1, "Par", "Parent", None, 0, WS_VISIBLE, 0, parent_rect);
+    let parent_rect = Rect {
+        left: 0,
+        top: 0,
+        right: 400,
+        bottom: 300,
+    };
+    let parent =
+        gwe.create_window_ex_with_rect(1, "Par", "Parent", None, 0, WS_VISIBLE, 0, parent_rect);
     // Initially hwnd has no parent (top-level).
     let prev = gwe.set_parent(hwnd, Some(parent)).unwrap();
     assert_eq!(prev, None); // no previous parent
@@ -5568,11 +6539,39 @@ fn gwe_caret_gesture_set_parent_region_rects_next_dlg_tab_group_and_foreground_k
 
     // get_next_dlg_tab_item / get_next_dlg_group_item.
     // Create a dialog with tab-stop children.
-    let dlg_rect = Rect { left: 0, top: 0, right: 300, bottom: 200 };
+    let dlg_rect = Rect {
+        left: 0,
+        top: 0,
+        right: 300,
+        bottom: 200,
+    };
     let dlg = gwe.create_window_ex_with_rect(1, "Dlg", "Dialog", None, 0, WS_VISIBLE, 0, dlg_rect);
-    let ctrl_rect = Rect { left: 10, top: 10, right: 50, bottom: 30 };
-    let ctrl1 = gwe.create_window_ex_with_rect(1, "Btn", "B1", Some(dlg), 1, WS_VISIBLE | WS_CHILD | WS_TABSTOP, 0, ctrl_rect);
-    let ctrl2 = gwe.create_window_ex_with_rect(1, "Btn", "B2", Some(dlg), 2, WS_VISIBLE | WS_CHILD | WS_TABSTOP, 0, ctrl_rect);
+    let ctrl_rect = Rect {
+        left: 10,
+        top: 10,
+        right: 50,
+        bottom: 30,
+    };
+    let ctrl1 = gwe.create_window_ex_with_rect(
+        1,
+        "Btn",
+        "B1",
+        Some(dlg),
+        1,
+        WS_VISIBLE | WS_CHILD | WS_TABSTOP,
+        0,
+        ctrl_rect,
+    );
+    let ctrl2 = gwe.create_window_ex_with_rect(
+        1,
+        "Btn",
+        "B2",
+        Some(dlg),
+        2,
+        WS_VISIBLE | WS_CHILD | WS_TABSTOP,
+        0,
+        ctrl_rect,
+    );
     // get_next_dlg_tab_item forward from ctrl1 → ctrl2.
     assert_eq!(gwe.get_next_dlg_tab_item(dlg, ctrl1, false), Some(ctrl2));
     // get_next_dlg_tab_item backward from ctrl2 → ctrl1.
@@ -5581,10 +6580,33 @@ fn gwe_caret_gesture_set_parent_region_rects_next_dlg_tab_group_and_foreground_k
     assert!(gwe.get_next_dlg_tab_item(0xDEAD, ctrl1, false).is_none());
 
     // get_next_dlg_group_item: WS_GROUP children.
-    let g_rect = Rect { left: 0, top: 0, right: 300, bottom: 200 };
+    let g_rect = Rect {
+        left: 0,
+        top: 0,
+        right: 300,
+        bottom: 200,
+    };
     let gdlg = gwe.create_window_ex_with_rect(1, "GDlg", "GDialog", None, 0, WS_VISIBLE, 0, g_rect);
-    let gr1 = gwe.create_window_ex_with_rect(1, "Btn", "G1", Some(gdlg), 10, WS_VISIBLE | WS_CHILD | WS_GROUP, 0, ctrl_rect);
-    let gr2 = gwe.create_window_ex_with_rect(1, "Btn", "G2", Some(gdlg), 11, WS_VISIBLE | WS_CHILD, 0, ctrl_rect);
+    let gr1 = gwe.create_window_ex_with_rect(
+        1,
+        "Btn",
+        "G1",
+        Some(gdlg),
+        10,
+        WS_VISIBLE | WS_CHILD | WS_GROUP,
+        0,
+        ctrl_rect,
+    );
+    let gr2 = gwe.create_window_ex_with_rect(
+        1,
+        "Btn",
+        "G2",
+        Some(gdlg),
+        11,
+        WS_VISIBLE | WS_CHILD,
+        0,
+        ctrl_rect,
+    );
     // Forward from gr1 → gr2 (within group).
     assert_eq!(gwe.get_next_dlg_group_item(gdlg, gr1, false), Some(gr2));
     // Backward from gr2 → gr1.
@@ -5619,16 +6641,22 @@ fn gwe_caret_gesture_set_parent_region_rects_next_dlg_tab_group_and_foreground_k
 }
 
 #[test]
-fn gwe_cursor_pos_window_pos_for_rect_draw_menu_bar_message_pointer_payload_dialog_cmds_and_key_state() {
+fn gwe_cursor_pos_window_pos_for_rect_draw_menu_bar_message_pointer_payload_dialog_cmds_and_key_state()
+ {
     use wince_emulation_v3::ce::gwe::{
-        BS_DEFPUSHBUTTON, BS_PUSHBUTTON, Gwe, MessagePointerPayload, Point, Rect, WM_DESTROY,
-        WM_NCDESTROY, WS_CHILD, WS_VISIBLE, WindowPos, HWND_TOP, WNDCLASSW_SIZE,
+        BS_DEFPUSHBUTTON, BS_PUSHBUTTON, Gwe, HWND_TOP, MessagePointerPayload, Point, Rect,
+        WM_DESTROY, WM_NCDESTROY, WNDCLASSW_SIZE, WS_CHILD, WS_VISIBLE, WindowPos,
     };
 
     let mut gwe = Gwe::default();
     let wndclass_bytes = [0u8; WNDCLASSW_SIZE];
     gwe.register_class("Btn", wndclass_bytes);
-    let rect = Rect { left: 10, top: 20, right: 110, bottom: 70 };
+    let rect = Rect {
+        left: 10,
+        top: 20,
+        right: 110,
+        bottom: 70,
+    };
     let hwnd = gwe.create_window_ex_with_rect(1, "Btn", "W", None, 0, WS_VISIBLE, 0, rect);
 
     // set_cursor_pos / get_cursor_pos.
@@ -5636,13 +6664,23 @@ fn gwe_cursor_pos_window_pos_for_rect_draw_menu_bar_message_pointer_payload_dial
     assert_eq!(gwe.get_cursor_pos(), Point { x: 55, y: 33 });
 
     // window_pos_for_rect: computes WindowPos from a rect.
-    let target_rect = Rect { left: 20, top: 30, right: 200, bottom: 150 };
-    let wp = gwe.window_pos_for_rect(hwnd, target_rect, HWND_TOP, 0).unwrap();
+    let target_rect = Rect {
+        left: 20,
+        top: 30,
+        right: 200,
+        bottom: 150,
+    };
+    let wp = gwe
+        .window_pos_for_rect(hwnd, target_rect, HWND_TOP, 0)
+        .unwrap();
     assert_eq!(wp.hwnd, hwnd);
     assert_eq!(wp.width, target_rect.width());
     assert_eq!(wp.height, target_rect.height());
     // Invalid hwnd → None.
-    assert!(gwe.window_pos_for_rect(0xDEAD, target_rect, HWND_TOP, 0).is_none());
+    assert!(
+        gwe.window_pos_for_rect(0xDEAD, target_rect, HWND_TOP, 0)
+            .is_none()
+    );
 
     // draw_menu_bar: returns true for valid hwnd, false otherwise.
     assert!(gwe.draw_menu_bar(hwnd));
@@ -5651,17 +6689,37 @@ fn gwe_cursor_pos_window_pos_for_rect_draw_menu_bar_message_pointer_payload_dial
     // active_window_is_within: only true when active window is hwnd or descendant.
     gwe.set_active_window(Some(hwnd));
     assert!(gwe.active_window_is_within(hwnd));
-    let other_rect = Rect { left: 200, top: 0, right: 300, bottom: 100 };
+    let other_rect = Rect {
+        left: 200,
+        top: 0,
+        right: 300,
+        bottom: 100,
+    };
     let hwnd2 = gwe.create_window_ex_with_rect(1, "Btn", "W2", None, 0, WS_VISIBLE, 0, other_rect);
     assert!(!gwe.active_window_is_within(hwnd2));
 
     // insert_message_pointer_payload: ptr=0 → false.
-    assert!(!gwe.insert_message_pointer_payload(0, MessagePointerPayload::WindowPos(WindowPos {
-        hwnd, insert_after: HWND_TOP, x: 0, y: 0, width: 100, height: 50, flags: 0,
-    })));
+    assert!(!gwe.insert_message_pointer_payload(
+        0,
+        MessagePointerPayload::WindowPos(WindowPos {
+            hwnd,
+            insert_after: HWND_TOP,
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 50,
+            flags: 0,
+        })
+    ));
     // Valid ptr.
     let payload = MessagePointerPayload::WindowPos(WindowPos {
-        hwnd, insert_after: HWND_TOP, x: 5, y: 10, width: 80, height: 40, flags: 0,
+        hwnd,
+        insert_after: HWND_TOP,
+        x: 5,
+        y: 10,
+        width: 80,
+        height: 40,
+        flags: 0,
     });
     assert!(gwe.insert_message_pointer_payload(0x1234, payload.clone()));
     // message_pointer_payload returns Some for existing ptr.
@@ -5674,12 +6732,29 @@ fn gwe_cursor_pos_window_pos_for_rect_draw_menu_bar_message_pointer_payload_dial
 
     // dialog_return_command / dialog_cancel_command / default_push_button / is_push_button.
     // Create a dialog with a default push button (BS_DEFPUSHBUTTON, class "button").
-    let dlg_rect = Rect { left: 0, top: 0, right: 400, bottom: 300 };
+    let dlg_rect = Rect {
+        left: 0,
+        top: 0,
+        right: 400,
+        bottom: 300,
+    };
     let dlg = gwe.create_window_ex_with_rect(1, "dialog", "Dlg", None, 0, WS_VISIBLE, 0, dlg_rect);
-    let btn_rect = Rect { left: 10, top: 10, right: 80, bottom: 30 };
+    let btn_rect = Rect {
+        left: 10,
+        top: 10,
+        right: 80,
+        bottom: 30,
+    };
     // Create IDOK (id=1) as default push button.
     let ok_btn = gwe.create_window_ex_with_rect(
-        1, "button", "OK", Some(dlg), 1, WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON, 0, btn_rect
+        1,
+        "button",
+        "OK",
+        Some(dlg),
+        1,
+        WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
+        0,
+        btn_rect,
     );
     // is_push_button: button class with push-button style → true.
     assert!(gwe.is_push_button(ok_btn));
@@ -5693,7 +6768,14 @@ fn gwe_cursor_pos_window_pos_for_rect_draw_menu_bar_message_pointer_payload_dial
     assert_eq!(src, ok_btn);
     // dialog_cancel_command: finds child with matching id.
     let cancel_btn = gwe.create_window_ex_with_rect(
-        1, "button", "Cancel", Some(dlg), 2, WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, 0, btn_rect
+        1,
+        "button",
+        "Cancel",
+        Some(dlg),
+        2,
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        0,
+        btn_rect,
     );
     let (cancel_id, cancel_src) = gwe.dialog_cancel_command(dlg, 2);
     assert_eq!(cancel_id, 2);
@@ -5723,12 +6805,17 @@ fn gwe_cursor_pos_window_pos_for_rect_draw_menu_bar_message_pointer_payload_dial
 #[test]
 fn gwe_sent_queue_snapshot_terminate_expire_result_writes_child_from_point_and_class_cursor() {
     use wince_emulation_v3::ce::gwe::{
-        Gwe, Message, Point, Rect, WS_CHILD, WS_VISIBLE, WNDCLASSW_SIZE, QS_SENDMESSAGE,
+        Gwe, Message, Point, QS_SENDMESSAGE, Rect, WNDCLASSW_SIZE, WS_CHILD, WS_VISIBLE,
     };
     const WM_USER: u32 = 0x0400;
 
     let mut gwe = Gwe::default();
-    let rect = Rect { left: 0, top: 0, right: 200, bottom: 200 };
+    let rect = Rect {
+        left: 0,
+        top: 0,
+        right: 200,
+        bottom: 200,
+    };
     let tid: u32 = 1;
     let hwnd1 = gwe.create_window_ex_with_rect(tid, "WndA", "W1", None, 0, WS_VISIBLE, 0, rect);
     let hwnd2 = gwe.create_window_ex_with_rect(tid, "WndA", "W2", None, 0, WS_VISIBLE, 0, rect);
@@ -5737,14 +6824,27 @@ fn gwe_sent_queue_snapshot_terminate_expire_result_writes_child_from_point_and_c
     assert!(gwe.sent_queue_snapshot().is_empty());
 
     // queue_send_message_for_window: invalid hwnd → None.
-    assert!(gwe.queue_send_message_for_window(
-        Some(99), 0xDEAD, Message::new(0, WM_USER, 0, 0, 0), 0, None
-    ).is_none());
+    assert!(
+        gwe.queue_send_message_for_window(
+            Some(99),
+            0xDEAD,
+            Message::new(0, WM_USER, 0, 0, 0),
+            0,
+            None
+        )
+        .is_none()
+    );
 
     // Queue msg1 for hwnd1.
-    let id1 = gwe.queue_send_message_for_window(
-        Some(99), hwnd1, Message::new(hwnd1, WM_USER + 1, 0xAA, 0xBB, 0), 0, None
-    ).unwrap();
+    let id1 = gwe
+        .queue_send_message_for_window(
+            Some(99),
+            hwnd1,
+            Message::new(hwnd1, WM_USER + 1, 0xAA, 0xBB, 0),
+            0,
+            None,
+        )
+        .unwrap();
 
     // sent_queue_snapshot: one thread entry with one message.
     let snap = gwe.sent_queue_snapshot();
@@ -5773,9 +6873,15 @@ fn gwe_sent_queue_snapshot_terminate_expire_result_writes_child_from_point_and_c
     assert!(gwe.set_sent_message_timeout_flags(id1, 0xF));
 
     // Queue msg2 for hwnd2, same sender.
-    let id2 = gwe.queue_send_message_for_window(
-        Some(99), hwnd2, Message::new(hwnd2, WM_USER + 2, 0, 0, 0), 0, None
-    ).unwrap();
+    let id2 = gwe
+        .queue_send_message_for_window(
+            Some(99),
+            hwnd2,
+            Message::new(hwnd2, WM_USER + 2, 0, 0, 0),
+            0,
+            None,
+        )
+        .unwrap();
 
     // sent_message_ids_for_windows: filter by window.
     let ids_for_hw1 = gwe.sent_message_ids_for_windows(&[hwnd1]);
@@ -5786,9 +6892,15 @@ fn gwe_sent_queue_snapshot_terminate_expire_result_writes_child_from_point_and_c
     assert!(ids_for_both.contains(&id2));
 
     // Queue msg3 with timeout so it can be expired.
-    let id3 = gwe.queue_send_message_for_window(
-        Some(88), hwnd1, Message::new(hwnd1, WM_USER + 3, 0, 0, 0), 0, Some(500)
-    ).unwrap();
+    let id3 = gwe
+        .queue_send_message_for_window(
+            Some(88),
+            hwnd1,
+            Message::new(hwnd1, WM_USER + 3, 0, 0, 0),
+            0,
+            Some(500),
+        )
+        .unwrap();
 
     // expire_timed_out_sent_messages: not yet expired at now_ms=0 (0 - 0 = 0 < 500).
     assert!(gwe.expire_timed_out_sent_messages(0).is_empty());
@@ -5800,16 +6912,26 @@ fn gwe_sent_queue_snapshot_terminate_expire_result_writes_child_from_point_and_c
     assert!(gwe.has_pending_sent_message_for_thread(tid));
 
     // Queue msg4 with timeout and result_ptr; expire it; check completed_result_writes.
-    let id4 = gwe.queue_send_message_for_window(
-        Some(77), hwnd1, Message::new(hwnd1, WM_USER + 4, 0, 0, 100), 0, Some(200)
-    ).unwrap();
+    let id4 = gwe
+        .queue_send_message_for_window(
+            Some(77),
+            hwnd1,
+            Message::new(hwnd1, WM_USER + 4, 0, 0, 100),
+            0,
+            Some(200),
+        )
+        .unwrap();
     assert!(gwe.set_sent_message_result_ptr(id4, 0xBEEF));
     // Expire at now_ms=400: 400 - 100 = 300 >= 200.
     let expired4 = gwe.expire_timed_out_sent_messages(400);
     assert!(expired4.contains(&id4));
     // completed_sent_message_result_writes: id4 has result_ptr + RESULT_READY + result=0.
     let writes = gwe.completed_sent_message_result_writes();
-    assert!(writes.iter().any(|(id, ptr, result)| *id == id4 && *ptr == 0xBEEF && *result == 0));
+    assert!(
+        writes
+            .iter()
+            .any(|(id, ptr, result)| *id == id4 && *ptr == 0xBEEF && *result == 0)
+    );
 
     // terminate_sent_messages_from_sender: removes all pending messages from sender 99.
     let terminated = gwe.terminate_sent_messages_from_sender(99);
@@ -5822,30 +6944,68 @@ fn gwe_sent_queue_snapshot_terminate_expire_result_writes_child_from_point_and_c
     assert!(gwe.terminate_sent_messages_from_sender(12345).is_empty());
 
     // take_sent_message_filtered: removes specific sent message by hwnd + msg range.
-    let _id5 = gwe.queue_send_message_for_window(
-        Some(55), hwnd1, Message::new(hwnd1, WM_USER + 5, 0, 0, 0), 0, None
-    ).unwrap();
+    let _id5 = gwe
+        .queue_send_message_for_window(
+            Some(55),
+            hwnd1,
+            Message::new(hwnd1, WM_USER + 5, 0, 0, 0),
+            0,
+            None,
+        )
+        .unwrap();
     let taken = gwe.take_sent_message_filtered(tid, Some(hwnd1), WM_USER + 5, WM_USER + 5);
     assert!(taken.is_some());
     assert_eq!(taken.unwrap().msg, WM_USER + 5);
     // Already consumed → None.
-    assert!(gwe.take_sent_message_filtered(tid, Some(hwnd1), WM_USER + 5, WM_USER + 5).is_none());
+    assert!(
+        gwe.take_sent_message_filtered(tid, Some(hwnd1), WM_USER + 5, WM_USER + 5)
+            .is_none()
+    );
 
     // child_window_from_point_for_thread.
-    let par_rect = Rect { left: 0, top: 0, right: 300, bottom: 300 };
+    let par_rect = Rect {
+        left: 0,
+        top: 0,
+        right: 300,
+        bottom: 300,
+    };
     let par = gwe.create_window_ex_with_rect(tid, "ParC", "P", None, 0, WS_VISIBLE, 0, par_rect);
-    let chd_rect = Rect { left: 10, top: 10, right: 100, bottom: 100 };
+    let chd_rect = Rect {
+        left: 10,
+        top: 10,
+        right: 100,
+        bottom: 100,
+    };
     let chd = gwe.create_window_ex_with_rect(
-        tid, "ChdC", "C", Some(par), 0, WS_VISIBLE | WS_CHILD, 0, chd_rect
+        tid,
+        "ChdC",
+        "C",
+        Some(par),
+        0,
+        WS_VISIBLE | WS_CHILD,
+        0,
+        chd_rect,
     );
     // Point in child client area → child returned.
-    assert_eq!(gwe.child_window_from_point_for_thread(tid, par, Point { x: 50, y: 50 }), Some(chd));
+    assert_eq!(
+        gwe.child_window_from_point_for_thread(tid, par, Point { x: 50, y: 50 }),
+        Some(chd)
+    );
     // Point in parent but outside child → parent returned.
-    assert_eq!(gwe.child_window_from_point_for_thread(tid, par, Point { x: 5, y: 5 }), Some(par));
+    assert_eq!(
+        gwe.child_window_from_point_for_thread(tid, par, Point { x: 5, y: 5 }),
+        Some(par)
+    );
     // Point outside parent → None.
-    assert!(gwe.child_window_from_point_for_thread(tid, par, Point { x: 500, y: 500 }).is_none());
+    assert!(
+        gwe.child_window_from_point_for_thread(tid, par, Point { x: 500, y: 500 })
+            .is_none()
+    );
     // Invalid parent → None.
-    assert!(gwe.child_window_from_point_for_thread(tid, 0xDEAD, Point { x: 0, y: 0 }).is_none());
+    assert!(
+        gwe.child_window_from_point_for_thread(tid, 0xDEAD, Point { x: 0, y: 0 })
+            .is_none()
+    );
 
     // window_class_cursor / window_class_hbr_background: read from WNDCLASSW bytes.
     let mut class_bytes = [0u8; WNDCLASSW_SIZE];
@@ -5859,7 +7019,8 @@ fn gwe_sent_queue_snapshot_terminate_expire_result_writes_child_from_point_and_c
     let mut class_bytes0 = [0u8; WNDCLASSW_SIZE];
     class_bytes0[28..32].copy_from_slice(&0x0000_ABCD_u32.to_le_bytes());
     gwe.register_class("NoCursorClass", class_bytes0);
-    let ncw = gwe.create_window_ex_with_rect(tid, "NoCursorClass", "NC", None, 0, WS_VISIBLE, 0, rect);
+    let ncw =
+        gwe.create_window_ex_with_rect(tid, "NoCursorClass", "NC", None, 0, WS_VISIBLE, 0, rect);
     assert_eq!(gwe.window_class_cursor(ncw), None);
     assert_eq!(gwe.window_class_hbr_background(ncw), 0xABCD);
     // Invalid hwnd → None / 0.
@@ -5868,15 +7029,21 @@ fn gwe_sent_queue_snapshot_terminate_expire_result_writes_child_from_point_and_c
 }
 
 #[test]
-fn gwe_post_message_for_window_register_window_message_message_source_activate_complete_and_window_and_descendants() {
+fn gwe_post_message_for_window_register_window_message_message_source_activate_complete_and_window_and_descendants()
+ {
     use wince_emulation_v3::ce::gwe::{
-        Gwe, Message, Rect, WS_CHILD, WS_VISIBLE, MSGSRC_SOFTWARE_POST, MSGSRC_SOFTWARE_SEND,
-        MSGSRC_UNKNOWN,
+        Gwe, MSGSRC_SOFTWARE_POST, MSGSRC_SOFTWARE_SEND, MSGSRC_UNKNOWN, Message, Rect, WS_CHILD,
+        WS_VISIBLE,
     };
     const WM_USER: u32 = 0x0400;
 
     let mut gwe = Gwe::default();
-    let rect = Rect { left: 0, top: 0, right: 100, bottom: 100 };
+    let rect = Rect {
+        left: 0,
+        top: 0,
+        right: 100,
+        bottom: 100,
+    };
     let tid: u32 = 1;
     let hwnd = gwe.create_window_ex_with_rect(tid, "Cls", "W", None, 0, WS_VISIBLE, 0, rect);
 
@@ -5909,9 +7076,15 @@ fn gwe_post_message_for_window_register_window_message_message_source_activate_c
     assert!(!gwe.queue_sent_message_for_window(0xDEAD, Message::new(0, WM_USER + 10, 0, 0, 0)));
 
     // activate_sent_message_for_receiver / complete_active_sent_message / take_completed_sent_message_result.
-    let sm_id = gwe.queue_send_message_for_window(
-        Some(77), hwnd, Message::new(hwnd, WM_USER + 20, 0, 0, 0), 0, None
-    ).unwrap();
+    let sm_id = gwe
+        .queue_send_message_for_window(
+            Some(77),
+            hwnd,
+            Message::new(hwnd, WM_USER + 20, 0, 0, 0),
+            0,
+            None,
+        )
+        .unwrap();
     // Activate: moves sm_id from sent_queues to active_sent_stack.
     assert!(gwe.activate_sent_message_for_receiver(tid, sm_id));
     // get_message_source now reflects MSGSRC_SOFTWARE_SEND.
@@ -5933,10 +7106,24 @@ fn gwe_post_message_for_window_register_window_message_message_source_activate_c
 
     // window_and_descendants: includes self, children, and grandchildren.
     let child = gwe.create_window_ex_with_rect(
-        tid, "ChlC", "C", Some(hwnd), 0, WS_VISIBLE | WS_CHILD, 0, rect
+        tid,
+        "ChlC",
+        "C",
+        Some(hwnd),
+        0,
+        WS_VISIBLE | WS_CHILD,
+        0,
+        rect,
     );
     let grand = gwe.create_window_ex_with_rect(
-        tid, "GrC", "G", Some(child), 0, WS_VISIBLE | WS_CHILD, 0, rect
+        tid,
+        "GrC",
+        "G",
+        Some(child),
+        0,
+        WS_VISIBLE | WS_CHILD,
+        0,
+        rect,
     );
     let desc = gwe.window_and_descendants(hwnd).unwrap();
     assert!(desc.contains(&hwnd));
@@ -5949,24 +7136,32 @@ fn gwe_post_message_for_window_register_window_message_message_source_activate_c
 #[test]
 fn gwe_send_message_dispatch_set_window_pos_and_clipboard_render() {
     use wince_emulation_v3::ce::gwe::{
-        Gwe, Rect, WS_VISIBLE, WNDCLASSW_SIZE,
-        WM_MOUSEACTIVATE, WM_NCACTIVATE, WM_NCHITTEST, WM_ERASEBKGND, WM_SETREDRAW,
-        WM_GETTEXTLENGTH, WM_SETFONT, WM_GETFONT, WM_NCCREATE,
-        MA_ACTIVATE, HTCLIENT,
-        SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SWP_HIDEWINDOW, SWP_NOZORDER,
+        Gwe, HTCLIENT, MA_ACTIVATE, Rect, SWP_HIDEWINDOW, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+        SWP_SHOWWINDOW, WM_ERASEBKGND, WM_GETFONT, WM_GETTEXTLENGTH, WM_MOUSEACTIVATE,
+        WM_NCACTIVATE, WM_NCCREATE, WM_NCHITTEST, WM_SETFONT, WM_SETREDRAW, WNDCLASSW_SIZE,
+        WS_VISIBLE,
     };
 
     let mut gwe = Gwe::default();
-    let rect = Rect { left: 0, top: 0, right: 200, bottom: 100 };
+    let rect = Rect {
+        left: 0,
+        top: 0,
+        right: 200,
+        bottom: 100,
+    };
     let tid: u32 = 1;
-    let hwnd = gwe.create_window_ex_with_rect(tid, "TestCls", "MyTitle", None, 0, WS_VISIBLE, 0, rect);
+    let hwnd =
+        gwe.create_window_ex_with_rect(tid, "TestCls", "MyTitle", None, 0, WS_VISIBLE, 0, rect);
 
     // --- send_message dispatch.
     // Invalid hwnd → None.
     assert!(gwe.send_message(0xDEAD, WM_MOUSEACTIVATE, 0, 0).is_none());
 
     // WM_MOUSEACTIVATE → MA_ACTIVATE.
-    assert_eq!(gwe.send_message(hwnd, WM_MOUSEACTIVATE, 0, 0), Some(MA_ACTIVATE));
+    assert_eq!(
+        gwe.send_message(hwnd, WM_MOUSEACTIVATE, 0, 0),
+        Some(MA_ACTIVATE)
+    );
 
     // WM_NCACTIVATE → 1.
     assert_eq!(gwe.send_message(hwnd, WM_NCACTIVATE, 0, 0), Some(1));
@@ -5974,11 +7169,17 @@ fn gwe_send_message_dispatch_set_window_pos_and_clipboard_render() {
     // WM_NCHITTEST: point (50, 50) inside client area → HTCLIENT.
     // lparam encodes point as (y<<16) | (x & 0xffff).
     let lparam = ((50u32) << 16) | (50u32 & 0xffff);
-    assert_eq!(gwe.send_message(hwnd, WM_NCHITTEST, 0, lparam), Some(HTCLIENT));
+    assert_eq!(
+        gwe.send_message(hwnd, WM_NCHITTEST, 0, lparam),
+        Some(HTCLIENT)
+    );
 
     // WM_GETTEXTLENGTH → character count of title (encoded as UTF-16 code units).
     let title_len = "MyTitle".encode_utf16().count() as u32;
-    assert_eq!(gwe.send_message(hwnd, WM_GETTEXTLENGTH, 0, 0), Some(title_len));
+    assert_eq!(
+        gwe.send_message(hwnd, WM_GETTEXTLENGTH, 0, 0),
+        Some(title_len)
+    );
 
     // WM_ERASEBKGND without background brush → 0; with brush → 1.
     assert_eq!(gwe.send_message(hwnd, WM_ERASEBKGND, 0, 0), Some(0)); // no brush registered
@@ -6029,15 +7230,32 @@ fn gwe_send_message_dispatch_set_window_pos_and_clipboard_render() {
 
     // SWP_HIDEWINDOW: window becomes invisible.
     assert!(gwe.is_window_visible(hwnd));
-    assert!(gwe.set_window_pos(hwnd, None, 0, 0, 50, 40, SWP_HIDEWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER));
+    assert!(gwe.set_window_pos(
+        hwnd,
+        None,
+        0,
+        0,
+        50,
+        40,
+        SWP_HIDEWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER
+    ));
     assert!(!gwe.is_window_visible(hwnd));
 
     // SWP_SHOWWINDOW: window becomes visible again.
-    assert!(gwe.set_window_pos(hwnd, None, 0, 0, 50, 40, SWP_SHOWWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER));
+    assert!(gwe.set_window_pos(
+        hwnd,
+        None,
+        0,
+        0,
+        50,
+        40,
+        SWP_SHOWWINDOW | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER
+    ));
     assert!(gwe.is_window_visible(hwnd));
 
     // --- begin_clipboard_render / clipboard_render_all_owner.
-    let owner_hwnd = gwe.create_window_ex_with_rect(tid, "ClpCls", "O", None, 0, WS_VISIBLE, 0, rect);
+    let owner_hwnd =
+        gwe.create_window_ex_with_rect(tid, "ClpCls", "O", None, 0, WS_VISIBLE, 0, rect);
     // Open and empty clipboard to set owner.
     assert!(gwe.open_clipboard(owner_hwnd));
     assert!(gwe.empty_clipboard()); // owner = owner_hwnd; data cleared
@@ -6059,7 +7277,7 @@ fn gwe_send_message_dispatch_set_window_pos_and_clipboard_render() {
 fn registry_reg_enum_value_w_key_count_and_reg_set_value_exw_binary() {
     use wince_emulation_v3::ce::registry::{
         ERROR_INVALID_HANDLE, ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS,
-        HKEY_LOCAL_MACHINE, Registry, RegistryDump, RegistryValue, REG_BINARY,
+        HKEY_LOCAL_MACHINE, REG_BINARY, Registry, RegistryDump, RegistryValue,
     };
 
     let mut reg = Registry::from_dump(RegistryDump {
@@ -6121,7 +7339,10 @@ fn registry_reg_enum_value_w_key_count_and_reg_set_value_exw_binary() {
     assert_eq!(r_inv.status, ERROR_INVALID_HANDLE);
 
     // reg_set_value_exw with REG_BINARY data.
-    let hkey2 = reg.reg_create_key_exw(HKEY_LOCAL_MACHINE, Some("BinaryTest")).hkey.unwrap();
+    let hkey2 = reg
+        .reg_create_key_exw(HKEY_LOCAL_MACHINE, Some("BinaryTest"))
+        .hkey
+        .unwrap();
     let bin_data = [0xDE_u8, 0xAD, 0xBE, 0xEF];
     assert_eq!(
         reg.reg_set_value_exw(hkey2, Some("BinVal"), REG_BINARY, &bin_data),
@@ -6135,8 +7356,8 @@ fn registry_reg_enum_value_w_key_count_and_reg_set_value_exw_binary() {
 
 #[test]
 fn timer_system_next_due_delay_ms_due_timers_remove_window_timers_and_clear_pending_message() {
-    use wince_emulation_v3::ce::timer::TimerSystem;
     use wince_emulation_v3::ce::gwe::WM_TIMER;
+    use wince_emulation_v3::ce::timer::TimerSystem;
 
     let mut timers = TimerSystem::default();
     let tid: u32 = 1;
@@ -6187,21 +7408,27 @@ fn timer_system_next_due_delay_ms_due_timers_remove_window_timers_and_clear_pend
 }
 
 #[test]
-fn shell_system_special_folder_queries_fallback_policy_destroyed_notify_icons_and_notification_callbacks() {
+fn shell_system_special_folder_queries_fallback_policy_destroyed_notify_icons_and_notification_callbacks()
+ {
     use wince_emulation_v3::ce::shell::{
-        NotifyIconData, NotifyIconOp, ShellNotificationCallbackMethod,
+        HHTBF_DESTROYICON, NIF_ICON, NotifyIconData, NotifyIconOp, ShellNotificationCallbackMethod,
         ShellNotificationCallbackRecord, ShellSpecialFolderFallbackPolicy,
         ShellSpecialFolderRecord, ShellSpecialFolderSource, ShellSystem,
-        NIF_ICON, HHTBF_DESTROYICON,
     };
 
     let mut shell = ShellSystem::default();
 
     // special_folder_fallback_policy: default is Compat.
-    assert_eq!(shell.special_folder_fallback_policy(), ShellSpecialFolderFallbackPolicy::Compat);
+    assert_eq!(
+        shell.special_folder_fallback_policy(),
+        ShellSpecialFolderFallbackPolicy::Compat
+    );
     // set_special_folder_fallback_policy → stored.
     shell.set_special_folder_fallback_policy(ShellSpecialFolderFallbackPolicy::Strict);
-    assert_eq!(shell.special_folder_fallback_policy(), ShellSpecialFolderFallbackPolicy::Strict);
+    assert_eq!(
+        shell.special_folder_fallback_policy(),
+        ShellSpecialFolderFallbackPolicy::Strict
+    );
 
     // record_special_folder_query / special_folder_queries.
     assert_eq!(shell.special_folder_queries().count(), 0);
@@ -6227,14 +7454,26 @@ fn shell_system_special_folder_queries_fallback_policy_destroyed_notify_icons_an
     // destroyed_notify_icons: populated when a notify icon with destroy_icon=true is replaced.
     // HHTBF_DESTROYICON flag sets destroy_icon=true on creation.
     let icon_data = NotifyIconData {
-        hwnd: 20, id: 3, flags: HHTBF_DESTROYICON, icon: 0xABCD, tip: String::new(),
-        callback_message: 0, state: 0, state_mask: 0,
+        hwnd: 20,
+        id: 3,
+        flags: HHTBF_DESTROYICON,
+        icon: 0xABCD,
+        tip: String::new(),
+        callback_message: 0,
+        state: 0,
+        state_mask: 0,
     };
     shell.apply_notify_icon(NotifyIconOp::Add, icon_data.clone());
     // Modify with NIF_ICON and a different icon → old icon pushed to destroyed_notify_icons.
     let modified = NotifyIconData {
-        hwnd: 20, id: 3, flags: NIF_ICON, icon: 0xDEAD, tip: String::new(),
-        callback_message: 0, state: 0, state_mask: 0,
+        hwnd: 20,
+        id: 3,
+        flags: NIF_ICON,
+        icon: 0xDEAD,
+        tip: String::new(),
+        callback_message: 0,
+        state: 0,
+        state_mask: 0,
     };
     shell.apply_notify_icon(NotifyIconOp::Modify, modified);
     assert_eq!(shell.destroyed_notify_icons().count(), 1);
@@ -6268,8 +7507,18 @@ fn gwe_send_message_wm_close_wm_getdlgcode_dm_defid_and_message_pos_after_get_me
     };
 
     let mut gwe = Gwe::default();
-    let big = Rect { left: 0, top: 0, right: 400, bottom: 300 };
-    let btn_rect = Rect { left: 10, top: 10, right: 90, bottom: 40 };
+    let big = Rect {
+        left: 0,
+        top: 0,
+        right: 400,
+        bottom: 300,
+    };
+    let btn_rect = Rect {
+        left: 10,
+        top: 10,
+        right: 90,
+        bottom: 40,
+    };
 
     // WM_CLOSE dispatch: sends WM_DESTROY internally then destroys window.
     let close_w = gwe.create_window_ex_with_rect(1, "CloseMe", "W", None, 0, WS_VISIBLE, 0, big);
@@ -6284,7 +7533,14 @@ fn gwe_send_message_wm_close_wm_getdlgcode_dm_defid_and_message_pos_after_get_me
     // WM_GETDLGCODE for "button" BS_PUSHBUTTON → DLGC_BUTTON | DLGC_UNDEFPUSHBUTTON.
     let dlg = gwe.create_window_ex_with_rect(1, "dialog", "Dlg", None, 0, WS_VISIBLE, 0, big);
     let pushbtn = gwe.create_window_ex_with_rect(
-        1, "button", "OK", Some(dlg), 1, WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, 0, btn_rect,
+        1,
+        "button",
+        "OK",
+        Some(dlg),
+        1,
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        0,
+        btn_rect,
     );
     assert_eq!(
         gwe.send_message(pushbtn, WM_GETDLGCODE, 0, 0),
@@ -6293,7 +7549,14 @@ fn gwe_send_message_wm_close_wm_getdlgcode_dm_defid_and_message_pos_after_get_me
 
     // WM_GETDLGCODE for "button" BS_DEFPUSHBUTTON → DLGC_BUTTON | DLGC_DEFPUSHBUTTON.
     let defbtn = gwe.create_window_ex_with_rect(
-        1, "button", "Def", Some(dlg), 2, WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON, 0, btn_rect,
+        1,
+        "button",
+        "Def",
+        Some(dlg),
+        2,
+        WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
+        0,
+        btn_rect,
     );
     assert_eq!(
         gwe.send_message(defbtn, WM_GETDLGCODE, 0, 0),
@@ -6302,13 +7565,30 @@ fn gwe_send_message_wm_close_wm_getdlgcode_dm_defid_and_message_pos_after_get_me
 
     // WM_GETDLGCODE for "static" → DLGC_STATIC.
     let static_w = gwe.create_window_ex_with_rect(
-        1, "static", "Lbl", Some(dlg), 3, WS_VISIBLE | WS_CHILD, 0, btn_rect,
+        1,
+        "static",
+        "Lbl",
+        Some(dlg),
+        3,
+        WS_VISIBLE | WS_CHILD,
+        0,
+        btn_rect,
     );
-    assert_eq!(gwe.send_message(static_w, WM_GETDLGCODE, 0, 0), Some(DLGC_STATIC));
+    assert_eq!(
+        gwe.send_message(static_w, WM_GETDLGCODE, 0, 0),
+        Some(DLGC_STATIC)
+    );
 
     // WM_GETDLGCODE for "edit" → DLGC_HASSETSEL | DLGC_WANTCHARS | DLGC_WANTARROWS.
     let edit_w = gwe.create_window_ex_with_rect(
-        1, "edit", "Ed", Some(dlg), 4, WS_VISIBLE | WS_CHILD, 0, btn_rect,
+        1,
+        "edit",
+        "Ed",
+        Some(dlg),
+        4,
+        WS_VISIBLE | WS_CHILD,
+        0,
+        btn_rect,
     );
     {
         use wince_emulation_v3::ce::gwe::DLGC_WANTARROWS;
@@ -6321,7 +7601,14 @@ fn gwe_send_message_wm_close_wm_getdlgcode_dm_defid_and_message_pos_after_get_me
     // DM_GETDEFID with no DEFPUSHBUTTON → 0.
     let dlg2 = gwe.create_window_ex_with_rect(2, "dialog", "Dlg2", None, 0, WS_VISIBLE, 0, big);
     let plain_btn = gwe.create_window_ex_with_rect(
-        2, "button", "Go", Some(dlg2), 42, WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, 0, btn_rect,
+        2,
+        "button",
+        "Go",
+        Some(dlg2),
+        42,
+        WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON,
+        0,
+        btn_rect,
     );
     assert_eq!(gwe.send_message(dlg2, DM_GETDEFID, 0, 0), Some(0));
 
@@ -6361,20 +7648,26 @@ fn gwe_send_message_wm_close_wm_getdlgcode_dm_defid_and_message_pos_after_get_me
 #[test]
 fn gwe_send_message_setcursor_syscommand_nclbuttondown_hscroll_vscroll_and_syskeydown_chains() {
     use wince_emulation_v3::ce::gwe::{
-        Gwe, Rect, WM_HSCROLL, WM_NCLBUTTONDOWN, WM_NCLBUTTONDBLCLK, WM_SETCURSOR, WM_SYSCOMMAND,
-        WM_VSCROLL, HTCAPTION, HTCLIENT, HTCLOSE, HTNOWHERE, HTSYSMENU, SC_CLOSE, WNDCLASSW_SIZE,
-        WS_CHILD, WS_VISIBLE,
+        Gwe, HTCAPTION, HTCLIENT, HTCLOSE, HTNOWHERE, HTSYSMENU, Rect, SC_CLOSE, WM_HSCROLL,
+        WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_SETCURSOR, WM_SYSCOMMAND, WM_VSCROLL,
+        WNDCLASSW_SIZE, WS_CHILD, WS_VISIBLE,
     };
 
     let mut gwe = Gwe::default();
-    let rect = Rect { left: 0, top: 0, right: 400, bottom: 300 };
+    let rect = Rect {
+        left: 0,
+        top: 0,
+        right: 400,
+        bottom: 300,
+    };
 
     // WM_SETCURSOR with HTCLIENT and a class cursor: sets the cursor, returns Some(1).
     let mut class_bytes = [0u8; WNDCLASSW_SIZE];
     let cursor_handle: u32 = 0x1234;
     class_bytes[24..28].copy_from_slice(&cursor_handle.to_le_bytes());
     gwe.register_class("CursorCls", class_bytes);
-    let w_cursor = gwe.create_window_ex_with_rect(1, "CursorCls", "W", None, 0, WS_VISIBLE, 0, rect);
+    let w_cursor =
+        gwe.create_window_ex_with_rect(1, "CursorCls", "W", None, 0, WS_VISIBLE, 0, rect);
 
     let result = gwe.send_message(w_cursor, WM_SETCURSOR, 0, HTCLIENT);
     assert_eq!(result, Some(1));
@@ -6394,7 +7687,8 @@ fn gwe_send_message_setcursor_syscommand_nclbuttondown_hscroll_vscroll_and_syske
     assert_ne!(gwe.get_cursor(), Some(cursor_handle));
 
     // WM_SETCURSOR with HTCLIENT but no class cursor: falls through → Some(0).
-    let w_no_cursor = gwe.create_window_ex_with_rect(1, "NoCur", "W2", None, 0, WS_VISIBLE, 0, rect);
+    let w_no_cursor =
+        gwe.create_window_ex_with_rect(1, "NoCur", "W2", None, 0, WS_VISIBLE, 0, rect);
     let result_no = gwe.send_message(w_no_cursor, WM_SETCURSOR, 0, HTCLIENT);
     assert_eq!(result_no, Some(0));
 
@@ -6430,8 +7724,22 @@ fn gwe_send_message_setcursor_syscommand_nclbuttondown_hscroll_vscroll_and_syske
 
     // WM_HSCROLL on a child with parent → returns Some(0), no error.
     let parent = gwe.create_window_ex_with_rect(1, "Par", "P", None, 0, WS_VISIBLE, 0, rect);
-    let child_rect = Rect { left: 0, top: 0, right: 100, bottom: 50 };
-    let child = gwe.create_window_ex_with_rect(1, "Ch", "C", Some(parent), 0, WS_VISIBLE | WS_CHILD, 0, child_rect);
+    let child_rect = Rect {
+        left: 0,
+        top: 0,
+        right: 100,
+        bottom: 50,
+    };
+    let child = gwe.create_window_ex_with_rect(
+        1,
+        "Ch",
+        "C",
+        Some(parent),
+        0,
+        WS_VISIBLE | WS_CHILD,
+        0,
+        child_rect,
+    );
     assert_eq!(gwe.send_message(child, WM_HSCROLL, 1, 0), Some(0));
 
     // WM_VSCROLL on child → Some(0).
@@ -6445,12 +7753,17 @@ fn gwe_send_message_setcursor_syscommand_nclbuttondown_hscroll_vscroll_and_syske
 #[test]
 fn gwe_send_message_chartoitem_vkeytoitem_syskeydown_f10_letter_syskeyup_menu_and_toggle_keys() {
     use wince_emulation_v3::ce::gwe::{
-        Gwe, Message, Rect, VK_MENU, VK_NUMLOCK, VK_SCROLL, WM_CHARTOITEM, WM_KEYDOWN,
-        WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_VKEYTOITEM, WS_VISIBLE,
+        Gwe, Message, Rect, VK_MENU, VK_NUMLOCK, VK_SCROLL, WM_CHARTOITEM, WM_KEYDOWN, WM_KEYUP,
+        WM_SYSKEYDOWN, WM_SYSKEYUP, WM_VKEYTOITEM, WS_VISIBLE,
     };
 
     let mut gwe = Gwe::default();
-    let rect = Rect { left: 0, top: 0, right: 400, bottom: 300 };
+    let rect = Rect {
+        left: 0,
+        top: 0,
+        right: 400,
+        bottom: 300,
+    };
     let hwnd = gwe.create_window_ex_with_rect(1, "W", "W", None, 0, WS_VISIBLE, 0, rect);
 
     // WM_CHARTOITEM → u32::MAX (CE DefWindowProcW returns -1 for list-box routing).
@@ -6523,8 +7836,8 @@ fn gwe_send_message_chartoitem_vkeytoitem_syskeydown_f10_letter_syskeyup_menu_an
 #[test]
 fn audio_wave_out_reset_set_volume_close_flush_all_and_write_pcm() {
     use wince_emulation_v3::ce::audio::{
-        AudioSystem, MMSYSERR_INVALHANDLE, MMSYSERR_NOERROR, NullAudioSink, WaveBuffer,
-        WaveFormat, WaveOutState,
+        AudioSystem, MMSYSERR_INVALHANDLE, MMSYSERR_NOERROR, NullAudioSink, WaveBuffer, WaveFormat,
+        WaveOutState,
     };
 
     let mut audio = AudioSystem::default();
@@ -6542,7 +7855,10 @@ fn audio_wave_out_reset_set_volume_close_flush_all_and_write_pcm() {
     assert_eq!(audio.wave_out_reset(0xDEAD), MMSYSERR_INVALHANDLE);
 
     // wave_out_write then wave_out_reset: clears pending buffers, state → Reset.
-    let buf = WaveBuffer { guest_ptr: 0x1000, len: 8 };
+    let buf = WaveBuffer {
+        guest_ptr: 0x1000,
+        len: 8,
+    };
     assert_eq!(audio.wave_out_write(id, buf), MMSYSERR_NOERROR);
     assert_eq!(audio.output(id).unwrap().state, WaveOutState::Playing);
     assert_eq!(audio.wave_out_reset(id), MMSYSERR_NOERROR);
@@ -6551,7 +7867,10 @@ fn audio_wave_out_reset_set_volume_close_flush_all_and_write_pcm() {
     assert!(audio.complete_next_buffer(id).is_none());
 
     // wave_out_set_volume on invalid id → MMSYSERR_INVALHANDLE.
-    assert_eq!(audio.wave_out_set_volume(0xDEAD, 0xFFFF), MMSYSERR_INVALHANDLE);
+    assert_eq!(
+        audio.wave_out_set_volume(0xDEAD, 0xFFFF),
+        MMSYSERR_INVALHANDLE
+    );
     // Valid id → MMSYSERR_NOERROR; volume stored.
     assert_eq!(audio.wave_out_set_volume(id, 0x8000_0000), MMSYSERR_NOERROR);
     assert_eq!(audio.get_volume(id), Ok(0x8000_0000));
@@ -6560,7 +7879,10 @@ fn audio_wave_out_reset_set_volume_close_flush_all_and_write_pcm() {
     assert_eq!(audio.wave_out_close(0xDEAD), MMSYSERR_INVALHANDLE);
     // Valid id → MMSYSERR_NOERROR; state → Closed, pending cleared.
     let id2 = audio.open_wave_out(fmt.clone());
-    let buf2 = WaveBuffer { guest_ptr: 0x2000, len: 4 };
+    let buf2 = WaveBuffer {
+        guest_ptr: 0x2000,
+        len: 4,
+    };
     audio.wave_out_write(id2, buf2);
     assert_eq!(audio.wave_out_close(id2), MMSYSERR_NOERROR);
     assert_eq!(audio.output(id2).unwrap().state, WaveOutState::Closed);
@@ -6574,11 +7896,20 @@ fn audio_wave_out_reset_set_volume_close_flush_all_and_write_pcm() {
 
     // wave_out_write_pcm on invalid id → MMSYSERR_INVALHANDLE.
     let dummy_pcm = vec![0u8; 8];
-    let buf3 = WaveBuffer { guest_ptr: 0x3000, len: 8 };
-    assert_eq!(audio.wave_out_write_pcm(0xDEAD, buf3.clone(), &dummy_pcm), MMSYSERR_INVALHANDLE);
+    let buf3 = WaveBuffer {
+        guest_ptr: 0x3000,
+        len: 8,
+    };
+    assert_eq!(
+        audio.wave_out_write_pcm(0xDEAD, buf3.clone(), &dummy_pcm),
+        MMSYSERR_INVALHANDLE
+    );
     // Valid id → MMSYSERR_NOERROR; buffer queued.
     let id3 = audio.open_wave_out(fmt);
-    assert_eq!(audio.wave_out_write_pcm(id3, buf3.clone(), &dummy_pcm), MMSYSERR_NOERROR);
+    assert_eq!(
+        audio.wave_out_write_pcm(id3, buf3.clone(), &dummy_pcm),
+        MMSYSERR_NOERROR
+    );
     assert_eq!(audio.output(id3).unwrap().state, WaveOutState::Playing);
     // Buffer is dequeued by complete_next_buffer.
     assert_eq!(audio.complete_next_buffer(id3), Some(buf3));
@@ -6590,16 +7921,24 @@ fn shell_notification_callback_method_com_vtable_offset_and_com_arguments() {
         ISHELL_NOTIFICATION_CALLBACK_ON_COMMAND_SELECTED_VTABLE_OFFSET,
         ISHELL_NOTIFICATION_CALLBACK_ON_DISMISS_VTABLE_OFFSET,
         ISHELL_NOTIFICATION_CALLBACK_ON_LINK_SELECTED_VTABLE_OFFSET,
-        ISHELL_NOTIFICATION_CALLBACK_ON_SHOW_VTABLE_OFFSET,
-        ShellNotificationCallbackArguments, ShellNotificationCallbackMethod,
+        ISHELL_NOTIFICATION_CALLBACK_ON_SHOW_VTABLE_OFFSET, ShellNotificationCallbackArguments,
+        ShellNotificationCallbackMethod,
     };
 
     // OnShow: vtable_offset = 0x0c; arguments carry id, x, y, lparam.
     let on_show = ShellNotificationCallbackMethod::OnShow { x: 10, y: 20 };
-    assert_eq!(on_show.com_vtable_offset(), ISHELL_NOTIFICATION_CALLBACK_ON_SHOW_VTABLE_OFFSET);
+    assert_eq!(
+        on_show.com_vtable_offset(),
+        ISHELL_NOTIFICATION_CALLBACK_ON_SHOW_VTABLE_OFFSET
+    );
     assert_eq!(
         on_show.com_arguments(5, 0xABCD),
-        ShellNotificationCallbackArguments::OnShow { id: 5, x: 10, y: 20, lparam: 0xABCD },
+        ShellNotificationCallbackArguments::OnShow {
+            id: 5,
+            x: 10,
+            y: 20,
+            lparam: 0xABCD
+        },
     );
 
     // OnCommandSelected: vtable_offset = 0x10; arguments carry id, command_id.
@@ -6610,11 +7949,16 @@ fn shell_notification_callback_method_com_vtable_offset_and_com_arguments() {
     );
     assert_eq!(
         on_cmd.com_arguments(7, 0),
-        ShellNotificationCallbackArguments::OnCommandSelected { id: 7, command_id: 42 },
+        ShellNotificationCallbackArguments::OnCommandSelected {
+            id: 7,
+            command_id: 42
+        },
     );
 
     // OnLinkSelected: vtable_offset = 0x14; arguments carry id, link, lparam.
-    let on_link = ShellNotificationCallbackMethod::OnLinkSelected { link: "https://example".into() };
+    let on_link = ShellNotificationCallbackMethod::OnLinkSelected {
+        link: "https://example".into(),
+    };
     assert_eq!(
         on_link.com_vtable_offset(),
         ISHELL_NOTIFICATION_CALLBACK_ON_LINK_SELECTED_VTABLE_OFFSET,
@@ -6660,7 +8004,10 @@ fn remote_ceremote_paused_key_serial_nmea_location_imu_audio_and_log_lines() {
     // enqueue_key: invalid phase → Err.
     assert!(remote.enqueue_key("hold", 0x41).is_err());
     // vk=0 → Err (out of range 1..=0xFF).
-    assert!(matches!(remote.enqueue_key("down", 0), Err(RemoteError::InvalidVirtualKey(0))));
+    assert!(matches!(
+        remote.enqueue_key("down", 0),
+        Err(RemoteError::InvalidVirtualKey(0))
+    ));
     // Valid.
     assert!(remote.enqueue_key("down", 0x41).is_ok());
     assert!(remote.enqueue_key("up", 0x41).is_ok());
@@ -6751,7 +8098,10 @@ fn remote_ceremote_paused_key_serial_nmea_location_imu_audio_and_log_lines() {
     let logs = remote.recent_log_lines(2);
     assert_eq!(logs.len(), 2);
     // recent_log_lines returns the most recent lines.
-    assert!(logs.iter().any(|l| l.contains("second") || l.contains("third")));
+    assert!(
+        logs.iter()
+            .any(|l| l.contains("second") || l.contains("third"))
+    );
 }
 
 #[test]
@@ -6828,22 +8178,31 @@ fn scheduler_serial_sendreply_waiter_ids_queue_candidates_and_timed_out() {
     // queue_all_serial_read_wake_candidates / queue_all_serial_event_wake_candidates.
     let mut sched2 = Scheduler::default();
     let _a = sched2.register_blocked_wait(
-        10, 0x110, vec![],
+        10,
+        0x110,
+        vec![],
         SchedulerBlockedWaitKind::SerialRead { handle: 0xA0 },
-        0, INFINITE,
+        0,
+        INFINITE,
     );
     let _b = sched2.register_blocked_wait(
-        11, 0x111, vec![],
+        11,
+        0x111,
+        vec![],
         SchedulerBlockedWaitKind::SerialRead { handle: 0xB0 },
-        0, INFINITE,
+        0,
+        INFINITE,
     );
     let n = sched2.queue_all_serial_read_wake_candidates();
     assert_eq!(n, 2);
 
     let _c = sched2.register_blocked_wait(
-        12, 0x112, vec![],
+        12,
+        0x112,
+        vec![],
         SchedulerBlockedWaitKind::SerialCommEvent { handle: 0xC0 },
-        0, INFINITE,
+        0,
+        INFINITE,
     );
     let n = sched2.queue_all_serial_event_wake_candidates();
     assert_eq!(n, 1);
@@ -6851,14 +8210,20 @@ fn scheduler_serial_sendreply_waiter_ids_queue_candidates_and_timed_out() {
     // queue_pending_wake_ids with explicit ids.
     let mut sched3 = Scheduler::default();
     let d = sched3.register_blocked_wait(
-        20, 0x120, vec![0x300],
+        20,
+        0x120,
+        vec![0x300],
         SchedulerBlockedWaitKind::Kernel,
-        0, 1000,
+        0,
+        1000,
     );
     let e = sched3.register_blocked_wait(
-        21, 0x121, vec![0x301],
+        21,
+        0x121,
+        vec![0x301],
         SchedulerBlockedWaitKind::Kernel,
-        0, 1000,
+        0,
+        1000,
     );
     // queue both manually.
     let n = sched3.queue_pending_wake_ids(vec![d, e]);
@@ -6872,16 +8237,19 @@ fn scheduler_serial_sendreply_waiter_ids_queue_candidates_and_timed_out() {
 
     // blocked_wait_timed_out: finite timeout elapses.
     let wait_finite = sched3.remove_blocked_wait(d).unwrap();
-    assert!(!blocked_wait_timed_out(&wait_finite, 999));   // not yet elapsed
-    assert!(blocked_wait_timed_out(&wait_finite, 1000));   // exactly elapsed
-    assert!(blocked_wait_timed_out(&wait_finite, 5000));   // past elapsed
+    assert!(!blocked_wait_timed_out(&wait_finite, 999)); // not yet elapsed
+    assert!(blocked_wait_timed_out(&wait_finite, 1000)); // exactly elapsed
+    assert!(blocked_wait_timed_out(&wait_finite, 5000)); // past elapsed
 
     // blocked_wait_timed_out: INFINITE timeout never elapses.
     let mut sched4 = Scheduler::default();
     let f = sched4.register_blocked_wait(
-        30, 0x130, vec![],
+        30,
+        0x130,
+        vec![],
         SchedulerBlockedWaitKind::Kernel,
-        0, INFINITE,
+        0,
+        INFINITE,
     );
     let wait_inf = sched4.remove_blocked_wait(f).unwrap();
     assert!(!blocked_wait_timed_out(&wait_inf, 0xFFFF_FFFF));
@@ -6904,66 +8272,272 @@ fn cemath_export_name_all_variants_and_gwe_get_window_text_length() {
     assert_eq!(CeMathCall::Abs(0).export_name(), "abs");
     assert_eq!(CeMathCall::Labs(0).export_name(), "labs");
     assert_eq!(CeMathCall::Div { numer: 1, denom: 1 }.export_name(), "div");
-    assert_eq!(CeMathCall::Ldiv { numer: 1, denom: 1 }.export_name(), "ldiv");
+    assert_eq!(
+        CeMathCall::Ldiv { numer: 1, denom: 1 }.export_name(),
+        "ldiv"
+    );
     assert_eq!(CeMathCall::Frexp(1.0).export_name(), "frexp");
-    assert_eq!(CeMathCall::Ldexp { value: 1.0, exp: 0 }.export_name(), "ldexp");
+    assert_eq!(
+        CeMathCall::Ldexp { value: 1.0, exp: 0 }.export_name(),
+        "ldexp"
+    );
     assert_eq!(CeMathCall::Modf(1.0).export_name(), "modf");
-    assert_eq!(CeMathCall::LlMul { lhs: 0, rhs: 0 }.export_name(), "__ll_mul");
-    assert_eq!(CeMathCall::LlDiv { lhs: 1, rhs: 1 }.export_name(), "__ll_div");
-    assert_eq!(CeMathCall::LlRem { lhs: 1, rhs: 1 }.export_name(), "__ll_rem");
-    assert_eq!(CeMathCall::UllDiv { lhs: 1, rhs: 1 }.export_name(), "__ull_div");
-    assert_eq!(CeMathCall::UllRem { lhs: 1, rhs: 1 }.export_name(), "__ull_rem");
-    assert_eq!(CeMathCall::LlLShift { value: 1, shift: 0 }.export_name(), "__ll_lshift");
-    assert_eq!(CeMathCall::LlRShift { value: 1, shift: 0 }.export_name(), "__ll_rshift");
-    assert_eq!(CeMathCall::UllRShift { value: 1, shift: 0 }.export_name(), "__ull_rshift");
-    assert_eq!(CeMathCall::FloatAdd { lhs: 0.0, rhs: 0.0 }.export_name(), "__fpadd");
-    assert_eq!(CeMathCall::FloatSub { lhs: 0.0, rhs: 0.0 }.export_name(), "__fpsub");
-    assert_eq!(CeMathCall::FloatMul { lhs: 0.0, rhs: 0.0 }.export_name(), "__fpmul");
-    assert_eq!(CeMathCall::FloatDiv { lhs: 1.0, rhs: 1.0 }.export_name(), "__fpdiv");
-    assert_eq!(CeMathCall::DoubleAdd { lhs: 0.0, rhs: 0.0 }.export_name(), "__dpadd");
-    assert_eq!(CeMathCall::DoubleSub { lhs: 0.0, rhs: 0.0 }.export_name(), "__dpsub");
-    assert_eq!(CeMathCall::DoubleMul { lhs: 0.0, rhs: 0.0 }.export_name(), "__dpmul");
-    assert_eq!(CeMathCall::DoubleDiv { lhs: 1.0, rhs: 1.0 }.export_name(), "__dpdiv");
+    assert_eq!(
+        CeMathCall::LlMul { lhs: 0, rhs: 0 }.export_name(),
+        "__ll_mul"
+    );
+    assert_eq!(
+        CeMathCall::LlDiv { lhs: 1, rhs: 1 }.export_name(),
+        "__ll_div"
+    );
+    assert_eq!(
+        CeMathCall::LlRem { lhs: 1, rhs: 1 }.export_name(),
+        "__ll_rem"
+    );
+    assert_eq!(
+        CeMathCall::UllDiv { lhs: 1, rhs: 1 }.export_name(),
+        "__ull_div"
+    );
+    assert_eq!(
+        CeMathCall::UllRem { lhs: 1, rhs: 1 }.export_name(),
+        "__ull_rem"
+    );
+    assert_eq!(
+        CeMathCall::LlLShift { value: 1, shift: 0 }.export_name(),
+        "__ll_lshift"
+    );
+    assert_eq!(
+        CeMathCall::LlRShift { value: 1, shift: 0 }.export_name(),
+        "__ll_rshift"
+    );
+    assert_eq!(
+        CeMathCall::UllRShift { value: 1, shift: 0 }.export_name(),
+        "__ull_rshift"
+    );
+    assert_eq!(
+        CeMathCall::FloatAdd { lhs: 0.0, rhs: 0.0 }.export_name(),
+        "__fpadd"
+    );
+    assert_eq!(
+        CeMathCall::FloatSub { lhs: 0.0, rhs: 0.0 }.export_name(),
+        "__fpsub"
+    );
+    assert_eq!(
+        CeMathCall::FloatMul { lhs: 0.0, rhs: 0.0 }.export_name(),
+        "__fpmul"
+    );
+    assert_eq!(
+        CeMathCall::FloatDiv { lhs: 1.0, rhs: 1.0 }.export_name(),
+        "__fpdiv"
+    );
+    assert_eq!(
+        CeMathCall::DoubleAdd { lhs: 0.0, rhs: 0.0 }.export_name(),
+        "__dpadd"
+    );
+    assert_eq!(
+        CeMathCall::DoubleSub { lhs: 0.0, rhs: 0.0 }.export_name(),
+        "__dpsub"
+    );
+    assert_eq!(
+        CeMathCall::DoubleMul { lhs: 0.0, rhs: 0.0 }.export_name(),
+        "__dpmul"
+    );
+    assert_eq!(
+        CeMathCall::DoubleDiv { lhs: 1.0, rhs: 1.0 }.export_name(),
+        "__dpdiv"
+    );
     assert_eq!(CeMathCall::FloatToLong(0.0).export_name(), "__fptoli");
-    assert_eq!(CeMathCall::FloatToUnsignedLong(0.0).export_name(), "__fptoul");
+    assert_eq!(
+        CeMathCall::FloatToUnsignedLong(0.0).export_name(),
+        "__fptoul"
+    );
     assert_eq!(CeMathCall::DoubleToLong(0.0).export_name(), "__dptoli");
-    assert_eq!(CeMathCall::DoubleToUnsignedLong(0.0).export_name(), "__dptoul");
+    assert_eq!(
+        CeMathCall::DoubleToUnsignedLong(0.0).export_name(),
+        "__dptoul"
+    );
     assert_eq!(CeMathCall::FloatToLongLong(0.0).export_name(), "__f_to_ll");
     assert_eq!(CeMathCall::DoubleToLongLong(0.0).export_name(), "__d_to_ll");
-    assert_eq!(CeMathCall::FloatToUnsignedLongLong(0.0).export_name(), "__f_to_ull");
-    assert_eq!(CeMathCall::DoubleToUnsignedLongLong(0.0).export_name(), "__d_to_ull");
+    assert_eq!(
+        CeMathCall::FloatToUnsignedLongLong(0.0).export_name(),
+        "__f_to_ull"
+    );
+    assert_eq!(
+        CeMathCall::DoubleToUnsignedLongLong(0.0).export_name(),
+        "__d_to_ull"
+    );
     assert_eq!(CeMathCall::LongToFloat(0).export_name(), "__litofp");
     assert_eq!(CeMathCall::LongToDouble(0).export_name(), "__litodp");
     assert_eq!(CeMathCall::UnsignedLongToFloat(0).export_name(), "__ultofp");
-    assert_eq!(CeMathCall::UnsignedLongToDouble(0).export_name(), "__ultodp");
+    assert_eq!(
+        CeMathCall::UnsignedLongToDouble(0).export_name(),
+        "__ultodp"
+    );
     assert_eq!(CeMathCall::FloatToDouble(0.0).export_name(), "__fptodp");
     assert_eq!(CeMathCall::DoubleToFloat(0.0).export_name(), "__dptofp");
-    assert_eq!(CeMathCall::FloatCmp { lhs: 0.0, rhs: 0.0 }.export_name(), "__fpcmp");
-    assert_eq!(CeMathCall::DoubleCmp { lhs: 0.0, rhs: 0.0 }.export_name(), "__dpcmp");
+    assert_eq!(
+        CeMathCall::FloatCmp { lhs: 0.0, rhs: 0.0 }.export_name(),
+        "__fpcmp"
+    );
+    assert_eq!(
+        CeMathCall::DoubleCmp { lhs: 0.0, rhs: 0.0 }.export_name(),
+        "__dpcmp"
+    );
 
     // UnaryF64 variants dispatch export_name from the op.
-    assert_eq!(CeMathCall::UnaryF64 { op: CeMathUnaryF64::Acos, value: 0.0 }.export_name(), "acos");
-    assert_eq!(CeMathCall::UnaryF64 { op: CeMathUnaryF64::Asin, value: 0.0 }.export_name(), "asin");
-    assert_eq!(CeMathCall::UnaryF64 { op: CeMathUnaryF64::Atan, value: 0.0 }.export_name(), "atan");
-    assert_eq!(CeMathCall::UnaryF64 { op: CeMathUnaryF64::Cos, value: 0.0 }.export_name(), "cos");
-    assert_eq!(CeMathCall::UnaryF64 { op: CeMathUnaryF64::Cosh, value: 0.0 }.export_name(), "cosh");
-    assert_eq!(CeMathCall::UnaryF64 { op: CeMathUnaryF64::Exp, value: 0.0 }.export_name(), "exp");
-    assert_eq!(CeMathCall::UnaryF64 { op: CeMathUnaryF64::Fabs, value: 0.0 }.export_name(), "fabs");
-    assert_eq!(CeMathCall::UnaryF64 { op: CeMathUnaryF64::Log, value: 1.0 }.export_name(), "log");
-    assert_eq!(CeMathCall::UnaryF64 { op: CeMathUnaryF64::Log10, value: 1.0 }.export_name(), "log10");
-    assert_eq!(CeMathCall::UnaryF64 { op: CeMathUnaryF64::Sin, value: 0.0 }.export_name(), "sin");
-    assert_eq!(CeMathCall::UnaryF64 { op: CeMathUnaryF64::Sinh, value: 0.0 }.export_name(), "sinh");
-    assert_eq!(CeMathCall::UnaryF64 { op: CeMathUnaryF64::Tan, value: 0.0 }.export_name(), "tan");
-    assert_eq!(CeMathCall::UnaryF64 { op: CeMathUnaryF64::Tanh, value: 0.0 }.export_name(), "tanh");
+    assert_eq!(
+        CeMathCall::UnaryF64 {
+            op: CeMathUnaryF64::Acos,
+            value: 0.0
+        }
+        .export_name(),
+        "acos"
+    );
+    assert_eq!(
+        CeMathCall::UnaryF64 {
+            op: CeMathUnaryF64::Asin,
+            value: 0.0
+        }
+        .export_name(),
+        "asin"
+    );
+    assert_eq!(
+        CeMathCall::UnaryF64 {
+            op: CeMathUnaryF64::Atan,
+            value: 0.0
+        }
+        .export_name(),
+        "atan"
+    );
+    assert_eq!(
+        CeMathCall::UnaryF64 {
+            op: CeMathUnaryF64::Cos,
+            value: 0.0
+        }
+        .export_name(),
+        "cos"
+    );
+    assert_eq!(
+        CeMathCall::UnaryF64 {
+            op: CeMathUnaryF64::Cosh,
+            value: 0.0
+        }
+        .export_name(),
+        "cosh"
+    );
+    assert_eq!(
+        CeMathCall::UnaryF64 {
+            op: CeMathUnaryF64::Exp,
+            value: 0.0
+        }
+        .export_name(),
+        "exp"
+    );
+    assert_eq!(
+        CeMathCall::UnaryF64 {
+            op: CeMathUnaryF64::Fabs,
+            value: 0.0
+        }
+        .export_name(),
+        "fabs"
+    );
+    assert_eq!(
+        CeMathCall::UnaryF64 {
+            op: CeMathUnaryF64::Log,
+            value: 1.0
+        }
+        .export_name(),
+        "log"
+    );
+    assert_eq!(
+        CeMathCall::UnaryF64 {
+            op: CeMathUnaryF64::Log10,
+            value: 1.0
+        }
+        .export_name(),
+        "log10"
+    );
+    assert_eq!(
+        CeMathCall::UnaryF64 {
+            op: CeMathUnaryF64::Sin,
+            value: 0.0
+        }
+        .export_name(),
+        "sin"
+    );
+    assert_eq!(
+        CeMathCall::UnaryF64 {
+            op: CeMathUnaryF64::Sinh,
+            value: 0.0
+        }
+        .export_name(),
+        "sinh"
+    );
+    assert_eq!(
+        CeMathCall::UnaryF64 {
+            op: CeMathUnaryF64::Tan,
+            value: 0.0
+        }
+        .export_name(),
+        "tan"
+    );
+    assert_eq!(
+        CeMathCall::UnaryF64 {
+            op: CeMathUnaryF64::Tanh,
+            value: 0.0
+        }
+        .export_name(),
+        "tanh"
+    );
 
     // BinaryF64 variants.
-    assert_eq!(CeMathCall::BinaryF64 { op: CeMathBinaryF64::Atan2, lhs: 0.0, rhs: 1.0 }.export_name(), "atan2");
-    assert_eq!(CeMathCall::BinaryF64 { op: CeMathBinaryF64::Fmod, lhs: 1.0, rhs: 1.0 }.export_name(), "fmod");
-    assert_eq!(CeMathCall::BinaryF64 { op: CeMathBinaryF64::Hypot, lhs: 3.0, rhs: 4.0 }.export_name(), "_hypot");
-    assert_eq!(CeMathCall::BinaryF64 { op: CeMathBinaryF64::Pow, lhs: 2.0, rhs: 3.0 }.export_name(), "pow");
+    assert_eq!(
+        CeMathCall::BinaryF64 {
+            op: CeMathBinaryF64::Atan2,
+            lhs: 0.0,
+            rhs: 1.0
+        }
+        .export_name(),
+        "atan2"
+    );
+    assert_eq!(
+        CeMathCall::BinaryF64 {
+            op: CeMathBinaryF64::Fmod,
+            lhs: 1.0,
+            rhs: 1.0
+        }
+        .export_name(),
+        "fmod"
+    );
+    assert_eq!(
+        CeMathCall::BinaryF64 {
+            op: CeMathBinaryF64::Hypot,
+            lhs: 3.0,
+            rhs: 4.0
+        }
+        .export_name(),
+        "_hypot"
+    );
+    assert_eq!(
+        CeMathCall::BinaryF64 {
+            op: CeMathBinaryF64::Pow,
+            lhs: 2.0,
+            rhs: 3.0
+        }
+        .export_name(),
+        "pow"
+    );
 
     // BinaryF32 variants.
-    assert_eq!(CeMathCall::BinaryF32 { op: CeMathBinaryF32::Fmod, lhs: 1.0, rhs: 1.0 }.export_name(), "fmodf");
+    assert_eq!(
+        CeMathCall::BinaryF32 {
+            op: CeMathBinaryF32::Fmod,
+            lhs: 1.0,
+            rhs: 1.0
+        }
+        .export_name(),
+        "fmodf"
+    );
 
     // get_window_text_length: counts UTF-16 code units of the title.
     let mut gwe = Gwe::default();
@@ -6975,7 +8549,12 @@ fn cemath_export_name_all_variants_and_gwe_get_window_text_length() {
         0,
         WS_VISIBLE,
         0,
-        Rect { left: 0, top: 0, right: 100, bottom: 50 },
+        Rect {
+            left: 0,
+            top: 0,
+            right: 100,
+            bottom: 50,
+        },
     );
     // "Hello" encodes to exactly 5 UTF-16 code units.
     assert_eq!(gwe.get_window_text_length(hwnd), Some(5));
@@ -6991,8 +8570,7 @@ fn cemath_export_name_all_variants_and_gwe_get_window_text_length() {
 #[test]
 fn filesystem_disk_space_volume_info_object_store_and_file_ops() -> Result<()> {
     use wince_emulation_v3::ce::file::{
-        CREATE_ALWAYS, FILE_ATTRIBUTE_READONLY, GENERIC_READ, GENERIC_WRITE,
-        OPEN_EXISTING,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_READONLY, GENERIC_READ, GENERIC_WRITE, OPEN_EXISTING,
     };
 
     let root = unique_test_root("filesystem_disk_space_volume_info");
@@ -7020,7 +8598,9 @@ fn filesystem_disk_space_volume_info_object_store_and_file_ops() -> Result<()> {
 
     // volume_info_for_path for a mounted guest path returns STORE info.
     kernel.mount_guest_root("\\TestMount", root.clone());
-    let vi_mount = kernel.files.volume_info_for_path(Some("\\TestMount\\file.txt"));
+    let vi_mount = kernel
+        .files
+        .volume_info_for_path(Some("\\TestMount\\file.txt"));
     // CE_VOLUME_FLAG_STORE = 0x20
     assert_eq!(vi_mount.flags & 0x20, 0x20);
 
@@ -7031,7 +8611,11 @@ fn filesystem_disk_space_volume_info_object_store_and_file_ops() -> Result<()> {
     assert_eq!(attr.attributes & 0x10, 0x10);
     kernel.remove_directory_w("\\ResidentFlash\\TestDir")?;
     // Directory is gone; re-querying returns an error.
-    assert!(kernel.file_attributes_w("\\ResidentFlash\\TestDir").is_err());
+    assert!(
+        kernel
+            .file_attributes_w("\\ResidentFlash\\TestDir")
+            .is_err()
+    );
 
     // Write a file, then exercise file operations.
     let fh = kernel.create_file_w(
@@ -7051,25 +8635,48 @@ fn filesystem_disk_space_volume_info_object_store_and_file_ops() -> Result<()> {
     assert_eq!(fattr.attributes & 0x10, 0); // not a directory
 
     // copy_file_w: copy src → dst.
-    kernel.copy_file_w("\\ResidentFlash\\ops_src.txt", "\\ResidentFlash\\ops_dst.txt", false)?;
+    kernel.copy_file_w(
+        "\\ResidentFlash\\ops_src.txt",
+        "\\ResidentFlash\\ops_dst.txt",
+        false,
+    )?;
     let dst_raw = kernel.read_guest_file("\\ResidentFlash\\ops_dst.txt")?;
     assert_eq!(dst_raw, b"hello world");
 
     // copy_file_w with fail_if_exists=true on existing dst → error.
-    assert!(kernel.copy_file_w(
-        "\\ResidentFlash\\ops_src.txt",
-        "\\ResidentFlash\\ops_dst.txt",
-        true
-    ).is_err());
+    assert!(
+        kernel
+            .copy_file_w(
+                "\\ResidentFlash\\ops_src.txt",
+                "\\ResidentFlash\\ops_dst.txt",
+                true
+            )
+            .is_err()
+    );
 
     // move_file_w: rename dst → moved.
-    kernel.move_file_w("\\ResidentFlash\\ops_dst.txt", "\\ResidentFlash\\ops_moved.txt")?;
-    assert!(kernel.file_attributes_w("\\ResidentFlash\\ops_dst.txt").is_err());
-    assert!(kernel.file_attributes_w("\\ResidentFlash\\ops_moved.txt").is_ok());
+    kernel.move_file_w(
+        "\\ResidentFlash\\ops_dst.txt",
+        "\\ResidentFlash\\ops_moved.txt",
+    )?;
+    assert!(
+        kernel
+            .file_attributes_w("\\ResidentFlash\\ops_dst.txt")
+            .is_err()
+    );
+    assert!(
+        kernel
+            .file_attributes_w("\\ResidentFlash\\ops_moved.txt")
+            .is_ok()
+    );
 
     // delete_file_w: remove moved file.
     kernel.delete_file_w("\\ResidentFlash\\ops_moved.txt")?;
-    assert!(kernel.file_attributes_w("\\ResidentFlash\\ops_moved.txt").is_err());
+    assert!(
+        kernel
+            .file_attributes_w("\\ResidentFlash\\ops_moved.txt")
+            .is_err()
+    );
 
     // set_file_attributes_w: mark src readonly.
     kernel.set_file_attributes_w("\\ResidentFlash\\ops_src.txt", FILE_ATTRIBUTE_READONLY)?;
@@ -7077,11 +8684,7 @@ fn filesystem_disk_space_volume_info_object_store_and_file_ops() -> Result<()> {
     kernel.set_file_attributes_w("\\ResidentFlash\\ops_src.txt", 0)?;
 
     // read_file_into: read via callback.
-    let fh2 = kernel.create_file_w(
-        "\\ResidentFlash\\ops_src.txt",
-        GENERIC_READ,
-        OPEN_EXISTING,
-    )?;
+    let fh2 = kernel.create_file_w("\\ResidentFlash\\ops_src.txt", GENERIC_READ, OPEN_EXISTING)?;
     let mut buf: Vec<u8> = Vec::new();
     kernel.read_file_into(fh2, 5, |chunk| {
         buf.extend_from_slice(chunk);
@@ -7108,7 +8711,8 @@ fn filesystem_disk_space_volume_info_object_store_and_file_ops() -> Result<()> {
 }
 
 #[test]
-fn kernel_loaded_module_snapshots_gwe_stats_recent_file_open_ops_lifecycle_trace_and_process_launch_variants() {
+fn kernel_loaded_module_snapshots_gwe_stats_recent_file_open_ops_lifecycle_trace_and_process_launch_variants()
+ {
     use wince_emulation_v3::ce::gwe::GweStats;
 
     let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
@@ -7118,7 +8722,12 @@ fn kernel_loaded_module_snapshots_gwe_stats_recent_file_open_ops_lifecycle_trace
     assert!(kernel.loaded_module_snapshots().is_empty());
 
     // Register a module and check snapshot.
-    kernel.register_loaded_module("test.dll", 0x1000_0000, Default::default(), Default::default());
+    kernel.register_loaded_module(
+        "test.dll",
+        0x1000_0000,
+        Default::default(),
+        Default::default(),
+    );
     let snaps = kernel.loaded_module_snapshots();
     assert_eq!(snaps.len(), 1);
     assert_eq!(snaps[0].name, "test.dll");
@@ -7175,7 +8784,10 @@ fn kernel_loaded_module_snapshots_gwe_stats_recent_file_open_ops_lifecycle_trace
     );
     assert_eq!(launch_opts.application.as_deref(), Some("OptsApp.exe"));
     assert_eq!(launch_opts.command_line.as_deref(), Some("OptsApp.exe arg"));
-    assert_eq!(launch_opts.current_directory.as_deref(), Some("\\ResidentFlash"));
+    assert_eq!(
+        launch_opts.current_directory.as_deref(),
+        Some("\\ResidentFlash")
+    );
     assert_eq!(launch_opts.show_cmd, Some(0));
 
     // take_pending_process_launches: retrieves and clears both queued launches.
@@ -7186,7 +8798,8 @@ fn kernel_loaded_module_snapshots_gwe_stats_recent_file_open_ops_lifecycle_trace
 }
 
 #[test]
-fn kernel_file_pointer_size_position_flush_find_first_next_close_and_change_notification() -> Result<()> {
+fn kernel_file_pointer_size_position_flush_find_first_next_close_and_change_notification()
+-> Result<()> {
     use wince_emulation_v3::ce::file::{
         CREATE_ALWAYS, FILE_ATTRIBUTE_DIRECTORY, GENERIC_READ, GENERIC_WRITE,
     };
@@ -7290,18 +8903,22 @@ fn kernel_file_pointer_size_position_flush_find_first_next_close_and_change_noti
     assert!(kernel.clear_file_change_notification(nfh)?);
 
     // Unsupported notify_filter → error (bit 9 = 0x200 is not in the supported mask).
-    assert!(kernel.find_first_change_notification_w(
-        "\\ResidentFlash\\WatchDir",
-        false,
-        0x0000_0200, // not in the supported mask
-    ).is_err());
+    assert!(
+        kernel
+            .find_first_change_notification_w(
+                "\\ResidentFlash\\WatchDir",
+                false,
+                0x0000_0200, // not in the supported mask
+            )
+            .is_err()
+    );
 
     // Path that is a file (not directory) → error.
-    assert!(kernel.find_first_change_notification_w(
-        "\\ResidentFlash\\seek.bin",
-        false,
-        notify_filter,
-    ).is_err());
+    assert!(
+        kernel
+            .find_first_change_notification_w("\\ResidentFlash\\seek.bin", false, notify_filter,)
+            .is_err()
+    );
 
     // find_close_change_notification: closes the handle.
     assert!(kernel.find_close_change_notification(nfh)?);
@@ -7310,11 +8927,10 @@ fn kernel_file_pointer_size_position_flush_find_first_next_close_and_change_noti
 }
 
 #[test]
-fn kernel_scheduler_stat_recording_winsock_wake_thread_has_sent_message_describe_handle_window_state() {
+fn kernel_scheduler_stat_recording_winsock_wake_thread_has_sent_message_describe_handle_window_state()
+ {
     use wince_emulation_v3::ce::gwe::{WM_USER, WS_VISIBLE};
-    use wince_emulation_v3::ce::scheduler::{
-        SchedulerBlockedWaitKind, SchedulerWinsockReadyKind,
-    };
+    use wince_emulation_v3::ce::scheduler::{SchedulerBlockedWaitKind, SchedulerWinsockReadyKind};
     use wince_emulation_v3::ce::timer::{INFINITE, WAIT_FAILED, WAIT_OBJECT_0};
 
     let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
@@ -7457,7 +9073,11 @@ fn kernel_scheduler_stat_recording_winsock_wake_thread_has_sent_message_describe
     // Second element signaled when first is not → WAIT_OBJECT_0 + 1.
     let event3 = kernel.create_event_w(Some("stat_ev3".to_owned()), true, true);
     let event_unset = kernel.create_event_w(Some("stat_ev4".to_owned()), true, false);
-    let r = kernel.wait_for_multiple_objects_without_scheduler_record(&[event_unset, event3], false, thread_id);
+    let r = kernel.wait_for_multiple_objects_without_scheduler_record(
+        &[event_unset, event3],
+        false,
+        thread_id,
+    );
     assert_eq!(r, WAIT_OBJECT_0 + 1);
 
     // --- queue_winsock_wake_candidates and queue_winsock_wake_candidates_for_handles ---
@@ -7532,9 +9152,8 @@ fn kernel_scheduler_stat_recording_winsock_wake_thread_has_sent_message_describe
     // Before any send: no pending.
     assert!(!kernel.thread_has_pending_sent_message(receiver_thread));
     // Queue an inter-thread send (sender_thread ≠ receiver_thread).
-    let send_id = kernel.begin_cross_thread_send_message_w(
-        sender_thread, hwnd, WM_USER + 0x80, 0, 0, None,
-    );
+    let send_id =
+        kernel.begin_cross_thread_send_message_w(sender_thread, hwnd, WM_USER + 0x80, 0, 0, None);
     assert!(send_id.is_some());
     // Now receiver_thread has a pending sent message.
     assert!(kernel.thread_has_pending_sent_message(receiver_thread));
@@ -7607,7 +9226,7 @@ fn kernel_scheduler_stat_recording_winsock_wake_thread_has_sent_message_describe
 fn kernel_post_shell_notify_icon_and_notification_callbacks_expire() {
     use wince_emulation_v3::ce::gwe::WS_VISIBLE;
     use wince_emulation_v3::ce::shell::{
-        NIF_MESSAGE, NotifyIconData, NotifyIconOp, ShellNotificationData, SHNP_ICONIC,
+        NIF_MESSAGE, NotifyIconData, NotifyIconOp, SHNP_ICONIC, ShellNotificationData,
     };
 
     let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
@@ -7642,7 +9261,8 @@ fn kernel_post_shell_notify_icon_and_notification_callbacks_expire() {
     assert!(ok);
 
     // Verify the message was posted (wparam=icon id, lparam=event_lparam).
-    let msg = kernel.take_ready_message_w_filtered(thread_id, Some(hwnd), callback_msg, callback_msg);
+    let msg =
+        kernel.take_ready_message_w_filtered(thread_id, Some(hwnd), callback_msg, callback_msg);
     assert!(msg.is_some());
     let m = msg.unwrap();
     assert_eq!(m.msg, callback_msg);
@@ -7788,34 +9408,59 @@ fn kernel_get_message_peek_message_erase_background_update_window() {
     assert_eq!(m2.lparam, 0x22);
 
     // Drain only WM_USER range so timers/system messages do not cause an infinite loop.
-    while kernel.peek_message_w_filtered(thread_id, None, WM_USER, WM_USER + 100, PeekFlags::REMOVE).is_some() {}
-    let msg3 = kernel.peek_message_w_filtered(thread_id, None, WM_USER, WM_USER + 100, PeekFlags::NO_REMOVE);
+    while kernel
+        .peek_message_w_filtered(thread_id, None, WM_USER, WM_USER + 100, PeekFlags::REMOVE)
+        .is_some()
+    {}
+    let msg3 = kernel.peek_message_w_filtered(
+        thread_id,
+        None,
+        WM_USER,
+        WM_USER + 100,
+        PeekFlags::NO_REMOVE,
+    );
     assert!(msg3.is_none());
 
     // peek_message_w_filtered with NO_REMOVE: empty queue → None.
     let peek = kernel.peek_message_w_filtered(
-        thread_id, Some(hwnd), WM_USER, WM_USER + 100, PeekFlags::NO_REMOVE,
+        thread_id,
+        Some(hwnd),
+        WM_USER,
+        WM_USER + 100,
+        PeekFlags::NO_REMOVE,
     );
     assert!(peek.is_none());
 
     // Post a message, peek with NO_REMOVE: message stays in queue.
     kernel.post_message_w(hwnd, WM_USER + 2, 0x33, 0x44);
     let peek2 = kernel.peek_message_w_filtered(
-        thread_id, Some(hwnd), WM_USER, WM_USER + 100, PeekFlags::NO_REMOVE,
+        thread_id,
+        Some(hwnd),
+        WM_USER,
+        WM_USER + 100,
+        PeekFlags::NO_REMOVE,
     );
     assert!(peek2.is_some());
     assert_eq!(peek2.unwrap().msg, WM_USER + 2);
 
     // peek with REMOVE: retrieves and removes the message.
     let peek3 = kernel.peek_message_w_filtered(
-        thread_id, Some(hwnd), WM_USER, WM_USER + 100, PeekFlags::REMOVE,
+        thread_id,
+        Some(hwnd),
+        WM_USER,
+        WM_USER + 100,
+        PeekFlags::REMOVE,
     );
     assert!(peek3.is_some());
     assert_eq!(peek3.unwrap().msg, WM_USER + 2);
 
     // After REMOVE, the message is gone.
     let peek4 = kernel.peek_message_w_filtered(
-        thread_id, Some(hwnd), WM_USER, WM_USER + 100, PeekFlags::NO_REMOVE,
+        thread_id,
+        Some(hwnd),
+        WM_USER,
+        WM_USER + 100,
+        PeekFlags::NO_REMOVE,
     );
     assert!(peek4.is_none());
 
@@ -7841,8 +9486,7 @@ fn kernel_get_message_peek_message_erase_background_update_window() {
 #[test]
 fn memory_local_re_alloc_detail_and_heap_re_alloc_detail_reallocation_fields() {
     use wince_emulation_v3::ce::memory::{
-        HEAP_REALLOC_IN_PLACE_ONLY, HEAP_ZERO_MEMORY,
-        LMEM_MODIFY, LMEM_ZEROINIT, MemorySystem,
+        HEAP_REALLOC_IN_PLACE_ONLY, HEAP_ZERO_MEMORY, LMEM_MODIFY, LMEM_ZEROINIT, MemorySystem,
     };
 
     let mut mem = MemorySystem::default();
@@ -7866,17 +9510,25 @@ fn memory_local_re_alloc_detail_and_heap_re_alloc_detail_reallocation_fields() {
 
     // heap_re_alloc_detail: HEAP_REALLOC_IN_PLACE_ONLY when grow required → None.
     let p2 = mem.heap_alloc(heap, 0, 64).unwrap();
-    assert!(mem.heap_re_alloc_detail(heap, HEAP_REALLOC_IN_PLACE_ONLY, p2, 9999).is_none());
+    assert!(
+        mem.heap_re_alloc_detail(heap, HEAP_REALLOC_IN_PLACE_ONLY, p2, 9999)
+            .is_none()
+    );
 
     // heap_re_alloc_detail: invalid flags → None.
-    assert!(mem.heap_re_alloc_detail(heap, 0xFFFF_0000, p2, 64).is_none());
+    assert!(
+        mem.heap_re_alloc_detail(heap, 0xFFFF_0000, p2, 64)
+            .is_none()
+    );
 
     // heap_re_alloc_detail: invalid heap → None.
     assert!(mem.heap_re_alloc_detail(0xDEAD_0000, 0, p2, 64).is_none());
 
     // heap_re_alloc_detail with HEAP_ZERO_MEMORY: zeroed flag set in result allocation.
     let p3 = mem.heap_alloc(heap, 0, 64).unwrap();
-    let r3 = mem.heap_re_alloc_detail(heap, HEAP_ZERO_MEMORY, p3, 32).unwrap();
+    let r3 = mem
+        .heap_re_alloc_detail(heap, HEAP_ZERO_MEMORY, p3, 32)
+        .unwrap();
     // Result ptr (in-place): verify the allocation is now tracked as zeroed.
     let alloc = mem.allocation(r3.ptr).unwrap();
     assert!(alloc.zeroed);
@@ -7884,7 +9536,9 @@ fn memory_local_re_alloc_detail_and_heap_re_alloc_detail_reallocation_fields() {
     // --- local_re_alloc_detail: invalid flags (LMEM_MODIFY is valid, 0xFFFF_0000 is not) ---
     let lp = mem.local_alloc(0, 64).unwrap();
     // Valid with LMEM_ZEROINIT | LMEM_MODIFY (both in valid mask).
-    let lr = mem.local_re_alloc_detail(lp, 32, LMEM_ZEROINIT | LMEM_MODIFY).unwrap();
+    let lr = mem
+        .local_re_alloc_detail(lp, 32, LMEM_ZEROINIT | LMEM_MODIFY)
+        .unwrap();
     assert!(!lr.moved); // shrink in-place
     // Invalid flags → None.
     assert!(mem.local_re_alloc_detail(lp, 32, 0xFFFF_0000).is_none());
@@ -7949,29 +9603,70 @@ fn device_namespace_default_baud_mode_and_accepts_remote_serial_target_and_bitma
 #[test]
 fn gwe_validate_window_rect_and_kernel_send_message_w_and_remote_free_functions() {
     use wince_emulation_v3::ce::gwe::{Gwe, Rect, WM_USER};
-    use wince_emulation_v3::ce::remote::{make_lparam, nmea_checksum_line, normalize_nmea_sentence};
+    use wince_emulation_v3::ce::remote::{
+        make_lparam, nmea_checksum_line, normalize_nmea_sentence,
+    };
 
     // --- validate_window_rect ---
     let mut gwe = Gwe::default();
-    let client = Rect { left: 0, top: 0, right: 100, bottom: 100 };
+    let client = Rect {
+        left: 0,
+        top: 0,
+        right: 100,
+        bottom: 100,
+    };
     let hwnd = gwe.create_window_ex_with_rect(1, "cls", "w", None, 0, 0, 0, client);
 
     // No pending update → validate_window_rect succeeds and is a no-op.
-    assert!(gwe.validate_window_rect(hwnd, Some(Rect { left: 10, top: 10, right: 50, bottom: 50 })));
+    assert!(gwe.validate_window_rect(
+        hwnd,
+        Some(Rect {
+            left: 10,
+            top: 10,
+            right: 50,
+            bottom: 50
+        })
+    ));
     assert!(gwe.update_rect(hwnd).is_none());
 
     // Invalidate a region, then validate with None → clears all pending.
-    gwe.invalidate_window(hwnd, Some(Rect { left: 0, top: 0, right: 40, bottom: 40 }), true);
+    gwe.invalidate_window(
+        hwnd,
+        Some(Rect {
+            left: 0,
+            top: 0,
+            right: 40,
+            bottom: 40,
+        }),
+        true,
+    );
     assert!(gwe.update_rect(hwnd).is_some());
     assert!(gwe.validate_window_rect(hwnd, None));
     assert!(gwe.update_rect(hwnd).is_none());
 
     // Invalidate, then validate sub-rect that does NOT fully subtract bounding box → update remains.
-    gwe.invalidate_window(hwnd, Some(Rect { left: 0, top: 0, right: 40, bottom: 40 }), false);
+    gwe.invalidate_window(
+        hwnd,
+        Some(Rect {
+            left: 0,
+            top: 0,
+            right: 40,
+            bottom: 40,
+        }),
+        false,
+    );
     assert!(gwe.update_rect(hwnd).is_some());
     // Validate a rect that partially overlaps but doesn't remove all → update_rect may still be Some
     // (exact result depends on subtract_bounding; just verify it doesn't panic and returns true).
-    let ok = gwe.validate_window_rect(hwnd, Some(Rect { left: 50, top: 50, right: 90, bottom: 90 }));
+    let ok = gwe.validate_window_rect(
+        hwnd,
+        Some(Rect {
+            left: 50,
+            top: 50,
+            right: 90,
+            bottom: 90,
+        }),
+    );
     assert!(ok);
 
     // Invalid hwnd → false.
@@ -7990,9 +9685,18 @@ fn gwe_validate_window_rect_and_kernel_send_message_w_and_remote_free_functions(
     assert_eq!(kernel.send_message_w(0xDEAD_0000, WM_USER, 0, 0), None);
 
     // --- normalize_nmea_sentence ---
-    assert_eq!(normalize_nmea_sentence("$GPRMC,...*00"), "$GPRMC,...*00\r\n");
-    assert_eq!(normalize_nmea_sentence("$GPRMC,...*00\r\n"), "$GPRMC,...*00\r\n");
-    assert_eq!(normalize_nmea_sentence("$GPRMC,...*00\r"), "$GPRMC,...*00\r\n");
+    assert_eq!(
+        normalize_nmea_sentence("$GPRMC,...*00"),
+        "$GPRMC,...*00\r\n"
+    );
+    assert_eq!(
+        normalize_nmea_sentence("$GPRMC,...*00\r\n"),
+        "$GPRMC,...*00\r\n"
+    );
+    assert_eq!(
+        normalize_nmea_sentence("$GPRMC,...*00\r"),
+        "$GPRMC,...*00\r\n"
+    );
 
     // --- nmea_checksum_line ---
     // XOR checksum of "GPRMC" = 'G'^'P'^'R'^'M'^'C' = 0x47^0x50^0x52^0x4D^0x43 = 0x4B
@@ -8008,8 +9712,8 @@ fn gwe_validate_window_rect_and_kernel_send_message_w_and_remote_free_functions(
 
 #[test]
 fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_drag() {
-    use wince_emulation_v3::ce::resource::{ImageListDraw, ResourceSystem};
     use wince_emulation_v3::ce::gwe::Rect;
+    use wince_emulation_v3::ce::resource::{ImageListDraw, ResourceSystem};
 
     let mut res = ResourceSystem::default();
 
@@ -8037,7 +9741,9 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
 
     // --- add_masked_image_list_image ---
     let ilh2 = res.create_image_list(16, 16, 0, 0, 2).unwrap();
-    let idx_masked = res.add_masked_image_list_image(ilh2, bmp_b, 0x00ff_00ff).unwrap();
+    let idx_masked = res
+        .add_masked_image_list_image(ilh2, bmp_b, 0x00ff_00ff)
+        .unwrap();
     assert_eq!(idx_masked, 0);
     let info_masked = res.image_list_info(ilh2, 0).unwrap();
     assert_eq!(info_masked.bitmap, bmp_b);
@@ -8101,22 +9807,37 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     res.add_image_list_image(src, bmp_a, 0).unwrap();
     res.add_image_list_image(dst_il, bmp_b, 0).unwrap();
     // Copy src[0] → dst[0], remove_source=false.
-    assert_eq!(res.copy_image_list_image(dst_il, 0, src, 0, false), Some(true));
+    assert_eq!(
+        res.copy_image_list_image(dst_il, 0, src, 0, false),
+        Some(true)
+    );
     let dst_info = res.image_list_info(dst_il, 0).unwrap();
     assert_eq!(dst_info.bitmap, bmp_a); // src bitmap copied
     assert_eq!(res.image_list_count(src), Some(2)); // source unchanged
     // Negative src_index → Some(false).
-    assert_eq!(res.copy_image_list_image(dst_il, 0, src, -1, false), Some(false));
+    assert_eq!(
+        res.copy_image_list_image(dst_il, 0, src, -1, false),
+        Some(false)
+    );
 
     // --- copy_dither_image_list_image ---
     let dither_src = res.create_image_list(16, 16, 0, 0, 2).unwrap();
     let dither_dst = res.create_image_list(16, 16, 0, 0, 2).unwrap();
     res.add_image_list_image(dither_src, bmp_a, 0).unwrap();
     res.add_image_list_image(dither_dst, bmp_b, 0).unwrap();
-    assert_eq!(res.copy_dither_image_list_image(dither_dst, 0, 5, 10, dither_src, 0, 0x42), Some(true));
+    assert_eq!(
+        res.copy_dither_image_list_image(dither_dst, 0, 5, 10, dither_src, 0, 0x42),
+        Some(true)
+    );
     // Negative dst_index or src_index → Some(false).
-    assert_eq!(res.copy_dither_image_list_image(dither_dst, -1, 0, 0, dither_src, 0, 0), Some(false));
-    assert_eq!(res.copy_dither_image_list_image(dither_dst, 0, 0, 0, dither_src, -1, 0), Some(false));
+    assert_eq!(
+        res.copy_dither_image_list_image(dither_dst, -1, 0, 0, dither_src, 0, 0),
+        Some(false)
+    );
+    assert_eq!(
+        res.copy_dither_image_list_image(dither_dst, 0, 0, 0, dither_src, -1, 0),
+        Some(false)
+    );
 
     // --- image_list_icon ---
     let icon_il = res.create_image_list(16, 16, 0, 0, 2).unwrap();
@@ -8205,7 +9926,10 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     assert_eq!(res.set_image_list_drag_cursor(drag_il, 0, 6, 7), Some(true));
     assert_eq!(res.image_list_drag().unwrap().hotspot_x, 6);
     // set_image_list_drag_cursor with bad index → Some(false).
-    assert_eq!(res.set_image_list_drag_cursor(drag_il, 99, 0, 0), Some(false));
+    assert_eq!(
+        res.set_image_list_drag_cursor(drag_il, 99, 0, 0),
+        Some(false)
+    );
     // end drag.
     assert!(res.end_image_list_drag());
     assert!(res.image_list_drag().is_none());
@@ -8213,10 +9937,25 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     assert!(!res.end_image_list_drag());
 
     // --- set_region_rects ---
-    let rh = res.create_region(Rect { left: 0, top: 0, right: 100, bottom: 100 });
+    let rh = res.create_region(Rect {
+        left: 0,
+        top: 0,
+        right: 100,
+        bottom: 100,
+    });
     let rects = vec![
-        Rect { left: 0, top: 0, right: 50, bottom: 50 },
-        Rect { left: 60, top: 0, right: 100, bottom: 50 },
+        Rect {
+            left: 0,
+            top: 0,
+            right: 50,
+            bottom: 50,
+        },
+        Rect {
+            left: 60,
+            top: 0,
+            right: 100,
+            bottom: 50,
+        },
     ];
     assert!(res.set_region_rects(rh, rects));
     // Invalid handle → false.
@@ -8268,15 +10007,22 @@ fn unmount_guest_root_signals_change_notification_handles_watching_subpaths() ->
 
     // The subpath handle should now be signaled with a REMOVED record.
     let records = kernel.file_change_notification_records(nfh)?;
-    assert!(!records.is_empty(), "subpath watcher should be signaled on volume removal");
+    assert!(
+        !records.is_empty(),
+        "subpath watcher should be signaled on volume removal"
+    );
     assert_eq!(
-        records[0].action, 0x0000_0002, // FILE_ACTION_REMOVED
+        records[0].action,
+        0x0000_0002, // FILE_ACTION_REMOVED
         "record action should be FILE_ACTION_REMOVED"
     );
 
     // The volume-root handle should also be signaled.
     let vol_records = kernel.file_change_notification_records(vol_nfh)?;
-    assert!(!vol_records.is_empty(), "volume root watcher should be signaled on removal");
+    assert!(
+        !vol_records.is_empty(),
+        "volume root watcher should be signaled on removal"
+    );
 
     kernel.find_close_change_notification(nfh)?;
     kernel.find_close_change_notification(vol_nfh)?;

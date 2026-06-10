@@ -17,7 +17,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-
 #[allow(unused_imports)]
 use wince_emulation_v3::emulator::cpu::CpuBackend as _;
 use wince_emulation_v3::{
@@ -33,9 +32,9 @@ use wince_emulation_v3::{
     },
     config::RuntimeConfig,
     emulator::{
+        cpu::{UnicornDebugSnapshot, UnicornMips, UnicornRunLimits, UnicornWindowSnapshot},
         dll_search::{emulator_provided_import_module, normalize_module_name, resolve_dll_path},
         memory::MemoryPerms,
-        cpu::{UnicornDebugSnapshot, UnicornMips, UnicornRunLimits, UnicornWindowSnapshot},
     },
     pe::PeImage,
     remote_server::{RemoteServer, RemoteServerConfig},

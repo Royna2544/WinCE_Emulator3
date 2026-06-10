@@ -1886,7 +1886,10 @@ impl ResourceSystem {
     }
 
     pub fn stretch_blt_mode(&self, hdc: u32) -> i32 {
-        self.dc_states.get(&hdc).map(|s| s.stretch_blt_mode).unwrap_or(1)
+        self.dc_states
+            .get(&hdc)
+            .map(|s| s.stretch_blt_mode)
+            .unwrap_or(1)
     }
 
     pub fn set_stretch_blt_mode(&mut self, hdc: u32, mode: i32) -> i32 {
@@ -1900,7 +1903,10 @@ impl ResourceSystem {
     }
 
     pub fn text_char_extra(&self, hdc: u32) -> i32 {
-        self.dc_states.get(&hdc).map(|s| s.text_char_extra).unwrap_or(0)
+        self.dc_states
+            .get(&hdc)
+            .map(|s| s.text_char_extra)
+            .unwrap_or(0)
     }
 
     pub fn set_text_char_extra(&mut self, hdc: u32, extra: i32) -> i32 {
@@ -2057,7 +2063,12 @@ impl ResourceSystem {
         if hdc == 0 {
             return None;
         }
-        Some(self.dc_states.get(&hdc).map(|s| s.bk_color).unwrap_or(0x00ff_ffff))
+        Some(
+            self.dc_states
+                .get(&hdc)
+                .map(|s| s.bk_color)
+                .unwrap_or(0x00ff_ffff),
+        )
     }
 
     pub fn get_dc_bk_mode(&self, hdc: u32) -> Option<i32> {

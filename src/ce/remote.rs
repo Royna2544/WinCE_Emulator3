@@ -786,11 +786,20 @@ mod tests {
     #[test]
     fn normalize_nmea_sentence_strips_existing_newlines_and_appends_crlf() {
         // already has \r\n → strip and re-add
-        assert_eq!(normalize_nmea_sentence("$GPRMC,data*XX\r\n"), "$GPRMC,data*XX\r\n");
+        assert_eq!(
+            normalize_nmea_sentence("$GPRMC,data*XX\r\n"),
+            "$GPRMC,data*XX\r\n"
+        );
         // only \n → strip and add \r\n
-        assert_eq!(normalize_nmea_sentence("$GPRMC,data*XX\n"), "$GPRMC,data*XX\r\n");
+        assert_eq!(
+            normalize_nmea_sentence("$GPRMC,data*XX\n"),
+            "$GPRMC,data*XX\r\n"
+        );
         // no trailing whitespace → just add \r\n
-        assert_eq!(normalize_nmea_sentence("$GPRMC,data*XX"), "$GPRMC,data*XX\r\n");
+        assert_eq!(
+            normalize_nmea_sentence("$GPRMC,data*XX"),
+            "$GPRMC,data*XX\r\n"
+        );
     }
 
     #[test]
