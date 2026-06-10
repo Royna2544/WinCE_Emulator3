@@ -1560,6 +1560,150 @@ fn coredll_raw_ext_text_out_opaque_fills_selected_memory_dib_with_bk_color() -> 
 }
 
 #[test]
+fn coredll_raw_ext_text_out_w_draws_glyphs_into_memory_dib() -> Result<()> {
+    // ExtTextOutW with count=1 for 'A' should write text-color pixels into the bitmap.
+    // Default font: height=16, ave_width=8. Glyph 'A' (FONT_8X8[33]):
+    //   row 0 = 0x18 = 00011000 → cols 3 and 4 set.
+    //   Screen rows 0..2 (glyph_row 0 scaled by 16/8=2), col 3.
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+    // 32×16 top-down RGB565 DIB gives enough room for the full 'A' glyph.
+    let (mem_dc, bits_ptr, stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 32, 16);
+
+    // Set text color to white (RGB565 = 0xFFFF).
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SET_TEXT_COLOR,
+        [mem_dc, 0x00FF_FFFF],
+    );
+
+    // Write L"A\0" at 0x2_0000 using write_wide_z (inserts into halfwords).
+    let text_ptr = 0x2_0000_u32;
+    memory.write_wide_z(text_ptr, "A");
+
+    // ExtTextOutW(mem_dc, x=0, y=0, options=0, rect=0, text_ptr, count=1, dx=0)
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXT_TEXT_OUT_W,
+            [mem_dc, 0, 0, 0, 0, text_ptr, 1, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
+    // Glyph row 0 of 'A' is 0x18 = bit 3 and bit 4 set from MSB.
+    // With cell_h=16: glyph_row 0 → screen rows 0 and 1.
+    // With cell_w=8:  glyph_col 3 → screen col 3; glyph_col 4 → screen col 4.
+    // So (3, 0) and (4, 0) should be white (0xFFFF).
+    assert_eq!(
+        rgb565_at(&memory, bits_ptr, stride, 3, 0),
+        0xFFFF,
+        "pixel (3,0) must be text-color for 'A' glyph row 0"
+    );
+    assert_eq!(
+        rgb565_at(&memory, bits_ptr, stride, 4, 0),
+        0xFFFF,
+        "pixel (4,0) must be text-color for 'A' glyph row 0"
+    );
+    // Adjacent unset pixels must remain zero (background).
+    assert_eq!(
+        rgb565_at(&memory, bits_ptr, stride, 0, 0),
+        0x0000,
+        "pixel (0,0) must be background (no glyph bit set)"
+    );
+    assert_eq!(
+        rgb565_at(&memory, bits_ptr, stride, 7, 0),
+        0x0000,
+        "pixel (7,0) must be background (no glyph bit set)"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_ext_text_out_w_draws_glyphs_into_framebuffer() -> Result<()> {
+    // ExtTextOutW via a window DC renders glyphs into VirtualFramebuffer.
+    // Window at (0,0,64,32) → client_to_screen origin = (0,0) → framebuffer coords = client coords.
+    // Default font: height=16, ave_width=8. Glyph 'A' row 0 = 0x18 → bits 3,4 set → cols 3,4 white.
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 9;
+
+    let hwnd = kernel.create_window_ex_w_with_rect(
+        thread_id,
+        "GLYPH_FB",
+        "",
+        None,
+        0,
+        WS_VISIBLE,
+        0,
+        Rect::from_origin_size(0, 0, 64, 32),
+    );
+    let hdc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [hwnd],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(hdc), .. } => hdc,
+        other => panic!("GetDC did not return a handle: {other:?}"),
+    };
+    // SetTextColor creates the dc_state entry so ExtTextOutW sees the white text color.
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SET_TEXT_COLOR,
+        [hdc, 0x00FF_FFFF],
+    );
+
+    let text_ptr = 0x2_0000_u32;
+    memory.write_wide_z(text_ptr, "A");
+
+    let mut framebuffer = VirtualFramebuffer::new(64, 32, PixelFormat::Rgb565)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_EXT_TEXT_OUT_W,
+            [hdc, 0, 0, 0, 0, text_ptr, 1, 0],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    ));
+
+    let stride = framebuffer.stride();
+    let pixels = framebuffer.pixels();
+    let at = |col: usize, row: usize| {
+        let off = row * stride + col * 2;
+        u16::from_le_bytes([pixels[off], pixels[off + 1]])
+    };
+    // Glyph 'A' row 0 = 0x18: bits 3 and 4 (from MSB) set → cols 3 and 4 are white.
+    assert_eq!(at(3, 0), 0xFFFF, "pixel (3,0) must be white for 'A' glyph row 0");
+    assert_eq!(at(4, 0), 0xFFFF, "pixel (4,0) must be white for 'A' glyph row 0");
+    // Adjacent unset columns must remain zero (background).
+    assert_eq!(at(0, 0), 0x0000, "pixel (0,0) must be background");
+    assert_eq!(at(7, 0), 0x0000, "pixel (7,0) must be background");
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_pat_blt_patcopy_paints_selected_memory_dib() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
@@ -21767,7 +21911,7 @@ fn coredll_raw_gdi_draw_text_w_validates_params_and_count() -> Result<()> {
     memory.write_word(rect_ptr + 8, 100);
     memory.write_word(rect_ptr + 12, 20);
 
-    // count=5 → returns max(5,1)=5.
+    // DrawTextW returns the text height in logical units (CE default font height = 16).
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -21777,10 +21921,10 @@ fn coredll_raw_gdi_draw_text_w_validates_params_and_count() -> Result<()> {
             [dc, text_ptr, 5_u32, rect_ptr],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::U32(5),
+            value: CoredllValue::U32(16),
             ..
         }
-    ), "DRAW_TEXT_W with count=5 must return 5");
+    ), "DRAW_TEXT_W with count=5 must return text height (16)");
 
     Ok(())
 }

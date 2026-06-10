@@ -5747,11 +5747,13 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         ORD_DRAW_TEXT_W => Some(CoredllValue::U32(draw_text_w_raw(
             kernel,
             memory,
+            framebuffer,
             thread_id,
             raw_arg(args, 0),
             raw_arg(args, 1),
             raw_i32_arg(args, 2),
             raw_arg(args, 3),
+            raw_arg(args, 4),
         ))),
         ORD_DRAW_EDGE => Some(CoredllValue::Bool(draw_edge_raw(
             kernel,
@@ -22210,22 +22212,97 @@ fn extract_pe_icon<M: CoredllGuestMemory>(
 
     // RT_ICON data is a DIB - BITMAPINFOHEADER + color table + XOR mask + AND mask
     // The height in the header is 2*h (XOR + AND masks stacked), fix it for color bitmap
-    if icon_bytes.len() < 16 {
+    if icon_bytes.len() < 40 {
         return None;
     }
+    let actual_width = read_le_i32(icon_bytes, 4)?;
     let dib_height = read_le_u32(icon_bytes, 8)?;
-    let actual_height = dib_height / 2;
+    let actual_height = (dib_height / 2) as i32;
+    let bpp = read_le_u16(icon_bytes, 14)?;
+    let compression = read_le_u32(icon_bytes, 16).unwrap_or(0);
 
     // Create a copy of the icon DIB with corrected height for the color bitmap
     let mut color_dib: Vec<u8> = icon_bytes.to_vec();
-    color_dib.get_mut(8..12)?.copy_from_slice(&actual_height.to_le_bytes());
+    color_dib.get_mut(8..12)?.copy_from_slice(&(actual_height as u32).to_le_bytes());
 
     let color_bitmap = create_bitmap_from_dib_bytes(kernel, memory, thread_id, &color_dib);
     if color_bitmap == 0 {
         return None;
     }
 
-    kernel.resources.create_icon(true, 0, 0, 0, color_bitmap)
+    // Extract AND mask (1bpp, follows XOR pixels in RT_ICON data)
+    // Only BI_RGB and BI_BITFIELDS icons have AND masks
+    let mask_bitmap = pe_icon_and_mask_bitmap(
+        kernel, memory, thread_id, icon_bytes, actual_width, actual_height, bpp, compression,
+    );
+
+    kernel.resources.create_icon(true, 0, 0, mask_bitmap, color_bitmap)
+}
+
+fn pe_icon_and_mask_bitmap<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    icon_bytes: &[u8],
+    width: i32,
+    height: i32,
+    bpp: u16,
+    compression: u32,
+) -> u32 {
+    pe_icon_and_mask_bitmap_inner(kernel, memory, thread_id, icon_bytes, width, height, bpp, compression)
+        .unwrap_or(0)
+}
+
+fn pe_icon_and_mask_bitmap_inner<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    icon_bytes: &[u8],
+    width: i32,
+    height: i32,
+    bpp: u16,
+    compression: u32,
+) -> Option<u32> {
+    const BI_BITFIELDS: u32 = 3;
+    let header_size = 40usize;
+    // BI_BITFIELDS adds 12 bytes of RGB masks between header and pixel data
+    let bitfields_bytes: usize = if compression == BI_BITFIELDS { 12 } else { 0 };
+    let color_entries: usize = if bpp <= 8 { 1 << bpp } else { 0 };
+    let used_entries = read_le_u32(icon_bytes, 32).map(|n| n as usize).unwrap_or(0);
+    let actual_color_entries = if used_entries > 0 && used_entries < color_entries { used_entries } else { color_entries };
+    let color_table_bytes = actual_color_entries * 4;
+    let xor_stride = ((width as usize).checked_mul(bpp as usize)?.checked_add(31)? / 32) * 4;
+    let xor_size = xor_stride.checked_mul(height as usize)?;
+    let and_stride = ((width as usize).checked_add(31)? / 32) * 4;
+    let and_size = and_stride.checked_mul(height as usize)?;
+    let and_offset = header_size
+        .checked_add(bitfields_bytes)?
+        .checked_add(color_table_bytes)?
+        .checked_add(xor_size)?;
+    let and_end = and_offset.checked_add(and_size)?;
+
+    let and_bytes = icon_bytes.get(and_offset..and_end)?;
+
+    // Build a 1bpp BITMAPINFOHEADER DIB for the AND mask.
+    // Color table: index 0 = black (opaque), index 1 = white (transparent).
+    let mut mask_dib: Vec<u8> = Vec::with_capacity(40 + 8 + and_size);
+    mask_dib.extend_from_slice(&40u32.to_le_bytes());
+    mask_dib.extend_from_slice(&width.to_le_bytes());
+    mask_dib.extend_from_slice(&height.to_le_bytes());
+    mask_dib.extend_from_slice(&1u16.to_le_bytes());
+    mask_dib.extend_from_slice(&1u16.to_le_bytes());
+    mask_dib.extend_from_slice(&0u32.to_le_bytes()); // BI_RGB
+    mask_dib.extend_from_slice(&0u32.to_le_bytes()); // biSizeImage
+    mask_dib.extend_from_slice(&0u32.to_le_bytes()); // biXPelsPerMeter
+    mask_dib.extend_from_slice(&0u32.to_le_bytes()); // biYPelsPerMeter
+    mask_dib.extend_from_slice(&2u32.to_le_bytes()); // biClrUsed
+    mask_dib.extend_from_slice(&0u32.to_le_bytes()); // biClrImportant
+    mask_dib.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // index 0 = black (opaque)
+    mask_dib.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0x00]); // index 1 = white (transparent)
+    mask_dib.extend_from_slice(and_bytes);
+
+    let handle = create_bitmap_from_dib_bytes(kernel, memory, thread_id, &mask_dib);
+    (handle != 0).then_some(handle)
 }
 
 fn destroy_icon_raw(kernel: &mut CeKernel, thread_id: u32, icon: u32) -> bool {
@@ -31526,14 +31603,29 @@ fn write_textmetric_w<M: CoredllGuestMemory>(
     write_guest_bytes(kernel, memory, thread_id, out_ptr, &bytes)
 }
 
+// DT_* flags used by DrawTextW
+const DT_LEFT: u32 = 0x0000;
+const DT_CENTER: u32 = 0x0001;
+const DT_RIGHT: u32 = 0x0002;
+const DT_TOP: u32 = 0x0000;
+const DT_VCENTER: u32 = 0x0004;
+const DT_BOTTOM: u32 = 0x0008;
+const DT_WORDBREAK: u32 = 0x0010;
+const DT_SINGLELINE: u32 = 0x0020;
+const DT_NOCLIP: u32 = 0x0100;
+const DT_CALCRECT: u32 = 0x0400;
+const DT_NOPREFIX: u32 = 0x0800;
+
 fn draw_text_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
-    memory: &M,
+    memory: &mut M,
+    mut framebuffer: Option<&mut dyn Framebuffer>,
     thread_id: u32,
     hdc: u32,
     text_ptr: u32,
     count: i32,
     rect_ptr: u32,
+    format: u32,
 ) -> u32 {
     if hdc == 0 || text_ptr == 0 || rect_ptr == 0 {
         kernel
@@ -31541,22 +31633,166 @@ fn draw_text_w_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     }
-    if read_guest_rect(kernel, memory, thread_id, rect_ptr).is_none() {
+    let Some(rect) = read_guest_rect(kernel, memory, thread_id, rect_ptr) else {
         return 0;
-    }
-    let text_len = if count < 0 {
+    };
+    let char_count = if count < 0 {
         read_guest_wide_arg(memory, text_ptr).map(|text| text.encode_utf16().count())
     } else {
         Some(count as usize)
     };
-    let Some(text_len) = text_len else {
+    let Some(char_count) = char_count else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     };
+    if char_count == 0 {
+        kernel.threads.set_last_error(thread_id, 0);
+        return 0;
+    }
+
+    let metrics = selected_text_metrics(kernel, hdc);
+    let cell_h = metrics.as_ref().map(|m| m.height).unwrap_or(16).max(1);
+
+    if format & DT_CALCRECT == 0 {
+        let clip = if format & DT_NOCLIP == 0 { Some(rect) } else { None };
+
+        // Horizontal alignment within the rect
+        let text_w = measure_text_width(kernel, memory, hdc, text_ptr, char_count as u32, 0);
+        let rect_w = (rect.right - rect.left).max(0);
+        let x = match format & (DT_CENTER | DT_RIGHT) {
+            DT_RIGHT => rect.right - text_w,
+            DT_CENTER => rect.left + (rect_w - text_w) / 2,
+            _ => rect.left,
+        };
+        // Vertical alignment: DT_VCENTER/DT_BOTTOM only apply with DT_SINGLELINE
+        let y = if format & DT_SINGLELINE != 0 {
+            let rect_h = (rect.bottom - rect.top).max(0);
+            if format & DT_BOTTOM != 0 {
+                rect.bottom - cell_h
+            } else if format & DT_VCENTER != 0 {
+                rect.top + (rect_h - cell_h) / 2
+            } else {
+                rect.top
+            }
+        } else {
+            rect.top
+        };
+
+        if let Some(fb) = framebuffer.as_deref_mut() {
+            draw_ext_text_glyphs_to_framebuffer(
+                kernel,
+                memory,
+                fb,
+                hdc,
+                x,
+                y,
+                text_ptr,
+                char_count as u32,
+                0,
+                clip,
+            );
+        } else if kernel.resources.is_memory_dc(hdc) {
+            draw_ext_text_glyphs_to_bitmap(
+                kernel, memory, hdc, x, y, text_ptr, char_count as u32, 0, clip,
+            );
+        }
+    }
+
     kernel.threads.set_last_error(thread_id, 0);
-    text_len.max(1).min(i32::MAX as usize) as u32
+    cell_h as u32
+}
+
+// Render FONT_8X8 glyphs into the selected bitmap of a memory DC.
+// Analogous to draw_ext_text_glyphs_to_framebuffer but writes via write_bitmap_pixel_rgb.
+fn draw_ext_text_glyphs_to_bitmap<M: CoredllGuestMemory>(
+    kernel: &CeKernel,
+    memory: &mut M,
+    hdc: u32,
+    x: i32,
+    y: i32,
+    text_ptr: u32,
+    count: u32,
+    dx_ptr: u32,
+    clip: Option<Rect>,
+) {
+    if !kernel.resources.is_memory_dc(hdc) {
+        return;
+    }
+    let Some(bitmap) = selected_bitmap_object(kernel, hdc) else {
+        return;
+    };
+
+    let Some(state) = kernel.resources.dc_state(hdc) else { return; };
+    let text_color = state.text_color;
+    let font = kernel.resources.font(state.selected_font).cloned();
+    let metrics = TextMetricsModel::from_font(font.as_ref());
+    let cell_h = metrics.height.max(1) as usize;
+    let cell_w = metrics.ave_width.max(1);
+    let rgb = colorref_rgb(text_color);
+
+    let bm_w = bitmap.width;
+    let bm_h = bitmap.height;
+
+    let mut cursor_x = x;
+
+    for char_idx in 0..count as usize {
+        let unit = memory
+            .read_u16(text_ptr.wrapping_add((char_idx as u32) * 2))
+            .unwrap_or(0);
+
+        let advance = if dx_ptr != 0 {
+            memory
+                .read_u32(dx_ptr.wrapping_add((char_idx as u32) * 4))
+                .unwrap_or(cell_w as u32) as i32
+        } else {
+            cell_w
+        };
+
+        if unit >= 32 && unit < 128 {
+            let glyph = FONT_8X8[(unit - 32) as usize];
+            for glyph_row in 0..8usize {
+                let row_byte = glyph[glyph_row];
+                if row_byte == 0 {
+                    continue;
+                }
+                let sy0 = y + (glyph_row * cell_h / 8) as i32;
+                let sy1 = y + ((glyph_row + 1) * cell_h / 8) as i32;
+                for sy in sy0..sy1 {
+                    if sy < 0 || sy >= bm_h {
+                        continue;
+                    }
+                    if let Some(c) = clip {
+                        if sy < c.top || sy >= c.bottom {
+                            continue;
+                        }
+                    }
+                    for glyph_col in 0..8usize {
+                        if row_byte & (0x80u8 >> glyph_col) == 0 {
+                            continue;
+                        }
+                        let sx0 = cursor_x + (glyph_col as i32 * cell_w) / 8;
+                        let sx1 = cursor_x + ((glyph_col as i32 + 1) * cell_w) / 8;
+                        let sx1 = sx1.max(sx0 + 1);
+                        for sx in sx0..sx1 {
+                            if sx < 0 || sx >= bm_w {
+                                continue;
+                            }
+                            if let Some(c) = clip {
+                                if sx < c.left || sx >= c.right {
+                                    continue;
+                                }
+                            }
+                            let _ = write_bitmap_pixel_rgb(memory, &bitmap, sx, sy, rgb);
+                        }
+                    }
+                }
+            }
+        }
+
+        cursor_x += advance;
+    }
 }
 
 fn get_text_extent_ex_point_w_raw<M: CoredllGuestMemory>(
@@ -31762,15 +31998,18 @@ fn get_text_face_w_raw<M: CoredllGuestMemory>(
 fn ext_text_out_w_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
-    framebuffer: Option<&mut dyn Framebuffer>,
+    mut framebuffer: Option<&mut dyn Framebuffer>,
     thread_id: u32,
     args: &[u32],
 ) -> bool {
     let hdc = raw_arg(args, 0);
+    let x = raw_i32_arg(args, 1);
+    let y = raw_i32_arg(args, 2);
     let options = raw_arg(args, 3);
     let rect_ptr = raw_arg(args, 4);
     let text_ptr = raw_arg(args, 5);
     let count = raw_arg(args, 6);
+    let dx_ptr = raw_arg(args, 7);
     if hdc == 0 || (count != 0 && text_ptr == 0) {
         kernel
             .threads
@@ -31794,13 +32033,236 @@ fn ext_text_out_w_raw<M: CoredllGuestMemory>(
             .map(|state| state.bk_color)
             .unwrap_or(rgb(0xff, 0xff, 0xff));
         if !fill_bitmap_rect_for_hdc(kernel, memory, hdc, rect, BrushPaint::Solid(color))
-            && let Some(framebuffer) = framebuffer
+            && let Some(fb) = framebuffer.as_deref_mut()
         {
-            fill_framebuffer_rect_for_hdc(kernel, framebuffer, hdc, rect, color);
+            fill_framebuffer_rect_for_hdc(kernel, fb, hdc, rect, color);
+        }
+    }
+    // Draw glyphs: window DCs → framebuffer; memory DCs → backing bitmap.
+    if count > 0 && text_ptr != 0 {
+        let clip = if options & ETO_CLIPPED != 0 { rect } else { None };
+
+        // Apply SetTextAlign alignment to the drawing origin.
+        let (draw_x, draw_y) =
+            text_align_origin(kernel, memory, hdc, x, y, text_ptr, count, dx_ptr);
+
+        if let Some(fb) = framebuffer.as_deref_mut() {
+            draw_ext_text_glyphs_to_framebuffer(
+                kernel, memory, fb, hdc, draw_x, draw_y, text_ptr, count, dx_ptr, clip,
+            );
+        } else if kernel.resources.is_memory_dc(hdc) {
+            draw_ext_text_glyphs_to_bitmap(
+                kernel, memory, hdc, draw_x, draw_y, text_ptr, count, dx_ptr, clip,
+            );
+        }
+
+        // TA_UPDATECP: advance the DC's current position to the end of text.
+        if let Some(state) = kernel.resources.dc_state(hdc) {
+            if state.text_align & TA_UPDATECP != 0 {
+                let total_w = measure_text_width(kernel, memory, hdc, text_ptr, count, dx_ptr);
+                kernel.resources.move_to(
+                    hdc,
+                    crate::ce::gwe::Point {
+                        x: draw_x + total_w,
+                        y: draw_y,
+                    },
+                );
+            }
         }
     }
     kernel.threads.set_last_error(thread_id, 0);
     true
+}
+
+// Compute the total pixel width of a text run using DC font metrics + optional dx array.
+fn measure_text_width<M: CoredllGuestMemory>(
+    kernel: &CeKernel,
+    memory: &M,
+    hdc: u32,
+    _text_ptr: u32,
+    count: u32,
+    dx_ptr: u32,
+) -> i32 {
+    let font = kernel
+        .resources
+        .dc_state(hdc)
+        .and_then(|state| kernel.resources.font(state.selected_font).cloned());
+    let metrics = TextMetricsModel::from_font(font.as_ref());
+    let cell_w = metrics.ave_width.max(1);
+    if dx_ptr != 0 {
+        (0..count as usize)
+            .map(|i| {
+                memory
+                    .read_u32(dx_ptr.wrapping_add((i as u32) * 4))
+                    .unwrap_or(cell_w as u32) as i32
+            })
+            .sum()
+    } else {
+        (count as i32).saturating_mul(cell_w)
+    }
+}
+
+// Adjust the (x, y) drawing origin for the DC's current SetTextAlign flags.
+// Handles TA_UPDATECP (use current pos), TA_CENTER/TA_RIGHT (shift x),
+// TA_BASELINE/TA_BOTTOM (shift y).
+fn text_align_origin<M: CoredllGuestMemory>(
+    kernel: &CeKernel,
+    memory: &M,
+    hdc: u32,
+    x: i32,
+    y: i32,
+    text_ptr: u32,
+    count: u32,
+    dx_ptr: u32,
+) -> (i32, i32) {
+    let Some(state) = kernel.resources.dc_state(hdc) else {
+        return (x, y);
+    };
+    let align = state.text_align;
+
+    // Horizontal: TA_UPDATECP uses current pos; then TA_CENTER/TA_RIGHT shifts
+    let (mut ox, mut oy) = if align & TA_UPDATECP != 0 {
+        (state.current_pos.x, state.current_pos.y)
+    } else {
+        (x, y)
+    };
+
+    let horiz = align & TA_HORIZMASK;
+    if horiz == TA_RIGHT || horiz == TA_CENTER {
+        let total_w = measure_text_width(kernel, memory, hdc, text_ptr, count, dx_ptr);
+        if horiz == TA_RIGHT {
+            ox -= total_w;
+        } else {
+            ox -= total_w / 2;
+        }
+    }
+
+    let font = kernel
+        .resources
+        .font(state.selected_font)
+        .cloned();
+    let metrics = TextMetricsModel::from_font(font.as_ref());
+    let vert = align & TA_VERTMASK;
+    if vert == TA_BOTTOM {
+        oy -= metrics.height;
+    } else if vert == TA_BASELINE {
+        oy -= metrics.ascent;
+    }
+
+    (ox, oy)
+}
+
+// Render ExtTextOutW glyphs to the framebuffer using the embedded 8×8 bitmap font.
+// Handles window DCs only; memory DCs are skipped (no backing bitmap write yet).
+fn draw_ext_text_glyphs_to_framebuffer<M: CoredllGuestMemory>(
+    kernel: &CeKernel,
+    memory: &M,
+    fb: &mut dyn Framebuffer,
+    hdc: u32,
+    x: i32,
+    y: i32,
+    text_ptr: u32,
+    count: u32,
+    dx_ptr: u32,
+    clip: Option<Rect>,
+) {
+    // Requires a window DC to map client → screen coords
+    let Some(hwnd) = hdc_to_hwnd(hdc) else { return; };
+    let Some(origin) = kernel.gwe.client_to_screen(hwnd, Point { x: 0, y: 0 }) else { return; };
+
+    let state = kernel.resources.dc_state(hdc).unwrap_or_default();
+    let text_color = state.text_color;
+    let font = kernel.resources.font(state.selected_font).cloned();
+    let metrics = TextMetricsModel::from_font(font.as_ref());
+    let cell_h = metrics.height.max(1) as usize;
+    let cell_w = metrics.ave_width.max(1);
+
+    let info = fb.info();
+    let stride = info.stride;
+    let bpp = info.format.bytes_per_pixel();
+    let pixel = pixel_bytes_for_colorref(info.format, text_color);
+    let fb_w = info.width as i32;
+    let fb_h = info.height as i32;
+
+    // Clip rect in screen coords
+    let screen_clip = clip.map(|r| r.offset(origin.x, origin.y));
+
+    let screen_x0 = x + origin.x;
+    let screen_y0 = y + origin.y;
+    let mut cursor_x = screen_x0;
+    let mut any_pixel = false;
+
+    for char_idx in 0..count as usize {
+        let unit = memory
+            .read_u16(text_ptr.wrapping_add((char_idx as u32) * 2))
+            .unwrap_or(0);
+
+        let advance = if dx_ptr != 0 {
+            memory
+                .read_u32(dx_ptr.wrapping_add((char_idx as u32) * 4))
+                .unwrap_or(cell_w as u32) as i32
+        } else {
+            cell_w
+        };
+
+        // Look up 8×8 glyph; non-ASCII → blank (no glyph drawn)
+        if unit >= 32 && unit < 128 {
+            let glyph = FONT_8X8[(unit - 32) as usize];
+            for glyph_row in 0..8usize {
+                let row_byte = glyph[glyph_row];
+                if row_byte == 0 {
+                    continue;
+                }
+                // Map glyph row to screen rows via cell_h/8 scale
+                let sy0 = screen_y0 + (glyph_row * cell_h / 8) as i32;
+                let sy1 = screen_y0 + ((glyph_row + 1) * cell_h / 8) as i32;
+                for sy in sy0..sy1 {
+                    if sy < 0 || sy >= fb_h {
+                        continue;
+                    }
+                    if let Some(sc) = screen_clip {
+                        if sy < sc.top || sy >= sc.bottom {
+                            continue;
+                        }
+                    }
+                    for glyph_col in 0..8usize {
+                        if row_byte & (0x80u8 >> glyph_col) == 0 {
+                            continue;
+                        }
+                        // Map glyph col to screen cols via cell_w/8 scale
+                        let sx0 = cursor_x + (glyph_col as i32 * cell_w) / 8;
+                        let sx1 = cursor_x + ((glyph_col as i32 + 1) * cell_w) / 8;
+                        let sx1 = sx1.max(sx0 + 1); // always draw at least 1px
+                        for sx in sx0..sx1 {
+                            if sx < 0 || sx >= fb_w {
+                                continue;
+                            }
+                            if let Some(sc) = screen_clip {
+                                if sx < sc.left || sx >= sc.right {
+                                    continue;
+                                }
+                            }
+                            let off = sy as usize * stride + sx as usize * bpp;
+                            fb.pixels_mut()[off..off + bpp].copy_from_slice(&pixel[..bpp]);
+                            any_pixel = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        cursor_x += advance;
+    }
+
+    if any_pixel {
+        let sx = screen_x0.max(0).min(fb_w) as u32;
+        let sy = screen_y0.max(0).min(fb_h) as u32;
+        let ex = cursor_x.max(0).min(fb_w) as u32;
+        let ey = (screen_y0 + cell_h as i32).max(0).min(fb_h) as u32;
+        if ex > sx && ey > sy {
+            fb.mark_dirty(FramebufferRect::new(sx, sy, ex - sx, ey - sy));
+        }
+    }
 }
 
 fn create_rect_rgn_raw(kernel: &mut CeKernel, left: i32, top: i32, right: i32, bottom: i32) -> u32 {
@@ -34770,6 +35232,143 @@ const R2_MERGEPENNOT: i32 = 14;
 const R2_MERGEPEN: i32 = 15;
 const R2_WHITE: i32 = 16;
 const ETO_OPAQUE: u32 = 0x0002;
+const ETO_CLIPPED: u32 = 0x0004;
+
+// SetTextAlign / GetTextAlign flags (CE wingdi.h)
+const TA_UPDATECP: u32 = 0x0001;
+const TA_RIGHT: u32 = 0x0002;
+const TA_CENTER: u32 = 0x0006;
+const TA_BOTTOM: u32 = 0x0008;
+const TA_BASELINE: u32 = 0x0018;
+const TA_HORIZMASK: u32 = 0x0006;
+const TA_VERTMASK: u32 = 0x0018;
+
+// Classic IBM PC VGA 8×8 bitmap font, ASCII 32–127.
+// Each entry is 8 bytes, one per row, MSB = leftmost pixel.
+#[rustfmt::skip]
+const FONT_8X8: [[u8; 8]; 96] = [
+    // 32 space          33 !               34 "               35 #
+    [0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00],
+    [0x18,0x18,0x18,0x18,0x18,0x00,0x18,0x00],
+    [0x66,0x66,0x24,0x00,0x00,0x00,0x00,0x00],
+    [0x6C,0x6C,0xFE,0x6C,0xFE,0x6C,0x6C,0x00],
+    // 36 $               37 %               38 &               39 '
+    [0x18,0x3E,0x03,0x1E,0x30,0x1F,0x18,0x00],
+    [0x00,0xC6,0xC6,0x18,0x30,0x66,0xC6,0x00],
+    [0x38,0x6C,0x38,0x56,0xDC,0xC6,0x7C,0x00],
+    [0x06,0x06,0x03,0x00,0x00,0x00,0x00,0x00],
+    // 40 (               41 )               42 *               43 +
+    [0x18,0x0C,0x06,0x06,0x06,0x0C,0x18,0x00],
+    [0x06,0x0C,0x18,0x18,0x18,0x0C,0x06,0x00],
+    [0x00,0x66,0x3C,0xFF,0x3C,0x66,0x00,0x00],
+    [0x00,0x18,0x18,0x7E,0x18,0x18,0x00,0x00],
+    // 44 ,               45 -               46 .               47 /
+    [0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x0C],
+    [0x00,0x00,0x00,0x7E,0x00,0x00,0x00,0x00],
+    [0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x00],
+    [0x00,0xC0,0x60,0x30,0x18,0x0C,0x06,0x00],
+    // 48 0               49 1               50 2               51 3
+    [0x38,0x6C,0xC6,0xD6,0xC6,0x6C,0x38,0x00],
+    [0x18,0x1C,0x18,0x18,0x18,0x18,0x7E,0x00],
+    [0x3C,0x66,0x60,0x30,0x18,0x0C,0x7E,0x00],
+    [0x3C,0x66,0x60,0x38,0x60,0x66,0x3C,0x00],
+    // 52 4               53 5               54 6               55 7
+    [0x60,0x70,0x78,0x6C,0xFE,0x60,0xF0,0x00],
+    [0x7E,0x06,0x3E,0x60,0x60,0x66,0x3C,0x00],
+    [0x3C,0x06,0x06,0x3E,0x66,0x66,0x3C,0x00],
+    [0x7E,0xC6,0xC6,0x60,0x30,0x18,0x18,0x00],
+    // 56 8               57 9               58 :               59 ;
+    [0x3C,0x66,0x66,0x3C,0x66,0x66,0x3C,0x00],
+    [0x3C,0x66,0x66,0x7C,0x60,0x30,0x1E,0x00],
+    [0x00,0x00,0x18,0x18,0x00,0x18,0x18,0x00],
+    [0x00,0x00,0x18,0x18,0x00,0x18,0x18,0x0C],
+    // 60 <               61 =               62 >               63 ?
+    [0x60,0x30,0x18,0x0C,0x18,0x30,0x60,0x00],
+    [0x00,0x00,0x7E,0x00,0x7E,0x00,0x00,0x00],
+    [0x0C,0x18,0x30,0x60,0x30,0x18,0x0C,0x00],
+    [0x3C,0x66,0x60,0x30,0x18,0x00,0x18,0x00],
+    // 64 @               65 A               66 B               67 C
+    [0x7C,0xC6,0xDE,0xDE,0xDC,0xC0,0x7C,0x00],
+    [0x18,0x3C,0x66,0x66,0x7E,0x66,0x66,0x00],
+    [0x3E,0x66,0x66,0x3E,0x66,0x66,0x3E,0x00],
+    [0x3C,0x66,0x06,0x06,0x06,0x66,0x3C,0x00],
+    // 68 D               69 E               70 F               71 G
+    [0x1E,0x36,0x66,0x66,0x66,0x36,0x1E,0x00],
+    [0x7E,0x06,0x06,0x3E,0x06,0x06,0x7E,0x00],
+    [0x7E,0x06,0x06,0x3E,0x06,0x06,0x06,0x00],
+    [0x3C,0x66,0x06,0x76,0x66,0x66,0x3C,0x00],
+    // 72 H               73 I               74 J               75 K
+    [0x66,0x66,0x66,0x7E,0x66,0x66,0x66,0x00],
+    [0x3C,0x18,0x18,0x18,0x18,0x18,0x3C,0x00],
+    [0x78,0x30,0x30,0x30,0x36,0x36,0x1C,0x00],
+    [0xC6,0x66,0x36,0x1E,0x36,0x66,0xC6,0x00],
+    // 76 L               77 M               78 N               79 O
+    [0x06,0x06,0x06,0x06,0x06,0x06,0x7E,0x00],
+    [0xC6,0xEE,0xFE,0xD6,0xC6,0xC6,0xC6,0x00],
+    [0xC6,0xCE,0xDE,0xF6,0xE6,0xC6,0xC6,0x00],
+    [0x3C,0x66,0xC6,0xC6,0xC6,0x66,0x3C,0x00],
+    // 80 P               81 Q               82 R               83 S
+    [0x3E,0x66,0x66,0x3E,0x06,0x06,0x06,0x00],
+    [0x3C,0x66,0xC6,0xC6,0xD6,0x7C,0x60,0x00],
+    [0x3E,0x66,0x66,0x3E,0x66,0x66,0xC6,0x00],
+    [0x3C,0x66,0x06,0x3C,0x60,0x66,0x3C,0x00],
+    // 84 T               85 U               86 V               87 W
+    [0x7E,0x18,0x18,0x18,0x18,0x18,0x18,0x00],
+    [0x66,0x66,0x66,0x66,0x66,0x66,0x7C,0x00],
+    [0x66,0x66,0x66,0x66,0x3C,0x3C,0x18,0x00],
+    [0xC6,0xC6,0xC6,0xD6,0xFE,0xEE,0xC6,0x00],
+    // 88 X               89 Y               90 Z               91 [
+    [0xC6,0xC6,0x6C,0x38,0x6C,0xC6,0xC6,0x00],
+    [0x66,0x66,0x66,0x3C,0x18,0x18,0x18,0x00],
+    [0x7E,0xC6,0x62,0x30,0x0C,0x86,0xFE,0x00],
+    [0x3C,0x0C,0x0C,0x0C,0x0C,0x0C,0x3C,0x00],
+    // 92 \               93 ]               94 ^               95 _
+    [0x06,0x0C,0x18,0x30,0x60,0xC0,0x80,0x00],
+    [0x3C,0x30,0x30,0x30,0x30,0x30,0x3C,0x00],
+    [0x10,0x38,0x6C,0xC6,0x00,0x00,0x00,0x00],
+    [0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xFF],
+    // 96 `               97 a               98 b               99 c
+    [0x18,0x18,0x0C,0x00,0x00,0x00,0x00,0x00],
+    [0x00,0x00,0x3C,0x60,0x7C,0x66,0x7C,0x00],
+    [0x06,0x06,0x3E,0x66,0x66,0x66,0x3E,0x00],
+    [0x00,0x00,0x3C,0x66,0x06,0x66,0x3C,0x00],
+    // 100 d              101 e              102 f              103 g
+    [0x60,0x60,0x7C,0x66,0x66,0x66,0x7C,0x00],
+    [0x00,0x00,0x3C,0x66,0x7E,0x06,0x3C,0x00],
+    [0x38,0x6C,0x0C,0x1E,0x0C,0x0C,0x0C,0x00],
+    [0x00,0x00,0x7C,0x66,0x66,0x7C,0x60,0x3C],
+    // 104 h              105 i              106 j              107 k
+    [0x06,0x06,0x36,0x6E,0x66,0x66,0x66,0x00],
+    [0x18,0x00,0x1C,0x18,0x18,0x18,0x3C,0x00],
+    [0x18,0x00,0x18,0x18,0x18,0x18,0x1E,0x0E],
+    [0x06,0x06,0x66,0x36,0x1E,0x36,0x66,0x00],
+    // 108 l              109 m              110 n              111 o
+    [0x1C,0x18,0x18,0x18,0x18,0x18,0x3C,0x00],
+    [0x00,0x00,0x6C,0xFE,0xD6,0xC6,0xC6,0x00],
+    [0x00,0x00,0x3E,0x66,0x66,0x66,0x66,0x00],
+    [0x00,0x00,0x3C,0x66,0x66,0x66,0x3C,0x00],
+    // 112 p              113 q              114 r              115 s
+    [0x00,0x00,0x3E,0x66,0x66,0x3E,0x06,0x06],
+    [0x00,0x00,0x7C,0x66,0x66,0x7C,0x60,0x60],
+    [0x00,0x00,0x3E,0x66,0x06,0x06,0x06,0x00],
+    [0x00,0x00,0x7C,0x06,0x3C,0x60,0x3E,0x00],
+    // 116 t              117 u              118 v              119 w
+    [0x18,0x18,0x7E,0x18,0x18,0x18,0x70,0x00],
+    [0x00,0x00,0x66,0x66,0x66,0x66,0x7C,0x00],
+    [0x00,0x00,0x66,0x66,0x66,0x3C,0x18,0x00],
+    [0x00,0x00,0xC6,0xC6,0xD6,0xFE,0x6C,0x00],
+    // 120 x              121 y              122 z              123 {
+    [0x00,0x00,0xC6,0x6C,0x38,0x6C,0xC6,0x00],
+    [0x00,0x00,0x66,0x66,0x66,0x7C,0x60,0x38],
+    [0x00,0x00,0x7E,0x30,0x18,0x0C,0x7E,0x00],
+    [0x70,0x18,0x18,0x0E,0x18,0x18,0x70,0x00],
+    // 124 |              125 }              126 ~              127 del
+    [0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x00],
+    [0x0E,0x18,0x18,0x70,0x18,0x18,0x0E,0x00],
+    [0x76,0xDC,0x00,0x00,0x00,0x00,0x00,0x00],
+    [0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00],
+];
+
 const PALETTE_ENTRY_SIZE: usize = 4;
 const PALETTE_ENTRY_SIZE_U32: u32 = 4;
 const MAX_LOG_PALETTE_ENTRIES: u32 = 4096;
