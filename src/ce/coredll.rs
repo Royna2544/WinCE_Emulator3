@@ -27223,12 +27223,31 @@ fn get_device_caps_raw(kernel: &CeKernel, hdc: u32, index: u32) -> u32 {
     if hdc == 0 {
         return 0;
     }
+    let cx = kernel.gwe.system_metric(crate::ce::gwe::SM_CXSCREEN) as u32;
+    let cy = kernel.gwe.system_metric(crate::ce::gwe::SM_CYSCREEN) as u32;
     match index {
-        HORZRES => kernel.gwe.system_metric(crate::ce::gwe::SM_CXSCREEN) as u32,
-        VERTRES => kernel.gwe.system_metric(crate::ce::gwe::SM_CYSCREEN) as u32,
+        TECHNOLOGY => 1,  // DT_RASDISPLAY
+        // Physical display size in mm; approximate for a typical car-nav screen at 96 DPI.
+        HORZSIZE => cx * 254 / 960,
+        VERTSIZE => cy * 254 / 960,
+        HORZRES => cx,
+        VERTRES => cy,
         BITSPIXEL => 16,
         PLANES => 1,
+        NUMCOLORS => u32::MAX,  // -1 cast to u32: true-color / hi-color device
+        // CE GWES raster display capability flags.
+        // RC_BITBLT | RC_BITMAP64 | RC_GDI20_OUTPUT | RC_DI_BITMAP | RC_DIBTODEV | RC_STRETCHBLT | RC_STRETCHDIB
+        RASTERCAPS => 0x0000_2A99,
+        // CE displays support the standard GDI polygon/curve/line/text primitives.
+        CURVECAPS => 0x01FF,  // CC_CIRCLES | CC_PIE | CC_CHORD | CC_ELLIPSES | CC_WIDE | CC_STYLED | CC_WIDESTYLED | CC_INTERIORS | CC_ROUNDRECT
+        LINECAPS => 0x00FE,   // LC_POLYLINE | LC_MARKER | LC_POLYMARKER | LC_WIDE | LC_STYLED | LC_WIDESTYLED | LC_INTERIORS
+        POLYGONALCAPS => 0x00FF, // PC_POLYGON | PC_RECTANGLE | PC_WINDPOLYGON | PC_SCANLINE | PC_WIDE | PC_STYLED | PC_WIDESTYLED | PC_INTERIORS
+        // TC_OP_CHARACTER | TC_OP_STROKE | TC_CR_ANY | TC_SF_X_YINDEP | TC_SA_DOUBLE | TC_SA_INTEGER | TC_SA_CONTIN | TC_UA_ABLE | TC_SO_ABLE | TC_RA_ABLE | TC_VA_ABLE
+        TEXTCAPS => 0x0000_7FF7,
         LOGPIXELSX | LOGPIXELSY => 96,
+        COLORRES => 16,  // 16-bit RGB565 color resolution
+        // SB_CONST_ALPHA | SB_PIXEL_ALPHA | SB_PREMULT_ALPHA | SB_GRAD_RECT | SB_GRAD_TRI
+        SHADEBLENDCAPS => 0x0000_0037,
         _ => 0,
     }
 }
@@ -35753,12 +35772,23 @@ const EVENT_PULSE: u32 = 1;
 const EVENT_RESET: u32 = 2;
 const EVENT_SET: u32 = 3;
 const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+const TECHNOLOGY: u32 = 2;
+const HORZSIZE: u32 = 4;
+const VERTSIZE: u32 = 6;
 const HORZRES: u32 = 8;
 const VERTRES: u32 = 10;
 const BITSPIXEL: u32 = 12;
 const PLANES: u32 = 14;
+const NUMCOLORS: u32 = 24;
+const CURVECAPS: u32 = 28;
+const LINECAPS: u32 = 30;
+const POLYGONALCAPS: u32 = 32;
+const TEXTCAPS: u32 = 34;
+const RASTERCAPS: u32 = 38;
 const LOGPIXELSX: u32 = 88;
 const LOGPIXELSY: u32 = 90;
+const COLORRES: u32 = 108;
+const SHADEBLENDCAPS: u32 = 120;
 const IMAGE_BITMAP: u32 = 0;
 const IMAGE_ICON: u32 = 1;
 const IMAGE_CURSOR: u32 = 2;

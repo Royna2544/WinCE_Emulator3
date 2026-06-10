@@ -23974,3 +23974,79 @@ fn coredll_raw_def_window_proc_help_forwards_to_parent() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn coredll_raw_get_device_caps_returns_ce_display_capabilities() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 5;
+
+    let hdc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_GET_DC, [0u32],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        other => panic!("GetDC failed: {other:?}"),
+    };
+    assert_ne!(hdc, 0);
+
+    let caps: &[(u32, &str, u32)] = &[
+        (2,   "TECHNOLOGY (DT_RASDISPLAY)", 1),
+        (8,   "HORZRES",     800),
+        (10,  "VERTRES",     480),
+        (12,  "BITSPIXEL",   16),
+        (14,  "PLANES",      1),
+        (24,  "NUMCOLORS",   u32::MAX),  // -1 cast: true-color/hi-color
+        (88,  "LOGPIXELSX",  96),
+        (90,  "LOGPIXELSY",  96),
+        (108, "COLORRES",    16),
+    ];
+    for &(idx, name, expected) in caps {
+        let got = match table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_GET_DEVICE_CAPS, [hdc, idx],
+        ) {
+            CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } => v,
+            other => panic!("GetDeviceCaps({name}) failed: {other:?}"),
+        };
+        assert_eq!(got, expected, "GetDeviceCaps({name}) mismatch");
+    }
+
+    // Capability masks should be non-zero for a functional display.
+    for &(idx, name) in &[
+        (28u32, "CURVECAPS"),
+        (30, "LINECAPS"),
+        (32, "POLYGONALCAPS"),
+        (34, "TEXTCAPS"),
+        (38, "RASTERCAPS"),
+        (120, "SHADEBLENDCAPS"),
+    ] {
+        let got = match table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_GET_DEVICE_CAPS, [hdc, idx],
+        ) {
+            CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } => v,
+            other => panic!("GetDeviceCaps({name}) failed: {other:?}"),
+        };
+        assert_ne!(got, 0, "GetDeviceCaps({name}) should be non-zero for a CE display");
+    }
+
+    // Unknown/unsupported index returns 0.
+    let unknown = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_GET_DEVICE_CAPS, [hdc, 999u32],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } => v,
+        other => panic!("GetDeviceCaps(999) failed: {other:?}"),
+    };
+    assert_eq!(unknown, 0, "unknown cap index returns 0");
+
+    // Null HDC always returns 0.
+    let null_result = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_GET_DEVICE_CAPS, [0u32, 8u32],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::U32(v), .. } => v,
+        other => panic!("GetDeviceCaps(null hdc) failed: {other:?}"),
+    };
+    assert_eq!(null_result, 0, "null HDC returns 0");
+
+    Ok(())
+}
