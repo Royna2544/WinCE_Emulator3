@@ -13235,6 +13235,8 @@ fn unicode_ctype1(u: u16) -> u16 {
         0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF => C1_ALPHA | C1_DEFINED,
         0xAC00..=0xD7A3 => C1_ALPHA | C1_DEFINED,
         0xD7B0..=0xD7FF => C1_ALPHA | C1_DEFINED,
+        // Arabic-Indic and Extended Arabic-Indic digits → C1_DIGIT
+        0x0660..=0x0669 | 0x06F0..=0x06F9 => C1_DIGIT | C1_DEFINED,
         0xFF10..=0xFF19 => C1_DIGIT | C1_DEFINED,
         0xFF21..=0xFF26 | 0xFF41..=0xFF46 => C1_ALPHA | C1_XDIGIT | C1_DEFINED,
         0xFF27..=0xFF3A | 0xFF47..=0xFF5A => C1_ALPHA | C1_DEFINED,
