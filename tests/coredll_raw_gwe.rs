@@ -59,7 +59,8 @@ use wince_emulation_v3::{
             ORD_IMM_GET_CONVERSION_STATUS, ORD_IMM_GET_IMEFILE_NAME_W, ORD_IMM_GET_KEYBOARD_LAYOUT,
             ORD_IMM_GET_OPEN_STATUS, ORD_IMM_IS_IME, ORD_IMM_NOTIFY_IME, ORD_IMM_RELEASE_CONTEXT,
             ORD_IMM_SET_CONVERSION_STATUS, ORD_IMM_SET_OPEN_STATUS, ORD_IN_SEND_MESSAGE,
-            ORD_INFLATE_RECT, ORD_INSERT_MENU_W, ORD_INTERSECT_RECT, ORD_INVALIDATE_RECT,
+            ORD_INFLATE_RECT, ORD_INSERT_MENU_W, ORD_INTERSECT_CLIP_RECT, ORD_INTERSECT_RECT,
+            ORD_EXCLUDE_CLIP_RECT, ORD_INVALIDATE_RECT,
             ORD_IS_CHILD, ORD_IS_DIALOG_MESSAGE_W, ORD_IS_RECT_EMPTY, ORD_IS_WINDOW,
             ORD_IS_WINDOW_ENABLED, ORD_IS_WINDOW_VISIBLE, ORD_KEYBD_EVENT, ORD_KEYBD_VKEY_TO_UNICODE,
             ORD_KILL_TIMER,
@@ -24112,6 +24113,115 @@ fn coredll_raw_adjust_window_rect_ex_expands_by_nonclient_area() -> Result<()> {
     // WS_CAPTION with menu: top also subtracts SM_CYMENU (24).
     assert!(dispatch_rect(&mut memory, &mut kernel, WS_CAPTION, HAS_MENU, 10, 100, 210, 300));
     assert_eq!(memory.read_u32(rect_ptr + 4)? as i32, 100 - 3 - 24 - 24, "WS_CAPTION+menu: top -=3+24+24");
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_intersect_clip_rect_and_exclude_clip_rect_update_dc_clip() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 180_u32;
+    let rect_ptr = 0x1_0000_u32;
+    memory.map_words(rect_ptr, 4);
+
+    let dc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        _ => panic!("CREATE_COMPATIBLE_DC failed"),
+    };
+    assert_ne!(dc, 0);
+
+    // IntersectClipRect with no prior clip: sets the clip region to the rect.
+    // Returns SIMPLEREGION (2) for a non-empty single rect.
+    let result = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_INTERSECT_CLIP_RECT,
+        [dc, 10_u32, 20_u32, 100_u32, 80_u32],
+    );
+    assert!(
+        matches!(result, CoredllDispatch::Returned { value: CoredllValue::U32(2), .. }),
+        "IntersectClipRect must return SIMPLEREGION=2, got {result:?}"
+    );
+
+    // GetClipBox after IntersectClipRect: must return the intersected rect.
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_CLIP_BOX,
+        [dc, rect_ptr],
+    );
+    assert_eq!(memory.read_u32(rect_ptr)? as i32, 10, "clip left");
+    assert_eq!(memory.read_u32(rect_ptr + 4)? as i32, 20, "clip top");
+    assert_eq!(memory.read_u32(rect_ptr + 8)? as i32, 100, "clip right");
+    assert_eq!(memory.read_u32(rect_ptr + 12)? as i32, 80, "clip bottom");
+
+    // Second IntersectClipRect narrows the existing clip.
+    let result2 = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_INTERSECT_CLIP_RECT,
+        [dc, 30_u32, 30_u32, 70_u32, 60_u32],
+    );
+    assert!(
+        matches!(result2, CoredllDispatch::Returned { value: CoredllValue::U32(2), .. }),
+        "second IntersectClipRect must return SIMPLEREGION=2, got {result2:?}"
+    );
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_CLIP_BOX,
+        [dc, rect_ptr],
+    );
+    assert_eq!(memory.read_u32(rect_ptr)? as i32, 30, "narrowed clip left");
+    assert_eq!(memory.read_u32(rect_ptr + 4)? as i32, 30, "narrowed clip top");
+    assert_eq!(memory.read_u32(rect_ptr + 8)? as i32, 70, "narrowed clip right");
+    assert_eq!(memory.read_u32(rect_ptr + 12)? as i32, 60, "narrowed clip bottom");
+
+    // Clear clip via SelectClipRgn(dc, 0), then set a wide clip, then ExcludeClipRect.
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SELECT_CLIP_RGN,
+        [dc, 0],
+    );
+    // Set clip to [0,0,200,100] via IntersectClipRect (no prior clip → new rect as clip).
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_INTERSECT_CLIP_RECT,
+        [dc, 0_u32, 0_u32, 200_u32, 100_u32],
+    );
+    // ExcludeClipRect: removes [50,0,150,100] from [0,0,200,100] → two rects: [0,0,50,100] and [150,0,200,100].
+    let ex_result = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_EXCLUDE_CLIP_RECT,
+        [dc, 50_u32, 0_u32, 150_u32, 100_u32],
+    );
+    // Two rects remaining → COMPLEXREGION (3).
+    assert!(
+        matches!(ex_result, CoredllDispatch::Returned { value: CoredllValue::U32(3), .. }),
+        "ExcludeClipRect leaving two rects must return COMPLEXREGION=3, got {ex_result:?}"
+    );
 
     Ok(())
 }

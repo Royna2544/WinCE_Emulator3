@@ -21,6 +21,9 @@ use wince_emulation_v3::{
             ORD_POW, ORD_PRINTF, ORD_REMOTE_HEAP_ALLOC, ORD_REMOTE_HEAP_FREE,
             ORD_REMOTE_HEAP_RE_ALLOC, ORD_REMOTE_HEAP_SIZE, ORD_REMOTE_LOCAL_RE_ALLOC,
             ORD_SQRT, ORD_TLS_CALL, ORD_ULTODP, ORD_ULTOFP,
+            ORD_DPA_CREATE, ORD_DPA_CLONE, ORD_DPA_INSERT_PTR, ORD_DPA_GET_PTR, ORD_DPA_DESTROY,
+            ORD_DSA_CREATE, ORD_DSA_CLONE, ORD_DSA_INSERT_ITEM, ORD_DSA_GET_ITEM_PTR,
+            ORD_DSA_SET_RANGE, ORD_DSA_DESTROY,
             ORD_AFS_CREATE_DIRECTORY_W, ORD_AFS_CREATE_FILE_W, ORD_AFS_DELETE_FILE_W,
             ORD_AFS_FIND_FIRST_CHANGE_NOTIFICATION_W, ORD_AFS_FIND_FIRST_FILE_W,
             ORD_AFS_FS_IO_CONTROL_W, ORD_AFS_GET_DISK_FREE_SPACE, ORD_AFS_GET_FILE_ATTRIBUTES_W,
@@ -7186,5 +7189,183 @@ fn coredll_raw_registry_convenience_apis_get_set_delete_and_exchange() -> Result
     );
     assert_eq!(memory.read_u32(out32_ptr)?, 99, "value must remain 99 when test value did not match");
 
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_dpa_clone_copies_all_ptrs_to_new_dpa() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+
+    // Create source DPA with cp_grow=4.
+    let hdpa = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_DPA_CREATE, [4],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        other => panic!("DPA_Create failed: {other:?}"),
+    };
+    assert_ne!(hdpa, 0);
+
+    // Insert three sentinel pointer values.
+    for ptr in [0x1000_u32, 0x2000, 0x3000] {
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_DPA_INSERT_PTR, [hdpa, 0xffff_ffff, ptr],
+        );
+    }
+
+    // DPA_Clone(hdpa, 0) — create a new DPA cloning all items.
+    let hdpa2 = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_DPA_CLONE, [hdpa, 0],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        other => panic!("DPA_Clone returned unexpected: {other:?}"),
+    };
+    assert_ne!(hdpa2, 0);
+    assert_ne!(hdpa2, hdpa, "clone must be a distinct allocation");
+
+    // Verify all three pointers are present in the clone.
+    for (i, expected) in [0x1000_u32, 0x2000, 0x3000].iter().enumerate() {
+        let got = match table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_DPA_GET_PTR, [hdpa2, i as u32],
+        ) {
+            CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+            other => panic!("DPA_GetPtr({i}) unexpected: {other:?}"),
+        };
+        assert_eq!(got, *expected, "clone item {i} must match source");
+    }
+
+    // Clean up.
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_DPA_DESTROY, [hdpa],
+    );
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_DPA_DESTROY, [hdpa2],
+    );
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_dsa_clone_copies_all_items_to_new_dsa() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+
+    // Create DSA: cb_item=4 bytes, cp_grow=4.
+    let hdsa = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_DSA_CREATE, [4, 4],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        other => panic!("DSA_Create failed: {other:?}"),
+    };
+    assert_ne!(hdsa, 0);
+
+    // Write item source buffers and insert them.
+    // Use write_bytes so read_u8 can recover the bytes during DSA_InsertItem.
+    let item_buf = 0x3_0000_u32;
+    for val in [0xAABB_u32, 0xCCDD, 0xEEFF] {
+        memory.write_bytes(item_buf, &val.to_le_bytes());
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_DSA_INSERT_ITEM, [hdsa, 0xffff_ffff, item_buf],
+        );
+    }
+
+    // DSA_Clone(hdsa, 0) — new DSA.
+    let hdsa2 = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_DSA_CLONE, [hdsa, 0],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        other => panic!("DSA_Clone returned unexpected: {other:?}"),
+    };
+    assert_ne!(hdsa2, 0);
+    assert_ne!(hdsa2, hdsa, "clone must be a distinct allocation");
+
+    // Verify items in the clone via read_bytes (item data lives in bytes map, not words).
+    for (i, expected) in [0xAABB_u32, 0xCCDD, 0xEEFF].iter().enumerate() {
+        let ptr = match table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_DSA_GET_ITEM_PTR, [hdsa2, i as u32],
+        ) {
+            CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+            other => panic!("DSA_GetItemPtr({i}) unexpected: {other:?}"),
+        };
+        assert_ne!(ptr, 0);
+        let raw = memory.read_bytes(ptr, 4);
+        let got = u32::from_le_bytes(raw.try_into().unwrap());
+        assert_eq!(got, *expected, "clone item {i} must match source ({expected:#x} != {got:#x})");
+    }
+
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_DSA_DESTROY, [hdsa],
+    );
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_DSA_DESTROY, [hdsa2],
+    );
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_dsa_set_range_overwrites_item_range() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 11;
+
+    // Create DSA: 4-byte items.
+    let hdsa = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_DSA_CREATE, [4, 4],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        other => panic!("DSA_Create failed: {other:?}"),
+    };
+
+    // Insert 4 items using write_bytes so read_u8 recovers them during DSA_InsertItem.
+    let item_buf = 0x3_0000_u32;
+    for val in [0x11_u32, 0x22, 0x33, 0x44] {
+        memory.write_bytes(item_buf, &val.to_le_bytes());
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_DSA_INSERT_ITEM, [hdsa, 0xffff_ffff, item_buf],
+        );
+    }
+
+    // DSA_SetRange(hdsa, 1, 2, item_buf) where item_buf now holds 0xFFFF.
+    // Overwrites items[1] and items[2] each to 0xFFFF (2 copies of the same 4-byte value).
+    memory.write_bytes(item_buf, &0xFFFF_u32.to_le_bytes());
+    let ok = matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_DSA_SET_RANGE, [hdsa, 1, 2, item_buf],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
+    );
+    assert!(ok, "DSA_SetRange must return TRUE");
+
+    // items[0]=0x11, items[1]=0xFFFF, items[2]=0xFFFF, items[3]=0x44.
+    for (i, expected) in [0x11_u32, 0xFFFF, 0xFFFF, 0x44].iter().enumerate() {
+        let ptr = match table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_DSA_GET_ITEM_PTR, [hdsa, i as u32],
+        ) {
+            CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+            other => panic!("DSA_GetItemPtr({i}) unexpected: {other:?}"),
+        };
+        let raw = memory.read_bytes(ptr, 4);
+        let got = u32::from_le_bytes(raw.try_into().unwrap());
+        assert_eq!(got, *expected, "item[{i}] expected {expected:#x} got {got:#x}");
+    }
+
+    // Out-of-range call must return FALSE.
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_DSA_SET_RANGE, [hdsa, 3, 2, item_buf],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Bool(false), .. }
+    ), "DSA_SetRange past end must return FALSE");
+
+    table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_DSA_DESTROY, [hdsa],
+    );
     Ok(())
 }

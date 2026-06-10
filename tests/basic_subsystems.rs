@@ -3665,6 +3665,7 @@ fn shell_system_message_box_recent_docs_notify_icons_and_notifications() {
         id: 7, priority: SHNP_ICONIC, duration_cs: 100,
         icon: 0, flags: 0, clsid,
         hwnd_sink: 0, title: "title".to_owned(), html: String::new(), lparam: 0,
+        callback_ptr: 0,
     };
     assert_eq!(shell.add_notification(data.clone(), 0), NotificationResult::Success);
     assert!(shell.notification(clsid, 7).is_some());
@@ -5197,6 +5198,7 @@ fn shell_system_remove_window_state_and_remove_windows_state() {
         id: 1, priority: SHNP_ICONIC, duration_cs: 9999,
         icon: 0, flags: 0, clsid,
         hwnd_sink: 10, title: "t".to_owned(), html: String::new(), lparam: 0,
+        callback_ptr: 0,
     };
     let _ = shell.add_notification(notif, 0);
 
@@ -6252,6 +6254,7 @@ fn shell_system_special_folder_queries_fallback_policy_destroyed_notify_icons_an
             lparam: 0,
         },
         lparam: 0,
+        callback_ptr: 0,
     });
     assert_eq!(shell.notification_callbacks().count(), 1);
 }
@@ -7681,6 +7684,7 @@ fn kernel_post_shell_notify_icon_and_notification_callbacks_expire() {
             title: "Test".to_owned(),
             html: String::new(),
             lparam: 0,
+            callback_ptr: 0,
         },
         now_ms,
     );
@@ -7715,6 +7719,7 @@ fn kernel_post_shell_notify_icon_and_notification_callbacks_expire() {
             title: "Exp".to_owned(),
             html: String::new(),
             lparam: 0,
+            callback_ptr: 0,
         },
         now_ms2,
     );
@@ -7743,6 +7748,7 @@ fn kernel_post_shell_notify_icon_and_notification_callbacks_expire() {
             title: "Link".to_owned(),
             html: String::new(),
             lparam: 0,
+            callback_ptr: 0,
         },
         now_ms3,
     );

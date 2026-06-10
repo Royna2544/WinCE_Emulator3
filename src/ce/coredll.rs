@@ -5995,18 +5995,24 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(r1.is_some() && r1 == r2))
         }
-        ORD_EXCLUDE_CLIP_RECT => {
-            // ExcludeClipRect: subtract a rectangle from the current clip region.
-            // We don't track per-DC clip regions beyond a single rect; return SIMPLEREGION.
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::U32(2)) // SIMPLEREGION
-        }
-        ORD_INTERSECT_CLIP_RECT => {
-            // IntersectClipRect: intersect DC clip with rect.
-            // Stub: return SIMPLEREGION.
-            kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::U32(2)) // SIMPLEREGION
-        }
+        ORD_EXCLUDE_CLIP_RECT => Some(CoredllValue::U32(exclude_clip_rect_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_i32_arg(args, 1),
+            raw_i32_arg(args, 2),
+            raw_i32_arg(args, 3),
+            raw_i32_arg(args, 4),
+        ))),
+        ORD_INTERSECT_CLIP_RECT => Some(CoredllValue::U32(intersect_clip_rect_raw(
+            kernel,
+            thread_id,
+            raw_arg(args, 0),
+            raw_i32_arg(args, 1),
+            raw_i32_arg(args, 2),
+            raw_i32_arg(args, 3),
+            raw_i32_arg(args, 4),
+        ))),
         ORD_SET_WINDOW_RGN => Some(CoredllValue::U32(set_window_rgn_raw(
             kernel,
             thread_id,
@@ -7410,8 +7416,10 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(raw_arg(args, 0) != 0))
         }
-        ORD_DPA_SORT | ORD_DPA_SEARCH | ORD_DPA_CLONE | ORD_DPA_DESTROY_CALLBACK
-        | ORD_DPA_ENUM_CALLBACK => {
+        ORD_DPA_CLONE => Some(CoredllValue::Handle(dpa_clone_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_DPA_SORT | ORD_DPA_SEARCH | ORD_DPA_DESTROY_CALLBACK | ORD_DPA_ENUM_CALLBACK => {
             // Complex DPA ops requiring Unicorn callbacks; stub as no-op/fail.
             kernel
                 .threads
@@ -7451,8 +7459,13 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(raw_arg(args, 0) != 0))
         }
-        ORD_DSA_SORT | ORD_DSA_SEARCH | ORD_DSA_CLONE | ORD_DSA_DESTROY_CALLBACK
-        | ORD_DSA_ENUM_CALLBACK | ORD_DSA_SET_RANGE => {
+        ORD_DSA_CLONE => Some(CoredllValue::Handle(dsa_clone_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_DSA_SET_RANGE => Some(CoredllValue::Bool(dsa_set_range_raw(
+            kernel, memory, thread_id, args,
+        ))),
+        ORD_DSA_SORT | ORD_DSA_SEARCH | ORD_DSA_DESTROY_CALLBACK | ORD_DSA_ENUM_CALLBACK => {
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
@@ -18737,7 +18750,7 @@ fn sh_notification_add_i_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
-    let Some(data) = read_shell_notification_data(
+    let Some(mut data) = read_shell_notification_data(
         kernel,
         memory,
         thread_id,
@@ -18750,6 +18763,8 @@ fn sh_notification_add_i_raw<M: CoredllGuestMemory>(
     if data.hwnd_sink != 0 && !kernel.gwe.is_window(data.hwnd_sink) {
         return ERROR_INVALID_PARAMETER;
     }
+    // args[1] = IShellNotificationCallback* — COM interface pointer for vtable callbacks.
+    data.callback_ptr = raw_arg(args, 1);
     notification_result_to_error(
         kernel
             .shell
@@ -18948,6 +18963,7 @@ fn read_shell_notification_data<M: CoredllGuestMemory>(
             thread_id,
             ptr.wrapping_add(SHNOTIFICATIONDATA_LPARAM_OFFSET),
         )?,
+        callback_ptr: 0,
     })
 }
 
@@ -26037,6 +26053,67 @@ fn dpa_get_ptr_index_raw<M: CoredllGuestMemory>(
     0xffff_ffff // DA_ERR = -1 — not found
 }
 
+fn dpa_clone_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let hdpa = raw_arg(args, 0);
+    let hdpa_new = raw_arg(args, 1);
+    if hdpa == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Ok(src_cp_items) = memory.read_u32(hdpa + DPA_OFFSET_CP_ITEMS) else {
+        return 0;
+    };
+    let Ok(src_pp) = memory.read_u32(hdpa + DPA_OFFSET_PP) else {
+        return 0;
+    };
+    let Ok(src_cp_grow) = memory.read_u32(hdpa + DPA_OFFSET_CP_GROW) else {
+        return 0;
+    };
+    let dest = if hdpa_new != 0 {
+        hdpa_new
+    } else {
+        let heap = kernel.memory.get_process_heap();
+        let Some(h) = kernel.memory.heap_alloc(heap, 0, DPA_SIZE) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_OUTOFMEMORY);
+            return 0;
+        };
+        let _ = memory.write_u32(h + DPA_OFFSET_CP_ITEMS, 0);
+        let _ = memory.write_u32(h + DPA_OFFSET_PP, 0);
+        let _ = memory.write_u32(h + DPA_OFFSET_HHEAP, heap);
+        let _ = memory.write_u32(h + DPA_OFFSET_CP_CAPACITY, 0);
+        let _ = memory.write_u32(h + DPA_OFFSET_CP_GROW, src_cp_grow);
+        h
+    };
+    if src_cp_items > 0 {
+        if !dpa_ensure_capacity(kernel, memory, dest, src_cp_items) {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_OUTOFMEMORY);
+            return 0;
+        }
+        let Ok(dest_pp) = memory.read_u32(dest + DPA_OFFSET_PP) else {
+            return 0;
+        };
+        for i in 0..src_cp_items {
+            if let Ok(val) = memory.read_u32(src_pp + i * 4) {
+                let _ = memory.write_u32(dest_pp + i * 4, val);
+            }
+        }
+    }
+    let _ = memory.write_u32(dest + DPA_OFFSET_CP_ITEMS, src_cp_items);
+    kernel.threads.set_last_error(thread_id, 0);
+    dest
+}
+
 // DSA (Dynamic Structure Array) helpers.
 // CE DSA struct layout (24 bytes at HDSA):
 //   +0  cpItems   u32 — item count
@@ -26328,6 +26405,116 @@ fn dsa_delete_item_raw<M: CoredllGuestMemory>(
         }
     }
     let _ = memory.write_u32(hdsa + DSA_OFFSET_CP_ITEMS, cp_items - 1);
+    kernel.threads.set_last_error(thread_id, 0);
+    true
+}
+
+fn dsa_clone_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> u32 {
+    let hdsa = raw_arg(args, 0);
+    let hdsa_new = raw_arg(args, 1);
+    if hdsa == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let Ok(src_cp_items) = memory.read_u32(hdsa + DSA_OFFSET_CP_ITEMS) else {
+        return 0;
+    };
+    let Ok(src_pdata) = memory.read_u32(hdsa + DSA_OFFSET_PDATA) else {
+        return 0;
+    };
+    let Ok(src_cp_grow) = memory.read_u32(hdsa + DSA_OFFSET_CP_GROW) else {
+        return 0;
+    };
+    let Ok(src_cb_item) = memory.read_u32(hdsa + DSA_OFFSET_CB_ITEM) else {
+        return 0;
+    };
+    let dest = if hdsa_new != 0 {
+        hdsa_new
+    } else {
+        let heap = kernel.memory.get_process_heap();
+        let Some(h) = kernel.memory.heap_alloc(heap, 0, DSA_SIZE) else {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_OUTOFMEMORY);
+            return 0;
+        };
+        let _ = memory.write_u32(h + DSA_OFFSET_CP_ITEMS, 0);
+        let _ = memory.write_u32(h + DSA_OFFSET_PDATA, 0);
+        let _ = memory.write_u32(h + DSA_OFFSET_HHEAP, heap);
+        let _ = memory.write_u32(h + DSA_OFFSET_CP_CAPACITY, 0);
+        let _ = memory.write_u32(h + DSA_OFFSET_CP_GROW, src_cp_grow);
+        let _ = memory.write_u32(h + DSA_OFFSET_CB_ITEM, src_cb_item);
+        h
+    };
+    if src_cp_items > 0 {
+        if !dsa_ensure_capacity(kernel, memory, dest, src_cp_items) {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_OUTOFMEMORY);
+            return 0;
+        }
+        let Ok(dest_pdata) = memory.read_u32(dest + DSA_OFFSET_PDATA) else {
+            return 0;
+        };
+        for i in 0..(src_cp_items * src_cb_item) {
+            if let Ok(b) = memory.read_u8(src_pdata + i) {
+                let _ = memory.write_u8(dest_pdata + i, b);
+            }
+        }
+    }
+    let _ = memory.write_u32(dest + DSA_OFFSET_CP_ITEMS, src_cp_items);
+    kernel.threads.set_last_error(thread_id, 0);
+    dest
+}
+
+fn dsa_set_range_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
+    let hdsa = raw_arg(args, 0);
+    let i_start = raw_i32_arg(args, 1);
+    let c_items = raw_i32_arg(args, 2);
+    let pv = raw_arg(args, 3);
+    if hdsa == 0 || i_start < 0 || c_items <= 0 || pv == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let i_start = i_start as u32;
+    let c_items = c_items as u32;
+    let Ok(cp_items) = memory.read_u32(hdsa + DSA_OFFSET_CP_ITEMS) else {
+        return false;
+    };
+    let Ok(cb_item) = memory.read_u32(hdsa + DSA_OFFSET_CB_ITEM) else {
+        return false;
+    };
+    if i_start.saturating_add(c_items) > cp_items {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
+    let Ok(pdata) = memory.read_u32(hdsa + DSA_OFFSET_PDATA) else {
+        return false;
+    };
+    // Copy the single cb_item-sized value at pv into each slot in the range.
+    for item in 0..c_items {
+        for b in 0..cb_item {
+            if let Ok(byte) = memory.read_u8(pv + b) {
+                let _ = memory.write_u8(pdata + (i_start + item) * cb_item + b, byte);
+            }
+        }
+    }
     kernel.threads.set_last_error(thread_id, 0);
     true
 }
@@ -33372,6 +33559,91 @@ fn select_clip_rgn_raw(kernel: &mut CeKernel, thread_id: u32, hdc: u32, region: 
     }
 }
 
+fn intersect_clip_rect_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    hdc: u32,
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+) -> u32 {
+    if hdc == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return ERROR_REGION;
+    }
+    let new_rect = Rect { left, top, right, bottom };
+    let new_rects = if is_rect_empty_value(new_rect) {
+        Vec::new()
+    } else {
+        // Intersect with existing clip region if any; otherwise new rect is the clip.
+        let existing = kernel
+            .resources
+            .clip_region(hdc)
+            .and_then(|h| kernel.resources.region(h))
+            .map(|r| r.rects.clone());
+        match existing {
+            Some(rects) => intersect_region_rects(&rects, &[new_rect]),
+            None => vec![new_rect],
+        }
+    };
+    let status = region_status_from_rects(&new_rects);
+    let new_hrgn = kernel.resources.create_region(Rect::default());
+    kernel.resources.set_region_rects(new_hrgn, new_rects);
+    kernel.resources.select_clip_region(hdc, Some(new_hrgn));
+    kernel.threads.set_last_error(thread_id, 0);
+    status
+}
+
+fn exclude_clip_rect_raw(
+    kernel: &mut CeKernel,
+    thread_id: u32,
+    hdc: u32,
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+) -> u32 {
+    if hdc == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return ERROR_REGION;
+    }
+    let cut_rect = Rect { left, top, right, bottom };
+    let Some(existing_hrgn) = kernel.resources.clip_region(hdc) else {
+        // No current clip region: ExcludeClipRect without a prior clip is a no-op.
+        kernel.threads.set_last_error(thread_id, 0);
+        return SIMPLEREGION;
+    };
+    let existing = kernel
+        .resources
+        .region(existing_hrgn)
+        .map(|r| r.rects.clone())
+        .unwrap_or_default();
+    let new_rects = if is_rect_empty_value(cut_rect) {
+        existing
+    } else {
+        diff_region_rects(&existing, &[cut_rect])
+    };
+    let status = region_status_from_rects(&new_rects);
+    let new_hrgn = kernel.resources.create_region(Rect::default());
+    kernel.resources.set_region_rects(new_hrgn, new_rects);
+    kernel.resources.select_clip_region(hdc, Some(new_hrgn));
+    kernel.threads.set_last_error(thread_id, 0);
+    status
+}
+
+fn region_status_from_rects(rects: &[Rect]) -> u32 {
+    match rects.len() {
+        0 => NULLREGION,
+        1 => SIMPLEREGION,
+        _ => COMPLEXREGION,
+    }
+}
+
 fn get_clip_box_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
@@ -36736,9 +37008,10 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "GetWindowAutoGesture",
     "SetDialogAutoScrollBar",
     "SetWindowPosOnRotate",
-    // DPA container (core ops only; sort/search/callback stubs are not listed)
+    // DPA container (core ops plus clone)
     "DPA_Create",
     "DPA_CreateEx",
+    "DPA_Clone",
     "DPA_DeleteAllPtrs",
     "DPA_DeletePtr",
     "DPA_Destroy",
@@ -36747,8 +37020,9 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "DPA_Grow",
     "DPA_InsertPtr",
     "DPA_SetPtr",
-    // DSA container (core ops only)
+    // DSA container (core ops plus clone and set-range)
     "DSA_Create",
+    "DSA_Clone",
     "DSA_DeleteAllItems",
     "DSA_DeleteItem",
     "DSA_Destroy",
@@ -36757,6 +37031,7 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "DSA_Grow",
     "DSA_InsertItem",
     "DSA_SetItem",
+    "DSA_SetRange",
     // GWE internal (returns zero/false, correct behavior)
     "GetGweApiSetTables",
     // String safe-copy helpers
@@ -36772,6 +37047,11 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "AnimateRects",
     "GetTextCharacterExtra",
     "SetTextCharacterExtra",
+    // GDI clip region
+    "ExcludeClipRect",
+    "IntersectClipRect",
+    "GetClipRgn",
+    "MaskBlt",
     // Font utilities
     "EnumFontFamiliesExW",
     "GetFontData",
@@ -36792,6 +37072,88 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     // Memory tracing variants (same impl as non-trace)
     "LocalAllocTrace",
     "HeapAllocTrace",
+    // Registry convenience APIs
+    "RegistryGetDword",
+    "RegistryGetString",
+    "RegistrySetDword",
+    "RegistrySetString",
+    "RegistryDeleteValue",
+    "RegistryTestExchangeDword",
+    "RegistryNotifyWindow",
+    "RegistryNotifyMsgQueue",
+    // File change notification handles
+    "FindFirstChangeNotificationW",
+    "FindNextChangeNotification",
+    "FindCloseChangeNotification",
+    "AFS_FindFirstChangeNotificationW",
+    "CeGetFileNotificationInfo",
+    // Shell shortcut and recent-docs APIs
+    "SHCreateShortcut",
+    "SHGetShortcutTarget",
+    "SHCreateShortcutEx",
+    "SHAddToRecentDocs",
+    "SHChangeNotifyRegisterI",
+    "SHFileNotifyRemoveI",
+    "SHFileNotifyFreeI",
+    // Icon APIs
+    "LoadIconW",
+    "CreateIconIndirect",
+    "ExtractIconExW",
+    "DrawIconEx",
+    // ImageList APIs
+    "ImageList_Create",
+    "ImageList_Destroy",
+    "ImageList_LoadImage",
+    "ImageList_Add",
+    "ImageList_AddMasked",
+    "ImageList_ReplaceIcon",
+    "ImageList_Replace",
+    "ImageList_Remove",
+    "ImageList_SetIconSize",
+    "ImageList_SetImageCount",
+    "ImageList_GetImageCount",
+    "ImageList_GetIconSize",
+    "ImageList_GetIcon",
+    "ImageList_GetImageInfo",
+    "ImageList_SetBkColor",
+    "ImageList_GetBkColor",
+    "ImageList_Draw",
+    "ImageList_DrawEx",
+    "ImageList_DrawIndirect",
+    "ImageList_CopyDitherImage",
+    "ImageList_Copy",
+    "ImageList_Merge",
+    "ImageList_Duplicate",
+    "ImageList_BeginDrag",
+    "ImageList_DragEnter",
+    "ImageList_DragLeave",
+    "ImageList_DragMove",
+    "ImageList_DragShowNolock",
+    "ImageList_EndDrag",
+    "ImageList_GetDragImage",
+    "ImageList_SetDragCursorImage",
+    "ImageList_SetOverlayImage",
+    // GWE window utilities
+    "FindWindowW",
+    "ValidateRect",
+    "GetUpdateRect",
+    "GetUpdateRgn",
+    "GetWindowDC",
+    "IsChild",
+    "GetWindowThreadProcessId",
+    "GetWindow",
+    "EnumWindows",
+    "BringWindowToTop",
+    "RegisterSIPanel",
+    "WindowFromPoint",
+    "ChildWindowFromPoint",
+    "CallWindowProcW",
+    // Input routing
+    "PostKeybdMessage",
+    // CE API readiness and gestures
+    "WaitForAPIReady",
+    "EnableGestures",
+    "DisableGestures",
 ];
 
 const REGISTRY_PREFIXES: &[&str] = &[

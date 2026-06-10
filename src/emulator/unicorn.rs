@@ -94,6 +94,10 @@ pub struct UnicornMips {
     #[cfg(feature = "unicorn")]
     pending_enum_display_monitors_returns: Vec<PendingEnumDisplayMonitorsReturn>,
     #[cfg(feature = "unicorn")]
+    pending_dpa_enum_returns: Vec<PendingDpaEnumReturn>,
+    #[cfg(feature = "unicorn")]
+    pending_com_notification_returns: Vec<PendingComNotificationReturn>,
+    #[cfg(feature = "unicorn")]
     pending_dll_lifecycle_returns: Vec<PendingDllLifecycleReturn>,
     #[cfg(feature = "unicorn")]
     pending_create_window_returns: Vec<CreateWindowReturn>,
@@ -152,6 +156,10 @@ struct UnicornRunStateHandles<'a> {
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingEnumWindowsReturn>>>,
     pending_enum_display_monitors_returns:
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingEnumDisplayMonitorsReturn>>>,
+    pending_dpa_enum_returns:
+        &'a std::rc::Rc<std::cell::RefCell<Vec<PendingDpaEnumReturn>>>,
+    pending_com_notification_returns:
+        &'a std::rc::Rc<std::cell::RefCell<Vec<PendingComNotificationReturn>>>,
     pending_dll_lifecycle_returns:
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingDllLifecycleReturn>>>,
     create_window_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<CreateWindowReturn>>>,
@@ -308,6 +316,12 @@ const ENUM_WINDOWS_RETURN_STUB_ADDR: u32 =
 #[cfg(feature = "unicorn")]
 const ENUM_DISPLAY_MONITORS_RETURN_STUB_ADDR: u32 =
     ENUM_WINDOWS_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
+#[cfg(feature = "unicorn")]
+const DPA_ENUM_RETURN_STUB_ADDR: u32 =
+    ENUM_DISPLAY_MONITORS_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
+#[cfg(feature = "unicorn")]
+const COM_NOTIFICATION_RETURN_STUB_ADDR: u32 =
+    DPA_ENUM_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
 #[cfg(feature = "unicorn")]
 const CREATESTRUCTW_SIZE: u32 = 48;
 #[cfg(feature = "unicorn")]
@@ -468,6 +482,29 @@ struct PendingEnumDisplayMonitorsReturn {
     return_pc: u32,
     return_sp: u32,
     caller_regs: MipsGuestContext,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingDpaEnumReturn {
+    return_pc: u32,
+    return_sp: u32,
+    caller_regs: MipsGuestContext,
+    hdpa: u32,
+    callback: u32,
+    pdata: u32,
+    remaining: Vec<u32>,
+    is_destroy: bool,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingComNotificationReturn {
+    return_pc: u32,
+    return_sp: u32,
+    caller_regs: MipsGuestContext,
+    /// Guest heap pointer to free after the COM method returns (used for OnLinkSelected link string).
+    heap_ptr_to_free: Option<u32>,
 }
 
 #[cfg(feature = "unicorn")]
@@ -756,6 +793,10 @@ impl UnicornMips {
             #[cfg(feature = "unicorn")]
             pending_enum_display_monitors_returns: Vec::new(),
             #[cfg(feature = "unicorn")]
+            pending_dpa_enum_returns: Vec::new(),
+            #[cfg(feature = "unicorn")]
+            pending_com_notification_returns: Vec::new(),
+            #[cfg(feature = "unicorn")]
             pending_dll_lifecycle_returns: Vec::new(),
             #[cfg(feature = "unicorn")]
             pending_create_window_returns: Vec::new(),
@@ -938,6 +979,16 @@ impl UnicornMips {
             .collect();
         self.pending_enum_display_monitors_returns = state
             .pending_enum_display_monitors_returns
+            .borrow_mut()
+            .drain(..)
+            .collect();
+        self.pending_dpa_enum_returns = state
+            .pending_dpa_enum_returns
+            .borrow_mut()
+            .drain(..)
+            .collect();
+        self.pending_com_notification_returns = state
+            .pending_com_notification_returns
             .borrow_mut()
             .drain(..)
             .collect();
@@ -1236,6 +1287,12 @@ impl UnicornMips {
                 #[cfg(feature = "unicorn")]
                 pending_enum_display_monitors_returns: std::mem::take(
                     &mut self.pending_enum_display_monitors_returns,
+                ),
+                #[cfg(feature = "unicorn")]
+                pending_dpa_enum_returns: std::mem::take(&mut self.pending_dpa_enum_returns),
+                #[cfg(feature = "unicorn")]
+                pending_com_notification_returns: std::mem::take(
+                    &mut self.pending_com_notification_returns,
                 ),
                 #[cfg(feature = "unicorn")]
                 pending_dll_lifecycle_returns: std::mem::take(
@@ -2238,6 +2295,13 @@ impl UnicornMips {
         )));
         let pending_enum_display_monitors_returns_hook =
             Rc::clone(&pending_enum_display_monitors_returns);
+        let pending_dpa_enum_returns =
+            Rc::new(RefCell::new(std::mem::take(&mut self.pending_dpa_enum_returns)));
+        let pending_dpa_enum_returns_hook = Rc::clone(&pending_dpa_enum_returns);
+        let pending_com_notification_returns = Rc::new(RefCell::new(std::mem::take(
+            &mut self.pending_com_notification_returns,
+        )));
+        let pending_com_notification_returns_hook = Rc::clone(&pending_com_notification_returns);
         let pending_dll_lifecycle_returns = Rc::new(RefCell::new(std::mem::take(
             &mut self.pending_dll_lifecycle_returns,
         )));
@@ -2281,6 +2345,8 @@ impl UnicornMips {
             pending_qsort_returns: &pending_qsort_returns,
             pending_enum_windows_returns: &pending_enum_windows_returns,
             pending_enum_display_monitors_returns: &pending_enum_display_monitors_returns,
+            pending_dpa_enum_returns: &pending_dpa_enum_returns,
+            pending_com_notification_returns: &pending_com_notification_returns,
             pending_dll_lifecycle_returns: &pending_dll_lifecycle_returns,
             create_window_returns: &create_window_returns,
             pending_wndproc_returns: &pending_wndproc_returns,
@@ -2862,6 +2928,22 @@ impl UnicornMips {
                     );
                     return;
                 }
+                if address == DPA_ENUM_RETURN_STUB_ADDR {
+                    handle_dpa_enum_return_stub(
+                        unsafe { &mut *kernel_ptr },
+                        uc,
+                        &pending_dpa_enum_returns_hook,
+                    );
+                    return;
+                }
+                if address == COM_NOTIFICATION_RETURN_STUB_ADDR {
+                    handle_com_notification_return_stub(
+                        unsafe { &mut *kernel_ptr },
+                        uc,
+                        &pending_com_notification_returns_hook,
+                    );
+                    return;
+                }
                 if address == GUEST_THREAD_RETURN_STUB_ADDR {
                     let exit_code = read_mips_reg(uc, RegisterMIPS::V0);
                     let active_thread_id = *current_thread_id_hook.borrow();
@@ -3123,6 +3205,7 @@ impl UnicornMips {
                         trap.module_kind,
                         trap.ordinal,
                         &args,
+                        address,
                         active_thread_id,
                         &blocked_get_message_hook,
                         &blocked_guest_thread_hook,
@@ -3134,6 +3217,7 @@ impl UnicornMips {
                         &last_messages_hook,
                         host_wall_clock_started,
                         host_wall_clock_limit,
+                        &pending_com_notification_returns_hook,
                         live_pump,
                     )
                 }) {
@@ -3551,6 +3635,18 @@ impl UnicornMips {
                         trap.ordinal,
                         &args,
                         &pending_enum_display_monitors_returns_hook,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_enter_dpa_enum_callout(
+                        unsafe { &*kernel_ptr },
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        &pending_dpa_enum_returns_hook,
                     )
                 }) {
                     return;
@@ -4202,6 +4298,8 @@ impl super::cpu::CpuBackend for UnicornMips {
             pending_qsort_returns: Vec::new(),
             pending_enum_windows_returns: Vec::new(),
             pending_enum_display_monitors_returns: Vec::new(),
+            pending_dpa_enum_returns: Vec::new(),
+            pending_com_notification_returns: Vec::new(),
             pending_dll_lifecycle_returns: Vec::new(),
             pending_create_window_returns: Vec::new(),
             pending_wndproc_returns: Vec::new(),
@@ -7364,6 +7462,129 @@ fn try_enter_get_message_sent_callout<D>(
     }
 }
 
+/// Dispatches the next pending `IShellNotificationCallback` COM vtable method into the guest.
+///
+/// Reads the vtable pointer from `*callback_ptr`, reads the method pointer at `vtable +
+/// vtable_offset`, sets up MIPS registers for the COM call (A0=this, A1-A3=method args), and
+/// pushes a `PendingComNotificationReturn` so the return stub re-enters the GetMessageW import.
+/// Returns `true` if the Unicorn PC was redirected to the COM method.
+#[cfg(feature = "unicorn")]
+fn try_dispatch_com_notification_callout<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    import_pc: u32,
+    pending_com_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingComNotificationReturn>>>,
+) -> bool {
+    use crate::ce::shell::ShellNotificationCallbackArguments;
+    use unicorn_engine::RegisterMIPS;
+
+    let Some(cb) = kernel.shell.take_pending_notification_callback() else {
+        return false;
+    };
+
+    if cb.callback_ptr == 0 {
+        return false;
+    }
+
+    // Read vtable pointer from *callback_ptr.
+    let mut vtable_bytes = [0u8; 4];
+    if uc.mem_read(u64::from(cb.callback_ptr), &mut vtable_bytes).is_err() {
+        return false;
+    }
+    let vtable_ptr = u32::from_le_bytes(vtable_bytes);
+
+    // Read method pointer from vtable at the recorded offset.
+    let mut method_bytes = [0u8; 4];
+    if uc.mem_read(u64::from(vtable_ptr + cb.vtable_offset), &mut method_bytes).is_err() {
+        return false;
+    }
+    let method_ptr = u32::from_le_bytes(method_bytes);
+
+    if !is_guest_wndproc(method_ptr) {
+        return false;
+    }
+
+    let caller_regs = capture_mips_gprs(uc);
+    let return_sp = read_mips_reg(uc, RegisterMIPS::SP);
+    let call_sp = return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
+    let call_method = normalize_ce_process_slot_callback(uc, method_ptr);
+
+    // Map typed arguments to MIPS registers.
+    // A0 = this (callback_ptr); A1,A2,A3 = first three explicit args; stack at call_sp+0x10 = 4th.
+    let (a1, a2, a3, heap_ptr_to_free): (u32, u32, u32, Option<u32>) = match &cb.arguments {
+        ShellNotificationCallbackArguments::OnShow { id, x, y, lparam } => {
+            // 5th arg (lparam) goes on the stack at call_sp+0x10.
+            let _ = uc.mem_write(u64::from(call_sp + 0x10), &lparam.to_le_bytes());
+            (*id, *x, *y, None)
+        }
+        ShellNotificationCallbackArguments::OnCommandSelected { id, command_id } => {
+            (*id, *command_id, 0, None)
+        }
+        ShellNotificationCallbackArguments::OnLinkSelected { id, link, lparam } => {
+            // Encode link as UTF-16 LE with null terminator and allocate in guest heap.
+            let utf16: Vec<u16> = link.encode_utf16().chain(std::iter::once(0u16)).collect();
+            let byte_len = utf16.len() as u32 * 2;
+            let process_heap = kernel.memory.get_process_heap();
+            let link_ptr = kernel
+                .memory
+                .heap_alloc(process_heap, 0, byte_len)
+                .unwrap_or(0);
+            if link_ptr != 0 {
+                let bytes: Vec<u8> =
+                    utf16.iter().flat_map(|c| c.to_le_bytes()).collect();
+                let _ = uc.mem_write(u64::from(link_ptr), &bytes);
+            }
+            (
+                *id,
+                link_ptr,
+                *lparam,
+                if link_ptr != 0 { Some(link_ptr) } else { None },
+            )
+        }
+        ShellNotificationCallbackArguments::OnDismiss { id, timed_out, lparam } => {
+            (*id, u32::from(*timed_out), *lparam, None)
+        }
+    };
+
+    tracing::debug!(
+        target: "ce.shell",
+        callback_ptr = format_args!("0x{:08x}", cb.callback_ptr),
+        vtable_offset = cb.vtable_offset,
+        method_ptr = format_args!("0x{method_ptr:08x}"),
+        "IShellNotificationCallback COM vtable dispatch"
+    );
+
+    let ok = [
+        uc.reg_write(RegisterMIPS::SP, u64::from(call_sp)),
+        uc.reg_write(RegisterMIPS::A0, u64::from(cb.callback_ptr)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(a1)),
+        uc.reg_write(RegisterMIPS::A2, u64::from(a2)),
+        uc.reg_write(RegisterMIPS::A3, u64::from(a3)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(COM_NOTIFICATION_RETURN_STUB_ADDR)),
+        uc.reg_write(RegisterMIPS::T9, u64::from(call_method)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(call_method)),
+    ]
+    .into_iter()
+    .all(|r| r.is_ok());
+
+    if !ok {
+        if let Some(ptr) = heap_ptr_to_free {
+            let process_heap = kernel.memory.get_process_heap();
+            kernel.memory.heap_free(process_heap, 0, ptr);
+        }
+        return false;
+    }
+
+    pending_com_returns.borrow_mut().push(PendingComNotificationReturn {
+        return_pc: import_pc,
+        return_sp,
+        caller_regs,
+        heap_ptr_to_free,
+    });
+
+    true
+}
+
 #[cfg(feature = "unicorn")]
 fn try_block_empty_get_message<D>(
     kernel: &mut CeKernel,
@@ -7371,6 +7592,7 @@ fn try_block_empty_get_message<D>(
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
+    import_pc: u32,
     thread_id: u32,
     blocked: &std::rc::Rc<std::cell::RefCell<Option<UnicornBlockedGetMessage>>>,
     blocked_thread: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
@@ -7382,6 +7604,9 @@ fn try_block_empty_get_message<D>(
     last_messages: &std::rc::Rc<std::cell::RefCell<Vec<UnicornLastMessage>>>,
     host_wall_clock_started: std::time::Instant,
     host_wall_clock_limit: Option<std::time::Duration>,
+    pending_com_notification_returns: &std::rc::Rc<
+        std::cell::RefCell<Vec<PendingComNotificationReturn>>,
+    >,
     live_pump: bool,
 ) -> bool {
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
@@ -7425,6 +7650,16 @@ fn try_block_empty_get_message<D>(
                 return false;
             }
         }
+    }
+
+    // After timer pump, dispatch any pending IShellNotificationCallback COM method before blocking.
+    if try_dispatch_com_notification_callout(
+        kernel,
+        uc,
+        import_pc,
+        pending_com_notification_returns,
+    ) {
+        return true;
     }
 
     *blocked.borrow_mut() = Some(unicorn_blocked_get_message_snapshot(
@@ -21987,6 +22222,232 @@ fn handle_enum_display_monitors_return_stub<D>(
 }
 
 #[cfg(feature = "unicorn")]
+fn handle_com_notification_return_stub<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingComNotificationReturn>>>,
+) {
+    use unicorn_engine::RegisterMIPS;
+
+    let mut pending = pending_returns.borrow_mut();
+    let Some(state) = pending.pop() else {
+        return;
+    };
+    drop(pending);
+
+    if let Some(ptr) = state.heap_ptr_to_free {
+        let process_heap = kernel.memory.get_process_heap();
+        kernel.memory.heap_free(process_heap, 0, ptr);
+    }
+
+    // restore_mips_gprs restores all GPRs including RA (= caller's GetMessageW return address).
+    // Do NOT overwrite RA afterward; return_pc is the import trap to re-enter.
+    restore_mips_gprs(uc, &state.caller_regs);
+    let _ = uc.reg_write(RegisterMIPS::SP, u64::from(state.return_sp));
+    let _ = uc.reg_write(RegisterMIPS::PC, u64::from(state.return_pc));
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_dpa_enum_callout<D>(
+    kernel: &CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingDpaEnumReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    let is_destroy = match ordinal {
+        Some(o) if o == crate::ce::coredll_ordinals::ORD_DPA_DESTROY_CALLBACK
+            && module_kind == crate::emulator::imports::ImportModuleKind::Coredll =>
+        {
+            true
+        }
+        Some(o) if o == crate::ce::coredll_ordinals::ORD_DPA_ENUM_CALLBACK
+            && module_kind == crate::emulator::imports::ImportModuleKind::Coredll =>
+        {
+            false
+        }
+        _ => return false,
+    };
+
+    let hdpa = args.first().copied().unwrap_or(0);
+    let callback = args.get(1).copied().unwrap_or(0);
+    let pdata = args.get(2).copied().unwrap_or(0);
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+
+    if hdpa == 0 {
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        return true;
+    }
+
+    if !is_guest_wndproc(callback) {
+        // Null callback: no-op (DPA_EnumCallback) or just destroy (DPA_DestroyCallback handled in dispatch).
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        return true;
+    }
+
+    // Read DPA item array from guest memory.
+    let mut cp_items_bytes = [0u8; 4];
+    let mut pp_bytes = [0u8; 4];
+    if uc.mem_read(u64::from(hdpa), &mut cp_items_bytes).is_err()
+        || uc
+            .mem_read(u64::from(hdpa + 4), &mut pp_bytes)
+            .is_err()
+    {
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        return true;
+    }
+    let cp_items = i32::from_le_bytes(cp_items_bytes) as usize;
+    let pp = u32::from_le_bytes(pp_bytes);
+
+    if cp_items == 0 || pp == 0 {
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        return true;
+    }
+
+    // Read all item pointers.
+    let mut item_ptrs: Vec<u32> = Vec::with_capacity(cp_items);
+    for i in 0..cp_items {
+        let mut item_bytes = [0u8; 4];
+        if uc
+            .mem_read(u64::from(pp + (i as u32) * 4), &mut item_bytes)
+            .is_err()
+        {
+            let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+            return true;
+        }
+        item_ptrs.push(u32::from_le_bytes(item_bytes));
+    }
+
+    if item_ptrs.is_empty() {
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        return true;
+    }
+
+    let caller_regs = capture_mips_gprs(uc);
+    let return_sp = read_mips_reg(uc, RegisterMIPS::SP);
+    let mut remaining = item_ptrs;
+    let first_item = remaining.remove(0);
+    let call_sp = return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
+    let call_callback = normalize_ce_process_slot_callback(uc, callback);
+
+    tracing::debug!(
+        target: "ce.dpa",
+        hdpa = format_args!("0x{hdpa:08x}"),
+        callback = format_args!("0x{callback:08x}"),
+        pdata = format_args!("0x{pdata:08x}"),
+        is_destroy,
+        total = remaining.len() + 1,
+        "DPA_EnumCallback/DPA_DestroyCallback guest callback callout"
+    );
+
+    let ok = [
+        uc.reg_write(RegisterMIPS::SP, u64::from(call_sp)),
+        uc.reg_write(RegisterMIPS::A0, u64::from(first_item)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(pdata)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(DPA_ENUM_RETURN_STUB_ADDR)),
+        uc.reg_write(RegisterMIPS::T9, u64::from(call_callback)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(call_callback)),
+    ]
+    .into_iter()
+    .all(|r| r.is_ok());
+
+    if !ok {
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        return true;
+    }
+
+    pending_returns.borrow_mut().push(PendingDpaEnumReturn {
+        return_pc,
+        return_sp,
+        caller_regs,
+        hdpa,
+        callback,
+        pdata,
+        remaining,
+        is_destroy,
+    });
+    true
+}
+
+#[cfg(feature = "unicorn")]
+fn handle_dpa_enum_return_stub<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingDpaEnumReturn>>>,
+) {
+    use unicorn_engine::RegisterMIPS;
+
+    let callback_result = read_mips_reg(uc, RegisterMIPS::V0);
+    let mut pending = pending_returns.borrow_mut();
+    let Some(state) = pending.last_mut() else {
+        return;
+    };
+
+    // DPA_EnumCallback stops if callback returns FALSE; DPA_DestroyCallback ignores return.
+    let stop = !state.is_destroy && callback_result == 0;
+
+    if stop || state.remaining.is_empty() {
+        let state = pending.pop().unwrap();
+        if state.is_destroy && !stop {
+            // All items iterated; free the DPA arrays.
+            // Read hheap and pp from guest memory.
+            let mut hheap_bytes = [0u8; 4];
+            let mut pp_bytes = [0u8; 4];
+            let hheap = if uc
+                .mem_read(u64::from(state.hdpa + 8), &mut hheap_bytes)
+                .is_ok()
+            {
+                u32::from_le_bytes(hheap_bytes)
+            } else {
+                0
+            };
+            let pp = if uc
+                .mem_read(u64::from(state.hdpa + 4), &mut pp_bytes)
+                .is_ok()
+            {
+                u32::from_le_bytes(pp_bytes)
+            } else {
+                0
+            };
+            if hheap != 0 {
+                if pp != 0 {
+                    kernel.memory.heap_free(hheap, 0, pp);
+                }
+                kernel.memory.heap_free(hheap, 0, state.hdpa);
+            }
+        }
+        restore_mips_gprs(uc, &state.caller_regs);
+        let _ = uc.reg_write(RegisterMIPS::SP, u64::from(state.return_sp));
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(state.return_pc));
+        let _ = uc.reg_write(RegisterMIPS::RA, u64::from(state.return_pc));
+        return;
+    }
+
+    // More items: invoke callback for the next item.
+    let next_item = state.remaining.remove(0);
+    let pdata = state.pdata;
+    let callback = state.callback;
+    let return_sp = state.return_sp;
+    drop(pending);
+
+    let call_sp = return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
+    let call_callback = normalize_ce_process_slot_callback(uc, callback);
+    let _ = [
+        uc.reg_write(RegisterMIPS::SP, u64::from(call_sp)),
+        uc.reg_write(RegisterMIPS::A0, u64::from(next_item)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(pdata)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(DPA_ENUM_RETURN_STUB_ADDR)),
+        uc.reg_write(RegisterMIPS::T9, u64::from(call_callback)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(call_callback)),
+    ]
+    .into_iter()
+    .all(|r| r.is_ok());
+}
+
+#[cfg(feature = "unicorn")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum QsortStep {
     ComparatorEntered,
@@ -26962,12 +27423,14 @@ mod unicorn_tests {
         let last_messages = Rc::new(RefCell::new(Vec::new()));
         uc.reg_write(RegisterMIPS::RA, 0x0040_2000).unwrap();
 
+        let pending_com = Rc::new(RefCell::new(Vec::new()));
         assert!(super::try_block_empty_get_message(
             &mut kernel,
             &mut uc,
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W),
             &[0x3000_0100, 0, 0, 0],
+            0,
             thread_id,
             &blocked_get_message,
             &blocked_guest_thread,
@@ -26979,6 +27442,7 @@ mod unicorn_tests {
             &last_messages,
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
+            &pending_com,
             false,
         ));
 
@@ -27036,12 +27500,14 @@ mod unicorn_tests {
         let last_messages = Rc::new(RefCell::new(Vec::new()));
         uc.reg_write(RegisterMIPS::RA, 0x0040_2000).unwrap();
 
+        let pending_com = Rc::new(RefCell::new(Vec::new()));
         assert!(super::try_block_empty_get_message(
             &mut kernel,
             &mut uc,
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W),
             &[0x3000_0100, 0, 0, 0],
+            0,
             thread_id,
             &blocked_get_message,
             &blocked_guest_thread,
@@ -27053,6 +27519,7 @@ mod unicorn_tests {
             &last_messages,
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
+            &pending_com,
             false,
         ));
 
@@ -27115,12 +27582,14 @@ mod unicorn_tests {
         uc.reg_write(RegisterMIPS::RA, 0x0040_2000).unwrap();
         uc.reg_write(RegisterMIPS::V0, 0xeeee_0001).unwrap();
 
+        let pending_com = Rc::new(RefCell::new(Vec::new()));
         assert!(super::try_block_empty_get_message(
             &mut kernel,
             &mut uc,
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W),
             &[0x3000_0100, 0, 0, 0],
+            0,
             main_thread_id,
             &blocked_get_message,
             &blocked_guest_thread,
@@ -27132,6 +27601,7 @@ mod unicorn_tests {
             &last_messages,
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
+            &pending_com,
             false,
         ));
 
@@ -27451,12 +27921,14 @@ mod unicorn_tests {
         let last_messages = Rc::new(RefCell::new(Vec::new()));
         uc.reg_write(RegisterMIPS::RA, 0x0040_2000).unwrap();
 
+        let pending_com = Rc::new(RefCell::new(Vec::new()));
         assert!(super::try_block_empty_get_message(
             &mut kernel,
             &mut uc,
             crate::emulator::imports::ImportModuleKind::Coredll,
             Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W),
             &[0x3000_0100, 0, 0, 0],
+            0,
             thread_id,
             &blocked_get_message,
             &blocked_guest_thread,
@@ -27468,6 +27940,7 @@ mod unicorn_tests {
             &last_messages,
             std::time::Instant::now(),
             Some(std::time::Duration::from_secs(1)),
+            &pending_com,
             true,
         ));
 

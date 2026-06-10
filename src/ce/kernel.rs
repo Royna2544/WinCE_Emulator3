@@ -3512,6 +3512,7 @@ impl CeKernel {
                 arguments: method.com_arguments(record.id, record.lparam),
                 method,
                 lparam: record.lparam,
+                callback_ptr: record.callback_ptr,
             });
         true
     }

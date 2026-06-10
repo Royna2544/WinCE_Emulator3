@@ -258,6 +258,14 @@ impl ShellSystem {
         self.notification_callbacks.iter()
     }
 
+    pub fn take_pending_notification_callback(&mut self) -> Option<ShellNotificationCallbackRecord> {
+        if self.notification_callbacks.is_empty() {
+            None
+        } else {
+            Some(self.notification_callbacks.remove(0))
+        }
+    }
+
     pub fn expire_notifications(&mut self, now_ms: u32) -> Vec<ShellNotificationRecord> {
         let expired = self
             .notifications
@@ -480,6 +488,8 @@ pub struct ShellNotificationCallbackRecord {
     pub vtable_offset: u32,
     pub arguments: ShellNotificationCallbackArguments,
     pub lparam: u32,
+    /// Guest IShellNotificationCallback* COM interface pointer (0 if not registered).
+    pub callback_ptr: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -575,6 +585,8 @@ pub struct ShellNotificationData {
     pub title: String,
     pub html: String,
     pub lparam: u32,
+    /// Guest IShellNotificationCallback* COM interface pointer (may be 0 if not provided).
+    pub callback_ptr: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -591,6 +603,8 @@ pub struct ShellNotificationRecord {
     pub title: String,
     pub html: String,
     pub lparam: u32,
+    /// Guest IShellNotificationCallback* COM interface pointer (may be 0 if not provided).
+    pub callback_ptr: u32,
 }
 
 impl ShellNotificationRecord {
@@ -610,6 +624,7 @@ impl ShellNotificationRecord {
             title: data.title,
             html: data.html,
             lparam: data.lparam,
+            callback_ptr: data.callback_ptr,
         }
     }
 
