@@ -5177,7 +5177,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             kernel, thread_id, args,
         ))),
         ORD_SCROLL_WINDOW_EX => Some(CoredllValue::U32(scroll_window_ex_raw(
-            kernel, memory, thread_id, args,
+            kernel, memory, framebuffer, thread_id, args,
         ) as u32)),
         ORD_SCROLL_DC => {
             // ScrollDC(hdc, dx, dy, lprcScroll, lprcClip, hrgnUpdate, lprcUpdate)
@@ -26430,29 +26430,224 @@ fn set_scroll_range_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> 
 fn scroll_window_ex_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
+    framebuffer: Option<&mut dyn Framebuffer>,
     thread_id: u32,
     args: &[u32],
 ) -> i32 {
+    // ScrollWindowEx(hWnd, dx, dy, prcScroll, prcClip, hrgnUpdate, prcUpdate, fuScroll)
     let hwnd = raw_arg(args, 0);
-    // dx, dy: scroll amounts; fuScroll: SW_* flags
+    let dx = raw_i32_arg(args, 1);
+    let dy = raw_i32_arg(args, 2);
+    let prc_scroll = raw_arg(args, 3);
+    let prc_clip = raw_arg(args, 4);
+    // args[5] = hrgnUpdate — region update not supported
+    let prc_update = raw_arg(args, 6);
     let fu_scroll = raw_arg(args, 7);
+
     const SW_INVALIDATE: u32 = 0x0002;
+    const SW_ERASE: u32 = 0x0004;
+
     if !kernel.gwe.is_window(hwnd) {
         kernel.threads.set_last_error(thread_id, ERROR_INVALID_HANDLE);
-        return 0; // ERROR
+        return 0;
     }
-    // Invalidate entire client area when SW_INVALIDATE is set.
-    if fu_scroll & SW_INVALIDATE != 0 {
-        kernel.gwe.invalidate_window(hwnd, None, true);
+
+    // Client rect in client coords (zero-origin) and screen-space origin of client area
+    let Some(client_rect) = kernel.gwe.get_client_rect(hwnd) else {
+        return 0;
+    };
+    let Some(origin) = kernel.gwe.client_to_screen(hwnd, Point { x: 0, y: 0 }) else {
+        return 0;
+    };
+
+    // Effective scroll rect in client coords, starting from full client area
+    let mut eff = client_rect;
+    if prc_scroll != 0 {
+        if let Some(r) = read_guest_rect(kernel, memory, thread_id, prc_scroll) {
+            match eff.intersect(r) {
+                Some(i) => eff = i,
+                None => {
+                    if prc_update != 0 {
+                        let _ = write_guest_bytes(kernel, memory, thread_id, prc_update, &[0u8; 16]);
+                    }
+                    kernel.threads.set_last_error(thread_id, 0);
+                    return NULLREGION as i32;
+                }
+            }
+        }
     }
-    // Check if prcUpdate (arg 6) is requested and write a zero RECT.
-    let prc_update = raw_arg(args, 6);
+    if prc_clip != 0 {
+        if let Some(r) = read_guest_rect(kernel, memory, thread_id, prc_clip) {
+            match eff.intersect(r) {
+                Some(i) => eff = i,
+                None => {
+                    if prc_update != 0 {
+                        let _ = write_guest_bytes(kernel, memory, thread_id, prc_update, &[0u8; 16]);
+                    }
+                    kernel.threads.set_last_error(thread_id, 0);
+                    return NULLREGION as i32;
+                }
+            }
+        }
+    }
+
+    if eff.is_empty() || (dx == 0 && dy == 0) {
+        if prc_update != 0 {
+            let _ = write_guest_bytes(kernel, memory, thread_id, prc_update, &[0u8; 16]);
+        }
+        kernel.threads.set_last_error(thread_id, 0);
+        return NULLREGION as i32;
+    }
+
+    // Shift pixels on framebuffer
+    if let Some(fb) = framebuffer {
+        scroll_framebuffer_rect(fb, eff.offset(origin.x, origin.y), dx, dy);
+    }
+
+    // Compute exposed rect (client coords) — the strip newly revealed by the scroll
+    let exposed = scroll_exposed_rect(eff, dx, dy);
+
     if prc_update != 0 {
-        // Write empty update rect (0,0,0,0)
-        let _ = write_guest_bytes(kernel, memory, thread_id, prc_update, &[0u8; 16]);
+        let _ = write_guest_rect(kernel, memory, thread_id, prc_update, exposed);
     }
+
+    if fu_scroll & SW_INVALIDATE != 0 && !exposed.is_empty() {
+        let erase = fu_scroll & SW_ERASE != 0;
+        kernel.gwe.invalidate_window(hwnd, Some(exposed), erase);
+    }
+
     kernel.threads.set_last_error(thread_id, 0);
-    1 // NULLREGION
+    if exposed.is_empty() {
+        NULLREGION as i32
+    } else {
+        SIMPLEREGION as i32
+    }
+}
+
+// Shift framebuffer pixels within `screen_rect` by `(dx, dy)`, clearing the exposed strip.
+fn scroll_framebuffer_rect(fb: &mut dyn Framebuffer, screen_rect: Rect, dx: i32, dy: i32) {
+    let info = fb.info();
+    let stride = info.stride;
+    let bpp = info.format.bytes_per_pixel();
+    let fb_w = info.width as i32;
+    let fb_h = info.height as i32;
+
+    let l = screen_rect.left.max(0).min(fb_w) as usize;
+    let t = screen_rect.top.max(0).min(fb_h) as usize;
+    let r = screen_rect.right.max(0).min(fb_w) as usize;
+    let b = screen_rect.bottom.max(0).min(fb_h) as usize;
+    if l >= r || t >= b {
+        return;
+    }
+    let row_len = (r - l) * bpp;
+
+    let pixels = fb.pixels_mut();
+
+    // Phase 1: vertical shift — move each row to its destination row.
+    // For dy > 0 (content moves down): iterate dst_y bottom-to-top to avoid src overwrite.
+    // For dy < 0 (content moves up): iterate dst_y top-to-bottom.
+    if dy != 0 {
+        let (start, end, step) = if dy > 0 {
+            (b as isize - 1, t as isize - 1, -1isize)
+        } else {
+            (t as isize, b as isize, 1isize)
+        };
+        let mut dst_y = start;
+        loop {
+            if step > 0 && dst_y >= end { break; }
+            if step < 0 && dst_y <= end { break; }
+            let src_y = dst_y - dy as isize;
+            let dst_off = dst_y as usize * stride + l * bpp;
+            if src_y >= t as isize && src_y < b as isize {
+                let src_off = src_y as usize * stride + l * bpp;
+                // Different rows — no overlap within [l*bpp, r*bpp] segment
+                pixels.copy_within(src_off..src_off + row_len, dst_off);
+            } else {
+                pixels[dst_off..dst_off + row_len].fill(0);
+            }
+            dst_y += step;
+        }
+    }
+
+    // Phase 2: horizontal shift — shift pixels within each row by dx.
+    // After phase 1, each row holds the vertically-shifted content.
+    // Now shift columns, exposing the vertical strip (left if dx>0, right if dx<0).
+    if dx != 0 {
+        for y in t..b {
+            if dx > 0 {
+                // Content moves right: iterate dst_x right-to-left
+                for dst_x in (l..r).rev() {
+                    let src_x = dst_x as isize - dx as isize;
+                    let dst_off = y * stride + dst_x * bpp;
+                    if src_x >= l as isize && src_x < r as isize {
+                        let src_off = y * stride + src_x as usize * bpp;
+                        pixels.copy_within(src_off..src_off + bpp, dst_off);
+                    } else {
+                        pixels[dst_off..dst_off + bpp].fill(0);
+                    }
+                }
+            } else {
+                // Content moves left: iterate dst_x left-to-right
+                for dst_x in l..r {
+                    let src_x = dst_x as isize - dx as isize;
+                    let dst_off = y * stride + dst_x * bpp;
+                    if src_x >= l as isize && src_x < r as isize {
+                        let src_off = y * stride + src_x as usize * bpp;
+                        pixels.copy_within(src_off..src_off + bpp, dst_off);
+                    } else {
+                        pixels[dst_off..dst_off + bpp].fill(0);
+                    }
+                }
+            }
+        }
+    }
+
+    fb.mark_dirty(FramebufferRect::new(l as u32, t as u32, (r - l) as u32, (b - t) as u32));
+}
+
+// Compute the exposed rect in client coords after scrolling `rect` by (dx, dy).
+// The exposed area is the union of the horizontal and vertical strips newly revealed.
+fn scroll_exposed_rect(rect: Rect, dx: i32, dy: i32) -> Rect {
+    let horiz = if dx > 0 {
+        Some(Rect {
+            left: rect.left,
+            top: rect.top,
+            right: (rect.left + dx).min(rect.right),
+            bottom: rect.bottom,
+        })
+    } else if dx < 0 {
+        Some(Rect {
+            left: (rect.right + dx).max(rect.left),
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+        })
+    } else {
+        None
+    };
+    let vert = if dy > 0 {
+        Some(Rect {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: (rect.top + dy).min(rect.bottom),
+        })
+    } else if dy < 0 {
+        Some(Rect {
+            left: rect.left,
+            top: (rect.bottom + dy).max(rect.top),
+            right: rect.right,
+            bottom: rect.bottom,
+        })
+    } else {
+        None
+    };
+    match (horiz, vert) {
+        (Some(h), Some(v)) => h.union(v),
+        (Some(h), None) => h,
+        (None, Some(v)) => v,
+        (None, None) => Rect { left: 0, top: 0, right: 0, bottom: 0 },
+    }
 }
 
 fn release_dc_raw(kernel: &CeKernel, hwnd: u32, hdc: u32) -> u32 {
