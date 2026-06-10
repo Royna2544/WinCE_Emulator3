@@ -105,8 +105,7 @@ and isolated guest networking.
   character input, direct button and dialog-client hit-tested button-down/release input, dialog `WM_COMMAND`, dialog
   `WM_CLOSE`, and dialog `WM_SYSCOMMAND/SC_CLOSE` input for the transient
   dialog before falling back to that default result, while dispatching queued
-  posted and sent same-thread non-dialog messages ahead of later dialog input;
-  the full blocking wait and broader live interaction remain queued.
+  posted and sent same-thread non-dialog messages ahead of later dialog input.
 - Improve GWE defaults for focus, activation, non-client messages, hit testing,
   client `WM_SETCURSOR` class-cursor selection, non-client
   `WM_SETCURSOR` stock sizing/arrow cursor selection, `WM_MOUSEACTIVATE`
