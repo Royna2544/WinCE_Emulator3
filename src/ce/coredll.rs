@@ -19465,6 +19465,31 @@ fn resolve_shell_launch(
             .process_current_directory()
             .and_then(normalize_shell_directory)
     });
+    // URL schemes (e.g. "http://", "ftp://") are detected on the raw input before
+    // path normalization so forward slashes in the URL are preserved.
+    if let Some(scheme) = shell_url_scheme(file.trim()) {
+        let target = file.trim().to_owned();
+        let launch_parameters = parameters.map(str::to_owned);
+        let command_template =
+            shell_class_command(kernel, scheme, verb).ok_or(ShellLaunchError::NoAssociation)?;
+        let command =
+            expand_shell_command_template(&command_template, &target, launch_parameters.as_deref());
+        let (application, command_line) = split_shell_command(&command);
+        let Some(application_path) = application.as_deref() else {
+            return Err(ShellLaunchError::NoAssociation);
+        };
+        if is_absolute_shell_path(application_path)
+            && kernel.file_attributes_w(application_path).is_err()
+        {
+            return Err(shell_missing_path_error(kernel, application_path));
+        }
+        return Ok(ShellLaunchCommand {
+            application,
+            command_line,
+            current_directory,
+            hinst_app: SHELL_EXECUTE_SUCCESS,
+        });
+    }
     let file = normalize_shell_path(file, current_directory.as_deref());
     let (target, launch_parameters) = if is_shell_shortcut(&file) {
         let shortcut = resolve_ce_shortcut(kernel, &file).ok_or(ShellLaunchError::FileNotFound)?;
@@ -19486,11 +19511,16 @@ fn resolve_shell_launch(
             hinst_app: SHELL_EXECUTE_SUCCESS,
         });
     }
-    if kernel.file_attributes_w(&target).is_err() {
-        return Err(shell_missing_path_error(kernel, &target));
-    }
-    let command_template =
-        shell_association_command(kernel, &target, verb).ok_or(ShellLaunchError::NoAssociation)?;
+    let file_attrs = kernel
+        .file_attributes_w(&target)
+        .map_err(|_| shell_missing_path_error(kernel, &target))?;
+    let command_template = if file_attrs.attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+        // Directories route through the "folder" class (HKCR\folder\Shell\{verb}\Command),
+        // matching CE's Explorer folder-open dispatch via shell_file_class behavior.
+        shell_class_command(kernel, "folder", verb).ok_or(ShellLaunchError::NoAssociation)?
+    } else {
+        shell_association_command(kernel, &target, verb).ok_or(ShellLaunchError::NoAssociation)?
+    };
     let command =
         expand_shell_command_template(&command_template, &target, launch_parameters.as_deref());
     let (application, command_line) = split_shell_command(&command);
@@ -19588,20 +19618,8 @@ fn resolve_ce_shortcut(kernel: &CeKernel, path: &str) -> Option<ShellShortcutTar
     })
 }
 
-fn shell_association_command(kernel: &CeKernel, target: &str, verb: &str) -> Option<String> {
-    let class = if let Some(extension) = file_extension(target) {
-        let extension_key = format!(r"HKCR\.{extension}");
-        registry_string(kernel, &extension_key, "").or_else(|| {
-            registry_string(kernel, &format!(r"HKLM\Software\Classes\.{extension}"), "")
-        })?
-    } else {
-        "file".to_owned()
-    };
-    let verb = if verb.trim().is_empty() {
-        "open"
-    } else {
-        verb.trim()
-    };
+fn shell_class_command(kernel: &CeKernel, class: &str, verb: &str) -> Option<String> {
+    let verb = if verb.trim().is_empty() { "open" } else { verb.trim() };
     registry_string(kernel, &format!(r"HKCR\{class}\Shell\{verb}\Command"), "")
         .or_else(|| {
             registry_string(
@@ -19618,6 +19636,30 @@ fn shell_association_command(kernel: &CeKernel, target: &str, verb: &str) -> Opt
                 "",
             )
         })
+}
+
+fn shell_association_command(kernel: &CeKernel, target: &str, verb: &str) -> Option<String> {
+    let class = if let Some(extension) = file_extension(target) {
+        let extension_key = format!(r"HKCR\.{extension}");
+        registry_string(kernel, &extension_key, "").or_else(|| {
+            registry_string(kernel, &format!(r"HKLM\Software\Classes\.{extension}"), "")
+        })?
+    } else {
+        "file".to_owned()
+    };
+    shell_class_command(kernel, &class, verb)
+}
+
+/// Extracts a URL scheme from a path that contains `://`, verifying the scheme
+/// is alphanumeric (ASCII letters, digits, `+`, `-`, `.` per RFC 3986).
+fn shell_url_scheme(target: &str) -> Option<&str> {
+    let idx = target.find("://")?;
+    let scheme = &target[..idx];
+    (!scheme.is_empty()
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.'))
+    .then_some(scheme)
 }
 
 fn shell_file_class(kernel: &CeKernel, path: &str, attributes: u32) -> String {

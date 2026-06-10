@@ -3311,6 +3311,185 @@ fn shell_execute_ex_verb_print_uses_print_command_when_registered() -> Result<()
 }
 
 #[test]
+fn shell_execute_ex_opens_directory_via_folder_class() -> Result<()> {
+    // Directories are routed through HKCR\folder\Shell\Open\Command (the "folder" class),
+    // not through the file-extension association, matching CE's Explorer dispatch.
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("shell_execute_ex_folder_class");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("Windows")).unwrap();
+    fs::create_dir_all(root.join("Docs")).unwrap();
+    fs::write(root.join("Windows").join("explorer.exe"), b"fake exe").unwrap();
+    kernel.set_file_root(&root);
+    kernel.registry.set_value(
+        r"HKCR\folder\Shell\Open\Command",
+        "",
+        RegistryValue::string(r#""\Windows\explorer.exe" "%1""#),
+    );
+
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 46;
+    let info = 0x2_5c00;
+    let verb_ptr = 0x2_5d00;
+    let file_ptr = 0x2_5e00;
+    memory.map_words(info, 16);
+    memory.write_word(info, 60);
+    memory.write_word(info + 12, verb_ptr);
+    memory.write_word(info + 16, file_ptr);
+    memory.write_wide_z(verb_ptr, "");
+    memory.write_wide_z(file_ptr, r"\Docs");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_EXECUTE_EX,
+            [info],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let launches = kernel.take_pending_process_launches();
+    assert_eq!(launches.len(), 1);
+    assert_eq!(
+        launches[0].command_line.as_deref(),
+        Some(r#""\Windows\explorer.exe" "\Docs""#),
+        "directory must route through folder class open command"
+    );
+
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn shell_execute_ex_directory_with_no_folder_class_returns_noassoc() -> Result<()> {
+    // When no HKCR\folder\Shell\Open\Command is registered, opening a directory
+    // returns SE_ERR_NOASSOC (31).
+    const SE_ERR_NOASSOC: u32 = 31;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("shell_execute_ex_folder_noassoc");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("Docs")).unwrap();
+    kernel.set_file_root(&root);
+    // No folder open command registered.
+
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 46;
+    let info = 0x2_5c00;
+    let verb_ptr = 0x2_5d00;
+    let file_ptr = 0x2_5e00;
+    memory.map_words(info, 16);
+    memory.write_word(info, 60);
+    memory.write_word(info + 12, verb_ptr);
+    memory.write_word(info + 16, file_ptr);
+    memory.write_wide_z(verb_ptr, "");
+    memory.write_wide_z(file_ptr, r"\Docs");
+
+    let result = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SHELL_EXECUTE_EX,
+        [info],
+    );
+    assert!(matches!(
+        result,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(info + 32)?, SE_ERR_NOASSOC);
+    assert!(kernel.take_pending_process_launches().is_empty());
+
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
+fn shell_execute_ex_opens_url_via_protocol_handler() -> Result<()> {
+    // URL targets (containing "://") are routed through HKCR\{scheme}\Shell\Open\Command
+    // without a filesystem existence check, matching CE's URL protocol-handler dispatch.
+    const SE_ERR_NOASSOC: u32 = 31;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("shell_execute_ex_url_protocol");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("Windows")).unwrap();
+    fs::write(root.join("Windows").join("iexplore.exe"), b"fake ie").unwrap();
+    kernel.set_file_root(&root);
+    kernel.registry.set_value(
+        r"HKCR\http\Shell\Open\Command",
+        "",
+        RegistryValue::string(r#""\Windows\iexplore.exe" "%1""#),
+    );
+
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 46;
+    let info = 0x2_5c00;
+    let verb_ptr = 0x2_5d00;
+    let file_ptr = 0x2_5e00;
+    memory.map_words(info, 16);
+    memory.write_word(info, 60);
+    memory.write_word(info + 12, verb_ptr);
+    memory.write_word(info + 16, file_ptr);
+    memory.write_wide_z(verb_ptr, "");
+    memory.write_wide_z(file_ptr, "http://example.com/route.nav");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_EXECUTE_EX,
+            [info],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let launches = kernel.take_pending_process_launches();
+    assert_eq!(launches.len(), 1);
+    assert_eq!(
+        launches[0].command_line.as_deref(),
+        Some(r#""\Windows\iexplore.exe" "http://example.com/route.nav""#),
+        "http URL must route through HKCR\\http\\Shell\\Open\\Command"
+    );
+
+    // URL with no registered scheme handler returns SE_ERR_NOASSOC.
+    memory.write_wide_z(file_ptr, "ftp://files.example.com/data");
+    let result = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SHELL_EXECUTE_EX,
+        [info],
+    );
+    assert!(matches!(
+        result,
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(info + 32)?, SE_ERR_NOASSOC);
+
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_create_process_preserves_current_directory() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
