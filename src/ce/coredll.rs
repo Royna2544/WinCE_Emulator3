@@ -22832,7 +22832,14 @@ fn image_list_draw_ex_raw<M: CoredllGuestMemory>(
     let y = raw_i32_arg(args, 4);
     let width = raw_i32_arg(args, 5);
     let height = raw_i32_arg(args, 6);
-    let flags = raw_arg(args, 9);
+    let rgb_bk = raw_arg(args, 7);
+    let raw_flags = raw_arg(args, 9);
+    const ILD_TRANSPARENT: u32 = 0x0001;
+    let flags = if rgb_bk == CLR_NONE {
+        raw_flags | ILD_TRANSPARENT
+    } else {
+        raw_flags
+    };
     if handle != SHELL_SYSTEM_IMAGE_LIST_HANDLE && kernel.resources.image_list(handle).is_none() {
         kernel
             .threads
