@@ -33233,9 +33233,23 @@ fn translate_message_raw<M: CoredllGuestMemory>(
     let is_western_layout = matches!(layout_lang, 0x040C | 0x0407 | 0x040A | 0x0C0A);
 
     if is_western_layout && message.msg == crate::ce::gwe::WM_KEYDOWN {
+        let ctrl = kernel.gwe.get_key_state(crate::ce::gwe::VK_CONTROL) & 0x8000_0000 != 0;
+        let alt = kernel.gwe.get_key_state(crate::ce::gwe::VK_MENU) & 0x8000_0000 != 0;
+        // Pure Ctrl (without Alt): bypass Western layout; fall through to control-key translation.
+        if ctrl && !alt {
+            // intentional fall-through to translate_virtual_key_to_char below
+        } else {
         let shift = kernel.gwe.get_key_state(crate::ce::gwe::VK_SHIFT) & 0x8000_0000 != 0;
         let caps = kernel.gwe.get_key_state(crate::ce::gwe::VK_CAPITAL) & 0x0001 != 0;
-        let (ch, is_dead) = translate_vk_for_western_layout(layout, message.wparam, shift, caps);
+        // AltGr (Ctrl+Alt): use the AltGr variant of the layout table, falling back
+        // to the normal layout table if there is no AltGr mapping for this VK.
+        let (ch, is_dead) = if ctrl && alt {
+            translate_vk_for_western_layout_altgr(layout, message.wparam)
+                .map_or_else(|| translate_vk_for_western_layout(layout, message.wparam, shift, caps),
+                             |c| (c, false))
+        } else {
+            translate_vk_for_western_layout(layout, message.wparam, shift, caps)
+        };
 
         if let Some(pending_dead) = kernel.gwe.take_dead_key() {
             if ch != 0 {
@@ -33315,6 +33329,7 @@ fn translate_message_raw<M: CoredllGuestMemory>(
             return true;
         }
         // ch == 0 from western table: fall through to standard US translation.
+        } // end `else` for non-pure-Ctrl branch
     }
 
     // WM_SYSKEYDOWN on a Western layout: translate VK→char using the layout table
@@ -33888,6 +33903,61 @@ fn translate_digit_key(vkey: u32, shift: bool) -> u32 {
         0x38 => b'*' as u32,
         0x39 => b'(' as u32,
         _ => 0,
+    }
+}
+
+/// Translate a VK code with AltGr (Ctrl+Alt) held for a Western European layout.
+/// Returns `Some(char_code)` when AltGr produces a character, `None` to fall back
+/// to the normal layout table. Only covers the most common AltGr mappings.
+fn translate_vk_for_western_layout_altgr(layout: u32, vkey: u32) -> Option<u32> {
+    let lang = layout & 0xFFFF;
+    match lang {
+        // French AZERTY AltGr (kbdfr.dll)
+        0x040C => match vkey {
+            0x30 => Some(0x40),   // AltGr+0 = @
+            0x32 => Some(0x7e),   // AltGr+2 = ~
+            0x33 => Some(0x23),   // AltGr+3 = #
+            0x34 => Some(0x7b),   // AltGr+4 = {
+            0x35 => Some(0x5b),   // AltGr+5 = [
+            0x36 => Some(0x7c),   // AltGr+6 = |
+            0x37 => Some(0x60),   // AltGr+7 = `
+            0x38 => Some(0x5c),   // AltGr+8 = backslash
+            0x39 => Some(0x5e),   // AltGr+9 = ^
+            0x45 => Some(0x20ac), // AltGr+E = €
+            0xbd => Some(0x5d),   // AltGr+) = ]
+            0xbb => Some(0x7d),   // AltGr+= = }
+            _ => None,
+        },
+        // German QWERTZ AltGr (kbdgr.dll)
+        0x0407 => match vkey {
+            0x32 => Some(0x00b2), // AltGr+2 = ²
+            0x33 => Some(0x00b3), // AltGr+3 = ³
+            0x37 => Some(0x7b),   // AltGr+7 = {
+            0x38 => Some(0x5b),   // AltGr+8 = [
+            0x39 => Some(0x5d),   // AltGr+9 = ]
+            0x30 => Some(0x7d),   // AltGr+0 = }
+            0x51 => Some(0x40),   // AltGr+Q = @
+            0x45 => Some(0x20ac), // AltGr+E = €
+            0xbd => Some(0x5c),   // AltGr+ß = backslash
+            0xbb => Some(0x7e),   // AltGr+acute = ~
+            0xe2 => Some(0x7c),   // AltGr+< = |
+            _ => None,
+        },
+        // Spanish AltGr (kbdsp.dll)
+        0x040A | 0x0C0A => match vkey {
+            0x31 => Some(0x7c),   // AltGr+1 = |
+            0x32 => Some(0x40),   // AltGr+2 = @
+            0x33 => Some(0x23),   // AltGr+3 = #
+            0x34 => Some(0x7e),   // AltGr+4 = ~
+            0x35 => Some(0x00bd), // AltGr+5 = ½
+            0x36 => Some(0x00ac), // AltGr+6 = ¬
+            0x45 => Some(0x20ac), // AltGr+E = €
+            0xdb => Some(0x5b),   // AltGr+[ = [
+            0xdd => Some(0x5d),   // AltGr+] = ]
+            0xe2 => Some(0x7c),   // AltGr+< = |
+            _ => None,
+        },
+        _ => None,
     }
 }
 

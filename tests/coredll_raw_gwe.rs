@@ -23208,6 +23208,78 @@ fn coredll_raw_gwe_def_window_proc_enable_invalidates_window() -> Result<()> {
 }
 
 #[test]
+fn coredll_raw_translate_message_western_layout_ctrl_and_altgr() -> Result<()> {
+    // Ctrl+letter on a Western layout must produce a WM_CHAR control code (not a layout character).
+    // AltGr (Ctrl+Alt)+key must produce the AltGr character from the layout-specific table.
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 55_u32;
+    let msg_ptr = 0x3_0000_u32;
+    memory.map_words(msg_ptr, 7);
+    let hwnd = kernel.create_window_ex_w(thread_id, "CTRL_ALTGR_OWNER", "", None, 0, 0, 0);
+
+    // Switch to French AZERTY (0x040C).
+    kernel.gwe.activate_keyboard_layout(0x040C);
+
+    // --- AZERTY Ctrl+Q: VK_Q maps to 'a' on AZERTY, but Ctrl must win → WM_CHAR(0x01=Ctrl+A). ---
+    // Post Ctrl down so key state is set.
+    kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYDOWN, VK_LCONTROL, 0);
+    write_raw_message(&mut memory, msg_ptr, hwnd, WM_KEYDOWN, 0x51u32, 0)?; // VK_Q
+    let r = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_TRANSLATE_MESSAGE, [msg_ptr],
+    );
+    assert!(matches!(r, CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }),
+        "Ctrl+VK_Q on AZERTY must produce WM_CHAR (control code)");
+    let ctrl_msg = kernel
+        .gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_CHAR, WM_CHAR, PeekFlags::REMOVE)
+        .expect("Ctrl+Q must post WM_CHAR(Ctrl+Q=0x11) not AZERTY layout char 'a'");
+    // VK codes are layout-independent: VK_Q=0x51, so Ctrl+VK_Q → 0x51-0x40 = 0x11.
+    assert_eq!(ctrl_msg.wparam, 0x11,
+        "Ctrl+VK_Q on AZERTY should produce Ctrl+Q (0x11), not layout char 'a'");
+    // Release Ctrl.
+    kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYUP, VK_LCONTROL, 0);
+
+    // --- AZERTY AltGr+2: AltGr = Ctrl+Alt, must produce '~' (0x7e). ---
+    kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYDOWN, VK_LCONTROL, 0);
+    kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYDOWN, VK_MENU, 0);
+    write_raw_message(&mut memory, msg_ptr, hwnd, WM_KEYDOWN, 0x32u32, 0)?; // VK_2
+    let r2 = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_TRANSLATE_MESSAGE, [msg_ptr],
+    );
+    assert!(matches!(r2, CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }),
+        "AltGr+2 on AZERTY must produce WM_CHAR");
+    let altgr_msg = kernel
+        .gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_CHAR, WM_CHAR, PeekFlags::REMOVE)
+        .expect("AltGr+2 on AZERTY must post WM_CHAR('~')");
+    assert_eq!(altgr_msg.wparam, 0x7e, "AltGr+2 on AZERTY → '~'");
+    // Release AltGr.
+    kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYUP, VK_MENU, 0);
+    kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYUP, VK_LCONTROL, 0);
+
+    // --- QWERTZ AltGr+Q → '@'. ---
+    kernel.gwe.activate_keyboard_layout(0x0407);
+    kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYDOWN, VK_LCONTROL, 0);
+    kernel.post_message_w_for_thread(thread_id, hwnd, WM_KEYDOWN, VK_MENU, 0);
+    write_raw_message(&mut memory, msg_ptr, hwnd, WM_KEYDOWN, 0x51u32, 0)?; // VK_Q
+    let r3 = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_TRANSLATE_MESSAGE, [msg_ptr],
+    );
+    assert!(matches!(r3, CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }),
+        "AltGr+Q on QWERTZ must produce WM_CHAR");
+    let q_msg = kernel
+        .gwe
+        .peek_message_filtered(thread_id, Some(hwnd), WM_CHAR, WM_CHAR, PeekFlags::REMOVE)
+        .expect("AltGr+Q on QWERTZ must post WM_CHAR('@')");
+    assert_eq!(q_msg.wparam, 0x40, "AltGr+Q on QWERTZ → '@'");
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_gwe_wm_parentnotify_on_create_and_destroy() -> Result<()> {
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
