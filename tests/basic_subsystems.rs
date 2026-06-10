@@ -8192,3 +8192,57 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     res.select_clip_region(hdc, None);
     assert!(res.clip_region(hdc).is_none());
 }
+
+#[test]
+fn unmount_guest_root_signals_change_notification_handles_watching_subpaths() -> Result<()> {
+    // CE FSDMGR behavior: unmounting a volume signals ALL FindFirstChangeNotificationW handles
+    // whose watch path is under the removed volume, regardless of their specific notify_filter.
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+
+    // Set up a host directory with a subdirectory so both watch paths are valid directories.
+    let host_vol = std::env::temp_dir().join("wince_test_sdcard_watch");
+    let host_sub = host_vol.join("Data");
+    std::fs::create_dir_all(&host_sub).unwrap();
+    kernel.mount_guest_root("\\SDCard", host_vol);
+
+    // FILE_NOTIFY_CHANGE_FILE_NAME = 0x1 (not a dir-change filter).
+    // Watch a subpath using only FILE_NOTIFY_CHANGE_FILE_NAME (not dir/creation).
+    let nfh = kernel.find_first_change_notification_w(
+        "\\SDCard\\Data",
+        true,
+        0x0000_0001, // FILE_NOTIFY_CHANGE_FILE_NAME only
+    )?;
+    assert!(kernel.file_change_notification_records(nfh)?.is_empty());
+
+    // Also create a handle watching \\SDCard itself with dir-change filter (normal DRIVEREMOVED path).
+    let vol_nfh = kernel.find_first_change_notification_w(
+        "\\SDCard",
+        false,
+        0x0000_0002, // FILE_NOTIFY_CHANGE_DIR_NAME
+    )?;
+
+    // Unmount the volume. This should:
+    // 1. Signal vol_nfh via the normal SHCNE_DRIVEREMOVED path (FILE_NOTIFY_CHANGE_DIR_NAME).
+    // 2. Signal nfh via the new subpath signaling (regardless of filter).
+    assert!(kernel.unmount_guest_root("\\SDCard"));
+
+    // The subpath handle should now be signaled with a REMOVED record.
+    let records = kernel.file_change_notification_records(nfh)?;
+    assert!(!records.is_empty(), "subpath watcher should be signaled on volume removal");
+    assert_eq!(
+        records[0].action, 0x0000_0002, // FILE_ACTION_REMOVED
+        "record action should be FILE_ACTION_REMOVED"
+    );
+
+    // The volume-root handle should also be signaled.
+    let vol_records = kernel.file_change_notification_records(vol_nfh)?;
+    assert!(!vol_records.is_empty(), "volume root watcher should be signaled on removal");
+
+    kernel.find_close_change_notification(nfh)?;
+    kernel.find_close_change_notification(vol_nfh)?;
+
+    let _ = std::fs::remove_dir_all(&host_sub);
+    let _ = std::fs::remove_dir(std::env::temp_dir().join("wince_test_sdcard_watch"));
+    Ok(())
+}

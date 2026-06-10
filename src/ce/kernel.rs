@@ -950,6 +950,9 @@ impl CeKernel {
         if self.files.unmount_guest_root(guest_root).is_some() {
             self.post_shell_file_change_notifications(SHCNE_DRIVEREMOVED, Some(guest_root), None);
             self.signal_file_change_notifications(SHCNE_DRIVEREMOVED, Some(guest_root), None);
+            // Signal all change notification handles watching any path under the removed volume
+            // (CE FSDMGR signals these regardless of their specific notify_filter).
+            self.signal_file_change_notifications_for_removed_mount(guest_root);
             // Broadcast WM_DEVICECHANGE(DBT_DEVICEREMOVECOMPLETE) to all top-level windows.
             self.send_notify_message_w(0, crate::ce::gwe::HWND_BROADCAST, WM_DEVICECHANGE, DBT_DEVICEREMOVECOMPLETE, 0);
             true
@@ -4732,6 +4735,43 @@ impl CeKernel {
             self.queue_object_wake_candidates(*handle);
         }
         handles.len()
+    }
+
+    fn signal_file_change_notifications_for_removed_mount(&mut self, volume_root: &str) {
+        let volume_root = normalize_shell_change_path(volume_root);
+        let volume_prefix = format!("{volume_root}\\");
+        let mut handles = Vec::new();
+        for (handle, object) in self.handles.iter_mut() {
+            let KernelObject::FileChangeNotification(notification) = object else {
+                continue;
+            };
+            let watch = normalize_shell_change_path(&notification.watch_path);
+            // Skip handles already covered by the SHCNE_DRIVEREMOVED signal call
+            // (those that watch the volume root itself with the dir-change filter).
+            if watch.eq_ignore_ascii_case(&volume_root) {
+                continue;
+            }
+            // Signal handles watching subpaths of the removed volume.
+            let prefix_len = volume_prefix.len();
+            let is_under_volume = watch
+                .get(..prefix_len)
+                .is_some_and(|head| head.eq_ignore_ascii_case(&volume_prefix));
+            if !is_under_volume {
+                continue;
+            }
+            let record = FileChangeRecord {
+                action: FILE_ACTION_REMOVED,
+                path: watch[volume_prefix.len()..].to_owned(),
+            };
+            append_file_change_records(&mut notification.pending, std::iter::once(record));
+            notification.signaled = !notification.pending.is_empty();
+            if notification.signaled {
+                handles.push(handle);
+            }
+        }
+        for handle in &handles {
+            self.queue_object_wake_candidates(*handle);
+        }
     }
 
     fn queue_shell_file_change_payload(&mut self, payload: FileChangeNotificationMessage) -> u32 {
