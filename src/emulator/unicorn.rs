@@ -516,6 +516,7 @@ struct BlockedClipboardData {
     thread_id: u32,
     thread_handle: u32,
     format: u32,
+    is_alloc: bool,
     regs: MipsGuestContext,
     return_pc: u32,
     wait_started_ms: u32,
@@ -8190,6 +8191,37 @@ fn try_resume_blocked_send_message_timeout<D>(
 const CLIPBOARD_RENDER_TIMEOUT_MS: u32 = 5000;
 
 #[cfg(feature = "unicorn")]
+fn clipboard_render_complete_handle<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    format: u32,
+    is_alloc: bool,
+) -> u32 {
+    let source = kernel.gwe.get_clipboard_data(format).unwrap_or(0);
+    if source == 0 || !is_alloc {
+        return source;
+    }
+    let Some(size) = kernel.memory.local_size(source) else {
+        return 0;
+    };
+    let Some(copy) = kernel.memory.local_alloc(0, size) else {
+        return 0;
+    };
+    if size != 0 {
+        match uc.mem_read_as_vec(u64::from(source), size as usize) {
+            Ok(bytes) => {
+                let _ = uc.mem_write(u64::from(copy), &bytes);
+            }
+            Err(_) => {
+                let _ = kernel.memory.local_free(copy);
+                return 0;
+            }
+        }
+    }
+    copy
+}
+
+#[cfg(feature = "unicorn")]
 #[allow(clippy::too_many_arguments)]
 fn try_block_for_clipboard_data_wait<D>(
     kernel: &mut CeKernel,
@@ -8203,8 +8235,9 @@ fn try_block_for_clipboard_data_wait<D>(
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
+    let is_alloc = ordinal == Some(crate::ce::coredll_ordinals::ORD_GET_CLIPBOARD_DATA_ALLOC);
     if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
-        || ordinal != Some(crate::ce::coredll_ordinals::ORD_GET_CLIPBOARD_DATA)
+        || (ordinal != Some(crate::ce::coredll_ordinals::ORD_GET_CLIPBOARD_DATA) && !is_alloc)
     {
         return false;
     }
@@ -8216,7 +8249,10 @@ fn try_block_for_clipboard_data_wait<D>(
 
     // Re-entry: the blocked thread re-ran at this ordinal — check if render is done.
     if let Some(blocked) = blocked_cbd.borrow().clone() {
-        if blocked.thread_id != thread_id || blocked.format != format {
+        if blocked.thread_id != thread_id
+            || blocked.format != format
+            || blocked.is_alloc != is_alloc
+        {
             return false;
         }
         let now_ms = kernel.timers.tick_count();
@@ -8231,11 +8267,7 @@ fn try_block_for_clipboard_data_wait<D>(
         }
         let _ = kernel.remove_blocked_waiter(blocked.wait_id);
         *blocked_cbd.borrow_mut() = None;
-        let handle = if render_ready {
-            kernel.gwe.get_clipboard_data(format).unwrap_or(0)
-        } else {
-            0
-        };
+        let handle = clipboard_render_complete_handle(kernel, uc, format, blocked.is_alloc);
         kernel.threads.set_last_error(blocked.thread_id, 0);
         let mut regs = blocked.regs;
         regs.set_v0(handle);
@@ -8298,6 +8330,7 @@ fn try_block_for_clipboard_data_wait<D>(
         thread_id,
         thread_handle,
         format,
+        is_alloc,
         regs: capture_mips_gprs(uc),
         return_pc: read_mips_reg(uc, RegisterMIPS::RA),
         wait_started_ms: now_ms,
@@ -8342,7 +8375,7 @@ fn try_resume_blocked_clipboard_data<D>(
     *blocked_cbd.borrow_mut() = None;
 
     let handle = if render_ready {
-        kernel.gwe.get_clipboard_data(blocked.format).unwrap_or(0)
+        clipboard_render_complete_handle(kernel, uc, blocked.format, blocked.is_alloc)
     } else {
         0
     };
