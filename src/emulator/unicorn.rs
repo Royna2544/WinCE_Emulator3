@@ -460,6 +460,13 @@ struct PendingQsortReturn {
     ranges: Vec<(u32, u32)>,
     partition: Option<PendingQsortPartition>,
     current_pair: Option<(u32, u32)>,
+    /// If true, dereference slot addresses to get item values before passing to comparator.
+    /// Used by DPA_Sort where pfnCmp receives item pointer values, not slot addresses.
+    deref_args: bool,
+    /// Extra lParam to pass as A2 to the comparator (DPA_Sort / DSA_Sort).
+    compare_lparam: Option<u32>,
+    /// Value to write into V0 when the sort finishes (0 for qsort void, 1 for DPA/DSA_Sort BOOL).
+    finish_v0: u32,
 }
 
 #[cfg(feature = "unicorn")]
@@ -3648,6 +3655,28 @@ impl UnicornMips {
                 }
                 if trap.as_ref().is_some_and(|trap| {
                     try_enter_qsort_callout(
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        &pending_qsort_returns_hook,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_enter_dpa_sort_callout(
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        &pending_qsort_returns_hook,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_enter_dsa_sort_callout(
                         memory.uc,
                         trap.module_kind,
                         trap.ordinal,
@@ -21969,6 +21998,9 @@ fn try_enter_qsort_callout<D>(
         ranges: vec![(0, count - 1)],
         partition: None,
         current_pair: None,
+        deref_args: false,
+        compare_lparam: None,
+        finish_v0: 0,
     };
     tracing::debug!(
         target: "ce.crt",
@@ -22014,6 +22046,176 @@ fn handle_qsort_return_stub<D>(
         }
         QsortStep::Failed => false,
     }
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_dpa_sort_callout<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingQsortReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_DPA_SORT)
+    {
+        return false;
+    }
+    let hdpa = args.first().copied().unwrap_or(0);
+    let callback = args.get(1).copied().unwrap_or(0);
+    let lparam = args.get(2).copied().unwrap_or(0);
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+
+    if hdpa == 0 || !is_guest_wndproc(callback) {
+        let _ = uc.reg_write(RegisterMIPS::V0, 1);
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        let _ = uc.reg_write(RegisterMIPS::RA, u64::from(return_pc));
+        return true;
+    }
+
+    let mut cp_bytes = [0u8; 4];
+    let mut pp_bytes = [0u8; 4];
+    if uc.mem_read(u64::from(hdpa), &mut cp_bytes).is_err()
+        || uc.mem_read(u64::from(hdpa + 4), &mut pp_bytes).is_err()
+    {
+        let _ = uc.reg_write(RegisterMIPS::V0, 1);
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        let _ = uc.reg_write(RegisterMIPS::RA, u64::from(return_pc));
+        return true;
+    }
+    let cp_items = i32::from_le_bytes(cp_bytes);
+    let pp = u32::from_le_bytes(pp_bytes);
+
+    if cp_items < 2 || pp == 0 {
+        let _ = uc.reg_write(RegisterMIPS::V0, 1);
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        let _ = uc.reg_write(RegisterMIPS::RA, u64::from(return_pc));
+        return true;
+    }
+    let count = cp_items as u32;
+    if count > 4096 {
+        return false;
+    }
+
+    let call_callback = normalize_ce_process_slot_callback(uc, callback);
+    let mut state = PendingQsortReturn {
+        return_pc,
+        return_sp: read_mips_reg(uc, RegisterMIPS::SP),
+        caller_regs: capture_mips_gprs(uc),
+        base: pp,
+        count,
+        size: 4,
+        comparator: call_callback,
+        ranges: vec![(0, count - 1)],
+        partition: None,
+        current_pair: None,
+        deref_args: true,
+        compare_lparam: Some(lparam),
+        finish_v0: 1,
+    };
+    tracing::debug!(
+        target: "ce.dpa",
+        hdpa = format_args!("0x{hdpa:08x}"),
+        count,
+        callback = format_args!("0x{callback:08x}"),
+        "DPA_Sort guest comparator callout"
+    );
+    match enter_next_qsort_comparator(uc, &mut state) {
+        QsortStep::ComparatorEntered => {}
+        QsortStep::Done => return finish_qsort_callout(uc, state),
+        QsortStep::Failed => return false,
+    }
+    pending_returns.borrow_mut().push(state);
+    true
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_dsa_sort_callout<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingQsortReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_DSA_SORT)
+    {
+        return false;
+    }
+    let hdsa = args.first().copied().unwrap_or(0);
+    let callback = args.get(1).copied().unwrap_or(0);
+    let lparam = args.get(2).copied().unwrap_or(0);
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+
+    if hdsa == 0 || !is_guest_wndproc(callback) {
+        let _ = uc.reg_write(RegisterMIPS::V0, 1);
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        let _ = uc.reg_write(RegisterMIPS::RA, u64::from(return_pc));
+        return true;
+    }
+
+    let mut cp_bytes = [0u8; 4];
+    let mut pdata_bytes = [0u8; 4];
+    let mut cbitem_bytes = [0u8; 4];
+    if uc.mem_read(u64::from(hdsa), &mut cp_bytes).is_err()
+        || uc.mem_read(u64::from(hdsa + 4), &mut pdata_bytes).is_err()
+        || uc.mem_read(u64::from(hdsa + 20), &mut cbitem_bytes).is_err()
+    {
+        let _ = uc.reg_write(RegisterMIPS::V0, 1);
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        let _ = uc.reg_write(RegisterMIPS::RA, u64::from(return_pc));
+        return true;
+    }
+    let cp_items = i32::from_le_bytes(cp_bytes);
+    let pdata = u32::from_le_bytes(pdata_bytes);
+    let cb_item = u32::from_le_bytes(cbitem_bytes);
+
+    if cp_items < 2 || pdata == 0 || cb_item == 0 {
+        let _ = uc.reg_write(RegisterMIPS::V0, 1);
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        let _ = uc.reg_write(RegisterMIPS::RA, u64::from(return_pc));
+        return true;
+    }
+    let count = cp_items as u32;
+    if count > 4096 || cb_item > 1024 * 1024 {
+        return false;
+    }
+
+    let call_callback = normalize_ce_process_slot_callback(uc, callback);
+    let mut state = PendingQsortReturn {
+        return_pc,
+        return_sp: read_mips_reg(uc, RegisterMIPS::SP),
+        caller_regs: capture_mips_gprs(uc),
+        base: pdata,
+        count,
+        size: cb_item,
+        comparator: call_callback,
+        ranges: vec![(0, count - 1)],
+        partition: None,
+        current_pair: None,
+        deref_args: false,
+        compare_lparam: Some(lparam),
+        finish_v0: 1,
+    };
+    tracing::debug!(
+        target: "ce.dsa",
+        hdsa = format_args!("0x{hdsa:08x}"),
+        count,
+        cb_item,
+        callback = format_args!("0x{callback:08x}"),
+        "DSA_Sort guest comparator callout"
+    );
+    match enter_next_qsort_comparator(uc, &mut state) {
+        QsortStep::ComparatorEntered => {}
+        QsortStep::Done => return finish_qsort_callout(uc, state),
+        QsortStep::Failed => return false,
+    }
+    pending_returns.borrow_mut().push(state);
+    true
 }
 
 #[cfg(feature = "unicorn")]
@@ -22715,23 +22917,37 @@ fn enter_next_qsort_comparator<D>(
                 };
                 let right = partition.pivot_addr;
                 state.current_pair = Some((left, right));
+                // For DPA_Sort: dereference slot addresses to get item pointer values.
+                let (a0, a1) = if state.deref_args {
+                    let mut a0b = [0u8; 4];
+                    let mut a1b = [0u8; 4];
+                    if uc.mem_read(u64::from(left), &mut a0b).is_err()
+                        || uc.mem_read(u64::from(right), &mut a1b).is_err()
+                    {
+                        return QsortStep::Failed;
+                    }
+                    (u32::from_le_bytes(a0b), u32::from_le_bytes(a1b))
+                } else {
+                    (left, right)
+                };
                 restore_mips_gprs(uc, &state.caller_regs);
                 let call_sp = state.return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
-                return if [
+                let ok = [
                     uc.reg_write(RegisterMIPS::SP, u64::from(call_sp)),
-                    uc.reg_write(RegisterMIPS::A0, u64::from(left)),
-                    uc.reg_write(RegisterMIPS::A1, u64::from(right)),
+                    uc.reg_write(RegisterMIPS::A0, u64::from(a0)),
+                    uc.reg_write(RegisterMIPS::A1, u64::from(a1)),
                     uc.reg_write(RegisterMIPS::RA, u64::from(QSORT_RETURN_STUB_ADDR)),
                     uc.reg_write(RegisterMIPS::T9, u64::from(state.comparator)),
                     uc.reg_write(RegisterMIPS::PC, u64::from(state.comparator)),
                 ]
                 .into_iter()
-                .all(|write| write.is_ok())
-                {
-                    QsortStep::ComparatorEntered
-                } else {
-                    QsortStep::Failed
-                };
+                .all(|write| write.is_ok());
+                if let Some(lparam) = state.compare_lparam {
+                    if uc.reg_write(RegisterMIPS::A2, u64::from(lparam)).is_err() {
+                        return QsortStep::Failed;
+                    }
+                }
+                return if ok { QsortStep::ComparatorEntered } else { QsortStep::Failed };
             }
 
             let partition = state.partition.take().unwrap();
@@ -22887,7 +23103,7 @@ fn finish_qsort_callout<D>(
     restore_mips_gprs(uc, &state.caller_regs);
     [
         uc.reg_write(RegisterMIPS::SP, u64::from(state.return_sp)),
-        uc.reg_write(RegisterMIPS::V0, 0),
+        uc.reg_write(RegisterMIPS::V0, u64::from(state.finish_v0)),
         uc.reg_write(RegisterMIPS::PC, u64::from(state.return_pc)),
         uc.reg_write(RegisterMIPS::RA, u64::from(state.return_pc)),
     ]

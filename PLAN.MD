@@ -155,6 +155,19 @@ and isolated guest networking.
   vtable from the registered COM pointer and dispatching OnShow/OnCommandSelected/
   OnLinkSelected/OnDismiss with correct MIPS register layout; OnLinkSelected
   link strings are heap-allocated in guest memory and freed after the method returns.
+  `DPA_Sort(hdpa, pfnCmp, lParam)` now routes through the existing Unicorn
+  quicksort machinery (`QSORT_RETURN_STUB_ADDR`) with `deref_args=true` so the
+  comparator receives the item pointer values (not DPA slot addresses) and
+  `lParam` as A2. `DSA_Sort(hdsa, pfnCmp, lParam)` routes through the same
+  machinery with `deref_args=false` so the comparator receives item struct
+  addresses from `pData + i * cbItem`; both return TRUE. `GetVersionExW`
+  (`write_os_version_info_w`) now returns `dwMajorVersion=6, dwMinorVersion=0`
+  matching CE 6.0 (`bldver.h`: `CE_MAJOR_VER=0x0006`); previously returned 4/20
+  (CE 4.20). `GetSystemInfo` (`write_system_info`) now writes
+  `wProcessorArchitecture=1` (`PROCESSOR_ARCHITECTURE_MIPS`); previously wrote 4
+  (SHX). `SHLoadDIBitmap(szFileName)` now calls `load_bitmap_file` instead of
+  returning `ERROR_NOT_SUPPORTED`, equivalent to
+  `LoadImage(NULL, szFileName, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE)`.
 - Replace direct-only WINSOCK with a CE-facing isolated NAT model: gateway
   `10.0.0.1`, guest IP `10.0.0.2`, host sockets as the transport boundary, and
   blocking waits owned by the scheduler. Socket-handle waiters can now be
