@@ -551,8 +551,8 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
             ..
         }
     ));
-    assert_eq!(memory.read_u32(version_info + 4)?, 4);
-    assert_eq!(memory.read_u32(version_info + 8)?, 20);
+    assert_eq!(memory.read_u32(version_info + 4)?, 6); // CE 6.0 dwMajorVersion
+    assert_eq!(memory.read_u32(version_info + 8)?, 0); // CE 6.0 dwMinorVersion
     assert_eq!(memory.read_u32(version_info + 16)?, 3);
     assert_eq!(memory.read_wide_z(version_info + 20, 128), "");
 

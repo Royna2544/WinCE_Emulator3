@@ -8214,6 +8214,7 @@ fn coredll_raw_gwe_ordinals_manage_hwnd_rects_points_and_resources() -> Result<(
         ),
         CoredllDispatch::Returned { .. }
     ));
+    assert_eq!(memory.read_u16(system_info_ptr)?, 1); // PROCESSOR_ARCHITECTURE_MIPS
     assert_eq!(memory.read_u32(system_info_ptr + 4)?, 4096);
     assert_eq!(memory.read_u32(system_info_ptr + 24)?, 4000);
     assert!(matches!(
@@ -21537,8 +21538,8 @@ fn coredll_raw_get_version_ex_w_fills_ce_os_info() -> Result<()> {
         ),
         CoredllDispatch::Returned { value: CoredllValue::Bool(true), .. }
     ), "GetVersionExW must return true for a valid buffer");
-    assert_eq!(memory.read_u32(info_ptr + 4)?, 4, "dwMajorVersion must be 4");
-    assert_eq!(memory.read_u32(info_ptr + 8)?, 20, "dwMinorVersion must be 20");
+    assert_eq!(memory.read_u32(info_ptr + 4)?, 6, "dwMajorVersion must be 6 (CE 6.0)");
+    assert_eq!(memory.read_u32(info_ptr + 8)?, 0, "dwMinorVersion must be 0 (CE 6.0)");
     assert_eq!(memory.read_u32(info_ptr + 12)?, 0, "dwBuildNumber must be 0");
     assert_eq!(
         memory.read_u32(info_ptr + 16)?,

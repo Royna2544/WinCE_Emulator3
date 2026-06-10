@@ -70,6 +70,7 @@ use wince_emulation_v3::{
             ORD_WCSCPY, ORD_WCSDUP, ORD_WCSICMP, ORD_WCSLEN, ORD_WCSNCMP, ORD_WCSNCPY,
             ORD_WCSNICMP, ORD_WCSPBRK, ORD_WCSRCHR, ORD_WCSSTR, ORD_WCSTOUL, ORD_WFOPEN,
             ORD_WIDE_CHAR_TO_MULTI_BYTE, ORD_WRITE_FILE, ORD_WSPRINTF_W, ORD_WTOL, ORD_WVSPRINTF_W,
+            ORD_SHLOAD_DIBITMAP,
         },
         file::{
             CREATE_ALWAYS, FILE_ATTRIBUTE_ARCHIVE, GENERIC_READ,
@@ -7367,5 +7368,60 @@ fn coredll_raw_dsa_set_range_overwrites_item_range() -> Result<()> {
     table.dispatch_raw_ordinal_with_memory(
         &mut kernel, &mut memory, thread_id, ORD_DSA_DESTROY, [hdsa],
     );
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_shload_dibitmap_loads_file_and_rejects_missing_path() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("shload_dibitmap");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    // Write a minimal 1x1 24bpp BMP.
+    let mut bmp = Vec::new();
+    bmp.extend_from_slice(b"BM");
+    bmp.extend_from_slice(&58u32.to_le_bytes()); // file size
+    bmp.extend_from_slice(&[0; 4]);
+    bmp.extend_from_slice(&54u32.to_le_bytes()); // pixel offset
+    bmp.extend_from_slice(&40u32.to_le_bytes()); // BITMAPINFOHEADER size
+    bmp.extend_from_slice(&1i32.to_le_bytes());  // width
+    bmp.extend_from_slice(&1i32.to_le_bytes());  // height
+    bmp.extend_from_slice(&1u16.to_le_bytes());  // planes
+    bmp.extend_from_slice(&24u16.to_le_bytes()); // bpp
+    bmp.extend_from_slice(&0u32.to_le_bytes());  // compression
+    bmp.extend_from_slice(&4u32.to_le_bytes());  // image size
+    bmp.extend_from_slice(&0i32.to_le_bytes());  // x pixels/m
+    bmp.extend_from_slice(&0i32.to_le_bytes());  // y pixels/m
+    bmp.extend_from_slice(&0u32.to_le_bytes());  // colors used
+    bmp.extend_from_slice(&0u32.to_le_bytes());  // colors important
+    bmp.extend_from_slice(&[0x33, 0x66, 0x99, 0x00]); // pixel data + padding
+    std::fs::write(root.join("bg.bmp"), &bmp).unwrap();
+    kernel.set_file_root(&root);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 200_u32;
+    let path_ptr = 0x1_0000_u32;
+    memory.map_halfwords(path_ptr, 64);
+
+    // Valid BMP path → non-zero HBITMAP.
+    memory.write_wide_z(path_ptr, r"\bg.bmp");
+    let hbm = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel, &mut memory, thread_id, ORD_SHLOAD_DIBITMAP, [path_ptr],
+    ) {
+        CoredllDispatch::Returned { value: CoredllValue::Handle(h), .. } => h,
+        other => panic!("SHLoadDIBitmap unexpected: {other:?}"),
+    };
+    assert_ne!(hbm, 0, "SHLoadDIBitmap must return a valid HBITMAP for an existing BMP");
+
+    // Missing path → 0.
+    memory.write_wide_z(path_ptr, r"\missing.bmp");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel, &mut memory, thread_id, ORD_SHLOAD_DIBITMAP, [path_ptr],
+        ),
+        CoredllDispatch::Returned { value: CoredllValue::Handle(0), .. }
+    ), "SHLoadDIBitmap with missing path must return 0");
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_FILE_NOT_FOUND);
     Ok(())
 }

@@ -3643,8 +3643,11 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::U32(0))
         }
         ORD_SHLOAD_DIBITMAP => {
-            kernel.threads.set_last_error(thread_id, ERROR_NOT_SUPPORTED);
-            Some(CoredllValue::Handle(0))
+            // SHLoadDIBitmap(szFileName) — load a BMP file as HBITMAP.
+            // Equivalent to LoadImage(NULL, szFileName, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE).
+            Some(CoredllValue::Handle(load_bitmap_file(
+                kernel, memory, thread_id, raw_arg(args, 0),
+            )))
         }
         // U_r* — ROM FS low-level file ops. Not supported.
         ORD_U_ROPEN => {
@@ -8900,7 +8903,11 @@ fn write_system_info<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    let word_writes = [(0, 0x0004), (2, 0), (32, 4), (34, 0)];
+    // SYSTEM_INFO layout: wProcessorArchitecture[0], wReserved[2], dwPageSize[4],
+    // lpMinApp[8], lpMaxApp[12], dwActiveProcessorMask[16], dwNumberOfProcessors[20],
+    // dwProcessorType[24], dwAllocationGranularity[28], wProcessorLevel[32], wProcessorRevision[34].
+    // PROCESSOR_ARCHITECTURE_MIPS = 1; wProcessorLevel = 4 (MIPS IV family).
+    let word_writes = [(0, 0x0001u16), (2, 0), (32, 4), (34, 0)];
     for (offset, value) in word_writes {
         if !write_guest_u16(
             kernel,
@@ -8957,7 +8964,8 @@ fn write_os_version_info_w<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return false;
     }
-    let dword_writes = [(4, 4), (8, 20), (12, 0), (16, VER_PLATFORM_WIN32_CE)];
+    // CE 6.0: dwMajorVersion=6, dwMinorVersion=0 (bldver.h: CE_MAJOR_VER=0x0006, CE_MINOR_VER=0x0000).
+    let dword_writes = [(4, 6), (8, 0), (12, 0), (16, VER_PLATFORM_WIN32_CE)];
     for (offset, value) in dword_writes {
         if !write_guest_u32(
             kernel,
@@ -37106,6 +37114,8 @@ const IMPLEMENTED_EXPORTS: &[&str] = &[
     "SHChangeNotifyRegisterI",
     "SHFileNotifyRemoveI",
     "SHFileNotifyFreeI",
+    // Shell load helpers
+    "SHLoadDIBitmap",
     // Icon APIs
     "LoadIconW",
     "CreateIconIndirect",
