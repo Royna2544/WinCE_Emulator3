@@ -8,7 +8,7 @@ Regenerated on 2026-06-11 from the current `src/` and `tests/` implementation st
 - Shell and file APIs: `ShellExecuteEx`, registry-backed file associations, shortcuts, recent-doc tracking, special folders, `SHGetFileInfo`, `ExtractIconExW`, resource-backed icon extraction, synthetic shell icons, image lists, selected DIB drawing, and icon rendering all have raw test coverage.
 - Windowing and GWE: windows, message queues, default window proc behavior, modal menu/message paths, clipboard/caret support, accelerator translation, `SendMessageTimeout` blocking setup, timeout handling, and destroyed-target result writes are implemented to the current raw-test level.
 - File system and storage: rooted host-backed paths, mount roots, directory enumeration, file attributes, change notification handles, `CeGetFileNotificationInfo`, duplicate coalescing, transient create/delete coalescing, and modified/delete coalescing are covered.
-- Winsock and remote IO: CE-facing Winsock dispatch, isolated NAT addressing, TCP/UDP socket creation, bind/listen/connect/accept/send/recv/select paths, nonblocking state, socket wait candidates, and scheduler wake integration are present.
+- Winsock and remote IO: CE-facing Winsock dispatch, isolated NAT addressing, TCP/UDP socket creation, bind/listen/connect/accept/send/recv/select paths, `FD_SETSIZE`/fd-set validation, nonblocking state, socket wait candidates, and scheduler wake integration are present.
 - Core subsystems: thread handles, waits, events, semaphores, mutexes, TLS, critical sections, process handles, memory APIs, registry APIs, GDI object management, bitmap/DIB drawing, and scheduler readiness selection are established.
 
 ## Active Roadmap
@@ -119,8 +119,8 @@ Reference evidence:
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\DEVICE\SERVICES\CORE\servacpt.cpp`
 
 Missing or under-validated:
-- Local Winsock already has core socket calls, `ioctlsocket`, `setsockopt`, `getsockopt`, and `select`; remaining work is CE stress parity: `FD_SETSIZE` limits, mixed read/write/except sets, repeated zero/error select recovery, peer close behavior, reset/error propagation, and long-running server loops.
-- Add tests based on CE server patterns where `select` is called with `nfds` values of `0`, `-1`, and active socket counts.
+- Local Winsock already has core socket calls, `ioctlsocket`, `setsockopt`, `getsockopt`, and `select`; `select` now accepts CE caller `nfds` values of `0`, `-1`, and active counts while rejecting null fd-set triads, `fd_count > FD_SETSIZE`, invalid socket handles, and fd-set memory faults with Winsock errors. Mixed read/write/except set filtering is covered. Remaining work is CE stress parity: repeated zero/error select recovery, peer close behavior, reset/error propagation, and long-running server loops.
+- Add more tests based on CE server/stress patterns for repeated `select` zero/error recovery under socket churn.
 - Validate UDP datagram source-address behavior, TCP half-close/reset semantics, and `SO_ERROR` clearing after `getsockopt`.
 
 ### Input, IME, Text, And GDI Gaps

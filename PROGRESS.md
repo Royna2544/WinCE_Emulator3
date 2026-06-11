@@ -10,7 +10,7 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 - `SHNotificationUpdateI` now covers CE update-mask behavior for null icon preservation and stale incoming `hwndSink` values while keeping the original registered sink.
 - File-change notifications now coalesce exact duplicates, transient create/delete pairs, and modified/delete sequences, and detailed notification records are gated by the CE `FILE_NOTIFY_CHANGE_CEGETINFO` flag while signal-only watches still wake normally.
 - GWE message work includes cross-thread send setup, timeout marking, destroyed-window completion, and zero-result writes for destroyed `SendMessageTimeout` targets.
-- Winsock has CE-facing dispatch for core socket operations with isolated NAT addressing, readiness checks, and scheduler wake candidate integration.
+- Winsock has CE-facing dispatch for core socket operations with isolated NAT addressing, `select` fd-set validation, readiness checks, and scheduler wake candidate integration.
 - Core CE subsystems remain broad and test-backed: handles, waits, events, TLS, critical sections, registry, files, memory, GDI resources, DIBs, windows, menus, clipboard, and scheduler selection.
 
 ## Recent Source-Visible Slices
@@ -25,11 +25,17 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 - `tests/coredll_raw_memory_file.rs`: transient file-change notification churn coverage is present.
 - `tests/coredll_raw_memory_file.rs`: signal-only change notifications without `FILE_NOTIFY_CHANGE_CEGETINFO` are covered separately from detailed `CeGetFileNotificationInfo` drains.
 - `tests/coredll_raw_gwe.rs`: destroyed-target `SendMessageTimeout` result write coverage is present.
+- `src/winsock.rs`: `select` now ignores `nfds` like CE callers expect while validating non-null fd sets, `FD_SETSIZE`, invalid socket handles, and fd-set memory faults before filtering readiness.
+- `src/winsock.rs`: Winsock unit coverage now exercises `select` with `nfds` values `0`, `-1`, and active counts, mixed read/write/except fd sets, null fd-set triads, oversized fd sets, invalid socket handles, and `WSAEFAULT` memory failures.
+- `tests/basic_subsystems.rs`: shell notify-icon and file-notification expectations now use explicit CE member/detail flags after the flag-gated notify and `FILE_NOTIFY_CHANGE_CEGETINFO` behavior changes.
 
 ## Last Known Validation
 
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed for the GWE slice.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_memory_file` passed for the file-change slice.
+- `cargo test --features unicorn,trace,win32-desktop winsock::tests::select_` passed for the Winsock select validation slice.
+- `cargo test --features unicorn,trace,win32-desktop --test basic_subsystems` passed after updating stale test expectations.
+- `cargo test --features unicorn,trace,win32-desktop` passed after the Winsock and test-fix slices.
 - `cargo check --features unicorn,trace,win32-desktop` passed after the recent code slices.
 - `git diff --check` was clean except for expected CRLF warnings on existing files.
 

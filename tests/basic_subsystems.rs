@@ -4100,9 +4100,9 @@ fn gwe_get_queue_status_and_peek_queue_status() {
 #[test]
 fn shell_system_message_box_recent_docs_notify_icons_and_notifications() {
     use wince_emulation_v3::ce::shell::{
-        MAX_RECENT_DOCUMENTS, MessageBoxRecord, NotificationResult, NotifyIconData, NotifyIconOp,
-        RecentDocumentRecord, SHNP_ICONIC, SHNUM_ICON, SHNUM_TITLE, ShellChangeNotifyRegistration,
-        ShellNotificationData, ShellSystem,
+        MAX_RECENT_DOCUMENTS, MessageBoxRecord, NIF_ICON, NIF_TIP, NotificationResult,
+        NotifyIconData, NotifyIconOp, RecentDocumentRecord, SHNP_ICONIC, SHNUM_ICON, SHNUM_TITLE,
+        ShellChangeNotifyRegistration, ShellNotificationData, ShellSystem,
     };
 
     let mut shell = ShellSystem::default();
@@ -4163,7 +4163,7 @@ fn shell_system_message_box_recent_docs_notify_icons_and_notifications() {
     let icon_data = NotifyIconData {
         hwnd: 10,
         id: 1,
-        flags: 0,
+        flags: NIF_ICON | NIF_TIP,
         callback_message: 0,
         icon: 0x100,
         tip: "tip".to_owned(),
@@ -7459,7 +7459,7 @@ fn shell_system_special_folder_queries_fallback_policy_destroyed_notify_icons_an
     let icon_data = NotifyIconData {
         hwnd: 20,
         id: 3,
-        flags: HHTBF_DESTROYICON,
+        flags: HHTBF_DESTROYICON | NIF_ICON,
         icon: 0xABCD,
         tip: String::new(),
         callback_message: 0,
@@ -9978,6 +9978,7 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
 fn unmount_guest_root_signals_change_notification_handles_watching_subpaths() -> Result<()> {
     // CE FSDMGR behavior: unmounting a volume signals ALL FindFirstChangeNotificationW handles
     // whose watch path is under the removed volume, regardless of their specific notify_filter.
+    const FILE_NOTIFY_CHANGE_CEGETINFO: u32 = 0x8000_0000;
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
     let mut kernel = CeKernel::boot(config);
 
@@ -9988,11 +9989,12 @@ fn unmount_guest_root_signals_change_notification_handles_watching_subpaths() ->
     kernel.mount_guest_root("\\SDCard", host_vol);
 
     // FILE_NOTIFY_CHANGE_FILE_NAME = 0x1 (not a dir-change filter).
-    // Watch a subpath using only FILE_NOTIFY_CHANGE_FILE_NAME (not dir/creation).
+    // Watch a subpath using only FILE_NOTIFY_CHANGE_FILE_NAME for matching, plus
+    // FILE_NOTIFY_CHANGE_CEGETINFO so CeGetFileNotificationInfo-style records are queued.
     let nfh = kernel.find_first_change_notification_w(
         "\\SDCard\\Data",
         true,
-        0x0000_0001, // FILE_NOTIFY_CHANGE_FILE_NAME only
+        0x0000_0001 | FILE_NOTIFY_CHANGE_CEGETINFO,
     )?;
     assert!(kernel.file_change_notification_records(nfh)?.is_empty());
 
@@ -10000,7 +10002,7 @@ fn unmount_guest_root_signals_change_notification_handles_watching_subpaths() ->
     let vol_nfh = kernel.find_first_change_notification_w(
         "\\SDCard",
         false,
-        0x0000_0002, // FILE_NOTIFY_CHANGE_DIR_NAME
+        0x0000_0002 | FILE_NOTIFY_CHANGE_CEGETINFO,
     )?;
 
     // Unmount the volume. This should:
@@ -10008,7 +10010,10 @@ fn unmount_guest_root_signals_change_notification_handles_watching_subpaths() ->
     // 2. Signal nfh via the new subpath signaling (regardless of filter).
     assert!(kernel.unmount_guest_root("\\SDCard"));
 
-    // The subpath handle should now be signaled with a REMOVED record.
+    // The handles signal on volume removal and expose REMOVED records because they opted into
+    // FILE_NOTIFY_CHANGE_CEGETINFO.
+    assert_eq!(kernel.wait_for_single_object(nfh, 0, 1), WAIT_OBJECT_0);
+    assert_eq!(kernel.wait_for_single_object(vol_nfh, 0, 1), WAIT_OBJECT_0);
     let records = kernel.file_change_notification_records(nfh)?;
     assert!(
         !records.is_empty(),
