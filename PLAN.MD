@@ -82,7 +82,7 @@ Reference file:
 Missing or under-validated:
 - `TrackPopupMenuEx` should be validated against all CE flags and structs exposed in `winuser.h`: alignment flags, `TPM_NONOTIFY`, `TPM_RETURNCMD`, `TPMPARAMS.rcExclude`, disabled/default items, submenu cascades, owner notifications, and cancellation behavior.
 - `MessageBoxW` should be validated across CE flags and return values: icon flags, default buttons, yes/no/cancel layouts, modality, owner-window disabled state, timeout/pump behavior, and foreground behavior.
-- `SendMessageTimeout` currently covers important paths but still needs parity for nested sends, reentrant dispatch, `ReplyMessage`, `QS_SENDMESSAGE` interaction during modal waits, unsupported flag rejection, and all `SMTO_NORMAL`, `SMTO_BLOCK`, and `SMTO_ABORTIFHUNG` combinations used by CE callers.
+- `SendMessageTimeout` currently covers important paths, including unsupported flag rejection, zero-timeout cross-thread expiry, nonzero cross-thread queueing, destroyed-target completion, hung-thread `SMTO_ABORTIFHUNG`, same-thread synchronous dispatch/result writes, and early `ReplyMessage` result propagation. Remaining gaps are nested sends, reentrant dispatch, deeper nested `ReplyMessage` parity, `QS_SENDMESSAGE` interaction during modal waits, and broader `SMTO_NORMAL`, `SMTO_BLOCK`, and `SMTO_ABORTIFHUNG` combinations used by CE callers.
 - `MsgWaitForMultipleObjectsEx` should be cross-checked against the CE queue-status masks, especially `QS_SENDMESSAGE`, `QS_ALLINPUT`, timer readiness, posted message readiness, and mixed kernel-handle waits.
 
 ### File Notification And FSDMGR Gaps
@@ -119,9 +119,8 @@ Reference evidence:
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\DEVICE\SERVICES\CORE\servacpt.cpp`
 
 Missing or under-validated:
-- Local Winsock already has core socket calls, `ioctlsocket`, `setsockopt`, `getsockopt`, and `select`; `select` now accepts CE caller `nfds` values of `0`, `-1`, and active counts while rejecting null fd-set triads, `fd_count > FD_SETSIZE`, invalid socket handles, and fd-set memory faults with Winsock errors. Mixed read/write/except set filtering, zero-ready recovery, graceful TCP peer-close read readiness, TCP half-close read/write behavior, and `SO_ERROR` clearing after `getsockopt` are covered. Remaining work is CE stress parity: reset/error propagation and long-running server loops.
-- Add more tests based on CE server/stress patterns for socket churn after reset/error transitions and long-lived accept/select loops.
-- Validate TCP reset semantics and long-running select/accept loops.
+- Local Winsock already has core socket calls, `ioctlsocket`, `setsockopt`, `getsockopt`, and `select`; `select` now accepts CE caller `nfds` values of `0`, `-1`, and active counts while rejecting null fd-set triads, `fd_count > FD_SETSIZE`, invalid socket handles, and fd-set memory faults with Winsock errors. Mixed read/write/except set filtering, zero-ready recovery, graceful TCP peer-close read readiness, TCP half-close read/write behavior, TCP reset read readiness/error propagation, repeated listener `select`/`accept` loops, and `SO_ERROR` clearing after `getsockopt` are covered. Remaining work is broader CE stress parity across higher-volume socket churn and full webproxy/service accept-loop patterns.
+- Add more tests based on CE server/stress patterns for higher-volume socket churn, concurrent accept/send/close transitions, and webproxy/service session lifetimes.
 
 ### Input, IME, Text, And GDI Gaps
 

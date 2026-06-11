@@ -10338,6 +10338,48 @@ fn coredll_raw_send_message_timeout_zero_cross_thread_expires_transaction() -> R
 }
 
 #[test]
+fn coredll_raw_send_message_timeout_same_thread_dispatches_synchronously() -> Result<()> {
+    const SMTO_BLOCK: u32 = 0x0000_0001;
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 52;
+    let result_ptr = 0xb210;
+    memory.map_words(result_ptr, 1);
+    memory.write_u32(result_ptr, 0xfeed_cafe)?;
+
+    let hwnd = kernel.create_window_ex_w(
+        thread_id,
+        "SYNC_SEND_TIMEOUT_SAME_THREAD",
+        "title",
+        None,
+        0,
+        0,
+        0,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SEND_MESSAGE_TIMEOUT,
+            [hwnd, WM_GETTEXTLENGTH, 0, 0, SMTO_BLOCK, 250, result_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(5),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(result_ptr)?, 5);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(kernel.gwe.sent_message(1).is_none());
+    assert!(kernel.gwe.get_message(thread_id).is_none());
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_send_message_timeout_rejects_non_ce_flags_without_queueing() -> Result<()> {
     const ERROR_INVALID_FLAGS: u32 = 1004;
     const SMTO_UNKNOWN_FLAG: u32 = 0x0000_0004;
@@ -10479,6 +10521,88 @@ fn coredll_raw_send_message_timeout_nonzero_cross_thread_queues_transaction() ->
     ));
     assert_eq!(memory.read_u32(result_ptr)?, 1);
     assert_eq!(kernel.take_completed_send_message_result(1), Some(1));
+
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_send_message_timeout_reply_message_writes_early_result() -> Result<()> {
+    const SMTO_BLOCK: u32 = 0x0000_0001;
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let sender_thread = 56;
+    let receiver_thread = 57;
+    let result_ptr = 0xb2a0;
+    let msg_ptr = 0xb2e0;
+    memory.map_words(result_ptr, 1);
+    memory.map_words(msg_ptr, 7);
+    memory.write_u32(result_ptr, 0xfeed_cafe)?;
+
+    let mut reply_class = [0u8; WNDCLASSW_SIZE];
+    reply_class[28..32].copy_from_slice(&0x000b_4005_u32.to_le_bytes());
+    kernel
+        .gwe
+        .register_class("SYNC_SEND_TIMEOUT_REPLY", reply_class);
+    let hwnd = kernel.create_window_ex_w(
+        receiver_thread,
+        "SYNC_SEND_TIMEOUT_REPLY",
+        "",
+        None,
+        0,
+        0,
+        0,
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            sender_thread,
+            ORD_SEND_MESSAGE_TIMEOUT,
+            [hwnd, WM_ERASEBKGND, 0x5c, 0x5d, SMTO_BLOCK, 500, result_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(result_ptr)?, 0xfeed_cafe);
+
+    assert_next_message(
+        &table,
+        &mut kernel,
+        &mut memory,
+        receiver_thread,
+        msg_ptr,
+        hwnd,
+        WM_ERASEBKGND,
+        0x5c,
+        0x5d,
+    );
+    assert!(kernel.gwe.in_send_message(receiver_thread));
+    assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread), Some(1));
+
+    assert!(kernel.reply_message(receiver_thread, 0xfeed));
+    assert!(!kernel.gwe.in_send_message(receiver_thread));
+    assert_eq!(memory.read_u32(result_ptr)?, 0xfeed_cafe);
+    assert!(kernel.sent_message_result_ready(1));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            receiver_thread,
+            ORD_DISPATCH_MESSAGE_W,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(result_ptr)?, 0xfeed);
+    assert_eq!(kernel.take_completed_send_message_result(1), Some(0xfeed));
 
     Ok(())
 }
