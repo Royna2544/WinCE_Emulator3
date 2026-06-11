@@ -25,23 +25,29 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 - `tests/coredll_raw_memory_file.rs`: transient file-change notification churn coverage is present.
 - `tests/coredll_raw_memory_file.rs`: signal-only change notifications without `FILE_NOTIFY_CHANGE_CEGETINFO` are covered separately from detailed `CeGetFileNotificationInfo` drains.
 - `tests/coredll_raw_gwe.rs`: destroyed-target `SendMessageTimeout` result write coverage is present.
+- `tests/coredll_raw_gwe.rs`: same-thread `SendMessageTimeout` coverage now verifies synchronous dispatch, direct result-pointer writes, clean last-error state, and no cross-thread sent-message transaction.
+- `tests/coredll_raw_gwe.rs`: cross-thread `SendMessageTimeout` coverage now verifies an early receiver `ReplyMessage` result wins over the later wndproc return and writes through the timeout result pointer.
 - `src/winsock.rs`: `select` now ignores `nfds` like CE callers expect while validating non-null fd sets, `FD_SETSIZE`, invalid socket handles, and fd-set memory faults before filtering readiness.
 - `src/winsock.rs`: Winsock unit coverage now exercises `select` with `nfds` values `0`, `-1`, and active counts, mixed read/write/except fd sets, null fd-set triads, oversized fd sets, invalid socket handles, and `WSAEFAULT` memory failures.
 - `src/winsock.rs`: TCP peer close is now read-ready for `select`, allowing the follow-up `recv` to return zero; repeated zero-ready `select` polling is covered by a recovery test that becomes readable after a later datagram.
 - `src/winsock.rs`: UDP `recvfrom` coverage now verifies host loopback datagram sources are exposed to CE callers as the isolated gateway address with the original sender port.
 - `src/winsock.rs`: TCP half-close coverage now verifies peer write shutdown wakes `select` for a zero-length `recv` while the guest socket can still `send` on its write half.
+- `src/winsock.rs`: TCP reset coverage now treats reset sockets as read-ready, caches `WSAECONNRESET` for `SO_ERROR`, and verifies `recv` reports the reset after a host `SO_LINGER(0)` close.
+- `src/winsock.rs`: Listener coverage now runs repeated `select`/`accept` cycles, verifies re-arming after each accepted client, and checks accepted loopback peer addresses are exposed as CE gateway addresses.
 - `tests/basic_subsystems.rs`: shell notify-icon and file-notification expectations now use explicit CE member/detail flags after the flag-gated notify and `FILE_NOTIFY_CHANGE_CEGETINFO` behavior changes.
 
 ## Last Known Validation
 
-- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed for the GWE slice.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed after the same-thread and early-`ReplyMessage` `SendMessageTimeout` slices.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_send_message_timeout` passed after adding same-thread and early-`ReplyMessage` `SendMessageTimeout` coverage.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_memory_file` passed for the file-change slice.
 - `cargo test --features unicorn,trace,win32-desktop winsock::tests::select_` passed for the Winsock select validation slice.
 - `cargo test --features unicorn,trace,win32-desktop winsock::tests` passed after the TCP peer-close and zero-ready recovery slice.
 - `cargo test --features unicorn,trace,win32-desktop winsock::tests` passed after adding UDP source-address validation.
 - `cargo test --features unicorn,trace,win32-desktop winsock::tests` passed after adding TCP half-close validation.
+- `cargo test --features unicorn,trace,win32-desktop winsock::tests` passed after adding TCP reset and repeated listener accept-loop coverage.
 - `cargo test --features unicorn,trace,win32-desktop --test basic_subsystems` passed after updating stale test expectations.
-- `cargo test --features unicorn,trace,win32-desktop` passed after the Winsock select, test-fix, and TCP peer-close slices.
+- `cargo test --features unicorn,trace,win32-desktop` passed after the Winsock select, test-fix, TCP peer-close, TCP reset, and repeated accept-loop slices.
 - `cargo check --features unicorn,trace,win32-desktop` passed after the recent code slices.
 - `git diff --check` was clean except for expected CRLF warnings on existing files.
 
@@ -69,8 +75,34 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   view pages. With this, happyway helpers complete and exit
   (`CreateProcessExited` appears), the splash artwork renders fully with a
   progress bar advancing, and iNavi keeps dispatching helper workers.
-- Current frontier: drive past the splash into the main map UI and first
-  map-tile render; then GPS serial (COM21) NMEA feed and touch-driven menus.
+- Third blocker fixed (commit `4a9865d0`): live-pump remote-drain stops and
+  wall-clock slice stops called `emu_stop` at arbitrary instructions; landing
+  on a MIPS branch delay slot lost the branch on resume and the guest jumped
+  wild (pc=0x3548), killing 2 of 3 remote-server runs in the first minute.
+  Stops now defer to the next safe pc (not a delay slot, not in a trampoline,
+  below the import-trap region) like the scheduler timeslice hook already did;
+  3 of 3 post-fix runs reach the healthy startup profile.
+- Repeated-run regression evidence: single-shot runs advance much further than
+  remote-server (live-pump) runs in the same wall time — a 150 s single shot
+  reached 868 file opens and a 10-thread event-pair worker pool past the old
+  264-open plateau, while live-pump runs sit in the helper spawn phase. Each
+  blocked-GetMessage exit in live-pump mode re-enters a fresh Unicorn (~400 MB
+  blob copy round trip plus full translation rebuild, ~1/s), so live-pump is
+  an order of magnitude slower, not stuck. Host-desktop mode uses 120 s slices
+  (`HOST_LIVE_RUN_SLICE_MS`) and is the better interactive driving path until
+  live-pump keeps its Unicorn/TB state across slices.
+- MAP UI MILESTONE: a 10-minute single-shot run
+  (`--cpu-wall-clock-limit-ms 600000`, framebuffer dump
+  `target/inavi_fb_long.ppm`) reached the full iNavi navigation screen —
+  street map tiles with Korean street/POI labels, POI icons, compass, zoom
+  controls, clock, and the bottom info bar all render. The app fully boots
+  from splash through map-engine startup to the live map with no
+  must-implement stub hits.
+- Current frontier: interactive driving — touch input needs the remote
+  server (live-pump), which is an order of magnitude slower per guest second
+  than single-shot (see above). Either keep the Unicorn/TB state alive across
+  live-pump slices or use host-desktop mode (120 s slices) for interactive
+  sessions; then GPS serial (COM21) NMEA feed for live positioning.
 
 ## Next Checkpoint
 
