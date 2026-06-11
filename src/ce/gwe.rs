@@ -823,6 +823,9 @@ pub struct Gwe {
     next_global_atom: u16,
     // Per-window property lists (hwnd → (name_or_atom → value)).
     window_props: BTreeMap<u32, BTreeMap<String, u32>>,
+    // GWES pen/mouse point buffer for GetMouseMovePoints: screen positions in
+    // 4x (quarter-pixel) resolution, drained by retrieval, capped at 64.
+    mouse_move_points: VecDeque<Point>,
 }
 
 impl Default for Gwe {
@@ -923,6 +926,7 @@ impl Default for Gwe {
             global_atoms: BTreeMap::new(),
             next_global_atom: 0xc001,
             window_props: BTreeMap::new(),
+            mouse_move_points: VecDeque::new(),
         }
     }
 }
@@ -2936,12 +2940,33 @@ impl Gwe {
         if message.mouse_pos_at_post.is_none() && is_mouse_message(message.msg) {
             message.mouse_pos_at_post = Some(message.lparam);
         }
+        // GWES pen point collection: WM_MOUSEMOVE/WM_LBUTTONDOWN screen positions
+        // accumulate in 4x resolution for GetMouseMovePoints retrieval.
+        if matches!(message.msg, WM_MOUSEMOVE | WM_LBUTTONDOWN)
+            && let Some(screen_pos) = message.mouse_pos_at_post
+        {
+            const GWES_MOUSE_POINT_BUFFER: usize = 64;
+            if self.mouse_move_points.len() >= GWES_MOUSE_POINT_BUFFER {
+                self.mouse_move_points.pop_front();
+            }
+            self.mouse_move_points.push_back(Point {
+                x: (screen_pos as u16 as i16 as i32) * 4,
+                y: ((screen_pos >> 16) as u16 as i16 as i32) * 4,
+            });
+        }
         self.update_key_state_for_message(message.msg, message.wparam);
         let status_bit = queue_status_bit_for_message(message.msg);
         let ready_time = message.time_ms;
         self.queues.entry(thread_id).or_default().push_back(message);
         self.ready_timestamp_by_thread.insert(thread_id, ready_time);
         self.mark_queue_status_changed(thread_id, status_bit);
+    }
+
+    /// Drain up to `max` pending GWES pen points (4x-resolution screen
+    /// positions) collected since the last retrieval, oldest first.
+    pub fn drain_mouse_move_points(&mut self, max: usize) -> Vec<Point> {
+        let count = self.mouse_move_points.len().min(max);
+        self.mouse_move_points.drain(..count).collect()
     }
 
     pub fn post_message_for_window(&mut self, hwnd: u32, message: Message) -> bool {

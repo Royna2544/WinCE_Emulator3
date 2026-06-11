@@ -208,6 +208,13 @@ and isolated guest networking.
   belong to `CONTEXT_CONTROL` per the header note, and runnable-but-not-stored
   targets, bad handles, null/unreadable CONTEXT pointers, and non-R4000 flag
   signatures fail with `ERROR_INVALID_HANDLE`/`ERROR_INVALID_PARAMETER`.
+  `GetMouseMovePoints(pptBuf, nBufPoints, pnPointsRetrieved)` now drains a real
+  GWES pen point buffer instead of always reporting zero points: queued
+  `WM_MOUSEMOVE`/`WM_LBUTTONDOWN` screen positions accumulate in
+  `Gwe::post_message` at CE's 4x (quarter-pixel) touch resolution (the INKSAMP
+  demo shifts `>> 2`), capped at 64 points with oldest dropped, drained oldest
+  first on retrieval; empty buffers return FALSE and null output pointers fail
+  with `ERROR_INVALID_PARAMETER`.
 - Replace direct-only WINSOCK with a CE-facing isolated NAT model: gateway
   `10.0.0.1`, guest IP `10.0.0.2`, host sockets as the transport boundary, and
   blocking waits owned by the scheduler. Socket-handle waiters can now be

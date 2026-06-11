@@ -1596,9 +1596,27 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::Bool(false))
         }
         ORD_GET_MOUSE_MOVE_POINTS => {
-            // GetMouseMovePointsEx — mouse history; return 0 (no points available).
+            // GetMouseMovePoints(pptBuf, nBufPoints, pnPointsRetrieved) — drain the
+            // GWES pen point buffer (4x-resolution screen positions collected from
+            // queued WM_MOUSEMOVE/WM_LBUTTONDOWN input since the last retrieval).
+            let ppt_buf = raw_arg(args, 0);
+            let n_buf_points = raw_arg(args, 1) as usize;
+            let pn_retrieved = raw_arg(args, 2);
+            if ppt_buf == 0 || pn_retrieved == 0 {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return Some(CoredllValue::Bool(false));
+            }
+            let points = kernel.gwe.drain_mouse_move_points(n_buf_points);
+            for (i, point) in points.iter().enumerate() {
+                let offset = ppt_buf.wrapping_add((i * 8) as u32);
+                let _ = memory.write_u32(offset, point.x as u32);
+                let _ = memory.write_u32(offset.wrapping_add(4), point.y as u32);
+            }
+            let _ = memory.write_u32(pn_retrieved, points.len() as u32);
             kernel.threads.set_last_error(thread_id, 0);
-            Some(CoredllValue::U32(0))
+            Some(CoredllValue::Bool(!points.is_empty()))
         }
         ORD_ENUM_CALENDAR_INFO_W
         | ORD_ENUM_DATE_FORMATS_W
