@@ -24,3 +24,6 @@ evc4-fixtures = []
 trace = []
 desktop = ["win32-desktop"]
 win32-desktop = []
+
+[profile.release]
+debug = true

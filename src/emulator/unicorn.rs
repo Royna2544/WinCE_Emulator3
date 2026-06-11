@@ -259,8 +259,6 @@ const UNICORN_PRESENTATION_TRACE_LIMIT: usize = 4096;
 #[cfg(all(feature = "unicorn", feature = "trace"))]
 const UNICORN_WINDOW_TRACE_LIMIT: usize = 4096;
 #[cfg(feature = "unicorn")]
-const UNICORN_TB_CACHE_FLUSH_INTERVAL: u32 = 0x0004_0000;
-#[cfg(feature = "unicorn")]
 const UNICORN_SCHEDULER_TIMESLICE_INTERVAL: u32 = 0x0008_0000;
 #[cfg(all(feature = "unicorn", feature = "trace"))]
 const UNICORN_IMPORT_MILESTONE_LIMIT: usize = 8192;
@@ -1908,9 +1906,6 @@ impl UnicornMips {
             }
             let code_trace_index = code_trace_counter_hook.get().wrapping_add(1);
             code_trace_counter_hook.set(code_trace_index);
-            if code_trace_index % UNICORN_TB_CACHE_FLUSH_INTERVAL == 0 {
-                let _ = uc.ctl_remove_cache(0, u64::MAX);
-            }
             if code_trace_index & 0x0fff == 0 {
                 if let Err(err) = unsafe { (&mut *framebuffer_ptr).emulator_tick() } {
                     *framebuffer_tick_error_code_hook.borrow_mut() = Some(err);
@@ -2194,9 +2189,6 @@ impl UnicornMips {
                         let pc = address as u32;
                         let code_trace_index = code_trace_counter.get().wrapping_add(1);
                         code_trace_counter.set(code_trace_index);
-                        if code_trace_index % UNICORN_TB_CACHE_FLUSH_INTERVAL == 0 {
-                            let _ = uc.ctl_remove_cache(0, u64::MAX);
-                        }
                         let Some(instruction) = read_unicorn_code_u32(uc, &mapped_code, pc) else {
                             return;
                         };
