@@ -13,6 +13,11 @@
     <WindowsPackageType>None</WindowsPackageType>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
+    <!-- Bundle the Windows App SDK + .NET runtime so the exe runs with no
+         separate "Windows App Runtime" install on the target machine. -->
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
   </PropertyGroup>
 
   <ItemGroup>
