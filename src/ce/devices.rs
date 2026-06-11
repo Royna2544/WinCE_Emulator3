@@ -191,10 +191,20 @@ impl DeviceNamespace {
 
     pub fn open(&self, guest_name: &str) -> Result<DeviceSession> {
         let normalized = normalize_device_name(guest_name);
-        let config = self
-            .devices
-            .get(&normalized)
-            .ok_or_else(|| Error::MissingDevice(guest_name.to_owned()))?;
+        let config = self.devices.get(&normalized).ok_or_else(|| {
+            tracing::debug!(
+                target: "ce.devices",
+                device = guest_name,
+                "device open: not configured"
+            );
+            Error::MissingDevice(guest_name.to_owned())
+        })?;
+        tracing::debug!(
+            target: "ce.devices",
+            device = guest_name,
+            backend = ?config.backend,
+            "device open"
+        );
 
         #[cfg(windows)]
         let host_serial = open_host_serial_if_configured(config, &self.defaults);
@@ -365,6 +375,14 @@ impl DeviceSession {
         input: &[u8],
         output_capacity: u32,
     ) -> DeviceIoControlResult {
+        tracing::debug!(
+            target: "ce.devices",
+            device = self.guest_name.as_str(),
+            ioctl = format_args!("0x{ioctl_code:08x}"),
+            in_len = input.len(),
+            out_cap = output_capacity,
+            "DeviceIoControl"
+        );
         match &mut self.runtime {
             DeviceRuntime::Accelerometer(sensor) => {
                 return sensor.device_io_control(ioctl_code, input, output_capacity);
