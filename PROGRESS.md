@@ -16,11 +16,17 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 ## Recent Source-Visible Slices
 
 - `src/ce/coredll.rs`: `ExtractIconExW` reads guest paths, validates files, extracts PE icon resources when available, falls back to shell icons for index zero, writes large/small icon outputs, and supports bitmap-backed icon rendering through `DrawIconEx`.
+- `src/ce/coredll.rs`: `MessageBoxW` now validates the CE `winuser.h` style surface, accepting CE high flags such as `MB_SETFOREGROUND`, `MB_TOPMOST`, and `MB_RTLREADING` while rejecting unsupported desktop-only bits and undefined icon nibbles before recording dialog state.
+- `src/ce/coredll.rs`: `TrackPopupMenuEx` now applies the CE `TPMPARAMS.rcExclude` screen rectangle to top-level popup placement before recording tracking state, painting, and hit-testing.
+- `src/ce/coredll.rs`: `SHGetFileInfoW` now writes CE shell `SFGAO_*` attributes for `SHGFI_ATTRIBUTES` instead of raw `FILE_ATTRIBUTE_*` values, covering filesystem, folder, shortcut, and read-only outputs.
 - `src/ce/coredll.rs`: `Shell_NotifyIconW` now follows the CE fixed `NOTIFYICONDATAW` contract from `shellapi.h`/`minserver.cpp` by rejecting short `cbSize` values and unreadable `szTip[64]` buffers before updating shell state.
 - `src/ce/kernel.rs`: file-change record append now coalesces pending records and signals only when pending notification data remains.
 - `src/ce/kernel.rs`: CE file-notification detail records are only queued for watches created with `FILE_NOTIFY_CHANGE_CEGETINFO`; watches without that flag still signal on matching changes and report no detailed records to `CeGetFileNotificationInfo`.
 - `src/ce/gwe.rs` and `src/ce/coredll.rs`: destroyed-window handling exposes completed send-message result writes and flushes them to guest memory.
 - `tests/coredll_raw_kernel.rs`: icon extraction, PE group-icon count, shell icon, and image-list drawing coverage is present.
+- `tests/coredll_raw_kernel.rs`: `MessageBoxW` now verifies CE-supported high style bits are preserved and unsupported style/icon bits fail without creating a new shell message-box record.
+- `tests/coredll_raw_gwe.rs`: `TrackPopupMenuEx` now verifies that `TPMPARAMS.rcExclude` moves the top-level popup before pointer hit-testing.
+- `tests/coredll_raw_kernel.rs`: `SHGetFileInfo` now verifies CE `SFGAO_*` attribute output for regular files, shortcuts, read-only files, storage-card folders, and inaccessible network folders.
 - `tests/coredll_raw_kernel.rs`: `Shell_NotifyIcon` duplicate-add rejection, `NIF_*` member flag handling, fixed CE `NOTIFYICONDATAW` size/readability, and null-icon modify preservation are covered.
 - `tests/coredll_raw_kernel.rs`: `SHNotificationAddI` sink-window validation and `SHNotificationUpdateI` stale-sink update behavior are covered.
 - `tests/coredll_raw_memory_file.rs`: transient file-change notification churn coverage is present.
@@ -44,8 +50,18 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed after the same-thread, early-`ReplyMessage`, and nested `SendMessageTimeout` slices.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_send_message_timeout` passed after adding same-thread, early-`ReplyMessage`, and nested `SendMessageTimeout` coverage.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_msgwait` passed after adding `QS_SENDMESSAGE`/`MWMO_INPUTAVAILABLE` message-wait coverage.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_track_popup_menu` passed after applying `TPMPARAMS.rcExclude` to popup placement.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed after applying `TPMPARAMS.rcExclude` to popup placement.
+- `cargo test --features unicorn,trace,win32-desktop` passed after applying `TPMPARAMS.rcExclude` to popup placement.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel message_box_w` passed after the CE `MessageBoxW` style-mask validation slice.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel` passed after the CE `MessageBoxW` style-mask validation slice.
+- `cargo check --features unicorn,trace,win32-desktop` passed after the CE `MessageBoxW` style-mask validation slice.
+- `cargo test --features unicorn,trace,win32-desktop` passed after the CE `MessageBoxW` style-mask validation slice.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel shell_notify_icon` passed after the CE fixed-`NOTIFYICONDATAW` `Shell_NotifyIconW` slice.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel` passed after the CE fixed-`NOTIFYICONDATAW` `Shell_NotifyIconW` slice.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel sh_get_file_info` passed after the CE `SFGAO_*` `SHGetFileInfoW` attribute slice.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel` passed after the CE `SFGAO_*` `SHGetFileInfoW` attribute slice.
+- `cargo test --features unicorn,trace,win32-desktop` passed after the CE `SFGAO_*` `SHGetFileInfoW` attribute slice.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed with the `QS_ALLINPUT` post/paint/timer and multi-handle message-wait additions.
 - `cargo test --features unicorn,trace,win32-desktop` passed after the CE fixed-`NOTIFYICONDATAW` shell notify slice and the message-wait coverage additions.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_memory_file` passed for the file-change slice.
@@ -125,3 +141,20 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 ## Next Checkpoint
 
 The next useful checkpoint is targeted validation after expanding shell icon/image-list edge coverage or completing the next `SendMessageTimeout` semantics slice.
+
+## UI Crawl Findings (2026-06-11, 50-step tap crawl)
+
+- A 50-step automated tap crawl over the live map UI discovered 23 unique UI
+  states with the emulator healthy throughout: map-browse mode with selection
+  cursor and register/nearby/origin/destination action bar, menu screens,
+  destination pages, pan/zoom states; identical taps reproduce identical
+  states across rounds.
+- Real app-level finding: opening 주변검색 (nearby search) raises iNavi's
+  G-sensor error modal ("G센서 초기화 ... GPS로 자동 전환 [Error Code: -15]")
+  — the emulator's IMU/G-sensor device does not answer initialization like
+  real hardware. The modal then never dismisses on its OK button even though
+  touches deliver to the view window (down/up posted at the button), which
+  suggests the dialog's owner thread is blocked on the sensor device and
+  never pumps the tap. Next root cause: DenebSensor/IMU device emulation
+  (serial_devices.json device behavior), then re-crawl the nearby-search and
+  remaining menu paths.
