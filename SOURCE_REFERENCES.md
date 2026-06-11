@@ -47,7 +47,16 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `DllMain(DLL_PROCESS_DETACH)` before marking the module unload-pending.
     Forwarded exports are retained from the PE export directory and resolved
     through already-loaded guest modules or CE search/load of the forwarded-to
-    DLL, including runtime `GetProcAddress` and import-patching paths.
+    DLL, including runtime `GetProcAddress` and import-patching paths. CE's
+    loader paths treat export names as literal strings and preserve load
+    failure state instead of repairing malformed targets, so v3 now rejects
+    malformed forwarded-export strings with whitespace around the module or
+    symbol before they can resolve through normal module/name normalization.
+    CE `CORE\DLL\loader.cpp` unwinds libraries loaded while resolving an
+    import block when `DoImports` fails; v3 now records runtime modules loaded
+    during one `LoadLibraryW` attempt and marks only those new modules
+    unload-pending if dependency load/import patching or lifecycle callout setup
+    fails.
     `LoadLibraryExW(DONT_RESOLVE_DLL_REFERENCES)` now maps/reuses the runtime
     DLL and publishes ordinary exports without recursive dependency loading,
     import patching, TLS callbacks, `DllMain`, or detach callouts on final
@@ -211,9 +220,14 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     modified/delete churn, and rearms/closes them through
     `FindNextChangeNotification`/`FindCloseChangeNotification`. Because
     `pathapi.cpp` carries the caller's `fWatchSubTree` value into the AFS/
-    FSDMGR notification event, root watches now preserve the same subtree
-    boundary: `\` without recursion matches immediate root children only, and
-    `\` with recursion matches deeper descendants.
+    FSDMGR notification event, watches now preserve the same subtree boundary:
+    non-recursive watches match immediate children only, while recursive
+    watches match deeper descendants. `fsnotify.cpp` `NotifyMoveFileEx`
+    compares source and destination parent paths, reports same-parent moves as
+    `FILE_ACTION_RENAMED_OLD_NAME`/`FILE_ACTION_RENAMED_NEW_NAME`, and reports
+    cross-parent moves as `FILE_ACTION_REMOVED`/`FILE_ACTION_ADDED`; v3 now
+    applies that move-boundary mapping to raw file-change notifications,
+    including the file-vs-directory notify-filter choice.
     `PRIVATE\WINCEOS\COREOS\STORAGE\NOTIFY\fsnotify.cpp` `NotifyReset` drains
     only the records that fit the caller buffer, sets `ERROR_MORE_DATA` after a
     successful prefix copy, reports remaining bytes through `lpBytesAvailable`,
@@ -605,29 +619,101 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     source rectangles when added to narrower image lists, and raw
     `ImageList_Draw*` blits those bitmap-backed image-list entries into the
     attached framebuffer or selected memory DIB before falling back to
-    pseudo-icon rendering.
-    `ImageList_AddMasked` and the `ImageList_LoadImage` mask-color argument now
+    pseudo-icon rendering. CE `imagelist.cpp` also treats
+    `ImageList_LoadImage(cx=0)` as `cx = bmHeight` before computing the strip
+    count and leaves other invalid widths to `ImageList::Create`, so raw
+    `ImageList_LoadImage` now uses the loaded bitmap height for zero-width
+    requests instead of treating the entire bitmap width as one image, while
+    negative widths fail through the image-list creation gate.
+    The same CE path builds creation flags from `crMask != CLR_NONE` and
+    `bm.bmBitsPixel & ILC_COLORMASK`, so raw `ImageList_LoadImage` now marks
+    masked loads with `ILC_MASK` and records the loaded bitmap color depth on
+    the image list. It calls `ImageList::Add` rather than
+    `ImageList::AddMasked` when `crMask == CLR_NONE`, so raw
+    `ImageList_LoadImage` now leaves unmasked entries with mask handle `0` and
+    no transparent color. `ImageList_AddMasked` and the `ImageList_LoadImage` mask-color argument now
     preserve a transparent color for BMP-backed entries, so masked
     framebuffer draws skip matching source pixels while still rendering
     non-transparent pixels. `ImageList_Add` with a bitmap `hbmMask` now also
     reads that mask bitmap during framebuffer draws and skips non-black mask
     pixels, preserving the distinct mask-handle path from color-key masking.
+    CE `ImageList::Add` first resolves the source bitmap with
+    `GetObjectW_I` and rejects `bm.bmWidth < m_cx`; the local resource image
+    list now returns failure for invalid or undersized source bitmaps on both
+    `ImageList_Add` and `ImageList_AddMasked` instead of reporting success
+    with zero appended strips. CE `ImageList::ReplaceIcon` also rejects
+    indexes below `-1` before appending or drawing, so local `ReplaceIcon`
+    now keeps `-1` as the only append sentinel. CE `ImageList::GetIconSize`
+    uses reviewed-parameter validation and returns failure when either output
+    pointer is null before writing `cx` or `cy`, so raw `ImageList_GetIconSize`
+    now avoids partial dimension writes on null outputs. CE `ImageList::Merge`
+    builds `rc1`/`rc2`, uses `UnionRect` for the merged list dimensions, and
+    combines mask/color creation flags from both lists, so local merged image
+    lists now expose CE-sized metadata for offset and mixed-size merges.
     Bitmap-backed `ImageList_Draw*` also resolves `ILD_OVERLAYMASK` through
     `ImageList_SetOverlayImage` and composites the registered overlay image
     through the same transparent-color or mask-bitmap path. CE `commctrl.h`
     defines `IMAGELISTDRAWPARAMS` as a 56-byte structure, and `imagelist.cpp`
     rejects `ImageList_DrawIndirect` calls whose `cbSize` is not exactly
     `sizeof(IMAGELISTDRAWPARAMS)`; raw `ImageList_DrawIndirect` now applies
-    that exact-size gate before recording draw state or rendering.
-    `imagelist.cpp` clears `m_aOverlayIndexes` only on `ImageList_Remove(-1)`;
+    that exact-size gate before recording draw state or rendering. CE's
+    `ImageList::Draw` wrapper initializes `rgbBk` and `rgbFg` to
+    `CLR_DEFAULT` before delegating to `DrawIndirect`, so raw `ImageList_Draw`
+    now uses the image-list background-color default instead of forcing
+    transparent drawing. The same CE path applies `xBitmap`/`yBitmap` to the source rectangle before
+    defaulting zero `cx`/`cy`, and resolves `rgbBk == CLR_DEFAULT` to the
+    image-list background color; v3 now normalizes raw draw parameters in
+    that order and writes the mutated `cx`, `cy`, `rgbBk`, and `fStyle`
+    fields back into the caller's `IMAGELISTDRAWPARAMS`, matching CE's
+    first-stage in-place parameter updates. When `ILD_OVERLAYMASK` is present,
+    CE then rewrites the same struct for the overlay pass (`i`, `x`, `y`,
+    `cx`, `cy`, and `fStyle`, preserving only `ILD_MASK`, forcing
+    `ILD_TRANSPARENT`, and adding the overlay metadata flags); v3 now writes
+    those final overlay-pass values for raw `ImageList_DrawIndirect` too.
+    `imagelist.cpp` also uses a private `ILD_BLENDMASK` value of
+    `0x000E`, so `ILD_BLEND75` still enters the blend setup; the 16-bit and
+    color-table blend helpers treat non-`ILD_BLEND50` blend styles as the 25%
+    branch. Bitmap-backed image-list draws now use that CE mask shape instead
+    of ignoring the `ILD_BLEND75` bit. For `rgbFg == CLR_NONE`, the CE 16-bit
+    blend path copies the destination into a work buffer and averages source
+    pixels with existing destination pixels; bitmap-backed selected-DIB and
+    framebuffer draws now model that destination-blend branch. The same
+    `DrawIndirect` branch chooses `pimldp->dwRop` when `ILD_ROP` is combined
+    with `ILD_MASK` or `ILD_IMAGE`, while `ILD_MASK` defaults to `SRCAND` for
+    transparent draws and `SRCCOPY` otherwise; bitmap-backed image-list draws
+    now carry `dwRop` and apply those CE raster-operation choices.
+    CE `ImageList::CopyDitherImage` does not replace the destination image
+    metadata; it computes the destination image rect, masks `fStyle` to
+    `ILD_OVERLAYMASK`, draws the source into the destination image DC with
+    `ILD_IMAGE`, optionally draws the source mask into the destination mask DC
+    with `ILD_BLEND50 | ILD_MASK`, and resets the destination background color.
+    v3 now records only the CE overlay style bits, preserves destination image
+    records, and mutates bitmap-backed destination image/mask pixels when both
+    sides have readable backing bitmaps.
+    `imagelist.cpp` treats only `ImageList_Remove(-1)` as remove-all; other
+    negative indexes fall through the single-image branch and fail before any
+    mutation. It clears `m_aOverlayIndexes` only on `ImageList_Remove(-1)`;
     its single-image `Remove` path calls `RemoveItemBitmap` and decrements
     `m_cImage` without rewriting overlay slots, and `SetImageCount` likewise
-    only reallocates and updates `m_cImage`. v3 now preserves those stale
-    overlay indexes for single-image removal and truncation while still
-    clearing overlays on remove-all. `ImageList::SetOverlayImage` also rejects
-    lists whose mask DC is absent (`m_hdcMask == NULL`), which corresponds to
-    image lists created without `ILC_MASK`; v3 now returns failure for those
-    unmasked overlay registrations instead of recording an overlay slot.
+    only reallocates and updates `m_cImage`. v3 now rejects negative remove
+    indexes below `-1`, preserves stale overlay indexes for single-image
+    removal and truncation, and still clears overlays on remove-all.
+    `SetImageCount` mutates `m_cImage` only after `ReAllocBitmaps` succeeds,
+    and `ReAllocBitmaps` returns failure when the backing image/mask bitmap
+    allocation fails; v3 now keeps the prior count and returns a raw
+    invalid-parameter-shaped failure for impractical allocation requests.
+    `ImageList::SetOverlayImage` also rejects
+    lists whose mask DC is absent (`m_hdcMask == NULL`) and overlay slots
+    outside CE's `1..=4` range after the `NUM_OVERLAY_IMAGES` check; v3 now
+    returns failure for those unmasked or out-of-range overlay registrations
+    instead of recording an overlay slot. The
+    same CE function scans the mask bitmap for the black-pixel bounding box and
+    stores overlay x/y/dx/dy plus `ILD_IMAGE` when the bounded area is fully
+    opaque; v3 now records that metadata and uses it when drawing overlays.
+    During overlay drawing, CE preserves the caller's `ILD_MASK` bit, forces
+    `ILD_TRANSPARENT`, applies the overlay metadata flags, and re-enters the
+    draw path, so bitmap-backed overlay draws now continue into the overlay
+    mask path instead of skipping overlays whenever `ILD_MASK` is set.
     `ImageList::SetIconSize` returns failure when the requested dimensions
     match the current size; otherwise it updates `m_cx`/`m_cy` and calls
     `ImageList::Remove(-1)`, so v3 now clears images and overlay slots when an
@@ -688,7 +774,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     as `ILC_VALID`, excluding private placeholders such as `ILC_LARGESMALL`
     and `ILC_UNIQUE`; raw `ImageList_Create` now rejects flags outside that
     mask while preserving accepted private/shared flags on the image-list
-    object. `commctrl.h` defines `ILCF_MOVE` and `ILCF_SWAP`, while
+    object. `imagelist.cpp` also converts a missing color-depth mask to
+    `ILC_COLORDDB` for CE backward compatibility, so raw and direct
+    image-list creation now store `ILC_COLORDDB` when callers pass
+    `ILC_COLOR`/zero color bits. `commctrl.h` defines `ILCF_MOVE` and `ILCF_SWAP`, while
     `pcommctr.h` defines `ILCF_VALID` as `ILCF_SWAP`; CE `imagelist.cpp`
     rejects `ImageList_Copy` when the source and destination image-list
     pointers differ, requires valid source and destination image rectangles,

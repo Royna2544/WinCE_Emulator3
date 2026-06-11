@@ -4,6 +4,7 @@ use crate::ce::gwe::{Rect, canonicalize_region_rects};
 
 const ILC_MASK: u32 = 0x0001;
 const STOCK_OBJECT_BASE: u32 = 0x000b_5000;
+const MAX_EMULATED_IMAGE_LIST_IMAGES: usize = 1_048_576;
 const WHITE_BRUSH: u32 = 0;
 const NULL_BRUSH: u32 = 5;
 const WHITE_PEN: u32 = 6;
@@ -256,7 +257,7 @@ pub struct ImageListOverlay {
     pub flags: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ImageListImage {
     pub bitmap: u32,
     pub mask: u32,
@@ -272,10 +273,10 @@ fn overlay_icon_handle(base_icon: u32, overlay_index: i32) -> u32 {
 }
 
 fn image_list_bitmap_strip_count(bitmap_width: i32, image_width: i32) -> i32 {
-    if bitmap_width <= 0 || image_width <= 0 {
-        return 1;
+    if bitmap_width <= 0 || image_width <= 0 || bitmap_width < image_width {
+        return 0;
     }
-    bitmap_width.saturating_add(image_width - 1) / image_width
+    bitmap_width / image_width
 }
 
 fn remove_image_list_image_at(list: &mut ImageListObject, index: usize) {
@@ -313,6 +314,8 @@ pub struct ImageListDraw {
     pub x_bitmap: i32,
     /// Additional source bitmap y offset from IMAGELISTDRAWPARAMS.yBitmap.
     pub y_bitmap: i32,
+    /// Raster operation from IMAGELISTDRAWPARAMS.dwRop, used when ILD_ROP is set.
+    pub rop: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1200,6 +1203,11 @@ impl ResourceSystem {
         if flags & !ILC_VALID != 0 {
             return None;
         }
+        let flags = if flags & ILC_COLORMASK == 0 {
+            flags | ILC_COLORMASK
+        } else {
+            flags
+        };
         let handle = self.next_gdi_handle;
         self.next_gdi_handle += 4;
         self.image_lists.insert(
@@ -1296,15 +1304,40 @@ impl ResourceSystem {
         }
         let first = self.image_lists.get(&first_handle)?;
         let first_image = first.images.get(first_index as usize)?.clone();
-        let width = first.width.saturating_add(dx.saturating_abs()).max(1);
-        let height = first.height.saturating_add(dy.saturating_abs()).max(1);
+        let first_width = first.width;
+        let first_height = first.height;
+        let first_flags = first.flags;
+        let first_grow = first.grow;
+        let first_bk_color = first.bk_color;
         let overlays = first.overlays.clone();
-        let second_image = self
-            .image_lists
-            .get(&second_handle)?
-            .images
-            .get(second_index as usize)?
-            .clone();
+        let second = self.image_lists.get(&second_handle)?;
+        let second_image = second.images.get(second_index as usize)?.clone();
+        let second_width = second.width;
+        let second_height = second.height;
+        let second_flags = second.flags;
+
+        let left = 0_i64.min(i64::from(dx));
+        let top = 0_i64.min(i64::from(dy));
+        let right = i64::from(first_width).max(i64::from(dx) + i64::from(second_width));
+        let bottom = i64::from(first_height).max(i64::from(dy) + i64::from(second_height));
+        let width = i32::try_from((right - left).max(1)).unwrap_or(i32::MAX);
+        let height = i32::try_from((bottom - top).max(1)).unwrap_or(i32::MAX);
+
+        const ILC_MASK: u32 = 0x0001;
+        const ILC_COLORMASK: u32 = 0x00fe;
+        const ILC_COLOR16: u32 = 0x0010;
+        const ILC_COLOR32: u32 = 0x0020;
+        const ILC_COLORDDB: u32 = 0x00fe;
+        let first_color = first_flags & ILC_COLORMASK;
+        let mut second_color = second_flags & ILC_COLORMASK;
+        if (first_color == ILC_COLOR16 || first_color == ILC_COLOR32)
+            && second_color == ILC_COLORDDB
+        {
+            second_color = first_color;
+        }
+        let flags = ILC_MASK
+            | ((first_flags | second_flags) & !ILC_COLORMASK)
+            | first_color.max(second_color);
 
         let handle = self.next_gdi_handle;
         self.next_gdi_handle += 4;
@@ -1314,9 +1347,9 @@ impl ResourceSystem {
                 handle,
                 width,
                 height,
-                flags: first.flags,
-                grow: first.grow,
-                bk_color: first.bk_color,
+                flags,
+                grow: first_grow,
+                bk_color: first_bk_color,
                 images: vec![first_image, second_image],
                 overlays,
                 last_draw: None,
@@ -1338,6 +1371,9 @@ impl ResourceSystem {
         let list = self.image_lists.get_mut(&handle)?;
         let index = list.images.len();
         let count = image_list_bitmap_strip_count(bitmap_width, list.width);
+        if count == 0 {
+            return None;
+        }
         for strip in 0..count {
             list.images.push(ImageListImage {
                 bitmap,
@@ -1368,6 +1404,9 @@ impl ResourceSystem {
         let list = self.image_lists.get_mut(&handle)?;
         let index = list.images.len();
         let count = image_list_bitmap_strip_count(bitmap_width, list.width);
+        if count == 0 {
+            return None;
+        }
         for strip in 0..count {
             list.images.push(ImageListImage {
                 bitmap,
@@ -1407,7 +1446,7 @@ impl ResourceSystem {
     }
 
     pub fn replace_image_list_icon(&mut self, handle: u32, index: i32, icon: u32) -> Option<i32> {
-        if icon == 0 {
+        if index < -1 || icon == 0 {
             return None;
         }
         let list = self.image_lists.get_mut(&handle)?;
@@ -1430,10 +1469,13 @@ impl ResourceSystem {
 
     pub fn remove_image_list_image(&mut self, handle: u32, index: i32) -> Option<bool> {
         let list = self.image_lists.get_mut(&handle)?;
-        if index < 0 {
+        if index == -1 {
             list.images.clear();
             list.overlays.clear();
             return Some(true);
+        }
+        if index < 0 {
+            return Some(false);
         }
         let index = index as usize;
         if index >= list.images.len() {
@@ -1488,20 +1530,22 @@ impl ResourceSystem {
         src_index: i32,
         flags: u32,
     ) -> Option<bool> {
+        const ILD_OVERLAYMASK: u32 = 0x0000_0f00;
         if dst_index < 0 || src_index < 0 {
             return Some(false);
         }
-        let image = self
-            .image_lists
-            .get(&src_handle)?
-            .images
-            .get(src_index as usize)?
-            .clone();
-        let dst = self.image_lists.get_mut(&dst_handle)?;
-        let Some(dst_image) = dst.images.get_mut(dst_index as usize) else {
-            return Some(false);
+        let Some(src) = self.image_lists.get(&src_handle) else {
+            return None;
         };
-        *dst_image = image;
+        if src.images.get(src_index as usize).is_none() {
+            return Some(false);
+        }
+        let Some(dst) = self.image_lists.get_mut(&dst_handle) else {
+            return None;
+        };
+        if dst.images.get(dst_index as usize).is_none() {
+            return Some(false);
+        }
         dst.last_dither_copy = Some(ImageListDitherCopy {
             dst_image_list: dst_handle,
             dst_index,
@@ -1509,26 +1553,26 @@ impl ResourceSystem {
             y,
             src_image_list: src_handle,
             src_index,
-            flags,
+            flags: flags & ILD_OVERLAYMASK,
         });
         Some(true)
     }
 
     pub fn set_image_list_count(&mut self, handle: u32, count: u32) -> Option<bool> {
         let list = self.image_lists.get_mut(&handle)?;
-        let count = count as usize;
+        let count = usize::try_from(count).ok()?;
+        if count > MAX_EMULATED_IMAGE_LIST_IMAGES {
+            return Some(false);
+        }
         if count > list.images.len() {
-            list.images.resize(
-                count,
-                ImageListImage {
-                    bitmap: 0,
-                    mask: 0,
-                    icon: 0,
-                    transparent_color: None,
-                    source_x: 0,
-                    source_y: 0,
-                },
-            );
+            if list
+                .images
+                .try_reserve_exact(count - list.images.len())
+                .is_err()
+            {
+                return Some(false);
+            }
+            list.images.resize(count, ImageListImage::default());
         } else {
             list.images.truncate(count);
         }
@@ -1601,7 +1645,8 @@ impl ResourceSystem {
         image_index: i32,
         overlay: i32,
     ) -> Option<bool> {
-        if image_index < 0 || !(1..=15).contains(&overlay) {
+        const NUM_OVERLAY_IMAGES: i32 = 4;
+        if image_index < 0 || !(1..=NUM_OVERLAY_IMAGES).contains(&overlay) {
             return Some(false);
         }
         let list = self.image_lists.get_mut(&handle)?;
@@ -1657,7 +1702,9 @@ impl ResourceSystem {
         draw.overlay_image = if overlay == 0 {
             None
         } else {
-            list.overlays.get(&overlay).map(|overlay| overlay.image_index)
+            list.overlays
+                .get(&overlay)
+                .map(|overlay| overlay.image_index)
         };
         list.last_draw = Some(draw);
         Some(true)

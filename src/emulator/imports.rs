@@ -525,9 +525,11 @@ impl ExternalImportTable {
 
 pub fn parse_forwarder_target(forwarder: &str) -> Option<(String, ImportBy)> {
     let (module_name, symbol) = forwarder.rsplit_once('.')?;
-    let module_name = module_name.trim();
-    let symbol = symbol.trim();
-    if module_name.is_empty() || symbol.is_empty() {
+    if module_name.is_empty()
+        || symbol.is_empty()
+        || module_name != module_name.trim()
+        || symbol != symbol.trim()
+    {
         return None;
     }
     let import = if let Some(ordinal) = symbol.strip_prefix('#') {
@@ -1414,6 +1416,53 @@ mod tests {
     }
 
     #[test]
+    fn external_table_rejects_malformed_forwarder_strings() {
+        let mut external = ExternalImportTable::default();
+        external.add_module_exports(
+            "target.dll",
+            0x6300_0000,
+            [("RealExport".to_owned(), 0x6300_1234)],
+            [],
+        );
+        external.modules.insert(
+            normalize_module("forwarder.dll"),
+            ExternalImportModule {
+                module_name: "forwarder.dll".to_owned(),
+                image_base: 0x6400_0000,
+                by_name: BTreeMap::from([
+                    (
+                        normalize_symbol("SpacedModule"),
+                        ExternalImportTarget::Forwarder(" target.RealExport".to_owned()),
+                    ),
+                    (
+                        normalize_symbol("SpacedSymbol"),
+                        ExternalImportTarget::Forwarder("target.RealExport ".to_owned()),
+                    ),
+                    (
+                        normalize_symbol("MissingOrdinal"),
+                        ExternalImportTarget::Forwarder("target.#".to_owned()),
+                    ),
+                ]),
+                by_ordinal: BTreeMap::new(),
+            },
+        );
+
+        for name in ["SpacedModule", "SpacedSymbol", "MissingOrdinal"] {
+            assert_eq!(
+                external.resolve(
+                    "forwarder.dll",
+                    &ImportBy::Name {
+                        hint: 0,
+                        name: name.to_owned(),
+                    }
+                ),
+                None,
+                "malformed forwarder {name} must fail closed"
+            );
+        }
+    }
+
+    #[test]
     fn parse_forwarder_target_handles_name_and_ordinal_forms() {
         // Normal name form: last dot separates module from symbol.
         assert_eq!(
@@ -1454,7 +1503,15 @@ mod tests {
         // Empty symbol name after split (dot at end) → None.
         assert_eq!(parse_forwarder_target("MSVCRT."), None);
 
+        // Literal PE forwarder strings are not whitespace-normalized.
+        assert_eq!(parse_forwarder_target(" MSVCRT.printf"), None);
+        assert_eq!(parse_forwarder_target("MSVCRT.printf "), None);
+        assert_eq!(parse_forwarder_target("MSVCRT. printf"), None);
+
         // '#' ordinal that is not a valid u16 → None.
         assert_eq!(parse_forwarder_target("FOO.#99999"), None);
+
+        // '#' without digits is not a valid ordinal.
+        assert_eq!(parse_forwarder_target("FOO.#"), None);
     }
 }

@@ -27,15 +27,16 @@ use wince_emulation_v3::{
             ORD_IMAGE_LIST_BEGIN_DRAG, ORD_IMAGE_LIST_COPY, ORD_IMAGE_LIST_COPY_DITHER_IMAGE,
             ORD_IMAGE_LIST_CREATE, ORD_IMAGE_LIST_DESTROY, ORD_IMAGE_LIST_DRAG_ENTER,
             ORD_IMAGE_LIST_DRAG_LEAVE, ORD_IMAGE_LIST_DRAG_MOVE, ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK,
-            ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT, ORD_IMAGE_LIST_DUPLICATE,
-            ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_BK_COLOR, ORD_IMAGE_LIST_GET_DRAG_IMAGE,
-            ORD_IMAGE_LIST_GET_ICON, ORD_IMAGE_LIST_GET_ICON_SIZE, ORD_IMAGE_LIST_GET_IMAGE_COUNT,
-            ORD_IMAGE_LIST_GET_IMAGE_INFO, ORD_IMAGE_LIST_LOAD_IMAGE, ORD_IMAGE_LIST_MERGE,
-            ORD_IMAGE_LIST_REMOVE, ORD_IMAGE_LIST_REPLACE, ORD_IMAGE_LIST_REPLACE_ICON,
-            ORD_IMAGE_LIST_SET_BK_COLOR, ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE,
-            ORD_IMAGE_LIST_SET_ICON_SIZE, ORD_IMAGE_LIST_SET_IMAGE_COUNT,
-            ORD_IMAGE_LIST_SET_OVERLAY_IMAGE, ORD_INITIALIZE_CRITICAL_SECTION,
-            ORD_INPUT_DEBUG_CHAR_W, ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
+            ORD_IMAGE_LIST_DRAW, ORD_IMAGE_LIST_DRAW_EX, ORD_IMAGE_LIST_DRAW_INDIRECT,
+            ORD_IMAGE_LIST_DUPLICATE, ORD_IMAGE_LIST_END_DRAG, ORD_IMAGE_LIST_GET_BK_COLOR,
+            ORD_IMAGE_LIST_GET_DRAG_IMAGE, ORD_IMAGE_LIST_GET_ICON, ORD_IMAGE_LIST_GET_ICON_SIZE,
+            ORD_IMAGE_LIST_GET_IMAGE_COUNT, ORD_IMAGE_LIST_GET_IMAGE_INFO,
+            ORD_IMAGE_LIST_LOAD_IMAGE, ORD_IMAGE_LIST_MERGE, ORD_IMAGE_LIST_REMOVE,
+            ORD_IMAGE_LIST_REPLACE, ORD_IMAGE_LIST_REPLACE_ICON, ORD_IMAGE_LIST_SET_BK_COLOR,
+            ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE, ORD_IMAGE_LIST_SET_ICON_SIZE,
+            ORD_IMAGE_LIST_SET_IMAGE_COUNT, ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
+            ORD_INITIALIZE_CRITICAL_SECTION, ORD_INPUT_DEBUG_CHAR_W,
+            ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
             ORD_INTERLOCKED_INCREMENT, ORD_IS_CLIPBOARD_FORMAT_AVAILABLE, ORD_KERNEL_IO_CONTROL,
             ORD_LEAVE_CRITICAL_SECTION, ORD_LOAD_IMAGE_W, ORD_LOAD_LIBRARY_EX_W,
             ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS, ORD_MESSAGE_BOX_W, ORD_MOVE_FILE_W,
@@ -5808,7 +5809,10 @@ fn sh_get_file_info_system_image_list_supports_icon_queries_and_draw() -> Result
 fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     const IMAGE_BITMAP: u32 = 0;
     const LR_LOADFROMFILE: u32 = 0x0000_0010;
+    const CLR_NONE: u32 = 0xffff_ffff;
     const ILC_MASK: u32 = 0x0001;
+    const ILC_COLORDDB: u32 = 0x00fe;
+    const ILC_COLOR24: u32 = 0x0018;
     const ILC_COLOR32: u32 = 0x0020;
     const ILC_SHARED: u32 = 0x0100;
     const ILC_LARGESMALL: u32 = 0x0200;
@@ -5921,6 +5925,42 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         }
     ));
 
+    let default_color_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [1, 1, 0, 1, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create rejected CE default color flags: {other:?}"),
+    };
+    assert_ne!(default_color_list, 0);
+    assert_eq!(
+        kernel
+            .resources
+            .image_list(default_color_list)
+            .unwrap()
+            .flags,
+        ILC_COLORDDB
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DESTROY,
+            [default_color_list],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+
     let image_list = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
@@ -5937,6 +5977,9 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     assert_ne!(image_list, 0);
     assert_eq!(kernel.resources.image_list(image_list).unwrap().width, 24);
     assert_eq!(kernel.resources.image_list(image_list).unwrap().height, 20);
+    let add_bitmap_24 = kernel.resources.create_bitmap(24, 20, 1, 24, 0);
+    let add_mask_24 = kernel.resources.create_bitmap(24, 20, 1, 1, 0);
+    let undersized_bitmap = kernel.resources.create_bitmap(8, 20, 1, 24, 0);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -5944,13 +5987,49 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             &mut memory,
             thread_id,
             ORD_IMAGE_LIST_ADD,
-            [image_list, 0x000a_1111, 0x000a_2222],
+            [image_list, undersized_bitmap, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0xffff_ffff),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(kernel.resources.image_list_count(image_list), Some(0));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [image_list, add_bitmap_24, add_mask_24],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::U32(0),
             ..
         }
     ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_REPLACE_ICON,
+            [image_list, 0xffff_fffe, 0x000b_8123],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0xffff_ffff),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -5992,6 +6071,29 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     ));
     assert_eq!(memory.read_i32(size_ptr)?, 24);
     assert_eq!(memory.read_i32(size_ptr + 4)?, 20);
+    memory.write_word(size_ptr, 0x7fff_ffff);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_GET_ICON_SIZE,
+            [image_list, size_ptr, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(
+        memory.read_i32(size_ptr)?,
+        0x7fff_ffff,
+        "CE ImageList_GetIconSize validates both output pointers before writing cx"
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -6059,13 +6161,15 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             ..
         }
     ));
+    let add_bitmap_32 = kernel.resources.create_bitmap(32, 18, 1, 24, 0);
+    let add_mask_32 = kernel.resources.create_bitmap(32, 18, 1, 1, 0);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
             &mut memory,
             thread_id,
             ORD_IMAGE_LIST_ADD,
-            [image_list, 0x000a_1111, 0x000a_2222],
+            [image_list, add_bitmap_32, add_mask_32],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::U32(0),
@@ -6142,13 +6246,14 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         } => handle,
         other => panic!("ImageList_Create(no-mask overlay) did not return a handle: {other:?}"),
     };
+    let add_bitmap_16 = kernel.resources.create_bitmap(16, 16, 1, 24, 0);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
             &mut memory,
             thread_id,
             ORD_IMAGE_LIST_ADD,
-            [no_mask_overlay_list, 0x000a_3333, 0],
+            [no_mask_overlay_list, add_bitmap_16, 0],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::U32(0),
@@ -6209,6 +6314,23 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             &mut memory,
             thread_id,
             ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
+            [image_list, 1, 5],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
             [image_list, 1, 2],
         ),
         CoredllDispatch::Returned {
@@ -6222,8 +6344,9 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             .image_list(image_list)
             .unwrap()
             .overlays
-            .get(&2),
-        Some(&1)
+            .get(&2)
+            .map(|overlay| overlay.image_index),
+        Some(1)
     );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -6277,6 +6400,33 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     assert_eq!(draw.flags, 0x0201);
     assert_eq!(draw.overlay_image, Some(1));
 
+    memory.write_wide_z(bitmap_path_ptr, r"\Images\masked.bmp");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_LOAD_IMAGE,
+            [
+                0,
+                bitmap_path_ptr,
+                12,
+                1,
+                0x00ff_00ff,
+                IMAGE_BITMAP,
+                LR_LOADFROMFILE,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
     let loaded = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
@@ -6285,7 +6435,7 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         [
             0,
             bitmap_path_ptr,
-            12,
+            2,
             1,
             0x00ff_00ff,
             IMAGE_BITMAP,
@@ -6300,11 +6450,25 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     };
     assert_ne!(loaded, 0);
     let loaded_list = kernel.resources.image_list(loaded).unwrap();
-    assert_eq!(loaded_list.width, 12);
+    assert_eq!(loaded_list.width, 2);
     assert_eq!(loaded_list.height, 1);
+    assert_eq!(loaded_list.flags, ILC_MASK | ILC_COLOR24);
     assert_eq!(loaded_list.images.len(), 1);
     assert_ne!(loaded_list.images[0].bitmap, 0);
     assert_eq!(loaded_list.images[0].mask, 0x00ff_00ff);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
+            [loaded, 0, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
     let hdc = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
@@ -6327,7 +6491,7 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             Some(&mut framebuffer),
             thread_id,
             ORD_IMAGE_LIST_DRAW_EX,
-            [loaded, 0, hdc, 6, 7, 1, 1, 0, 0, 0],
+            [loaded, 0, hdc, 6, 7, 2, 1, 0, 0, 0],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
@@ -6336,11 +6500,11 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     assert!(!framebuffer.dirty_rects().is_empty());
-    let pixel_offset = 7 * framebuffer.stride() + 6 * PixelFormat::Rgb565.bytes_per_pixel();
+    let pixel_offset = 7 * framebuffer.stride() + 7 * PixelFormat::Rgb565.bytes_per_pixel();
     assert_eq!(
         &framebuffer.pixels()[pixel_offset..pixel_offset + 2],
-        &[0x26, 0x9b],
-        "ImageList_DrawEx should blit the loaded bitmap pixel, not just the pseudo-icon placeholder"
+        &[0xe0, 0x07],
+        "ImageList_DrawEx should blit the loaded bitmap's non-transparent pixel, not just the pseudo-icon placeholder"
     );
 
     let (mem_dc, bits_ptr, stride) =
@@ -6351,7 +6515,7 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             &mut memory,
             thread_id,
             ORD_IMAGE_LIST_DRAW_EX,
-            [loaded, 0, mem_dc, 4, 5, 1, 1, 0, 0, 0],
+            [loaded, 0, mem_dc, 4, 5, 2, 1, 0, 0, 0],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
@@ -6360,14 +6524,63 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     assert_eq!(
-        rgb565_at(&memory, bits_ptr, stride, 4, 5),
-        0x9b26,
+        rgb565_at(&memory, bits_ptr, stride, 5, 5),
+        0x07e0,
         "ImageList_DrawEx should blit bitmap-backed entries into selected memory DIBs"
     );
     assert_eq!(
         rgb565_at(&memory, bits_ptr, stride, 3, 5),
         0,
         "ImageList_DrawEx should leave memory DIB pixels outside the target rect untouched"
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_SET_BK_COLOR,
+            [loaded, 0x00ff_0000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(_),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW,
+            [loaded, 0, mem_dc, 6, 5, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, bits_ptr, stride, 6, 5),
+        0x001f,
+        "CE ImageList_Draw defaults rgbBk to the image-list background color"
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW,
+            [loaded, 0, mem_dc, 8, 5, 0x0001],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, bits_ptr, stride, 8, 5),
+        0,
+        "explicit ILD_TRANSPARENT should still leave the transparent source pixel untouched"
     );
 
     let resource_loaded = match table.dispatch_raw_ordinal_with_memory(
@@ -6387,7 +6600,10 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     let resource_loaded_list = kernel.resources.image_list(resource_loaded).unwrap();
     assert_eq!(resource_loaded_list.width, 1);
     assert_eq!(resource_loaded_list.height, 1);
+    assert_eq!(resource_loaded_list.flags, ILC_COLOR24);
     assert_ne!(resource_loaded_list.images[0].bitmap, 0);
+    assert_eq!(resource_loaded_list.images[0].mask, 0);
+    assert_eq!(resource_loaded_list.images[0].transparent_color, None);
     let resource_bitmap = kernel
         .resources
         .bitmap(resource_loaded_list.images[0].bitmap)
@@ -6418,6 +6634,67 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         &[0x26, 0x9b],
         "ImageList_LoadImage should blit RT_BITMAP DIB rows, not the DIB header bytes"
     );
+
+    memory.write_wide_z(bitmap_path_ptr, r"\Images\masked.bmp");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_LOAD_IMAGE,
+            [
+                0,
+                bitmap_path_ptr,
+                0xffff_ffff,
+                1,
+                0xffff_ffff,
+                IMAGE_BITMAP,
+                LR_LOADFROMFILE,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    memory.write_wide_z(bitmap_path_ptr, r"\Images\masked.bmp");
+    let zero_cx_loaded = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_LOAD_IMAGE,
+        [
+            0,
+            bitmap_path_ptr,
+            0,
+            1,
+            0xffff_ffff,
+            IMAGE_BITMAP,
+            LR_LOADFROMFILE,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => {
+            panic!("ImageList_LoadImage(cx=0 strip bitmap) did not return a handle: {other:?}")
+        }
+    };
+    let zero_cx_loaded_list = kernel.resources.image_list(zero_cx_loaded).unwrap();
+    assert_eq!(
+        zero_cx_loaded_list.width, 1,
+        "CE ImageList_LoadImage treats cx=0 as the bitmap height"
+    );
+    assert_eq!(zero_cx_loaded_list.height, 1);
+    assert_eq!(zero_cx_loaded_list.images.len(), 2);
+    assert_eq!(zero_cx_loaded_list.images[0].source_x, 0);
+    assert_eq!(zero_cx_loaded_list.images[1].source_x, 1);
 
     memory.write_wide_z(bitmap_path_ptr, r"\Images\masked.bmp");
     let strip_loaded = match table.dispatch_raw_ordinal_with_memory(
@@ -6496,6 +6773,37 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         } => handle,
         other => panic!("ImageList_Create(masked) did not return a handle: {other:?}"),
     };
+    let wide_masked_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [4, 1, 0, 1, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create(wide masked) did not return a handle: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD_MASKED,
+            [wide_masked_list, masked_bitmap, 0x00ff_00ff],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0xffff_ffff),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(kernel.resources.image_list_count(wide_masked_list), Some(0));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -6684,6 +6992,20 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             ..
         }
     ));
+    let overlay_record = kernel
+        .resources
+        .image_list(overlay_list)
+        .unwrap()
+        .overlays
+        .get(&1)
+        .copied()
+        .expect("overlay metadata");
+    assert_eq!(overlay_record.image_index, 1);
+    assert_eq!(overlay_record.x, 1);
+    assert_eq!(overlay_record.y, 0);
+    assert_eq!(overlay_record.width, 1);
+    assert_eq!(overlay_record.height, 1);
+    assert_eq!(overlay_record.flags, 0x0020);
     let _ = framebuffer.take_dirty_rects();
     assert!(matches!(
         table.dispatch_raw_ordinal_with_framebuffer(
@@ -6711,6 +7033,27 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         &[0xe0, 0x07],
         "ImageList overlay draw should composite the registered overlay image"
     );
+    let _ = framebuffer.take_dirty_rects();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_EX,
+            [overlay_list, 0, hdc, 6, 8, 2, 1, 0, 0, 0x0110],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let overlay_mask_right = 8 * framebuffer.stride() + 7 * PixelFormat::Rgb565.bytes_per_pixel();
+    assert_eq!(
+        &framebuffer.pixels()[overlay_mask_right..overlay_mask_right + 2],
+        &[0x00, 0x00],
+        "ImageList overlay draw with ILD_MASK should draw the overlay mask instead of skipping the overlay"
+    );
 
     let merged = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
@@ -6727,8 +7070,9 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     };
     assert_ne!(merged, 0);
     let merged_list = kernel.resources.image_list(merged).unwrap();
-    assert_eq!(merged_list.width, 37);
-    assert_eq!(merged_list.height, 25);
+    assert_eq!(merged_list.width, 32);
+    assert_eq!(merged_list.height, 18);
+    assert_eq!(merged_list.flags, ILC_MASK | ILC_COLORDDB);
     assert_eq!(merged_list.images.len(), 2);
 
     let duplicate = match table.dispatch_raw_ordinal_with_memory(
@@ -6764,7 +7108,8 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         }
     ));
     let image_list_after_dither = kernel.resources.image_list(image_list).unwrap();
-    assert_eq!(image_list_after_dither.images[0].icon, 0x000b_8123);
+    assert_eq!(image_list_after_dither.images[0].bitmap, 0x000a_3333);
+    assert_eq!(image_list_after_dither.images[0].icon, 0);
     let dither_copy = image_list_after_dither.last_dither_copy.unwrap();
     assert_eq!(dither_copy.dst_image_list, image_list);
     assert_eq!(dither_copy.dst_index, 0);
@@ -6772,7 +7117,99 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     assert_eq!(dither_copy.y, 9);
     assert_eq!(dither_copy.src_image_list, duplicate);
     assert_eq!(dither_copy.src_index, 1);
-    assert_eq!(dither_copy.flags, 0x0201);
+    assert_eq!(dither_copy.flags, 0x0200);
+
+    memory.write_wide_z(bitmap_path_ptr, r"\Images\red.bmp");
+    let dither_dst = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_LOAD_IMAGE,
+        [
+            0,
+            bitmap_path_ptr,
+            2,
+            1,
+            CLR_NONE,
+            IMAGE_BITMAP,
+            LR_LOADFROMFILE,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_LoadImage(dither dst) did not return a handle: {other:?}"),
+    };
+    memory.write_wide_z(bitmap_path_ptr, r"\Images\masked.bmp");
+    let dither_src = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_LOAD_IMAGE,
+        [
+            0,
+            bitmap_path_ptr,
+            2,
+            1,
+            CLR_NONE,
+            IMAGE_BITMAP,
+            LR_LOADFROMFILE,
+        ],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_LoadImage(dither src) did not return a handle: {other:?}"),
+    };
+    let dither_dst_bitmap = kernel.resources.image_list(dither_dst).unwrap().images[0].bitmap;
+    assert_ne!(dither_dst_bitmap, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_COPY_DITHER_IMAGE,
+            [dither_dst, 0, 0, 0, dither_src, 0, 0x02ff],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    let dither_dst_after = kernel.resources.image_list(dither_dst).unwrap();
+    assert_eq!(dither_dst_after.images[0].bitmap, dither_dst_bitmap);
+    assert_eq!(
+        dither_dst_after.last_dither_copy.unwrap().flags,
+        0x0200,
+        "CE masks CopyDitherImage fStyle down to ILD_OVERLAYMASK"
+    );
+    let (dither_mem_dc, dither_bits, dither_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 4, 2);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_EX,
+            [dither_dst, 0, dither_mem_dc, 0, 0, 2, 1, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, dither_bits, dither_stride, 0, 0),
+        0xf81f,
+        "CopyDitherImage should copy source pixels into the destination bitmap"
+    );
+    assert_eq!(
+        rgb565_at(&memory, dither_bits, dither_stride, 1, 0),
+        0x07e0,
+        "CopyDitherImage should mutate the destination bitmap instead of replacing metadata only"
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -6799,9 +7236,9 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             [image_list, 0, 0],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Handle(0x000b_8123),
+            value: CoredllValue::Handle(handle),
             ..
-        }
+        } if handle == (0x000b_8000 | (0x000a_3333 & 0xffff))
     ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -7077,6 +7514,58 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             &mut kernel,
             &mut memory,
             thread_id,
+            ORD_IMAGE_LIST_SET_IMAGE_COUNT,
+            [image_list, u32::MAX],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(
+        kernel
+            .resources
+            .image_list(image_list)
+            .unwrap()
+            .images
+            .len(),
+        1
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_REMOVE,
+            [image_list, 0xffff_fffe],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(
+        kernel
+            .resources
+            .image_list(image_list)
+            .unwrap()
+            .images
+            .len(),
+        1
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_IMAGE_LIST_REMOVE,
             [image_list, 0xffff_ffff],
         ),
@@ -7300,6 +7789,11 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
     const LR_LOADFROMFILE: u32 = 0x0000_0010;
     const ILC_COLOR16: u32 = 0x0010;
     const ILC_MASK: u32 = 0x0001;
+    const ILD_TRANSPARENT: u32 = 0x0001;
+    const ILD_BLEND75: u32 = 0x0008;
+    const ILD_IMAGE: u32 = 0x0020;
+    const ILD_ROP: u32 = 0x0040;
+    const SRCINVERT: u32 = 0x0066_0046;
     const CLR_NONE: u32 = 0xffff_ffff;
     const CLR_DEFAULT: u32 = 0xff00_0000;
     const ERROR_INVALID_PARAMETER: u32 = 87;
@@ -7314,6 +7808,8 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
     fs::create_dir_all(&root).unwrap();
     // 2x1 BMP: pixel 0 = magenta (0xFF00FF), pixel 1 = green (0x00FF00).
     fs::write(root.join("mg.bmp"), bmp_2x1_magenta_green_24bpp()).unwrap();
+    fs::write(root.join("mask.bmp"), bmp_2x1_white_black_24bpp()).unwrap();
+    fs::write(root.join("red.bmp"), bmp_2x1_red_red_24bpp()).unwrap();
     kernel.set_file_root(&root);
     let mut memory = TestGuestMemory::default();
     let thread_id = 45;
@@ -7434,6 +7930,11 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
     let magenta_rgb565 = 0xF81F_u16;
     let green_rgb565 = 0x07E0_u16;
     assert_eq!(
+        memory.read_u32(PARAMS_PTR + 48)?,
+        ILD_TRANSPARENT,
+        "CE mutates fStyle in IMAGELISTDRAWPARAMS when rgbBk=CLR_NONE forces transparent drawing"
+    );
+    assert_eq!(
         rgb565_at(&memory, bits_ptr, stride, 0, 0),
         magenta_rgb565,
         "xBitmap=0 should draw magenta (first pixel of the 2x1 bitmap)"
@@ -7459,6 +7960,152 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
         rgb565_at(&memory, bits_ptr, stride, 1, 0),
         green_rgb565,
         "xBitmap=1 should draw green (second pixel of the 2x1 bitmap)"
+    );
+
+    // CE DrawIndirect uses dwRop for ILD_IMAGE when ILD_ROP is set.
+    memory
+        .write_u16(bits_ptr + 3 * 2, 0xf800)
+        .expect("destination pixel should be writable");
+    memory.write_word(PARAMS_PTR + 16, 3); // x=3
+    memory.write_word(PARAMS_PTR + 20, 0); // y=0
+    memory.write_word(PARAMS_PTR + 24, 1); // cx=1
+    memory.write_word(PARAMS_PTR + 28, 1); // cy=1
+    memory.write_word(PARAMS_PTR + 32, 1); // xBitmap=1 -> green source pixel
+    memory.write_word(PARAMS_PTR + 40, CLR_NONE); // rgbBk
+    memory.write_word(PARAMS_PTR + 44, CLR_DEFAULT); // rgbFg
+    memory.write_word(PARAMS_PTR + 48, ILD_IMAGE | ILD_ROP); // fStyle
+    memory.write_word(PARAMS_PTR + 52, SRCINVERT); // dwRop
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_INDIRECT,
+            [PARAMS_PTR],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, bits_ptr, stride, 3, 0),
+        0xffe0,
+        "ILD_ROP should apply dwRop instead of copying the source image"
+    );
+
+    // CE's private ILD_BLENDMASK includes ILD_BLEND75 (0x0008). The CE blend
+    // path treats non-BLEND50 styles as the 25% alpha branch for image-list DIBs.
+    memory.write_word(PARAMS_PTR + 16, 2); // x=2
+    memory.write_word(PARAMS_PTR + 20, 1); // y=1
+    memory.write_word(PARAMS_PTR + 24, 1); // cx=1
+    memory.write_word(PARAMS_PTR + 28, 1); // cy=1
+    memory.write_word(PARAMS_PTR + 32, 1); // xBitmap=1 -> green source pixel
+    memory.write_word(PARAMS_PTR + 40, CLR_NONE); // rgbBk
+    memory.write_word(PARAMS_PTR + 44, 0x0000_00ff); // rgbFg=red COLORREF
+    memory.write_word(PARAMS_PTR + 48, ILD_BLEND75); // fStyle
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_INDIRECT,
+            [PARAMS_PTR],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, bits_ptr, stride, 2, 1),
+        0x3de0,
+        "ILD_BLEND75 should enter CE's blend path instead of drawing unchanged green"
+    );
+
+    // rgbFg=CLR_NONE follows CE's destination-blend branch for 16-bit image lists:
+    // the existing destination pixel is blended with the source image at 50%.
+    memory
+        .write_u16(bits_ptr + stride + 3 * 2, 0xf800)
+        .expect("destination pixel should be writable");
+    memory.write_word(PARAMS_PTR + 16, 3); // x=3
+    memory.write_word(PARAMS_PTR + 20, 1); // y=1
+    memory.write_word(PARAMS_PTR + 24, 1); // cx=1
+    memory.write_word(PARAMS_PTR + 28, 1); // cy=1
+    memory.write_word(PARAMS_PTR + 32, 1); // xBitmap=1 -> green source pixel
+    memory.write_word(PARAMS_PTR + 40, CLR_NONE); // rgbBk
+    memory.write_word(PARAMS_PTR + 44, CLR_NONE); // rgbFg=destination blend
+    memory.write_word(PARAMS_PTR + 48, 0x0004); // fStyle=ILD_BLEND50
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_INDIRECT,
+            [PARAMS_PTR],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, bits_ptr, stride, 3, 1),
+        0x7be0,
+        "rgbFg=CLR_NONE should blend source green with the existing red destination pixel"
+    );
+
+    // With cx/cy set to zero, CE defaults to the remaining source rectangle after
+    // xBitmap/yBitmap are applied. xBitmap=1 on a 2x1 image therefore draws one
+    // pixel, not the full two-pixel image width.
+    memory.write_word(PARAMS_PTR + 16, 0); // x=0
+    memory.write_word(PARAMS_PTR + 20, 1); // y=1
+    memory.write_word(PARAMS_PTR + 24, 0); // cx=0 -> image width - xBitmap
+    memory.write_word(PARAMS_PTR + 28, 0); // cy=0 -> image height
+    memory.write_word(PARAMS_PTR + 32, 1); // xBitmap=1
+    memory.write_word(PARAMS_PTR + 40, CLR_NONE); // rgbBk
+    memory.write_word(PARAMS_PTR + 44, CLR_DEFAULT); // rgbFg
+    memory.write_word(PARAMS_PTR + 48, 0); // fStyle
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_INDIRECT,
+            [PARAMS_PTR],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let draw = kernel.resources.image_list(il).unwrap().last_draw.unwrap();
+    assert_eq!(draw.width, 1);
+    assert_eq!(draw.height, 1);
+    assert_eq!(
+        memory.read_i32(PARAMS_PTR + 24)?,
+        1,
+        "CE writes the defaulted cx back into IMAGELISTDRAWPARAMS"
+    );
+    assert_eq!(
+        memory.read_i32(PARAMS_PTR + 28)?,
+        1,
+        "CE writes the defaulted cy back into IMAGELISTDRAWPARAMS"
+    );
+    assert_eq!(
+        memory.read_u32(PARAMS_PTR + 48)?,
+        ILD_TRANSPARENT,
+        "CE writes the normalized transparent fStyle bit back into IMAGELISTDRAWPARAMS"
+    );
+    assert_eq!(
+        rgb565_at(&memory, bits_ptr, stride, 0, 1),
+        green_rgb565,
+        "cx=0 with xBitmap=1 should default to the remaining one-pixel source width"
+    );
+    assert_eq!(
+        rgb565_at(&memory, bits_ptr, stride, 1, 1),
+        0,
+        "cx=0 with xBitmap=1 should not draw the skipped source column"
     );
 
     // --- rgb_bk fill test ---
@@ -7510,6 +8157,19 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
         Some(0x00ff_00ff),
         "image should carry the magenta transparent_color"
     );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_SET_BK_COLOR,
+            [il2, 0x00ff_0000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(CLR_NONE),
+            ..
+        }
+    ));
 
     // Draw with rgb_bk=CLR_NONE (ILD_TRANSPARENT forced): transparent pixel stays 0.
     memory.write_word(PARAMS_PTR + 4, il2); // himl=il2
@@ -7517,6 +8177,7 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
     memory.write_word(PARAMS_PTR + 24, 1); // cx=1
     memory.write_word(PARAMS_PTR + 32, 0); // xBitmap=0
     memory.write_word(PARAMS_PTR + 40, CLR_NONE); // rgbBk=CLR_NONE
+    memory.write_word(PARAMS_PTR + 48, 0); // fStyle
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -7536,9 +8197,44 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
         "rgb_bk=CLR_NONE: transparent draw should leave dest pixel untouched (no bg fill)"
     );
 
+    // Draw with rgb_bk=CLR_DEFAULT: CE resolves it to the image-list bk color.
+    memory.write_word(PARAMS_PTR + 16, 0); // x=0
+    memory.write_word(PARAMS_PTR + 20, 1); // y=1
+    memory.write_word(PARAMS_PTR + 24, 1); // cx=1
+    memory.write_word(PARAMS_PTR + 28, 1); // cy=1
+    memory.write_word(PARAMS_PTR + 40, CLR_DEFAULT); // rgbBk=image-list background
+    memory.write_word(PARAMS_PTR + 48, 0); // fStyle
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_INDIRECT,
+            [PARAMS_PTR],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let draw = kernel.resources.image_list(il2).unwrap().last_draw.unwrap();
+    assert_eq!(draw.rgb_bk, 0x00ff_0000);
+    assert_eq!(
+        memory.read_u32(PARAMS_PTR + 40)?,
+        0x00ff_0000,
+        "CE writes the resolved image-list background color back into IMAGELISTDRAWPARAMS"
+    );
+    assert_eq!(
+        rgb565_at(&memory, bits_ptr, stride, 0, 1),
+        0x001f,
+        "rgb_bk=CLR_DEFAULT should fill transparent pixels with the image-list bk color"
+    );
+
     // Draw with rgb_bk=green (0x0000FF00): transparent area should be filled with green.
     memory.write_word(PARAMS_PTR + 16, 3); // x=3
+    memory.write_word(PARAMS_PTR + 20, 0); // y=0
     memory.write_word(PARAMS_PTR + 40, 0x0000_ff00); // rgbBk=green
+    memory.write_word(PARAMS_PTR + 48, 0); // fStyle
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -7556,6 +8252,145 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
         rgb565_at(&memory, bits_ptr, stride, 3, 0),
         green_rgb565,
         "rgb_bk=green: transparent area should be pre-filled with background color"
+    );
+
+    // CE's overlay pass mutates the caller's IMAGELISTDRAWPARAMS again after
+    // the base draw: i/x/y/cx/cy/fStyle become the overlay draw values.
+    let overlay_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [2, 1, ILC_COLOR16 | ILC_MASK, 1, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("ImageList_Create(overlay params) failed: {other:?}"),
+    };
+    memory.write_wide_z(path_ptr, r"\red.bmp");
+    let overlay_bitmap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOAD_IMAGE_W,
+        [0, path_ptr, IMAGE_BITMAP, 2, 1, LR_LOADFROMFILE],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("LoadImage overlay bitmap failed: {other:?}"),
+    };
+    memory.write_wide_z(path_ptr, r"\mask.bmp");
+    let overlay_mask = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOAD_IMAGE_W,
+        [0, path_ptr, IMAGE_BITMAP, 2, 1, LR_LOADFROMFILE],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("LoadImage overlay mask failed: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [overlay_list, overlay_bitmap, overlay_mask],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
+            [overlay_list, 0, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let overlay_record = kernel
+        .resources
+        .image_list(overlay_list)
+        .unwrap()
+        .overlays
+        .get(&1)
+        .copied()
+        .expect("overlay bounds should be recorded");
+    assert_eq!(overlay_record.x, 1);
+    assert_eq!(overlay_record.width, 1);
+    assert_eq!(overlay_record.flags, 0x0020);
+
+    memory.write_word(PARAMS_PTR, 56); // cbSize
+    memory.write_word(PARAMS_PTR + 4, overlay_list); // himl
+    memory.write_word(PARAMS_PTR + 8, 0); // i=0
+    memory.write_word(PARAMS_PTR + 12, mem_dc); // hdcDst
+    memory.write_word(PARAMS_PTR + 16, 0); // x=0
+    memory.write_word(PARAMS_PTR + 20, 0); // y=0
+    memory.write_word(PARAMS_PTR + 24, 2); // cx=2
+    memory.write_word(PARAMS_PTR + 28, 1); // cy=1
+    memory.write_word(PARAMS_PTR + 32, 0); // xBitmap=0
+    memory.write_word(PARAMS_PTR + 36, 0); // yBitmap=0
+    memory.write_word(PARAMS_PTR + 40, CLR_NONE); // rgbBk
+    memory.write_word(PARAMS_PTR + 44, CLR_DEFAULT); // rgbFg
+    memory.write_word(PARAMS_PTR + 48, 0x0100); // fStyle=overlay slot 1
+    memory.write_word(PARAMS_PTR + 52, 0); // dwRop
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_INDIRECT,
+            [PARAMS_PTR],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_i32(PARAMS_PTR + 8)?,
+        0,
+        "CE rewrites i to the registered overlay image index"
+    );
+    assert_eq!(
+        memory.read_i32(PARAMS_PTR + 16)?,
+        1,
+        "CE offsets x by the overlay mask bounds"
+    );
+    assert_eq!(
+        memory.read_i32(PARAMS_PTR + 20)?,
+        0,
+        "CE offsets y by the overlay mask bounds"
+    );
+    assert_eq!(
+        memory.read_i32(PARAMS_PTR + 24)?,
+        1,
+        "CE rewrites cx to the overlay mask width"
+    );
+    assert_eq!(
+        memory.read_i32(PARAMS_PTR + 28)?,
+        1,
+        "CE rewrites cy to the overlay mask height"
+    );
+    assert_eq!(
+        memory.read_u32(PARAMS_PTR + 48)?,
+        ILD_TRANSPARENT | 0x0020,
+        "CE strips the overlay mask and leaves the overlay pass fStyle"
     );
 
     let _ = fs::remove_dir_all(root);

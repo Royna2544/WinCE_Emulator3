@@ -25,13 +25,19 @@
 // - GET /api/v1/debug/windows.txt returns the latest GWE window snapshot text.
 // - GET /api/v1/debug/messages.txt returns the latest GWE/message trace text.
 // - GET /api/v1/debug/processes.txt returns recent process/thread ops.
+// - GET /api/v1/debug/sends.txt returns synchronous SendMessage state.
+// - GET /api/v1/debug/pending-wndproc.txt returns pending WNDPROC callouts.
 // - GET /api/v1/debug/wndproc.txt returns recent WNDPROC call/return traces.
 // - GET /api/v1/debug/imports.txt returns recent import calls.
+// - GET /api/v1/debug/milestones.txt returns recent milestone import calls.
+// - GET /api/v1/debug/counts.txt returns import call counts.
 // - GET /api/v1/debug/calls.txt returns recent guest call targets.
 // - GET /api/v1/debug/code.txt returns recent guest code samples.
+// - GET /api/v1/debug/blocks.txt returns recent guest basic blocks.
 // - GET /api/v1/debug/files.txt returns recent file I/O summary.
 // - GET /api/v1/debug/files-full.txt returns recent file I/O records.
 // - GET /api/v1/debug/events.txt returns recent event operations.
+// - GET /api/v1/debug/parked.txt returns parked-process snapshots.
 // - GET /api/v1/debug/remote-input.txt returns the latest remote input drain line.
 // - GET /api/v1/video.mjpg[?fps=1..60][&quality=1..100] streams multipart
 //   MJPEG frames until the client disconnects.
@@ -415,13 +421,21 @@ impl RemoteServer {
             ("GET", "/api/v1/debug/windows.txt") => self.latest_debug_text("windows").into(),
             ("GET", "/api/v1/debug/messages.txt") => self.latest_debug_text("messages").into(),
             ("GET", "/api/v1/debug/processes.txt") => self.latest_debug_text("processes").into(),
+            ("GET", "/api/v1/debug/sends.txt") => self.latest_debug_text("sends").into(),
+            ("GET", "/api/v1/debug/pending-wndproc.txt") => {
+                self.latest_debug_text("pending-wndproc").into()
+            }
             ("GET", "/api/v1/debug/wndproc.txt") => self.latest_debug_text("wndproc").into(),
             ("GET", "/api/v1/debug/imports.txt") => self.latest_debug_text("imports").into(),
+            ("GET", "/api/v1/debug/milestones.txt") => self.latest_debug_text("milestones").into(),
+            ("GET", "/api/v1/debug/counts.txt") => self.latest_debug_text("counts").into(),
             ("GET", "/api/v1/debug/calls.txt") => self.latest_debug_text("calls").into(),
             ("GET", "/api/v1/debug/code.txt") => self.latest_debug_text("code").into(),
+            ("GET", "/api/v1/debug/blocks.txt") => self.latest_debug_text("blocks").into(),
             ("GET", "/api/v1/debug/files.txt") => self.latest_debug_text("files").into(),
             ("GET", "/api/v1/debug/files-full.txt") => self.latest_debug_text("files-full").into(),
             ("GET", "/api/v1/debug/events.txt") => self.latest_debug_text("events").into(),
+            ("GET", "/api/v1/debug/parked.txt") => self.latest_debug_text("parked").into(),
             ("GET", "/api/v1/debug/remote-input.txt") => {
                 self.latest_debug_text("remote-input").into()
             }
@@ -484,13 +498,19 @@ impl RemoteServer {
                     "debugWindows": "GET /api/v1/debug/windows.txt",
                     "debugMessages": "GET /api/v1/debug/messages.txt",
                     "debugProcesses": "GET /api/v1/debug/processes.txt",
+                    "debugSends": "GET /api/v1/debug/sends.txt",
+                    "debugPendingWndProc": "GET /api/v1/debug/pending-wndproc.txt",
                     "debugWndProc": "GET /api/v1/debug/wndproc.txt",
                     "debugImports": "GET /api/v1/debug/imports.txt",
+                    "debugMilestones": "GET /api/v1/debug/milestones.txt",
+                    "debugCounts": "GET /api/v1/debug/counts.txt",
                     "debugCalls": "GET /api/v1/debug/calls.txt",
                     "debugCode": "GET /api/v1/debug/code.txt",
+                    "debugBlocks": "GET /api/v1/debug/blocks.txt",
                     "debugFiles": "GET /api/v1/debug/files.txt",
                     "debugFilesFull": "GET /api/v1/debug/files-full.txt",
                     "debugEvents": "GET /api/v1/debug/events.txt",
+                    "debugParked": "GET /api/v1/debug/parked.txt",
                     "debugRemoteInput": "GET /api/v1/debug/remote-input.txt",
                     "video": "GET /api/v1/video.mjpg",
                     "touch": "POST /api/v1/input/touch",

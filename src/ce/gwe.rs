@@ -3894,6 +3894,80 @@ impl Gwe {
         self.stats
     }
 
+    pub fn sent_message_debug_text(&self) -> String {
+        use std::fmt::Write as _;
+
+        let mut out = String::new();
+        let _ = writeln!(
+            &mut out,
+            "  sent messages: total={} queues={} active_stacks={} depth_threads={}",
+            self.sent_messages.len(),
+            self.sent_queues.len(),
+            self.active_sent_stack_by_thread.len(),
+            self.send_depth_by_thread.len()
+        );
+        if self.sent_messages.is_empty() {
+            out.push_str("    none\n");
+        } else {
+            for (id, sent) in &self.sent_messages {
+                let ready = sent.flags & SMF_RESULT_READY != 0;
+                let timeout = sent.flags & SMF_TIMEOUT != 0;
+                let _ = writeln!(
+                    &mut out,
+                    "    id={id} sender={:?} sender_pid={:?} receiver={} hwnd=0x{:08x} msg=0x{:04x} w=0x{:08x} l=0x{:08x} flags=0x{:08x} ready={} timeout={} result={:?} result_ptr={:?} timeout_ms={:?}",
+                    sent.sender_thread_id,
+                    sent.sender_process_id,
+                    sent.receiver_thread_id,
+                    sent.message.hwnd,
+                    sent.message.msg,
+                    sent.message.wparam,
+                    sent.message.lparam,
+                    sent.flags,
+                    ready,
+                    timeout,
+                    sent.result,
+                    sent.result_ptr,
+                    sent.timeout_ms
+                );
+            }
+        }
+        if self.sent_queues.is_empty() {
+            out.push_str("  sent queues: none\n");
+        } else {
+            out.push_str("  sent queues:\n");
+            for (thread_id, queue) in &self.sent_queues {
+                let ids = queue
+                    .iter()
+                    .map(u64::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let _ = writeln!(&mut out, "    thread={thread_id}: [{ids}]");
+            }
+        }
+        if self.active_sent_stack_by_thread.is_empty() {
+            out.push_str("  active sent stacks: none\n");
+        } else {
+            out.push_str("  active sent stacks:\n");
+            for (thread_id, stack) in &self.active_sent_stack_by_thread {
+                let ids = stack
+                    .iter()
+                    .map(u64::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",");
+                let depth = self
+                    .send_depth_by_thread
+                    .get(thread_id)
+                    .copied()
+                    .unwrap_or_default();
+                let _ = writeln!(
+                    &mut out,
+                    "    thread={thread_id}: depth={depth} stack=[{ids}]"
+                );
+            }
+        }
+        out
+    }
+
     pub fn get_message_source(&self, thread_id: u32) -> u32 {
         self.last_message_source_by_thread
             .get(&thread_id)

@@ -47,6 +47,10 @@ impl UnicornMips {
         self.resources.extend(result.resources);
         Ok(())
     }
+
+    pub fn pending_wndproc_debug_text(&self) -> String {
+        "  pending wndproc returns: 0\n    none\n".to_owned()
+    }
 }
 
 impl CpuBackend for UnicornMips {
@@ -95,6 +99,10 @@ impl CpuBackend for UnicornMips {
 
     fn has_parked_child_processes(&self) -> bool {
         false
+    }
+
+    fn parked_process_debug_text(&self, _kernel: &CeKernel) -> String {
+        "  parked processes: none\n".to_owned()
     }
 
     fn has_ready_parked_send_unblock(&self, _kernel: &CeKernel) -> bool {

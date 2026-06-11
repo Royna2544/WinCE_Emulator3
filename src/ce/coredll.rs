@@ -7722,7 +7722,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             raw_arg(args, 0),
         ))),
         ORD_IMAGE_LIST_COPY_DITHER_IMAGE => {
-            image_list_copy_dither_image_raw(kernel, thread_id, args);
+            image_list_copy_dither_image_raw(kernel, memory, thread_id, args);
             Some(CoredllValue::U32(0))
         }
         ORD_IMAGE_LIST_COPY => Some(CoredllValue::Bool(image_list_copy_raw(
@@ -25011,6 +25011,7 @@ fn draw_icon_ex_raw<M: CoredllGuestMemory>(
                 source_height,
                 &image,
                 None,
+                None,
             );
         } else {
             render_image_list_bitmap_entry_hdc(
@@ -25024,6 +25025,7 @@ fn draw_icon_ex_raw<M: CoredllGuestMemory>(
                 source_width,
                 source_height,
                 &image,
+                None,
                 None,
             );
         }
@@ -25045,6 +25047,7 @@ fn draw_icon_ex_raw<M: CoredllGuestMemory>(
         rgb_bk: CLR_NONE,
         x_bitmap: 0,
         y_bitmap: 0,
+        rop: SRCCOPY,
     };
     if !render_image_list_draw_bitmap(kernel, memory, draw) {
         render_image_list_draw_framebuffer(kernel, memory, framebuffer, draw);
@@ -25140,26 +25143,38 @@ fn image_list_load_image_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return 0;
     };
+    let height = bitmap_info.height.max(1);
     let width = if requested_cx > 0 {
         requested_cx
+    } else if requested_cx == 0 {
+        height
     } else {
-        bitmap_info.width.abs().max(1)
+        requested_cx
     };
-    let height = bitmap_info.height.max(1);
+    const ILC_MASK: u32 = 0x0001;
+    const ILC_COLORMASK: u32 = 0x00fe;
+    let mut image_list_flags = 0;
+    if mask != CLR_NONE {
+        image_list_flags |= ILC_MASK;
+    }
+    image_list_flags |= u32::from(bitmap_info.bits_pixel) & ILC_COLORMASK;
     let Some(list) = kernel
         .resources
-        .create_image_list(width, height, 0, 1, grow)
+        .create_image_list(width, height, image_list_flags, 1, grow)
     else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return 0;
     };
-    if kernel
-        .resources
-        .add_masked_image_list_image(list, bitmap, mask)
-        .is_none()
-    {
+    let added = if mask == CLR_NONE {
+        kernel.resources.add_image_list_image(list, bitmap, 0)
+    } else {
+        kernel
+            .resources
+            .add_masked_image_list_image(list, bitmap, mask)
+    };
+    if added.is_none() {
         kernel.resources.destroy_image_list(list);
         kernel
             .threads
@@ -25309,9 +25324,15 @@ fn image_list_set_image_count_raw(kernel: &mut CeKernel, thread_id: u32, args: &
     let handle = raw_arg(args, 0);
     let count = raw_arg(args, 1);
     match kernel.resources.set_image_list_count(handle, count) {
-        Some(ok) => {
+        Some(true) => {
             kernel.threads.set_last_error(thread_id, 0);
-            ok
+            true
+        }
+        Some(false) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            false
         }
         None => {
             kernel
@@ -25350,6 +25371,12 @@ fn image_list_get_icon_size_raw<M: CoredllGuestMemory>(
     let handle = raw_arg(args, 0);
     let cx_ptr = raw_arg(args, 1);
     let cy_ptr = raw_arg(args, 2);
+    if cx_ptr == 0 || cy_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return false;
+    }
     let size = if handle == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
         Some((SHELL_SYSTEM_IMAGE_LIST_CX, SHELL_SYSTEM_IMAGE_LIST_CY))
     } else {
@@ -25532,21 +25559,25 @@ fn image_list_draw_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     };
-    let draw = ImageListDraw {
-        image_list: handle,
-        index,
-        hdc,
-        x,
-        y,
-        width,
-        height,
-        flags,
-        overlay_image: None,
-        rgb_fg: CLR_DEFAULT,
-        rgb_bk: CLR_NONE,
-        x_bitmap: 0,
-        y_bitmap: 0,
-    };
+    let draw = normalize_image_list_draw(
+        kernel,
+        ImageListDraw {
+            image_list: handle,
+            index,
+            hdc,
+            x,
+            y,
+            width,
+            height,
+            flags,
+            overlay_image: None,
+            rgb_fg: CLR_DEFAULT,
+            rgb_bk: CLR_DEFAULT,
+            x_bitmap: 0,
+            y_bitmap: 0,
+            rop: SRCCOPY,
+        },
+    );
     let rendered = record_image_list_draw(kernel, thread_id, draw);
     if rendered {
         if !render_image_list_draw_bitmap(kernel, memory, draw) {
@@ -25573,33 +25604,31 @@ fn image_list_draw_ex_raw<M: CoredllGuestMemory>(
     let rgb_bk = raw_arg(args, 7);
     let rgb_fg = raw_arg(args, 8);
     let raw_flags = raw_arg(args, 9);
-    const ILD_TRANSPARENT: u32 = 0x0001;
-    let flags = if rgb_bk == CLR_NONE {
-        raw_flags | ILD_TRANSPARENT
-    } else {
-        raw_flags
-    };
     if handle != SHELL_SYSTEM_IMAGE_LIST_HANDLE && kernel.resources.image_list(handle).is_none() {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         return false;
     }
-    let draw = ImageListDraw {
-        image_list: handle,
-        index,
-        hdc,
-        x,
-        y,
-        width,
-        height,
-        flags,
-        overlay_image: None,
-        rgb_fg,
-        rgb_bk,
-        x_bitmap: 0,
-        y_bitmap: 0,
-    };
+    let draw = normalize_image_list_draw(
+        kernel,
+        ImageListDraw {
+            image_list: handle,
+            index,
+            hdc,
+            x,
+            y,
+            width,
+            height,
+            flags: raw_flags,
+            overlay_image: None,
+            rgb_fg,
+            rgb_bk,
+            x_bitmap: 0,
+            y_bitmap: 0,
+            rop: SRCCOPY,
+        },
+    );
     let rendered = record_image_list_draw(kernel, thread_id, draw);
     if rendered {
         if !render_image_list_draw_bitmap(kernel, memory, draw) {
@@ -25657,7 +25686,6 @@ fn image_list_draw_indirect_raw<M: CoredllGuestMemory>(
     //  @0  cbSize, @4 himl, @8 i, @12 hdcDst, @16 x, @20 y, @24 cx, @28 cy
     //  @32 xBitmap, @36 yBitmap, @40 rgbBk, @44 rgbFg, @48 fStyle, @52 dwRop
     // xBitmap/yBitmap are added to the image source rect per CE imagelist.cpp DrawIndirect.
-    const ILD_TRANSPARENT: u32 = 0x0001;
     let x_bitmap =
         read_guest_i32(kernel, memory, thread_id, draw_ptr.wrapping_add(32)).unwrap_or(0);
     let y_bitmap =
@@ -25668,33 +25696,152 @@ fn image_list_draw_indirect_raw<M: CoredllGuestMemory>(
         read_guest_u32(kernel, memory, thread_id, draw_ptr.wrapping_add(44)).unwrap_or(CLR_DEFAULT);
     let raw_flags =
         read_guest_u32(kernel, memory, thread_id, draw_ptr.wrapping_add(48)).unwrap_or(0);
-    let flags = if rgb_bk == CLR_NONE {
-        raw_flags | ILD_TRANSPARENT
-    } else {
-        raw_flags
-    };
-    let draw = ImageListDraw {
-        image_list: handle,
-        index,
-        hdc,
-        x,
-        y,
-        width,
-        height,
-        flags,
-        overlay_image: None,
-        rgb_fg,
-        rgb_bk,
-        x_bitmap,
-        y_bitmap,
-    };
+    let rop = read_guest_u32(kernel, memory, thread_id, draw_ptr.wrapping_add(52)).unwrap_or(0);
+    let draw = normalize_image_list_draw(
+        kernel,
+        ImageListDraw {
+            image_list: handle,
+            index,
+            hdc,
+            x,
+            y,
+            width,
+            height,
+            flags: raw_flags,
+            overlay_image: None,
+            rgb_fg,
+            rgb_bk,
+            x_bitmap,
+            y_bitmap,
+            rop,
+        },
+    );
     let rendered = record_image_list_draw(kernel, thread_id, draw);
     if rendered {
+        let visible_params = image_list_draw_indirect_visible_params(kernel, draw);
+        if !write_image_list_draw_indirect_normalized_params(
+            kernel,
+            memory,
+            thread_id,
+            draw_ptr,
+            visible_params,
+        ) {
+            return false;
+        }
         if !render_image_list_draw_bitmap(kernel, memory, draw) {
             render_image_list_draw_framebuffer(kernel, memory, framebuffer, draw);
         }
     }
     rendered
+}
+
+fn image_list_draw_indirect_visible_params(
+    kernel: &CeKernel,
+    draw: ImageListDraw,
+) -> ImageListDraw {
+    const ILD_MASK: u32 = 0x0010;
+    const ILD_TRANSPARENT: u32 = 0x0001;
+    const ILD_OVERLAYMASK: u32 = 0x0000_0f00;
+
+    if draw.flags & ILD_OVERLAYMASK == 0 {
+        return draw;
+    }
+    let Some(list) = kernel.resources.image_list(draw.image_list) else {
+        return draw;
+    };
+    let Some(overlay) = image_list_overlay_record(list, draw) else {
+        return draw;
+    };
+    ImageListDraw {
+        index: overlay.image_index,
+        x: draw.x.saturating_add(overlay.x),
+        y: draw.y.saturating_add(overlay.y),
+        width: overlay.width,
+        height: overlay.height,
+        flags: (draw.flags & ILD_MASK) | ILD_TRANSPARENT | overlay.flags,
+        ..draw
+    }
+}
+
+fn write_image_list_draw_indirect_normalized_params<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    draw_ptr: u32,
+    draw: ImageListDraw,
+) -> bool {
+    write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        draw_ptr.wrapping_add(8),
+        draw.index as u32,
+    ) && write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        draw_ptr.wrapping_add(16),
+        draw.x as u32,
+    ) && write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        draw_ptr.wrapping_add(20),
+        draw.y as u32,
+    ) && write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        draw_ptr.wrapping_add(24),
+        draw.width as u32,
+    ) && write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        draw_ptr.wrapping_add(28),
+        draw.height as u32,
+    ) && write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        draw_ptr.wrapping_add(40),
+        draw.rgb_bk,
+    ) && write_guest_u32(
+        kernel,
+        memory,
+        thread_id,
+        draw_ptr.wrapping_add(48),
+        draw.flags,
+    )
+}
+
+fn normalize_image_list_draw(kernel: &CeKernel, mut draw: ImageListDraw) -> ImageListDraw {
+    const ILD_TRANSPARENT: u32 = 0x0001;
+    let (default_width, default_height, bk_color) =
+        if draw.image_list == SHELL_SYSTEM_IMAGE_LIST_HANDLE {
+            (
+                SHELL_SYSTEM_IMAGE_LIST_CX,
+                SHELL_SYSTEM_IMAGE_LIST_CY,
+                CLR_NONE,
+            )
+        } else if let Some(list) = kernel.resources.image_list(draw.image_list) {
+            (list.width, list.height, list.bk_color)
+        } else {
+            (draw.width, draw.height, CLR_NONE)
+        };
+    if draw.rgb_bk == CLR_DEFAULT {
+        draw.rgb_bk = bk_color;
+    }
+    if draw.rgb_bk == CLR_NONE {
+        draw.flags |= ILD_TRANSPARENT;
+    }
+    if draw.width == 0 {
+        draw.width = default_width.saturating_sub(draw.x_bitmap);
+    }
+    if draw.height == 0 {
+        draw.height = default_height.saturating_sub(draw.y_bitmap);
+    }
+    draw
 }
 
 fn render_image_list_draw_framebuffer<M: CoredllGuestMemory>(
@@ -25909,6 +26056,7 @@ fn render_image_list_bitmap_framebuffer<M: CoredllGuestMemory>(
     };
     let draw_flags = draw.flags & 0x00ff;
     const ILD_TRANSPARENT: u32 = 0x0001;
+    let rop = image_list_draw_rop(draw_flags, draw.rop);
     // Apply ILD draw flags to the effective image: ILD_MASK draws only the mask
     // bitmap; ILD_IMAGE suppresses mask and transparent-color transparency.
     // Also apply xBitmap/yBitmap source offsets from DrawIndirect.
@@ -25945,7 +26093,7 @@ fn render_image_list_bitmap_framebuffer<M: CoredllGuestMemory>(
     }
     let src_width = list.width.max(1);
     let src_height = list.height.max(1);
-    let blend = ild_blend_color(draw_flags, draw.rgb_fg);
+    let blend = ild_blend_mode(draw_flags, draw.rgb_fg);
     if !render_image_list_bitmap_entry_framebuffer(
         kernel,
         memory,
@@ -25959,38 +26107,44 @@ fn render_image_list_bitmap_framebuffer<M: CoredllGuestMemory>(
         src_height,
         &effective_image,
         blend,
+        rop,
     ) {
         return false;
     }
 
-    // Overlay is drawn on top using its own image properties (not affected by ILD_MASK).
-    if draw_flags & ILD_MASK == 0 {
-        let overlay_record = image_list_overlay_record(list, draw);
-        if let Some(overlay_record) = overlay_record
-            && let Some(overlay) = list.images.get(overlay_record.image_index as usize)
-        {
-            let mut overlay = overlay.clone();
-            overlay.source_x = overlay.source_x.saturating_add(overlay_record.x);
-            overlay.source_y = overlay.source_y.saturating_add(overlay_record.y);
-            if overlay_record.flags & ILD_IMAGE != 0 {
-                overlay.mask = 0;
-                overlay.transparent_color = None;
+    let overlay_record = image_list_overlay_record(list, draw);
+    if let Some(overlay_record) = overlay_record
+        && let Some(overlay) = list.images.get(overlay_record.image_index as usize)
+    {
+        let mut overlay = overlay.clone();
+        overlay.source_x = overlay.source_x.saturating_add(overlay_record.x);
+        overlay.source_y = overlay.source_y.saturating_add(overlay_record.y);
+        if draw_flags & ILD_MASK != 0 {
+            if overlay.mask == 0 {
+                return true;
             }
-            let _ = render_image_list_bitmap_entry_framebuffer(
-                kernel,
-                memory,
-                framebuffer,
-                draw.hdc,
-                draw.x.saturating_add(overlay_record.x),
-                draw.y.saturating_add(overlay_record.y),
-                overlay_record.width,
-                overlay_record.height,
-                overlay_record.width.max(1),
-                overlay_record.height.max(1),
-                &overlay,
-                None, // overlay not blended
-            );
+            overlay.bitmap = overlay.mask;
+            overlay.mask = 0;
+            overlay.transparent_color = None;
+        } else if overlay_record.flags & ILD_IMAGE != 0 {
+            overlay.mask = 0;
+            overlay.transparent_color = None;
         }
+        let _ = render_image_list_bitmap_entry_framebuffer(
+            kernel,
+            memory,
+            framebuffer,
+            draw.hdc,
+            draw.x.saturating_add(overlay_record.x),
+            draw.y.saturating_add(overlay_record.y),
+            overlay_record.width,
+            overlay_record.height,
+            overlay_record.width.max(1),
+            overlay_record.height.max(1),
+            &overlay,
+            None, // overlay not blended
+            None,
+        );
     }
     true
 }
@@ -26016,6 +26170,7 @@ fn render_image_list_bitmap_hdc<M: CoredllGuestMemory>(
     };
     let draw_flags = draw.flags & 0x00ff;
     const ILD_TRANSPARENT: u32 = 0x0001;
+    let rop = image_list_draw_rop(draw_flags, draw.rop);
     // Apply ILD draw flags and xBitmap/yBitmap source offsets from DrawIndirect.
     let effective_image = if draw_flags & ILD_MASK != 0 && image.mask != 0 {
         crate::ce::resource::ImageListImage {
@@ -26053,7 +26208,7 @@ fn render_image_list_bitmap_hdc<M: CoredllGuestMemory>(
     }
     let src_width = list.width.max(1);
     let src_height = list.height.max(1);
-    let blend = ild_blend_color(draw_flags, draw.rgb_fg);
+    let blend = ild_blend_mode(draw_flags, draw.rgb_fg);
     if !render_image_list_bitmap_entry_hdc(
         kernel,
         memory,
@@ -26066,38 +26221,68 @@ fn render_image_list_bitmap_hdc<M: CoredllGuestMemory>(
         src_height,
         &effective_image,
         blend,
+        rop,
     ) {
         return false;
     }
 
-    if draw_flags & ILD_MASK == 0 {
-        let overlay_record = image_list_overlay_record(list, draw);
-        if let Some(overlay_record) = overlay_record
-            && let Some(overlay) = list.images.get(overlay_record.image_index as usize)
-        {
-            let mut overlay = overlay.clone();
-            overlay.source_x = overlay.source_x.saturating_add(overlay_record.x);
-            overlay.source_y = overlay.source_y.saturating_add(overlay_record.y);
-            if overlay_record.flags & ILD_IMAGE != 0 {
-                overlay.mask = 0;
-                overlay.transparent_color = None;
+    let overlay_record = image_list_overlay_record(list, draw);
+    if let Some(overlay_record) = overlay_record
+        && let Some(overlay) = list.images.get(overlay_record.image_index as usize)
+    {
+        let mut overlay = overlay.clone();
+        overlay.source_x = overlay.source_x.saturating_add(overlay_record.x);
+        overlay.source_y = overlay.source_y.saturating_add(overlay_record.y);
+        if draw_flags & ILD_MASK != 0 {
+            if overlay.mask == 0 {
+                return true;
             }
-            let _ = render_image_list_bitmap_entry_hdc(
-                kernel,
-                memory,
-                draw.hdc,
-                draw.x.saturating_add(overlay_record.x),
-                draw.y.saturating_add(overlay_record.y),
-                overlay_record.width,
-                overlay_record.height,
-                overlay_record.width.max(1),
-                overlay_record.height.max(1),
-                &overlay,
-                None, // overlay not blended
-            );
+            overlay.bitmap = overlay.mask;
+            overlay.mask = 0;
+            overlay.transparent_color = None;
+        } else if overlay_record.flags & ILD_IMAGE != 0 {
+            overlay.mask = 0;
+            overlay.transparent_color = None;
         }
+        let _ = render_image_list_bitmap_entry_hdc(
+            kernel,
+            memory,
+            draw.hdc,
+            draw.x.saturating_add(overlay_record.x),
+            draw.y.saturating_add(overlay_record.y),
+            overlay_record.width,
+            overlay_record.height,
+            overlay_record.width.max(1),
+            overlay_record.height.max(1),
+            &overlay,
+            None, // overlay not blended
+            None,
+        );
     }
     true
+}
+
+fn image_list_overlay_record(
+    list: &crate::ce::resource::ImageListObject,
+    draw: ImageListDraw,
+) -> Option<crate::ce::resource::ImageListOverlay> {
+    draw.overlay_image
+        .map(|image_index| crate::ce::resource::ImageListOverlay {
+            image_index,
+            x: 0,
+            y: 0,
+            width: list.width,
+            height: list.height,
+            flags: 0,
+        })
+        .or_else(|| {
+            let overlay = (draw.flags & 0x0000_0f00) >> 8;
+            if overlay == 0 {
+                None
+            } else {
+                list.overlays.get(&overlay).copied()
+            }
+        })
 }
 
 fn render_image_list_bitmap_entry_framebuffer<M: CoredllGuestMemory>(
@@ -26112,7 +26297,8 @@ fn render_image_list_bitmap_entry_framebuffer<M: CoredllGuestMemory>(
     src_width: i32,
     src_height: i32,
     image: &crate::ce::resource::ImageListImage,
-    blend: Option<([u8; 3], u8)>,
+    blend: Option<ImageListBlend>,
+    rop: Option<u32>,
 ) -> bool {
     // Resolve the bitmap: prefer image.bitmap, fall back to icon color_bitmap.
     let (bitmap_handle, mask_handle) = if image.bitmap != 0 {
@@ -26166,6 +26352,7 @@ fn render_image_list_bitmap_entry_framebuffer<M: CoredllGuestMemory>(
             .map(|(mask, bytes)| (*mask, bytes.as_slice())),
         image.transparent_color.map(colorref_rgb),
         blend,
+        rop,
     );
     true
 }
@@ -26181,7 +26368,8 @@ fn render_image_list_bitmap_entry_hdc<M: CoredllGuestMemory>(
     src_width: i32,
     src_height: i32,
     image: &crate::ce::resource::ImageListImage,
-    blend: Option<([u8; 3], u8)>,
+    blend: Option<ImageListBlend>,
+    rop: Option<u32>,
 ) -> bool {
     let (bitmap_handle, mask_handle) = if image.bitmap != 0 {
         (image.bitmap, image.mask)
@@ -26243,6 +26431,7 @@ fn render_image_list_bitmap_entry_hdc<M: CoredllGuestMemory>(
                 .map(|(mask, bytes)| (*mask, bytes.as_slice())),
             image.transparent_color.map(colorref_rgb),
             blend,
+            rop,
             clip,
         );
     }
@@ -26291,7 +26480,12 @@ fn image_list_copy_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> b
     }
 }
 
-fn image_list_copy_dither_image_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) {
+fn image_list_copy_dither_image_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    args: &[u32],
+) {
     let dst_handle = raw_arg(args, 0);
     let dst_index = raw_i32_arg(args, 1) & 0xffff;
     let x = raw_i32_arg(args, 2);
@@ -26304,6 +26498,9 @@ fn image_list_copy_dither_image_raw(kernel: &mut CeKernel, thread_id: u32, args:
         .copy_dither_image_list_image(dst_handle, dst_index, x, y, src_handle, src_index, flags)
     {
         Some(true) => {
+            copy_dither_image_list_bitmap_pixels(
+                kernel, memory, dst_handle, dst_index, x, y, src_handle, src_index,
+            );
             kernel.threads.set_last_error(thread_id, 0);
         }
         Some(false) => {
@@ -26317,6 +26514,133 @@ fn image_list_copy_dither_image_raw(kernel: &mut CeKernel, thread_id: u32, args:
                 .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         }
     }
+}
+
+fn copy_dither_image_list_bitmap_pixels<M: CoredllGuestMemory>(
+    kernel: &CeKernel,
+    memory: &mut M,
+    dst_handle: u32,
+    dst_index: i32,
+    x: i32,
+    y: i32,
+    src_handle: u32,
+    src_index: i32,
+) {
+    let Some(dst_list) = kernel.resources.image_list(dst_handle) else {
+        return;
+    };
+    let Some(src_list) = kernel.resources.image_list(src_handle) else {
+        return;
+    };
+    let Some(dst_image) = dst_list.images.get(dst_index as usize).cloned() else {
+        return;
+    };
+    let Some(src_image) = src_list.images.get(src_index as usize).cloned() else {
+        return;
+    };
+    let Some((dst_bitmap_handle, dst_mask_handle)) =
+        image_list_image_bitmap_handles(kernel, &dst_image)
+    else {
+        return;
+    };
+    let Some((src_bitmap_handle, src_mask_handle)) =
+        image_list_image_bitmap_handles(kernel, &src_image)
+    else {
+        return;
+    };
+
+    copy_image_list_bitmap_pixels(
+        kernel,
+        memory,
+        dst_bitmap_handle,
+        dst_image.source_x.saturating_add(x),
+        dst_image.source_y.saturating_add(y),
+        src_bitmap_handle,
+        src_image.source_x,
+        src_image.source_y,
+        src_list.width,
+        src_list.height,
+    );
+
+    if dst_mask_handle != 0 && src_mask_handle != 0 {
+        copy_image_list_bitmap_pixels(
+            kernel,
+            memory,
+            dst_mask_handle,
+            dst_image.source_x.saturating_add(x),
+            dst_image.source_y.saturating_add(y),
+            src_mask_handle,
+            src_image.source_x,
+            src_image.source_y,
+            src_list.width,
+            src_list.height,
+        );
+    }
+}
+
+fn image_list_image_bitmap_handles(
+    kernel: &CeKernel,
+    image: &crate::ce::resource::ImageListImage,
+) -> Option<(u32, u32)> {
+    if image.bitmap != 0 {
+        return Some((image.bitmap, image.mask));
+    }
+    if image.icon == 0 {
+        return None;
+    }
+    let icon = kernel.resources.icon(image.icon)?;
+    (icon.color_bitmap != 0).then_some((icon.color_bitmap, icon.mask_bitmap))
+}
+
+fn copy_image_list_bitmap_pixels<M: CoredllGuestMemory>(
+    kernel: &CeKernel,
+    memory: &mut M,
+    dst_bitmap_handle: u32,
+    dst_x: i32,
+    dst_y: i32,
+    src_bitmap_handle: u32,
+    src_x: i32,
+    src_y: i32,
+    width: i32,
+    height: i32,
+) {
+    if width <= 0 || height <= 0 {
+        return;
+    }
+    let Some(dst_bitmap) = kernel.resources.bitmap(dst_bitmap_handle).cloned() else {
+        return;
+    };
+    let Some(src_bitmap) = kernel.resources.bitmap(src_bitmap_handle) else {
+        return;
+    };
+    let Some(src_bytes) = read_bitmap_object_bytes(memory, src_bitmap) else {
+        return;
+    };
+    let clip = Rect {
+        left: 0,
+        top: 0,
+        right: dst_bitmap.width,
+        bottom: dst_bitmap.height,
+    };
+    draw_bitmap_bytes_to_bitmap(
+        memory,
+        &dst_bitmap,
+        dst_x,
+        dst_y,
+        width,
+        height,
+        src_x,
+        src_y,
+        width,
+        height,
+        src_bitmap,
+        &src_bytes,
+        None,
+        None,
+        None,
+        None,
+        clip,
+    );
 }
 
 fn image_list_merge_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> u32 {
@@ -26555,7 +26879,12 @@ fn image_list_duplicate_raw(kernel: &mut CeKernel, thread_id: u32, handle: u32) 
     }
 }
 
-fn image_list_set_overlay_image_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
+fn image_list_set_overlay_image_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    args: &[u32],
+) -> bool {
     let handle = raw_arg(args, 0);
     let image_index = raw_i32_arg(args, 1);
     let overlay = raw_i32_arg(args, 2);
@@ -26564,6 +26893,7 @@ fn image_list_set_overlay_image_raw(kernel: &mut CeKernel, thread_id: u32, args:
         .set_image_list_overlay(handle, image_index, overlay)
     {
         Some(true) => {
+            refine_image_list_overlay_bounds(kernel, memory, handle, image_index, overlay);
             kernel.threads.set_last_error(thread_id, 0);
             true
         }
@@ -26580,6 +26910,89 @@ fn image_list_set_overlay_image_raw(kernel: &mut CeKernel, thread_id: u32, args:
             false
         }
     }
+}
+
+fn refine_image_list_overlay_bounds<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    handle: u32,
+    image_index: i32,
+    overlay: i32,
+) {
+    const ILD_IMAGE: u32 = 0x0020;
+    let Some(list) = kernel.resources.image_list(handle) else {
+        return;
+    };
+    let Some(image) = list.images.get(image_index as usize) else {
+        return;
+    };
+    let list_width = list.width.max(0);
+    let list_height = list.height.max(0);
+    let source_x = image.source_x;
+    let source_y = image.source_y;
+    let mask_handle = image.mask;
+    if mask_handle == 0 {
+        let _ = kernel.resources.set_image_list_overlay_bounds(
+            handle,
+            overlay,
+            0,
+            0,
+            list_width,
+            list_height,
+            ILD_IMAGE,
+        );
+        return;
+    }
+    let Some(mask) = kernel.resources.bitmap(mask_handle) else {
+        return;
+    };
+    let Some(mask_bytes) = read_bitmap_object_bytes(memory, mask) else {
+        return;
+    };
+    let mut left = i32::MAX;
+    let mut top = i32::MAX;
+    let mut right = 0;
+    let mut bottom = 0;
+    for y in 0..list_height {
+        for x in 0..list_width {
+            if bitmap_pixel_rgb(mask, &mask_bytes, source_x + x, source_y + y) == Some([0, 0, 0]) {
+                left = left.min(x);
+                top = top.min(y);
+                right = right.max(x.saturating_add(1));
+                bottom = bottom.max(y.saturating_add(1));
+            }
+        }
+    }
+    if left == i32::MAX {
+        left = 0;
+        top = 0;
+    }
+    let mut flags = 0;
+    if right > left && bottom > top {
+        let mut rectangular = true;
+        'rows: for y in top..bottom {
+            for x in left..right {
+                if bitmap_pixel_rgb(mask, &mask_bytes, source_x + x, source_y + y)
+                    != Some([0, 0, 0])
+                {
+                    rectangular = false;
+                    break 'rows;
+                }
+            }
+        }
+        if rectangular {
+            flags = ILD_IMAGE;
+        }
+    }
+    let _ = kernel.resources.set_image_list_overlay_bounds(
+        handle,
+        overlay,
+        left,
+        top,
+        right.saturating_sub(left),
+        bottom.saturating_sub(top),
+        flags,
+    );
 }
 
 fn record_image_list_draw(kernel: &mut CeKernel, thread_id: u32, draw: ImageListDraw) -> bool {
@@ -32044,6 +32457,7 @@ fn bit_blt_raw<M: CoredllGuestMemory>(
                         None,
                         None,
                         None,
+                        None,
                         clip,
                     );
                 }
@@ -32213,6 +32627,7 @@ fn stretch_blt_raw<M: CoredllGuestMemory>(
                         None,
                         None,
                         None,
+                        None,
                         clip,
                     );
                 }
@@ -32231,6 +32646,7 @@ fn stretch_blt_raw<M: CoredllGuestMemory>(
                     src_height,
                     &src_bitmap,
                     &src_bytes,
+                    None,
                     None,
                     None,
                     None,
@@ -32355,6 +32771,7 @@ fn draw_dib_to_framebuffer<M: CoredllGuestMemory>(
         None,
         None,
         None,
+        None,
     );
 }
 
@@ -32429,44 +32846,112 @@ fn read_dib_source<M: CoredllGuestMemory>(
     ))
 }
 
-/// Compute ILD_BLEND color from draw flags and rgbFg per CE imagelist.cpp.
-/// Returns (highlight_rgb, alpha) where alpha=128 for BLEND50, 64 for BLEND25.
-/// CLR_DEFAULT (0xFF000000) or 0 resolves to COLOR_HIGHLIGHT.
-/// CLR_NONE (destination blend) is not supported and returns None.
-fn ild_blend_color(draw_flags: u32, rgb_fg: u32) -> Option<([u8; 3], u8)> {
-    const ILD_BLEND25: u32 = 0x0002;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ImageListBlend {
+    Solid { rgb: [u8; 3], alpha: u8 },
+    Destination,
+}
+
+/// Compute ILD_BLEND behavior from draw flags and rgbFg per CE imagelist.cpp.
+/// Solid blends use alpha=128 for BLEND50 and alpha=64 for other CE blend
+/// styles such as BLEND25 and the private-but-recognized BLEND75 bit.
+/// CLR_DEFAULT (0xFF000000) or 0 resolves to COLOR_HIGHLIGHT. CLR_NONE blends
+/// with the destination for the bitmap-backed path.
+fn ild_blend_mode(draw_flags: u32, rgb_fg: u32) -> Option<ImageListBlend> {
     const ILD_BLEND50: u32 = 0x0004;
-    const ILD_BLENDMASK: u32 = 0x0006;
+    const ILD_BLENDMASK: u32 = 0x000e;
     let alpha = match draw_flags & ILD_BLENDMASK {
         ILD_BLEND50 => 128u8,
-        ILD_BLEND25 => 64u8,
+        blend if blend != 0 => 64u8,
         _ => return None,
     };
     if rgb_fg == CLR_NONE {
-        return None; // destination blend not implemented
+        return Some(ImageListBlend::Destination);
     }
     let color = if rgb_fg == CLR_DEFAULT || rgb_fg == 0 {
         [0x00, 0x00, 0x80] // COLOR_HIGHLIGHT (index 13 in our sys color table)
     } else {
         colorref_rgb(rgb_fg)
     };
-    Some((color, alpha))
+    Some(ImageListBlend::Solid { rgb: color, alpha })
 }
 
-/// Apply ILD_BLEND50/ILD_BLEND25 color blending per CE imagelist.cpp Blend16Helper.
-/// blend: (highlight_rgb, alpha) where alpha=128 for 50%, alpha=64 for 25%.
-/// new_channel = (src * (256 - alpha) + highlight * alpha) / 256
-fn apply_ild_blend(rgb: [u8; 3], blend: Option<([u8; 3], u8)>) -> [u8; 3] {
-    let Some((highlight, alpha)) = blend else {
-        return rgb;
+/// Apply ILD_BLEND color or destination blending per CE imagelist.cpp Blend16Helper.
+fn apply_ild_blend(
+    rgb: [u8; 3],
+    blend: Option<ImageListBlend>,
+    dst_rgb: Option<[u8; 3]>,
+) -> [u8; 3] {
+    match blend {
+        Some(ImageListBlend::Solid {
+            rgb: highlight,
+            alpha,
+        }) => {
+            let inv = u32::from(255u8 - alpha) + 1; // 256 - alpha
+            let a = u32::from(alpha);
+            [
+                (((u32::from(rgb[0]) * inv) + (u32::from(highlight[0]) * a)) >> 8) as u8,
+                (((u32::from(rgb[1]) * inv) + (u32::from(highlight[1]) * a)) >> 8) as u8,
+                (((u32::from(rgb[2]) * inv) + (u32::from(highlight[2]) * a)) >> 8) as u8,
+            ]
+        }
+        Some(ImageListBlend::Destination) => {
+            let Some(dst) = dst_rgb else {
+                return rgb;
+            };
+            [
+                ((u16::from(rgb[0]) + u16::from(dst[0])) / 2) as u8,
+                ((u16::from(rgb[1]) + u16::from(dst[1])) / 2) as u8,
+                ((u16::from(rgb[2]) + u16::from(dst[2])) / 2) as u8,
+            ]
+        }
+        None => rgb,
+    }
+}
+
+fn image_list_draw_rop(draw_flags: u32, dw_rop: u32) -> Option<u32> {
+    const ILD_TRANSPARENT: u32 = 0x0001;
+    const ILD_MASK: u32 = 0x0010;
+    const ILD_IMAGE: u32 = 0x0020;
+    const ILD_ROP: u32 = 0x0040;
+
+    if draw_flags & ILD_MASK != 0 {
+        Some(if draw_flags & ILD_ROP != 0 {
+            dw_rop
+        } else if draw_flags & ILD_TRANSPARENT != 0 {
+            SRCAND
+        } else {
+            SRCCOPY
+        })
+    } else if draw_flags & ILD_IMAGE != 0 {
+        Some(if draw_flags & ILD_ROP != 0 {
+            dw_rop
+        } else {
+            SRCCOPY
+        })
+    } else {
+        None
+    }
+}
+
+fn bitmap_rop_needs_destination(rop: Option<u32>) -> bool {
+    matches!(rop, Some(SRCPAINT | SRCAND | SRCINVERT | DSTINVERT))
+}
+
+fn apply_bitmap_rop(src: [u8; 3], dst: Option<[u8; 3]>, rop: Option<u32>) -> [u8; 3] {
+    let Some(rop) = rop else {
+        return src;
     };
-    let inv = u32::from(255u8 - alpha) + 1; // 256 - alpha
-    let a = u32::from(alpha);
-    [
-        (((u32::from(rgb[0]) * inv) + (u32::from(highlight[0]) * a)) >> 8) as u8,
-        (((u32::from(rgb[1]) * inv) + (u32::from(highlight[1]) * a)) >> 8) as u8,
-        (((u32::from(rgb[2]) * inv) + (u32::from(highlight[2]) * a)) >> 8) as u8,
-    ]
+    let Some(dst) = dst else {
+        return src;
+    };
+    match rop {
+        SRCPAINT => [src[0] | dst[0], src[1] | dst[1], src[2] | dst[2]],
+        SRCAND => [src[0] & dst[0], src[1] & dst[1], src[2] & dst[2]],
+        SRCINVERT => [src[0] ^ dst[0], src[1] ^ dst[1], src[2] ^ dst[2]],
+        DSTINVERT => [!dst[0], !dst[1], !dst[2]],
+        _ => src,
+    }
 }
 
 fn draw_bitmap_bytes_to_framebuffer(
@@ -32485,7 +32970,8 @@ fn draw_bitmap_bytes_to_framebuffer(
     bitmap_bytes: &[u8],
     mask_bitmap: Option<(&crate::ce::resource::BitmapObject, &[u8])>,
     transparent_rgb: Option<[u8; 3]>,
-    blend: Option<([u8; 3], u8)>,
+    blend: Option<ImageListBlend>,
+    rop: Option<u32>,
 ) {
     if dst_width == 0 || dst_height == 0 || src_width == 0 || src_height == 0 {
         return;
@@ -32539,8 +33025,21 @@ fn draw_bitmap_bytes_to_framebuffer(
                 {
                     continue;
                 }
-                let blended = apply_ild_blend(rgb, blend);
-                let pixel = pixel_bytes_for_rgb(info.format, blended);
+                let dst_rgb = match (blend, bitmap_rop_needs_destination(rop)) {
+                    (Some(ImageListBlend::Destination), _) | (_, true) => {
+                        let bytes_per_pixel = info.format.bytes_per_pixel();
+                        let offset = (screen_y as usize * dst_stride)
+                            + (screen_x as usize * bytes_per_pixel);
+                        Some(framebuffer_pixel_rgb(
+                            info.format,
+                            &framebuffer.pixels()[offset..offset + bytes_per_pixel],
+                        ))
+                    }
+                    _ => None,
+                };
+                let blended = apply_ild_blend(rgb, blend, dst_rgb);
+                let rop_rgb = apply_bitmap_rop(blended, dst_rgb, rop);
+                let pixel = pixel_bytes_for_rgb(info.format, rop_rgb);
                 let offset =
                     (screen_y as usize * dst_stride) + (screen_x as usize * bytes_per_pixel);
                 framebuffer.pixels_mut()[offset..offset + bytes_per_pixel]
@@ -32571,7 +33070,8 @@ fn draw_bitmap_bytes_to_bitmap<M: CoredllGuestMemory>(
     src_bytes: &[u8],
     mask_bitmap: Option<(&crate::ce::resource::BitmapObject, &[u8])>,
     transparent_rgb: Option<[u8; 3]>,
-    blend: Option<([u8; 3], u8)>,
+    blend: Option<ImageListBlend>,
+    rop: Option<u32>,
     clip: Rect,
 ) {
     if dst.bits_ptr == 0
@@ -32627,7 +33127,15 @@ fn draw_bitmap_bytes_to_bitmap<M: CoredllGuestMemory>(
             {
                 continue;
             }
-            let _ = write_bitmap_pixel_rgb(memory, dst, x, y, apply_ild_blend(rgb, blend));
+            let dst_rgb = match (blend, bitmap_rop_needs_destination(rop)) {
+                (Some(ImageListBlend::Destination), _) | (_, true) => {
+                    bitmap_pixel_rgb_from_memory(memory, dst, x, y)
+                }
+                _ => None,
+            };
+            let blended = apply_ild_blend(rgb, blend, dst_rgb);
+            let _ =
+                write_bitmap_pixel_rgb(memory, dst, x, y, apply_bitmap_rop(blended, dst_rgb, rop));
         }
     }
 }
@@ -33167,6 +33675,7 @@ fn transparent_image_raw<M: CoredllGuestMemory>(
                         None,
                         Some(colorref_rgb(transparent_color)),
                         None,
+                        None,
                         clip,
                     );
                 }
@@ -33187,6 +33696,7 @@ fn transparent_image_raw<M: CoredllGuestMemory>(
                     &bitmap_bytes,
                     None,
                     Some(colorref_rgb(transparent_color)),
+                    None,
                     None,
                 );
             }

@@ -2178,6 +2178,11 @@ mod tests {
             ),
             4
         );
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !socket_read_ready(socket) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(socket_read_ready(socket));
         assert_eq!(
             dispatch_import(
                 &mut kernel,

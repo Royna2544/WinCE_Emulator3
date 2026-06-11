@@ -154,6 +154,7 @@ fn main() -> Result<()> {
         kernel.set_remote_server(server);
         publish_remote_endpoint(
             kernel.remote_server.as_ref(),
+            None,
             &kernel,
             desktop.framebuffer(),
             None,
@@ -318,6 +319,18 @@ fn run_cpu_loop(
     let mut reported_blocked_message_wait = false;
     let run_started = Instant::now();
     loop {
+        if cpu.complete_escaped_saved_get_message_sent_callout(kernel) {
+            reported_blocked_message_wait = false;
+            continue;
+        }
+        if cpu.complete_orphaned_parked_send_wait(kernel) {
+            reported_blocked_message_wait = false;
+            continue;
+        }
+        if rotate_to_cross_process_send_target(cpu, kernel) {
+            reported_blocked_message_wait = false;
+            continue;
+        }
         let blocked_remote_target = blocked_remote_input_target(cpu, kernel, args.desktop);
         let remote_drained =
             service_remote_endpoint(cpu, kernel, desktop, blocked_remote_target.as_ref());
@@ -330,6 +343,10 @@ fn run_cpu_loop(
             reported_blocked_message_wait = false;
         }
         if cpu.rotate_to_ready_parked_wait(kernel) {
+            reported_blocked_message_wait = false;
+            continue;
+        }
+        if rotate_to_cross_process_send_target(cpu, kernel) {
             reported_blocked_message_wait = false;
             continue;
         }
@@ -409,23 +426,18 @@ fn run_cpu_loop(
             reported_blocked_message_wait = false;
             continue;
         }
-        if let Some(target_process_id) = cpu
-            .last_debug_snapshot()
-            .and_then(|snapshot| snapshot.cross_process_send_yield.as_ref())
-            .map(|yielded| yielded.target_process_id)
-        {
-            if cpu.rotate_to_parked_process_id(kernel, target_process_id) {
-                reported_blocked_message_wait = false;
-                continue;
-            }
+        if rotate_to_cross_process_send_target(cpu, kernel) {
+            reported_blocked_message_wait = false;
+            continue;
         }
         let snapshot_state = cpu.last_debug_snapshot().map(|snapshot| {
             (
                 snapshot.host_wall_clock_stop.is_some(),
                 snapshot_has_blocked_get_message(snapshot),
+                snapshot_has_non_message_blocked_wait(snapshot),
             )
         });
-        if let Some((host_wall_clock_stop, message_waiter)) = snapshot_state {
+        if let Some((host_wall_clock_stop, message_waiter, non_message_waiter)) = snapshot_state {
             let should_rotate_process = should_rotate_parked_process(
                 cpu.has_parked_child_processes(),
                 cpu.has_ready_parked_send_unblock(kernel),
@@ -440,6 +452,11 @@ fn run_cpu_loop(
                 continue;
             }
             if live_pump_slice && message_waiter {
+                if non_message_waiter {
+                    reported_blocked_message_wait = false;
+                    std::thread::sleep(Duration::from_millis(16));
+                    continue;
+                }
                 if !reported_blocked_message_wait {
                     if let Some(snapshot) = cpu.last_debug_snapshot() {
                         print_unicorn_stop(snapshot);
@@ -465,6 +482,17 @@ fn run_cpu_loop(
     }
     desktop.show_stopped_message("Emulator process stopped")?;
     Ok(())
+}
+
+fn rotate_to_cross_process_send_target(cpu: &mut UnicornMips, kernel: &mut CeKernel) -> bool {
+    let Some(target_process_id) = cpu
+        .last_debug_snapshot()
+        .and_then(|snapshot| snapshot.cross_process_send_yield.as_ref())
+        .map(|yielded| yielded.target_process_id)
+    else {
+        return false;
+    };
+    cpu.rotate_to_parked_process_id(kernel, target_process_id)
 }
 
 fn remaining_wall_clock_limit_ms(limit_ms: u64, elapsed: Duration) -> u64 {
@@ -499,7 +527,7 @@ fn host_idle_message_poll_slice(cpu: &UnicornMips, desktop: DesktopMode) -> bool
     desktop == DesktopMode::Host
         && cpu
             .last_debug_snapshot()
-            .is_some_and(snapshot_has_blocked_get_message)
+            .is_some_and(snapshot_is_idle_message_wait_only)
 }
 
 fn should_idle_host_message_pump(
@@ -525,6 +553,17 @@ fn snapshot_has_saved_get_message_waiter(snapshot: &UnicornDebugSnapshot) -> boo
         .active_blocked_waits
         .iter()
         .any(|wait| wait.kind == "get_message")
+}
+
+fn snapshot_has_non_message_blocked_wait(snapshot: &UnicornDebugSnapshot) -> bool {
+    snapshot
+        .active_blocked_waits
+        .iter()
+        .any(|wait| wait.kind != "get_message")
+}
+
+fn snapshot_is_idle_message_wait_only(snapshot: &UnicornDebugSnapshot) -> bool {
+    snapshot_has_blocked_get_message(snapshot) && !snapshot_has_non_message_blocked_wait(snapshot)
 }
 
 fn effective_wall_clock_limit_ms(
@@ -782,6 +821,7 @@ fn service_remote_endpoint(
     };
     publish_remote_endpoint(
         kernel.remote_server.as_ref(),
+        Some(cpu),
         kernel,
         desktop.framebuffer(),
         cpu.last_debug_snapshot(),
@@ -791,6 +831,7 @@ fn service_remote_endpoint(
 
 fn publish_remote_endpoint(
     server: Option<&RemoteServer>,
+    cpu: Option<&UnicornMips>,
     kernel: &CeKernel,
     framebuffer: &VirtualFramebuffer,
     snapshot: Option<&UnicornDebugSnapshot>,
@@ -807,13 +848,23 @@ fn publish_remote_endpoint(
             server.publish_debug_text("windows", monitor_trace_text(snapshot, "windows"));
             server.publish_debug_text("messages", monitor_trace_text(snapshot, "messages"));
             server.publish_debug_text("processes", monitor_trace_text(snapshot, "processes"));
+            server.publish_debug_text("sends", kernel.gwe.sent_message_debug_text());
+            if let Some(cpu) = cpu {
+                server.publish_debug_text("pending-wndproc", cpu.pending_wndproc_debug_text());
+            }
             server.publish_debug_text("wndproc", monitor_trace_text(snapshot, "wndproc"));
             server.publish_debug_text("imports", monitor_trace_text(snapshot, "imports"));
+            server.publish_debug_text("milestones", monitor_trace_text(snapshot, "milestones"));
+            server.publish_debug_text("counts", monitor_trace_text(snapshot, "counts"));
             server.publish_debug_text("calls", monitor_trace_text(snapshot, "calls"));
             server.publish_debug_text("code", monitor_trace_text(snapshot, "code"));
+            server.publish_debug_text("blocks", monitor_trace_text(snapshot, "blocks"));
             server.publish_debug_text("files", monitor_trace_text(snapshot, "files"));
             server.publish_debug_text("files-full", monitor_trace_text(snapshot, "files-full"));
             server.publish_debug_text("events", monitor_trace_text(snapshot, "events"));
+            if let Some(cpu) = cpu {
+                server.publish_debug_text("parked", cpu.parked_process_debug_text(kernel));
+            }
         }
     }
 }
@@ -2706,6 +2757,7 @@ mod tests {
     fn idle_poll_detects_saved_get_message_waiter() {
         let mut snapshot = UnicornDebugSnapshot::default();
         assert!(!snapshot_has_blocked_get_message(&snapshot));
+        assert!(!snapshot_has_non_message_blocked_wait(&snapshot));
 
         snapshot.active_blocked_waits.push(
             wince_emulation_v3::emulator::cpu::UnicornBlockedWaitSnapshot {
@@ -2720,6 +2772,40 @@ mod tests {
         );
 
         assert!(snapshot_has_blocked_get_message(&snapshot));
+        assert!(!snapshot_has_non_message_blocked_wait(&snapshot));
+        assert!(snapshot_is_idle_message_wait_only(&snapshot));
+    }
+
+    #[test]
+    fn idle_poll_detects_mixed_message_and_sleep_waiters() {
+        let mut snapshot = UnicornDebugSnapshot::default();
+
+        snapshot.active_blocked_waits.push(
+            wince_emulation_v3::emulator::cpu::UnicornBlockedWaitSnapshot {
+                id: 1,
+                thread_id: 3,
+                thread_handle: 0x303,
+                kind: "get_message".to_owned(),
+                wait_started_ms: 10,
+                timeout_ms: u32::MAX,
+                handles: Vec::new(),
+            },
+        );
+        snapshot.active_blocked_waits.push(
+            wince_emulation_v3::emulator::cpu::UnicornBlockedWaitSnapshot {
+                id: 2,
+                thread_id: 1,
+                thread_handle: u32::MAX,
+                kind: "sleep".to_owned(),
+                wait_started_ms: 20,
+                timeout_ms: 501,
+                handles: Vec::new(),
+            },
+        );
+
+        assert!(snapshot_has_blocked_get_message(&snapshot));
+        assert!(snapshot_has_non_message_blocked_wait(&snapshot));
+        assert!(!snapshot_is_idle_message_wait_only(&snapshot));
     }
 
     #[test]

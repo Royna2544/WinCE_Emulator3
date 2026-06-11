@@ -4869,9 +4869,11 @@ fn resource_system_image_list_create_add_count_info_bk_color_and_destroy() {
     assert!(res.create_image_list(16, 0, 0, 0, 4).is_none());
 
     // Valid creation.
+    const ILC_COLORDDB: u32 = 0x00fe;
     let ilh = res.create_image_list(16, 16, 0, 4, 4).unwrap();
     assert!(res.image_list(ilh).is_some());
     assert_eq!(res.gdi_object_kind(ilh), "image_list");
+    assert_eq!(res.image_list(ilh).unwrap().flags, ILC_COLORDDB);
     assert_eq!(res.image_list_count(ilh), Some(0));
 
     // add_image_list_image: bitmap=0 returns None.
@@ -5470,6 +5472,8 @@ fn resource_system_image_list_duplicate_replace_remove_copy_count_overlay_and_dr
     assert_eq!(res.image_list_count(ilh), Some(5));
     assert_eq!(res.set_image_list_count(ilh, 2), Some(true));
     assert_eq!(res.image_list_count(ilh), Some(2));
+    assert_eq!(res.set_image_list_count(ilh, u32::MAX), Some(false));
+    assert_eq!(res.image_list_count(ilh), Some(2));
     assert!(res.set_image_list_count(0xDEAD, 2).is_none());
 
     // remove_image_list_image: remove index 0.
@@ -5477,14 +5481,18 @@ fn resource_system_image_list_duplicate_replace_remove_copy_count_overlay_and_dr
     assert_eq!(res.image_list_count(ilh), Some(1));
     // Out-of-range index returns Some(false).
     assert_eq!(res.remove_image_list_image(ilh, 5), Some(false));
-    // Negative index clears all.
+    // CE accepts only -1 as remove-all; other negative indexes fail.
     res.add_image_list_image(ilh, bmp, 0); // add 3 more
+    let count_before_negative_remove = res.image_list_count(ilh);
+    assert_eq!(res.remove_image_list_image(ilh, -2), Some(false));
+    assert_eq!(res.image_list_count(ilh), count_before_negative_remove);
     assert_eq!(res.remove_image_list_image(ilh, -1), Some(true));
     assert_eq!(res.image_list_count(ilh), Some(0));
 
-    // replace_image_list_icon: negative index appends, non-negative replaces.
+    // replace_image_list_icon: CE accepts only -1 as append.
     let bmp2 = res.create_bitmap(16, 16, 1, 8, 0xB000);
     let icon = res.create_icon(true, 0, 0, bmp2, 0).unwrap();
+    assert!(res.replace_image_list_icon(ilh, -2, icon).is_none());
     let idx = res.replace_image_list_icon(ilh, -1, icon).unwrap();
     assert_eq!(idx, 0); // appended as first image
     // zero icon returns None.
@@ -5498,9 +5506,13 @@ fn resource_system_image_list_duplicate_replace_remove_copy_count_overlay_and_dr
         res.set_image_list_overlay(masked_overlay_il, 0, 1),
         Some(true)
     );
-    // overlay out of range returns Some(false).
+    // CE supports overlay slots 1..=4.
     assert_eq!(
         res.set_image_list_overlay(masked_overlay_il, 0, 0),
+        Some(false)
+    );
+    assert_eq!(
+        res.set_image_list_overlay(masked_overlay_il, 0, 5),
         Some(false)
     );
     assert_eq!(
@@ -6315,10 +6327,15 @@ fn resource_system_owned_bitmap_bitmap_mut_region_rects_palette_mut_shell_image_
     res.add_image_list_image(il1, bmp16, 0);
     let bmp16b = res.create_bitmap(16, 16, 1, 24, 0);
     res.add_image_list_image(il2, bmp16b, 0);
+    let bmp_short = res.create_bitmap(8, 16, 1, 24, 0);
+    assert!(res.add_image_list_image(il1, bmp_short, 0).is_none());
+    assert_eq!(res.image_list_count(il1), Some(1));
     // merge first image of il1 with first image of il2, offset (2,2).
     let merged = res.merge_image_list_images(il1, 0, il2, 0, 2, 2).unwrap();
     let merged_il = res.image_list(merged).unwrap();
     assert_eq!(merged_il.images.len(), 2);
+    assert_eq!(merged_il.width, 18);
+    assert_eq!(merged_il.height, 18);
     // negative indices → None.
     assert!(res.merge_image_list_images(il1, -1, il2, 0, 0, 0).is_none());
 
@@ -6337,6 +6354,11 @@ fn resource_system_owned_bitmap_bitmap_mut_region_rects_palette_mut_shell_image_
     );
     // add_masked_image_list_image with bitmap=0 → None.
     assert!(res.add_masked_image_list_image(ilm, 0, 0).is_none());
+    assert!(
+        res.add_masked_image_list_image(ilm, bmp_short, 0xFF00_FF00)
+            .is_none()
+    );
+    assert_eq!(res.image_list_count(ilm), Some(2));
 
     // replace_image_list_image: bitmap variant (not icon).
     let bmp_new = res.create_bitmap(16, 16, 1, 24, 0);
@@ -6360,19 +6382,20 @@ fn resource_system_owned_bitmap_bitmap_mut_region_rects_palette_mut_shell_image_
             .is_none()
     );
 
-    // copy_dither_image_list_image: copies image and records dither info.
+    // copy_dither_image_list_image: records the draw without replacing metadata.
     let il_dst = res.create_image_list(16, 16, 0, 4, 1).unwrap();
     let bmp_dst = res.create_bitmap(16, 16, 1, 24, 0);
     res.add_image_list_image(il_dst, bmp_dst, 0);
     let result = res.copy_dither_image_list_image(il_dst, 0, 5, 10, ilm, 0, 0x01);
     assert_eq!(result, Some(true));
+    assert_eq!(res.image_list(il_dst).unwrap().images[0].bitmap, bmp_dst);
     let last = res.image_list(il_dst).unwrap().last_dither_copy.unwrap();
     assert_eq!(last.dst_index, 0);
     assert_eq!(last.x, 5);
     assert_eq!(last.y, 10);
     assert_eq!(last.src_image_list, ilm);
     assert_eq!(last.src_index, 0);
-    assert_eq!(last.flags, 0x01);
+    assert_eq!(last.flags, 0);
     // Negative dst_index → Some(false).
     assert_eq!(
         res.copy_dither_image_list_image(il_dst, -1, 0, 0, ilm, 0, 0),
@@ -9782,10 +9805,13 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     // Create a 16×16 image list and two 32×16 bitmaps (each yields 2 strips at 16px width).
     let bmp_a = res.create_bitmap(32, 16, 1, 16, 0x1000);
     let bmp_b = res.create_bitmap(32, 16, 1, 16, 0x2000);
+    let bmp_short = res.create_bitmap(8, 16, 1, 16, 0x3000);
     let ilh = res.create_image_list(16, 16, 0, 0, 2).unwrap();
     let idx_a = res.add_image_list_image(ilh, bmp_a, 0).unwrap();
     assert_eq!(idx_a, 0);
     assert_eq!(res.image_list_count(ilh), Some(2)); // 32px strip → 2 images
+    assert!(res.add_image_list_image(ilh, bmp_short, 0).is_none());
+    assert_eq!(res.image_list_count(ilh), Some(2));
 
     // --- duplicate_image_list ---
     let dup = res.duplicate_image_list(ilh).unwrap();
@@ -9798,6 +9824,23 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     let merged = res.merge_image_list_images(ilh, 0, dup, 1, 4, 4).unwrap();
     assert_ne!(merged, ilh);
     assert_eq!(res.image_list_count(merged), Some(2)); // first + second image
+    assert_eq!(res.image_list(merged).unwrap().width, 20);
+    assert_eq!(res.image_list(merged).unwrap().height, 20);
+    let first_color_merge = res.create_image_list(10, 10, 0x0010, 0, 1).unwrap();
+    let second_ddb_merge = res.create_image_list(20, 8, 0, 0, 1).unwrap();
+    let bmp_10 = res.create_bitmap(10, 10, 1, 16, 0x4000);
+    let bmp_20 = res.create_bitmap(20, 8, 1, 24, 0x5000);
+    res.add_image_list_image(first_color_merge, bmp_10, 0)
+        .unwrap();
+    res.add_image_list_image(second_ddb_merge, bmp_20, 0)
+        .unwrap();
+    let mixed_merge = res
+        .merge_image_list_images(first_color_merge, 0, second_ddb_merge, 0, -5, -3)
+        .unwrap();
+    let mixed_merge_list = res.image_list(mixed_merge).unwrap();
+    assert_eq!(mixed_merge_list.width, 20);
+    assert_eq!(mixed_merge_list.height, 13);
+    assert_eq!(mixed_merge_list.flags, 0x0011);
     // Negative index → None.
     assert!(res.merge_image_list_images(ilh, -1, dup, 0, 0, 0).is_none());
 
@@ -9811,6 +9854,11 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     assert_eq!(info_masked.bitmap, bmp_b);
     // bitmap=0 → None.
     assert!(res.add_masked_image_list_image(ilh2, 0, 0).is_none());
+    assert!(
+        res.add_masked_image_list_image(ilh2, bmp_short, 0x00ff_00ff)
+            .is_none()
+    );
+    assert_eq!(res.image_list_count(ilh2), Some(2));
 
     // --- replace_image_list_image ---
     // Replace index 0 with bmp_b.
@@ -9829,8 +9877,9 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     // --- replace_image_list_icon ---
     // icon=0 → None.
     assert!(res.replace_image_list_icon(ilh, 0, 0).is_none());
-    // index<0 → append.
+    // CE accepts only -1 as append.
     let icon_handle = 0xABCD;
+    assert!(res.replace_image_list_icon(ilh, -2, icon_handle).is_none());
     let new_idx = res.replace_image_list_icon(ilh, -1, icon_handle).unwrap();
     assert_eq!(new_idx as usize, res.image_list_count(ilh).unwrap() - 1);
     // index>=0 → replace at that index.
@@ -9848,6 +9897,9 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     // Shrink to 1.
     assert_eq!(res.set_image_list_count(ilh3, 1), Some(true));
     assert_eq!(res.image_list_count(ilh3), Some(1));
+    // CE reports SetImageCount success only after ReAllocBitmaps succeeds.
+    assert_eq!(res.set_image_list_count(ilh3, u32::MAX), Some(false));
+    assert_eq!(res.image_list_count(ilh3), Some(1));
     // Invalid handle → None.
     assert_eq!(res.set_image_list_count(0xDEAD, 5), None);
 
@@ -9857,9 +9909,12 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     assert_eq!(res.image_list_count(ilh3), Some(0));
     // Out of bounds → Some(false).
     assert_eq!(res.remove_image_list_image(ilh3, 0), Some(false));
-    // Add two images and remove all with index<0.
+    // CE accepts only -1 as remove-all; other negative indexes fail.
     res.add_image_list_image(ilh3, bmp_a, 0);
     res.add_image_list_image(ilh3, bmp_b, 0);
+    let count_before_negative_remove = res.image_list_count(ilh3);
+    assert_eq!(res.remove_image_list_image(ilh3, -2), Some(false));
+    assert_eq!(res.image_list_count(ilh3), count_before_negative_remove);
     assert_eq!(res.remove_image_list_image(ilh3, -1), Some(true));
     assert_eq!(res.image_list_count(ilh3), Some(0));
 
@@ -9889,6 +9944,15 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     assert_eq!(
         res.copy_dither_image_list_image(dither_dst, 0, 5, 10, dither_src, 0, 0x42),
         Some(true)
+    );
+    assert_eq!(res.image_list(dither_dst).unwrap().images[0].bitmap, bmp_b);
+    assert_eq!(
+        res.image_list(dither_dst)
+            .unwrap()
+            .last_dither_copy
+            .unwrap()
+            .flags,
+        0
     );
     // Negative dst_index or src_index → Some(false).
     assert_eq!(
@@ -9924,8 +9988,9 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     res.add_image_list_image(ov_il, bmp_a, 0).unwrap();
     // image_index < 0 → Some(false).
     assert_eq!(res.set_image_list_overlay(ov_il, -1, 1), Some(false));
-    // overlay out of [1..=15] → Some(false).
+    // CE supports overlay slots 1..=4.
     assert_eq!(res.set_image_list_overlay(ov_il, 0, 0), Some(false));
+    assert_eq!(res.set_image_list_overlay(ov_il, 0, 5), Some(false));
     assert_eq!(res.set_image_list_overlay(ov_il, 0, 16), Some(false));
     // Valid: maps overlay 1 → image index 0.
     assert_eq!(res.set_image_list_overlay(ov_il, 0, 1), Some(true));
@@ -9945,6 +10010,7 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
         rgb_bk: 0xffff_ffff, // CLR_NONE
         x_bitmap: 0,
         y_bitmap: 0,
+        rop: 0x00cc_0020, // SRCCOPY
     };
     assert_eq!(res.record_image_list_draw(draw.clone()), Some(true));
     let last_draw = res.image_list(ov_il).unwrap().last_draw.unwrap();

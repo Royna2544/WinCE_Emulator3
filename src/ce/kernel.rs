@@ -1797,6 +1797,13 @@ impl CeKernel {
     }
 
     pub fn move_file_w(&mut self, existing_path: &str, new_path: &str) -> Result<()> {
+        let existing_was_dir = self
+            .files
+            .file_attributes_w(existing_path)
+            .ok()
+            .is_some_and(|data| data.attributes & FILE_ATTRIBUTE_DIRECTORY != 0);
+        let same_parent = shell_change_parent_path(existing_path)
+            .eq_ignore_ascii_case(&shell_change_parent_path(new_path));
         let result = self.files.move_file_w(existing_path, new_path);
         if result.is_ok() {
             self.post_shell_file_change_notifications(
@@ -1804,10 +1811,11 @@ impl CeKernel {
                 Some(existing_path),
                 Some(new_path),
             );
-            self.signal_file_change_notifications(
-                SHCNE_RENAMEITEM,
-                Some(existing_path),
-                Some(new_path),
+            self.signal_file_move_notifications(
+                existing_path,
+                new_path,
+                existing_was_dir,
+                same_parent,
             );
         }
         result
@@ -5052,6 +5060,70 @@ impl CeKernel {
         handles.len()
     }
 
+    fn signal_file_move_notifications(
+        &mut self,
+        existing_path: &str,
+        new_path: &str,
+        is_directory: bool,
+        same_parent: bool,
+    ) -> usize {
+        let required_filter = if is_directory {
+            FILE_NOTIFY_CHANGE_DIR_NAME
+        } else {
+            FILE_NOTIFY_CHANGE_FILE_NAME
+        };
+        let (old_action, new_action) = if same_parent {
+            (FILE_ACTION_RENAMED_OLD_NAME, FILE_ACTION_RENAMED_NEW_NAME)
+        } else {
+            (FILE_ACTION_REMOVED, FILE_ACTION_ADDED)
+        };
+        self.signal_file_change_notification_path(required_filter, old_action, existing_path)
+            + self.signal_file_change_notification_path(required_filter, new_action, new_path)
+    }
+
+    fn signal_file_change_notification_path(
+        &mut self,
+        required_filter: u32,
+        action: u32,
+        path: &str,
+    ) -> usize {
+        let mut handles = Vec::new();
+        for (handle, object) in self.handles.iter_mut() {
+            let KernelObject::FileChangeNotification(notification) = object else {
+                continue;
+            };
+            if notification.notify_filter & required_filter == 0
+                || !shell_change_path_matches(
+                    &notification.watch_path,
+                    path,
+                    notification.recursive,
+                )
+            {
+                continue;
+            }
+            if notification.notify_filter & FILE_NOTIFY_CHANGE_CEGETINFO != 0 {
+                let record = FileChangeRecord {
+                    action,
+                    path: file_change_relative_path(&notification.watch_path, path),
+                };
+                append_file_change_records(&mut notification.pending, [record]);
+                notification.pending_signal_count = notification.pending.len();
+                notification.signaled = notification.pending_signal_count > 0;
+            } else {
+                notification.pending_signal_count =
+                    notification.pending_signal_count.saturating_add(1);
+                notification.signaled = true;
+            }
+            if notification.signaled {
+                handles.push(handle);
+            }
+        }
+        for handle in &handles {
+            self.queue_object_wake_candidates(*handle);
+        }
+        handles.len()
+    }
+
     fn signal_file_change_notifications_for_removed_mount(&mut self, volume_root: &str) {
         let volume_root = normalize_shell_change_path(volume_root);
         let volume_prefix = format!("{volume_root}\\");
@@ -5441,6 +5513,23 @@ fn shell_change_path_matches(watch_dir: &str, path: &str, recursive: bool) -> bo
         .map(|(parent, _name)| if parent.is_empty() { "\\" } else { parent })
         .unwrap_or("");
     parent.eq_ignore_ascii_case(watch_dir)
+}
+
+fn shell_change_parent_path(path: &str) -> String {
+    let path = normalize_shell_change_path(path);
+    if path == "\\" {
+        return path;
+    }
+    path.trim_end_matches('\\')
+        .rsplit_once('\\')
+        .map(|(parent, _name)| {
+            if parent.is_empty() {
+                "\\".to_owned()
+            } else {
+                parent.to_owned()
+            }
+        })
+        .unwrap_or_else(|| "\\".to_owned())
 }
 
 fn normalize_shell_change_path(path: &str) -> String {
