@@ -4010,6 +4010,11 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
     fs::write(root.join("Docs").join("morning.nav"), b"route").unwrap();
     fs::write(root.join("Docs").join("viewer.exe"), b"MZ").unwrap();
     fs::write(
+        root.join("Docs").join("two-icons.exe"),
+        pe32_with_group_icon_count(2),
+    )
+    .unwrap();
+    fs::write(
         root.join("Docs").join("viewer.lnk"),
         br#"23#"\Docs\viewer.exe""#,
     )
@@ -4178,6 +4183,22 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
         memory.read_u32(large_icon_ptr)?,
         shell_pseudo_icon_handle(2)
     );
+
+    memory.write_wide_z(path_ptr, r"\Docs\two-icons.exe");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXTRACT_ICON_EX_W,
+            [path_ptr, 0xffff_ffff, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(2),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
     memory.write_wide_z(path_ptr, r"\Docs\viewer.lnk");
     memory.write_u32(info_ptr + SHFILEINFO_HICON_OFFSET, 0)?;
@@ -4505,6 +4526,100 @@ fn shell_pseudo_icon_handle_with_overlay(index: i32, overlay: u32) -> u32 {
         value => 0x0000_c000 | ((value as u32) & 0x3fff),
     };
     0x000b_8000 | stock | ((overlay & 0x0f) << 24)
+}
+
+fn pe32_with_group_icon_count(group_count: u16) -> Vec<u8> {
+    let mut bytes = vec![0u8; 0x400];
+    put_test_bytes(&mut bytes, 0, b"MZ");
+    put_test_u32(&mut bytes, 0x3c, 0x80);
+    put_test_bytes(&mut bytes, 0x80, b"PE\0\0");
+
+    let coff = 0x84;
+    put_test_u16(&mut bytes, coff, 0x0166);
+    put_test_u16(&mut bytes, coff + 2, 1);
+    put_test_u16(&mut bytes, coff + 16, 0xe0);
+    put_test_u16(&mut bytes, coff + 18, 0x0102);
+
+    let optional = 0x98;
+    put_test_u16(&mut bytes, optional, 0x010b);
+    put_test_u32(&mut bytes, optional + 8, 0x200);
+    put_test_u32(&mut bytes, optional + 24, 0x1000);
+    put_test_u32(&mut bytes, optional + 28, 0x0040_0000);
+    put_test_u32(&mut bytes, optional + 32, 0x1000);
+    put_test_u32(&mut bytes, optional + 36, 0x200);
+    put_test_u32(&mut bytes, optional + 56, 0x2000);
+    put_test_u32(&mut bytes, optional + 60, 0x200);
+    put_test_u16(&mut bytes, optional + 68, 2);
+    put_test_u32(&mut bytes, optional + 72, 0x100000);
+    put_test_u32(&mut bytes, optional + 76, 0x1000);
+    put_test_u32(&mut bytes, optional + 80, 0x100000);
+    put_test_u32(&mut bytes, optional + 84, 0x1000);
+    put_test_u32(&mut bytes, optional + 92, 16);
+    put_test_u32(&mut bytes, optional + 112, 0x1000);
+    put_test_u32(&mut bytes, optional + 116, 0x200);
+
+    let section = 0x178;
+    put_test_bytes(&mut bytes, section, b".rsrc\0\0\0");
+    put_test_u32(&mut bytes, section + 8, 0x200);
+    put_test_u32(&mut bytes, section + 12, 0x1000);
+    put_test_u32(&mut bytes, section + 16, 0x200);
+    put_test_u32(&mut bytes, section + 20, 0x200);
+    put_test_u32(&mut bytes, section + 36, 0x4000_0040);
+
+    let rsrc = 0x200;
+    put_test_resource_directory(&mut bytes, rsrc, 1);
+    put_test_u32(&mut bytes, rsrc + 16, 14);
+    put_test_u32(&mut bytes, rsrc + 20, 0x8000_0020);
+
+    let type_dir = rsrc + 0x20;
+    put_test_resource_directory(&mut bytes, type_dir, group_count);
+    let name_entries = type_dir + 16;
+    let name_dir_base = 0x40usize;
+    let data_entry_base = 0x100usize;
+    let group_data_base = 0x180usize;
+    for index in 0..group_count as usize {
+        let name_dir_offset = name_dir_base + index * 0x20;
+        put_test_u32(&mut bytes, name_entries + index * 8, (index + 1) as u32);
+        put_test_u32(
+            &mut bytes,
+            name_entries + index * 8 + 4,
+            0x8000_0000 | name_dir_offset as u32,
+        );
+
+        let name_dir = rsrc + name_dir_offset;
+        put_test_resource_directory(&mut bytes, name_dir, 1);
+        let data_entry_offset = data_entry_base + index * 16;
+        put_test_u32(&mut bytes, name_dir + 16, 0x0409);
+        put_test_u32(&mut bytes, name_dir + 20, data_entry_offset as u32);
+
+        let data_entry = rsrc + data_entry_offset;
+        let group_data_offset = group_data_base + index * 8;
+        put_test_u32(&mut bytes, data_entry, 0x1000 + group_data_offset as u32);
+        put_test_u32(&mut bytes, data_entry + 4, 6);
+
+        let group_data = rsrc + group_data_offset;
+        put_test_u16(&mut bytes, group_data, 0);
+        put_test_u16(&mut bytes, group_data + 2, 1);
+        put_test_u16(&mut bytes, group_data + 4, 0);
+    }
+
+    bytes
+}
+
+fn put_test_resource_directory(bytes: &mut [u8], offset: usize, id_entries: u16) {
+    put_test_u16(bytes, offset + 14, id_entries);
+}
+
+fn put_test_bytes(bytes: &mut [u8], offset: usize, value: &[u8]) {
+    bytes[offset..offset + value.len()].copy_from_slice(value);
+}
+
+fn put_test_u16(bytes: &mut [u8], offset: usize, value: u16) {
+    bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_test_u32(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
 }
 
 fn bmp_1x1_24bpp() -> Vec<u8> {
@@ -6223,6 +6338,32 @@ fn shell_notify_icon_tracks_add_modify_delete_and_posts_callback() -> Result<()>
     assert_eq!(callback.wparam, 77);
     assert_eq!(callback.lparam, WM_LBUTTONDOWN);
 
+    memory.write_word(data + 12, NIF_MESSAGE | NIF_ICON | NIF_TIP);
+    memory.write_word(data + 16, WM_USER + 99);
+    memory.write_word(data + 20, 0x000b_8fff);
+    memory.write_wide_z(data + NID_TIP_OFFSET, "Duplicate should fail");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_ADD, data],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_HANDLE
+    );
+    let icon = kernel.shell.notify_icon(hwnd, 77).expect("notify icon");
+    assert_eq!(icon.callback_message, WM_USER + 88);
+    assert_eq!(icon.icon, 0x000b_8001);
+    assert_eq!(icon.tip, "Route ready");
+
     memory.write_word(data + 12, NIF_TIP | NIF_STATE);
     memory.write_wide_z(data + NID_TIP_OFFSET, "Route updated");
     memory.write_word(data + NID_STATE_OFFSET, 0);
@@ -6245,6 +6386,32 @@ fn shell_notify_icon_tracks_add_modify_delete_and_posts_callback() -> Result<()>
     assert_eq!(icon.icon, 0x000b_8001);
     assert_eq!(icon.tip, "Route updated");
     assert_eq!(icon.state, 0);
+    assert_eq!(
+        kernel
+            .shell
+            .destroyed_notify_icons()
+            .copied()
+            .collect::<Vec<_>>(),
+        Vec::<u32>::new()
+    );
+
+    memory.write_word(data + 12, NIF_ICON);
+    memory.write_word(data + 20, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_MODIFY, data],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let icon = kernel.shell.notify_icon(hwnd, 77).expect("notify icon");
+    assert_eq!(icon.icon, 0x000b_8001);
     assert_eq!(
         kernel
             .shell
@@ -6310,6 +6477,58 @@ fn shell_notify_icon_tracks_add_modify_delete_and_posts_callback() -> Result<()>
 }
 
 #[test]
+fn shell_notify_icon_add_respects_member_flags() -> Result<()> {
+    const NIM_ADD: u32 = 0;
+    const NIF_TIP: u32 = 0x0000_0004;
+    const NIF_STATE: u32 = 0x0000_0008;
+    const NID_SIZE: u32 = 160;
+    const NID_TIP_OFFSET: u32 = 24;
+    const NID_STATE_OFFSET: u32 = 152;
+    const NID_STATE_MASK_OFFSET: u32 = 156;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 46;
+    let hwnd = kernel.create_window_ex_w(thread_id, "SHELL_NOTIFY_FLAGS", "", None, 0, 0, 0);
+    let data = 0x2_a000;
+    memory.map_words(data, NID_SIZE / 4);
+    memory.map_halfwords(data + NID_TIP_OFFSET, 64);
+    memory.write_word(data, NID_SIZE);
+    memory.write_word(data + 4, hwnd);
+    memory.write_word(data + 8, 12);
+    memory.write_word(data + 12, NIF_TIP | NIF_STATE);
+    memory.write_word(data + 16, WM_USER + 99);
+    memory.write_word(data + 20, 0x000b_8aaa);
+    memory.write_wide_z(data + NID_TIP_OFFSET, "Visible tip");
+    memory.write_word(data + NID_STATE_OFFSET, 0b1010);
+    memory.write_word(data + NID_STATE_MASK_OFFSET, 0b0110);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_ADD, data],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let icon = kernel.shell.notify_icon(hwnd, 12).expect("notify icon");
+    assert_eq!(icon.callback_message, 0);
+    assert_eq!(icon.icon, 0);
+    assert_eq!(icon.tip, "Visible tip");
+    assert_eq!(icon.state, 0b0010);
+    assert!(!kernel.post_shell_notify_icon_callback(hwnd, 12, WM_LBUTTONDOWN));
+
+    Ok(())
+}
+
+#[test]
 fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     const ERROR_INVALID_DATA: u32 = 13;
     const SHNOTIFICATIONDATA_SIZE: u32 = 56;
@@ -6364,6 +6583,21 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     memory.write_wide_z(html, "<b>Drive now</b>");
 
     memory.write_word(data + 40, 0xDEAD_BEEF);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHNOTIFICATION_ADD_I,
+            [data, SHNOTIFICATIONDATA_SIZE, title, html],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_INVALID_PARAMETER),
+            ..
+        }
+    ));
+    assert!(kernel.shell.notification(clsid, 301).is_none());
+    memory.write_word(data + 40, 0);
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -6703,13 +6937,13 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
             [SHNUM_TITLE, data, SHNOTIFICATIONDATA_SIZE, title, html],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::U32(ERROR_INVALID_PARAMETER),
+            value: CoredllValue::U32(ERROR_SUCCESS),
             ..
         }
     ));
     let record = kernel.shell.notification(clsid, 301).expect("notification");
     assert_eq!(record.hwnd_sink, hwnd);
-    assert_eq!(record.title, "Route alert");
+    assert_eq!(record.title, "Ignored sink");
     memory.write_word(data + 40, hwnd);
 
     memory.write_wide_z(title, "Mask ignored");
@@ -6740,7 +6974,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
         }
     ));
     let record = kernel.shell.notification(clsid, 301).expect("notification");
-    assert_eq!(record.title, "Route alert");
+    assert_eq!(record.title, "Ignored sink");
     assert_eq!(record.icon, 0x000b_9001);
 
     memory.write_word(data + 8, SHNP_ICONIC);

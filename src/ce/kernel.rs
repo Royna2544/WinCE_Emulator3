@@ -5003,9 +5003,13 @@ impl CeKernel {
             {
                 continue;
             }
-            let records = file_change_records_for_event(event_id, notification, path1, path2);
-            append_file_change_records(&mut notification.pending, records);
-            notification.signaled = !notification.pending.is_empty();
+            if notification.notify_filter & FILE_NOTIFY_CHANGE_CEGETINFO != 0 {
+                let records = file_change_records_for_event(event_id, notification, path1, path2);
+                append_file_change_records(&mut notification.pending, records);
+                notification.signaled = !notification.pending.is_empty();
+            } else {
+                notification.signaled = true;
+            }
             if notification.signaled {
                 handles.push(handle);
             }
@@ -5046,8 +5050,12 @@ impl CeKernel {
                 action: FILE_ACTION_REMOVED,
                 path: relative_path,
             };
-            append_file_change_records(&mut notification.pending, std::iter::once(record));
-            notification.signaled = !notification.pending.is_empty();
+            if notification.notify_filter & FILE_NOTIFY_CHANGE_CEGETINFO != 0 {
+                append_file_change_records(&mut notification.pending, std::iter::once(record));
+                notification.signaled = !notification.pending.is_empty();
+            } else {
+                notification.signaled = true;
+            }
             if notification.signaled {
                 handles.push(handle);
             }

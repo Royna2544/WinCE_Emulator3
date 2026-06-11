@@ -19662,7 +19662,7 @@ fn sh_notification_add_i_raw<M: CoredllGuestMemory>(
     ) else {
         return ERROR_INVALID_PARAMETER;
     };
-    if data.hwnd_sink != 0 && !kernel.gwe.is_window(data.hwnd_sink) {
+    if !kernel.gwe.is_window(data.hwnd_sink) {
         return ERROR_INVALID_PARAMETER;
     }
     // args[1] = IShellNotificationCallback* — COM interface pointer for vtable callbacks.
@@ -19690,9 +19690,6 @@ fn sh_notification_update_i_raw<M: CoredllGuestMemory>(
     ) else {
         return ERROR_INVALID_PARAMETER;
     };
-    if data.hwnd_sink != 0 && !kernel.gwe.is_window(data.hwnd_sink) {
-        return ERROR_INVALID_PARAMETER;
-    }
     notification_result_to_error(kernel.shell.update_notification(
         raw_arg(args, 0),
         data,
@@ -23779,16 +23776,20 @@ fn extract_icon_ex_w_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_FILE_NOT_FOUND);
         return 0;
     };
+    let is_pe = is_executable_shell_path(&path) || path.to_ascii_lowercase().ends_with(".dll");
     if icon_index == -1 {
         kernel.threads.set_last_error(thread_id, 0);
-        return 1;
+        return if is_pe {
+            pe_icon_group_count(kernel, &path).unwrap_or(1)
+        } else {
+            1
+        };
     }
     if icon_index < 0 || icon_count == 0 {
         kernel.threads.set_last_error(thread_id, 0);
         return 0;
     }
     // Try to extract real icon from PE file (EXE/DLL)
-    let is_pe = is_executable_shell_path(&path) || path.to_ascii_lowercase().ends_with(".dll");
     let icon = if is_pe {
         match extract_pe_icon(kernel, memory, thread_id, &path, icon_index as u32) {
             Some(handle) => handle,
@@ -23817,6 +23818,22 @@ fn extract_icon_ex_w_raw<M: CoredllGuestMemory>(
     }
     kernel.threads.set_last_error(thread_id, 0);
     1
+}
+
+fn pe_icon_group_count(kernel: &mut CeKernel, path: &str) -> Option<u32> {
+    use crate::pe::PeImage;
+
+    let bytes = kernel.read_guest_file(path).ok()?;
+    let pe = PeImage::parse_bytes(path, &bytes).ok()?;
+    let resources = pe.resource_data_entries().ok()?;
+
+    const RT_GROUP_ICON: u32 = 14;
+    Some(
+        resources
+            .iter()
+            .filter(|resource| resource.kind == RT_GROUP_ICON)
+            .count() as u32,
+    )
 }
 
 fn extract_pe_icon<M: CoredllGuestMemory>(

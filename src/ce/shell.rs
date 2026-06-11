@@ -161,6 +161,9 @@ impl ShellSystem {
         let key = (data.hwnd, data.id);
         match op {
             NotifyIconOp::Add => {
+                if self.notify_icons.contains_key(&key) {
+                    return false;
+                }
                 self.notify_icons
                     .insert(key, NotifyIconRecord::from_data(data));
                 true
@@ -437,10 +440,26 @@ impl NotifyIconRecord {
         Self {
             hwnd: data.hwnd,
             id: data.id,
-            callback_message: data.callback_message,
-            icon: data.icon,
-            tip: data.tip,
-            state: data.state,
+            callback_message: if data.flags & NIF_MESSAGE != 0 {
+                data.callback_message
+            } else {
+                0
+            },
+            icon: if data.flags & NIF_ICON != 0 {
+                data.icon
+            } else {
+                0
+            },
+            tip: if data.flags & NIF_TIP != 0 {
+                data.tip
+            } else {
+                String::new()
+            },
+            state: if data.flags & NIF_STATE != 0 {
+                data.state & data.state_mask
+            } else {
+                0
+            },
             destroy_icon: data.flags & HHTBF_DESTROYICON != 0,
         }
     }
@@ -450,8 +469,8 @@ impl NotifyIconRecord {
         if data.flags & NIF_MESSAGE != 0 {
             self.callback_message = data.callback_message;
         }
-        if data.flags & NIF_ICON != 0 {
-            if self.destroy_icon && self.icon != 0 && data.icon != 0 && self.icon != data.icon {
+        if data.flags & NIF_ICON != 0 && data.icon != 0 {
+            if self.destroy_icon && self.icon != 0 && self.icon != data.icon {
                 destroyed_icon = Some(self.icon);
             }
             self.icon = data.icon;

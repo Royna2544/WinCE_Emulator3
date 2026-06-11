@@ -68,11 +68,11 @@ Reference files:
 - `C:\WINCE600\PUBLIC\WCESHELLFE\OAK\TASKMAN\mintask.cpp`
 
 Missing or under-validated:
-- `Shell_NotifyIcon` should be validated against the CE tray-server callback model from `minserver.cpp` and `mintask.cpp`, including `NIM_ADD`, `NIM_MODIFY`, `NIM_DELETE`, `NIF_MESSAGE`, `NIF_ICON`, `NIF_TIP`, callback message delivery, tooltip truncation, duplicate `(hwnd,uID)` behavior, and stale modify/delete handling.
+- `Shell_NotifyIcon` now rejects duplicate `NIM_ADD` records, honors `NIF_MESSAGE`, `NIF_ICON`, `NIF_TIP`, and `NIF_STATE` when capturing `NOTIFYICONDATA` members, and follows the CE taskbar update rule that `NIM_MODIFY | NIF_ICON` with a null `hIcon` leaves the existing tray icon intact. Remaining gaps are integrated taskbar-visible state, tooltip truncation edge cases, callback lifetime across process/window destruction, and broader tray-server routing validation against `minserver.cpp`, `mintask.cpp`, and the Explorer taskbar sources.
 - `SHNotification*` has local COM callback dispatch support, but still needs integrated validation for the CE `IShellNotificationCallback` methods: `OnShow`, `OnCommandSelected`, `OnLinkSelected`, and `OnDismiss`.
-- `SHNotificationUpdate` should be checked against CE update-mask behavior, data replacement rules, callback pointer lifetime, and remove/update races.
+- `SHNotificationUpdate` now preserves existing icons on `SHNUM_ICON` updates with null `hicon` and follows the CE update path by allowing stale `hwndSink` values in the incoming update struct while preserving the original sink. Remaining gaps are priority-transition list movement, callback pointer lifetime, title/HTML allocation edge cases, and remove/update races.
 - `SHGetFileInfo` should be expanded across the exact CE-supported flag set: `SHGFI_ICON`, `SHGFI_DISPLAYNAME`, `SHGFI_TYPENAME`, `SHGFI_ATTRIBUTES`, `SHGFI_SYSICONINDEX`, `SHGFI_SMALLICON`, and `SHGFI_USEFILEATTRIBUTES`.
-- `ExtractIconExW` now extracts PE resources, but needs CE-reference coverage for `nIconIndex == -1` counts, multi-group ordering, large/small output arrays, malformed group/icon resources, and non-PE fallback.
+- `ExtractIconExW` now extracts PE resources and reports actual PE `RT_GROUP_ICON` counts for `nIconIndex == -1` while preserving the synthetic one-icon fallback for non-PE shell-icon paths. Remaining gaps are multi-group extraction ordering, large/small output arrays beyond one icon, malformed group/icon resources, and non-PE fallback edge cases.
 
 ### GWE, Menu, And Modal Message Gaps
 
@@ -95,7 +95,7 @@ Reference files:
 Missing or under-validated:
 - CE distinguishes external caller handles from internal/kernel-owned handles through `FSEXT_*`, `FSINT_*`, `NotifyGetNextChange`, and `INT_NotifyGetNextChange`; the emulator should validate notification handle ownership, process ownership, duplicated handles, invalid handles, and close behavior.
 - `FindFirstChangeNotificationW` should be validated through CE path canonicalization and mount-volume resolution semantics, not only simple rooted paths.
-- `CeGetFileNotificationInfo` should be extended for buffer-size reporting, `lpBytesReturned`, `lpBytesAvailable`, empty queues, reset semantics, subtree watches, rename old/new pairs, and access-denied/error propagation.
+- `CeGetFileNotificationInfo` now follows the CE `FILE_NOTIFY_CHANGE_CEGETINFO` detail-record gate for signal-only vs detailed watches. Remaining gaps are access-denied/error propagation, process-owned handle semantics, and more exhaustive buffer/reset edge coverage.
 - FSDMGR volume-handle paths should be tested for mounted storage, system volumes, read-only host roots, cross-volume renames, and watch-subtree boundaries.
 
 ### Loader And Runtime Gaps
