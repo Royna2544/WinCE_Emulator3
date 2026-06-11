@@ -6,7 +6,7 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 - Runtime loader work has reached dynamic Unicorn DLL mapping with dependency loading, import patching, forwarders, trampoline tracking, datafile/no-resolve flags, and lifecycle calls.
 - Shell icon work now includes `ExtractIconExW`, real PE resource icon extraction, PE group-icon count reporting for `nIconIndex == -1`, shell fallback icons, `CreateIconIndirect`, `DrawIconEx`, image lists, bitmap-backed image-list drawing, `xBitmap` offsets, and `rgbBk` fill handling.
-- `Shell_NotifyIcon` now tracks add/modify/delete state, rejects duplicate `(hwnd,uID)` adds, honors member `NIF_*` flags on add, keeps the existing icon on `NIM_MODIFY | NIF_ICON` with null `hIcon` per the CE taskbar path, posts callback messages, and records destroy-icon cleanup.
+- `Shell_NotifyIcon` now tracks add/modify/delete state, rejects duplicate `(hwnd,uID)` adds, honors member `NIF_*` flags on add, requires the fixed CE `NOTIFYICONDATAW` footprint and readable 64-WCHAR `szTip` buffer, keeps the existing icon on `NIM_MODIFY | NIF_ICON` with null `hIcon` per the CE taskbar path, posts callback messages, and records destroy-icon cleanup.
 - `SHNotificationUpdateI` now covers CE update-mask behavior for null icon preservation and stale incoming `hwndSink` values while keeping the original registered sink.
 - File-change notifications now coalesce exact duplicates, transient create/delete pairs, and modified/delete sequences, and detailed notification records are gated by the CE `FILE_NOTIFY_CHANGE_CEGETINFO` flag while signal-only watches still wake normally.
 - GWE message work includes cross-thread send setup, timeout marking, destroyed-window completion, and zero-result writes for destroyed `SendMessageTimeout` targets.
@@ -16,17 +16,20 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 ## Recent Source-Visible Slices
 
 - `src/ce/coredll.rs`: `ExtractIconExW` reads guest paths, validates files, extracts PE icon resources when available, falls back to shell icons for index zero, writes large/small icon outputs, and supports bitmap-backed icon rendering through `DrawIconEx`.
+- `src/ce/coredll.rs`: `Shell_NotifyIconW` now follows the CE fixed `NOTIFYICONDATAW` contract from `shellapi.h`/`minserver.cpp` by rejecting short `cbSize` values and unreadable `szTip[64]` buffers before updating shell state.
 - `src/ce/kernel.rs`: file-change record append now coalesces pending records and signals only when pending notification data remains.
 - `src/ce/kernel.rs`: CE file-notification detail records are only queued for watches created with `FILE_NOTIFY_CHANGE_CEGETINFO`; watches without that flag still signal on matching changes and report no detailed records to `CeGetFileNotificationInfo`.
 - `src/ce/gwe.rs` and `src/ce/coredll.rs`: destroyed-window handling exposes completed send-message result writes and flushes them to guest memory.
 - `tests/coredll_raw_kernel.rs`: icon extraction, PE group-icon count, shell icon, and image-list drawing coverage is present.
-- `tests/coredll_raw_kernel.rs`: `Shell_NotifyIcon` duplicate-add rejection, `NIF_*` member flag handling, and null-icon modify preservation are covered.
+- `tests/coredll_raw_kernel.rs`: `Shell_NotifyIcon` duplicate-add rejection, `NIF_*` member flag handling, fixed CE `NOTIFYICONDATAW` size/readability, and null-icon modify preservation are covered.
 - `tests/coredll_raw_kernel.rs`: `SHNotificationAddI` sink-window validation and `SHNotificationUpdateI` stale-sink update behavior are covered.
 - `tests/coredll_raw_memory_file.rs`: transient file-change notification churn coverage is present.
 - `tests/coredll_raw_memory_file.rs`: signal-only change notifications without `FILE_NOTIFY_CHANGE_CEGETINFO` are covered separately from detailed `CeGetFileNotificationInfo` drains.
 - `tests/coredll_raw_gwe.rs`: destroyed-target `SendMessageTimeout` result write coverage is present.
 - `tests/coredll_raw_gwe.rs`: same-thread `SendMessageTimeout` coverage now verifies synchronous dispatch, direct result-pointer writes, clean last-error state, and no cross-thread sent-message transaction.
 - `tests/coredll_raw_gwe.rs`: cross-thread `SendMessageTimeout` coverage now verifies an early receiver `ReplyMessage` result wins over the later wndproc return and writes through the timeout result pointer.
+- `tests/coredll_raw_gwe.rs`: nested `SendMessageTimeout` coverage now verifies an inner `ReplyMessage` writes the inner result without clearing or overwriting the still-active outer send.
+- `tests/coredll_raw_gwe.rs`: `MsgWaitForMultipleObjectsEx` coverage now verifies `QS_SENDMESSAGE`, CE `QS_ALLINPUT` over posted messages, paint, and timers, `MWMO_INPUTAVAILABLE` new-vs-existing input behavior, and signaled handle precedence over queued sent-message input.
 - `src/winsock.rs`: `select` now ignores `nfds` like CE callers expect while validating non-null fd sets, `FD_SETSIZE`, invalid socket handles, and fd-set memory faults before filtering readiness.
 - `src/winsock.rs`: Winsock unit coverage now exercises `select` with `nfds` values `0`, `-1`, and active counts, mixed read/write/except fd sets, null fd-set triads, oversized fd sets, invalid socket handles, and `WSAEFAULT` memory failures.
 - `src/winsock.rs`: TCP peer close is now read-ready for `select`, allowing the follow-up `recv` to return zero; repeated zero-ready `select` polling is covered by a recovery test that becomes readable after a later datagram.
@@ -38,8 +41,13 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Last Known Validation
 
-- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed after the same-thread and early-`ReplyMessage` `SendMessageTimeout` slices.
-- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_send_message_timeout` passed after adding same-thread and early-`ReplyMessage` `SendMessageTimeout` coverage.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed after the same-thread, early-`ReplyMessage`, and nested `SendMessageTimeout` slices.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_send_message_timeout` passed after adding same-thread, early-`ReplyMessage`, and nested `SendMessageTimeout` coverage.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_msgwait` passed after adding `QS_SENDMESSAGE`/`MWMO_INPUTAVAILABLE` message-wait coverage.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel shell_notify_icon` passed after the CE fixed-`NOTIFYICONDATAW` `Shell_NotifyIconW` slice.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel` passed after the CE fixed-`NOTIFYICONDATAW` `Shell_NotifyIconW` slice.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed with the `QS_ALLINPUT` post/paint/timer and multi-handle message-wait additions.
+- `cargo test --features unicorn,trace,win32-desktop` passed after the CE fixed-`NOTIFYICONDATAW` shell notify slice and the message-wait coverage additions.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_memory_file` passed for the file-change slice.
 - `cargo test --features unicorn,trace,win32-desktop winsock::tests::select_` passed for the Winsock select validation slice.
 - `cargo test --features unicorn,trace,win32-desktop winsock::tests` passed after the TCP peer-close and zero-ready recovery slice.
@@ -98,6 +106,16 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
   controls, clock, and the bottom info bar all render. The app fully boots
   from splash through map-engine startup to the live map with no
   must-implement stub hits.
+- BOOT TIME: the 10-minute figure was a dev-profile build. The release build
+  boots cold start to the fully rendered map UI in about 30 seconds. Two
+  flamegraph-driven fixes (cargo flamegraph under Windows sudo, ETW): the
+  undocumented full TB-cache flush every 0x40000 instructions made QEMU
+  re-translation (`tb_gen_code_mipsel`, 5.2% of system samples vs <1% for the
+  hook callback itself) dominate guest execution — removed (commit
+  `66a2f151`, identical boot trajectory and framebuffer, suite green); and
+  the trampoline patcher's per-word linear range scan (2.5% of samples) now
+  binary-searches merged sorted ranges (commit `4f4917d7`). Release profile
+  keeps debug symbols for future profiling.
 - Current frontier: interactive driving — touch input needs the remote
   server (live-pump), which is an order of magnitude slower per guest second
   than single-shot (see above). Either keep the Unicorn/TB state alive across
