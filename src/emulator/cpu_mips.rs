@@ -202,6 +202,7 @@ pub(crate) fn patch_mips_unicorn_trampolines(
             end,
             &image.path,
         )?);
+        merge_patch_data_ranges(&mut jump_table_data_ranges);
         let mut rva = start;
         while rva.checked_add(8).is_some_and(|next| next <= end) {
             if mips_patch_rva_overlaps_data_ranges(rva, &jump_table_data_ranges) {
@@ -692,11 +693,35 @@ fn find_mips_jump_table_entry_count(
     Ok(None)
 }
 
+/// Sort ranges by start and merge overlapping/adjacent entries so the per-word
+/// patcher scan can binary-search instead of scanning every range.
+pub(crate) fn merge_patch_data_ranges(ranges: &mut Vec<(u32, u32)>) {
+    ranges.sort_unstable_by_key(|(start, _)| *start);
+    let mut merged: Vec<(u32, u32)> = Vec::with_capacity(ranges.len());
+    for (start, len) in ranges.drain(..) {
+        let end = start.saturating_add(len);
+        if let Some((last_start, last_len)) = merged.last_mut() {
+            let last_end = last_start.saturating_add(*last_len);
+            if start <= last_end {
+                *last_len = end.max(last_end).saturating_sub(*last_start);
+                continue;
+            }
+        }
+        merged.push((start, len));
+    }
+    *ranges = merged;
+}
+
+/// `ranges` must be sorted by start and non-overlapping (the patcher merges
+/// them via `merge_patch_data_ranges`); among ranges starting before the probe
+/// end, only the last can still overlap, so one binary search suffices.
 pub(crate) fn mips_patch_rva_overlaps_data_ranges(rva: u32, ranges: &[(u32, u32)]) -> bool {
-    ranges.iter().any(|(start, len)| {
-        let end = start.saturating_add(*len);
-        rva < end && rva.saturating_add(8) > *start
-    })
+    let probe_end = rva.saturating_add(8);
+    let index = ranges.partition_point(|(start, _)| *start < probe_end);
+    index > 0 && {
+        let (start, len) = ranges[index - 1];
+        rva < start.saturating_add(len)
+    }
 }
 
 // ── instruction predicates ────────────────────────────────────────────────────
