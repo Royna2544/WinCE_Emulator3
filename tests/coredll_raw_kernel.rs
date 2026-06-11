@@ -37,19 +37,20 @@ use wince_emulation_v3::{
             ORD_IMAGE_LIST_SET_IMAGE_COUNT, ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
             ORD_INITIALIZE_CRITICAL_SECTION, ORD_INPUT_DEBUG_CHAR_W,
             ORD_INTERLOCKED_COMPARE_EXCHANGE, ORD_INTERLOCKED_EXCHANGE_ADD,
-            ORD_INTERLOCKED_INCREMENT, ORD_IS_CLIPBOARD_FORMAT_AVAILABLE, ORD_KERNEL_IO_CONTROL,
-            ORD_LEAVE_CRITICAL_SECTION, ORD_LOAD_IMAGE_W, ORD_LOAD_LIBRARY_EX_W,
-            ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS, ORD_MESSAGE_BOX_W, ORD_MOVE_FILE_W,
-            ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR, ORD_OPEN_CLIPBOARD,
-            ORD_OPEN_EVENT_W, ORD_PEEK_MESSAGE_W, ORD_PURGE_COMM, ORD_QUERY_PERFORMANCE_COUNTER,
-            ORD_QUERY_PERFORMANCE_FREQUENCY, ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_RELEASE_MUTEX,
-            ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD, ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA,
-            ORD_SET_COMM_MASK, ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR,
-            ORD_SET_THREAD_PRIORITY, ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I,
-            ORD_SHCREATE_SHORTCUT, ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX,
-            ORD_SHELL_NOTIFY_ICON, ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I,
-            ORD_SHGET_FILE_INFO, ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH,
-            ORD_SHNOTIFICATION_ADD_I, ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
+            ORD_INTERLOCKED_INCREMENT, ORD_IS_CLIPBOARD_FORMAT_AVAILABLE, ORD_KERN_EXTRACT_ICONS,
+            ORD_KERNEL_IO_CONTROL, ORD_LEAVE_CRITICAL_SECTION, ORD_LOAD_IMAGE_W,
+            ORD_LOAD_LIBRARY_EX_W, ORD_LOAD_LIBRARY_W, ORD_MBSTOWCS, ORD_MESSAGE_BOX_W,
+            ORD_MOVE_FILE_W, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR,
+            ORD_OPEN_CLIPBOARD, ORD_OPEN_EVENT_W, ORD_PEEK_MESSAGE_W, ORD_PROCESS_DETACH_ALL_DLLS,
+            ORD_PURGE_COMM, ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY,
+            ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE,
+            ORD_RESUME_THREAD, ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK,
+            ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
+            ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT,
+            ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON,
+            ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO,
+            ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I,
+            ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
             ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP, ORD_SLEEP_TILL_TICK, ORD_SUSPEND_THREAD,
             ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS, ORD_TLS_GET_VALUE,
             ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_COMM_EVENT,
@@ -99,7 +100,7 @@ use support::{TestGuestMemory, unique_test_root};
 #[test]
 fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 7;
@@ -403,12 +404,6 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     assert_eq!(memory.read_u32(time_zone + 84)?, 0);
     assert_eq!(memory.read_u32(time_zone + 168)?, 0);
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
-    assert!(
-        kernel
-            .loaded_module_by_handle(module_base)
-            .unwrap()
-            .thread_library_calls_disabled
-    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -1610,7 +1605,7 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
 #[test]
 fn coredll_raw_open_event_w_opens_existing_named_event_only() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 7;
@@ -1690,7 +1685,7 @@ fn coredll_raw_open_event_w_opens_existing_named_event_only() -> Result<()> {
 #[test]
 fn coredll_raw_shget_special_folder_path_returns_ce_paths() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 7;
@@ -1834,7 +1829,7 @@ fn coredll_raw_shget_special_folder_path_returns_ce_paths() -> Result<()> {
 #[test]
 fn coredll_raw_shget_special_folder_path_covers_ce_supported_fallbacks() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 7;
@@ -1903,7 +1898,7 @@ fn coredll_raw_shget_special_folder_path_covers_ce_supported_fallbacks() -> Resu
 #[test]
 fn coredll_raw_shget_special_folder_path_strict_policy_rejects_fallbacks() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 7;
@@ -1968,7 +1963,7 @@ fn coredll_raw_shget_special_folder_path_rejects_overlong_registry_path() -> Res
     const CSIDL_WINDOWS: u32 = 0x0024;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 7;
@@ -2023,7 +2018,7 @@ fn coredll_raw_shget_special_folder_path_honors_create_flags() -> Result<()> {
     const CSIDL_APPDATA: u32 = 0x001a;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let root = unique_test_root("shget_special_folder_create");
     let _ = fs::remove_dir_all(&root);
@@ -2223,7 +2218,7 @@ fn coredll_raw_shget_special_folder_path_honors_create_flags() -> Result<()> {
 #[test]
 fn coredll_raw_module_apis_resolve_preloaded_search_dll_exports() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 41;
@@ -2338,7 +2333,7 @@ fn coredll_raw_module_apis_resolve_preloaded_search_dll_exports() -> Result<()> 
 fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_modules()
 -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 42;
@@ -2592,7 +2587,7 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_m
 #[test]
 fn coredll_raw_disable_thread_library_calls_validates_module_handles() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 42;
@@ -2623,6 +2618,12 @@ fn coredll_raw_disable_thread_library_calls_validates_module_handles() -> Result
         }
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(
+        kernel
+            .loaded_module_by_handle(module_base)
+            .unwrap()
+            .thread_library_calls_disabled
+    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -2645,9 +2646,89 @@ fn coredll_raw_disable_thread_library_calls_validates_module_handles() -> Result
 }
 
 #[test]
+fn coredll_raw_process_detach_all_dlls_drains_imported_module_refs() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 42;
+
+    kernel.register_loaded_module_with_metadata(
+        "normal.dll",
+        0x6500_0000,
+        std::collections::BTreeMap::new(),
+        std::collections::BTreeMap::new(),
+        LoadedModuleMetadata {
+            dynamic: true,
+            ref_count: 2,
+            ..LoadedModuleMetadata::default()
+        },
+    );
+    kernel.register_loaded_module_with_metadata(
+        "disabled.dll",
+        0x6510_0000,
+        std::collections::BTreeMap::new(),
+        std::collections::BTreeMap::new(),
+        LoadedModuleMetadata {
+            dynamic: true,
+            thread_library_calls_disabled: true,
+            ..LoadedModuleMetadata::default()
+        },
+    );
+    kernel.register_loaded_module_with_metadata(
+        "noresolve.dll",
+        0x6520_0000,
+        std::collections::BTreeMap::new(),
+        std::collections::BTreeMap::new(),
+        LoadedModuleMetadata {
+            dynamic: true,
+            load_flags: 0x0000_0001,
+            ..LoadedModuleMetadata::default()
+        },
+    );
+    kernel.register_loaded_module_with_metadata(
+        "datafile.dll",
+        0x6530_0000,
+        std::collections::BTreeMap::new(),
+        std::collections::BTreeMap::new(),
+        LoadedModuleMetadata {
+            dynamic: true,
+            load_flags: 0x0000_0003,
+            ..LoadedModuleMetadata::default()
+        },
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PROCESS_DETACH_ALL_DLLS,
+            [],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(kernel.loaded_module_handle("normal.dll"), None);
+    assert_eq!(kernel.loaded_module_handle("disabled.dll"), None);
+    assert_eq!(
+        kernel.loaded_module_handle("noresolve.dll"),
+        Some(0x6520_0000)
+    );
+    assert_eq!(
+        kernel.loaded_module_handle("datafile.dll"),
+        Some(0x6530_0000)
+    );
+    Ok(())
+}
+
+#[test]
 fn shell_execute_ex_resolves_registry_association_and_queues_process() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let root = unique_test_root("shell_execute_ex_assoc");
     let _ = fs::remove_dir_all(&root);
@@ -2715,7 +2796,7 @@ fn shell_execute_ex_resolves_registry_association_and_queues_process() -> Result
 #[test]
 fn shell_execute_ex_appends_parameters_without_template_placeholder() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let root = unique_test_root("shell_execute_ex_assoc_append");
     let _ = fs::remove_dir_all(&root);
@@ -2772,7 +2853,7 @@ fn shell_execute_ex_appends_parameters_without_template_placeholder() -> Result<
 #[test]
 fn shell_execute_ex_expands_long_filename_template_placeholders() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let root = unique_test_root("shell_execute_ex_assoc_long_placeholders");
     let _ = fs::remove_dir_all(&root);
@@ -2831,7 +2912,7 @@ fn shell_execute_ex_expands_long_filename_template_placeholders() -> Result<()> 
 #[test]
 fn shell_execute_ex_expands_urlfile_embedded_target_placeholder() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let root = unique_test_root("shell_execute_ex_urlfile_placeholder");
     let _ = fs::remove_dir_all(&root);
@@ -2888,7 +2969,7 @@ fn shell_execute_ex_expands_urlfile_embedded_target_placeholder() -> Result<()> 
 #[test]
 fn shell_execute_ex_resolves_hklm_software_classes_association() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let root = unique_test_root("shell_execute_ex_assoc_hklm");
     let _ = fs::remove_dir_all(&root);
@@ -2948,7 +3029,7 @@ fn shell_execute_ex_resolves_hklm_software_classes_association() -> Result<()> {
 #[test]
 fn shell_execute_ex_resolves_relative_paths_from_process_current_directory() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let root = unique_test_root("shell_execute_ex_process_cwd");
     let _ = fs::remove_dir_all(&root);
@@ -3039,7 +3120,7 @@ fn shell_execute_ex_resolves_relative_paths_from_process_current_directory() -> 
 #[test]
 fn shell_execute_ex_resolves_generic_file_association_for_extensionless_document() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let root = unique_test_root("shell_execute_ex_generic_file_assoc");
     let _ = fs::remove_dir_all(&root);
@@ -3100,7 +3181,7 @@ fn shell_execute_ex_reports_precise_missing_exe_and_no_association_errors() -> R
     const ERROR_PATH_NOT_FOUND: u32 = 3;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let root = unique_test_root("shell_execute_ex_errors");
     let _ = fs::remove_dir_all(&root);
@@ -3325,7 +3406,7 @@ fn shell_execute_ex_reports_precise_missing_exe_and_no_association_errors() -> R
 #[test]
 fn shell_execute_ex_verb_print_falls_back_to_open_when_print_not_registered() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let root = unique_test_root("shell_execute_ex_verb_fallback");
     let _ = fs::remove_dir_all(&root);
@@ -3390,7 +3471,7 @@ fn shell_execute_ex_verb_print_falls_back_to_open_when_print_not_registered() ->
 #[test]
 fn shell_execute_ex_verb_print_uses_print_command_when_registered() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let root = unique_test_root("shell_execute_ex_verb_print");
     let _ = fs::remove_dir_all(&root);
@@ -3462,7 +3543,7 @@ fn shell_execute_ex_opens_directory_via_folder_class() -> Result<()> {
     // Directories are routed through HKCR\folder\Shell\Open\Command (the "folder" class),
     // not through the file-extension association, matching CE's Explorer dispatch.
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let root = unique_test_root("shell_execute_ex_folder_class");
     let _ = fs::remove_dir_all(&root);
@@ -3520,7 +3601,7 @@ fn shell_execute_ex_directory_with_no_folder_class_returns_noassoc() -> Result<(
     const SE_ERR_NOASSOC: u32 = 31;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let root = unique_test_root("shell_execute_ex_folder_noassoc");
     let _ = fs::remove_dir_all(&root);
@@ -3568,7 +3649,7 @@ fn shell_execute_ex_opens_url_via_protocol_handler() -> Result<()> {
     const SE_ERR_NOASSOC: u32 = 31;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let root = unique_test_root("shell_execute_ex_url_protocol");
     let _ = fs::remove_dir_all(&root);
@@ -3639,7 +3720,7 @@ fn shell_execute_ex_opens_url_via_protocol_handler() -> Result<()> {
 #[test]
 fn coredll_raw_create_process_preserves_current_directory() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 45;
@@ -3678,7 +3759,7 @@ fn coredll_raw_create_process_preserves_current_directory() -> Result<()> {
 #[test]
 fn shell_shortcut_ordinals_create_read_and_launch_ce_lnk_files() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let root = unique_test_root("shell_shortcut_ordinals");
     let _ = fs::remove_dir_all(&root);
@@ -3812,7 +3893,7 @@ fn shell_shortcut_ordinals_create_read_and_launch_ce_lnk_files() -> Result<()> {
 #[test]
 fn shell_create_shortcut_ex_returns_unique_name_and_checks_output_capacity() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let root = unique_test_root("shell_shortcut_ex");
     let _ = fs::remove_dir_all(&root);
@@ -3900,7 +3981,7 @@ fn shell_add_to_recent_docs_creates_and_clears_recent_shortcuts() -> Result<()> 
     const SHARD_PATH: u32 = 2;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let root = unique_test_root("shell_recent_docs");
     let _ = fs::remove_dir_all(&root);
@@ -4154,7 +4235,7 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
     const SFGAO_FILESYSTEM: u32 = 0x4000_0000;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let root = unique_test_root("shget_file_info");
     let _ = fs::remove_dir_all(&root);
@@ -5104,6 +5185,100 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn coredll_raw_kern_extract_icons_copies_group_rt_icon_payloads() -> Result<()> {
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let root = unique_test_root("kern_extract_icons");
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("Docs")).unwrap();
+    fs::write(
+        root.join("Docs").join("multi-size-icons.exe"),
+        pe32_with_multi_size_icon_group(),
+    )
+    .unwrap();
+    kernel.set_file_root(&root);
+
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 46;
+    let path_ptr = 0x2_4000;
+    let large_out = 0x2_5000;
+    let small_out = 0x2_5004;
+    memory.map_halfwords(path_ptr, 64);
+    memory.map_words(large_out, 2);
+    memory.write_wide_z(path_ptr, r"\Docs\multi-size-icons.exe");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KERN_EXTRACT_ICONS,
+            [path_ptr, 1, large_out, small_out, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(2),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    let large_ptr = memory.read_u32(large_out)?;
+    let small_ptr = memory.read_u32(small_out)?;
+    assert_ne!(large_ptr, 0);
+    assert_ne!(small_ptr, 0);
+    assert_ne!(large_ptr, small_ptr);
+
+    let large_header = memory.read_bytes(large_ptr, 16);
+    let small_header = memory.read_bytes(small_ptr, 16);
+    assert_eq!(
+        u32::from_le_bytes(large_header[0..4].try_into().unwrap()),
+        40
+    );
+    assert_eq!(
+        i32::from_le_bytes(large_header[4..8].try_into().unwrap()),
+        16
+    );
+    assert_eq!(
+        u32::from_le_bytes(large_header[8..12].try_into().unwrap()),
+        32,
+        "RT_ICON payload stores XOR and AND mask heights stacked"
+    );
+    assert_eq!(
+        i32::from_le_bytes(small_header[4..8].try_into().unwrap()),
+        32
+    );
+    assert_eq!(
+        u32::from_le_bytes(small_header[8..12].try_into().unwrap()),
+        64
+    );
+
+    memory.write_word(large_out, 0xdead_beef);
+    memory.write_word(small_out, 0xfeed_face);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KERN_EXTRACT_ICONS,
+            [path_ptr, 99, large_out, small_out, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_RESOURCE_NAME_NOT_FOUND
+    );
+    assert_eq!(memory.read_u32(large_out)?, 0xdead_beef);
+    assert_eq!(memory.read_u32(small_out)?, 0xfeed_face);
+
+    let _ = fs::remove_dir_all(root);
+    Ok(())
+}
+
 fn expected_default_icon_index(location: &str, icon_index: i32) -> i32 {
     let location_hash = location.bytes().fold(0u32, |acc, byte| {
         acc.wrapping_mul(33)
@@ -5673,7 +5848,7 @@ fn sh_get_file_info_system_image_list_supports_icon_queries_and_draw() -> Result
     const SHELL_SYSTEM_IMAGE_LIST_HANDLE: u32 = 0x000b_f000;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 45;
@@ -5899,7 +6074,7 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     const ILC_VIRTUAL: u32 = 0x8000;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let root = unique_test_root("image_list_load_image");
     let _ = fs::remove_dir_all(&root);
@@ -7686,7 +7861,7 @@ fn image_list_copy_honors_ce_move_swap_flags() -> Result<()> {
     const ERROR_INVALID_PARAMETER: u32 = 87;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 45;
@@ -7878,7 +8053,7 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
     const PARAMS_PTR: u32 = 0x3_0000;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let root = unique_test_root("image_list_draw_indirect");
     let _ = fs::remove_dir_all(&root);
@@ -8485,7 +8660,7 @@ fn sh_get_file_info_rejects_unsupported_and_colliding_flags() -> Result<()> {
     const SHGFI_USEFILEATTRIBUTES: u32 = 0x0000_0010;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 45;
@@ -8539,7 +8714,7 @@ fn shell_notify_icon_tracks_add_modify_delete_and_posts_callback() -> Result<()>
     const NID_STATE_MASK_OFFSET: u32 = 156;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 46;
@@ -8744,7 +8919,7 @@ fn shell_notify_icon_add_respects_member_flags() -> Result<()> {
     const NID_STATE_MASK_OFFSET: u32 = 156;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 46;
@@ -8793,7 +8968,7 @@ fn shell_notify_icon_requires_ce_fixed_notifyicondata_size() -> Result<()> {
     const CE_NID_SIZE: u32 = 152;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 46;
@@ -8869,7 +9044,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     const SHNN_LINKSEL: u32 = 0xffff_fc18;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 47;
@@ -9503,7 +9678,7 @@ fn shnotification_i_add_uses_marshalled_html_pointer_presence() -> Result<()> {
     const SHNP_INFORM: u32 = 0x1b1;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 47;
@@ -9571,7 +9746,7 @@ fn shnotification_i_posts_timeout_dismiss_and_removes_expired_record() -> Result
     const SHNN_DISMISS: u32 = 0xffff_fc17;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 47;
@@ -9690,7 +9865,7 @@ fn sh_change_notify_i_tracks_register_remove_and_free_state() -> Result<()> {
     const SHCNE_DELETE: u32 = 0x0000_0004;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 47;
@@ -9824,7 +9999,7 @@ fn sh_change_notify_i_posts_filechangeinfo_for_matching_file_operations() -> Res
     const FILECHANGEINFO_SIZE: u32 = 36;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let root = unique_test_root("shell-filechange");
@@ -10221,7 +10396,7 @@ fn sh_change_notify_i_posts_filechangeinfo_for_matching_file_operations() -> Res
 #[test]
 fn mount_unmount_broadcasts_wm_devicechange_to_top_level_windows() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 7;
@@ -10293,7 +10468,7 @@ fn shell_window_destroy_removes_notify_icon_and_notification_state() -> Result<(
     const SHNP_INFORM: u32 = 0x1b1;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 48;
@@ -10514,7 +10689,7 @@ fn message_box_w_records_text_owner_and_returns_default_button() -> Result<()> {
     const IDNO: u32 = 7;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 49;
@@ -10763,7 +10938,7 @@ fn message_box_w_uses_queued_modal_key_and_button_input() -> Result<()> {
     const VK_ESCAPE: u32 = 0x1b;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 51;
@@ -11314,7 +11489,7 @@ fn message_box_w_tab_navigation_changes_activated_button() -> Result<()> {
     const VK_SPACE: u32 = 0x20;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 53;
@@ -11428,7 +11603,7 @@ fn message_box_w_mnemonic_key_activates_matching_button() -> Result<()> {
     const WM_SYSCHAR: u32 = 0x0106;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 53;
@@ -11515,7 +11690,7 @@ fn make_lparam(x: i32, y: i32) -> u32 {
 #[test]
 fn message_box_w_rejects_destroyed_owner_without_recording() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 50;
@@ -11552,7 +11727,7 @@ fn clipboard_raw_ordinals_track_lock_owner_formats_and_names() -> Result<()> {
     const CF_UNICODETEXT: u32 = 13;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 51;
@@ -11874,7 +12049,7 @@ fn clipboard_delayed_render_requests_owner_and_accepts_rendered_handle() -> Resu
     const CF_UNICODETEXT: u32 = 13;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let owner_thread = 52;
@@ -12181,7 +12356,7 @@ fn empty_clipboard_notifies_previous_owner_and_reassigns_owner() -> Result<()> {
     const CF_TEXT: u32 = 1;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let owner_thread = 54;
@@ -12304,7 +12479,7 @@ fn destroying_clipboard_owner_clears_open_owner_and_unrendered_formats() -> Resu
     const CF_UNICODETEXT: u32 = 13;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 56;
@@ -12413,7 +12588,7 @@ fn destroying_clipboard_owner_requests_render_all_and_keeps_rendered_data() -> R
     const CF_UNICODETEXT: u32 = 13;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let owner_thread = 57;
@@ -12543,7 +12718,7 @@ fn clipboard_raw_ordinals_reject_invalid_open_and_missing_lock() -> Result<()> {
     const CF_UNICODETEXT: u32 = 13;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 52;
@@ -12610,7 +12785,7 @@ fn clipboard_data_alloc_copies_known_local_handle_contents() -> Result<()> {
     const CF_TEXT: u32 = 1;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 53;
@@ -12688,7 +12863,7 @@ fn clipboard_data_alloc_rejects_unknown_source_handle() -> Result<()> {
     const CF_TEXT: u32 = 1;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 54;
@@ -12757,7 +12932,7 @@ fn clipboard_data_alloc_rejects_unknown_source_handle() -> Result<()> {
 #[test]
 fn coredll_raw_file_time_to_system_time_round_trips_guest_fields() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 17;
@@ -12821,7 +12996,7 @@ fn coredll_raw_kernel_io_control_returns_device_id() -> Result<()> {
     const IOCTL_HAL_GET_DEVICEID: u32 = 0x0101_207c;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 18;
@@ -12876,7 +13051,7 @@ fn coredll_raw_kernel_io_control_returns_device_id() -> Result<()> {
 #[test]
 fn coredll_multibyte_to_wide_char_uses_korean_acp() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 7;
@@ -12906,7 +13081,7 @@ fn coredll_multibyte_to_wide_char_uses_korean_acp() -> Result<()> {
 #[test]
 fn coredll_wide_char_to_multi_byte_uses_korean_acp() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 7;
@@ -12941,7 +13116,7 @@ fn coredll_wide_char_to_multi_byte_uses_korean_acp() -> Result<()> {
 #[test]
 fn coredll_crt_mbstowcs_and_wcstombs_use_korean_acp() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 7;
@@ -13018,7 +13193,7 @@ fn coredll_crt_mbstowcs_and_wcstombs_use_korean_acp() -> Result<()> {
 #[test]
 fn coredll_input_debug_char_w_formats_when_called_like_wsprintf() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 7;
@@ -13053,7 +13228,7 @@ fn coredll_input_debug_char_w_formats_when_called_like_wsprintf() -> Result<()> 
 #[test]
 fn coredll_raw_msgwait_requires_new_input_unless_inputavailable() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 77;
@@ -13112,7 +13287,7 @@ fn coredll_raw_msgwait_requires_new_input_unless_inputavailable() -> Result<()> 
 #[test]
 fn coredll_raw_msgwait_wakes_for_timer_due_inside_timeout() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 78;
@@ -13141,7 +13316,7 @@ fn coredll_raw_msgwait_wakes_for_timer_due_inside_timeout() -> Result<()> {
     assert_eq!(timer.msg, WM_TIMER);
     assert_eq!(timer.wparam, 78);
 
-    let mut kernel = CeKernel::boot(RuntimeConfig::load("regs.json", "serial_devices.json")?);
+    let mut kernel = CeKernel::boot(RuntimeConfig::load_default()?);
     let hwnd = kernel.create_window_ex_w(thread_id, "MSGWAIT_TIMER_LATE", "", None, 0, 0, 0);
     assert_eq!(
         kernel.set_timer_for_thread(thread_id, Some(hwnd), Some(79), 1000, None),
@@ -13168,7 +13343,7 @@ fn coredll_raw_msgwait_wakes_for_timer_due_inside_timeout() -> Result<()> {
 #[test]
 fn coredll_raw_adb_account_setter_is_not_exported_by_current_map() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 7;
@@ -13191,7 +13366,7 @@ fn coredll_raw_adb_account_setter_is_not_exported_by_current_map() -> Result<()>
 #[test]
 fn coredll_raw_comm_timeouts_round_trip_on_serial_handle() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 7;
@@ -13253,7 +13428,7 @@ fn coredll_raw_comm_state_mask_wait_and_purge_are_stateful() -> Result<()> {
     const PURGE_RXCLEAR: u32 = 0x0008;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 7;
@@ -13394,7 +13569,7 @@ fn coredll_raw_enter_and_delete_critical_section_complete_lifecycle() -> Result<
     const CS_OWNER_THREAD_OFFSET: u32 = 4;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 7_u32;

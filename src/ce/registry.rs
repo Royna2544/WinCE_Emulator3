@@ -78,6 +78,62 @@ pub struct RegistryKey {
     values: BTreeMap<String, RegistryValue>,
 }
 
+impl RegistryDump {
+    pub fn from_regedit(text: &str, source: Option<String>) -> Result<Self> {
+        let mut keys = BTreeMap::new();
+        let mut current_path = None::<String>;
+
+        for line in logical_regedit_lines(text) {
+            let line = line.trim();
+            if line.is_empty()
+                || line.starts_with(';')
+                || line.eq_ignore_ascii_case("REGEDIT4")
+                || line.eq_ignore_ascii_case("Windows Registry Editor Version 5.00")
+            {
+                continue;
+            }
+
+            if line.starts_with("[-") && line.ends_with(']') {
+                current_path = None;
+                continue;
+            }
+
+            if line.starts_with('[') && line.ends_with(']') {
+                let section = &line[1..line.len() - 1];
+                let path = parse_regedit_key_path(section).ok_or_else(|| {
+                    Error::InvalidArgument(format!("unsupported registry key path: {section}"))
+                })?;
+                keys.entry(path.clone()).or_insert_with(|| RegistryKeyDump {
+                    values: BTreeMap::new(),
+                });
+                current_path = Some(path);
+                continue;
+            }
+
+            let Some(path) = current_path.as_deref() else {
+                return Err(Error::InvalidArgument(format!(
+                    "registry value outside a key section: {line}"
+                )));
+            };
+            let Some((name, value)) = parse_regedit_value_line(line)? else {
+                continue;
+            };
+            keys.entry(path.to_owned())
+                .or_insert_with(|| RegistryKeyDump {
+                    values: BTreeMap::new(),
+                })
+                .values
+                .insert(name, value);
+        }
+
+        Ok(Self {
+            version: 1,
+            source,
+            keys,
+        })
+    }
+}
+
 impl Registry {
     pub fn from_dump(dump: RegistryDump) -> Self {
         let keys = dump
@@ -648,6 +704,196 @@ fn normalize_value_name(name: &str) -> String {
     name.to_ascii_lowercase()
 }
 
+fn logical_regedit_lines(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+
+    for raw in text.lines() {
+        let line = raw.trim_end_matches('\r');
+        let trimmed = line.trim_end();
+        let continued = trimmed.ends_with('\\');
+        let part = if continued {
+            trimmed[..trimmed.len() - 1].trim_end()
+        } else {
+            line
+        };
+
+        if current.is_empty() {
+            current.push_str(part.trim_start());
+        } else {
+            current.push_str(part.trim());
+        }
+
+        if !continued {
+            lines.push(current.trim().to_owned());
+            current.clear();
+        }
+    }
+
+    if !current.trim().is_empty() {
+        lines.push(current.trim().to_owned());
+    }
+
+    lines
+}
+
+fn parse_regedit_key_path(section: &str) -> Option<String> {
+    let section = section.trim().trim_matches('\\');
+    let (root, rest) = section.split_once('\\').unwrap_or((section, ""));
+    let root = match root.to_ascii_uppercase().as_str() {
+        "HKEY_CLASSES_ROOT" | "HKCR" => "hkcr",
+        "HKEY_CURRENT_USER" | "HKCU" => "hkcu",
+        "HKEY_LOCAL_MACHINE" | "HKLM" => "hklm",
+        "HKEY_USERS" | "HKU" => "hku",
+        _ => return None,
+    };
+    if rest.is_empty() {
+        Some(root.to_owned())
+    } else {
+        Some(format!("{root}\\{rest}"))
+    }
+}
+
+fn parse_regedit_value_line(line: &str) -> Result<Option<(String, RegistryValue)>> {
+    let Some((name, raw_value)) = line.split_once('=') else {
+        return Err(Error::InvalidArgument(format!(
+            "invalid registry value line: {line}"
+        )));
+    };
+    if raw_value.trim() == "-" {
+        return Ok(None);
+    }
+
+    let name = parse_regedit_value_name(name.trim()).ok_or_else(|| {
+        Error::InvalidArgument(format!("invalid registry value name: {}", name.trim()))
+    })?;
+    let value = parse_regedit_value(raw_value.trim())?;
+    Ok(Some((name, value)))
+}
+
+fn parse_regedit_value_name(raw: &str) -> Option<String> {
+    if raw == "@" {
+        Some(String::new())
+    } else if raw.starts_with('"') {
+        parse_regedit_quoted(raw)
+    } else {
+        Some(raw.trim().to_owned())
+    }
+}
+
+fn parse_regedit_value(raw: &str) -> Result<RegistryValue> {
+    if raw.starts_with('"') {
+        return Ok(RegistryValue::string(
+            parse_regedit_quoted(raw).ok_or_else(|| {
+                Error::InvalidArgument(format!("invalid registry string value: {raw}"))
+            })?,
+        ));
+    }
+
+    if raw.len() >= 6 && raw[..6].eq_ignore_ascii_case("dword:") {
+        let hex = &raw[6..];
+        let value = u32::from_str_radix(hex.trim(), 16).map_err(|err| {
+            Error::InvalidArgument(format!("invalid registry dword {raw}: {err}"))
+        })?;
+        return Ok(RegistryValue::dword(value));
+    }
+
+    if raw.len() >= 3 && raw[..3].eq_ignore_ascii_case("hex") {
+        return parse_regedit_hex_value(raw);
+    }
+
+    Err(Error::InvalidArgument(format!(
+        "unsupported registry value: {raw}"
+    )))
+}
+
+fn parse_regedit_quoted(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    let start = raw.find('"')?;
+    let end = raw.rfind('"')?;
+    if end <= start {
+        return None;
+    }
+
+    let mut out = String::new();
+    let mut chars = raw[start + 1..end].chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        match chars.next() {
+            Some('\\') => out.push('\\'),
+            Some('"') => out.push('"'),
+            Some('n') => out.push('\n'),
+            Some('r') => out.push('\r'),
+            Some('t') => out.push('\t'),
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
+            }
+            None => out.push('\\'),
+        }
+    }
+    Some(out)
+}
+
+fn parse_regedit_hex_value(raw: &str) -> Result<RegistryValue> {
+    let Some((header, data)) = raw.split_once(':') else {
+        return Err(Error::InvalidArgument(format!(
+            "invalid registry hex value: {raw}"
+        )));
+    };
+    let value_type = parse_regedit_hex_type(header)?;
+    let bytes = parse_regedit_hex_bytes(data)?;
+
+    if let Some(ty) = RegistryType::from_win32_type(value_type) {
+        if let Some(value) = RegistryValue::from_reg_bytes(ty, &bytes) {
+            return Ok(value);
+        }
+    }
+
+    Ok(RegistryValue {
+        ty: RegistryType::RegBinary,
+        data: RegistryData::Binary(bytes),
+    })
+}
+
+fn parse_regedit_hex_type(header: &str) -> Result<u32> {
+    let header = header.trim();
+    if header.eq_ignore_ascii_case("hex") {
+        return Ok(REG_BINARY);
+    }
+    let lower = header.to_ascii_lowercase();
+    let Some(typed) = lower.strip_prefix("hex(") else {
+        return Err(Error::InvalidArgument(format!(
+            "invalid registry hex type: {header}"
+        )));
+    };
+    let Some(type_hex) = typed.strip_suffix(')') else {
+        return Err(Error::InvalidArgument(format!(
+            "invalid registry hex type: {header}"
+        )));
+    };
+    u32::from_str_radix(type_hex, 16)
+        .map_err(|err| Error::InvalidArgument(format!("invalid registry hex type {header}: {err}")))
+}
+
+fn parse_regedit_hex_bytes(data: &str) -> Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    for token in data.split(',') {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        let byte = u8::from_str_radix(token, 16).map_err(|err| {
+            Error::InvalidArgument(format!("invalid registry hex byte {token}: {err}"))
+        })?;
+        bytes.push(byte);
+    }
+    Ok(bytes)
+}
+
 const REG_CREATED_NEW_KEY: u32 = 1;
 const REG_OPENED_EXISTING_KEY: u32 = 2;
 
@@ -726,6 +972,85 @@ mod tests {
             registry.query_value("hklm/ident", "name").unwrap().as_str(),
             Some("nav")
         );
+    }
+
+    #[test]
+    fn regedit_parser_loads_strings_dwords_and_hex_values() {
+        let dump = RegistryDump::from_regedit(
+            r#"
+REGEDIT4
+
+[HKEY_LOCAL_MACHINE\Ident]
+@="default"
+"Name"="nav"
+"Flags"=dword:0000002a
+"Blob"=hex:01,02,ff
+"Multi"=hex(7):61,00,00,00,62,00,00,00,00,00
+"Path"=hex(2):25,00,53,00,44,00,25,00,00,00
+"Split"=hex:\
+  0a,0b,\
+  0c
+"#,
+            Some("test.reg".to_owned()),
+        )
+        .unwrap();
+
+        let key = dump.keys.get("hklm\\Ident").unwrap();
+        assert_eq!(key.values[""].as_str(), Some("default"));
+        assert_eq!(key.values["Name"].as_str(), Some("nav"));
+        assert_eq!(key.values["Flags"].as_dword(), Some(42));
+        assert_eq!(
+            key.values["Blob"],
+            RegistryValue {
+                ty: RegistryType::RegBinary,
+                data: RegistryData::Binary(vec![1, 2, 255]),
+            }
+        );
+        assert_eq!(
+            key.values["Multi"],
+            RegistryValue {
+                ty: RegistryType::RegMultiSz,
+                data: RegistryData::MultiString(vec!["a".to_owned(), "b".to_owned()]),
+            }
+        );
+        assert_eq!(
+            key.values["Path"],
+            RegistryValue {
+                ty: RegistryType::RegExpandSz,
+                data: RegistryData::String("%SD%".to_owned()),
+            }
+        );
+        assert_eq!(
+            key.values["Split"],
+            RegistryValue {
+                ty: RegistryType::RegBinary,
+                data: RegistryData::Binary(vec![10, 11, 12]),
+            }
+        );
+    }
+
+    #[test]
+    fn regedit_parser_supports_short_hive_names_and_quoted_paths() {
+        let dump = RegistryDump::from_regedit(
+            r#"
+Windows Registry Editor Version 5.00
+
+[HKCR\.cab]
+@="cabfile"
+"Open"="\\Windows\\wceload.exe "%1""
+"Deleted"=-
+"#,
+            None,
+        )
+        .unwrap();
+
+        let key = dump.keys.get("hkcr\\.cab").unwrap();
+        assert_eq!(key.values[""].as_str(), Some("cabfile"));
+        assert_eq!(
+            key.values["Open"].as_str(),
+            Some(r#"\Windows\wceload.exe "%1""#)
+        );
+        assert!(!key.values.contains_key("Deleted"));
     }
 
     #[test]

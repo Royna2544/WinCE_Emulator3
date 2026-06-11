@@ -201,7 +201,7 @@ mod tests {
         std::fs::write(configured_dir.join("foo.dll"), b"configured").unwrap();
         std::fs::write(windows_dir.join("foo.dll"), b"windows").unwrap();
 
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         kernel.set_file_root(&root);
         kernel.mount_guest_root("\\Program Files\\App", &process_dir);
@@ -250,7 +250,7 @@ mod tests {
         let dll = windows_dir.join("bar.dll");
         std::fs::write(&dll, []).unwrap();
 
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         kernel.set_file_root(&root);
         kernel.mount_guest_root("\\Windows", &windows_dir);

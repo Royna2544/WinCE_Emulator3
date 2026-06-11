@@ -1041,9 +1041,10 @@ impl UnicornMips {
                     matches!(blocked.kind, BlockedWaitKind::SendMessage { send_id: id, .. } if id == send_id)
                 })
             });
+            let modal_blocked = process.cpu.blocked_modal_message_box.is_some();
             let _ = writeln!(
                 &mut out,
-                "    {index}: pid={} tid={} app={} handle={:?} thread_handle={:?} blocked_send={:?} blocked_send_live={:?} blocked_send_wait_present={:?} can_run={} priority_ready={} ready_wait={:?}",
+                "    {index}: pid={} tid={} app={} handle={:?} thread_handle={:?} blocked_send={:?} blocked_send_live={:?} blocked_send_wait_present={:?} modal_blocked={} can_run={} priority_ready={} ready_wait={:?}",
                 process.process_state.process_id,
                 process.thread_id,
                 process.application.as_deref().unwrap_or("<none>"),
@@ -1052,6 +1053,7 @@ impl UnicornMips {
                 process.blocked_send_id,
                 blocked_send_live,
                 blocked_send_wait_present,
+                modal_blocked,
                 can_run,
                 priority_ready,
                 ready_wait
@@ -1373,8 +1375,39 @@ impl UnicornMips {
         true
     }
 
+    #[cfg(feature = "unicorn")]
+    pub fn rotate_to_ready_parked_threads(
+        &mut self,
+        kernel: &mut CeKernel,
+        thread_ids: &[u32],
+    ) -> bool {
+        if thread_ids.is_empty() {
+            return false;
+        }
+        let Some(index) = self.parked_child_processes.iter().position(|process| {
+            Self::parked_process_contains_thread(process, thread_ids)
+                && Self::parked_process_has_ready_receiver_work(process, kernel)
+        }) else {
+            return false;
+        };
+        let Some(parked) = self.parked_child_processes.remove(index) else {
+            return false;
+        };
+        self.switch_to_parked_process(kernel, parked, true);
+        true
+    }
+
     #[cfg(not(feature = "unicorn"))]
     pub fn rotate_to_ready_parked_wait(&mut self, _kernel: &mut CeKernel) -> bool {
+        false
+    }
+
+    #[cfg(not(feature = "unicorn"))]
+    pub fn rotate_to_ready_parked_threads(
+        &mut self,
+        _kernel: &mut CeKernel,
+        _thread_ids: &[u32],
+    ) -> bool {
         false
     }
 
@@ -1396,6 +1429,50 @@ impl UnicornMips {
 
     pub fn rotate_to_next_parked_process(&mut self, kernel: &mut CeKernel) -> bool {
         self.switch_to_next_parked_process(kernel, true)
+    }
+
+    #[cfg(feature = "unicorn")]
+    pub fn current_thread_id(&self) -> u32 {
+        self.current_thread_id
+    }
+
+    #[cfg(not(feature = "unicorn"))]
+    pub fn current_thread_id(&self) -> u32 {
+        self.initial_thread_id
+    }
+
+    #[cfg(feature = "unicorn")]
+    pub fn contains_thread(&self, thread_ids: &[u32]) -> bool {
+        thread_ids.contains(&self.initial_thread_id)
+            || thread_ids.contains(&self.current_thread_id)
+            || self
+                .running_guest_thread
+                .is_some_and(|(thread_id, _)| thread_ids.contains(&thread_id))
+            || self
+                .blocked_guest_thread
+                .as_ref()
+                .is_some_and(|thread| thread_ids.contains(&thread.thread_id))
+            || self
+                .blocked_modal_message_box
+                .as_ref()
+                .is_some_and(|modal| thread_ids.contains(&modal.thread_id))
+            || self
+                .blocked_wait_threads
+                .iter()
+                .any(|thread| thread_ids.contains(&thread.thread_id))
+            || self
+                .suspended_guest_thread
+                .as_ref()
+                .is_some_and(|thread| thread_ids.contains(&thread.thread_id))
+            || self
+                .suspended_guest_thread_queue
+                .iter()
+                .any(|thread| thread_ids.contains(&thread.thread_id))
+    }
+
+    #[cfg(not(feature = "unicorn"))]
+    pub fn contains_thread(&self, thread_ids: &[u32]) -> bool {
+        thread_ids.contains(&self.initial_thread_id)
     }
 
     pub fn has_parked_process_id(&self, process_id: u32) -> bool {
@@ -1588,6 +1665,14 @@ impl UnicornMips {
                 return Some(blocked.wait_id);
             }
         }
+        if let Some(modal) = parked.cpu.blocked_modal_message_box.as_ref() {
+            let wait = kernel.blocked_waiter(modal.wait_id)?;
+            if scheduler_blocked_wait_is_ready(wait, kernel)
+                || crate::ce::scheduler::blocked_wait_timed_out(wait, kernel.timers.tick_count())
+            {
+                return Some(modal.wait_id);
+            }
+        }
         parked.cpu.blocked_wait_threads.iter().find_map(|blocked| {
             let wait = kernel.blocked_waiter(blocked.wait_id)?;
             (scheduler_blocked_wait_is_ready(wait, kernel)
@@ -1599,18 +1684,61 @@ impl UnicornMips {
     #[cfg(feature = "unicorn")]
     fn parked_process_has_ready_receiver_work(parked: &ParkedProcess, kernel: &CeKernel) -> bool {
         Self::parked_process_ready_wait_id(parked, kernel).is_some()
-            || kernel.thread_has_pending_sent_message(parked.cpu.current_thread_id)
-            || kernel.thread_has_pending_sent_message(parked.thread_id)
+            || Self::thread_has_ready_receiver_work(parked.cpu.current_thread_id, kernel)
+            || Self::thread_has_ready_receiver_work(parked.thread_id, kernel)
             || parked
                 .cpu
                 .suspended_guest_thread
                 .as_ref()
-                .is_some_and(|thread| kernel.thread_has_pending_sent_message(thread.thread_id))
+                .is_some_and(|thread| {
+                    Self::thread_has_ready_receiver_work(thread.thread_id, kernel)
+                })
             || parked
                 .cpu
                 .suspended_guest_thread_queue
                 .iter()
-                .any(|thread| kernel.thread_has_pending_sent_message(thread.thread_id))
+                .any(|thread| Self::thread_has_ready_receiver_work(thread.thread_id, kernel))
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn thread_has_ready_receiver_work(thread_id: u32, kernel: &CeKernel) -> bool {
+        kernel.thread_has_pending_sent_message(thread_id)
+            || kernel.gwe.has_message_filtered(thread_id, None, 0, 0)
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn parked_process_contains_thread(parked: &ParkedProcess, thread_ids: &[u32]) -> bool {
+        thread_ids.contains(&parked.thread_id)
+            || thread_ids.contains(&parked.cpu.current_thread_id)
+            || parked
+                .cpu
+                .running_guest_thread
+                .is_some_and(|(thread_id, _)| thread_ids.contains(&thread_id))
+            || parked
+                .cpu
+                .blocked_guest_thread
+                .as_ref()
+                .is_some_and(|thread| thread_ids.contains(&thread.thread_id))
+            || parked
+                .cpu
+                .blocked_modal_message_box
+                .as_ref()
+                .is_some_and(|modal| thread_ids.contains(&modal.thread_id))
+            || parked
+                .cpu
+                .blocked_wait_threads
+                .iter()
+                .any(|thread| thread_ids.contains(&thread.thread_id))
+            || parked
+                .cpu
+                .suspended_guest_thread
+                .as_ref()
+                .is_some_and(|thread| thread_ids.contains(&thread.thread_id))
+            || parked
+                .cpu
+                .suspended_guest_thread_queue
+                .iter()
+                .any(|thread| thread_ids.contains(&thread.thread_id))
     }
 
     fn switch_to_parked_process(
@@ -1668,6 +1796,7 @@ impl UnicornMips {
         }
         #[cfg(feature = "unicorn")]
         {
+            let _ = Self::prepare_parked_modal_message_box(&mut next_cpu, kernel);
             let _ = Self::prepare_parked_get_message_sent_callout(&mut next_cpu, kernel);
         }
         next_cpu
@@ -1815,6 +1944,31 @@ impl UnicornMips {
         });
         cpu.current_thread_id = blocked.thread_id;
         cpu.running_guest_thread = running_thread;
+        true
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn prepare_parked_modal_message_box(cpu: &mut UnicornMips, kernel: &mut CeKernel) -> bool {
+        let Some(modal) = cpu.blocked_modal_message_box.take() else {
+            return false;
+        };
+        kernel.pump_timers_to_gwe(modal.thread_id);
+        let Some(result) = modal.modal_state.try_queued_result(kernel, modal.thread_id) else {
+            cpu.blocked_modal_message_box = Some(modal);
+            return false;
+        };
+        let _ = kernel.remove_blocked_waiter(modal.wait_id);
+        modal.modal_state.teardown(kernel, modal.thread_id, result);
+        kernel.threads.set_last_error(modal.thread_id, 0);
+        let mut regs = modal.regs;
+        regs.set_v0(result);
+        regs.regs[31] = modal.return_pc;
+        cpu.saved_context = Some(SavedCpuContext {
+            pc: modal.return_pc,
+            regs,
+        });
+        cpu.current_thread_id = modal.thread_id;
+        cpu.running_guest_thread = Some((modal.thread_id, modal.thread_handle));
         true
     }
 
@@ -5496,11 +5650,14 @@ fn try_handle_runtime_loader_import<D>(
         ordinal == crate::ce::coredll_ordinals::ORD_THREAD_ATTACH_ALL_DLLS;
     let is_thread_detach_all_dlls =
         ordinal == crate::ce::coredll_ordinals::ORD_THREAD_DETACH_ALL_DLLS;
+    let is_process_detach_all_dlls =
+        ordinal == crate::ce::coredll_ordinals::ORD_PROCESS_DETACH_ALL_DLLS;
     if !is_load_library_w
         && !is_load_library_ex_w
         && !is_free_library
         && !is_thread_attach_all_dlls
         && !is_thread_detach_all_dlls
+        && !is_process_detach_all_dlls
     {
         return None;
     }
@@ -5516,6 +5673,7 @@ fn try_handle_runtime_loader_import<D>(
     }
 
     if is_thread_attach_all_dlls || is_thread_detach_all_dlls {
+        kernel.threads.set_last_error(thread_id, 0);
         let reason = if is_thread_attach_all_dlls {
             DLL_THREAD_ATTACH
         } else {
@@ -5533,6 +5691,24 @@ fn try_handle_runtime_loader_import<D>(
         ) {
             return Some(RuntimeLoaderImportResult::EnteredLifecycle);
         }
+        return Some(RuntimeLoaderImportResult::Complete(0));
+    }
+
+    if is_process_detach_all_dlls {
+        kernel.threads.set_last_error(thread_id, 0);
+        let plan = dll_process_detach_lifecycle_plan(kernel);
+        if enter_dll_lifecycle_callout(
+            uc,
+            record_dll_lifecycle_calls(kernel, plan.lifecycle_calls),
+            thread_id,
+            0,
+            plan.release_after_lifecycle.clone(),
+            Vec::new(),
+            pending_returns,
+        ) {
+            return Some(RuntimeLoaderImportResult::EnteredLifecycle);
+        }
+        release_runtime_loader_module_refs(kernel, plan.release_after_lifecycle);
         return Some(RuntimeLoaderImportResult::Complete(0));
     }
 
@@ -6406,6 +6582,53 @@ fn dll_thread_lifecycle_calls(kernel: &CeKernel, reason: u32) -> Vec<DllLifecycl
         }
     }
     calls
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct RuntimeProcessDetachPlan {
+    lifecycle_calls: Vec<DllLifecycleCall>,
+    release_after_lifecycle: Vec<u32>,
+}
+
+#[cfg(feature = "unicorn")]
+fn dll_process_detach_lifecycle_plan(kernel: &CeKernel) -> RuntimeProcessDetachPlan {
+    let mut modules: Vec<(LoadedModule, u32)> = kernel
+        .loaded_modules_for_process_detach()
+        .into_iter()
+        .map(|module| {
+            let ref_count = module.ref_count;
+            (module, ref_count)
+        })
+        .collect();
+    let mut plan = RuntimeProcessDetachPlan::default();
+    let mut min_count = 1;
+    loop {
+        let mut next_min_count = u32::MAX;
+        for (module, ref_count) in &mut modules {
+            if *ref_count == 0 {
+                continue;
+            }
+            if *ref_count <= min_count {
+                *ref_count = 0;
+                plan.lifecycle_calls
+                    .extend(dll_detach_lifecycle_calls_for_module(module));
+            } else {
+                *ref_count -= min_count;
+                next_min_count = next_min_count.min(*ref_count);
+            }
+        }
+        if next_min_count == u32::MAX {
+            break;
+        }
+        min_count = next_min_count;
+    }
+    for (module, _) in modules {
+        for _ in 0..module.ref_count {
+            plan.release_after_lifecycle.push(module.base);
+        }
+    }
+    plan
 }
 
 #[cfg(feature = "unicorn")]
@@ -9408,10 +9631,6 @@ fn try_resume_blocked_modal_message_box<D>(
     let Some(modal) = existing_modal else {
         return false;
     };
-    if active_thread_id == modal.thread_id {
-        *blocked_modal.borrow_mut() = Some(modal);
-        return false;
-    }
     kernel.pump_timers_to_gwe(modal.thread_id);
     let Some(result) = modal.modal_state.try_queued_result(kernel, modal.thread_id) else {
         *blocked_modal.borrow_mut() = Some(modal);
@@ -9422,7 +9641,7 @@ fn try_resume_blocked_modal_message_box<D>(
     kernel.threads.set_last_error(modal.thread_id, 0);
     *blocked_get_message.borrow_mut() = None;
 
-    if save_active_context {
+    if save_active_context && active_thread_id != modal.thread_id {
         let mut current = SuspendedGuestThread {
             thread_id: active_thread_id,
             thread_handle: running_thread
@@ -9435,7 +9654,7 @@ fn try_resume_blocked_modal_message_box<D>(
         if !push_suspended_guest_thread(suspended_thread, suspended_queue, current) {
             return false;
         }
-    } else {
+    } else if active_thread_id != modal.thread_id {
         remove_suspended_guest_threads_for_thread(
             suspended_thread,
             suspended_queue,
@@ -13641,12 +13860,13 @@ fn scheduler_blocked_msg_wait_has_input(
             }
         }
         crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox => {
-            kernel.gwe.has_message_filtered(
-                blocked.thread_id,
-                None,
-                crate::ce::gwe::WM_PAINT,
-                crate::ce::gwe::WM_LBUTTONUP,
-            )
+            kernel.thread_has_pending_sent_message(blocked.thread_id)
+                || kernel.gwe.has_message_filtered(
+                    blocked.thread_id,
+                    None,
+                    crate::ce::gwe::WM_PAINT,
+                    crate::ce::gwe::WM_LBUTTONUP,
+                )
         }
         crate::ce::scheduler::SchedulerBlockedWaitKind::PopupMenuModal { mouse_message_max } => {
             kernel.gwe.has_message_filtered(
@@ -13703,6 +13923,15 @@ fn scheduler_blocked_wait_is_ready(
             ),
             crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage { send_id } => {
                 kernel.sent_message_result_ready(send_id)
+            }
+            crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox => {
+                kernel.thread_has_pending_sent_message(blocked.thread_id)
+                    || kernel.gwe.has_message_filtered(
+                        blocked.thread_id,
+                        None,
+                        crate::ce::gwe::WM_PAINT,
+                        crate::ce::gwe::WM_LBUTTONUP,
+                    )
             }
             crate::ce::scheduler::SchedulerBlockedWaitKind::ClipboardRender { format } => kernel
                 .gwe
@@ -13817,7 +14046,7 @@ mod wait_scheduler_tests {
             stream.write_all(b"wake").unwrap();
         });
 
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -13957,7 +14186,7 @@ mod wait_scheduler_tests {
         let port = probe.local_addr().unwrap().port();
         drop(probe);
 
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -14093,7 +14322,7 @@ mod wait_scheduler_tests {
         let port = probe.local_addr().unwrap().port();
         drop(probe);
 
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -14242,7 +14471,7 @@ mod wait_scheduler_tests {
             stream.write_all(b"sel!").unwrap();
         });
 
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -14391,7 +14620,7 @@ mod wait_scheduler_tests {
             close_rx.recv().unwrap();
         });
 
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -14535,7 +14764,7 @@ mod wait_scheduler_tests {
             close_rx.recv().unwrap();
         });
 
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -14676,7 +14905,7 @@ mod wait_scheduler_tests {
         let port = probe.local_addr().unwrap().port();
         drop(probe);
 
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -14822,7 +15051,7 @@ mod wait_scheduler_tests {
             close_rx.recv().unwrap();
         });
 
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -14946,7 +15175,7 @@ mod wait_scheduler_tests {
         let port = probe.local_addr().unwrap().port();
         drop(probe);
 
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -15070,7 +15299,7 @@ mod wait_scheduler_tests {
         let port = probe.local_addr().unwrap().port();
         drop(probe);
 
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -15200,7 +15429,7 @@ mod wait_scheduler_tests {
     #[test]
     fn winsock_select_write_fdset_parks_pending_socket_until_timeout() {
         let _winsock_guard = reset_winsock_for_scheduler_test();
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -15332,7 +15561,7 @@ mod wait_scheduler_tests {
             close_rx.recv().unwrap();
         });
 
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -15497,7 +15726,7 @@ mod wait_scheduler_tests {
     #[test]
     fn winsock_select_except_fdset_parks_until_timeout_and_clears_fdset() {
         let _winsock_guard = reset_winsock_for_scheduler_test();
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -15625,7 +15854,7 @@ mod wait_scheduler_tests {
         let port = probe.local_addr().unwrap().port();
         drop(probe);
 
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -15768,7 +15997,7 @@ mod wait_scheduler_tests {
         let port = probe.local_addr().unwrap().port();
         drop(probe);
 
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -16023,7 +16252,7 @@ mod wait_scheduler_tests {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
 
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -16132,7 +16361,7 @@ mod wait_scheduler_tests {
     #[test]
     fn blocked_wait_comm_event_resume_writes_rxchar_event() {
         const EV_RXCHAR: u32 = 0x0001;
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let com = kernel
             .create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)
@@ -16165,7 +16394,7 @@ mod wait_scheduler_tests {
     #[test]
     fn blocked_wait_comm_event_resume_writes_zero_after_mask_change() {
         const EV_RXCHAR: u32 = 0x0001;
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let com = kernel
             .create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)
@@ -16206,7 +16435,7 @@ mod wait_scheduler_tests {
     #[test]
     fn current_wait_comm_event_without_peer_parks_and_stops_instead_of_falling_through() {
         const EV_RXCHAR: u32 = 0x0001;
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let com = kernel
             .create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)
@@ -16297,7 +16526,7 @@ mod wait_scheduler_tests {
     #[test]
     fn wait_comm_event_yields_to_ready_blocked_waiter() {
         const EV_RXCHAR: u32 = 0x0001;
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let com = kernel
             .create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)
@@ -16402,7 +16631,7 @@ mod wait_scheduler_tests {
     fn finite_serial_read_timeout_without_peer_completes_current_thread() {
         use unicorn_engine::RegisterMIPS;
 
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -16467,7 +16696,7 @@ mod wait_scheduler_tests {
     fn serial_read_yields_to_ready_blocked_waiter_before_timeout() {
         use unicorn_engine::RegisterMIPS;
 
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -16599,7 +16828,7 @@ mod wait_scheduler_tests {
 
     #[test]
     fn current_msg_wait_timeout_writes_wait_timeout_result() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -16635,7 +16864,7 @@ mod wait_scheduler_tests {
 
     #[test]
     fn current_msg_wait_without_peer_parks_and_stops_instead_of_falling_through() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -16704,7 +16933,7 @@ mod wait_scheduler_tests {
 
     #[test]
     fn current_multiple_wait_timeout_writes_wait_timeout_result() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -16742,7 +16971,7 @@ mod wait_scheduler_tests {
 
     #[test]
     fn current_msg_wait_long_timer_writes_message_wait_result() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -16789,7 +17018,7 @@ mod wait_scheduler_tests {
 
     #[test]
     fn current_single_wait_timeout_writes_wait_timeout_result() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -16822,7 +17051,7 @@ mod wait_scheduler_tests {
 
     #[test]
     fn live_pump_current_single_wait_completes_one_timeout_slice() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -16882,7 +17111,7 @@ mod wait_scheduler_tests {
 
     #[test]
     fn current_sleep_timeout_advances_timers_and_returns_zero() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -16921,7 +17150,7 @@ mod wait_scheduler_tests {
 
     #[test]
     fn live_pump_current_sleep_completes_one_timeout_slice() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -16998,7 +17227,7 @@ mod wait_scheduler_tests {
 
     #[test]
     fn current_sleep_yields_to_ready_blocked_waiter() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -17093,7 +17322,7 @@ mod wait_scheduler_tests {
 
     #[test]
     fn current_yield_sleep_without_peer_returns_to_same_thread() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -17169,7 +17398,7 @@ mod wait_scheduler_tests {
 
     #[test]
     fn current_sleep_yields_to_ready_blocked_get_message() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -17307,7 +17536,7 @@ mod wait_scheduler_tests {
 
     #[test]
     fn blocked_current_get_message_dispatches_pending_send_when_no_thread_running() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -17429,7 +17658,7 @@ mod wait_scheduler_tests {
 
     #[test]
     fn escaped_get_message_sent_callout_completes_active_send() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -17530,7 +17759,7 @@ mod wait_scheduler_tests {
 
     #[test]
     fn current_sleep_waits_to_next_blocked_sleep_timeout() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -17635,7 +17864,7 @@ mod wait_scheduler_tests {
 
     #[test]
     fn current_multiple_wait_yields_to_ready_blocked_waiter() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -17748,7 +17977,7 @@ mod wait_scheduler_tests {
 
     #[test]
     fn current_msg_wait_yields_to_ready_blocked_waiter() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -17844,7 +18073,7 @@ mod wait_scheduler_tests {
 
     #[test]
     fn timeslice_preempts_active_thread_to_ready_blocked_waiter() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -17924,7 +18153,7 @@ mod wait_scheduler_tests {
 
     #[test]
     fn timeslice_ready_waiter_queues_active_when_suspended_slot_is_occupied() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -18035,7 +18264,7 @@ mod wait_scheduler_tests {
 
     #[test]
     fn timeslice_can_switch_from_main_thread_without_running_handle() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -18143,7 +18372,7 @@ mod wait_scheduler_tests {
 
     #[test]
     fn stale_blocked_wait_cleanup_removes_prior_context_for_thread() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let event_a = kernel.create_event_w(None, true, false);
         let event_b = kernel.create_event_w(None, true, true);
@@ -18263,7 +18492,7 @@ mod wait_scheduler_tests {
 
     #[test]
     fn blocked_msg_wait_wakes_on_queue_input() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let thread_id = 9;
         let mut blocked = blocked_wait_for_thread(thread_id, 0x200);
@@ -18281,7 +18510,7 @@ mod wait_scheduler_tests {
 
     #[test]
     fn timeslice_prefers_suspended_receiver_with_pending_sent_message() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -19379,7 +19608,7 @@ mod guest_thread_stack_tests {
 
     #[test]
     fn switch_to_parked_child_restores_process_identity() -> Result<()> {
-        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let mut parent = UnicornMips::new()?;
         let child = UnicornMips::new()?;
@@ -19429,7 +19658,7 @@ mod guest_thread_stack_tests {
 
     #[test]
     fn switch_to_next_parked_child_skips_idle_blocked_get_message() -> Result<()> {
-        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let mut parent = UnicornMips::new()?;
 
@@ -19525,7 +19754,7 @@ mod guest_thread_stack_tests {
 
     #[test]
     fn switch_to_next_parked_child_prefers_expired_sleep_over_runnable_child() -> Result<()> {
-        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let mut parent = UnicornMips::new()?;
 
@@ -19629,7 +19858,7 @@ mod guest_thread_stack_tests {
         .unwrap();
         std::fs::write(root.join("Apps").join("Child").join("child.exe"), b"child").unwrap();
 
-        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         kernel.set_file_root(&root);
         kernel.set_process_module_host_path(root.join("Apps").join("Parent").join("parent.exe"));
@@ -19652,7 +19881,7 @@ mod guest_thread_stack_tests {
 
     #[test]
     fn rotate_to_parked_process_requeues_current_process() -> Result<()> {
-        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let mut parent = UnicornMips::new()?;
         parent.set_initial_thread_id(1);
@@ -19722,7 +19951,7 @@ mod guest_thread_stack_tests {
 
     #[test]
     fn rotate_to_parked_process_skips_send_blocked_process_until_ready() -> Result<()> {
-        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let mut scheduler = UnicornMips::new()?;
         scheduler.set_initial_thread_id(1);
@@ -19855,7 +20084,7 @@ mod guest_thread_stack_tests {
 
     #[test]
     fn orphaned_parked_send_wait_resumes_sender() -> Result<()> {
-        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let mut scheduler = UnicornMips::new()?;
         scheduler.set_initial_thread_id(1);
@@ -19954,7 +20183,7 @@ mod guest_thread_stack_tests {
 
     #[test]
     fn rotate_to_ready_parked_wait_process() -> Result<()> {
-        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let mut scheduler = UnicornMips::new()?;
         scheduler.set_initial_thread_id(4);
@@ -20040,8 +20269,122 @@ mod guest_thread_stack_tests {
     }
 
     #[test]
+    fn rotate_to_ready_parked_threads_prefers_target_receiver() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+        scheduler.set_initial_thread_id(4);
+        kernel.set_current_process_state(crate::ce::kernel::CurrentProcessState {
+            process_id: 68,
+            exit_code: crate::ce::kernel::STILL_ACTIVE,
+            signaled: false,
+        });
+        kernel.set_process_module_path("\\SDMMC Disk\\INavi\\iSearch.exe".to_owned());
+        kernel.set_process_module_host_path(std::path::PathBuf::from(
+            r"D:\INAVI_Emulator\INAVI\INavi\iSearch.exe",
+        ));
+
+        let make_parked_get_message = |kernel: &mut CeKernel,
+                                       thread_id: u32,
+                                       process_id: u32,
+                                       module_path: &str|
+         -> Result<ParkedProcess> {
+            let thread_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
+            let wait_id = kernel.register_blocked_waiter(
+                thread_id,
+                thread_handle,
+                Vec::new(),
+                crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage {
+                    hwnd: None,
+                    min_msg: 0,
+                    max_msg: 0,
+                },
+                kernel.timers.tick_count(),
+                crate::ce::timer::INFINITE,
+            );
+            let mut cpu = UnicornMips::new()?;
+            cpu.set_initial_thread_id(thread_id);
+            cpu.current_thread_id = thread_id;
+            cpu.running_guest_thread = None;
+            cpu.blocked_guest_thread = Some(BlockedGuestThread {
+                wait_id,
+                thread_id,
+                thread_handle,
+                regs: MipsGuestContext::zero(),
+                import_pc: 0,
+                return_pc: 0x0040_1000 + thread_id,
+                msg_ptr: 0x3000_0100 + thread_id,
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            });
+            Ok(ParkedProcess {
+                application: Some(module_path.to_owned()),
+                process_handle: None,
+                thread_handle: None,
+                process_state: crate::ce::kernel::CurrentProcessState {
+                    process_id,
+                    exit_code: crate::ce::kernel::STILL_ACTIVE,
+                    signaled: false,
+                },
+                thread_id,
+                cpu: Box::new(cpu),
+                blocked_send_id: None,
+                module_base: 0x0010_0000 + process_id * 0x10000,
+                module_path: module_path.to_owned(),
+                module_host_path: std::path::PathBuf::from(module_path.replace('\\', "/")),
+                command_line: module_path.to_owned(),
+                current_directory: None,
+            })
+        };
+
+        let other_thread = 9;
+        let target_thread = 1;
+        scheduler
+            .parked_child_processes
+            .push_back(make_parked_get_message(
+                &mut kernel,
+                other_thread,
+                9,
+                "\\SDMMC Disk\\INavi\\other.exe",
+            )?);
+        scheduler
+            .parked_child_processes
+            .push_back(make_parked_get_message(
+                &mut kernel,
+                target_thread,
+                1,
+                "\\SDMMC Disk\\INavi\\iNavi.exe",
+            )?);
+
+        assert!(kernel.post_thread_message_w(other_thread, crate::ce::gwe::WM_USER + 8, 1, 2));
+        assert!(kernel.post_thread_message_w(target_thread, crate::ce::gwe::WM_USER + 9, 3, 4));
+        assert!(scheduler.rotate_to_ready_parked_threads(&mut kernel, &[target_thread]));
+        assert_eq!(kernel.current_process_id(), 1);
+        assert_eq!(
+            kernel.process_module_path(),
+            "\\SDMMC Disk\\INavi\\iNavi.exe"
+        );
+        assert_eq!(scheduler.current_thread_id, target_thread);
+        assert!(
+            scheduler
+                .parked_child_processes
+                .iter()
+                .any(|process| process.thread_id == other_thread)
+        );
+        assert!(
+            scheduler
+                .parked_child_processes
+                .iter()
+                .any(|process| process.process_state.process_id == 68)
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn orphaned_parked_send_wait_without_side_marker_resumes_sender() -> Result<()> {
-        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let mut scheduler = UnicornMips::new()?;
         scheduler.set_initial_thread_id(1);
@@ -20134,7 +20477,7 @@ mod guest_thread_stack_tests {
 
     #[test]
     fn orphaned_parked_send_wait_without_cpu_wait_removes_kernel_waiter() -> Result<()> {
-        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let mut scheduler = UnicornMips::new()?;
         scheduler.set_initial_thread_id(1);
@@ -20199,7 +20542,7 @@ mod guest_thread_stack_tests {
 
     #[test]
     fn rotate_to_ready_parked_process_with_pending_sent_receiver() -> Result<()> {
-        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let mut scheduler = UnicornMips::new()?;
         scheduler.set_initial_thread_id(4);
@@ -20329,7 +20672,7 @@ mod guest_thread_stack_tests {
 
     #[test]
     fn rotate_to_ready_parked_kernel_wait_process() -> Result<()> {
-        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let mut scheduler = UnicornMips::new()?;
         scheduler.set_initial_thread_id(1);
@@ -20410,7 +20753,7 @@ mod guest_thread_stack_tests {
         // Verify: when the parent process exits after queuing a SendNotifyMessage
         // to a child's window, the scheduler hands execution to the child and the
         // child's GWE window + pending sent message are preserved.
-        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
 
         // Parent is process 1, thread 9 (matches iNavi.exe route-search scenario).
@@ -20551,7 +20894,7 @@ mod guest_thread_stack_tests {
         // pending sent message from the child thread's queue (or mark it
         // SMF_SENDER_TERMINATED if already active), so the child is not stuck
         // with an orphaned send whose sender is gone.
-        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let config = crate::config::RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
 
         let parent_process_id = kernel.current_process_id();
@@ -29395,7 +29738,7 @@ mod unicorn_tests {
 
     #[test]
     fn runtime_loader_failure_rollback_releases_only_new_modules() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let dynamic = crate::ce::kernel::LoadedModuleMetadata {
             dynamic: true,
@@ -29457,7 +29800,7 @@ mod unicorn_tests {
 
     #[test]
     fn dll_attach_failure_releases_attempt_refs_and_sets_init_failed() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         kernel.register_loaded_module_with_metadata(
             "retained.dll",
@@ -29498,7 +29841,7 @@ mod unicorn_tests {
 
     #[test]
     fn runtime_free_library_release_plan_releases_dependency_refs() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         kernel.register_loaded_module_with_metadata(
             "root.dll",
@@ -29548,7 +29891,7 @@ mod unicorn_tests {
 
     #[test]
     fn dll_thread_lifecycle_calls_follow_load_order_and_skip_disabled_noimport_modules() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
 
         kernel.register_loaded_module_with_metadata(
@@ -29612,8 +29955,101 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn dll_process_detach_plan_drains_refcounts_in_ce_order() {
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = CeKernel::boot(config);
+
+        kernel.register_loaded_module_with_metadata(
+            "dependency.dll",
+            0x7100_0000,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            crate::ce::kernel::LoadedModuleMetadata {
+                entry_point: 0x7100_1000,
+                ref_count: 2,
+                dynamic: true,
+                ..Default::default()
+            },
+        );
+        kernel.register_loaded_module_with_metadata(
+            "root.dll",
+            0x7200_0000,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            crate::ce::kernel::LoadedModuleMetadata {
+                entry_point: 0x7200_1000,
+                dynamic: true,
+                thread_library_calls_disabled: true,
+                ..Default::default()
+            },
+        );
+        kernel.register_loaded_module_with_metadata(
+            "noresolve.dll",
+            0x7300_0000,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            crate::ce::kernel::LoadedModuleMetadata {
+                entry_point: 0x7300_1000,
+                load_flags: super::RUNTIME_DONT_RESOLVE_DLL_REFERENCES,
+                dynamic: true,
+                ..Default::default()
+            },
+        );
+        kernel.register_loaded_module_with_metadata(
+            "late.dll",
+            0x7400_0000,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            crate::ce::kernel::LoadedModuleMetadata {
+                entry_point: 0x7400_1000,
+                ref_count: 3,
+                dynamic: true,
+                ..Default::default()
+            },
+        );
+
+        let plan = super::dll_process_detach_lifecycle_plan(&kernel);
+        assert_eq!(
+            plan.lifecycle_calls
+                .iter()
+                .map(|call| (call.module, call.target, call.reason, call.returns_bool))
+                .collect::<Vec<_>>(),
+            vec![
+                (0x7200_0000, 0x7200_1000, super::DLL_PROCESS_DETACH, false),
+                (0x7100_0000, 0x7100_1000, super::DLL_PROCESS_DETACH, false),
+                (0x7400_0000, 0x7400_1000, super::DLL_PROCESS_DETACH, false),
+            ]
+        );
+        assert_eq!(
+            plan.release_after_lifecycle,
+            vec![
+                0x7100_0000,
+                0x7100_0000,
+                0x7200_0000,
+                0x7400_0000,
+                0x7400_0000,
+                0x7400_0000,
+            ]
+        );
+        assert_eq!(
+            super::release_runtime_loader_module_refs(
+                &mut kernel,
+                plan.release_after_lifecycle.clone()
+            ),
+            6
+        );
+        assert_eq!(kernel.loaded_module_handle("dependency.dll"), None);
+        assert_eq!(kernel.loaded_module_handle("root.dll"), None);
+        assert_eq!(kernel.loaded_module_handle("late.dll"), None);
+        assert_eq!(
+            kernel.loaded_module_handle("noresolve.dll"),
+            Some(0x7300_0000)
+        );
+    }
+
+    #[test]
     fn runtime_free_library_release_plan_preserves_still_referenced_dependency() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         kernel.register_loaded_module_with_metadata(
             "root.dll",
@@ -29771,7 +30207,7 @@ mod unicorn_tests {
 
     #[test]
     fn create_window_callout_returns_hwnd_or_null_after_wm_create() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         let thread_id = 9;
@@ -29828,7 +30264,7 @@ mod unicorn_tests {
 
     #[test]
     fn create_window_nccreate_false_destroys_window_and_returns_null() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         let thread_id = 9;
@@ -29865,7 +30301,7 @@ mod unicorn_tests {
 
     #[test]
     fn create_window_nccreate_true_proceeds_to_wm_create() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         let thread_id = 9;
@@ -29915,7 +30351,7 @@ mod unicorn_tests {
         // default_send_message_result, returning 0 for WM_NCCREATE. MFC apps chain
         // their WM_NCCREATE to DefWindowProcW, so a 0 return aborted CreateWindowEx
         // and stalled the whole app. DefWindowProc must report these as handled.
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let thread_id = 7;
         let hwnd = kernel.create_window_ex_w(thread_id, "DEFPROC", "", None, 0, 0, 0);
@@ -29959,7 +30395,7 @@ mod unicorn_tests {
 
     #[test]
     fn destroy_wndproc_callouts_are_guest_child_first() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let thread_id = 1;
         let parent = kernel.create_window_ex_w(thread_id, "PARENT", "", None, 0, 0, 0);
@@ -30697,7 +31133,7 @@ mod unicorn_tests {
 
     #[test]
     fn send_message_callout_enters_cross_thread_receiver_context() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         let sender_thread = 1;
@@ -30785,7 +31221,7 @@ mod unicorn_tests {
 
     #[test]
     fn send_message_callout_blocks_sender_when_yielding_to_parked_process() -> crate::Result<()> {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let config = RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         let sender_thread = 1;
@@ -30886,7 +31322,7 @@ mod unicorn_tests {
 
     #[test]
     fn enable_window_callout_sends_cancelmode_then_enable_synchronously() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         let wndproc = 0x0001_3570;
@@ -30930,7 +31366,7 @@ mod unicorn_tests {
 
     #[test]
     fn wndproc_continuation_allows_non_paint_without_update_rect() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         let wndproc = 0x0001_3570;
@@ -30991,7 +31427,7 @@ mod unicorn_tests {
 
     #[test]
     fn dispatch_message_callout_enters_timerproc_callback() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         let msg_ptr = 0x3000_0100;
@@ -31050,7 +31486,7 @@ mod unicorn_tests {
 
     #[test]
     fn dispatch_message_callout_skips_destroyed_hwnd() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         let msg_ptr = 0x3000_0100;
@@ -31090,7 +31526,7 @@ mod unicorn_tests {
 
     #[test]
     fn send_message_blocked_wait_resume_restores_sender_context() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         let sender_thread = 11;
@@ -31189,7 +31625,7 @@ mod unicorn_tests {
 
     #[test]
     fn send_message_blocked_wait_resume_recovers_missing_running_metadata() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         let (sender_handle, sender_thread) = kernel.create_guest_thread(0x0040_3000, 0, false);
@@ -31282,7 +31718,7 @@ mod unicorn_tests {
 
     #[test]
     fn get_message_block_registration_clears_stale_sleep_wait() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         let thread_id = super::MAIN_GUEST_THREAD_ID;
@@ -31359,7 +31795,7 @@ mod unicorn_tests {
 
     #[test]
     fn get_message_block_registration_clears_stale_get_message_wait() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         let thread_id = super::MAIN_GUEST_THREAD_ID;
@@ -31442,7 +31878,7 @@ mod unicorn_tests {
 
     #[test]
     fn get_message_block_yields_to_timed_out_worker_sleep() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         let main_thread_id = super::MAIN_GUEST_THREAD_ID;
@@ -31536,7 +31972,7 @@ mod unicorn_tests {
 
     #[test]
     fn get_message_resume_ignores_unrelated_serial_timeout_and_saves_active_pc() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         uc.mem_map(0x3000_0000, 0x1000, unicorn_engine::Prot::ALL)
@@ -31639,7 +32075,7 @@ mod unicorn_tests {
 
     #[test]
     fn get_message_resume_from_no_running_thread_consumes_posted_input() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         uc.mem_map(0x3000_0000, 0x1000, unicorn_engine::Prot::ALL)
@@ -31718,7 +32154,7 @@ mod unicorn_tests {
 
     #[test]
     fn non_main_get_message_without_running_thread_registers_waiter() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
 
@@ -31778,7 +32214,7 @@ mod unicorn_tests {
 
     #[test]
     fn blocked_get_message_waits_to_next_timer_when_no_other_context_is_ready() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
         uc.mem_map(0x3000_0000, 0x1000, unicorn_engine::Prot::ALL)
@@ -31875,7 +32311,7 @@ mod unicorn_tests {
 
     #[test]
     fn live_pump_getmessage_does_not_fast_forward_short_ui_timer() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,
@@ -31986,7 +32422,7 @@ mod unicorn_tests {
 
     #[test]
     fn current_get_message_long_timer_wait_returns_timer_message() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = crate::ce::kernel::CeKernel::boot(config);
         let mut uc = unicorn_engine::Unicorn::new(
             unicorn_engine::Arch::MIPS,

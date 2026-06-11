@@ -220,7 +220,7 @@ impl DeviceNamespace {
             comm_mask: 0,
             rx: Vec::new(),
             tx: Vec::new(),
-            runtime: DeviceRuntime::from_backend(&config.backend),
+            runtime: DeviceRuntime::from_config(config),
             #[cfg(windows)]
             host_serial,
         })
@@ -260,12 +260,12 @@ impl DeviceNamespace {
 }
 
 impl DeviceRuntime {
-    fn from_backend(backend: &DeviceBackend) -> Self {
-        match backend {
+    fn from_config(config: &DeviceConfig) -> Self {
+        match &config.backend {
             DeviceBackend::Accelerometer => {
                 Self::Accelerometer(accelerometer::Accelerometer::new())
             }
-            DeviceBackend::I2cBus => Self::I2cBus(i2c_bus::I2cBus::new()),
+            DeviceBackend::I2cBus => Self::I2cBus(i2c_bus::I2cBus::new_for_guest(&config.guest)),
             DeviceBackend::LightSensor => Self::LightSensor(light_sensor::LightSensor::new()),
             DeviceBackend::Magnetometer => Self::Magnetometer(magnetometer::Magnetometer::new()),
             DeviceBackend::NandUuid => Self::NandUuid(nand_uuid::NandUuid::new()),
@@ -792,6 +792,22 @@ mod tests {
                     enabled: true,
                     note: None,
                 },
+                DeviceConfig {
+                    guest: "I2C3:".to_owned(),
+                    kind: DeviceKind::IoctlDevice,
+                    backend: DeviceBackend::I2cBus,
+                    host: None,
+                    enabled: true,
+                    note: None,
+                },
+                DeviceConfig {
+                    guest: "I2C4:".to_owned(),
+                    kind: DeviceKind::IoctlDevice,
+                    backend: DeviceBackend::I2cBus,
+                    host: None,
+                    enabled: true,
+                    note: None,
+                },
             ],
         });
 
@@ -842,11 +858,24 @@ mod tests {
         let i2c_read = i2c.device_io_control(i2c_bus::IOCTL_I2C_READ, &[0x10], 1);
         assert_eq!(i2c_read.output, vec![0x33]);
         assert!(
-            i2c.device_io_control(i2c_bus::IOCTL_I2C_GIO_I2C2_TRANSFER, &[0x10, 0x44], 1)
+            !i2c.device_io_control(i2c_bus::IOCTL_I2C_GIO_I2C2_TRANSFER, &[0x10, 0x44], 1)
                 .success
         );
-        let i2c_transfer_read = i2c.device_io_control(i2c_bus::IOCTL_I2C_READ, &[0x10], 1);
+
+        let mut i2c3 = namespace.open("I2C3:").unwrap();
+        assert!(
+            i2c3.device_io_control(i2c_bus::IOCTL_I2C_GIO_I2C2_TRANSFER, &[0x10, 0x44], 1)
+                .success
+        );
+        let i2c_transfer_read = i2c3.device_io_control(i2c_bus::IOCTL_I2C_READ, &[0x10], 1);
         assert_eq!(i2c_transfer_read.output, vec![0x44]);
+
+        let mut i2c4 = namespace.open("I2C4:").unwrap();
+        assert!(
+            !i2c4
+                .device_io_control(i2c_bus::IOCTL_I2C_WRITE_READ, &[0x10, 0x55], 1)
+                .success
+        );
     }
 
     #[test]

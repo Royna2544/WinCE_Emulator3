@@ -65,7 +65,14 @@ enum RemoteTouchTargeting {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RemoteInputDrain {
     posted: usize,
+    target_thread_ids: Vec<u32>,
     detail: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RemoteServerControlDrain {
+    pub handled: usize,
+    pub target_thread_ids: Vec<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -956,6 +963,38 @@ impl CeKernel {
             .collect();
         modules.sort_by_key(|module| module.load_order);
         modules
+    }
+
+    pub fn loaded_modules_for_process_detach(&self) -> Vec<LoadedModule> {
+        let mut modules: Vec<LoadedModule> = self
+            .loaded_modules
+            .values()
+            .filter(|loaded| {
+                !loaded.unload_pending
+                    && loaded.ref_count != 0
+                    && (loaded.load_flags & NO_IMPORT_LOAD_FLAGS) == 0
+            })
+            .cloned()
+            .collect();
+        modules.sort_by_key(|module| module.load_order);
+        modules
+    }
+
+    pub fn release_process_detach_loaded_modules(&mut self) -> usize {
+        let modules = self.loaded_modules_for_process_detach();
+        let mut released = 0usize;
+        for module in modules {
+            for _ in 0..module.ref_count {
+                match self.release_loaded_module(module.base) {
+                    FreeLibraryResult::StillReferenced { .. }
+                    | FreeLibraryResult::UnloadPending => {
+                        released += 1;
+                    }
+                    FreeLibraryResult::Pinned | FreeLibraryResult::InvalidHandle => {}
+                }
+            }
+        }
+        released
     }
 
     pub fn font_families(&self) -> &[CeFontFamily] {
@@ -4475,9 +4514,53 @@ impl CeKernel {
     }
 
     fn post_gwe_message(&mut self, thread_id: u32, message: Message) {
+        let button_click = if message.msg == crate::ce::gwe::WM_LBUTTONUP
+            && self.gwe.is_push_button(message.hwnd)
+        {
+            self.gwe.get_parent(message.hwnd).and_then(|parent| {
+                self.gwe.get_dlg_ctrl_id(message.hwnd).map(|id| {
+                    let command = id & 0xffff;
+                    let time_ms = message.time_ms;
+                    (
+                        parent,
+                        Message::new(
+                            parent,
+                            crate::ce::gwe::WM_COMMAND,
+                            command,
+                            message.hwnd,
+                            time_ms,
+                        ),
+                    )
+                })
+            })
+        } else {
+            None
+        };
         let trace_message = message.clone();
         self.gwe.post_message(thread_id, message);
         self.record_message_op("post_message", thread_id, &trace_message, Some(1), None);
+        if let Some((parent, command_message)) = button_click {
+            let trace_message = command_message.clone();
+            let parent_thread_id = self
+                .gwe
+                .window_thread_process_id(parent)
+                .map(|(thread_id, _)| thread_id);
+            if self
+                .gwe
+                .queue_sent_message_for_window(parent, command_message)
+            {
+                self.record_message_op(
+                    "button_click",
+                    thread_id,
+                    &trace_message,
+                    Some(1),
+                    Some("BN_CLICKED".to_owned()),
+                );
+                if let Some(parent_thread_id) = parent_thread_id {
+                    self.queue_message_wake_candidates(parent_thread_id);
+                }
+            }
+        }
         self.queue_message_wake_candidates(thread_id);
     }
 
@@ -4581,12 +4664,19 @@ impl CeKernel {
     }
 
     pub fn drain_remote_server_control_messages(&mut self) -> usize {
+        self.drain_remote_server_control_messages_with_targets()
+            .handled
+    }
+
+    pub fn drain_remote_server_control_messages_with_targets(
+        &mut self,
+    ) -> RemoteServerControlDrain {
         let Some(server) = self.remote_server.clone() else {
-            return 0;
+            return RemoteServerControlDrain::default();
         };
         let messages = server.drain_control_messages();
         if messages.is_empty() {
-            return 0;
+            return RemoteServerControlDrain::default();
         }
         let mut applied = 0;
         let touch_before = self.remote.touch_event_count();
@@ -4611,7 +4701,10 @@ impl CeKernel {
             );
         }
         self.publish_remote_server_status();
-        applied
+        RemoteServerControlDrain {
+            handled: applied + drain.posted,
+            target_thread_ids: drain.target_thread_ids,
+        }
     }
 
     pub fn drain_remote_server_control_messages_to_thread_window(
@@ -4619,12 +4712,21 @@ impl CeKernel {
         thread_id: u32,
         hwnd: Option<u32>,
     ) -> usize {
+        self.drain_remote_server_control_messages_to_thread_window_with_targets(thread_id, hwnd)
+            .handled
+    }
+
+    pub fn drain_remote_server_control_messages_to_thread_window_with_targets(
+        &mut self,
+        thread_id: u32,
+        hwnd: Option<u32>,
+    ) -> RemoteServerControlDrain {
         let Some(server) = self.remote_server.clone() else {
-            return 0;
+            return RemoteServerControlDrain::default();
         };
         let messages = server.drain_control_messages();
         if messages.is_empty() {
-            return 0;
+            return RemoteServerControlDrain::default();
         }
         let mut applied = 0;
         let touch_before = self.remote.touch_event_count();
@@ -4651,9 +4753,11 @@ impl CeKernel {
                 ),
             );
         }
-        applied += drain.posted;
         self.publish_remote_server_status();
-        applied
+        RemoteServerControlDrain {
+            handled: applied + drain.posted,
+            target_thread_ids: drain.target_thread_ids,
+        }
     }
 
     pub fn dispatch_remote_control_message(
@@ -4699,6 +4803,7 @@ impl CeKernel {
             .unwrap_or(0);
         let mut posted = 0;
         let mut details = Vec::new();
+        let mut target_thread_ids = Vec::new();
 
         for event in touch_events {
             let time_ms = remote_event_time_ms(base_time_ms, first_input_ms, event.enqueued_at_ms);
@@ -4782,6 +4887,9 @@ impl CeKernel {
                 )
                 .with_mouse_pos(make_lparam(point.x, point.y)),
             );
+            if !target_thread_ids.contains(&target_thread_id) {
+                target_thread_ids.push(target_thread_id);
+            }
             details.push(format!(
                 "touch:hwnd=0x{target:08x}/thread={target_thread_id}/msg=0x{:04x}/client={},{} /screen={},{}",
                 event.message, client.x, client.y, point.x, point.y
@@ -4837,6 +4945,9 @@ impl CeKernel {
                 Message::new(key_target, event.message, event.vk, 1, time_ms)
                     .with_source(crate::ce::gwe::MSGSRC_HARDWARE_KEYBOARD),
             );
+            if !target_thread_ids.contains(&thread_id) {
+                target_thread_ids.push(thread_id);
+            }
             details.push(format!(
                 "key:hwnd=0x{key_target:08x}/thread={thread_id}/msg=0x{:04x}/vk=0x{:02x}",
                 event.message, event.vk
@@ -4858,6 +4969,7 @@ impl CeKernel {
 
         RemoteInputDrain {
             posted,
+            target_thread_ids,
             detail: if details.is_empty() {
                 "none".to_owned()
             } else {
@@ -4906,12 +5018,14 @@ impl CeKernel {
         let Some(hwnd) = hwnd else {
             return RemoteInputDrain {
                 posted: 0,
+                target_thread_ids: Vec::new(),
                 detail: "no active window".to_owned(),
             };
         };
         let Some((thread_id, _process_id)) = self.gwe.window_thread_process_id(hwnd) else {
             return RemoteInputDrain {
                 posted: 0,
+                target_thread_ids: Vec::new(),
                 detail: format!("no thread for active hwnd=0x{hwnd:08x}"),
             };
         };
@@ -5634,7 +5748,7 @@ mod tests {
 
     #[test]
     fn loaded_module_export_snapshots_skip_unload_pending_modules() -> Result<()> {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let config = RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let mut exports_by_name = BTreeMap::new();
         exports_by_name.insert("NamedExport".to_owned(), 0x1000_1234);
@@ -5672,7 +5786,7 @@ mod tests {
 
     #[test]
     fn destroy_cleanup_clears_dead_active_without_posting_inactive_app_window() -> Result<()> {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let config = RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let thread_id = 1;
         let parent = kernel.create_window_ex_w(thread_id, "TOP", "", None, 0, 0, 0);
@@ -5699,7 +5813,7 @@ mod tests {
 
     #[test]
     fn remote_input_active_window_drain_posts_mouse_messages() -> Result<()> {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let config = RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let thread_id = 1;
         let hwnd = kernel.create_window_ex_w_with_rect(
@@ -5748,7 +5862,7 @@ mod tests {
 
     #[test]
     fn remote_input_blocked_thread_target_overrides_stale_active_window() -> Result<()> {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let config = RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let active_thread_id = 1;
         let blocked_thread_id = 2;
@@ -5792,7 +5906,7 @@ mod tests {
 
     #[test]
     fn remote_input_any_blocked_thread_uses_desktop_hit_test_owner() -> Result<()> {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let config = RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let visible_thread_id = 1;
         let helper_thread_id = 2;
@@ -5867,7 +5981,7 @@ mod tests {
 
     #[test]
     fn remote_input_active_window_uses_desktop_hit_test_over_hidden_active_window() -> Result<()> {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let config = RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         let visible_thread_id = 1;
         let hidden_thread_id = 2;
@@ -5939,7 +6053,7 @@ mod tests {
 
     #[test]
     fn terminate_current_process_destroys_owned_windows() -> Result<()> {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let config = RuntimeConfig::load_default()?;
         let mut kernel = CeKernel::boot(config);
         kernel.set_current_process_id(77);
         let parent = kernel.create_window_ex_w(1, "PARENT", "", None, 0, 0, 0);

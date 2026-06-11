@@ -52,7 +52,7 @@ use support::unique_test_root;
 
 #[test]
 fn boots_and_smokes_basic_ce_subsystems() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
 
     let ident_key = kernel
@@ -130,7 +130,7 @@ fn boots_and_smokes_basic_ce_subsystems() -> Result<()> {
 
 #[test]
 fn com_subsystem_tracks_apartments_and_registered_class_creation() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
 
     assert_eq!(kernel.com.co_initialize_ex(17, 0), S_OK);
@@ -180,7 +180,7 @@ fn memory_map_finds_containing_region() -> Result<()> {
 
 #[test]
 fn wait_for_multiple_validates_all_handles_before_acquiring() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let thread_id = 7;
 
@@ -215,7 +215,7 @@ fn wait_for_multiple_validates_all_handles_before_acquiring() -> Result<()> {
 
 #[test]
 fn suspend_resume_thread_counts_follow_ce_cap() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let (thread, _thread_id) = kernel.create_guest_thread(0x1000, 0x2000, false);
 
@@ -253,7 +253,7 @@ fn suspend_resume_thread_counts_follow_ce_cap() -> Result<()> {
 
 #[test]
 fn current_thread_pseudo_handle_updates_priority_and_suspend_state() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let main_thread_id = 1;
 
@@ -306,7 +306,7 @@ fn current_thread_pseudo_handle_updates_priority_and_suspend_state() -> Result<(
 
 #[test]
 fn current_process_pseudo_handle_is_waitable_after_terminate() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let thread_id = 7;
 
@@ -337,7 +337,7 @@ fn current_process_pseudo_handle_is_waitable_after_terminate() -> Result<()> {
 
 #[test]
 fn child_current_process_exit_state_does_not_signal_parent_pseudo_handle() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let parent_thread_id = 1;
     let launch = kernel.queue_process_launch(Some("child.exe".to_owned()), None);
@@ -378,7 +378,7 @@ fn child_current_process_exit_state_does_not_signal_parent_pseudo_handle() -> Re
 fn parent_exits_and_child_window_pump_stays_alive() -> Result<()> {
     use wince_emulation_v3::ce::kernel::STILL_ACTIVE;
 
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
 
     let parent_thread_id: u32 = 1;
@@ -435,7 +435,7 @@ fn parent_exits_and_child_window_pump_stays_alive() -> Result<()> {
 
 #[test]
 fn mutex_waits_track_recursive_owner_lock_count() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mutex = kernel.create_mutex_w(Some("recursive-mx".to_owned()), None);
 
@@ -467,7 +467,7 @@ fn mutex_waits_track_recursive_owner_lock_count() -> Result<()> {
 
 #[test]
 fn mutex_recursive_wait_fails_at_ce_max_lock_count() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mutex = kernel.create_mutex_w(None, Some(7));
     let KernelObject::Mutex(state) = kernel.handles.get_mut(mutex)? else {
@@ -483,7 +483,7 @@ fn mutex_recursive_wait_fails_at_ce_max_lock_count() -> Result<()> {
 
 #[test]
 fn object_transitions_queue_scheduler_wait_candidates() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
 
     let event = kernel.create_event_w(Some("wake_event".to_owned()), false, false);
@@ -573,7 +573,7 @@ fn object_transitions_queue_scheduler_wait_candidates() -> Result<()> {
 
 #[test]
 fn pulse_event_releases_registered_waiter_after_reset() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
 
     let event = kernel.create_event_w(Some("pulse_event".to_owned()), false, false);
@@ -608,7 +608,7 @@ fn pulse_event_releases_registered_waiter_after_reset() -> Result<()> {
 
 #[test]
 fn thread_and_process_exit_queue_scheduler_wait_candidates() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
 
     let (thread_handle, _) = kernel.create_guest_thread(0x1000, 0, false);
@@ -719,7 +719,7 @@ fn thread_and_process_exit_queue_scheduler_wait_candidates() -> Result<()> {
 
 #[test]
 fn message_and_timer_transitions_queue_scheduler_msg_wait_candidates() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
 
     let select_ready = |kernel: &CeKernel, active_thread_id: u32, now_ms: u32| {
@@ -873,7 +873,7 @@ fn message_and_timer_transitions_queue_scheduler_msg_wait_candidates() -> Result
 
 #[test]
 fn window_timers_with_same_id_keep_independent_owners() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
 
     let hwnd_a = kernel.gwe.create_window(61, "TimerA", "a");
@@ -897,7 +897,7 @@ fn window_timers_with_same_id_keep_independent_owners() -> Result<()> {
 
 #[test]
 fn kernel_timer_messages_coalesce_while_pending() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
 
     let hwnd = kernel.gwe.create_window(61, "TimerCoalesce", "timer");
@@ -933,7 +933,7 @@ fn kernel_timer_messages_coalesce_while_pending() -> Result<()> {
 
 #[test]
 fn destroy_window_removes_hwnd_timers_but_keeps_thread_timers() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
 
     let hwnd = kernel.gwe.create_window(63, "TimerDestroy", "timer");
@@ -953,7 +953,7 @@ fn destroy_window_removes_hwnd_timers_but_keeps_thread_timers() -> Result<()> {
 
 #[test]
 fn destroy_owner_removes_owned_popup_timers() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
 
     let owner = kernel
@@ -999,7 +999,7 @@ fn destroy_owner_removes_owned_popup_timers() -> Result<()> {
 
 #[test]
 fn send_message_transitions_queue_scheduler_reply_wait_candidates() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
 
     let select_send_wait =
@@ -1131,7 +1131,7 @@ fn send_message_transitions_queue_scheduler_reply_wait_candidates() -> Result<()
 
 #[test]
 fn reply_message_wakes_sender_waiter_before_receiver_dispatch_returns() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
 
     let sender_thread = 66;
@@ -1192,7 +1192,7 @@ fn reply_message_wakes_sender_waiter_before_receiver_dispatch_returns() -> Resul
 
 #[test]
 fn get_message_waiter_uses_filtered_scheduler_message_readiness() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let thread_id = 46;
     let hwnd = kernel
@@ -1258,7 +1258,7 @@ fn get_message_waiter_uses_filtered_scheduler_message_readiness() -> Result<()> 
 
 #[test]
 fn remote_serial_injection_queues_scheduler_serial_read_candidates() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let com = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
     assert!(kernel.is_serial_device_handle(com));
@@ -1337,7 +1337,7 @@ fn remote_serial_injection_queues_scheduler_serial_read_candidates() -> Result<(
 fn remote_serial_injection_queues_scheduler_comm_event_candidates() -> Result<()> {
     const EV_RXCHAR: u32 = 0x0001;
 
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let com = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
     kernel.set_comm_mask(com, EV_RXCHAR)?;
@@ -1415,7 +1415,7 @@ fn remote_serial_injection_queues_scheduler_comm_event_candidates() -> Result<()
 fn set_comm_mask_wakes_pending_comm_event_with_zero_event() -> Result<()> {
     const EV_RXCHAR: u32 = 0x0001;
 
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let com = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
     let comm_wait = kernel.register_blocked_waiter(
@@ -1451,7 +1451,7 @@ fn set_comm_mask_wakes_pending_comm_event_with_zero_event() -> Result<()> {
 
 #[test]
 fn serial_comm_timeouts_control_empty_read_parking() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let com = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
 
@@ -1483,7 +1483,7 @@ fn serial_comm_timeouts_control_empty_read_parking() -> Result<()> {
 
 #[test]
 fn serial_comm_state_mask_and_purge_are_handle_state() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let com = kernel.create_file_w("COM7:", GENERIC_READ | GENERIC_WRITE, CREATE_ALWAYS)?;
 
@@ -1528,7 +1528,7 @@ fn virtual_win32_api_smoke_covers_file_device_sync_gwe_and_audio() -> Result<()>
     let root = unique_test_root("virtual_win32_api_smoke");
     fs::create_dir_all(&root).unwrap();
 
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     kernel.set_file_root(&root);
 
@@ -1650,7 +1650,7 @@ fn virtual_win32_api_smoke_covers_file_device_sync_gwe_and_audio() -> Result<()>
 
 #[test]
 fn remote_server_api_state_queues_input_serial_audio_and_status() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     kernel.remote.set_framebuffer_size(800, 480);
 
@@ -1754,7 +1754,7 @@ fn remote_server_api_state_queues_input_serial_audio_and_status() -> Result<()> 
 
 #[test]
 fn blocked_get_message_wait_wakes_when_remote_input_is_drained() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     kernel.remote.set_framebuffer_size(800, 480);
 
@@ -1821,7 +1821,7 @@ fn blocked_get_message_wait_wakes_when_remote_input_is_drained() -> Result<()> {
 
 #[test]
 fn resumed_get_message_take_records_trace_and_clears_timer_pending() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let thread_id = 74;
     let hwnd = kernel.create_window_ex_w(thread_id, "RESUME_TIMER", "", None, 0, 0, 0);
@@ -1858,7 +1858,7 @@ fn resumed_get_message_take_records_trace_and_clears_timer_pending() -> Result<(
 
 #[test]
 fn public_message_entrypoints_record_durable_gwe_trace() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let window_thread = 51;
     let sender_thread = 52;
@@ -1933,7 +1933,7 @@ fn public_message_entrypoints_record_durable_gwe_trace() -> Result<()> {
 
 #[test]
 fn get_message_drains_remote_touch_to_active_window() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     kernel.remote.set_framebuffer_size(800, 480);
 
@@ -1966,7 +1966,7 @@ fn get_message_drains_remote_touch_to_active_window() -> Result<()> {
 
 #[test]
 fn get_message_hit_tests_remote_touch_to_visible_child() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     kernel.remote.set_framebuffer_size(800, 480);
 
@@ -2569,7 +2569,7 @@ fn handle_table_describe_handle_formats_event_mutex_semaphore_and_invalid() {
 
 #[test]
 fn crt_rand_produces_deterministic_lcg_sequence_and_srand_reseeds() {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+    let config = RuntimeConfig::load_default().unwrap();
     let mut kernel = CeKernel::boot(config);
 
     // Default seed is 1; record first two values.
@@ -2610,7 +2610,7 @@ fn release_semaphore_rejects_non_positive_count_and_overflow_above_maximum() {
 
 #[test]
 fn crt_strtok_next_returns_zero_by_default_and_removing_with_null_ptr() {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+    let config = RuntimeConfig::load_default().unwrap();
     let mut kernel = CeKernel::boot(config);
 
     let tid = 77_u32;
@@ -2634,7 +2634,7 @@ fn crt_strtok_next_returns_zero_by_default_and_removing_with_null_ptr() {
 
 #[test]
 fn register_and_release_loaded_module_follows_pinned_dynamic_and_ref_count_paths() {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+    let config = RuntimeConfig::load_default().unwrap();
     let mut kernel = CeKernel::boot(config);
 
     // Register a pinned (dynamic=false) module.
@@ -2761,7 +2761,7 @@ fn resolve_loaded_module_proc_by_name_and_ordinal() {
     use std::collections::BTreeMap;
     use wince_emulation_v3::ce::kernel::LoadedModuleMetadata;
 
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+    let config = RuntimeConfig::load_default().unwrap();
     let mut kernel = CeKernel::boot(config);
 
     let mut by_name: BTreeMap<String, u32> = BTreeMap::new();
@@ -2822,7 +2822,7 @@ fn registry_has_key_set_value_enum_subkeys_and_query_info() {
         ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HKEY_LOCAL_MACHINE, RegistryValue,
     };
 
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+    let config = RuntimeConfig::load_default().unwrap();
     let mut kernel = CeKernel::boot(config);
 
     // Programmatic helpers use full paths including the hklm root prefix.
@@ -2901,7 +2901,7 @@ fn ce_sleep_request_boundary_cases_and_timer_performance_counter() {
     );
 
     // performance_frequency is always 1_000 (millisecond resolution).
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+    let config = RuntimeConfig::load_default().unwrap();
     let mut kernel = CeKernel::boot(config);
     assert_eq!(kernel.timers.performance_frequency(), 1_000);
 
@@ -2914,7 +2914,7 @@ fn ce_sleep_request_boundary_cases_and_timer_performance_counter() {
 
 #[test]
 fn com_initialize_rejects_apartment_mode_change_and_create_instance_validates_pointers() {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+    let config = RuntimeConfig::load_default().unwrap();
     let mut kernel = CeKernel::boot(config);
     let tid = 5_u32;
 
@@ -2938,7 +2938,7 @@ fn com_initialize_rejects_apartment_mode_change_and_create_instance_validates_po
 
 #[test]
 fn gwe_caret_blink_time_zero_rejected_and_advance_without_caret_returns_false() {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+    let config = RuntimeConfig::load_default().unwrap();
     let mut kernel = CeKernel::boot(config);
 
     // set_caret_blink_time(0) → false; time unchanged.
@@ -2962,7 +2962,7 @@ fn gwe_caret_blink_time_zero_rejected_and_advance_without_caret_returns_false() 
 
 #[test]
 fn gwe_find_window_matches_by_class_and_title_and_resolve_class_name_normalizes() {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+    let config = RuntimeConfig::load_default().unwrap();
     let mut kernel = CeKernel::boot(config);
 
     let tid = 1_u32;
@@ -2999,7 +2999,7 @@ fn gwe_find_window_matches_by_class_and_title_and_resolve_class_name_normalizes(
 
 #[test]
 fn gwe_keyboard_layout_ime_and_activate_layout() {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+    let config = RuntimeConfig::load_default().unwrap();
     let mut kernel = CeKernel::boot(config);
 
     // keyboard_layout() and keyboard_layout_list() are consistent.
@@ -3762,7 +3762,7 @@ fn thread_system_allocate_id_set_last_error_and_tls_call_alloc_free() {
 
 #[test]
 fn kernel_runtime_loader_stats_and_process_metadata_getters_setters() {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+    let config = RuntimeConfig::load_default().unwrap();
     let mut kernel = CeKernel::boot(config);
 
     // All stats start at zero.
@@ -4596,7 +4596,7 @@ fn kernel_crt_rand_strtok_process_state_pseudo_handles_and_process_launch() -> R
         CurrentProcessState, FileTraceRecord,
     };
 
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
 
     // is_current_thread_pseudo_handle / is_current_process_pseudo_handle.
@@ -5006,7 +5006,7 @@ fn framebuffer_pixel_format_bytes_per_pixel_and_rect_operations() {
 fn scheduler_stats_record_wait_attempt_blocked_yield_and_wake() {
     use wince_emulation_v3::ce::scheduler::{SchedulerWaitKind, SchedulerWakeReason};
 
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+    let config = RuntimeConfig::load_default().unwrap();
     let mut kernel = CeKernel::boot(config);
 
     // All stat counters start at zero.
@@ -5743,7 +5743,7 @@ fn kernel_mount_guest_root_host_path_file_io_stats_and_map_window_points() {
     use wince_emulation_v3::ce::gwe::{Gwe, Point};
 
     // file_io_stats starts at zero.
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+    let config = RuntimeConfig::load_default().unwrap();
     let kernel = CeKernel::boot(config);
     let stats = kernel.file_io_stats();
     assert_eq!(stats.host_file_open_count, 0);
@@ -5754,7 +5754,7 @@ fn kernel_mount_guest_root_host_path_file_io_stats_and_map_window_points() {
     assert!(kernel.recent_event_ops().is_empty());
 
     // mount_guest_root / host_path_for_guest / host_path_to_guest_mount.
-    let config2 = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+    let config2 = RuntimeConfig::load_default().unwrap();
     let mut kernel = CeKernel::boot(config2);
     let host_root = std::path::PathBuf::from(".");
     kernel.mount_guest_root("\\Storage Card", host_root.clone());
@@ -8698,7 +8698,7 @@ fn filesystem_disk_space_volume_info_object_store_and_file_ops() -> Result<()> {
     let root = unique_test_root("filesystem_disk_space_volume_info");
     fs::create_dir_all(&root).unwrap();
 
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     kernel.set_file_root(&root);
 
@@ -8837,7 +8837,7 @@ fn kernel_loaded_module_snapshots_gwe_stats_recent_file_open_ops_lifecycle_trace
  {
     use wince_emulation_v3::ce::gwe::GweStats;
 
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+    let config = RuntimeConfig::load_default().unwrap();
     let mut kernel = CeKernel::boot(config);
 
     // loaded_module_snapshots: no modules loaded → empty.
@@ -8931,7 +8931,7 @@ fn kernel_file_pointer_size_position_flush_find_first_next_close_and_change_noti
     // Also create a subdir for the find test.
     fs::create_dir_all(root.join("ResidentFlash")).unwrap();
 
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     kernel.set_file_root(&root);
 
@@ -9055,7 +9055,7 @@ fn kernel_scheduler_stat_recording_winsock_wake_thread_has_sent_message_describe
     use wince_emulation_v3::ce::scheduler::{SchedulerBlockedWaitKind, SchedulerWinsockReadyKind};
     use wince_emulation_v3::ce::timer::{INFINITE, WAIT_FAILED, WAIT_OBJECT_0};
 
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+    let config = RuntimeConfig::load_default().unwrap();
     let mut kernel = CeKernel::boot(config);
     let thread_id = 42u32;
 
@@ -9351,7 +9351,7 @@ fn kernel_post_shell_notify_icon_and_notification_callbacks_expire() {
         NIF_MESSAGE, NotifyIconData, NotifyIconOp, SHNP_ICONIC, ShellNotificationData,
     };
 
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+    let config = RuntimeConfig::load_default().unwrap();
     let mut kernel = CeKernel::boot(config);
     let thread_id = 55u32;
 
@@ -9510,7 +9510,7 @@ fn kernel_post_shell_notify_icon_and_notification_callbacks_expire() {
 fn kernel_get_message_peek_message_erase_background_update_window() {
     use wince_emulation_v3::ce::gwe::{PeekFlags, WM_USER, WS_VISIBLE};
 
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+    let config = RuntimeConfig::load_default().unwrap();
     let mut kernel = CeKernel::boot(config);
     let thread_id = 77u32;
 
@@ -9795,7 +9795,7 @@ fn gwe_validate_window_rect_and_kernel_send_message_w_and_remote_free_functions(
     assert!(!gwe.validate_window_rect(0xDEAD_0000, None));
 
     // --- kernel.send_message_w: WM_USER to a known window ---
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+    let config = RuntimeConfig::load_default().unwrap();
     let mut kernel = CeKernel::boot(config);
     let tid = 88u32;
     let win = kernel.create_window_ex_w(tid, "Button", "Btn", None, 0, WS_VISIBLE, 0);
@@ -10154,7 +10154,7 @@ fn unmount_guest_root_signals_change_notification_handles_watching_subpaths() ->
     // CE FSDMGR behavior: unmounting a volume signals ALL FindFirstChangeNotificationW handles
     // whose watch path is under the removed volume, regardless of their specific notify_filter.
     const FILE_NOTIFY_CHANGE_CEGETINFO: u32 = 0x8000_0000;
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
 
     // Set up a host directory with a subdirectory so both watch paths are valid directories.

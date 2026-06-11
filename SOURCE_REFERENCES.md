@@ -74,6 +74,24 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     CE `int_LoadLibraryExW` rejects non-null `hFile` with
     `ERROR_INVALID_PARAMETER`, which v3 now applies in raw and runtime
     `LoadLibraryExW` dispatch.
+    CE `CORE\DLL\loader.cpp` also implements `DisableThreadLibraryCalls` by
+    setting `MF_NO_THREAD_CALLS` on the resolved module, and its
+    `ThreadNotifyDLLs` loop calls loaded DLL entrypoints for
+    `DLL_THREAD_ATTACH`/`DLL_THREAD_DETACH` only when modules are imported,
+    not loading, and not marked no-thread-calls. v3 now persists that
+    loaded-module flag in raw coredll dispatch and uses it, together with
+    no-import/datafile flags and load order, when Unicorn handles
+    `ThreadAttachAllDLLs` and `ThreadDetachAllDLLs`.
+    The same file's `ProcessDetach` loop drains loaded DLL refcounts by the
+    current minimum positive refcount while walking load order and calls
+    `DllMain(DLL_PROCESS_DETACH)` only when an imported module reaches zero;
+    this keeps dependent modules detached before their higher-ref dependencies.
+    v3 now uses that ordering for runtime `ProcessDetachAllDLLs` and releases
+    the included per-process module refs after the guest lifecycle callouts
+    complete, while still excluding no-import/datafile modules. Raw
+    `ProcessDetachAllDLLs` cannot enter guest code, but it now uses the same
+    imported-module eligibility to drain loaded-module refs and leaves
+    no-import/datafile modules visible.
     `LoadLibraryExW(DONT_RESOLVE_DLL_REFERENCES)` now maps/reuses the runtime
     DLL and publishes ordinary exports without recursive dependency loading,
     import patching, TLS callbacks, `DllMain`, or detach callouts on final
@@ -96,7 +114,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
 
 - CE loader lifecycle anchors:
   `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\loader.c` and
-  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\thread.c`
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\NK\KERNEL\thread.c`;
+  user-mode thread notification behavior is anchored in
+  `C:\WINCE600\PRIVATE\WINCEOS\COREOS\CORE\DLL\loader.cpp`
   - `NKFreeLibrary` routes final unload through the module unlock/unload path
     with `fCallDllMain`; process/thread exit paths notify
     `DLL_PROCESS_DETACH` through `NKPSLNotify`. v3's runtime Unicorn import
@@ -821,7 +841,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `resource.cpp` `KernExtractIcons` loads the module as datafile, resolves
     `RT_GROUP_ICON` with `MAKEINTRESOURCE(nIconIndex)`, lets a callback choose
     large/small group-directory indices, then extracts the referenced
-    `RT_ICON` resources.
+    `RT_ICON` resources. Raw `KernExtractIcons` now follows that integer
+    group-resource lookup and copies selected `RT_ICON` payload bytes into
+    guest heap outputs; the non-Unicorn raw path uses the default `{0, 1}`
+    group-entry selection because it cannot execute the CE callback.
     Missing paths fail with `ERROR_FILE_NOT_FOUND`; broader PE format variants
     and non-PE fallback edges remain queued.
   - `shellapi.h` defines `SHELLEXECUTEINFO`, `SEE_MASK_NOCLOSEPROCESS`,
@@ -1697,7 +1720,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     define CE/MFC message, class, HWND, HDC, or GDI semantics.
 
 - GDI DIB/color-table surface:
-  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h`
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h` and
+  `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\da.cpp`
   - CE exposes `CreateDIBSection`, `GetDIBColorTable`, `SetDIBColorTable`,
     `RGBQUAD`, `BITMAPINFOHEADER`, `BITMAPINFO`, `DIB_RGB_COLORS`, and indexed
     DIB color-table conventions through the public GDI header.
@@ -1715,17 +1739,96 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     indexed `StretchDIBits`/`SetDIBitsToDevice` sources use their embedded
     palette. Remaining indexed-DIB work is broader palette/device-color
     behavior as trace evidence reaches it.
+  - CE `draw.cpp::passNull2Draw(EBitBlt)` and
+    `draw.cpp::passNull2Draw(EStretchBlt)` expect null/bad destination and
+    source DCs to fail with `ERROR_INVALID_HANDLE`. The same cases reject
+    `MAKEROP4(PATCOPY, PATINVERT)` passed to `BitBlt`/`StretchBlt` with
+    `ERROR_INVALID_PARAMETER`. Raw `BitBlt` and `StretchBlt` now enforce those
+    validation edges before rendering.
+  - CE `draw.cpp::gnvRop3Array`, `BitBltSuite`, `StretchBltSuite`, and
+    `TestAllRops` exercise common source/destination ROP3 operations including
+    `DSTINVERT`, `SRCINVERT`, `SRCCOPY`, `SRCPAINT`, and `SRCAND` for
+    `BitBlt` and `StretchBlt`. Raw blits now render those source/destination
+    operations for selected-DIB and framebuffer paths, while broader ROP3/ROP4
+    combinations remain future work.
+  - CE `draw.cpp::passNull2Draw(EMaskBlt)` expects `MaskBlt` to fail null/bad
+    destination DCs with `ERROR_INVALID_HANDLE`, fail null/bad source DCs with
+    `ERROR_INVALID_HANDLE`, reject bad mask handles with `ERROR_INVALID_HANDLE`,
+    and reject color masks or negative mask origins with
+    `ERROR_INVALID_PARAMETER`. `MaskBltBadMaskWidth` also rejects 1 bpp masks
+    whose origin/size cannot cover the requested blit rectangle, while
+    `MaskBltTest` uses `MAKEROP4(DSTCOPY, SRCCOPY)` with a 1 bpp mask. Raw
+    `MaskBlt` now implements those validation paths plus selected-DIB and
+    framebuffer masked copies for that CE source-backed ROP4 shape.
+  - CE `draw.cpp::passNull2Draw(EAlphaBlend)` expects `AlphaBlend` null/bad
+    destination and source DCs to fail with `ERROR_INVALID_HANDLE`.
+    `AlphaBlendRandomTest` expects CE to reject nonzero `BlendFlags`,
+    non-`AC_SRC_OVER` `BlendOp`, unsupported `AlphaFormat`, and
+    `AC_SRC_ALPHA` on non-32bpp sources with `ERROR_INVALID_PARAMETER`.
+    Raw `AlphaBlend` now validates those fields before rendering and keeps
+    source-constant-alpha selected-DIB blending covered.
+  - CE GDIAPI device-attribute tests expect `GetBkMode(NULL/bad hdc)` to
+    return `0` and `GetBkColor(NULL/bad hdc)` to return `CLR_INVALID`, both
+    with `ERROR_INVALID_HANDLE`, so raw `GetBkMode` and `GetBkColor` now report
+    those last-error states.
+  - The same `da.cpp` `PassNull2da` and `AlphaCheckGetSetColor` paths expect
+    `SetBkColor`/`GetBkColor` and `SetTextColor`/`GetTextColor` to return
+    `CLR_INVALID` with `ERROR_INVALID_HANDLE` for null and bad HDCs, while
+    valid `CLR_INVALID` color values round-trip through background/text color
+    state with `ERROR_INVALID_PARAMETER`.
+  - The `da.cpp` `PassNull2da`, `randSetStretchBltMode`,
+    `RandSetTextCharacterExtraTest`, and `GetSetLayoutModeTest` paths define
+    CE device-attribute sentinels: stretch mode APIs return `0` for invalid
+    HDCs and invalid modes, text-character-extra APIs return `0x80000000` for
+    invalid HDCs and `INT_MIN`, and layout APIs use `GDI_ERROR` only for
+    invalid HDCs while successful layout state remains a non-sentinel value.
+  - The same `PassNull2da` switch expects exported `SetViewportOrgEx` to return
+    `FALSE` and set `ERROR_INVALID_HANDLE` for null and bad HDCs. The local CE
+    export map currently exposes only `SetViewportOrgEx` from this origin/ext
+    API family, so the raw implementation now validates the HDC before applying
+    its existing no-op `(0,0)` viewport-origin behavior.
+  - `brush.cpp` `passBrushNULL(ESetBrushOrgEx)` expects `SetBrushOrgEx` to
+    return `FALSE` with `ERROR_INVALID_HANDLE` for null and bad HDCs, and
+    `SimpleSetBrushOrgExTest` expects valid calls to return the previous brush
+    origin through `lppt` while succeeding with a null output pointer.
+  - `dc.cpp` `PassNull` and `SaveRestoreDCPairs` expect `SaveDC`/`RestoreDC`
+    invalid HDCs to report `ERROR_INVALID_HANDLE`, `RestoreDC(hdc, 0)` to fail
+    with `ERROR_INVALID_PARAMETER`, `RestoreDC(hdc, -1)` to restore one saved
+    level at a time, and positive save levels to restore that absolute level
+    while discarding newer saved states.
 
 - GDI text/font query surface:
-  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h`
+  `C:\WINCE600\PUBLIC\COMMON\SDK\INC\wingdi.h` and
+  `C:\WINCE600\PRIVATE\TEST\GWES\GDI\GDIAPI\text.cpp`
   - Defines CE `LOGFONTW`, `TEXTMETRICW`, `ExtTextOutW`,
     `GetTextExtentExPointW`, `GetTextMetricsW`, `SetTextAlign`,
     `GetTextAlign`, and `GetTextColor`; `GetTextExtentPointW` is a macro over
     `GetTextExtentExPointW`.
   - Rust now copies selected `LOGFONTW` fields into font objects and returns
     deterministic selected-font metrics, extent/fitting arrays, face names,
-    text color, and text alignment at the raw COREDLL boundary. This is layout
-    query fidelity only; glyph rasterization remains a later GDI text step.
+    text color, and text alignment at the raw COREDLL boundary. CE GDIAPI
+    tests expect `GetTextFace(hdc, c, NULL)` to return the selected face-name
+    length including the terminating NUL and `GetTextFace(hdc, -1, buffer)` to
+    fail with `ERROR_INVALID_PARAMETER`, so raw `GetTextFaceW` now follows
+    those parameter edges. The same CE test matrix expects
+    `GetTextExtentExPoint` to fail with `ERROR_INVALID_PARAMETER` for a null
+    output `SIZE`, null input text with a positive count, and negative counts,
+    so raw `GetTextExtentExPointW` now follows those parameter edges.
+    `passNull2Text` expects `SetTextAlign` and `GetTextAlign` to return
+    `GDI_ERROR` with `ERROR_INVALID_HANDLE` for null and bad HDCs, so the raw
+    alignment APIs now validate the HDC before reading or mutating DC state.
+    `da.cpp::PassNull2da` expects `SetBkMode` and `GetBkMode` to return `0`
+    with `ERROR_INVALID_HANDLE` for null and bad HDCs, so the raw background
+    mode APIs now validate the HDC before reading or mutating DC state.
+    `text.cpp` manual and color-fill text paths call `SetBkMode(OPAQUE)` or
+    `SetBkMode(TRANSPARENT)` before `ExtTextOut`, so raw `ExtTextOutW` now
+    applies the selected DC background mode when rendering text cells: opaque
+    fills use `bk_color`, while transparent mode leaves non-glyph pixels
+    untouched. `passNull2Text` expects `ExtTextOut` null/bad HDCs to fail with
+    `ERROR_INVALID_HANDLE`, while null text with a positive count on a valid HDC
+    fails with `ERROR_INVALID_PARAMETER`, so raw `ExtTextOutW` validates the HDC
+    before checking the text pointer. Broader glyph rasterization remains a
+    later GDI text step.
 
 - MFC window layout behavior:
   `/mnt/c/Program Files (x86)/Microsoft Visual Studio 8/VC/ce/atlmfc/src/mfc/wincore.cpp`

@@ -955,7 +955,7 @@ mod tests {
         assert_eq!(trap.ordinal, None);
         assert_eq!(trap.name.as_deref(), Some("NotARealCeApi"));
 
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut memory = TestMemory;
         assert_eq!(
@@ -976,7 +976,7 @@ mod tests {
             iat_va: 0x4000,
         });
 
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut memory = TestMemory;
         assert_eq!(

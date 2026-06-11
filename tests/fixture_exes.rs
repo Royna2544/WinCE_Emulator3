@@ -27,7 +27,7 @@ mod fixtures {
     use wince_emulation_v3::{
         Error, Result,
         ce::{framebuffer::VirtualFramebuffer, kernel::CeKernel},
-        config::RuntimeConfig,
+        config::{DEFAULT_DEVICES_PATH, DEFAULT_REGISTRY_PATH, RuntimeConfig},
         emulator::unicorn::UnicornMips,
         pe::PeImage,
     };
@@ -618,8 +618,8 @@ mod fixtures {
         eprintln!("running fixture {}", fixture.name);
         let image = PeImage::inspect(&fixture.exe_path)?;
         let config = RuntimeConfig::load(
-            manifest_dir.join("regs.json"),
-            manifest_dir.join("serial_devices.json"),
+            manifest_dir.join(DEFAULT_REGISTRY_PATH),
+            manifest_dir.join(DEFAULT_DEVICES_PATH),
         )?;
         let mut kernel = CeKernel::boot(config);
         kernel.set_process_module_base(image.image_base());

@@ -2253,19 +2253,24 @@ impl ResourceSystem {
         stack.len() as i32
     }
 
-    /// Pop DC state from the save stack.  `level` is the 1-based save level
-    /// returned by `save_dc`, or 0 / negative to pop one level.
+    /// Pop DC state from the save stack. `level` is the 1-based save level
+    /// returned by `save_dc`, or a negative offset where -1 is the most recent
+    /// save level.
     /// Returns true on success.
     pub fn restore_dc(&mut self, hdc: u32, level: i32) -> bool {
-        if hdc == 0 {
+        if hdc == 0 || level == 0 {
             return false;
         }
         let stack = match self.dc_save_stacks.get_mut(&hdc) {
             Some(s) if !s.is_empty() => s,
             _ => return false,
         };
-        let target_len = if level <= 0 {
-            stack.len().saturating_sub((-level + 1) as usize)
+        let target_len = if level < 0 {
+            let relative = stack.len() as i32 + level;
+            if relative < 0 {
+                return false;
+            }
+            relative as usize
         } else {
             (level as usize).saturating_sub(1)
         };

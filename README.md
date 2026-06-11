@@ -6,8 +6,8 @@ SE G3 MIPS R4000 application.
 The current base focuses on reusable CE behavior rather than app-specific
 shortcuts:
 
-- registry loading from `regs.json`
-- CE-style registry API calls backed by `regs.json`
+- registry loading from the checked-in Windows `.reg` dump, `registry.reg`
+- CE-style registry API calls backed by `registry.reg`
 - Win32/CE-shaped kernel facade for file, device, sync, GWE, timer, and waveOut
   calls
 - virtual CE memory model for process/custom heaps, local allocation,

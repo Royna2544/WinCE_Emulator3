@@ -93,7 +93,7 @@ fn coredll_ordinal_lookup_covers_static_sdk_and_supplemental_layers() {
 
 #[test]
 fn cemath_evaluates_crt_and_mips_helper_calls() -> Result<()> {
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let kernel = CeKernel::boot(config);
 
     assert_eq!(
@@ -134,7 +134,7 @@ fn cemath_evaluates_crt_and_mips_helper_calls() -> Result<()> {
 #[test]
 fn coredll_raw_dispatch_routes_mips_soft_float_compare_helpers() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 1;
@@ -521,7 +521,7 @@ fn coredll_raw_dispatch_routes_mips_soft_float_compare_helpers() -> Result<()> {
 #[test]
 fn coredll_raw_dispatch_handles_iswctype_masks() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 1;
@@ -593,7 +593,7 @@ fn coredll_dispatcher_routes_ordinals_to_virtual_win32_framework() -> Result<()>
     let root = unique_test_root("coredll_dispatcher");
     fs::create_dir_all(&root).unwrap();
 
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     kernel.set_file_root(&root);
 
@@ -761,7 +761,7 @@ fn coredll_dispatcher_routes_ordinals_to_virtual_win32_framework() -> Result<()>
 #[test]
 fn coredll_raw_dispatch_routes_atof_as_double_return() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 1;
@@ -791,7 +791,7 @@ fn coredll_raw_dispatch_routes_atof_as_double_return() -> Result<()> {
 #[test]
 fn raw_stub_audit_keeps_import_trap_context() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
 
@@ -921,7 +921,7 @@ fn coredll_raw_dispatch_has_defined_path_for_every_parsed_ordinal() -> Result<()
 #[test]
 fn coredll_dispatcher_routes_cemath_ordinals() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
 
     assert!(matches!(

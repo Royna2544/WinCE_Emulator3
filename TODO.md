@@ -11,9 +11,17 @@ Regenerated on 2026-06-11 from current source and test coverage.
 - Extend file-change notification coverage across mount roots, rename sequences, and FSDMGR-style volume handle ownership.
 - Audit runtime loader behavior outside Unicorn so raw tests and runtime mapping behavior stay intentionally aligned.
 - Continue iNavi route-flow work from the current process/window/shell readiness point into destination search and map interaction.
+- Re-run the iNavi UI crawl on a host/remote launch after fixing the detached
+  remote-server listener lifetime; validate that the new target-thread wake path
+  lets top-right menu/search taps reach and advance the live iNavi UI.
+- Decode the SMB380/G-sensor initialization contract from actual dump code or a
+  real caller trace before adding accelerometer commands; do not use the
+  unverified `0xb100...` family as SMB380 evidence.
 
 ## Cleanup Queue
 
+- Keep registry fixtures and launch docs on `registry.reg`; only use
+  `regs.json` for explicit legacy-parser regression coverage.
 - Remove or use `IOCTL_NANDUUID_MICOM_RESET_STAGE` if it remains intentionally unused.
 - Decide whether no-feature `cargo test` is a supported build profile. If yes, audit feature-gated Unicorn references and add it to validation.
 - Keep `SOURCE_REFERENCES.md` tied to actual source behavior when implementing new slices.

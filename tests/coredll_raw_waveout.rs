@@ -26,7 +26,7 @@ use support::TestGuestMemory;
 #[test]
 fn coredll_raw_waveout_ordinals_use_unplugged_audio_adapter() -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut host_sink = HostAudioSink::named_unplugged("host-test", 4);
     host_sink.connect();
@@ -238,7 +238,7 @@ fn coredll_raw_waveout_function_callback_is_not_event_handle() -> Result<()> {
     const CALLBACK_FUNCTION: u32 = 0x0003_0000;
 
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut memory = TestGuestMemory::default();
     let thread_id = 12;
@@ -303,7 +303,7 @@ fn coredll_raw_waveout_function_callback_is_not_event_handle() -> Result<()> {
 fn coredll_raw_waveout_break_loop_message_get_dev_caps_get_error_text_get_id_reset_pitch()
 -> Result<()> {
     let table = CoredllExportTable::default();
-    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let config = RuntimeConfig::load_default()?;
     let mut kernel = CeKernel::boot(config);
     let mut host_sink = HostAudioSink::named_unplugged("host-test2", 4);
     host_sink.connect();

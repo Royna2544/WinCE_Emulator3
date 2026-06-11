@@ -225,7 +225,7 @@ mod tests {
 
     #[test]
     fn string_from_clsid_allocates_cotaskmem_wide_guid() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut memory = TestMemory::default();
         memory.write_seed(
@@ -260,7 +260,7 @@ mod tests {
 
     #[test]
     fn string_from_clsid_rejects_null_output_pointer() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut memory = TestMemory::default();
 
@@ -273,7 +273,7 @@ mod tests {
 
     #[test]
     fn clsid_from_string_parses_wide_guid_into_ce_layout() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let mut memory = TestMemory::default();
         let text = "{01234567-89ab-cdef-0123-456789abcdef}";

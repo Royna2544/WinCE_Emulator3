@@ -30,7 +30,9 @@ use wince_emulation_v3::{
         registry::{ERROR_SUCCESS, HKEY_LOCAL_MACHINE},
         scheduler::SchedulerBlockedWaitKind,
     },
-    config::RuntimeConfig,
+    config::{
+        DEFAULT_DEVICES_PATH, DEFAULT_MOUNT_CONFIG_PATH, DEFAULT_REGISTRY_PATH, RuntimeConfig,
+    },
     emulator::{
         cpu::{UnicornDebugSnapshot, UnicornMips, UnicornRunLimits, UnicornWindowSnapshot},
         dll_search::{emulator_provided_import_module, normalize_module_name, resolve_dll_path},
@@ -85,6 +87,12 @@ enum DesktopMode {
 struct BlockedRemoteInputTarget {
     thread_id: u32,
     hwnd: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RemoteEndpointDrain {
+    handled: usize,
+    target_thread_ids: Vec<u32>,
 }
 
 enum DesktopRuntime {
@@ -331,11 +339,24 @@ fn run_cpu_loop(
             reported_blocked_message_wait = false;
             continue;
         }
-        let blocked_remote_target = blocked_remote_input_target(cpu, kernel, args.desktop);
+        let blocked_remote_target = blocked_remote_input_target(cpu, kernel);
         let remote_drained =
             service_remote_endpoint(cpu, kernel, desktop, blocked_remote_target.as_ref());
-        if remote_drained != 0 {
+        if remote_drained.handled != 0 {
             reported_blocked_message_wait = false;
+            let current_cpu_targeted = cpu.contains_thread(&remote_drained.target_thread_ids);
+            if cpu.rotate_to_ready_parked_threads(kernel, &remote_drained.target_thread_ids) {
+                continue;
+            }
+            if cpu.rotate_to_ready_parked_wait(kernel) {
+                continue;
+            }
+            if !current_cpu_targeted
+                && cpu.has_runnable_parked_process(kernel)
+                && cpu.rotate_to_next_parked_process(kernel)
+            {
+                continue;
+            }
             continue;
         }
         let desktop_queued =
@@ -343,7 +364,7 @@ fn run_cpu_loop(
         if desktop_queued != 0 {
             reported_blocked_message_wait = false;
         }
-        if (remote_drained != 0 || desktop_queued != 0)
+        if (remote_drained.handled != 0 || desktop_queued != 0)
             && cpu.has_runnable_parked_process(kernel)
             && cpu.rotate_to_next_parked_process(kernel)
         {
@@ -358,7 +379,7 @@ fn run_cpu_loop(
             reported_blocked_message_wait = false;
             continue;
         }
-        if remote_drained == 0
+        if remote_drained.handled == 0
             && desktop_queued == 0
             && should_idle_host_message_pump(cpu, kernel, args.desktop)
         {
@@ -407,15 +428,21 @@ fn run_cpu_loop(
             reported_blocked_message_wait = false;
         }
         desktop.present()?;
-        let blocked_remote_target = blocked_remote_input_target(cpu, kernel, args.desktop);
+        let blocked_remote_target = blocked_remote_input_target(cpu, kernel);
         let remote_drained =
             service_remote_endpoint(cpu, kernel, desktop, blocked_remote_target.as_ref());
-        if remote_drained != 0 {
+        if remote_drained.handled != 0 {
             reported_blocked_message_wait = false;
+            let current_cpu_targeted = cpu.contains_thread(&remote_drained.target_thread_ids);
+            if cpu.rotate_to_ready_parked_threads(kernel, &remote_drained.target_thread_ids) {
+                continue;
+            }
             if cpu.rotate_to_ready_parked_wait(kernel) {
                 continue;
             }
-            if cpu.has_runnable_parked_process(kernel) && cpu.rotate_to_next_parked_process(kernel)
+            if !current_cpu_targeted
+                && cpu.has_runnable_parked_process(kernel)
+                && cpu.rotate_to_next_parked_process(kernel)
             {
                 continue;
             }
@@ -450,7 +477,7 @@ fn run_cpu_loop(
         }
         let snapshot_state = cpu.last_debug_snapshot().map(|snapshot| {
             (
-                snapshot.host_wall_clock_stop.is_some(),
+                snapshot_can_rotate_on_wall_stop(snapshot),
                 snapshot_has_blocked_get_message(snapshot),
                 snapshot_has_non_message_blocked_wait(snapshot),
             )
@@ -497,6 +524,11 @@ fn run_cpu_loop(
             if let Some(snapshot) = cpu.last_debug_snapshot() {
                 print_unicorn_stop(snapshot);
             }
+        }
+        if args.remote_server.is_some() {
+            reported_blocked_message_wait = false;
+            std::thread::sleep(Duration::from_millis(16));
+            continue;
         }
         break;
     }
@@ -569,7 +601,14 @@ fn should_idle_host_message_pump(
 }
 
 fn snapshot_has_blocked_get_message(snapshot: &UnicornDebugSnapshot) -> bool {
+    if snapshot.trap_address.is_some() {
+        return false;
+    }
     snapshot.blocked_get_message.is_some() || snapshot_has_saved_get_message_waiter(snapshot)
+}
+
+fn snapshot_can_rotate_on_wall_stop(snapshot: &UnicornDebugSnapshot) -> bool {
+    snapshot.host_wall_clock_stop.is_some() && snapshot.trap_address.is_none()
 }
 
 fn snapshot_has_saved_get_message_waiter(snapshot: &UnicornDebugSnapshot) -> bool {
@@ -801,14 +840,11 @@ impl Drop for CompanionProcesses {
 fn blocked_remote_input_target(
     cpu: &UnicornMips,
     kernel: &CeKernel,
-    desktop_mode: DesktopMode,
 ) -> Option<BlockedRemoteInputTarget> {
-    if desktop_mode != DesktopMode::Host {
-        return None;
-    }
     if let Some(blocked) = cpu
         .last_debug_snapshot()
         .and_then(|snapshot| snapshot.blocked_get_message.clone())
+        .filter(|blocked| blocked.hwnd.is_none_or(|hwnd| kernel.gwe.is_window(hwnd)))
     {
         return Some(BlockedRemoteInputTarget {
             thread_id: blocked.thread_id,
@@ -836,12 +872,14 @@ fn service_remote_endpoint(
     kernel: &mut CeKernel,
     desktop: &DesktopRuntime,
     blocked_get_message: Option<&BlockedRemoteInputTarget>,
-) -> usize {
+) -> RemoteEndpointDrain {
     let drained = if let Some(blocked) = blocked_get_message {
-        kernel
-            .drain_remote_server_control_messages_to_thread_window(blocked.thread_id, blocked.hwnd)
+        kernel.drain_remote_server_control_messages_to_thread_window_with_targets(
+            blocked.thread_id,
+            blocked.hwnd,
+        )
     } else {
-        kernel.drain_remote_server_control_messages()
+        kernel.drain_remote_server_control_messages_with_targets()
     };
     publish_remote_endpoint(
         kernel.remote_server.as_ref(),
@@ -850,7 +888,10 @@ fn service_remote_endpoint(
         desktop.framebuffer(),
         cpu.last_debug_snapshot(),
     );
-    drained
+    RemoteEndpointDrain {
+        handled: drained.handled,
+        target_thread_ids: drained.target_thread_ids,
+    }
 }
 
 fn publish_remote_endpoint(
@@ -913,7 +954,7 @@ fn enqueue_desktop_input_for_current_wait(
     desktop_mode: DesktopMode,
 ) -> Result<usize> {
     let blocked_get_message = if desktop_mode == DesktopMode::Host {
-        blocked_remote_input_target(cpu, kernel, desktop_mode)
+        blocked_remote_input_target(cpu, kernel)
     } else {
         None
     };
@@ -2224,8 +2265,8 @@ fn attach_host_audio(kernel: &mut CeKernel) -> String {
 
 impl Args {
     fn parse() -> Result<Self> {
-        let mut registry = PathBuf::from("regs.json");
-        let mut devices = PathBuf::from("serial_devices.json");
+        let mut registry = PathBuf::from(DEFAULT_REGISTRY_PATH);
+        let mut devices = PathBuf::from(DEFAULT_DEVICES_PATH);
         let mut image = None;
         let mut companion_images = Vec::new();
         let mut dll_search_dirs = Vec::new();
@@ -2488,7 +2529,7 @@ fn next_tap(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<(i32,
 
 fn print_help() {
     println!(
-        "Usage: wince_emulation_v3 [--registry regs.json] [--devices serial_devices.json] [--mount-config mounts.toml] [--image INavi.exe] [--companion-image MultiTBT.exe]... [--dll-search-dir DIR]... [--desktop virtual|host] [--remote-server [IP:PORT]] [--remote-bind IP] [--remote-port PORT] [--remote-token TOKEN] [--remote-video-fps N] [--remote-jpeg-quality N] [--remote-audio] [--remote-audio-sample-rate N] [--remote-audio-channels N] [--remote-audio-format s16le] [--framebuffer-dump OUT.ppm] [--tracefile KIND OUT.txt]... [--cpu-instruction-limit N] [--cpu-wall-clock-limit-ms N] [--cpu-stop-pc ADDR] [--tap X,Y]... [--run-cpu] [--monitor] [--verbose]"
+        "Usage: wince_emulation_v3 [--registry {DEFAULT_REGISTRY_PATH}] [--devices {DEFAULT_DEVICES_PATH}] [--mount-config {DEFAULT_MOUNT_CONFIG_PATH}] [--image INavi.exe] [--companion-image MultiTBT.exe]... [--dll-search-dir DIR]... [--desktop virtual|host] [--remote-server [IP:PORT]] [--remote-bind IP] [--remote-port PORT] [--remote-token TOKEN] [--remote-video-fps N] [--remote-jpeg-quality N] [--remote-audio] [--remote-audio-sample-rate N] [--remote-audio-channels N] [--remote-audio-format s16le] [--framebuffer-dump OUT.ppm] [--tracefile KIND OUT.txt]... [--cpu-instruction-limit N] [--cpu-wall-clock-limit-ms N] [--cpu-stop-pc ADDR] [--tap X,Y]... [--run-cpu] [--monitor] [--verbose]"
     );
 }
 
@@ -2634,7 +2675,7 @@ mod tests {
 
     #[test]
     fn maps_image_under_configured_mount_to_ce_mount_path() {
-        let mut config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut config = RuntimeConfig::load_default().unwrap();
         config
             .storage
             .mounts
@@ -2803,6 +2844,12 @@ mod tests {
         assert!(snapshot_has_blocked_get_message(&snapshot));
         assert!(!snapshot_has_non_message_blocked_wait(&snapshot));
         assert!(snapshot_is_idle_message_wait_only(&snapshot));
+
+        snapshot.trap_address = Some(0x7fff_2a00);
+        snapshot.trap_ordinal = Some(wince_emulation_v3::ce::coredll_ordinals::ORD_MESSAGE_BOX_W);
+        assert!(!snapshot_has_blocked_get_message(&snapshot));
+        assert!(!snapshot_is_idle_message_wait_only(&snapshot));
+        assert!(!snapshot_can_rotate_on_wall_stop(&snapshot));
     }
 
     #[test]
@@ -2840,8 +2887,7 @@ mod tests {
     #[test]
     fn saved_remote_input_target_uses_saved_get_message_waiter() {
         let mut kernel = CeKernel::boot(
-            RuntimeConfig::load("regs.json", "serial_devices.json")
-                .expect("runtime config loads for saved waiter test"),
+            RuntimeConfig::load_default().expect("runtime config loads for saved waiter test"),
         );
         kernel.register_blocked_waiter(
             7,
@@ -2868,12 +2914,12 @@ mod tests {
     #[test]
     fn companion_command_uses_shared_config_without_remote_or_nested_companions() {
         let args = Args {
-            registry: PathBuf::from("regs.json"),
-            devices: PathBuf::from("serial_devices.json"),
+            registry: PathBuf::from(DEFAULT_REGISTRY_PATH),
+            devices: PathBuf::from(DEFAULT_DEVICES_PATH),
             image: Some(PathBuf::from(r"D:\INAVI_Emulator\INAVI\INavi\iNavi.exe")),
             companion_images: vec![PathBuf::from(r"D:\INAVI_Emulator\INAVI\TBT\MultiTBT.exe")],
             dll_search_dirs: vec![PathBuf::from(r"D:\INAVI_Emulator\DUMPPLZ\Windows")],
-            mount_config: Some(PathBuf::from("mounts.toml")),
+            mount_config: Some(PathBuf::from(DEFAULT_MOUNT_CONFIG_PATH)),
             framebuffer_dump: None,
             tracefiles: Vec::new(),
             desktop: DesktopMode::Host,
@@ -2899,11 +2945,11 @@ mod tests {
             command_args,
             vec![
                 "--registry",
-                "regs.json",
+                DEFAULT_REGISTRY_PATH,
                 "--devices",
-                "serial_devices.json",
+                DEFAULT_DEVICES_PATH,
                 "--mount-config",
-                "mounts.toml",
+                DEFAULT_MOUNT_CONFIG_PATH,
                 "--image",
                 r"D:\INAVI_Emulator\INAVI\TBT\MultiTBT.exe",
                 "--dll-search-dir",
@@ -2943,12 +2989,7 @@ mod tests {
 
     #[test]
     fn maps_image_under_loaded_mount_config_to_ce_mount_path() {
-        let config = RuntimeConfig::load_with_mounts(
-            "regs.json",
-            "serial_devices.json",
-            Some("mounts.toml"),
-        )
-        .unwrap();
+        let config = RuntimeConfig::load_default_with_mounts().unwrap();
         assert_eq!(config.storage.mounts.len(), 3);
         assert_eq!(
             config.storage.mounts[0].host_root.as_deref(),
@@ -2962,7 +3003,7 @@ mod tests {
 
     #[test]
     fn leaves_unmounted_image_path_as_ce_style_host_path() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let kernel = CeKernel::boot(config);
         let path = ce_module_path_for_image(&kernel, r"D:\Other\INavi.exe");
 
@@ -3008,7 +3049,7 @@ mod tests {
 
     #[test]
     fn virtual_desktop_uses_headless_audio_sink() {
-        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
         let status = attach_audio_for_desktop(&mut kernel, DesktopMode::Virtual);
 

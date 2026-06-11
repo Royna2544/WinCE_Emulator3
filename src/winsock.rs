@@ -2069,7 +2069,7 @@ mod tests {
     }
 
     fn test_kernel() -> CeKernel {
-        CeKernel::boot(RuntimeConfig::load("regs.json", "serial_devices.json").unwrap())
+        CeKernel::boot(RuntimeConfig::load_default().unwrap())
     }
 
     fn host_socket_timeouts(socket: u32) -> Option<(Option<Duration>, Option<Duration>)> {

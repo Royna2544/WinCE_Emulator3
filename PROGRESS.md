@@ -4,7 +4,7 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Current Snapshot
 
-- Runtime loader work has reached dynamic Unicorn DLL mapping with dependency loading, dependency-ref release on unload, current-image cleanup on failed maps, transactional current-image resource/trap/trampoline commit ordering, import patching, forwarders, malformed-forwarder rejection, failed-load and failed-attach rollback for load-attempt refs, trampoline tracking, datafile/no-resolve flags, datafile export suppression, and lifecycle calls.
+- Runtime loader work has reached dynamic Unicorn DLL mapping with dependency loading, dependency-ref release on unload, current-image cleanup on failed maps, transactional current-image resource/trap/trampoline commit ordering, import patching, forwarders, malformed-forwarder rejection, failed-load and failed-attach rollback for load-attempt refs, trampoline tracking, datafile/no-resolve flags, datafile export suppression, CE-style process/thread lifecycle calls, process-detach refcount draining, and CE `DisableThreadLibraryCalls` filtering.
 - Shell icon work now includes `ExtractIconExW`, real PE resource icon extraction, PE group-icon count reporting for `nIconIndex == -1`, shell fallback icons, `CreateIconIndirect`, `DrawIconEx`, image lists, CE-valid image-list creation/copy flag validation, bitmap-backed image-list drawing, `xBitmap` offsets, `rgbBk` fill handling, and exact CE `IMAGELISTDRAWPARAMS` size plus normalized-field write-back validation.
 - `Shell_NotifyIcon` now tracks add/modify/delete state, rejects duplicate `(hwnd,uID)` adds, honors member `NIF_*` flags on add, requires the fixed CE `NOTIFYICONDATAW` footprint and readable 64-WCHAR `szTip` buffer, keeps the existing icon on `NIM_MODIFY | NIF_ICON` with null `hIcon` per the CE taskbar path, posts callback messages, and records destroy-icon cleanup.
 - `SHNotificationUpdateI` now covers CE update-mask behavior for null icon preservation, stale incoming `hwndSink` values while keeping the original registered sink, and inform/iconic priority-list movement; notification remove and sink cleanup now purge pending callback records for removed notifications, and `SHNotificationGetDataI` accepts the CE fixed-title-buffer path when `cbTitle == 0`.
@@ -15,6 +15,18 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/registry.rs`, `src/config.rs`, and `src/main.rs`: runtime registry
+  loading now accepts Windows REGEDIT `.reg` dumps, keeps JSON dump support for
+  explicit legacy files, and defaults the emulator to the checked-in
+  `registry.reg` copied from the current CE dump export.
+- `src/ce/coredll.rs`: `SystemParametersInfoW(SPI_GETOEMINFO)` now keeps the
+  emulator-specific override path but falls back to `HKLM\Ident\Name` from the
+  imported CE registry dump, matching the CE core DLL device-info routing and
+  keeping full-feature tests aligned with `registry.reg`.
+- Test fixture loads in `src` unit tests and integration tests now use
+  `registry.reg` instead of the removed `regs.json`; the full
+  `cargo test -j 1 --features unicorn,trace,win32-desktop` suite passes with
+  that fixture.
 - `src/ce/kernel.rs`: loaded-module export resolution now suppresses name and ordinal exports for modules flagged with `LOAD_LIBRARY_AS_DATAFILE`, matching CE `loader.c` resource-only load behavior and keeping raw and Unicorn `GetProcAddress` paths aligned.
 - `src/ce/shell.rs`: removing a shell notification by `(CLSID, id)` or by sink-window/process cleanup now removes queued `IShellNotificationCallback` records for that notification so stale callbacks cannot survive after the CE taskbar/bubble record is gone.
 - `src/ce/coredll.rs`: `SHNotificationGetDataI` now ignores `cbTitle` for non-null title output and writes through the fixed CE taskbar title capacity (`MAX_PATH`), matching `notification.cpp`'s `CCHMAXTBLABEL` assumption.
@@ -27,6 +39,9 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 - `src/ce/resource.rs` and `src/emulator/unicorn.rs`: runtime resource parsing now completes before current-image trap/trampoline/module/resource commits, and resource state has a module-scoped cleanup path for failed loader attempts.
 - `src/ce/thread.rs` and `src/emulator/unicorn.rs`: runtime `DllMain(DLL_PROCESS_ATTACH)` false returns now follow CE `CallDllMain` failure shape by setting `ERROR_DLL_INIT_FAILED`, recording a loud loader failure, and releasing newly loaded plus retained dependency refs owned by that load attempt.
 - `src/ce/kernel.rs`, `src/ce/coredll.rs`, and `src/emulator/unicorn.rs`: `LoadLibraryExW` now rejects non-null `hFile` handles with `ERROR_INVALID_PARAMETER`, and already loaded `DONT_RESOLVE_DLL_REFERENCES` modules are promoted to normal loaded-module flags when a later normal load requests them without CE no-import flags.
+- `src/ce/kernel.rs`, `src/ce/coredll.rs`, `src/emulator/unicorn.rs`, and `src/main.rs`: loaded modules now retain CE load-order and no-thread-calls metadata; raw `DisableThreadLibraryCalls` sets the module flag; Unicorn `ThreadAttachAllDLLs` and `ThreadDetachAllDLLs` now enter guest DLL entrypoints in load order while skipping no-import/datafile and disabled modules.
+- `src/ce/kernel.rs` and `src/emulator/unicorn.rs`: runtime `ProcessDetachAllDLLs` now plans `DLL_PROCESS_DETACH` callouts with CE `ProcessDetach` min-refcount ordering, does not let `DisableThreadLibraryCalls` suppress process detach, skips no-import/datafile modules, and releases the included modules' per-process refs after lifecycle callbacks complete.
+- `src/ce/kernel.rs` and `src/ce/coredll.rs`: raw `ProcessDetachAllDLLs` now drains eligible loaded-module refs for raw/non-Unicorn parity with the runtime process-detach state transition, while preserving no-resolve/datafile modules because they never received process attach.
 - `src/ce/kernel.rs`: file-change notifications now track an outstanding signal count separately from detailed pending records, matching the CE `NotifyReset` path where `FindNextChangeNotification` consumes one pending signal without discarding every queued notification record.
 - `src/ce/file.rs` and `src/ce/coredll.rs`: `MoveFileW` now classifies source and destination guest volumes before host translation, disallows mount-point renames, emulates cross-volume file moves by copy/delete, rejects cross-volume directory moves with `ERROR_NOT_SAME_DEVICE`, and preserves CE-specific raw last-error values.
 - `src/ce/file.rs` and `src/ce/coredll.rs`: read-only mounted roots now surface `ERROR_ACCESS_DENIED` for raw mutating paths including write `CreateFileW`, copy destinations, file deletion, directory creation/removal, and attribute changes instead of collapsing to generic invalid-argument or file-not-found failures.
@@ -36,6 +51,7 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 - `src/ce/shell.rs` and `src/ce/coredll.rs`: raw `SHNotificationAddI` now validates notification title/HTML content using CE marshalled pointer presence, so `SHNP_INFORM` rejects a null HTML pointer but accepts a non-null empty HTML string.
 - `src/ce/shell.rs`: shell notifications now maintain CE-style inform and iconic priority lists, moving records between lists on `SHNUM_PRIORITY` updates and removing list entries when notifications are removed, expired, or cleaned up with their sink windows.
 - `src/ce/coredll.rs`: `ExtractIconExW` reads guest paths, validates files, extracts PE icon resources when available, enumerates `RT_GROUP_ICON` data through a shared helper for count/extract behavior, falls back to CE-style integer `RT_GROUP_ICON` resource ID lookup for sparse indexes, selects distinct large/small icons from multi-size PE icon groups, fills successive large/small icon output-array slots, reports `ERROR_RESOURCE_NAME_NOT_FOUND` for malformed present PE group/icon resources, falls back to shell icons for non-PE index zero, and supports bitmap-backed icon rendering through `DrawIconEx`.
+- `src/ce/coredll.rs`: raw `KernExtractIcons` now follows CE `resource.cpp` by resolving integer `RT_GROUP_ICON` resource IDs from datafile-loaded PE resources and copying the selected `RT_ICON` payload bytes into guest heap outputs instead of returning the old unsupported stub.
 - `src/ce/coredll.rs`: `DrawIconEx` now scales bitmap-backed icons from their native bitmap dimensions into caller-requested destination rectangles for both framebuffer and selected-memory-DIB targets instead of treating the requested destination size as the source extent, and honors bitmap-backed `DI_MASK` by selecting the icon mask bitmap as the draw source.
 - `src/ce/resource.rs`: `ImageList_Create` now applies the CE `ILC_VALID` flag mask, rejecting unsupported creation flags such as `ILC_LARGESMALL`, `ILC_UNIQUE`, and unknown high bits before allocating image-list state.
 - `src/ce/resource.rs`: `ImageList_Create` now follows CE `imagelist.cpp` by normalizing a missing color-depth mask (`ILC_COLOR`) to `ILC_COLORDDB` before storing image-list flags.
@@ -67,6 +83,22 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 - `src/ce/coredll.rs`: `ImageList_GetDragImage` now follows CE `imagelist.cpp` by returning a null drag-image handle with zeroed default points when no drag image is active, instead of reporting an invalid-handle error.
 - `src/ce/resource.rs` and `src/ce/coredll.rs`: no-active `ImageList_DragEnter`/`ImageList_DragLeave` now follow CE's static `s_DragContext` lock and point state, so `DragEnter` can succeed before `ImageList_BeginDrag` and later no-active `ImageList_GetDragImage` reports that stored point.
 - `src/ce/coredll.rs`: `ImageList_DrawIndirect` now rejects undersized or oversized `IMAGELISTDRAWPARAMS` records before reading optional fields, recording draw state, or rendering, matching CE `imagelist.cpp`'s exact-struct-size gate.
+- `src/ce/coredll.rs`: raw `GetTextFaceW` now follows CE GDIAPI parameter edges by returning the selected face-name length including the trailing NUL for null output buffers and rejecting negative character counts with `ERROR_INVALID_PARAMETER`.
+- `src/ce/coredll.rs`: raw `GetTextExtentExPointW` now follows CE GDIAPI invalid-parameter behavior for null output `SIZE`, null input text with a positive count, and negative character counts.
+- `src/ce/coredll.rs`: raw `SetBkMode`/`GetBkMode` now follow CE GDIAPI `PassNull2da` invalid-HDC behavior by returning `0` and setting `ERROR_INVALID_HANDLE` for null and bad DC handles before touching DC state.
+- `src/ce/coredll.rs`: raw `GetBkColor` now follows CE GDIAPI device-attribute invalid-HDC behavior by returning `CLR_INVALID` and setting `ERROR_INVALID_HANDLE`.
+- `src/ce/coredll.rs`: raw `SetBkColor`/`GetBkColor` and `SetTextColor`/`GetTextColor` now follow CE GDIAPI `PassNull2da` invalid-HDC behavior and `AlphaCheckGetSetColor` behavior for `CLR_INVALID`, preserving the special color value while reporting `ERROR_INVALID_PARAMETER` only on valid DCs that actually hold `CLR_INVALID`.
+- `src/ce/coredll.rs`: raw `SetTextAlign`/`GetTextAlign` now follow CE GDIAPI `passNull2Text` invalid-HDC behavior by returning `GDI_ERROR` and setting `ERROR_INVALID_HANDLE` for null and bad DC handles before touching DC state.
+- `src/ce/coredll.rs`: raw `ExtTextOutW` now follows CE GDIAPI text background-mode expectations by filling selected-memory-DIB and framebuffer text cells with the DC background color when `SetBkMode(..., OPAQUE)` is active, while explicit `TRANSPARENT` mode keeps glyph-only rendering.
+- `src/ce/coredll.rs`: raw `ExtTextOutW` now follows CE GDIAPI `passNull2Text` invalid-HDC behavior by returning `FALSE` and setting `ERROR_INVALID_HANDLE` for null and bad DC handles before preserving `ERROR_INVALID_PARAMETER` for null text with a positive count on valid DCs.
+- `src/ce/coredll.rs`: raw `BitBlt` and `StretchBlt` now follow CE GDIAPI `draw.cpp` invalid-HDC behavior by rejecting null/bad destination and source DCs with `ERROR_INVALID_HANDLE`, and reject CE-invalid `MAKEROP4(PATCOPY, PATINVERT)`-style ROP4 values with `ERROR_INVALID_PARAMETER`.
+- `src/ce/coredll.rs`: raw `BitBlt` and `StretchBlt` now render CE's common source/destination ROP3 operations (`SRCPAINT`, `SRCAND`, `SRCINVERT`) through the shared selected-DIB/framebuffer bitmap renderer and apply `DSTINVERT` directly to selected-DIB and framebuffer destinations.
+- `src/ce/coredll.rs`: raw `MaskBlt` now follows CE GDIAPI `draw.cpp` parameter behavior for null/bad destination DCs, null/bad source DCs, invalid or color mask bitmaps, negative mask origins, and masks that cannot cover the requested rectangle, while selected-memory-DIB and framebuffer calls render the common 1bpp `MAKEROP4(DSTCOPY, SRCCOPY)` mask-copy path instead of reporting a no-op success.
+- `src/ce/coredll.rs`: raw `AlphaBlend` now follows CE GDIAPI `draw.cpp` invalid-HDC and blend-function validation by rejecting null/bad destination and source DCs with `ERROR_INVALID_HANDLE`, rejecting invalid `BlendOp`, nonzero `BlendFlags`, unsupported `AlphaFormat`, and non-32bpp per-pixel alpha with `ERROR_INVALID_PARAMETER`, and preserving selected-memory-DIB source-constant-alpha blending.
+- `src/ce/coredll.rs`: raw `Get/SetStretchBltMode`, `Get/SetTextCharacterExtra`, and `Get/SetLayout` now follow CE GDIAPI device-attribute sentinel behavior for null/bad HDCs and invalid parameters; invalid stretch modes and `SetTextCharacterExtra(INT_MIN)` fail without changing state, and layout state is constrained to CE layout flags so `GDI_ERROR` remains an error sentinel.
+- `src/ce/coredll.rs`: raw exported `SetViewportOrgEx` now follows CE GDIAPI `PassNull2da` invalid-HDC behavior by returning `FALSE` and setting `ERROR_INVALID_HANDLE`, while valid DCs keep the current CE-compatible no-op origin semantics and optional previous-origin output.
+- `src/ce/coredll.rs`: raw `SetBrushOrgEx` now follows CE GDIAPI `passBrushNULL` invalid-HDC behavior by returning `FALSE` with `ERROR_INVALID_HANDLE` for null and bad DC handles, while valid calls continue to update brush origin and return the previous origin when requested.
+- `src/ce/coredll.rs` and `src/ce/resource.rs`: raw `SaveDC`/`RestoreDC` now follow CE GDIAPI DC-stack behavior for invalid HDCs (`ERROR_INVALID_HANDLE`), `RestoreDC(hdc, 0)` (`ERROR_INVALID_PARAMETER`), `RestoreDC(hdc, -1)` restoring only the top saved level, and absolute positive restore levels removing newer saved states.
 - `src/emulator/unicorn.rs`: full-feature Unicorn tests now compile with the newer blocked-GetMessage `import_pc` and pending-WndProc-return plumbing, while synthetic zero-`import_pc` GetMessage resumes still write queued sent messages directly into the guest MSG buffer.
 - `src/emulator/unicorn.rs`: escaped `GetMessageW` sent-message WndProc callouts now complete the active send and restore the saved import registers, current thread, and running-thread state before the original `GetMessageW` import trap is processed.
 - `src/ce/coredll.rs`: `MessageBoxW` now validates the CE `winuser.h` style surface, accepting CE high flags such as `MB_SETFOREGROUND`, `MB_TOPMOST`, and `MB_RTLREADING` while rejecting unsupported desktop-only bits and undefined icon nibbles before recording dialog state.
@@ -111,6 +143,9 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 - `tests/test_progs/174_loadlibrary_forwarded_export`: forwarded-export fixture coverage now verifies a named export forwarding to a target DLL ordinal (`a_forward_target.#7`).
 - `src/emulator/unicorn.rs` unit coverage now verifies failed runtime loader rollback releases only modules from the failed attempt, `DllMain(DLL_PROCESS_ATTACH)` false-return cleanup sets `ERROR_DLL_INIT_FAILED` while releasing attempt refs, and final `FreeLibrary` dependency release plans detach/release dependency refs without unloading still-referenced modules.
 - `tests/basic_subsystems.rs` and `tests/coredll_raw_kernel.rs` now verify CE loaded-module no-resolve promotion and raw `LoadLibraryExW` non-null `hFile` rejection.
+- `tests/coredll_raw_kernel.rs` and `src/emulator/unicorn.rs` unit coverage now verify raw `DisableThreadLibraryCalls` persists the module flag and runtime thread lifecycle plans preserve CE load order while skipping disabled and no-import modules.
+- `src/emulator/unicorn.rs` unit coverage now verifies CE process-detach refcount-drain ordering, post-lifecycle ref release, no-resolve exclusion, and process-detach inclusion of modules marked with `DisableThreadLibraryCalls`.
+- `tests/coredll_raw_kernel.rs` now verifies raw `ProcessDetachAllDLLs` drains normal and `DisableThreadLibraryCalls` dynamic modules while preserving no-resolve/datafile loaded modules.
 - `src/emulator/memory.rs` unit coverage now verifies exact unmap removes only a matching mapped region while preserving adjacent mappings.
 - `src/ce/resource.rs` unit coverage now verifies module-scoped resource cleanup removes only that module's resource entries and strings.
 - `tests/coredll_raw_gwe.rs`: `DrawIconEx` now verifies scaled framebuffer and selected-memory-DIB output from a 2x2 bitmap-backed icon into a 4x4 destination rectangle, verifies `DI_MASK` draws/scales the mask bitmap rather than the color bitmap, and covers a 1bpp mask-only icon draw into a framebuffer.
@@ -152,6 +187,18 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Last Known Validation
 
+- `cargo fmt` passed after adding CE `DisableThreadLibraryCalls` state and thread attach/detach lifecycle callout planning; PowerShell emitted the existing non-fatal PSReadLine profile warning.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop dll_process_detach_plan_drains_refcounts_in_ce_order` passed through the x64 VS developer environment after adding CE process-detach refcount-drain planning.
+- `cargo check --features unicorn,trace,win32-desktop` passed through the x64 VS developer environment after adding CE process-detach refcount-drain planning.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed through the x64 VS developer environment after adding CE process-detach refcount-drain planning; the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop coredll_raw_process_detach_all_dlls_drains_imported_module_refs` passed through the x64 VS developer environment after adding raw `ProcessDetachAllDLLs` module-state draining.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel` passed through the x64 VS developer environment after adding raw `ProcessDetachAllDLLs` module-state draining.
+- `cargo check --features unicorn,trace,win32-desktop` passed through the x64 VS developer environment after adding raw `ProcessDetachAllDLLs` module-state draining.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed through the x64 VS developer environment after adding raw `ProcessDetachAllDLLs` module-state draining; the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop coredll_raw_disable_thread_library_calls_validates_module_handles` passed through the x64 VS developer environment after verifying the raw no-thread-calls module flag.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop dll_thread_lifecycle_calls_follow_load_order_and_skip_disabled_noimport_modules` passed through the x64 VS developer environment after adding runtime thread-notification planning coverage.
+- `cargo check --features unicorn,trace,win32-desktop` passed through the x64 VS developer environment after the loader thread-notification changes.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed through the x64 VS developer environment after the loader thread-notification changes; the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
 - `cargo fmt` passed after aligning file-change move records with CE `NotifyMoveFileEx`; PowerShell emitted the existing non-fatal PSReadLine profile warning.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_memory_file coredll_raw_nonroot_change_notification_honors_subtree_and_move_boundaries` passed with `CARGO_INCREMENTAL=0` after adding non-root subtree and cross-parent move notification coverage.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_memory_file coredll_raw_change_notification_handles_signal_and_rearm` passed with `CARGO_INCREMENTAL=0` after updating cross-parent move expectations from rename old/new to CE remove/add records.
@@ -403,6 +450,8 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel sh_get_file_info` passed after adding 8bpp indexed `RT_ICON` `ExtractIconExW` coverage.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel sh_get_file_info` passed after adding 4bpp indexed `RT_ICON` extraction and render coverage.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel sh_get_file_info` passed after adding sparse integer `RT_GROUP_ICON` ID lookup coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop coredll_raw_kern_extract_icons_copies_group_rt_icon_payloads` passed after implementing raw CE `KernExtractIcons` resource-byte extraction.
+- `cargo check --features unicorn,trace,win32-desktop`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_kernel`, and `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after implementing raw CE `KernExtractIcons` resource-byte extraction.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel image_list_draw_indirect` passed after enforcing exact `IMAGELISTDRAWPARAMS` size validation.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel image_list_ordinals_track_created_lists_and_icons` passed after enforcing CE `ILC_VALID` image-list creation flags.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel image_list_copy_honors_ce_move_swap_flags` passed after enforcing CE `ILCF_VALID` image-list copy flags.
@@ -410,6 +459,43 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_destroy_icon_accepts_loaded_icon_handles` passed after adding bitmap-backed `DrawIconEx` `DI_MASK` source selection coverage.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_destroy_icon_accepts_loaded_icon_handles` passed after adding bitmap-backed `DrawIconEx` framebuffer stretched-output coverage.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_destroy_icon_accepts_loaded_icon_handles` passed after adding 1bpp mask-only framebuffer `DrawIconEx` coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_text_metrics_use_selected_logfont` passed after adding CE `GetTextFaceW` null-output and negative-count coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed after adding CE `GetTextFaceW` null-output and negative-count coverage.
+- `cargo check --features unicorn,trace,win32-desktop` passed after adding CE `GetTextFaceW` null-output and negative-count coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after adding CE `GetTextFaceW` null-output and negative-count coverage; the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_get_text_extent_ex_point_fills_fit_dx_and_size` passed after adding CE `GetTextExtentExPointW` invalid-parameter coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe` and `cargo check --features unicorn,trace,win32-desktop` passed after adding CE `GetTextExtentExPointW` invalid-parameter coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after adding CE `GetTextExtentExPointW` invalid-parameter coverage; the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_gdi_set_bk_mode_returns_previous_mode` passed after adding CE `GetBkMode` invalid-HDC last-error coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe` and `cargo check --features unicorn,trace,win32-desktop` passed after adding CE `GetBkMode` invalid-HDC last-error coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after adding CE `GetBkMode` invalid-HDC last-error coverage; the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_gdi_set_bk_mode_returns_previous_mode` passed after adding CE `GetBkColor` invalid-HDC last-error coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe` and `cargo check --features unicorn,trace,win32-desktop` passed after adding CE `GetBkColor` invalid-HDC last-error coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after adding CE `GetBkColor` invalid-HDC last-error coverage; the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_gdi_set_bk_mode_returns_previous_mode`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`, and `cargo check --features unicorn,trace,win32-desktop` passed after adding CE `CLR_INVALID` background/text color state coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after adding CE `CLR_INVALID` background/text color state coverage; the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_gdi_device_attribute_modes_follow_ce_sentinels` and `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed after adding CE stretch-mode, text-character-extra, and layout sentinel coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after adding CE stretch-mode, text-character-extra, and layout sentinel coverage; the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_gdi_device_attribute_modes_follow_ce_sentinels` and `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed after adding CE `SetViewportOrgEx` invalid-HDC coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after adding CE `SetViewportOrgEx` invalid-HDC coverage; the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_gdi_save_restore_dc_follows_ce_levels` and `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed after adding CE `SaveDC`/`RestoreDC` invalid-HDC and restore-level coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after adding CE `SaveDC`/`RestoreDC` invalid-HDC and restore-level coverage; the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_gdi_device_attribute_modes_follow_ce_sentinels` and `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed after adding CE `SetBrushOrgEx` invalid-HDC and previous-origin coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after adding CE `SetBrushOrgEx` invalid-HDC and previous-origin coverage; the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_gdi_set_bk_mode_returns_previous_mode` and `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed after adding CE color API invalid-HDC coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after adding CE color API invalid-HDC coverage; the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_text_metrics_use_selected_logfont` and `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed after adding CE `SetTextAlign`/`GetTextAlign` invalid-HDC coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after adding CE `SetTextAlign`/`GetTextAlign` invalid-HDC coverage; the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_gdi_set_bk_mode_returns_previous_mode` and `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed after adding CE `SetBkMode`/`GetBkMode` bad-HDC validation.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after adding CE `SetBkMode`/`GetBkMode` bad-HDC validation; the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe ext_text_out` and `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed after adding CE `ExtTextOutW` `OPAQUE` background-mode text-cell fill coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after adding CE `ExtTextOutW` `OPAQUE` background-mode text-cell fill coverage; the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe ext_text_out` and `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed after adding CE `ExtTextOutW` invalid-HDC/null-text parameter coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after adding CE `ExtTextOutW` invalid-HDC/null-text parameter coverage; the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe mask_blt` and `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed after adding CE `MaskBlt` validation plus selected-memory-DIB and framebuffer 1bpp mask-copy coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after adding CE `MaskBlt` validation plus selected-memory-DIB and framebuffer 1bpp mask-copy coverage; the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe alpha_blend` and `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed after adding CE `AlphaBlend` invalid-HDC/blend-function validation and selected-memory-DIB source-constant-alpha coverage.
+- `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_blt_validates_ce_hdc_and_rop_edges`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_mask_blt_validates_ce_mask_parameters`, `cargo test -j 1 --features unicorn,trace,win32-desktop --test coredll_raw_gwe`, and `cargo test -j 1 --features unicorn,trace,win32-desktop` passed after adding CE `BitBlt`/`StretchBlt` invalid-HDC and invalid-ROP4 validation and correcting `MaskBlt` source-HDC last-error behavior; the eVC4 MIPSII fixture test remains ignored because the toolchain is not configured.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel` passed after adding malformed present PE group/icon `ExtractIconExW` failure coverage.
 - `cargo test --features unicorn,trace,win32-desktop` passed after fixing the feature-enabled Unicorn test helper call sites and adding malformed present PE group/icon `ExtractIconExW` failure coverage.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel` passed after adding multi-size large/small PE `ExtractIconExW` selection coverage.
@@ -516,3 +602,27 @@ The next useful checkpoint is targeted validation after expanding shell icon/ima
   never pumps the tap. Next root cause: DenebSensor/IMU device emulation
   (serial_devices.json device behavior), then re-crawl the nearby-search and
   remaining menu paths.
+
+## Runtime Diagnostics (2026-06-11)
+
+- Verified the initial `happyway_win` "Quit Happyway" dialog is real helper UI,
+  not emulator-invented UI. The unreadable/undismissable behavior came from the
+  modal loop and scheduler not servicing cross-thread sent messages before
+  posted input. `MessageBoxW` modal pumping now drains ready sent messages, and
+  modal waits wake for pending sends.
+- Verified CE dump IOCTL contracts directly with LLVM tools from
+  `D:\GitHub\llvm-proj\build-mips-objdump\bin`: `YAS526B.dll` exposes the
+  `0xb0000000..0xb0000010` magnetometer family, `light_sensor_drv.dll` exposes
+  the `0xd2000004/8/14/18` light-sensor family, and the I2C DLLs differ by bus
+  (`I2C3:` accepts `0x80002001`, `I2C2:`/`I2C4:` do not). The I2C emulation now
+  derives per-bus behavior from the configured guest device name.
+- The old `SMB380.dll` `0xb100...` assumption was not verified in the CE DLL
+  dump; the observed SMB380 handler uses a dense `0x01012ee0..0x01012fcc`
+  command family. Do not implement `0xb100...` SMB behavior without a real
+  caller/source reference.
+- The SD card mount is configured writable (`mounts.toml`, `\SDMMC Disk` to
+  `D:\INAVI_Emulator\INAVI`) and a prior route-test file was created there, so
+  the current sensor/dialog failure is not explained by read-only SD storage.
+- Remote touch posting now records and wakes the actual hit-test target threads.
+  This fixes the observed case where taps hit the iNavi window on thread 1 while
+  the host loop kept resuming the unrelated iSearch thread 4.

@@ -5,8 +5,9 @@
 //! dumped CE image. The sensor drivers do not use `ReadFile`/`WriteFile` on
 //! `I2C2:` and friends; they issue `DeviceIoControl` requests where the first
 //! input byte is the register/address phase and the remaining input bytes are
-//! payload. The implementation keeps a small register map so higher-level
-//! sensor handlers and direct `I2C*:` callers observe stable state.
+//! payload. The individual DLLs accept slightly different private IOCTL sets,
+//! so the implementation keeps that per-device contract alongside a small
+//! register map.
 //!
 //! Scope:
 //! - Preserve the private CE IOCTL numbers and buffer shapes.
@@ -25,15 +26,36 @@ pub const IOCTL_I2C_WRITE_READ: u32 = 0x8000_2006;
 #[derive(Debug, Clone)]
 pub struct I2cBus {
     registers: [u8; 256],
+    contract: I2cContract,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum I2cContract {
+    WriteRead,
+    TransferWriteRead,
+    WriteReadOnly,
 }
 
 impl I2cBus {
-    pub fn new() -> Self {
+    pub fn new_for_guest(guest_name: &str) -> Self {
+        let normalized = guest_name.trim_end_matches(':').to_ascii_uppercase();
+        let contract = match normalized.as_str() {
+            "I2C3" => I2cContract::TransferWriteRead,
+            "I2C4" => I2cContract::WriteReadOnly,
+            _ => I2cContract::WriteRead,
+        };
+        Self::new_with_contract(contract)
+    }
+
+    fn new_with_contract(contract: I2cContract) -> Self {
         let mut registers = [0; 256];
         registers[0x2e] = 0x10;
         registers[0x2f] = 0x20;
         registers[0x23] = 0x40;
-        Self { registers }
+        Self {
+            registers,
+            contract,
+        }
     }
 
     pub fn device_io_control(
@@ -45,15 +67,26 @@ impl I2cBus {
         match ioctl_code {
             IOCTL_I2C_WRITE => self.write_transaction(input),
             IOCTL_I2C_READ => self.read_transaction(input, output_capacity),
-            IOCTL_I2C_GIO_I2C2_TRANSFER | IOCTL_I2C_WRITE_READ => {
-                let write = self.write_transaction(input);
-                if !write.success {
-                    write
-                } else {
-                    self.read_transaction(input, output_capacity)
-                }
+            IOCTL_I2C_WRITE_READ if self.contract.accepts_write_read() => {
+                self.write_read_transaction(input, output_capacity)
+            }
+            IOCTL_I2C_GIO_I2C2_TRANSFER if self.contract.accepts_transfer() => {
+                self.write_read_transaction(input, output_capacity)
             }
             _ => failure(),
+        }
+    }
+
+    fn write_read_transaction(
+        &mut self,
+        input: &[u8],
+        output_capacity: u32,
+    ) -> DeviceIoControlResult {
+        let write = self.write_transaction(input);
+        if !write.success {
+            write
+        } else {
+            self.read_transaction(input, output_capacity)
         }
     }
 
@@ -78,6 +111,16 @@ impl I2cBus {
             output.push(self.registers[(start + offset) & 0xff]);
         }
         success(output)
+    }
+}
+
+impl I2cContract {
+    fn accepts_transfer(self) -> bool {
+        matches!(self, Self::TransferWriteRead)
+    }
+
+    fn accepts_write_read(self) -> bool {
+        matches!(self, Self::WriteRead | Self::TransferWriteRead)
     }
 }
 

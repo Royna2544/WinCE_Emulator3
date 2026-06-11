@@ -10,6 +10,10 @@ use crate::{
     error::{Error, Result},
 };
 
+pub const DEFAULT_REGISTRY_PATH: &str = "registry.reg";
+pub const DEFAULT_DEVICES_PATH: &str = "serial_devices.json";
+pub const DEFAULT_MOUNT_CONFIG_PATH: &str = "mounts.toml";
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct RuntimeConfig {
     pub registry: RegistryDump,
@@ -76,6 +80,18 @@ struct MountToml {
 }
 
 impl RuntimeConfig {
+    pub fn load_default() -> Result<Self> {
+        Self::load(DEFAULT_REGISTRY_PATH, DEFAULT_DEVICES_PATH)
+    }
+
+    pub fn load_default_with_mounts() -> Result<Self> {
+        Self::load_with_mounts(
+            DEFAULT_REGISTRY_PATH,
+            DEFAULT_DEVICES_PATH,
+            Some(DEFAULT_MOUNT_CONFIG_PATH),
+        )
+    }
+
     pub fn load(registry_path: impl AsRef<Path>, devices_path: impl AsRef<Path>) -> Result<Self> {
         Self::load_with_mounts(registry_path, devices_path, Option::<&Path>::None)
     }
@@ -86,7 +102,7 @@ impl RuntimeConfig {
         mount_path: Option<impl AsRef<Path>>,
     ) -> Result<Self> {
         Ok(Self {
-            registry: read_json(registry_path.as_ref())?,
+            registry: read_registry(registry_path.as_ref())?,
             devices: read_json(devices_path.as_ref())?,
             storage: StorageConfig::load_or_default(mount_path)?,
         })
@@ -194,6 +210,35 @@ fn default_object_store() -> ObjectStoreConfig {
 
 fn mbytes_to_bytes(mbytes: u64) -> u64 {
     mbytes.saturating_mul(1024 * 1024)
+}
+
+fn read_registry(path: &Path) -> Result<RegistryDump> {
+    let bytes = fs::read(path).map_err(|source| Error::Read {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    let extension_is_reg = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("reg"));
+    let text = String::from_utf8_lossy(&bytes);
+    let starts_as_regedit = text
+        .trim_start_matches('\u{feff}')
+        .trim_start()
+        .starts_with("REGEDIT4")
+        || text
+            .trim_start_matches('\u{feff}')
+            .trim_start()
+            .starts_with("Windows Registry Editor");
+
+    if extension_is_reg || starts_as_regedit {
+        RegistryDump::from_regedit(&text, Some(path.display().to_string()))
+    } else {
+        serde_json::from_slice(&bytes).map_err(|source| Error::Json {
+            path: path.to_path_buf(),
+            source,
+        })
+    }
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> Result<T> {
@@ -363,5 +408,33 @@ writable = true
         assert!(err.to_string().contains("missing required [object_store]"));
 
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn runtime_config_loads_regedit_registry_file() {
+        let root = std::env::temp_dir().join(format!(
+            "wince-runtime-regedit-config-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let registry_path = root.join(DEFAULT_REGISTRY_PATH);
+        let devices_path = root.join(DEFAULT_DEVICES_PATH);
+        fs::write(
+            &registry_path,
+            r#"
+REGEDIT4
+
+[HKEY_LOCAL_MACHINE\Ident]
+"Name"="nav"
+"#,
+        )
+        .unwrap();
+        fs::write(&devices_path, r#"{"devices":[]}"#).unwrap();
+
+        let config = RuntimeConfig::load(&registry_path, &devices_path).unwrap();
+        assert!(config.registry.keys.contains_key("hklm\\Ident"));
+
+        let _ = fs::remove_dir_all(root);
     }
 }
