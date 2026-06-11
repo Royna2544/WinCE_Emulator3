@@ -197,6 +197,17 @@ and isolated guest networking.
   + `CAL_ICALINTVALUE`/`CAL_SCALNAME`/`CAL_SSHORTDATE`/`CAL_SLONGDATE`/
   `CAL_SYEARMONTH` selection return FALSE on invalid inputs; callback FALSE
   stops the enumeration but the API still returns TRUE per NLS semantics.
+  `GetThreadContext`/`SetThreadContext` are now served by
+  `try_enter_thread_context_callout` against the CE MIPS32 `CONTEXT_R4000`
+  layout (winnt.h, 0x130 bytes: Flt at 0x10, IntZero..IntRa at 0x90, Lo/Hi,
+  Fir 0x11C, ContextFlags 0x124): the calling thread reads/writes live Unicorn
+  registers (a control-context set redirects its continuation to `Fir`),
+  `SuspendThread`-parked threads use the self-suspended map, and
+  kernel-wait/GetMessageW-blocked threads use their stored scheduler register
+  snapshots; `CONTEXT_INTEGER` covers r0–r27+r30+lo/hi while gp/sp/ra/Fir
+  belong to `CONTEXT_CONTROL` per the header note, and runnable-but-not-stored
+  targets, bad handles, null/unreadable CONTEXT pointers, and non-R4000 flag
+  signatures fail with `ERROR_INVALID_HANDLE`/`ERROR_INVALID_PARAMETER`.
 - Replace direct-only WINSOCK with a CE-facing isolated NAT model: gateway
   `10.0.0.1`, guest IP `10.0.0.2`, host sockets as the transport boundary, and
   blocking waits owned by the scheduler. Socket-handle waiters can now be

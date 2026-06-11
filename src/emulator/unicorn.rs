@@ -3478,6 +3478,21 @@ impl UnicornMips {
                     return;
                 }
                 if trap.as_ref().is_some_and(|trap| {
+                    try_enter_thread_context_callout(
+                        unsafe { &mut *kernel_ptr },
+                        uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        active_thread_id,
+                        &self_suspended_guest_threads_hook,
+                        &blocked_wait_threads_hook,
+                        &blocked_guest_thread_hook,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
                     try_block_wait_for_single_object(
                         unsafe { &mut *kernel_ptr },
                         uc,
@@ -9552,6 +9567,269 @@ fn try_block_wait_for_single_object<D>(
         return true;
     }
     false
+}
+
+// CE MIPS32 CONTEXT (winnt.h CONTEXT_R4000, CONTEXT32_LENGTH = 0x130):
+// Argument[4] at 0x00, FltF0–F31 at 0x10, IntZero..IntRa (MIPS r0..r31) at
+// 0x90 + 4*reg, IntLo 0x110, IntHi 0x114, Fsr 0x118, Fir 0x11C, Psr 0x120,
+// ContextFlags 0x124. Per the header note, gp/sp/ra belong to the control
+// context even though they sit in the integer section.
+#[cfg(feature = "unicorn")]
+const MIPS_CONTEXT_LENGTH: usize = 0x130;
+#[cfg(feature = "unicorn")]
+const MIPS_CONTEXT_INT_OFFSET: usize = 0x90;
+#[cfg(feature = "unicorn")]
+const MIPS_CONTEXT_LO_OFFSET: usize = 0x110;
+#[cfg(feature = "unicorn")]
+const MIPS_CONTEXT_HI_OFFSET: usize = 0x114;
+#[cfg(feature = "unicorn")]
+const MIPS_CONTEXT_FIR_OFFSET: usize = 0x11c;
+#[cfg(feature = "unicorn")]
+const MIPS_CONTEXT_FLAGS_OFFSET: usize = 0x124;
+#[cfg(feature = "unicorn")]
+const CONTEXT_R4000: u32 = 0x0001_0000;
+#[cfg(feature = "unicorn")]
+const CONTEXT_R4000_CONTROL: u32 = 0x0000_0001;
+#[cfg(feature = "unicorn")]
+const CONTEXT_R4000_INTEGER: u32 = 0x0000_0004;
+
+/// Where a target thread's register state lives while it is not executing.
+#[cfg(feature = "unicorn")]
+enum ThreadContextSource {
+    /// The calling thread itself: live Unicorn registers.
+    Live,
+    /// SuspendThread'ed thread parked in the self-suspended map (key = handle).
+    SelfSuspended(u32),
+    /// Thread blocked in a kernel wait (index into the blocked-waits vec).
+    BlockedWait(usize),
+    /// Thread blocked in GetMessageW.
+    BlockedGetMessage,
+}
+
+/// GetThreadContext/SetThreadContext over the emulator's thread register
+/// stores: live Unicorn state for the current thread, the self-suspended
+/// thread map, and scheduler blocked-wait state for parked threads.
+#[cfg(feature = "unicorn")]
+#[allow(clippy::too_many_arguments)]
+fn try_enter_thread_context_callout<D>(
+    kernel: &mut CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    thread_id: u32,
+    self_suspended_threads: &std::rc::Rc<
+        std::cell::RefCell<std::collections::BTreeMap<u32, SuspendedGuestThread>>,
+    >,
+    blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
+    blocked_get_message: &std::rc::Rc<std::cell::RefCell<Option<BlockedGuestThread>>>,
+) -> bool {
+    use crate::ce::coredll_ordinals::{ORD_GET_THREAD_CONTEXT, ORD_SET_THREAD_CONTEXT};
+    use unicorn_engine::RegisterMIPS;
+
+    const ERROR_INVALID_HANDLE: u32 = 6;
+    const ERROR_INVALID_PARAMETER: u32 = 87;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll {
+        return false;
+    }
+    let is_set = match ordinal {
+        Some(o) if o == ORD_GET_THREAD_CONTEXT => false,
+        Some(o) if o == ORD_SET_THREAD_CONTEXT => true,
+        _ => return false,
+    };
+
+    let handle = args.first().copied().unwrap_or(0);
+    let ctx_ptr = args.get(1).copied().unwrap_or(0);
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+
+    let mut finish = |uc: &mut unicorn_engine::Unicorn<'_, D>, ok: bool, pc: u32| {
+        let _ = uc.reg_write(RegisterMIPS::V0, u64::from(ok as u32));
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(pc));
+        true
+    };
+
+    let Some(target_thread_id) = kernel.guest_thread_id_for_handle(handle, thread_id) else {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
+        return finish(uc, false, return_pc);
+    };
+    if ctx_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return finish(uc, false, return_pc);
+    }
+
+    // Locate the target thread's register state.
+    let source = if target_thread_id == thread_id {
+        Some(ThreadContextSource::Live)
+    } else if let Some((handle_key, _)) = self_suspended_threads
+        .borrow()
+        .iter()
+        .find(|(_, t)| t.thread_id == target_thread_id)
+    {
+        Some(ThreadContextSource::SelfSuspended(*handle_key))
+    } else if let Some(index) = blocked_waits
+        .borrow()
+        .iter()
+        .position(|t| t.thread_id == target_thread_id)
+    {
+        Some(ThreadContextSource::BlockedWait(index))
+    } else if blocked_get_message
+        .borrow()
+        .as_ref()
+        .is_some_and(|t| t.thread_id == target_thread_id)
+    {
+        Some(ThreadContextSource::BlockedGetMessage)
+    } else {
+        None
+    };
+    let Some(source) = source else {
+        // The target thread is runnable but not the caller: its registers are
+        // not materialized anywhere. CE requires suspension for a stable
+        // context; report failure rather than fabricating one.
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return finish(uc, false, return_pc);
+    };
+
+    let mut flags_bytes = [0u8; 4];
+    if uc
+        .mem_read(
+            u64::from(ctx_ptr) + MIPS_CONTEXT_FLAGS_OFFSET as u64,
+            &mut flags_bytes,
+        )
+        .is_err()
+    {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return finish(uc, false, return_pc);
+    }
+    let flags = u32::from_le_bytes(flags_bytes);
+    if flags & CONTEXT_R4000 == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return finish(uc, false, return_pc);
+    }
+    let want_control = flags & CONTEXT_R4000_CONTROL != 0;
+    let want_integer = flags & CONTEXT_R4000_INTEGER != 0;
+
+    if !is_set {
+        // GetThreadContext: snapshot the target registers into the guest CONTEXT.
+        let (regs, pc) = match source {
+            ThreadContextSource::Live => (capture_mips_gprs(uc), return_pc),
+            ThreadContextSource::SelfSuspended(key) => {
+                let map = self_suspended_threads.borrow();
+                let t = &map[&key];
+                (t.regs.clone(), t.pc)
+            }
+            ThreadContextSource::BlockedWait(index) => {
+                let waits = blocked_waits.borrow();
+                (waits[index].regs.clone(), waits[index].return_pc)
+            }
+            ThreadContextSource::BlockedGetMessage => {
+                let blocked = blocked_get_message.borrow();
+                let t = blocked.as_ref().unwrap();
+                (t.regs.clone(), t.return_pc)
+            }
+        };
+        let mut buf = vec![0u8; MIPS_CONTEXT_LENGTH];
+        if uc.mem_read(u64::from(ctx_ptr), &mut buf).is_err() {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return finish(uc, false, return_pc);
+        }
+        if want_integer {
+            // r0..r27 + r30 + lo/hi; gp(28)/sp(29)/ra(31) are control context.
+            for reg in (0..28).chain([30]) {
+                let off = MIPS_CONTEXT_INT_OFFSET + reg * 4;
+                buf[off..off + 4].copy_from_slice(&regs.regs[reg].to_le_bytes());
+            }
+            buf[MIPS_CONTEXT_LO_OFFSET..MIPS_CONTEXT_LO_OFFSET + 4]
+                .copy_from_slice(&regs.lo.to_le_bytes());
+            buf[MIPS_CONTEXT_HI_OFFSET..MIPS_CONTEXT_HI_OFFSET + 4]
+                .copy_from_slice(&regs.hi.to_le_bytes());
+        }
+        if want_control {
+            for reg in [28usize, 29, 31] {
+                let off = MIPS_CONTEXT_INT_OFFSET + reg * 4;
+                buf[off..off + 4].copy_from_slice(&regs.regs[reg].to_le_bytes());
+            }
+            buf[MIPS_CONTEXT_FIR_OFFSET..MIPS_CONTEXT_FIR_OFFSET + 4]
+                .copy_from_slice(&pc.to_le_bytes());
+        }
+        if uc.mem_write(u64::from(ctx_ptr), &buf).is_err() {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            return finish(uc, false, return_pc);
+        }
+        kernel.threads.set_last_error(thread_id, 0);
+        return finish(uc, true, return_pc);
+    }
+
+    // SetThreadContext: apply the guest CONTEXT onto the stored registers.
+    let mut buf = vec![0u8; MIPS_CONTEXT_LENGTH];
+    if uc.mem_read(u64::from(ctx_ptr), &mut buf).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return finish(uc, false, return_pc);
+    }
+    let read_u32 = |buf: &[u8], off: usize| {
+        u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]])
+    };
+
+    let apply = |regs: &mut MipsGuestContext, pc: &mut u32| {
+        if want_integer {
+            for reg in (1..28).chain([30]) {
+                regs.regs[reg] = read_u32(&buf, MIPS_CONTEXT_INT_OFFSET + reg * 4);
+            }
+            regs.lo = read_u32(&buf, MIPS_CONTEXT_LO_OFFSET);
+            regs.hi = read_u32(&buf, MIPS_CONTEXT_HI_OFFSET);
+        }
+        if want_control {
+            for reg in [28usize, 29, 31] {
+                regs.regs[reg] = read_u32(&buf, MIPS_CONTEXT_INT_OFFSET + reg * 4);
+            }
+            *pc = read_u32(&buf, MIPS_CONTEXT_FIR_OFFSET);
+        }
+    };
+
+    match source {
+        ThreadContextSource::Live => {
+            let mut regs = capture_mips_gprs(uc);
+            // Setting CONTROL on the running thread redirects its continuation.
+            let mut pc = return_pc;
+            apply(&mut regs, &mut pc);
+            restore_mips_gprs(uc, &regs);
+            kernel.threads.set_last_error(thread_id, 0);
+            return finish(uc, true, pc);
+        }
+        ThreadContextSource::SelfSuspended(key) => {
+            let mut map = self_suspended_threads.borrow_mut();
+            let t = map.get_mut(&key).unwrap();
+            apply(&mut t.regs, &mut t.pc);
+        }
+        ThreadContextSource::BlockedWait(index) => {
+            let mut waits = blocked_waits.borrow_mut();
+            let t = &mut waits[index];
+            apply(&mut t.regs, &mut t.return_pc);
+        }
+        ThreadContextSource::BlockedGetMessage => {
+            let mut blocked = blocked_get_message.borrow_mut();
+            let t = blocked.as_mut().unwrap();
+            apply(&mut t.regs, &mut t.return_pc);
+        }
+    }
+    kernel.threads.set_last_error(thread_id, 0);
+    finish(uc, true, return_pc)
 }
 
 #[cfg(feature = "unicorn")]

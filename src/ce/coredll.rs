@@ -2184,7 +2184,8 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::U32(0))
         }
         ORD_GET_THREAD_CONTEXT | ORD_SET_THREAD_CONTEXT => {
-            // GetThreadContext/SetThreadContext require Unicorn CPU state access.
+            // Unicorn callout (try_enter_thread_context_callout) serves these from
+            // live/suspended/blocked CPU state; this is the non-Unicorn fallback.
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_NOT_SUPPORTED);
