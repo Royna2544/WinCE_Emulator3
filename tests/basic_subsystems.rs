@@ -5496,20 +5496,15 @@ fn resource_system_image_list_duplicate_replace_remove_copy_count_overlay_and_dr
     // unknown handle returns None.
     assert!(res.set_image_list_overlay(0xDEAD, 0, 1).is_none());
 
-    // copy_image_list_image: copy src[0] to dst[-1] (append).
+    // copy_image_list_image: CE ILCF_MOVE is flag value 0 and moves src[0] to dst[-1].
     let src = res.create_image_list(16, 16, 0, 0, 0).unwrap();
-    res.add_image_list_image(src, bmp, 0); // 3 images
+    res.add_image_list_image(src, bmp, 0);
     let dst = res.create_image_list(16, 16, 0, 0, 0).unwrap();
-    assert_eq!(
-        res.copy_image_list_image(dst, -1, src, 0, false),
-        Some(true)
-    );
+    assert_eq!(res.copy_image_list_image(dst, -1, src, 0, 0), Some(true));
     assert_eq!(res.image_list_count(dst), Some(1));
+    assert_eq!(res.image_list_count(src), Some(2));
     // Negative src_index always returns Some(false).
-    assert_eq!(
-        res.copy_image_list_image(dst, -1, src, -1, false),
-        Some(false)
-    );
+    assert_eq!(res.copy_image_list_image(dst, -1, src, -1, 0), Some(false));
 
     // begin_image_list_drag / image_list_drag / move / drag_leave / end.
     assert!(res.image_list_drag().is_none());
@@ -9809,17 +9804,14 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     let dst_il = res.create_image_list(16, 16, 0, 0, 2).unwrap();
     res.add_image_list_image(src, bmp_a, 0).unwrap();
     res.add_image_list_image(dst_il, bmp_b, 0).unwrap();
-    // Copy src[0] → dst[0], remove_source=false.
-    assert_eq!(
-        res.copy_image_list_image(dst_il, 0, src, 0, false),
-        Some(true)
-    );
+    // CE ILCF_MOVE is flag value 0: move src[0] -> dst[0].
+    assert_eq!(res.copy_image_list_image(dst_il, 0, src, 0, 0), Some(true));
     let dst_info = res.image_list_info(dst_il, 0).unwrap();
-    assert_eq!(dst_info.bitmap, bmp_a); // src bitmap copied
-    assert_eq!(res.image_list_count(src), Some(2)); // source unchanged
+    assert_eq!(dst_info.bitmap, bmp_a);
+    assert_eq!(res.image_list_count(src), Some(1));
     // Negative src_index → Some(false).
     assert_eq!(
-        res.copy_image_list_image(dst_il, 0, src, -1, false),
+        res.copy_image_list_image(dst_il, 0, src, -1, 0),
         Some(false)
     );
 

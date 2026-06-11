@@ -115,6 +115,10 @@ const KEYEVENTF_KEYUP: u32 = 0x0002;
 const KF_EXTENDED_LPARAM: u32 = 0x0100_0000;
 const KF_REPEAT_LPARAM: u32 = 0x4000_0000;
 const KF_UP_LPARAM: u32 = 0x8000_0000;
+const TPM_CENTERALIGN: u32 = 0x0004;
+const TPM_RIGHTALIGN: u32 = 0x0008;
+const TPM_VCENTERALIGN: u32 = 0x0010;
+const TPM_BOTTOMALIGN: u32 = 0x0020;
 const TPM_NONOTIFY: u32 = 0x0080;
 const TPM_RETURNCMD: u32 = 0x0100;
 const TPM_RIGHTBUTTON: u32 = 0x0002;
@@ -22185,6 +22189,7 @@ fn track_popup_menu_ex_raw<M: CoredllGuestMemory>(
     let (popup_x, popup_y) = popup_menu_initial_position(
         &kernel.resources,
         menu,
+        flags,
         requested_x,
         requested_y,
         exclude_rect,
@@ -22408,6 +22413,7 @@ pub(crate) fn track_popup_menu_ex_prepare<M: CoredllGuestMemory>(
     let (popup_x, popup_y) = popup_menu_initial_position(
         &kernel.resources,
         menu,
+        flags,
         requested_x,
         requested_y,
         exclude_rect,
@@ -22579,16 +22585,18 @@ fn popup_menu_clamp_to_screen(
 fn popup_menu_initial_position(
     resources: &ResourceSystem,
     menu: u32,
+    flags: u32,
     x: i32,
     y: i32,
     exclude_rect: Option<[i32; 4]>,
     screen_w: i32,
     screen_h: i32,
 ) -> (i32, i32) {
-    let Some(exclude_rect) = exclude_rect else {
+    let Some((width, height)) = popup_menu_outer_size(resources, menu) else {
         return (x, y);
     };
-    let Some((width, height)) = popup_menu_outer_size(resources, menu) else {
+    let (x, y) = popup_menu_aligned_position(flags, x, y, width, height);
+    let Some(exclude_rect) = exclude_rect else {
         return (x, y);
     };
     let exclude = Rect {
@@ -22625,6 +22633,20 @@ fn popup_menu_initial_position(
         }
     }
     first_clamped.unwrap_or((x, y))
+}
+
+fn popup_menu_aligned_position(flags: u32, x: i32, y: i32, width: i32, height: i32) -> (i32, i32) {
+    let x = match flags & (TPM_CENTERALIGN | TPM_RIGHTALIGN) {
+        TPM_CENTERALIGN => x.saturating_sub(width / 2),
+        TPM_RIGHTALIGN => x.saturating_sub(width),
+        _ => x,
+    };
+    let y = match flags & (TPM_VCENTERALIGN | TPM_BOTTOMALIGN) {
+        TPM_VCENTERALIGN => y.saturating_sub(height / 2),
+        TPM_BOTTOMALIGN => y.saturating_sub(height),
+        _ => y,
+    };
+    (x, y)
 }
 
 fn popup_menu_modal_input_loop(

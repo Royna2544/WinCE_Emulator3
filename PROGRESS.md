@@ -21,7 +21,7 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 - `src/ce/resource.rs`: `ImageList_Copy` now applies CE `ILCF_VALID` flag validation, implements `ILCF_SWAP` as an actual image exchange, preserves overlay index mappings during same-list swaps, and treats move-to-self as a no-op instead of deleting the image.
 - `src/ce/coredll.rs`: `ImageList_DrawIndirect` now rejects undersized or oversized `IMAGELISTDRAWPARAMS` records before reading optional fields, recording draw state, or rendering, matching CE `imagelist.cpp`'s exact-struct-size gate.
 - `src/ce/coredll.rs`: `MessageBoxW` now validates the CE `winuser.h` style surface, accepting CE high flags such as `MB_SETFOREGROUND`, `MB_TOPMOST`, and `MB_RTLREADING` while rejecting unsupported desktop-only bits and undefined icon nibbles before recording dialog state.
-- `src/ce/coredll.rs`: `TrackPopupMenuEx` now applies the CE `TPMPARAMS.rcExclude` screen rectangle to top-level popup placement before recording tracking state, painting, and hit-testing.
+- `src/ce/coredll.rs`: `TrackPopupMenuEx` now applies CE horizontal/vertical `TPM_*ALIGN` flags before recording tracking state, painting, hit-testing, and any `TPMPARAMS.rcExclude` adjustment.
 - `src/ce/coredll.rs`: `SHGetFileInfoW` now writes CE shell `SFGAO_*` attributes for `SHGFI_ATTRIBUTES` instead of raw `FILE_ATTRIBUTE_*` values, covering filesystem, folder, shortcut, and read-only outputs.
 - `src/ce/coredll.rs`: `Shell_NotifyIconW` now follows the CE fixed `NOTIFYICONDATAW` contract from `shellapi.h`/`minserver.cpp` by rejecting short `cbSize` values and unreadable `szTip[64]` buffers before updating shell state.
 - `src/ce/kernel.rs`: file-change record append now coalesces pending records and signals only when pending notification data remains.
@@ -33,7 +33,8 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 - `tests/coredll_raw_kernel.rs`: `ImageList_DrawIndirect` now covers exact CE `cbSize == sizeof(IMAGELISTDRAWPARAMS)` validation, including no draw-state mutation for short or oversized records.
 - `tests/coredll_raw_gwe.rs`: `DrawIconEx` now verifies scaled framebuffer and selected-memory-DIB output from a 2x2 bitmap-backed icon into a 4x4 destination rectangle, verifies `DI_MASK` draws/scales the mask bitmap rather than the color bitmap, and covers a 1bpp mask-only icon draw into a framebuffer.
 - `tests/coredll_raw_kernel.rs`: `MessageBoxW` now verifies CE-supported high style bits are preserved and unsupported style/icon bits fail without creating a new shell message-box record.
-- `tests/coredll_raw_gwe.rs`: `TrackPopupMenuEx` now verifies that `TPMPARAMS.rcExclude` moves the top-level popup before pointer hit-testing.
+- `tests/coredll_raw_gwe.rs`: `TrackPopupMenuEx` now verifies that `TPMPARAMS.rcExclude` moves the top-level popup before pointer hit-testing and that CE center/right/bottom alignment flags reposition the popup before pointer selection.
+- `tests/basic_subsystems.rs`: direct `ResourceSystem::copy_image_list_image` callers now assert CE `ILCF_MOVE` removal semantics instead of the removed pre-CE boolean-copy helper shape.
 - `tests/coredll_raw_kernel.rs`: `SHGetFileInfo` now verifies CE `SFGAO_*` attribute output for regular files, shortcuts, read-only files, storage-card folders, and inaccessible network folders.
 - `tests/coredll_raw_kernel.rs`: `Shell_NotifyIcon` duplicate-add rejection, `NIF_*` member flag handling, fixed CE `NOTIFYICONDATAW` size/readability, and null-icon modify preservation are covered.
 - `tests/coredll_raw_kernel.rs`: `SHNotificationAddI` sink-window validation and `SHNotificationUpdateI` stale-sink update behavior are covered.
@@ -56,6 +57,10 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 ## Last Known Validation
 
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed after the same-thread, early-`ReplyMessage`, and nested `SendMessageTimeout` slices.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_track_popup_menu_ex_applies_ce_alignment_flags` passed after adding CE `TPM_*ALIGN` popup positioning.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed after adding CE `TPM_*ALIGN` popup positioning.
+- `cargo test --features unicorn,trace,win32-desktop --test basic_subsystems image_list` passed after updating direct image-list copy tests to CE `ILCF_MOVE` semantics.
+- `cargo test --features unicorn,trace,win32-desktop` passed after adding CE `TPM_*ALIGN` popup positioning and updating direct image-list move tests.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_send_message_timeout` passed after adding same-thread, early-`ReplyMessage`, and nested `SendMessageTimeout` coverage.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_msgwait` passed after adding `QS_SENDMESSAGE`/`MWMO_INPUTAVAILABLE` message-wait coverage.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_track_popup_menu` passed after applying `TPMPARAMS.rcExclude` to popup placement.

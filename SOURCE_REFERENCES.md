@@ -255,9 +255,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `TPM_RIGHTBUTTON` is set. Queued posted/sent same-thread non-owner
     messages, owner-window non-menu messages, and generated owner `WM_PAINT`
     are now dispatched before default or later owner-window menu input resolves.
-    CE `winuser.h` defines `TPMPARAMS.rcExclude` as a screen-coordinate
-    rectangle to exclude while positioning `TrackPopupMenuEx`; v3 now applies
-    that rectangle to top-level popup placement before painting and hit-testing.
+    CE `winuser.h` defines `TPM_CENTERALIGN`, `TPM_RIGHTALIGN`,
+    `TPM_VCENTERALIGN`, and `TPM_BOTTOMALIGN`; v3 now applies those anchor
+    transforms to top-level popup placement before painting and hit-testing.
+    CE `winuser.h` also defines `TPMPARAMS.rcExclude` as a screen-coordinate
+    rectangle to exclude while positioning `TrackPopupMenuEx`; v3 applies that
+    rectangle after initial alignment.
     A full nested modal menu pump and remaining live submenu cancellation/routing
     edge cases remain queued.
 

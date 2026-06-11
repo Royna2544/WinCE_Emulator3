@@ -14412,6 +14412,106 @@ fn coredll_raw_track_popup_menu_ex_uses_tpmp_params_exclude_rect_for_initial_pos
 }
 
 #[test]
+fn coredll_raw_track_popup_menu_ex_applies_ce_alignment_flags() -> Result<()> {
+    const TPM_CENTERALIGN: u32 = 0x0004;
+    const TPM_RIGHTALIGN: u32 = 0x0008;
+    const TPM_VCENTERALIGN: u32 = 0x0010;
+    const TPM_BOTTOMALIGN: u32 = 0x0020;
+    const TPM_RETURNCMD: u32 = 0x0100;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 41;
+    let first_text = 0x1_7c00;
+    let second_text = 0x1_7d00;
+    memory.map_halfwords(first_text, 16);
+    memory.map_halfwords(second_text, 16);
+    memory.write_wide_z(first_text, "First");
+    memory.write_wide_z(second_text, "Second");
+
+    let hwnd = kernel.create_window_ex_w(thread_id, "POPUP_ALIGN_OWNER", "", None, 0, 0, 0);
+    let popup = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_POPUP_MENU,
+        [],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreatePopupMenu did not return a handle: {other:?}"),
+    };
+    for args in [[popup, 0, 777, first_text], [popup, 0, 778, second_text]] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_APPEND_MENU_W,
+                args,
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(true),
+                ..
+            }
+        ));
+    }
+
+    kernel.gwe.set_cursor_pos(Point { x: 160, y: 123 });
+    let center_flags = TPM_CENTERALIGN | TPM_VCENTERALIGN | TPM_RETURNCMD;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRACK_POPUP_MENU_EX,
+            [popup, center_flags, 200, 120, hwnd, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(778),
+            ..
+        }
+    ));
+    let tracking = kernel
+        .resources
+        .last_popup_tracking()
+        .expect("center-aligned popup tracking");
+    assert_eq!(tracking.flags, center_flags);
+    assert_eq!(tracking.x, 155);
+    assert_eq!(tracking.y, 100);
+
+    kernel.gwe.set_cursor_pos(Point { x: 215, y: 203 });
+    let right_bottom_flags = TPM_RIGHTALIGN | TPM_BOTTOMALIGN | TPM_RETURNCMD;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_TRACK_POPUP_MENU_EX,
+            [popup, right_bottom_flags, 300, 220, hwnd, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(778),
+            ..
+        }
+    ));
+    let tracking = kernel
+        .resources
+        .last_popup_tracking()
+        .expect("right/bottom-aligned popup tracking");
+    assert_eq!(tracking.flags, right_bottom_flags);
+    assert_eq!(tracking.x, 210);
+    assert_eq!(tracking.y, 180);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    Ok(())
+}
+
+#[test]
 fn coredll_raw_track_popup_menu_tap_opens_submenu_before_selecting() -> Result<()> {
     // CE touch devices use tap-only menus: tapping a submenu parent must open the
     // child pane rather than immediately picking the child's default command. The
