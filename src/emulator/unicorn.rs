@@ -1751,6 +1751,9 @@ impl UnicornMips {
             uc.mem_write(u64::from(blob.base), &blob.bytes)
                 .map_err(|err| Error::Backend(format!("write 0x{:08x}: {err:?}", blob.base)))?;
         }
+        // Refresh shared file-mapping views from their canonical mapping data so
+        // this process observes writes other processes made since its last slice.
+        let _ = sync_file_mapping_views_to_unicorn(&mut uc, kernel);
         let mut start_pc = if let Some(saved) = self.saved_context.as_ref() {
             restore_mips_gprs(&mut uc, &saved.regs);
             saved.pc
@@ -5922,9 +5925,16 @@ fn sync_file_mapping_views_from_unicorn<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     kernel: &mut CeKernel,
 ) -> Result<()> {
+    // Only the owning process's view pages carry authoritative bytes: other
+    // processes hold stale snapshot copies of the same guest addresses, and
+    // reading those back would clobber data the owner wrote into the mapping.
+    let current_process_id = kernel.current_process_id();
     let mut updates = Vec::new();
     for mapping in kernel.handles.file_mappings() {
         for view in mapping.views.iter().copied() {
+            if view.process_id != current_process_id {
+                continue;
+            }
             let size = view.size.min(mapping.size.saturating_sub(view.offset)) as usize;
             let mut bytes = vec![0; size];
             uc.mem_read(u64::from(view.base), &mut bytes)
@@ -5945,6 +5955,24 @@ fn sync_file_mapping_views_from_unicorn<D>(
             }
             mapping.data[offset..end].copy_from_slice(&bytes);
         }
+    }
+    // Refresh every view's lazy-map seed bytes from the canonical mapping data
+    // so any process that maps (or re-maps) a view page next sees the latest
+    // cross-process state.
+    let seeds: Vec<(u32, Vec<u8>)> = kernel
+        .handles
+        .file_mappings()
+        .flat_map(|mapping| {
+            mapping.views.iter().map(|view| {
+                let start = (view.offset as usize).min(mapping.data.len());
+                let end = start
+                    .saturating_add(view.size as usize)
+                    .min(mapping.data.len());
+                (view.base, mapping.data[start..end].to_vec())
+            })
+        })
+        .collect();
+    for (base, bytes) in seeds {
         kernel.memory.set_virtual_initial_bytes(base, bytes);
     }
     Ok(())
@@ -5964,10 +5992,10 @@ fn sync_file_mapping_views_to_unicorn<D>(
             if start >= end {
                 continue;
             }
-            uc.mem_write(u64::from(view.base), &mapping.data[start..end])
-                .map_err(|err| {
-                    Error::Backend(format!("write mapped view 0x{:08x}: {err:?}", view.base))
-                })?;
+            // A view page may not be mapped in this process yet (kernel
+            // allocations map lazily on the first import); the lazy map seeds
+            // from the canonical initial bytes instead.
+            let _ = uc.mem_write(u64::from(view.base), &mapping.data[start..end]);
         }
     }
     Ok(())

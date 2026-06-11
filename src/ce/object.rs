@@ -94,6 +94,10 @@ pub struct FileMappingView {
     pub base: u32,
     pub size: u32,
     pub offset: u32,
+    /// Process that created the view. Cross-process coherence syncs a view's
+    /// guest pages from its owner's CPU only; other processes' copies of the
+    /// same pages are stale snapshots and must not overwrite the mapping data.
+    pub process_id: u32,
 }
 
 #[derive(Debug, Clone)]

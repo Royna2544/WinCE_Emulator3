@@ -17007,6 +17007,7 @@ fn map_view_of_file_raw<M: CoredllGuestMemory>(
         .memory
         .set_virtual_initial_bytes(base, std::mem::take(&mut initial_bytes));
     try_seed_guest_bytes(memory, base, &mapping_bytes);
+    let process_id = kernel.current_process_id();
     let Ok(mapping) = kernel.handles.file_mapping_mut(mapping_handle) else {
         kernel
             .threads
@@ -17023,6 +17024,7 @@ fn map_view_of_file_raw<M: CoredllGuestMemory>(
         base,
         size,
         offset: offset_low,
+        process_id,
     });
     kernel.threads.set_last_error(thread_id, 0);
     base
