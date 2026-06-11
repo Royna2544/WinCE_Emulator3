@@ -15,7 +15,7 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPWSTR, int) {
     FARPROC byOrdinalProc = GetProcAddressW(forwarder, (LPCWSTR)4);
     if (!byOrdinalProc) return FixtureFail(17404);
     PFN_FORWARD byOrdinal = (PFN_FORWARD)byOrdinalProc;
-    if (byOrdinal(6) != 0x1206) return FixtureFail(17405);
+    if (byOrdinal(6) != 0x3406) return FixtureFail(17405);
 
     HMODULE user = LoadLibraryW(L"c_forward_user.dll");
     if (!user) return FixtureFail(17406);

@@ -2,4 +2,4 @@ LIBRARY b_forwarder
 
 EXPORTS
     ForwardByName=a_forward_target.TargetByName @3
-    ForwardByOrdinal=a_forward_target.TargetByName @4
+    ForwardByOrdinal=a_forward_target.#7 @4
