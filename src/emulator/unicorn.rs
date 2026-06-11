@@ -8155,8 +8155,12 @@ fn try_block_empty_get_message<D>(
         return true;
     }
 
-    if thread_id == MAIN_GUEST_THREAD_ID {
-        let thread_handle = crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE;
+    let fallback_thread_handle = if thread_id == MAIN_GUEST_THREAD_ID {
+        Some(crate::ce::kernel::CE_CURRENT_THREAD_PSEUDO_HANDLE)
+    } else {
+        kernel.guest_thread_handle_by_id(thread_id)
+    };
+    if let Some(thread_handle) = fallback_thread_handle {
         kernel.record_blocked_msg_wait(0, crate::ce::timer::INFINITE);
         remove_stale_blocked_waits_for_thread(kernel, blocked_waits, thread_id);
         remove_stale_blocked_get_message_for_thread(kernel, blocked_thread, thread_id);
@@ -29704,6 +29708,65 @@ mod unicorn_tests {
             crate::ce::gwe::WM_LBUTTONDOWN
         );
         assert_eq!(u32::from_le_bytes(msg_bytes[8..12].try_into().unwrap()), 1);
+    }
+
+    #[test]
+    fn non_main_get_message_without_running_thread_registers_waiter() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+
+        let (thread_handle, thread_id) = kernel.create_guest_thread(0x0040_3000, 0, false);
+        let blocked_waits = Rc::new(RefCell::new(Vec::new()));
+        let blocked_get_message = Rc::new(RefCell::new(None));
+        let blocked_guest_thread = Rc::new(RefCell::new(None));
+        let displaced_blocked_get_messages = Rc::new(RefCell::new(Vec::new()));
+        let pending_returns = Rc::new(RefCell::new(Vec::new()));
+        let current_thread_id = Rc::new(RefCell::new(thread_id));
+        let suspended_thread = Rc::new(RefCell::new(None));
+        let running_thread = Rc::new(RefCell::new(None));
+        let last_messages = Rc::new(RefCell::new(Vec::new()));
+        uc.reg_write(RegisterMIPS::RA, 0x0040_4000).unwrap();
+
+        let pending_com = Rc::new(RefCell::new(Vec::new()));
+        assert!(super::try_block_empty_get_message(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_GET_MESSAGE_W),
+            &[0x3000_0100, 0, 0, 0],
+            0,
+            thread_id,
+            &blocked_get_message,
+            &blocked_guest_thread,
+            &displaced_blocked_get_messages,
+            &blocked_waits,
+            &pending_returns,
+            &current_thread_id,
+            &suspended_thread,
+            &running_thread,
+            &last_messages,
+            std::time::Instant::now(),
+            Some(std::time::Duration::from_secs(1)),
+            &pending_com,
+            true,
+        ));
+
+        let waiter = blocked_guest_thread.borrow();
+        let waiter = waiter.as_ref().expect("non-main GetMessage waiter");
+        assert_eq!(waiter.thread_id, thread_id);
+        assert_eq!(waiter.thread_handle, thread_handle);
+        assert!(kernel.blocked_waiter(waiter.wait_id).is_some());
+        assert!(
+            kernel
+                .blocked_waiters()
+                .any(|wait| wait.thread_id == thread_id
+                    && matches!(
+                        wait.kind,
+                        crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage { .. }
+                    ))
+        );
+        assert_eq!(*running_thread.borrow(), None);
     }
 
     #[test]
