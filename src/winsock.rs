@@ -3277,6 +3277,7 @@ mod tests {
         assert_eq!(memory.read_u32(readfds).unwrap(), 0);
 
         let sender = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let sender_port = sender.local_addr().unwrap().port();
         sender
             .send_to(b"gram", (Ipv4Addr::LOCALHOST, port))
             .unwrap();
@@ -3319,6 +3320,23 @@ mod tests {
             b"gram"
         );
         assert_eq!(memory.read_u32(remote_len).unwrap(), 16);
+        assert_eq!(memory.read_u16(remote_addr).unwrap(), AF_INET as u16);
+        assert_eq!(
+            u16::from_be_bytes([
+                memory.read_u8(remote_addr + 2).unwrap(),
+                memory.read_u8(remote_addr + 3).unwrap()
+            ]),
+            sender_port
+        );
+        assert_eq!(
+            [
+                memory.read_u8(remote_addr + 4).unwrap(),
+                memory.read_u8(remote_addr + 5).unwrap(),
+                memory.read_u8(remote_addr + 6).unwrap(),
+                memory.read_u8(remote_addr + 7).unwrap(),
+            ],
+            CE_GATEWAY_IP.octets()
+        );
         assert!(!socket_read_ready(socket));
         assert_eq!(
             dispatch_import(
@@ -3632,6 +3650,292 @@ mod tests {
                 Some("closesocket"),
                 &mut memory,
                 &[udp],
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn select_reports_tcp_peer_close_as_read_ready_for_zero_recv() {
+        let _winsock_guard = locked_reset_for_tests();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (accepted_tx, accepted_rx) = mpsc::channel();
+        let (close_tx, close_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            accepted_tx.send(()).unwrap();
+            close_rx.recv().unwrap();
+            drop(stream);
+        });
+
+        let mut kernel = test_kernel();
+        let mut memory = TestMemory::default();
+        let sockaddr = 0x3000_d100;
+        let readfds = 0x3000_d200;
+        let recv_buf = 0x3000_d300;
+        memory.write_sockaddr_v4(sockaddr, Ipv4Addr::LOCALHOST, port);
+        let socket = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("socket"),
+            &mut memory,
+            &[AF_INET, SOCK_STREAM, 0],
+        );
+        assert_ne!(socket, INVALID_SOCKET);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("connect"),
+                &mut memory,
+                &[socket, sockaddr, 16],
+            ),
+            0
+        );
+        accepted_rx.recv().unwrap();
+        assert!(!socket_read_ready(socket));
+
+        close_tx.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !socket_read_ready(socket) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(socket_read_ready(socket));
+
+        memory.write_fd_set(readfds, &[socket]);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("select"),
+                &mut memory,
+                &[0, readfds, 0, 0, 0],
+            ),
+            1
+        );
+        assert_eq!(memory.read_u32(readfds).unwrap(), 1);
+        assert_eq!(memory.read_u32(readfds + 4).unwrap(), socket);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("recv"),
+                &mut memory,
+                &[socket, recv_buf, 4, 0],
+            ),
+            0
+        );
+        assert_eq!(kernel.threads.get_last_error(1), 0);
+
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("closesocket"),
+                &mut memory,
+                &[socket],
+            ),
+            0
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn tcp_peer_write_shutdown_is_read_ready_but_keeps_guest_send_open() {
+        let _winsock_guard = locked_reset_for_tests();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (accepted_tx, accepted_rx) = mpsc::channel();
+        let (shutdown_tx, shutdown_rx) = mpsc::channel();
+        let (shutdown_done_tx, shutdown_done_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            accepted_tx.send(()).unwrap();
+            shutdown_rx.recv().unwrap();
+            stream.shutdown(Shutdown::Write).unwrap();
+            shutdown_done_tx.send(()).unwrap();
+            let mut input = [0; 4];
+            stream.read_exact(&mut input).unwrap();
+            assert_eq!(&input, b"pong");
+        });
+
+        let mut kernel = test_kernel();
+        let mut memory = TestMemory::default();
+        let sockaddr = 0x3000_d600;
+        let readfds = 0x3000_d700;
+        let recv_buf = 0x3000_d800;
+        let send_buf = 0x3000_d900;
+        memory.write_sockaddr_v4(sockaddr, Ipv4Addr::LOCALHOST, port);
+        memory.write_bytes_at(send_buf, b"pong");
+        let socket = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("socket"),
+            &mut memory,
+            &[AF_INET, SOCK_STREAM, 0],
+        );
+        assert_ne!(socket, INVALID_SOCKET);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("connect"),
+                &mut memory,
+                &[socket, sockaddr, 16],
+            ),
+            0
+        );
+        accepted_rx.recv().unwrap();
+        assert!(!socket_read_ready(socket));
+
+        shutdown_tx.send(()).unwrap();
+        shutdown_done_rx.recv().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !socket_read_ready(socket) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(socket_read_ready(socket));
+
+        memory.write_fd_set(readfds, &[socket]);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("select"),
+                &mut memory,
+                &[0, readfds, 0, 0, 0],
+            ),
+            1
+        );
+        assert_eq!(memory.read_u32(readfds).unwrap(), 1);
+        assert_eq!(memory.read_u32(readfds + 4).unwrap(), socket);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("recv"),
+                &mut memory,
+                &[socket, recv_buf, 4, 0],
+            ),
+            0
+        );
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("send"),
+                &mut memory,
+                &[socket, send_buf, 4, 0],
+            ),
+            4
+        );
+
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("closesocket"),
+                &mut memory,
+                &[socket],
+            ),
+            0
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn select_recovers_after_zero_ready_poll_when_socket_becomes_readable() {
+        let _winsock_guard = locked_reset_for_tests();
+        let probe = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let mut kernel = test_kernel();
+        let mut memory = TestMemory::default();
+        let bind_addr = 0x3000_d400;
+        let readfds = 0x3000_d500;
+        memory.write_sockaddr_v4(bind_addr, Ipv4Addr::LOCALHOST, port);
+        let socket = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("socket"),
+            &mut memory,
+            &[AF_INET, SOCK_DGRAM, 0],
+        );
+        assert_ne!(socket, INVALID_SOCKET);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("bind"),
+                &mut memory,
+                &[socket, bind_addr, 16],
+            ),
+            0
+        );
+
+        memory.write_fd_set(readfds, &[socket]);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("select"),
+                &mut memory,
+                &[0, readfds, 0, 0, 0],
+            ),
+            0
+        );
+        assert_eq!(memory.read_u32(readfds).unwrap(), 0);
+        assert_eq!(kernel.threads.get_last_error(1), 0);
+
+        let sender = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        sender
+            .send_to(b"again", (Ipv4Addr::LOCALHOST, port))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !socket_read_ready(socket) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(socket_read_ready(socket));
+
+        memory.write_fd_set(readfds, &[socket]);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("select"),
+                &mut memory,
+                &[0, readfds, 0, 0, 0],
+            ),
+            1
+        );
+        assert_eq!(memory.read_u32(readfds).unwrap(), 1);
+        assert_eq!(memory.read_u32(readfds + 4).unwrap(), socket);
+
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("closesocket"),
+                &mut memory,
+                &[socket],
             ),
             0
         );

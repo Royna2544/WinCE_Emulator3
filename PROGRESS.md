@@ -27,6 +27,9 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 - `tests/coredll_raw_gwe.rs`: destroyed-target `SendMessageTimeout` result write coverage is present.
 - `src/winsock.rs`: `select` now ignores `nfds` like CE callers expect while validating non-null fd sets, `FD_SETSIZE`, invalid socket handles, and fd-set memory faults before filtering readiness.
 - `src/winsock.rs`: Winsock unit coverage now exercises `select` with `nfds` values `0`, `-1`, and active counts, mixed read/write/except fd sets, null fd-set triads, oversized fd sets, invalid socket handles, and `WSAEFAULT` memory failures.
+- `src/winsock.rs`: TCP peer close is now read-ready for `select`, allowing the follow-up `recv` to return zero; repeated zero-ready `select` polling is covered by a recovery test that becomes readable after a later datagram.
+- `src/winsock.rs`: UDP `recvfrom` coverage now verifies host loopback datagram sources are exposed to CE callers as the isolated gateway address with the original sender port.
+- `src/winsock.rs`: TCP half-close coverage now verifies peer write shutdown wakes `select` for a zero-length `recv` while the guest socket can still `send` on its write half.
 - `tests/basic_subsystems.rs`: shell notify-icon and file-notification expectations now use explicit CE member/detail flags after the flag-gated notify and `FILE_NOTIFY_CHANGE_CEGETINFO` behavior changes.
 
 ## Last Known Validation
@@ -34,8 +37,11 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed for the GWE slice.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_memory_file` passed for the file-change slice.
 - `cargo test --features unicorn,trace,win32-desktop winsock::tests::select_` passed for the Winsock select validation slice.
+- `cargo test --features unicorn,trace,win32-desktop winsock::tests` passed after the TCP peer-close and zero-ready recovery slice.
+- `cargo test --features unicorn,trace,win32-desktop winsock::tests` passed after adding UDP source-address validation.
+- `cargo test --features unicorn,trace,win32-desktop winsock::tests` passed after adding TCP half-close validation.
 - `cargo test --features unicorn,trace,win32-desktop --test basic_subsystems` passed after updating stale test expectations.
-- `cargo test --features unicorn,trace,win32-desktop` passed after the Winsock and test-fix slices.
+- `cargo test --features unicorn,trace,win32-desktop` passed after the Winsock select, test-fix, and TCP peer-close slices.
 - `cargo check --features unicorn,trace,win32-desktop` passed after the recent code slices.
 - `git diff --check` was clean except for expected CRLF warnings on existing files.
 

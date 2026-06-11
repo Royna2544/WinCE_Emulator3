@@ -119,9 +119,9 @@ Reference evidence:
 - `C:\WINCE600\PRIVATE\WINCEOS\COREOS\DEVICE\SERVICES\CORE\servacpt.cpp`
 
 Missing or under-validated:
-- Local Winsock already has core socket calls, `ioctlsocket`, `setsockopt`, `getsockopt`, and `select`; `select` now accepts CE caller `nfds` values of `0`, `-1`, and active counts while rejecting null fd-set triads, `fd_count > FD_SETSIZE`, invalid socket handles, and fd-set memory faults with Winsock errors. Mixed read/write/except set filtering is covered. Remaining work is CE stress parity: repeated zero/error select recovery, peer close behavior, reset/error propagation, and long-running server loops.
-- Add more tests based on CE server/stress patterns for repeated `select` zero/error recovery under socket churn.
-- Validate UDP datagram source-address behavior, TCP half-close/reset semantics, and `SO_ERROR` clearing after `getsockopt`.
+- Local Winsock already has core socket calls, `ioctlsocket`, `setsockopt`, `getsockopt`, and `select`; `select` now accepts CE caller `nfds` values of `0`, `-1`, and active counts while rejecting null fd-set triads, `fd_count > FD_SETSIZE`, invalid socket handles, and fd-set memory faults with Winsock errors. Mixed read/write/except set filtering, zero-ready recovery, graceful TCP peer-close read readiness, TCP half-close read/write behavior, and `SO_ERROR` clearing after `getsockopt` are covered. Remaining work is CE stress parity: reset/error propagation and long-running server loops.
+- Add more tests based on CE server/stress patterns for socket churn after reset/error transitions and long-lived accept/select loops.
+- Validate TCP reset semantics and long-running select/accept loops.
 
 ### Input, IME, Text, And GDI Gaps
 
