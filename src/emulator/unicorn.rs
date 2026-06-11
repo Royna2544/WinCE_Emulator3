@@ -1876,10 +1876,36 @@ impl UnicornMips {
         let blocked_get_message_live_hook = Rc::clone(&blocked_get_message);
         let cross_process_send_yield = Rc::new(RefCell::new(None::<UnicornCrossProcessSendYield>));
         let cross_process_send_yield_hook = Rc::clone(&cross_process_send_yield);
+        // Wall-clock/live-pump stops must not land on a branch delay slot or
+        // inside a trampoline sequence: resuming at such a pc executes the
+        // delay slot standalone (the branch is lost) and the guest jumps wild.
+        // The stop request is deferred until the next safe instruction.
+        let host_wall_clock_stop_pending = Rc::new(Cell::new(false));
+        let host_wall_clock_stop_pending_hook = Rc::clone(&host_wall_clock_stop_pending);
+        let code_hook_previous_pc = Rc::new(Cell::new(None::<u32>));
+        let code_hook_previous_pc_hook = Rc::clone(&code_hook_previous_pc);
+        let trampoline_ranges_wall_clock_hook = trampoline_ranges.clone();
         // ── Code hook: per-instruction trampoline dispatch, call tracing, indirect-call probe ──
         if !fast_start_enabled {
             uc.add_code_hook(1, 0, move |uc, address, _size| {
             let pc = address as u32;
+            let previous_pc = code_hook_previous_pc_hook.replace(Some(pc));
+            if host_wall_clock_stop_pending_hook.get()
+                && pc < IMPORT_TRAP_BASE
+                && !target_in_ranges(pc, &trampoline_ranges_wall_clock_hook)
+                && !is_mips_delay_slot_pc(|addr| read_unicorn_u32(uc, addr), previous_pc, pc)
+            {
+                host_wall_clock_stop_pending_hook.set(false);
+                *host_wall_clock_stop_hook.borrow_mut() = Some(UnicornHostWallClockStop {
+                    pc,
+                    ra: read_mips_reg(uc, RegisterMIPS::RA),
+                    sp: read_mips_reg(uc, RegisterMIPS::SP),
+                    instruction: read_unicorn_code_u32(uc, &mapped_code, pc),
+                    elapsed_ms: host_wall_clock_started.elapsed().as_millis() as u64,
+                });
+                let _ = uc.emu_stop();
+                return;
+            }
             let code_trace_index = code_trace_counter_hook.get().wrapping_add(1);
             code_trace_counter_hook.set(code_trace_index);
             if code_trace_index % UNICORN_TB_CACHE_FLUSH_INTERVAL == 0 {
@@ -1904,15 +1930,7 @@ impl UnicornMips {
                     unsafe { (&mut *kernel_ptr).drain_remote_server_control_messages() }
                 };
                 if live_pump && remote_drained != 0 {
-                    *host_wall_clock_stop_hook.borrow_mut() = Some(UnicornHostWallClockStop {
-                        pc,
-                        ra: read_mips_reg(uc, RegisterMIPS::RA),
-                        sp: read_mips_reg(uc, RegisterMIPS::SP),
-                        instruction: None,
-                        elapsed_ms: host_wall_clock_started.elapsed().as_millis() as u64,
-                    });
-                    let _ = uc.emu_stop();
-                    return;
+                    host_wall_clock_stop_pending_hook.set(true);
                 }
                 if let Err(err) = drain_win32_host_input_to_active_window(unsafe {
                     &mut *kernel_ptr
@@ -1939,15 +1957,7 @@ impl UnicornMips {
                 let mut counter = host_wall_clock_counter_hook.borrow_mut();
                 *counter = counter.wrapping_add(1);
                 if *counter & 0x0fff == 0 && host_wall_clock_started.elapsed() >= limit {
-                    *host_wall_clock_stop_hook.borrow_mut() = Some(UnicornHostWallClockStop {
-                        pc,
-                        ra: read_mips_reg(uc, RegisterMIPS::RA),
-                        sp: read_mips_reg(uc, RegisterMIPS::SP),
-                        instruction,
-                        elapsed_ms: host_wall_clock_started.elapsed().as_millis() as u64,
-                    });
-                    let _ = uc.emu_stop();
-                    return;
+                    host_wall_clock_stop_pending_hook.set(true);
                 }
             }
             let direct_jump_target =
