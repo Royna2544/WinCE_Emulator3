@@ -44,7 +44,11 @@ const FAST_START_RUN_SLICE_INSTRUCTIONS: usize = 250_000;
 const HOST_LIVE_RUN_SLICE_MS: u64 = 120_000;
 const HOST_IDLE_MESSAGE_POLL_SLICE_MS: u64 = 100;
 const HOST_REMOTE_BUSY_RUN_SLICE_MS: u64 = 5_000;
-const REMOTE_LIVE_RUN_SLICE_MS: u64 = 1_000;
+// Long busy slices: the in-run code hook already drains remote control
+// messages and ticks the framebuffer while the guest executes, and a fully
+// blocked guest exits the run on its own, so short forced exits only paid the
+// fresh-Unicorn restart cost (blob copy + retranslation) every second.
+const REMOTE_LIVE_RUN_SLICE_MS: u64 = 120_000;
 const COMPANION_START_DELAY_MS: u64 = 1_000;
 const COMPANION_INSTRUCTION_LIMIT: usize = 250_000_000;
 #[cfg(windows)]
