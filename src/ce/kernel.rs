@@ -101,6 +101,7 @@ pub struct CeKernel {
     pending_process_launches: Vec<PendingProcessLaunch>,
     next_process_id: u32,
     loaded_modules: BTreeMap<String, LoadedModule>,
+    next_loaded_module_order: u64,
     next_font_mem_resource_handle: u32,
     crt_rand_state: u32,
     crt_strtok_next_by_thread: BTreeMap<u32, u32>,
@@ -386,7 +387,9 @@ pub struct RuntimeLoaderStats {
     pub loud_failure_count: u64,
 }
 
+const DONT_RESOLVE_DLL_REFERENCES_FLAG: u32 = 0x0000_0001;
 const LOAD_LIBRARY_AS_DATAFILE_FLAG: u32 = 0x0000_0002;
+const NO_IMPORT_LOAD_FLAGS: u32 = DONT_RESOLVE_DLL_REFERENCES_FLAG | LOAD_LIBRARY_AS_DATAFILE_FLAG;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedModule {
@@ -406,6 +409,8 @@ pub struct LoadedModule {
     pub load_flags: u32,
     pub dynamic: bool,
     pub unload_pending: bool,
+    pub thread_library_calls_disabled: bool,
+    load_order: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -421,6 +426,7 @@ pub struct LoadedModuleMetadata {
     pub ref_count: u32,
     pub load_flags: u32,
     pub dynamic: bool,
+    pub thread_library_calls_disabled: bool,
 }
 
 impl Default for LoadedModuleMetadata {
@@ -437,6 +443,7 @@ impl Default for LoadedModuleMetadata {
             ref_count: 1,
             load_flags: 0,
             dynamic: false,
+            thread_library_calls_disabled: false,
         }
     }
 }
@@ -654,6 +661,7 @@ impl CeKernel {
             pending_process_launches: Vec::new(),
             next_process_id: 0x42,
             loaded_modules: BTreeMap::new(),
+            next_loaded_module_order: 0,
             next_font_mem_resource_handle: 0x5f00_0001,
             crt_rand_state: 1,
             crt_strtok_next_by_thread: BTreeMap::new(),
@@ -797,6 +805,8 @@ impl CeKernel {
             .into_iter()
             .map(|(name, forwarder)| (normalize_symbol_name(&name), forwarder))
             .collect();
+        let load_order = self.next_loaded_module_order;
+        self.next_loaded_module_order = self.next_loaded_module_order.saturating_add(1);
         self.loaded_modules.insert(
             normalize_module_name(&name),
             LoadedModule {
@@ -816,6 +826,8 @@ impl CeKernel {
                 load_flags: metadata.load_flags,
                 dynamic: metadata.dynamic,
                 unload_pending: false,
+                thread_library_calls_disabled: metadata.thread_library_calls_disabled,
+                load_order,
             },
         );
     }
@@ -833,12 +845,42 @@ impl CeKernel {
             .any(|loaded| loaded.base == module && !loaded.unload_pending)
     }
 
+    pub fn disable_thread_library_calls_for_module(&mut self, module: u32) -> bool {
+        let Some(loaded) = self
+            .loaded_modules
+            .values_mut()
+            .find(|loaded| loaded.base == module && !loaded.unload_pending)
+        else {
+            return false;
+        };
+        loaded.thread_library_calls_disabled = true;
+        true
+    }
+
     pub fn retain_loaded_module_by_name(&mut self, name: &str) -> Option<u32> {
         let module = self.loaded_modules.get_mut(&normalize_module_name(name))?;
         if module.unload_pending {
             return None;
         }
         module.ref_count = module.ref_count.saturating_add(1);
+        Some(module.base)
+    }
+
+    pub fn retain_loaded_module_by_name_for_load(
+        &mut self,
+        name: &str,
+        requested_flags: u32,
+    ) -> Option<u32> {
+        let module = self.loaded_modules.get_mut(&normalize_module_name(name))?;
+        if module.unload_pending {
+            return None;
+        }
+        module.ref_count = module.ref_count.saturating_add(1);
+        if (module.load_flags & NO_IMPORT_LOAD_FLAGS) == DONT_RESOLVE_DLL_REFERENCES_FLAG
+            && (requested_flags & NO_IMPORT_LOAD_FLAGS) == 0
+        {
+            module.load_flags &= !DONT_RESOLVE_DLL_REFERENCES_FLAG;
+        }
         Some(module.base)
     }
 
@@ -899,6 +941,21 @@ impl CeKernel {
             .values()
             .find(|loaded| loaded.base == module && !loaded.unload_pending)
             .cloned()
+    }
+
+    pub fn loaded_modules_for_thread_notifications(&self) -> Vec<LoadedModule> {
+        let mut modules: Vec<LoadedModule> = self
+            .loaded_modules
+            .values()
+            .filter(|loaded| {
+                !loaded.unload_pending
+                    && !loaded.thread_library_calls_disabled
+                    && (loaded.load_flags & NO_IMPORT_LOAD_FLAGS) == 0
+            })
+            .cloned()
+            .collect();
+        modules.sort_by_key(|module| module.load_order);
+        modules
     }
 
     pub fn font_families(&self) -> &[CeFontFamily] {

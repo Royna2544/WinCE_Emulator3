@@ -568,6 +568,33 @@ impl ResourceSystem {
         );
     }
 
+    pub fn remove_module_resources(&mut self, module: u32) -> usize {
+        let resource_handles = self
+            .entries
+            .iter()
+            .filter_map(|(handle, entry)| (entry.module == module).then_some(*handle))
+            .collect::<Vec<_>>();
+        let resource_count = resource_handles.len();
+        for handle in resource_handles {
+            self.entries.remove(&handle);
+        }
+        self.by_key
+            .retain(|(entry_module, _name, _kind), _handle| *entry_module != module);
+
+        let string_keys = self
+            .strings
+            .keys()
+            .filter(|(entry_module, _id)| *entry_module == module)
+            .copied()
+            .collect::<Vec<_>>();
+        let string_count = string_keys.len();
+        for key in string_keys {
+            self.strings.remove(&key);
+        }
+
+        resource_count + string_count
+    }
+
     pub fn load_string(&self, module: u32, id: u32) -> Option<&ResourceString> {
         self.strings.get(&(module, id))
     }
@@ -2332,6 +2359,46 @@ mod tests {
                 ResourceId::Integer(6),
             ),
             Some(handle)
+        );
+    }
+
+    #[test]
+    fn remove_module_resources_removes_only_resource_entries_and_strings_for_module() {
+        let mut resources = ResourceSystem::default();
+        let removed_handle = resources.register(
+            0x0001_0000,
+            ResourceId::Integer(10),
+            ResourceId::Integer(3),
+            0x0040_0000,
+            16,
+        );
+        let kept_handle = resources.register(
+            0x0002_0000,
+            ResourceId::Integer(10),
+            ResourceId::Integer(3),
+            0x0050_0000,
+            20,
+        );
+        resources.register_string(0x0001_0000, 7, "removed", Some(0x0040_0100));
+        resources.register_string(0x0002_0000, 7, "kept", Some(0x0050_0100));
+
+        assert_eq!(resources.remove_module_resources(0x0001_0000), 2);
+        assert_eq!(resources.resource_entry(removed_handle), None);
+        assert_eq!(
+            resources.find_resource(0x0001_0000, ResourceId::Integer(10), ResourceId::Integer(3)),
+            None
+        );
+        assert_eq!(resources.load_string(0x0001_0000, 7), None);
+        assert!(resources.resource_entry(kept_handle).is_some());
+        assert_eq!(
+            resources.find_resource(0x0002_0000, ResourceId::Integer(10), ResourceId::Integer(3)),
+            Some(kept_handle)
+        );
+        assert_eq!(
+            resources
+                .load_string(0x0002_0000, 7)
+                .map(|value| value.text.as_str()),
+            Some("kept")
         );
     }
 }

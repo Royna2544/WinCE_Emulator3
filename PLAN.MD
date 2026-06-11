@@ -108,10 +108,10 @@ Reference evidence:
 - `C:\WINCE600\PUBLIC\OSTEST\CESYSGEN\makefile`
 
 Missing or under-validated:
-- `LoadLibraryEx` now validates CE resource-only combinations such as `LOAD_LIBRARY_AS_DATAFILE | DONT_RESOLVE_DLL_REFERENCES`; keep expanding cases around resource-only handle behavior as more CE source consumers are found.
+- `LoadLibraryEx` now validates CE resource-only combinations such as `LOAD_LIBRARY_AS_DATAFILE | DONT_RESOLVE_DLL_REFERENCES`, rejects non-null `hFile` handles with `ERROR_INVALID_PARAMETER`, and promotes an already loaded `DONT_RESOLVE_DLL_REFERENCES` module to normal loaded-module flags when a later raw/normal load requests it without no-import flags. Keep expanding cases around resource-only handle behavior as more CE source consumers are found.
 - Loader lifecycle should be checked against CE build-entry behavior: `DllEntry`, `_DllMainCRTStartup`, C++ static constructors/destructors, TLS callbacks, and process/thread attach-detach ordering.
 - Runtime DLL mapping parity should be audited outside Unicorn so raw loader tests and Unicorn execution do not silently diverge.
-- Forwarder resolution now includes a host fixture where a named export forwards to a target DLL ordinal, and malformed literal forwarder strings fail closed instead of being whitespace-normalized into valid targets. Runtime `LoadLibraryW` failures now release modules newly loaded during the failed attempt, matching CE `DoImports` cleanup of dependency blocks. Remaining gaps are full dependency detach/unload ordering and broader guest-memory cleanup for failed maps.
+- Forwarder resolution now includes a host fixture where a named export forwards to a target DLL ordinal, and malformed literal forwarder strings fail closed instead of being whitespace-normalized into valid targets. Runtime `LoadLibraryW` failures now release modules newly loaded during the failed attempt, matching CE `DoImports` cleanup of dependency blocks, final dynamic `FreeLibrary` now releases the module's dependency refs after detach planning, failed runtime DLL maps now unmap their current image reservation before returning failure, current-image resource/trap/trampoline/module state is committed only after fallible parse/forwarder/resource steps succeed, and `DllMain(DLL_PROCESS_ATTACH)` false returns now set `ERROR_DLL_INIT_FAILED` while releasing refs owned by the failed load attempt. Remaining gaps are deeper lifecycle failure variants and broader integration fixtures for loader failure paths.
 
 ### Winsock And Network Gaps
 

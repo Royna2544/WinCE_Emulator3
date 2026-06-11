@@ -407,11 +407,13 @@ struct DllLifecycleCall {
 struct PendingDllLifecycleReturn {
     current: DllLifecycleCall,
     remaining: Vec<DllLifecycleCall>,
+    caller_thread_id: u32,
     return_pc: u32,
     return_sp: u32,
     caller_regs: MipsGuestContext,
     api_result: u32,
-    release_after_return: Option<u32>,
+    release_after_return: Vec<u32>,
+    release_on_attach_failure: Vec<u32>,
 }
 
 #[cfg(feature = "unicorn")]
@@ -1031,15 +1033,25 @@ impl UnicornMips {
             let ready_wait = Self::parked_process_ready_wait_id(process, kernel);
             let can_run = Self::parked_process_can_run(process, kernel);
             let priority_ready = Self::parked_process_has_priority_ready_work(process, kernel);
+            let blocked_send_live = process
+                .blocked_send_id
+                .map(|send_id| kernel.gwe.sent_message(send_id).is_some());
+            let blocked_send_wait_present = process.blocked_send_id.map(|send_id| {
+                process.cpu.blocked_wait_threads.iter().any(|blocked| {
+                    matches!(blocked.kind, BlockedWaitKind::SendMessage { send_id: id, .. } if id == send_id)
+                })
+            });
             let _ = writeln!(
                 &mut out,
-                "    {index}: pid={} tid={} app={} handle={:?} thread_handle={:?} blocked_send={:?} can_run={} priority_ready={} ready_wait={:?}",
+                "    {index}: pid={} tid={} app={} handle={:?} thread_handle={:?} blocked_send={:?} blocked_send_live={:?} blocked_send_wait_present={:?} can_run={} priority_ready={} ready_wait={:?}",
                 process.process_state.process_id,
                 process.thread_id,
                 process.application.as_deref().unwrap_or("<none>"),
                 process.process_handle,
                 process.thread_handle,
                 process.blocked_send_id,
+                blocked_send_live,
+                blocked_send_wait_present,
                 can_run,
                 priority_ready,
                 ready_wait
@@ -1245,18 +1257,87 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
+    pub fn has_runnable_parked_process(&self, kernel: &CeKernel) -> bool {
+        self.parked_child_processes
+            .iter()
+            .any(|process| Self::parked_process_can_run(process, kernel))
+    }
+
+    #[cfg(feature = "unicorn")]
     pub fn complete_orphaned_parked_send_wait(&mut self, kernel: &mut CeKernel) -> bool {
-        let Some(index) = self.parked_child_processes.iter().position(|process| {
-            process
-                .blocked_send_id
-                .is_some_and(|send_id| kernel.gwe.sent_message(send_id).is_none())
-        }) else {
+        Self::complete_orphaned_send_wait_in_parked_processes(
+            &mut self.parked_child_processes,
+            kernel,
+        )
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn complete_orphaned_send_wait_in_parked_processes(
+        parked_child_processes: &mut VecDeque<ParkedProcess>,
+        kernel: &mut CeKernel,
+    ) -> bool {
+        let Some((index, send_id)) =
+            parked_child_processes
+                .iter()
+                .enumerate()
+                .find_map(|(index, process)| {
+                    process
+                        .blocked_send_id
+                        .filter(|send_id| kernel.gwe.sent_message(*send_id).is_none())
+                        .or_else(|| {
+                            process.cpu.blocked_wait_threads.iter().find_map(|blocked| {
+                                if let BlockedWaitKind::SendMessage { send_id, .. } = blocked.kind
+                                    && kernel.gwe.sent_message(send_id).is_none()
+                                {
+                                    Some(send_id)
+                                } else {
+                                    None
+                                }
+                            })
+                        })
+                        .or_else(|| {
+                            kernel.blocked_waiters().find_map(|wait| {
+                                if wait.thread_id == process.thread_id
+                                && let crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage {
+                                    send_id,
+                                } = wait.kind
+                                && kernel.gwe.sent_message(send_id).is_none()
+                            {
+                                Some(send_id)
+                            } else {
+                                None
+                            }
+                            })
+                        })
+                        .map(|send_id| (index, send_id))
+                })
+        else {
             return false;
         };
-        let Some(send_id) = self.parked_child_processes[index].blocked_send_id else {
-            return false;
-        };
-        let parked = &mut self.parked_child_processes[index];
+        let parked = &mut parked_child_processes[index];
+        let wait_present = parked.cpu.blocked_wait_threads.iter().any(|blocked| {
+            matches!(blocked.kind, BlockedWaitKind::SendMessage { send_id: id, .. } if id == send_id)
+        });
+        if !wait_present {
+            let stale_wait_ids = kernel
+                .blocked_waiters()
+                .filter_map(|wait| {
+                    (wait.thread_id == parked.thread_id
+                        && matches!(
+                            wait.kind,
+                            crate::ce::scheduler::SchedulerBlockedWaitKind::SendMessage {
+                                send_id: id
+                            } if id == send_id
+                        ))
+                    .then_some(wait.id)
+                })
+                .collect::<Vec<_>>();
+            for wait_id in stale_wait_ids {
+                let _ = kernel.remove_blocked_waiter(wait_id);
+            }
+            parked.blocked_send_id = None;
+            return true;
+        }
         if Self::complete_blocked_send_for_parked_cpu(parked.cpu.as_mut(), kernel, send_id, 0) {
             parked.blocked_send_id = None;
             return true;
@@ -2257,6 +2338,10 @@ impl UnicornMips {
         let parked_child_processes = Rc::new(RefCell::new(std::mem::take(
             &mut self.parked_child_processes,
         )));
+        {
+            let mut parked = parked_child_processes.borrow_mut();
+            let _ = Self::complete_orphaned_send_wait_in_parked_processes(&mut parked, kernel);
+        }
         let parked_child_processes_hook = Rc::clone(&parked_child_processes);
         let live_trampoline_state_code_hook = Rc::clone(&live_trampoline_state);
         let blocked_get_message = Rc::new(RefCell::new(None::<UnicornBlockedGetMessage>));
@@ -5370,6 +5455,10 @@ const RUNTIME_COREDLL_MODULE_HANDLE: u32 = 0x7000_0001;
 const DLL_PROCESS_DETACH: u32 = 0;
 #[cfg(feature = "unicorn")]
 const DLL_PROCESS_ATTACH: u32 = 1;
+#[cfg(feature = "unicorn")]
+const DLL_THREAD_ATTACH: u32 = 2;
+#[cfg(feature = "unicorn")]
+const DLL_THREAD_DETACH: u32 = 3;
 
 #[cfg(feature = "unicorn")]
 enum RuntimeLoaderImportResult {
@@ -5403,7 +5492,16 @@ fn try_handle_runtime_loader_import<D>(
     let is_load_library_w = ordinal == crate::ce::coredll_ordinals::ORD_LOAD_LIBRARY_W;
     let is_load_library_ex_w = ordinal == crate::ce::coredll_ordinals::ORD_LOAD_LIBRARY_EX_W;
     let is_free_library = ordinal == crate::ce::coredll_ordinals::ORD_FREE_LIBRARY;
-    if !is_load_library_w && !is_load_library_ex_w && !is_free_library {
+    let is_thread_attach_all_dlls =
+        ordinal == crate::ce::coredll_ordinals::ORD_THREAD_ATTACH_ALL_DLLS;
+    let is_thread_detach_all_dlls =
+        ordinal == crate::ce::coredll_ordinals::ORD_THREAD_DETACH_ALL_DLLS;
+    if !is_load_library_w
+        && !is_load_library_ex_w
+        && !is_free_library
+        && !is_thread_attach_all_dlls
+        && !is_thread_detach_all_dlls
+    {
         return None;
     }
 
@@ -5417,11 +5515,38 @@ fn try_handle_runtime_loader_import<D>(
         ));
     }
 
+    if is_thread_attach_all_dlls || is_thread_detach_all_dlls {
+        let reason = if is_thread_attach_all_dlls {
+            DLL_THREAD_ATTACH
+        } else {
+            DLL_THREAD_DETACH
+        };
+        let calls = record_dll_lifecycle_calls(kernel, dll_thread_lifecycle_calls(kernel, reason));
+        if enter_dll_lifecycle_callout(
+            uc,
+            calls,
+            thread_id,
+            0,
+            Vec::new(),
+            Vec::new(),
+            pending_returns,
+        ) {
+            return Some(RuntimeLoaderImportResult::EnteredLifecycle);
+        }
+        return Some(RuntimeLoaderImportResult::Complete(0));
+    }
+
     let flags = if is_load_library_ex_w {
         args.get(2).copied().unwrap_or(0)
     } else {
         0
     };
+    if is_load_library_ex_w && args.get(1).copied().unwrap_or(0) != 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, crate::ce::thread::ERROR_INVALID_PARAMETER);
+        return Some(RuntimeLoaderImportResult::Complete(0));
+    }
     let name_ptr = args.first().copied().unwrap_or(0);
     let Some(module_name) = read_unicorn_wide_z(uc, name_ptr, 260) else {
         kernel
@@ -5444,7 +5569,14 @@ fn try_handle_runtime_loader_import<D>(
             .set_last_error(thread_id, crate::ce::thread::ERROR_NOT_SUPPORTED);
         return Some(RuntimeLoaderImportResult::Complete(0));
     }
-    if let Some(handle) = kernel.retain_loaded_module_by_name(&module_name) {
+    let effective_flags = if flags & RUNTIME_LOAD_LIBRARY_AS_DATAFILE != 0 {
+        flags | RUNTIME_DONT_RESOLVE_DLL_REFERENCES
+    } else {
+        flags
+    };
+    if let Some(handle) =
+        kernel.retain_loaded_module_by_name_for_load(&module_name, effective_flags)
+    {
         kernel.threads.set_last_error(thread_id, 0);
         return Some(RuntimeLoaderImportResult::Complete(handle));
     }
@@ -5458,11 +5590,7 @@ fn try_handle_runtime_loader_import<D>(
     };
     let mut loading = BTreeSet::new();
     let mut newly_loaded_modules = Vec::new();
-    let effective_flags = if flags & RUNTIME_LOAD_LIBRARY_AS_DATAFILE != 0 {
-        flags | RUNTIME_DONT_RESOLVE_DLL_REFERENCES
-    } else {
-        flags
-    };
+    let mut retained_dependency_modules = Vec::new();
     match runtime_load_guest_dll_from_path(
         uc,
         kernel,
@@ -5480,6 +5608,7 @@ fn try_handle_runtime_loader_import<D>(
         effective_flags,
         &mut loading,
         &mut newly_loaded_modules,
+        &mut retained_dependency_modules,
     ) {
         Ok(handle) => {
             kernel.threads.set_last_error(thread_id, 0);
@@ -5493,8 +5622,13 @@ fn try_handle_runtime_loader_import<D>(
             } else if enter_dll_lifecycle_callout(
                 uc,
                 record_dll_lifecycle_calls(kernel, lifecycle_calls),
+                thread_id,
                 handle,
-                None,
+                Vec::new(),
+                runtime_loader_attach_failure_release_refs(
+                    &newly_loaded_modules,
+                    &retained_dependency_modules,
+                ),
                 pending_returns,
             ) {
                 Some(RuntimeLoaderImportResult::EnteredLifecycle)
@@ -5505,6 +5639,7 @@ fn try_handle_runtime_loader_import<D>(
                     path = %path.display(),
                     "runtime LoadLibraryW failed to enter DLL lifecycle callout"
                 );
+                rollback_runtime_loader_retained_modules(kernel, &retained_dependency_modules);
                 rollback_runtime_loader_new_modules(kernel, &newly_loaded_modules);
                 kernel.record_runtime_loader_loud_failure();
                 kernel
@@ -5521,6 +5656,7 @@ fn try_handle_runtime_loader_import<D>(
                 error = %err,
                 "runtime LoadLibraryW failed"
             );
+            rollback_runtime_loader_retained_modules(kernel, &retained_dependency_modules);
             rollback_runtime_loader_new_modules(kernel, &newly_loaded_modules);
             kernel.record_runtime_loader_loud_failure();
             kernel
@@ -5542,6 +5678,45 @@ fn rollback_runtime_loader_new_modules(
         if !seen.insert(module) {
             continue;
         }
+        match kernel.release_loaded_module(module) {
+            FreeLibraryResult::UnloadPending | FreeLibraryResult::StillReferenced { .. } => {
+                released += 1;
+            }
+            FreeLibraryResult::Pinned | FreeLibraryResult::InvalidHandle => {}
+        }
+    }
+    released
+}
+
+#[cfg(feature = "unicorn")]
+fn rollback_runtime_loader_retained_modules(
+    kernel: &mut CeKernel,
+    retained_dependency_modules: &[u32],
+) -> usize {
+    release_runtime_loader_module_refs(kernel, retained_dependency_modules.iter().rev().copied())
+}
+
+#[cfg(feature = "unicorn")]
+fn runtime_loader_attach_failure_release_refs(
+    newly_loaded_modules: &[u32],
+    retained_dependency_modules: &[u32],
+) -> Vec<u32> {
+    let mut refs = retained_dependency_modules
+        .iter()
+        .rev()
+        .copied()
+        .collect::<Vec<_>>();
+    refs.extend(newly_loaded_modules.iter().rev().copied());
+    refs
+}
+
+#[cfg(feature = "unicorn")]
+fn release_runtime_loader_module_refs(
+    kernel: &mut CeKernel,
+    modules: impl IntoIterator<Item = u32>,
+) -> usize {
+    let mut released = 0usize;
+    for module in modules {
         match kernel.release_loaded_module(module) {
             FreeLibraryResult::UnloadPending | FreeLibraryResult::StillReferenced { .. } => {
                 released += 1;
@@ -5589,27 +5764,18 @@ fn handle_runtime_free_library_import<D>(
         };
     }
 
-    let lifecycle_calls = if loaded.load_flags & RUNTIME_DONT_RESOLVE_DLL_REFERENCES != 0 {
-        Vec::new()
-    } else {
-        dll_detach_lifecycle_calls_for_module(&loaded)
-    };
-    if lifecycle_calls.is_empty() {
-        let result = kernel.release_loaded_module(module);
-        if matches!(result, FreeLibraryResult::UnloadPending) {
-            kernel.threads.set_last_error(thread_id, 0);
-            RuntimeLoaderImportResult::Complete(1)
-        } else {
-            kernel
-                .threads
-                .set_last_error(thread_id, crate::ce::thread::ERROR_INVALID_HANDLE);
-            RuntimeLoaderImportResult::Complete(0)
-        }
+    let release_plan = runtime_free_library_release_plan(kernel, &loaded);
+    if release_plan.lifecycle_calls.is_empty() {
+        release_runtime_loader_module_refs(kernel, release_plan.release_after_lifecycle);
+        kernel.threads.set_last_error(thread_id, 0);
+        RuntimeLoaderImportResult::Complete(1)
     } else if enter_dll_lifecycle_callout(
         uc,
-        record_dll_lifecycle_calls(kernel, lifecycle_calls),
+        record_dll_lifecycle_calls(kernel, release_plan.lifecycle_calls),
+        thread_id,
         1,
-        Some(module),
+        release_plan.release_after_lifecycle,
+        Vec::new(),
         pending_returns,
     ) {
         kernel.threads.set_last_error(thread_id, 0);
@@ -5647,6 +5813,7 @@ fn runtime_load_guest_dll_from_path<D>(
     load_flags: u32,
     loading: &mut BTreeSet<String>,
     newly_loaded_modules: &mut Vec<u32>,
+    retained_dependency_modules: &mut Vec<u32>,
 ) -> Result<u32> {
     let file_name = path
         .file_name()
@@ -5654,7 +5821,7 @@ fn runtime_load_guest_dll_from_path<D>(
         .unwrap_or_default()
         .to_owned();
     let normalized = normalize_module_name(&file_name);
-    if let Some(handle) = kernel.retain_loaded_module_by_name(&file_name) {
+    if let Some(handle) = kernel.retain_loaded_module_by_name_for_load(&file_name, load_flags) {
         return Ok(handle);
     }
     if !loading.insert(normalized.clone()) {
@@ -5669,11 +5836,13 @@ fn runtime_load_guest_dll_from_path<D>(
     if !dont_resolve {
         for descriptor in &image.imports {
             let dependency_name = normalize_module_name(&descriptor.module_name);
-            if emulator_provided_import_module(&dependency_name)
-                || kernel
-                    .loaded_module_handle(&descriptor.module_name)
-                    .is_some()
+            if emulator_provided_import_module(&dependency_name) {
+                continue;
+            }
+            if let Some(handle) =
+                kernel.retain_loaded_module_by_name_for_load(&descriptor.module_name, 0)
             {
+                retained_dependency_modules.push(handle);
                 continue;
             }
             let dependency_path =
@@ -5700,6 +5869,7 @@ fn runtime_load_guest_dll_from_path<D>(
                 0,
                 loading,
                 newly_loaded_modules,
+                retained_dependency_modules,
             )?;
         }
     }
@@ -5746,40 +5916,37 @@ fn runtime_load_guest_dll_from_path<D>(
         runtime_dll_memory_perms(datafile),
         &label,
     )?;
-    uc.mem_map(
+    if let Err(err) = uc.mem_map(
         u64::from(load_base),
         u64::from(mapped_size),
         unicorn_perms(runtime_dll_memory_perms(datafile)),
-    )
-    .map_err(|err| Error::Backend(format!("map runtime DLL {label}: {err:?}")))?;
-    uc.mem_write(u64::from(load_base), &mapped)
-        .map_err(|err| Error::Backend(format!("write runtime DLL {label}: {err:?}")))?;
+    ) {
+        let _ = memory_map.unmap_exact(load_base, mapped_size);
+        return Err(Error::Backend(format!("map runtime DLL {label}: {err:?}")));
+    }
+    if let Err(err) = uc.mem_write(u64::from(load_base), &mapped) {
+        cleanup_runtime_dll_mapping(uc, memory_map, load_base, mapped_size);
+        return Err(Error::Backend(format!(
+            "write runtime DLL {label}: {err:?}"
+        )));
+    }
     kernel.record_runtime_loader_successful_map();
 
-    if let Some(range) = trampoline_patch.range {
-        trampoline_ranges.push(range);
-    }
-    trampoline_jumps.extend(trampoline_patch.jumps.iter().copied());
-    live_trampoline_state.borrow_mut().extend(&trampoline_patch);
-
-    if !new_traps.is_empty() {
-        let mut trap_table = traps.borrow_mut();
-        trap_table.merge(new_traps);
-        let trap_page = import_trap_code_page(&trap_table);
-        uc.mem_write(u64::from(IMPORT_TRAP_BASE), &trap_page)
-            .map_err(|err| Error::Backend(format!("rewrite import trap page: {err:?}")))?;
-        refresh_import_trap_page_blob(mapped_blobs, &trap_table);
-    }
-
-    let mut module_info = loaded_module_info(&image, load_base)?;
+    let mut module_info = match loaded_module_info(&image, load_base) {
+        Ok(module_info) => module_info,
+        Err(err) => {
+            cleanup_runtime_dll_mapping(uc, memory_map, load_base, mapped_size);
+            return Err(err);
+        }
+    };
     if datafile {
         module_info.exports_by_name.clear();
         module_info.exports_by_ordinal.clear();
         module_info.forwarders_by_name.clear();
         module_info.forwarders_by_ordinal.clear();
     }
-    if !dont_resolve {
-        resolve_runtime_forwarders(
+    if !dont_resolve
+        && let Err(err) = resolve_runtime_forwarders(
             uc,
             kernel,
             memory_map,
@@ -5795,16 +5962,52 @@ fn runtime_load_guest_dll_from_path<D>(
             &mut module_info,
             loading,
             newly_loaded_modules,
-        )?;
+            retained_dependency_modules,
+        )
+    {
+        cleanup_runtime_dll_mapping(uc, memory_map, load_base, mapped_size);
+        return Err(err);
     }
+    let (module_resource_strings, module_resources) =
+        match runtime_resource_mappings(&image, load_base) {
+            Ok(resources) => resources,
+            Err(err) => {
+                cleanup_runtime_dll_mapping(uc, memory_map, load_base, mapped_size);
+                return Err(err);
+            }
+        };
+    if !new_traps.is_empty() {
+        let mut trap_table = traps.borrow().clone();
+        trap_table.merge(new_traps);
+        let trap_page = import_trap_code_page(&trap_table);
+        if let Err(err) = uc.mem_write(u64::from(IMPORT_TRAP_BASE), &trap_page) {
+            cleanup_runtime_dll_mapping(uc, memory_map, load_base, mapped_size);
+            return Err(Error::Backend(format!("rewrite import trap page: {err:?}")));
+        }
+        *traps.borrow_mut() = trap_table;
+        let trap_table = traps.borrow();
+        refresh_import_trap_page_blob(mapped_blobs, &trap_table);
+    }
+    if let Some(range) = trampoline_patch.range {
+        trampoline_ranges.push(range);
+    }
+    trampoline_jumps.extend(trampoline_patch.jumps.iter().copied());
+    live_trampoline_state.borrow_mut().extend(&trampoline_patch);
     module_info.name = file_name.clone();
     module_info.guest_path = kernel.host_path_to_guest_mount(path);
     module_info.host_path = Some(path.to_path_buf());
     module_info.load_flags = load_flags;
     module_info.dynamic = true;
+    register_runtime_resources(
+        kernel,
+        load_base,
+        module_resource_strings,
+        module_resources,
+        resource_strings,
+        resources,
+    );
     register_runtime_module_with_kernel(kernel, &module_info);
     loaded_modules.push(module_info);
-    register_runtime_resources(kernel, &image, load_base, resource_strings, resources)?;
     mapped_blobs.push(MappedBlob {
         name: label,
         base: load_base,
@@ -5831,6 +6034,7 @@ fn resolve_runtime_forwarders<D>(
     module_info: &mut LoadedPeModuleInfo,
     loading: &mut BTreeSet<String>,
     newly_loaded_modules: &mut Vec<u32>,
+    retained_dependency_modules: &mut Vec<u32>,
 ) -> Result<()> {
     for (name, forwarder) in module_info.forwarders_by_name.clone() {
         kernel.record_runtime_loader_forwarded_export();
@@ -5850,6 +6054,7 @@ fn resolve_runtime_forwarders<D>(
             &forwarder,
             loading,
             newly_loaded_modules,
+            retained_dependency_modules,
         )?;
         module_info.exports_by_name.insert(name, address);
     }
@@ -5871,6 +6076,7 @@ fn resolve_runtime_forwarders<D>(
             &forwarder,
             loading,
             newly_loaded_modules,
+            retained_dependency_modules,
         )?;
         module_info.exports_by_ordinal.insert(ordinal, address);
     }
@@ -5894,6 +6100,7 @@ fn resolve_runtime_forwarder<D>(
     forwarder: &str,
     loading: &mut BTreeSet<String>,
     newly_loaded_modules: &mut Vec<u32>,
+    retained_dependency_modules: &mut Vec<u32>,
 ) -> Result<u32> {
     let (target_module, target_import) = parse_forwarder_target(forwarder).ok_or_else(|| {
         Error::InvalidArgument(format!("invalid forwarded export string: {forwarder}"))
@@ -5935,6 +6142,7 @@ fn resolve_runtime_forwarder<D>(
             0,
             loading,
             newly_loaded_modules,
+            retained_dependency_modules,
         )?;
     }
     let handle =
@@ -5992,6 +6200,17 @@ fn runtime_dll_memory_perms(datafile: bool) -> MemoryPerms {
 }
 
 #[cfg(feature = "unicorn")]
+fn cleanup_runtime_dll_mapping<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    memory_map: &mut MemoryMap,
+    base: u32,
+    size: u32,
+) {
+    let _ = uc.mem_unmap(u64::from(base), u64::from(size));
+    let _ = memory_map.unmap_exact(base, size);
+}
+
+#[cfg(feature = "unicorn")]
 fn external_imports_from_loaded_modules(kernel: &CeKernel) -> ExternalImportTable {
     let mut external = ExternalImportTable::default();
     for module in kernel.loaded_module_export_snapshots() {
@@ -6040,44 +6259,33 @@ fn register_runtime_module_with_kernel(kernel: &mut CeKernel, module: &LoadedPeM
             ref_count: 1,
             load_flags: module.load_flags,
             dynamic: true,
+            thread_library_calls_disabled: false,
         },
     );
 }
 
 #[cfg(feature = "unicorn")]
-fn register_runtime_resources(
-    kernel: &mut CeKernel,
+fn runtime_resource_mappings(
     image: &PeImage,
     load_base: u32,
-    resource_strings: &mut Vec<MappedResourceString>,
-    resources: &mut Vec<MappedResource>,
-) -> Result<()> {
-    for string in image.resource_strings()? {
+) -> Result<(Vec<MappedResourceString>, Vec<MappedResource>)> {
+    let strings = image.resource_strings()?;
+    let resource_entries = image.resource_data_entries()?;
+    let mut mapped_strings = Vec::new();
+    let mut mapped_resources = Vec::new();
+
+    for string in strings {
         let data_ptr = Some(load_base.wrapping_add(string.data_rva));
-        kernel
-            .resources
-            .register_string(load_base, string.id, string.text.clone(), data_ptr);
-        resource_strings.push(MappedResourceString {
+        mapped_strings.push(MappedResourceString {
             module: load_base,
             id: string.id,
             text: string.text,
             data_ptr,
         });
     }
-    for resource in image.resource_data_entries()? {
-        let name = resource
-            .name_string
-            .as_ref()
-            .map(|name| crate::ce::resource::ResourceId::Name(name.clone()))
-            .unwrap_or(crate::ce::resource::ResourceId::Integer(
-                resource.name as u16,
-            ));
-        let kind = crate::ce::resource::ResourceId::Integer(resource.kind as u16);
+    for resource in resource_entries {
         let data_ptr = load_base.wrapping_add(resource.data_rva);
-        kernel
-            .resources
-            .register(load_base, name, kind, data_ptr, resource.size);
-        resources.push(MappedResource {
+        mapped_resources.push(MappedResource {
             module: load_base,
             name: resource.name,
             name_string: resource.name_string,
@@ -6086,7 +6294,41 @@ fn register_runtime_resources(
             size: resource.size,
         });
     }
-    Ok(())
+    Ok((mapped_strings, mapped_resources))
+}
+
+#[cfg(feature = "unicorn")]
+fn register_runtime_resources(
+    kernel: &mut CeKernel,
+    load_base: u32,
+    module_resource_strings: Vec<MappedResourceString>,
+    module_resources: Vec<MappedResource>,
+    resource_strings: &mut Vec<MappedResourceString>,
+    resources: &mut Vec<MappedResource>,
+) {
+    for string in module_resource_strings {
+        kernel.resources.register_string(
+            load_base,
+            string.id,
+            string.text.clone(),
+            string.data_ptr,
+        );
+        resource_strings.push(string);
+    }
+    for resource in module_resources {
+        let name = resource
+            .name_string
+            .as_ref()
+            .map(|name| crate::ce::resource::ResourceId::Name(name.clone()))
+            .unwrap_or(crate::ce::resource::ResourceId::Integer(
+                resource.name as u16,
+            ));
+        let kind = crate::ce::resource::ResourceId::Integer(resource.kind as u16);
+        kernel
+            .resources
+            .register(load_base, name, kind, resource.data_ptr, resource.size);
+        resources.push(resource);
+    }
 }
 
 #[cfg(feature = "unicorn")]
@@ -6150,6 +6392,76 @@ fn dll_detach_lifecycle_calls_for_module(module: &LoadedModule) -> Vec<DllLifecy
 }
 
 #[cfg(feature = "unicorn")]
+fn dll_thread_lifecycle_calls(kernel: &CeKernel, reason: u32) -> Vec<DllLifecycleCall> {
+    let mut calls = Vec::new();
+    for module in kernel.loaded_modules_for_thread_notifications() {
+        if module.entry_point != module.base && module.entry_point != 0 {
+            calls.push(DllLifecycleCall {
+                module: module.base,
+                target: module.entry_point,
+                reason,
+                returns_bool: false,
+                entrypoint: true,
+            });
+        }
+    }
+    calls
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct RuntimeFreeLibraryReleasePlan {
+    lifecycle_calls: Vec<DllLifecycleCall>,
+    release_after_lifecycle: Vec<u32>,
+}
+
+#[cfg(feature = "unicorn")]
+fn runtime_free_library_release_plan(
+    kernel: &CeKernel,
+    module: &LoadedModule,
+) -> RuntimeFreeLibraryReleasePlan {
+    let mut plan = RuntimeFreeLibraryReleasePlan::default();
+    let mut seen = BTreeSet::new();
+    collect_runtime_free_library_release(kernel, module, &mut seen, &mut plan);
+    plan
+}
+
+#[cfg(feature = "unicorn")]
+fn collect_runtime_free_library_release(
+    kernel: &CeKernel,
+    module: &LoadedModule,
+    seen: &mut BTreeSet<u32>,
+    plan: &mut RuntimeFreeLibraryReleasePlan,
+) {
+    if !seen.insert(module.base) {
+        return;
+    }
+
+    let will_unload = module.dynamic && module.ref_count <= 1;
+    if will_unload && module.load_flags & RUNTIME_DONT_RESOLVE_DLL_REFERENCES == 0 {
+        plan.lifecycle_calls
+            .extend(dll_detach_lifecycle_calls_for_module(module));
+    }
+    plan.release_after_lifecycle.push(module.base);
+
+    if !will_unload || module.load_flags & RUNTIME_DONT_RESOLVE_DLL_REFERENCES != 0 {
+        return;
+    }
+    for dependency in module.dependencies.iter().rev() {
+        if emulator_provided_import_module(&normalize_module_name(dependency)) {
+            continue;
+        }
+        let Some(handle) = kernel.loaded_module_handle(dependency) else {
+            continue;
+        };
+        let Some(dependency_module) = kernel.loaded_module_by_handle(handle) else {
+            continue;
+        };
+        collect_runtime_free_library_release(kernel, &dependency_module, seen, plan);
+    }
+}
+
+#[cfg(feature = "unicorn")]
 fn record_dll_lifecycle_calls(
     kernel: &mut CeKernel,
     calls: Vec<DllLifecycleCall>,
@@ -6172,8 +6484,10 @@ fn record_dll_lifecycle_calls(
 fn enter_dll_lifecycle_callout<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     mut calls: Vec<DllLifecycleCall>,
+    caller_thread_id: u32,
     api_result: u32,
-    release_after_return: Option<u32>,
+    release_after_return: Vec<u32>,
+    release_on_attach_failure: Vec<u32>,
     pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingDllLifecycleReturn>>>,
 ) -> bool {
     let Some(first) = (!calls.is_empty()).then(|| calls.remove(0)) else {
@@ -6182,11 +6496,13 @@ fn enter_dll_lifecycle_callout<D>(
     let pending = PendingDllLifecycleReturn {
         current: first,
         remaining: calls,
+        caller_thread_id,
         return_pc: read_mips_reg(uc, RegisterMIPS::RA),
         return_sp: read_mips_reg(uc, RegisterMIPS::SP),
         caller_regs: capture_mips_gprs(uc),
         api_result,
         release_after_return,
+        release_on_attach_failure,
     };
     if !enter_current_dll_lifecycle_call(uc, &pending) {
         return false;
@@ -6237,17 +6553,43 @@ fn handle_dll_lifecycle_return_stub<D>(
     }
     let pending = pending_returns.pop().unwrap();
     restore_mips_gprs(uc, &pending.caller_regs);
-    if let Some(module) = pending.release_after_return {
-        let _ = kernel.release_loaded_module(module);
-    }
+    let return_sp = pending.return_sp;
+    let return_pc = pending.return_pc;
+    let api_result = pending.api_result;
+    apply_dll_lifecycle_return_side_effects(
+        kernel,
+        pending.caller_thread_id,
+        api_result,
+        pending.release_after_return,
+        pending.release_on_attach_failure,
+    );
     [
-        uc.reg_write(RegisterMIPS::SP, u64::from(pending.return_sp)),
-        uc.reg_write(RegisterMIPS::V0, u64::from(pending.api_result)),
-        uc.reg_write(RegisterMIPS::PC, u64::from(pending.return_pc)),
-        uc.reg_write(RegisterMIPS::RA, u64::from(pending.return_pc)),
+        uc.reg_write(RegisterMIPS::SP, u64::from(return_sp)),
+        uc.reg_write(RegisterMIPS::V0, u64::from(api_result)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(return_pc)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(return_pc)),
     ]
     .into_iter()
     .all(|write| write.is_ok())
+}
+
+#[cfg(feature = "unicorn")]
+fn apply_dll_lifecycle_return_side_effects(
+    kernel: &mut CeKernel,
+    caller_thread_id: u32,
+    api_result: u32,
+    release_after_return: Vec<u32>,
+    release_on_attach_failure: Vec<u32>,
+) {
+    if api_result == 0 && !release_on_attach_failure.is_empty() {
+        kernel.record_runtime_loader_loud_failure();
+        kernel
+            .threads
+            .set_last_error(caller_thread_id, crate::ce::thread::ERROR_DLL_INIT_FAILED);
+        release_runtime_loader_module_refs(kernel, release_on_attach_failure);
+    } else {
+        release_runtime_loader_module_refs(kernel, release_after_return);
+    }
 }
 
 #[cfg(feature = "unicorn")]
@@ -19698,6 +20040,164 @@ mod guest_thread_stack_tests {
     }
 
     #[test]
+    fn orphaned_parked_send_wait_without_side_marker_resumes_sender() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+        scheduler.set_initial_thread_id(1);
+
+        let sender_thread = 1;
+        let receiver_thread = 3;
+        let hwnd = kernel.create_window_ex_w(receiver_thread, "SEND_TARGET", "", None, 0, 0, 0);
+        let send_id = kernel
+            .begin_cross_thread_send_message_w(
+                sender_thread,
+                hwnd,
+                crate::ce::gwe::WM_USER,
+                0,
+                0,
+                None,
+            )
+            .expect("queued send");
+        let wait_started_ms = kernel.timers.tick_count();
+        let mut sender_regs = MipsGuestContext::zero();
+        sender_regs.regs[16] = 0x2030_4050;
+        let sender_return_pc = 0x0040_5432;
+        let sender_handle = 0x22c;
+        let wait_kind = BlockedWaitKind::SendMessage {
+            send_id,
+            receiver_thread_id: receiver_thread,
+            result_ptr: None,
+            previous_running_thread: Some((sender_thread, sender_handle)),
+        };
+        let wait_id = kernel.register_blocked_waiter(
+            sender_thread,
+            sender_handle,
+            Vec::new(),
+            scheduler_blocked_wait_kind(wait_kind),
+            wait_started_ms,
+            crate::ce::timer::INFINITE,
+        );
+        let mut sender_cpu = UnicornMips::new()?;
+        sender_cpu.blocked_wait_threads.push(BlockedWaitThread {
+            wait_id,
+            thread_id: sender_thread,
+            thread_handle: sender_handle,
+            wait_handles: Vec::new(),
+            kind: wait_kind,
+            wait_started_ms,
+            timeout_ms: crate::ce::timer::INFINITE,
+            regs: sender_regs,
+            return_pc: sender_return_pc,
+        });
+        scheduler.parked_child_processes.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned()),
+            process_handle: None,
+            thread_handle: None,
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 1,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: sender_thread,
+            cpu: Box::new(sender_cpu),
+            blocked_send_id: None,
+            module_base: 0x0010_0000,
+            module_path: "\\SDMMC Disk\\INavi\\iNavi.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(r"D:\INAVI_Emulator\INAVI\INavi.exe"),
+            command_line: "parent".to_owned(),
+            current_directory: None,
+        });
+
+        let removed = kernel
+            .gwe
+            .terminate_sent_messages_from_sender(sender_thread);
+        assert_eq!(removed, vec![send_id]);
+        assert!(scheduler.complete_orphaned_parked_send_wait(&mut kernel));
+        let parked = scheduler
+            .parked_child_processes
+            .front()
+            .expect("parked parent");
+        assert!(parked.cpu.blocked_wait_threads.is_empty());
+        assert!(kernel.blocked_waiter(wait_id).is_none());
+        let saved = parked
+            .cpu
+            .saved_context
+            .as_ref()
+            .expect("orphaned send should restore sender context");
+        assert_eq!(saved.pc, sender_return_pc);
+        assert_eq!(saved.regs.regs[2], 0);
+        assert_eq!(saved.regs.regs[16], 0x2030_4050);
+
+        Ok(())
+    }
+
+    #[test]
+    fn orphaned_parked_send_wait_without_cpu_wait_removes_kernel_waiter() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+        scheduler.set_initial_thread_id(1);
+
+        let sender_thread = 1;
+        let receiver_thread = 3;
+        let hwnd = kernel.create_window_ex_w(receiver_thread, "SEND_TARGET", "", None, 0, 0, 0);
+        let send_id = kernel
+            .begin_cross_thread_send_message_w(
+                sender_thread,
+                hwnd,
+                crate::ce::gwe::WM_USER,
+                0,
+                0,
+                None,
+            )
+            .expect("queued send");
+        let wait_kind = BlockedWaitKind::SendMessage {
+            send_id,
+            receiver_thread_id: receiver_thread,
+            result_ptr: None,
+            previous_running_thread: None,
+        };
+        let wait_id = kernel.register_blocked_waiter(
+            sender_thread,
+            0,
+            Vec::new(),
+            scheduler_blocked_wait_kind(wait_kind),
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        let mut sender_cpu = UnicornMips::new()?;
+        sender_cpu.set_initial_thread_id(sender_thread);
+        scheduler.parked_child_processes.push_back(ParkedProcess {
+            application: Some("\\SDMMC Disk\\INavi\\iNavi.exe".to_owned()),
+            process_handle: None,
+            thread_handle: None,
+            process_state: crate::ce::kernel::CurrentProcessState {
+                process_id: 1,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            },
+            thread_id: sender_thread,
+            cpu: Box::new(sender_cpu),
+            blocked_send_id: None,
+            module_base: 0x0010_0000,
+            module_path: "\\SDMMC Disk\\INavi\\iNavi.exe".to_owned(),
+            module_host_path: std::path::PathBuf::from(r"D:\INAVI_Emulator\INAVI\INavi.exe"),
+            command_line: "parent".to_owned(),
+            current_directory: None,
+        });
+
+        let removed = kernel
+            .gwe
+            .terminate_sent_messages_from_sender(sender_thread);
+        assert_eq!(removed, vec![send_id]);
+        assert!(scheduler.complete_orphaned_parked_send_wait(&mut kernel));
+        assert!(kernel.blocked_waiter(wait_id).is_none());
+
+        Ok(())
+    }
+
+    #[test]
     fn rotate_to_ready_parked_process_with_pending_sent_receiver() -> Result<()> {
         let config = crate::config::RuntimeConfig::load("regs.json", "serial_devices.json")?;
         let mut kernel = CeKernel::boot(config);
@@ -28953,6 +29453,208 @@ mod unicorn_tests {
                 .iter()
                 .any(|module| module.name == "failed.dll" && module.unload_pending)
         );
+    }
+
+    #[test]
+    fn dll_attach_failure_releases_attempt_refs_and_sets_init_failed() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = CeKernel::boot(config);
+        kernel.register_loaded_module_with_metadata(
+            "retained.dll",
+            0x7100_0000,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            crate::ce::kernel::LoadedModuleMetadata {
+                ref_count: 2,
+                dynamic: true,
+                ..Default::default()
+            },
+        );
+        kernel.register_loaded_module_with_metadata(
+            "failed.dll",
+            0x7200_0000,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            crate::ce::kernel::LoadedModuleMetadata {
+                dynamic: true,
+                ..Default::default()
+            },
+        );
+
+        let refs =
+            super::runtime_loader_attach_failure_release_refs(&[0x7200_0000], &[0x7100_0000]);
+        super::apply_dll_lifecycle_return_side_effects(&mut kernel, 7, 0, Vec::new(), refs);
+
+        assert_eq!(
+            kernel.threads.get_last_error(7),
+            crate::ce::thread::ERROR_DLL_INIT_FAILED
+        );
+        assert_eq!(kernel.runtime_loader_stats().loud_failure_count, 1);
+        assert_eq!(kernel.loaded_module_handle("failed.dll"), None);
+        let retained = kernel.loaded_module_by_handle(0x7100_0000).unwrap();
+        assert_eq!(retained.ref_count, 1);
+        assert!(!retained.unload_pending);
+    }
+
+    #[test]
+    fn runtime_free_library_release_plan_releases_dependency_refs() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = CeKernel::boot(config);
+        kernel.register_loaded_module_with_metadata(
+            "root.dll",
+            0x7100_0000,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            crate::ce::kernel::LoadedModuleMetadata {
+                entry_point: 0x7100_1000,
+                dependencies: vec!["dependency.dll".to_owned()],
+                dynamic: true,
+                ..Default::default()
+            },
+        );
+        kernel.register_loaded_module_with_metadata(
+            "dependency.dll",
+            0x7200_0000,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            crate::ce::kernel::LoadedModuleMetadata {
+                entry_point: 0x7200_1000,
+                dynamic: true,
+                ..Default::default()
+            },
+        );
+
+        let root = kernel.loaded_module_by_handle(0x7100_0000).unwrap();
+        let plan = super::runtime_free_library_release_plan(&kernel, &root);
+
+        assert_eq!(
+            plan.lifecycle_calls
+                .iter()
+                .map(|call| (call.module, call.target, call.reason, call.entrypoint))
+                .collect::<Vec<_>>(),
+            vec![
+                (0x7100_0000, 0x7100_1000, super::DLL_PROCESS_DETACH, true),
+                (0x7200_0000, 0x7200_1000, super::DLL_PROCESS_DETACH, true),
+            ]
+        );
+        assert_eq!(plan.release_after_lifecycle, vec![0x7100_0000, 0x7200_0000]);
+        assert_eq!(
+            super::release_runtime_loader_module_refs(&mut kernel, plan.release_after_lifecycle,),
+            2
+        );
+        assert_eq!(kernel.loaded_module_handle("root.dll"), None);
+        assert_eq!(kernel.loaded_module_handle("dependency.dll"), None);
+    }
+
+    #[test]
+    fn dll_thread_lifecycle_calls_follow_load_order_and_skip_disabled_noimport_modules() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = CeKernel::boot(config);
+
+        kernel.register_loaded_module_with_metadata(
+            "z-first.dll",
+            0x7100_0000,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            crate::ce::kernel::LoadedModuleMetadata {
+                entry_point: 0x7100_1000,
+                dynamic: true,
+                ..Default::default()
+            },
+        );
+        kernel.register_loaded_module_with_metadata(
+            "a-disabled.dll",
+            0x7200_0000,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            crate::ce::kernel::LoadedModuleMetadata {
+                entry_point: 0x7200_1000,
+                dynamic: true,
+                ..Default::default()
+            },
+        );
+        kernel.register_loaded_module_with_metadata(
+            "m-noresolve.dll",
+            0x7300_0000,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            crate::ce::kernel::LoadedModuleMetadata {
+                entry_point: 0x7300_1000,
+                load_flags: super::RUNTIME_DONT_RESOLVE_DLL_REFERENCES,
+                dynamic: true,
+                ..Default::default()
+            },
+        );
+        kernel.register_loaded_module_with_metadata(
+            "b-second.dll",
+            0x7400_0000,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            crate::ce::kernel::LoadedModuleMetadata {
+                entry_point: 0x7400_1000,
+                dynamic: true,
+                ..Default::default()
+            },
+        );
+        assert!(kernel.disable_thread_library_calls_for_module(0x7200_0000));
+
+        let calls = super::dll_thread_lifecycle_calls(&kernel, super::DLL_THREAD_ATTACH);
+        assert_eq!(
+            calls
+                .iter()
+                .map(|call| (call.module, call.target, call.reason, call.returns_bool))
+                .collect::<Vec<_>>(),
+            vec![
+                (0x7100_0000, 0x7100_1000, super::DLL_THREAD_ATTACH, false),
+                (0x7400_0000, 0x7400_1000, super::DLL_THREAD_ATTACH, false),
+            ]
+        );
+    }
+
+    #[test]
+    fn runtime_free_library_release_plan_preserves_still_referenced_dependency() {
+        let config = RuntimeConfig::load("regs.json", "serial_devices.json").unwrap();
+        let mut kernel = CeKernel::boot(config);
+        kernel.register_loaded_module_with_metadata(
+            "root.dll",
+            0x7100_0000,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            crate::ce::kernel::LoadedModuleMetadata {
+                dependencies: vec!["dependency.dll".to_owned()],
+                dynamic: true,
+                ..Default::default()
+            },
+        );
+        kernel.register_loaded_module_with_metadata(
+            "dependency.dll",
+            0x7200_0000,
+            BTreeMap::new(),
+            BTreeMap::new(),
+            crate::ce::kernel::LoadedModuleMetadata {
+                ref_count: 2,
+                dynamic: true,
+                ..Default::default()
+            },
+        );
+
+        let root = kernel.loaded_module_by_handle(0x7100_0000).unwrap();
+        let plan = super::runtime_free_library_release_plan(&kernel, &root);
+
+        assert!(plan.lifecycle_calls.is_empty());
+        assert_eq!(plan.release_after_lifecycle, vec![0x7100_0000, 0x7200_0000]);
+        assert_eq!(
+            super::release_runtime_loader_module_refs(&mut kernel, plan.release_after_lifecycle,),
+            2
+        );
+        assert_eq!(kernel.loaded_module_handle("root.dll"), None);
+        assert_eq!(
+            kernel.loaded_module_handle("dependency.dll"),
+            Some(0x7200_0000)
+        );
+        let dependency = kernel.loaded_module_by_handle(0x7200_0000).unwrap();
+        assert_eq!(dependency.ref_count, 1);
+        assert!(!dependency.unload_pending);
     }
 
     #[test]

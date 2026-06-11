@@ -403,6 +403,12 @@ fn coredll_raw_ordinals_execute_kernel_thread_time_and_sync_semantics() -> Resul
     assert_eq!(memory.read_u32(time_zone + 84)?, 0);
     assert_eq!(memory.read_u32(time_zone + 168)?, 0);
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(
+        kernel
+            .loaded_module_by_handle(module_base)
+            .unwrap()
+            .thread_library_calls_disabled
+    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -2339,8 +2345,10 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_m
     let module_name_ptr = 0x1_9000;
     let resource_name_ptr = 0x1_9080;
     let proc_name_ptr = 0x1_90c0;
+    let deferred_name_ptr = 0x1_9100;
     let module_base = 0x6300_0000;
     let resource_base = 0x6310_0000;
+    let deferred_base = 0x6320_0000;
 
     kernel.register_loaded_module_with_metadata(
         "dynamic.dll",
@@ -2372,6 +2380,21 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_m
     memory.write_wide_z(resource_name_ptr, "resource.dll");
     memory.write_bytes(proc_name_ptr, b"VisibleExport\0");
 
+    kernel.register_loaded_module_with_metadata(
+        "deferred.dll",
+        deferred_base,
+        std::collections::BTreeMap::from([("visibleexport".to_owned(), deferred_base + 0x1234)]),
+        std::collections::BTreeMap::new(),
+        LoadedModuleMetadata {
+            dynamic: true,
+            guest_path: Some(r"\Windows\deferred.dll".to_owned()),
+            image_size: 0x10000,
+            load_flags: 0x0000_0001,
+            ..LoadedModuleMetadata::default()
+        },
+    );
+    memory.write_wide_z(deferred_name_ptr, "deferred.dll");
+
     for _ in 0..2 {
         assert!(matches!(
             table.dispatch_raw_ordinal_with_memory(
@@ -2387,7 +2410,13 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_m
             } if handle == module_base
         ));
     }
-    assert_eq!(kernel.loaded_module_snapshots()[0].ref_count, 3);
+    assert_eq!(
+        kernel
+            .loaded_module_by_handle(module_base)
+            .unwrap()
+            .ref_count,
+        3
+    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -2402,7 +2431,13 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_m
             ..
         }
     ));
-    assert_eq!(kernel.loaded_module_snapshots()[0].ref_count, 2);
+    assert_eq!(
+        kernel
+            .loaded_module_by_handle(module_base)
+            .unwrap()
+            .ref_count,
+        2
+    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -2418,7 +2453,13 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_m
         } if handle == module_base
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
-    assert_eq!(kernel.loaded_module_snapshots()[0].ref_count, 3);
+    assert_eq!(
+        kernel
+            .loaded_module_by_handle(module_base)
+            .unwrap()
+            .ref_count,
+        3
+    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -2434,6 +2475,42 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_m
         } if handle == resource_base
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_LIBRARY_EX_W,
+            [module_name_ptr, 0x1234, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_LIBRARY_W,
+            [deferred_name_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle == deferred_base
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    let deferred = kernel.loaded_module_by_handle(deferred_base).unwrap();
+    assert_eq!(deferred.ref_count, 2);
+    assert_eq!(deferred.load_flags & 0x0000_0001, 0);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(

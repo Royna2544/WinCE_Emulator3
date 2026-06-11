@@ -336,11 +336,19 @@ fn run_cpu_loop(
             service_remote_endpoint(cpu, kernel, desktop, blocked_remote_target.as_ref());
         if remote_drained != 0 {
             reported_blocked_message_wait = false;
+            continue;
         }
         let desktop_queued =
             enqueue_desktop_input_for_current_wait(cpu, desktop, kernel, args.desktop)?;
         if desktop_queued != 0 {
             reported_blocked_message_wait = false;
+        }
+        if (remote_drained != 0 || desktop_queued != 0)
+            && cpu.has_runnable_parked_process(kernel)
+            && cpu.rotate_to_next_parked_process(kernel)
+        {
+            reported_blocked_message_wait = false;
+            continue;
         }
         if cpu.rotate_to_ready_parked_wait(kernel) {
             reported_blocked_message_wait = false;
@@ -400,8 +408,18 @@ fn run_cpu_loop(
         }
         desktop.present()?;
         let blocked_remote_target = blocked_remote_input_target(cpu, kernel, args.desktop);
-        if service_remote_endpoint(cpu, kernel, desktop, blocked_remote_target.as_ref()) != 0 {
+        let remote_drained =
+            service_remote_endpoint(cpu, kernel, desktop, blocked_remote_target.as_ref());
+        if remote_drained != 0 {
             reported_blocked_message_wait = false;
+            if cpu.rotate_to_ready_parked_wait(kernel) {
+                continue;
+            }
+            if cpu.has_runnable_parked_process(kernel) && cpu.rotate_to_next_parked_process(kernel)
+            {
+                continue;
+            }
+            continue;
         }
         if cpu.rotate_to_ready_parked_wait(kernel) {
             reported_blocked_message_wait = false;
@@ -438,8 +456,10 @@ fn run_cpu_loop(
             )
         });
         if let Some((host_wall_clock_stop, message_waiter, non_message_waiter)) = snapshot_state {
+            let has_runnable_parked_process = cpu.has_runnable_parked_process(kernel);
             let should_rotate_process = should_rotate_parked_process(
                 cpu.has_parked_child_processes(),
+                has_runnable_parked_process,
                 cpu.has_ready_parked_send_unblock(kernel),
                 cpu.has_ready_parked_wait_unblock(kernel),
                 message_waiter,
@@ -509,6 +529,7 @@ fn wall_clock_limit_expired(limit_ms: u64, elapsed: Duration) -> bool {
 
 fn should_rotate_parked_process(
     has_parked_child_processes: bool,
+    has_runnable_parked_process: bool,
     has_ready_parked_send_unblock: bool,
     has_ready_parked_wait_unblock: bool,
     message_waiter: bool,
@@ -517,7 +538,10 @@ fn should_rotate_parked_process(
     idle_message_poll_slice: bool,
 ) -> bool {
     has_parked_child_processes
-        && ((message_waiter && (has_ready_parked_send_unblock || has_ready_parked_wait_unblock))
+        && ((message_waiter
+            && (has_runnable_parked_process
+                || has_ready_parked_send_unblock
+                || has_ready_parked_wait_unblock))
             || (live_pump_slice
                 && host_wall_clock_stop
                 && (!idle_message_poll_slice || has_ready_parked_wait_unblock || message_waiter)))
@@ -1310,6 +1334,7 @@ fn monitor_continue_process_handoff(
     let message_waiter = snapshot_has_blocked_get_message(snapshot);
     let should_rotate_process = should_rotate_parked_process(
         cpu.has_parked_child_processes(),
+        cpu.has_runnable_parked_process(kernel),
         cpu.has_ready_parked_send_unblock(kernel),
         cpu.has_ready_parked_wait_unblock(kernel),
         message_waiter,
@@ -2586,6 +2611,7 @@ fn register_loaded_modules(kernel: &mut CeKernel, cpu: &UnicornMips) {
                 ref_count: 1,
                 load_flags: 0,
                 dynamic: module.dynamic,
+                thread_library_calls_disabled: false,
             },
         );
     }
@@ -2731,25 +2757,28 @@ mod tests {
     #[test]
     fn live_wall_stop_rotates_parked_processes() {
         assert!(should_rotate_parked_process(
-            true, false, false, false, true, true, false
+            true, false, false, false, false, true, true, false
         ));
         assert!(should_rotate_parked_process(
-            true, true, false, true, false, false, true
-        ));
-        assert!(!should_rotate_parked_process(
-            true, false, false, true, false, false, true
+            true, false, true, false, true, false, false, true
         ));
         assert!(should_rotate_parked_process(
-            true, false, true, false, true, true, true
+            true, true, false, false, true, false, false, true
         ));
         assert!(!should_rotate_parked_process(
-            true, false, false, false, true, true, true
+            true, false, false, false, true, false, false, true
+        ));
+        assert!(should_rotate_parked_process(
+            true, false, false, true, false, true, true, true
         ));
         assert!(!should_rotate_parked_process(
-            true, false, false, false, true, false, false
+            true, false, false, false, false, true, true, true
         ));
         assert!(!should_rotate_parked_process(
-            false, true, true, true, true, true, false
+            true, false, false, false, false, true, false, false
+        ));
+        assert!(!should_rotate_parked_process(
+            false, false, true, true, true, true, true, false
         ));
     }
 

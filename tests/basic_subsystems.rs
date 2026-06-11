@@ -2697,6 +2697,44 @@ fn register_and_release_loaded_module_follows_pinned_dynamic_and_ref_count_paths
 
     // retain on unloaded module → None.
     assert!(kernel.retain_loaded_module_by_name("dyn.dll").is_none());
+
+    kernel.register_loaded_module_with_metadata(
+        "deferred.dll",
+        0x3000_0000,
+        Default::default(),
+        Default::default(),
+        LoadedModuleMetadata {
+            dynamic: true,
+            load_flags: 0x0000_0001,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        kernel.retain_loaded_module_by_name_for_load("deferred.dll", 0),
+        Some(0x3000_0000)
+    );
+    let deferred = kernel.loaded_module_by_handle(0x3000_0000).unwrap();
+    assert_eq!(deferred.ref_count, 2);
+    assert_eq!(deferred.load_flags & 0x0000_0001, 0);
+
+    kernel.register_loaded_module_with_metadata(
+        "resource.dll",
+        0x3100_0000,
+        Default::default(),
+        Default::default(),
+        LoadedModuleMetadata {
+            dynamic: true,
+            load_flags: 0x0000_0003,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        kernel.retain_loaded_module_by_name_for_load("resource.dll", 0),
+        Some(0x3100_0000)
+    );
+    let resource = kernel.loaded_module_by_handle(0x3100_0000).unwrap();
+    assert_eq!(resource.ref_count, 2);
+    assert_eq!(resource.load_flags & 0x0000_0003, 0x0000_0003);
 }
 
 #[test]

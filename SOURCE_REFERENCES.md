@@ -56,7 +56,24 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     import block when `DoImports` fails; v3 now records runtime modules loaded
     during one `LoadLibraryW` attempt and marks only those new modules
     unload-pending if dependency load/import patching or lifecycle callout setup
-    fails.
+    fails. The same file's `UnDoDepends` path frees imported dependency
+    modules after module detach; v3 now retains direct dependency refs while
+    loading and releases the reachable dependency chain after final dynamic
+    `FreeLibrary` detach planning. Failed runtime DLL maps now unwind the
+    current image's `MemoryMap`/Unicorn reservation before propagating late
+    map, write, forwarded-export, trap-page, metadata, or resource failures,
+    and v3 parses current-image resources before committing trap pages,
+    trampoline metadata, module records, or resource handles. CE `CallDllMain`
+    sets `ERROR_DLL_INIT_FAILED` when `DllMain(DLL_PROCESS_ATTACH)` returns
+    false and then `DoImportAndCallDllMain` frees the failed module; v3 now
+    records the same last-error shape and releases load-attempt module refs
+    after a guest attach entry point returns false. The same CE `DoLoadLibrary`
+    path increments an already loaded module's refcount and clears
+    `DONT_RESOLVE_DLL_REFERENCES` when a later request has no no-import flags;
+    v3 now mirrors that loaded-module promotion for raw and runtime reuse paths.
+    CE `int_LoadLibraryExW` rejects non-null `hFile` with
+    `ERROR_INVALID_PARAMETER`, which v3 now applies in raw and runtime
+    `LoadLibraryExW` dispatch.
     `LoadLibraryExW(DONT_RESOLVE_DLL_REFERENCES)` now maps/reuses the runtime
     DLL and publishes ordinary exports without recursive dependency loading,
     import patching, TLS callbacks, `DllMain`, or detach callouts on final

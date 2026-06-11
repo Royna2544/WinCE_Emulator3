@@ -16236,7 +16236,7 @@ fn load_library_w_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return COREDLL_MODULE_HANDLE;
     }
-    if let Some(handle) = kernel.retain_loaded_module_by_name(&name) {
+    if let Some(handle) = kernel.retain_loaded_module_by_name_for_load(&name, 0) {
         kernel.threads.set_last_error(thread_id, 0);
         return handle;
     }
@@ -16252,6 +16252,13 @@ fn load_library_ex_w_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
+    let hfile = raw_arg(args, 1);
+    if hfile != 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return 0;
+    }
     let flags = raw_arg(args, 2);
     let supported_flags = DONT_RESOLVE_DLL_REFERENCES | LOAD_LIBRARY_AS_DATAFILE;
     if flags & !supported_flags != 0 {
@@ -16275,7 +16282,12 @@ fn load_library_ex_w_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return COREDLL_MODULE_HANDLE;
     }
-    if let Some(handle) = kernel.retain_loaded_module_by_name(&name) {
+    let effective_flags = if flags & LOAD_LIBRARY_AS_DATAFILE != 0 {
+        flags | DONT_RESOLVE_DLL_REFERENCES
+    } else {
+        flags
+    };
+    if let Some(handle) = kernel.retain_loaded_module_by_name_for_load(&name, effective_flags) {
         kernel.threads.set_last_error(thread_id, 0);
         return handle;
     }
@@ -16307,10 +16319,10 @@ fn free_library_raw(kernel: &mut CeKernel, thread_id: u32, module: u32) -> bool 
 }
 
 fn disable_thread_library_calls_raw(kernel: &mut CeKernel, thread_id: u32, module: u32) -> bool {
-    if module == COREDLL_MODULE_HANDLE
-        || module == kernel.process_module_base()
-        || kernel.is_loaded_module_handle(module)
-    {
+    if module == COREDLL_MODULE_HANDLE || module == kernel.process_module_base() {
+        kernel.threads.set_last_error(thread_id, 0);
+        true
+    } else if kernel.disable_thread_library_calls_for_module(module) {
         kernel.threads.set_last_error(thread_id, 0);
         true
     } else {
