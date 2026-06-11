@@ -175,6 +175,28 @@ and isolated guest networking.
   (SHX). `SHLoadDIBitmap(szFileName)` now calls `load_bitmap_file` instead of
   returning `ERROR_NOT_SUPPORTED`, equivalent to
   `LoadImage(NULL, szFileName, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE)`.
+  `EnumFontFamiliesExW`/`EnumFontFamiliesW`/`EnumFontsW` now dispatch the guest
+  `FONTENUMPROC` via `ENUM_FONT_FAMILIES_RETURN_STUB_ADDR` against a
+  `CeKernel`-held CE 6.0 Korean system font registry (gulim.ttc faces per
+  `common.reg` plus Tahoma/Arial/Courier New): the LOGFONTW
+  `lfCharSet`/`lfFaceName` filter (ExW) or WCHAR* face name (basic forms)
+  narrows the family list, ENUMLOGFONTEXW (348 B) + NEWTEXTMETRICEXW (100 B)
+  are written into a stack frame below the caller SP and rewritten per
+  iteration, callback result 0 stops and returns 0, and exhausting the list
+  returns the final non-zero callback result.
+  `EnumSystemLocalesW`/`EnumSystemCodePagesW`/`EnumDateFormatsW`/
+  `EnumTimeFormatsW`/`EnumCalendarInfoW`/`EnumUILanguagesW` now share one
+  `LOCALE_ENUM_RETURN_STUB_ADDR` string-enumeration machinery (every CE NLS
+  `ENUMPROCW` takes a single LPWSTR): locale/code-page/UI-language id strings
+  and the 0409/0412 date/time format pictures plus calendar names/ids/pictures
+  come from `C:\WINCE600` `locale.txt` (Korean image: locales 00000409/00000412,
+  code pages 437/949/1252, UI language 0412, Korean calendars 서기(한글)/
+  서기(영어)/단기 with gg-era Tangun pictures); LCID/CP `INSTALLED|SUPPORTED`
+  flag validation, `DATE_SHORTDATE`/`DATE_LONGDATE`/`DATE_YEARMONTH` selection,
+  `TIME_NOSECONDS` second-stripping, and `ENUM_ALL_CALENDARS`/specific-calendar
+  + `CAL_ICALINTVALUE`/`CAL_SCALNAME`/`CAL_SSHORTDATE`/`CAL_SLONGDATE`/
+  `CAL_SYEARMONTH` selection return FALSE on invalid inputs; callback FALSE
+  stops the enumeration but the API still returns TRUE per NLS semantics.
 - Replace direct-only WINSOCK with a CE-facing isolated NAT model: gateway
   `10.0.0.1`, guest IP `10.0.0.2`, host sockets as the transport boundary, and
   blocking waits owned by the scheduler. Socket-handle waiters can now be

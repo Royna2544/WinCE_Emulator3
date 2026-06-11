@@ -1604,7 +1604,8 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
         | ORD_ENUM_DATE_FORMATS_W
         | ORD_ENUM_TIME_FORMATS_W
         | ORD_ENUM_UILANGUAGES_W => {
-            // Locale enumeration callbacks; require Unicorn; return TRUE (empty enumeration).
+            // Unicorn callout (try_enter_locale_enum_callout) dispatches the guest
+            // callback and never returns here; this path is the non-Unicorn fallback.
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }
@@ -6483,7 +6484,8 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             Some(CoredllValue::Bool(true))
         }
         ORD_ENUM_SYSTEM_LOCALES_W | ORD_ENUM_SYSTEM_CODE_PAGES_W => {
-            // Require guest callbacks; return TRUE with empty enumeration.
+            // Unicorn callout (try_enter_locale_enum_callout) dispatches the guest
+            // callback and never returns here; this path is the non-Unicorn fallback.
             kernel.threads.set_last_error(thread_id, 0);
             Some(CoredllValue::Bool(true))
         }

@@ -188,6 +188,190 @@ fn ce_system_font_families() -> Vec<CeFontFamily> {
     ]
 }
 
+// CE 6.0 NLS enumeration data for the Korean device image (locale.txt in
+// PUBLIC\COMMON\OAK\FILES): English (0409) and Korean (0412) locales.
+
+/// EnumSystemLocalesW strings: 8-hex-digit LCIDs of locales in the OS image.
+pub fn ce_nls_system_locales() -> Vec<String> {
+    vec!["00000409".to_owned(), "00000412".to_owned()]
+}
+
+/// EnumSystemCodePagesW strings: code pages in the Korean OS image.
+pub fn ce_nls_system_code_pages() -> Vec<String> {
+    vec!["437".to_owned(), "949".to_owned(), "1252".to_owned()]
+}
+
+/// EnumUILanguagesW strings: 4-hex-digit UI language ids (Korean image).
+pub fn ce_nls_ui_languages() -> Vec<String> {
+    vec!["0412".to_owned()]
+}
+
+/// Resolve an LCID to one of the image's locale tables: Korean (0x12) or
+/// English (0x09); LANG_NEUTRAL/system/user defaults map to Korean.
+fn ce_nls_resolve_locale(locale: u32) -> Option<u16> {
+    match locale as u16 & 0x03ff {
+        0x0000 | 0x0012 => Some(0x0412),
+        0x0009 => Some(0x0409),
+        _ => None,
+    }
+}
+
+const KO_SHORT_DATES: &[&str] = &["yyyy-MM-dd", "yy-MM-dd", "yy-M-d", "yyyy-M-d"];
+const KO_LONG_DATES: &[&str] = &[
+    "yyyy'\u{B144}' M'\u{C6D4}' d'\u{C77C}' dddd",
+    "yyyy'\u{B144}' M'\u{C6D4}' d'\u{C77C}'",
+    "yy'\u{B144}' M'\u{C6D4}' d'\u{C77C}' dddd",
+    "yy'\u{B144}' M'\u{C6D4}' d'\u{C77C}'",
+    "yyyy'\u{B144}' MM'\u{C6D4}' dd'\u{C77C}' dddd",
+    "yyyy'\u{B144}' MM'\u{C6D4}' dd'\u{C77C}'",
+];
+const KO_YEAR_MONTH: &[&str] = &["yyyy'\u{B144}' M'\u{C6D4}'"];
+const KO_TIME_FORMATS: &[&str] = &["tt h:mm:ss", "tt hh:mm:ss", "H:mm:ss", "HH:mm:ss"];
+
+const EN_SHORT_DATES: &[&str] = &[
+    "M/d/yyyy",
+    "M/d/yy",
+    "MM/dd/yy",
+    "MM/dd/yyyy",
+    "yy/MM/dd",
+    "yyyy-MM-dd",
+    "dd-MMM-yy",
+];
+const EN_LONG_DATES: &[&str] = &[
+    "dddd, MMMM dd, yyyy",
+    "MMMM dd, yyyy",
+    "dddd, dd MMMM, yyyy",
+    "dd MMMM, yyyy",
+];
+const EN_YEAR_MONTH: &[&str] = &["MMMM, yyyy"];
+const EN_TIME_FORMATS: &[&str] = &["h:mm:ss tt", "hh:mm:ss tt", "H:mm:ss", "HH:mm:ss"];
+
+/// EnumDateFormatsW strings for a locale and DATE_* flag (0 = short).
+pub fn ce_nls_date_formats(locale: u32, flags: u32) -> Option<Vec<String>> {
+    const DATE_SHORTDATE: u32 = 0x0001;
+    const DATE_LONGDATE: u32 = 0x0002;
+    const DATE_YEARMONTH: u32 = 0x0008;
+    let lang = ce_nls_resolve_locale(locale)?;
+    let table = match flags {
+        0 | DATE_SHORTDATE => {
+            if lang == 0x0412 {
+                KO_SHORT_DATES
+            } else {
+                EN_SHORT_DATES
+            }
+        }
+        DATE_LONGDATE => {
+            if lang == 0x0412 {
+                KO_LONG_DATES
+            } else {
+                EN_LONG_DATES
+            }
+        }
+        DATE_YEARMONTH => {
+            if lang == 0x0412 {
+                KO_YEAR_MONTH
+            } else {
+                EN_YEAR_MONTH
+            }
+        }
+        _ => return None,
+    };
+    Some(table.iter().map(|s| (*s).to_owned()).collect())
+}
+
+/// EnumTimeFormatsW strings for a locale; TIME_NOSECONDS strips ":ss".
+pub fn ce_nls_time_formats(locale: u32, flags: u32) -> Option<Vec<String>> {
+    const TIME_NOSECONDS: u32 = 0x0002;
+    let lang = ce_nls_resolve_locale(locale)?;
+    let table = if lang == 0x0412 {
+        KO_TIME_FORMATS
+    } else {
+        EN_TIME_FORMATS
+    };
+    let mut formats: Vec<String> = match flags {
+        0 => table.iter().map(|s| (*s).to_owned()).collect(),
+        TIME_NOSECONDS => table.iter().map(|s| s.replace(":ss", "")).collect(),
+        _ => return None,
+    };
+    formats.dedup();
+    Some(formats)
+}
+
+/// EnumCalendarInfoW strings: calendars from locale.txt IOPTIONALCALENDAR
+/// (Korean: Gregorian-Korean 1, Gregorian-English 2, Tangun era 5) and the
+/// CALENDAR table format pictures (calendar 1 defers to locale defaults).
+pub fn ce_nls_calendar_info(locale: u32, calendar: u32, cal_type: u32) -> Option<Vec<String>> {
+    const ENUM_ALL_CALENDARS: u32 = 0xffff_ffff;
+    const CAL_ICALINTVALUE: u32 = 0x0001;
+    const CAL_SCALNAME: u32 = 0x0002;
+    const CAL_SSHORTDATE: u32 = 0x0005;
+    const CAL_SLONGDATE: u32 = 0x0006;
+    const CAL_SYEARMONTH: u32 = 0x002f;
+    const CAL_NOUSEROVERRIDE: u32 = 0x8000_0000;
+
+    let lang = ce_nls_resolve_locale(locale)?;
+    // (calendar id, native calendar name) per locale.txt IOPTIONALCALENDAR.
+    let calendars: &[(u32, &str)] = if lang == 0x0412 {
+        &[
+            (1, "\u{C11C}\u{AE30} (\u{D55C}\u{AE00})"),
+            (2, "\u{C11C}\u{AE30} (\u{C601}\u{C5B4})"),
+            (5, "\u{B2E8}\u{AE30}"),
+        ]
+    } else {
+        &[(1, "Gregorian Calendar")]
+    };
+    let selected: Vec<(u32, &str)> = if calendar == ENUM_ALL_CALENDARS {
+        calendars.to_vec()
+    } else {
+        calendars
+            .iter()
+            .copied()
+            .filter(|(id, _)| *id == calendar)
+            .collect()
+    };
+    if selected.is_empty() {
+        return None;
+    }
+
+    let mut out = Vec::new();
+    for (id, name) in selected {
+        match cal_type & !CAL_NOUSEROVERRIDE {
+            CAL_ICALINTVALUE => out.push(id.to_string()),
+            CAL_SCALNAME => out.push(name.to_owned()),
+            CAL_SSHORTDATE => match id {
+                // Calendar 1 pictures are \x0000 in the CALENDAR table: locale default.
+                1 => out.extend(ce_nls_date_formats(locale, 0x0001)?),
+                2 => out.extend(EN_SHORT_DATES[..4].iter().map(|s| (*s).to_owned())),
+                5 => out.push("gg yyyy-MM-dd".to_owned()),
+                _ => return None,
+            },
+            CAL_SLONGDATE => match id {
+                1 => out.extend(ce_nls_date_formats(locale, 0x0002)?),
+                2 => out.extend(EN_LONG_DATES[..2].iter().map(|s| (*s).to_owned())),
+                5 => out.extend(
+                    [
+                        "gg yyyy'\u{B144}' M'\u{C6D4}' d'\u{C77C}' dddd",
+                        "gg yyyy'\u{B144}' M'\u{C6D4}' d'\u{C77C}'",
+                        "gg yyyy'\u{B144}' MM'\u{C6D4}' dd'\u{C77C}' dddd",
+                        "gg yyyy'\u{B144}' MM'\u{C6D4}' dd'\u{C77C}'",
+                    ]
+                    .iter()
+                    .map(|s| (*s).to_owned()),
+                ),
+                _ => return None,
+            },
+            CAL_SYEARMONTH => match id {
+                1 => out.extend(ce_nls_date_formats(locale, 0x0008)?),
+                2 => out.extend(EN_YEAR_MONTH.iter().map(|s| (*s).to_owned())),
+                5 => out.push("gg yyyy'\u{B144}' M'\u{C6D4}'".to_owned()),
+                _ => return None,
+            },
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RuntimeLoaderStats {
     pub load_attempt_count: u64,

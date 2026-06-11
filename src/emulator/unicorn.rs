@@ -95,6 +95,8 @@ pub struct UnicornMips {
     #[cfg(feature = "unicorn")]
     pending_enum_font_families_returns: Vec<PendingEnumFontFamiliesReturn>,
     #[cfg(feature = "unicorn")]
+    pending_locale_enum_returns: Vec<PendingLocaleEnumReturn>,
+    #[cfg(feature = "unicorn")]
     pending_dll_lifecycle_returns: Vec<PendingDllLifecycleReturn>,
     #[cfg(feature = "unicorn")]
     pending_create_window_returns: Vec<CreateWindowReturn>,
@@ -160,6 +162,7 @@ struct UnicornRunStateHandles<'a> {
     pending_dpa_search_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<PendingDpaSearchReturn>>>,
     pending_enum_font_families_returns:
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingEnumFontFamiliesReturn>>>,
+    pending_locale_enum_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<PendingLocaleEnumReturn>>>,
     pending_dll_lifecycle_returns:
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingDllLifecycleReturn>>>,
     create_window_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<CreateWindowReturn>>>,
@@ -330,6 +333,9 @@ const DPA_SEARCH_RETURN_STUB_ADDR: u32 =
 #[cfg(feature = "unicorn")]
 const ENUM_FONT_FAMILIES_RETURN_STUB_ADDR: u32 =
     DPA_SEARCH_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
+#[cfg(feature = "unicorn")]
+const LOCALE_ENUM_RETURN_STUB_ADDR: u32 =
+    ENUM_FONT_FAMILIES_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
 #[cfg(feature = "unicorn")]
 const CREATESTRUCTW_SIZE: u32 = 48;
 #[cfg(feature = "unicorn")]
@@ -574,6 +580,22 @@ struct PendingEnumFontFamiliesReturn {
     /// Remaining font families to enumerate (front = next to call).
     remaining: Vec<crate::ce::kernel::CeFontFamily>,
     /// Stack address where ENUMLOGFONTEXW (348 B) and NEWTEXTMETRICEXW (100 B) are written.
+    struct_frame_sp: u32,
+}
+
+/// NLS string enumeration state (EnumSystemLocalesW, EnumSystemCodePagesW,
+/// EnumDateFormatsW, EnumTimeFormatsW, EnumCalendarInfoW, EnumUILanguagesW —
+/// every CE NLS ENUMPROCW takes a single LPWSTR argument).
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingLocaleEnumReturn {
+    return_pc: u32,
+    return_sp: u32,
+    caller_regs: MipsGuestContext,
+    callback: u32,
+    /// Remaining NUL-terminated UTF-16 strings to enumerate (front = next).
+    remaining: Vec<Vec<u16>>,
+    /// Stack address where the current string is written.
     struct_frame_sp: u32,
 }
 
@@ -871,6 +893,8 @@ impl UnicornMips {
             #[cfg(feature = "unicorn")]
             pending_enum_font_families_returns: Vec::new(),
             #[cfg(feature = "unicorn")]
+            pending_locale_enum_returns: Vec::new(),
+            #[cfg(feature = "unicorn")]
             pending_dll_lifecycle_returns: Vec::new(),
             #[cfg(feature = "unicorn")]
             pending_create_window_returns: Vec::new(),
@@ -1073,6 +1097,11 @@ impl UnicornMips {
             .collect();
         self.pending_dpa_search_returns = state
             .pending_dpa_search_returns
+            .borrow_mut()
+            .drain(..)
+            .collect();
+        self.pending_locale_enum_returns = state
+            .pending_locale_enum_returns
             .borrow_mut()
             .drain(..)
             .collect();
@@ -1390,6 +1419,8 @@ impl UnicornMips {
                 pending_enum_font_families_returns: std::mem::take(
                     &mut self.pending_enum_font_families_returns,
                 ),
+                #[cfg(feature = "unicorn")]
+                pending_locale_enum_returns: std::mem::take(&mut self.pending_locale_enum_returns),
                 #[cfg(feature = "unicorn")]
                 pending_dll_lifecycle_returns: std::mem::take(
                     &mut self.pending_dll_lifecycle_returns,
@@ -2412,6 +2443,10 @@ impl UnicornMips {
         )));
         let pending_enum_font_families_returns_hook =
             Rc::clone(&pending_enum_font_families_returns);
+        let pending_locale_enum_returns = Rc::new(RefCell::new(std::mem::take(
+            &mut self.pending_locale_enum_returns,
+        )));
+        let pending_locale_enum_returns_hook = Rc::clone(&pending_locale_enum_returns);
         let pending_dll_lifecycle_returns = Rc::new(RefCell::new(std::mem::take(
             &mut self.pending_dll_lifecycle_returns,
         )));
@@ -2458,6 +2493,7 @@ impl UnicornMips {
             pending_dsa_enum_returns: &pending_dsa_enum_returns,
             pending_dpa_search_returns: &pending_dpa_search_returns,
             pending_enum_font_families_returns: &pending_enum_font_families_returns,
+            pending_locale_enum_returns: &pending_locale_enum_returns,
             pending_dll_lifecycle_returns: &pending_dll_lifecycle_returns,
             create_window_returns: &create_window_returns,
             pending_wndproc_returns: &pending_wndproc_returns,
@@ -3074,6 +3110,10 @@ impl UnicornMips {
                         uc,
                         &pending_enum_font_families_returns_hook,
                     );
+                    return;
+                }
+                if address == LOCALE_ENUM_RETURN_STUB_ADDR {
+                    handle_locale_enum_return_stub(uc, &pending_locale_enum_returns_hook);
                     return;
                 }
                 if address == GUEST_THREAD_RETURN_STUB_ADDR {
@@ -3793,6 +3833,17 @@ impl UnicornMips {
                     return;
                 }
                 if trap.as_ref().is_some_and(|trap| {
+                    try_enter_locale_enum_callout(
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        &pending_locale_enum_returns_hook,
+                    )
+                }) {
+                    return;
+                }
+                if trap.as_ref().is_some_and(|trap| {
                     try_enter_enum_windows_callout(
                         unsafe { &*kernel_ptr },
                         memory.uc,
@@ -4492,6 +4543,7 @@ impl super::cpu::CpuBackend for UnicornMips {
             pending_dsa_enum_returns: Vec::new(),
             pending_dpa_search_returns: Vec::new(),
             pending_enum_font_families_returns: Vec::new(),
+            pending_locale_enum_returns: Vec::new(),
             pending_dll_lifecycle_returns: Vec::new(),
             pending_create_window_returns: Vec::new(),
             pending_wndproc_returns: Vec::new(),
@@ -22937,6 +22989,203 @@ fn handle_enum_font_families_return_stub<D>(
     ]
     .into_iter()
     .all(|r| r.is_ok());
+}
+
+// NLS string enum frame: longest CE format picture is well under 64 UTF-16
+// code units; 256 bytes leaves call-frame headroom below the string.
+#[cfg(feature = "unicorn")]
+const LOCALE_ENUM_FRAME_SIZE: u32 = 256;
+
+/// Dispatch one NLS string to the guest ENUMPROCW: write the NUL-terminated
+/// UTF-16 string at `struct_frame_sp` and call back with A0 = string pointer.
+#[cfg(feature = "unicorn")]
+fn call_locale_enum_callback<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    struct_frame_sp: u32,
+    callback: u32,
+    string: &[u16],
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    let mut bytes = Vec::with_capacity(string.len() * 2);
+    for c in string {
+        bytes.extend_from_slice(&c.to_le_bytes());
+    }
+    if uc.mem_write(u64::from(struct_frame_sp), &bytes).is_err() {
+        return false;
+    }
+    let call_callback = normalize_ce_process_slot_callback(uc, callback);
+    [
+        uc.reg_write(RegisterMIPS::SP, u64::from(struct_frame_sp)),
+        uc.reg_write(RegisterMIPS::A0, u64::from(struct_frame_sp)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(LOCALE_ENUM_RETURN_STUB_ADDR)),
+        uc.reg_write(RegisterMIPS::T9, u64::from(call_callback)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(call_callback)),
+    ]
+    .into_iter()
+    .all(|r| r.is_ok())
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_locale_enum_callout<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingLocaleEnumReturn>>>,
+) -> bool {
+    use crate::ce::coredll_ordinals::{
+        ORD_ENUM_CALENDAR_INFO_W, ORD_ENUM_DATE_FORMATS_W, ORD_ENUM_SYSTEM_CODE_PAGES_W,
+        ORD_ENUM_SYSTEM_LOCALES_W, ORD_ENUM_TIME_FORMATS_W, ORD_ENUM_UILANGUAGES_W,
+    };
+    use crate::ce::kernel::{
+        ce_nls_calendar_info, ce_nls_date_formats, ce_nls_system_code_pages, ce_nls_system_locales,
+        ce_nls_time_formats, ce_nls_ui_languages,
+    };
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll {
+        return false;
+    }
+    let Some(ordinal) = ordinal else {
+        return false;
+    };
+    let is_locale_enum = matches!(
+        ordinal,
+        o if o == ORD_ENUM_SYSTEM_LOCALES_W
+            || o == ORD_ENUM_SYSTEM_CODE_PAGES_W
+            || o == ORD_ENUM_DATE_FORMATS_W
+            || o == ORD_ENUM_TIME_FORMATS_W
+            || o == ORD_ENUM_CALENDAR_INFO_W
+            || o == ORD_ENUM_UILANGUAGES_W
+    );
+    if !is_locale_enum {
+        return false;
+    }
+
+    // Every CE NLS enumeration passes the ENUMPROCW as the first argument.
+    let callback = args.first().copied().unwrap_or(0);
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+
+    // LCID_INSTALLED / CP_INSTALLED = 1, LCID_SUPPORTED / CP_SUPPORTED = 2.
+    let strings: Option<Vec<String>> = if ordinal == ORD_ENUM_SYSTEM_LOCALES_W {
+        match args.get(1).copied().unwrap_or(0) {
+            1 | 2 => Some(ce_nls_system_locales()),
+            _ => None,
+        }
+    } else if ordinal == ORD_ENUM_SYSTEM_CODE_PAGES_W {
+        match args.get(1).copied().unwrap_or(0) {
+            1 | 2 => Some(ce_nls_system_code_pages()),
+            _ => None,
+        }
+    } else if ordinal == ORD_ENUM_DATE_FORMATS_W {
+        ce_nls_date_formats(
+            args.get(1).copied().unwrap_or(0),
+            args.get(2).copied().unwrap_or(0),
+        )
+    } else if ordinal == ORD_ENUM_TIME_FORMATS_W {
+        ce_nls_time_formats(
+            args.get(1).copied().unwrap_or(0),
+            args.get(2).copied().unwrap_or(0),
+        )
+    } else if ordinal == ORD_ENUM_CALENDAR_INFO_W {
+        ce_nls_calendar_info(
+            args.get(1).copied().unwrap_or(0),
+            args.get(2).copied().unwrap_or(0),
+            args.get(3).copied().unwrap_or(0),
+        )
+    } else {
+        Some(ce_nls_ui_languages())
+    };
+
+    let Some(strings) = strings else {
+        // Invalid locale/flags/calendar: fail like CE NLS with FALSE.
+        let _ = uc.reg_write(RegisterMIPS::V0, 0);
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        return true;
+    };
+
+    if !is_guest_wndproc(callback) || strings.is_empty() {
+        let _ = uc.reg_write(
+            RegisterMIPS::V0,
+            u64::from(is_guest_wndproc(callback) as u32),
+        );
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+        return true;
+    }
+
+    let mut remaining: Vec<Vec<u16>> = strings
+        .iter()
+        .map(|s| s.encode_utf16().chain(std::iter::once(0)).collect())
+        .collect();
+    let first = remaining.remove(0);
+
+    let caller_regs = capture_mips_gprs(uc);
+    let return_sp = read_mips_reg(uc, RegisterMIPS::SP);
+    let struct_frame_sp = return_sp.wrapping_sub(LOCALE_ENUM_FRAME_SIZE);
+
+    tracing::debug!(
+        target: "ce.coredll",
+        ordinal,
+        callback = format_args!("0x{callback:08x}"),
+        count = remaining.len() + 1,
+        "NLS string enumeration guest callback callout"
+    );
+
+    if !call_locale_enum_callback(uc, struct_frame_sp, callback, &first) {
+        return false;
+    }
+
+    pending_returns.borrow_mut().push(PendingLocaleEnumReturn {
+        return_pc,
+        return_sp,
+        caller_regs,
+        callback,
+        remaining,
+        struct_frame_sp,
+    });
+    true
+}
+
+#[cfg(feature = "unicorn")]
+fn handle_locale_enum_return_stub<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingLocaleEnumReturn>>>,
+) {
+    use unicorn_engine::RegisterMIPS;
+
+    let callback_result = read_mips_reg(uc, RegisterMIPS::V0);
+    let mut pending = pending_returns.borrow_mut();
+    let Some(state) = pending.last_mut() else {
+        return;
+    };
+
+    // Callback FALSE stops the enumeration; the NLS enums still return TRUE
+    // (unlike EnumFontFamilies, which propagates the callback result).
+    if callback_result == 0 || state.remaining.is_empty() {
+        let state = pending.pop().unwrap();
+        restore_mips_gprs(uc, &state.caller_regs);
+        let _ = uc.reg_write(RegisterMIPS::SP, u64::from(state.return_sp));
+        let _ = uc.reg_write(RegisterMIPS::V0, 1u64);
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(state.return_pc));
+        let _ = uc.reg_write(RegisterMIPS::RA, u64::from(state.return_pc));
+        return;
+    }
+
+    let next = state.remaining.remove(0);
+    let struct_frame_sp = state.struct_frame_sp;
+    let callback = state.callback;
+    drop(pending);
+
+    if !call_locale_enum_callback(uc, struct_frame_sp, callback, &next) {
+        let mut pending = pending_returns.borrow_mut();
+        let state = pending.pop().unwrap();
+        restore_mips_gprs(uc, &state.caller_regs);
+        let _ = uc.reg_write(RegisterMIPS::SP, u64::from(state.return_sp));
+        let _ = uc.reg_write(RegisterMIPS::V0, 1u64);
+        let _ = uc.reg_write(RegisterMIPS::PC, u64::from(state.return_pc));
+        let _ = uc.reg_write(RegisterMIPS::RA, u64::from(state.return_pc));
+    }
 }
 
 #[cfg(feature = "unicorn")]
