@@ -8285,13 +8285,13 @@ fn try_block_for_message_box_modal_wait<D>(
     }
 
     // Re-entry: blocked_modal is set from a prior call that didn't get a result yet.
-    if let Some(modal) = blocked_modal.borrow().clone() {
+    let existing_modal = { blocked_modal.borrow_mut().take() };
+    if let Some(modal) = existing_modal {
         kernel.pump_timers_to_gwe(modal.thread_id);
         if let Some(result) = modal.modal_state.try_queued_result(kernel, modal.thread_id) {
             let _ = kernel.remove_blocked_waiter(modal.wait_id);
             modal.modal_state.teardown(kernel, modal.thread_id, result);
             kernel.threads.set_last_error(modal.thread_id, 0);
-            *blocked_modal.borrow_mut() = None;
             *blocked_get_message.borrow_mut() = None;
             let mut regs = modal.regs;
             regs.set_v0(result);
@@ -8305,10 +8305,13 @@ fn try_block_for_message_box_modal_wait<D>(
                 let _ = uc.emu_stop();
             }
         } else {
+            let modal_thread_id = modal.thread_id;
+            let dialog_hwnd = modal.modal_state.dialog_hwnd();
+            *blocked_modal.borrow_mut() = Some(modal);
             *blocked_get_message.borrow_mut() = Some(unicorn_blocked_get_message_snapshot(
                 kernel,
-                modal.thread_id,
-                Some(modal.modal_state.dialog_hwnd()),
+                modal_thread_id,
+                Some(dialog_hwnd),
                 crate::ce::gwe::WM_PAINT,
                 crate::ce::gwe::WM_LBUTTONUP,
             ));
@@ -8391,20 +8394,22 @@ fn try_resume_blocked_modal_message_box<D>(
 ) -> bool {
     use unicorn_engine::RegisterMIPS;
 
-    let Some(modal) = blocked_modal.borrow().clone() else {
+    let existing_modal = { blocked_modal.borrow_mut().take() };
+    let Some(modal) = existing_modal else {
         return false;
     };
     if active_thread_id == modal.thread_id {
+        *blocked_modal.borrow_mut() = Some(modal);
         return false;
     }
     kernel.pump_timers_to_gwe(modal.thread_id);
     let Some(result) = modal.modal_state.try_queued_result(kernel, modal.thread_id) else {
+        *blocked_modal.borrow_mut() = Some(modal);
         return false;
     };
     let _ = kernel.remove_blocked_waiter(modal.wait_id);
     modal.modal_state.teardown(kernel, modal.thread_id, result);
     kernel.threads.set_last_error(modal.thread_id, 0);
-    *blocked_modal.borrow_mut() = None;
     *blocked_get_message.borrow_mut() = None;
 
     if save_active_context {

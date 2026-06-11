@@ -267,6 +267,18 @@ fn image_list_bitmap_strip_count(bitmap_width: i32, image_width: i32) -> i32 {
     bitmap_width.saturating_add(image_width - 1) / image_width
 }
 
+fn remove_image_list_image_at(list: &mut ImageListObject, index: usize) {
+    list.images.remove(index);
+    list.overlays
+        .retain(|_, overlay_index| *overlay_index as usize != index);
+    for overlay_index in list.overlays.values_mut() {
+        let overlay_index_usize = *overlay_index as usize;
+        if overlay_index_usize > index {
+            *overlay_index -= 1;
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImageListImageInfo {
     pub bitmap: u32,
@@ -1162,7 +1174,18 @@ impl ResourceSystem {
         initial: i32,
         grow: i32,
     ) -> Option<u32> {
+        const ILC_MASK: u32 = 0x0001;
+        const ILC_COLORMASK: u32 = 0x00fe;
+        const ILC_SHARED: u32 = 0x0100;
+        const ILC_PALETTE: u32 = 0x0800;
+        const ILC_MIRROR: u32 = 0x2000;
+        const ILC_VIRTUAL: u32 = 0x8000;
+        const ILC_VALID: u32 =
+            ILC_MASK | ILC_COLORMASK | ILC_SHARED | ILC_PALETTE | ILC_MIRROR | ILC_VIRTUAL;
         if width <= 0 || height <= 0 {
+            return None;
+        }
+        if flags & !ILC_VALID != 0 {
             return None;
         }
         let handle = self.next_gdi_handle;
@@ -1399,15 +1422,7 @@ impl ResourceSystem {
         if index >= list.images.len() {
             return Some(false);
         }
-        list.images.remove(index);
-        list.overlays
-            .retain(|_, overlay_index| *overlay_index as usize != index);
-        for overlay_index in list.overlays.values_mut() {
-            let overlay_index_usize = *overlay_index as usize;
-            if overlay_index_usize > index {
-                *overlay_index -= 1;
-            }
-        }
+        remove_image_list_image_at(list, index);
         Some(true)
     }
 
@@ -1417,32 +1432,73 @@ impl ResourceSystem {
         dst_index: i32,
         src_handle: u32,
         src_index: i32,
-        remove_source: bool,
+        flags: u32,
     ) -> Option<bool> {
-        if src_index < 0 {
+        const ILCF_SWAP: u32 = 0x0000_0001;
+        if flags & !ILCF_SWAP != 0 || src_index < 0 {
             return Some(false);
         }
-        let image = self
-            .image_lists
-            .get(&src_handle)?
-            .images
-            .get(src_index as usize)?
-            .clone();
+        let src_index = src_index as usize;
+        let swap = flags & ILCF_SWAP != 0;
+        if swap {
+            if dst_index < 0 {
+                return Some(false);
+            }
+            let dst_index = dst_index as usize;
+            if dst_handle == src_handle {
+                let list = self.image_lists.get_mut(&dst_handle)?;
+                if dst_index >= list.images.len() || src_index >= list.images.len() {
+                    return Some(false);
+                }
+                list.images.swap(dst_index, src_index);
+                for overlay_index in list.overlays.values_mut() {
+                    let overlay_index_usize = *overlay_index as usize;
+                    if overlay_index_usize == dst_index {
+                        *overlay_index = src_index as i32;
+                    } else if overlay_index_usize == src_index {
+                        *overlay_index = dst_index as i32;
+                    }
+                }
+                return Some(true);
+            }
+            let Some(src_list) = self.image_lists.get(&src_handle) else {
+                return None;
+            };
+            let Some(src_image) = src_list.images.get(src_index).cloned() else {
+                return Some(false);
+            };
+            let Some(dst_list) = self.image_lists.get(&dst_handle) else {
+                return None;
+            };
+            let Some(dst_image) = dst_list.images.get(dst_index).cloned() else {
+                return Some(false);
+            };
+            self.image_lists.get_mut(&dst_handle)?.images[dst_index] = src_image;
+            self.image_lists.get_mut(&src_handle)?.images[src_index] = dst_image;
+            return Some(true);
+        }
+        let Some(src_list) = self.image_lists.get(&src_handle) else {
+            return None;
+        };
+        let Some(image) = src_list.images.get(src_index).cloned() else {
+            return Some(false);
+        };
+        if dst_handle == src_handle && dst_index >= 0 && dst_index as usize == src_index {
+            return Some(true);
+        }
         let dst = self.image_lists.get_mut(&dst_handle)?;
         if dst_index < 0 || dst_index as usize >= dst.images.len() {
             dst.images.push(image);
         } else {
             dst.images[dst_index as usize] = image;
         }
-        if remove_source {
-            let Some(src) = self.image_lists.get_mut(&src_handle) else {
-                return Some(false);
-            };
-            if src_index as usize >= src.images.len() {
-                return Some(false);
-            }
-            src.images.remove(src_index as usize);
+        let Some(src) = self.image_lists.get_mut(&src_handle) else {
+            return Some(false);
+        };
+        if src_index >= src.images.len() {
+            return Some(false);
         }
+        remove_image_list_image_at(src, src_index);
         Some(true)
     }
 

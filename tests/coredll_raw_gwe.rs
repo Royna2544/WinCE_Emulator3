@@ -652,7 +652,7 @@ fn coredll_raw_destroy_icon_accepts_loaded_icon_handles() -> Result<()> {
 
     let (pattern_dst_dc, pattern_dst_bits, pattern_dst_stride) =
         create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 6, 6);
-    let (_, pattern_mask_bitmap, _, _) =
+    let (_, pattern_mask_bitmap, pattern_mask_bits, pattern_mask_stride) =
         create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
     let (_, pattern_color_bitmap, pattern_color_bits, pattern_color_stride) =
         create_selected_rgb565_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
@@ -752,6 +752,185 @@ fn coredll_raw_destroy_icon_accepts_loaded_icon_handles() -> Result<()> {
     assert_eq!(
         rgb565_at(&memory, pattern_dst_bits, pattern_dst_stride, 5, 5),
         0x0000
+    );
+
+    let mut bitmap_framebuffer = VirtualFramebuffer::new(8, 8, PixelFormat::Rgb565)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut bitmap_framebuffer),
+            thread_id,
+            ORD_DRAW_ICON_EX,
+            [hdc, 1, 1, scaled_icon, 4, 4, 0, 0, 0x0003],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(
+        framebuffer_rgb565_at(&bitmap_framebuffer, 1, 1),
+        0xf800,
+        "bitmap-backed DrawIconEx should scale red into framebuffer upper-left"
+    );
+    assert_eq!(
+        framebuffer_rgb565_at(&bitmap_framebuffer, 3, 1),
+        0x07e0,
+        "bitmap-backed DrawIconEx should scale green into framebuffer upper-right"
+    );
+    assert_eq!(
+        framebuffer_rgb565_at(&bitmap_framebuffer, 1, 3),
+        0x001f,
+        "bitmap-backed DrawIconEx should scale blue into framebuffer lower-left"
+    );
+    assert_eq!(
+        framebuffer_rgb565_at(&bitmap_framebuffer, 3, 3),
+        0xffff,
+        "bitmap-backed DrawIconEx should scale white into framebuffer lower-right"
+    );
+    assert_eq!(
+        framebuffer_rgb565_at(&bitmap_framebuffer, 5, 5),
+        0x0000,
+        "bitmap-backed DrawIconEx should leave framebuffer pixels outside the target rect untouched"
+    );
+
+    let (_, mono_mask_bitmap, mono_mask_bits, mono_mask_stride) =
+        create_selected_1bpp_dib_with_bitmap(&table, &mut kernel, &mut memory, thread_id, 2, 2);
+    memory.write_bytes(
+        mono_mask_bits,
+        &[
+            0b1000_0000,
+            0,
+            0,
+            0, // white, black
+            0b0100_0000,
+            0,
+            0,
+            0, // black, white
+        ],
+    );
+    memory.write_word(icon_info + 12, mono_mask_bitmap);
+    memory.write_word(icon_info + 16, 0);
+    let mono_mask_icon = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_CREATE_ICON_INDIRECT,
+        [icon_info],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(icon),
+            ..
+        } => icon,
+        other => panic!("CreateIconIndirect(1bpp mask-only) did not return a handle: {other:?}"),
+    };
+    assert_eq!(mono_mask_stride, 4);
+    let mut mono_mask_framebuffer = VirtualFramebuffer::new(6, 6, PixelFormat::Rgb565)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut mono_mask_framebuffer),
+            thread_id,
+            ORD_DRAW_ICON_EX,
+            [hdc, 1, 1, mono_mask_icon, 4, 4, 0, 0, 0x0001],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(
+        framebuffer_rgb565_at(&mono_mask_framebuffer, 1, 1),
+        0xffff,
+        "1bpp DI_MASK should expand white mask bits into framebuffer pixels"
+    );
+    assert_eq!(
+        framebuffer_rgb565_at(&mono_mask_framebuffer, 3, 1),
+        0x0000,
+        "1bpp DI_MASK should expand black mask bits into framebuffer pixels"
+    );
+    assert_eq!(
+        framebuffer_rgb565_at(&mono_mask_framebuffer, 1, 3),
+        0x0000,
+        "1bpp DI_MASK should scale the lower-left black mask bit"
+    );
+    assert_eq!(
+        framebuffer_rgb565_at(&mono_mask_framebuffer, 3, 3),
+        0xffff,
+        "1bpp DI_MASK should scale the lower-right white mask bit"
+    );
+
+    write_rgb565(
+        &mut memory,
+        pattern_mask_bits,
+        pattern_mask_stride,
+        0,
+        0,
+        0xffff,
+    );
+    write_rgb565(
+        &mut memory,
+        pattern_mask_bits,
+        pattern_mask_stride,
+        1,
+        0,
+        0x001f,
+    );
+    write_rgb565(
+        &mut memory,
+        pattern_mask_bits,
+        pattern_mask_stride,
+        0,
+        1,
+        0x07e0,
+    );
+    write_rgb565(
+        &mut memory,
+        pattern_mask_bits,
+        pattern_mask_stride,
+        1,
+        1,
+        0xf800,
+    );
+    let (mask_dst_dc, mask_dst_bits, mask_dst_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 6, 6);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DRAW_ICON_EX,
+            [mask_dst_dc, 1, 1, scaled_icon, 4, 4, 0, 0, 0x0001],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(
+        rgb565_at(&memory, mask_dst_bits, mask_dst_stride, 1, 1),
+        0xffff,
+        "DI_MASK should draw the icon mask bitmap, not the color bitmap"
+    );
+    assert_eq!(
+        rgb565_at(&memory, mask_dst_bits, mask_dst_stride, 3, 1),
+        0x001f,
+        "DI_MASK should scale from the mask bitmap source"
+    );
+    assert_eq!(
+        rgb565_at(&memory, mask_dst_bits, mask_dst_stride, 1, 3),
+        0x07e0,
+        "DI_MASK should preserve mask bitmap pixels in the lower-left quadrant"
+    );
+    assert_eq!(
+        rgb565_at(&memory, mask_dst_bits, mask_dst_stride, 3, 3),
+        0xf800,
+        "DI_MASK should preserve mask bitmap pixels in the lower-right quadrant"
     );
 
     assert!(matches!(
@@ -1593,10 +1772,86 @@ fn create_selected_rgb565_dib_with_bitmap(
     (mem_dc, bitmap, bits_ptr, stride)
 }
 
+fn create_selected_1bpp_dib_with_bitmap(
+    table: &CoredllExportTable,
+    kernel: &mut CeKernel,
+    memory: &mut TestGuestMemory,
+    thread_id: u32,
+    width: i32,
+    height: i32,
+) -> (u32, u32, u32, u32) {
+    let mem_dc = match table.dispatch_raw_ordinal_with_memory(
+        kernel,
+        memory,
+        thread_id,
+        ORD_CREATE_COMPATIBLE_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateCompatibleDC(NULL) did not return a handle: {other:?}"),
+    };
+    let info = 0x1_0200;
+    let bits_out = 0x1_0300;
+    memory.map_bytes(info, 40);
+    memory.map_words(bits_out, 1);
+    let mut header = [0u8; 40];
+    header[0..4].copy_from_slice(&40u32.to_le_bytes());
+    header[4..8].copy_from_slice(&width.to_le_bytes());
+    header[8..12].copy_from_slice(&(-height).to_le_bytes());
+    header[12..14].copy_from_slice(&1u16.to_le_bytes());
+    header[14..16].copy_from_slice(&1u16.to_le_bytes());
+    memory.write_bytes(info, &header);
+    memory.write_word(info, 40);
+
+    let bitmap = match table.dispatch_raw_ordinal_with_memory(
+        kernel,
+        memory,
+        thread_id,
+        ORD_CREATE_DIBSECTION,
+        [mem_dc, info, 0, bits_out, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("CreateDIBSection(1bpp) did not return a bitmap: {other:?}"),
+    };
+    assert_ne!(bitmap, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            kernel,
+            memory,
+            thread_id,
+            ORD_SELECT_OBJECT,
+            [mem_dc, bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle != 0
+    ));
+    let bits_ptr = memory
+        .read_u32(bits_out)
+        .expect("CreateDIBSection should write bits pointer");
+    let stride = (((width as u32) + 31) / 32) * 4;
+    (mem_dc, bitmap, bits_ptr, stride)
+}
+
 fn rgb565_at(memory: &TestGuestMemory, bits_ptr: u32, stride: u32, x: u32, y: u32) -> u16 {
     memory
         .read_u16(bits_ptr + y * stride + x * 2)
         .expect("pixel should be readable")
+}
+
+fn framebuffer_rgb565_at(framebuffer: &VirtualFramebuffer, x: usize, y: usize) -> u16 {
+    let offset = y * framebuffer.stride() + x * PixelFormat::Rgb565.bytes_per_pixel();
+    u16::from_le_bytes([
+        framebuffer.pixels()[offset],
+        framebuffer.pixels()[offset + 1],
+    ])
 }
 
 fn write_rgb565(

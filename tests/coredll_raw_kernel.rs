@@ -10,13 +10,14 @@ use wince_emulation_v3::{
             ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIBSECTION, ORD_CREATE_DIRECTORY_W,
             ORD_CREATE_EVENT_W, ORD_CREATE_FILE_W, ORD_CREATE_PROCESS_W, ORD_CREATE_SEMAPHORE_W,
             ORD_CREATE_THREAD, ORD_DELETE_CRITICAL_SECTION, ORD_DISABLE_THREAD_LIBRARY_CALLS,
-            ORD_DISPATCH_MESSAGE_W, ORD_EMPTY_CLIPBOARD, ORD_ENTER_CRITICAL_SECTION,
-            ORD_ENUM_CLIPBOARD_FORMATS, ORD_EVENT_MODIFY, ORD_EXTRACT_ICON_EX_W,
-            ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY, ORD_GET_CALLER_PROCESS_INDEX,
-            ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_GET_CLIPBOARD_FORMAT_NAME_W,
-            ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK, ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS,
-            ORD_GET_DC, ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR,
-            ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W, ORD_GET_OPEN_CLIPBOARD_WINDOW,
+            ORD_DISPATCH_MESSAGE_W, ORD_DRAW_ICON_EX, ORD_EMPTY_CLIPBOARD,
+            ORD_ENTER_CRITICAL_SECTION, ORD_ENUM_CLIPBOARD_FORMATS, ORD_EVENT_MODIFY,
+            ORD_EXTRACT_ICON_EX_W, ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY,
+            ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC,
+            ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK,
+            ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_EXIT_CODE_PROCESS,
+            ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
+            ORD_GET_MODULE_HANDLE_W, ORD_GET_OPEN_CLIPBOARD_WINDOW,
             ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
             ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID,
             ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_TIME,
@@ -4034,6 +4035,11 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
     )
     .unwrap();
     fs::write(
+        root.join("Docs").join("sparse-group-icon.exe"),
+        pe32_with_sparse_group_icon_id(),
+    )
+    .unwrap();
+    fs::write(
         root.join("Docs").join("bad-group-icon.exe"),
         pe32_with_malformed_icon_group_type(),
     )
@@ -4041,6 +4047,21 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
     fs::write(
         root.join("Docs").join("missing-icon-resource.exe"),
         pe32_with_missing_icon_resource(),
+    )
+    .unwrap();
+    fs::write(
+        root.join("Docs").join("missing-and-mask-icon.exe"),
+        pe32_with_missing_and_mask_icon(),
+    )
+    .unwrap();
+    fs::write(
+        root.join("Docs").join("eight-bpp-icon.exe"),
+        pe32_with_8bpp_icon(),
+    )
+    .unwrap();
+    fs::write(
+        root.join("Docs").join("four-bpp-icon.exe"),
+        pe32_with_4bpp_icon(),
     )
     .unwrap();
     fs::write(
@@ -4316,6 +4337,120 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
     assert_eq!((small_bitmap.width, small_bitmap.height), (16, 16));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
+    memory.write_wide_z(path_ptr, r"\Docs\eight-bpp-icon.exe");
+    memory.write_u32(large_icon_ptr, 0)?;
+    memory.write_u32(small_icon_ptr, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXTRACT_ICON_EX_W,
+            [path_ptr, 0, large_icon_ptr, small_icon_ptr, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    let eight_bpp_icon = memory.read_u32(large_icon_ptr)?;
+    assert_ne!(eight_bpp_icon, 0);
+    assert_eq!(memory.read_u32(small_icon_ptr)?, eight_bpp_icon);
+    let eight_bpp_color_bitmap = kernel
+        .resources
+        .icon(eight_bpp_icon)
+        .expect("8bpp PE icon")
+        .color_bitmap;
+    let eight_bpp_bitmap = kernel
+        .resources
+        .bitmap(eight_bpp_color_bitmap)
+        .expect("8bpp PE icon bitmap");
+    assert_eq!(eight_bpp_bitmap.bits_pixel, 8);
+    assert_eq!(eight_bpp_bitmap.color_table.len(), 256);
+    assert_eq!(
+        eight_bpp_bitmap.color_table[7],
+        [0x07, 0x47, 0x87, 0x00],
+        "8bpp RT_ICON color table should be preserved on the extracted bitmap"
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_wide_z(path_ptr, r"\Docs\four-bpp-icon.exe");
+    memory.write_u32(large_icon_ptr, 0)?;
+    memory.write_u32(small_icon_ptr, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXTRACT_ICON_EX_W,
+            [path_ptr, 0, large_icon_ptr, small_icon_ptr, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    let four_bpp_icon = memory.read_u32(large_icon_ptr)?;
+    assert_ne!(four_bpp_icon, 0);
+    assert_eq!(memory.read_u32(small_icon_ptr)?, four_bpp_icon);
+    let four_bpp_color_bitmap = kernel
+        .resources
+        .icon(four_bpp_icon)
+        .expect("4bpp PE icon")
+        .color_bitmap;
+    let four_bpp_bitmap = kernel
+        .resources
+        .bitmap(four_bpp_color_bitmap)
+        .expect("4bpp PE icon bitmap");
+    assert_eq!(four_bpp_bitmap.bits_pixel, 4);
+    assert_eq!(four_bpp_bitmap.color_table.len(), 16);
+    assert_eq!(
+        four_bpp_bitmap.color_table[9],
+        [0x09, 0x39, 0x99, 0x00],
+        "4bpp RT_ICON color table should be preserved on the extracted bitmap"
+    );
+    let hdc = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_GET_DC,
+        [0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("GetDC did not return a desktop HDC: {other:?}"),
+    };
+    let mut four_bpp_framebuffer = VirtualFramebuffer::new(4, 4, PixelFormat::Rgb565)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut four_bpp_framebuffer),
+            thread_id,
+            ORD_DRAW_ICON_EX,
+            [hdc, 1, 1, four_bpp_icon, 2, 1, 0, 0, 0x0003],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let four_bpp_left = 1 * four_bpp_framebuffer.stride() + PixelFormat::Rgb565.bytes_per_pixel();
+    let four_bpp_right = four_bpp_left + PixelFormat::Rgb565.bytes_per_pixel();
+    assert_eq!(
+        &four_bpp_framebuffer.pixels()[four_bpp_left..four_bpp_left + 2],
+        &[0xc1, 0x99],
+        "4bpp RT_ICON draw should decode the high-nibble palette index"
+    );
+    assert_eq!(
+        &four_bpp_framebuffer.pixels()[four_bpp_right..four_bpp_right + 2],
+        &[0xa0, 0x91],
+        "4bpp RT_ICON draw should decode the low-nibble palette index"
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
     memory.write_wide_z(path_ptr, r"\Docs\named-group-icon.exe");
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -4349,6 +4484,44 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
     let named_large_icon = memory.read_u32(large_icon_ptr)?;
     assert_ne!(named_large_icon, 0);
     assert_eq!(memory.read_u32(small_icon_ptr)?, named_large_icon);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_wide_z(path_ptr, r"\Docs\sparse-group-icon.exe");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXTRACT_ICON_EX_W,
+            [path_ptr, 0xffff_ffff, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    memory.write_u32(large_icon_ptr, 0)?;
+    memory.write_u32(small_icon_ptr, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXTRACT_ICON_EX_W,
+            [path_ptr, 7, large_icon_ptr, small_icon_ptr, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    let sparse_large_icon = memory.read_u32(large_icon_ptr)?;
+    assert_ne!(
+        sparse_large_icon, 0,
+        "integer RT_GROUP_ICON resource IDs should be usable as ExtractIconExW indexes"
+    );
+    assert_eq!(memory.read_u32(small_icon_ptr)?, sparse_large_icon);
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
     for malformed_icon_path in [
@@ -4392,6 +4565,50 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
         assert_eq!(memory.read_u32(large_icon_ptr)?, 0xdead_beef);
         assert_eq!(memory.read_u32(small_icon_ptr)?, 0xfeed_face);
     }
+
+    memory.write_wide_z(path_ptr, r"\Docs\missing-and-mask-icon.exe");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXTRACT_ICON_EX_W,
+            [path_ptr, 0xffff_ffff, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    memory.write_u32(large_icon_ptr, 0)?;
+    memory.write_u32(small_icon_ptr, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXTRACT_ICON_EX_W,
+            [path_ptr, 0, large_icon_ptr, small_icon_ptr, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    let missing_mask_icon = memory.read_u32(large_icon_ptr)?;
+    assert_ne!(missing_mask_icon, 0);
+    assert_eq!(memory.read_u32(small_icon_ptr)?, missing_mask_icon);
+    let missing_mask_icon_obj = kernel
+        .resources
+        .icon(missing_mask_icon)
+        .expect("missing-AND-mask PE icon");
+    assert_ne!(missing_mask_icon_obj.color_bitmap, 0);
+    assert_eq!(
+        missing_mask_icon_obj.mask_bitmap, 0,
+        "RT_ICON without trailing AND-mask bytes should still extract the color bitmap"
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
 
     memory.write_wide_z(path_ptr, r"\Docs\viewer.lnk");
     memory.write_u32(info_ptr + SHFILEINFO_HICON_OFFSET, 0)?;
@@ -4804,6 +5021,14 @@ fn pe32_with_string_named_icon_group() -> Vec<u8> {
     bytes
 }
 
+fn pe32_with_sparse_group_icon_id() -> Vec<u8> {
+    let mut bytes = pe32_with_group_icon_count(1);
+    let rsrc = 0x200usize;
+    let group_type_dir = rsrc + 0x60;
+    put_test_u32(&mut bytes, group_type_dir + 16, 7);
+    bytes
+}
+
 fn pe32_with_malformed_icon_group_type() -> Vec<u8> {
     let mut bytes = pe32_with_group_icon_count(1);
     put_test_u16(&mut bytes, 0x200 + 0x500 + 2, 2);
@@ -4813,6 +5038,35 @@ fn pe32_with_malformed_icon_group_type() -> Vec<u8> {
 fn pe32_with_missing_icon_resource() -> Vec<u8> {
     let mut bytes = pe32_with_group_icon_count(1);
     put_test_u16(&mut bytes, 0x200 + 0x500 + 18, 999);
+    bytes
+}
+
+fn pe32_with_missing_and_mask_icon() -> Vec<u8> {
+    let mut bytes = pe32_with_group_icon_count(1);
+    let truncated_icon_size = 44u32; // BITMAPINFOHEADER + one 32bpp XOR pixel, no AND mask.
+    put_test_u32(&mut bytes, 0x200 + 0x2a0 + 4, truncated_icon_size);
+    put_test_u32(&mut bytes, 0x200 + 0x500 + 14, truncated_icon_size);
+    bytes
+}
+
+fn pe32_with_8bpp_icon() -> Vec<u8> {
+    let mut bytes = pe32_with_group_icon_count(1);
+    let icon_dib = icon_dib_8bpp(1, 1, 7);
+    put_test_u32(&mut bytes, 0x200 + 0x2a0 + 4, icon_dib.len() as u32);
+    put_test_u16(&mut bytes, 0x200 + 0x500 + 12, 8);
+    put_test_u32(&mut bytes, 0x200 + 0x500 + 14, icon_dib.len() as u32);
+    put_test_bytes(&mut bytes, 0x200 + 0x700, &icon_dib);
+    bytes
+}
+
+fn pe32_with_4bpp_icon() -> Vec<u8> {
+    let mut bytes = pe32_with_group_icon_count(1);
+    let icon_dib = icon_dib_4bpp(2, 1, 9, 4);
+    put_test_u8(&mut bytes, 0x200 + 0x500 + 6, 2);
+    put_test_u32(&mut bytes, 0x200 + 0x2a0 + 4, icon_dib.len() as u32);
+    put_test_u16(&mut bytes, 0x200 + 0x500 + 12, 4);
+    put_test_u32(&mut bytes, 0x200 + 0x500 + 14, icon_dib.len() as u32);
+    put_test_bytes(&mut bytes, 0x200 + 0x700, &icon_dib);
     bytes
 }
 
@@ -5008,6 +5262,58 @@ fn icon_dib_32bpp(width: i32, height: i32, channel: u8) -> Vec<u8> {
     bytes
 }
 
+fn icon_dib_8bpp(width: i32, height: i32, color_index: u8) -> Vec<u8> {
+    let xor_stride = (((width as usize * 8) + 31) / 32) * 4;
+    let xor_size = xor_stride * height as usize;
+    let and_stride = ((width as usize + 31) / 32) * 4;
+    let and_size = and_stride * height as usize;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&40u32.to_le_bytes());
+    bytes.extend_from_slice(&width.to_le_bytes());
+    bytes.extend_from_slice(&(height * 2).to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&8u16.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&(xor_size as u32).to_le_bytes());
+    bytes.extend_from_slice(&0i32.to_le_bytes());
+    bytes.extend_from_slice(&0i32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    for index in 0..=u8::MAX {
+        bytes.extend_from_slice(&[index, index.wrapping_add(0x40), index.wrapping_add(0x80), 0]);
+    }
+    bytes.push(color_index);
+    bytes.resize(bytes.len() + xor_size.saturating_sub(1), 0);
+    bytes.resize(bytes.len() + and_size, 0);
+    bytes
+}
+
+fn icon_dib_4bpp(width: i32, height: i32, first_index: u8, second_index: u8) -> Vec<u8> {
+    let xor_stride = (((width as usize * 4) + 31) / 32) * 4;
+    let xor_size = xor_stride * height as usize;
+    let and_stride = ((width as usize + 31) / 32) * 4;
+    let and_size = and_stride * height as usize;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&40u32.to_le_bytes());
+    bytes.extend_from_slice(&width.to_le_bytes());
+    bytes.extend_from_slice(&(height * 2).to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&4u16.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&(xor_size as u32).to_le_bytes());
+    bytes.extend_from_slice(&0i32.to_le_bytes());
+    bytes.extend_from_slice(&0i32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    for index in 0..16u8 {
+        bytes.extend_from_slice(&[index, index.wrapping_add(0x30), index.wrapping_add(0x90), 0]);
+    }
+    bytes.push(((first_index & 0x0f) << 4) | (second_index & 0x0f));
+    bytes.resize(bytes.len() + xor_size.saturating_sub(1), 0);
+    bytes.resize(bytes.len() + and_size, 0);
+    bytes
+}
+
 fn put_test_resource_directory(bytes: &mut [u8], offset: usize, id_entries: u16) {
     put_test_u16(bytes, offset + 14, id_entries);
 }
@@ -5026,6 +5332,10 @@ fn put_test_bytes(bytes: &mut [u8], offset: usize, value: &[u8]) {
 
 fn put_test_u16(bytes: &mut [u8], offset: usize, value: u16) {
     bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_test_u8(bytes: &mut [u8], offset: usize, value: u8) {
+    bytes[offset] = value;
 }
 
 fn put_test_u32(bytes: &mut [u8], offset: usize, value: u32) {
@@ -5391,6 +5701,14 @@ fn sh_get_file_info_system_image_list_supports_icon_queries_and_draw() -> Result
 fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     const IMAGE_BITMAP: u32 = 0;
     const LR_LOADFROMFILE: u32 = 0x0000_0010;
+    const ILC_MASK: u32 = 0x0001;
+    const ILC_COLOR32: u32 = 0x0020;
+    const ILC_SHARED: u32 = 0x0100;
+    const ILC_LARGESMALL: u32 = 0x0200;
+    const ILC_UNIQUE: u32 = 0x0400;
+    const ILC_PALETTE: u32 = 0x0800;
+    const ILC_MIRROR: u32 = 0x2000;
+    const ILC_VIRTUAL: u32 = 0x8000;
 
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
@@ -5436,6 +5754,65 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         resource_dib_ptr,
         resource_dib.len() as u32,
     );
+
+    for invalid_flags in [ILC_LARGESMALL, ILC_UNIQUE, 0x1000, 0x0001_0000] {
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_IMAGE_LIST_CREATE,
+                [16, 16, invalid_flags, 1, 1],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Handle(0),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_PARAMETER,
+            "ImageList_Create should reject non-CE ILC flags {invalid_flags:#x}"
+        );
+    }
+
+    let valid_private_flags =
+        ILC_MASK | ILC_COLOR32 | ILC_SHARED | ILC_PALETTE | ILC_MIRROR | ILC_VIRTUAL;
+    let valid_private_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [1, 1, valid_private_flags, 1, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create rejected CE-valid private flags: {other:?}"),
+    };
+    assert_ne!(valid_private_list, 0);
+    assert_eq!(
+        kernel
+            .resources
+            .image_list(valid_private_list)
+            .unwrap()
+            .flags,
+        valid_private_flags
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DESTROY,
+            [valid_private_list],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
 
     let image_list = match table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
@@ -6387,6 +6764,156 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
 }
 
 #[test]
+fn image_list_copy_honors_ce_move_swap_flags() -> Result<()> {
+    const ILCF_MOVE: u32 = 0x0000_0000;
+    const ILCF_SWAP: u32 = 0x0000_0001;
+    const ERROR_INVALID_PARAMETER: u32 = 87;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 45;
+
+    let list_a = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [16, 16, 0, 2, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create(list_a) failed: {other:?}"),
+    };
+    let list_b = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [16, 16, 0, 2, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create(list_b) failed: {other:?}"),
+    };
+
+    for (list, icon_a, icon_b) in [
+        (list_a, 0x000b_8101, 0x000b_8102),
+        (list_b, 0x000b_8201, 0x000b_8202),
+    ] {
+        for icon in [icon_a, icon_b] {
+            assert!(matches!(
+                table.dispatch_raw_ordinal_with_memory(
+                    &mut kernel,
+                    &mut memory,
+                    thread_id,
+                    ORD_IMAGE_LIST_REPLACE_ICON,
+                    [list, 0xffff_ffff, icon],
+                ),
+                CoredllDispatch::Returned {
+                    value: CoredllValue::U32(_),
+                    ..
+                }
+            ));
+        }
+    }
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_COPY,
+            [list_a, 0, list_b, 1, 0x0000_0002],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(
+        kernel.resources.image_list(list_a).unwrap().images[0].icon,
+        0x000b_8101
+    );
+    assert_eq!(
+        kernel.resources.image_list(list_b).unwrap().images[1].icon,
+        0x000b_8202
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_COPY,
+            [list_a, 0, list_b, 1, ILCF_SWAP],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.resources.image_list(list_a).unwrap().images[0].icon,
+        0x000b_8202
+    );
+    assert_eq!(
+        kernel.resources.image_list(list_b).unwrap().images[1].icon,
+        0x000b_8101
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_COPY,
+            [list_a, 1, list_a, 1, ILCF_MOVE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let list_a_after_self_move = kernel.resources.image_list(list_a).unwrap();
+    assert_eq!(
+        list_a_after_self_move.images.len(),
+        2,
+        "ImageList_Copy move-to-self should not delete the source image"
+    );
+    assert_eq!(list_a_after_self_move.images[1].icon, 0x000b_8102);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_COPY,
+            [list_a, 0, list_b, 4, ILCF_MOVE],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+
+    Ok(())
+}
+
+#[test]
 fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<()> {
     // IMAGELISTDRAWPARAMS layout (4 bytes each, 14 fields = 56 bytes):
     // @0 cbSize @4 himl @8 i @12 hdcDst @16 x @20 y @24 cx @28 cy
@@ -6397,6 +6924,7 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
     const ILC_MASK: u32 = 0x0001;
     const CLR_NONE: u32 = 0xffff_ffff;
     const CLR_DEFAULT: u32 = 0xff00_0000;
+    const ERROR_INVALID_PARAMETER: u32 = 87;
     const IMLDP_WORDS: u32 = 14; // 56-byte struct / 4 = 14 words
     const PARAMS_PTR: u32 = 0x3_0000;
 
@@ -6467,6 +6995,35 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
 
     // Allocate IMAGELISTDRAWPARAMS in guest memory (14 words = 56 bytes).
     memory.map_words(PARAMS_PTR, IMLDP_WORDS);
+
+    for invalid_size in [40, 60] {
+        memory.write_word(PARAMS_PTR, invalid_size); // cbSize
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_IMAGE_LIST_DRAW_INDIRECT,
+                [PARAMS_PTR],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::Bool(false),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_INVALID_PARAMETER
+        );
+        assert!(
+            kernel
+                .resources
+                .image_list(il)
+                .and_then(|list| list.last_draw)
+                .is_none(),
+            "ImageList_DrawIndirect should reject cbSize={invalid_size} before recording a draw"
+        );
+    }
 
     // Draw with xBitmap=0: reads from source_x=0 → magenta pixel blitted to dest (0,0).
     memory.write_word(PARAMS_PTR, 56); // cbSize

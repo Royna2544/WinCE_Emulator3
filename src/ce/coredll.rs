@@ -11545,10 +11545,17 @@ fn message_box_w_raw<M: CoredllGuestMemory>(
         Err(result) => return result,
         Ok(state) => state,
     };
-    let result = state
-        .try_queued_result(kernel, thread_id)
-        .unwrap_or_else(|| state.default_result());
+    let (result, used_default_fallback) = match state.try_queued_result(kernel, thread_id) {
+        Some(result) => (result, false),
+        None => {
+            message_box_drain_generated_paints(kernel, thread_id);
+            (state.default_result(), true)
+        }
+    };
     state.teardown(kernel, thread_id, result);
+    if used_default_fallback {
+        message_box_drain_generated_paints(kernel, thread_id);
+    }
     kernel.threads.set_last_error(thread_id, 0);
     result
 }
@@ -11620,7 +11627,14 @@ pub(crate) fn message_box_w_prepare<M: CoredllGuestMemory>(
         let _ = kernel.set_focus(Some(default_button));
     }
     let rendered = if let Some(framebuffer) = framebuffer {
-        render_message_box_framebuffer(framebuffer, &caption, &text, &selection);
+        render_message_box_framebuffer(
+            kernel,
+            framebuffer,
+            owner_hwnd,
+            &caption,
+            &text,
+            &selection,
+        );
         true
     } else {
         false
@@ -11701,6 +11715,209 @@ pub(crate) struct MessageBoxWindowState {
     pub(crate) button_hwnds: Vec<u32>,
 }
 
+#[derive(Debug, Clone)]
+struct MessageBoxLayout {
+    dialog: Rect,
+    caption: Rect,
+    caption_text: Rect,
+    icon_outer: Option<Rect>,
+    icon_inner: Option<Rect>,
+    text_background: Rect,
+    text: Rect,
+    text_child: Rect,
+    button_children: Vec<Rect>,
+    button_screens: Vec<Rect>,
+}
+
+fn message_box_layout(
+    kernel: &CeKernel,
+    owner_hwnd: u32,
+    caption: &str,
+    text: &str,
+    selection: &MessageBoxSelection,
+) -> MessageBoxLayout {
+    message_box_layout_in_bounds(
+        kernel,
+        owner_hwnd,
+        caption,
+        text,
+        selection,
+        kernel.gwe.desktop_rect(),
+    )
+}
+
+fn message_box_layout_for_framebuffer(
+    kernel: &CeKernel,
+    framebuffer: &dyn Framebuffer,
+    owner_hwnd: u32,
+    caption: &str,
+    text: &str,
+    selection: &MessageBoxSelection,
+) -> MessageBoxLayout {
+    let info = framebuffer.info();
+    let bounds = Rect::from_origin_size(0, 0, info.width as i32, info.height as i32);
+    message_box_layout_in_bounds(kernel, owner_hwnd, caption, text, selection, bounds)
+}
+
+fn message_box_layout_in_bounds(
+    kernel: &CeKernel,
+    owner_hwnd: u32,
+    caption: &str,
+    text: &str,
+    selection: &MessageBoxSelection,
+    desktop: Rect,
+) -> MessageBoxLayout {
+    let frame_x = kernel
+        .gwe
+        .system_metric(crate::ce::gwe::SM_CXDLGFRAME)
+        .max(1);
+    let frame_y = kernel
+        .gwe
+        .system_metric(crate::ce::gwe::SM_CYDLGFRAME)
+        .max(1);
+    let caption_height = kernel
+        .gwe
+        .system_metric(crate::ce::gwe::SM_CYCAPTION)
+        .max(frame_y * 4);
+    let icon_width = kernel
+        .gwe
+        .system_metric(crate::ce::gwe::SM_CXSMICON)
+        .max(frame_x * 4);
+    let icon_height = kernel
+        .gwe
+        .system_metric(crate::ce::gwe::SM_CYSMICON)
+        .max(frame_y * 4);
+    let margin_x = frame_x * 4;
+    let margin_y = frame_y * 4;
+    let gap_x = frame_x * 3;
+    let gap_y = frame_y * 3;
+    let max_dialog_width = (desktop.width() - margin_x * 2).max(margin_x * 8);
+    let max_text_width = (max_dialog_width - margin_x * 2 - icon_width - gap_x).max(margin_x * 6);
+
+    let (caption_width, caption_height_text) = measure_message_box_text(caption, max_text_width);
+    let (text_width, text_height) = measure_message_box_text(text, max_text_width);
+    let text_background_width = text_width.max(frame_x * 30) + frame_x * 2;
+    let text_background_height = text_height.max(caption_height_text) + frame_y * 2;
+
+    let button_gap = gap_x;
+    let button_sizes: Vec<(i32, i32)> = selection
+        .button_layout
+        .iter()
+        .map(|button| {
+            let (label_width, label_height) =
+                measure_message_box_text(message_box_button_title(button.label), max_text_width);
+            (
+                (label_width + frame_x * 8).max(frame_x * 18),
+                (label_height + frame_y * 3).max(caption_height - frame_y),
+            )
+        })
+        .collect();
+    let buttons_width = button_sizes.iter().map(|(width, _)| *width).sum::<i32>()
+        + button_gap * (button_sizes.len().saturating_sub(1) as i32);
+    let button_height = button_sizes
+        .iter()
+        .map(|(_, height)| *height)
+        .max()
+        .unwrap_or(caption_height - frame_y);
+
+    let content_width = icon_width + gap_x + text_background_width;
+    let dialog_width = (margin_x * 2)
+        .saturating_add(
+            content_width
+                .max(buttons_width)
+                .max(caption_width + margin_x),
+        )
+        .min(max_dialog_width)
+        .max(margin_x * 12);
+    let dialog_height = caption_height
+        + margin_y
+        + text_background_height
+        + gap_y
+        + button_height
+        + margin_y
+        + frame_y;
+
+    let owner_or_desktop = (owner_hwnd != 0)
+        .then(|| kernel.gwe.get_window_rect(owner_hwnd))
+        .flatten()
+        .filter(|rect| rect.width() > 0 && rect.height() > 0)
+        .unwrap_or(desktop);
+    let left = (owner_or_desktop.left + (owner_or_desktop.width() - dialog_width) / 2).clamp(
+        desktop.left,
+        (desktop.right - dialog_width).max(desktop.left),
+    );
+    let top = (owner_or_desktop.top + (owner_or_desktop.height() - dialog_height) / 2).clamp(
+        desktop.top,
+        (desktop.bottom - dialog_height).max(desktop.top),
+    );
+    let dialog = Rect::from_origin_size(left, top, dialog_width, dialog_height);
+
+    let caption = Rect::from_origin_size(
+        dialog.left + frame_x,
+        dialog.top + frame_y,
+        dialog.width() - frame_x * 2,
+        caption_height,
+    );
+    let caption_text = Rect::from_origin_size(
+        caption.left + frame_x * 2,
+        caption.top + frame_y,
+        caption.width() - frame_x * 4,
+        caption.height() - frame_y * 2,
+    );
+    let content_top = caption.bottom + margin_y;
+    let icon_outer = selection.icon.map(|_| {
+        Rect::from_origin_size(dialog.left + margin_x, content_top, icon_width, icon_height)
+    });
+    let icon_inner = icon_outer.map(|rect| {
+        Rect::from_origin_size(
+            rect.left + frame_x,
+            rect.top + frame_y,
+            (rect.width() - frame_x * 2).max(1),
+            (rect.height() - frame_y * 2).max(1),
+        )
+    });
+    let text_background = Rect::from_origin_size(
+        dialog.left + margin_x + icon_width + gap_x,
+        content_top,
+        dialog.width() - margin_x * 2 - icon_width - gap_x,
+        text_background_height,
+    );
+    let text_rect = Rect::from_origin_size(
+        text_background.left + frame_x,
+        text_background.top + frame_y,
+        text_background.width() - frame_x * 2,
+        text_background.height() - frame_y * 2,
+    );
+
+    let buttons_top = text_background.bottom + gap_y;
+    let mut next_button_left = dialog.left + (dialog.width() - buttons_width) / 2;
+    let button_screens: Vec<Rect> = button_sizes
+        .into_iter()
+        .map(|(width, height)| {
+            let rect = Rect::from_origin_size(next_button_left, buttons_top, width, height);
+            next_button_left += width + button_gap;
+            rect
+        })
+        .collect();
+    let button_children = button_screens
+        .iter()
+        .map(|rect| rect.offset(-dialog.left, -dialog.top))
+        .collect();
+
+    MessageBoxLayout {
+        dialog,
+        caption,
+        caption_text,
+        icon_outer,
+        icon_inner,
+        text_background,
+        text: text_rect,
+        text_child: text_rect.offset(-dialog.left, -dialog.top),
+        button_children,
+        button_screens,
+    }
+}
+
 fn create_message_box_window(
     kernel: &mut CeKernel,
     thread_id: u32,
@@ -11710,6 +11927,7 @@ fn create_message_box_window(
     selection: &MessageBoxSelection,
 ) -> MessageBoxWindowState {
     let owner = (owner_hwnd != 0).then_some(owner_hwnd);
+    let layout = message_box_layout(kernel, owner_hwnd, caption, text, selection);
     let dialog = kernel.create_window_ex_w_with_parent_owner_and_rect(
         thread_id,
         "Dialog",
@@ -11719,7 +11937,7 @@ fn create_message_box_window(
         0,
         WS_POPUP | WS_VISIBLE,
         0,
-        Rect::from_origin_size(24, 24, 220, 96),
+        layout.dialog,
     );
     let text_hwnd = kernel.create_window_ex_w_with_rect(
         thread_id,
@@ -11729,11 +11947,8 @@ fn create_message_box_window(
         0,
         WS_CHILD | WS_VISIBLE,
         0,
-        Rect::from_origin_size(12, 12, 196, 34),
+        layout.text_child,
     );
-    let button_width = 58;
-    let button_height = 18;
-    let button_y = 62;
     let button_hwnds = selection
         .button_layout
         .iter()
@@ -11753,12 +11968,7 @@ fn create_message_box_window(
                 button.id,
                 style,
                 0,
-                Rect::from_origin_size(
-                    message_box_button_x(button.slot, button_width),
-                    button_y,
-                    button_width,
-                    button_height,
-                ),
+                layout.button_children[index],
             )
         })
         .collect();
@@ -11799,6 +12009,22 @@ fn message_box_modal_input_result(
         }
     }
     None
+}
+
+fn message_box_drain_generated_paints(kernel: &mut CeKernel, thread_id: u32) {
+    const MAX_DRAINED_PAINTS: usize = 64;
+    for _ in 0..MAX_DRAINED_PAINTS {
+        let Some(message) = kernel.gwe.peek_message_filtered(
+            thread_id,
+            None,
+            crate::ce::gwe::WM_PAINT,
+            crate::ce::gwe::WM_PAINT,
+            PeekFlags::REMOVE,
+        ) else {
+            break;
+        };
+        kernel.dispatch_message_w_for_thread(thread_id, message);
+    }
 }
 
 fn message_box_message_targets_window(window_state: &MessageBoxWindowState, hwnd: u32) -> bool {
@@ -12011,34 +12237,44 @@ fn message_box_cancel_or_default_result(
 }
 
 fn render_message_box_framebuffer(
+    kernel: &CeKernel,
     framebuffer: &mut dyn Framebuffer,
+    owner_hwnd: u32,
     caption: &str,
     text: &str,
     selection: &MessageBoxSelection,
 ) {
-    const DIALOG_LEFT: i32 = 24;
-    const DIALOG_TOP: i32 = 24;
-    const DIALOG_WIDTH: i32 = 220;
-    const DIALOG_HEIGHT: i32 = 96;
-
-    let dialog = Rect::from_origin_size(DIALOG_LEFT, DIALOG_TOP, DIALOG_WIDTH, DIALOG_HEIGHT);
-    let caption_rect =
-        Rect::from_origin_size(DIALOG_LEFT + 2, DIALOG_TOP + 2, DIALOG_WIDTH - 4, 14);
-    fill_framebuffer_screen_rect(framebuffer, dialog, rgb(0x00, 0x00, 0x00));
+    let layout = message_box_layout_for_framebuffer(
+        kernel,
+        framebuffer,
+        owner_hwnd,
+        caption,
+        text,
+        selection,
+    );
+    let frame_x = kernel
+        .gwe
+        .system_metric(crate::ce::gwe::SM_CXDLGFRAME)
+        .max(1);
+    let frame_y = kernel
+        .gwe
+        .system_metric(crate::ce::gwe::SM_CYDLGFRAME)
+        .max(1);
+    fill_framebuffer_screen_rect(framebuffer, layout.dialog, rgb(0x00, 0x00, 0x00));
     fill_framebuffer_screen_rect(
         framebuffer,
         Rect::from_origin_size(
-            DIALOG_LEFT + 1,
-            DIALOG_TOP + 1,
-            DIALOG_WIDTH - 2,
-            DIALOG_HEIGHT - 2,
+            layout.dialog.left + frame_x,
+            layout.dialog.top + frame_y,
+            layout.dialog.width() - frame_x * 2,
+            layout.dialog.height() - frame_y * 2,
         ),
         rgb(0xc0, 0xc0, 0xc0),
     );
-    fill_framebuffer_screen_rect(framebuffer, caption_rect, rgb(0x00, 0x00, 0x80));
-    render_framebuffer_text_marks(
+    fill_framebuffer_screen_rect(framebuffer, layout.caption, rgb(0x00, 0x00, 0x80));
+    render_framebuffer_text(
         framebuffer,
-        Rect::from_origin_size(DIALOG_LEFT + 8, DIALOG_TOP + 5, 150, 7),
+        layout.caption_text,
         caption,
         rgb(0xff, 0xff, 0xff),
     );
@@ -12050,37 +12286,21 @@ fn render_message_box_framebuffer(
             MessageBoxIcon::Exclamation => rgb(0xff, 0xc0, 0x00),
             MessageBoxIcon::Asterisk => rgb(0x00, 0x80, 0x40),
         };
-        fill_framebuffer_screen_rect(
-            framebuffer,
-            Rect::from_origin_size(DIALOG_LEFT + 12, DIALOG_TOP + 28, 18, 18),
-            rgb(0xff, 0xff, 0xff),
-        );
-        fill_framebuffer_screen_rect(
-            framebuffer,
-            Rect::from_origin_size(DIALOG_LEFT + 15, DIALOG_TOP + 31, 12, 12),
-            color,
-        );
+        if let Some(icon_outer) = layout.icon_outer {
+            fill_framebuffer_screen_rect(framebuffer, icon_outer, rgb(0xff, 0xff, 0xff));
+        }
+        if let Some(icon_inner) = layout.icon_inner {
+            fill_framebuffer_screen_rect(framebuffer, icon_inner, color);
+        }
     }
 
-    fill_framebuffer_screen_rect(
-        framebuffer,
-        Rect::from_origin_size(DIALOG_LEFT + 38, DIALOG_TOP + 25, 168, 24),
-        rgb(0xff, 0xff, 0xff),
-    );
-    render_framebuffer_text_marks(
-        framebuffer,
-        Rect::from_origin_size(DIALOG_LEFT + 42, DIALOG_TOP + 30, 156, 12),
-        text,
-        rgb(0x00, 0x00, 0x00),
-    );
+    fill_framebuffer_screen_rect(framebuffer, layout.text_background, rgb(0xff, 0xff, 0xff));
+    render_framebuffer_text(framebuffer, layout.text, text, rgb(0x00, 0x00, 0x00));
 
     for (index, button) in selection.button_layout.iter().enumerate() {
-        let button_rect = Rect::from_origin_size(
-            DIALOG_LEFT + message_box_button_x(button.slot, 58),
-            DIALOG_TOP + 62,
-            58,
-            18,
-        );
+        let Some(button_rect) = layout.button_screens.get(index).copied() else {
+            continue;
+        };
         fill_framebuffer_screen_rect(framebuffer, button_rect, rgb(0x00, 0x00, 0x00));
         fill_framebuffer_screen_rect(
             framebuffer,
@@ -12114,13 +12334,268 @@ fn render_message_box_framebuffer(
                 rgb(0x00, 0x00, 0x00),
             );
         }
-        render_framebuffer_text_marks(
+        render_framebuffer_text(
             framebuffer,
-            Rect::from_origin_size(button_rect.left + 7, button_rect.top + 7, 44, 6),
+            Rect::from_origin_size(
+                button_rect.left + 7,
+                button_rect.top + 4,
+                button_rect.width() - 14,
+                button_rect.height() - 8,
+            ),
             message_box_button_title(button.label),
             rgb(0x00, 0x00, 0x00),
         );
     }
+}
+
+fn render_framebuffer_text(framebuffer: &mut dyn Framebuffer, rect: Rect, text: &str, color: u32) {
+    #[cfg(windows)]
+    {
+        if render_framebuffer_text_with_gdi(framebuffer, rect, text, color) {
+            return;
+        }
+    }
+
+    render_framebuffer_text_marks(framebuffer, rect, text, color);
+}
+
+fn measure_message_box_text(text: &str, max_width: i32) -> (i32, i32) {
+    #[cfg(windows)]
+    {
+        if let Some(measured) = measure_message_box_text_with_gdi(text, max_width) {
+            return measured;
+        }
+    }
+
+    measure_message_box_text_fallback(text, max_width)
+}
+
+#[cfg(windows)]
+fn measure_message_box_text_with_gdi(text: &str, max_width: i32) -> Option<(i32, i32)> {
+    use std::ptr::null_mut;
+
+    use windows::Win32::{
+        Foundation::RECT,
+        Graphics::Gdi::{
+            DEFAULT_GUI_FONT, DRAW_TEXT_FORMAT, DeleteDC, DrawTextW as GdiDrawTextW,
+            GetStockObject, HDC, SelectObject,
+        },
+    };
+
+    let hdc = unsafe { windows::Win32::Graphics::Gdi::CreateCompatibleDC(HDC(null_mut())) };
+    if hdc.0.is_null() {
+        return None;
+    }
+    let font = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
+    let old_font = if !font.0.is_null() {
+        unsafe { SelectObject(hdc, font) }
+    } else {
+        windows::Win32::Graphics::Gdi::HGDIOBJ(null_mut())
+    };
+
+    let mut text_wide: Vec<u16> = text.encode_utf16().collect();
+    if text_wide.is_empty() {
+        text_wide.push(' ' as u16);
+    }
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: max_width.max(1),
+        bottom: 0,
+    };
+    let height = unsafe {
+        GdiDrawTextW(
+            hdc,
+            text_wide.as_mut_slice(),
+            &mut rect,
+            DRAW_TEXT_FORMAT(DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT),
+        )
+    };
+
+    unsafe {
+        if !old_font.0.is_null() {
+            let _ = SelectObject(hdc, old_font);
+        }
+        let _ = DeleteDC(hdc);
+    }
+
+    (height > 0).then_some((
+        (rect.right - rect.left).max(1),
+        (rect.bottom - rect.top).max(1),
+    ))
+}
+
+fn measure_message_box_text_fallback(text: &str, max_width: i32) -> (i32, i32) {
+    let cell_height = 16;
+    let max_width = max_width.max(1);
+    let mut line_width = 0;
+    let mut widest = 0;
+    let mut lines = 1;
+    for ch in text.chars() {
+        if ch == '\r' {
+            continue;
+        }
+        if ch == '\n' {
+            widest = widest.max(line_width);
+            line_width = 0;
+            lines += 1;
+            continue;
+        }
+        let char_width = if ch.is_ascii() { 7 } else { 14 };
+        if line_width > 0 && line_width + char_width > max_width {
+            widest = widest.max(line_width);
+            line_width = 0;
+            lines += 1;
+        }
+        line_width += char_width;
+    }
+    widest = widest.max(line_width).max(1).min(max_width);
+    (widest, lines * cell_height)
+}
+
+#[cfg(windows)]
+fn render_framebuffer_text_with_gdi(
+    framebuffer: &mut dyn Framebuffer,
+    rect: Rect,
+    text: &str,
+    color: u32,
+) -> bool {
+    use std::{ffi::c_void, ptr::null_mut};
+
+    use windows::Win32::{
+        Foundation::{COLORREF, RECT},
+        Graphics::Gdi::{
+            BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection,
+            DEFAULT_GUI_FONT, DIB_RGB_COLORS, DRAW_TEXT_FORMAT, DeleteDC, DeleteObject,
+            DrawTextW as GdiDrawTextW, GetStockObject, HDC, HGDIOBJ, SelectObject, SetBkMode,
+            SetTextColor, TRANSPARENT,
+        },
+    };
+
+    if text.is_empty() {
+        return true;
+    }
+
+    let info = framebuffer.info();
+    let left = rect.left.max(0).min(info.width as i32);
+    let top = rect.top.max(0).min(info.height as i32);
+    let right = rect.right.max(0).min(info.width as i32);
+    let bottom = rect.bottom.max(0).min(info.height as i32);
+    if right <= left || bottom <= top {
+        return true;
+    }
+
+    let width = right - left;
+    let height = bottom - top;
+    let bmi = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            biHeight: -height,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let mut bits: *mut c_void = null_mut();
+    let hdc = unsafe { CreateCompatibleDC(HDC(null_mut())) };
+    if hdc.0.is_null() {
+        return false;
+    }
+
+    let Ok(bitmap) = (unsafe { CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, &mut bits, None, 0) })
+    else {
+        unsafe {
+            let _ = DeleteDC(hdc);
+        }
+        return false;
+    };
+    if bitmap.0.is_null() || bits.is_null() {
+        unsafe {
+            let _ = DeleteDC(hdc);
+        }
+        return false;
+    }
+
+    let font = unsafe { GetStockObject(DEFAULT_GUI_FONT) };
+
+    let old_bitmap = unsafe { SelectObject(hdc, HGDIOBJ(bitmap.0)) };
+    let old_font = if !font.0.is_null() {
+        unsafe { SelectObject(hdc, font) }
+    } else {
+        HGDIOBJ(null_mut())
+    };
+
+    unsafe {
+        let _ = SetBkMode(hdc, TRANSPARENT);
+        let _ = SetTextColor(hdc, COLORREF(0x00ff_ffff));
+    }
+
+    let mut text_wide: Vec<u16> = text.encode_utf16().collect();
+    let mut text_rect = RECT {
+        left: 0,
+        top: 0,
+        right: width,
+        bottom: height,
+    };
+    let draw_flags = DT_LEFT | DT_TOP | DT_WORDBREAK | DT_NOPREFIX;
+    unsafe {
+        let _ = GdiDrawTextW(
+            hdc,
+            text_wide.as_mut_slice(),
+            &mut text_rect,
+            DRAW_TEXT_FORMAT(draw_flags),
+        );
+    }
+
+    let source =
+        unsafe { std::slice::from_raw_parts(bits.cast::<u8>(), (width * height * 4) as usize) };
+    let target_pixel = pixel_bytes_for_colorref(info.format, color);
+    let bytes_per_pixel = info.format.bytes_per_pixel();
+    let mut dirty = false;
+    {
+        let pixels = framebuffer.pixels_mut();
+        for y in 0..height as usize {
+            for x in 0..width as usize {
+                let source_offset = y * width as usize * 4 + x * 4;
+                let blue = source[source_offset] as u16;
+                let green = source[source_offset + 1] as u16;
+                let red = source[source_offset + 2] as u16;
+                if red + green + blue <= 8 {
+                    continue;
+                }
+                let target_offset =
+                    (top as usize + y) * info.stride + (left as usize + x) * bytes_per_pixel;
+                pixels[target_offset..target_offset + bytes_per_pixel]
+                    .copy_from_slice(&target_pixel[..bytes_per_pixel]);
+                dirty = true;
+            }
+        }
+    }
+
+    unsafe {
+        if !old_font.0.is_null() {
+            let _ = SelectObject(hdc, old_font);
+        }
+        if !old_bitmap.0.is_null() {
+            let _ = SelectObject(hdc, old_bitmap);
+        }
+        let _ = DeleteObject(HGDIOBJ(bitmap.0));
+        let _ = DeleteDC(hdc);
+    }
+
+    if dirty {
+        framebuffer.mark_dirty(FramebufferRect::new(
+            left as u32,
+            top as u32,
+            (right - left) as u32,
+            (bottom - top) as u32,
+        ));
+    }
+    true
 }
 
 fn render_framebuffer_text_marks(
@@ -12151,14 +12626,6 @@ fn render_framebuffer_text_marks(
             fill_framebuffer_screen_rect(framebuffer, Rect::from_origin_size(x, y, 3, 5), color);
         }
         x += 4;
-    }
-}
-
-fn message_box_button_x(slot: MessageBoxButtonSlot, button_width: i32) -> i32 {
-    match slot {
-        MessageBoxButtonSlot::Left => 26,
-        MessageBoxButtonSlot::Center => 110 - button_width / 2,
-        MessageBoxButtonSlot::Right => 220 - 26 - button_width,
     }
 }
 
@@ -24082,6 +24549,15 @@ fn extract_pe_icons<M: CoredllGuestMemory>(
     let groups = pe_icon_group_resources(&resources);
     let group = groups
         .get(icon_index as usize)
+        .copied()
+        .or_else(|| {
+            ((icon_index as usize) > groups.len()).then(|| {
+                groups
+                    .iter()
+                    .copied()
+                    .find(|resource| resource.name_string.is_none() && resource.name == icon_index)
+            })?
+        })
         .ok_or(PeIconExtractError::Unavailable)?;
 
     let group_offset = pe
@@ -24353,6 +24829,7 @@ fn draw_icon_ex_raw<M: CoredllGuestMemory>(
     let icon = raw_arg(args, 3);
     let width = raw_i32_arg(args, 4);
     let height = raw_i32_arg(args, 5);
+    let draw_flags = raw_arg(args, 8);
     if !is_valid_hdc(kernel, hdc) || !is_icon_handle(kernel, icon) {
         kernel
             .threads
@@ -24369,9 +24846,21 @@ fn draw_icon_ex_raw<M: CoredllGuestMemory>(
     }
     // Icons created via CreateIconIndirect / ExtractIconEx have a bitmap-backed IconObject
     if let Some(icon_obj) = kernel.resources.icon(icon) {
+        const DI_MASK: u32 = 0x0001;
+        const DI_IMAGE: u32 = 0x0002;
+        const DI_NORMAL: u32 = DI_MASK | DI_IMAGE;
+
         let color_bitmap = icon_obj.color_bitmap;
         let mask_bitmap = icon_obj.mask_bitmap;
-        let source_bitmap = if color_bitmap != 0 {
+        let effective_flags = if draw_flags & DI_NORMAL == 0 {
+            DI_NORMAL
+        } else {
+            draw_flags & DI_NORMAL
+        };
+        let mask_only = effective_flags == DI_MASK;
+        let source_bitmap = if mask_only {
+            mask_bitmap
+        } else if color_bitmap != 0 {
             color_bitmap
         } else {
             mask_bitmap
@@ -24382,12 +24871,12 @@ fn draw_icon_ex_raw<M: CoredllGuestMemory>(
             .map(|bitmap| (bitmap.width.abs().max(1), bitmap.height.abs().max(1)))
             .unwrap_or((width, height));
         let image = crate::ce::resource::ImageListImage {
-            bitmap: if color_bitmap != 0 {
-                color_bitmap
-            } else {
+            bitmap: source_bitmap,
+            mask: if effective_flags == DI_NORMAL && color_bitmap != 0 && !mask_only {
                 mask_bitmap
+            } else {
+                0
             },
-            mask: if color_bitmap != 0 { mask_bitmap } else { 0 },
             icon: 0,
             source_x: 0,
             source_y: 0,
@@ -25021,7 +25510,8 @@ fn image_list_draw_indirect_raw<M: CoredllGuestMemory>(
     let Some(size) = read_guest_u32(kernel, memory, thread_id, draw_ptr) else {
         return false;
     };
-    if size < 40 {
+    const IMAGELISTDRAWPARAMS_SIZE: u32 = 56;
+    if size != IMAGELISTDRAWPARAMS_SIZE {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -25053,31 +25543,16 @@ fn image_list_draw_indirect_raw<M: CoredllGuestMemory>(
     //  @32 xBitmap, @36 yBitmap, @40 rgbBk, @44 rgbFg, @48 fStyle, @52 dwRop
     // xBitmap/yBitmap are added to the image source rect per CE imagelist.cpp DrawIndirect.
     const ILD_TRANSPARENT: u32 = 0x0001;
-    let x_bitmap = if size >= 36 {
-        read_guest_i32(kernel, memory, thread_id, draw_ptr.wrapping_add(32)).unwrap_or(0)
-    } else {
-        0
-    };
-    let y_bitmap = if size >= 40 {
-        read_guest_i32(kernel, memory, thread_id, draw_ptr.wrapping_add(36)).unwrap_or(0)
-    } else {
-        0
-    };
-    let rgb_bk = if size >= 44 {
-        read_guest_u32(kernel, memory, thread_id, draw_ptr.wrapping_add(40)).unwrap_or(CLR_NONE)
-    } else {
-        CLR_NONE
-    };
-    let rgb_fg = if size >= 48 {
-        read_guest_u32(kernel, memory, thread_id, draw_ptr.wrapping_add(44)).unwrap_or(CLR_DEFAULT)
-    } else {
-        CLR_DEFAULT
-    };
-    let raw_flags = if size >= 52 {
-        read_guest_u32(kernel, memory, thread_id, draw_ptr.wrapping_add(48)).unwrap_or(0)
-    } else {
-        0
-    };
+    let x_bitmap =
+        read_guest_i32(kernel, memory, thread_id, draw_ptr.wrapping_add(32)).unwrap_or(0);
+    let y_bitmap =
+        read_guest_i32(kernel, memory, thread_id, draw_ptr.wrapping_add(36)).unwrap_or(0);
+    let rgb_bk =
+        read_guest_u32(kernel, memory, thread_id, draw_ptr.wrapping_add(40)).unwrap_or(CLR_NONE);
+    let rgb_fg =
+        read_guest_u32(kernel, memory, thread_id, draw_ptr.wrapping_add(44)).unwrap_or(CLR_DEFAULT);
+    let raw_flags =
+        read_guest_u32(kernel, memory, thread_id, draw_ptr.wrapping_add(48)).unwrap_or(0);
     let flags = if rgb_bk == CLR_NONE {
         raw_flags | ILD_TRANSPARENT
     } else {
@@ -25666,19 +26141,15 @@ fn read_bitmap_object_bytes<M: CoredllGuestMemory>(
 }
 
 fn image_list_copy_raw(kernel: &mut CeKernel, thread_id: u32, args: &[u32]) -> bool {
-    const ILCF_MOVE: u32 = 0x0000_0000;
     let dst_handle = raw_arg(args, 0);
     let dst_index = raw_i32_arg(args, 1);
     let src_handle = raw_arg(args, 2);
     let src_index = raw_i32_arg(args, 3);
     let flags = raw_arg(args, 4);
-    match kernel.resources.copy_image_list_image(
-        dst_handle,
-        dst_index,
-        src_handle,
-        src_index,
-        flags == ILCF_MOVE,
-    ) {
+    match kernel
+        .resources
+        .copy_image_list_image(dst_handle, dst_index, src_handle, src_index, flags)
+    {
         Some(true) => {
             kernel.threads.set_last_error(thread_id, 0);
             true
@@ -32042,6 +32513,7 @@ fn write_bitmap_pixel_rgb<M: CoredllGuestMemory>(
         24 => bitmap.bits_ptr.wrapping_add(row_start).wrapping_add(x * 3),
         16 => bitmap.bits_ptr.wrapping_add(row_start).wrapping_add(x * 2),
         8 => bitmap.bits_ptr.wrapping_add(row_start).wrapping_add(x),
+        4 => bitmap.bits_ptr.wrapping_add(row_start).wrapping_add(x / 2),
         1 => bitmap.bits_ptr.wrapping_add(row_start).wrapping_add(x / 8),
         _ => return Ok(()),
     };
@@ -32072,6 +32544,16 @@ fn write_bitmap_pixel_rgb<M: CoredllGuestMemory>(
             memory.write_u16(addr, raw as u16)
         }
         8 => memory.write_u8(addr, nearest_color_table_index(bitmap, [red, green, blue])),
+        4 => {
+            let mut byte = memory.read_u8(addr).unwrap_or(0);
+            let index = nearest_color_table_index(bitmap, [red, green, blue]) & 0x0f;
+            if x % 2 == 0 {
+                byte = (byte & 0x0f) | (index << 4);
+            } else {
+                byte = (byte & 0xf0) | index;
+            }
+            memory.write_u8(addr, byte)
+        }
         1 => {
             let mut byte = memory.read_u8(addr).unwrap_or(0);
             let mask = 0x80u8 >> (x % 8);
@@ -32151,6 +32633,10 @@ fn bitmap_pixel_rgb(
             .get(row_start + x)
             .copied()
             .map(|index| rgb_from_color_table(bitmap, index)),
+        4 => bytes.get(row_start + (x / 2)).copied().map(|byte| {
+            let index = if x % 2 == 0 { byte >> 4 } else { byte & 0x0f };
+            rgb_from_color_table(bitmap, index)
+        }),
         _ => None,
     }
 }
@@ -32187,6 +32673,13 @@ fn bitmap_pixel_rgb_from_memory<M: CoredllGuestMemory>(
                 .read_u8(addr)
                 .ok()
                 .map(|index| rgb_from_color_table(bitmap, index))
+        }
+        4 => {
+            let addr = bitmap.bits_ptr.wrapping_add(row_start).wrapping_add(x / 2);
+            memory.read_u8(addr).ok().map(|byte| {
+                let index = if x % 2 == 0 { byte >> 4 } else { byte & 0x0f };
+                rgb_from_color_table(bitmap, index)
+            })
         }
         16 => {
             let addr = bitmap.bits_ptr.wrapping_add(row_start).wrapping_add(x * 2);

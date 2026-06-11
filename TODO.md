@@ -4,8 +4,8 @@ Regenerated on 2026-06-11 from current source and test coverage.
 
 ## Immediate Engineering Queue
 
-- Add PE icon extraction edge tests for malformed resources, multiple icon groups, unusual bit depths, missing AND masks, and non-PE fallback paths.
-- Expand `DrawIconEx`, `ImageList_DrawEx`, and `ImageList_DrawIndirect` tests for mask handling, stretched draws, framebuffer output, and invalid object lifetimes.
+- Add PE icon extraction edge tests for remaining PE resource variants and non-PE fallback paths.
+- Expand `DrawIconEx`, `ImageList_DrawEx`, and `ImageList_DrawIndirect` tests for remaining mask/blend/overlay handling, stretched draws, framebuffer output, and invalid object lifetimes.
 - Implement and test remaining `SendMessageTimeout` semantics: nested cross-thread sends, reentrant waits, `ReplyMessage`, abort-if-hung edge cases, and multi-wait interactions.
 - Verify `Shell_NotifyIcon` and `SHNotification*` in an integrated Unicorn run, including COM callback dispatch, update/remove lifetimes, and invalid-handle behavior.
 - Extend file-change notification coverage across mount roots, rename sequences, and FSDMGR-style volume handle ownership.

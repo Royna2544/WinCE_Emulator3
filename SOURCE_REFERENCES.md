@@ -581,7 +581,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     pixels, preserving the distinct mask-handle path from color-key masking.
     Bitmap-backed `ImageList_Draw*` also resolves `ILD_OVERLAYMASK` through
     `ImageList_SetOverlayImage` and composites the registered overlay image
-    through the same transparent-color or mask-bitmap path.
+    through the same transparent-color or mask-bitmap path. CE `commctrl.h`
+    defines `IMAGELISTDRAWPARAMS` as a 56-byte structure, and `imagelist.cpp`
+    rejects `ImageList_DrawIndirect` calls whose `cbSize` is not exactly
+    `sizeof(IMAGELISTDRAWPARAMS)`; raw `ImageList_DrawIndirect` now applies
+    that exact-size gate before recording draw state or rendering.
     The `api.cpp` attribute-probe branch treats
     inaccessible UNC paths with access/network errors as
     `FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_TEMPORARY`, so raw
@@ -612,22 +616,41 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     Raw `DrawIconEx` also validates the HDC/icon handle pair, paints a
     deterministic pseudo-icon into attached window framebuffers and selected
     memory DIBs for shell pseudo-icons, and draws bitmap-backed icons through
-    the same bitmap renderer as image lists. Bitmap-backed selected-memory-DIB
-    draws now scale from the icon bitmap's native source dimensions into
-    caller-requested destination sizes.
+    the same bitmap renderer as image lists. Bitmap-backed framebuffer and
+    selected-memory-DIB draws now scale from the icon bitmap's native source dimensions into
+    caller-requested destination sizes, and bitmap-backed `DI_MASK` draws use
+    the icon mask bitmap as the source instead of the color bitmap, including
+    a covered 1bpp mask-only framebuffer path. CE
+    `imagelist.cpp` uses `DrawIconEx_I(..., DI_NORMAL)` for image storage and
+    `DrawIconEx_I(..., DI_MASK)` for mask storage when replacing an image-list
+    icon. `pcommctr.h` defines CE's implemented image-list creation flag mask
+    as `ILC_VALID`, excluding private placeholders such as `ILC_LARGESMALL`
+    and `ILC_UNIQUE`; raw `ImageList_Create` now rejects flags outside that
+    mask while preserving accepted private/shared flags on the image-list
+    object. `commctrl.h` defines `ILCF_MOVE` and `ILCF_SWAP`, while
+    `pcommctr.h` defines `ILCF_VALID` as `ILCF_SWAP`; raw `ImageList_Copy`
+    now rejects unsupported copy flags and swaps image entries for `ILCF_SWAP`
+    instead of treating every nonzero flag as a copy.
     Raw `ExtractIconExW` now supports `nIconIndex == -1` count probes,
     extracts PE `RT_GROUP_ICON`/`RT_ICON` resources into bitmap-backed icon
     handles, selects separate large/small icon entries from multi-size groups,
     counts and extracts string-named `RT_GROUP_ICON` group resources whose
-    group directories reference ordinal `RT_ICON` payloads, fills successive
-    large/small output-array slots, reports `ERROR_RESOURCE_NAME_NOT_FOUND`
+    group directories reference ordinal `RT_ICON` payloads, resolves sparse
+    integer `RT_GROUP_ICON` resource IDs when zero-based group enumeration does
+    not cover the requested `nIconIndex`, fills successive large/small
+    output-array slots, reports `ERROR_RESOURCE_NAME_NOT_FOUND`
     when a present group references malformed or missing icon resource data,
+    tolerates present `RT_ICON` DIB payloads that have color pixels but omit
+    trailing AND-mask bytes by creating a color-only icon, preserves color
+    tables for covered 4bpp and 8bpp indexed `RT_ICON` payloads, and decodes
+    4bpp high/low-nibble palette indexes when drawing extracted icons,
     and keeps the index-zero shell fallback for non-PE paths that writes the
     same synthetic `HICON` values that
     `SHGetFileInfo` would select, including CE shortcut overlays. CE
     `resource.cpp` `KernExtractIcons` loads the module as datafile, resolves
-    `RT_GROUP_ICON`, lets a callback choose large/small group-directory
-    indices, then extracts the referenced `RT_ICON` resources.
+    `RT_GROUP_ICON` with `MAKEINTRESOURCE(nIconIndex)`, lets a callback choose
+    large/small group-directory indices, then extracts the referenced
+    `RT_ICON` resources.
     Missing paths fail with `ERROR_FILE_NOT_FOUND`; broader PE format variants,
     RT_ICON ordinal failure, and non-PE fallback edges remain queued.
   - `shellapi.h` defines `SHELLEXECUTEINFO`, `SEE_MASK_NOCLOSEPROCESS`,
