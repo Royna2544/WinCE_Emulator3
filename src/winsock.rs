@@ -29,6 +29,7 @@ const SO_SNDTIMEO: u32 = 0x1005;
 const SO_RCVTIMEO: u32 = 0x1006;
 const SO_ERROR: u32 = 0x1007;
 const MSG_OOB: u32 = 0x0001;
+const FD_SETSIZE: u32 = 64;
 const SOCKET_HANDLE_BASE: u32 = 0x7100_0000;
 const MAX_GUEST_IO: usize = 1024 * 1024;
 const CE_GATEWAY_IP: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 1);
@@ -168,9 +169,11 @@ pub fn dispatch_import<M: CoredllGuestMemory>(
             kernel,
             thread_id,
             memory,
+            raw_import_arg(args, 0),
             raw_import_arg(args, 1),
             raw_import_arg(args, 2),
             raw_import_arg(args, 3),
+            raw_import_arg(args, 4),
         ),
         (_, "__wsafdisset") => {
             fd_is_set_raw(memory, raw_import_arg(args, 0), raw_import_arg(args, 1))
@@ -999,17 +1002,66 @@ fn select_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     thread_id: u32,
     memory: &mut M,
+    _nfds: u32,
     readfds_ptr: u32,
     writefds_ptr: u32,
     exceptfds_ptr: u32,
+    _timeout_ptr: u32,
 ) -> u32 {
+    let readfds = match read_fd_set_sockets(memory, readfds_ptr) {
+        Ok(fdset) => fdset,
+        Err(error) => {
+            set_wsa_error(kernel, thread_id, error);
+            return SOCKET_ERROR;
+        }
+    };
+    let writefds = match read_fd_set_sockets(memory, writefds_ptr) {
+        Ok(fdset) => fdset,
+        Err(error) => {
+            set_wsa_error(kernel, thread_id, error);
+            return SOCKET_ERROR;
+        }
+    };
+    let exceptfds = match read_fd_set_sockets(memory, exceptfds_ptr) {
+        Ok(fdset) => fdset,
+        Err(error) => {
+            set_wsa_error(kernel, thread_id, error);
+            return SOCKET_ERROR;
+        }
+    };
+    if readfds.is_none() && writefds.is_none() && exceptfds.is_none() {
+        set_wsa_error(kernel, thread_id, WSAEINVAL);
+        return SOCKET_ERROR;
+    }
+    if let Err(error) = validate_fd_set_sockets(&readfds, &writefds, &exceptfds) {
+        set_wsa_error(kernel, thread_id, error);
+        return SOCKET_ERROR;
+    }
+
     let mut ready = 0;
-    ready += filter_fd_set_by_socket(memory, readfds_ptr, socket_read_ready).unwrap_or(0);
-    ready += filter_fd_set(memory, writefds_ptr, |socket| {
+    match filter_fd_set_by_socket(memory, readfds_ptr, socket_read_ready) {
+        Ok(count) => ready += count,
+        Err(_) => {
+            set_wsa_error(kernel, thread_id, WSAEFAULT);
+            return SOCKET_ERROR;
+        }
+    }
+    match filter_fd_set(memory, writefds_ptr, |socket| {
         host_socket_write_ready(socket)
-    })
-    .unwrap_or(0);
-    ready += filter_fd_set_by_socket(memory, exceptfds_ptr, socket_except_ready).unwrap_or(0);
+    }) {
+        Ok(count) => ready += count,
+        Err(_) => {
+            set_wsa_error(kernel, thread_id, WSAEFAULT);
+            return SOCKET_ERROR;
+        }
+    }
+    match filter_fd_set_by_socket(memory, exceptfds_ptr, socket_except_ready) {
+        Ok(count) => ready += count,
+        Err(_) => {
+            set_wsa_error(kernel, thread_id, WSAEFAULT);
+            return SOCKET_ERROR;
+        }
+    }
     set_wsa_error(kernel, thread_id, 0);
     ready
 }
@@ -1021,7 +1073,7 @@ fn fd_is_set_raw<M: CoredllGuestMemory>(memory: &mut M, socket: u32, fdset_ptr: 
     let Ok(count) = memory.read_u32(fdset_ptr) else {
         return 0;
     };
-    for index in 0..count.min(64) {
+    for index in 0..count.min(FD_SETSIZE) {
         if memory.read_u32(fdset_ptr + 4 + index * 4).ok() == Some(socket) {
             return 1;
         }
@@ -1323,7 +1375,7 @@ where
     if fdset_ptr == 0 {
         return Ok(0);
     }
-    let count = memory.read_u32(fdset_ptr)?.min(64);
+    let count = memory.read_u32(fdset_ptr)?.min(FD_SETSIZE);
     let mut ready_sockets = Vec::new();
     let mut state = state().lock().ok();
     for index in 0..count {
@@ -1343,6 +1395,47 @@ where
     Ok(ready_sockets.len() as u32)
 }
 
+fn read_fd_set_sockets<M: CoredllGuestMemory>(
+    memory: &mut M,
+    fdset_ptr: u32,
+) -> std::result::Result<Option<Vec<u32>>, u32> {
+    if fdset_ptr == 0 {
+        return Ok(None);
+    }
+    let count = memory.read_u32(fdset_ptr).map_err(|_| WSAEFAULT)?;
+    if count > FD_SETSIZE {
+        return Err(WSAEINVAL);
+    }
+    let mut sockets = Vec::with_capacity(count as usize);
+    for index in 0..count {
+        sockets.push(
+            memory
+                .read_u32(fdset_ptr + 4 + index * 4)
+                .map_err(|_| WSAEFAULT)?,
+        );
+    }
+    Ok(Some(sockets))
+}
+
+fn validate_fd_set_sockets(
+    readfds: &Option<Vec<u32>>,
+    writefds: &Option<Vec<u32>>,
+    exceptfds: &Option<Vec<u32>>,
+) -> std::result::Result<(), u32> {
+    let state = state().lock().map_err(|_| WSAEINTR)?;
+    for socket in readfds
+        .iter()
+        .chain(writefds.iter())
+        .chain(exceptfds.iter())
+        .flat_map(|sockets| sockets.iter().copied())
+    {
+        if !state.sockets.contains_key(&socket) {
+            return Err(WSAEBADF);
+        }
+    }
+    Ok(())
+}
+
 fn filter_fd_set_by_socket<M, F>(memory: &mut M, fdset_ptr: u32, mut ready_fn: F) -> Result<u32>
 where
     M: CoredllGuestMemory,
@@ -1351,7 +1444,7 @@ where
     if fdset_ptr == 0 {
         return Ok(0);
     }
-    let count = memory.read_u32(fdset_ptr)?.min(64);
+    let count = memory.read_u32(fdset_ptr)?.min(FD_SETSIZE);
     let mut ready_sockets = Vec::new();
     for index in 0..count {
         let socket = memory.read_u32(fdset_ptr + 4 + index * 4)?;
@@ -1774,6 +1867,7 @@ mod tests {
         Result,
         ce::{scheduler::SchedulerBlockedWaitKind, timer::INFINITE},
         config::RuntimeConfig,
+        error::Error,
     };
     use std::{
         collections::BTreeMap,
@@ -1816,6 +1910,13 @@ mod tests {
             self.write_bytes(addr + 4, &ip.octets()).unwrap();
             self.fill_bytes(addr + 8, 0, 8).unwrap();
         }
+
+        fn write_fd_set(&mut self, addr: u32, sockets: &[u32]) {
+            self.write_u32(addr, sockets.len() as u32).unwrap();
+            for (index, socket) in sockets.iter().copied().enumerate() {
+                self.write_u32(addr + 4 + index as u32 * 4, socket).unwrap();
+            }
+        }
     }
 
     impl CoredllGuestMemory for TestMemory {
@@ -1854,6 +1955,63 @@ mod tests {
                 self.write_u8(addr + offset as u32, byte)?;
             }
             Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct FaultingTestMemory {
+        inner: TestMemory,
+        read_faults: Vec<u32>,
+        write_faults: Vec<u32>,
+    }
+
+    impl FaultingTestMemory {
+        fn fail() -> Error {
+            Error::Backend("test memory fault".to_owned())
+        }
+    }
+
+    impl CoredllGuestMemory for FaultingTestMemory {
+        fn read_u8(&self, addr: u32) -> Result<u8> {
+            if self.read_faults.contains(&addr) {
+                return Err(Self::fail());
+            }
+            self.inner.read_u8(addr)
+        }
+
+        fn write_u8(&mut self, addr: u32, value: u8) -> Result<()> {
+            if self.write_faults.contains(&addr) {
+                return Err(Self::fail());
+            }
+            self.inner.write_u8(addr, value)
+        }
+
+        fn read_u32(&self, addr: u32) -> Result<u32> {
+            if self.read_faults.contains(&addr) {
+                return Err(Self::fail());
+            }
+            self.inner.read_u32(addr)
+        }
+
+        fn write_u32(&mut self, addr: u32, value: u32) -> Result<()> {
+            if self.write_faults.contains(&addr) {
+                return Err(Self::fail());
+            }
+            self.inner.write_u32(addr, value)
+        }
+
+        fn read_u16(&self, addr: u32) -> Result<u16> {
+            if self.read_faults.contains(&addr) {
+                return Err(Self::fail());
+            }
+            self.inner.read_u16(addr)
+        }
+
+        fn write_u16(&mut self, addr: u32, value: u16) -> Result<()> {
+            if self.write_faults.contains(&addr) {
+                return Err(Self::fail());
+            }
+            self.inner.write_u16(addr, value)
         }
     }
 
@@ -3170,6 +3328,310 @@ mod tests {
                 Some("closesocket"),
                 &mut memory,
                 &[socket],
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn select_accepts_ce_nfds_values_and_preserves_ready_fd_set() {
+        let _winsock_guard = locked_reset_for_tests();
+        let probe = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let mut kernel = test_kernel();
+        let mut memory = TestMemory::default();
+        let bind_addr = 0x3000_b100;
+        let readfds = 0x3000_b200;
+        memory.write_sockaddr_v4(bind_addr, Ipv4Addr::LOCALHOST, port);
+        let socket = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("socket"),
+            &mut memory,
+            &[AF_INET, SOCK_DGRAM, 0],
+        );
+        assert_ne!(socket, INVALID_SOCKET);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("bind"),
+                &mut memory,
+                &[socket, bind_addr, 16],
+            ),
+            0
+        );
+
+        let sender = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        sender
+            .send_to(b"nfds", (Ipv4Addr::LOCALHOST, port))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !socket_read_ready(socket) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(socket_read_ready(socket));
+
+        for nfds in [0, u32::MAX, 1] {
+            memory.write_fd_set(readfds, &[socket]);
+            assert_eq!(
+                dispatch_import(
+                    &mut kernel,
+                    1,
+                    None,
+                    Some("select"),
+                    &mut memory,
+                    &[nfds, readfds, 0, 0, 0],
+                ),
+                1
+            );
+            assert_eq!(memory.read_u32(readfds).unwrap(), 1);
+            assert_eq!(memory.read_u32(readfds + 4).unwrap(), socket);
+            assert_eq!(kernel.threads.get_last_error(1), 0);
+        }
+
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("closesocket"),
+                &mut memory,
+                &[socket],
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn select_rejects_invalid_fd_sets_and_socket_handles() {
+        let _winsock_guard = locked_reset_for_tests();
+        let mut kernel = test_kernel();
+        let mut memory = TestMemory::default();
+        let readfds = 0x3000_c100;
+
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("select"),
+                &mut memory,
+                &[0, 0, 0, 0, 0],
+            ),
+            SOCKET_ERROR
+        );
+        assert_eq!(kernel.threads.get_last_error(1), WSAEINVAL);
+
+        memory.write_u32(readfds, FD_SETSIZE + 1).unwrap();
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("select"),
+                &mut memory,
+                &[0, readfds, 0, 0, 0],
+            ),
+            SOCKET_ERROR
+        );
+        assert_eq!(kernel.threads.get_last_error(1), WSAEINVAL);
+
+        memory.write_fd_set(readfds, &[SOCKET_HANDLE_BASE + 0x1234]);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("select"),
+                &mut memory,
+                &[0, readfds, 0, 0, 0],
+            ),
+            SOCKET_ERROR
+        );
+        assert_eq!(kernel.threads.get_last_error(1), WSAEBADF);
+    }
+
+    #[test]
+    fn select_maps_fd_set_memory_faults_to_wsaefault() {
+        let _winsock_guard = locked_reset_for_tests();
+        let mut kernel = test_kernel();
+        let readfds = 0x3000_c200;
+        let mut read_fault_memory = FaultingTestMemory {
+            read_faults: vec![readfds],
+            ..FaultingTestMemory::default()
+        };
+
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("select"),
+                &mut read_fault_memory,
+                &[0, readfds, 0, 0, 0],
+            ),
+            SOCKET_ERROR
+        );
+        assert_eq!(kernel.threads.get_last_error(1), WSAEFAULT);
+
+        let socket = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("socket"),
+            &mut read_fault_memory,
+            &[AF_INET, SOCK_DGRAM, 0],
+        );
+        assert_ne!(socket, INVALID_SOCKET);
+        read_fault_memory.inner.write_fd_set(readfds, &[socket]);
+        read_fault_memory.read_faults.clear();
+        read_fault_memory.write_faults.push(readfds);
+
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("select"),
+                &mut read_fault_memory,
+                &[0, readfds, 0, 0, 0],
+            ),
+            SOCKET_ERROR
+        );
+        assert_eq!(kernel.threads.get_last_error(1), WSAEFAULT);
+
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("closesocket"),
+                &mut read_fault_memory,
+                &[socket],
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn select_filters_mixed_read_write_and_exception_fd_sets() {
+        let _winsock_guard = locked_reset_for_tests();
+        let udp_probe = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let udp_port = udp_probe.local_addr().unwrap().port();
+        drop(udp_probe);
+        let refused_probe = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let refused_port = refused_probe.local_addr().unwrap().port();
+        drop(refused_probe);
+
+        let mut kernel = test_kernel();
+        let mut memory = TestMemory::default();
+        let udp_addr = 0x3000_c300;
+        let refused_addr = 0x3000_c400;
+        let readfds = 0x3000_c500;
+        let writefds = 0x3000_c600;
+        let exceptfds = 0x3000_c700;
+        memory.write_sockaddr_v4(udp_addr, Ipv4Addr::LOCALHOST, udp_port);
+        memory.write_sockaddr_v4(refused_addr, Ipv4Addr::LOCALHOST, refused_port);
+
+        let udp = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("socket"),
+            &mut memory,
+            &[AF_INET, SOCK_DGRAM, 0],
+        );
+        assert_ne!(udp, INVALID_SOCKET);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("bind"),
+                &mut memory,
+                &[udp, udp_addr, 16],
+            ),
+            0
+        );
+        let sender = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        sender
+            .send_to(b"mix", (Ipv4Addr::LOCALHOST, udp_port))
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !socket_read_ready(udp) && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(socket_read_ready(udp));
+
+        let failed = dispatch_import(
+            &mut kernel,
+            1,
+            None,
+            Some("socket"),
+            &mut memory,
+            &[AF_INET, SOCK_STREAM, 0],
+        );
+        assert_ne!(failed, INVALID_SOCKET);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("connect"),
+                &mut memory,
+                &[failed, refused_addr, 16],
+            ),
+            SOCKET_ERROR
+        );
+        assert_eq!(kernel.threads.get_last_error(1), WSAECONNREFUSED);
+        assert!(socket_except_ready(failed));
+
+        memory.write_fd_set(readfds, &[udp]);
+        memory.write_fd_set(writefds, &[udp]);
+        memory.write_fd_set(exceptfds, &[failed]);
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("select"),
+                &mut memory,
+                &[0, readfds, writefds, exceptfds, 0],
+            ),
+            3
+        );
+        assert_eq!(memory.read_u32(readfds).unwrap(), 1);
+        assert_eq!(memory.read_u32(readfds + 4).unwrap(), udp);
+        assert_eq!(memory.read_u32(writefds).unwrap(), 1);
+        assert_eq!(memory.read_u32(writefds + 4).unwrap(), udp);
+        assert_eq!(memory.read_u32(exceptfds).unwrap(), 1);
+        assert_eq!(memory.read_u32(exceptfds + 4).unwrap(), failed);
+        assert_eq!(kernel.threads.get_last_error(1), 0);
+
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("closesocket"),
+                &mut memory,
+                &[failed],
+            ),
+            0
+        );
+        assert_eq!(
+            dispatch_import(
+                &mut kernel,
+                1,
+                None,
+                Some("closesocket"),
+                &mut memory,
+                &[udp],
             ),
             0
         );
