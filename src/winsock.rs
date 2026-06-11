@@ -1463,7 +1463,7 @@ fn host_socket_read_ready(socket: &HostSocket, options: SocketOptions) -> bool {
     match socket {
         HostSocket::TcpStream(stream) => {
             let mut byte = [0; 1];
-            matches!(stream.peek(&mut byte), Ok(count) if count > 0)
+            stream.peek(&mut byte).is_ok()
         }
         HostSocket::Udp(udp) => udp_socket_read_ready(udp, options),
         HostSocket::TcpListener { pending, .. } => !pending.is_empty(),
