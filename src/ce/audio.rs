@@ -29,6 +29,7 @@ pub struct WaveBuffer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WaveOutCallback {
     Event(u32),
+    Function { callback: u32, instance: u32 },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

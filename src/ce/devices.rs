@@ -15,6 +15,7 @@ use std::{
 };
 
 use serde::Deserialize;
+use serde_json::Value;
 
 use crate::error::{Error, Result};
 
@@ -380,47 +381,100 @@ impl DeviceSession {
             device = self.guest_name.as_str(),
             ioctl = format_args!("0x{ioctl_code:08x}"),
             in_len = input.len(),
+            input = %format_ioctl_bytes(input),
             out_cap = output_capacity,
             "DeviceIoControl"
         );
-        match &mut self.runtime {
+        let result = match &mut self.runtime {
             DeviceRuntime::Accelerometer(sensor) => {
-                return sensor.device_io_control(ioctl_code, input, output_capacity);
+                sensor.device_io_control(ioctl_code, input, output_capacity)
             }
-            DeviceRuntime::I2cBus(bus) => {
-                return bus.device_io_control(ioctl_code, input, output_capacity);
-            }
+            DeviceRuntime::I2cBus(bus) => bus.device_io_control(ioctl_code, input, output_capacity),
             DeviceRuntime::LightSensor(sensor) => {
-                return sensor.device_io_control(ioctl_code, input, output_capacity);
+                sensor.device_io_control(ioctl_code, input, output_capacity)
             }
             DeviceRuntime::Magnetometer(sensor) => {
-                return sensor.device_io_control(ioctl_code, input, output_capacity);
+                sensor.device_io_control(ioctl_code, input, output_capacity)
             }
             DeviceRuntime::NandUuid(device) => {
-                return device.device_io_control(ioctl_code, input, output_capacity);
+                device.device_io_control(ioctl_code, input, output_capacity)
             }
             DeviceRuntime::PicController(device) => {
-                return device.device_io_control(ioctl_code, input, output_capacity);
+                device.device_io_control(ioctl_code, input, output_capacity)
             }
-            DeviceRuntime::None => {}
-        }
+            DeviceRuntime::None => DeviceIoControlResult {
+                success: false,
+                bytes_returned: 0,
+                output: Vec::new(),
+            },
+        };
+        tracing::debug!(
+            target: "ce.devices",
+            device = self.guest_name.as_str(),
+            ioctl = format_args!("0x{ioctl_code:08x}"),
+            success = result.success,
+            bytes_returned = result.bytes_returned,
+            output = %format_ioctl_bytes(&result.output),
+            "DeviceIoControl result"
+        );
+        result
+    }
 
-        match self.backend {
-            DeviceBackend::Stub | DeviceBackend::Win32Com => DeviceIoControlResult {
-                success: false,
-                bytes_returned: 0,
-                output: Vec::new(),
-            },
-            DeviceBackend::Accelerometer
-            | DeviceBackend::I2cBus
-            | DeviceBackend::LightSensor
-            | DeviceBackend::Magnetometer
-            | DeviceBackend::NandUuid
-            | DeviceBackend::PicController => DeviceIoControlResult {
-                success: false,
-                bytes_returned: 0,
-                output: Vec::new(),
-            },
+    pub fn apply_remote_imu(&mut self, imu: &Value) {
+        match &mut self.runtime {
+            DeviceRuntime::Accelerometer(sensor) => {
+                let x = scaled_imu_component(
+                    imu,
+                    &["ax", "accelX", "accelerometerX", "x"],
+                    &["accel", "accelerometer"],
+                    "x",
+                    256.0,
+                );
+                let y = scaled_imu_component(
+                    imu,
+                    &["ay", "accelY", "accelerometerY", "y"],
+                    &["accel", "accelerometer"],
+                    "y",
+                    256.0,
+                );
+                let z = scaled_imu_component(
+                    imu,
+                    &["az", "accelZ", "accelerometerZ", "z"],
+                    &["accel", "accelerometer"],
+                    "z",
+                    256.0,
+                );
+                if let (Some(x), Some(y), Some(z)) = (x, y, z) {
+                    sensor.set_axes(x, y, z);
+                }
+            }
+            DeviceRuntime::Magnetometer(sensor) => {
+                let x = scaled_imu_component(
+                    imu,
+                    &["mx", "magX", "magnetometerX"],
+                    &["mag", "magnetometer"],
+                    "x",
+                    1.0,
+                );
+                let y = scaled_imu_component(
+                    imu,
+                    &["my", "magY", "magnetometerY"],
+                    &["mag", "magnetometer"],
+                    "y",
+                    1.0,
+                );
+                let z = scaled_imu_component(
+                    imu,
+                    &["mz", "magZ", "magnetometerZ"],
+                    &["mag", "magnetometer"],
+                    "z",
+                    1.0,
+                );
+                if let (Some(x), Some(y), Some(z)) = (x, y, z) {
+                    sensor.set_field(x, y, z);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -449,6 +503,30 @@ impl DeviceSession {
     pub fn tx_bytes(&self) -> &[u8] {
         &self.tx
     }
+}
+
+fn scaled_imu_component(
+    imu: &Value,
+    names: &[&str],
+    containers: &[&str],
+    axis: &str,
+    scale: f64,
+) -> Option<i16> {
+    names
+        .iter()
+        .find_map(|name| imu.get(*name).and_then(Value::as_f64))
+        .or_else(|| {
+            containers.iter().find_map(|container| {
+                imu.get(*container)
+                    .and_then(|value| value.get(axis))
+                    .and_then(Value::as_f64)
+            })
+        })
+        .map(|value| clamp_i16((value * scale).round()))
+}
+
+fn clamp_i16(value: f64) -> i16 {
+    value.clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16
 }
 
 #[cfg(windows)]
@@ -609,6 +687,22 @@ fn default_mode() -> String {
     "8N1".to_owned()
 }
 
+fn format_ioctl_bytes(bytes: &[u8]) -> String {
+    const MAX_BYTES: usize = 16;
+    let mut out = String::new();
+    for (index, byte) in bytes.iter().copied().take(MAX_BYTES).enumerate() {
+        if index > 0 {
+            out.push(' ');
+        }
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{byte:02x}");
+    }
+    if bytes.len() > MAX_BYTES {
+        out.push_str(" ...");
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -734,6 +828,11 @@ mod tests {
         let mag_read =
             mag.device_io_control(magnetometer::IOCTL_MFS_READ_REGISTERS, &[0, 0x40, 1, 0], 1);
         assert_eq!(mag_read.output, vec![0xaa]);
+        let mag_poll =
+            mag.device_io_control(magnetometer::IOCTL_MFS_READ_REGISTERS, &[0, 0x40, 1, 0], 0);
+        assert!(mag_poll.success);
+        assert_eq!(mag_poll.bytes_returned, 0);
+        assert!(mag_poll.output.is_empty());
 
         let mut i2c = namespace.open("I2C2:").unwrap();
         assert!(
@@ -742,6 +841,70 @@ mod tests {
         );
         let i2c_read = i2c.device_io_control(i2c_bus::IOCTL_I2C_READ, &[0x10], 1);
         assert_eq!(i2c_read.output, vec![0x33]);
+        assert!(
+            i2c.device_io_control(i2c_bus::IOCTL_I2C_GIO_I2C2_TRANSFER, &[0x10, 0x44], 1)
+                .success
+        );
+        let i2c_transfer_read = i2c.device_io_control(i2c_bus::IOCTL_I2C_READ, &[0x10], 1);
+        assert_eq!(i2c_transfer_read.output, vec![0x44]);
+    }
+
+    #[test]
+    fn remote_imu_updates_sensor_backend_reads() {
+        let namespace = DeviceNamespace::from_config(DeviceConfigFile {
+            version: 1,
+            defaults: DeviceDefaults::default(),
+            devices: vec![
+                DeviceConfig {
+                    guest: "SMB1:".to_owned(),
+                    kind: DeviceKind::IoctlDevice,
+                    backend: DeviceBackend::Accelerometer,
+                    host: None,
+                    enabled: true,
+                    note: None,
+                },
+                DeviceConfig {
+                    guest: "MFS1:".to_owned(),
+                    kind: DeviceKind::IoctlDevice,
+                    backend: DeviceBackend::Magnetometer,
+                    host: None,
+                    enabled: true,
+                    note: None,
+                },
+            ],
+        });
+
+        let mut accel = namespace.open("SMB1:").unwrap();
+        accel.apply_remote_imu(&serde_json::json!({
+            "ax": 0.5,
+            "ay": -0.25,
+            "az": 1.0
+        }));
+        let xyz = accel.device_io_control(accelerometer::IOCTL_SMB380_READ_ACCEL_XYZT, &[], 6);
+        assert!(xyz.success);
+        assert_eq!(&xyz.output[0..2], &128i16.to_le_bytes());
+        assert_eq!(&xyz.output[2..4], &(-64i16).to_le_bytes());
+        assert_eq!(&xyz.output[4..6], &256i16.to_le_bytes());
+
+        let image = accel.device_io_control(accelerometer::IOCTL_SMB380_GET_IMAGE, &[], 8);
+        assert!(image.success);
+        assert_eq!(&image.output[2..4], &128i16.to_le_bytes());
+        assert_eq!(&image.output[4..6], &(-64i16).to_le_bytes());
+        assert_eq!(&image.output[6..8], &256i16.to_le_bytes());
+
+        let mut mag = namespace.open("MFS1:").unwrap();
+        mag.apply_remote_imu(&serde_json::json!({
+            "magnetometer": {
+                "x": 30.0,
+                "y": -5.0,
+                "z": 42.0
+            }
+        }));
+        let field = mag.device_io_control(magnetometer::IOCTL_MFS_READ_REGISTERS, &[0, 0, 6, 0], 6);
+        assert!(field.success);
+        assert_eq!(&field.output[0..2], &30i16.to_le_bytes());
+        assert_eq!(&field.output[2..4], &(-5i16).to_le_bytes());
+        assert_eq!(&field.output[4..6], &42i16.to_le_bytes());
     }
 
     #[test]

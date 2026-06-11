@@ -811,6 +811,9 @@ fn publish_remote_endpoint(
             server.publish_debug_text("imports", monitor_trace_text(snapshot, "imports"));
             server.publish_debug_text("calls", monitor_trace_text(snapshot, "calls"));
             server.publish_debug_text("code", monitor_trace_text(snapshot, "code"));
+            server.publish_debug_text("files", monitor_trace_text(snapshot, "files"));
+            server.publish_debug_text("files-full", monitor_trace_text(snapshot, "files-full"));
+            server.publish_debug_text("events", monitor_trace_text(snapshot, "events"));
         }
     }
 }

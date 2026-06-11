@@ -4,42 +4,81 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Current Snapshot
 
-- Runtime loader work has reached dynamic Unicorn DLL mapping with dependency loading, import patching, forwarders, trampoline tracking, datafile/no-resolve flags, and lifecycle calls.
+- Runtime loader work has reached dynamic Unicorn DLL mapping with dependency loading, import patching, forwarders, trampoline tracking, datafile/no-resolve flags, datafile export suppression, and lifecycle calls.
 - Shell icon work now includes `ExtractIconExW`, real PE resource icon extraction, PE group-icon count reporting for `nIconIndex == -1`, shell fallback icons, `CreateIconIndirect`, `DrawIconEx`, image lists, CE-valid image-list creation/copy flag validation, bitmap-backed image-list drawing, `xBitmap` offsets, `rgbBk` fill handling, and exact CE `IMAGELISTDRAWPARAMS` size validation.
 - `Shell_NotifyIcon` now tracks add/modify/delete state, rejects duplicate `(hwnd,uID)` adds, honors member `NIF_*` flags on add, requires the fixed CE `NOTIFYICONDATAW` footprint and readable 64-WCHAR `szTip` buffer, keeps the existing icon on `NIM_MODIFY | NIF_ICON` with null `hIcon` per the CE taskbar path, posts callback messages, and records destroy-icon cleanup.
-- `SHNotificationUpdateI` now covers CE update-mask behavior for null icon preservation and stale incoming `hwndSink` values while keeping the original registered sink.
-- File-change notifications now coalesce exact duplicates, transient create/delete pairs, and modified/delete sequences, and detailed notification records are gated by the CE `FILE_NOTIFY_CHANGE_CEGETINFO` flag while signal-only watches still wake normally.
+- `SHNotificationUpdateI` now covers CE update-mask behavior for null icon preservation, stale incoming `hwndSink` values while keeping the original registered sink, and inform/iconic priority-list movement; notification remove and sink cleanup now purge pending callback records for removed notifications, and `SHNotificationGetDataI` accepts the CE fixed-title-buffer path when `cbTitle == 0`.
+- File-change notifications now canonicalize public watch paths, honor root `WatchSubtree` boundaries, coalesce exact duplicates, transient create/delete pairs, and modified/delete sequences, track CE-style outstanding notification signals across `FindNextChangeNotification`, and gate detailed notification records by the CE `FILE_NOTIFY_CHANGE_CEGETINFO` flag while signal-only watches still wake normally. Mounted file operations now enforce CE volume boundaries and read-only root access checks for mutating calls.
 - GWE message work includes cross-thread send setup, timeout marking, destroyed-window completion, and zero-result writes for destroyed `SendMessageTimeout` targets.
 - Winsock has CE-facing dispatch for core socket operations with isolated NAT addressing, `select` fd-set validation, readiness checks, and scheduler wake candidate integration.
 - Core CE subsystems remain broad and test-backed: handles, waits, events, TLS, critical sections, registry, files, memory, GDI resources, DIBs, windows, menus, clipboard, and scheduler selection.
 
 ## Recent Source-Visible Slices
 
+- `src/ce/kernel.rs`: loaded-module export resolution now suppresses name and ordinal exports for modules flagged with `LOAD_LIBRARY_AS_DATAFILE`, matching CE `loader.c` resource-only load behavior and keeping raw and Unicorn `GetProcAddress` paths aligned.
+- `src/ce/shell.rs`: removing a shell notification by `(CLSID, id)` or by sink-window/process cleanup now removes queued `IShellNotificationCallback` records for that notification so stale callbacks cannot survive after the CE taskbar/bubble record is gone.
+- `src/ce/coredll.rs`: `SHNotificationGetDataI` now ignores `cbTitle` for non-null title output and writes through the fixed CE taskbar title capacity (`MAX_PATH`), matching `notification.cpp`'s `CCHMAXTBLABEL` assumption.
+- `src/ce/kernel.rs` and `src/ce/coredll.rs`: public `FindFirstChangeNotificationW` setup now canonicalizes the CE watch path before directory validation and handle registration, so unrooted watch paths and `.`/`..` components resolve like the CE FSDMGR `SafeGetCanonicalPathW` path.
+- `src/ce/kernel.rs`: file-change notifications now track an outstanding signal count separately from detailed pending records, matching the CE `NotifyReset` path where `FindNextChangeNotification` consumes one pending signal without discarding every queued notification record.
+- `src/ce/file.rs` and `src/ce/coredll.rs`: `MoveFileW` now classifies source and destination guest volumes before host translation, disallows mount-point renames, emulates cross-volume file moves by copy/delete, rejects cross-volume directory moves with `ERROR_NOT_SAME_DEVICE`, and preserves CE-specific raw last-error values.
+- `src/ce/file.rs` and `src/ce/coredll.rs`: read-only mounted roots now surface `ERROR_ACCESS_DENIED` for raw mutating paths including write `CreateFileW`, copy destinations, file deletion, directory creation/removal, and attribute changes instead of collapsing to generic invalid-argument or file-not-found failures.
+- `src/ce/kernel.rs`: root file-change watches now honor the CE `WatchSubtree` flag instead of treating `\` as a universal match for non-recursive handles; non-recursive root watches match immediate root children only, while recursive root watches still match deeper descendants.
+- `src/ce/kernel.rs`: `FindCloseChangeNotification` now closes a valid non-notification handle before returning `ERROR_INVALID_HANDLE`, matching CE's public `NotifyCloseChangeHandle` path that duplicates the caller handle with `DUPLICATE_CLOSE_SOURCE` before checking notification event data.
+- `src/ce/coredll.rs`: raw `SHNotificationAddI` now treats the second marshalled argument as CE `cbData` only and no longer records it as an `IShellNotificationCallback*`; callback metadata is derived from the notification CLSID path like CE `bubble.cpp`.
+- `src/ce/shell.rs` and `src/ce/coredll.rs`: raw `SHNotificationAddI` now validates notification title/HTML content using CE marshalled pointer presence, so `SHNP_INFORM` rejects a null HTML pointer but accepts a non-null empty HTML string.
+- `src/ce/shell.rs`: shell notifications now maintain CE-style inform and iconic priority lists, moving records between lists on `SHNUM_PRIORITY` updates and removing list entries when notifications are removed, expired, or cleaned up with their sink windows.
 - `src/ce/coredll.rs`: `ExtractIconExW` reads guest paths, validates files, extracts PE icon resources when available, enumerates `RT_GROUP_ICON` data through a shared helper for count/extract behavior, falls back to CE-style integer `RT_GROUP_ICON` resource ID lookup for sparse indexes, selects distinct large/small icons from multi-size PE icon groups, fills successive large/small icon output-array slots, reports `ERROR_RESOURCE_NAME_NOT_FOUND` for malformed present PE group/icon resources, falls back to shell icons for non-PE index zero, and supports bitmap-backed icon rendering through `DrawIconEx`.
 - `src/ce/coredll.rs`: `DrawIconEx` now scales bitmap-backed icons from their native bitmap dimensions into caller-requested destination rectangles for both framebuffer and selected-memory-DIB targets instead of treating the requested destination size as the source extent, and honors bitmap-backed `DI_MASK` by selecting the icon mask bitmap as the draw source.
 - `src/ce/resource.rs`: `ImageList_Create` now applies the CE `ILC_VALID` flag mask, rejecting unsupported creation flags such as `ILC_LARGESMALL`, `ILC_UNIQUE`, and unknown high bits before allocating image-list state.
-- `src/ce/resource.rs`: `ImageList_Copy` now applies CE `ILCF_VALID` flag validation, implements `ILCF_SWAP` as an actual image exchange, preserves overlay index mappings during same-list swaps, and treats move-to-self as a no-op instead of deleting the image.
+- `src/ce/resource.rs`: `ImageList_Copy` now applies CE `ILCF_VALID` flag validation, rejects CE-unsupported cross-list copies, copies only between valid same-list slots for `ILCF_MOVE`, and swaps same-list slots for `ILCF_SWAP`.
+- `src/ce/resource.rs`: `ImageList_Remove` and `ImageList_SetImageCount` now follow CE `imagelist.cpp` overlay-slot lifetime semantics by leaving overlay indexes intact for single-image removal and truncation, while `ImageList_Remove(-1)` still clears all overlay slots.
+- `src/ce/resource.rs`: `ImageList_SetOverlayImage` now follows CE `imagelist.cpp` by rejecting lists created without `ILC_MASK`, matching the `m_hdcMask == NULL` failure path before an overlay slot is recorded.
+- `src/ce/resource.rs`: `ImageList_SetIconSize` now follows CE `imagelist.cpp` by returning false for unchanged dimensions and clearing all images/overlays through the remove-all path whenever the icon size changes.
+- `src/ce/resource.rs`: `ImageList_DragMove` now follows CE `imagelist.cpp` by returning true even when there is no active/visible drag image, while only advancing the stored drag point when an active drag image is visible.
+- `src/ce/resource.rs`: `ImageList_SetDragCursorImage` now follows CE `MergeDragImages` by returning true when no drag/dither image exists yet, treating that state as a no-op instead of an error.
+- `src/ce/coredll.rs`: `ImageList_GetDragImage` now follows CE `imagelist.cpp` by returning a null drag-image handle with zeroed default points when no drag image is active, instead of reporting an invalid-handle error.
+- `src/ce/resource.rs` and `src/ce/coredll.rs`: no-active `ImageList_DragEnter`/`ImageList_DragLeave` now follow CE's static `s_DragContext` lock and point state, so `DragEnter` can succeed before `ImageList_BeginDrag` and later no-active `ImageList_GetDragImage` reports that stored point.
 - `src/ce/coredll.rs`: `ImageList_DrawIndirect` now rejects undersized or oversized `IMAGELISTDRAWPARAMS` records before reading optional fields, recording draw state, or rendering, matching CE `imagelist.cpp`'s exact-struct-size gate.
 - `src/ce/coredll.rs`: `MessageBoxW` now validates the CE `winuser.h` style surface, accepting CE high flags such as `MB_SETFOREGROUND`, `MB_TOPMOST`, and `MB_RTLREADING` while rejecting unsupported desktop-only bits and undefined icon nibbles before recording dialog state.
 - `src/ce/coredll.rs`: `TrackPopupMenuEx` now applies CE horizontal/vertical `TPM_*ALIGN` flags before recording tracking state, painting, hit-testing, and any `TPMPARAMS.rcExclude` adjustment.
 - `src/ce/coredll.rs`: `SHGetFileInfoW` now writes CE shell `SFGAO_*` attributes for `SHGFI_ATTRIBUTES` instead of raw `FILE_ATTRIBUTE_*` values, covering filesystem, folder, shortcut, and read-only outputs.
+- `src/ce/coredll.rs`: `SHGetFileInfoW` now follows CE `api.cpp` return semantics by returning the system image-list handle for `SHGFI_ICON` queries as well as `SHGFI_SYSICONINDEX`, while still writing the extracted/synthetic `hIcon` into `SHFILEINFO`.
 - `src/ce/coredll.rs`: `Shell_NotifyIconW` now follows the CE fixed `NOTIFYICONDATAW` contract from `shellapi.h`/`minserver.cpp` by rejecting short `cbSize` values and unreadable `szTip[64]` buffers before updating shell state.
 - `src/ce/kernel.rs`: file-change record append now coalesces pending records and signals only when pending notification data remains.
 - `src/ce/kernel.rs`: CE file-notification detail records are only queued for watches created with `FILE_NOTIFY_CHANGE_CEGETINFO`; watches without that flag still signal on matching changes and report no detailed records to `CeGetFileNotificationInfo`.
 - `src/ce/gwe.rs` and `src/ce/coredll.rs`: destroyed-window handling exposes completed send-message result writes and flushes them to guest memory.
-- `tests/coredll_raw_kernel.rs`: icon extraction, PE group-icon count, multi-slot PE `ExtractIconExW` output, multi-size large/small PE icon selection, string-named `RT_GROUP_ICON` extraction, sparse integer `RT_GROUP_ICON` ID extraction, 4bpp and 8bpp indexed PE icon extraction, missing-AND-mask color-only PE icon extraction, malformed PE group/icon failure, shell icon, and image-list drawing coverage is present.
+- `tests/coredll_raw_kernel.rs`: icon extraction, PE group-icon count, multi-slot PE `ExtractIconExW` output, multi-size large/small PE icon selection, string-named `RT_GROUP_ICON` extraction, sparse integer `RT_GROUP_ICON` ID extraction, 4bpp and 8bpp indexed PE icon extraction, missing-AND-mask color-only PE icon extraction, malformed PE group/icon failure, missing primary and secondary `RT_ICON` ordinal failure, shell icon, and image-list drawing coverage is present.
+- `tests/coredll_raw_kernel.rs`: `LoadLibraryExW(LOAD_LIBRARY_AS_DATAFILE | DONT_RESOLVE_DLL_REFERENCES)` now covers already-loaded module reuse plus blocked raw `GetProcAddressA/W` name and ordinal lookups for datafile-flagged modules with real exports.
 - `tests/coredll_raw_kernel.rs`: `ImageList_Create` now covers rejection of non-CE creation flags and acceptance/preservation of CE-valid private/shared flags.
-- `tests/coredll_raw_kernel.rs`: `ImageList_Copy` now covers invalid copy flags, cross-list `ILCF_SWAP`, and move-to-self behavior.
+- `tests/coredll_raw_kernel.rs`: `ImageList_Copy` now covers invalid copy flags, CE-unsupported cross-list copies, same-list `ILCF_SWAP`, and same-list copy behavior without source removal.
 - `tests/coredll_raw_kernel.rs`: `ImageList_DrawIndirect` now covers exact CE `cbSize == sizeof(IMAGELISTDRAWPARAMS)` validation, including no draw-state mutation for short or oversized records.
+- `tests/basic_subsystems.rs`: direct image-list coverage now verifies CE overlay slot retention after single-image removal and count truncation, plus overlay clearing for `ImageList_Remove(-1)`.
+- `tests/basic_subsystems.rs` and `tests/coredll_raw_kernel.rs`: image-list overlay coverage now verifies unmasked lists reject `ImageList_SetOverlayImage`, while `ILC_MASK` lists still record and draw overlays.
+- `tests/basic_subsystems.rs` and `tests/coredll_raw_kernel.rs`: image-list size coverage now verifies CE `ImageList_SetIconSize` no-op failure and image-count clearing after a real size change.
+- `tests/basic_subsystems.rs` and `tests/coredll_raw_kernel.rs`: image-list drag coverage now verifies CE `ImageList_DragMove` succeeds even before `ImageList_BeginDrag` has created an active drag image.
+- `tests/basic_subsystems.rs` and `tests/coredll_raw_kernel.rs`: image-list drag coverage now verifies hidden active `ImageList_DragMove` calls succeed without advancing the stored drag point.
+- `tests/basic_subsystems.rs` and `tests/coredll_raw_kernel.rs`: image-list drag coverage now verifies CE `ImageList_SetDragCursorImage` succeeds as a no-op when no active drag image exists.
+- `tests/coredll_raw_kernel.rs`: raw image-list drag coverage now verifies CE `ImageList_GetDragImage` returns null plus zeroed default points before `ImageList_BeginDrag`, then returns the no-active point stored by `ImageList_DragEnter` until a matching `ImageList_DragLeave`.
 - `tests/coredll_raw_gwe.rs`: `DrawIconEx` now verifies scaled framebuffer and selected-memory-DIB output from a 2x2 bitmap-backed icon into a 4x4 destination rectangle, verifies `DI_MASK` draws/scales the mask bitmap rather than the color bitmap, and covers a 1bpp mask-only icon draw into a framebuffer.
 - `tests/coredll_raw_kernel.rs`: `MessageBoxW` now verifies CE-supported high style bits are preserved and unsupported style/icon bits fail without creating a new shell message-box record.
 - `tests/coredll_raw_gwe.rs`: `TrackPopupMenuEx` now verifies that `TPMPARAMS.rcExclude` moves the top-level popup before pointer hit-testing and that CE center/right/bottom alignment flags reposition the popup before pointer selection.
-- `tests/basic_subsystems.rs`: direct `ResourceSystem::copy_image_list_image` callers now assert CE `ILCF_MOVE` removal semantics instead of the removed pre-CE boolean-copy helper shape.
+- `tests/basic_subsystems.rs`: direct `ResourceSystem::copy_image_list_image` callers now assert CE same-list-only `ImageList_Copy` behavior instead of the removed cross-list move approximation.
 - `tests/coredll_raw_kernel.rs`: `SHGetFileInfo` now verifies CE `SFGAO_*` attribute output for regular files, shortcuts, read-only files, storage-card folders, and inaccessible network folders.
+- `tests/coredll_raw_kernel.rs`: `SHGetFileInfo` system-image-list coverage now verifies an icon-only request returns the system image-list handle and separately populates `hIcon`.
 - `tests/coredll_raw_kernel.rs`: `Shell_NotifyIcon` duplicate-add rejection, `NIF_*` member flag handling, fixed CE `NOTIFYICONDATAW` size/readability, and null-icon modify preservation are covered.
-- `tests/coredll_raw_kernel.rs`: `SHNotificationAddI` sink-window validation and `SHNotificationUpdateI` stale-sink update behavior are covered.
+- `tests/coredll_raw_kernel.rs`: `SHNotificationAddI` sink-window validation, `SHNotificationUpdateI` stale-sink update behavior, `SHNotificationRemoveI` pending-callback purge, sink-window destruction callback cleanup, and `SHNotificationGetDataI` fixed-title-buffer output with `cbTitle == 0` are covered.
+- `tests/basic_subsystems.rs`: direct `ShellSystem` cleanup now verifies window-state removal clears pending notification callbacks along with notify icons, shell notifications, and change-notification registrations.
 - `tests/coredll_raw_memory_file.rs`: transient file-change notification churn coverage is present.
 - `tests/coredll_raw_memory_file.rs`: signal-only change notifications without `FILE_NOTIFY_CHANGE_CEGETINFO` are covered separately from detailed `CeGetFileNotificationInfo` drains.
+- `tests/coredll_raw_memory_file.rs`: `FindFirstChangeNotificationW` now covers an unrooted watch path containing `.` and `..` components against a mounted `\ResidentFlash` directory and verifies the canonical watch receives detailed create records.
+- `tests/coredll_raw_memory_file.rs`: `FindNextChangeNotification` now covers the CE reset case where two pending detailed creates remain signaled after one reset and can still be fetched through `CeGetFileNotificationInfo`.
+- `tests/coredll_raw_memory_file.rs`: `MoveFileW` now covers cross-volume file success, cross-volume directory rejection, source mount-point rename denial, and destination mount-point collision errors across mounted `\ResidentFlash` and `\Storage Card` roots.
+- `tests/coredll_raw_memory_file.rs`: read-only mounted root coverage now verifies raw `CreateFileW`, `CopyFileW`, `SetFileAttributesW`, and `DeleteFileW` all fail with `ERROR_ACCESS_DENIED` without mutating the host backing directory.
+- `tests/coredll_raw_memory_file.rs`: root file-change notification coverage now verifies a nested create under `\ResidentFlash\watch` does not signal a non-recursive `\` watch, does signal a recursive `\` watch, and returns the expected root-relative detailed record.
+- `tests/coredll_raw_memory_file.rs`: `FindCloseChangeNotification` coverage now verifies a wrong-type file handle fails with `ERROR_INVALID_HANDLE` and is no longer closeable afterward, preserving the CE caller-handle ownership side effect.
+- `tests/coredll_raw_kernel.rs`: `SHNotificationAddI` coverage now asserts the stored notification and queued COM callback record do not inherit the marshalled `cbData` argument as a callback pointer.
+- `tests/coredll_raw_kernel.rs`: `SHNotificationAddI` title/HTML coverage now verifies the CE pointer-presence rule for `SHNP_INFORM`: title-only with null HTML fails, while non-null empty HTML succeeds and receives the default inform duration.
+- `tests/coredll_raw_kernel.rs`: `SHNotificationUpdateI` coverage now asserts `SHNUM_PRIORITY` moves a notification from the inform list to the iconic list and `SHNotificationRemoveI` clears the priority-list entry.
 - `tests/coredll_raw_gwe.rs`: destroyed-target `SendMessageTimeout` result write coverage is present.
 - `tests/coredll_raw_gwe.rs`: same-thread `SendMessageTimeout` coverage now verifies synchronous dispatch, direct result-pointer writes, clean last-error state, and no cross-thread sent-message transaction.
 - `tests/coredll_raw_gwe.rs`: cross-thread `SendMessageTimeout` coverage now verifies an early receiver `ReplyMessage` result wins over the later wndproc return and writes through the timeout result pointer.
@@ -56,11 +95,116 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Last Known Validation
 
+- `cargo fmt` passed after aligning no-active `ImageList_DragEnter`/`ImageList_DragLeave` static context and visible-only `ImageList_DragMove` behavior with CE.
+- `cargo test --features unicorn,trace,win32-desktop --test basic_subsystems resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_drag` passed after aligning no-active `ImageList_DragEnter`/`ImageList_DragLeave` static context and visible-only `ImageList_DragMove` behavior with CE.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel image_list_ordinals_track_created_lists_and_icons` passed after aligning no-active `ImageList_DragEnter`/`ImageList_DragLeave` static context and visible-only `ImageList_DragMove` behavior with CE.
+- `cargo check --features unicorn,trace,win32-desktop` passed after aligning no-active `ImageList_DragEnter`/`ImageList_DragLeave` static context and visible-only `ImageList_DragMove` behavior with CE.
+- `cargo test --features unicorn,trace,win32-desktop` passed after aligning no-active `ImageList_DragEnter`/`ImageList_DragLeave` static context and visible-only `ImageList_DragMove` behavior with CE.
+- `git diff --check` passed after aligning no-active `ImageList_DragEnter`/`ImageList_DragLeave` static context and visible-only `ImageList_DragMove` behavior with CE; output was limited to existing CRLF normalization warnings.
+- `cargo fmt` passed after aligning no-active `ImageList_GetDragImage` behavior with CE.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel image_list_ordinals_track_created_lists_and_icons` passed after aligning no-active `ImageList_GetDragImage` behavior with CE.
+- `cargo check --features unicorn,trace,win32-desktop` passed after aligning no-active `ImageList_GetDragImage` behavior with CE.
+- `cargo test --features unicorn,trace,win32-desktop` passed after aligning no-active `ImageList_GetDragImage` behavior with CE.
+- `git diff --check` passed after aligning no-active `ImageList_GetDragImage` behavior with CE; output was limited to existing CRLF normalization warnings.
+- `cargo fmt` passed after aligning `ImageList_SetDragCursorImage` no-active-drag behavior with CE.
+- `cargo test --features unicorn,trace,win32-desktop --test basic_subsystems resource_system_owned_bitmap_bitmap_mut_region_rects_palette_mut_shell_image_list_merge_and_dither` passed after aligning `ImageList_SetDragCursorImage` no-active-drag behavior with CE.
+- `cargo test --features unicorn,trace,win32-desktop --test basic_subsystems resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_drag` passed after aligning `ImageList_SetDragCursorImage` no-active-drag behavior with CE.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel image_list_ordinals_track_created_lists_and_icons` passed after aligning `ImageList_SetDragCursorImage` no-active-drag behavior with CE.
+- `cargo check --features unicorn,trace,win32-desktop` passed after aligning `ImageList_SetDragCursorImage` no-active-drag behavior with CE.
+- `cargo test --features unicorn,trace,win32-desktop` passed after aligning `ImageList_SetDragCursorImage` no-active-drag behavior with CE.
+- `git diff --check` passed after aligning `ImageList_SetDragCursorImage` no-active-drag behavior with CE; output was limited to existing CRLF normalization warnings.
+- `cargo fmt` passed after aligning `ImageList_DragMove` with CE's unconditional success return.
+- `cargo test --features unicorn,trace,win32-desktop --test basic_subsystems resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_drag` passed after aligning `ImageList_DragMove` with CE's unconditional success return.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel image_list_ordinals_track_created_lists_and_icons` passed after aligning `ImageList_DragMove` with CE's unconditional success return.
+- `cargo check --features unicorn,trace,win32-desktop` passed after aligning `ImageList_DragMove` with CE's unconditional success return.
+- `cargo test --features unicorn,trace,win32-desktop` passed after aligning `ImageList_DragMove` with CE's unconditional success return.
+- `git diff --check` passed after aligning `ImageList_DragMove` with CE's unconditional success return; output was limited to existing CRLF normalization warnings.
+- `cargo fmt` passed after aligning `ImageList_Copy` with CE same-list-only copy/swap semantics.
+- `cargo test --features unicorn,trace,win32-desktop --test basic_subsystems resource_system_image_list_duplicate_replace_remove_copy_count_overlay_and_drag` passed after aligning `ImageList_Copy` with CE same-list-only copy/swap semantics.
+- `cargo test --features unicorn,trace,win32-desktop --test basic_subsystems resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_drag` passed after aligning `ImageList_Copy` with CE same-list-only copy/swap semantics.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel image_list_copy_honors_ce_move_swap_flags` passed after aligning `ImageList_Copy` with CE same-list-only copy/swap semantics.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel image_list_ordinals_track_created_lists_and_icons` passed after aligning `ImageList_Copy` with CE same-list-only copy/swap semantics.
+- `cargo check --features unicorn,trace,win32-desktop` passed after aligning `ImageList_Copy` with CE same-list-only copy/swap semantics.
+- `cargo test --features unicorn,trace,win32-desktop` passed after aligning `ImageList_Copy` with CE same-list-only copy/swap semantics.
+- `git diff --check` passed after aligning `ImageList_Copy` with CE same-list-only copy/swap semantics; output was limited to existing CRLF normalization warnings.
+- `cargo fmt` passed after aligning `ImageList_SetIconSize` with CE no-op failure and remove-all resize semantics.
+- `cargo test --features unicorn,trace,win32-desktop --test basic_subsystems resource_system_image_list_create_add_count_info_bk_color_and_destroy` passed after aligning `ImageList_SetIconSize` with CE no-op failure and remove-all resize semantics.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel image_list_ordinals_track_created_lists_and_icons` passed after aligning `ImageList_SetIconSize` with CE no-op failure and remove-all resize semantics.
+- `cargo check --features unicorn,trace,win32-desktop` passed after aligning `ImageList_SetIconSize` with CE no-op failure and remove-all resize semantics.
+- `cargo test --features unicorn,trace,win32-desktop` passed after aligning `ImageList_SetIconSize` with CE no-op failure and remove-all resize semantics.
+- `git diff --check` passed after aligning `ImageList_SetIconSize` with CE no-op failure and remove-all resize semantics; output was limited to existing CRLF normalization warnings.
+- `cargo fmt` passed after enforcing CE `ILC_MASK` requirements for `ImageList_SetOverlayImage`.
+- `cargo test --features unicorn,trace,win32-desktop --test basic_subsystems resource_system_image_list_duplicate_replace_remove_copy_count_overlay_and_drag` passed after enforcing CE `ILC_MASK` requirements for `ImageList_SetOverlayImage`.
+- `cargo test --features unicorn,trace,win32-desktop --test basic_subsystems resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_drag` passed after enforcing CE `ILC_MASK` requirements for `ImageList_SetOverlayImage`.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel image_list_ordinals_track_created_lists_and_icons` passed after enforcing CE `ILC_MASK` requirements for `ImageList_SetOverlayImage`.
+- `cargo check --features unicorn,trace,win32-desktop` passed after enforcing CE `ILC_MASK` requirements for `ImageList_SetOverlayImage`.
+- `cargo test --features unicorn,trace,win32-desktop` passed after enforcing CE `ILC_MASK` requirements for `ImageList_SetOverlayImage`.
+- `git diff --check` passed after enforcing CE `ILC_MASK` requirements for `ImageList_SetOverlayImage`; output was limited to existing CRLF normalization warnings.
+- `cargo fmt` passed after aligning image-list overlay slot retention with CE.
+- `cargo test --features unicorn,trace,win32-desktop --test basic_subsystems resource_system_image_list_duplicate_replace_remove_copy_count_overlay_and_drag` passed after aligning image-list overlay slot retention with CE.
+- `cargo test --features unicorn,trace,win32-desktop` passed after aligning image-list overlay slot retention with CE.
+- `git diff --check` passed after aligning image-list overlay slot retention with CE; output was limited to existing CRLF normalization warnings.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel sh_get_file_info_system_image_list_supports_icon_queries_and_draw` passed after aligning icon-only `SHGetFileInfoW` return semantics with CE.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel` passed after aligning icon-only `SHGetFileInfoW` return semantics with CE.
+- `cargo check --features unicorn,trace,win32-desktop` passed after aligning icon-only `SHGetFileInfoW` return semantics with CE.
+- `cargo test --features unicorn,trace,win32-desktop` passed after aligning icon-only `SHGetFileInfoW` return semantics with CE.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel shnotification_i_tracks_query_update_and_remove_state` passed after adding CE-style inform/iconic notification priority-list movement.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel` passed after adding CE-style inform/iconic notification priority-list movement.
+- `cargo check --features unicorn,trace,win32-desktop` passed after adding CE-style inform/iconic notification priority-list movement.
+- `cargo test --features unicorn,trace,win32-desktop` passed after adding CE-style inform/iconic notification priority-list movement.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel shnotification_i_add_uses_marshalled_html_pointer_presence` passed after aligning raw `SHNotificationAddI` title/HTML validation with CE marshalled pointer-presence semantics.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel` passed after aligning raw `SHNotificationAddI` title/HTML validation with CE marshalled pointer-presence semantics.
+- `cargo check --features unicorn,trace,win32-desktop` passed after aligning raw `SHNotificationAddI` title/HTML validation with CE marshalled pointer-presence semantics.
+- `cargo test --features unicorn,trace,win32-desktop` passed after aligning raw `SHNotificationAddI` title/HTML validation with CE marshalled pointer-presence semantics.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel shnotification_i_tracks_query_update_and_remove_state` passed after aligning raw `SHNotificationAddI` callback metadata with CE `cbData` semantics.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel` passed after aligning raw `SHNotificationAddI` callback metadata with CE `cbData` semantics.
+- `cargo check --features unicorn,trace,win32-desktop` passed after aligning raw `SHNotificationAddI` callback metadata with CE `cbData` semantics.
+- `cargo test --features unicorn,trace,win32-desktop` passed after aligning raw `SHNotificationAddI` callback metadata with CE `cbData` semantics.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_memory_file coredll_raw_find_close_change_notification_consumes_wrong_handle_type` passed after matching CE wrong-handle close behavior for `FindCloseChangeNotification`.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_memory_file` passed after matching CE wrong-handle close behavior for `FindCloseChangeNotification`.
+- `cargo check --features unicorn,trace,win32-desktop` passed after matching CE wrong-handle close behavior for `FindCloseChangeNotification`.
+- `cargo test --features unicorn,trace,win32-desktop` passed after matching CE wrong-handle close behavior for `FindCloseChangeNotification`.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_memory_file coredll_raw_root_change_notification_honors_subtree_flag` passed after fixing root `WatchSubtree` matching.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_memory_file` passed after fixing root `WatchSubtree` matching.
+- `cargo check --features unicorn,trace,win32-desktop` passed after fixing root `WatchSubtree` matching.
+- `cargo test --features unicorn,trace,win32-desktop` passed after fixing root `WatchSubtree` matching.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_memory_file coredll_raw_readonly_mount_reports_access_denied_for_mutations` passed after adding read-only mounted-root mutation coverage.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_memory_file` passed after adding read-only mounted-root mutation coverage.
+- `cargo check --features unicorn,trace,win32-desktop` passed after adding read-only mounted-root mutation coverage.
+- `cargo test --features unicorn,trace,win32-desktop` passed after adding read-only mounted-root mutation coverage.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_memory_file coredll_raw_move_file_w_enforces_ce_volume_boundaries` passed after adding CE mounted-volume `MoveFileW` boundary behavior.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_memory_file` passed after adding CE mounted-volume `MoveFileW` boundary behavior and fixing repeat setup for the copy-file raw test.
+- `cargo check --features unicorn,trace,win32-desktop` passed after adding CE mounted-volume `MoveFileW` boundary behavior.
+- `cargo test --features unicorn,trace,win32-desktop` passed after adding CE mounted-volume `MoveFileW` boundary behavior.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_memory_file coredll_raw_find_next_change_notification_consumes_one_pending_signal` passed after adding CE outstanding notification signal-count behavior.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_memory_file` passed after adding CE outstanding notification signal-count behavior.
+- `cargo check --features unicorn,trace,win32-desktop` passed after adding CE outstanding notification signal-count behavior.
+- `cargo test --features unicorn,trace,win32-desktop` passed after adding CE outstanding notification signal-count behavior.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_memory_file coredll_raw_change_notification_canonicalizes_watch_path` passed after adding CE canonical watch-path coverage.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_memory_file` passed after adding CE canonical watch-path coverage.
+- `cargo check --features unicorn,trace,win32-desktop` passed after adding CE canonical watch-path coverage.
+- `cargo test --features unicorn,trace,win32-desktop` passed after adding CE canonical watch-path coverage.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel shnotification_i_tracks_query_update_and_remove_state` passed after adding CE fixed-title-buffer `SHNotificationGetDataI` coverage.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel` passed after adding CE fixed-title-buffer `SHNotificationGetDataI` coverage.
+- `cargo check --features unicorn,trace,win32-desktop` passed after adding CE fixed-title-buffer `SHNotificationGetDataI` coverage.
+- `cargo test --features unicorn,trace,win32-desktop` passed after adding CE fixed-title-buffer `SHNotificationGetDataI` coverage.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel shnotification_i_tracks_query_update_and_remove_state` passed after adding notification callback cleanup.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel shell_window_destroy_removes_notify_icon_and_notification_state` passed after adding notification callback cleanup.
+- `cargo test --features unicorn,trace,win32-desktop --test basic_subsystems shell_system_remove_window_state_and_remove_windows_state` passed after adding notification callback cleanup.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel` passed after adding notification callback cleanup.
+- `cargo test --features unicorn,trace,win32-desktop --test basic_subsystems` passed after adding notification callback cleanup.
+- `cargo check --features unicorn,trace,win32-desktop` passed after adding notification callback cleanup.
+- `cargo test --features unicorn,trace,win32-desktop` passed after adding notification callback cleanup.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_modules` passed after adding datafile export-suppression coverage.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel` passed after adding datafile export-suppression coverage.
+- `cargo check --features unicorn,trace,win32-desktop` passed after adding datafile export-suppression coverage.
+- `cargo test --features unicorn,trace,win32-desktop` passed after adding datafile export-suppression coverage.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed after the same-thread, early-`ReplyMessage`, and nested `SendMessageTimeout` slices.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_track_popup_menu_ex_applies_ce_alignment_flags` passed after adding CE `TPM_*ALIGN` popup positioning.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed after adding CE `TPM_*ALIGN` popup positioning.
 - `cargo test --features unicorn,trace,win32-desktop --test basic_subsystems image_list` passed after updating direct image-list copy tests to CE `ILCF_MOVE` semantics.
 - `cargo test --features unicorn,trace,win32-desktop` passed after adding CE `TPM_*ALIGN` popup positioning and updating direct image-list move tests.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel sh_get_file_info` passed after adding secondary `RT_ICON` ordinal failure coverage.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_send_message_timeout` passed after adding same-thread, early-`ReplyMessage`, and nested `SendMessageTimeout` coverage.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_msgwait` passed after adding `QS_SENDMESSAGE`/`MWMO_INPUTAVAILABLE` message-wait coverage.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_track_popup_menu` passed after applying `TPMPARAMS.rcExclude` to popup placement.

@@ -57,7 +57,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     immediately with `kernel.resources`, and keeps code exports hidden from
     `GetProcAddress`. The raw/non-Unicorn helper cannot map new guest bytes,
     but it now mirrors the already-loaded-module reuse/refcount behavior for
-    supported no-resolve/datafile flags and fails missing raw loads explicitly.
+    supported no-resolve/datafile flags, keeps datafile-flagged loaded-module
+    exports hidden from raw `GetProcAddress` name/ordinal lookups, and fails
+    missing raw loads explicitly.
     Runtime executable DLL loads now run the same MIPS Unicorn trampoline
     patcher before map/write and publish inline stub ranges into live
     full-code-hook metadata so high/relocated DLL branch/call sites can execute
@@ -198,26 +200,50 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     creates a notification event only for an existing directory, while
     `fileapi.cpp` shows file writes notifying `FILE_NOTIFY_CHANGE_LAST_WRITE`.
     Rust now creates waitable directory-change handles for the public and
-    direct AFS first-change ordinals, signals them from matching create/delete/
-    rename/write/attribute directory events, exposes pending action/name
-    records through `CeGetFileNotificationInfo` using the standard
+    direct AFS first-change ordinals, canonicalizes public
+    `FindFirstChangeNotificationW` watch paths before directory validation and
+    registration, signals them from matching create/delete/rename/write/
+    attribute directory events, exposes pending action/name records through
+    `CeGetFileNotificationInfo` using the standard
     `FILE_NOTIFY_INFORMATION` layout, including recursive directory-create,
     rename old/new, and directory-removal records, coalesces consecutive
     duplicate action/name records plus transient create/delete and
     modified/delete churn, and rearms/closes them through
-    `FindNextChangeNotification`/`FindCloseChangeNotification`.
+    `FindNextChangeNotification`/`FindCloseChangeNotification`. Because
+    `pathapi.cpp` carries the caller's `fWatchSubTree` value into the AFS/
+    FSDMGR notification event, root watches now preserve the same subtree
+    boundary: `\` without recursion matches immediate root children only, and
+    `\` with recursion matches deeper descendants.
     `PRIVATE\WINCEOS\COREOS\STORAGE\NOTIFY\fsnotify.cpp` `NotifyReset` drains
     only the records that fit the caller buffer, sets `ERROR_MORE_DATA` after a
     successful prefix copy, reports remaining bytes through `lpBytesAvailable`,
     re-signals the event while records remain, returns
     `ERROR_INSUFFICIENT_BUFFER` when the first record cannot fit, and returns
     `ERROR_NO_MORE_ITEMS` for data fetches with no pending notifications; v3 now
-    mirrors those byte-count and re-signal semantics.
+    mirrors those byte-count and re-signal semantics. The same `NotifyReset`
+    path decrements one outstanding event count for no-buffer
+    `FindNextChangeNotification` calls, so v3 keeps an outstanding signal count
+    separate from detailed records instead of clearing all queued records on a
+    single reset. `NotifyCloseChangeHandle` duplicates the caller's event
+    handle with `DUPLICATE_CLOSE_SOURCE` before checking the event data, so v3
+    now closes valid-but-wrong handle types before returning
+    `ERROR_INVALID_HANDLE` from `FindCloseChangeNotification`.
     `mounttable.cpp` also calls `NotifyPathChange` with `FILE_ACTION_ADDED` or
     `FILE_ACTION_REMOVED` for visible mount folders on the root notification
     handle; v3 mirrors that for root-directory waiters when guest roots are
     mounted or unmounted. Full FSDMGR volume-handle ownership and broader
     mounted edge behavior remain queued.
+    FSDMGR `FS_MoveFileW` also canonicalizes source/destination paths and
+    compares their owning volumes: same-volume moves call `AFS_MoveFileW`,
+    cross-volume file moves are emulated with `CopyFileW` plus source delete,
+    cross-volume directory moves fail with `ERROR_NOT_SAME_DEVICE`, source
+    mount-point renames fail with `ERROR_ACCESS_DENIED`, and destination
+    mount-point collisions fail with `ERROR_ALREADY_EXISTS`; v3 now mirrors
+    those mounted-boundary cases for raw `MoveFileW`.
+    `fileapi.cpp`/`pathapi.cpp` also return `ERROR_ACCESS_DENIED` for storage
+    access-check failures on mutating operations, so v3 now reports access
+    denied for raw create/copy/delete/remove-directory/set-attributes attempts
+    against read-only mounted host roots.
 
 - Shell popup-menu APIs:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`,
@@ -567,6 +593,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     attributes to `SFGAO_FILESYSTEM`, `SFGAO_FOLDER`, `SFGAO_LINK`, and
     `SFGAO_READONLY`; v3 mirrors that shell-attribute output instead of
     returning raw `FILE_ATTRIBUTE_*` values in `SHFILEINFO.dwAttributes`.
+    `CESHELL\API\api.cpp` returns a system image-list handle whenever either
+    `SHGFI_ICON` or `SHGFI_SYSICONINDEX` is requested, so raw `SHGetFileInfoW`
+    now returns that list handle for icon-only queries while still populating
+    `SHFILEINFO.hIcon`.
     File-backed `LoadImageW(..., IMAGE_BITMAP, LR_LOADFROMFILE)` now keeps the
     BMP pixel rows in CE heap-backed bitmap storage. Resource-backed
     `LoadImageW`/`LoadBitmapW` for RT_BITMAP DIB data also copies the resolved
@@ -589,6 +619,34 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     rejects `ImageList_DrawIndirect` calls whose `cbSize` is not exactly
     `sizeof(IMAGELISTDRAWPARAMS)`; raw `ImageList_DrawIndirect` now applies
     that exact-size gate before recording draw state or rendering.
+    `imagelist.cpp` clears `m_aOverlayIndexes` only on `ImageList_Remove(-1)`;
+    its single-image `Remove` path calls `RemoveItemBitmap` and decrements
+    `m_cImage` without rewriting overlay slots, and `SetImageCount` likewise
+    only reallocates and updates `m_cImage`. v3 now preserves those stale
+    overlay indexes for single-image removal and truncation while still
+    clearing overlays on remove-all. `ImageList::SetOverlayImage` also rejects
+    lists whose mask DC is absent (`m_hdcMask == NULL`), which corresponds to
+    image lists created without `ILC_MASK`; v3 now returns failure for those
+    unmasked overlay registrations instead of recording an overlay slot.
+    `ImageList::SetIconSize` returns failure when the requested dimensions
+    match the current size; otherwise it updates `m_cx`/`m_cy` and calls
+    `ImageList::Remove(-1)`, so v3 now clears images and overlay slots when an
+    image-list size change succeeds. `ImageList::DragMove` always returns
+    `TRUE` after its optional visible-drag move block; v3 now reports success
+    for no-active-drag `DragMove` calls while leaving drag state absent and
+    only advances the stored drag point while an active drag image is visible.
+    `ImageList::SetDragCursorImage` calls `MergeDragImages`, whose no-dither
+    branch treats the missing drag-image setup as non-error, so v3 now returns
+    success for no-active-drag cursor-image requests against valid image lists.
+    `ImageList::GetDragImage` writes `s_DragContext.ptDrag` and
+    `ptDragHotspot` before returning `s_DragContext.pimlDrag`; since CE
+    initializes those fields to zero/null, v3 now returns null and zeroed
+    point outputs before any drag context exists instead of surfacing a
+    handle error. `ImageList::DragEnter` still records `hwndDC` and
+    `ptDrag` when no drag image exists because it ignores the no-image
+    `DragShowNolock(TRUE)` result, and `ImageList::DragLeave` clears that
+    lock only for the matching window; v3 now preserves that no-active
+    static drag point/lock state for subsequent `GetDragImage` calls.
     The `api.cpp` attribute-probe branch treats
     inaccessible UNC paths with access/network errors as
     `FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_TEMPORARY`, so raw
@@ -631,9 +689,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     and `ILC_UNIQUE`; raw `ImageList_Create` now rejects flags outside that
     mask while preserving accepted private/shared flags on the image-list
     object. `commctrl.h` defines `ILCF_MOVE` and `ILCF_SWAP`, while
-    `pcommctr.h` defines `ILCF_VALID` as `ILCF_SWAP`; raw `ImageList_Copy`
-    now rejects unsupported copy flags and swaps image entries for `ILCF_SWAP`
-    instead of treating every nonzero flag as a copy.
+    `pcommctr.h` defines `ILCF_VALID` as `ILCF_SWAP`; CE `imagelist.cpp`
+    rejects `ImageList_Copy` when the source and destination image-list
+    pointers differ, requires valid source and destination image rectangles,
+    and uses `ILCF_SWAP` only for a same-list slot exchange. Raw
+    `ImageList_Copy` now matches that same-list-only behavior instead of
+    treating flag zero as a cross-list move/removal path.
     Raw `ExtractIconExW` now supports `nIconIndex == -1` count probes,
     extracts PE `RT_GROUP_ICON`/`RT_ICON` resources into bitmap-backed icon
     handles, selects separate large/small icon entries from multi-size groups,
@@ -642,7 +703,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     integer `RT_GROUP_ICON` resource IDs when zero-based group enumeration does
     not cover the requested `nIconIndex`, fills successive large/small
     output-array slots, reports `ERROR_RESOURCE_NAME_NOT_FOUND`
-    when a present group references malformed or missing icon resource data,
+    when a present group references malformed icon data or missing primary or
+    secondary `RT_ICON` ordinal resources,
     tolerates present `RT_ICON` DIB payloads that have color pixels but omit
     trailing AND-mask bytes by creating a color-only icon, preserves color
     tables for covered 4bpp and 8bpp indexed `RT_ICON` payloads, and decodes
@@ -654,8 +716,8 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `RT_GROUP_ICON` with `MAKEINTRESOURCE(nIconIndex)`, lets a callback choose
     large/small group-directory indices, then extracts the referenced
     `RT_ICON` resources.
-    Missing paths fail with `ERROR_FILE_NOT_FOUND`; broader PE format variants,
-    RT_ICON ordinal failure, and non-PE fallback edges remain queued.
+    Missing paths fail with `ERROR_FILE_NOT_FOUND`; broader PE format variants
+    and non-PE fallback edges remain queued.
   - `shellapi.h` defines `SHELLEXECUTEINFO`, `SEE_MASK_NOCLOSEPROCESS`,
     `nShow`, `hInstApp`, and `hProcess`. v3's raw `ShellExecuteEx` now
     preserves `nShow`, returns the queued process handle when
@@ -1917,14 +1979,32 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `NMSHN` allocation, carries `SHNN_DISMISS` `fTimeout`, and prunes
     window-bound notify icon, notification, and change-notification records
     when the sink HWND is destroyed directly or removed during process-exit
-    cleanup.
+    cleanup. Explicit `SHNotificationRemoveI` and sink-window cleanup also
+    purge pending callback records for that `(CLSID, dwID)`, matching the CE
+    taskbar model where callbacks are delivered from live bubble records rather
+    than from detached stale queue entries. CE `GetNotificationData` ignores
+    `cbTitle` and assumes `pszTitle` has the fixed taskbar-label capacity
+    (`CCHMAXTBLABEL == MAX_PATH`), so raw `SHNotificationGetDataI` now writes a
+    bounded fixed-title copy even when the marshalled `cbTitle` argument is
+    zero. `SHNotificationAddII` validates title/HTML content by pointer
+    presence (`pszHTML == NULL` and both title/HTML null), not by string
+    length, so raw `SHNotificationAddI` now accepts a non-null empty HTML string
+    for `SHNP_INFORM` while still rejecting a null HTML pointer.
+    `CTaskBar::UpdateBubble` handles `SHNUM_PRIORITY` changes by removing the
+    record from its old priority list, assigning `m_npPriority`, then adding it
+    to the iconic tray list or inform bubble list, so Rust now keeps separate
+    inform/iconic notification key lists synchronized with add, update, remove,
+    expiration, and sink-window cleanup.
     `bubble.cpp` attempts
     `IShellNotificationCallback` COM methods for show/link/dismiss/command
     events before also notifying the sink window, so Rust now records the
     callback method, CE vtable offset, and typed arguments for non-null
     notification CLSIDs and posts the command-selection `WM_COMMAND` sink
-    message; actual guest COM vtable invocation, visual bubble/taskbar
-    rendering, and richer icon lifetime remain queued separately.
+    message. The raw `I` API `cbData` argument is the marshalled
+    `SHNOTIFICATIONDATA` byte count and not a callback pointer, so v3 no longer
+    stores it as callback state; actual guest COM vtable invocation, visual
+    bubble/taskbar rendering, and richer icon lifetime remain queued
+    separately.
 
 - CE Winsock exception-readiness authority:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winsock.h` and

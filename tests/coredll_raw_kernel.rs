@@ -2336,7 +2336,10 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_m
     let mut memory = TestGuestMemory::default();
     let thread_id = 42;
     let module_name_ptr = 0x1_9000;
+    let resource_name_ptr = 0x1_9080;
+    let proc_name_ptr = 0x1_90c0;
     let module_base = 0x6300_0000;
+    let resource_base = 0x6310_0000;
 
     kernel.register_loaded_module_with_metadata(
         "dynamic.dll",
@@ -2351,6 +2354,22 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_m
         },
     );
     memory.write_wide_z(module_name_ptr, "dynamic.dll");
+
+    kernel.register_loaded_module_with_metadata(
+        "resource.dll",
+        resource_base,
+        std::collections::BTreeMap::from([("visibleexport".to_owned(), resource_base + 0x1234)]),
+        std::collections::BTreeMap::from([(7, resource_base + 0x5678)]),
+        LoadedModuleMetadata {
+            dynamic: true,
+            guest_path: Some(r"\Windows\resource.dll".to_owned()),
+            image_size: 0x10000,
+            load_flags: 0x0000_0003,
+            ..LoadedModuleMetadata::default()
+        },
+    );
+    memory.write_wide_z(resource_name_ptr, "resource.dll");
+    memory.write_bytes(proc_name_ptr, b"VisibleExport\0");
 
     for _ in 0..2 {
         assert!(matches!(
@@ -2399,6 +2418,57 @@ fn coredll_raw_loadlibrary_refcounts_dynamic_modules_and_ex_flags_reuse_loaded_m
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     assert_eq!(kernel.loaded_module_snapshots()[0].ref_count, 3);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_LOAD_LIBRARY_EX_W,
+            [resource_name_ptr, 0, 0x0000_0003],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle == resource_base
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_PROC_ADDRESS_A,
+            [resource_base, proc_name_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_FILE_NOT_FOUND
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_GET_PROC_ADDRESS_W,
+            [resource_base, 7],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_FILE_NOT_FOUND
+    );
 
     let missing_name_ptr = 0x1_9040;
     memory.write_wide_z(missing_name_ptr, "missing.dll");
@@ -4050,6 +4120,11 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
     )
     .unwrap();
     fs::write(
+        root.join("Docs").join("missing-small-icon-resource.exe"),
+        pe32_with_missing_small_icon_resource(),
+    )
+    .unwrap();
+    fs::write(
         root.join("Docs").join("missing-and-mask-icon.exe"),
         pe32_with_missing_and_mask_icon(),
     )
@@ -4527,6 +4602,7 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
     for malformed_icon_path in [
         r"\Docs\bad-group-icon.exe",
         r"\Docs\missing-icon-resource.exe",
+        r"\Docs\missing-small-icon-resource.exe",
     ] {
         memory.write_wide_z(path_ptr, malformed_icon_path);
         assert!(matches!(
@@ -5041,6 +5117,12 @@ fn pe32_with_missing_icon_resource() -> Vec<u8> {
     bytes
 }
 
+fn pe32_with_missing_small_icon_resource() -> Vec<u8> {
+    let mut bytes = pe32_with_multi_size_icon_group();
+    put_test_u16(&mut bytes, 0x200 + 0x500 + 18, 999);
+    bytes
+}
+
 fn pe32_with_missing_and_mask_icon() -> Vec<u8> {
     let mut bytes = pe32_with_group_icon_count(1);
     let truncated_icon_size = 44u32; // BITMAPINFOHEADER + one 32bpp XOR pixel, no AND mask.
@@ -5503,7 +5585,9 @@ fn rgb565_at(memory: &TestGuestMemory, bits_ptr: u32, stride: u32, x: u32, y: u3
 #[test]
 fn sh_get_file_info_system_image_list_supports_icon_queries_and_draw() -> Result<()> {
     const SHFILEINFO_SIZE_W: u32 = 692;
+    const SHFILEINFO_HICON_OFFSET: u32 = 0;
     const SHFILEINFO_IICON_OFFSET: u32 = 4;
+    const SHGFI_ICON: u32 = 0x0000_0100;
     const SHGFI_SYSICONINDEX: u32 = 0x0000_4000;
     const SHGFI_SMALLICON: u32 = 0x0000_0001;
     const SHGFI_USEFILEATTRIBUTES: u32 = 0x0000_0010;
@@ -5570,6 +5654,29 @@ fn sh_get_file_info_system_image_list_supports_icon_queries_and_draw() -> Result
         }
     ));
     let icon_index = memory.read_i32(info_ptr + SHFILEINFO_IICON_OFFSET)?;
+
+    memory.write_u32(info_ptr + SHFILEINFO_HICON_OFFSET, 0)?;
+    let ret = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SHGET_FILE_INFO,
+        [
+            path_ptr,
+            FILE_ATTRIBUTE_ARCHIVE,
+            info_ptr,
+            SHFILEINFO_SIZE_W,
+            SHGFI_USEFILEATTRIBUTES | SHGFI_ICON,
+        ],
+    );
+    assert!(matches!(
+        ret,
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(SHELL_SYSTEM_IMAGE_LIST_HANDLE),
+            ..
+        }
+    ));
+    assert_ne!(memory.read_u32(info_ptr + SHFILEINFO_HICON_OFFSET)?, 0);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -5819,7 +5926,7 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         &mut memory,
         thread_id,
         ORD_IMAGE_LIST_CREATE,
-        [24, 20, 0, 1, 2],
+        [24, 20, ILC_MASK, 1, 2],
     ) {
         CoredllDispatch::Returned {
             value: CoredllValue::Handle(handle),
@@ -5891,6 +5998,19 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             &mut memory,
             thread_id,
             ORD_IMAGE_LIST_SET_ICON_SIZE,
+            [image_list, 24, 20],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_SET_ICON_SIZE,
             [image_list, 32, 18],
         ),
         CoredllDispatch::Returned {
@@ -5913,6 +6033,58 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     ));
     assert_eq!(memory.read_i32(size_ptr)?, 32);
     assert_eq!(memory.read_i32(size_ptr + 4)?, 18);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_GET_IMAGE_COUNT,
+            [image_list],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_GET_ICON,
+            [image_list, 1, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [image_list, 0x000a_1111, 0x000a_2222],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_REPLACE_ICON,
+            [image_list, 0xffff_ffff, 0x000b_8123],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -5956,6 +6128,54 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     assert_eq!(memory.read_u32(image_info_ptr + 4)?, 0x000a_4444);
     assert_eq!(memory.read_i32(image_info_ptr + 24)?, 32);
     assert_eq!(memory.read_i32(image_info_ptr + 28)?, 18);
+
+    let no_mask_overlay_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [16, 16, 0, 1, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create(no-mask overlay) did not return a handle: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [no_mask_overlay_list, 0x000a_3333, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
+            [no_mask_overlay_list, 0, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(
+        !kernel
+            .resources
+            .image_list(no_mask_overlay_list)
+            .unwrap()
+            .overlays
+            .contains_key(&1)
+    );
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -6417,7 +6637,7 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         &mut memory,
         thread_id,
         ORD_IMAGE_LIST_CREATE,
-        [2, 1, 0, 2, 1],
+        [2, 1, ILC_MASK, 2, 1],
     ) {
         CoredllDispatch::Returned {
             value: CoredllValue::Handle(handle),
@@ -6562,7 +6782,7 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             [image_list, 0, duplicate, 1, 1],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Bool(true),
+            value: CoredllValue::Bool(false),
             ..
         }
     ));
@@ -6583,6 +6803,123 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             ..
         }
     ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAG_MOVE,
+            [6, 7],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(kernel.resources.image_list_drag().is_none());
+    memory.write_word(drag_point_ptr, 0x7fff_ffff);
+    memory.write_word(drag_point_ptr + 4, 0x7fff_ffff);
+    memory.write_word(drag_hotspot_ptr, 0x7fff_ffff);
+    memory.write_word(drag_hotspot_ptr + 4, 0x7fff_ffff);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_GET_DRAG_IMAGE,
+            [drag_point_ptr, drag_hotspot_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_i32(drag_point_ptr)?, 0);
+    assert_eq!(memory.read_i32(drag_point_ptr + 4)?, 0);
+    assert_eq!(memory.read_i32(drag_hotspot_ptr)?, 0);
+    assert_eq!(memory.read_i32(drag_hotspot_ptr + 4)?, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_SET_DRAG_CURSOR_IMAGE,
+            [image_list, 99, 4, 5],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(kernel.resources.image_list_drag().is_none());
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAG_ENTER,
+            [0x0007_0000, 12, 13],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(kernel.resources.image_list_drag().is_none());
+    memory.write_word(drag_point_ptr, 0x7fff_ffff);
+    memory.write_word(drag_point_ptr + 4, 0x7fff_ffff);
+    memory.write_word(drag_hotspot_ptr, 0x7fff_ffff);
+    memory.write_word(drag_hotspot_ptr + 4, 0x7fff_ffff);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_GET_DRAG_IMAGE,
+            [drag_point_ptr, drag_hotspot_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(memory.read_i32(drag_point_ptr)?, 12);
+    assert_eq!(memory.read_i32(drag_point_ptr + 4)?, 13);
+    assert_eq!(memory.read_i32(drag_hotspot_ptr)?, 0);
+    assert_eq!(memory.read_i32(drag_hotspot_ptr + 4)?, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAG_LEAVE,
+            [0x0007_1234],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAG_LEAVE,
+            [0x0007_0000],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert!(kernel.resources.image_list_drag().is_none());
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -6634,6 +6971,19 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             thread_id,
             ORD_IMAGE_LIST_DRAG_SHOW_NOLOCK,
             [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAG_MOVE,
+            [30, 31],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
@@ -6858,16 +7208,43 @@ fn image_list_copy_honors_ce_move_swap_flags() -> Result<()> {
             [list_a, 0, list_b, 1, ILCF_SWAP],
         ),
         CoredllDispatch::Returned {
-            value: CoredllValue::Bool(true),
+            value: CoredllValue::Bool(false),
             ..
         }
     ));
     assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(
         kernel.resources.image_list(list_a).unwrap().images[0].icon,
-        0x000b_8202
+        0x000b_8101
     );
     assert_eq!(
         kernel.resources.image_list(list_b).unwrap().images[1].icon,
+        0x000b_8202
+    );
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_COPY,
+            [list_a, 0, list_a, 1, ILCF_SWAP],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_eq!(
+        kernel.resources.image_list(list_a).unwrap().images[0].icon,
+        0x000b_8102
+    );
+    assert_eq!(
+        kernel.resources.image_list(list_a).unwrap().images[1].icon,
         0x000b_8101
     );
 
@@ -6877,7 +7254,7 @@ fn image_list_copy_honors_ce_move_swap_flags() -> Result<()> {
             &mut memory,
             thread_id,
             ORD_IMAGE_LIST_COPY,
-            [list_a, 1, list_a, 1, ILCF_MOVE],
+            [list_a, 0, list_a, 1, ILCF_MOVE],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(true),
@@ -6888,9 +7265,10 @@ fn image_list_copy_honors_ce_move_swap_flags() -> Result<()> {
     assert_eq!(
         list_a_after_self_move.images.len(),
         2,
-        "ImageList_Copy move-to-self should not delete the source image"
+        "ImageList_Copy should copy within the list without removing the source image"
     );
-    assert_eq!(list_a_after_self_move.images[1].icon, 0x000b_8102);
+    assert_eq!(list_a_after_self_move.images[0].icon, 0x000b_8101);
+    assert_eq!(list_a_after_self_move.images[1].icon, 0x000b_8101);
 
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -6898,7 +7276,7 @@ fn image_list_copy_honors_ce_move_swap_flags() -> Result<()> {
             &mut memory,
             thread_id,
             ORD_IMAGE_LIST_COPY,
-            [list_a, 0, list_b, 4, ILCF_MOVE],
+            [list_a, 0, list_a, 4, ILCF_MOVE],
         ),
         CoredllDispatch::Returned {
             value: CoredllValue::Bool(false),
@@ -7591,6 +7969,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     let out_title = 0x3002_e000;
     let out_html = 0x3002_f000;
     let html_len = 0x3002_f800;
+    let out_title_zero_cb = 0x3004_0000;
     let msg_ptr = 0x3002_fc00;
     let clsid = [
         0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x44, 0x33, 0x22, 0x11, 0xaa, 0xbb, 0xcc,
@@ -7603,6 +7982,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     memory.map_bytes(out_title, 64);
     memory.map_bytes(out_html, 128);
     memory.map_words(html_len, 1);
+    memory.map_bytes(out_title_zero_cb, 520);
     memory.map_words(msg_ptr, 7);
     memory.write_word(data, SHNOTIFICATIONDATA_SIZE);
     memory.write_word(data + 4, 301);
@@ -7665,6 +8045,21 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     assert_eq!(record.title, "Route alert");
     assert_eq!(record.html, "<b>Drive now</b>");
     assert_eq!(record.duration_cs, 5);
+    assert_eq!(record.callback_ptr, 0);
+    assert_eq!(
+        kernel
+            .shell
+            .notification_priority_keys(SHNP_INFORM)
+            .collect::<Vec<_>>(),
+        vec![(clsid, 301)]
+    );
+    assert_eq!(
+        kernel
+            .shell
+            .notification_priority_keys(SHNP_ICONIC)
+            .collect::<Vec<_>>(),
+        Vec::<([u8; 16], u32)>::new()
+    );
     assert!(kernel.post_shell_notification_callback(clsid, 301, SHNN_SHOW, 0, 0));
     let callbacks = kernel
         .shell
@@ -7675,6 +8070,7 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     assert_eq!(callbacks[0].clsid, clsid);
     assert_eq!(callbacks[0].id, 301);
     assert_eq!(callbacks[0].lparam, 0xCAFE_BABE);
+    assert_eq!(callbacks[0].callback_ptr, 0);
     assert_eq!(
         callbacks[0].method,
         ShellNotificationCallbackMethod::OnShow { x: 0, y: 0 }
@@ -7960,6 +8356,21 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     assert_eq!(memory.read_wide_z(out_title, 32), "Route alert");
     assert_eq!(memory.read_wide_z(out_html, 32), "<b>Driv");
 
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHNOTIFICATION_GET_DATA_I,
+            [data + 24, 16, 301, 0, 0, out_title_zero_cb, 0, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_wide_z(out_title_zero_cb, 64), "Route alert");
+
     memory.write_word(data + 40, 0xDEAD_BEEF);
     memory.write_wide_z(title, "Ignored sink");
     assert!(matches!(
@@ -8046,6 +8457,20 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     assert_eq!(record.lparam, 0xCAFE_BABE);
     assert_eq!(record.title, "Route changed");
     assert_eq!(record.html, "<i>Later</i>");
+    assert_eq!(
+        kernel
+            .shell
+            .notification_priority_keys(SHNP_INFORM)
+            .collect::<Vec<_>>(),
+        Vec::<([u8; 16], u32)>::new()
+    );
+    assert_eq!(
+        kernel
+            .shell
+            .notification_priority_keys(SHNP_ICONIC)
+            .collect::<Vec<_>>(),
+        vec![(clsid, 301)]
+    );
 
     memory.write_word(data + 16, 0);
     assert!(matches!(
@@ -8124,6 +8549,14 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
         }
     ));
     assert!(kernel.shell.notification(clsid, 301).is_none());
+    assert_eq!(kernel.shell.notification_callbacks().count(), 0);
+    assert_eq!(
+        kernel
+            .shell
+            .notification_priority_keys(SHNP_ICONIC)
+            .collect::<Vec<_>>(),
+        Vec::<([u8; 16], u32)>::new()
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -8148,6 +8581,73 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
             ..
         }
     ));
+
+    Ok(())
+}
+
+#[test]
+fn shnotification_i_add_uses_marshalled_html_pointer_presence() -> Result<()> {
+    const SHNOTIFICATIONDATA_SIZE: u32 = 56;
+    const SHNP_INFORM: u32 = 0x1b1;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 47;
+    let hwnd = kernel.create_window_ex_w(thread_id, "SHN_HTML", "", None, 0, 0, 0);
+    let data = 0x3006_0000;
+    let title = 0x3006_1000;
+    let empty_html = 0x3006_2000;
+    let clsid = [
+        0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
+        0x30,
+    ];
+    memory.map_words(data, SHNOTIFICATIONDATA_SIZE / 4);
+    memory.map_bytes(title, 64);
+    memory.map_bytes(empty_html, 4);
+    memory.write_word(data, SHNOTIFICATIONDATA_SIZE);
+    memory.write_word(data + 4, 901);
+    memory.write_word(data + 8, SHNP_INFORM);
+    memory.write_word(data + 12, 0);
+    memory.write_word(data + 20, 0x10);
+    memory.write_bytes(data + 24, &clsid);
+    memory.write_word(data + 40, hwnd);
+    memory.write_wide_z(title, "Title only");
+    memory.write_wide_z(empty_html, "");
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHNOTIFICATION_ADD_I,
+            [data, SHNOTIFICATIONDATA_SIZE, title, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_INVALID_PARAMETER),
+            ..
+        }
+    ));
+    assert!(kernel.shell.notification(clsid, 901).is_none());
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHNOTIFICATION_ADD_I,
+            [data, SHNOTIFICATIONDATA_SIZE, 0, empty_html],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(ERROR_SUCCESS),
+            ..
+        }
+    ));
+    let record = kernel.shell.notification(clsid, 901).expect("notification");
+    assert_eq!(record.title, "");
+    assert_eq!(record.html, "");
+    assert_eq!(record.duration_cs, 5);
 
     Ok(())
 }
@@ -8963,6 +9463,8 @@ fn shell_window_destroy_removes_notify_icon_and_notification_state() -> Result<(
         }
     ));
     assert!(kernel.shell.change_notification(hwnd).is_some());
+    assert!(kernel.post_shell_notification_dismiss_callback(clsid, 402, false));
+    assert_eq!(kernel.shell.notification_callbacks().count(), 1);
 
     assert!(kernel.destroy_window(hwnd));
 
@@ -8976,6 +9478,7 @@ fn shell_window_destroy_removes_notify_icon_and_notification_state() -> Result<(
         vec![0x000b_8002]
     );
     assert!(kernel.shell.notification(clsid, 402).is_none());
+    assert_eq!(kernel.shell.notification_callbacks().count(), 0);
     assert!(kernel.shell.change_notification(hwnd).is_none());
 
     let process_id = 0x2200;

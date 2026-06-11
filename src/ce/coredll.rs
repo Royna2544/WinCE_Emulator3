@@ -23,7 +23,9 @@ use crate::{
             Point, Rect, WM_FILECHANGEINFO, WNDCLASSW_SIZE, WS_CHILD, WS_POPUP, WS_TABSTOP,
             WS_VISIBLE, WindowPos,
         },
-        kernel::{CeKernel, FreeLibraryResult, MessagePumpResult},
+        kernel::{
+            CeKernel, FILE_NOTIFY_CHANGE_SUPPORTED_MASK, FreeLibraryResult, MessagePumpResult,
+        },
         memory::{HEAP_ZERO_MEMORY, MEM_RELEASE, PROCESS_HEAP_HANDLE},
         object::{
             CriticalSectionObject, FileMappingView, KernelObject, ThreadResumeResult,
@@ -47,8 +49,8 @@ use crate::{
             ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_CLASS_DOES_NOT_EXIST,
             ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER,
             ERROR_INVALID_WINDOW_HANDLE, ERROR_NO_MORE_FILES, ERROR_NOT_ENOUGH_MEMORY,
-            ERROR_NOT_OWNER, ERROR_NOT_SUPPORTED, ERROR_RESOURCE_NAME_NOT_FOUND,
-            ERROR_SIGNAL_REFUSED,
+            ERROR_NOT_OWNER, ERROR_NOT_SAME_DEVICE, ERROR_NOT_SUPPORTED,
+            ERROR_RESOURCE_NAME_NOT_FOUND, ERROR_SIGNAL_REFUSED,
         },
     },
     error::{Error, Result},
@@ -7759,7 +7761,7 @@ fn dispatch_real_raw_ordinal<M: CoredllGuestMemory>(
             image_list_set_drag_cursor_raw(kernel, thread_id, args),
         )),
         ORD_IMAGE_LIST_SET_OVERLAY_IMAGE => Some(CoredllValue::Bool(
-            image_list_set_overlay_image_raw(kernel, thread_id, args),
+            image_list_set_overlay_image_raw(kernel, memory, thread_id, args),
         )),
         ORD_GET_OBJECT_W => Some(CoredllValue::U32(get_object_w_raw(
             kernel,
@@ -9846,10 +9848,15 @@ fn wide_char_to_multi_byte_raw<M: CoredllGuestMemory>(
     let output_ptr = raw_arg(args, 4);
     let output_capacity = raw_arg(args, 5);
     let used_default_ptr = raw_arg(args, 7);
-    let Some(units) = read_conversion_wide(kernel, memory, thread_id, input_ptr, input_len) else {
+    let Some(units) =
+        read_wide_char_to_multi_byte_input(kernel, memory, thread_id, input_ptr, input_len)
+    else {
         return 0;
     };
-    let Some((bytes, used_default)) = encode_wide_to_multibyte(code_page, flags, &units) else {
+    let track_used_default = used_default_ptr != 0;
+    let Some((bytes, used_default)) =
+        encode_wide_to_multibyte(code_page, flags, &units, track_used_default)
+    else {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -9889,7 +9896,7 @@ fn wcstombs_raw<M: CoredllGuestMemory>(
         return u32::MAX;
     };
     if dest_ptr == 0 {
-        let Some((bytes, _)) = encode_wide_to_multibyte(CE_ACP_CODE_PAGE, 0, &units) else {
+        let Some((bytes, _)) = encode_wide_to_multibyte(CE_ACP_CODE_PAGE, 0, &units, false) else {
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -9906,7 +9913,7 @@ fn wcstombs_raw<M: CoredllGuestMemory>(
     let mut bytes_written = 0usize;
     let mut return_count = 0usize;
     for unit in units {
-        let Some((bytes, _)) = encode_wide_to_multibyte(CE_ACP_CODE_PAGE, 0, &[unit]) else {
+        let Some((bytes, _)) = encode_wide_to_multibyte(CE_ACP_CODE_PAGE, 0, &[unit], false) else {
             kernel
                 .threads
                 .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -9936,7 +9943,12 @@ fn wcstombs_raw<M: CoredllGuestMemory>(
 }
 
 #[cfg(windows)]
-fn encode_wide_to_multibyte(code_page: u32, flags: u32, units: &[u16]) -> Option<(Vec<u8>, bool)> {
+fn encode_wide_to_multibyte(
+    code_page: u32,
+    flags: u32,
+    units: &[u16],
+    track_used_default: bool,
+) -> Option<(Vec<u8>, bool)> {
     use windows::{
         Win32::{
             Foundation::BOOL,
@@ -9946,7 +9958,7 @@ fn encode_wide_to_multibyte(code_page: u32, flags: u32, units: &[u16]) -> Option
     };
 
     let mut used_default = BOOL(0);
-    let used_default_ptr = (flags & WC_COMPOSITECHECK) == 0;
+    let used_default_ptr = track_used_default && (flags & WC_COMPOSITECHECK) == 0;
     let needed = unsafe {
         WideCharToMultiByte(
             code_page,
@@ -9983,6 +9995,7 @@ fn encode_wide_to_multibyte(
     _code_page: u32,
     _flags: u32,
     units: &[u16],
+    _track_used_default: bool,
 ) -> Option<(Vec<u8>, bool)> {
     let mut used_default = false;
     let bytes = units
@@ -10078,6 +10091,22 @@ fn read_conversion_wide<M: CoredllGuestMemory>(
     } else {
         Some(units)
     }
+}
+
+fn read_wide_char_to_multi_byte_input<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    ptr: u32,
+    len: i32,
+) -> Option<Vec<u16>> {
+    let mut units = read_conversion_wide(kernel, memory, thread_id, ptr, len)?;
+    if len >= 0 {
+        if let Some(nul_index) = units.iter().position(|unit| *unit == 0) {
+            units.truncate(nul_index + 1);
+        }
+    }
+    Some(units)
 }
 
 fn write_conversion_wide_result<M: CoredllGuestMemory>(
@@ -10893,6 +10922,12 @@ fn create_file_w_raw<M: CoredllGuestMemory>(
     };
     match kernel.create_file_w(&path, raw_arg(args, 1), raw_arg(args, 4)) {
         Ok(handle) => handle,
+        Err(Error::AccessDenied(_)) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+            u32::MAX
+        }
         Err(_) => {
             kernel
                 .threads
@@ -11345,27 +11380,26 @@ fn find_first_change_notification_w_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
         return u32::MAX;
     };
-    let Ok(data) = kernel.file_attributes_w(&path) else {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_PATH_NOT_FOUND);
-        return u32::MAX;
-    };
-    if data.attributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_PATH_NOT_FOUND);
-        return u32::MAX;
-    }
     match kernel.find_first_change_notification_w(&path, recursive != 0, notify_filter) {
         Ok(handle) => {
             kernel.threads.set_last_error(thread_id, 0);
             handle
         }
+        Err(Error::InvalidArgument(_)) => {
+            kernel.threads.set_last_error(
+                thread_id,
+                if notify_filter & !FILE_NOTIFY_CHANGE_SUPPORTED_MASK != 0 {
+                    ERROR_INVALID_PARAMETER
+                } else {
+                    ERROR_PATH_NOT_FOUND
+                },
+            );
+            u32::MAX
+        }
         Err(_) => {
             kernel
                 .threads
-                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                .set_last_error(thread_id, ERROR_PATH_NOT_FOUND);
             u32::MAX
         }
     }
@@ -13480,6 +13514,24 @@ fn path_mutating_bool_raw<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             true
         }
+        Err(Error::AccessDenied(_)) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+            false
+        }
+        Err(Error::AlreadyExists(_)) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_ALREADY_EXISTS);
+            false
+        }
+        Err(Error::NotSameDevice(_)) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_SAME_DEVICE);
+            false
+        }
         Err(_) => {
             kernel
                 .threads
@@ -13513,6 +13565,24 @@ fn move_file_w_raw<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             true
         }
+        Err(Error::AccessDenied(_)) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+            false
+        }
+        Err(Error::AlreadyExists(_)) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_ALREADY_EXISTS);
+            false
+        }
+        Err(Error::NotSameDevice(_)) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_NOT_SAME_DEVICE);
+            false
+        }
         Err(_) => {
             kernel
                 .threads
@@ -13545,6 +13615,12 @@ fn copy_file_w_raw<M: CoredllGuestMemory>(
             kernel.threads.set_last_error(thread_id, 0);
             true
         }
+        Err(Error::AccessDenied(_)) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+            false
+        }
         Err(_) => {
             kernel
                 .threads
@@ -13571,6 +13647,12 @@ fn set_file_attributes_w_raw<M: CoredllGuestMemory>(
         Ok(()) => {
             kernel.threads.set_last_error(thread_id, 0);
             true
+        }
+        Err(Error::AccessDenied(_)) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_ACCESS_DENIED);
+            false
         }
         Err(_) => {
             kernel
@@ -19467,6 +19549,8 @@ const WAVE_FORMAT_QUERY: u32 = 0x0001;
 const WHDR_DONE: u32 = 0x0000_0001;
 const WHDR_PREPARED: u32 = 0x0000_0002;
 const WHDR_INQUEUE: u32 = 0x0000_0010;
+const CALLBACK_TYPEMASK: u32 = 0x0007_0000;
+const CALLBACK_FUNCTION: u32 = 0x0003_0000;
 const CALLBACK_EVENT: u32 = 0x0005_0000;
 const TIME_MS: u32 = 0x0001;
 const TIME_SAMPLES: u32 = 0x0002;
@@ -19497,6 +19581,7 @@ fn wave_out_open_raw<M: CoredllGuestMemory>(
     let device_id = raw_arg(args, 1);
     let format_ptr = raw_arg(args, 2);
     let callback = raw_arg(args, 3);
+    let callback_instance = raw_arg(args, 4);
     let open_flags = raw_arg(args, 5);
     if device_id != 0 && device_id != WAVE_MAPPER {
         return MMSYSERR_BADDEVICEID;
@@ -19515,10 +19600,22 @@ fn wave_out_open_raw<M: CoredllGuestMemory>(
         Ok(handle) => handle,
         Err(status) => return status,
     };
-    if open_flags & CALLBACK_EVENT != 0 {
-        kernel
-            .audio
-            .set_wave_out_callback(handle, Some(WaveOutCallback::Event(callback)));
+    match open_flags & CALLBACK_TYPEMASK {
+        CALLBACK_FUNCTION => {
+            kernel.audio.set_wave_out_callback(
+                handle,
+                Some(WaveOutCallback::Function {
+                    callback,
+                    instance: callback_instance,
+                }),
+            );
+        }
+        CALLBACK_EVENT => {
+            kernel
+                .audio
+                .set_wave_out_callback(handle, Some(WaveOutCallback::Event(callback)));
+        }
+        _ => {}
     }
     if !write_guest_u32(kernel, memory, thread_id, handle_ptr, handle) {
         return MMSYSERR_INVALHANDLE;
@@ -20162,7 +20259,7 @@ fn sh_notification_add_i_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
-    let Some(mut data) = read_shell_notification_data(
+    let Some(data) = read_shell_notification_data(
         kernel,
         memory,
         thread_id,
@@ -20175,13 +20272,14 @@ fn sh_notification_add_i_raw<M: CoredllGuestMemory>(
     if !kernel.gwe.is_window(data.hwnd_sink) {
         return ERROR_INVALID_PARAMETER;
     }
-    // args[1] = IShellNotificationCallback* — COM interface pointer for vtable callbacks.
-    data.callback_ptr = raw_arg(args, 1);
-    notification_result_to_error(
-        kernel
-            .shell
-            .add_notification(data, kernel.timers.tick_count()),
-    )
+    let title_present = raw_arg(args, 2) != 0;
+    let html_present = raw_arg(args, 3) != 0;
+    notification_result_to_error(kernel.shell.add_notification_with_content_presence(
+        title_present,
+        html_present,
+        data,
+        kernel.timers.tick_count(),
+    ))
 }
 
 fn sh_notification_update_i_raw<M: CoredllGuestMemory>(
@@ -20237,17 +20335,14 @@ fn sh_notification_get_data_i_raw<M: CoredllGuestMemory>(
         return ERROR_INVALID_PARAMETER;
     }
     if raw_arg(args, 5) != 0 {
-        let capacity = wide_capacity_from_cb(raw_arg(args, 6));
-        if capacity == 0
-            || !write_guest_wide_fixed(
-                kernel,
-                memory,
-                thread_id,
-                raw_arg(args, 5),
-                &record.title,
-                capacity,
-            )
-        {
+        if !write_guest_wide_fixed(
+            kernel,
+            memory,
+            thread_id,
+            raw_arg(args, 5),
+            &record.title,
+            MAX_PATH_CHARS,
+        ) {
             return ERROR_INVALID_PARAMETER;
         }
     }
@@ -20671,10 +20766,8 @@ fn sh_get_file_info_w_raw<M: CoredllGuestMemory>(
     }
 
     kernel.threads.set_last_error(thread_id, 0);
-    if flags & SHGFI_SYSICONINDEX != 0 {
+    if flags & (SHGFI_ICON | SHGFI_SYSICONINDEX) != 0 {
         SHELL_SYSTEM_IMAGE_LIST_HANDLE
-    } else if flags & SHGFI_ICON != 0 {
-        icon.handle
     } else {
         1
     }
@@ -25872,29 +25965,28 @@ fn render_image_list_bitmap_framebuffer<M: CoredllGuestMemory>(
 
     // Overlay is drawn on top using its own image properties (not affected by ILD_MASK).
     if draw_flags & ILD_MASK == 0 {
-        let overlay_index = draw.overlay_image.or_else(|| {
-            let overlay = (draw.flags & 0x0000_0f00) >> 8;
-            if overlay == 0 {
-                None
-            } else {
-                list.overlays.get(&overlay).copied()
-            }
-        });
-        if let Some(overlay_index) = overlay_index
-            && let Some(overlay) = list.images.get(overlay_index as usize)
+        let overlay_record = image_list_overlay_record(list, draw);
+        if let Some(overlay_record) = overlay_record
+            && let Some(overlay) = list.images.get(overlay_record.image_index as usize)
         {
-            let overlay = overlay.clone();
+            let mut overlay = overlay.clone();
+            overlay.source_x = overlay.source_x.saturating_add(overlay_record.x);
+            overlay.source_y = overlay.source_y.saturating_add(overlay_record.y);
+            if overlay_record.flags & ILD_IMAGE != 0 {
+                overlay.mask = 0;
+                overlay.transparent_color = None;
+            }
             let _ = render_image_list_bitmap_entry_framebuffer(
                 kernel,
                 memory,
                 framebuffer,
                 draw.hdc,
-                draw.x,
-                draw.y,
-                width,
-                height,
-                src_width,
-                src_height,
+                draw.x.saturating_add(overlay_record.x),
+                draw.y.saturating_add(overlay_record.y),
+                overlay_record.width,
+                overlay_record.height,
+                overlay_record.width.max(1),
+                overlay_record.height.max(1),
                 &overlay,
                 None, // overlay not blended
             );
@@ -25979,21 +26071,29 @@ fn render_image_list_bitmap_hdc<M: CoredllGuestMemory>(
     }
 
     if draw_flags & ILD_MASK == 0 {
-        let overlay_index = draw.overlay_image.or_else(|| {
-            let overlay = (draw.flags & 0x0000_0f00) >> 8;
-            if overlay == 0 {
-                None
-            } else {
-                list.overlays.get(&overlay).copied()
-            }
-        });
-        if let Some(overlay_index) = overlay_index
-            && let Some(overlay) = list.images.get(overlay_index as usize)
+        let overlay_record = image_list_overlay_record(list, draw);
+        if let Some(overlay_record) = overlay_record
+            && let Some(overlay) = list.images.get(overlay_record.image_index as usize)
         {
-            let overlay = overlay.clone();
+            let mut overlay = overlay.clone();
+            overlay.source_x = overlay.source_x.saturating_add(overlay_record.x);
+            overlay.source_y = overlay.source_y.saturating_add(overlay_record.y);
+            if overlay_record.flags & ILD_IMAGE != 0 {
+                overlay.mask = 0;
+                overlay.transparent_color = None;
+            }
             let _ = render_image_list_bitmap_entry_hdc(
-                kernel, memory, draw.hdc, draw.x, draw.y, width, height, src_width, src_height,
-                &overlay, None, // overlay not blended
+                kernel,
+                memory,
+                draw.hdc,
+                draw.x.saturating_add(overlay_record.x),
+                draw.y.saturating_add(overlay_record.y),
+                overlay_record.width,
+                overlay_record.height,
+                overlay_record.width.max(1),
+                overlay_record.height.max(1),
+                &overlay,
+                None, // overlay not blended
             );
         }
     }
@@ -26376,14 +26476,33 @@ fn image_list_get_drag_image_raw<M: CoredllGuestMemory>(
     thread_id: u32,
     args: &[u32],
 ) -> u32 {
-    let Some(drag) = kernel.resources.image_list_drag() else {
-        kernel
-            .threads
-            .set_last_error(thread_id, ERROR_INVALID_HANDLE);
-        return 0;
-    };
     let point_ptr = raw_arg(args, 0);
     let hotspot_ptr = raw_arg(args, 1);
+    let Some(drag) = kernel.resources.image_list_drag() else {
+        let (x, y) = kernel.resources.image_list_drag_position();
+        let (hotspot_x, hotspot_y) = kernel.resources.image_list_drag_hotspot();
+        if point_ptr != 0
+            && !write_guest_point(kernel, memory, thread_id, point_ptr, Point { x, y })
+        {
+            return 0;
+        }
+        if hotspot_ptr != 0
+            && !write_guest_point(
+                kernel,
+                memory,
+                thread_id,
+                hotspot_ptr,
+                Point {
+                    x: hotspot_x,
+                    y: hotspot_y,
+                },
+            )
+        {
+            return 0;
+        }
+        kernel.threads.set_last_error(thread_id, 0);
+        return 0;
+    };
     if point_ptr != 0
         && !write_guest_point(
             kernel,

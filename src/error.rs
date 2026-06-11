@@ -26,10 +26,16 @@ pub enum Error {
         #[source]
         source: std::io::Error,
     },
+    #[error("access denied: {0}")]
+    AccessDenied(String),
+    #[error("already exists: {0}")]
+    AlreadyExists(String),
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
     #[error("CE object handle 0x{0:08x} is not valid")]
     InvalidHandle(u32),
+    #[error("not same device: {0}")]
+    NotSameDevice(String),
     #[error("CE registry key not found: {0}")]
     MissingRegistryKey(String),
     #[error("CE registry value not found: {key}\\{value}")]

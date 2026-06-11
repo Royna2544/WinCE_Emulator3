@@ -19,9 +19,9 @@ use std::collections::BTreeMap;
 
 use crate::ce::devices::DeviceIoControlResult;
 
-pub const IOCTL_NAND_UPD_WRITE_UUID_BY_SECTORNUM: u32 = 0xa000_002c;
-pub const IOCTL_NAND_UPD_READ_UUID: u32 = 0xa000_00cc;
-pub const IOCTL_NAND_UPD_READ_UUID_BY_SECTORNUM: u32 = 0xa000_00d0;
+pub const IOCTL_NAND_UPD_WRITE_UUID_BY_SECTORNUM: u32 = 0xa001_002c;
+pub const IOCTL_NAND_UPD_READ_UUID: u32 = 0xa001_00cc;
+pub const IOCTL_NAND_UPD_READ_UUID_BY_SECTORNUM: u32 = 0xa001_00d0;
 pub const IOCTL_MICOM_RESET: u32 = 0x0023_d021;
 pub const IOCTL_TOUCHPAD_LOCK: u32 = 0x0022_1011;
 pub const IOCTL_TOUCHPAD_UNLOCK: u32 = 0x0022_1015;

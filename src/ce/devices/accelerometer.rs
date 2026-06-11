@@ -133,6 +133,15 @@ impl Accelerometer {
         }
     }
 
+    pub fn set_axes(&mut self, x: i16, y: i16, z: i16) {
+        self.x = x;
+        self.y = y;
+        self.z = z;
+        self.registers[0x02..0x04].copy_from_slice(&x.to_le_bytes());
+        self.registers[0x04..0x06].copy_from_slice(&y.to_le_bytes());
+        self.registers[0x06..0x08].copy_from_slice(&z.to_le_bytes());
+    }
+
     pub fn device_io_control(
         &mut self,
         ioctl_code: u32,

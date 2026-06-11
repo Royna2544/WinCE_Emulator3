@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+pub type ShellNotificationKey = ([u8; 16], u32);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotifyIconOp {
     Add,
@@ -45,7 +47,9 @@ pub struct NotifyIconRecord {
 pub struct ShellSystem {
     notify_icons: BTreeMap<(u32, u32), NotifyIconRecord>,
     destroyed_notify_icons: Vec<u32>,
-    notifications: BTreeMap<([u8; 16], u32), ShellNotificationRecord>,
+    notifications: BTreeMap<ShellNotificationKey, ShellNotificationRecord>,
+    inform_notifications: Vec<ShellNotificationKey>,
+    iconic_notifications: Vec<ShellNotificationKey>,
     notification_callbacks: Vec<ShellNotificationCallbackRecord>,
     change_notifications: BTreeMap<u32, ShellChangeNotifyRegistration>,
     freed_file_notifications: Vec<u32>,
@@ -204,15 +208,30 @@ impl ShellSystem {
         data: ShellNotificationData,
         now_ms: u32,
     ) -> NotificationResult {
-        if !is_notification_priority_valid(data.priority)
-            || data.title.is_empty() && data.html.is_empty()
-        {
+        self.add_notification_with_content_presence(
+            !data.title.is_empty(),
+            !data.html.is_empty(),
+            data,
+            now_ms,
+        )
+    }
+
+    pub fn add_notification_with_content_presence(
+        &mut self,
+        title_present: bool,
+        html_present: bool,
+        data: ShellNotificationData,
+        now_ms: u32,
+    ) -> NotificationResult {
+        if !is_notification_priority_valid(data.priority) || !title_present && !html_present {
             return NotificationResult::InvalidParameter;
         }
-        if data.priority == SHNP_INFORM && data.html.is_empty() {
+        if data.priority == SHNP_INFORM && !html_present {
             return NotificationResult::InvalidParameter;
         }
         let key = (data.clsid, data.id);
+        self.remove_notification_from_priority_lists(key);
+        self.add_notification_to_priority_list(key, data.priority);
         self.notifications
             .insert(key, ShellNotificationRecord::from_data(data, now_ms));
         NotificationResult::Success
@@ -230,15 +249,26 @@ impl ShellSystem {
         if update_mask & SHNUM_PRIORITY != 0 && !is_notification_priority_valid(data.priority) {
             return NotificationResult::InvalidParameter;
         }
-        let Some(record) = self.notifications.get_mut(&(data.clsid, data.id)) else {
+        let key = (data.clsid, data.id);
+        let Some(old_priority) = self.notifications.get(&key).map(|record| record.priority) else {
+            return NotificationResult::InvalidData;
+        };
+        let new_priority = data.priority;
+        let Some(record) = self.notifications.get_mut(&key) else {
             return NotificationResult::InvalidData;
         };
         record.update(update_mask, data, now_ms);
+        if update_mask & SHNUM_PRIORITY != 0 && old_priority != new_priority {
+            self.remove_notification_from_priority_lists(key);
+            self.add_notification_to_priority_list(key, new_priority);
+        }
         NotificationResult::Success
     }
 
     pub fn remove_notification(&mut self, clsid: [u8; 16], id: u32) -> NotificationResult {
         if self.notifications.remove(&(clsid, id)).is_some() {
+            self.remove_notification_from_priority_lists((clsid, id));
+            self.remove_notification_callbacks_for(clsid, id);
             NotificationResult::Success
         } else {
             NotificationResult::InvalidData
@@ -251,6 +281,18 @@ impl ShellSystem {
 
     pub fn notifications(&self) -> impl Iterator<Item = &ShellNotificationRecord> {
         self.notifications.values()
+    }
+
+    pub fn notification_priority_keys(
+        &self,
+        priority: u32,
+    ) -> impl Iterator<Item = ShellNotificationKey> + '_ {
+        let keys = if priority == SHNP_ICONIC {
+            &self.iconic_notifications
+        } else {
+            &self.inform_notifications
+        };
+        keys.iter().copied()
     }
 
     pub fn record_notification_callback(&mut self, record: ShellNotificationCallbackRecord) {
@@ -284,7 +326,12 @@ impl ShellSystem {
             .collect::<Vec<_>>();
         expired
             .into_iter()
-            .filter_map(|key| self.notifications.remove(&key))
+            .filter_map(|key| {
+                let record = self.notifications.remove(&key)?;
+                self.remove_notification_from_priority_lists(key);
+                self.remove_notification_callbacks_for(key.0, key.1);
+                Some(record)
+            })
             .collect()
     }
 
@@ -300,15 +347,22 @@ impl ShellSystem {
                 self.record_notify_icon_destroy(record);
             }
         }
-        let before_notifications = self.notifications.len();
-        self.notifications
-            .retain(|(_clsid, _id), record| record.hwnd_sink != hwnd);
+        let removed_notifications = self
+            .notifications
+            .iter()
+            .filter_map(|(key, record)| (record.hwnd_sink == hwnd).then_some(*key))
+            .collect::<Vec<_>>();
+        for (clsid, id) in &removed_notifications {
+            self.notifications.remove(&(*clsid, *id));
+            self.remove_notification_from_priority_lists((*clsid, *id));
+            self.remove_notification_callbacks_for(*clsid, *id);
+        }
         let before_change_notifications = self.change_notifications.len();
         self.change_notifications
             .retain(|_registered_hwnd, record| record.hwnd != hwnd);
         ShellWindowCleanup {
             notify_icons_removed,
-            notifications_removed: before_notifications.saturating_sub(self.notifications.len()),
+            notifications_removed: removed_notifications.len(),
             change_notifications_removed: before_change_notifications
                 .saturating_sub(self.change_notifications.len()),
         }
@@ -329,6 +383,24 @@ impl ShellSystem {
         if record.destroy_icon && record.icon != 0 {
             self.destroyed_notify_icons.push(record.icon);
         }
+    }
+
+    fn remove_notification_callbacks_for(&mut self, clsid: [u8; 16], id: u32) {
+        self.notification_callbacks
+            .retain(|record| record.clsid != clsid || record.id != id);
+    }
+
+    fn add_notification_to_priority_list(&mut self, key: ShellNotificationKey, priority: u32) {
+        if priority == SHNP_ICONIC {
+            self.iconic_notifications.push(key);
+        } else {
+            self.inform_notifications.push(key);
+        }
+    }
+
+    fn remove_notification_from_priority_lists(&mut self, key: ShellNotificationKey) {
+        self.iconic_notifications.retain(|listed| *listed != key);
+        self.inform_notifications.retain(|listed| *listed != key);
     }
 }
 

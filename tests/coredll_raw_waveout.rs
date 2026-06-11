@@ -1,7 +1,10 @@
 use wince_emulation_v3::{
     Result,
     ce::{
-        audio::{HostAudioSink, MMSYSERR_BADDEVICEID, MMSYSERR_INVALHANDLE, MMSYSERR_NOERROR},
+        audio::{
+            HostAudioSink, MMSYSERR_BADDEVICEID, MMSYSERR_INVALHANDLE, MMSYSERR_NOERROR,
+            WaveOutCallback,
+        },
         coredll::{CoredllDispatch, CoredllExportTable, CoredllGuestMemory, CoredllValue},
         coredll_ordinals::{
             ORD_WAVE_OUT_BREAK_LOOP, ORD_WAVE_OUT_CLOSE, ORD_WAVE_OUT_GET_DEV_CAPS,
@@ -227,6 +230,72 @@ fn coredll_raw_waveout_ordinals_use_unplugged_audio_adapter() -> Result<()> {
         }
     ));
 
+    Ok(())
+}
+
+#[test]
+fn coredll_raw_waveout_function_callback_is_not_event_handle() -> Result<()> {
+    const CALLBACK_FUNCTION: u32 = 0x0003_0000;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 12;
+    let handle_ptr = 0x1_5000;
+    let format_ptr = 0x1_5100;
+    let header_ptr = 0x1_5200;
+    let callback_ptr = 0x1d_6608;
+
+    memory.map_words(handle_ptr, 1);
+    memory.write_wave_format_pcm(format_ptr, 2, 44_100);
+    memory.map_words(header_ptr, 8);
+    memory.write_word(header_ptr, 0x2_0000);
+    memory.write_word(header_ptr + 4, 2048);
+    memory.write_word(header_ptr + 16, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAVE_OUT_OPEN,
+            [
+                handle_ptr,
+                u32::MAX,
+                format_ptr,
+                callback_ptr,
+                0,
+                CALLBACK_FUNCTION,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::MmResult(MMSYSERR_NOERROR),
+            ..
+        }
+    ));
+    let wave = memory.read_u32(handle_ptr)?;
+    assert_eq!(
+        kernel.audio.output(wave).unwrap().callback,
+        Some(WaveOutCallback::Function {
+            callback: callback_ptr,
+            instance: 0,
+        })
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_WAVE_OUT_WRITE,
+            [wave, header_ptr, 32],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::MmResult(MMSYSERR_NOERROR),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(header_ptr + 16)? & 0x10, 0x10);
     Ok(())
 }
 

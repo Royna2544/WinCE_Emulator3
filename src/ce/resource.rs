@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ce::gwe::{Rect, canonicalize_region_rects};
 
+const ILC_MASK: u32 = 0x0001;
 const STOCK_OBJECT_BASE: u32 = 0x000b_5000;
 const WHITE_BRUSH: u32 = 0;
 const NULL_BRUSH: u32 = 5;
@@ -240,9 +241,19 @@ pub struct ImageListObject {
     pub grow: i32,
     pub bk_color: u32,
     pub images: Vec<ImageListImage>,
-    pub overlays: BTreeMap<u32, i32>,
+    pub overlays: BTreeMap<u32, ImageListOverlay>,
     pub last_draw: Option<ImageListDraw>,
     pub last_dither_copy: Option<ImageListDitherCopy>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ImageListOverlay {
+    pub image_index: i32,
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    pub flags: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -269,14 +280,6 @@ fn image_list_bitmap_strip_count(bitmap_width: i32, image_width: i32) -> i32 {
 
 fn remove_image_list_image_at(list: &mut ImageListObject, index: usize) {
     list.images.remove(index);
-    list.overlays
-        .retain(|_, overlay_index| *overlay_index as usize != index);
-    for overlay_index in list.overlays.values_mut() {
-        let overlay_index_usize = *overlay_index as usize;
-        if overlay_index_usize > index {
-            *overlay_index -= 1;
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -444,6 +447,11 @@ pub struct ResourceSystem {
     last_popup_tracking: Option<PopupMenuTracking>,
     popup_notifications: Vec<PopupMenuNotification>,
     image_list_drag: Option<ImageListDragState>,
+    image_list_drag_x: i32,
+    image_list_drag_y: i32,
+    image_list_drag_hotspot_x: i32,
+    image_list_drag_hotspot_y: i32,
+    image_list_drag_lock_hwnd: u32,
 }
 
 impl Default for ResourceSystem {
@@ -472,6 +480,11 @@ impl Default for ResourceSystem {
             last_popup_tracking: None,
             popup_notifications: Vec::new(),
             image_list_drag: None,
+            image_list_drag_x: 0,
+            image_list_drag_y: 0,
+            image_list_drag_hotspot_x: 0,
+            image_list_drag_hotspot_y: 0,
+            image_list_drag_lock_hwnd: 0,
         }
     }
 }
@@ -1174,7 +1187,6 @@ impl ResourceSystem {
         initial: i32,
         grow: i32,
     ) -> Option<u32> {
-        const ILC_MASK: u32 = 0x0001;
         const ILC_COLORMASK: u32 = 0x00fe;
         const ILC_SHARED: u32 = 0x0100;
         const ILC_PALETTE: u32 = 0x0800;
@@ -1238,8 +1250,13 @@ impl ResourceSystem {
             return Some(false);
         }
         let list = self.image_lists.get_mut(&handle)?;
+        if list.width == width && list.height == height {
+            return Some(false);
+        }
         list.width = width;
         list.height = height;
+        list.images.clear();
+        list.overlays.clear();
         Some(true)
     }
 
@@ -1435,70 +1452,29 @@ impl ResourceSystem {
         flags: u32,
     ) -> Option<bool> {
         const ILCF_SWAP: u32 = 0x0000_0001;
-        if flags & !ILCF_SWAP != 0 || src_index < 0 {
+        if flags & !ILCF_SWAP != 0 || dst_index < 0 || src_index < 0 {
             return Some(false);
         }
-        let src_index = src_index as usize;
-        let swap = flags & ILCF_SWAP != 0;
-        if swap {
-            if dst_index < 0 {
-                return Some(false);
-            }
-            let dst_index = dst_index as usize;
-            if dst_handle == src_handle {
-                let list = self.image_lists.get_mut(&dst_handle)?;
-                if dst_index >= list.images.len() || src_index >= list.images.len() {
-                    return Some(false);
-                }
-                list.images.swap(dst_index, src_index);
-                for overlay_index in list.overlays.values_mut() {
-                    let overlay_index_usize = *overlay_index as usize;
-                    if overlay_index_usize == dst_index {
-                        *overlay_index = src_index as i32;
-                    } else if overlay_index_usize == src_index {
-                        *overlay_index = dst_index as i32;
-                    }
-                }
-                return Some(true);
-            }
-            let Some(src_list) = self.image_lists.get(&src_handle) else {
-                return None;
-            };
-            let Some(src_image) = src_list.images.get(src_index).cloned() else {
-                return Some(false);
-            };
-            let Some(dst_list) = self.image_lists.get(&dst_handle) else {
-                return None;
-            };
-            let Some(dst_image) = dst_list.images.get(dst_index).cloned() else {
-                return Some(false);
-            };
-            self.image_lists.get_mut(&dst_handle)?.images[dst_index] = src_image;
-            self.image_lists.get_mut(&src_handle)?.images[src_index] = dst_image;
-            return Some(true);
-        }
-        let Some(src_list) = self.image_lists.get(&src_handle) else {
+        if !self.image_lists.contains_key(&dst_handle)
+            || !self.image_lists.contains_key(&src_handle)
+        {
             return None;
-        };
-        let Some(image) = src_list.images.get(src_index).cloned() else {
+        }
+        if dst_handle != src_handle {
             return Some(false);
-        };
-        if dst_handle == src_handle && dst_index >= 0 && dst_index as usize == src_index {
+        }
+        let list = self.image_lists.get_mut(&dst_handle)?;
+        let dst_index = dst_index as usize;
+        let src_index = src_index as usize;
+        if dst_index >= list.images.len() || src_index >= list.images.len() {
+            return Some(false);
+        }
+        if flags & ILCF_SWAP != 0 {
+            list.images.swap(dst_index, src_index);
             return Some(true);
         }
-        let dst = self.image_lists.get_mut(&dst_handle)?;
-        if dst_index < 0 || dst_index as usize >= dst.images.len() {
-            dst.images.push(image);
-        } else {
-            dst.images[dst_index as usize] = image;
-        }
-        let Some(src) = self.image_lists.get_mut(&src_handle) else {
-            return Some(false);
-        };
-        if src_index >= src.images.len() {
-            return Some(false);
-        }
-        remove_image_list_image_at(src, src_index);
+        let image = list.images[src_index].clone();
+        list.images[dst_index] = image;
         Some(true)
     }
 
@@ -1555,7 +1531,6 @@ impl ResourceSystem {
             );
         } else {
             list.images.truncate(count);
-            list.overlays.retain(|_, index| (*index as usize) < count);
         }
         Some(true)
     }
@@ -1591,7 +1566,7 @@ impl ResourceSystem {
             return Some(base_icon);
         }
         Some(match list.overlays.get(&overlay) {
-            Some(overlay_index) => overlay_icon_handle(base_icon, *overlay_index),
+            Some(overlay) => overlay_icon_handle(base_icon, overlay.image_index),
             None => base_icon,
         })
     }
@@ -1630,10 +1605,45 @@ impl ResourceSystem {
             return Some(false);
         }
         let list = self.image_lists.get_mut(&handle)?;
+        if list.flags & ILC_MASK == 0 {
+            return Some(false);
+        }
         if image_index as usize >= list.images.len() {
             return Some(false);
         }
-        list.overlays.insert(overlay as u32, image_index);
+        list.overlays.insert(
+            overlay as u32,
+            ImageListOverlay {
+                image_index,
+                x: 0,
+                y: 0,
+                width: list.width,
+                height: list.height,
+                flags: 0,
+            },
+        );
+        Some(true)
+    }
+
+    pub fn set_image_list_overlay_bounds(
+        &mut self,
+        handle: u32,
+        overlay: i32,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        flags: u32,
+    ) -> Option<bool> {
+        let list = self.image_lists.get_mut(&handle)?;
+        let Some(record) = list.overlays.get_mut(&(overlay as u32)) else {
+            return Some(false);
+        };
+        record.x = x;
+        record.y = y;
+        record.width = width;
+        record.height = height;
+        record.flags = flags;
         Some(true)
     }
 
@@ -1647,7 +1657,7 @@ impl ResourceSystem {
         draw.overlay_image = if overlay == 0 {
             None
         } else {
-            list.overlays.get(&overlay).copied()
+            list.overlays.get(&overlay).map(|overlay| overlay.image_index)
         };
         list.last_draw = Some(draw);
         Some(true)
@@ -1663,14 +1673,16 @@ impl ResourceSystem {
         if !self.image_list_has_index(handle, index) {
             return Some(false);
         }
+        self.image_list_drag_hotspot_x = hotspot_x;
+        self.image_list_drag_hotspot_y = hotspot_y;
         self.image_list_drag = Some(ImageListDragState {
             image_list: handle,
             index,
             hotspot_x,
             hotspot_y,
-            lock_hwnd: 0,
-            x: 0,
-            y: 0,
+            lock_hwnd: self.image_list_drag_lock_hwnd,
+            x: self.image_list_drag_x,
+            y: self.image_list_drag_y,
             visible: true,
         });
         Some(true)
@@ -1683,12 +1695,14 @@ impl ResourceSystem {
         hotspot_x: i32,
         hotspot_y: i32,
     ) -> Option<bool> {
+        self.image_lists.get(&handle)?;
+        if self.image_list_drag.is_none() {
+            return Some(true);
+        }
         if !self.image_list_has_index(handle, index) {
             return Some(false);
         }
-        let Some(drag) = self.image_list_drag.as_mut() else {
-            return Some(false);
-        };
+        let drag = self.image_list_drag.as_mut()?;
         drag.image_list = handle;
         drag.index = index;
         drag.hotspot_x = hotspot_x;
@@ -1697,32 +1711,40 @@ impl ResourceSystem {
     }
 
     pub fn image_list_drag_enter(&mut self, hwnd: u32, x: i32, y: i32) -> bool {
-        let Some(drag) = self.image_list_drag.as_mut() else {
+        if self.image_list_drag_lock_hwnd != 0 {
             return false;
-        };
-        drag.lock_hwnd = hwnd;
-        drag.x = x;
-        drag.y = y;
+        }
+        self.image_list_drag_lock_hwnd = hwnd;
+        self.image_list_drag_x = x;
+        self.image_list_drag_y = y;
+        if let Some(drag) = self.image_list_drag.as_mut() {
+            drag.lock_hwnd = hwnd;
+            drag.x = x;
+            drag.y = y;
+        }
         true
     }
 
     pub fn image_list_drag_move(&mut self, x: i32, y: i32) -> bool {
-        let Some(drag) = self.image_list_drag.as_mut() else {
-            return false;
-        };
-        drag.x = x;
-        drag.y = y;
+        if let Some(drag) = self.image_list_drag.as_mut() {
+            if drag.visible {
+                drag.x = x;
+                drag.y = y;
+                self.image_list_drag_x = x;
+                self.image_list_drag_y = y;
+            }
+        }
         true
     }
 
     pub fn image_list_drag_leave(&mut self, hwnd: u32) -> bool {
-        let Some(drag) = self.image_list_drag.as_mut() else {
-            return false;
-        };
-        if hwnd != 0 && drag.lock_hwnd != 0 && drag.lock_hwnd != hwnd {
+        if self.image_list_drag_lock_hwnd != hwnd {
             return false;
         }
-        drag.lock_hwnd = 0;
+        self.image_list_drag_lock_hwnd = 0;
+        if let Some(drag) = self.image_list_drag.as_mut() {
+            drag.lock_hwnd = 0;
+        }
         true
     }
 
@@ -1740,6 +1762,17 @@ impl ResourceSystem {
 
     pub fn image_list_drag(&self) -> Option<ImageListDragState> {
         self.image_list_drag
+    }
+
+    pub fn image_list_drag_position(&self) -> (i32, i32) {
+        (self.image_list_drag_x, self.image_list_drag_y)
+    }
+
+    pub fn image_list_drag_hotspot(&self) -> (i32, i32) {
+        (
+            self.image_list_drag_hotspot_x,
+            self.image_list_drag_hotspot_y,
+        )
     }
 
     fn image_list_has_index(&self, handle: u32, index: i32) -> bool {

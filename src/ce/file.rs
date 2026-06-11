@@ -59,6 +59,19 @@ pub struct FileMount {
     pub hidden: bool,
 }
 
+#[derive(Debug, Clone)]
+struct GuestVolumePath {
+    normalized_path: String,
+    volume_key: String,
+    is_mount_root: bool,
+}
+
+impl GuestVolumePath {
+    fn is_mount_root(&self) -> bool {
+        self.is_mount_root
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ObjectStore {
     pub total_bytes: u64,
@@ -498,7 +511,7 @@ impl HostFileSystem {
     ) -> Result<u32> {
         let mount = self.mount_for_guest_path(guest_path);
         if desired_access & GENERIC_WRITE != 0 && mount.is_some_and(|mount| !mount.writable) {
-            return Err(Error::InvalidArgument(format!(
+            return Err(Error::AccessDenied(format!(
                 "guest mount is read-only: {guest_path}"
             )));
         }
@@ -659,7 +672,7 @@ impl HostFileSystem {
             .mount_for_guest_path(guest_path)
             .is_some_and(|mount| !mount.writable)
         {
-            return Err(Error::InvalidArgument(format!(
+            return Err(Error::AccessDenied(format!(
                 "guest mount is read-only: {guest_path}"
             )));
         }
@@ -675,7 +688,7 @@ impl HostFileSystem {
             .mount_for_guest_path(guest_path)
             .is_some_and(|mount| !mount.writable)
         {
-            return Err(Error::InvalidArgument(format!(
+            return Err(Error::AccessDenied(format!(
                 "guest mount is read-only: {guest_path}"
             )));
         }
@@ -691,7 +704,7 @@ impl HostFileSystem {
             .mount_for_guest_path(guest_path)
             .is_some_and(|mount| !mount.writable)
         {
-            return Err(Error::InvalidArgument(format!(
+            return Err(Error::AccessDenied(format!(
                 "guest mount is read-only: {guest_path}"
             )));
         }
@@ -703,24 +716,62 @@ impl HostFileSystem {
     }
 
     pub fn move_file_w(&self, existing_path: &str, new_path: &str) -> Result<()> {
+        let existing_volume = self.volume_for_guest_path(existing_path);
+        let new_volume = self.volume_for_guest_path(new_path);
+        if existing_volume.is_mount_root() {
+            return Err(Error::AccessDenied(format!(
+                "cannot rename guest mount point: {existing_path}"
+            )));
+        }
+        if new_volume.is_mount_root() {
+            return Err(Error::AlreadyExists(format!(
+                "cannot rename over guest mount point: {new_path}"
+            )));
+        }
         if self
-            .mount_for_guest_path(existing_path)
+            .mount_for_normalized_path(&existing_volume.normalized_path)
             .is_some_and(|mount| !mount.writable)
             || self
-                .mount_for_guest_path(new_path)
+                .mount_for_normalized_path(&new_volume.normalized_path)
                 .is_some_and(|mount| !mount.writable)
         {
-            return Err(Error::InvalidArgument(format!(
+            return Err(Error::AccessDenied(format!(
                 "guest mount is read-only: {existing_path} -> {new_path}"
             )));
         }
         let existing = self.translate_guest_path(existing_path)?;
         let new = self.translate_guest_path(new_path)?;
+        let existing_metadata = existing.metadata().map_err(|source| Error::Io {
+            path: existing.clone(),
+            source,
+        })?;
+        let cross_volume = existing_volume.volume_key != new_volume.volume_key;
+        if cross_volume && existing_metadata.is_dir() {
+            return Err(Error::NotSameDevice(format!(
+                "cannot move directory across guest volumes: {existing_path} -> {new_path}"
+            )));
+        }
         if let Some(parent) = new.parent() {
             fs::create_dir_all(parent).map_err(|source| Error::Io {
                 path: parent.to_path_buf(),
                 source,
             })?;
+        }
+        if cross_volume {
+            if new.exists() {
+                return Err(Error::AlreadyExists(format!(
+                    "destination exists: {new_path}"
+                )));
+            }
+            fs::copy(&existing, &new).map_err(|source| Error::Io {
+                path: existing.clone(),
+                source,
+            })?;
+            fs::remove_file(&existing).map_err(|source| Error::Io {
+                path: existing,
+                source,
+            })?;
+            return Ok(());
         }
         fs::rename(&existing, &new).map_err(|source| Error::Io {
             path: existing,
@@ -738,7 +789,7 @@ impl HostFileSystem {
             .mount_for_guest_path(new_path)
             .is_some_and(|mount| !mount.writable)
         {
-            return Err(Error::InvalidArgument(format!(
+            return Err(Error::AccessDenied(format!(
                 "guest mount is read-only: {new_path}"
             )));
         }
@@ -768,7 +819,7 @@ impl HostFileSystem {
             .mount_for_guest_path(guest_path)
             .is_some_and(|mount| !mount.writable)
         {
-            return Err(Error::InvalidArgument(format!(
+            return Err(Error::AccessDenied(format!(
                 "guest mount is read-only: {guest_path}"
             )));
         }
@@ -1149,6 +1200,20 @@ impl HostFileSystem {
     fn mount_for_normalized_path(&self, normalized: &str) -> Option<&FileMount> {
         self.mounts_longest_first()
             .find(|mount| mount_remainder(normalized, &mount.guest_root).is_some())
+    }
+
+    fn volume_for_guest_path(&self, guest_path: &str) -> GuestVolumePath {
+        let normalized_path = normalize_guest_path(guest_path);
+        let volume_key = self
+            .mount_for_normalized_path(&normalized_path)
+            .map(|mount| mount.guest_root.clone())
+            .unwrap_or_default();
+        GuestVolumePath {
+            is_mount_root: !volume_key.is_empty()
+                && normalized_path.eq_ignore_ascii_case(&volume_key),
+            normalized_path,
+            volume_key,
+        }
     }
 
     fn is_root_namespace_pattern(&self, guest_pattern: &str, normalized: &str) -> bool {

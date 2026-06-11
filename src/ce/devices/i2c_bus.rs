@@ -17,6 +17,7 @@
 
 use crate::ce::devices::DeviceIoControlResult;
 
+pub const IOCTL_I2C_GIO_I2C2_TRANSFER: u32 = 0x8000_2001;
 pub const IOCTL_I2C_WRITE: u32 = 0x8000_2004;
 pub const IOCTL_I2C_READ: u32 = 0x8000_2005;
 pub const IOCTL_I2C_WRITE_READ: u32 = 0x8000_2006;
@@ -44,7 +45,7 @@ impl I2cBus {
         match ioctl_code {
             IOCTL_I2C_WRITE => self.write_transaction(input),
             IOCTL_I2C_READ => self.read_transaction(input, output_capacity),
-            IOCTL_I2C_WRITE_READ => {
+            IOCTL_I2C_GIO_I2C2_TRANSFER | IOCTL_I2C_WRITE_READ => {
                 let write = self.write_transaction(input);
                 if !write.success {
                     write

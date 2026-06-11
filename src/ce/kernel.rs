@@ -386,6 +386,8 @@ pub struct RuntimeLoaderStats {
     pub loud_failure_count: u64,
 }
 
+const LOAD_LIBRARY_AS_DATAFILE_FLAG: u32 = 0x0000_0002;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedModule {
     pub name: String,
@@ -567,7 +569,7 @@ const FILE_NOTIFY_CHANGE_LAST_ACCESS: u32 = 0x0000_0020;
 const FILE_NOTIFY_CHANGE_CREATION: u32 = 0x0000_0040;
 const FILE_NOTIFY_CHANGE_SECURITY: u32 = 0x0000_0100;
 const FILE_NOTIFY_CHANGE_CEGETINFO: u32 = 0x8000_0000;
-const FILE_NOTIFY_CHANGE_SUPPORTED_MASK: u32 = FILE_NOTIFY_CHANGE_FILE_NAME
+pub(crate) const FILE_NOTIFY_CHANGE_SUPPORTED_MASK: u32 = FILE_NOTIFY_CHANGE_FILE_NAME
     | FILE_NOTIFY_CHANGE_DIR_NAME
     | FILE_NOTIFY_CHANGE_ATTRIBUTES
     | FILE_NOTIFY_CHANGE_SIZE
@@ -917,21 +919,25 @@ impl CeKernel {
 
     pub fn resolve_loaded_module_proc_by_name(&self, module: u32, name: &str) -> Option<u32> {
         let symbol = normalize_symbol_name(name);
-        self.loaded_modules
+        let loaded = self
+            .loaded_modules
             .values()
-            .find(|loaded| loaded.base == module && !loaded.unload_pending)?
-            .exports_by_name
-            .get(&symbol)
-            .copied()
+            .find(|loaded| loaded.base == module && !loaded.unload_pending)?;
+        if loaded.load_flags & LOAD_LIBRARY_AS_DATAFILE_FLAG != 0 {
+            return None;
+        }
+        loaded.exports_by_name.get(&symbol).copied()
     }
 
     pub fn resolve_loaded_module_proc_by_ordinal(&self, module: u32, ordinal: u32) -> Option<u32> {
-        self.loaded_modules
+        let loaded = self
+            .loaded_modules
             .values()
-            .find(|loaded| loaded.base == module && !loaded.unload_pending)?
-            .exports_by_ordinal
-            .get(&ordinal)
-            .copied()
+            .find(|loaded| loaded.base == module && !loaded.unload_pending)?;
+        if loaded.load_flags & LOAD_LIBRARY_AS_DATAFILE_FLAG != 0 {
+            return None;
+        }
+        loaded.exports_by_ordinal.get(&ordinal).copied()
     }
 
     pub fn set_process_module_path(&mut self, path: impl Into<String>) {
@@ -2096,7 +2102,8 @@ impl CeKernel {
                 "unsupported file notification filter 0x{notify_filter:08x}"
             )));
         }
-        let data = self.files.file_attributes_w(path)?;
+        let path = canonical_shell_change_path(path);
+        let data = self.files.file_attributes_w(&path)?;
         if data.attributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
             return Err(Error::InvalidArgument(format!(
                 "change notification path is not a directory: {path}"
@@ -2104,17 +2111,18 @@ impl CeKernel {
         }
         let handle = self.handles.insert(KernelObject::FileChangeNotification(
             FileChangeNotificationObject {
-                watch_path: normalize_shell_change_path(path),
+                watch_path: normalize_shell_change_path(&path),
                 recursive,
                 notify_filter,
                 signaled: false,
+                pending_signal_count: 0,
                 pending: Vec::new(),
             },
         ));
         self.push_file_trace(FileTraceRecord {
             op: "FindFirstChangeNotificationW",
             handle: Some(handle),
-            path: Some(path.to_owned()),
+            path: Some(path),
             preview: Some(format!(
                 "recursive={recursive} filter=0x{notify_filter:08x}"
             )),
@@ -2132,8 +2140,13 @@ impl CeKernel {
         else {
             return Err(Error::InvalidHandle(handle));
         };
-        notification.signaled = false;
-        notification.pending.clear();
+        if notification.pending_signal_count > 0 {
+            notification.pending_signal_count -= 1;
+        }
+        if notification.pending_signal_count == 0 {
+            notification.pending.clear();
+        }
+        notification.signaled = notification.pending_signal_count > 0;
         Ok(true)
     }
 
@@ -2141,6 +2154,9 @@ impl CeKernel {
         let KernelObject::FileChangeNotification(notification) = self.handles.get(handle)? else {
             return Err(Error::InvalidHandle(handle));
         };
+        if notification.pending_signal_count == 0 {
+            return Ok(Vec::new());
+        }
         Ok(notification.pending.clone())
     }
 
@@ -2155,7 +2171,13 @@ impl CeKernel {
         };
         let drain_count = count.min(notification.pending.len());
         notification.pending.drain(..drain_count);
-        notification.signaled = !notification.pending.is_empty();
+        notification.pending_signal_count = notification
+            .pending_signal_count
+            .saturating_sub(drain_count);
+        if notification.pending_signal_count == 0 {
+            notification.pending.clear();
+        }
+        notification.signaled = notification.pending_signal_count > 0;
         let still_pending = notification.signaled;
         if still_pending {
             self.queue_object_wake_candidates(handle);
@@ -2168,11 +2190,16 @@ impl CeKernel {
     }
 
     pub fn find_close_change_notification(&mut self, handle: u32) -> Result<bool> {
-        let KernelObject::FileChangeNotification(_) = self.handles.get(handle)? else {
-            return Err(Error::InvalidHandle(handle));
-        };
-        self.handles.close(handle)?;
-        Ok(true)
+        let is_notification = matches!(
+            self.handles.get(handle)?,
+            KernelObject::FileChangeNotification(_)
+        );
+        self.close_handle(handle)?;
+        if is_notification {
+            Ok(true)
+        } else {
+            Err(Error::InvalidHandle(handle))
+        }
     }
 
     pub fn device_io_control(
@@ -2182,8 +2209,10 @@ impl CeKernel {
         input: &[u8],
         output_capacity: u32,
     ) -> Result<DeviceIoControlResult> {
+        let remote_imu = self.remote.imu_state().clone();
         match self.handles.get_mut(handle)? {
             KernelObject::Device(device) => {
+                device.apply_remote_imu(&remote_imu);
                 Ok(device.device_io_control(ioctl_code, input, output_capacity))
             }
             _ => Ok(DeviceIoControlResult {
@@ -5006,8 +5035,11 @@ impl CeKernel {
             if notification.notify_filter & FILE_NOTIFY_CHANGE_CEGETINFO != 0 {
                 let records = file_change_records_for_event(event_id, notification, path1, path2);
                 append_file_change_records(&mut notification.pending, records);
-                notification.signaled = !notification.pending.is_empty();
+                notification.pending_signal_count = notification.pending.len();
+                notification.signaled = notification.pending_signal_count > 0;
             } else {
+                notification.pending_signal_count =
+                    notification.pending_signal_count.saturating_add(1);
                 notification.signaled = true;
             }
             if notification.signaled {
@@ -5052,8 +5084,11 @@ impl CeKernel {
             };
             if notification.notify_filter & FILE_NOTIFY_CHANGE_CEGETINFO != 0 {
                 append_file_change_records(&mut notification.pending, std::iter::once(record));
-                notification.signaled = !notification.pending.is_empty();
+                notification.pending_signal_count = notification.pending.len();
+                notification.signaled = notification.pending_signal_count > 0;
             } else {
+                notification.pending_signal_count =
+                    notification.pending_signal_count.saturating_add(1);
                 notification.signaled = true;
             }
             if notification.signaled {
@@ -5388,10 +5423,10 @@ fn shell_change_path_pidl(path: &str) -> Vec<u8> {
 
 fn shell_change_path_matches(watch_dir: &str, path: &str, recursive: bool) -> bool {
     let path = normalize_shell_change_path(path);
-    if watch_dir == "\\" {
+    if path.eq_ignore_ascii_case(watch_dir) {
         return true;
     }
-    if path.eq_ignore_ascii_case(watch_dir) {
+    if watch_dir == "\\" && recursive {
         return true;
     }
     if recursive {
@@ -5409,14 +5444,25 @@ fn shell_change_path_matches(watch_dir: &str, path: &str, recursive: bool) -> bo
 }
 
 fn normalize_shell_change_path(path: &str) -> String {
-    let mut path = path.trim().replace('/', "\\");
-    while path.len() > 1 && path.ends_with('\\') {
-        path.pop();
+    canonical_shell_change_path(path)
+}
+
+fn canonical_shell_change_path(path: &str) -> String {
+    let path = path.trim().replace('/', "\\");
+    let mut parts = Vec::new();
+    for part in path.split('\\') {
+        match part.trim() {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            part => parts.push(part),
+        }
     }
-    if path.is_empty() {
+    if parts.is_empty() {
         "\\".to_owned()
     } else {
-        path
+        format!("\\{}", parts.join("\\"))
     }
 }
 

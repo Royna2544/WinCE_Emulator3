@@ -97,6 +97,8 @@ pub struct UnicornMips {
     #[cfg(feature = "unicorn")]
     pending_locale_enum_returns: Vec<PendingLocaleEnumReturn>,
     #[cfg(feature = "unicorn")]
+    pending_wave_out_callback_returns: Vec<PendingWaveOutCallbackReturn>,
+    #[cfg(feature = "unicorn")]
     pending_dll_lifecycle_returns: Vec<PendingDllLifecycleReturn>,
     #[cfg(feature = "unicorn")]
     pending_create_window_returns: Vec<CreateWindowReturn>,
@@ -165,6 +167,8 @@ struct UnicornRunStateHandles<'a> {
     pending_enum_font_families_returns:
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingEnumFontFamiliesReturn>>>,
     pending_locale_enum_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<PendingLocaleEnumReturn>>>,
+    pending_wave_out_callback_returns:
+        &'a std::rc::Rc<std::cell::RefCell<Vec<PendingWaveOutCallbackReturn>>>,
     pending_dll_lifecycle_returns:
         &'a std::rc::Rc<std::cell::RefCell<Vec<PendingDllLifecycleReturn>>>,
     create_window_returns: &'a std::rc::Rc<std::cell::RefCell<Vec<CreateWindowReturn>>>,
@@ -338,11 +342,16 @@ const ENUM_FONT_FAMILIES_RETURN_STUB_ADDR: u32 =
 const LOCALE_ENUM_RETURN_STUB_ADDR: u32 =
     ENUM_FONT_FAMILIES_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
 #[cfg(feature = "unicorn")]
+const WAVE_OUT_CALLBACK_RETURN_STUB_ADDR: u32 =
+    LOCALE_ENUM_RETURN_STUB_ADDR - crate::emulator::imports::IMPORT_TRAP_STRIDE;
+#[cfg(feature = "unicorn")]
 const CREATESTRUCTW_SIZE: u32 = 48;
 #[cfg(feature = "unicorn")]
 const WM_INITDIALOG: u32 = 0x0110;
 #[cfg(feature = "unicorn")]
 const WNDPROC_CALL_FRAME_BYTES: u32 = 0x20;
+#[cfg(feature = "unicorn")]
+const WOM_DONE: u32 = 0x0000_03bd;
 #[cfg(feature = "unicorn")]
 const CURRENT_WAIT_HOST_THROTTLE_MS: u64 = 1;
 #[cfg(feature = "unicorn")]
@@ -598,6 +607,15 @@ struct PendingLocaleEnumReturn {
     remaining: Vec<Vec<u16>>,
     /// Stack address where the current string is written.
     struct_frame_sp: u32,
+}
+
+#[cfg(feature = "unicorn")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingWaveOutCallbackReturn {
+    return_pc: u32,
+    return_sp: u32,
+    caller_regs: MipsGuestContext,
+    api_result: u32,
 }
 
 #[cfg(feature = "unicorn")]
@@ -896,6 +914,8 @@ impl UnicornMips {
             #[cfg(feature = "unicorn")]
             pending_locale_enum_returns: Vec::new(),
             #[cfg(feature = "unicorn")]
+            pending_wave_out_callback_returns: Vec::new(),
+            #[cfg(feature = "unicorn")]
             pending_dll_lifecycle_returns: Vec::new(),
             #[cfg(feature = "unicorn")]
             pending_create_window_returns: Vec::new(),
@@ -1105,6 +1125,11 @@ impl UnicornMips {
             .collect();
         self.pending_locale_enum_returns = state
             .pending_locale_enum_returns
+            .borrow_mut()
+            .drain(..)
+            .collect();
+        self.pending_wave_out_callback_returns = state
+            .pending_wave_out_callback_returns
             .borrow_mut()
             .drain(..)
             .collect();
@@ -1429,6 +1454,10 @@ impl UnicornMips {
                 ),
                 #[cfg(feature = "unicorn")]
                 pending_locale_enum_returns: std::mem::take(&mut self.pending_locale_enum_returns),
+                #[cfg(feature = "unicorn")]
+                pending_wave_out_callback_returns: std::mem::take(
+                    &mut self.pending_wave_out_callback_returns,
+                ),
                 #[cfg(feature = "unicorn")]
                 pending_dll_lifecycle_returns: std::mem::take(
                     &mut self.pending_dll_lifecycle_returns,
@@ -2466,6 +2495,10 @@ impl UnicornMips {
             &mut self.pending_locale_enum_returns,
         )));
         let pending_locale_enum_returns_hook = Rc::clone(&pending_locale_enum_returns);
+        let pending_wave_out_callback_returns = Rc::new(RefCell::new(std::mem::take(
+            &mut self.pending_wave_out_callback_returns,
+        )));
+        let pending_wave_out_callback_returns_hook = Rc::clone(&pending_wave_out_callback_returns);
         let pending_dll_lifecycle_returns = Rc::new(RefCell::new(std::mem::take(
             &mut self.pending_dll_lifecycle_returns,
         )));
@@ -2519,6 +2552,7 @@ impl UnicornMips {
             pending_dpa_search_returns: &pending_dpa_search_returns,
             pending_enum_font_families_returns: &pending_enum_font_families_returns,
             pending_locale_enum_returns: &pending_locale_enum_returns,
+            pending_wave_out_callback_returns: &pending_wave_out_callback_returns,
             pending_dll_lifecycle_returns: &pending_dll_lifecycle_returns,
             create_window_returns: &create_window_returns,
             pending_wndproc_returns: &pending_wndproc_returns,
@@ -3142,6 +3176,15 @@ impl UnicornMips {
                 }
                 if address == LOCALE_ENUM_RETURN_STUB_ADDR {
                     handle_locale_enum_return_stub(uc, &pending_locale_enum_returns_hook);
+                    return;
+                }
+                if address == WAVE_OUT_CALLBACK_RETURN_STUB_ADDR {
+                    if !handle_wave_out_callback_return_stub(
+                        uc,
+                        &pending_wave_out_callback_returns_hook,
+                    ) {
+                        let _ = uc.emu_stop();
+                    }
                     return;
                 }
                 if address == GUEST_THREAD_RETURN_STUB_ADDR {
@@ -4158,6 +4201,19 @@ impl UnicornMips {
                 }) {
                     return;
                 }
+                if trap.as_ref().is_some_and(|trap| {
+                    try_enter_wave_out_function_callback(
+                        unsafe { &*kernel_ptr },
+                        memory.uc,
+                        trap.module_kind,
+                        trap.ordinal,
+                        &args,
+                        result,
+                        &pending_wave_out_callback_returns_hook,
+                    )
+                }) {
+                    return;
+                }
                 let _ = memory.uc.reg_write(RegisterMIPS::V0, u64::from(result));
                 if let Some(v1) = import_return.v1 {
                     let _ = memory.uc.reg_write(RegisterMIPS::V1, u64::from(v1));
@@ -4594,6 +4650,7 @@ impl super::cpu::CpuBackend for UnicornMips {
             pending_dpa_search_returns: Vec::new(),
             pending_enum_font_families_returns: Vec::new(),
             pending_locale_enum_returns: Vec::new(),
+            pending_wave_out_callback_returns: Vec::new(),
             pending_dll_lifecycle_returns: Vec::new(),
             pending_create_window_returns: Vec::new(),
             pending_wndproc_returns: Vec::new(),
@@ -7909,6 +7966,96 @@ fn try_dispatch_com_notification_callout<D>(
         });
 
     true
+}
+
+#[cfg(feature = "unicorn")]
+fn try_enter_wave_out_function_callback<D>(
+    kernel: &CeKernel,
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    module_kind: crate::emulator::imports::ImportModuleKind,
+    ordinal: Option<u32>,
+    args: &[u32],
+    api_result: u32,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWaveOutCallbackReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    if module_kind != crate::emulator::imports::ImportModuleKind::Coredll
+        || ordinal != Some(crate::ce::coredll_ordinals::ORD_WAVE_OUT_WRITE)
+        || api_result != crate::ce::audio::MMSYSERR_NOERROR
+    {
+        return false;
+    }
+
+    let wave_handle = args.first().copied().unwrap_or(0);
+    let header_ptr = args.get(1).copied().unwrap_or(0);
+    let Some(crate::ce::audio::WaveOutCallback::Function { callback, instance }) = kernel
+        .audio
+        .output(wave_handle)
+        .and_then(|output| output.callback)
+    else {
+        return false;
+    };
+    if !is_guest_wndproc(callback) {
+        return false;
+    }
+
+    let caller_regs = capture_mips_gprs(uc);
+    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+    let return_sp = read_mips_reg(uc, RegisterMIPS::SP);
+    let call_sp = return_sp.wrapping_sub(WNDPROC_CALL_FRAME_BYTES);
+    let callback_target = normalize_ce_process_slot_callback(uc, callback);
+
+    let ok = [
+        uc.mem_write(u64::from(call_sp + 0x10), &0u32.to_le_bytes()),
+        uc.reg_write(RegisterMIPS::SP, u64::from(call_sp)),
+        uc.reg_write(RegisterMIPS::A0, u64::from(wave_handle)),
+        uc.reg_write(RegisterMIPS::A1, u64::from(WOM_DONE)),
+        uc.reg_write(RegisterMIPS::A2, u64::from(instance)),
+        uc.reg_write(RegisterMIPS::A3, u64::from(header_ptr)),
+        uc.reg_write(
+            RegisterMIPS::RA,
+            u64::from(WAVE_OUT_CALLBACK_RETURN_STUB_ADDR),
+        ),
+        uc.reg_write(RegisterMIPS::T9, u64::from(callback_target)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(callback_target)),
+    ]
+    .into_iter()
+    .all(|write| write.is_ok());
+    if !ok {
+        return false;
+    }
+
+    pending_returns
+        .borrow_mut()
+        .push(PendingWaveOutCallbackReturn {
+            return_pc,
+            return_sp,
+            caller_regs,
+            api_result,
+        });
+    true
+}
+
+#[cfg(feature = "unicorn")]
+fn handle_wave_out_callback_return_stub<D>(
+    uc: &mut unicorn_engine::Unicorn<'_, D>,
+    pending_returns: &std::rc::Rc<std::cell::RefCell<Vec<PendingWaveOutCallbackReturn>>>,
+) -> bool {
+    use unicorn_engine::RegisterMIPS;
+
+    let Some(pending) = pending_returns.borrow_mut().pop() else {
+        return false;
+    };
+    restore_mips_gprs(uc, &pending.caller_regs);
+    [
+        uc.reg_write(RegisterMIPS::SP, u64::from(pending.return_sp)),
+        uc.reg_write(RegisterMIPS::V0, u64::from(pending.api_result)),
+        uc.reg_write(RegisterMIPS::PC, u64::from(pending.return_pc)),
+        uc.reg_write(RegisterMIPS::RA, u64::from(pending.return_pc)),
+    ]
+    .into_iter()
+    .all(|write| write.is_ok())
 }
 
 #[cfg(feature = "unicorn")]

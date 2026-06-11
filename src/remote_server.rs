@@ -29,6 +29,9 @@
 // - GET /api/v1/debug/imports.txt returns recent import calls.
 // - GET /api/v1/debug/calls.txt returns recent guest call targets.
 // - GET /api/v1/debug/code.txt returns recent guest code samples.
+// - GET /api/v1/debug/files.txt returns recent file I/O summary.
+// - GET /api/v1/debug/files-full.txt returns recent file I/O records.
+// - GET /api/v1/debug/events.txt returns recent event operations.
 // - GET /api/v1/debug/remote-input.txt returns the latest remote input drain line.
 // - GET /api/v1/video.mjpg[?fps=1..60][&quality=1..100] streams multipart
 //   MJPEG frames until the client disconnects.
@@ -416,6 +419,9 @@ impl RemoteServer {
             ("GET", "/api/v1/debug/imports.txt") => self.latest_debug_text("imports").into(),
             ("GET", "/api/v1/debug/calls.txt") => self.latest_debug_text("calls").into(),
             ("GET", "/api/v1/debug/code.txt") => self.latest_debug_text("code").into(),
+            ("GET", "/api/v1/debug/files.txt") => self.latest_debug_text("files").into(),
+            ("GET", "/api/v1/debug/files-full.txt") => self.latest_debug_text("files-full").into(),
+            ("GET", "/api/v1/debug/events.txt") => self.latest_debug_text("events").into(),
             ("GET", "/api/v1/debug/remote-input.txt") => {
                 self.latest_debug_text("remote-input").into()
             }
@@ -482,6 +488,9 @@ impl RemoteServer {
                     "debugImports": "GET /api/v1/debug/imports.txt",
                     "debugCalls": "GET /api/v1/debug/calls.txt",
                     "debugCode": "GET /api/v1/debug/code.txt",
+                    "debugFiles": "GET /api/v1/debug/files.txt",
+                    "debugFilesFull": "GET /api/v1/debug/files-full.txt",
+                    "debugEvents": "GET /api/v1/debug/events.txt",
                     "debugRemoteInput": "GET /api/v1/debug/remote-input.txt",
                     "video": "GET /api/v1/video.mjpg",
                     "touch": "POST /api/v1/input/touch",

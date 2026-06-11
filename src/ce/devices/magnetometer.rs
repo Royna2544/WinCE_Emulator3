@@ -39,6 +39,12 @@ impl Magnetometer {
         Self { bank_2e, bank_2f }
     }
 
+    pub fn set_field(&mut self, x: i16, y: i16, z: i16) {
+        self.bank_2e[0x00..0x02].copy_from_slice(&x.to_le_bytes());
+        self.bank_2e[0x02..0x04].copy_from_slice(&y.to_le_bytes());
+        self.bank_2e[0x04..0x06].copy_from_slice(&z.to_le_bytes());
+    }
+
     pub fn device_io_control(
         &mut self,
         ioctl_code: u32,
@@ -66,11 +72,17 @@ impl Magnetometer {
     }
 
     fn read_registers(&self, input: &[u8], output_capacity: u32) -> DeviceIoControlResult {
-        if input.len() != 4 || output_capacity == 0 || !valid_selector(input[1]) {
+        if input.len() != 4 || !valid_selector(input[1]) {
             return failure();
         }
         let requested = input[2] as usize;
-        if requested == 0 || requested > output_capacity as usize {
+        if requested == 0 {
+            return failure();
+        }
+        if output_capacity == 0 {
+            return success(Vec::new());
+        }
+        if requested > output_capacity as usize {
             return failure();
         }
         let bank = self.bank(input[0]);

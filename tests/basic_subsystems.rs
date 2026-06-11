@@ -1555,7 +1555,7 @@ fn virtual_win32_api_smoke_covers_file_device_sync_gwe_and_audio() -> Result<()>
     assert!(kernel.close_handle(com)?);
 
     let uid = kernel.create_file_w("UID1:", GENERIC_READ, CREATE_ALWAYS)?;
-    let uid_ioctl = kernel.device_io_control(uid, 0xa000_00cc, &[], 4)?;
+    let uid_ioctl = kernel.device_io_control(uid, 0xa001_00cc, &[], 4)?;
     assert!(uid_ioctl.success);
     assert_eq!(uid_ioctl.bytes_returned, 4);
     assert!(kernel.close_handle(uid)?);
@@ -4897,9 +4897,12 @@ fn resource_system_image_list_create_add_count_info_bk_color_and_destroy() {
     assert_eq!(prev_color, 0xffff_ffff); // default is CLR_NONE
     assert_eq!(res.image_list(ilh).unwrap().bk_color, 0x123456);
 
-    // set_image_list_size.
+    // set_image_list_size: CE rejects no-op sizes and clears images/overlays on change.
+    assert_eq!(res.set_image_list_size(ilh, 16, 16), Some(false));
     assert_eq!(res.set_image_list_size(ilh, 32, 32), Some(true));
     assert_eq!(res.image_list(ilh).unwrap().width, 32);
+    assert_eq!(res.image_list(ilh).unwrap().height, 32);
+    assert_eq!(res.image_list_count(ilh), Some(0));
     assert_eq!(res.set_image_list_size(ilh, 0, 32), Some(false)); // invalid
     assert_eq!(res.set_image_list_size(0xDEAD, 16, 16), None); // invalid handle
 
@@ -5446,6 +5449,7 @@ fn resource_system_dc_palette_bk_mode_color_text_align_rop2_is_memory_and_delete
 fn resource_system_image_list_duplicate_replace_remove_copy_count_overlay_and_drag() {
     use wince_emulation_v3::ce::resource::ResourceSystem;
 
+    const ILC_MASK: u32 = 0x0001;
     let mut res = ResourceSystem::default();
 
     // Create an image list and add 3 images via a strip bitmap.
@@ -5486,24 +5490,67 @@ fn resource_system_image_list_duplicate_replace_remove_copy_count_overlay_and_dr
     // zero icon returns None.
     assert!(res.replace_image_list_icon(ilh, -1, 0).is_none());
 
-    // set_image_list_overlay: valid range 1..=15.
-    assert_eq!(res.set_image_list_overlay(ilh, 0, 1), Some(true));
+    // set_image_list_overlay: CE requires a mask-capable image list.
+    assert_eq!(res.set_image_list_overlay(ilh, 0, 1), Some(false));
+    let masked_overlay_il = res.create_image_list(16, 16, ILC_MASK, 0, 0).unwrap();
+    res.add_image_list_image(masked_overlay_il, bmp, 0).unwrap();
+    assert_eq!(
+        res.set_image_list_overlay(masked_overlay_il, 0, 1),
+        Some(true)
+    );
     // overlay out of range returns Some(false).
-    assert_eq!(res.set_image_list_overlay(ilh, 0, 0), Some(false));
-    assert_eq!(res.set_image_list_overlay(ilh, 0, 16), Some(false));
+    assert_eq!(
+        res.set_image_list_overlay(masked_overlay_il, 0, 0),
+        Some(false)
+    );
+    assert_eq!(
+        res.set_image_list_overlay(masked_overlay_il, 0, 16),
+        Some(false)
+    );
     // negative image_index returns Some(false).
-    assert_eq!(res.set_image_list_overlay(ilh, -1, 1), Some(false));
+    assert_eq!(
+        res.set_image_list_overlay(masked_overlay_il, -1, 1),
+        Some(false)
+    );
     // unknown handle returns None.
     assert!(res.set_image_list_overlay(0xDEAD, 0, 1).is_none());
 
-    // copy_image_list_image: CE ILCF_MOVE is flag value 0 and moves src[0] to dst[-1].
+    // CE keeps overlay slots intact when individual images are removed or the
+    // image count is truncated; only Remove(-1) clears them.
+    let overlay_il = res.create_image_list(16, 16, ILC_MASK, 0, 0).unwrap();
+    res.add_image_list_image(overlay_il, bmp, 0).unwrap();
+    assert_eq!(res.image_list_count(overlay_il), Some(3));
+    assert_eq!(res.set_image_list_overlay(overlay_il, 0, 1), Some(true));
+    assert_eq!(res.remove_image_list_image(overlay_il, 0), Some(true));
+    let base_icon = res.image_list_icon(overlay_il, 0, 0, 0).unwrap();
+    assert_eq!(
+        res.image_list_icon(overlay_il, 0, 0, 0x0100),
+        Some(base_icon | 0x0100_0000)
+    );
+    assert_eq!(res.set_image_list_overlay(overlay_il, 1, 1), Some(true));
+    assert_eq!(res.set_image_list_count(overlay_il, 1), Some(true));
+    assert_eq!(
+        res.image_list_icon(overlay_il, 0, 0, 0x0100),
+        Some(base_icon | 0x0200_0000)
+    );
+    assert_eq!(res.remove_image_list_image(overlay_il, -1), Some(true));
+    res.add_image_list_image(overlay_il, bmp, 0).unwrap();
+    let reset_base_icon = res.image_list_icon(overlay_il, 0, 0, 0).unwrap();
+    assert_eq!(
+        res.image_list_icon(overlay_il, 0, 0, 0x0100),
+        Some(reset_base_icon)
+    );
+
+    // copy_image_list_image: CE only supports same-list slot copy/swap.
     let src = res.create_image_list(16, 16, 0, 0, 0).unwrap();
     res.add_image_list_image(src, bmp, 0);
     let dst = res.create_image_list(16, 16, 0, 0, 0).unwrap();
-    assert_eq!(res.copy_image_list_image(dst, -1, src, 0, 0), Some(true));
-    assert_eq!(res.image_list_count(dst), Some(1));
-    assert_eq!(res.image_list_count(src), Some(2));
-    // Negative src_index always returns Some(false).
+    res.add_image_list_image(dst, bmp2, 0);
+    assert_eq!(res.copy_image_list_image(dst, 0, src, 0, 0), Some(false));
+    assert_eq!(res.copy_image_list_image(src, 1, src, 0, 0), Some(true));
+    assert_eq!(res.image_list_count(src), Some(3));
+    assert_eq!(res.image_list_info(src, 1).unwrap().left, 0);
+    // Negative indexes return Some(false).
     assert_eq!(res.copy_image_list_image(dst, -1, src, -1, 0), Some(false));
 
     // begin_image_list_drag / image_list_drag / move / drag_leave / end.
@@ -6051,7 +6098,8 @@ fn handle_table_create_mutex_with_status_suspend_resume_by_id_and_file_mappings_
 fn shell_system_remove_window_state_and_remove_windows_state() {
     use wince_emulation_v3::ce::shell::{
         NotifyIconData, NotifyIconOp, SHNP_ICONIC, ShellChangeNotifyRegistration,
-        ShellNotificationData, ShellSystem, ShellWindowCleanup,
+        ShellNotificationCallbackMethod, ShellNotificationCallbackRecord, ShellNotificationData,
+        ShellSystem, ShellWindowCleanup,
     };
 
     let mut shell = ShellSystem::default();
@@ -6096,6 +6144,17 @@ fn shell_system_remove_window_state_and_remove_windows_state() {
         callback_ptr: 0,
     };
     let _ = shell.add_notification(notif, 0);
+    let method = ShellNotificationCallbackMethod::OnDismiss { timed_out: false };
+    shell.record_notification_callback(ShellNotificationCallbackRecord {
+        clsid,
+        id: 1,
+        vtable_offset: method.com_vtable_offset(),
+        arguments: method.com_arguments(1, 0),
+        method,
+        lparam: 0,
+        callback_ptr: 0,
+    });
+    assert_eq!(shell.notification_callbacks().count(), 1);
 
     // Register a change notification for hwnd=10.
     shell.register_change_notification(ShellChangeNotifyRegistration {
@@ -6125,6 +6184,7 @@ fn shell_system_remove_window_state_and_remove_windows_state() {
     assert!(shell.notify_icon(10, 1).is_none());
     assert!(shell.notify_icon(10, 2).is_none());
     assert!(shell.notification(clsid, 1).is_none());
+    assert_eq!(shell.notification_callbacks().count(), 0);
     assert!(shell.change_notification(10).is_none());
     // The other hwnd is untouched.
     assert!(shell.change_notification(99).is_some());
@@ -6324,11 +6384,14 @@ fn resource_system_owned_bitmap_bitmap_mut_region_rects_palette_mut_shell_image_
         Some(false)
     );
 
-    // set_image_list_drag_cursor: no active drag → Some(false).
+    // set_image_list_drag_cursor: CE treats a missing drag image/dither pair as
+    // a successful no-op, even if the requested cursor index is not usable yet.
     let il_cur = res.create_image_list(16, 16, 0, 4, 1).unwrap();
     let bmp_cur = res.create_bitmap(16, 16, 1, 24, 0);
     res.add_image_list_image(il_cur, bmp_cur, 0);
-    assert_eq!(res.set_image_list_drag_cursor(il_cur, 0, 2, 3), Some(false));
+    assert_eq!(res.set_image_list_drag_cursor(il_cur, 0, 2, 3), Some(true));
+    assert_eq!(res.set_image_list_drag_cursor(il_cur, 99, 2, 3), Some(true));
+    assert!(res.image_list_drag().is_none());
     // Start drag first.
     res.begin_image_list_drag(il_cur, 0, 1, 1);
     // Now set_image_list_drag_cursor updates the drag state.
@@ -9713,6 +9776,7 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     use wince_emulation_v3::ce::gwe::Rect;
     use wince_emulation_v3::ce::resource::{ImageListDraw, ResourceSystem};
 
+    const ILC_MASK: u32 = 0x0001;
     let mut res = ResourceSystem::default();
 
     // Create a 16×16 image list and two 32×16 bitmaps (each yields 2 strips at 16px width).
@@ -9804,11 +9868,13 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     let dst_il = res.create_image_list(16, 16, 0, 0, 2).unwrap();
     res.add_image_list_image(src, bmp_a, 0).unwrap();
     res.add_image_list_image(dst_il, bmp_b, 0).unwrap();
-    // CE ILCF_MOVE is flag value 0: move src[0] -> dst[0].
-    assert_eq!(res.copy_image_list_image(dst_il, 0, src, 0, 0), Some(true));
-    let dst_info = res.image_list_info(dst_il, 0).unwrap();
-    assert_eq!(dst_info.bitmap, bmp_a);
-    assert_eq!(res.image_list_count(src), Some(1));
+    // CE ImageList_Copy only operates within the same image list.
+    assert_eq!(res.copy_image_list_image(dst_il, 0, src, 0, 0), Some(false));
+    assert_eq!(res.copy_image_list_image(src, 1, src, 0, 0), Some(true));
+    let copied_info = res.image_list_info(src, 1).unwrap();
+    assert_eq!(copied_info.bitmap, bmp_a);
+    assert_eq!(copied_info.left, 0);
+    assert_eq!(res.image_list_count(src), Some(2));
     // Negative src_index → Some(false).
     assert_eq!(
         res.copy_image_list_image(dst_il, 0, src, -1, 0),
@@ -9849,7 +9915,12 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     assert_eq!(ic_fallback, 0xFACE);
 
     // --- set_image_list_overlay ---
-    let ov_il = res.create_image_list(16, 16, 0, 0, 4).unwrap();
+    let no_mask_ov_il = res.create_image_list(16, 16, 0, 0, 4).unwrap();
+    res.add_image_list_image(no_mask_ov_il, bmp_a, 0).unwrap();
+    // CE ImageList_SetOverlayImage requires an ILC_MASK-backed image list.
+    assert_eq!(res.set_image_list_overlay(no_mask_ov_il, 0, 1), Some(false));
+
+    let ov_il = res.create_image_list(16, 16, ILC_MASK, 0, 4).unwrap();
     res.add_image_list_image(ov_il, bmp_a, 0).unwrap();
     // image_index < 0 → Some(false).
     assert_eq!(res.set_image_list_overlay(ov_il, -1, 1), Some(false));
@@ -9885,9 +9956,13 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     assert_eq!(res.record_image_list_draw(bad_draw), Some(false));
 
     // --- image_list drag sequence ---
-    // begin before drag started → false for drag ops.
-    assert!(!res.image_list_drag_enter(0, 0, 0));
-    assert!(!res.image_list_drag_move(5, 5));
+    // begin before drag started: CE records DragEnter state even without an
+    // active drag image, while DragMove still has no visible image to move.
+    assert!(res.image_list_drag_enter(0x1111, 2, 3));
+    assert_eq!(res.image_list_drag_position(), (2, 3));
+    assert!(res.image_list_drag_move(5, 5));
+    assert_eq!(res.image_list_drag_position(), (2, 3));
+    assert!(res.image_list_drag_leave(0x1111));
     assert!(!res.image_list_drag_show(true));
     assert!(!res.end_image_list_drag());
     assert!(res.image_list_drag().is_none());
@@ -9909,9 +9984,13 @@ fn resource_image_list_duplicate_merge_add_masked_replace_remove_copy_overlay_dr
     // drag_move updates position.
     assert!(res.image_list_drag_move(30, 40));
     assert_eq!(res.image_list_drag().unwrap().x, 30);
+    assert_eq!(res.image_list_drag_position(), (30, 40));
     // drag_show toggles visible.
     assert!(res.image_list_drag_show(false));
     assert!(!res.image_list_drag().unwrap().visible);
+    assert!(res.image_list_drag_move(50, 60));
+    assert_eq!(res.image_list_drag().unwrap().x, 30);
+    assert_eq!(res.image_list_drag_position(), (30, 40));
     // drag_leave: hwnd mismatch → false.
     assert!(!res.image_list_drag_leave(0xDEAD));
     // drag_leave with matching hwnd.

@@ -70,6 +70,7 @@ pub struct FileChangeNotificationObject {
     pub recursive: bool,
     pub notify_filter: u32,
     pub signaled: bool,
+    pub pending_signal_count: usize,
     pub pending: Vec<FileChangeRecord>,
 }
 
