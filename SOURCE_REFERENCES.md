@@ -255,6 +255,9 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `TPM_RIGHTBUTTON` is set. Queued posted/sent same-thread non-owner
     messages, owner-window non-menu messages, and generated owner `WM_PAINT`
     are now dispatched before default or later owner-window menu input resolves.
+    CE `winuser.h` defines `TPMPARAMS.rcExclude` as a screen-coordinate
+    rectangle to exclude while positioning `TrackPopupMenuEx`; v3 now applies
+    that rectangle to top-level popup placement before painting and hit-testing.
     A full nested modal menu pump and remaining live submenu cancellation/routing
     edge cases remain queued.
 
@@ -556,6 +559,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     selected-memory-DIB-backed raw `ImageList_Draw*` calls now paint clipped
     deterministic pseudo-icons for these image-list slots until real icon
     bitmap extraction is ported.
+    HPC shell `api.cpp` also routes `SHGFI_ATTRIBUTES` through
+    `IShellFolder::GetAttributesOf`, and `filefolder.cpp` maps filesystem
+    attributes to `SFGAO_FILESYSTEM`, `SFGAO_FOLDER`, `SFGAO_LINK`, and
+    `SFGAO_READONLY`; v3 mirrors that shell-attribute output instead of
+    returning raw `FILE_ATTRIBUTE_*` values in `SHFILEINFO.dwAttributes`.
     File-backed `LoadImageW(..., IMAGE_BITMAP, LR_LOADFROMFILE)` now keeps the
     BMP pixel rows in CE heap-backed bitmap storage. Resource-backed
     `LoadImageW`/`LoadBitmapW` for RT_BITMAP DIB data also copies the resolved
@@ -601,17 +609,27 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     Raw `CreateIconIndirect` also validates the CE `ICONINFO` mask/color bitmap
     handles, stores a state-backed synthetic icon object, and lets
     `DestroyIcon` release that tracked object.
-    Raw `DrawIconEx` also validates the HDC/icon handle pair and paints a
+    Raw `DrawIconEx` also validates the HDC/icon handle pair, paints a
     deterministic pseudo-icon into attached window framebuffers and selected
-    memory DIBs, sharing the same placeholder rendering model as shell
-    image-list pseudo slots.
-    Raw `ExtractIconExW` now supports `nIconIndex == -1` count probes and
-    index-zero extraction for existing shell paths by writing the same
-    synthetic large/small `HICON` values that `SHGetFileInfo` would select,
-    including CE shortcut overlays. Missing paths fail with
-    `ERROR_FILE_NOT_FOUND`; actual DLL/icon-resource bitmap extraction remains
-    queued.
-    Full icon resource bitmap extraction remains queued.
+    memory DIBs for shell pseudo-icons, and draws bitmap-backed icons through
+    the same bitmap renderer as image lists. Bitmap-backed selected-memory-DIB
+    draws now scale from the icon bitmap's native source dimensions into
+    caller-requested destination sizes.
+    Raw `ExtractIconExW` now supports `nIconIndex == -1` count probes,
+    extracts PE `RT_GROUP_ICON`/`RT_ICON` resources into bitmap-backed icon
+    handles, selects separate large/small icon entries from multi-size groups,
+    counts and extracts string-named `RT_GROUP_ICON` group resources whose
+    group directories reference ordinal `RT_ICON` payloads, fills successive
+    large/small output-array slots, reports `ERROR_RESOURCE_NAME_NOT_FOUND`
+    when a present group references malformed or missing icon resource data,
+    and keeps the index-zero shell fallback for non-PE paths that writes the
+    same synthetic `HICON` values that
+    `SHGetFileInfo` would select, including CE shortcut overlays. CE
+    `resource.cpp` `KernExtractIcons` loads the module as datafile, resolves
+    `RT_GROUP_ICON`, lets a callback choose large/small group-directory
+    indices, then extracts the referenced `RT_ICON` resources.
+    Missing paths fail with `ERROR_FILE_NOT_FOUND`; broader PE format variants,
+    RT_ICON ordinal failure, and non-PE fallback edges remain queued.
   - `shellapi.h` defines `SHELLEXECUTEINFO`, `SEE_MASK_NOCLOSEPROCESS`,
     `nShow`, `hInstApp`, and `hProcess`. v3's raw `ShellExecuteEx` now
     preserves `nShow`, returns the queued process handle when
@@ -639,11 +657,14 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     command strings are treated as unusable associations and report
     `SE_ERR_NOASSOC`.
   - `winuser.h` anchors the public `MessageBoxW` signature, button groups,
-    default-button flags, icons, and `ID*` return codes. `OWNERDRAWLIB`
+    default-button flags, icon flags, `MB_SETFOREGROUND`, `MB_TOPMOST`,
+    `MB_RTLREADING`, and `ID*` return codes. `OWNERDRAWLIB`
     `animlibbase.h` and `appalert.cpp` add the CE owner-draw `MB_YESALL` and
     `MB_CANCEL` alert modes, and `appalert.cpp` maps each alert mode onto
     left/center/right button labels before converting button messages into
-    return IDs; v3's raw `MessageBoxW` records the requested modal
+    return IDs; v3's raw `MessageBoxW` validates that CE flag surface before
+    creating transient dialog state, rejects unsupported desktop-only bits and
+    undefined icon nibbles with `ERROR_INVALID_PARAMETER`, records the requested modal
     text/caption/style plus button IDs, those CE button slots/labels,
     default-button index, icon class, owner enabled-state, transient dialog and
     child-control HWNDs, and result, and now derives default return codes for
@@ -662,10 +683,14 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     repeatedly reselected. The full blocking modal wait and broader live
     user-driven dispatch remain queued.
   - `shellapi.h` also anchors `Shell_NotifyIcon` and the `NOTIFYICONDATAW`
-    prefix. v3 now stores notify icon add/modify/delete state in
-    `ShellSystem`, validates owner HWNDs through GWE, and posts the registered
-    `uCallbackMessage` to `hWnd` with `wParam=uID` and `lParam` carrying the
-    shell event. `HPC\EXPLORER\INC\taskbar.hxx`, `TASKBAR\taskbar.cpp`, and
+    fixed layout, including the 64-WCHAR `szTip` buffer, while
+    `WCESHELLFE\OAK\TASKMAN\minserver.cpp` copies `sizeof(NOTIFYICONDATA)`
+    before posting it to the taskbar thread. v3 now requires that fixed
+    footprint and a readable `szTip[64]` buffer, stores notify icon
+    add/modify/delete state in `ShellSystem`, validates owner HWNDs through
+    GWE, and posts the registered `uCallbackMessage` to `hWnd` with
+    `wParam=uID` and `lParam` carrying the shell event.
+    `HPC\EXPLORER\INC\taskbar.hxx`, `TASKBAR\taskbar.cpp`, and
     `TASKBAR\taskbarnotification.cpp` define `HHTBF_DESTROYICON`,
     `NotifyTagDestroyIcon`, and notify-item update/delete paths that destroy
     owned taskbar icons when replaced or removed; v3 records those would-destroy

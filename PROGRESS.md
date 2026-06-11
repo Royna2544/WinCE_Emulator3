@@ -15,7 +15,8 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 
 ## Recent Source-Visible Slices
 
-- `src/ce/coredll.rs`: `ExtractIconExW` reads guest paths, validates files, extracts PE icon resources when available, falls back to shell icons for index zero, writes large/small icon outputs, and supports bitmap-backed icon rendering through `DrawIconEx`.
+- `src/ce/coredll.rs`: `ExtractIconExW` reads guest paths, validates files, extracts PE icon resources when available, enumerates `RT_GROUP_ICON` data through a shared helper for count/extract behavior, selects distinct large/small icons from multi-size PE icon groups, fills successive large/small icon output-array slots, reports `ERROR_RESOURCE_NAME_NOT_FOUND` for malformed present PE group/icon resources, falls back to shell icons for non-PE index zero, and supports bitmap-backed icon rendering through `DrawIconEx`.
+- `src/ce/coredll.rs`: `DrawIconEx` now scales bitmap-backed icons from their native bitmap dimensions into caller-requested destination rectangles instead of treating the requested destination size as the source extent.
 - `src/ce/coredll.rs`: `MessageBoxW` now validates the CE `winuser.h` style surface, accepting CE high flags such as `MB_SETFOREGROUND`, `MB_TOPMOST`, and `MB_RTLREADING` while rejecting unsupported desktop-only bits and undefined icon nibbles before recording dialog state.
 - `src/ce/coredll.rs`: `TrackPopupMenuEx` now applies the CE `TPMPARAMS.rcExclude` screen rectangle to top-level popup placement before recording tracking state, painting, and hit-testing.
 - `src/ce/coredll.rs`: `SHGetFileInfoW` now writes CE shell `SFGAO_*` attributes for `SHGFI_ATTRIBUTES` instead of raw `FILE_ATTRIBUTE_*` values, covering filesystem, folder, shortcut, and read-only outputs.
@@ -23,7 +24,8 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 - `src/ce/kernel.rs`: file-change record append now coalesces pending records and signals only when pending notification data remains.
 - `src/ce/kernel.rs`: CE file-notification detail records are only queued for watches created with `FILE_NOTIFY_CHANGE_CEGETINFO`; watches without that flag still signal on matching changes and report no detailed records to `CeGetFileNotificationInfo`.
 - `src/ce/gwe.rs` and `src/ce/coredll.rs`: destroyed-window handling exposes completed send-message result writes and flushes them to guest memory.
-- `tests/coredll_raw_kernel.rs`: icon extraction, PE group-icon count, shell icon, and image-list drawing coverage is present.
+- `tests/coredll_raw_kernel.rs`: icon extraction, PE group-icon count, multi-slot PE `ExtractIconExW` output, multi-size large/small PE icon selection, string-named `RT_GROUP_ICON` extraction, malformed PE group/icon failure, shell icon, and image-list drawing coverage is present.
+- `tests/coredll_raw_gwe.rs`: `DrawIconEx` now verifies scaled selected-memory-DIB output from a 2x2 bitmap-backed icon into a 4x4 destination rectangle.
 - `tests/coredll_raw_kernel.rs`: `MessageBoxW` now verifies CE-supported high style bits are preserved and unsupported style/icon bits fail without creating a new shell message-box record.
 - `tests/coredll_raw_gwe.rs`: `TrackPopupMenuEx` now verifies that `TPMPARAMS.rcExclude` moves the top-level popup before pointer hit-testing.
 - `tests/coredll_raw_kernel.rs`: `SHGetFileInfo` now verifies CE `SFGAO_*` attribute output for regular files, shortcuts, read-only files, storage-card folders, and inaccessible network folders.
@@ -60,6 +62,20 @@ Regenerated on 2026-06-11 from the current implementation and test surface.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel shell_notify_icon` passed after the CE fixed-`NOTIFYICONDATAW` `Shell_NotifyIconW` slice.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel` passed after the CE fixed-`NOTIFYICONDATAW` `Shell_NotifyIconW` slice.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel sh_get_file_info` passed after the CE `SFGAO_*` `SHGetFileInfoW` attribute slice.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel sh_get_file_info` passed after adding multi-slot PE `ExtractIconExW` extraction coverage.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel sh_get_file_info` passed after adding multi-size large/small PE `ExtractIconExW` selection coverage.
+- `cargo check --features unicorn,trace,win32-desktop` passed after unblocking the feature build around displaced blocked-`GetMessage` state.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel sh_get_file_info` passed after adding malformed present PE group/icon `ExtractIconExW` failure coverage.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel sh_get_file_info` passed after adding string-named `RT_GROUP_ICON` `ExtractIconExW` coverage.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe coredll_raw_destroy_icon_accepts_loaded_icon_handles` passed after adding bitmap-backed `DrawIconEx` stretched selected-memory-DIB coverage.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel` passed after adding malformed present PE group/icon `ExtractIconExW` failure coverage.
+- `cargo test --features unicorn,trace,win32-desktop` passed after fixing the feature-enabled Unicorn test helper call sites and adding malformed present PE group/icon `ExtractIconExW` failure coverage.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel` passed after adding multi-size large/small PE `ExtractIconExW` selection coverage.
+- `cargo check --features unicorn,trace,win32-desktop` passed after adding multi-size large/small PE `ExtractIconExW` selection coverage.
+- `cargo test --features unicorn,trace,win32-desktop` passed after adding multi-size large/small PE `ExtractIconExW` selection coverage.
+- `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel` passed after adding multi-slot PE `ExtractIconExW` extraction coverage.
+- `cargo check --features unicorn,trace,win32-desktop` passed after adding multi-slot PE `ExtractIconExW` extraction coverage.
+- `cargo test --features unicorn,trace,win32-desktop` passed after adding multi-slot PE `ExtractIconExW` extraction coverage.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_kernel` passed after the CE `SFGAO_*` `SHGetFileInfoW` attribute slice.
 - `cargo test --features unicorn,trace,win32-desktop` passed after the CE `SFGAO_*` `SHGetFileInfoW` attribute slice.
 - `cargo test --features unicorn,trace,win32-desktop --test coredll_raw_gwe` passed with the `QS_ALLINPUT` post/paint/timer and multi-handle message-wait additions.

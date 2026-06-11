@@ -14,8 +14,8 @@ use crate::{
         crt,
         devices::{CommDcb, CommTimeouts, DeviceIoControlResult},
         file::{
-            CREATE_NEW, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_TEMPORARY,
-            FileIoResult, FindData, GENERIC_WRITE, VolumeInfo,
+            CREATE_NEW, FILE_ATTRIBUTE_ARCHIVE, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_READONLY,
+            FILE_ATTRIBUTE_TEMPORARY, FileIoResult, FindData, GENERIC_WRITE, VolumeInfo,
         },
         framebuffer::{Framebuffer, FramebufferRect, PixelFormat},
         gwe::{
@@ -190,6 +190,8 @@ const SHGFI_SUPPORTED_CE_FLAGS: u32 = SHGFI_ICON
     | SHGFI_ATTRIBUTES
     | SHGFI_SYSICONINDEX
     | SHGFI_USEFILEATTRIBUTES;
+const SFGAO_LINK: u32 = 0x0001_0000;
+const SFGAO_READONLY: u32 = 0x0004_0000;
 const SFGAO_FOLDER: u32 = 0x2000_0000;
 const SFGAO_FILESYSTEM: u32 = 0x4000_0000;
 const SHELL_DOCUMENT_ICON: u32 = 32512;
@@ -206,9 +208,10 @@ const SHELL_SYSTEM_IMAGE_LIST_CX: i32 = 16;
 const SHELL_SYSTEM_IMAGE_LIST_CY: i32 = 16;
 const CLR_NONE: u32 = 0xffff_ffff;
 const CLR_DEFAULT: u32 = 0xff00_0000;
-const NOTIFYICONDATA_MIN_SIZE_W: u32 = 24;
 const NOTIFYICONDATA_TIP_OFFSET: u32 = 24;
 const NOTIFYICONDATA_TIP_CHARS: usize = 64;
+const NOTIFYICONDATA_FIXED_SIZE_W: u32 =
+    NOTIFYICONDATA_TIP_OFFSET + (NOTIFYICONDATA_TIP_CHARS as u32 * 2);
 const NOTIFYICONDATA_STATE_OFFSET: u32 =
     NOTIFYICONDATA_TIP_OFFSET + (NOTIFYICONDATA_TIP_CHARS as u32 * 2);
 const NOTIFYICONDATA_STATE_MASK_OFFSET: u32 = NOTIFYICONDATA_STATE_OFFSET + 4;
@@ -12227,6 +12230,9 @@ fn message_box_selection(style: u32) -> Option<MessageBoxSelection> {
     const MB_ICONQUESTION: u32 = 0x0000_0020;
     const MB_ICONEXCLAMATION: u32 = 0x0000_0030;
     const MB_ICONASTERISK: u32 = 0x0000_0040;
+    const MB_SETFOREGROUND: u32 = 0x0001_0000;
+    const MB_TOPMOST: u32 = 0x0004_0000;
+    const MB_RTLREADING: u32 = 0x0010_0000;
     const IDOK: u32 = 1;
     const IDCANCEL: u32 = 2;
     const IDABORT: u32 = 3;
@@ -12234,6 +12240,12 @@ fn message_box_selection(style: u32) -> Option<MessageBoxSelection> {
     const IDIGNORE: u32 = 5;
     const IDYES: u32 = 6;
     const IDNO: u32 = 7;
+
+    let supported_mask =
+        MB_TYPEMASK | MB_DEFMASK | MB_ICONMASK | MB_SETFOREGROUND | MB_TOPMOST | MB_RTLREADING;
+    if style & !supported_mask != 0 {
+        return None;
+    }
 
     let button_layout: Vec<MessageBoxButton> = match style & MB_TYPEMASK {
         MB_OK => vec![message_box_button(
@@ -12346,7 +12358,7 @@ fn message_box_selection(style: u32) -> Option<MessageBoxSelection> {
         MB_ICONQUESTION => Some(MessageBoxIcon::Question),
         MB_ICONEXCLAMATION => Some(MessageBoxIcon::Exclamation),
         MB_ICONASTERISK => Some(MessageBoxIcon::Asterisk),
-        _ => None,
+        _ => return None,
     };
     let result = buttons[default_button_index];
     Some(MessageBoxSelection {
@@ -19568,7 +19580,7 @@ fn shell_notify_icon_w_raw<M: CoredllGuestMemory>(
     let Some(cb_size) = read_guest_u32(kernel, memory, thread_id, data_ptr) else {
         return false;
     };
-    if cb_size < NOTIFYICONDATA_MIN_SIZE_W {
+    if cb_size < NOTIFYICONDATA_FIXED_SIZE_W {
         kernel
             .threads
             .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
@@ -19596,12 +19608,8 @@ fn shell_notify_icon_w_raw<M: CoredllGuestMemory>(
         return false;
     }
 
-    let tip = if cb_size > NOTIFYICONDATA_TIP_OFFSET {
-        let chars = ((cb_size - NOTIFYICONDATA_TIP_OFFSET) / 2).min(NOTIFYICONDATA_TIP_CHARS as u32)
-            as usize;
-        read_guest_wide_z(memory, data_ptr + NOTIFYICONDATA_TIP_OFFSET, chars).unwrap_or_default()
-    } else {
-        String::new()
+    let Some(tip) = read_notify_icon_tip_w(kernel, memory, thread_id, data_ptr) else {
+        return false;
     };
     let state = if cb_size >= NOTIFYICONDATA_STATE_OFFSET + 4 {
         read_guest_u32(
@@ -19644,6 +19652,37 @@ fn shell_notify_icon_w_raw<M: CoredllGuestMemory>(
             .set_last_error(thread_id, ERROR_INVALID_HANDLE);
         false
     }
+}
+
+fn read_notify_icon_tip_w<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &M,
+    thread_id: u32,
+    data_ptr: u32,
+) -> Option<String> {
+    let mut units = Vec::new();
+    let mut found_nul = false;
+    for index in 0..NOTIFYICONDATA_TIP_CHARS {
+        let addr = data_ptr
+            .wrapping_add(NOTIFYICONDATA_TIP_OFFSET)
+            .wrapping_add((index as u32) * 2);
+        let unit = match memory.read_u16(addr) {
+            Ok(unit) => unit,
+            Err(_) => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return None;
+            }
+        };
+        if unit == 0 {
+            found_nul = true;
+        }
+        if !found_nul {
+            units.push(unit);
+        }
+    }
+    Some(String::from_utf16_lossy(&units))
 }
 
 fn sh_notification_add_i_raw<M: CoredllGuestMemory>(
@@ -20059,7 +20098,15 @@ fn sh_get_file_info_w_raw<M: CoredllGuestMemory>(
         && flags & SHGFI_ICON != 0
         && (is_executable_shell_path(&path) || path.to_ascii_lowercase().ends_with(".dll"))
     {
-        extract_pe_icon(kernel, memory, thread_id, &path, 0)
+        extract_pe_icons(kernel, memory, thread_id, &path, 0)
+            .ok()
+            .map(|icons| {
+                if flags & SHGFI_SMALLICON != 0 {
+                    icons.small
+                } else {
+                    icons.large
+                }
+            })
     } else {
         None
     };
@@ -20098,7 +20145,7 @@ fn sh_get_file_info_w_raw<M: CoredllGuestMemory>(
             memory,
             thread_id,
             info_ptr + SHFILEINFO_ATTRIBUTES_OFFSET,
-            shell_attributes_override.unwrap_or(attributes),
+            shell_attributes_override.unwrap_or_else(|| shell_file_attributes(&path, attributes)),
         ) {
             return 0;
         }
@@ -21003,6 +21050,20 @@ fn shell_file_class(kernel: &CeKernel, path: &str, attributes: u32) -> String {
         .unwrap_or_else(|| format!("{extension}file"))
 }
 
+fn shell_file_attributes(path: &str, attributes: u32) -> u32 {
+    let mut shell_attributes = SFGAO_FILESYSTEM;
+    if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+        shell_attributes |= SFGAO_FOLDER;
+    }
+    if attributes & FILE_ATTRIBUTE_READONLY != 0 {
+        shell_attributes |= SFGAO_READONLY;
+    }
+    if is_shell_shortcut(path) {
+        shell_attributes |= SFGAO_LINK;
+    }
+    shell_attributes
+}
+
 fn shell_file_type_name(kernel: &CeKernel, path: &str, attributes: u32, class: &str) -> String {
     if path.trim_end_matches(['\\', '/']) == "\\" {
         return "System Folder".to_owned();
@@ -21652,11 +21713,22 @@ fn track_popup_menu_ex_raw<M: CoredllGuestMemory>(
         Some([rect.left, rect.top, rect.right, rect.bottom])
     };
     let flags = raw_arg(args, 1);
+    let requested_x = raw_i32_arg(args, 2);
+    let requested_y = raw_i32_arg(args, 3);
+    let (popup_x, popup_y) = popup_menu_initial_position(
+        &kernel.resources,
+        menu,
+        requested_x,
+        requested_y,
+        exclude_rect,
+        kernel.gwe.system_metric(crate::ce::gwe::SM_CXSCREEN),
+        kernel.gwe.system_metric(crate::ce::gwe::SM_CYSCREEN),
+    );
     let tracking = PopupMenuTracking {
         menu,
         flags,
-        x: raw_i32_arg(args, 2),
-        y: raw_i32_arg(args, 3),
+        x: popup_x,
+        y: popup_y,
         hwnd,
         exclude_rect,
     };
@@ -21671,13 +21743,7 @@ fn track_popup_menu_ex_raw<M: CoredllGuestMemory>(
     notify_popup_menu_pre_loop(kernel, hwnd, menu, flags);
     let mut framebuffer = framebuffer;
     if let Some(framebuffer) = framebuffer.as_mut() {
-        render_popup_menu_framebuffer(
-            *framebuffer,
-            &kernel.resources,
-            menu,
-            raw_i32_arg(args, 2),
-            raw_i32_arg(args, 3),
-        );
+        render_popup_menu_framebuffer(*framebuffer, &kernel.resources, menu, popup_x, popup_y);
     }
     kernel.threads.set_last_error(thread_id, 0);
     let cursor = kernel.gwe.get_cursor_pos();
@@ -21687,22 +21753,16 @@ fn track_popup_menu_ex_raw<M: CoredllGuestMemory>(
         hwnd,
         menu,
         flags,
-        raw_i32_arg(args, 2),
-        raw_i32_arg(args, 3),
+        popup_x,
+        popup_y,
         &mut framebuffer,
     );
     let cancelled = matches!(modal_input, Some(PopupMenuModalInput::Cancelled));
     let selection = match modal_input {
         Some(PopupMenuModalInput::Selected(selection)) => Some(selection),
         Some(PopupMenuModalInput::Cancelled) => None,
-        None => popup_menu_pointer_selection(
-            &kernel.resources,
-            menu,
-            raw_i32_arg(args, 2),
-            raw_i32_arg(args, 3),
-            cursor,
-        )
-        .or_else(|| kernel.resources.popup_menu_command_selection(menu)),
+        None => popup_menu_pointer_selection(&kernel.resources, menu, popup_x, popup_y, cursor)
+            .or_else(|| kernel.resources.popup_menu_command_selection(menu)),
     };
     let command = selection
         .as_ref()
@@ -21876,8 +21936,17 @@ pub(crate) fn track_popup_menu_ex_prepare<M: CoredllGuestMemory>(
         Some([rect.left, rect.top, rect.right, rect.bottom])
     };
     let flags = raw_arg(args, 1);
-    let popup_x = raw_i32_arg(args, 2);
-    let popup_y = raw_i32_arg(args, 3);
+    let requested_x = raw_i32_arg(args, 2);
+    let requested_y = raw_i32_arg(args, 3);
+    let (popup_x, popup_y) = popup_menu_initial_position(
+        &kernel.resources,
+        menu,
+        requested_x,
+        requested_y,
+        exclude_rect,
+        kernel.gwe.system_metric(crate::ce::gwe::SM_CXSCREEN),
+        kernel.gwe.system_metric(crate::ce::gwe::SM_CYSCREEN),
+    );
     let tracking = PopupMenuTracking {
         menu,
         flags,
@@ -22018,6 +22087,78 @@ impl PopupMenuModalState {
 const POPUP_MENU_ITEM_HEIGHT: i32 = 18;
 const POPUP_MENU_BORDER: i32 = 2;
 const POPUP_MENU_VERTICAL_PADDING: i32 = POPUP_MENU_BORDER * 2;
+
+fn popup_menu_outer_size(resources: &ResourceSystem, menu: u32) -> Option<(i32, i32)> {
+    let menu_object = resources.menu(menu)?;
+    let width = menu_popup_width(menu_object);
+    let height = (menu_object.items.len() as i32).max(1) * POPUP_MENU_ITEM_HEIGHT
+        + POPUP_MENU_VERTICAL_PADDING;
+    Some((width, height))
+}
+
+fn popup_menu_clamp_to_screen(
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    screen_w: i32,
+    screen_h: i32,
+) -> (i32, i32) {
+    let max_x = screen_w.saturating_sub(width).max(0);
+    let max_y = screen_h.saturating_sub(height).max(0);
+    (x.clamp(0, max_x), y.clamp(0, max_y))
+}
+
+fn popup_menu_initial_position(
+    resources: &ResourceSystem,
+    menu: u32,
+    x: i32,
+    y: i32,
+    exclude_rect: Option<[i32; 4]>,
+    screen_w: i32,
+    screen_h: i32,
+) -> (i32, i32) {
+    let Some(exclude_rect) = exclude_rect else {
+        return (x, y);
+    };
+    let Some((width, height)) = popup_menu_outer_size(resources, menu) else {
+        return (x, y);
+    };
+    let exclude = Rect {
+        left: exclude_rect[0],
+        top: exclude_rect[1],
+        right: exclude_rect[2],
+        bottom: exclude_rect[3],
+    }
+    .normalized();
+    if exclude.is_empty()
+        || Rect::from_origin_size(x, y, width, height)
+            .intersect(exclude)
+            .is_none()
+    {
+        return (x, y);
+    }
+
+    let candidates = [
+        (x, exclude.bottom),
+        (x, exclude.top.saturating_sub(height)),
+        (exclude.right, y),
+        (exclude.left.saturating_sub(width), y),
+    ];
+    let mut first_clamped = None;
+    for (candidate_x, candidate_y) in candidates {
+        let (candidate_x, candidate_y) =
+            popup_menu_clamp_to_screen(candidate_x, candidate_y, width, height, screen_w, screen_h);
+        first_clamped.get_or_insert((candidate_x, candidate_y));
+        if Rect::from_origin_size(candidate_x, candidate_y, width, height)
+            .intersect(exclude)
+            .is_none()
+        {
+            return (candidate_x, candidate_y);
+        }
+    }
+    first_clamped.unwrap_or((x, y))
+}
 
 fn popup_menu_modal_input_loop(
     kernel: &mut CeKernel,
@@ -23789,35 +23930,104 @@ fn extract_icon_ex_w_raw<M: CoredllGuestMemory>(
         kernel.threads.set_last_error(thread_id, 0);
         return 0;
     }
-    // Try to extract real icon from PE file (EXE/DLL)
-    let icon = if is_pe {
-        match extract_pe_icon(kernel, memory, thread_id, &path, icon_index as u32) {
-            Some(handle) => handle,
-            // Only fall back to synthetic shell icon for index 0; otherwise no icon
-            None if icon_index == 0 => {
-                let class = shell_file_class(kernel, &path, attributes.attributes);
-                shell_file_icon(kernel, &path, attributes.attributes, &class).handle
+    let mut extracted = 0;
+    for slot in 0..icon_count {
+        let current_index = (icon_index as u32).saturating_add(slot);
+        let icons = match extract_shell_icons_for_index(
+            kernel,
+            memory,
+            thread_id,
+            &path,
+            attributes.attributes,
+            is_pe,
+            current_index,
+        ) {
+            Ok(Some(icons)) => icons,
+            Ok(None) => break,
+            Err(error) => {
+                kernel.threads.set_last_error(thread_id, error);
+                return extracted;
             }
-            None => 0,
+        };
+        let offset = slot.saturating_mul(4);
+        if large_out != 0
+            && !write_guest_u32(
+                kernel,
+                memory,
+                thread_id,
+                large_out.wrapping_add(offset),
+                icons.large,
+            )
+        {
+            return 0;
         }
-    } else if icon_index == 0 {
-        let class = shell_file_class(kernel, &path, attributes.attributes);
-        shell_file_icon(kernel, &path, attributes.attributes, &class).handle
-    } else {
-        0
-    };
-    if icon == 0 {
-        kernel.threads.set_last_error(thread_id, 0);
-        return 0;
-    }
-    if large_out != 0 && !write_guest_u32(kernel, memory, thread_id, large_out, icon) {
-        return 0;
-    }
-    if small_out != 0 && !write_guest_u32(kernel, memory, thread_id, small_out, icon) {
-        return 0;
+        if small_out != 0
+            && !write_guest_u32(
+                kernel,
+                memory,
+                thread_id,
+                small_out.wrapping_add(offset),
+                icons.small,
+            )
+        {
+            return 0;
+        }
+        extracted += 1;
     }
     kernel.threads.set_last_error(thread_id, 0);
-    1
+    extracted
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ExtractedShellIcons {
+    large: u32,
+    small: u32,
+}
+
+impl ExtractedShellIcons {
+    fn same(icon: u32) -> Self {
+        Self {
+            large: icon,
+            small: icon,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PeIconExtractError {
+    Unavailable,
+    Malformed,
+}
+
+fn extract_shell_icons_for_index<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    path: &str,
+    attributes: u32,
+    is_pe: bool,
+    icon_index: u32,
+) -> std::result::Result<Option<ExtractedShellIcons>, u32> {
+    if is_pe {
+        match extract_pe_icons(kernel, memory, thread_id, path, icon_index) {
+            Ok(icons) => Ok(Some(icons)),
+            Err(PeIconExtractError::Unavailable) if icon_index == 0 => {
+                let class = shell_file_class(kernel, path, attributes);
+                Ok(Some(ExtractedShellIcons::same(
+                    shell_file_icon(kernel, path, attributes, &class).handle,
+                )))
+            }
+            Err(PeIconExtractError::Unavailable) => Ok(None),
+            Err(PeIconExtractError::Malformed) => Err(ERROR_RESOURCE_NAME_NOT_FOUND),
+        }
+    } else if icon_index == 0 {
+        let class = shell_file_class(kernel, path, attributes);
+        Ok(Some(ExtractedShellIcons::same(
+            shell_file_icon(kernel, path, attributes, &class).handle,
+        )))
+    } else {
+        Ok(None)
+    }
 }
 
 fn pe_icon_group_count(kernel: &mut CeKernel, path: &str) -> Option<u32> {
@@ -23827,97 +24037,183 @@ fn pe_icon_group_count(kernel: &mut CeKernel, path: &str) -> Option<u32> {
     let pe = PeImage::parse_bytes(path, &bytes).ok()?;
     let resources = pe.resource_data_entries().ok()?;
 
-    const RT_GROUP_ICON: u32 = 14;
-    Some(
-        resources
-            .iter()
-            .filter(|resource| resource.kind == RT_GROUP_ICON)
-            .count() as u32,
-    )
+    Some(pe_icon_group_resources(&resources).len() as u32)
 }
 
-fn extract_pe_icon<M: CoredllGuestMemory>(
+fn pe_icon_group_resources(
+    resources: &[crate::pe::PeResourceData],
+) -> Vec<&crate::pe::PeResourceData> {
+    const RT_GROUP_ICON: u32 = 14;
+
+    resources
+        .iter()
+        .filter(|resource| resource.kind == RT_GROUP_ICON)
+        .collect()
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PeIconGroupEntry {
+    width: i32,
+    height: i32,
+    bit_count: i32,
+    id: u16,
+}
+
+fn extract_pe_icons<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
     memory: &mut M,
     thread_id: u32,
     path: &str,
     icon_index: u32,
-) -> Option<u32> {
+) -> std::result::Result<ExtractedShellIcons, PeIconExtractError> {
     use crate::pe::PeImage;
 
-    let bytes = kernel.read_guest_file(path).ok()?;
-    let pe = PeImage::parse_bytes(path, &bytes).ok()?;
-    let resources = pe.resource_data_entries().ok()?;
+    let bytes = kernel
+        .read_guest_file(path)
+        .map_err(|_| PeIconExtractError::Unavailable)?;
+    let pe = PeImage::parse_bytes(path, &bytes).map_err(|_| PeIconExtractError::Unavailable)?;
+    let resources = pe
+        .resource_data_entries()
+        .map_err(|_| PeIconExtractError::Malformed)?;
 
-    const RT_ICON: u32 = 3;
-    const RT_GROUP_ICON: u32 = 14;
+    // Find the icon group at icon_index. The public ExtractIconExW path uses
+    // zero-based group enumeration; CE KernExtractIcons then resolves the
+    // selected group through RT_GROUP_ICON/MAKEINTRESOURCE.
+    let groups = pe_icon_group_resources(&resources);
+    let group = groups
+        .get(icon_index as usize)
+        .ok_or(PeIconExtractError::Unavailable)?;
 
-    // Find the icon group at icon_index
-    let groups: Vec<_> = resources
-        .iter()
-        .filter(|r| r.kind == RT_GROUP_ICON)
-        .collect();
-    let group = groups.get(icon_index as usize)?;
-
-    let group_offset = pe.rva_to_file_offset(group.data_rva)?;
-    let group_bytes = bytes.get(group_offset..group_offset + group.size as usize)?;
+    let group_offset = pe
+        .rva_to_file_offset(group.data_rva)
+        .ok_or(PeIconExtractError::Malformed)?;
+    let group_end = group_offset
+        .checked_add(group.size as usize)
+        .ok_or(PeIconExtractError::Malformed)?;
+    let group_bytes = bytes
+        .get(group_offset..group_end)
+        .ok_or(PeIconExtractError::Malformed)?;
 
     // Parse GRPICONDIR: WORD reserved, WORD type, WORD count
     if group_bytes.len() < 6 {
-        return None;
+        return Err(PeIconExtractError::Malformed);
     }
-    let icon_count = read_le_u16(group_bytes, 4)? as usize;
-    if group_bytes.len() < 6 + icon_count * 14 {
-        return None;
+    let reserved = read_le_u16(group_bytes, 0).ok_or(PeIconExtractError::Malformed)?;
+    let resource_type = read_le_u16(group_bytes, 2).ok_or(PeIconExtractError::Malformed)?;
+    let icon_count = read_le_u16(group_bytes, 4).ok_or(PeIconExtractError::Malformed)? as usize;
+    if reserved != 0 || resource_type != 1 || icon_count == 0 {
+        return Err(PeIconExtractError::Malformed);
+    }
+    let group_table_len = 6usize
+        .checked_add(
+            icon_count
+                .checked_mul(14)
+                .ok_or(PeIconExtractError::Malformed)?,
+        )
+        .ok_or(PeIconExtractError::Malformed)?;
+    if group_bytes.len() < group_table_len {
+        return Err(PeIconExtractError::Malformed);
     }
 
-    // Pick the best icon from the group (prefer 32x32, highest bit depth)
-    let mut best_id: Option<u16> = None;
-    let mut best_score: i32 = -1;
-    for i in 0..icon_count {
-        let entry_off = 6 + i * 14;
-        let entry = group_bytes.get(entry_off..entry_off + 14)?;
-        let width = entry[0] as i32;
-        let bit_count = read_le_u16(entry, 6)? as i32;
-        let id = read_le_u16(entry, 12)?;
-        // Score: prefer 32x32 and 32bpp; fall back to largest available
-        let size_score = if width == 32 { 100 } else { width };
-        let bpp_score = bit_count;
-        let score = size_score * 10 + bpp_score;
-        if score > best_score {
-            best_score = score;
-            best_id = Some(id);
-        }
+    let mut entries = Vec::with_capacity(icon_count);
+    for index in 0..icon_count {
+        let entry_off = 6 + index * 14;
+        let entry = group_bytes
+            .get(entry_off..entry_off + 14)
+            .ok_or(PeIconExtractError::Malformed)?;
+        entries.push(PeIconGroupEntry {
+            width: pe_icon_directory_dimension(entry[0]),
+            height: pe_icon_directory_dimension(entry[1]),
+            bit_count: read_le_u16(entry, 6).ok_or(PeIconExtractError::Malformed)? as i32,
+            id: read_le_u16(entry, 12).ok_or(PeIconExtractError::Malformed)?,
+        });
     }
-    let icon_id = best_id?;
+    let large_id = select_pe_icon_group_entry(&entries, 32)
+        .ok_or(PeIconExtractError::Malformed)?
+        .id;
+    let small_id = select_pe_icon_group_entry(&entries, 16)
+        .ok_or(PeIconExtractError::Malformed)?
+        .id;
+    let large =
+        extract_pe_icon_by_id(kernel, memory, thread_id, &pe, &bytes, &resources, large_id)?;
+    let small = if small_id == large_id {
+        large
+    } else {
+        extract_pe_icon_by_id(kernel, memory, thread_id, &pe, &bytes, &resources, small_id)?
+    };
+
+    Ok(ExtractedShellIcons { large, small })
+}
+
+fn pe_icon_directory_dimension(value: u8) -> i32 {
+    if value == 0 { 256 } else { value as i32 }
+}
+
+fn select_pe_icon_group_entry(
+    entries: &[PeIconGroupEntry],
+    target: i32,
+) -> Option<PeIconGroupEntry> {
+    entries.iter().copied().max_by_key(|entry| {
+        let exact_size = entry.width == target && entry.height == target;
+        let size_score = if exact_size {
+            10_000
+        } else {
+            entry.width.max(entry.height)
+        };
+        size_score * 1_000 + entry.bit_count
+    })
+}
+
+fn extract_pe_icon_by_id<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    pe: &crate::pe::PeImage,
+    bytes: &[u8],
+    resources: &[crate::pe::PeResourceData],
+    icon_id: u16,
+) -> std::result::Result<u32, PeIconExtractError> {
+    const RT_ICON: u32 = 3;
 
     // Find matching RT_ICON entry
     let icon_entry = resources
         .iter()
-        .find(|r| r.kind == RT_ICON && r.name == icon_id as u32)?;
-    let icon_offset = pe.rva_to_file_offset(icon_entry.data_rva)?;
-    let icon_bytes = bytes.get(icon_offset..icon_offset + icon_entry.size as usize)?;
+        .find(|r| r.kind == RT_ICON && r.name == icon_id as u32)
+        .ok_or(PeIconExtractError::Malformed)?;
+    let icon_offset = pe
+        .rva_to_file_offset(icon_entry.data_rva)
+        .ok_or(PeIconExtractError::Malformed)?;
+    let icon_end = icon_offset
+        .checked_add(icon_entry.size as usize)
+        .ok_or(PeIconExtractError::Malformed)?;
+    let icon_bytes = bytes
+        .get(icon_offset..icon_end)
+        .ok_or(PeIconExtractError::Malformed)?;
 
     // RT_ICON data is a DIB - BITMAPINFOHEADER + color table + XOR mask + AND mask
     // The height in the header is 2*h (XOR + AND masks stacked), fix it for color bitmap
     if icon_bytes.len() < 40 {
-        return None;
+        return Err(PeIconExtractError::Malformed);
     }
-    let actual_width = read_le_i32(icon_bytes, 4)?;
-    let dib_height = read_le_u32(icon_bytes, 8)?;
+    let actual_width = read_le_i32(icon_bytes, 4).ok_or(PeIconExtractError::Malformed)?;
+    let dib_height = read_le_u32(icon_bytes, 8).ok_or(PeIconExtractError::Malformed)?;
     let actual_height = (dib_height / 2) as i32;
-    let bpp = read_le_u16(icon_bytes, 14)?;
+    let bpp = read_le_u16(icon_bytes, 14).ok_or(PeIconExtractError::Malformed)?;
     let compression = read_le_u32(icon_bytes, 16).unwrap_or(0);
+    if actual_width <= 0 || actual_height <= 0 || dib_height % 2 != 0 || bpp == 0 {
+        return Err(PeIconExtractError::Malformed);
+    }
 
     // Create a copy of the icon DIB with corrected height for the color bitmap
     let mut color_dib: Vec<u8> = icon_bytes.to_vec();
     color_dib
-        .get_mut(8..12)?
+        .get_mut(8..12)
+        .ok_or(PeIconExtractError::Malformed)?
         .copy_from_slice(&(actual_height as u32).to_le_bytes());
 
     let color_bitmap = create_bitmap_from_dib_bytes(kernel, memory, thread_id, &color_dib);
     if color_bitmap == 0 {
-        return None;
+        return Err(PeIconExtractError::Malformed);
     }
 
     // Extract AND mask (1bpp, follows XOR pixels in RT_ICON data)
@@ -23936,6 +24232,7 @@ fn extract_pe_icon<M: CoredllGuestMemory>(
     kernel
         .resources
         .create_icon(true, 0, 0, mask_bitmap, color_bitmap)
+        .ok_or(PeIconExtractError::Malformed)
 }
 
 fn pe_icon_and_mask_bitmap<M: CoredllGuestMemory>(
@@ -24074,6 +24371,16 @@ fn draw_icon_ex_raw<M: CoredllGuestMemory>(
     if let Some(icon_obj) = kernel.resources.icon(icon) {
         let color_bitmap = icon_obj.color_bitmap;
         let mask_bitmap = icon_obj.mask_bitmap;
+        let source_bitmap = if color_bitmap != 0 {
+            color_bitmap
+        } else {
+            mask_bitmap
+        };
+        let (source_width, source_height) = kernel
+            .resources
+            .bitmap(source_bitmap)
+            .map(|bitmap| (bitmap.width.abs().max(1), bitmap.height.abs().max(1)))
+            .unwrap_or((width, height));
         let image = crate::ce::resource::ImageListImage {
             bitmap: if color_bitmap != 0 {
                 color_bitmap
@@ -24088,11 +24395,32 @@ fn draw_icon_ex_raw<M: CoredllGuestMemory>(
         };
         if let Some(fb) = framebuffer {
             render_image_list_bitmap_entry_framebuffer(
-                kernel, memory, fb, hdc, x, y, width, height, width, height, &image, None,
+                kernel,
+                memory,
+                fb,
+                hdc,
+                x,
+                y,
+                width,
+                height,
+                source_width,
+                source_height,
+                &image,
+                None,
             );
         } else {
             render_image_list_bitmap_entry_hdc(
-                kernel, memory, hdc, x, y, width, height, width, height, &image, None,
+                kernel,
+                memory,
+                hdc,
+                x,
+                y,
+                width,
+                height,
+                source_width,
+                source_height,
+                &image,
+                None,
             );
         }
         kernel.threads.set_last_error(thread_id, 0);

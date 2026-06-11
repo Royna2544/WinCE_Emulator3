@@ -84,7 +84,7 @@ use wince_emulation_v3::{
         thread::{
             ERROR_ACCESS_DENIED, ERROR_FILE_NOT_FOUND, ERROR_INVALID_HANDLE,
             ERROR_INVALID_PARAMETER, ERROR_INVALID_WINDOW_HANDLE, ERROR_NOT_OWNER,
-            ERROR_NOT_SUPPORTED, ERROR_SIGNAL_REFUSED,
+            ERROR_NOT_SUPPORTED, ERROR_RESOURCE_NAME_NOT_FOUND, ERROR_SIGNAL_REFUSED,
         },
         timer::{INFINITE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     },
@@ -3997,7 +3997,10 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
     const SHGFI_USEFILEATTRIBUTES: u32 = 0x0000_0010;
     const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
     const FILE_ATTRIBUTE_ARCHIVE: u32 = 0x0000_0020;
+    const FILE_ATTRIBUTE_READONLY: u32 = 0x0000_0001;
     const FILE_ATTRIBUTE_TEMPORARY: u32 = 0x0000_0100;
+    const SFGAO_LINK: u32 = 0x0001_0000;
+    const SFGAO_READONLY: u32 = 0x0004_0000;
     const SFGAO_FOLDER: u32 = 0x2000_0000;
     const SFGAO_FILESYSTEM: u32 = 0x4000_0000;
 
@@ -4008,10 +4011,36 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("Docs")).unwrap();
     fs::write(root.join("Docs").join("morning.nav"), b"route").unwrap();
+    fs::write(root.join("Docs").join("readonly.txt"), b"locked").unwrap();
+    let mut readonly_permissions = fs::metadata(root.join("Docs").join("readonly.txt"))
+        .unwrap()
+        .permissions();
+    readonly_permissions.set_readonly(true);
+    fs::set_permissions(root.join("Docs").join("readonly.txt"), readonly_permissions).unwrap();
     fs::write(root.join("Docs").join("viewer.exe"), b"MZ").unwrap();
     fs::write(
         root.join("Docs").join("two-icons.exe"),
         pe32_with_group_icon_count(2),
+    )
+    .unwrap();
+    fs::write(
+        root.join("Docs").join("multi-size-icons.exe"),
+        pe32_with_multi_size_icon_group(),
+    )
+    .unwrap();
+    fs::write(
+        root.join("Docs").join("named-group-icon.exe"),
+        pe32_with_string_named_icon_group(),
+    )
+    .unwrap();
+    fs::write(
+        root.join("Docs").join("bad-group-icon.exe"),
+        pe32_with_malformed_icon_group_type(),
+    )
+    .unwrap();
+    fs::write(
+        root.join("Docs").join("missing-icon-resource.exe"),
+        pe32_with_missing_icon_resource(),
     )
     .unwrap();
     fs::write(
@@ -4078,7 +4107,7 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
     ));
     assert_eq!(
         memory.read_u32(info_ptr + SHFILEINFO_ATTRIBUTES_OFFSET)?,
-        FILE_ATTRIBUTE_ARCHIVE
+        SFGAO_FILESYSTEM
     );
     let expected_nav_icon = expected_default_icon_index(r"\Windows\navicons.dll", -7);
     assert_eq!(
@@ -4199,10 +4228,175 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
         }
     ));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    memory.write_u32(large_icon_ptr, 0)?;
+    memory.write_u32(large_icon_ptr + 4, 0)?;
+    memory.write_u32(small_icon_ptr, 0)?;
+    memory.write_u32(small_icon_ptr + 4, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXTRACT_ICON_EX_W,
+            [path_ptr, 0, large_icon_ptr, small_icon_ptr, 2],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(2),
+            ..
+        }
+    ));
+    let first_large_icon = memory.read_u32(large_icon_ptr)?;
+    let second_large_icon = memory.read_u32(large_icon_ptr + 4)?;
+    assert_ne!(first_large_icon, 0);
+    assert_ne!(second_large_icon, 0);
+    assert_ne!(first_large_icon, second_large_icon);
+    assert_eq!(memory.read_u32(small_icon_ptr)?, first_large_icon);
+    assert_eq!(memory.read_u32(small_icon_ptr + 4)?, second_large_icon);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_u32(large_icon_ptr, 0)?;
+    memory.write_u32(large_icon_ptr + 4, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXTRACT_ICON_EX_W,
+            [path_ptr, 1, large_icon_ptr, 0, 2],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_ne!(memory.read_u32(large_icon_ptr)?, 0);
+    assert_eq!(memory.read_u32(large_icon_ptr + 4)?, 0);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_wide_z(path_ptr, r"\Docs\multi-size-icons.exe");
+    memory.write_u32(large_icon_ptr, 0)?;
+    memory.write_u32(small_icon_ptr, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXTRACT_ICON_EX_W,
+            [path_ptr, 0, large_icon_ptr, small_icon_ptr, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    let large_icon = memory.read_u32(large_icon_ptr)?;
+    let small_icon = memory.read_u32(small_icon_ptr)?;
+    assert_ne!(large_icon, 0);
+    assert_ne!(small_icon, 0);
+    assert_ne!(large_icon, small_icon);
+    let large_color_bitmap = kernel
+        .resources
+        .icon(large_icon)
+        .expect("large PE icon")
+        .color_bitmap;
+    let small_color_bitmap = kernel
+        .resources
+        .icon(small_icon)
+        .expect("small PE icon")
+        .color_bitmap;
+    let large_bitmap = kernel
+        .resources
+        .bitmap(large_color_bitmap)
+        .expect("large PE icon bitmap");
+    let small_bitmap = kernel
+        .resources
+        .bitmap(small_color_bitmap)
+        .expect("small PE icon bitmap");
+    assert_eq!((large_bitmap.width, large_bitmap.height), (32, 32));
+    assert_eq!((small_bitmap.width, small_bitmap.height), (16, 16));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    memory.write_wide_z(path_ptr, r"\Docs\named-group-icon.exe");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXTRACT_ICON_EX_W,
+            [path_ptr, 0xffff_ffff, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    memory.write_u32(large_icon_ptr, 0)?;
+    memory.write_u32(small_icon_ptr, 0)?;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_EXTRACT_ICON_EX_W,
+            [path_ptr, 0, large_icon_ptr, small_icon_ptr, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    let named_large_icon = memory.read_u32(large_icon_ptr)?;
+    assert_ne!(named_large_icon, 0);
+    assert_eq!(memory.read_u32(small_icon_ptr)?, named_large_icon);
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+
+    for malformed_icon_path in [
+        r"\Docs\bad-group-icon.exe",
+        r"\Docs\missing-icon-resource.exe",
+    ] {
+        memory.write_wide_z(path_ptr, malformed_icon_path);
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_EXTRACT_ICON_EX_W,
+                [path_ptr, 0xffff_ffff, 0, 0, 0],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(1),
+                ..
+            }
+        ));
+        assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+        memory.write_u32(large_icon_ptr, 0xdead_beef)?;
+        memory.write_u32(small_icon_ptr, 0xfeed_face)?;
+        assert!(matches!(
+            table.dispatch_raw_ordinal_with_memory(
+                &mut kernel,
+                &mut memory,
+                thread_id,
+                ORD_EXTRACT_ICON_EX_W,
+                [path_ptr, 0, large_icon_ptr, small_icon_ptr, 1],
+            ),
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(0),
+                ..
+            }
+        ));
+        assert_eq!(
+            kernel.threads.get_last_error(thread_id),
+            ERROR_RESOURCE_NAME_NOT_FOUND
+        );
+        assert_eq!(memory.read_u32(large_icon_ptr)?, 0xdead_beef);
+        assert_eq!(memory.read_u32(small_icon_ptr)?, 0xfeed_face);
+    }
 
     memory.write_wide_z(path_ptr, r"\Docs\viewer.lnk");
     memory.write_u32(info_ptr + SHFILEINFO_HICON_OFFSET, 0)?;
     memory.write_u32(info_ptr + SHFILEINFO_IICON_OFFSET, 0)?;
+    memory.write_u32(info_ptr + SHFILEINFO_ATTRIBUTES_OFFSET, 0)?;
     let ret = table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
         &mut memory,
@@ -4213,7 +4407,12 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
             0,
             info_ptr,
             SHFILEINFO_SIZE_W,
-            SHGFI_DISPLAYNAME | SHGFI_TYPENAME | SHGFI_SYSICONINDEX | SHGFI_ICON | SHGFI_SMALLICON,
+            SHGFI_DISPLAYNAME
+                | SHGFI_TYPENAME
+                | SHGFI_ATTRIBUTES
+                | SHGFI_SYSICONINDEX
+                | SHGFI_ICON
+                | SHGFI_SMALLICON,
         ],
     );
     assert!(matches!(
@@ -4227,6 +4426,10 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
     assert_eq!(
         memory.read_u32(info_ptr + SHFILEINFO_HICON_OFFSET)?,
         shell_pseudo_icon_handle_with_overlay(2, 1)
+    );
+    assert_eq!(
+        memory.read_u32(info_ptr + SHFILEINFO_ATTRIBUTES_OFFSET)?,
+        SFGAO_FILESYSTEM | SFGAO_LINK
     );
     assert_eq!(
         memory.read_wide_z(info_ptr + SHFILEINFO_DISPLAY_NAME_OFFSET, 260),
@@ -4363,7 +4566,7 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
     ));
     assert_eq!(
         memory.read_u32(info_ptr + SHFILEINFO_ATTRIBUTES_OFFSET)?,
-        FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_TEMPORARY
+        SFGAO_FILESYSTEM | SFGAO_FOLDER
     );
     assert_eq!(memory.read_i32(info_ptr + SHFILEINFO_IICON_OFFSET)?, 3);
     assert_eq!(
@@ -4456,6 +4659,33 @@ fn sh_get_file_info_uses_registry_associations_and_attributes() -> Result<()> {
         "Network Folder"
     );
 
+    memory.write_wide_z(path_ptr, r"\Docs\readonly.txt");
+    memory.write_u32(info_ptr + SHFILEINFO_ATTRIBUTES_OFFSET, 0)?;
+    let ret = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_SHGET_FILE_INFO,
+        [
+            path_ptr,
+            FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_READONLY,
+            info_ptr,
+            SHFILEINFO_SIZE_W,
+            SHGFI_ATTRIBUTES,
+        ],
+    );
+    assert!(matches!(
+        ret,
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(info_ptr + SHFILEINFO_ATTRIBUTES_OFFSET)?,
+        SFGAO_FILESYSTEM | SFGAO_READONLY
+    );
+
     memory.write_wide_z(path_ptr, r"\Docs\missing.nav");
     let ret = table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
@@ -4529,7 +4759,77 @@ fn shell_pseudo_icon_handle_with_overlay(index: i32, overlay: u32) -> u32 {
 }
 
 fn pe32_with_group_icon_count(group_count: u16) -> Vec<u8> {
-    let mut bytes = vec![0u8; 0x400];
+    let groups: Vec<_> = (0..group_count)
+        .map(|index| TestIconGroup {
+            images: vec![TestIconImage {
+                width: 1,
+                height: 1,
+                channel: 0x30u8.saturating_add((index as u8).saturating_mul(0x40)),
+            }],
+        })
+        .collect();
+    pe32_with_icon_groups(&groups)
+}
+
+fn pe32_with_multi_size_icon_group() -> Vec<u8> {
+    pe32_with_icon_groups(&[TestIconGroup {
+        images: vec![
+            TestIconImage {
+                width: 16,
+                height: 16,
+                channel: 0x30,
+            },
+            TestIconImage {
+                width: 32,
+                height: 32,
+                channel: 0x80,
+            },
+        ],
+    }])
+}
+
+fn pe32_with_string_named_icon_group() -> Vec<u8> {
+    let mut bytes = pe32_with_group_icon_count(1);
+    let rsrc = 0x200usize;
+    let group_type_dir = rsrc + 0x60;
+    let group_name_string_offset = 0x180usize;
+    put_test_u16(&mut bytes, group_type_dir + 12, 1);
+    put_test_u16(&mut bytes, group_type_dir + 14, 0);
+    put_test_u32(
+        &mut bytes,
+        group_type_dir + 16,
+        0x8000_0000 | group_name_string_offset as u32,
+    );
+    put_test_resource_name_string(&mut bytes, rsrc + group_name_string_offset, "APPICON");
+    bytes
+}
+
+fn pe32_with_malformed_icon_group_type() -> Vec<u8> {
+    let mut bytes = pe32_with_group_icon_count(1);
+    put_test_u16(&mut bytes, 0x200 + 0x500 + 2, 2);
+    bytes
+}
+
+fn pe32_with_missing_icon_resource() -> Vec<u8> {
+    let mut bytes = pe32_with_group_icon_count(1);
+    put_test_u16(&mut bytes, 0x200 + 0x500 + 18, 999);
+    bytes
+}
+
+struct TestIconGroup {
+    images: Vec<TestIconImage>,
+}
+
+#[derive(Clone, Copy)]
+struct TestIconImage {
+    width: u8,
+    height: u8,
+    channel: u8,
+}
+
+fn pe32_with_icon_groups(groups: &[TestIconGroup]) -> Vec<u8> {
+    let resource_size = 0x4000u32;
+    let mut bytes = vec![0u8; 0x200 + resource_size as usize];
     put_test_bytes(&mut bytes, 0, b"MZ");
     put_test_u32(&mut bytes, 0x3c, 0x80);
     put_test_bytes(&mut bytes, 0x80, b"PE\0\0");
@@ -4547,7 +4847,7 @@ fn pe32_with_group_icon_count(group_count: u16) -> Vec<u8> {
     put_test_u32(&mut bytes, optional + 28, 0x0040_0000);
     put_test_u32(&mut bytes, optional + 32, 0x1000);
     put_test_u32(&mut bytes, optional + 36, 0x200);
-    put_test_u32(&mut bytes, optional + 56, 0x2000);
+    put_test_u32(&mut bytes, optional + 56, 0x1000 + resource_size);
     put_test_u32(&mut bytes, optional + 60, 0x200);
     put_test_u16(&mut bytes, optional + 68, 2);
     put_test_u32(&mut bytes, optional + 72, 0x100000);
@@ -4556,58 +4856,168 @@ fn pe32_with_group_icon_count(group_count: u16) -> Vec<u8> {
     put_test_u32(&mut bytes, optional + 84, 0x1000);
     put_test_u32(&mut bytes, optional + 92, 16);
     put_test_u32(&mut bytes, optional + 112, 0x1000);
-    put_test_u32(&mut bytes, optional + 116, 0x200);
+    put_test_u32(&mut bytes, optional + 116, resource_size);
 
     let section = 0x178;
     put_test_bytes(&mut bytes, section, b".rsrc\0\0\0");
-    put_test_u32(&mut bytes, section + 8, 0x200);
+    put_test_u32(&mut bytes, section + 8, resource_size);
     put_test_u32(&mut bytes, section + 12, 0x1000);
-    put_test_u32(&mut bytes, section + 16, 0x200);
+    put_test_u32(&mut bytes, section + 16, resource_size);
     put_test_u32(&mut bytes, section + 20, 0x200);
     put_test_u32(&mut bytes, section + 36, 0x4000_0040);
 
     let rsrc = 0x200;
-    put_test_resource_directory(&mut bytes, rsrc, 1);
-    put_test_u32(&mut bytes, rsrc + 16, 14);
+    put_test_resource_directory(&mut bytes, rsrc, 2);
+    put_test_u32(&mut bytes, rsrc + 16, 3);
     put_test_u32(&mut bytes, rsrc + 20, 0x8000_0020);
+    put_test_u32(&mut bytes, rsrc + 24, 14);
+    put_test_u32(&mut bytes, rsrc + 28, 0x8000_0060);
 
-    let type_dir = rsrc + 0x20;
-    put_test_resource_directory(&mut bytes, type_dir, group_count);
-    let name_entries = type_dir + 16;
-    let name_dir_base = 0x40usize;
-    let data_entry_base = 0x100usize;
-    let group_data_base = 0x180usize;
-    for index in 0..group_count as usize {
-        let name_dir_offset = name_dir_base + index * 0x20;
-        put_test_u32(&mut bytes, name_entries + index * 8, (index + 1) as u32);
+    let icon_type_dir = rsrc + 0x20;
+    let group_type_dir = rsrc + 0x60;
+    let icon_name_dir_base = 0x0a0usize;
+    let group_name_dir_base = 0x1a0usize;
+    let icon_data_entry_base = 0x2a0usize;
+    let group_data_entry_base = 0x3a0usize;
+    let group_data_base = 0x500usize;
+    let icon_data_base = 0x700usize;
+    let icon_count: usize = groups.iter().map(|group| group.images.len()).sum();
+
+    put_test_resource_directory(&mut bytes, icon_type_dir, icon_count as u16);
+    put_test_resource_directory(&mut bytes, group_type_dir, groups.len() as u16);
+    let mut icon_index = 0usize;
+    let mut group_icon_entries: Vec<Vec<(u16, TestIconImage, usize)>> = Vec::new();
+    for group in groups {
+        let mut current_group_entries = Vec::new();
+        for image in &group.images {
+            let icon_resource_id = 100 + icon_index as u32;
+            let icon_name_dir_offset = icon_name_dir_base + icon_index * 0x20;
+            put_test_u32(
+                &mut bytes,
+                icon_type_dir + 16 + icon_index * 8,
+                icon_resource_id,
+            );
+            put_test_u32(
+                &mut bytes,
+                icon_type_dir + 20 + icon_index * 8,
+                0x8000_0000 | icon_name_dir_offset as u32,
+            );
+            let icon_name_dir = rsrc + icon_name_dir_offset;
+            put_test_resource_directory(&mut bytes, icon_name_dir, 1);
+            let icon_data_entry_offset = icon_data_entry_base + icon_index * 16;
+            put_test_u32(&mut bytes, icon_name_dir + 16, 0x0409);
+            put_test_u32(
+                &mut bytes,
+                icon_name_dir + 20,
+                icon_data_entry_offset as u32,
+            );
+
+            let icon_dib = icon_dib_32bpp(image.width as i32, image.height as i32, image.channel);
+            let icon_data_offset = icon_data_base + icon_index * 0x500;
+            let icon_data_entry = rsrc + icon_data_entry_offset;
+            put_test_u32(
+                &mut bytes,
+                icon_data_entry,
+                0x1000 + icon_data_offset as u32,
+            );
+            put_test_u32(&mut bytes, icon_data_entry + 4, icon_dib.len() as u32);
+            put_test_bytes(&mut bytes, rsrc + icon_data_offset, &icon_dib);
+            current_group_entries.push((icon_resource_id as u16, *image, icon_dib.len()));
+            icon_index += 1;
+        }
+        group_icon_entries.push(current_group_entries);
+    }
+
+    for (index, group_entries) in group_icon_entries.iter().enumerate() {
+        let group_name_dir_offset = group_name_dir_base + index * 0x20;
         put_test_u32(
             &mut bytes,
-            name_entries + index * 8 + 4,
-            0x8000_0000 | name_dir_offset as u32,
+            group_type_dir + 16 + index * 8,
+            (index + 1) as u32,
+        );
+        put_test_u32(
+            &mut bytes,
+            group_type_dir + 20 + index * 8,
+            0x8000_0000 | group_name_dir_offset as u32,
+        );
+        let group_name_dir = rsrc + group_name_dir_offset;
+        put_test_resource_directory(&mut bytes, group_name_dir, 1);
+        let group_data_entry_offset = group_data_entry_base + index * 16;
+        put_test_u32(&mut bytes, group_name_dir + 16, 0x0409);
+        put_test_u32(
+            &mut bytes,
+            group_name_dir + 20,
+            group_data_entry_offset as u32,
         );
 
-        let name_dir = rsrc + name_dir_offset;
-        put_test_resource_directory(&mut bytes, name_dir, 1);
-        let data_entry_offset = data_entry_base + index * 16;
-        put_test_u32(&mut bytes, name_dir + 16, 0x0409);
-        put_test_u32(&mut bytes, name_dir + 20, data_entry_offset as u32);
-
-        let data_entry = rsrc + data_entry_offset;
-        let group_data_offset = group_data_base + index * 8;
-        put_test_u32(&mut bytes, data_entry, 0x1000 + group_data_offset as u32);
-        put_test_u32(&mut bytes, data_entry + 4, 6);
-
+        let group_data_offset = group_data_base + index * 0x20;
+        let group_data_entry = rsrc + group_data_entry_offset;
+        put_test_u32(
+            &mut bytes,
+            group_data_entry,
+            0x1000 + group_data_offset as u32,
+        );
+        put_test_u32(
+            &mut bytes,
+            group_data_entry + 4,
+            (6 + group_entries.len() * 14) as u32,
+        );
         let group_data = rsrc + group_data_offset;
         put_test_u16(&mut bytes, group_data, 0);
         put_test_u16(&mut bytes, group_data + 2, 1);
-        put_test_u16(&mut bytes, group_data + 4, 0);
+        put_test_u16(&mut bytes, group_data + 4, group_entries.len() as u16);
+        for (entry_index, (icon_resource_id, image, icon_dib_len)) in
+            group_entries.iter().copied().enumerate()
+        {
+            let entry = group_data + 6 + entry_index * 14;
+            bytes[entry] = image.width;
+            bytes[entry + 1] = image.height;
+            bytes[entry + 2] = 0;
+            bytes[entry + 3] = 0;
+            put_test_u16(&mut bytes, entry + 4, 1);
+            put_test_u16(&mut bytes, entry + 6, 32);
+            put_test_u32(&mut bytes, entry + 8, icon_dib_len as u32);
+            put_test_u16(&mut bytes, entry + 12, icon_resource_id);
+        }
     }
 
     bytes
 }
 
+fn icon_dib_32bpp(width: i32, height: i32, channel: u8) -> Vec<u8> {
+    let xor_stride = (width as usize) * 4;
+    let xor_size = xor_stride * height as usize;
+    let and_stride = ((width as usize + 31) / 32) * 4;
+    let and_size = and_stride * height as usize;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&40u32.to_le_bytes());
+    bytes.extend_from_slice(&width.to_le_bytes());
+    bytes.extend_from_slice(&(height * 2).to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&32u16.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&(xor_size as u32).to_le_bytes());
+    bytes.extend_from_slice(&0i32.to_le_bytes());
+    bytes.extend_from_slice(&0i32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    for _ in 0..(width as usize * height as usize) {
+        bytes.extend_from_slice(&[channel, channel.saturating_add(0x20), 0xcc, 0xff]);
+    }
+    bytes.resize(bytes.len() + and_size, 0);
+    bytes
+}
+
 fn put_test_resource_directory(bytes: &mut [u8], offset: usize, id_entries: u16) {
     put_test_u16(bytes, offset + 14, id_entries);
+}
+
+fn put_test_resource_name_string(bytes: &mut [u8], offset: usize, value: &str) {
+    let units: Vec<u16> = value.encode_utf16().collect();
+    put_test_u16(bytes, offset, units.len() as u16);
+    for (index, unit) in units.into_iter().enumerate() {
+        put_test_u16(bytes, offset + 2 + index * 2, unit);
+    }
 }
 
 fn put_test_bytes(bytes: &mut [u8], offset: usize, value: &[u8]) {
@@ -6529,6 +6939,73 @@ fn shell_notify_icon_add_respects_member_flags() -> Result<()> {
 }
 
 #[test]
+fn shell_notify_icon_requires_ce_fixed_notifyicondata_size() -> Result<()> {
+    const NIM_ADD: u32 = 0;
+    const NIF_TIP: u32 = 0x0000_0004;
+    const HEADER_ONLY_NID_SIZE: u32 = 24;
+    const CE_NID_SIZE: u32 = 152;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load("regs.json", "serial_devices.json")?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 46;
+    let hwnd = kernel.create_window_ex_w(thread_id, "SHELL_NOTIFY_SHORT", "", None, 0, 0, 0);
+    let data = 0x2_b000;
+    memory.map_words(data, HEADER_ONLY_NID_SIZE / 4);
+    memory.write_word(data, HEADER_ONLY_NID_SIZE);
+    memory.write_word(data + 4, hwnd);
+    memory.write_word(data + 8, 23);
+    memory.write_word(data + 12, NIF_TIP);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_ADD, data],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert!(kernel.shell.notify_icon(hwnd, 23).is_none());
+
+    let bad_tip_data = 0x2_c000;
+    memory.map_words(bad_tip_data, HEADER_ONLY_NID_SIZE / 4);
+    memory.write_word(bad_tip_data, CE_NID_SIZE);
+    memory.write_word(bad_tip_data + 4, hwnd);
+    memory.write_word(bad_tip_data + 8, 24);
+    memory.write_word(bad_tip_data + 12, NIF_TIP);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_ADD, bad_tip_data],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert!(kernel.shell.notify_icon(hwnd, 24).is_none());
+
+    Ok(())
+}
+
+#[test]
 fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     const ERROR_INVALID_DATA: u32 = 13;
     const SHNOTIFICATIONDATA_SIZE: u32 = 56;
@@ -8055,6 +8532,11 @@ fn message_box_w_records_text_owner_and_returns_default_button() -> Result<()> {
     const MB_CANCEL: u32 = 0x0000_0007;
     const MB_DEFBUTTON2: u32 = 0x0000_0100;
     const MB_ICONQUESTION: u32 = 0x0000_0020;
+    const MB_SETFOREGROUND: u32 = 0x0001_0000;
+    const MB_TOPMOST: u32 = 0x0004_0000;
+    const MB_RTLREADING: u32 = 0x0010_0000;
+    const MB_UNDEFINED_ICON_NIBBLE: u32 = 0x0000_0050;
+    const MB_DESKTOP_ONLY_TASKMODAL: u32 = 0x0000_2000;
     const IDCANCEL: u32 = 2;
     const IDYES: u32 = 6;
     const IDNO: u32 = 7;
@@ -8232,6 +8714,69 @@ fn message_box_w_records_text_owner_and_returns_default_button() -> Result<()> {
         .expect("disabled-owner record");
     assert_eq!(record.owner_was_enabled, Some(false));
     assert!(!kernel.gwe.is_window_enabled(hwnd));
+
+    let supported_high_flags = MB_CANCEL | MB_SETFOREGROUND | MB_TOPMOST | MB_RTLREADING;
+    let supported_high = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_MESSAGE_BOX_W,
+        [hwnd, text, caption, supported_high_flags],
+    );
+    assert!(matches!(
+        supported_high,
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(IDCANCEL),
+            ..
+        }
+    ));
+    let record = kernel
+        .shell
+        .last_message_box()
+        .expect("supported-high-flags record");
+    assert_eq!(record.style, supported_high_flags);
+    assert_eq!(record.result, IDCANCEL);
+
+    let record_count = kernel.shell.message_boxes().count();
+    let unsupported_desktop_flag = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_MESSAGE_BOX_W,
+        [hwnd, text, caption, MB_CANCEL | MB_DESKTOP_ONLY_TASKMODAL],
+    );
+    assert!(matches!(
+        unsupported_desktop_flag,
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(kernel.shell.message_boxes().count(), record_count);
+
+    let unsupported_icon_flag = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_MESSAGE_BOX_W,
+        [hwnd, text, caption, MB_CANCEL | MB_UNDEFINED_ICON_NIBBLE],
+    );
+    assert!(matches!(
+        unsupported_icon_flag,
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_INVALID_PARAMETER
+    );
+    assert_eq!(kernel.shell.message_boxes().count(), record_count);
 
     Ok(())
 }

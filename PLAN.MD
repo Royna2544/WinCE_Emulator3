@@ -18,8 +18,8 @@ Regenerated on 2026-06-11 from the current `src/` and `tests/` implementation st
    - Keep validating dependency attach/detach ordering, forwarder failure modes, datafile loads, no-resolve loads, and invalid image edges.
 
 2. Finish shell rendering parity.
-   - Expand `ExtractIconExW` coverage across PE icon formats, malformed resource tables, ordinal resource names, multi-size icon groups, and non-PE fallback behavior.
-   - Add more `DrawIconEx` and image-list drawing cases for masks, stretched sizes, selected DIBs, framebuffer output, and invalid handle cleanup.
+   - Expand `ExtractIconExW` coverage across remaining PE icon formats, `RT_ICON` ordinal failure cases, and non-PE fallback behavior.
+   - Add more `DrawIconEx` and image-list drawing cases for masks, additional stretched-size paths, framebuffer output, and invalid handle cleanup.
 
 3. Finish modal UI and cross-thread message semantics.
    - Extend `SendMessageTimeout` beyond current timeout/destroyed-target cases into nested sends, reentrant waits, abort-if-hung edge cases, and `ReplyMessage` parity.
@@ -68,11 +68,12 @@ Reference files:
 - `C:\WINCE600\PUBLIC\WCESHELLFE\OAK\TASKMAN\mintask.cpp`
 
 Missing or under-validated:
-- `Shell_NotifyIcon` now rejects duplicate `NIM_ADD` records, honors `NIF_MESSAGE`, `NIF_ICON`, `NIF_TIP`, and `NIF_STATE` when capturing `NOTIFYICONDATA` members, and follows the CE taskbar update rule that `NIM_MODIFY | NIF_ICON` with a null `hIcon` leaves the existing tray icon intact. Remaining gaps are integrated taskbar-visible state, tooltip truncation edge cases, callback lifetime across process/window destruction, and broader tray-server routing validation against `minserver.cpp`, `mintask.cpp`, and the Explorer taskbar sources.
+- `Shell_NotifyIcon` now rejects duplicate `NIM_ADD` records, honors `NIF_MESSAGE`, `NIF_ICON`, `NIF_TIP`, and `NIF_STATE` when capturing `NOTIFYICONDATA` members, requires the fixed CE `NOTIFYICONDATAW` footprint with its 64-WCHAR `szTip` buffer before mutating state, and follows the CE taskbar update rule that `NIM_MODIFY | NIF_ICON` with a null `hIcon` leaves the existing tray icon intact. Remaining gaps are integrated taskbar-visible state, callback lifetime across process/window destruction, and broader tray-server routing validation against `minserver.cpp`, `mintask.cpp`, and the Explorer taskbar sources.
 - `SHNotification*` has local COM callback dispatch support, but still needs integrated validation for the CE `IShellNotificationCallback` methods: `OnShow`, `OnCommandSelected`, `OnLinkSelected`, and `OnDismiss`.
 - `SHNotificationUpdate` now preserves existing icons on `SHNUM_ICON` updates with null `hicon` and follows the CE update path by allowing stale `hwndSink` values in the incoming update struct while preserving the original sink. Remaining gaps are priority-transition list movement, callback pointer lifetime, title/HTML allocation edge cases, and remove/update races.
-- `SHGetFileInfo` should be expanded across the exact CE-supported flag set: `SHGFI_ICON`, `SHGFI_DISPLAYNAME`, `SHGFI_TYPENAME`, `SHGFI_ATTRIBUTES`, `SHGFI_SYSICONINDEX`, `SHGFI_SMALLICON`, and `SHGFI_USEFILEATTRIBUTES`.
-- `ExtractIconExW` now extracts PE resources and reports actual PE `RT_GROUP_ICON` counts for `nIconIndex == -1` while preserving the synthetic one-icon fallback for non-PE shell-icon paths. Remaining gaps are multi-group extraction ordering, large/small output arrays beyond one icon, malformed group/icon resources, and non-PE fallback edge cases.
+- `SHGetFileInfo` now covers the CE-supported flag set shape for `SHGFI_ICON`, `SHGFI_DISPLAYNAME`, `SHGFI_TYPENAME`, `SHGFI_ATTRIBUTES`, `SHGFI_SYSICONINDEX`, `SHGFI_SMALLICON`, and `SHGFI_USEFILEATTRIBUTES`, including CE `SFGAO_*` shell-attribute output for filesystem, folder, shortcut, read-only, and inaccessible network-folder cases. Remaining gaps are broader shell-folder PIDL/display-name parity and more edge cases around icon-cache lifetime.
+- `ExtractIconExW` now extracts PE resources, reports actual PE `RT_GROUP_ICON` counts for `nIconIndex == -1`, fills successive large/small output-array slots for multi-group extraction, selects distinct large/small `RT_ICON` entries from multi-size groups, covers string-named `RT_GROUP_ICON` entries with ordinal `RT_ICON` payloads, reports `ERROR_RESOURCE_NAME_NOT_FOUND` for malformed present group/icon resources instead of falling back to synthetic shell icons, and preserves the synthetic one-icon fallback for non-PE shell-icon paths. Remaining gaps are broader `RT_ICON` ordinal failure cases, broader PE format variants, and non-PE fallback edge cases.
+- `DrawIconEx` now paints bitmap-backed icons into framebuffers and selected memory DIBs, validates icon/HDC handles, and scales selected-memory-DIB draws from the icon bitmap's native source dimensions when callers request a non-native destination size. Remaining gaps are broader mask-only rendering, framebuffer scaled-icon verification, and additional cleanup/error combinations.
 
 ### GWE, Menu, And Modal Message Gaps
 
@@ -80,10 +81,10 @@ Reference file:
 - `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`
 
 Missing or under-validated:
-- `TrackPopupMenuEx` should be validated against all CE flags and structs exposed in `winuser.h`: alignment flags, `TPM_NONOTIFY`, `TPM_RETURNCMD`, `TPMPARAMS.rcExclude`, disabled/default items, submenu cascades, owner notifications, and cancellation behavior.
-- `MessageBoxW` should be validated across CE flags and return values: icon flags, default buttons, yes/no/cancel layouts, modality, owner-window disabled state, timeout/pump behavior, and foreground behavior.
-- `SendMessageTimeout` currently covers important paths, including unsupported flag rejection, zero-timeout cross-thread expiry, nonzero cross-thread queueing, destroyed-target completion, hung-thread `SMTO_ABORTIFHUNG`, same-thread synchronous dispatch/result writes, and early `ReplyMessage` result propagation. Remaining gaps are nested sends, reentrant dispatch, deeper nested `ReplyMessage` parity, `QS_SENDMESSAGE` interaction during modal waits, and broader `SMTO_NORMAL`, `SMTO_BLOCK`, and `SMTO_ABORTIFHUNG` combinations used by CE callers.
-- `MsgWaitForMultipleObjectsEx` should be cross-checked against the CE queue-status masks, especially `QS_SENDMESSAGE`, `QS_ALLINPUT`, timer readiness, posted message readiness, and mixed kernel-handle waits.
+- `TrackPopupMenuEx` now covers the core CE popup loop shape, including `TPM_NONOTIFY`, `TPM_RETURNCMD`, disabled/default items, submenu cascades, owner notifications, cancellation behavior, and top-level `TPMPARAMS.rcExclude` screen-rectangle avoidance. Remaining gaps are the alignment flag family, deeper rcExclude edge placement, and broader live nested modal routing.
+- `MessageBoxW` now validates CE-supported button, default-button, icon, `MB_SETFOREGROUND`, `MB_TOPMOST`, and `MB_RTLREADING` flag shapes while rejecting unsupported desktop-only or undefined bits; it also covers default return IDs, yes/no/cancel layouts, owner-window disabled state, and queued modal input. Remaining gaps are deeper modality, timeout/pump behavior, foreground/topmost z-order effects, and broader live user-driven dispatch.
+- `SendMessageTimeout` currently covers important paths, including unsupported flag rejection, zero-timeout cross-thread expiry, nonzero cross-thread queueing, destroyed-target completion, hung-thread `SMTO_ABORTIFHUNG`, same-thread synchronous dispatch/result writes, early `ReplyMessage` result propagation, and nested timeout sends where an inner `ReplyMessage` completes without clearing the outer send. Remaining gaps are broader reentrant dispatch and broader `SMTO_NORMAL`, `SMTO_BLOCK`, and `SMTO_ABORTIFHUNG` combinations used by CE callers.
+- `MsgWaitForMultipleObjectsEx` now covers CE's ignored desktop `MWMO_WAITALL` bit, `QS_TIMER`, `QS_SENDMESSAGE`, `QS_ALLINPUT` over posted messages, paint, and timers, `MWMO_INPUTAVAILABLE` new-vs-existing input behavior, and signaled-handle precedence over message wake. Remaining gaps are broader mixed multi-handle waits, cancellation edges, and live modal-loop interaction.
 
 ### File Notification And FSDMGR Gaps
 
