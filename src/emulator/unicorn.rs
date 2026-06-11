@@ -24941,9 +24941,21 @@ fn handle_create_window_return_stub<D>(
                     .destroy_window_with_reason(callout.hwnd, "CreateWindowExW/WM_NCCREATE failed");
                 return_create_window_result(uc, callout.return_pc, 0)
             } else {
-                // Proceed to WM_CREATE.
+                // Proceed to WM_CREATE, re-reading the window's current wndproc:
+                // the guest may have subclassed during WM_NCCREATE (MFC's standard
+                // subclass does exactly this), and CE GWES delivers each creation
+                // message to the wndproc current at send time. Delivering WM_CREATE
+                // to the stale class wndproc makes MFC's AfxWndProc treat the window
+                // as foreign and unsubclass it (SetWindowLong(GWL_WNDPROC, 0)).
+                let current_wndproc = kernel
+                    .gwe
+                    .window(callout.hwnd)
+                    .map(|window| window.wndproc)
+                    .filter(|&wndproc| is_guest_wndproc(wndproc))
+                    .unwrap_or(callout.wndproc);
                 let next = CreateWindowReturn {
                     phase: CreateWindowPhase::Create,
+                    wndproc: current_wndproc,
                     ..callout
                 };
                 if write_create_window_wndproc_call_registers(uc, &next) {
