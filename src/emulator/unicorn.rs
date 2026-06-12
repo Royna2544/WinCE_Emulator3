@@ -355,6 +355,8 @@ const WOM_DONE: u32 = 0x0000_03bd;
 #[cfg(feature = "unicorn")]
 const CURRENT_WAIT_HOST_THROTTLE_MS: u64 = 1;
 #[cfg(feature = "unicorn")]
+const LIVE_PUMP_INLINE_TIMEOUT_STOP_SLICE_MS: u32 = 5_000;
+#[cfg(feature = "unicorn")]
 const REALTIME_WAIT_THROTTLE_ENV: &str = "WINCE_EMU_REALTIME_WAITS";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -634,6 +636,24 @@ fn pop_pending_guest_thread_return_for_thread(
     } else {
         None
     }
+}
+
+#[cfg(feature = "unicorn")]
+fn snapshot_has_orphaned_cross_process_send_yield(
+    snapshot: &mut Option<UnicornDebugSnapshot>,
+    kernel: &CeKernel,
+) -> bool {
+    let Some(snapshot) = snapshot.as_mut() else {
+        return false;
+    };
+    let Some(yielded) = snapshot.cross_process_send_yield.as_ref() else {
+        return false;
+    };
+    if kernel.gwe.sent_message(yielded.send_id).is_some() {
+        return false;
+    }
+    snapshot.cross_process_send_yield = None;
+    true
 }
 
 #[cfg(feature = "unicorn")]
@@ -999,6 +1019,10 @@ impl UnicornMips {
         self.last_debug.as_ref()
     }
 
+    pub fn has_saved_context(&self) -> bool {
+        self.saved_context.is_some()
+    }
+
     pub fn preferred_trace_snapshot(&self) -> Option<&UnicornDebugSnapshot> {
         if self
             .last_debug
@@ -1010,6 +1034,18 @@ impl UnicornMips {
         self.last_wall_clock_debug
             .as_ref()
             .or(self.last_debug.as_ref())
+    }
+
+    #[cfg(feature = "unicorn")]
+    pub fn clear_orphaned_cross_process_send_yield(&mut self, kernel: &CeKernel) -> bool {
+        let mut cleared = false;
+        if snapshot_has_orphaned_cross_process_send_yield(&mut self.last_debug, kernel) {
+            cleared = true;
+        }
+        if snapshot_has_orphaned_cross_process_send_yield(&mut self.last_wall_clock_debug, kernel) {
+            cleared = true;
+        }
+        cleared
     }
 
     pub fn has_parked_child_processes(&self) -> bool {
@@ -1069,28 +1105,37 @@ impl UnicornMips {
                 process.process_state.signaled
             );
             if let Some(snapshot) = process.cpu.last_debug_snapshot() {
-                let _ = writeln!(&mut out, "      stop: {}", snapshot.summary());
+                let _ = writeln!(&mut out, "      last_stop_snapshot: {}", snapshot.summary());
                 if !snapshot.active_blocked_waits.is_empty() {
-                    let waits = snapshot
-                        .active_blocked_waits
-                        .iter()
-                        .map(|wait| {
-                            format!(
-                                "id={} tid={} kind={} timeout={} started={} handles={:?}",
-                                wait.id,
-                                wait.thread_id,
-                                wait.kind,
-                                wait.timeout_ms,
-                                wait.wait_started_ms,
-                                wait.handles
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                        .join("; ");
-                    let _ = writeln!(&mut out, "      waits: {waits}");
+                    let mut live_waits = Vec::new();
+                    let mut stale_waits = Vec::new();
+                    for wait in &snapshot.active_blocked_waits {
+                        let formatted = format!(
+                            "id={} tid={} kind={} timeout={} started={} handles={:?}",
+                            wait.id,
+                            wait.thread_id,
+                            wait.kind,
+                            wait.timeout_ms,
+                            wait.wait_started_ms,
+                            wait.handles
+                        );
+                        if kernel.blocked_waiter(wait.id).is_some() {
+                            live_waits.push(formatted);
+                        } else {
+                            stale_waits.push(formatted);
+                        }
+                    }
+                    if !live_waits.is_empty() {
+                        let waits = live_waits.join("; ");
+                        let _ = writeln!(&mut out, "      live_waits_from_last_stop: {waits}");
+                    }
+                    if !stale_waits.is_empty() {
+                        let waits = stale_waits.join("; ");
+                        let _ = writeln!(&mut out, "      stale_stop_waits: {waits}");
+                    }
                 }
             } else {
-                out.push_str("      stop: <none>\n");
+                out.push_str("      last_stop_snapshot: <none>\n");
             }
         }
         out
@@ -1266,11 +1311,82 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
+    fn has_live_pump_resumable_parked_process(&self, kernel: &CeKernel) -> bool {
+        self.parked_child_processes
+            .iter()
+            .any(|process| Self::parked_process_can_resume_from_live_pump(process, kernel))
+    }
+
+    #[cfg(feature = "unicorn")]
     pub fn complete_orphaned_parked_send_wait(&mut self, kernel: &mut CeKernel) -> bool {
         Self::complete_orphaned_send_wait_in_parked_processes(
             &mut self.parked_child_processes,
             kernel,
         )
+    }
+
+    #[cfg(feature = "unicorn")]
+    pub fn complete_orphaned_active_send_wait(&mut self, kernel: &mut CeKernel) -> bool {
+        let Some(send_id) = self.blocked_wait_threads.iter().find_map(|blocked| {
+            if let BlockedWaitKind::SendMessage { send_id, .. } = blocked.kind
+                && kernel.gwe.sent_message(send_id).is_none()
+            {
+                Some(send_id)
+            } else {
+                None
+            }
+        }) else {
+            return false;
+        };
+        Self::complete_blocked_send_for_parked_cpu(self, kernel, send_id, 0)
+    }
+
+    #[cfg(feature = "unicorn")]
+    pub fn clear_orphaned_send_depths(&mut self, kernel: &mut CeKernel) -> bool {
+        let protected_threads = self
+            .pending_wndproc_returns
+            .iter()
+            .filter_map(|pending| pending.send_thread_id)
+            .collect::<Vec<_>>();
+        let cleared = kernel
+            .gwe
+            .clear_orphaned_send_depths_excluding(&protected_threads);
+        if cleared.is_empty() {
+            return false;
+        }
+        tracing::debug!(
+            target: "ce.gwe",
+            ?cleared,
+            ?protected_threads,
+            "cleared orphaned send-message depth"
+        );
+        true
+    }
+
+    #[cfg(feature = "unicorn")]
+    pub fn clear_orphaned_direct_send_callouts(&mut self, kernel: &CeKernel) -> bool {
+        let before = self.pending_wndproc_returns.len();
+        self.pending_wndproc_returns.retain(|pending| {
+            let Some(thread_id) = pending.send_thread_id else {
+                return true;
+            };
+            let direct_send = pending.send_restore.is_none()
+                && pending.send_timeout_result_ptr.is_none()
+                && matches!(pending.source, "SendMessageW" | "SendMessageTimeout");
+            !direct_send
+                || kernel.gwe.in_send_message(thread_id)
+                || kernel.gwe.active_sent_message_id(thread_id).is_some()
+        });
+        let removed = before.saturating_sub(self.pending_wndproc_returns.len());
+        if removed == 0 {
+            return false;
+        }
+        tracing::debug!(
+            target: "ce.gwe",
+            removed,
+            "cleared orphaned direct SendMessage WNDPROC callouts"
+        );
+        true
     }
 
     #[cfg(feature = "unicorn")]
@@ -1361,6 +1477,24 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     pub fn rotate_to_ready_parked_wait(&mut self, kernel: &mut CeKernel) -> bool {
+        self.rotate_to_ready_parked_wait_with_framebuffer(kernel, None)
+    }
+
+    #[cfg(feature = "unicorn")]
+    pub fn complete_ready_active_modal_message_box_with_framebuffer(
+        &mut self,
+        kernel: &mut CeKernel,
+        framebuffer: Option<&mut dyn Framebuffer>,
+    ) -> bool {
+        Self::prepare_parked_modal_message_box(self, kernel, framebuffer)
+    }
+
+    #[cfg(feature = "unicorn")]
+    pub fn rotate_to_ready_parked_wait_with_framebuffer(
+        &mut self,
+        kernel: &mut CeKernel,
+        framebuffer: Option<&mut dyn Framebuffer>,
+    ) -> bool {
         let Some(index) = self
             .parked_child_processes
             .iter()
@@ -1371,7 +1505,7 @@ impl UnicornMips {
         let Some(parked) = self.parked_child_processes.remove(index) else {
             return false;
         };
-        self.switch_to_parked_process(kernel, parked, true);
+        self.switch_to_parked_process(kernel, parked, true, framebuffer);
         true
     }
 
@@ -1380,6 +1514,16 @@ impl UnicornMips {
         &mut self,
         kernel: &mut CeKernel,
         thread_ids: &[u32],
+    ) -> bool {
+        self.rotate_to_ready_parked_threads_with_framebuffer(kernel, thread_ids, None)
+    }
+
+    #[cfg(feature = "unicorn")]
+    pub fn rotate_to_ready_parked_threads_with_framebuffer(
+        &mut self,
+        kernel: &mut CeKernel,
+        thread_ids: &[u32],
+        framebuffer: Option<&mut dyn Framebuffer>,
     ) -> bool {
         if thread_ids.is_empty() {
             return false;
@@ -1393,7 +1537,7 @@ impl UnicornMips {
         let Some(parked) = self.parked_child_processes.remove(index) else {
             return false;
         };
-        self.switch_to_parked_process(kernel, parked, true);
+        self.switch_to_parked_process(kernel, parked, true, framebuffer);
         true
     }
 
@@ -1427,8 +1571,49 @@ impl UnicornMips {
         self.switch_to_next_parked_process(kernel, false)
     }
 
+    pub fn preserve_current_on_process_handoff(&self, kernel: &CeKernel) -> bool {
+        self.has_active_blocked_state(kernel)
+    }
+
     pub fn rotate_to_next_parked_process(&mut self, kernel: &mut CeKernel) -> bool {
         self.switch_to_next_parked_process(kernel, true)
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn rotate_to_live_pump_resumable_parked_process(&mut self, kernel: &mut CeKernel) -> bool {
+        let Some(index) = self
+            .parked_child_processes
+            .iter()
+            .position(|process| Self::parked_process_can_resume_from_live_pump(process, kernel))
+        else {
+            return false;
+        };
+        let Some(parked) = self.parked_child_processes.remove(index) else {
+            return false;
+        };
+        self.switch_to_parked_process(kernel, parked, true, None);
+        true
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn has_active_blocked_state(&self, kernel: &CeKernel) -> bool {
+        self.blocked_guest_thread.is_some()
+            || !self.displaced_blocked_get_messages.is_empty()
+            || self.blocked_modal_message_box.is_some()
+            || self.blocked_popup_menu_modal.is_some()
+            || self.blocked_send_message_timeout.is_some()
+            || self.blocked_clipboard_data.is_some()
+            || !self.blocked_wait_threads.is_empty()
+            || self.running_guest_thread.is_some()
+            || kernel
+                .scheduler
+                .blocked_waits()
+                .any(|wait| self.contains_thread(&[wait.thread_id]))
+    }
+
+    #[cfg(not(feature = "unicorn"))]
+    fn has_active_blocked_state(&self, _kernel: &CeKernel) -> bool {
+        false
     }
 
     #[cfg(feature = "unicorn")]
@@ -1443,31 +1628,9 @@ impl UnicornMips {
 
     #[cfg(feature = "unicorn")]
     pub fn contains_thread(&self, thread_ids: &[u32]) -> bool {
-        thread_ids.contains(&self.initial_thread_id)
-            || thread_ids.contains(&self.current_thread_id)
-            || self
-                .running_guest_thread
-                .is_some_and(|(thread_id, _)| thread_ids.contains(&thread_id))
-            || self
-                .blocked_guest_thread
-                .as_ref()
-                .is_some_and(|thread| thread_ids.contains(&thread.thread_id))
-            || self
-                .blocked_modal_message_box
-                .as_ref()
-                .is_some_and(|modal| thread_ids.contains(&modal.thread_id))
-            || self
-                .blocked_wait_threads
-                .iter()
-                .any(|thread| thread_ids.contains(&thread.thread_id))
-            || self
-                .suspended_guest_thread
-                .as_ref()
-                .is_some_and(|thread| thread_ids.contains(&thread.thread_id))
-            || self
-                .suspended_guest_thread_queue
-                .iter()
-                .any(|thread| thread_ids.contains(&thread.thread_id))
+        self.tracked_thread_ids()
+            .into_iter()
+            .any(|thread_id| thread_ids.contains(&thread_id))
     }
 
     #[cfg(not(feature = "unicorn"))]
@@ -1479,6 +1642,100 @@ impl UnicornMips {
         self.parked_child_processes
             .iter()
             .any(|process| process.process_state.process_id == process_id)
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn tracked_thread_ids(&self) -> Vec<u32> {
+        let mut ids = Vec::new();
+        let mut push = |thread_id: u32| {
+            if thread_id != 0 && !ids.contains(&thread_id) {
+                ids.push(thread_id);
+            }
+        };
+        push(self.initial_thread_id);
+        push(self.current_thread_id);
+        if let Some((thread_id, _)) = self.running_guest_thread {
+            push(thread_id);
+        }
+        if let Some(thread) = self.blocked_guest_thread.as_ref() {
+            push(thread.thread_id);
+        }
+        for thread in &self.displaced_blocked_get_messages {
+            push(thread.thread_id);
+        }
+        if let Some(modal) = self.blocked_modal_message_box.as_ref() {
+            push(modal.thread_id);
+        }
+        if let Some(modal) = self.blocked_popup_menu_modal.as_ref() {
+            push(modal.thread_id);
+        }
+        if let Some(blocked) = self.blocked_send_message_timeout.as_ref() {
+            push(blocked.thread_id);
+        }
+        if let Some(blocked) = self.blocked_clipboard_data.as_ref() {
+            push(blocked.thread_id);
+        }
+        for thread in &self.blocked_wait_threads {
+            push(thread.thread_id);
+        }
+        if let Some(thread) = self.suspended_guest_thread.as_ref() {
+            push(thread.thread_id);
+        }
+        for thread in &self.suspended_guest_thread_queue {
+            push(thread.thread_id);
+        }
+        for thread in self.self_suspended_guest_threads.values() {
+            push(thread.thread_id);
+        }
+        ids
+    }
+
+    #[cfg(feature = "unicorn")]
+    fn representative_thread_id(&self) -> u32 {
+        self.blocked_modal_message_box
+            .as_ref()
+            .map(|modal| modal.thread_id)
+            .or_else(|| {
+                self.blocked_popup_menu_modal
+                    .as_ref()
+                    .map(|modal| modal.thread_id)
+            })
+            .or_else(|| {
+                self.blocked_send_message_timeout
+                    .as_ref()
+                    .map(|blocked| blocked.thread_id)
+            })
+            .or_else(|| {
+                self.blocked_clipboard_data
+                    .as_ref()
+                    .map(|blocked| blocked.thread_id)
+            })
+            .or_else(|| {
+                self.blocked_guest_thread
+                    .as_ref()
+                    .map(|thread| thread.thread_id)
+            })
+            .or_else(|| {
+                self.blocked_wait_threads
+                    .first()
+                    .map(|thread| thread.thread_id)
+            })
+            .or_else(|| self.running_guest_thread.map(|(thread_id, _)| thread_id))
+            .or_else(|| {
+                self.suspended_guest_thread
+                    .as_ref()
+                    .map(|thread| thread.thread_id)
+            })
+            .or_else(|| {
+                self.suspended_guest_thread_queue
+                    .front()
+                    .map(|thread| thread.thread_id)
+            })
+            .unwrap_or(if self.current_thread_id != 0 {
+                self.current_thread_id
+            } else {
+                self.initial_thread_id
+            })
     }
 
     #[cfg(feature = "unicorn")]
@@ -1587,7 +1844,7 @@ impl UnicornMips {
         let Some(parked) = self.parked_child_processes.remove(index) else {
             return false;
         };
-        self.switch_to_parked_process(kernel, parked, true);
+        self.switch_to_parked_process(kernel, parked, true, None);
         true
     }
 
@@ -1599,7 +1856,7 @@ impl UnicornMips {
         let Some(parked) = self.pop_next_runnable_parked_process(kernel) else {
             return false;
         };
-        self.switch_to_parked_process(kernel, parked, requeue_current);
+        self.switch_to_parked_process(kernel, parked, requeue_current, None);
         true
     }
 
@@ -1648,6 +1905,30 @@ impl UnicornMips {
         parked.cpu.blocked_guest_thread.is_none() && parked.cpu.blocked_wait_threads.is_empty()
     }
 
+    #[cfg(feature = "unicorn")]
+    fn parked_process_can_resume_from_live_pump(parked: &ParkedProcess, kernel: &CeKernel) -> bool {
+        if parked.blocked_send_id.is_some_and(|send_id| {
+            kernel.sent_message_result_ready(send_id)
+                && parked
+                    .cpu
+                    .saved_context
+                    .as_ref()
+                    .is_some_and(|context| context.pc != 0)
+        }) {
+            return true;
+        }
+        if Self::parked_process_has_ready_receiver_work(parked, kernel) {
+            return true;
+        }
+        parked.cpu.blocked_guest_thread.is_none()
+            && parked.cpu.blocked_wait_threads.is_empty()
+            && parked
+                .cpu
+                .saved_context
+                .as_ref()
+                .is_some_and(|context| context.pc != 0)
+    }
+
     #[cfg(not(feature = "unicorn"))]
     fn parked_process_can_run(parked: &ParkedProcess, kernel: &CeKernel) -> bool {
         parked
@@ -1666,10 +1947,14 @@ impl UnicornMips {
             }
         }
         if let Some(modal) = parked.cpu.blocked_modal_message_box.as_ref() {
-            let wait = kernel.blocked_waiter(modal.wait_id)?;
-            if scheduler_blocked_wait_is_ready(wait, kernel)
-                || crate::ce::scheduler::blocked_wait_timed_out(wait, kernel.timers.tick_count())
-            {
+            let ready = kernel.blocked_waiter(modal.wait_id).is_none_or(|wait| {
+                scheduler_blocked_wait_is_ready(wait, kernel)
+                    || crate::ce::scheduler::blocked_wait_timed_out(
+                        wait,
+                        kernel.timers.tick_count(),
+                    )
+            });
+            if ready {
                 return Some(modal.wait_id);
             }
         }
@@ -1684,20 +1969,11 @@ impl UnicornMips {
     #[cfg(feature = "unicorn")]
     fn parked_process_has_ready_receiver_work(parked: &ParkedProcess, kernel: &CeKernel) -> bool {
         Self::parked_process_ready_wait_id(parked, kernel).is_some()
-            || Self::thread_has_ready_receiver_work(parked.cpu.current_thread_id, kernel)
-            || Self::thread_has_ready_receiver_work(parked.thread_id, kernel)
             || parked
                 .cpu
-                .suspended_guest_thread
-                .as_ref()
-                .is_some_and(|thread| {
-                    Self::thread_has_ready_receiver_work(thread.thread_id, kernel)
-                })
-            || parked
-                .cpu
-                .suspended_guest_thread_queue
-                .iter()
-                .any(|thread| Self::thread_has_ready_receiver_work(thread.thread_id, kernel))
+                .tracked_thread_ids()
+                .into_iter()
+                .any(|thread_id| Self::thread_has_ready_receiver_work(thread_id, kernel))
     }
 
     #[cfg(feature = "unicorn")]
@@ -1709,36 +1985,11 @@ impl UnicornMips {
     #[cfg(feature = "unicorn")]
     fn parked_process_contains_thread(parked: &ParkedProcess, thread_ids: &[u32]) -> bool {
         thread_ids.contains(&parked.thread_id)
-            || thread_ids.contains(&parked.cpu.current_thread_id)
             || parked
                 .cpu
-                .running_guest_thread
-                .is_some_and(|(thread_id, _)| thread_ids.contains(&thread_id))
-            || parked
-                .cpu
-                .blocked_guest_thread
-                .as_ref()
-                .is_some_and(|thread| thread_ids.contains(&thread.thread_id))
-            || parked
-                .cpu
-                .blocked_modal_message_box
-                .as_ref()
-                .is_some_and(|modal| thread_ids.contains(&modal.thread_id))
-            || parked
-                .cpu
-                .blocked_wait_threads
-                .iter()
-                .any(|thread| thread_ids.contains(&thread.thread_id))
-            || parked
-                .cpu
-                .suspended_guest_thread
-                .as_ref()
-                .is_some_and(|thread| thread_ids.contains(&thread.thread_id))
-            || parked
-                .cpu
-                .suspended_guest_thread_queue
-                .iter()
-                .any(|thread| thread_ids.contains(&thread.thread_id))
+                .tracked_thread_ids()
+                .into_iter()
+                .any(|thread_id| thread_ids.contains(&thread_id))
     }
 
     fn switch_to_parked_process(
@@ -1746,6 +1997,7 @@ impl UnicornMips {
         kernel: &mut CeKernel,
         parked: ParkedProcess,
         requeue_current: bool,
+        framebuffer: Option<&mut dyn Framebuffer>,
     ) {
         let current = requeue_current.then(|| self.park_current_process(kernel));
         let ParkedProcess {
@@ -1796,7 +2048,7 @@ impl UnicornMips {
         }
         #[cfg(feature = "unicorn")]
         {
-            let _ = Self::prepare_parked_modal_message_box(&mut next_cpu, kernel);
+            let _ = Self::prepare_parked_modal_message_box(&mut next_cpu, kernel, framebuffer);
             let _ = Self::prepare_parked_get_message_sent_callout(&mut next_cpu, kernel);
         }
         next_cpu
@@ -1948,18 +2200,35 @@ impl UnicornMips {
     }
 
     #[cfg(feature = "unicorn")]
-    fn prepare_parked_modal_message_box(cpu: &mut UnicornMips, kernel: &mut CeKernel) -> bool {
-        let Some(modal) = cpu.blocked_modal_message_box.take() else {
+    fn prepare_parked_modal_message_box(
+        cpu: &mut UnicornMips,
+        kernel: &mut CeKernel,
+        framebuffer: Option<&mut dyn Framebuffer>,
+    ) -> bool {
+        let Some(modal) = cpu.blocked_modal_message_box.as_ref().cloned() else {
             return false;
         };
         kernel.pump_timers_to_gwe(modal.thread_id);
-        let Some(result) = modal.modal_state.try_queued_result(kernel, modal.thread_id) else {
-            cpu.blocked_modal_message_box = Some(modal);
+        let Some(result) = ready_modal_message_box_result(&modal, kernel) else {
             return false;
         };
+        let Some(modal) = cpu.blocked_modal_message_box.take() else {
+            return false;
+        };
+        let dialog_hwnd = modal.modal_state.dialog_hwnd();
         let _ = kernel.remove_blocked_waiter(modal.wait_id);
-        modal.modal_state.teardown(kernel, modal.thread_id, result);
+        modal
+            .modal_state
+            .teardown(kernel, modal.thread_id, result, framebuffer);
         kernel.threads.set_last_error(modal.thread_id, 0);
+        if cpu.blocked_guest_thread.as_ref().is_some_and(|blocked| {
+            blocked.thread_id == modal.thread_id && blocked.hwnd == Some(dialog_hwnd)
+        }) {
+            cpu.blocked_guest_thread = None;
+        }
+        cpu.displaced_blocked_get_messages.retain(|blocked| {
+            !(blocked.thread_id == modal.thread_id && blocked.hwnd == Some(dialog_hwnd))
+        });
         let mut regs = modal.regs;
         regs.set_v0(result);
         regs.regs[31] = modal.return_pc;
@@ -1978,12 +2247,76 @@ impl UnicornMips {
             .as_ref()
             .and_then(|snapshot| snapshot.cross_process_send_yield.as_ref())
             .map(|yielded| yielded.send_id);
+        let representative_thread_id = self.representative_thread_id();
+        let entry_image_base = self.entry_image_base;
+        let loaded_image = self
+            .entry_image_base
+            .and_then(|base| {
+                self.loaded_modules
+                    .iter()
+                    .find(|module| module.base == base)
+            })
+            .or_else(|| {
+                self.loaded_modules
+                    .iter()
+                    .find(|module| module.base == kernel.process_module_base())
+            })
+            .or_else(|| {
+                kernel.process_module_host_path().and_then(|host_path| {
+                    self.loaded_modules
+                        .iter()
+                        .find(|module| module.host_path.as_ref() == Some(host_path))
+                })
+            })
+            .or_else(|| {
+                self.loaded_modules
+                    .iter()
+                    .find(|module| module.name.to_ascii_lowercase().ends_with(".exe"))
+            })
+            .or_else(|| self.loaded_modules.first());
+        let module_base = loaded_image
+            .map(|module| module.base)
+            .or(entry_image_base)
+            .unwrap_or_else(|| kernel.process_module_base());
+        let module_path = loaded_image
+            .and_then(|module| module.guest_path.clone())
+            .unwrap_or_else(|| kernel.process_module_path().to_owned());
+        let module_host_path = loaded_image
+            .and_then(|module| module.host_path.clone())
+            .or_else(|| kernel.process_module_host_path().cloned())
+            .unwrap_or_default();
+        let mut process_state = kernel.current_process_state();
+        let owned_threads = self.tracked_thread_ids();
+        let windows = kernel.gwe.windows_snapshot();
+        if let Some(process_id) = windows
+            .iter()
+            .find(|window| {
+                !window.destroyed
+                    && window.thread_id == representative_thread_id
+                    && window.process_id != 0
+            })
+            .or_else(|| {
+                windows.iter().find(|window| {
+                    !window.destroyed
+                        && owned_threads.contains(&window.thread_id)
+                        && window.process_id != 0
+                })
+            })
+            .map(|window| window.process_id)
+            .filter(|process_id| *process_id != process_state.process_id)
+        {
+            process_state = crate::ce::kernel::CurrentProcessState {
+                process_id,
+                exit_code: crate::ce::kernel::STILL_ACTIVE,
+                signaled: false,
+            };
+        }
         ParkedProcess {
-            application: Some(kernel.process_module_path().to_owned()),
+            application: Some(module_path.clone()),
             process_handle: None,
             thread_handle: None,
-            process_state: kernel.current_process_state(),
-            thread_id: self.initial_thread_id,
+            process_state,
+            thread_id: representative_thread_id,
             cpu: Box::new(UnicornMips {
                 memory: std::mem::take(&mut self.memory),
                 import_traps: std::mem::take(&mut self.import_traps),
@@ -2083,12 +2416,9 @@ impl UnicornMips {
                 saved_context: self.saved_context.take(),
             }),
             blocked_send_id,
-            module_base: kernel.process_module_base(),
-            module_path: kernel.process_module_path().to_owned(),
-            module_host_path: kernel
-                .process_module_host_path()
-                .cloned()
-                .unwrap_or_default(),
+            module_base,
+            module_path,
+            module_host_path,
             command_line: kernel.process_command_line().to_owned(),
             current_directory: kernel.process_current_directory().map(ToOwned::to_owned),
         }
@@ -2485,6 +2815,7 @@ impl UnicornMips {
         let progress_import_traps = self.import_traps.clone();
         let kernel_ptr = kernel as *mut CeKernel;
         let framebuffer_ptr = framebuffer as *mut dyn Framebuffer;
+        let _ = self.complete_orphaned_active_send_wait(kernel);
         let framebuffer_tick_error = Rc::new(RefCell::new(None::<Error>));
         let framebuffer_tick_error_hook = Rc::clone(&framebuffer_tick_error);
         let framebuffer_tick_error_code_hook = Rc::clone(&framebuffer_tick_error);
@@ -2497,11 +2828,15 @@ impl UnicornMips {
             let _ = Self::complete_orphaned_send_wait_in_parked_processes(&mut parked, kernel);
         }
         let parked_child_processes_hook = Rc::clone(&parked_child_processes);
+        let parked_child_processes_live_pump_hook = Rc::clone(&parked_child_processes);
+        let parked_child_processes_import_live_pump_hook = Rc::clone(&parked_child_processes);
         let live_trampoline_state_code_hook = Rc::clone(&live_trampoline_state);
         let blocked_get_message = Rc::new(RefCell::new(None::<UnicornBlockedGetMessage>));
         let blocked_get_message_live_hook = Rc::clone(&blocked_get_message);
+        let blocked_get_message_import_live_hook = Rc::clone(&blocked_get_message);
         let cross_process_send_yield = Rc::new(RefCell::new(None::<UnicornCrossProcessSendYield>));
         let cross_process_send_yield_hook = Rc::clone(&cross_process_send_yield);
+        let host_wall_clock_stop_import_hook = Rc::clone(&host_wall_clock_stop);
         // Wall-clock/live-pump stops must not land on a branch delay slot or
         // inside a trampoline sequence: resuming at such a pc executes the
         // delay slot standalone (the branch is lost) and the guest jumps wild.
@@ -2540,19 +2875,22 @@ impl UnicornMips {
                     let _ = uc.emu_stop();
                     return;
                 }
-                let remote_drained = if let Some(blocked) = blocked_get_message_live_hook
-                    .borrow()
-                    .as_ref()
-                {
-                    unsafe { &mut *kernel_ptr }
-                        .drain_remote_server_control_messages_to_thread_window(
-                            blocked.thread_id,
-                            blocked.hwnd,
-                        )
-                } else {
-                    unsafe { (&mut *kernel_ptr).drain_remote_server_control_messages() }
-                };
+                let live_blocked = blocked_get_message_live_hook.borrow().clone();
+                let remote_drained = drain_remote_server_control_messages_for_message_target(
+                    unsafe { &mut *kernel_ptr },
+                    live_blocked,
+                );
                 if live_pump && remote_drained != 0 {
+                    host_wall_clock_stop_pending_hook.set(true);
+                }
+                if live_pump
+                    && parked_child_processes_live_pump_hook
+                        .borrow()
+                        .iter()
+                        .any(|process| Self::parked_process_can_resume_from_live_pump(process, unsafe {
+                            &*kernel_ptr
+                        }))
+                {
                     host_wall_clock_stop_pending_hook.set(true);
                 }
                 if let Err(err) = drain_win32_host_input_to_active_window(unsafe {
@@ -2793,6 +3131,7 @@ impl UnicornMips {
             let fast_code_trace_counter = Rc::clone(&code_trace_counter);
             let fast_host_wall_clock_counter = Rc::clone(&host_wall_clock_counter);
             let fast_host_wall_clock_stop = Rc::clone(&host_wall_clock_stop);
+            let fast_parked_child_processes = Rc::clone(&parked_child_processes);
             let fast_framebuffer_tick_error = Rc::clone(&framebuffer_tick_error_code_hook);
             let fast_blocked_get_message = Rc::clone(&blocked_get_message);
             let fast_pc_stop = Rc::clone(&pc_stop);
@@ -2807,6 +3146,7 @@ impl UnicornMips {
                 let code_trace_counter = Rc::clone(&fast_code_trace_counter);
                 let host_wall_clock_counter = Rc::clone(&fast_host_wall_clock_counter);
                 let host_wall_clock_stop = Rc::clone(&fast_host_wall_clock_stop);
+                let parked_child_processes = Rc::clone(&fast_parked_child_processes);
                 let framebuffer_tick_error = Rc::clone(&fast_framebuffer_tick_error);
                 let blocked_get_message = Rc::clone(&fast_blocked_get_message);
                 let pc_stop = Rc::clone(&fast_pc_stop);
@@ -2836,18 +3176,33 @@ impl UnicornMips {
                                 let _ = uc.emu_stop();
                                 return;
                             }
-                            let remote_drained = if let Some(blocked) =
-                                blocked_get_message.borrow().as_ref()
-                            {
-                                unsafe { &mut *kernel_ptr }
-                                    .drain_remote_server_control_messages_to_thread_window(
-                                        blocked.thread_id,
-                                        blocked.hwnd,
-                                    )
-                            } else {
-                                unsafe { (&mut *kernel_ptr).drain_remote_server_control_messages() }
-                            };
+                            let live_blocked = blocked_get_message.borrow().clone();
+                            let remote_drained =
+                                drain_remote_server_control_messages_for_message_target(
+                                    unsafe { &mut *kernel_ptr },
+                                    live_blocked,
+                                );
                             if live_pump && remote_drained != 0 {
+                                *host_wall_clock_stop.borrow_mut() =
+                                    Some(UnicornHostWallClockStop {
+                                        pc,
+                                        ra: read_mips_reg(uc, RegisterMIPS::RA),
+                                        sp: read_mips_reg(uc, RegisterMIPS::SP),
+                                        instruction: Some(instruction),
+                                        elapsed_ms: host_wall_clock_started.elapsed().as_millis()
+                                            as u64,
+                                    });
+                                let _ = uc.emu_stop();
+                                return;
+                            }
+                            if live_pump
+                                && parked_child_processes.borrow().iter().any(|process| {
+                                    Self::parked_process_can_resume_from_live_pump(
+                                        process,
+                                        unsafe { &*kernel_ptr },
+                                    )
+                                })
+                            {
                                 *host_wall_clock_stop.borrow_mut() =
                                     Some(UnicornHostWallClockStop {
                                         pc,
@@ -4085,6 +4440,7 @@ impl UnicornMips {
                         trap.ordinal,
                         &args,
                         active_thread_id,
+                        unsafe { &*trampoline_jumps_ptr },
                         &blocked_modal_message_box_hook,
                         &blocked_get_message_hook,
                         &running_guest_thread_hook,
@@ -4101,6 +4457,7 @@ impl UnicornMips {
                         trap.ordinal,
                         &args,
                         active_thread_id,
+                        unsafe { &*trampoline_jumps_ptr },
                         &blocked_popup_menu_modal_hook,
                         &blocked_get_message_hook,
                         &running_guest_thread_hook,
@@ -4369,6 +4726,7 @@ impl UnicornMips {
                         trap.ordinal,
                         &args,
                         active_thread_id,
+                        unsafe { &*trampoline_jumps_ptr },
                         &current_thread_id_hook,
                         &running_guest_thread_hook,
                         &blocked_wait_threads_hook,
@@ -4830,6 +5188,40 @@ impl UnicornMips {
                 if let Some(v1) = import_return.v1 {
                     let _ = memory.uc.reg_write(RegisterMIPS::V1, u64::from(v1));
                 }
+                if live_pump && pending_wndproc_returns_hook.borrow().is_empty() {
+                    let live_blocked = blocked_get_message_import_live_hook.borrow().clone();
+                    let remote_drained = drain_remote_server_control_messages_for_message_target(
+                        unsafe { &mut *kernel_ptr },
+                        live_blocked,
+                    );
+                    let has_resumable_parked = parked_child_processes_import_live_pump_hook
+                        .borrow()
+                        .iter()
+                        .any(|process| {
+                            Self::parked_process_can_resume_from_live_pump(
+                                process,
+                                unsafe { &*kernel_ptr },
+                            )
+                        });
+                    let return_pc = read_mips_reg(memory.uc, RegisterMIPS::RA);
+                    if (remote_drained != 0 || has_resumable_parked)
+                        && return_pc != 0
+                        && return_pc < IMPORT_TRAP_BASE
+                        && !target_in_ranges(return_pc, unsafe { &*trampoline_ranges_ptr })
+                    {
+                        let _ = memory.uc.reg_write(RegisterMIPS::PC, u64::from(return_pc));
+                        *host_wall_clock_stop_import_hook.borrow_mut() =
+                            Some(UnicornHostWallClockStop {
+                                pc: return_pc,
+                                ra: read_mips_reg(memory.uc, RegisterMIPS::RA),
+                                sp: read_mips_reg(memory.uc, RegisterMIPS::SP),
+                                instruction: read_unicorn_u32(memory.uc, return_pc),
+                                elapsed_ms: host_wall_clock_started.elapsed().as_millis() as u64,
+                            });
+                        let _ = memory.uc.emu_stop();
+                        return;
+                    }
+                }
                 if pending_wndproc_returns_hook.borrow().is_empty() {
                     if try_resume_blocked_wait(
                         unsafe { &mut *kernel_ptr },
@@ -5201,6 +5593,14 @@ impl UnicornMips {
             )));
         }
         self.persist_run_state(&run_state);
+        let _ = self.complete_orphaned_active_send_wait(kernel);
+        let _ = self.complete_orphaned_parked_send_wait(kernel);
+        let live_pump_stop = host_wall_clock_stop.borrow().is_some();
+        if self.has_active_blocked_state(kernel) && self.has_runnable_parked_process(kernel) {
+            let _ = self.rotate_to_next_parked_process(kernel);
+        } else if live_pump_stop && self.has_live_pump_resumable_parked_process(kernel) {
+            let _ = self.rotate_to_live_pump_resumable_parked_process(kernel);
+        }
         let _ = sync_file_mapping_views_from_unicorn(&mut uc, kernel);
         Ok(())
     }
@@ -5332,6 +5732,13 @@ impl super::cpu::CpuBackend for UnicornMips {
 
     fn preferred_trace_snapshot(&self) -> Option<&UnicornDebugSnapshot> {
         self.preferred_trace_snapshot()
+    }
+
+    fn clear_orphaned_cross_process_send_yield(
+        &mut self,
+        kernel: &crate::ce::kernel::CeKernel,
+    ) -> bool {
+        self.clear_orphaned_cross_process_send_yield(kernel)
     }
 
     fn has_parked_child_processes(&self) -> bool {
@@ -8932,6 +9339,9 @@ fn try_dispatch_com_notification_callout<D>(
     if cb.callback_ptr == 0 {
         return false;
     }
+    let restore_callback = |kernel: &mut CeKernel, cb| {
+        kernel.shell.restore_pending_notification_callback_front(cb);
+    };
 
     // Read vtable pointer from *callback_ptr.
     let mut vtable_bytes = [0u8; 4];
@@ -8939,6 +9349,7 @@ fn try_dispatch_com_notification_callout<D>(
         .mem_read(u64::from(cb.callback_ptr), &mut vtable_bytes)
         .is_err()
     {
+        restore_callback(kernel, cb);
         return false;
     }
     let vtable_ptr = u32::from_le_bytes(vtable_bytes);
@@ -8949,11 +9360,13 @@ fn try_dispatch_com_notification_callout<D>(
         .mem_read(u64::from(vtable_ptr + cb.vtable_offset), &mut method_bytes)
         .is_err()
     {
+        restore_callback(kernel, cb);
         return false;
     }
     let method_ptr = u32::from_le_bytes(method_bytes);
 
     if !is_guest_wndproc(method_ptr) {
+        restore_callback(kernel, cb);
         return false;
     }
 
@@ -9029,6 +9442,7 @@ fn try_dispatch_com_notification_callout<D>(
             let process_heap = kernel.memory.get_process_heap();
             kernel.memory.heap_free(process_heap, 0, ptr);
         }
+        restore_callback(kernel, cb);
         return false;
     }
 
@@ -9500,11 +9914,12 @@ fn try_block_empty_get_message<D>(
 fn try_block_for_message_box_modal_wait<D>(
     kernel: &mut CeKernel,
     uc: &mut unicorn_engine::Unicorn<'_, D>,
-    framebuffer: Option<&mut dyn crate::ce::framebuffer::Framebuffer>,
+    mut framebuffer: Option<&mut dyn crate::ce::framebuffer::Framebuffer>,
     module_kind: crate::emulator::imports::ImportModuleKind,
     ordinal: Option<u32>,
     args: &[u32],
     thread_id: u32,
+    trampoline_jumps: &[MipsTrampolineJump],
     blocked_modal: &std::rc::Rc<std::cell::RefCell<Option<BlockedModalMessageBox>>>,
     blocked_get_message: &std::rc::Rc<std::cell::RefCell<Option<UnicornBlockedGetMessage>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
@@ -9521,9 +9936,11 @@ fn try_block_for_message_box_modal_wait<D>(
     let existing_modal = { blocked_modal.borrow_mut().take() };
     if let Some(modal) = existing_modal {
         kernel.pump_timers_to_gwe(modal.thread_id);
-        if let Some(result) = modal.modal_state.try_queued_result(kernel, modal.thread_id) {
+        if let Some(result) = ready_modal_message_box_result(&modal, kernel) {
             let _ = kernel.remove_blocked_waiter(modal.wait_id);
-            modal.modal_state.teardown(kernel, modal.thread_id, result);
+            modal
+                .modal_state
+                .teardown(kernel, modal.thread_id, result, framebuffer);
             kernel.threads.set_last_error(modal.thread_id, 0);
             *blocked_get_message.borrow_mut() = None;
             let mut regs = modal.regs;
@@ -9555,13 +9972,16 @@ fn try_block_for_message_box_modal_wait<D>(
 
     // First entry: prepare the dialog window.
     let memory = UnicornGuestMemory { uc };
-    let state = match crate::ce::coredll::message_box_w_prepare(
-        kernel,
-        &memory,
-        framebuffer,
-        thread_id,
-        args,
-    ) {
+    let state = match match framebuffer {
+        Some(ref mut framebuffer) => crate::ce::coredll::message_box_w_prepare(
+            kernel,
+            &memory,
+            Some(&mut **framebuffer),
+            thread_id,
+            args,
+        ),
+        None => crate::ce::coredll::message_box_w_prepare(kernel, &memory, None, thread_id, args),
+    } {
         Err(result) => {
             let _ = memory.uc.reg_write(RegisterMIPS::V0, u64::from(result));
             return true;
@@ -9571,7 +9991,7 @@ fn try_block_for_message_box_modal_wait<D>(
 
     // Drain any already-queued input synchronously.
     if let Some(result) = state.try_queued_result(kernel, thread_id) {
-        state.teardown(kernel, thread_id, result);
+        state.teardown(kernel, thread_id, result, framebuffer);
         kernel.threads.set_last_error(thread_id, 0);
         let _ = memory.uc.reg_write(RegisterMIPS::V0, u64::from(result));
         return true;
@@ -9591,12 +10011,14 @@ fn try_block_for_message_box_modal_wait<D>(
         crate::ce::timer::INFINITE,
     );
     let dialog_hwnd = state.dialog_hwnd();
+    let raw_return_pc = read_mips_reg(memory.uc, RegisterMIPS::RA);
+    let return_pc = import_callout_return_pc(raw_return_pc, trampoline_jumps);
     *blocked_modal.borrow_mut() = Some(BlockedModalMessageBox {
         wait_id,
         thread_id,
         thread_handle,
         regs: capture_mips_gprs(memory.uc),
-        return_pc: read_mips_reg(memory.uc, RegisterMIPS::RA),
+        return_pc,
         modal_state: state,
     });
     *blocked_get_message.borrow_mut() = Some(unicorn_blocked_get_message_snapshot(
@@ -9608,6 +10030,22 @@ fn try_block_for_message_box_modal_wait<D>(
     ));
     let _ = memory.uc.emu_stop();
     true
+}
+
+#[cfg(feature = "unicorn")]
+fn ready_modal_message_box_result(
+    modal: &BlockedModalMessageBox,
+    kernel: &mut CeKernel,
+) -> Option<u32> {
+    if let Some(result) = modal.modal_state.try_queued_result(kernel, modal.thread_id) {
+        return Some(result);
+    }
+    let wait_is_gone = kernel.blocked_waiter(modal.wait_id).is_none();
+    let dialog_is_gone = kernel
+        .gwe
+        .window(modal.modal_state.dialog_hwnd())
+        .is_none_or(|window| window.destroyed);
+    (wait_is_gone && dialog_is_gone).then(|| modal.modal_state.default_result())
 }
 
 #[cfg(feature = "unicorn")]
@@ -9632,12 +10070,14 @@ fn try_resume_blocked_modal_message_box<D>(
         return false;
     };
     kernel.pump_timers_to_gwe(modal.thread_id);
-    let Some(result) = modal.modal_state.try_queued_result(kernel, modal.thread_id) else {
+    let Some(result) = ready_modal_message_box_result(&modal, kernel) else {
         *blocked_modal.borrow_mut() = Some(modal);
         return false;
     };
     let _ = kernel.remove_blocked_waiter(modal.wait_id);
-    modal.modal_state.teardown(kernel, modal.thread_id, result);
+    modal
+        .modal_state
+        .teardown(kernel, modal.thread_id, result, None);
     kernel.threads.set_last_error(modal.thread_id, 0);
     *blocked_get_message.borrow_mut() = None;
 
@@ -9691,6 +10131,7 @@ fn try_block_for_popup_menu_modal_wait<D>(
     ordinal: Option<u32>,
     args: &[u32],
     thread_id: u32,
+    trampoline_jumps: &[MipsTrampolineJump],
     blocked_popup: &std::rc::Rc<std::cell::RefCell<Option<BlockedPopupMenuModal>>>,
     blocked_get_message: &std::rc::Rc<std::cell::RefCell<Option<UnicornBlockedGetMessage>>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
@@ -9798,12 +10239,14 @@ fn try_block_for_popup_menu_modal_wait<D>(
                 kernel.timers.tick_count(),
                 crate::ce::timer::INFINITE,
             );
+            let raw_return_pc = read_mips_reg(memory.uc, RegisterMIPS::RA);
+            let return_pc = import_callout_return_pc(raw_return_pc, trampoline_jumps);
             *blocked_popup.borrow_mut() = Some(BlockedPopupMenuModal {
                 wait_id,
                 thread_id,
                 thread_handle,
                 regs: capture_mips_gprs(memory.uc),
-                return_pc: read_mips_reg(memory.uc, RegisterMIPS::RA),
+                return_pc,
                 modal_state: state,
             });
             *blocked_get_message.borrow_mut() = Some(unicorn_blocked_get_message_snapshot(
@@ -9978,6 +10421,8 @@ fn try_block_for_send_message_timeout_wait<D>(
             }
             (1u32, 0u32)
         } else {
+            let _ = kernel.timeout_send_message(blocked.block_state.send_id);
+            let _ = kernel.take_completed_send_message_result(blocked.block_state.send_id);
             (0u32, crate::ce::coredll::ERROR_TIMEOUT_LOCAL)
         };
         kernel.threads.set_last_error(blocked.thread_id, error);
@@ -10070,6 +10515,8 @@ fn try_resume_blocked_send_message_timeout<D>(
         }
         (1u32, 0u32)
     } else {
+        let _ = kernel.timeout_send_message(blocked.block_state.send_id);
+        let _ = kernel.take_completed_send_message_result(blocked.block_state.send_id);
         (0u32, crate::ce::coredll::ERROR_TIMEOUT_LOCAL)
     };
     kernel.threads.set_last_error(blocked.thread_id, error);
@@ -11515,7 +11962,9 @@ fn complete_current_single_wait_timeout<D>(
     if writes.into_iter().any(|write| write.is_err()) {
         let _ = uc.emu_stop();
     }
-    if live_pump {
+    if live_pump
+        && kernel.should_stop_after_live_pump_timeout_slice(LIVE_PUMP_INLINE_TIMEOUT_STOP_SLICE_MS)
+    {
         let _ = uc.emu_stop();
     }
     true
@@ -11545,7 +11994,9 @@ fn complete_current_sleep_timeout<D>(
     if writes.into_iter().any(|write| write.is_err()) {
         let _ = uc.emu_stop();
     }
-    if live_pump {
+    if live_pump
+        && kernel.should_stop_after_live_pump_timeout_slice(LIVE_PUMP_INLINE_TIMEOUT_STOP_SLICE_MS)
+    {
         let _ = uc.emu_stop();
     }
     true
@@ -19455,6 +19906,62 @@ fn drain_win32_host_input_to_active_window(_kernel: &mut CeKernel) -> Result<usi
 }
 
 #[cfg(feature = "unicorn")]
+fn drain_remote_server_control_messages_for_message_target(
+    kernel: &mut CeKernel,
+    live_blocked: Option<UnicornBlockedGetMessage>,
+) -> usize {
+    if let Some(blocked) =
+        live_blocked.filter(|blocked| blocked.hwnd.is_none_or(|hwnd| kernel.gwe.is_window(hwnd)))
+    {
+        return kernel.drain_remote_server_control_messages_to_thread_window(
+            blocked.thread_id,
+            blocked.hwnd,
+        );
+    }
+    if let Some((thread_id, hwnd)) = saved_message_remote_input_target_for_unicorn(kernel) {
+        return kernel.drain_remote_server_control_messages_to_thread_window(thread_id, hwnd);
+    }
+    kernel.drain_remote_server_control_messages()
+}
+
+#[cfg(feature = "unicorn")]
+fn saved_message_remote_input_target_for_unicorn(kernel: &CeKernel) -> Option<(u32, Option<u32>)> {
+    let get_message = kernel.scheduler.blocked_waits().find_map(|wait| {
+        matches!(
+            wait.kind,
+            crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage { .. }
+        )
+        .then(|| {
+            let crate::ce::scheduler::SchedulerBlockedWaitKind::GetMessage { hwnd, .. } = wait.kind
+            else {
+                unreachable!();
+            };
+            (wait.thread_id, hwnd)
+        })
+    });
+    if get_message.is_some() {
+        return get_message;
+    }
+    kernel.scheduler.blocked_waits().find_map(|wait| {
+        if wait.kind != crate::ce::scheduler::SchedulerBlockedWaitKind::ModalMessageBox {
+            return None;
+        }
+        let dialog = kernel
+            .gwe
+            .windows_snapshot()
+            .into_iter()
+            .find(|window| {
+                window.thread_id == wait.thread_id
+                    && window.visible
+                    && !window.destroyed
+                    && window.class_name.eq_ignore_ascii_case("dialog")
+            })
+            .map(|window| window.hwnd);
+        Some((wait.thread_id, dialog))
+    })
+}
+
+#[cfg(feature = "unicorn")]
 fn write_unicorn_message<D>(
     uc: &mut unicorn_engine::Unicorn<'_, D>,
     addr: u32,
@@ -20176,6 +20683,136 @@ mod guest_thread_stack_tests {
         assert_eq!(
             parked.cpu.running_guest_thread,
             Some((sender_thread, sender_handle))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn orphaned_active_send_wait_resumes_sender() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+        let sender_thread = 1;
+        let receiver_thread = 3;
+        let hwnd = kernel.create_window_ex_w(receiver_thread, "SEND_TARGET", "", None, 0, 0, 0);
+        let send_id = kernel
+            .begin_cross_thread_send_message_w(
+                sender_thread,
+                hwnd,
+                crate::ce::gwe::WM_USER,
+                0,
+                0,
+                None,
+            )
+            .expect("queued send");
+        let wait_started_ms = kernel.timers.tick_count();
+        let sender_return_pc = 0x0040_9876;
+        let sender_handle = 0x229;
+        let wait_kind = BlockedWaitKind::SendMessage {
+            send_id,
+            receiver_thread_id: receiver_thread,
+            result_ptr: None,
+            previous_running_thread: Some((sender_thread, sender_handle)),
+        };
+        let wait_id = kernel.register_blocked_waiter(
+            sender_thread,
+            sender_handle,
+            Vec::new(),
+            scheduler_blocked_wait_kind(wait_kind),
+            wait_started_ms,
+            crate::ce::timer::INFINITE,
+        );
+        scheduler.blocked_wait_threads.push(BlockedWaitThread {
+            wait_id,
+            thread_id: sender_thread,
+            thread_handle: sender_handle,
+            wait_handles: Vec::new(),
+            kind: wait_kind,
+            wait_started_ms,
+            timeout_ms: crate::ce::timer::INFINITE,
+            regs: MipsGuestContext::zero(),
+            return_pc: sender_return_pc,
+        });
+
+        let removed = kernel
+            .gwe
+            .terminate_sent_messages_from_sender(sender_thread);
+        assert_eq!(removed, vec![send_id]);
+        assert!(scheduler.complete_orphaned_active_send_wait(&mut kernel));
+        assert!(scheduler.blocked_wait_threads.is_empty());
+        assert!(kernel.blocked_waiter(wait_id).is_none());
+        let saved = scheduler
+            .saved_context
+            .as_ref()
+            .expect("active orphaned send should restore sender context");
+        assert_eq!(saved.pc, sender_return_pc);
+        assert_eq!(saved.regs.regs[2], 0);
+        assert_eq!(
+            scheduler.running_guest_thread,
+            Some((sender_thread, sender_handle))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn stale_cross_process_send_yield_is_cleared_when_send_record_is_gone() -> Result<()> {
+        let config = crate::config::RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut scheduler = UnicornMips::new()?;
+        let sender_thread = 1;
+        let receiver_thread = 3;
+        let hwnd = kernel.create_window_ex_w(receiver_thread, "SEND_TARGET", "", None, 0, 0, 0);
+        let send_id = kernel
+            .begin_cross_thread_send_message_w(
+                sender_thread,
+                hwnd,
+                crate::ce::gwe::WM_USER + 1,
+                0,
+                0,
+                None,
+            )
+            .expect("queued send");
+        let yield_marker = UnicornCrossProcessSendYield {
+            send_id,
+            sender_thread_id: sender_thread,
+            sender_process_id: 1,
+            target_thread_id: receiver_thread,
+            target_process_id: 2,
+            hwnd,
+            msg: crate::ce::gwe::WM_USER + 1,
+        };
+        scheduler.last_debug = Some(UnicornDebugSnapshot {
+            cross_process_send_yield: Some(yield_marker.clone()),
+            ..Default::default()
+        });
+        scheduler.last_wall_clock_debug = Some(UnicornDebugSnapshot {
+            cross_process_send_yield: Some(yield_marker),
+            ..Default::default()
+        });
+
+        assert!(!scheduler.clear_orphaned_cross_process_send_yield(&kernel));
+        assert!(
+            scheduler
+                .last_debug_snapshot()
+                .is_some_and(|snapshot| snapshot.cross_process_send_yield.is_some())
+        );
+
+        let removed = kernel
+            .gwe
+            .terminate_sent_messages_from_sender(sender_thread);
+        assert_eq!(removed, vec![send_id]);
+        assert!(scheduler.clear_orphaned_cross_process_send_yield(&kernel));
+        assert!(
+            scheduler
+                .last_debug_snapshot()
+                .is_some_and(|snapshot| snapshot.cross_process_send_yield.is_none())
+        );
+        assert!(
+            scheduler
+                .preferred_trace_snapshot()
+                .is_some_and(|snapshot| snapshot.cross_process_send_yield.is_none())
         );
 
         Ok(())
@@ -23731,6 +24368,7 @@ fn try_enter_send_message_callout<D>(
     ordinal: Option<u32>,
     args: &[u32],
     active_thread_id: u32,
+    trampoline_jumps: &[MipsTrampolineJump],
     current_thread_id: &std::rc::Rc<std::cell::RefCell<u32>>,
     running_thread: &std::rc::Rc<std::cell::RefCell<Option<(u32, u32)>>>,
     blocked_waits: &std::rc::Rc<std::cell::RefCell<Vec<BlockedWaitThread>>>,
@@ -23769,7 +24407,8 @@ fn try_enter_send_message_callout<D>(
     let result_ptr = is_send_message_timeout
         .then(|| args.get(6).copied().unwrap_or(0))
         .filter(|ptr| *ptr != 0);
-    let return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+    let raw_return_pc = read_mips_reg(uc, RegisterMIPS::RA);
+    let return_pc = import_callout_return_pc(raw_return_pc, trampoline_jumps);
     let source = if is_send_message_timeout {
         "SendMessageTimeout"
     } else {
@@ -23876,6 +24515,27 @@ fn try_enter_send_message_callout<D>(
             return true;
         }
         if is_guest_wndproc(wndproc) {
+            if active_process_id != target_process_id {
+                let result = 0u32;
+                if let Some(ptr) = result_ptr {
+                    let _ = uc.mem_write(u64::from(ptr), &result.to_le_bytes());
+                }
+                kernel.threads.set_last_error(active_thread_id, 0);
+                let _ = uc.reg_write(RegisterMIPS::V0, u64::from(result));
+                tracing::debug!(
+                    target: "ce.gwe",
+                    source,
+                    hwnd = format_args!("0x{hwnd:08x}"),
+                    class = class_name.as_str(),
+                    wndproc = format_args!("0x{wndproc:08x}"),
+                    active_thread_id,
+                    active_process_id,
+                    target_thread_id,
+                    target_process_id,
+                    "SendMessage guest wndproc target has no runnable process"
+                );
+                return true;
+            }
             tracing::debug!(
                 target: "ce.gwe",
                 source,
@@ -24061,6 +24721,13 @@ fn try_enter_send_message_callout<D>(
         }
         false
     }
+}
+
+#[cfg(feature = "unicorn")]
+fn import_callout_return_pc(raw_return_pc: u32, trampoline_jumps: &[MipsTrampolineJump]) -> u32 {
+    mips_trampoline_origin_for_pc(raw_return_pc, trampoline_jumps)
+        .map(|origin| origin.wrapping_add(8))
+        .unwrap_or(raw_return_pc)
 }
 
 #[cfg(feature = "unicorn")]
@@ -29737,6 +30404,112 @@ mod unicorn_tests {
     }
 
     #[test]
+    fn shell_notification_com_dispatch_restores_unmapped_callback_pointer() {
+        use crate::ce::shell::{ShellNotificationCallbackMethod, ShellNotificationCallbackRecord};
+
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let method = ShellNotificationCallbackMethod::OnDismiss { timed_out: true };
+        let callback = ShellNotificationCallbackRecord {
+            clsid: [0x42; 16],
+            id: 77,
+            vtable_offset: method.com_vtable_offset(),
+            arguments: method.com_arguments(77, 0x1234_5678),
+            method,
+            lparam: 0x1234_5678,
+            callback_ptr: 0x3000_4000,
+        };
+        kernel.shell.record_notification_callback(callback.clone());
+        let pending = Rc::new(RefCell::new(Vec::new()));
+
+        assert!(!super::try_dispatch_com_notification_callout(
+            &mut kernel,
+            &mut uc,
+            0x8000_1000,
+            &pending,
+        ));
+        assert!(pending.borrow().is_empty());
+        assert_eq!(
+            kernel.shell.take_pending_notification_callback(),
+            Some(callback),
+            "unmapped non-null callback pointers should be retried before newer notifications"
+        );
+    }
+
+    #[test]
+    fn shell_notification_com_dispatch_enters_mapped_guest_callback() {
+        use crate::ce::shell::{ShellNotificationCallbackMethod, ShellNotificationCallbackRecord};
+
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        uc.mem_map(0x3000_0000, 0x2000, Prot::ALL).unwrap();
+
+        let callback_ptr = 0x3000_0100u32;
+        let vtable_ptr = 0x3000_0200u32;
+        let method_ptr = 0x0040_1000u32;
+        uc.mem_write(u64::from(callback_ptr), &vtable_ptr.to_le_bytes())
+            .unwrap();
+        uc.mem_write(
+            u64::from(
+                vtable_ptr
+                    + crate::ce::shell::ISHELL_NOTIFICATION_CALLBACK_ON_DISMISS_VTABLE_OFFSET,
+            ),
+            &method_ptr.to_le_bytes(),
+        )
+        .unwrap();
+
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let method = ShellNotificationCallbackMethod::OnDismiss { timed_out: true };
+        kernel
+            .shell
+            .record_notification_callback(ShellNotificationCallbackRecord {
+                clsid: [0x42; 16],
+                id: 77,
+                vtable_offset: method.com_vtable_offset(),
+                arguments: method.com_arguments(77, 0x1234_5678),
+                method,
+                lparam: 0x1234_5678,
+                callback_ptr,
+            });
+
+        let import_pc = 0x8000_1000;
+        let return_sp = 0x3000_1800u32;
+        uc.reg_write(RegisterMIPS::SP, u64::from(return_sp))
+            .unwrap();
+        uc.reg_write(RegisterMIPS::RA, 0x8000_2000).unwrap();
+        let pending = Rc::new(RefCell::new(Vec::new()));
+
+        assert!(super::try_dispatch_com_notification_callout(
+            &mut kernel,
+            &mut uc,
+            import_pc,
+            &pending,
+        ));
+        assert!(kernel.shell.take_pending_notification_callback().is_none());
+        assert_eq!(uc.reg_read(RegisterMIPS::PC).unwrap() as u32, method_ptr);
+        assert_eq!(uc.reg_read(RegisterMIPS::T9).unwrap() as u32, method_ptr);
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::RA).unwrap() as u32,
+            super::COM_NOTIFICATION_RETURN_STUB_ADDR
+        );
+        assert_eq!(
+            uc.reg_read(RegisterMIPS::SP).unwrap() as u32,
+            return_sp - super::WNDPROC_CALL_FRAME_BYTES
+        );
+        assert_eq!(uc.reg_read(RegisterMIPS::A0).unwrap() as u32, callback_ptr);
+        assert_eq!(uc.reg_read(RegisterMIPS::A1).unwrap() as u32, 77);
+        assert_eq!(uc.reg_read(RegisterMIPS::A2).unwrap() as u32, 1);
+        assert_eq!(uc.reg_read(RegisterMIPS::A3).unwrap() as u32, 0x1234_5678);
+
+        let pending = pending.borrow();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].return_pc, import_pc);
+        assert_eq!(pending[0].return_sp, return_sp);
+        assert_eq!(pending[0].heap_ptr_to_free, None);
+    }
+
+    #[test]
     fn runtime_loader_failure_rollback_releases_only_new_modules() {
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
@@ -31140,9 +31913,15 @@ mod unicorn_tests {
         let (receiver_handle, receiver_thread) = kernel.create_guest_thread(0x0040_3000, 0, false);
         let wndproc: u32 = 0x0001_3570;
         let return_pc: u32 = 0x0040_1000;
+        let raw_return_pc: u32 = 0x008c_c9b0;
+        let trampoline_jumps = [super::MipsTrampolineJump {
+            origin: return_pc.wrapping_sub(8),
+            stub: 0x008c_c9a0,
+            byte_len: 0x20,
+        }];
         let hwnd = kernel.create_window_ex_w(receiver_thread, "CROSS_SEND", "", None, 0, 0, 0);
         kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, wndproc);
-        uc.reg_write(RegisterMIPS::RA, u64::from(return_pc))
+        uc.reg_write(RegisterMIPS::RA, u64::from(raw_return_pc))
             .unwrap();
         uc.reg_write(RegisterMIPS::S0, 0x7777_0001).unwrap();
 
@@ -31159,6 +31938,7 @@ mod unicorn_tests {
             Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_W),
             &[hwnd, crate::ce::gwe::WM_USER + 88, 0x55, 0x66],
             sender_thread,
+            &trampoline_jumps,
             &current_thread_id,
             &running_thread,
             &blocked_waits,
@@ -31186,6 +31966,7 @@ mod unicorn_tests {
         );
         let pending = pending.borrow();
         assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].return_pc, return_pc);
         let restore = pending[0]
             .send_restore
             .as_ref()
@@ -31197,6 +31978,7 @@ mod unicorn_tests {
         assert_eq!(blocked_waits[0].wait_id, restore.wait_id);
         assert_eq!(blocked_waits[0].thread_id, sender_thread);
         assert_eq!(blocked_waits[0].thread_handle, 0x120);
+        assert_eq!(blocked_waits[0].return_pc, return_pc);
         assert_eq!(blocked_waits[0].regs.regs[16], 0x7777_0001);
         let super::BlockedWaitKind::SendMessage {
             send_id,
@@ -31275,6 +32057,7 @@ mod unicorn_tests {
             Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_W),
             &[hwnd, crate::ce::gwe::WM_USER + 89, 0x55, 0x66],
             sender_thread,
+            &[],
             &current_thread_id,
             &running_thread,
             &blocked_waits,
@@ -31316,6 +32099,103 @@ mod unicorn_tests {
         assert!(kernel.blocked_waiter(blocked.wait_id).is_some());
         assert!(kernel.gwe.sent_message(yielded.send_id).is_some());
         assert_eq!(kernel.gwe.active_sent_message_id(receiver_thread), None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn import_callout_return_pc_maps_stub_ra_to_guest_continuation() {
+        let return_pc: u32 = 0x0040_1000;
+        let raw_return_pc: u32 = 0x008c_c9b0;
+        let trampoline_jumps = [super::MipsTrampolineJump {
+            origin: return_pc.wrapping_sub(8),
+            stub: 0x008c_c9a0,
+            byte_len: 0x20,
+        }];
+
+        assert_eq!(
+            super::import_callout_return_pc(raw_return_pc, &trampoline_jumps),
+            return_pc
+        );
+        assert_eq!(super::import_callout_return_pc(return_pc, &[]), return_pc);
+    }
+
+    #[test]
+    fn send_message_callout_fails_cross_process_guest_wndproc_without_runnable_receiver()
+    -> crate::Result<()> {
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let mut uc = Unicorn::new(Arch::MIPS, Mode::MIPS32 | Mode::LITTLE_ENDIAN).unwrap();
+        let sender_thread = 1;
+        let sender_process = 1;
+        let sender_handle = 0x0000_0120;
+        let receiver_thread = 3;
+        let receiver_process = 67;
+        let wndproc: u32 = 0x0001_3570;
+        let result_ptr = 0x0001_0040;
+
+        uc.mem_map(0x0001_0000, 0x1000, Prot::ALL).unwrap();
+        uc.mem_write(u64::from(result_ptr), &0xdead_beefu32.to_le_bytes())
+            .unwrap();
+
+        kernel.set_current_process_id(receiver_process);
+        let hwnd = kernel.create_window_ex_w(
+            receiver_thread,
+            "CROSS_PROCESS_UNAVAILABLE",
+            "",
+            None,
+            0,
+            0,
+            0,
+        );
+        kernel.gwe.set_window_long(hwnd, GWL_WNDPROC, wndproc);
+        kernel.set_current_process_id(sender_process);
+
+        let current_thread_id = Rc::new(RefCell::new(sender_thread));
+        let running_thread = Rc::new(RefCell::new(Some((sender_thread, sender_handle))));
+        let blocked_waits = Rc::new(RefCell::new(Vec::new()));
+        let pending = Rc::new(RefCell::new(Vec::new()));
+        let parked = Rc::new(RefCell::new(VecDeque::new()));
+        let cross_process_send_yield = Rc::new(RefCell::new(None));
+
+        assert!(super::try_enter_send_message_callout(
+            &mut kernel,
+            &mut uc,
+            crate::emulator::imports::ImportModuleKind::Coredll,
+            Some(crate::ce::coredll_ordinals::ORD_SEND_MESSAGE_TIMEOUT),
+            &[
+                hwnd,
+                crate::ce::gwe::WM_USER + 90,
+                0x55,
+                0x66,
+                0,
+                1000,
+                result_ptr
+            ],
+            sender_thread,
+            &[],
+            &current_thread_id,
+            &running_thread,
+            &blocked_waits,
+            &pending,
+            &parked,
+            &cross_process_send_yield,
+        ));
+
+        assert_eq!(uc.reg_read(RegisterMIPS::V0).unwrap() as u32, 0);
+        let mut result_bytes = [0; 4];
+        uc.mem_read(u64::from(result_ptr), &mut result_bytes)
+            .unwrap();
+        assert_eq!(u32::from_le_bytes(result_bytes), 0);
+        assert!(blocked_waits.borrow().is_empty());
+        assert!(pending.borrow().is_empty());
+        assert!(cross_process_send_yield.borrow().is_none());
+        assert!(kernel.gwe.sent_message(1).is_none());
+        assert_eq!(*current_thread_id.borrow(), sender_thread);
+        assert_eq!(
+            *running_thread.borrow(),
+            Some((sender_thread, sender_handle))
+        );
 
         Ok(())
     }

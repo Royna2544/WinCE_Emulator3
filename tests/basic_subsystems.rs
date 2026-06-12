@@ -4163,6 +4163,8 @@ fn shell_system_message_box_recent_docs_notify_icons_and_notifications() {
         result: 0,
         owner_was_enabled: None,
         rendered: false,
+        dialog_was_active: false,
+        dialog_ex_style: 0,
     });
     assert_eq!(shell.last_message_box().unwrap().text, "msg");
     assert_eq!(shell.message_boxes().count(), 1);
@@ -4210,6 +4212,10 @@ fn shell_system_message_box_recent_docs_notify_icons_and_notifications() {
     };
     assert!(shell.apply_notify_icon(NotifyIconOp::Add, icon_data.clone()));
     assert_eq!(shell.notify_icon(10, 1).unwrap().tip, "tip");
+    shell.register_taskbar(0x0004_0008);
+    assert_eq!(shell.taskbar_hwnd(), Some(0x0004_0008));
+    shell.register_taskbar(0);
+    assert_eq!(shell.taskbar_hwnd(), None);
     // Modify non-existent fails.
     assert!(!shell.apply_notify_icon(
         NotifyIconOp::Modify,
@@ -4791,15 +4797,30 @@ fn com_system_initialize_uninitialize_register_class_create_instance_and_object(
     let iid = 0x2000u32;
     com.register_class(clsid, 0xABCD);
 
-    // create instance: success returns a handle.
+    // create instance: success returns the registered local interface token.
     let handle = com.co_create_instance(clsid, iid).unwrap();
-    assert_ne!(handle, 0);
+    assert_eq!(handle, 0xABCD);
 
     // object() retrieves it.
     let obj = com.object(handle).unwrap();
     assert_eq!(obj.handle, handle);
     assert_eq!(obj.clsid_ptr, clsid);
     assert_eq!(obj.iid_ptr, iid);
+
+    let clsid_guid = [1, 0, 0, 0, 2, 0, 3, 0, 4, 5, 6, 7, 8, 9, 10, 11];
+    let iid_guid = [
+        0xc0, 0x14, 0x02, 0x00, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46,
+    ];
+    com.register_class_guid(clsid_guid, 0xBEEF);
+    let guid_handle = com
+        .co_create_instance_guid_values(clsid_guid, iid_guid)
+        .unwrap();
+    assert_eq!(guid_handle, 0xBEEF);
+    let guid_obj = com.object(guid_handle).unwrap();
+    assert_eq!(guid_obj.clsid_ptr, 0);
+    assert_eq!(guid_obj.clsid, Some(clsid_guid));
+    assert_eq!(guid_obj.iid_ptr, 0);
+    assert_eq!(guid_obj.iid, Some(iid_guid));
 
     // co_create_instance with clsid=0 → E_POINTER.
     assert_eq!(com.co_create_instance(0, iid), Err(E_POINTER));
@@ -4808,6 +4829,10 @@ fn com_system_initialize_uninitialize_register_class_create_instance_and_object(
     // co_create_instance with unregistered clsid → REGDB_E_CLASSNOTREG.
     assert_eq!(
         com.co_create_instance(0x9999, iid),
+        Err(REGDB_E_CLASSNOTREG)
+    );
+    assert_eq!(
+        com.co_create_instance_guid_values([0x99; 16], iid_guid),
         Err(REGDB_E_CLASSNOTREG)
     );
 
@@ -8111,6 +8136,52 @@ fn shell_notification_callback_method_com_vtable_offset_and_com_arguments() {
 }
 
 #[test]
+fn shell_notification_callback_queue_restores_failed_runtime_dispatch_to_front() {
+    use wince_emulation_v3::ce::shell::{
+        ShellNotificationCallbackMethod, ShellNotificationCallbackRecord, ShellSystem,
+    };
+
+    let mut shell = ShellSystem::default();
+    let first_method = ShellNotificationCallbackMethod::OnDismiss { timed_out: false };
+    let second_method = ShellNotificationCallbackMethod::OnCommandSelected { command_id: 7 };
+    let first = ShellNotificationCallbackRecord {
+        clsid: [1; 16],
+        id: 11,
+        vtable_offset: first_method.com_vtable_offset(),
+        arguments: first_method.com_arguments(11, 0x1111),
+        method: first_method,
+        lparam: 0x1111,
+        callback_ptr: 0x2000,
+    };
+    let second = ShellNotificationCallbackRecord {
+        clsid: [2; 16],
+        id: 22,
+        vtable_offset: second_method.com_vtable_offset(),
+        arguments: second_method.com_arguments(22, 0x2222),
+        method: second_method,
+        lparam: 0x2222,
+        callback_ptr: 0x3000,
+    };
+
+    shell.record_notification_callback(first.clone());
+    shell.record_notification_callback(second.clone());
+
+    let failed = shell
+        .take_pending_notification_callback()
+        .expect("first callback should be queued");
+    assert_eq!(failed, first);
+    shell.restore_pending_notification_callback_front(failed);
+
+    assert_eq!(
+        shell.take_pending_notification_callback(),
+        Some(first),
+        "a failed non-null COM dispatch should be retried before newer callbacks"
+    );
+    assert_eq!(shell.take_pending_notification_callback(), Some(second));
+    assert!(shell.take_pending_notification_callback().is_none());
+}
+
+#[test]
 fn remote_ceremote_paused_key_serial_nmea_location_imu_audio_and_log_lines() {
     use wince_emulation_v3::ce::remote::{CeRemote, LocationFix, RemoteError};
 
@@ -9024,16 +9095,26 @@ fn kernel_file_pointer_size_position_flush_find_first_next_close_and_change_noti
     // clear_file_change_notification: delegates to find_next → Ok(true).
     assert!(kernel.clear_file_change_notification(nfh)?);
 
-    // Unsupported notify_filter → error (bit 9 = 0x200 is not in the supported mask).
+    // Unknown notify_filter bits are preserved like CE; they simply do not
+    // match known generated change bits by themselves.
+    let unknown_nfh =
+        kernel.find_first_change_notification_w("\\ResidentFlash\\WatchDir", false, 0x0000_0200)?;
+    let unknown_file = kernel.create_file_w(
+        "\\ResidentFlash\\WatchDir\\unknown-filter.bin",
+        GENERIC_READ | GENERIC_WRITE,
+        CREATE_ALWAYS,
+    )?;
+    kernel.close_handle(unknown_file)?;
+    assert_eq!(
+        kernel.wait_for_single_object(unknown_nfh, 0, 1),
+        WAIT_TIMEOUT
+    );
     assert!(
         kernel
-            .find_first_change_notification_w(
-                "\\ResidentFlash\\WatchDir",
-                false,
-                0x0000_0200, // not in the supported mask
-            )
-            .is_err()
+            .file_change_notification_records(unknown_nfh)?
+            .is_empty()
     );
+    assert!(kernel.find_close_change_notification(unknown_nfh)?);
 
     // Path that is a file (not directory) → error.
     assert!(
@@ -9409,6 +9490,8 @@ fn kernel_post_shell_notify_icon_and_notification_callbacks_expire() {
 
     // --- post_shell_notification_callback ---
     let clsid = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+    let callback_ptr = 0x3000_4000;
+    kernel.com.register_class_guid(clsid, callback_ptr);
     // No notification registered → false.
     assert!(!kernel.post_shell_notification_callback(clsid, 99, 0, 0, 0));
 
@@ -9437,6 +9520,14 @@ fn kernel_post_shell_notify_icon_and_notification_callbacks_expire() {
     // With non-zero clsid and no hwnd_sink → COM callback recorded.
     assert!(delivered);
     assert_eq!(kernel.shell.notification_callbacks().count(), before + 1);
+    let callback = kernel.shell.notification_callbacks().last().unwrap();
+    assert_eq!(callback.callback_ptr, callback_ptr);
+    let object = kernel.com.object(callback_ptr).unwrap();
+    assert_eq!(object.clsid, Some(clsid));
+    assert_eq!(
+        object.iid,
+        Some(wince_emulation_v3::ce::shell::IID_ISHELL_NOTIFICATION_CALLBACK)
+    );
 
     // --- post_shell_notification_dismiss_callback ---
     // Reset callbacks and verify dismiss posts a COM record.

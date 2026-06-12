@@ -475,6 +475,11 @@ impl HostFileSystem {
         self.io_stats
     }
 
+    pub fn volume_root_for_guest_path(&self, guest_path: &str) -> Option<String> {
+        let volume_key = self.volume_for_guest_path(guest_path).volume_key;
+        (!volume_key.is_empty()).then(|| format!("\\{}", volume_key.replace('/', "\\")))
+    }
+
     pub fn set_root_relative_guest_path(&mut self, guest_path: &str) {
         let normalized = normalize_guest_path(guest_path);
         self.root_relative_mount = self
@@ -664,10 +669,17 @@ impl HostFileSystem {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        find_data_from_path(&host_path, file_name)
+        let mut data = find_data_from_path(&host_path, file_name)?;
+        self.apply_mount_attributes(&normalized, &mut data);
+        Ok(data)
     }
 
     pub fn create_directory_w(&self, guest_path: &str) -> Result<()> {
+        if self.volume_for_guest_path(guest_path).is_mount_root() {
+            return Err(Error::AlreadyExists(format!(
+                "guest mount root already exists: {guest_path}"
+            )));
+        }
         if self
             .mount_for_guest_path(guest_path)
             .is_some_and(|mount| !mount.writable)
@@ -684,6 +696,11 @@ impl HostFileSystem {
     }
 
     pub fn remove_directory_w(&self, guest_path: &str) -> Result<()> {
+        if self.volume_for_guest_path(guest_path).is_mount_root() {
+            return Err(Error::AccessDenied(format!(
+                "cannot remove guest mount root: {guest_path}"
+            )));
+        }
         if self
             .mount_for_guest_path(guest_path)
             .is_some_and(|mount| !mount.writable)
@@ -700,6 +717,11 @@ impl HostFileSystem {
     }
 
     pub fn delete_file_w(&self, guest_path: &str) -> Result<()> {
+        if self.volume_for_guest_path(guest_path).is_mount_root() {
+            return Err(Error::InvalidArgument(format!(
+                "cannot delete guest mount root as a file: {guest_path}"
+            )));
+        }
         if self
             .mount_for_guest_path(guest_path)
             .is_some_and(|mount| !mount.writable)
@@ -728,17 +750,6 @@ impl HostFileSystem {
                 "cannot rename over guest mount point: {new_path}"
             )));
         }
-        if self
-            .mount_for_normalized_path(&existing_volume.normalized_path)
-            .is_some_and(|mount| !mount.writable)
-            || self
-                .mount_for_normalized_path(&new_volume.normalized_path)
-                .is_some_and(|mount| !mount.writable)
-        {
-            return Err(Error::AccessDenied(format!(
-                "guest mount is read-only: {existing_path} -> {new_path}"
-            )));
-        }
         let existing = self.translate_guest_path(existing_path)?;
         let new = self.translate_guest_path(new_path)?;
         let existing_metadata = existing.metadata().map_err(|source| Error::Io {
@@ -746,6 +757,17 @@ impl HostFileSystem {
             source,
         })?;
         let cross_volume = existing_volume.volume_key != new_volume.volume_key;
+        let existing_readonly = self
+            .mount_for_normalized_path(&existing_volume.normalized_path)
+            .is_some_and(|mount| !mount.writable);
+        let new_readonly = self
+            .mount_for_normalized_path(&new_volume.normalized_path)
+            .is_some_and(|mount| !mount.writable);
+        if new_readonly || (!cross_volume && existing_readonly) {
+            return Err(Error::AccessDenied(format!(
+                "guest mount is read-only: {existing_path} -> {new_path}"
+            )));
+        }
         if cross_volume && existing_metadata.is_dir() {
             return Err(Error::NotSameDevice(format!(
                 "cannot move directory across guest volumes: {existing_path} -> {new_path}"
@@ -767,16 +789,54 @@ impl HostFileSystem {
                 path: existing.clone(),
                 source,
             })?;
-            fs::remove_file(&existing).map_err(|source| Error::Io {
-                path: existing,
-                source,
-            })?;
+            if !existing_readonly {
+                let _ = fs::remove_file(&existing);
+            }
             return Ok(());
         }
         fs::rename(&existing, &new).map_err(|source| Error::Io {
             path: existing,
             source,
         })
+    }
+
+    pub fn delete_and_rename_file_w(&self, old_path: &str, new_path: &str) -> Result<()> {
+        let old_volume = self.volume_for_guest_path(old_path);
+        let new_volume = self.volume_for_guest_path(new_path);
+        if old_volume.is_mount_root() || new_volume.is_mount_root() {
+            return Err(Error::AccessDenied(format!(
+                "cannot delete and rename guest mount point: {old_path} -> {new_path}"
+            )));
+        }
+        if old_volume.volume_key != new_volume.volume_key {
+            return Err(Error::NotSameDevice(format!(
+                "cannot delete and rename across guest volumes: {old_path} -> {new_path}"
+            )));
+        }
+        if self
+            .mount_for_normalized_path(&old_volume.normalized_path)
+            .is_some_and(|mount| !mount.writable)
+        {
+            return Err(Error::AccessDenied(format!(
+                "guest mount is read-only: {old_path} -> {new_path}"
+            )));
+        }
+        let old = self.translate_guest_path(old_path)?;
+        let new = self.translate_guest_path(new_path)?;
+        let new_metadata = new.metadata().map_err(|source| Error::Io {
+            path: new.clone(),
+            source,
+        })?;
+        if new_metadata.is_dir() {
+            return Err(Error::InvalidArgument(format!(
+                "replacement source is a directory: {new_path}"
+            )));
+        }
+        fs::remove_file(&old).map_err(|source| Error::Io {
+            path: old.clone(),
+            source,
+        })?;
+        fs::rename(&new, &old).map_err(|source| Error::Io { path: new, source })
     }
 
     pub fn copy_file_w(
@@ -815,6 +875,11 @@ impl HostFileSystem {
     }
 
     pub fn set_file_attributes_w(&self, guest_path: &str, attributes: u32) -> Result<()> {
+        if self.volume_for_guest_path(guest_path).is_mount_root() {
+            return Err(Error::AccessDenied(format!(
+                "cannot set attributes on guest mount root: {guest_path}"
+            )));
+        }
         if self
             .mount_for_guest_path(guest_path)
             .is_some_and(|mount| !mount.writable)
@@ -985,6 +1050,25 @@ impl HostFileSystem {
             .map(|_| ())
     }
 
+    pub fn duplicate_open_file(&mut self, id: u32) -> Result<u32> {
+        let mut duplicate = self
+            .open_files
+            .get(&id)
+            .ok_or(Error::InvalidHandle(id))?
+            .clone();
+        let duplicate_id = self.next_id;
+        self.next_id += 1;
+        duplicate.id = duplicate_id;
+        if duplicate.is_host_file_backed() {
+            self.io_stats.host_file_open_count += 1;
+        }
+        if duplicate.is_memory_backed() {
+            self.io_stats.memory_backed_open_count += 1;
+        }
+        self.open_files.insert(duplicate_id, duplicate);
+        Ok(duplicate_id)
+    }
+
     pub fn find_first_file_w(&mut self, guest_pattern: &str) -> Result<(u32, FindData)> {
         let entries = self.find_matches(guest_pattern)?;
         let Some(first) = entries.first().cloned() else {
@@ -1021,6 +1105,19 @@ impl HostFileSystem {
             .remove(&id)
             .ok_or(Error::InvalidHandle(id))
             .map(|_| ())
+    }
+
+    pub fn duplicate_find(&mut self, id: u32) -> Result<u32> {
+        let mut duplicate = self
+            .open_finds
+            .get(&id)
+            .ok_or(Error::InvalidHandle(id))?
+            .clone();
+        let duplicate_id = self.next_id;
+        self.next_id += 1;
+        duplicate.id = duplicate_id;
+        self.open_finds.insert(duplicate_id, duplicate);
+        Ok(duplicate_id)
     }
 
     pub fn open_file(&self, id: u32) -> Result<&OpenFile> {
@@ -1098,6 +1195,10 @@ impl HostFileSystem {
             "translated find pattern"
         );
 
+        let system_volume = self
+            .mount_for_normalized_path(&normalized)
+            .is_some_and(|mount| mount.system);
+
         if has_wildcards(&pattern_name) {
             let dir = host_pattern.parent().unwrap_or_else(|| Path::new("."));
             let mut entries = Vec::new();
@@ -1111,7 +1212,11 @@ impl HostFileSystem {
                 })?;
                 let file_name = entry.file_name().to_string_lossy().into_owned();
                 if wildcard_match(&pattern_name, &file_name) {
-                    entries.push(find_data_from_path(&entry.path(), file_name)?);
+                    let mut data = find_data_from_path(&entry.path(), file_name)?;
+                    if system_volume {
+                        data.attributes |= FILE_ATTRIBUTE_SYSTEM;
+                    }
+                    entries.push(data);
                 }
             }
             entries.sort_by(|lhs, rhs| lhs.file_name.cmp(&rhs.file_name));
@@ -1145,7 +1250,11 @@ impl HostFileSystem {
             host_pattern = %host_pattern.display(),
             "find pattern matched exact path"
         );
-        Ok(vec![find_data_from_path(&host_pattern, file_name)?])
+        let mut data = find_data_from_path(&host_pattern, file_name)?;
+        if system_volume {
+            data.attributes |= FILE_ATTRIBUTE_SYSTEM;
+        }
+        Ok(vec![data])
     }
 
     fn root_namespace_entries(&self, pattern: &str) -> Vec<FindData> {
@@ -1243,6 +1352,15 @@ impl HostFileSystem {
                     .to_owned();
                 mount_root_find_data(mount, file_name)
             })
+    }
+
+    fn apply_mount_attributes(&self, normalized: &str, data: &mut FindData) {
+        if self
+            .mount_for_normalized_path(normalized)
+            .is_some_and(|mount| mount.system)
+        {
+            data.attributes |= FILE_ATTRIBUTE_SYSTEM;
+        }
     }
 
     fn mounts_in_order(&self) -> impl Iterator<Item = &FileMount> {
@@ -1911,6 +2029,10 @@ mod tests {
         );
         let (_id, data) = fs.find_first_file_w("\\Windows\\*").unwrap();
         assert_eq!(data.file_name, "shell.txt");
+        assert_eq!(
+            data.attributes,
+            FILE_ATTRIBUTE_ARCHIVE | FILE_ATTRIBUTE_SYSTEM
+        );
         assert!(
             fs.create_file_w("\\Windows\\x.txt", GENERIC_WRITE, CREATE_ALWAYS)
                 .is_err()

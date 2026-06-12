@@ -95,6 +95,7 @@ pub const WM_RENDERFORMAT: u32 = 0x0305;
 pub const WM_RENDERALLFORMATS: u32 = 0x0306;
 pub const WM_DESTROYCLIPBOARD: u32 = 0x0307;
 pub const WM_USER: u32 = 0x0400;
+pub const WM_HANDLESHELLNOTIFYICON: u32 = WM_USER + 0x0bad;
 pub const WM_APP: u32 = 0x8000;
 pub const WM_NCDESTROY: u32 = WM_APP - 1;
 pub const WM_FILECHANGEINFO: u32 = WM_APP + 0x101;
@@ -240,6 +241,7 @@ pub const WS_CLIPCHILDREN: u32 = 0x0200_0000;
 pub const WS_GROUP: u32 = 0x0002_0000;
 pub const WS_TABSTOP: u32 = 0x0001_0000;
 pub const WS_EX_NOPARENTNOTIFY: u32 = 0x0000_0004;
+pub const WS_EX_TOPMOST: u32 = 0x0000_0008;
 pub const WA_INACTIVE: u32 = 0;
 pub const WA_ACTIVE: u32 = 1;
 pub const WA_CLICKACTIVE: u32 = 2;
@@ -340,10 +342,23 @@ pub struct FileChangeNotificationMessage {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotifyIconMessage {
+    pub hwnd: u32,
+    pub id: u32,
+    pub flags: u32,
+    pub callback_message: u32,
+    pub icon: u32,
+    pub tip: String,
+    pub state: u32,
+    pub state_mask: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MessagePointerPayload {
     WindowPos(WindowPos),
     ShellNotification(ShellNotificationMessage),
     FileChangeNotification(FileChangeNotificationMessage),
+    NotifyIcon(NotifyIconMessage),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1723,6 +1738,15 @@ impl Gwe {
                     .stats
                     .send_transaction_receiver_terminated_count
                     .saturating_add(1);
+            }
+        }
+        for id in &doomed_sent {
+            if self
+                .sent_messages
+                .get(id)
+                .is_some_and(|sent| sent.sender_thread_id.is_none())
+            {
+                self.sent_messages.remove(id);
             }
         }
         for queue in self.sent_queues.values_mut() {
@@ -3661,6 +3685,30 @@ impl Gwe {
                 .is_some_and(|replied_depths| replied_depths.contains(&depth))
     }
 
+    pub fn clear_orphaned_send_depths_excluding(&mut self, protected_threads: &[u32]) -> Vec<u32> {
+        if !self.sent_messages.is_empty()
+            || self
+                .active_sent_stack_by_thread
+                .values()
+                .any(|stack| !stack.is_empty())
+            || self.sent_queues.values().any(|queue| !queue.is_empty())
+        {
+            return Vec::new();
+        }
+        let threads = self
+            .send_depth_by_thread
+            .keys()
+            .copied()
+            .filter(|thread_id| !protected_threads.contains(thread_id))
+            .collect::<Vec<_>>();
+        for thread_id in &threads {
+            self.send_depth_by_thread.remove(thread_id);
+            self.replied_send_depth_by_thread.remove(thread_id);
+        }
+        self.sent_queues.retain(|_, queue| !queue.is_empty());
+        threads
+    }
+
     pub fn reply_message(&mut self, thread_id: u32, result: u32) -> Option<u64> {
         let depth = self
             .send_depth_by_thread
@@ -3877,17 +3925,26 @@ impl Gwe {
         }
 
         for id in &expired {
-            if let Some(sent) = self.sent_messages.get_mut(id) {
-                sent.flags |= SMF_TIMEOUT | SMF_RESULT_READY;
-                sent.result = Some(0);
-                self.stats.send_transaction_timeout_count =
-                    self.stats.send_transaction_timeout_count.saturating_add(1);
-            }
-        }
-        for queue in self.sent_queues.values_mut() {
-            queue.retain(|id| !expired.contains(id));
+            let _ = self.timeout_sent_message(*id);
         }
         expired
+    }
+
+    pub fn timeout_sent_message(&mut self, id: u64) -> bool {
+        let Some(sent) = self.sent_messages.get_mut(&id) else {
+            return false;
+        };
+        if sent.flags & SMF_RESULT_READY != 0 {
+            return false;
+        }
+        sent.flags |= SMF_TIMEOUT | SMF_RESULT_READY;
+        sent.result = Some(0);
+        self.stats.send_transaction_timeout_count =
+            self.stats.send_transaction_timeout_count.saturating_add(1);
+        for queue in self.sent_queues.values_mut() {
+            queue.retain(|queued_id| *queued_id != id);
+        }
+        true
     }
 
     pub fn stats(&self) -> GweStats {
@@ -5427,6 +5484,73 @@ mod tests {
     }
 
     #[test]
+    fn timeout_sent_message_removes_queued_send_before_delivery() {
+        let mut gwe = Gwe::default();
+        let sender_thread = 11;
+        let receiver_thread = 12;
+        let hwnd = gwe.create_window(receiver_thread, "target", "");
+
+        let send_id = gwe
+            .queue_send_message_for_window(
+                Some(sender_thread),
+                hwnd,
+                Message::new(hwnd, WM_USER + 10, 0xaa, 0xbb, 0),
+                SMF_TIMEOUT,
+                Some(250),
+            )
+            .expect("queued timeout send");
+        assert!(gwe.has_pending_sent_message_for_thread(receiver_thread));
+
+        assert!(gwe.timeout_sent_message(send_id));
+        let sent = gwe.sent_message(send_id).expect("timed-out send state");
+        assert_ne!(sent.flags & SMF_TIMEOUT, 0);
+        assert_ne!(sent.flags & SMF_RESULT_READY, 0);
+        assert_eq!(sent.result, Some(0));
+        assert!(!gwe.has_pending_sent_message_for_thread(receiver_thread));
+        assert_eq!(gwe.get_message(receiver_thread), None);
+        assert_eq!(gwe.take_completed_sent_message_result(send_id), Some(0));
+        assert!(!gwe.timeout_sent_message(send_id));
+    }
+
+    #[test]
+    fn sent_message_dispatch_honors_hwnd_and_message_filters() {
+        let mut gwe = Gwe::default();
+        let receiver_thread = 12;
+        let modal_hwnd = gwe.create_window(receiver_thread, "dialog", "");
+        let target_hwnd = gwe.create_window(receiver_thread, "owner", "");
+
+        assert!(gwe.queue_sent_message_for_window(
+            target_hwnd,
+            Message::new(target_hwnd, WM_USER + 1, 0x14, 0x15, 0),
+        ));
+
+        assert!(!gwe.has_message_filtered(
+            receiver_thread,
+            Some(modal_hwnd),
+            WM_USER + 1,
+            WM_USER + 1,
+        ));
+        assert!(!gwe.has_message_filtered(
+            receiver_thread,
+            Some(target_hwnd),
+            WM_PAINT,
+            WM_LBUTTONUP,
+        ));
+        assert!(gwe.has_message_filtered(
+            receiver_thread,
+            Some(target_hwnd),
+            WM_USER + 1,
+            WM_USER + 1,
+        ));
+        let message = gwe
+            .get_message_filtered(receiver_thread, Some(target_hwnd), WM_USER + 1, WM_USER + 1)
+            .expect("sent message should match the requested receive filter");
+        assert_eq!(message.hwnd, target_hwnd);
+        assert_eq!(message.msg, WM_USER + 1);
+        assert_eq!(gwe.active_sent_message_id(receiver_thread), Some(1));
+    }
+
+    #[test]
     fn destroying_target_marks_queued_sync_send_receiver_terminated() {
         let mut gwe = Gwe::default();
         let sender_thread = 21;
@@ -5449,6 +5573,28 @@ mod tests {
         assert_ne!(sent.flags & SMF_RESULT_READY, 0);
         assert_eq!(gwe.get_message(receiver_thread), None);
         assert_eq!(gwe.take_completed_sent_message_result(send_id), Some(0));
+    }
+
+    #[test]
+    fn destroying_target_removes_senderless_sent_message() {
+        let mut gwe = Gwe::default();
+        let receiver_thread = 22;
+        let hwnd = gwe.create_window(receiver_thread, "dialog", "");
+
+        let send_id = gwe
+            .queue_send_message_for_window(
+                None,
+                hwnd,
+                Message::new(hwnd, WM_COMMAND, 1, 2, 0),
+                SMF_SENDER_NO_WAIT,
+                None,
+            )
+            .expect("queued senderless send");
+
+        assert!(gwe.destroy_window(hwnd, 0));
+        assert!(gwe.sent_message(send_id).is_none());
+        assert_eq!(gwe.get_message(receiver_thread), None);
+        assert!(!gwe.has_pending_sent_message_for_thread(receiver_thread));
     }
 
     #[test]
@@ -5630,6 +5776,26 @@ mod tests {
             gwe.take_completed_sent_message_result(outer_id),
             Some(0x1111)
         );
+    }
+
+    #[test]
+    fn clear_orphaned_send_depths_keeps_protected_direct_send_threads() {
+        let mut gwe = Gwe::default();
+        gwe.begin_send_message(1);
+        gwe.begin_send_message(3);
+
+        assert_eq!(gwe.clear_orphaned_send_depths_excluding(&[1]), vec![3]);
+        assert!(gwe.in_send_message(1));
+        assert!(!gwe.in_send_message(3));
+
+        assert_eq!(
+            gwe.clear_orphaned_send_depths_excluding(&[1]),
+            Vec::<u32>::new()
+        );
+        assert!(gwe.in_send_message(1));
+
+        assert_eq!(gwe.clear_orphaned_send_depths_excluding(&[]), vec![1]);
+        assert!(!gwe.in_send_message(1));
     }
 
     #[test]

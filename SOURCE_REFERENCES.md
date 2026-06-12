@@ -243,13 +243,17 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `FILE_NOTIFY_CHANGE_*` masks, and `mwinbase.h` maps the public trap ids.
     FSDMGR `pathapi.cpp` canonicalizes the watched path, resolves the owning
     volume, and routes to `AFS_FindFirstChangeNotificationW`; `volumeapi.cpp`
-    creates a notification event only for an existing directory, while
-    `fileapi.cpp` shows file writes notifying `FILE_NOTIFY_CHANGE_LAST_WRITE`.
+    creates a notification event only for an existing directory and passes
+    `NotifyFilter` through unchanged to `NotifyCreateEvent`; `fsnotify.cpp`
+    stores that value in `NOTEVENTENTRY::dwFlags` and later matches generated
+    known change bits with `pEvent->dwFlags & dwFlags`, while `fileapi.cpp`
+    shows file writes notifying `FILE_NOTIFY_CHANGE_LAST_WRITE`.
     Rust now creates waitable directory-change handles for the public and
     direct AFS first-change ordinals, canonicalizes public
     `FindFirstChangeNotificationW` watch paths before directory validation and
-    registration, signals them from matching create/delete/rename/write/
-    attribute directory events, exposes pending action/name records through
+    registration, preserves unknown caller filter bits instead of rejecting
+    them up front, signals them from matching create/delete/rename/write/
+    attribute directory events through the same known-bit gate, exposes pending action/name records through
     `CeGetFileNotificationInfo` using the standard
     `FILE_NOTIFY_INFORMATION` layout, including recursive directory-create,
     rename old/new, and directory-removal records, coalesces consecutive
@@ -264,37 +268,122 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `FILE_ACTION_RENAMED_OLD_NAME`/`FILE_ACTION_RENAMED_NEW_NAME`, and reports
     cross-parent moves as `FILE_ACTION_REMOVED`/`FILE_ACTION_ADDED`; v3 now
     applies that move-boundary mapping to raw file-change notifications,
-    including the file-vs-directory notify-filter choice.
+    including the file-vs-directory notify-filter choice. In the
+    `NotifyPathChangeEx` directory removal/rename branch, CE also signals a
+    watcher on the directory being removed or renamed with a current-directory
+    record (`FILE_ACTION_REMOVED`, `"\\"`); v3 now applies that exact record
+    shape for self-watched directory removal and rename-old notifications.
     `PRIVATE\WINCEOS\COREOS\STORAGE\NOTIFY\fsnotify.cpp` `NotifyReset` drains
     only the records that fit the caller buffer, sets `ERROR_MORE_DATA` after a
     successful prefix copy, reports remaining bytes through `lpBytesAvailable`,
     re-signals the event while records remain, returns
     `ERROR_INSUFFICIENT_BUFFER` when the first record cannot fit, and returns
     `ERROR_NO_MORE_ITEMS` for data fetches with no pending notifications; v3 now
-    mirrors those byte-count and re-signal semantics. The same `NotifyReset`
-    path decrements one outstanding event count for no-buffer
+    mirrors those byte-count and re-signal semantics. CE computes each copied
+    `FILE_NOTIFY_INFORMATION` length as header plus `FileNameLength` plus a
+    trailing NUL WCHAR, DWORD-aligns that total, copies the NUL into the guest
+    buffer, and leaves `FileNameLength` as the non-NUL byte count; v3 now uses
+    that same sizing and copy shape. A null `lpBuffer` with a nonzero length
+    large enough for the first record reaches the same guarded write path in CE
+    and fails with `ERROR_INVALID_PARAMETER`, so v3 now lets the fit calculation
+    proceed by length and reports the invalid guest pointer without draining
+    pending records. When no records are pending, the CE `NotifyReset` data
+    fetch path writes `0` to `lpBytesReturned` before `lpBytesAvailable` inside
+    a guarded block, swallows output-pointer faults, and still reports
+    `ERROR_NO_MORE_ITEMS`; v3 now mirrors the observable bad nonzero output
+    pointer order and last-error result. The same `NotifyReset` path decrements
+    one outstanding event count for no-buffer
     `FindNextChangeNotification` calls, so v3 keeps an outstanding signal count
     separate from detailed records instead of clearing all queued records on a
     single reset. `NotifyCloseChangeHandle` duplicates the caller's event
     handle with `DUPLICATE_CLOSE_SOURCE` before checking the event data, so v3
     now closes valid-but-wrong handle types before returning
-    `ERROR_INVALID_HANDLE` from `FindCloseChangeNotification`.
+    `ERROR_INVALID_HANDLE` from `FindCloseChangeNotification`. The same CE
+    path depends on real `DuplicateHandle` ownership transfer instead of a
+    handle-value alias; raw `DuplicateHandle` now validates the source handle,
+    target pointer, and option mask, creates an independent local handle-table
+    entry, preserves duplicated file-change notification handles after
+    `DUPLICATE_CLOSE_SOURCE` consumes the source handle, and assigns duplicated
+    notification handles to the requested target process so only that process
+    can wait/reset/read/close the duplicate. `NotifyCreateEvent`
+    stores the caller process in `NOTEVENTENTRY::hProc`, duplicates the
+    internal notification handle into that process, and returns an event handle
+    owned by that same process. `pathapi.cpp` supplies that process as
+    `GetCallerVMProcessId()` for `FSEXT_FindFirstChangeNotificationW`,
+    `GetCurrentProcessId()` for `FSINT_FindFirstChangeNotificationW`, and passes
+    it through as `hProc` to `AFS_FindFirstChangeNotificationW`; v3 now records
+    the creating process on public file-change notification handles, honors a
+    nonzero direct AFS `hProc` owner, and rejects foreign-process wait,
+    `FindNextChangeNotification`, `CeGetFileNotificationInfo`,
+    `DuplicateHandle`, and `FindCloseChangeNotification` attempts.
+    CE `NotifyCreateEvent` inserts events under the `NOTVOLENTRY` for the
+    resolved volume, and `NotifyPathChangeEx`/`NotifyMoveFileEx` receive that
+    same `hVolume` from FSDMGR before walking directory events. v3 now stores
+    the resolved mounted root on each file-change notification handle and
+    requires later changes to come from the same mounted volume unless the
+    watch is the root namespace; same-parent mounted renames return CE old/new
+    rename records to the owning volume, cross-parent mounted renames return
+    CE remove/add records to the owning volume, same-child paths on other
+    mounted volumes remain quiet, and recursive root watchers still report
+    mounted-volume-prefixed old/new or remove/add paths such as
+    `ResidentFlash\watch\old.bin` and
+    `ResidentFlash\watch\src\move.bin`.
     `mounttable.cpp` also calls `NotifyPathChange` with `FILE_ACTION_ADDED` or
     `FILE_ACTION_REMOVED` for visible mount folders on the root notification
     handle; v3 mirrors that for root-directory waiters when guest roots are
-    mounted or unmounted. Full FSDMGR volume-handle ownership and broader
-    mounted edge behavior remain queued.
+    mounted or unmounted. Deeper FSDMGR volume-handle ownership and remaining
+    owner/reset/close lifetime edges remain queued.
+    FSDMGR `fileapi.cpp` calls `NotifyHandleChange(FILE_NOTIFY_CHANGE_LAST_WRITE)`
+    after successful writes, and `fsnotify.cpp` marks that handle changed so
+    `NotifyCloseHandle` emits `FILE_ACTION_CHANGE_COMPLETED` on close with the
+    CE attribute/size/write/access/creation filter mask. v3 now tracks changed
+    file handles, reports the close-completed detailed record, and keeps later
+    remove coalescing from leaking stale write/completion churn.
     FSDMGR `FS_MoveFileW` also canonicalizes source/destination paths and
     compares their owning volumes: same-volume moves call `AFS_MoveFileW`,
     cross-volume file moves are emulated with `CopyFileW` plus source delete,
-    cross-volume directory moves fail with `ERROR_NOT_SAME_DEVICE`, source
-    mount-point renames fail with `ERROR_ACCESS_DENIED`, and destination
-    mount-point collisions fail with `ERROR_ALREADY_EXISTS`; v3 now mirrors
-    those mounted-boundary cases for raw `MoveFileW`.
-    `fileapi.cpp`/`pathapi.cpp` also return `ERROR_ACCESS_DENIED` for storage
-    access-check failures on mutating operations, so v3 now reports access
-    denied for raw create/copy/delete/remove-directory/set-attributes attempts
-    against read-only mounted host roots.
+    and CE explicitly succeeds the `MoveFileW` call even if that source delete
+    fails after the copy. Cross-volume directory moves fail with
+    `ERROR_NOT_SAME_DEVICE`, source mount-point renames fail with
+    `ERROR_ACCESS_DENIED`, and destination mount-point collisions fail with
+    `ERROR_ALREADY_EXISTS`; v3 now mirrors those mounted-boundary cases for raw
+    `MoveFileW`, including successful copy-without-delete moves off read-only
+    mounted media and destination-only file-change notification records when
+    the source remains.
+    CE `FS_DeleteAndRenameFileW` and `FSDMGR_DeleteAndRenameFileW` implement
+    the public `DeleteAndRenameFile(old, new)`/direct
+    `AFS_PrestoChangoFileName(old, new)` shape by deleting the old path and
+    moving the new path into that old name, requiring both paths to resolve to
+    the same volume. FSDMGR then emits a destination delete notification
+    followed by `NotifyMoveFile(source, destination)`, so v3 now routes both raw
+    ordinals through a dedicated delete-and-rename helper instead of a
+    delete-then-regular-`MoveFileW` shim.
+    `pathapi.cpp` rejects direct mount-root mutations before dispatching to
+    the filesystem: `FS_CreateDirectoryW` reports `ERROR_ALREADY_EXISTS` for a
+    mount root, `FS_DeleteFileW` reports `ERROR_FILE_NOT_FOUND`, and
+    `FS_RemoveDirectoryW`/`FS_SetFileAttributesW` report
+    `ERROR_ACCESS_DENIED`. `fileapi.cpp`/`pathapi.cpp` also return
+    `ERROR_ACCESS_DENIED` for storage access-check failures on mutating
+    operations, and the `fsnotify.cpp` `NotifyPathChangeEx`/`NotifyMoveFileEx`
+    paths are change notifications emitted after filesystem changes rather
+    than for failed access checks. v3 now mirrors those mounted-root errors,
+    reports access denied for raw create/copy/delete/directory/rename/
+    set-attributes attempts against read-only mounted host roots, and verifies
+    those failed mutations do not signal matching change-notification handles
+    or enqueue detailed `CeGetFileNotificationInfo` records.
+    `virtroot.cpp` skips `AFS_FLAG_HIDDEN` mount folders while enumerating the
+    merged root directory and marks `AFS_FLAG_SYSTEM` mount folders with
+    `FILE_ATTRIBUTE_SYSTEM`; `pathapi.cpp` also ORs `FILE_ATTRIBUTE_SYSTEM`
+    into all file/directory attributes returned from a system volume, while
+    exact hidden mount-root probes keep `FILE_ATTRIBUTE_HIDDEN`.
+    `volumeapi.cpp` folds `AFS_FLAG_HIDDEN` and `AFS_FLAG_SYSTEM` into
+    `CE_VOLUME_INFO.dwAttributes`, while `storemgr.h` defines the standard
+    read-only and removable `CE_VOLUME_ATTRIBUTE_*` bits supplied by disk/store
+    metadata. v3 now applies the system attribute to nested host-backed files
+    and directories under system mounts and has raw coverage for hidden-root
+    enumeration suppression, exact hidden mount attributes, system/hidden
+    `CeGetVolumeInfoW` attributes, and read-only/removable volume attributes
+    through both `CeGetVolumeInfoW` and `CeFsIoControlW(FSCTL_GET_VOLUME_INFO)`.
 
 - Shell popup-menu APIs:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winuser.h`,
@@ -337,7 +426,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     transforms to top-level popup placement before painting and hit-testing.
     CE `winuser.h` also defines `TPMPARAMS.rcExclude` as a screen-coordinate
     rectangle to exclude while positioning `TrackPopupMenuEx`; v3 applies that
-    rectangle after initial alignment.
+    rectangle after initial alignment, including the below-candidate placement,
+    right-side fallback when the below/above placements still intersect the
+    excluded screen rectangle after clamping, left-side fallback when the right
+    candidate clamps back into the excluded region, and the final
+    first-clamped-candidate fallback when every placement still intersects the
+    excluded rectangle.
     A full nested modal menu pump and remaining live submenu cancellation/routing
     edge cases remain queued.
 
@@ -675,10 +769,52 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     reads that mask bitmap during framebuffer draws and skips non-black mask
     pixels, preserving the distinct mask-handle path from color-key masking.
     CE `ImageList::Add` first resolves the source bitmap with
-    `GetObjectW_I` and rejects `bm.bmWidth < m_cx`; the local resource image
-    list now returns failure for invalid or undersized source bitmaps on both
-    `ImageList_Add` and `ImageList_AddMasked` instead of reporting success
-    with zero appended strips. CE `ImageList::ReplaceIcon` also rejects
+    `GetObjectW_I`, rejects `bm.bmWidth < m_cx`, and copies image/mask pixels
+    into the image-list-owned DCs. Raw `ImageList_Add`, `ImageList_AddMasked`,
+    and `ImageList_Replace` now snapshot real source/mask bitmap pixels into
+    owned backing bitmaps, so deleting the caller-owned source bitmap after an
+    add does not invalidate later image-list draws; metadata-only pseudo
+    handles remain preserved for existing non-rendering paths. CE
+    `ImageList::Duplicate` copies the backing image bitmap with
+    `CopyDIBBitmap`, optionally copies the mask with `CopyBitmap`, then copies
+    count, allocation, color, and overlay metadata into the new list. Raw
+    `ImageList_Duplicate` now deep-copies bitmap-backed image/mask entries
+    into fresh owned bitmap storage while preserving pseudo-handle entries.
+    CE `ImageList::Cleanup` deletes `m_hbmImage` and `m_hbmMask` through
+    `ImageList::DeleteBitmap` before freeing the list. Raw `ImageList_Destroy`
+    now releases cloned image-list-owned bitmap handles and their heap-backed
+    bits while preserving caller-owned bitmap handles.
+    CE `ImageList::Replace` and `ImageList::Remove` overwrite or remove image
+    pixels from the list backing storage, with remove/set-count paths possibly
+    calling `ReAllocBitmaps`; CE `ImageList::ReplaceIcon` allocates an image
+    slot when needed and draws the icon color/mask into that slot. Local raw
+    replace, replace-icon, remove, size reset, and image-count truncation now
+    delete cloned per-entry backing bitmaps only after no remaining image-list
+    entry references those handles.
+    CE `ImageList::SetBkColor` updates `m_clrBk` and calls `ResetBkColor`
+    for existing images; `ResetBkColor` applies mask-driven ROPs so mask-on
+    background slots become black for `CLR_NONE`/black, white for white, or
+    the selected background color. Raw `ImageList_SetBkColor` now mirrors that
+    for bitmap-backed masked entries.
+    CE `ImageList::GetIcon` allocates color and mono mask bitmaps, draws the
+    image-list entry once with `ILD_MASK | flags` and once with
+    `ILD_TRANSPARENT | flags`, then creates an icon from those bitmaps. Raw
+    `ImageList_GetIcon` now does the same for bitmap-backed entries with real
+    backing storage while preserving local pseudo handles for synthetic entries.
+    CE `pcommctr.h::OVERLAYMASKTOINDEX` and `imagelist.cpp::DrawIndirect`
+    limit overlay-mask drawing to `NUM_OVERLAY_IMAGES` entries, so synthetic
+    shell/system image-list pseudo handles and pseudo rendering now ignore
+    overlay nibbles above slot four instead of encoding or painting them.
+    Because CE deletes the temporary `hbmMask` and `hbmColor` immediately after
+    `CreateIconIndirect_I`, local `CreateIconIndirect` now copies readable
+    caller bitmap backing into icon-owned storage, and `DestroyIcon` releases
+    only bitmaps marked as icon-owned. This also lets `ImageList_GetIcon` and
+    PE-extracted icons free their owned backing storage without deleting caller
+    source bitmaps.
+    The local
+    resource image list now returns failure for invalid or undersized source
+    bitmaps on both `ImageList_Add` and `ImageList_AddMasked` instead of
+    reporting success with zero appended strips. CE `ImageList::ReplaceIcon` also rejects
     indexes below `-1` before appending or drawing, so local `ReplaceIcon`
     now keeps `-1` as the only append sentinel. CE `ImageList::GetIconSize`
     uses reviewed-parameter validation and returns failure when either output
@@ -712,9 +848,14 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     color-table blend helpers treat non-`ILD_BLEND50` blend styles as the 25%
     branch. Bitmap-backed image-list draws now use that CE mask shape instead
     of ignoring the `ILD_BLEND75` bit. For `rgbFg == CLR_NONE`, the CE 16-bit
-    blend path copies the destination into a work buffer and averages source
-    pixels with existing destination pixels; bitmap-backed selected-DIB and
-    framebuffer draws now model that destination-blend branch. The same
+    color-image blend path copies the destination into a work buffer and
+    averages source pixels with existing destination pixels; bitmap-backed
+    selected-DIB and framebuffer draws now model that destination-blend branch.
+    When the same `rgbFg == CLR_NONE` blend setup is used with `ILD_MASK`,
+    `imagelist.cpp` instead ORs the mask with the mono dither brush, forces
+    `ILD_TRANSPARENT`, and reaches the mask draw's `SRCAND` path, so v3 now
+    keeps mask-only blends on the dither/SRCAND branch rather than tinting mask
+    pixels against the destination. The same
     `DrawIndirect` branch chooses `pimldp->dwRop` when `ILD_ROP` is combined
     with `ILD_MASK` or `ILD_IMAGE`, while `ILD_MASK` defaults to `SRCAND` for
     transparent draws and `SRCCOPY` otherwise; bitmap-backed image-list draws
@@ -725,8 +866,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `ILD_IMAGE`, optionally draws the source mask into the destination mask DC
     with `ILD_BLEND50 | ILD_MASK`, and resets the destination background color.
     v3 now records only the CE overlay style bits, preserves destination image
-    records, and mutates bitmap-backed destination image/mask pixels when both
-    sides have readable backing bitmaps.
+    records, mutates bitmap-backed destination image pixels, and updates
+    destination mask pixels with CE's 8x8 `0xAAAAAAAA`/`0x55555555` 50% mono
+    dither pattern ORed with the source mask before applying the final
+    `SRCAND` step.
     `imagelist.cpp` treats only `ImageList_Remove(-1)` as remove-all; other
     negative indexes fall through the single-image branch and fail before any
     mutation. It clears `m_aOverlayIndexes` only on `ImageList_Remove(-1)`;
@@ -744,9 +887,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     outside CE's `1..=4` range after the `NUM_OVERLAY_IMAGES` check; v3 now
     returns failure for those unmasked or out-of-range overlay registrations
     instead of recording an overlay slot. The
-    same CE function scans the mask bitmap for the black-pixel bounding box and
-    stores overlay x/y/dx/dy plus `ILD_IMAGE` when the bounded area is fully
-    opaque; v3 now records that metadata and uses it when drawing overlays.
+    same CE function scans the mask bitmap for the black-pixel bounding box,
+    leaves an all-white mask as a zero-width/zero-height overlay rooted at
+    `(0, 0)`, and stores overlay x/y/dx/dy plus `ILD_IMAGE` only when the
+    bounded area is fully opaque; v3 now records that metadata, keeps sparse
+    non-rectangular overlay masks in the mask-driven draw path, and uses it
+    when drawing overlays.
     During overlay drawing, CE preserves the caller's `ILD_MASK` bit, forces
     `ILD_TRANSPARENT`, applies the overlay metadata flags, and re-enters the
     draw path, so bitmap-backed overlay draws now continue into the overlay
@@ -804,7 +950,7 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     selected-memory-DIB draws now scale from the icon bitmap's native source dimensions into
     caller-requested destination sizes, and bitmap-backed `DI_MASK` draws use
     the icon mask bitmap as the source instead of the color bitmap, including
-    a covered 1bpp mask-only framebuffer path. CE
+    covered 1bpp mask-only framebuffer and selected-memory-DIB paths. CE
     `imagelist.cpp` uses `DrawIconEx_I(..., DI_NORMAL)` for image storage and
     `DrawIconEx_I(..., DI_MASK)` for mask storage when replacing an image-list
     icon. `pcommctr.h` defines CE's implemented image-list creation flag mask
@@ -843,7 +989,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     large/small group-directory indices, then extracts the referenced
     `RT_ICON` resources. Raw `KernExtractIcons` now follows that integer
     group-resource lookup and copies selected `RT_ICON` payload bytes into
-    guest heap outputs; the non-Unicorn raw path uses the default `{0, 1}`
+    guest heap outputs, rejects zero-based group enumeration when no matching
+    integer `RT_GROUP_ICON` resource ID exists, and reports
+    `ERROR_RESOURCE_NAME_NOT_FOUND` when neither large nor small output pointer
+    is supplied; the non-Unicorn raw path uses the default `{0, 1}`
     group-entry selection because it cannot execute the CE callback.
     Missing paths fail with `ERROR_FILE_NOT_FOUND`; broader PE format variants
     and non-PE fallback edges remain queued.
@@ -884,10 +1033,12 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     undefined icon nibbles with `ERROR_INVALID_PARAMETER`, records the requested modal
     text/caption/style plus button IDs, those CE button slots/labels,
     default-button index, icon class, owner enabled-state, transient dialog and
-    child-control HWNDs, and result, and now derives default return codes for
-    both SDK and owner-draw button groups while closing the transient skeleton
-    through `EndDialog`; framebuffer-backed raw calls also paint the dialog
-    surface from the same caption, text, icon, and button-layout state. v3 also
+    child-control HWNDs, active-dialog state, `MB_TOPMOST`'s CE
+    `WS_EX_TOPMOST` extended style, and result, and now derives default return
+    codes for both SDK and owner-draw button groups while closing the transient
+    skeleton through `EndDialog`; framebuffer-backed raw calls also paint the
+    dialog surface from the same caption, text, icon, and button-layout state.
+    v3 also
     consumes already queued modal Enter/Escape key and character input, direct
     button and dialog-client hit-tested button-down/release input, dialog
     `WM_COMMAND`, dialog `WM_CLOSE`, and
@@ -902,22 +1053,39 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   - `shellapi.h` also anchors `Shell_NotifyIcon` and the `NOTIFYICONDATAW`
     fixed layout, including the 64-WCHAR `szTip` buffer, while
     `WCESHELLFE\OAK\TASKMAN\minserver.cpp` copies `sizeof(NOTIFYICONDATA)`
-    before posting it to the taskbar thread. v3 now requires that fixed
+    before posting it to the taskbar thread, `mintask.cpp` consumes
+    `WM_HANDLESHELLNOTIFYICON` with `wParam` as the `NIM_*` operation and
+    `lParam` as the copied `PNOTIFYICONDATA`, and `minshell.h` defines that
+    private taskbar message as `WM_USER + 0xBAD`. v3 now requires that fixed
     footprint and a readable `szTip[64]` buffer, stores notify icon
     add/modify/delete state in `ShellSystem`, validates owner HWNDs through
-    GWE, and posts the registered `uCallbackMessage` to `hWnd` with
-    `wParam=uID` and `lParam` carrying the shell event.
+    GWE, posts the registered `uCallbackMessage` to `hWnd` with `wParam=uID`
+    and `lParam` carrying the shell event, tracks the registered taskbar HWND,
+    posts successful `Shell_NotifyIcon` operations to that taskbar with a
+    heap-backed copied `NOTIFYICONDATAW` payload, releases the copied payload
+    after `DispatchMessageW` handles `WM_HANDLESHELLNOTIFYICON`, and still
+    reports success after mutating shell state when the registered taskbar
+    HWND has gone stale and no private taskbar post can be queued, matching
+    the sample callback's state-copy-before-taskbar-processing shape. The
+    dispatch release guard now also checks the stored private payload type, so
+    a spoofed taskbar private message cannot free an unrelated window-pos or
+    shell-notification allocation.
     `HPC\EXPLORER\INC\taskbar.hxx`, `TASKBAR\taskbar.cpp`, and
     `TASKBAR\taskbarnotification.cpp` define `HHTBF_DESTROYICON`,
     `NotifyTagDestroyIcon`, and notify-item update/delete paths that destroy
     owned taskbar icons when replaced or removed; v3 records those would-destroy
     `HICON` handles on replacement, explicit delete, and owner-window cleanup.
+    CE `SHNotificationRemoveII` removes iconic bubbles through
+    `NIM_BUBBLE_DELETE`, which reaches `DeleteItem(..., TRUE)`; v3 records
+    copied iconic notification icon destruction on explicit remove and sink
+    window/process cleanup as well as timeout expiration.
     Stored `SHNotificationAddI`/`SHNotificationUpdateI` records also validate
     nonzero sink HWNDs against live GWE windows, so stale notification sinks
     fail before mutating shell notification state. CE `notification.cpp`
-    rejects zero or unknown `SHNUM_*` update masks in `UpdateBubble`, and only
-    replaces an icon when `SHNUM_ICON` carries a non-null `hicon`; v3 mirrors
-    both raw update edges.
+    rejects zero or unknown `SHNUM_*` update masks in `UpdateBubble`, only
+    replaces an icon when `SHNUM_ICON` carries a non-null `hicon`, and destroys
+    the old bubble icon before copying the replacement; v3 mirrors those raw
+    update edges and records the replaced owned icon for destruction.
     Rich `SHNotification*` guest-COM invocation and taskbar rendering behavior
     remain queued instead of inventing shell UI.
   - The generated COREDLL ordinal table remains behavior data from these CE
@@ -1532,6 +1700,11 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   - GWE now keeps a receiver-side sent-message queue distinct from posted
     messages and paint requests. Retrieval prefers sent messages, marks
     `InSendMessage`, exposes `QS_SENDMESSAGE`, and records a send source.
+    Filtered retrieval still applies the caller's HWND/min/max range before a
+    receiver-side send is reported or removed, matching the queue filter shape
+    in `GetMessageW`/`GetMessageWNoWait`; this keeps unrelated queued notify
+    sends and mount `WM_DEVICECHANGE` broadcasts from satisfying modal or shell
+    `WM_FILECHANGEINFO` peeks.
     Raw and Unicorn `DispatchMessageW` paths now clear the receiver send
     context after dispatch returns. Raw cross-thread `SendMessageW` now creates
     this sent-message transaction instead of running the receiver/default path
@@ -1549,20 +1722,35 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     `MessageTimeout` comment and `smfTimeout` flag now map to GWE timeout
     expiry: non-result-ready sent transactions compare the current tick against
     the message timestamp plus timeout, set `SMF_TIMEOUT|SMF_RESULT_READY`,
-    leave a zero result, and leave receiver retrieval. Raw
+    leave a zero result, and are removed from receiver queues before retrieval.
+    Raw
     `SendMessageTimeout(..., timeout=0)` across threads now goes through the
     same sent-transaction path and expires immediately instead of running the
     receiver shortcut. Raw `SendMessageTimeout(..., timeout>0)` across threads
     also creates a timeout-flagged sent transaction and leaves it queued for
     receiver retrieval rather than fabricating a synchronous result in the
     caller thread. CE SDK `winuser.h` exposes only `SMTO_NORMAL` for this
-    target, while the CE private Office `winresrc.h` also defines
-    `SMTO_BLOCK` and `SMTO_ABORTIFHUNG`; v3 now accepts those two nonzero bits,
-    rejects still-unknown `fuFlags` with `ERROR_INVALID_FLAGS` before queueing,
-    and preserves the original accepted flag bits on the sent transaction so
-    later blocking/reentrancy work can honor the exact caller contract. The Unicorn
+    target, and v3 now covers that public zero-flag path with a nonzero timeout
+    send that queues, dispatches on the receiver thread, and writes through
+    `lpdwResult`. The CE private Office `winresrc.h` also defines `SMTO_BLOCK`
+    and `SMTO_ABORTIFHUNG`; v3 now accepts those two nonzero bits, rejects
+    still-unknown `fuFlags` with `ERROR_INVALID_FLAGS` before queueing, and
+    preserves the original accepted flag bits on the sent transaction so later
+    blocking/reentrancy work can honor the exact caller contract. Same-thread
+    raw `SendMessageTimeout` still uses the synchronous send path before the
+    cross-thread hung check, so `SMTO_ABORTIFHUNG` does not abort a same-thread
+    dispatch even when that thread's last-dispatch timestamp would satisfy the
+    CE hung threshold. Cross-thread `SMTO_ABORTIFHUNG` now also covers the CE
+    threshold boundary by queueing just below the 5-second hung cutoff and
+    aborting without queueing once the receiver is considered hung. The Unicorn
     guest path then parks the sender context on that same transaction when a
-    guest WNDPROC callout is possible. The scheduler
+    guest WNDPROC callout is possible; zero-timeout cross-thread calls are
+    refused by Unicorn block preparation so the raw immediate-expiry path owns
+    the CE case and no stale receiver send is queued by a parked waiter. When a
+    parked `SendMessageTimeout` reaches its timeout before a receiver result,
+    the Unicorn resume path now marks the same sent-message transaction timed
+    out and consumes it before returning `ERROR_TIMEOUT`, so the receiver cannot
+    dispatch stale work after the sender has resumed. The scheduler
     now has a send-reply blocked-wait kind
     keyed by sent-message id, mirroring the sender-side `pSentNext`/reply wait
     relationship: normal WNDPROC completion, timeout expiry, receiver
@@ -1570,17 +1758,33 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     send-reply wake candidates once the `WndProcResult` state is ready.
     `cmsgque.h` documents `smfResultReady` as the reply event for a sent
     message, and v3 now preserves that result if the receiver later unwinds
-    from dispatch; the raw `DestroyWindow` path also flushes a receiver-
-    terminated zero result into a pending `SendMessageTimeout` caller's
+    from dispatch. The same header's `MessageTimeout::cReference` note says the
+    timeout record is kept alive for nested `SendMessageTimeout` calls; raw GWE
+    coverage now verifies the equivalent state shape where an active outer send
+    can time out, a nested sent message can still dispatch and complete
+    independently, and the later outer dispatch unwind preserves the timeout
+    result instead of overwriting it. The raw `DestroyWindow` path also flushes
+    a receiver-terminated zero result into a pending `SendMessageTimeout` caller's
     `lpdwResult`. Unicorn raw `SendMessageW`/`SendMessageTimeoutW` now uses
     that transaction state for same-process cross-thread guest WNDPROCs: the
     receiver thread becomes the active CE thread for the guest WNDPROC callout,
     the sender MIPS context is parked in a scheduler-backed `SendMessage`
     blocked wait, WNDPROC return and generic scheduler wake/resume restore that
     blocked record after the result is captured, and the result flows back to
-    the sender and optional timeout result pointer. Reentrant cross-thread
+    the sender and optional timeout result pointer. Because CE's `SendMsgEntry_t`
+    is the authoritative live send transaction, the runtime now clears stale
+    cross-process send-yield debug snapshots once the corresponding GWE
+    sent-message record has been completed or removed; the remote and monitor
+    handoff loops then use current queue/wait state instead of re-routing on an
+    orphaned snapshot from an earlier modal/send stop. Reentrant cross-thread
     scheduling, a public raw `ReplyMessage` export if the target import table
     exposes one, and broader nested destroyed-target edge behavior remain open.
+  - CE `cmsgque.h` exposes `MsgWaitForMultipleObjectsEx_I` as a message-queue
+    wait entrypoint with an owned handle list. Local raw dispatch now probes
+    those handles with the no-record multiple-wait helper, preserving CE
+    signaled-handle precedence while keeping scheduler telemetry attributed to
+    the public message-wait call rather than to an extra internal
+    `WaitForMultipleObjects` attempt.
   - CE SDK headers define `CREATESTRUCTW` as
     `lpCreateParams`, `hInstance`, `hMenu`, `hwndParent`, `cy`, `cx`, `y`, `x`,
     `style`, `lpszName`, `lpszClass`, and `dwExStyle`, and define
@@ -1747,26 +1951,64 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     validation edges before rendering.
   - CE `draw.cpp::gnvRop3Array`, `BitBltSuite`, `StretchBltSuite`, and
     `TestAllRops` exercise common source/destination ROP3 operations including
-    `DSTINVERT`, `SRCINVERT`, `SRCCOPY`, `SRCPAINT`, and `SRCAND` for
-    `BitBlt` and `StretchBlt`. Raw blits now render those source/destination
-    operations for selected-DIB and framebuffer paths, while broader ROP3/ROP4
-    combinations remain future work.
+    `DSTINVERT`, `SRCINVERT`, `SRCCOPY`, `SRCPAINT`, `SRCAND`, `SRCERASE`,
+    `MERGEPAINT`, `NOTSRCCOPY`, and `NOTSRCERASE` for `BitBlt` and
+    `StretchBlt`. Raw blits now render those source/destination operations for
+    selected-DIB and framebuffer paths. The same shared path now samples the
+    selected brush for CE pattern ROP3 operations `MERGECOPY`, `PATCOPY`,
+    `PATINVERT`, and `PATPAINT` across selected-DIB and framebuffer targets,
+    and evaluates the ROP3 byte generically for the literal values in
+    `gnvRop3Array`; broader ROP4 combinations remain future work.
   - CE `draw.cpp::passNull2Draw(EMaskBlt)` expects `MaskBlt` to fail null/bad
     destination DCs with `ERROR_INVALID_HANDLE`, fail null/bad source DCs with
     `ERROR_INVALID_HANDLE`, reject bad mask handles with `ERROR_INVALID_HANDLE`,
     and reject color masks or negative mask origins with
     `ERROR_INVALID_PARAMETER`. `MaskBltBadMaskWidth` also rejects 1 bpp masks
     whose origin/size cannot cover the requested blit rectangle, while
-    `MaskBltTest` uses `MAKEROP4(DSTCOPY, SRCCOPY)` with a 1 bpp mask. Raw
-    `MaskBlt` now implements those validation paths plus selected-DIB and
-    framebuffer masked copies for that CE source-backed ROP4 shape.
+    `MaskBltTest` uses `MAKEROP4(DSTCOPY, SRCCOPY)` with a 1 bpp mask, and
+    `TestAllRops(EMaskBlt)` iterates foreground/background ROP3 bytes with a
+    two-pixel mask. Raw `MaskBlt` now implements those validation paths plus
+    selected-DIB and framebuffer masked copies for that CE source-backed ROP4
+    shape and generic ROP4 foreground/background byte evaluation.
+  - CE `core\dll\apis.c::SystemParametersInfoW` routes
+    `SPI_GETOEMINFO` and related device-info actions through
+    `KernelIoControl(IOCTL_HAL_GET_DEVICE_INFO, ...)` before GWE handles the
+    remaining `SystemParametersInfo` surface. Rust keeps explicit emulator SPI
+    override values when present and falls back to the imported
+    `HKLM\Ident\Name` registry value for `SPI_GETOEMINFO`, which preserves the
+    device identity from `registry.reg`.
   - CE `draw.cpp::passNull2Draw(EAlphaBlend)` expects `AlphaBlend` null/bad
     destination and source DCs to fail with `ERROR_INVALID_HANDLE`.
     `AlphaBlendRandomTest` expects CE to reject nonzero `BlendFlags`,
     non-`AC_SRC_OVER` `BlendOp`, unsupported `AlphaFormat`, and
     `AC_SRC_ALPHA` on non-32bpp sources with `ERROR_INVALID_PARAMETER`.
-    Raw `AlphaBlend` now validates those fields before rendering and keeps
-    source-constant-alpha selected-DIB blending covered.
+    CE SDK `wingdi.h` exposes both `AC_SRC_ALPHA` and
+    `AC_SRC_ALPHA_NONPREMULT`, while GWE `colortable.hpp` documents that GDI
+    `AlphaBlend` defaults to premultiplied alpha and uses a separate negative
+    flag for non-premultiplied color data.
+    `AlphaBlendGoodRectTest` treats zero source or destination dimensions as
+    successful no-op rectangles, while `AlphaBlendBadRectTest` expects negative
+    dimensions and source rectangles outside the source surface to fail with
+    `ERROR_INVALID_PARAMETER`.
+    CE GPE `swblt.cpp` handles `BLT_STRETCH` by converting the source and
+    destination extents into Bresenham accumulators (`rowXAccum`/`yAccum`) and
+    repeating or advancing source pixels from that state; uneven stretches such
+    as 2-to-3 or 3-to-5 therefore do not match simple floor-division sampling.
+    `AlphaBlendConstAlphaTest`, `AlphaBlendPerPixelAlphaToPrimaryTest`, and
+    `AlphaBlendPerPixelAlphaTest(..., TRUE/FALSE)` cover source-constant and
+    top-down/bottom-up 32 bpp per-pixel alpha into primary or DIB surfaces.
+    Raw `AlphaBlend` now validates those fields before rendering, accepts empty
+    rectangles as successful no-ops, rejects negative dimensions and
+    out-of-bounds selected-DIB source rectangles, keeps source-constant-alpha
+    selected-DIB blending covered, treats `AC_SRC_ALPHA` source RGB as
+    premultiplied, accepts `AC_SRC_ALPHA_NONPREMULT` for non-premultiplied
+    source RGB, applies top-down and bottom-up 32 bpp per-pixel alpha between
+    selected-memory DIBs, and applies source-constant plus top-down and
+    bottom-up 32 bpp per-pixel alpha into framebuffer-backed window DCs, and
+    clips negative framebuffer destination origins while preserving CE stretch
+    source mapping to the visible pixel. Selected-DIB and framebuffer alpha
+    stretch paths now use the same CE GPE Bresenham source-pixel
+    repetition/advance pattern for uneven stretches.
   - CE GDIAPI device-attribute tests expect `GetBkMode(NULL/bad hdc)` to
     return `0` and `GetBkColor(NULL/bad hdc)` to return `CLR_INVALID`, both
     with `ERROR_INVALID_HANDLE`, so raw `GetBkMode` and `GetBkColor` now report
@@ -2159,7 +2401,10 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
   `C:\WINCE600\PRIVATE\SHELL\SHELLPSL\HAVEAYGSHELL\shellpsl.cpp`,
   `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\AYGSHELLFUNCS\HAVEAYGSHELL\notification.cpp`,
   and
-  `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\AYGSHELLFUNCS\HAVEAYGSHELL\bubble.cpp`
+  `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\AYGSHELLFUNCS\HAVEAYGSHELL\bubble.cpp`,
+  plus the taskbar bubble implementation at
+  `C:\WINCE600\PUBLIC\SHELL\OAK\HPC\EXPLORER\TASKBAR\bubble.cpp` and
+  `C:\WINCE600\PUBLIC\SHELLSDK\SDK\INC\shellsdkguids.h`
   - `shsdkstc.h` defines `SHNOTIFICATIONDATA` as the 56-byte CE struct keyed
     by `CLSID` and `dwID`, with title/HTML strings carried through marshalled
     pointers in the `I` API set signatures.
@@ -2204,16 +2449,44 @@ trees remain behavior/reference evidence, not the primary runtime DLL source.
     to the iconic tray list or inform bubble list, so Rust now keeps separate
     inform/iconic notification key lists synchronized with add, update, remove,
     expiration, and sink-window cleanup.
-    `bubble.cpp` attempts
-    `IShellNotificationCallback` COM methods for show/link/dismiss/command
-    events before also notifying the sink window, so Rust now records the
-    callback method, CE vtable offset, and typed arguments for non-null
-    notification CLSIDs and posts the command-selection `WM_COMMAND` sink
-    message. The raw `I` API `cbData` argument is the marshalled
+    taskbar `bubble.cpp` sends `SHNN_SHOW` through the window sink from
+    `PopUp` without calling `GetCallbackInterface`, while link, dismiss, and
+    non-cancel command paths attempt `IShellNotificationCallback` COM methods
+    before also notifying the sink window. Rust now keeps `SHNN_SHOW` as a
+    window-notification-only path, records the callback method, CE vtable
+    offset, and typed arguments for the link/dismiss/command COM candidates
+    from non-null notification CLSIDs, can enter a pending runtime guest vtable
+    method when the saved interface pointer is readable, restores non-null
+    pending callback records to the front of the queue when transient guest
+    vtable dispatch or unmapped callback-interface pointer reads cannot yet be
+    entered, and posts the command-selection `WM_COMMAND` sink message. The raw
+    `I` API `cbData`
+    argument is the marshalled
     `SHNOTIFICATIONDATA` byte count and not a callback pointer, so v3 no longer
-    stores it as callback state; actual guest COM vtable invocation, visual
-    bubble/taskbar rendering, and richer icon lifetime remain queued
+    stores it as callback state. `bubble.cpp::GetCallbackInterface` acquires
+    the callback with `CoCreateInstance(m_tbiiBubble.clsid, NULL, CLSCTX_ALL,
+    IID_IShellNotificationCallback, &m_pishnc)`, and the local OLE import path
+    now routes `CoCreateInstance` through the emulator COM registry using the
+    CLSID/IID GUID bytes read from guest memory, with `ppv` zeroing/writeback
+    and the registered interface token returned as the acquired pointer when
+    present. `shellsdkguids.h` defines `IID_IShellNotificationCallback` as
+    `DEFINE_OLEGUID(..., 0x000214C0L, 0, 0)`, so Rust stores the CE memory-order
+    GUID bytes and uses them when a notification with only a CLSID queues a
+    link/dismiss/command callback. If the local COM registry has that CLSID, the
+    queue now records the acquired `IShellNotificationCallback*` token instead
+    of a null callback pointer. A Unicorn regression now maps a guest COM
+    interface pointer/vtable and verifies the callback dispatcher enters the
+    selected `IShellNotificationCallback` method with the CE-style MIPS
+    `this`/argument registers, return stub, stack adjustment, and pending return
+    bookkeeping. Integrated Explorer/taskbar validation with a real guest COM
+    object lifecycle and visual bubble/taskbar rendering remain queued
     separately.
+    CE `UpdateTimedNotificationIcons` walks iconic bubble notifications in the
+    taskbar list, sets `HHTBF_DESTROYICON` on expired items, then calls
+    `DeleteItem(..., TRUE)`, whose taskbar path destroys `m_hIcon` only when
+    that flag is present. Rust now records destruction of the copied
+    notification icon when an iconic `SHNotification` expires, is explicitly
+    removed, or is cleaned up with its sink window/process.
 
 - CE Winsock exception-readiness authority:
   `C:\WINCE600\PUBLIC\COMMON\SDK\INC\winsock.h` and

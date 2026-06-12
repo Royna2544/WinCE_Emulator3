@@ -1,4 +1,5 @@
 use crate::ce::{
+    com::E_POINTER,
     coredll::CoredllGuestMemory,
     kernel::CeKernel,
     memory::{HEAP_ZERO_MEMORY, PROCESS_HEAP_HANDLE},
@@ -9,6 +10,7 @@ pub const S_OK: u32 = 0;
 pub const E_INVALIDARG: u32 = 0x8007_0057;
 pub const E_OUTOFMEMORY: u32 = 0x8007_000e;
 pub const CO_E_CLASSSTRING: u32 = 0x8004_01f3;
+pub const CLASS_E_NOAGGREGATION: u32 = 0x8004_0110;
 
 pub fn string_from_clsid_raw<M: CoredllGuestMemory>(
     kernel: &mut CeKernel,
@@ -63,6 +65,89 @@ pub fn co_task_mem_free_raw(kernel: &mut CeKernel, ptr: u32) {
     if ptr != 0 {
         let _ = kernel.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
     }
+}
+
+pub fn co_create_instance_raw<M: CoredllGuestMemory>(
+    kernel: &mut CeKernel,
+    memory: &mut M,
+    thread_id: u32,
+    clsid_ptr: u32,
+    outer_ptr: u32,
+    _class_context: u32,
+    iid_ptr: u32,
+    object_out_ptr: u32,
+) -> u32 {
+    if object_out_ptr == 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return E_POINTER;
+    }
+    if memory.write_u32(object_out_ptr, 0).is_err() {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return E_POINTER;
+    }
+    if outer_ptr != 0 {
+        kernel
+            .threads
+            .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+        return CLASS_E_NOAGGREGATION;
+    }
+    let clsid = read_guid(memory, clsid_ptr);
+    let iid = read_guid(memory, iid_ptr);
+    if let (Some(clsid), Some(iid)) = (clsid, iid) {
+        match kernel
+            .com
+            .co_create_instance_guid(clsid_ptr, clsid, iid_ptr, iid)
+        {
+            Ok(object) => {
+                if memory.write_u32(object_out_ptr, object).is_err() {
+                    kernel
+                        .threads
+                        .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                    return E_POINTER;
+                }
+                kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+                return S_OK;
+            }
+            Err(status) if status != crate::ce::com::REGDB_E_CLASSNOTREG => {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return status;
+            }
+            Err(_) => {}
+        }
+    }
+    match kernel.com.co_create_instance(clsid_ptr, iid_ptr) {
+        Ok(object) => {
+            if memory.write_u32(object_out_ptr, object).is_err() {
+                kernel
+                    .threads
+                    .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+                return E_POINTER;
+            }
+            kernel.threads.set_last_error(thread_id, ERROR_SUCCESS);
+            S_OK
+        }
+        Err(status) => {
+            kernel
+                .threads
+                .set_last_error(thread_id, ERROR_INVALID_PARAMETER);
+            status
+        }
+    }
+}
+
+fn read_guid<M: CoredllGuestMemory>(memory: &M, ptr: u32) -> Option<[u8; 16]> {
+    if ptr == 0 {
+        return None;
+    }
+    let mut guid = [0; 16];
+    memory.read_bytes(ptr, &mut guid).ok()?;
+    Some(guid)
 }
 
 pub fn clsid_from_string_raw<M: CoredllGuestMemory>(

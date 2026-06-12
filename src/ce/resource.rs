@@ -127,6 +127,8 @@ pub struct IconObject {
     pub y_hotspot: u32,
     pub mask_bitmap: u32,
     pub color_bitmap: u32,
+    pub owns_mask_bitmap: bool,
+    pub owns_color_bitmap: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -702,6 +704,27 @@ impl ResourceSystem {
         mask_bitmap: u32,
         color_bitmap: u32,
     ) -> Option<u32> {
+        self.create_icon_with_bitmap_ownership(
+            is_icon,
+            x_hotspot,
+            y_hotspot,
+            mask_bitmap,
+            color_bitmap,
+            false,
+            false,
+        )
+    }
+
+    pub fn create_icon_with_bitmap_ownership(
+        &mut self,
+        is_icon: bool,
+        x_hotspot: u32,
+        y_hotspot: u32,
+        mask_bitmap: u32,
+        color_bitmap: u32,
+        owns_mask_bitmap: bool,
+        owns_color_bitmap: bool,
+    ) -> Option<u32> {
         if (mask_bitmap != 0 && !self.bitmaps.contains_key(&mask_bitmap))
             || (color_bitmap != 0 && !self.bitmaps.contains_key(&color_bitmap))
             || (mask_bitmap == 0 && color_bitmap == 0)
@@ -719,6 +742,8 @@ impl ResourceSystem {
                 y_hotspot,
                 mask_bitmap,
                 color_bitmap,
+                owns_mask_bitmap: owns_mask_bitmap && mask_bitmap != 0,
+                owns_color_bitmap: owns_color_bitmap && color_bitmap != 0,
             },
         );
         Some(handle)
@@ -1308,11 +1333,22 @@ impl ResourceSystem {
     }
 
     pub fn duplicate_image_list(&mut self, handle: u32) -> Option<u32> {
+        let images = self.image_lists.get(&handle)?.images.clone();
+        self.duplicate_image_list_with_images(handle, images)
+    }
+
+    pub fn duplicate_image_list_with_images(
+        &mut self,
+        handle: u32,
+        images: Vec<ImageListImage>,
+    ) -> Option<u32> {
         let mut duplicate = self.image_lists.get(&handle)?.clone();
         let new_handle = self.next_gdi_handle;
         self.next_gdi_handle += 4;
         duplicate.handle = new_handle;
+        duplicate.images = images;
         duplicate.last_draw = None;
+        duplicate.last_dither_copy = None;
         self.image_lists.insert(new_handle, duplicate);
         Some(new_handle)
     }
@@ -1490,7 +1526,14 @@ impl ResourceSystem {
             return i32::try_from(index).ok();
         }
         let image = list.images.get_mut(index as usize)?;
-        image.icon = icon;
+        *image = ImageListImage {
+            bitmap: 0,
+            mask: 0,
+            icon,
+            transparent_color: None,
+            source_x: 0,
+            source_y: 0,
+        };
         Some(index)
     }
 

@@ -57,6 +57,7 @@ pub struct ShellSystem {
     recent_documents: Vec<RecentDocumentRecord>,
     special_folder_queries: Vec<ShellSpecialFolderRecord>,
     special_folder_fallback_policy: ShellSpecialFolderFallbackPolicy,
+    taskbar_hwnd: Option<u32>,
 }
 
 pub const MAX_RECENT_DOCUMENTS: usize = 10;
@@ -203,6 +204,14 @@ impl ShellSystem {
         self.destroyed_notify_icons.iter()
     }
 
+    pub fn register_taskbar(&mut self, hwnd: u32) {
+        self.taskbar_hwnd = (hwnd != 0).then_some(hwnd);
+    }
+
+    pub fn taskbar_hwnd(&self) -> Option<u32> {
+        self.taskbar_hwnd
+    }
+
     pub fn add_notification(
         &mut self,
         data: ShellNotificationData,
@@ -257,6 +266,9 @@ impl ShellSystem {
         let Some(record) = self.notifications.get_mut(&key) else {
             return NotificationResult::InvalidData;
         };
+        if update_mask & SHNUM_ICON != 0 && data.icon != 0 && record.icon != 0 {
+            self.destroyed_notify_icons.push(record.icon);
+        }
         record.update(update_mask, data, now_ms);
         if update_mask & SHNUM_PRIORITY != 0 && old_priority != new_priority {
             self.remove_notification_from_priority_lists(key);
@@ -266,7 +278,8 @@ impl ShellSystem {
     }
 
     pub fn remove_notification(&mut self, clsid: [u8; 16], id: u32) -> NotificationResult {
-        if self.notifications.remove(&(clsid, id)).is_some() {
+        if let Some(record) = self.notifications.remove(&(clsid, id)) {
+            self.record_notification_icon_destroy(&record);
             self.remove_notification_from_priority_lists((clsid, id));
             self.remove_notification_callbacks_for(clsid, id);
             NotificationResult::Success
@@ -313,6 +326,13 @@ impl ShellSystem {
         }
     }
 
+    pub fn restore_pending_notification_callback_front(
+        &mut self,
+        record: ShellNotificationCallbackRecord,
+    ) {
+        self.notification_callbacks.insert(0, record);
+    }
+
     pub fn expire_notifications(&mut self, now_ms: u32) -> Vec<ShellNotificationRecord> {
         let expired = self
             .notifications
@@ -328,6 +348,7 @@ impl ShellSystem {
             .into_iter()
             .filter_map(|key| {
                 let record = self.notifications.remove(&key)?;
+                self.record_notification_icon_destroy(&record);
                 self.remove_notification_from_priority_lists(key);
                 self.remove_notification_callbacks_for(key.0, key.1);
                 Some(record)
@@ -353,7 +374,9 @@ impl ShellSystem {
             .filter_map(|(key, record)| (record.hwnd_sink == hwnd).then_some(*key))
             .collect::<Vec<_>>();
         for (clsid, id) in &removed_notifications {
-            self.notifications.remove(&(*clsid, *id));
+            if let Some(record) = self.notifications.remove(&(*clsid, *id)) {
+                self.record_notification_icon_destroy(&record);
+            }
             self.remove_notification_from_priority_lists((*clsid, *id));
             self.remove_notification_callbacks_for(*clsid, *id);
         }
@@ -381,6 +404,12 @@ impl ShellSystem {
 
     fn record_notify_icon_destroy(&mut self, record: NotifyIconRecord) {
         if record.destroy_icon && record.icon != 0 {
+            self.destroyed_notify_icons.push(record.icon);
+        }
+    }
+
+    fn record_notification_icon_destroy(&mut self, record: &ShellNotificationRecord) {
+        if record.priority == SHNP_ICONIC && record.icon != 0 {
             self.destroyed_notify_icons.push(record.icon);
         }
     }
@@ -471,6 +500,8 @@ pub struct MessageBoxRecord {
     pub result: u32,
     pub owner_was_enabled: Option<bool>,
     pub rendered: bool,
+    pub dialog_was_active: bool,
+    pub dialog_ex_style: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -568,6 +599,9 @@ pub const HHTBF_DESTROYICON: u32 = 0x1000_0000;
 pub const SHNN_SHOW: u32 = 0xffff_fc16;
 pub const SHNN_DISMISS: u32 = 0xffff_fc17;
 pub const SHNN_LINKSEL: u32 = 0xffff_fc18;
+pub const IID_ISHELL_NOTIFICATION_CALLBACK: [u8; 16] = [
+    0xc0, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
+];
 pub const ISHELL_NOTIFICATION_CALLBACK_ON_SHOW_VTABLE_OFFSET: u32 = 0x0c;
 pub const ISHELL_NOTIFICATION_CALLBACK_ON_COMMAND_SELECTED_VTABLE_OFFSET: u32 = 0x10;
 pub const ISHELL_NOTIFICATION_CALLBACK_ON_LINK_SELECTED_VTABLE_OFFSET: u32 = 0x14;

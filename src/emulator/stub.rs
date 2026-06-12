@@ -97,6 +97,10 @@ impl CpuBackend for UnicornMips {
         None
     }
 
+    fn clear_orphaned_cross_process_send_yield(&mut self, _kernel: &CeKernel) -> bool {
+        false
+    }
+
     fn has_parked_child_processes(&self) -> bool {
         false
     }

@@ -37,6 +37,7 @@
 // - GET /api/v1/debug/files.txt returns recent file I/O summary.
 // - GET /api/v1/debug/files-full.txt returns recent file I/O records.
 // - GET /api/v1/debug/events.txt returns recent event operations.
+// - GET /api/v1/debug/devices.txt returns recent device IOCTL operations.
 // - GET /api/v1/debug/parked.txt returns parked-process snapshots.
 // - GET /api/v1/debug/remote-input.txt returns the latest remote input drain line.
 // - GET /api/v1/video.mjpg[?fps=1..60][&quality=1..100] streams multipart
@@ -435,6 +436,7 @@ impl RemoteServer {
             ("GET", "/api/v1/debug/files.txt") => self.latest_debug_text("files").into(),
             ("GET", "/api/v1/debug/files-full.txt") => self.latest_debug_text("files-full").into(),
             ("GET", "/api/v1/debug/events.txt") => self.latest_debug_text("events").into(),
+            ("GET", "/api/v1/debug/devices.txt") => self.latest_debug_text("devices").into(),
             ("GET", "/api/v1/debug/parked.txt") => self.latest_debug_text("parked").into(),
             ("GET", "/api/v1/debug/remote-input.txt") => {
                 self.latest_debug_text("remote-input").into()
@@ -510,6 +512,7 @@ impl RemoteServer {
                     "debugFiles": "GET /api/v1/debug/files.txt",
                     "debugFilesFull": "GET /api/v1/debug/files-full.txt",
                     "debugEvents": "GET /api/v1/debug/events.txt",
+                    "debugDevices": "GET /api/v1/debug/devices.txt",
                     "debugParked": "GET /api/v1/debug/parked.txt",
                     "debugRemoteInput": "GET /api/v1/debug/remote-input.txt",
                     "video": "GET /api/v1/video.mjpg",

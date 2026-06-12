@@ -9,15 +9,15 @@ use wince_emulation_v3::{
             ORD_CLOSE_CLIPBOARD, ORD_CLOSE_HANDLE, ORD_COUNT_CLIPBOARD_FORMATS,
             ORD_CREATE_COMPATIBLE_DC, ORD_CREATE_DIBSECTION, ORD_CREATE_DIRECTORY_W,
             ORD_CREATE_EVENT_W, ORD_CREATE_FILE_W, ORD_CREATE_PROCESS_W, ORD_CREATE_SEMAPHORE_W,
-            ORD_CREATE_THREAD, ORD_DELETE_CRITICAL_SECTION, ORD_DISABLE_THREAD_LIBRARY_CALLS,
-            ORD_DISPATCH_MESSAGE_W, ORD_DRAW_ICON_EX, ORD_EMPTY_CLIPBOARD,
-            ORD_ENTER_CRITICAL_SECTION, ORD_ENUM_CLIPBOARD_FORMATS, ORD_EVENT_MODIFY,
-            ORD_EXTRACT_ICON_EX_W, ORD_FILE_TIME_TO_SYSTEM_TIME, ORD_FREE_LIBRARY,
-            ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA, ORD_GET_CLIPBOARD_DATA_ALLOC,
-            ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER, ORD_GET_COMM_MASK,
-            ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC, ORD_GET_EXIT_CODE_PROCESS,
-            ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR, ORD_GET_LOCAL_TIME,
-            ORD_GET_MODULE_HANDLE_W, ORD_GET_OPEN_CLIPBOARD_WINDOW,
+            ORD_CREATE_THREAD, ORD_DELETE_CRITICAL_SECTION, ORD_DELETE_OBJECT, ORD_DESTROY_ICON,
+            ORD_DISABLE_THREAD_LIBRARY_CALLS, ORD_DISPATCH_MESSAGE_W, ORD_DRAW_ICON_EX,
+            ORD_EMPTY_CLIPBOARD, ORD_ENTER_CRITICAL_SECTION, ORD_ENUM_CLIPBOARD_FORMATS,
+            ORD_EVENT_MODIFY, ORD_EXTRACT_ICON_EX_W, ORD_FILE_TIME_TO_SYSTEM_TIME,
+            ORD_FREE_LIBRARY, ORD_GET_CALLER_PROCESS_INDEX, ORD_GET_CLIPBOARD_DATA,
+            ORD_GET_CLIPBOARD_DATA_ALLOC, ORD_GET_CLIPBOARD_FORMAT_NAME_W, ORD_GET_CLIPBOARD_OWNER,
+            ORD_GET_COMM_MASK, ORD_GET_COMM_STATE, ORD_GET_COMM_TIMEOUTS, ORD_GET_DC,
+            ORD_GET_EXIT_CODE_PROCESS, ORD_GET_EXIT_CODE_THREAD, ORD_GET_LAST_ERROR,
+            ORD_GET_LOCAL_TIME, ORD_GET_MODULE_HANDLE_W, ORD_GET_OPEN_CLIPBOARD_WINDOW,
             ORD_GET_PRIORITY_CLIPBOARD_FORMAT, ORD_GET_PROC_ADDRESS_A, ORD_GET_PROC_ADDRESS_W,
             ORD_GET_PROCESS_ID, ORD_GET_PROCESS_IDFROM_INDEX, ORD_GET_PROCESS_INDEX_FROM_ID,
             ORD_GET_PROCESS_VERSION, ORD_GET_STORE_INFORMATION, ORD_GET_SYSTEM_TIME,
@@ -43,14 +43,14 @@ use wince_emulation_v3::{
             ORD_MOVE_FILE_W, ORD_MSG_WAIT_FOR_MULTIPLE_OBJECTS_EX, ORD_MULTI_BYTE_TO_WIDE_CHAR,
             ORD_OPEN_CLIPBOARD, ORD_OPEN_EVENT_W, ORD_PEEK_MESSAGE_W, ORD_PROCESS_DETACH_ALL_DLLS,
             ORD_PURGE_COMM, ORD_QUERY_PERFORMANCE_COUNTER, ORD_QUERY_PERFORMANCE_FREQUENCY,
-            ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_RELEASE_MUTEX, ORD_RELEASE_SEMAPHORE,
-            ORD_RESUME_THREAD, ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA, ORD_SET_COMM_MASK,
-            ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR, ORD_SET_THREAD_PRIORITY,
-            ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I, ORD_SHCREATE_SHORTCUT,
-            ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX, ORD_SHELL_NOTIFY_ICON,
-            ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I, ORD_SHGET_FILE_INFO,
-            ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH, ORD_SHNOTIFICATION_ADD_I,
-            ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
+            ORD_REGISTER_CLIPBOARD_FORMAT_W, ORD_REGISTER_TASK_BAR, ORD_RELEASE_MUTEX,
+            ORD_RELEASE_SEMAPHORE, ORD_RESUME_THREAD, ORD_SELECT_OBJECT, ORD_SET_CLIPBOARD_DATA,
+            ORD_SET_COMM_MASK, ORD_SET_COMM_STATE, ORD_SET_COMM_TIMEOUTS, ORD_SET_LAST_ERROR,
+            ORD_SET_THREAD_PRIORITY, ORD_SHADD_TO_RECENT_DOCS, ORD_SHCHANGE_NOTIFY_REGISTER_I,
+            ORD_SHCREATE_SHORTCUT, ORD_SHCREATE_SHORTCUT_EX, ORD_SHELL_EXECUTE_EX,
+            ORD_SHELL_NOTIFY_ICON, ORD_SHFILE_NOTIFY_FREE_I, ORD_SHFILE_NOTIFY_REMOVE_I,
+            ORD_SHGET_FILE_INFO, ORD_SHGET_SHORTCUT_TARGET, ORD_SHGET_SPECIAL_FOLDER_PATH,
+            ORD_SHNOTIFICATION_ADD_I, ORD_SHNOTIFICATION_GET_DATA_I, ORD_SHNOTIFICATION_REMOVE_I,
             ORD_SHNOTIFICATION_UPDATE_I, ORD_SLEEP, ORD_SLEEP_TILL_TICK, ORD_SUSPEND_THREAD,
             ORD_SYSTEM_TIME_TO_FILE_TIME, ORD_TERMINATE_PROCESS, ORD_TLS_GET_VALUE,
             ORD_TLS_SET_VALUE, ORD_TRY_ENTER_CRITICAL_SECTION, ORD_WAIT_COMM_EVENT,
@@ -61,10 +61,10 @@ use wince_emulation_v3::{
         file::{CREATE_ALWAYS, GENERIC_READ, GENERIC_WRITE},
         framebuffer::{Framebuffer, PixelFormat, VirtualFramebuffer},
         gwe::{
-            Message, PeekFlags, QS_POSTMESSAGE, QS_TIMER, Rect, SC_CLOSE, WM_CHAR, WM_CLOSE,
-            WM_COMMAND, WM_DESTROYCLIPBOARD, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_NOTIFY,
-            WM_PAINT, WM_RENDERALLFORMATS, WM_RENDERFORMAT, WM_SYSCOMMAND, WM_TIMER, WM_USER,
-            WS_VISIBLE,
+            Message, MessagePointerPayload, PeekFlags, QS_POSTMESSAGE, QS_TIMER, Rect, SC_CLOSE,
+            WM_CHAR, WM_CLOSE, WM_COMMAND, WM_DESTROYCLIPBOARD, WM_KEYDOWN, WM_LBUTTONDOWN,
+            WM_LBUTTONUP, WM_NOTIFY, WM_PAINT, WM_RENDERALLFORMATS, WM_RENDERFORMAT, WM_SYSCOMMAND,
+            WM_TIMER, WM_USER, WM_WINDOWPOSCHANGED, WS_VISIBLE, WindowPos,
         },
         kernel::{
             CE_CURRENT_PROCESS_PSEUDO_HANDLE, CE_CURRENT_THREAD_PSEUDO_HANDLE, CeKernel,
@@ -78,8 +78,7 @@ use wince_emulation_v3::{
         shell::{
             ISHELL_NOTIFICATION_CALLBACK_ON_COMMAND_SELECTED_VTABLE_OFFSET,
             ISHELL_NOTIFICATION_CALLBACK_ON_DISMISS_VTABLE_OFFSET,
-            ISHELL_NOTIFICATION_CALLBACK_ON_LINK_SELECTED_VTABLE_OFFSET,
-            ISHELL_NOTIFICATION_CALLBACK_ON_SHOW_VTABLE_OFFSET, MessageBoxButtonLabel,
+            ISHELL_NOTIFICATION_CALLBACK_ON_LINK_SELECTED_VTABLE_OFFSET, MessageBoxButtonLabel,
             MessageBoxButtonSlot, MessageBoxIcon, ShellNotificationCallbackArguments,
             ShellNotificationCallbackMethod, ShellSpecialFolderFallbackPolicy,
             ShellSpecialFolderSource,
@@ -5198,6 +5197,21 @@ fn coredll_raw_kern_extract_icons_copies_group_rt_icon_payloads() -> Result<()> 
         pe32_with_multi_size_icon_group(),
     )
     .unwrap();
+    fs::write(
+        root.join("Docs").join("sparse-group-icon.exe"),
+        pe32_with_sparse_multi_size_icon_group_id(),
+    )
+    .unwrap();
+    let sparse_bytes = fs::read(root.join("Docs").join("sparse-group-icon.exe")).unwrap();
+    let sparse_pe =
+        wince_emulation_v3::pe::PeImage::parse_bytes("sparse-group-icon.exe", &sparse_bytes)?;
+    let sparse_group_ids = sparse_pe
+        .resource_data_entries()?
+        .into_iter()
+        .filter(|resource| resource.kind == 14)
+        .map(|resource| resource.name)
+        .collect::<Vec<_>>();
+    assert_eq!(sparse_group_ids, vec![7]);
     kernel.set_file_root(&root);
 
     let mut memory = TestGuestMemory::default();
@@ -5253,6 +5267,70 @@ fn coredll_raw_kern_extract_icons_copies_group_rt_icon_payloads() -> Result<()> 
         64
     );
 
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KERN_EXTRACT_ICONS,
+            [path_ptr, 1, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_RESOURCE_NAME_NOT_FOUND
+    );
+
+    memory.write_wide_z(path_ptr, r"\Docs\sparse-group-icon.exe");
+    memory.write_word(large_out, 0xdead_beef);
+    memory.write_word(small_out, 0xfeed_face);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_KERN_EXTRACT_ICONS,
+            [path_ptr, 0, large_out, small_out, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.threads.get_last_error(thread_id),
+        ERROR_RESOURCE_NAME_NOT_FOUND
+    );
+    assert_eq!(memory.read_u32(large_out)?, 0xdead_beef);
+    assert_eq!(memory.read_u32(small_out)?, 0xfeed_face);
+
+    let sparse_result = table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_KERN_EXTRACT_ICONS,
+        [path_ptr, 7, large_out, small_out, 0],
+    );
+    assert!(
+        matches!(
+            sparse_result,
+            CoredllDispatch::Returned {
+                value: CoredllValue::U32(2),
+                ..
+            }
+        ),
+        "unexpected sparse KernExtractIcons result: {sparse_result:?}, last_error={}",
+        kernel.threads.get_last_error(thread_id)
+    );
+    assert_eq!(kernel.threads.get_last_error(thread_id), 0);
+    assert_ne!(memory.read_u32(large_out)?, 0xdead_beef);
+    assert_ne!(memory.read_u32(small_out)?, 0xfeed_face);
+
+    memory.write_wide_z(path_ptr, r"\Docs\multi-size-icons.exe");
     memory.write_word(large_out, 0xdead_beef);
     memory.write_word(small_out, 0xfeed_face);
     assert!(matches!(
@@ -5300,6 +5378,11 @@ fn shell_pseudo_icon_handle_with_overlay(index: i32, overlay: u32) -> u32 {
         4 => 32516,
         5 => 32517,
         value => 0x0000_c000 | ((value as u32) & 0x3fff),
+    };
+    let overlay = if (1..=4).contains(&overlay) {
+        overlay
+    } else {
+        0
     };
     0x000b_8000 | stock | ((overlay & 0x0f) << 24)
 }
@@ -5352,6 +5435,14 @@ fn pe32_with_string_named_icon_group() -> Vec<u8> {
 
 fn pe32_with_sparse_group_icon_id() -> Vec<u8> {
     let mut bytes = pe32_with_group_icon_count(1);
+    let rsrc = 0x200usize;
+    let group_type_dir = rsrc + 0x60;
+    put_test_u32(&mut bytes, group_type_dir + 16, 7);
+    bytes
+}
+
+fn pe32_with_sparse_multi_size_icon_group_id() -> Vec<u8> {
+    let mut bytes = pe32_with_multi_size_icon_group();
     let rsrc = 0x200usize;
     let group_type_dir = rsrc + 0x60;
     put_test_u32(&mut bytes, group_type_dir + 16, 7);
@@ -5740,6 +5831,27 @@ fn bmp_2x1_white_black_24bpp() -> Vec<u8> {
     bytes
 }
 
+fn bmp_2x1_white_white_24bpp() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"BM");
+    bytes.extend_from_slice(&62u32.to_le_bytes());
+    bytes.extend_from_slice(&[0; 4]);
+    bytes.extend_from_slice(&54u32.to_le_bytes());
+    bytes.extend_from_slice(&40u32.to_le_bytes());
+    bytes.extend_from_slice(&2i32.to_le_bytes());
+    bytes.extend_from_slice(&1i32.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&24u16.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&8u32.to_le_bytes());
+    bytes.extend_from_slice(&0i32.to_le_bytes());
+    bytes.extend_from_slice(&0i32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00, 0x00]);
+    bytes
+}
+
 fn bmp_2x1_red_red_24bpp() -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"BM");
@@ -5758,6 +5870,53 @@ fn bmp_2x1_red_red_24bpp() -> Vec<u8> {
     bytes.extend_from_slice(&0u32.to_le_bytes());
     bytes.extend_from_slice(&0u32.to_le_bytes());
     bytes.extend_from_slice(&[0x00, 0x00, 0xff, 0x00, 0x00, 0xff, 0x00, 0x00]);
+    bytes
+}
+
+fn bmp_2x2_solid_24bpp(bgr: [u8; 3]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"BM");
+    bytes.extend_from_slice(&70u32.to_le_bytes());
+    bytes.extend_from_slice(&[0; 4]);
+    bytes.extend_from_slice(&54u32.to_le_bytes());
+    bytes.extend_from_slice(&40u32.to_le_bytes());
+    bytes.extend_from_slice(&2i32.to_le_bytes());
+    bytes.extend_from_slice(&2i32.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&24u16.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&0i32.to_le_bytes());
+    bytes.extend_from_slice(&0i32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    for _ in 0..2 {
+        bytes.extend_from_slice(&bgr);
+        bytes.extend_from_slice(&bgr);
+        bytes.extend_from_slice(&[0x00, 0x00]);
+    }
+    bytes
+}
+
+fn bmp_2x2_diagonal_mask_24bpp() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"BM");
+    bytes.extend_from_slice(&70u32.to_le_bytes());
+    bytes.extend_from_slice(&[0; 4]);
+    bytes.extend_from_slice(&54u32.to_le_bytes());
+    bytes.extend_from_slice(&40u32.to_le_bytes());
+    bytes.extend_from_slice(&2i32.to_le_bytes());
+    bytes.extend_from_slice(&2i32.to_le_bytes());
+    bytes.extend_from_slice(&1u16.to_le_bytes());
+    bytes.extend_from_slice(&24u16.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&0i32.to_le_bytes());
+    bytes.extend_from_slice(&0i32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&[0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00]);
+    bytes.extend_from_slice(&[0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0x00, 0x00]);
     bytes
 }
 
@@ -5990,6 +6149,19 @@ fn sh_get_file_info_system_image_list_supports_icon_queries_and_draw() -> Result
             &mut kernel,
             &mut memory,
             thread_id,
+            ORD_IMAGE_LIST_GET_ICON,
+            [SHELL_SYSTEM_IMAGE_LIST_HANDLE, icon_index as u32, 0x0500],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } if handle == shell_pseudo_icon_handle(icon_index)
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
             ORD_IMAGE_LIST_GET_IMAGE_INFO,
             [
                 SHELL_SYSTEM_IMAGE_LIST_HANDLE,
@@ -6047,12 +6219,45 @@ fn sh_get_file_info_system_image_list_supports_icon_queries_and_draw() -> Result
         }
     ));
     assert!(!framebuffer.dirty_rects().is_empty());
-    let pixel = |x: usize, y: usize| {
+    let pixel = |framebuffer: &VirtualFramebuffer, x: usize, y: usize| {
         let offset = y * framebuffer.stride() + x * PixelFormat::Rgb565.bytes_per_pixel();
-        &framebuffer.pixels()[offset..offset + PixelFormat::Rgb565.bytes_per_pixel()]
+        [
+            framebuffer.pixels()[offset],
+            framebuffer.pixels()[offset + 1],
+        ]
     };
-    assert_eq!(pixel(0, 0), &[0, 0]);
-    assert_ne!(pixel(5, 9), &[0, 0]);
+    assert_eq!(pixel(&framebuffer, 0, 0), [0, 0]);
+    assert_ne!(pixel(&framebuffer, 5, 9), [0, 0]);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_EX,
+            [
+                SHELL_SYSTEM_IMAGE_LIST_HANDLE,
+                icon_index as u32,
+                hdc,
+                20,
+                8,
+                16,
+                16,
+                0,
+                0,
+                0x0500,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        pixel(&framebuffer, 32, 20),
+        pixel(&framebuffer, 21, 9),
+        "invalid CE overlay slots above four should not paint the synthetic overlay marker"
+    );
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     Ok(())
 }
@@ -6072,6 +6277,7 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
     const ILC_PALETTE: u32 = 0x0800;
     const ILC_MIRROR: u32 = 0x2000;
     const ILC_VIRTUAL: u32 = 0x8000;
+    const ILD_IMAGE: u32 = 0x0020;
 
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
@@ -6090,7 +6296,27 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         bmp_2x1_white_black_24bpp(),
     )
     .unwrap();
+    fs::write(
+        root.join("Images").join("white-mask.bmp"),
+        bmp_2x1_white_white_24bpp(),
+    )
+    .unwrap();
     fs::write(root.join("Images").join("red.bmp"), bmp_2x1_red_red_24bpp()).unwrap();
+    fs::write(
+        root.join("Images").join("red2.bmp"),
+        bmp_2x2_solid_24bpp([0x00, 0x00, 0xff]),
+    )
+    .unwrap();
+    fs::write(
+        root.join("Images").join("green2.bmp"),
+        bmp_2x2_solid_24bpp([0x00, 0xff, 0x00]),
+    )
+    .unwrap();
+    fs::write(
+        root.join("Images").join("diagonal-mask.bmp"),
+        bmp_2x2_diagonal_mask_24bpp(),
+    )
+    .unwrap();
     kernel.set_file_root(&root);
     let mut memory = TestGuestMemory::default();
     let thread_id = 45;
@@ -7142,13 +7368,223 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             ..
         }
     ));
-    let mask_image = &kernel
+    let mask_image = kernel
         .resources
         .image_list(mask_handle_list)
         .unwrap()
-        .images[0];
-    assert_eq!(mask_image.mask, mask_bitmap);
+        .images[0]
+        .clone();
+    assert_ne!(mask_image.bitmap, masked_bitmap);
+    assert_ne!(mask_image.mask, mask_bitmap);
+    assert!(kernel.resources.bitmap(mask_image.bitmap).is_some());
+    assert!(kernel.resources.bitmap(mask_image.mask).is_some());
     assert_eq!(mask_image.transparent_color, None);
+    let extracted_icon = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_GET_ICON,
+        [mask_handle_list, 0, 0],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_GetIcon(mask handle) did not return a handle: {other:?}"),
+    };
+    assert_ne!(extracted_icon, 0);
+    assert_ne!(
+        extracted_icon & 0x00ff_ffff,
+        0x000b_8000 | (mask_image.bitmap & 0x0000_ffff),
+        "CE ImageList_GetIcon creates a real icon instead of returning a bitmap pseudo-handle"
+    );
+    let extracted_icon_obj = kernel
+        .resources
+        .icon(extracted_icon)
+        .expect("bitmap-backed ImageList_GetIcon should create a real icon")
+        .clone();
+    assert_ne!(extracted_icon_obj.color_bitmap, 0);
+    assert_ne!(extracted_icon_obj.mask_bitmap, 0);
+    let extracted_color = kernel
+        .resources
+        .bitmap(extracted_icon_obj.color_bitmap)
+        .expect("extracted icon color bitmap");
+    let extracted_mask = kernel
+        .resources
+        .bitmap(extracted_icon_obj.mask_bitmap)
+        .expect("extracted icon mask bitmap");
+    assert_eq!((extracted_color.width, extracted_color.height), (2, 1));
+    assert_eq!((extracted_mask.width, extracted_mask.height), (2, 1));
+    let extracted_color_bits = memory.read_bytes(
+        extracted_color.bits_ptr,
+        extracted_color.width_bytes as usize,
+    );
+    assert_eq!(
+        &extracted_color_bits[4..8],
+        &[0x00, 0xff, 0x00, 0xff],
+        "ImageList_GetIcon color pass should render the non-masked source pixel"
+    );
+    let extracted_mask_byte = memory.read_u8(extracted_mask.bits_ptr)?;
+    assert_eq!(
+        extracted_mask_byte & 0xc0,
+        0x80,
+        "ImageList_GetIcon mask pass should preserve CE white/black mask pixels"
+    );
+    let extracted_color_handle = extracted_icon_obj.color_bitmap;
+    let extracted_mask_handle = extracted_icon_obj.mask_bitmap;
+    let extracted_color_bits_ptr = extracted_color.bits_ptr;
+    let extracted_mask_bits_ptr = extracted_mask.bits_ptr;
+    assert!(extracted_icon_obj.owns_color_bitmap);
+    assert!(extracted_icon_obj.owns_mask_bitmap);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DESTROY_ICON,
+            [extracted_icon],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(kernel.resources.icon(extracted_icon).is_none());
+    assert!(kernel.resources.bitmap(extracted_color_handle).is_none());
+    assert!(kernel.resources.bitmap(extracted_mask_handle).is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, extracted_color_bits_ptr)
+            .is_none()
+    );
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, extracted_mask_bits_ptr)
+            .is_none()
+    );
+    let mask_handle_duplicate = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_DUPLICATE,
+        [mask_handle_list],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Duplicate(mask handle) did not return a handle: {other:?}"),
+    };
+    assert_ne!(mask_handle_duplicate, 0);
+    assert_ne!(mask_handle_duplicate, mask_handle_list);
+    let original_mask_image = kernel
+        .resources
+        .image_list(mask_handle_list)
+        .unwrap()
+        .images[0]
+        .clone();
+    let duplicate_mask_image = kernel
+        .resources
+        .image_list(mask_handle_duplicate)
+        .unwrap()
+        .images[0]
+        .clone();
+    assert_ne!(
+        duplicate_mask_image.bitmap, original_mask_image.bitmap,
+        "CE ImageList_Duplicate copies image bitmap storage instead of aliasing the source list"
+    );
+    assert_ne!(
+        duplicate_mask_image.mask, original_mask_image.mask,
+        "CE ImageList_Duplicate copies mask bitmap storage instead of aliasing the source list"
+    );
+    assert_ne!(
+        kernel
+            .resources
+            .bitmap(duplicate_mask_image.bitmap)
+            .unwrap()
+            .bits_ptr,
+        kernel
+            .resources
+            .bitmap(original_mask_image.bitmap)
+            .unwrap()
+            .bits_ptr
+    );
+    assert_ne!(
+        kernel
+            .resources
+            .bitmap(duplicate_mask_image.mask)
+            .unwrap()
+            .bits_ptr,
+        kernel
+            .resources
+            .bitmap(original_mask_image.mask)
+            .unwrap()
+            .bits_ptr
+    );
+    let duplicate_bitmap_bits = kernel
+        .resources
+        .bitmap(duplicate_mask_image.bitmap)
+        .unwrap()
+        .bits_ptr;
+    let duplicate_mask_bits = kernel
+        .resources
+        .bitmap(duplicate_mask_image.mask)
+        .unwrap()
+        .bits_ptr;
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, duplicate_bitmap_bits)
+            .is_some()
+    );
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, duplicate_mask_bits)
+            .is_some()
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DESTROY,
+            [mask_handle_duplicate],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(kernel.resources.image_list(mask_handle_duplicate).is_none());
+    assert!(
+        kernel
+            .resources
+            .bitmap(duplicate_mask_image.bitmap)
+            .is_none()
+    );
+    assert!(kernel.resources.bitmap(duplicate_mask_image.mask).is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, duplicate_bitmap_bits)
+            .is_none()
+    );
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, duplicate_mask_bits)
+            .is_none()
+    );
+    assert!(
+        kernel
+            .resources
+            .bitmap(original_mask_image.bitmap)
+            .is_some()
+    );
+    assert!(kernel.resources.bitmap(original_mask_image.mask).is_some());
     let _ = framebuffer.take_dirty_rects();
     assert!(matches!(
         table.dispatch_raw_ordinal_with_framebuffer(
@@ -7175,6 +7611,424 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         &framebuffer.pixels()[mask_right..mask_right + 2],
         &[0xe0, 0x07],
         "ImageList_Add should blit pixels allowed by a black hbmMask"
+    );
+    let bk_reset_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [2, 1, ILC_MASK, 1, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create(bk reset) did not return a handle: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [bk_reset_list, masked_bitmap, mask_bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_SET_BK_COLOR,
+            [bk_reset_list, 0x0000_00ff],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(CLR_NONE),
+            ..
+        }
+    ));
+    let _ = framebuffer.take_dirty_rects();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_EX,
+            [
+                bk_reset_list,
+                0,
+                hdc,
+                8,
+                5,
+                2,
+                1,
+                CLR_NONE,
+                CLR_NONE,
+                ILD_IMAGE
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let reset_left = 5 * framebuffer.stride() + 8 * PixelFormat::Rgb565.bytes_per_pixel();
+    let reset_right = reset_left + PixelFormat::Rgb565.bytes_per_pixel();
+    assert_eq!(
+        &framebuffer.pixels()[reset_left..reset_left + 2],
+        &[0x00, 0xf8],
+        "ImageList_SetBkColor should rewrite mask-on backing pixels before ILD_IMAGE draws"
+    );
+    assert_eq!(
+        &framebuffer.pixels()[reset_right..reset_right + 2],
+        &[0xe0, 0x07],
+        "ImageList_SetBkColor should leave mask-off source pixels unchanged"
+    );
+    let original_bitmap_bits = kernel
+        .resources
+        .bitmap(original_mask_image.bitmap)
+        .unwrap()
+        .bits_ptr;
+    let original_mask_bits = kernel
+        .resources
+        .bitmap(original_mask_image.mask)
+        .unwrap()
+        .bits_ptr;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_REMOVE,
+            [mask_handle_list, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.resources.image_list_count(mask_handle_list), Some(0));
+    assert!(
+        kernel
+            .resources
+            .bitmap(original_mask_image.bitmap)
+            .is_none()
+    );
+    assert!(kernel.resources.bitmap(original_mask_image.mask).is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, original_bitmap_bits)
+            .is_none()
+    );
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, original_mask_bits)
+            .is_none()
+    );
+    let replace_cleanup_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [2, 1, ILC_MASK, 1, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create(replace cleanup) did not return a handle: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [replace_cleanup_list, masked_bitmap, mask_bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    let replaced_image = kernel
+        .resources
+        .image_list(replace_cleanup_list)
+        .unwrap()
+        .images[0]
+        .clone();
+    let replaced_bitmap_bits = kernel
+        .resources
+        .bitmap(replaced_image.bitmap)
+        .unwrap()
+        .bits_ptr;
+    let replaced_mask_bits = kernel
+        .resources
+        .bitmap(replaced_image.mask)
+        .unwrap()
+        .bits_ptr;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_REPLACE,
+            [replace_cleanup_list, 0, masked_bitmap, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let replacement_image = kernel
+        .resources
+        .image_list(replace_cleanup_list)
+        .unwrap()
+        .images[0]
+        .clone();
+    assert_ne!(replacement_image.bitmap, replaced_image.bitmap);
+    assert_eq!(replacement_image.mask, 0);
+    assert!(kernel.resources.bitmap(replaced_image.bitmap).is_none());
+    assert!(kernel.resources.bitmap(replaced_image.mask).is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, replaced_bitmap_bits)
+            .is_none()
+    );
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, replaced_mask_bits)
+            .is_none()
+    );
+    let replace_icon_cleanup_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [2, 1, ILC_MASK, 1, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => {
+            panic!("ImageList_Create(replace icon cleanup) did not return a handle: {other:?}")
+        }
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [replace_icon_cleanup_list, masked_bitmap, mask_bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    let icon_replaced_image = kernel
+        .resources
+        .image_list(replace_icon_cleanup_list)
+        .unwrap()
+        .images[0]
+        .clone();
+    let icon_replaced_bitmap_bits = kernel
+        .resources
+        .bitmap(icon_replaced_image.bitmap)
+        .unwrap()
+        .bits_ptr;
+    let icon_replaced_mask_bits = kernel
+        .resources
+        .bitmap(icon_replaced_image.mask)
+        .unwrap()
+        .bits_ptr;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_REPLACE_ICON,
+            [replace_icon_cleanup_list, 0, 0x000b_8123],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    let icon_replacement = &kernel
+        .resources
+        .image_list(replace_icon_cleanup_list)
+        .unwrap()
+        .images[0];
+    assert_eq!(icon_replacement.bitmap, 0);
+    assert_eq!(icon_replacement.mask, 0);
+    assert_eq!(icon_replacement.icon, 0x000b_8123);
+    assert!(
+        kernel
+            .resources
+            .bitmap(icon_replaced_image.bitmap)
+            .is_none()
+    );
+    assert!(kernel.resources.bitmap(icon_replaced_image.mask).is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, icon_replaced_bitmap_bits)
+            .is_none()
+    );
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, icon_replaced_mask_bits)
+            .is_none()
+    );
+    let dither_mask_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [1, 1, ILC_MASK, 2, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create(dither mask) did not return a handle: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [dither_mask_list, masked_bitmap, mask_bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(kernel.resources.image_list_count(dither_mask_list), Some(2));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_COPY_DITHER_IMAGE,
+            [dither_mask_list, 0, 0, 0, dither_mask_list, 1, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    let (dither_mask_dc, dither_mask_bits, dither_mask_stride) =
+        create_selected_rgb565_dib(&table, &mut kernel, &mut memory, thread_id, 1, 1);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_EX,
+            [
+                dither_mask_list,
+                0,
+                dither_mask_dc,
+                0,
+                0,
+                1,
+                1,
+                0,
+                0,
+                0x0010
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        rgb565_at(&memory, dither_mask_bits, dither_mask_stride, 0, 0),
+        0xffff,
+        "CopyDitherImage should OR a 50% CE dither pattern into copied masks before SRCAND"
+    );
+    let dither_image = kernel
+        .resources
+        .image_list(dither_mask_list)
+        .unwrap()
+        .images[0]
+        .clone();
+    let dither_bitmap_bits = kernel
+        .resources
+        .bitmap(dither_image.bitmap)
+        .unwrap()
+        .bits_ptr;
+    let dither_mask_bits_ptr = kernel.resources.bitmap(dither_image.mask).unwrap().bits_ptr;
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_SET_IMAGE_COUNT,
+            [dither_mask_list, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(kernel.resources.bitmap(dither_image.bitmap).is_some());
+    assert!(kernel.resources.bitmap(dither_image.mask).is_some());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, dither_bitmap_bits)
+            .is_some()
+    );
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, dither_mask_bits_ptr)
+            .is_some()
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_SET_IMAGE_COUNT,
+            [dither_mask_list, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(kernel.resources.bitmap(dither_image.bitmap).is_none());
+    assert!(kernel.resources.bitmap(dither_image.mask).is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, dither_bitmap_bits)
+            .is_none()
+    );
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, dither_mask_bits_ptr)
+            .is_none()
     );
 
     memory.write_wide_z(bitmap_path_ptr, r"\Images\red.bmp");
@@ -7218,6 +8072,44 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
             ..
         }
     ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DELETE_OBJECT,
+            [red_bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(
+        kernel.resources.bitmap(red_bitmap).is_none(),
+        "caller-owned source bitmap should be deletable after ImageList_Add"
+    );
+    let _ = framebuffer.take_dirty_rects();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_EX,
+            [overlay_list, 0, hdc, 12, 7, 2, 1, 0, 0, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let lifetime_pixel = 7 * framebuffer.stride() + 12 * PixelFormat::Rgb565.bytes_per_pixel();
+    assert_eq!(
+        &framebuffer.pixels()[lifetime_pixel..lifetime_pixel + 2],
+        &[0x00, 0xf8],
+        "ImageList_Add should copy source pixels so later DeleteObject does not invalidate drawing"
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -7305,6 +8197,248 @@ fn image_list_ordinals_track_created_lists_and_icons() -> Result<()> {
         &framebuffer.pixels()[overlay_mask_right..overlay_mask_right + 2],
         &[0x00, 0x00],
         "ImageList overlay draw with ILD_MASK should draw the overlay mask instead of skipping the overlay"
+    );
+
+    memory.write_wide_z(bitmap_path_ptr, r"\Images\white-mask.bmp");
+    let white_mask_bitmap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOAD_IMAGE_W,
+        [0, bitmap_path_ptr, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("LoadImageW(white mask bitmap) did not return a bitmap: {other:?}"),
+    };
+    assert_ne!(white_mask_bitmap, 0);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [overlay_list, masked_bitmap, white_mask_bitmap],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(2),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
+            [overlay_list, 2, 2],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let white_overlay_record = kernel
+        .resources
+        .image_list(overlay_list)
+        .unwrap()
+        .overlays
+        .get(&2)
+        .copied()
+        .expect("white overlay metadata");
+    assert_eq!(white_overlay_record.image_index, 2);
+    assert_eq!(white_overlay_record.x, 0);
+    assert_eq!(white_overlay_record.y, 0);
+    assert_eq!(white_overlay_record.width, 0);
+    assert_eq!(white_overlay_record.height, 0);
+    assert_eq!(white_overlay_record.flags, 0);
+    let _ = framebuffer.take_dirty_rects();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_EX,
+            [overlay_list, 0, hdc, 10, 8, 2, 1, 0, 0, 0x0200],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let white_overlay_left = 8 * framebuffer.stride() + 10 * PixelFormat::Rgb565.bytes_per_pixel();
+    let white_overlay_right = white_overlay_left + PixelFormat::Rgb565.bytes_per_pixel();
+    assert_eq!(
+        &framebuffer.pixels()[white_overlay_left..white_overlay_left + 2],
+        &[0x00, 0xf8],
+        "all-white overlay masks should leave the base image's left pixel intact"
+    );
+    assert_eq!(
+        &framebuffer.pixels()[white_overlay_right..white_overlay_right + 2],
+        &[0x00, 0xf8],
+        "all-white overlay masks should leave the base image's right pixel intact"
+    );
+
+    memory.write_wide_z(bitmap_path_ptr, r"\Images\red2.bmp");
+    let diagonal_base_bitmap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOAD_IMAGE_W,
+        [0, bitmap_path_ptr, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("LoadImageW(red2 bitmap) did not return a bitmap: {other:?}"),
+    };
+    assert_ne!(diagonal_base_bitmap, 0);
+    memory.write_wide_z(bitmap_path_ptr, r"\Images\green2.bmp");
+    let diagonal_overlay_bitmap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOAD_IMAGE_W,
+        [0, bitmap_path_ptr, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("LoadImageW(green2 bitmap) did not return a bitmap: {other:?}"),
+    };
+    assert_ne!(diagonal_overlay_bitmap, 0);
+    memory.write_wide_z(bitmap_path_ptr, r"\Images\diagonal-mask.bmp");
+    let diagonal_mask_bitmap = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOAD_IMAGE_W,
+        [0, bitmap_path_ptr, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("LoadImageW(diagonal mask bitmap) did not return a bitmap: {other:?}"),
+    };
+    assert_ne!(diagonal_mask_bitmap, 0);
+    let diagonal_overlay_list = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [2, 2, ILC_MASK, 2, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(handle),
+            ..
+        } => handle,
+        other => panic!("ImageList_Create(diagonal overlay) did not return a handle: {other:?}"),
+    };
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [diagonal_overlay_list, diagonal_base_bitmap, 0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [
+                diagonal_overlay_list,
+                diagonal_overlay_bitmap,
+                diagonal_mask_bitmap
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(1),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_SET_OVERLAY_IMAGE,
+            [diagonal_overlay_list, 1, 1],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let diagonal_overlay_record = kernel
+        .resources
+        .image_list(diagonal_overlay_list)
+        .unwrap()
+        .overlays
+        .get(&1)
+        .copied()
+        .expect("diagonal overlay metadata");
+    assert_eq!(diagonal_overlay_record.image_index, 1);
+    assert_eq!(diagonal_overlay_record.x, 0);
+    assert_eq!(diagonal_overlay_record.y, 0);
+    assert_eq!(diagonal_overlay_record.width, 2);
+    assert_eq!(diagonal_overlay_record.height, 2);
+    assert_eq!(
+        diagonal_overlay_record.flags, 0,
+        "non-rectangular overlay masks should not be promoted to ILD_IMAGE"
+    );
+    let _ = framebuffer.take_dirty_rects();
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_framebuffer(
+            &mut kernel,
+            &mut memory,
+            Some(&mut framebuffer),
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_EX,
+            [diagonal_overlay_list, 0, hdc, 14, 8, 2, 2, 0, 0, 0x0100],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    let diagonal_top_left = 8 * framebuffer.stride() + 14 * PixelFormat::Rgb565.bytes_per_pixel();
+    let diagonal_top_right = diagonal_top_left + PixelFormat::Rgb565.bytes_per_pixel();
+    let diagonal_bottom_left =
+        9 * framebuffer.stride() + 14 * PixelFormat::Rgb565.bytes_per_pixel();
+    let diagonal_bottom_right = diagonal_bottom_left + PixelFormat::Rgb565.bytes_per_pixel();
+    assert_eq!(
+        &framebuffer.pixels()[diagonal_top_left..diagonal_top_left + 2],
+        &[0xe0, 0x07],
+        "diagonal overlay mask should paint the top-left black-mask pixel"
+    );
+    assert_eq!(
+        &framebuffer.pixels()[diagonal_top_right..diagonal_top_right + 2],
+        &[0x00, 0xf8],
+        "diagonal overlay mask should preserve the top-right white-mask pixel"
+    );
+    assert_eq!(
+        &framebuffer.pixels()[diagonal_bottom_left..diagonal_bottom_left + 2],
+        &[0x00, 0xf8],
+        "diagonal overlay mask should preserve the bottom-left white-mask pixel"
+    );
+    assert_eq!(
+        &framebuffer.pixels()[diagonal_bottom_right..diagonal_bottom_right + 2],
+        &[0xe0, 0x07],
+        "diagonal overlay mask should paint the bottom-right black-mask pixel"
     );
 
     let merged = match table.dispatch_raw_ordinal_with_memory(
@@ -8042,7 +9176,9 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
     const ILC_COLOR16: u32 = 0x0010;
     const ILC_MASK: u32 = 0x0001;
     const ILD_TRANSPARENT: u32 = 0x0001;
+    const ILD_BLEND50: u32 = 0x0004;
     const ILD_BLEND75: u32 = 0x0008;
+    const ILD_MASK: u32 = 0x0010;
     const ILD_IMAGE: u32 = 0x0020;
     const ILD_ROP: u32 = 0x0040;
     const SRCINVERT: u32 = 0x0066_0046;
@@ -8305,6 +9441,97 @@ fn image_list_draw_indirect_applies_x_bitmap_offset_and_rgb_bk_fill() -> Result<
         rgb565_at(&memory, bits_ptr, stride, 3, 1),
         0x7be0,
         "rgbFg=CLR_NONE should blend source green with the existing red destination pixel"
+    );
+
+    // CE does not apply that destination blend to ILD_MASK draws. The private
+    // code ORs the mask with a 50% mono dither, sets ILD_TRANSPARENT, and then
+    // draws the mask with SRCAND.
+    let il_mask = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_IMAGE_LIST_CREATE,
+        [2, 1, ILC_COLOR16 | ILC_MASK, 1, 1],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("ImageList_Create(mask blend) failed: {other:?}"),
+    };
+    memory.write_wide_z(path_ptr, r"\mask.bmp");
+    let mask_handle = match table.dispatch_raw_ordinal_with_memory(
+        &mut kernel,
+        &mut memory,
+        thread_id,
+        ORD_LOAD_IMAGE_W,
+        [0, path_ptr, IMAGE_BITMAP, 2, 1, LR_LOADFROMFILE],
+    ) {
+        CoredllDispatch::Returned {
+            value: CoredllValue::Handle(h),
+            ..
+        } => h,
+        other => panic!("LoadImage mask failed: {other:?}"),
+    };
+    memory.write_wide_z(path_ptr, r"\mg.bmp");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_ADD,
+            [il_mask, bmp_handle, mask_handle],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    memory
+        .write_u16(bits_ptr + stride, 0xffff)
+        .expect("left mask destination should be writable");
+    memory
+        .write_u16(bits_ptr + stride + 2, 0xffff)
+        .expect("right mask destination should be writable");
+    memory.write_word(PARAMS_PTR + 4, il_mask); // himl=il_mask
+    memory.write_word(PARAMS_PTR + 8, 0); // i=0
+    memory.write_word(PARAMS_PTR + 16, 0); // x=0
+    memory.write_word(PARAMS_PTR + 20, 1); // y=1
+    memory.write_word(PARAMS_PTR + 24, 2); // cx=2
+    memory.write_word(PARAMS_PTR + 28, 1); // cy=1
+    memory.write_word(PARAMS_PTR + 32, 0); // xBitmap=0
+    memory.write_word(PARAMS_PTR + 36, 0); // yBitmap=0
+    memory.write_word(PARAMS_PTR + 40, 0); // rgbBk=black, not CLR_NONE
+    memory.write_word(PARAMS_PTR + 44, CLR_NONE); // rgbFg=destination/dither blend
+    memory.write_word(PARAMS_PTR + 48, ILD_MASK | ILD_BLEND50); // fStyle
+    memory.write_word(PARAMS_PTR + 52, 0); // dwRop
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_IMAGE_LIST_DRAW_INDIRECT,
+            [PARAMS_PTR],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(
+        memory.read_u32(PARAMS_PTR + 48)?,
+        ILD_MASK | ILD_BLEND50 | ILD_TRANSPARENT,
+        "CE writes ILD_TRANSPARENT back after rgbFg=CLR_NONE blend-mask setup"
+    );
+    assert_eq!(
+        rgb565_at(&memory, bits_ptr, stride, 0, 1),
+        0xffff,
+        "white mask pixels should survive the CE SRCAND mask pass"
+    );
+    assert_eq!(
+        rgb565_at(&memory, bits_ptr, stride, 1, 1),
+        0,
+        "mask-only blend should dither/SRCAND instead of tinting the black mask pixel with the destination"
     );
 
     // With cx/cy set to zero, CE defaults to the remaining source rectangle after
@@ -8909,6 +10136,330 @@ fn shell_notify_icon_tracks_add_modify_delete_and_posts_callback() -> Result<()>
 }
 
 #[test]
+fn shell_notify_icon_posts_registered_taskbar_message_with_copied_data() -> Result<()> {
+    const NIM_ADD: u32 = 0;
+    const NIM_MODIFY: u32 = 1;
+    const NIF_MESSAGE: u32 = 0x0000_0001;
+    const NIF_ICON: u32 = 0x0000_0002;
+    const NIF_TIP: u32 = 0x0000_0004;
+    const NIF_STATE: u32 = 0x0000_0008;
+    const NID_SIZE: u32 = 160;
+    const NID_TIP_OFFSET: u32 = 24;
+    const NID_STATE_OFFSET: u32 = 152;
+    const NID_STATE_MASK_OFFSET: u32 = 156;
+    const WM_HANDLESHELLNOTIFYICON: u32 = WM_USER + 0x0bad;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 46;
+    let app_hwnd = kernel.create_window_ex_w(thread_id, "SHELL_NOTIFY_APP", "", None, 0, 0, 0);
+    let taskbar_hwnd =
+        kernel.create_window_ex_w(thread_id, "HHTaskBar", "", None, 0, WS_VISIBLE, 0);
+    let data = 0x2_d000;
+    let msg_ptr = 0x2_e000;
+    memory.map_words(data, NID_SIZE / 4);
+    memory.map_halfwords(data + NID_TIP_OFFSET, 64);
+    memory.map_words(msg_ptr, 7);
+    memory.write_word(data, NID_SIZE);
+    memory.write_word(data + 4, app_hwnd);
+    memory.write_word(data + 8, 88);
+    memory.write_word(data + 12, NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_STATE);
+    memory.write_word(data + 16, WM_USER + 123);
+    memory.write_word(data + 20, 0x000b_8123);
+    memory.write_wide_z(data + NID_TIP_OFFSET, "Taskbar copy");
+    memory.write_word(data + NID_STATE_OFFSET, 0x4);
+    memory.write_word(data + NID_STATE_MASK_OFFSET, 0xff);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REGISTER_TASK_BAR,
+            [taskbar_hwnd],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_ADD, data],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PEEK_MESSAGE_W,
+            [
+                msg_ptr,
+                taskbar_hwnd,
+                WM_HANDLESHELLNOTIFYICON,
+                WM_HANDLESHELLNOTIFYICON,
+                1,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(memory.read_u32(msg_ptr)?, taskbar_hwnd);
+    assert_eq!(memory.read_u32(msg_ptr + 4)?, WM_HANDLESHELLNOTIFYICON);
+    assert_eq!(memory.read_u32(msg_ptr + 8)?, NIM_ADD);
+    let copied_nid = memory.read_u32(msg_ptr + 12)?;
+    assert_ne!(copied_nid, 0);
+    assert_eq!(
+        kernel.gwe.message_pointer_payload(copied_nid),
+        Some(MessagePointerPayload::NotifyIcon(
+            wince_emulation_v3::ce::gwe::NotifyIconMessage {
+                hwnd: app_hwnd,
+                id: 88,
+                flags: NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_STATE,
+                callback_message: WM_USER + 123,
+                icon: 0x000b_8123,
+                tip: "Taskbar copy".to_owned(),
+                state: 0x4,
+                state_mask: 0xff,
+            }
+        ))
+    );
+    assert_eq!(memory.read_u32(copied_nid)?, 152);
+    assert_eq!(memory.read_u32(copied_nid + 4)?, app_hwnd);
+    assert_eq!(memory.read_u32(copied_nid + 8)?, 88);
+    assert_eq!(
+        memory.read_u32(copied_nid + 12)?,
+        NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_STATE
+    );
+    assert_eq!(memory.read_u32(copied_nid + 16)?, WM_USER + 123);
+    assert_eq!(memory.read_u32(copied_nid + 20)?, 0x000b_8123);
+    assert_eq!(
+        memory.read_wide_z(copied_nid + NID_TIP_OFFSET, 64),
+        "Taskbar copy"
+    );
+    assert_eq!(memory.read_u32(copied_nid + NID_STATE_OFFSET)?, 0x4);
+    assert_eq!(memory.read_u32(copied_nid + NID_STATE_MASK_OFFSET)?, 0xff);
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, copied_nid)
+            .is_some()
+    );
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DISPATCH_MESSAGE_W,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(kernel.gwe.message_pointer_payload(copied_nid).is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, copied_nid)
+            .is_none()
+    );
+
+    assert!(kernel.destroy_window(taskbar_hwnd));
+    memory.write_word(data + 12, NIF_TIP);
+    memory.write_wide_z(data + NID_TIP_OFFSET, "Stale taskbar HWND");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_MODIFY, data],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert_eq!(kernel.threads.get_last_error(thread_id), ERROR_SUCCESS);
+    let icon = kernel
+        .shell
+        .notify_icon(app_hwnd, 88)
+        .expect("notify icon after stale taskbar update");
+    assert_eq!(icon.tip, "Stale taskbar HWND");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PEEK_MESSAGE_W,
+            [
+                msg_ptr,
+                0,
+                WM_HANDLESHELLNOTIFYICON,
+                WM_HANDLESHELLNOTIFYICON,
+                1,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_REGISTER_TASK_BAR,
+            [0],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    memory.write_word(data + 12, NIF_TIP);
+    memory.write_wide_z(data + NID_TIP_OFFSET, "No taskbar post");
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_SHELL_NOTIFY_ICON,
+            [NIM_MODIFY, data],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(true),
+            ..
+        }
+    ));
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_PEEK_MESSAGE_W,
+            [
+                msg_ptr,
+                taskbar_hwnd,
+                WM_HANDLESHELLNOTIFYICON,
+                WM_HANDLESHELLNOTIFYICON,
+                1,
+            ],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::Bool(false),
+            ..
+        }
+    ));
+
+    Ok(())
+}
+
+#[test]
+fn dispatch_message_releases_only_matching_private_pointer_payload_type() -> Result<()> {
+    const WM_HANDLESHELLNOTIFYICON: u32 = WM_USER + 0x0bad;
+
+    let table = CoredllExportTable::default();
+    let config = RuntimeConfig::load_default()?;
+    let mut kernel = CeKernel::boot(config);
+    let mut memory = TestGuestMemory::default();
+    let thread_id = 46;
+    let hwnd = kernel.create_window_ex_w(thread_id, "PRIVATE_PAYLOAD", "", None, 0, 0, 0);
+    let msg_ptr = 0x2_f000;
+    memory.map_words(msg_ptr, 7);
+    let payload_ptr = kernel
+        .memory
+        .heap_alloc(PROCESS_HEAP_HANDLE, 0, 28)
+        .expect("private payload allocation");
+    let payload = MessagePointerPayload::WindowPos(WindowPos {
+        hwnd,
+        insert_after: 0,
+        x: 1,
+        y: 2,
+        width: 3,
+        height: 4,
+        flags: 5,
+    });
+    assert!(
+        kernel
+            .gwe
+            .insert_message_pointer_payload(payload_ptr, payload.clone())
+    );
+    memory.write_word(msg_ptr, hwnd);
+    memory.write_word(msg_ptr + 4, WM_HANDLESHELLNOTIFYICON);
+    memory.write_word(msg_ptr + 8, 0);
+    memory.write_word(msg_ptr + 12, payload_ptr);
+    memory.write_word(msg_ptr + 16, 0);
+
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DISPATCH_MESSAGE_W,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert_eq!(
+        kernel.gwe.message_pointer_payload(payload_ptr),
+        Some(payload)
+    );
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, payload_ptr)
+            .is_some()
+    );
+
+    memory.write_word(msg_ptr + 4, WM_WINDOWPOSCHANGED);
+    assert!(matches!(
+        table.dispatch_raw_ordinal_with_memory(
+            &mut kernel,
+            &mut memory,
+            thread_id,
+            ORD_DISPATCH_MESSAGE_W,
+            [msg_ptr],
+        ),
+        CoredllDispatch::Returned {
+            value: CoredllValue::U32(0),
+            ..
+        }
+    ));
+    assert!(kernel.gwe.message_pointer_payload(payload_ptr).is_none());
+    assert!(
+        kernel
+            .memory
+            .heap_size(PROCESS_HEAP_HANDLE, 0, payload_ptr)
+            .is_none()
+    );
+
+    Ok(())
+}
+
+#[test]
 fn shell_notify_icon_add_respects_member_flags() -> Result<()> {
     const NIM_ADD: u32 = 0;
     const NIF_TIP: u32 = 0x0000_0004;
@@ -9153,27 +10704,9 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
         .notification_callbacks()
         .cloned()
         .collect::<Vec<_>>();
-    assert_eq!(callbacks.len(), 1);
-    assert_eq!(callbacks[0].clsid, clsid);
-    assert_eq!(callbacks[0].id, 301);
-    assert_eq!(callbacks[0].lparam, 0xCAFE_BABE);
-    assert_eq!(callbacks[0].callback_ptr, 0);
-    assert_eq!(
-        callbacks[0].method,
-        ShellNotificationCallbackMethod::OnShow { x: 0, y: 0 }
-    );
-    assert_eq!(
-        callbacks[0].vtable_offset,
-        ISHELL_NOTIFICATION_CALLBACK_ON_SHOW_VTABLE_OFFSET
-    );
-    assert_eq!(
-        callbacks[0].arguments,
-        ShellNotificationCallbackArguments::OnShow {
-            id: 301,
-            x: 0,
-            y: 0,
-            lparam: 0xCAFE_BABE
-        }
+    assert!(
+        callbacks.is_empty(),
+        "CE taskbar PopUp sends SHNN_SHOW to the sink window without invoking the COM callback"
     );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
@@ -9232,19 +10765,19 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
         .notification_callbacks()
         .cloned()
         .collect::<Vec<_>>();
-    assert_eq!(callbacks.len(), 2);
+    assert_eq!(callbacks.len(), 1);
     assert_eq!(
-        callbacks[1].method,
+        callbacks[0].method,
         ShellNotificationCallbackMethod::OnLinkSelected {
             link: "cmd:route".to_owned()
         }
     );
     assert_eq!(
-        callbacks[1].vtable_offset,
+        callbacks[0].vtable_offset,
         ISHELL_NOTIFICATION_CALLBACK_ON_LINK_SELECTED_VTABLE_OFFSET
     );
     assert_eq!(
-        callbacks[1].arguments,
+        callbacks[0].arguments,
         ShellNotificationCallbackArguments::OnLinkSelected {
             id: 301,
             link: "cmd:route".to_owned(),
@@ -9307,17 +10840,17 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
         .notification_callbacks()
         .cloned()
         .collect::<Vec<_>>();
-    assert_eq!(callbacks.len(), 3);
+    assert_eq!(callbacks.len(), 2);
     assert_eq!(
-        callbacks[2].method,
+        callbacks[1].method,
         ShellNotificationCallbackMethod::OnDismiss { timed_out: true }
     );
     assert_eq!(
-        callbacks[2].vtable_offset,
+        callbacks[1].vtable_offset,
         ISHELL_NOTIFICATION_CALLBACK_ON_DISMISS_VTABLE_OFFSET
     );
     assert_eq!(
-        callbacks[2].arguments,
+        callbacks[1].arguments,
         ShellNotificationCallbackArguments::OnDismiss {
             id: 301,
             timed_out: true,
@@ -9373,17 +10906,17 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
         .notification_callbacks()
         .cloned()
         .collect::<Vec<_>>();
-    assert_eq!(callbacks.len(), 4);
+    assert_eq!(callbacks.len(), 3);
     assert_eq!(
-        callbacks[3].method,
+        callbacks[2].method,
         ShellNotificationCallbackMethod::OnCommandSelected { command_id: 0x1234 }
     );
     assert_eq!(
-        callbacks[3].vtable_offset,
+        callbacks[2].vtable_offset,
         ISHELL_NOTIFICATION_CALLBACK_ON_COMMAND_SELECTED_VTABLE_OFFSET
     );
     assert_eq!(
-        callbacks[3].arguments,
+        callbacks[2].arguments,
         ShellNotificationCallbackArguments::OnCommandSelected {
             id: 301,
             command_id: 0x1234
@@ -9558,6 +11091,14 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
             .collect::<Vec<_>>(),
         vec![(clsid, 301)]
     );
+    assert_eq!(
+        kernel
+            .shell
+            .destroyed_notify_icons()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![0x000b_9001]
+    );
 
     memory.write_word(data + 16, 0);
     assert!(matches!(
@@ -9575,6 +11116,14 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     ));
     let record = kernel.shell.notification(clsid, 301).expect("notification");
     assert_eq!(record.icon, 0x000b_9002);
+    assert_eq!(
+        kernel
+            .shell
+            .destroyed_notify_icons()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![0x000b_9001]
+    );
 
     memory.write_word(data + 12, 0);
     assert!(matches!(
@@ -9637,6 +11186,14 @@ fn shnotification_i_tracks_query_update_and_remove_state() -> Result<()> {
     ));
     assert!(kernel.shell.notification(clsid, 301).is_none());
     assert_eq!(kernel.shell.notification_callbacks().count(), 0);
+    assert_eq!(
+        kernel
+            .shell
+            .destroyed_notify_icons()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![0x000b_9001, 0x000b_9002]
+    );
     assert_eq!(
         kernel
             .shell
@@ -9742,7 +11299,7 @@ fn shnotification_i_add_uses_marshalled_html_pointer_presence() -> Result<()> {
 #[test]
 fn shnotification_i_posts_timeout_dismiss_and_removes_expired_record() -> Result<()> {
     const SHNOTIFICATIONDATA_SIZE: u32 = 56;
-    const SHNP_INFORM: u32 = 0x1b1;
+    const SHNP_ICONIC: u32 = 0x1b2;
     const SHNN_DISMISS: u32 = 0xffff_fc17;
 
     let table = CoredllExportTable::default();
@@ -9765,7 +11322,7 @@ fn shnotification_i_posts_timeout_dismiss_and_removes_expired_record() -> Result
     memory.map_words(msg_ptr, 7);
     memory.write_word(data, SHNOTIFICATIONDATA_SIZE);
     memory.write_word(data + 4, 401);
-    memory.write_word(data + 8, SHNP_INFORM);
+    memory.write_word(data + 8, SHNP_ICONIC);
     memory.write_word(data + 12, 1);
     memory.write_word(data + 16, 0x000b_9001);
     memory.write_word(data + 20, 0x10);
@@ -9835,6 +11392,14 @@ fn shnotification_i_posts_timeout_dismiss_and_removes_expired_record() -> Result
     assert_eq!(memory.read_u32(nmshn_ptr + 12)?, 0xFACE_CAFE);
     assert_eq!(memory.read_u32(nmshn_ptr + 20)?, 1);
     assert!(kernel.shell.notification(clsid, 401).is_none());
+    assert_eq!(
+        kernel
+            .shell
+            .destroyed_notify_icons()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec![0x000b_9001]
+    );
     assert!(matches!(
         table.dispatch_raw_ordinal_with_memory(
             &mut kernel,
@@ -10465,7 +12030,7 @@ fn shell_window_destroy_removes_notify_icon_and_notification_state() -> Result<(
     const NID_SIZE: u32 = 160;
     const NID_TIP_OFFSET: u32 = 24;
     const SHNOTIFICATIONDATA_SIZE: u32 = 56;
-    const SHNP_INFORM: u32 = 0x1b1;
+    const SHNP_ICONIC: u32 = 0x1b2;
 
     let table = CoredllExportTable::default();
     let config = RuntimeConfig::load_default()?;
@@ -10508,7 +12073,7 @@ fn shell_window_destroy_removes_notify_icon_and_notification_state() -> Result<(
     ));
     memory.write_word(notify_data, SHNOTIFICATIONDATA_SIZE);
     memory.write_word(notify_data + 4, 402);
-    memory.write_word(notify_data + 8, SHNP_INFORM);
+    memory.write_word(notify_data + 8, SHNP_ICONIC);
     memory.write_word(notify_data + 12, 0);
     memory.write_word(notify_data + 16, 0x000b_9003);
     memory.write_word(notify_data + 20, 0);
@@ -10562,7 +12127,7 @@ fn shell_window_destroy_removes_notify_icon_and_notification_state() -> Result<(
             .destroyed_notify_icons()
             .copied()
             .collect::<Vec<_>>(),
-        vec![0x000b_8002]
+        vec![0x000b_8002, 0x000b_9003]
     );
     assert!(kernel.shell.notification(clsid, 402).is_none());
     assert_eq!(kernel.shell.notification_callbacks().count(), 0);
@@ -10601,7 +12166,7 @@ fn shell_window_destroy_removes_notify_icon_and_notification_state() -> Result<(
     ));
     memory.write_word(notify_data, SHNOTIFICATIONDATA_SIZE);
     memory.write_word(notify_data + 4, 403);
-    memory.write_word(notify_data + 8, SHNP_INFORM);
+    memory.write_word(notify_data + 8, SHNP_ICONIC);
     memory.write_word(notify_data + 12, 0);
     memory.write_word(notify_data + 16, 0x000b_9004);
     memory.write_word(notify_data + 20, 0);
@@ -10666,7 +12231,7 @@ fn shell_window_destroy_removes_notify_icon_and_notification_state() -> Result<(
             .destroyed_notify_icons()
             .copied()
             .collect::<Vec<_>>(),
-        vec![0x000b_8002, 0x000b_8003]
+        vec![0x000b_8002, 0x000b_9003, 0x000b_8003, 0x000b_9004]
     );
 
     Ok(())
@@ -10684,6 +12249,7 @@ fn message_box_w_records_text_owner_and_returns_default_button() -> Result<()> {
     const MB_RTLREADING: u32 = 0x0010_0000;
     const MB_UNDEFINED_ICON_NIBBLE: u32 = 0x0000_0050;
     const MB_DESKTOP_ONLY_TASKMODAL: u32 = 0x0000_2000;
+    const WS_EX_TOPMOST: u32 = 0x0000_0008;
     const IDCANCEL: u32 = 2;
     const IDYES: u32 = 6;
     const IDNO: u32 = 7;
@@ -10737,6 +12303,8 @@ fn message_box_w_records_text_owner_and_returns_default_button() -> Result<()> {
     assert_eq!(record.icon, Some(MessageBoxIcon::Question));
     assert_eq!(record.result, IDNO);
     assert!(record.rendered);
+    assert!(record.dialog_was_active);
+    assert_eq!(record.dialog_ex_style & WS_EX_TOPMOST, 0);
     assert_eq!(record.button_hwnds.len(), 3);
     assert_eq!(kernel.gwe.dialog_result(record.dialog_hwnd), Some(IDNO));
     assert!(!kernel.gwe.is_window(record.dialog_hwnd));
@@ -10750,14 +12318,6 @@ fn message_box_w_records_text_owner_and_returns_default_button() -> Result<()> {
     assert_eq!(record.owner_was_enabled, Some(true));
     assert_eq!(kernel.threads.get_last_error(thread_id), 0);
     assert!(!framebuffer.dirty_rects().is_empty());
-    let pixel = |x: usize, y: usize| {
-        let offset = y * framebuffer.stride() + x * PixelFormat::Rgb565.bytes_per_pixel();
-        &framebuffer.pixels()[offset..offset + PixelFormat::Rgb565.bytes_per_pixel()]
-    };
-    assert_ne!(pixel(30, 30), &[0, 0]);
-    assert_ne!(pixel(45, 32), &[0, 0]);
-    assert_ne!(pixel(46, 55), &[0, 0]);
-    assert_ne!(pixel(58, 87), &[0, 0]);
 
     let yes_all = table.dispatch_raw_ordinal_with_memory(
         &mut kernel,
@@ -10883,6 +12443,8 @@ fn message_box_w_records_text_owner_and_returns_default_button() -> Result<()> {
         .expect("supported-high-flags record");
     assert_eq!(record.style, supported_high_flags);
     assert_eq!(record.result, IDCANCEL);
+    assert!(record.dialog_was_active);
+    assert_eq!(record.dialog_ex_style & WS_EX_TOPMOST, WS_EX_TOPMOST);
 
     let record_count = kernel.shell.message_boxes().count();
     let unsupported_desktop_flag = table.dispatch_raw_ordinal_with_memory(

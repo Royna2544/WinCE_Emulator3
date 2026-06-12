@@ -599,7 +599,14 @@ fn ole_stub_return<M: CoredllGuestMemory>(
     args: &[u32],
 ) -> u32 {
     match normalize_symbol(name).as_str() {
-        "coinitialize" | "coinitializeex" | "couninitialize" | "oleinitialize" => 0,
+        "coinitialize" | "oleinitialize" => kernel.com.co_initialize_ex(thread_id, 0),
+        "coinitializeex" => kernel
+            .com
+            .co_initialize_ex(thread_id, raw_import_arg(args, 1)),
+        "couninitialize" => {
+            kernel.com.co_uninitialize(thread_id);
+            0
+        }
         "stringfromclsid" => ole::string_from_clsid_raw(
             kernel,
             memory,
@@ -618,7 +625,17 @@ fn ole_stub_return<M: CoredllGuestMemory>(
             ole::co_task_mem_free_raw(kernel, raw_import_arg(args, 0));
             0
         }
-        "cocreateinstance" | "cogetclassobject" => 0x8000_4001,
+        "cocreateinstance" => ole::co_create_instance_raw(
+            kernel,
+            memory,
+            thread_id,
+            raw_import_arg(args, 0),
+            raw_import_arg(args, 1),
+            raw_import_arg(args, 2),
+            raw_import_arg(args, 3),
+            raw_import_arg(args, 4),
+        ),
+        "cogetclassobject" => 0x8000_4001,
         _ => 0,
     }
 }
@@ -759,6 +776,8 @@ fn write_mapped_u32(mapped: &mut [u8], rva: u32, value: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
     use crate::pe::ImportThunk;
     use crate::{
         ce::{coredll::CoredllGuestMemory, kernel::CeKernel},
@@ -766,23 +785,58 @@ mod tests {
     };
 
     #[derive(Default)]
-    struct TestMemory;
+    struct TestMemory {
+        bytes: BTreeMap<u32, u8>,
+        words: BTreeMap<u32, u32>,
+    }
+
+    impl TestMemory {
+        fn map_bytes(&mut self, addr: u32, bytes: &[u8]) {
+            for (offset, byte) in bytes.iter().copied().enumerate() {
+                self.bytes.insert(addr + offset as u32, byte);
+            }
+        }
+
+        fn map_word(&mut self, addr: u32, value: u32) {
+            self.words.insert(addr, value);
+        }
+
+        fn word(&self, addr: u32) -> u32 {
+            self.words.get(&addr).copied().unwrap_or(0)
+        }
+    }
 
     impl CoredllGuestMemory for TestMemory {
-        fn read_u8(&self, _addr: u32) -> Result<u8> {
-            Err(Error::Backend("unexpected read_u8".to_owned()))
+        fn read_u8(&self, addr: u32) -> Result<u8> {
+            self.bytes
+                .get(&addr)
+                .copied()
+                .ok_or_else(|| Error::Backend(format!("unexpected read_u8 0x{addr:08x}")))
         }
 
-        fn write_u8(&mut self, _addr: u32, _value: u8) -> Result<()> {
-            Err(Error::Backend("unexpected write_u8".to_owned()))
+        fn write_u8(&mut self, addr: u32, value: u8) -> Result<()> {
+            if let Some(byte) = self.bytes.get_mut(&addr) {
+                *byte = value;
+                Ok(())
+            } else {
+                Err(Error::Backend(format!("unexpected write_u8 0x{addr:08x}")))
+            }
         }
 
-        fn read_u32(&self, _addr: u32) -> Result<u32> {
-            Err(Error::Backend("unexpected read_u32".to_owned()))
+        fn read_u32(&self, addr: u32) -> Result<u32> {
+            self.words
+                .get(&addr)
+                .copied()
+                .ok_or_else(|| Error::Backend(format!("unexpected read_u32 0x{addr:08x}")))
         }
 
-        fn write_u32(&mut self, _addr: u32, _value: u32) -> Result<()> {
-            Err(Error::Backend("unexpected write_u32".to_owned()))
+        fn write_u32(&mut self, addr: u32, value: u32) -> Result<()> {
+            if let Some(word) = self.words.get_mut(&addr) {
+                *word = value;
+                Ok(())
+            } else {
+                Err(Error::Backend(format!("unexpected write_u32 0x{addr:08x}")))
+            }
         }
 
         fn read_u16(&self, _addr: u32) -> Result<u16> {
@@ -957,7 +1011,7 @@ mod tests {
 
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
-        let mut memory = TestMemory;
+        let mut memory = TestMemory::default();
         assert_eq!(
             table.dispatch_trap(&mut kernel, &mut memory, 1, IMPORT_TRAP_BASE, vec![]),
             None
@@ -978,7 +1032,7 @@ mod tests {
 
         let config = RuntimeConfig::load_default().unwrap();
         let mut kernel = CeKernel::boot(config);
-        let mut memory = TestMemory;
+        let mut memory = TestMemory::default();
         assert_eq!(
             table.dispatch_trap_registers(
                 &mut kernel,
@@ -1005,6 +1059,78 @@ mod tests {
                 v1: Some(u32::MAX)
             })
         );
+    }
+
+    #[test]
+    fn ole_cocreateinstance_import_uses_com_registry_and_writes_ppv() {
+        let mut table = ImportTrapTable::new();
+        table.insert(ImportTrap {
+            address: IMPORT_TRAP_BASE,
+            module_kind: ImportModuleKind::Ole,
+            module_name: "ole32.dll".to_owned(),
+            ordinal: None,
+            name: Some("CoCreateInstance".to_owned()),
+            iat_va: 0x4000,
+        });
+
+        let config = RuntimeConfig::load_default().unwrap();
+        let mut kernel = CeKernel::boot(config);
+        let mut memory = TestMemory::default();
+        let clsid_ptr = 0x1000;
+        let same_clsid_ptr = 0x1100;
+        let iid_ptr = 0x2000;
+        let ppv = 0x3000;
+        let clsid = [
+            0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+            0x77, 0x88,
+        ];
+        let iid = [0x01, 0, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0, 0x46];
+        memory.map_bytes(clsid_ptr, &clsid);
+        memory.map_bytes(same_clsid_ptr, &clsid);
+        memory.map_bytes(iid_ptr, &iid);
+        memory.map_word(ppv, 0xfeed_face);
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                17,
+                IMPORT_TRAP_BASE,
+                vec![clsid_ptr, 0, 0x17, iid_ptr, 0],
+            ),
+            Some(crate::ce::com::E_POINTER)
+        );
+
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                17,
+                IMPORT_TRAP_BASE,
+                vec![clsid_ptr, 0, 0x17, iid_ptr, ppv],
+            ),
+            Some(crate::ce::com::REGDB_E_CLASSNOTREG)
+        );
+        assert_eq!(memory.word(ppv), 0);
+
+        kernel.com.register_class_guid(clsid, 0x55aa);
+        assert_eq!(
+            table.dispatch_trap(
+                &mut kernel,
+                &mut memory,
+                17,
+                IMPORT_TRAP_BASE,
+                vec![same_clsid_ptr, 0, 0x17, iid_ptr, ppv],
+            ),
+            Some(crate::ce::com::S_OK)
+        );
+        let object = memory.word(ppv);
+        assert_eq!(object, 0x55aa);
+        let record = kernel.com.object(object).expect("registered COM object");
+        assert_eq!(record.clsid_ptr, same_clsid_ptr);
+        assert_eq!(record.clsid, Some(clsid));
+        assert_eq!(record.iid_ptr, iid_ptr);
+        assert_eq!(record.iid, Some(iid));
     }
 
     #[test]

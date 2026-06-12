@@ -331,7 +331,30 @@ fn run_cpu_loop(
             reported_blocked_message_wait = false;
             continue;
         }
+        if cpu.clear_orphaned_send_depths(kernel) {
+            reported_blocked_message_wait = false;
+            continue;
+        }
+        if cpu.clear_orphaned_direct_send_callouts(kernel) {
+            reported_blocked_message_wait = false;
+            continue;
+        }
+        if cpu.complete_orphaned_active_send_wait(kernel) {
+            reported_blocked_message_wait = false;
+            continue;
+        }
         if cpu.complete_orphaned_parked_send_wait(kernel) {
+            reported_blocked_message_wait = false;
+            continue;
+        }
+        if cpu.clear_orphaned_cross_process_send_yield(kernel) {
+            reported_blocked_message_wait = false;
+            continue;
+        }
+        if cpu.complete_ready_active_modal_message_box_with_framebuffer(
+            kernel,
+            Some(desktop.framebuffer_mut()),
+        ) {
             reported_blocked_message_wait = false;
             continue;
         }
@@ -344,11 +367,20 @@ fn run_cpu_loop(
             service_remote_endpoint(cpu, kernel, desktop, blocked_remote_target.as_ref());
         if remote_drained.handled != 0 {
             reported_blocked_message_wait = false;
-            let current_cpu_targeted = cpu.contains_thread(&remote_drained.target_thread_ids);
-            if cpu.rotate_to_ready_parked_threads(kernel, &remote_drained.target_thread_ids) {
+            let current_cpu_targeted = remote_drained
+                .target_thread_ids
+                .contains(&cpu.current_thread_id());
+            if cpu.rotate_to_ready_parked_threads_with_framebuffer(
+                kernel,
+                &remote_drained.target_thread_ids,
+                Some(desktop.framebuffer_mut()),
+            ) {
                 continue;
             }
-            if cpu.rotate_to_ready_parked_wait(kernel) {
+            if cpu.rotate_to_ready_parked_wait_with_framebuffer(
+                kernel,
+                Some(desktop.framebuffer_mut()),
+            ) {
                 continue;
             }
             if !current_cpu_targeted
@@ -371,11 +403,51 @@ fn run_cpu_loop(
             reported_blocked_message_wait = false;
             continue;
         }
-        if cpu.rotate_to_ready_parked_wait(kernel) {
+        if cpu.rotate_to_ready_parked_wait_with_framebuffer(kernel, Some(desktop.framebuffer_mut()))
+        {
             reported_blocked_message_wait = false;
             continue;
         }
         if rotate_to_cross_process_send_target(cpu, kernel) {
+            reported_blocked_message_wait = false;
+            continue;
+        }
+        if args.remote_server.is_some()
+            && remote_drained.handled == 0
+            && desktop_queued == 0
+            && !cpu.has_saved_context()
+            && cpu
+                .last_debug_snapshot()
+                .is_some_and(|snapshot| snapshot_has_orphaned_cross_process_send(snapshot, kernel))
+            && cpu.has_runnable_parked_process(kernel)
+            && cpu.rotate_to_next_parked_process(kernel)
+        {
+            reported_blocked_message_wait = false;
+            continue;
+        }
+        if args.remote_server.is_some()
+            && remote_drained.handled == 0
+            && desktop_queued == 0
+            && !cpu.has_saved_context()
+            && cpu
+                .last_debug_snapshot()
+                .is_some_and(|snapshot| snapshot_has_only_stale_blocked_waits(snapshot, kernel))
+            && cpu.has_runnable_parked_process(kernel)
+            && cpu.rotate_to_next_parked_process(kernel)
+        {
+            reported_blocked_message_wait = false;
+            continue;
+        }
+        if args.remote_server.is_some()
+            && remote_drained.handled == 0
+            && desktop_queued == 0
+            && !cpu.has_saved_context()
+            && cpu.last_debug_snapshot().is_some_and(|snapshot| {
+                snapshot_has_only_stale_owned_blocked_waits(snapshot, cpu, kernel)
+            })
+            && cpu.has_runnable_parked_process(kernel)
+            && cpu.rotate_to_next_parked_process(kernel)
+        {
             reported_blocked_message_wait = false;
             continue;
         }
@@ -433,11 +505,20 @@ fn run_cpu_loop(
             service_remote_endpoint(cpu, kernel, desktop, blocked_remote_target.as_ref());
         if remote_drained.handled != 0 {
             reported_blocked_message_wait = false;
-            let current_cpu_targeted = cpu.contains_thread(&remote_drained.target_thread_ids);
-            if cpu.rotate_to_ready_parked_threads(kernel, &remote_drained.target_thread_ids) {
+            let current_cpu_targeted = remote_drained
+                .target_thread_ids
+                .contains(&cpu.current_thread_id());
+            if cpu.rotate_to_ready_parked_threads_with_framebuffer(
+                kernel,
+                &remote_drained.target_thread_ids,
+                Some(desktop.framebuffer_mut()),
+            ) {
                 continue;
             }
-            if cpu.rotate_to_ready_parked_wait(kernel) {
+            if cpu.rotate_to_ready_parked_wait_with_framebuffer(
+                kernel,
+                Some(desktop.framebuffer_mut()),
+            ) {
                 continue;
             }
             if !current_cpu_targeted
@@ -448,7 +529,8 @@ fn run_cpu_loop(
             }
             continue;
         }
-        if cpu.rotate_to_ready_parked_wait(kernel) {
+        if cpu.rotate_to_ready_parked_wait_with_framebuffer(kernel, Some(desktop.framebuffer_mut()))
+        {
             reported_blocked_message_wait = false;
             continue;
         }
@@ -465,9 +547,18 @@ fn run_cpu_loop(
             }
             break;
         }
-        if (active_process_exited || active_context_returned_without_continuation)
-            && cpu.switch_to_next_parked_child_process(kernel)
-        {
+        let process_handoff_switched = if active_process_exited {
+            cpu.switch_to_next_parked_child_process(kernel)
+        } else if active_context_returned_without_continuation {
+            if cpu.preserve_current_on_process_handoff(kernel) {
+                cpu.rotate_to_next_parked_process(kernel)
+            } else {
+                cpu.switch_to_next_parked_child_process(kernel)
+            }
+        } else {
+            false
+        };
+        if process_handoff_switched {
             reported_blocked_message_wait = false;
             continue;
         }
@@ -537,14 +628,16 @@ fn run_cpu_loop(
 }
 
 fn rotate_to_cross_process_send_target(cpu: &mut UnicornMips, kernel: &mut CeKernel) -> bool {
-    let Some(target_process_id) = cpu
+    let Some(yielded) = cpu
         .last_debug_snapshot()
         .and_then(|snapshot| snapshot.cross_process_send_yield.as_ref())
-        .map(|yielded| yielded.target_process_id)
     else {
         return false;
     };
-    cpu.rotate_to_parked_process_id(kernel, target_process_id)
+    if kernel.gwe.sent_message(yielded.send_id).is_none() {
+        return false;
+    }
+    cpu.rotate_to_parked_process_id(kernel, yielded.target_process_id)
 }
 
 fn remaining_wall_clock_limit_ms(limit_ms: u64, elapsed: Duration) -> u64 {
@@ -623,6 +716,45 @@ fn snapshot_has_non_message_blocked_wait(snapshot: &UnicornDebugSnapshot) -> boo
         .active_blocked_waits
         .iter()
         .any(|wait| wait.kind != "get_message")
+}
+
+fn snapshot_has_orphaned_cross_process_send(
+    snapshot: &UnicornDebugSnapshot,
+    kernel: &CeKernel,
+) -> bool {
+    snapshot
+        .cross_process_send_yield
+        .as_ref()
+        .is_some_and(|yielded| kernel.gwe.sent_message(yielded.send_id).is_none())
+}
+
+fn snapshot_has_only_stale_blocked_waits(
+    snapshot: &UnicornDebugSnapshot,
+    kernel: &CeKernel,
+) -> bool {
+    !snapshot.active_blocked_waits.is_empty()
+        && snapshot
+            .active_blocked_waits
+            .iter()
+            .all(|wait| kernel.blocked_waiter(wait.id).is_none())
+}
+
+fn snapshot_has_only_stale_owned_blocked_waits(
+    snapshot: &UnicornDebugSnapshot,
+    cpu: &UnicornMips,
+    kernel: &CeKernel,
+) -> bool {
+    let mut owned_waits = 0usize;
+    for wait in &snapshot.active_blocked_waits {
+        if !cpu.contains_thread(&[wait.thread_id]) {
+            continue;
+        }
+        owned_waits += 1;
+        if kernel.blocked_waiter(wait.id).is_some() {
+            return false;
+        }
+    }
+    owned_waits != 0
 }
 
 fn snapshot_is_idle_message_wait_only(snapshot: &UnicornDebugSnapshot) -> bool {
@@ -844,27 +976,82 @@ fn blocked_remote_input_target(
     if let Some(blocked) = cpu
         .last_debug_snapshot()
         .and_then(|snapshot| snapshot.blocked_get_message.clone())
-        .filter(|blocked| blocked.hwnd.is_none_or(|hwnd| kernel.gwe.is_window(hwnd)))
+        .filter(|blocked| {
+            remote_input_wait_target_is_visible(kernel, blocked.thread_id, blocked.hwnd)
+        })
     {
         return Some(BlockedRemoteInputTarget {
             thread_id: blocked.thread_id,
             hwnd: blocked.hwnd,
         });
     }
-    saved_get_message_remote_input_target(kernel)
+    saved_message_remote_input_target(kernel)
 }
 
-fn saved_get_message_remote_input_target(kernel: &CeKernel) -> Option<BlockedRemoteInputTarget> {
-    kernel.scheduler.blocked_waits().find_map(|wait| {
-        if let SchedulerBlockedWaitKind::GetMessage { hwnd, .. } = wait.kind {
-            Some(BlockedRemoteInputTarget {
-                thread_id: wait.thread_id,
-                hwnd,
+fn saved_message_remote_input_target(kernel: &CeKernel) -> Option<BlockedRemoteInputTarget> {
+    let get_message = kernel.scheduler.blocked_waits().find_map(|wait| {
+        matches!(wait.kind, SchedulerBlockedWaitKind::GetMessage { .. })
+            .then(|| {
+                let SchedulerBlockedWaitKind::GetMessage { hwnd, .. } = wait.kind else {
+                    unreachable!();
+                };
+                remote_input_wait_target_is_visible(kernel, wait.thread_id, hwnd).then_some(
+                    BlockedRemoteInputTarget {
+                        thread_id: wait.thread_id,
+                        hwnd,
+                    },
+                )
             })
-        } else {
-            None
+            .flatten()
+    });
+    if get_message.is_some() {
+        return get_message;
+    }
+    kernel.scheduler.blocked_waits().find_map(|wait| {
+        if wait.kind != SchedulerBlockedWaitKind::ModalMessageBox {
+            return None;
         }
+        let dialog = kernel
+            .gwe
+            .windows_snapshot()
+            .into_iter()
+            .find(|window| {
+                window.thread_id == wait.thread_id
+                    && window.visible
+                    && !window.destroyed
+                    && window.class_name.eq_ignore_ascii_case("dialog")
+            })
+            .map(|window| window.hwnd);
+        Some(BlockedRemoteInputTarget {
+            thread_id: wait.thread_id,
+            hwnd: dialog,
+        })
     })
+}
+
+fn remote_input_wait_target_is_visible(
+    kernel: &CeKernel,
+    thread_id: u32,
+    hwnd: Option<u32>,
+) -> bool {
+    let visible_input_window = |window: &wince_emulation_v3::ce::gwe::Window| {
+        window.thread_id == thread_id
+            && window.visible
+            && !window.destroyed
+            && window.rect.width() > 0
+            && window.rect.height() > 0
+    };
+    if let Some(hwnd) = hwnd {
+        return kernel
+            .gwe
+            .window(hwnd)
+            .is_some_and(|window| visible_input_window(window));
+    }
+    kernel
+        .gwe
+        .windows_snapshot()
+        .iter()
+        .any(visible_input_window)
 }
 
 fn service_remote_endpoint(
@@ -905,13 +1092,18 @@ fn publish_remote_endpoint(
         server.publish_status(&kernel.remote_status());
         server.publish_recent_logs(kernel.remote.recent_log_lines(4096));
         server.publish_framebuffer(framebuffer);
+        server.publish_debug_text("windows", live_kernel_windows_text(kernel));
+        server.publish_debug_text("messages", live_kernel_messages_text(kernel));
+        server.publish_debug_text("devices", live_kernel_devices_text(kernel));
         if let Some(snapshot) = snapshot {
             server.publish_debug_text(
                 "summary",
-                format!("  Unicorn stopped: {}\n", snapshot.summary()),
+                format!(
+                    "  last_stop_snapshot: {}\n{}",
+                    snapshot.summary(),
+                    live_kernel_waits_text(kernel)
+                ),
             );
-            server.publish_debug_text("windows", monitor_trace_text(snapshot, "windows"));
-            server.publish_debug_text("messages", monitor_trace_text(snapshot, "messages"));
             server.publish_debug_text("processes", monitor_trace_text(snapshot, "processes"));
             server.publish_debug_text("sends", kernel.gwe.sent_message_debug_text());
             if let Some(cpu) = cpu {
@@ -1349,13 +1541,26 @@ fn monitor_continue_process_handoff(
     if *continued >= MAX_MONITOR_CONTINUATIONS {
         return false;
     }
+    if cpu.clear_orphaned_cross_process_send_yield(kernel) {
+        *continued += 1;
+        return true;
+    }
     let active_process_exited = cpu
         .last_debug_snapshot()
         .is_some_and(|snapshot| snapshot.encoded_kernel_exit.is_some());
     let active_context_returned_without_continuation = cpu.last_stop_is_guest_thread_return_stub();
-    if (active_process_exited || active_context_returned_without_continuation)
-        && cpu.switch_to_next_parked_child_process(kernel)
-    {
+    let process_handoff_switched = if active_process_exited {
+        cpu.switch_to_next_parked_child_process(kernel)
+    } else if active_context_returned_without_continuation {
+        if cpu.preserve_current_on_process_handoff(kernel) {
+            cpu.rotate_to_next_parked_process(kernel)
+        } else {
+            cpu.switch_to_next_parked_child_process(kernel)
+        }
+    } else {
+        false
+    };
+    if process_handoff_switched {
         *continued += 1;
         return true;
     }
@@ -1613,6 +1818,111 @@ fn monitor_trace_text(snapshot: &UnicornDebugSnapshot, selector: &str) -> String
                 "  unknown trace kind `{other}`; use all/imports/milestones/counts/loader/calls/code/blocks/messages/window-imports/presentation/windows/wndproc/render/controller/guest/resource/files/files-full/processes/events"
             );
         }
+    }
+    out
+}
+
+fn live_kernel_messages_text(kernel: &CeKernel) -> String {
+    let mut out = String::new();
+    push_monitor_records(&mut out, "live message ops", kernel.recent_message_ops());
+    out
+}
+
+fn live_kernel_devices_text(kernel: &CeKernel) -> String {
+    let mut out = String::new();
+    push_monitor_records(&mut out, "live device ops", kernel.recent_device_ops());
+    out
+}
+
+fn live_kernel_waits_text(kernel: &CeKernel) -> String {
+    let waits = kernel.blocked_waiters().collect::<Vec<_>>();
+    if waits.is_empty() {
+        return "  live scheduler waits: none\n".to_owned();
+    }
+    let mut out = String::new();
+    let _ = writeln!(out, "  live scheduler waits:");
+    for wait in waits {
+        let handles = if wait.wait_handles.is_empty() {
+            "none".to_owned()
+        } else {
+            wait.wait_handles
+                .iter()
+                .map(|handle| format!("0x{handle:08x}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let _ = writeln!(
+            out,
+            "    id={} tid={} kind={:?} timeout={} started={} handles={}",
+            wait.id, wait.thread_id, wait.kind, wait.timeout_ms, wait.wait_started_ms, handles
+        );
+    }
+    out
+}
+
+fn live_kernel_windows_text(kernel: &CeKernel) -> String {
+    let mut out = String::new();
+    let z_order = kernel.gwe.z_order_snapshot();
+    if !z_order.is_empty() {
+        let _ = write!(out, "  z-order:");
+        for hwnd in z_order {
+            let _ = write!(out, " 0x{hwnd:08x}");
+        }
+        let _ = writeln!(out);
+    }
+    let windows = kernel.gwe.windows_snapshot();
+    if windows.is_empty() {
+        let _ = writeln!(out, "  windows: none");
+        return out;
+    }
+    let _ = writeln!(out, "  windows:");
+    for window in windows {
+        let parent = window
+            .parent
+            .map(|hwnd| format!("0x{hwnd:08x}"))
+            .unwrap_or_else(|| "<none>".to_owned());
+        let owner = window
+            .owner
+            .map(|hwnd| format!("0x{hwnd:08x}"))
+            .unwrap_or_else(|| "<none>".to_owned());
+        let update = window
+            .update_rects
+            .iter()
+            .copied()
+            .reduce(wince_emulation_v3::ce::gwe::Rect::union)
+            .unwrap_or_default();
+        let _ = writeln!(
+            out,
+            "    0x{:08x} tid={} pid={} parent={} owner={} class=`{}` title=`{}` vis={} enabled={} destroying={} dead={} update_pending={} erase_pending={} update={},{}-{},{} style=0x{:08x} ex=0x{:08x} rect={},{}-{},{} client={},{}-{},{} wndproc=0x{:08x}",
+            window.hwnd,
+            window.thread_id,
+            window.process_id,
+            parent,
+            owner,
+            window.class_name,
+            window.title,
+            window.visible,
+            window.enabled,
+            window.being_destroyed,
+            window.destroyed,
+            window.update_pending,
+            window.erase_pending,
+            update.left,
+            update.top,
+            update.right,
+            update.bottom,
+            window.style,
+            window.ex_style,
+            window.rect.left,
+            window.rect.top,
+            window.rect.right,
+            window.rect.bottom,
+            window.client_rect.left,
+            window.client_rect.top,
+            window.client_rect.right,
+            window.client_rect.bottom,
+            window.wndproc,
+        );
     }
     out
 }
@@ -2889,12 +3199,21 @@ mod tests {
         let mut kernel = CeKernel::boot(
             RuntimeConfig::load_default().expect("runtime config loads for saved waiter test"),
         );
+        let hwnd = kernel.create_window_ex_w(
+            7,
+            "REMOTE_INPUT_TARGET",
+            "",
+            None,
+            0,
+            wince_emulation_v3::ce::gwe::WS_VISIBLE,
+            0,
+        );
         kernel.register_blocked_waiter(
             7,
             0x120,
             Vec::new(),
             SchedulerBlockedWaitKind::GetMessage {
-                hwnd: Some(0x20004),
+                hwnd: Some(hwnd),
                 min_msg: 0,
                 max_msg: 0,
             },
@@ -2903,10 +3222,10 @@ mod tests {
         );
 
         assert_eq!(
-            saved_get_message_remote_input_target(&kernel),
+            saved_message_remote_input_target(&kernel),
             Some(BlockedRemoteInputTarget {
                 thread_id: 7,
-                hwnd: Some(0x20004),
+                hwnd: Some(hwnd),
             })
         );
     }

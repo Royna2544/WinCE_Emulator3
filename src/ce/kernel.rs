@@ -11,11 +11,12 @@ use crate::{
         },
         gwe::{
             FileChangeNotificationMessage, Gwe, GweStats, HWND_BROADCAST, HWND_TOP, Message,
-            MessagePointerPayload, PeekFlags, Point, Rect, SMF_NULL, SWP_HIDEWINDOW,
-            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
+            MessagePointerPayload, NotifyIconMessage, PeekFlags, Point, Rect, SMF_NULL,
+            SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
             ShellNotificationMessage, WA_ACTIVE, WA_INACTIVE, WM_ACTIVATE, WM_CANCELMODE,
-            WM_CAPTURECHANGED, WM_ENABLE, WM_FILECHANGEINFO, WM_KILLFOCUS, WM_MOVE, WM_NOTIFY,
-            WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WM_WINDOWPOSCHANGED, WindowPos,
+            WM_CAPTURECHANGED, WM_ENABLE, WM_FILECHANGEINFO, WM_HANDLESHELLNOTIFYICON,
+            WM_KILLFOCUS, WM_MOVE, WM_NOTIFY, WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE,
+            WM_WINDOWPOSCHANGED, WindowPos,
         },
         memory::{MemorySystem, PROCESS_HEAP_HANDLE},
         object::{
@@ -32,7 +33,7 @@ use crate::{
             SchedulerWaitKind, SchedulerWakeReason,
         },
         shell::{
-            ShellChangeNotifyRegistration, ShellNotificationCallbackMethod,
+            NotifyIconData, ShellChangeNotifyRegistration, ShellNotificationCallbackMethod,
             ShellNotificationCallbackRecord, ShellNotificationRecord, ShellSystem,
         },
         thread::ThreadSystem,
@@ -118,6 +119,9 @@ pub struct CeKernel {
     recent_process_ops: Vec<ProcessTraceRecord>,
     recent_event_ops: Vec<EventTraceRecord>,
     recent_message_ops: Vec<MessageTraceRecord>,
+    recent_device_ops: Vec<DeviceTraceRecord>,
+    modal_dialog_results: BTreeMap<(u32, u32), u32>,
+    live_pump_timeout_stop_tick: Option<u32>,
     runtime_loader_stats: RuntimeLoaderStats,
     pulsed_wait_handles: BTreeMap<u64, u32>,
     comm_event_mask_changed_waits: BTreeSet<u64>,
@@ -555,11 +559,28 @@ pub struct MessageTraceRecord {
     pub detail: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceTraceRecord {
+    pub op: &'static str,
+    pub handle: u32,
+    pub device: Option<String>,
+    pub backend: Option<String>,
+    pub ioctl_code: u32,
+    pub input_len: u32,
+    pub input_preview: Option<String>,
+    pub output_capacity: u32,
+    pub success: bool,
+    pub bytes_returned: u32,
+    pub output_preview: Option<String>,
+    pub detail: Option<String>,
+}
+
 const FILE_TRACE_LIMIT: usize = 512;
 const FILE_TRACE_PREVIEW_LIMIT: usize = 64;
 const PROCESS_TRACE_LIMIT: usize = 128;
 const EVENT_TRACE_LIMIT: usize = 256;
 const MESSAGE_TRACE_LIMIT: usize = 2048;
+const DEVICE_TRACE_LIMIT: usize = 512;
 const SHCNE_RENAMEITEM: u32 = 0x0000_0001;
 const SHCNE_CREATE: u32 = 0x0000_0002;
 const SHCNE_DELETE: u32 = 0x0000_0004;
@@ -581,22 +602,13 @@ const FILE_NOTIFY_CHANGE_SIZE: u32 = 0x0000_0008;
 const FILE_NOTIFY_CHANGE_LAST_WRITE: u32 = 0x0000_0010;
 const FILE_NOTIFY_CHANGE_LAST_ACCESS: u32 = 0x0000_0020;
 const FILE_NOTIFY_CHANGE_CREATION: u32 = 0x0000_0040;
-const FILE_NOTIFY_CHANGE_SECURITY: u32 = 0x0000_0100;
 const FILE_NOTIFY_CHANGE_CEGETINFO: u32 = 0x8000_0000;
-pub(crate) const FILE_NOTIFY_CHANGE_SUPPORTED_MASK: u32 = FILE_NOTIFY_CHANGE_FILE_NAME
-    | FILE_NOTIFY_CHANGE_DIR_NAME
-    | FILE_NOTIFY_CHANGE_ATTRIBUTES
-    | FILE_NOTIFY_CHANGE_SIZE
-    | FILE_NOTIFY_CHANGE_LAST_WRITE
-    | FILE_NOTIFY_CHANGE_LAST_ACCESS
-    | FILE_NOTIFY_CHANGE_CREATION
-    | FILE_NOTIFY_CHANGE_SECURITY
-    | FILE_NOTIFY_CHANGE_CEGETINFO;
 const FILE_ACTION_ADDED: u32 = 0x0000_0001;
 const FILE_ACTION_REMOVED: u32 = 0x0000_0002;
 const FILE_ACTION_MODIFIED: u32 = 0x0000_0003;
 const FILE_ACTION_RENAMED_OLD_NAME: u32 = 0x0000_0004;
 const FILE_ACTION_RENAMED_NEW_NAME: u32 = 0x0000_0005;
+const FILE_ACTION_CHANGE_COMPLETED: u32 = 0x0001_0000;
 const FILECHANGENOTIFY_BASE_SIZE: usize = 40;
 
 pub fn normalize_module_name(name: &str) -> String {
@@ -678,6 +690,9 @@ impl CeKernel {
             recent_process_ops: Vec::new(),
             recent_event_ops: Vec::new(),
             recent_message_ops: Vec::new(),
+            recent_device_ops: Vec::new(),
+            modal_dialog_results: BTreeMap::new(),
+            live_pump_timeout_stop_tick: None,
             runtime_loader_stats: RuntimeLoaderStats::default(),
             pulsed_wait_handles: BTreeMap::new(),
             comm_event_mask_changed_waits: BTreeSet::new(),
@@ -687,6 +702,22 @@ impl CeKernel {
 
     pub fn runtime_loader_stats(&self) -> RuntimeLoaderStats {
         self.runtime_loader_stats
+    }
+
+    pub fn should_stop_after_live_pump_timeout_slice(&mut self, slice_ms: u32) -> bool {
+        if slice_ms == 0 {
+            return true;
+        }
+        let now = self.timers.tick_count();
+        let Some(started) = self.live_pump_timeout_stop_tick else {
+            self.live_pump_timeout_stop_tick = Some(now);
+            return false;
+        };
+        if now.wrapping_sub(started) < slice_ms {
+            return false;
+        }
+        self.live_pump_timeout_stop_tick = Some(now);
+        true
     }
 
     pub fn record_runtime_loader_load_attempt(&mut self) {
@@ -1296,6 +1327,14 @@ impl CeKernel {
         expired
     }
 
+    pub fn timeout_send_message(&mut self, send_id: u64) -> bool {
+        if !self.gwe.timeout_sent_message(send_id) {
+            return false;
+        }
+        self.queue_send_reply_wake_candidates(send_id);
+        true
+    }
+
     pub fn set_file_root(&mut self, root: impl Into<std::path::PathBuf>) {
         self.files = HostFileSystem::new(root);
     }
@@ -1363,6 +1402,10 @@ impl CeKernel {
         &self.recent_message_ops
     }
 
+    pub fn recent_device_ops(&self) -> &[DeviceTraceRecord] {
+        &self.recent_device_ops
+    }
+
     pub fn file_io_stats(&self) -> FileIoStats {
         self.files.io_stats()
     }
@@ -1398,6 +1441,13 @@ impl CeKernel {
             self.recent_message_ops.remove(0);
         }
         self.recent_message_ops.push(record);
+    }
+
+    fn record_device_trace(&mut self, record: DeviceTraceRecord) {
+        if self.recent_device_ops.len() == DEVICE_TRACE_LIMIT {
+            self.recent_device_ops.remove(0);
+        }
+        self.recent_device_ops.push(record);
     }
 
     pub fn record_window_lifecycle_trace(
@@ -1706,6 +1756,7 @@ impl CeKernel {
         let handle = self.handles.insert(KernelObject::File(FileObject {
             guest_path: path.to_owned(),
             file_id,
+            notify_change_pending: false,
         }));
         self.push_file_trace(FileTraceRecord {
             op: "CreateFileW",
@@ -1898,20 +1949,56 @@ impl CeKernel {
             .file_attributes_w(existing_path)
             .ok()
             .is_some_and(|data| data.attributes & FILE_ATTRIBUTE_DIRECTORY != 0);
+        let cross_volume = self.files.volume_root_for_guest_path(existing_path)
+            != self.files.volume_root_for_guest_path(new_path);
         let same_parent = shell_change_parent_path(existing_path)
             .eq_ignore_ascii_case(&shell_change_parent_path(new_path));
         let result = self.files.move_file_w(existing_path, new_path);
         if result.is_ok() {
+            if cross_volume {
+                self.post_shell_file_change_notifications(SHCNE_CREATE, Some(new_path), None);
+                self.signal_file_change_notifications(SHCNE_CREATE, Some(new_path), None);
+                if self.files.file_attributes_w(existing_path).is_err() {
+                    self.post_shell_file_change_notifications(
+                        SHCNE_DELETE,
+                        Some(existing_path),
+                        None,
+                    );
+                    self.signal_file_change_notifications(SHCNE_DELETE, Some(existing_path), None);
+                }
+            } else {
+                self.post_shell_file_change_notifications(
+                    SHCNE_RENAMEITEM,
+                    Some(existing_path),
+                    Some(new_path),
+                );
+                self.signal_file_move_notifications(
+                    existing_path,
+                    new_path,
+                    existing_was_dir,
+                    same_parent,
+                );
+            }
+        }
+        result
+    }
+
+    pub fn delete_and_rename_file_w(&mut self, old_path: &str, new_path: &str) -> Result<()> {
+        let result = self.files.delete_and_rename_file_w(old_path, new_path);
+        if result.is_ok() {
+            self.post_shell_file_change_notifications(SHCNE_DELETE, Some(old_path), None);
+            self.signal_file_change_notifications(SHCNE_DELETE, Some(old_path), None);
             self.post_shell_file_change_notifications(
                 SHCNE_RENAMEITEM,
-                Some(existing_path),
                 Some(new_path),
+                Some(old_path),
             );
             self.signal_file_move_notifications(
-                existing_path,
                 new_path,
-                existing_was_dir,
-                same_parent,
+                old_path,
+                false,
+                shell_change_parent_path(new_path)
+                    .eq_ignore_ascii_case(&shell_change_parent_path(old_path)),
             );
         }
         result
@@ -1946,7 +2033,16 @@ impl CeKernel {
         let path = self.path_for_handle(handle);
         let result = match self.handles.get_mut(handle) {
             Ok(object) => match object {
-                KernelObject::File(file) => self.files.write_file(file.file_id, bytes),
+                KernelObject::File(file) => {
+                    let result = self.files.write_file(file.file_id, bytes);
+                    if result
+                        .as_ref()
+                        .is_ok_and(|io| io.success && io.bytes_transferred != 0)
+                    {
+                        file.notify_change_pending = true;
+                    }
+                    result
+                }
                 KernelObject::Device(device) => Ok(FileIoResult {
                     success: true,
                     bytes_transferred: device.write_file(bytes),
@@ -2201,11 +2297,21 @@ impl CeKernel {
         recursive: bool,
         notify_filter: u32,
     ) -> Result<u32> {
-        if notify_filter & !FILE_NOTIFY_CHANGE_SUPPORTED_MASK != 0 {
-            return Err(Error::InvalidArgument(format!(
-                "unsupported file notification filter 0x{notify_filter:08x}"
-            )));
-        }
+        self.find_first_change_notification_w_for_process(
+            path,
+            recursive,
+            notify_filter,
+            self.current_process_id,
+        )
+    }
+
+    pub fn find_first_change_notification_w_for_process(
+        &mut self,
+        path: &str,
+        recursive: bool,
+        notify_filter: u32,
+        owner_process_id: u32,
+    ) -> Result<u32> {
         let path = canonical_shell_change_path(path);
         let data = self.files.file_attributes_w(&path)?;
         if data.attributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
@@ -2215,7 +2321,9 @@ impl CeKernel {
         }
         let handle = self.handles.insert(KernelObject::FileChangeNotification(
             FileChangeNotificationObject {
+                owner_process_id,
                 watch_path: normalize_shell_change_path(&path),
+                volume_root: self.files.volume_root_for_guest_path(&path),
                 recursive,
                 notify_filter,
                 signaled: false,
@@ -2239,7 +2347,28 @@ impl CeKernel {
         Ok(handle)
     }
 
+    fn ensure_file_change_notification_owner(
+        &self,
+        notification: &FileChangeNotificationObject,
+        handle: u32,
+    ) -> Result<()> {
+        if notification.owner_process_id != self.current_process_id {
+            return Err(Error::AccessDenied(format!(
+                "process {} cannot access notification handle 0x{handle:08x} owned by process {}",
+                self.current_process_id, notification.owner_process_id
+            )));
+        }
+        Ok(())
+    }
+
     pub fn find_next_change_notification(&mut self, handle: u32) -> Result<bool> {
+        {
+            let KernelObject::FileChangeNotification(notification) = self.handles.get(handle)?
+            else {
+                return Err(Error::InvalidHandle(handle));
+            };
+            self.ensure_file_change_notification_owner(notification, handle)?;
+        }
         let KernelObject::FileChangeNotification(notification) = self.handles.get_mut(handle)?
         else {
             return Err(Error::InvalidHandle(handle));
@@ -2258,6 +2387,7 @@ impl CeKernel {
         let KernelObject::FileChangeNotification(notification) = self.handles.get(handle)? else {
             return Err(Error::InvalidHandle(handle));
         };
+        self.ensure_file_change_notification_owner(notification, handle)?;
         if notification.pending_signal_count == 0 {
             return Ok(Vec::new());
         }
@@ -2269,6 +2399,13 @@ impl CeKernel {
         handle: u32,
         count: usize,
     ) -> Result<bool> {
+        {
+            let KernelObject::FileChangeNotification(notification) = self.handles.get(handle)?
+            else {
+                return Err(Error::InvalidHandle(handle));
+            };
+            self.ensure_file_change_notification_owner(notification, handle)?;
+        }
         let KernelObject::FileChangeNotification(notification) = self.handles.get_mut(handle)?
         else {
             return Err(Error::InvalidHandle(handle));
@@ -2294,10 +2431,13 @@ impl CeKernel {
     }
 
     pub fn find_close_change_notification(&mut self, handle: u32) -> Result<bool> {
-        let is_notification = matches!(
-            self.handles.get(handle)?,
-            KernelObject::FileChangeNotification(_)
-        );
+        let is_notification = match self.handles.get(handle)? {
+            KernelObject::FileChangeNotification(notification) => {
+                self.ensure_file_change_notification_owner(notification, handle)?;
+                true
+            }
+            _ => false,
+        };
         self.close_handle(handle)?;
         if is_notification {
             Ok(true)
@@ -2314,17 +2454,40 @@ impl CeKernel {
         output_capacity: u32,
     ) -> Result<DeviceIoControlResult> {
         let remote_imu = self.remote.imu_state().clone();
-        match self.handles.get_mut(handle)? {
+        let (device, backend, detail, result) = match self.handles.get_mut(handle)? {
             KernelObject::Device(device) => {
+                let device_name = device.guest_name.clone();
+                let backend = format!("{:?}", device.backend);
                 device.apply_remote_imu(&remote_imu);
-                Ok(device.device_io_control(ioctl_code, input, output_capacity))
+                let result = device.device_io_control(ioctl_code, input, output_capacity);
+                (Some(device_name), Some(backend), None, result)
             }
-            _ => Ok(DeviceIoControlResult {
-                success: false,
-                bytes_returned: 0,
-                output: Vec::new(),
-            }),
-        }
+            other => (
+                None,
+                None,
+                Some(format!("non-device handle: {other:?}")),
+                DeviceIoControlResult {
+                    success: false,
+                    bytes_returned: 0,
+                    output: Vec::new(),
+                },
+            ),
+        };
+        self.record_device_trace(DeviceTraceRecord {
+            op: "DeviceIoControl",
+            handle,
+            device,
+            backend,
+            ioctl_code,
+            input_len: input.len() as u32,
+            input_preview: file_trace_preview(input),
+            output_capacity,
+            success: result.success,
+            bytes_returned: result.bytes_returned,
+            output_preview: file_trace_preview(&result.output),
+            detail,
+        });
+        Ok(result)
     }
 
     pub fn close_handle(&mut self, handle: u32) -> Result<bool> {
@@ -2345,7 +2508,20 @@ impl CeKernel {
                 | KernelObject::FileMapping(_)
         );
         match object {
-            KernelObject::File(file) => self.files.close(file.file_id)?,
+            KernelObject::File(file) => {
+                self.files.close(file.file_id)?;
+                if file.notify_change_pending {
+                    self.signal_file_change_notification_path(
+                        FILE_NOTIFY_CHANGE_ATTRIBUTES
+                            | FILE_NOTIFY_CHANGE_SIZE
+                            | FILE_NOTIFY_CHANGE_LAST_WRITE
+                            | FILE_NOTIFY_CHANGE_LAST_ACCESS
+                            | FILE_NOTIFY_CHANGE_CREATION,
+                        FILE_ACTION_CHANGE_COMPLETED,
+                        &file.guest_path,
+                    );
+                }
+            }
             KernelObject::FindFile(find) => self.files.find_close(find.find_id)?,
             KernelObject::Event(event) if event.name.is_some() => {
                 self.record_event_trace(EventTraceRecord {
@@ -2386,6 +2562,43 @@ impl CeKernel {
             });
         }
         Ok(true)
+    }
+
+    pub fn duplicate_handle(
+        &mut self,
+        handle: u32,
+        target_process_id: u32,
+        close_source: bool,
+    ) -> Result<u32> {
+        let object = self.handles.get(handle)?.clone();
+        let duplicate_object = match object {
+            KernelObject::File(file) => {
+                let duplicate_file_id = self.files.duplicate_open_file(file.file_id)?;
+                KernelObject::File(FileObject {
+                    guest_path: file.guest_path,
+                    file_id: duplicate_file_id,
+                    notify_change_pending: file.notify_change_pending,
+                })
+            }
+            KernelObject::FindFile(find) => {
+                let duplicate_find_id = self.files.duplicate_find(find.find_id)?;
+                KernelObject::FindFile(FindFileObject {
+                    guest_pattern: find.guest_pattern,
+                    find_id: duplicate_find_id,
+                })
+            }
+            KernelObject::FileChangeNotification(mut notification) => {
+                self.ensure_file_change_notification_owner(&notification, handle)?;
+                notification.owner_process_id = target_process_id;
+                KernelObject::FileChangeNotification(notification)
+            }
+            other => other,
+        };
+        let duplicate = self.handles.insert(duplicate_object);
+        if close_source {
+            self.close_handle(handle)?;
+        }
+        Ok(duplicate)
     }
 
     pub fn create_event_w(
@@ -2842,6 +3055,13 @@ impl CeKernel {
                 WaitResult::Timeout
             };
         }
+        if let Ok(KernelObject::FileChangeNotification(notification)) = self.handles.get(handle)
+            && self
+                .ensure_file_change_notification_owner(notification, handle)
+                .is_err()
+        {
+            return WaitResult::Failed;
+        }
         self.handles
             .wait_for_single_object(handle, timeout_ms, thread_id)
     }
@@ -3008,6 +3228,14 @@ impl CeKernel {
         self.scheduler.remove_blocked_wait(wait_id)
     }
 
+    pub(crate) fn take_modal_dialog_result(
+        &mut self,
+        thread_id: u32,
+        dialog_hwnd: u32,
+    ) -> Option<u32> {
+        self.modal_dialog_results.remove(&(thread_id, dialog_hwnd))
+    }
+
     pub fn blocked_waiter(&self, wait_id: u64) -> Option<&SchedulerBlockedWait> {
         self.scheduler.blocked_wait(wait_id)
     }
@@ -3064,6 +3292,24 @@ impl CeKernel {
 
     pub fn queue_message_wake_candidates(&mut self, thread_id: u32) -> usize {
         self.scheduler.queue_message_wake_candidates(thread_id)
+    }
+
+    fn queue_paint_wake_candidates(&mut self) -> usize {
+        let thread_ids = self
+            .gwe
+            .windows_snapshot()
+            .into_iter()
+            .filter(|window| {
+                !window.destroyed
+                    && window.update_pending
+                    && self.gwe.is_window_visible(window.hwnd)
+            })
+            .map(|window| window.thread_id)
+            .collect::<BTreeSet<_>>();
+        thread_ids
+            .into_iter()
+            .map(|thread_id| self.queue_message_wake_candidates(thread_id))
+            .sum()
     }
 
     pub fn queue_send_reply_wake_candidates(&mut self, send_id: u64) -> usize {
@@ -3143,6 +3389,13 @@ impl CeKernel {
         }
         if Self::is_current_process_pseudo_handle(handle) {
             return Some(self.current_process_signaled);
+        }
+        if let Ok(KernelObject::FileChangeNotification(notification)) = self.handles.get(handle)
+            && self
+                .ensure_file_change_notification_owner(notification, handle)
+                .is_err()
+        {
+            return None;
         }
         self.handles.is_wait_ready(handle, thread_id)
     }
@@ -3782,6 +4035,41 @@ impl CeKernel {
         self.post_message_w(icon.hwnd, icon.callback_message, icon.id, event_lparam)
     }
 
+    pub fn register_taskbar(&mut self, hwnd: u32) -> bool {
+        if hwnd != 0 && !self.gwe.is_window(hwnd) {
+            return false;
+        }
+        self.shell.register_taskbar(hwnd);
+        true
+    }
+
+    pub fn post_taskbar_notify_icon_message(&mut self, op: u32, data: &NotifyIconData) -> bool {
+        const NOTIFYICONDATA_FIXED_SIZE_W: u32 = 152;
+
+        let Some(taskbar_hwnd) = self.shell.taskbar_hwnd() else {
+            return false;
+        };
+        if !self.gwe.is_window(taskbar_hwnd) {
+            return false;
+        }
+        let payload = NotifyIconMessage {
+            hwnd: data.hwnd,
+            id: data.id,
+            flags: data.flags,
+            callback_message: data.callback_message,
+            icon: data.icon,
+            tip: data.tip.clone(),
+            state: data.state,
+            state_mask: data.state_mask,
+        };
+        let lparam = self.queue_notify_icon_payload(payload, NOTIFYICONDATA_FIXED_SIZE_W);
+        if lparam == 0 {
+            return false;
+        }
+        self.post_window_message(taskbar_hwnd, WM_HANDLESHELLNOTIFYICON, op, lparam);
+        true
+    }
+
     pub fn post_shell_notification_callback(
         &mut self,
         clsid: [u8; 16],
@@ -3882,7 +4170,8 @@ impl CeKernel {
     ) -> bool {
         let method = match code {
             crate::ce::shell::SHNN_SHOW => {
-                ShellNotificationCallbackMethod::OnShow { x: data0, y: data1 }
+                return self
+                    .post_shell_notification_window_callback(record, code, data0, data1, link);
             }
             crate::ce::shell::SHNN_LINKSEL => ShellNotificationCallbackMethod::OnLinkSelected {
                 link: link.clone().unwrap_or_default(),
@@ -3909,6 +4198,16 @@ impl CeKernel {
         if record.clsid == [0; 16] {
             return false;
         }
+        let callback_ptr = if record.callback_ptr != 0 {
+            record.callback_ptr
+        } else {
+            self.com
+                .co_create_instance_guid_values(
+                    record.clsid,
+                    crate::ce::shell::IID_ISHELL_NOTIFICATION_CALLBACK,
+                )
+                .unwrap_or(0)
+        };
         self.shell
             .record_notification_callback(ShellNotificationCallbackRecord {
                 clsid: record.clsid,
@@ -3917,7 +4216,7 @@ impl CeKernel {
                 arguments: method.com_arguments(record.id, record.lparam),
                 method,
                 lparam: record.lparam,
-                callback_ptr: record.callback_ptr,
+                callback_ptr,
             });
         true
     }
@@ -4314,6 +4613,7 @@ impl CeKernel {
             for send_id in doomed_send_ids {
                 self.queue_send_reply_wake_candidates(send_id);
             }
+            self.queue_paint_wake_candidates();
         }
         self.record_window_lifecycle_trace(
             "destroy_window_end",
@@ -4487,9 +4787,7 @@ impl CeKernel {
         if let Some(sent_context_thread) = sent_context_thread {
             self.complete_active_sent_message(sent_context_thread, result);
         }
-        if message.msg == WM_WINDOWPOSCHANGED || message.msg == WM_NOTIFY {
-            self.release_message_pointer_payload(message.lparam);
-        }
+        self.release_dispatch_message_pointer_payload(&message);
         result
     }
 
@@ -4501,6 +4799,26 @@ impl CeKernel {
         let payload = self.gwe.take_message_pointer_payload(ptr)?;
         let _ = self.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
         Some(payload)
+    }
+
+    fn release_dispatch_message_pointer_payload(&mut self, message: &Message) {
+        let should_release = matches!(
+            (
+                message.msg,
+                self.gwe.message_pointer_payload(message.lparam)
+            ),
+            (
+                WM_WINDOWPOSCHANGED,
+                Some(MessagePointerPayload::WindowPos(_))
+            ) | (WM_NOTIFY, Some(MessagePointerPayload::ShellNotification(_)))
+                | (
+                    WM_HANDLESHELLNOTIFYICON,
+                    Some(MessagePointerPayload::NotifyIcon(_))
+                )
+        );
+        if should_release {
+            self.release_message_pointer_payload(message.lparam);
+        }
     }
 
     pub fn message_pump_step(&mut self, thread_id: u32) -> MessagePumpResult {
@@ -4545,9 +4863,10 @@ impl CeKernel {
                 .gwe
                 .window_thread_process_id(parent)
                 .map(|(thread_id, _)| thread_id);
+            let command = command_message.wparam & 0xffff;
             if self
                 .gwe
-                .queue_sent_message_for_window(parent, command_message)
+                .queue_sent_message_for_window(parent, command_message.clone())
             {
                 self.record_message_op(
                     "button_click",
@@ -4559,9 +4878,103 @@ impl CeKernel {
                 if let Some(parent_thread_id) = parent_thread_id {
                     self.queue_message_wake_candidates(parent_thread_id);
                 }
+            } else if let Some(parent_thread_id) = parent_thread_id {
+                self.gwe.post_message(parent_thread_id, command_message);
+                self.record_message_op(
+                    "button_click_post",
+                    thread_id,
+                    &trace_message,
+                    Some(1),
+                    Some("BN_CLICKED".to_owned()),
+                );
+                self.queue_message_wake_candidates(parent_thread_id);
+            }
+            if let Some(parent_thread_id) = parent_thread_id {
+                let _ = self.dismiss_modal_dialog_wait_from_button(
+                    parent,
+                    parent_thread_id,
+                    command,
+                    trace_message.hwnd,
+                );
             }
         }
         self.queue_message_wake_candidates(thread_id);
+    }
+
+    fn dismiss_modal_dialog_wait_from_button(
+        &mut self,
+        dialog_hwnd: u32,
+        thread_id: u32,
+        command: u32,
+        button_hwnd: u32,
+    ) -> bool {
+        let is_dialog = self
+            .gwe
+            .window(dialog_hwnd)
+            .is_some_and(|window| window.class_name.eq_ignore_ascii_case("dialog"));
+        if !is_dialog {
+            return false;
+        }
+        let wait_id = self
+            .scheduler
+            .message_waiter_ids_for_thread(thread_id)
+            .into_iter()
+            .find(|wait_id| {
+                self.scheduler.blocked_wait(*wait_id).is_some_and(|wait| {
+                    matches!(
+                        wait.kind,
+                        SchedulerBlockedWaitKind::ModalMessageBox
+                            | SchedulerBlockedWaitKind::PopupMenuModal { .. }
+                    )
+                })
+            });
+        let Some(wait_id) = wait_id else {
+            return false;
+        };
+        self.modal_dialog_results
+            .insert((thread_id, dialog_hwnd), command);
+        let _ = self.remove_blocked_waiter(wait_id);
+        let removed_get_message_waits =
+            self.remove_dialog_get_message_waiters(thread_id, dialog_hwnd);
+        let _ = self.destroy_window_with_reason(dialog_hwnd, "DialogModalButton");
+        self.record_message_trace(MessageTraceRecord {
+            op: "dialog_modal_button_dismiss",
+            thread_id,
+            hwnd: Some(dialog_hwnd),
+            msg: Some(crate::ce::gwe::WM_COMMAND),
+            wparam: Some(command),
+            lparam: Some(button_hwnd),
+            screen_pos: None,
+            source: Some(crate::ce::gwe::MSGSRC_SOFTWARE_POST),
+            result: Some(1),
+            detail: Some(format!(
+                "wait_id={wait_id}/get_message_waits={removed_get_message_waits}"
+            )),
+        });
+        self.queue_message_wake_candidates(thread_id);
+        true
+    }
+
+    fn remove_dialog_get_message_waiters(&mut self, thread_id: u32, dialog_hwnd: u32) -> usize {
+        let wait_ids = self
+            .scheduler
+            .message_waiter_ids_for_thread(thread_id)
+            .into_iter()
+            .filter(|wait_id| {
+                self.scheduler
+                    .blocked_wait(*wait_id)
+                    .is_some_and(|wait| match wait.kind {
+                        SchedulerBlockedWaitKind::GetMessage {
+                            hwnd: Some(hwnd), ..
+                        } => hwnd == dialog_hwnd,
+                        _ => false,
+                    })
+            })
+            .collect::<Vec<_>>();
+        for wait_id in &wait_ids {
+            let _ = self.remove_blocked_waiter(*wait_id);
+        }
+        wait_ids.len()
     }
 
     pub fn set_timer(
@@ -5147,6 +5560,21 @@ impl CeKernel {
         }
     }
 
+    fn queue_notify_icon_payload(&mut self, payload: NotifyIconMessage, alloc_size: u32) -> u32 {
+        let Some(ptr) = self.memory.heap_alloc(PROCESS_HEAP_HANDLE, 0, alloc_size) else {
+            return 0;
+        };
+        if self
+            .gwe
+            .insert_message_pointer_payload(ptr, MessagePointerPayload::NotifyIcon(payload))
+        {
+            ptr
+        } else {
+            let _ = self.memory.heap_free(PROCESS_HEAP_HANDLE, 0, ptr);
+            0
+        }
+    }
+
     fn post_shell_file_change_notifications(
         &mut self,
         event_id: u32,
@@ -5201,13 +5629,19 @@ impl CeKernel {
         let Some(required_filter) = file_notify_filter_for_shell_event(event_id) else {
             return 0;
         };
+        let path1_volume = path1.and_then(|path| self.files.volume_root_for_guest_path(path));
+        let path2_volume = path2.and_then(|path| self.files.volume_root_for_guest_path(path));
         let mut handles = Vec::new();
         for (handle, object) in self.handles.iter_mut() {
             let KernelObject::FileChangeNotification(notification) = object else {
                 continue;
             };
             if notification.notify_filter & required_filter == 0
-                || !file_change_notification_matches(notification, path1, path2)
+                || !file_change_notification_matches(
+                    notification,
+                    path1.map(|path| (path, path1_volume.as_deref())),
+                    path2.map(|path| (path, path2_volume.as_deref())),
+                )
             {
                 continue;
             }
@@ -5258,12 +5692,14 @@ impl CeKernel {
         action: u32,
         path: &str,
     ) -> usize {
+        let path_volume = self.files.volume_root_for_guest_path(path);
         let mut handles = Vec::new();
         for (handle, object) in self.handles.iter_mut() {
             let KernelObject::FileChangeNotification(notification) = object else {
                 continue;
             };
             if notification.notify_filter & required_filter == 0
+                || !file_change_volume_matches(notification, path_volume.as_deref())
                 || !shell_change_path_matches(
                     &notification.watch_path,
                     path,
@@ -5273,10 +5709,14 @@ impl CeKernel {
                 continue;
             }
             if notification.notify_filter & FILE_NOTIFY_CHANGE_CEGETINFO != 0 {
-                let record = FileChangeRecord {
+                let mut record = FileChangeRecord {
                     action,
                     path: file_change_relative_path(&notification.watch_path, path),
                 };
+                apply_ce_current_directory_removal_record(
+                    &mut record,
+                    required_filter == FILE_NOTIFY_CHANGE_DIR_NAME,
+                );
                 append_file_change_records(&mut notification.pending, [record]);
                 notification.pending_signal_count = notification.pending.len();
                 notification.signaled = notification.pending_signal_count > 0;
@@ -5489,12 +5929,23 @@ fn shell_change_registration_matches(
 
 fn file_change_notification_matches(
     notification: &FileChangeNotificationObject,
-    path1: Option<&str>,
-    path2: Option<&str>,
+    path1: Option<(&str, Option<&str>)>,
+    path2: Option<(&str, Option<&str>)>,
 ) -> bool {
-    [path1, path2].into_iter().flatten().any(|path| {
-        shell_change_path_matches(&notification.watch_path, path, notification.recursive)
-    })
+    [path1, path2]
+        .into_iter()
+        .flatten()
+        .any(|(path, volume_root)| {
+            file_change_volume_matches(notification, volume_root)
+                && shell_change_path_matches(&notification.watch_path, path, notification.recursive)
+        })
+}
+
+fn file_change_volume_matches(
+    notification: &FileChangeNotificationObject,
+    event_volume_root: Option<&str>,
+) -> bool {
+    notification.watch_path == "\\" || notification.volume_root.as_deref() == event_volume_root
 }
 
 fn file_notify_filter_for_shell_event(event_id: u32) -> Option<u32> {
@@ -5547,9 +5998,13 @@ fn file_change_records_for_event(
             .filter(|path| {
                 shell_change_path_matches(&notification.watch_path, path, notification.recursive)
             })
-            .map(|path| FileChangeRecord {
-                action: FILE_ACTION_REMOVED,
-                path: file_change_relative_path(&notification.watch_path, path),
+            .map(|path| {
+                let mut record = FileChangeRecord {
+                    action: FILE_ACTION_REMOVED,
+                    path: file_change_relative_path(&notification.watch_path, path),
+                };
+                apply_ce_current_directory_removal_record(&mut record, event_id == SHCNE_RMDIR);
+                record
             })
             .collect(),
         SHCNE_ATTRIBUTES | SHCNE_UPDATEITEM => path1
@@ -5563,6 +6018,19 @@ fn file_change_records_for_event(
             })
             .collect(),
         _ => Vec::new(),
+    }
+}
+
+fn apply_ce_current_directory_removal_record(record: &mut FileChangeRecord, directory_event: bool) {
+    if !directory_event || !record.path.is_empty() {
+        return;
+    }
+    if matches!(
+        record.action,
+        FILE_ACTION_REMOVED | FILE_ACTION_RENAMED_OLD_NAME
+    ) {
+        record.action = FILE_ACTION_REMOVED;
+        record.path = "\\".to_owned();
     }
 }
 
@@ -5616,7 +6084,7 @@ fn coalesce_removed_file_change_record(
                 pending.remove(index);
                 return true;
             }
-            FILE_ACTION_MODIFIED => {
+            FILE_ACTION_MODIFIED | FILE_ACTION_CHANGE_COMPLETED => {
                 pending.remove(index);
             }
             FILE_ACTION_REMOVED => return true,
@@ -5740,8 +6208,8 @@ mod tests {
     use super::*;
     use crate::{
         ce::gwe::{
-            WM_ACTIVATE, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_SETFOCUS, WS_CHILD,
-            WS_VISIBLE,
+            BS_DEFPUSHBUTTON, WM_ACTIVATE, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_SETFOCUS,
+            WS_CHILD, WS_VISIBLE,
         },
         config::RuntimeConfig,
     };
@@ -5901,6 +6369,127 @@ mod tests {
             .copied()
             .expect("blocked target receives mouse up");
         assert!(up.2 > down.2);
+        Ok(())
+    }
+
+    #[test]
+    fn remote_button_tap_dismisses_modal_dialog_waiter() -> Result<()> {
+        let config = RuntimeConfig::load_default()?;
+        let mut kernel = CeKernel::boot(config);
+        let background_thread_id = 1;
+        let thread_id = 3;
+        let background = kernel.create_window_ex_w_with_rect(
+            background_thread_id,
+            "static",
+            "background",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(0, 0, 800, 480),
+        );
+        assert!(kernel.gwe.validate_window(background));
+        let background_wait_id = kernel.register_blocked_waiter(
+            background_thread_id,
+            0x101,
+            Vec::new(),
+            SchedulerBlockedWaitKind::GetMessage {
+                hwnd: None,
+                min_msg: 0,
+                max_msg: 0,
+            },
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        let dialog = kernel.create_window_ex_w_with_rect(
+            thread_id,
+            "dialog",
+            "Button",
+            None,
+            0,
+            WS_VISIBLE,
+            0,
+            Rect::from_origin_size(40, 40, 120, 90),
+        );
+        let button = kernel.create_window_ex_w_with_rect(
+            thread_id,
+            "button",
+            "OK",
+            Some(dialog),
+            1,
+            WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
+            0,
+            Rect::from_origin_size(7, 27, 54, 22),
+        );
+        let wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            0x103,
+            Vec::new(),
+            SchedulerBlockedWaitKind::ModalMessageBox,
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+        let dialog_get_message_wait_id = kernel.register_blocked_waiter(
+            thread_id,
+            0x104,
+            Vec::new(),
+            SchedulerBlockedWaitKind::GetMessage {
+                hwnd: Some(dialog),
+                min_msg: crate::ce::gwe::WM_PAINT,
+                max_msg: crate::ce::gwe::WM_LBUTTONUP,
+            },
+            kernel.timers.tick_count(),
+            crate::ce::timer::INFINITE,
+        );
+
+        kernel.remote.set_framebuffer_size(800, 480);
+        let button_rect = kernel
+            .gwe
+            .get_window_rect(button)
+            .expect("button should have a screen rect");
+        let button_point = Point {
+            x: button_rect.left + button_rect.width() / 2,
+            y: button_rect.top + button_rect.height() / 2,
+        };
+        assert_eq!(
+            kernel
+                .gwe
+                .window_from_point_for_thread(thread_id, button_point),
+            Some(button)
+        );
+        kernel
+            .remote
+            .enqueue_touch("tap", button_point.x, button_point.y)
+            .unwrap();
+
+        assert_eq!(
+            kernel.drain_remote_input_to_thread_window(thread_id, Some(dialog)),
+            2
+        );
+        assert!(kernel.blocked_waiter(wait_id).is_none());
+        assert!(kernel.blocked_waiter(dialog_get_message_wait_id).is_none());
+        assert_eq!(kernel.take_modal_dialog_result(thread_id, dialog), Some(1));
+        assert_eq!(kernel.take_modal_dialog_result(thread_id, dialog), None);
+        assert!(!kernel.gwe.is_window(dialog));
+        assert!(!kernel.gwe.is_window(button));
+        assert_eq!(
+            kernel.gwe.update_rect(background).unwrap().rect,
+            Rect::from_origin_size(40, 40, 120, 90)
+        );
+        let ready =
+            kernel.select_ready_blocked_waiter(0, kernel.timers.tick_count(), |blocked, kernel| {
+                match blocked.kind {
+                    SchedulerBlockedWaitKind::GetMessage {
+                        hwnd,
+                        min_msg,
+                        max_msg,
+                    } => kernel
+                        .gwe
+                        .has_message_filtered(blocked.thread_id, hwnd, min_msg, max_msg),
+                    _ => false,
+                }
+            });
+        assert_eq!(ready, Some(background_wait_id));
         Ok(())
     }
 

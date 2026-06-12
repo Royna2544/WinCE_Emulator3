@@ -56,6 +56,7 @@ pub struct SemaphoreObject {
 pub struct FileObject {
     pub guest_path: String,
     pub file_id: u32,
+    pub notify_change_pending: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -66,7 +67,9 @@ pub struct FindFileObject {
 
 #[derive(Debug, Clone)]
 pub struct FileChangeNotificationObject {
+    pub owner_process_id: u32,
     pub watch_path: String,
+    pub volume_root: Option<String>,
     pub recursive: bool,
     pub notify_filter: u32,
     pub signaled: bool,
@@ -236,7 +239,8 @@ impl HandleTable {
                 format!("find(id={},pattern={})", find.find_id, find.guest_pattern)
             }
             Ok(KernelObject::FileChangeNotification(notification)) => format!(
-                "file_change(path={},recursive={},filter=0x{:08x},signaled={})",
+                "file_change(owner={},path={},recursive={},filter=0x{:08x},signaled={})",
+                notification.owner_process_id,
                 notification.watch_path,
                 notification.recursive,
                 notification.notify_filter,

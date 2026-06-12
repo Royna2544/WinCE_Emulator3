@@ -27,6 +27,7 @@ pub trait CpuBackend: Clone + std::fmt::Debug {
 
     fn last_debug_snapshot(&self) -> Option<&UnicornDebugSnapshot>;
     fn preferred_trace_snapshot(&self) -> Option<&UnicornDebugSnapshot>;
+    fn clear_orphaned_cross_process_send_yield(&mut self, kernel: &CeKernel) -> bool;
 
     fn has_parked_child_processes(&self) -> bool;
     fn parked_process_debug_text(&self, kernel: &CeKernel) -> String;
